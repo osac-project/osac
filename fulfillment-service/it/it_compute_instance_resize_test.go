@@ -129,26 +129,18 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		computeInstanceTemplateId = fmt.Sprintf("test-resize-template-%s", uuid.New())
+		computeInstanceTemplateId = newTemplateID("test_resize_template")
 		_, err = computeInstanceTemplatesClient.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 			Object: privatev1.ComputeInstanceTemplate_builder{
 				Id:          computeInstanceTemplateId,
 				Title:       "Resize test template",
 				Description: "Template for InstanceType resize tests",
-				Metadata:    privatev1.Metadata_builder{Name: computeInstanceTemplateId}.Build(),
+				Metadata:    privatev1.Metadata_builder{Name: fmt.Sprintf("test-resize-tmpl-%s", uuid.New()[24:32])}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		networkClassName := fmt.Sprintf("test-resize-nc-%s", uuid.New())
-		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata:      privatev1.Metadata_builder{Name: networkClassName}.Build(),
-				Title:         "Resize test network class",
-				FabricManager: new("netris"),
-				K8SManager:    new(testVMK8SManagerName),
-			}.Build(),
-		}.Build())
+		ncResp, err := sharedNetworkClass(ctx, networkClassesClient)
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId = ncResp.GetObject().GetId()
 		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
@@ -168,9 +160,7 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 				Id:       virtualNetworkId,
 				Metadata: privatev1.Metadata_builder{Name: virtualNetworkId, Tenant: usersGroup}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.110.0.0/16"),
+					Ipv4Cidr: new("10.110.0.0/16"),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -198,15 +188,7 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 			g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
 		}, time.Minute, time.Second).Should(Succeed())
 
-		subnetResponse, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetId}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		subnet := subnetResponse.GetObject()
-		subnet.SetStatus(privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build())
-		_, err = subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
-			Object:     subnet,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		setSubnetReady(ctx, subnetsClient, subnetId)
 
 		securityGroupId = createComputeInstanceFixtureSecurityGroup(ctx, fixtureClients.securityGroups,
 			fmt.Sprintf("test-resize-sg-%s", uuid.New()), virtualNetworkId)

@@ -15,7 +15,7 @@ Before changing this component, identify the documents relevant to the change
 below, then read and follow them. These documents are authoritative for their
 respective areas.
 
-- Deployment architecture: [`docs/helm-deployment-guide.md`](docs/helm-deployment-guide.md)
+- Deployment architecture: [`../docs/guides/installation/helm-deployment-guide.md`](../docs/guides/installation/helm-deployment-guide.md)
 - Script behavior: [`README.md`](README.md) and `scripts/`
 - Values and schema: `charts/osac/values.yaml` and `charts/osac/values.schema.json`
 - Changes to installer values or schema: read the
@@ -52,9 +52,18 @@ respective areas.
 | Fulfillment integration report opt-in and output paths | Unit with expanded Makefile commands | `make kind-runtime-test` |
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |
 | Fulfillment token helper or dev-full hook credential wiring | Unit and Helm contract | `make fulfillment-auth-test` and `make dev-full-render-test` |
+| Service-account IDP credential mount and Keycloak management roles | Helm contract | `make service-account-idp-render-test` |
 | Deployed dev-full hook authentication | Component integration | Coverage gap tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); local `install-devstack` invokes the hooks but does not assert token acceptance. |
+| Fulfillment Volume lifecycle | Component integration | `../fulfillment-service/it/it_volume_lifecycle_test.go` covers Volume creation and deletion, status, hub assignment, and cleanup through `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment`. |
+| `global.networking` values, schema, networking validation, cudn_evpn or Netris registration (`test_cudn_evpn_registration_is_contract_format`, `test_netris_registration_is_contract_format`), admission policy, or `network-fulfillment-ig` rendering | Helm contract | `make helm-networking-test` |
+| CaaS Netris settings of cluster fulfillment (`NETRIS_CONTROLLER_URL`, `NETRIS_VALIDATE_CERTS`, `NETRIS_CA_CONFIGMAP` in `config-as-code-ig`) | Helm contract | `make helm-networking-test` (`AapSettingsTest`) |
+| Netris CI overlays (`values/{vmaas-ci,bmaas-ci,full-ci}/netris.yaml`) | Helm contract | `make helm-networking-test` (`NetrisOverlayTest`) |
+| NetworkClass step (`files/network-class-step.py`) | Unit with a fake fulfillment API | `make network-class-step-test` |
 | OpenBao security context, podSecurityContext, or Kind/OpenShift UID handling | Helm contract | `make openbao-security-context-test` |
 | `evpn` values, EVPN ConfigMap, or configure-evpn hook | Helm contract | `make evpn-render-test` |
+| Install preflight engine, catalog, report schema, or `preflight.*` values | Unit (mocked cluster) | `helm unittest charts/osac` (helm-unittest plugin; CI pins v1.2.1) |
+| Install preflight rendering contract, hook log policy, or CSI hook deadlines | Helm contract | `uv run --script scripts/test-preflight-render.py` |
+| Install preflight against a real API server, upgrade behavior, or failed-hook logs | Component integration | `uv run --script scripts/test-preflight-kind.py` against a Kind context; see [install preflight](../docs/INTEGRATION-TESTING.md#install-preflight-osac-6561) |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
 
 ## Validation
@@ -73,6 +82,8 @@ make helm-validate
 pre-commit run --all-files
 make mce-render-test
 make fulfillment-trust-render-test
+helm unittest charts/osac
+uv run --script scripts/test-preflight-render.py
 ```
 
 `pre-commit run --all-files` does not constitute a full repository secret scan;

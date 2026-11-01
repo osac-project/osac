@@ -760,7 +760,9 @@
           "view-realm",
           "view-users",
           "manage-identity-providers",
-          "view-identity-providers"
+          "view-identity-providers",
+          "create-client",
+          "view-clients"
         ]
       },
       "notBefore": 0,
@@ -1092,7 +1094,7 @@
       "clientId": "osac-ui",
       "name": "OSAC UI",
       "description": "OSAC web console",
-      "rootUrl": "http://ui.osac.localhost:8080",
+      "rootUrl": "__OSAC_UI_URL__",
       "adminUrl": "",
       "baseUrl": "/",
       "surrogateAuthRequired": false,
@@ -1100,11 +1102,11 @@
       "alwaysDisplayInConsole": false,
       "clientAuthenticatorType": "client-secret",
       "redirectUris": [
-        "http://ui.osac.localhost:8080/callback",
-        "http://ui.osac.localhost:8080/*"
+        "__OSAC_UI_URL__/callback",
+        "__OSAC_UI_URL__/*"
       ],
       "webOrigins": [
-        "http://ui.osac.localhost:8080"
+        "__OSAC_UI_URL__"
       ],
       "notBefore": 0,
       "bearerOnly": false,
@@ -2342,7 +2344,10 @@
             "oidc-sha256-pairwise-sub-mapper",
             "saml-role-list-mapper",
             "oidc-address-mapper",
-            "saml-user-attribute-mapper"
+            "saml-user-attribute-mapper",
+            "oidc-hardcoded-claim-mapper",
+            "oidc-audience-mapper",
+            "oidc-usersessionmodel-note-mapper"
           ]
         }
       },
@@ -2394,6 +2399,9 @@
         "config": {
           "allow-default-scopes": [
             "true"
+          ],
+          "allowed-client-scopes": [
+            "service_account"
           ]
         }
       },

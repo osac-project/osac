@@ -509,9 +509,7 @@ var _ = Describe("Private clusters server", func() {
 					Name:   "test-vnet",
 					Tenant: testTenant,
 				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-network-class"}.Build(),
-				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{}.Build(),
 				Status: privatev1.VirtualNetworkStatus_builder{
 					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 					Hub:   "network-hub-a",
@@ -593,6 +591,9 @@ var _ = Describe("Private clusters server", func() {
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+
+			// Cluster creates without an explicit attachment resolve the tenant defaults.
+			seedReadyDefaultNetworking(testTenant, 0)
 
 			// Create numbered templates for list tests:
 			for i := range 10 {
@@ -797,7 +798,7 @@ var _ = Describe("Private clusters server", func() {
 			object := response.GetObject()
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
-			Expect(object.GetStatus().GetObservedCpVersion()).To(Equal("4.17.0"))
+			Expect(object.GetStatus().GetObservedVersion()).To(Equal("4.17.0"))
 			Expect(object.GetStatus().GetNodeSets()["compute"].GetObservedVersion()).To(Equal("4.17.0"))
 			Expect(object.GetStatus().GetNodeSets()["gpu"].GetObservedVersion()).To(Equal("4.17.0"))
 
@@ -838,7 +839,7 @@ var _ = Describe("Private clusters server", func() {
 				}.Build(),
 			}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("IP_FAMILY_IPV4"))
+			Expect(err.Error()).To(ContainSubstring("no available capacity in any READY pool for IPv4"))
 		})
 
 		It("rejects a cluster whose subnet and security group are assigned to different Hubs", func() {
@@ -847,9 +848,7 @@ var _ = Describe("Private clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			virtualNetwork, err := virtualNetworksDao.Create().SetObject(privatev1.VirtualNetwork_builder{
 				Metadata: privatev1.Metadata_builder{Name: "hub-compat-vn", Tenant: testTenant}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-network-class"}.Build(),
-				}.Build(),
+				Spec:     privatev1.VirtualNetworkSpec_builder{}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
@@ -942,7 +941,6 @@ var _ = Describe("Private clusters server", func() {
 			endpoints := map[string]bool{}
 			for _, eip := range eipList.GetItems() {
 				Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
-				Expect(eip.GetMetadata().GetLabels()).ToNot(HaveKey(autoAttachmentDeferredLabel))
 				Expect(eip.GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("cluster"))
 				Expect(eip.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(clusterID))
 				endpoints[eip.GetMetadata().GetLabels()[autoCreatedEndpointLabel]] = true
@@ -3009,7 +3007,8 @@ var _ = Describe("Private clusters server", func() {
 				Expect(proto.Equal(stored.GetObject().GetSpec().GetNetworkAttachment(), object.GetSpec().GetNetworkAttachment())).To(BeTrue())
 			})
 
-			It("Rejects adding network_attachment when none existed", func() {
+			It("Rejects replacing the resolved default network_attachment", func() {
+				defaults := seedReadyDefaultNetworking(testTenant, 0)
 				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
@@ -3039,11 +3038,14 @@ var _ = Describe("Private clusters server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(Equal(
-					"cannot change spec.network_attachment.subnet from '' to 'subnet-1': subnet is immutable",
+					fmt.Sprintf(
+						"cannot change spec.network_attachment.subnet from '%s' to 'subnet-1': subnet is immutable",
+						defaults.subnetID,
+					),
 				))
 				stored, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(stored.GetObject().GetSpec().GetNetworkAttachment()).To(BeNil())
+				Expect(proto.Equal(stored.GetObject().GetSpec().GetNetworkAttachment(), object.GetSpec().GetNetworkAttachment())).To(BeTrue())
 			})
 
 			It("Rejects changing security_groups with same subnet", func() {
@@ -3315,6 +3317,136 @@ var _ = Describe("Private clusters server", func() {
 				).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 			}
+
+			It("Uses locked catalog add-on operator defaults and rejects caller input", func() {
+				operatorID := "locked-catalog-operator-" + uuid.New()[24:32]
+				operatorName := "locked-catalog-operator-" + uuid.New()[24:32]
+				seedAddOnOperator(ctx, operatorID, operatorName, true)
+				createCatalogItem("cat-locked-operators", true, privatev1.ClusterCatalogItemFields_builder{
+					AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
+						Locked: privatev1.AddOnOperatorReferenceList_builder{
+							Items: []*privatev1.AddOnOperatorReference{
+								privatev1.AddOnOperatorReference_builder{Id: operatorID, Name: operatorName}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "cluster-locked-operators"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-locked-operators"}.Build(),
+						}.Build(),
+						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetAddOnOperators()).To(HaveLen(1))
+				Expect(response.GetObject().GetSpec().GetAddOnOperators()[0].GetId()).To(Equal(operatorID))
+
+				_, err = server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "cluster-locked-operators-input"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-locked-operators"}.Build(),
+							AddOnOperators: []*privatev1.AddOnOperatorReference{
+								privatev1.AddOnOperatorReference_builder{Id: operatorID, Name: operatorName}.Build(),
+							},
+						}.Build(),
+						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			})
+
+			It("Uses non-empty caller operators for an editable catalog policy", func() {
+				defaultID := "default-catalog-operator-" + uuid.New()[24:32]
+				defaultName := "default-catalog-operator-" + uuid.New()[24:32]
+				callerID := "caller-catalog-operator-" + uuid.New()[24:32]
+				callerName := "caller-catalog-operator-" + uuid.New()[24:32]
+				seedAddOnOperator(ctx, defaultID, defaultName, true)
+				seedAddOnOperator(ctx, callerID, callerName, true)
+				createCatalogItem("cat-editable-operators", true, privatev1.ClusterCatalogItemFields_builder{
+					AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
+						Editable: privatev1.EditableAddOnOperatorReferenceList_builder{
+							DefaultValue: privatev1.AddOnOperatorReferenceList_builder{
+								Items: []*privatev1.AddOnOperatorReference{
+									privatev1.AddOnOperatorReference_builder{Id: defaultID, Name: defaultName}.Build(),
+								},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "cluster-editable-operators"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-editable-operators"}.Build(),
+						}.Build(),
+						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetAddOnOperators()[0].GetId()).To(Equal(defaultID))
+
+				response, err = server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "cluster-editable-operators-input"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-editable-operators"}.Build(),
+							AddOnOperators: []*privatev1.AddOnOperatorReference{
+								privatev1.AddOnOperatorReference_builder{Id: callerID, Name: callerName}.Build(),
+							},
+						}.Build(),
+						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetAddOnOperators()[0].GetId()).To(Equal(callerID))
+			})
+
+			It("Expands catalog operator dependencies during cluster creation", func() {
+				dependencyID := "catalog-graph-dependency-" + uuid.New()[24:32]
+				dependencyName := "catalog-graph-dependency-" + uuid.New()[24:32]
+				rootID := "catalog-graph-root-" + uuid.New()[24:32]
+				rootName := "catalog-graph-root-" + uuid.New()[24:32]
+
+				dependency := newTestAddOnOperator(dependencyID, dependencyName, true)
+				seedAddOnOperatorObject(ctx, dependency)
+				root := newTestAddOnOperator(rootID, rootName, true)
+				root.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+					privatev1.AddOnOperatorLocalReference_builder{Id: dependencyID}.Build(),
+				})
+				seedAddOnOperatorObject(ctx, root)
+				createCatalogItem("cat-graph-operators", true, privatev1.ClusterCatalogItemFields_builder{
+					AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
+						Locked: privatev1.AddOnOperatorReferenceList_builder{
+							Items: []*privatev1.AddOnOperatorReference{
+								privatev1.AddOnOperatorReference_builder{Id: rootID, Name: rootName}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "cluster-graph-operators"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-graph-operators"}.Build(),
+						}.Build(),
+						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				resolvedIDs := make([]string, 0, len(response.GetObject().GetSpec().GetAddOnOperators()))
+				for _, operator := range response.GetObject().GetSpec().GetAddOnOperators() {
+					resolvedIDs = append(resolvedIDs, operator.GetId())
+				}
+				Expect(resolvedIDs).To(ConsistOf(rootID, dependencyID))
+			})
 
 			It("Creates cluster with catalog item and populates node sets from its policy", func() {
 				createCatalogItem("cat-happy", true, nil)
@@ -5318,7 +5450,7 @@ var _ = Describe("Private clusters server", func() {
 				Expect(attempt.GetSourceVersion()).To(Equal("4.17.0"))
 				Expect(attempt.GetTargetVersion()).To(Equal("4.18.0"))
 				Expect(attempt.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
-				Expect(attempt.GetAcceptedTime()).To(Equal(attempt.GetLastStateTime()))
+				Expect(attempt.GetAcceptedTime()).To(Equal(attempt.GetStateTransitionTime()))
 				Expect(updated.GetSpec().GetControlPlaneAttemptId()).To(Equal(attempt.GetAttemptId()))
 			})
 
@@ -5366,8 +5498,9 @@ var _ = Describe("Private clusters server", func() {
 				Expect(history).To(HaveLen(2))
 				cpTransition := &privatev1.ClusterUpgradeHistoryEntry{}
 				cpTransition.SetAttemptId(cpID)
+				cpTransition.SetComponent(proto.Clone(history[1].GetComponent()).(*privatev1.ClusterUpgradeComponent))
 				cpTransition.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING)
-				cpTransition.SetLastStateTime(timestamppb.New(history[1].GetLastStateTime().AsTime().Add(time.Second)))
+				cpTransition.SetStateTransitionTime(timestamppb.New(history[1].GetStateTransitionTime().AsTime().Add(time.Second)))
 				cpTransition.SetMessage("Control plane is updating")
 				response, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 					Object: privatev1.Cluster_builder{Id: cluster.GetId(),
@@ -5382,6 +5515,79 @@ var _ = Describe("Private clusters server", func() {
 				Expect(merged[1].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
 				Expect(proto.Equal(merged[1].GetComponent(), history[1].GetComponent())).To(BeTrue())
 				Expect(proto.Equal(merged[1].GetAcceptedTime(), history[1].GetAcceptedTime())).To(BeTrue())
+			})
+
+			It("merges each component independently when attempt IDs are shared", func() {
+				cluster := createCluster()
+				seedNextVersion()
+				updateVersion(cluster.GetId(), "4-18-0")
+				withNodeSet := updateNodeSetVersion(cluster.GetId(), "compute")
+				stored := withNodeSet.GetStatus().GetUpgradeHistory()
+				Expect(stored).To(HaveLen(2))
+				Expect(stored[0].GetComponent().GetNodeSetId()).To(Equal("compute"))
+				Expect(stored[1].GetComponent().GetControlPlane()).NotTo(BeNil())
+				stored[1].SetAttemptId(stored[0].GetAttemptId())
+
+				nodeSetUpdate := proto.Clone(stored[0]).(*privatev1.ClusterUpgradeHistoryEntry)
+				nodeSetUpdate.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING)
+				nodeSetUpdate.SetMessage("Node pool is updating")
+				nodeSetUpdate.SetStateTransitionTime(timestamppb.New(stored[0].GetStateTransitionTime().AsTime().Add(time.Second)))
+				controlPlaneUpdate := proto.Clone(stored[1]).(*privatev1.ClusterUpgradeHistoryEntry)
+				controlPlaneUpdate.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED)
+				controlPlaneUpdate.SetMessage("Control plane upgrade failed")
+				controlPlaneUpdate.SetStateTransitionTime(timestamppb.New(stored[1].GetStateTransitionTime().AsTime().Add(time.Second)))
+
+				merged := mergeClusterUpgradeStateChanges(stored,
+					[]*privatev1.ClusterUpgradeHistoryEntry{nodeSetUpdate, controlPlaneUpdate})
+				Expect(merged[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
+				Expect(merged[0].GetMessage()).To(Equal("Node pool is updating"))
+				Expect(merged[1].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED))
+				Expect(merged[1].GetMessage()).To(Equal("Control plane upgrade failed"))
+
+				controlPlaneOnly := mergeClusterUpgradeStateChanges(stored,
+					[]*privatev1.ClusterUpgradeHistoryEntry{controlPlaneUpdate})
+				Expect(controlPlaneOnly[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+				Expect(controlPlaneOnly[1].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED))
+
+				missingComponent := proto.Clone(controlPlaneUpdate).(*privatev1.ClusterUpgradeHistoryEntry)
+				missingComponent.SetComponent(nil)
+				unchanged := mergeClusterUpgradeStateChanges(stored,
+					[]*privatev1.ClusterUpgradeHistoryEntry{missingComponent})
+				Expect(unchanged[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+				Expect(unchanged[1].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+				unchanged = mergeClusterUpgradeStateChanges(stored[1:],
+					[]*privatev1.ClusterUpgradeHistoryEntry{missingComponent})
+				Expect(unchanged[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+			})
+
+			It("freezes the node count at acceptance", func() {
+				cluster := createCluster()
+				seedNextVersion()
+				updated := updateNodeSetVersion(cluster.GetId(), "compute")
+				entry := updated.GetStatus().GetUpgradeHistory()[0]
+				acceptedCount := max(int32(1), updated.GetSpec().GetNodeSets()["compute"].GetSize())
+				Expect(entry.GetTimeoutNodeCount()).To(Equal(acceptedCount))
+				transition := &privatev1.ClusterUpgradeHistoryEntry{}
+				transition.SetAttemptId(entry.GetAttemptId())
+				transition.SetComponent(proto.Clone(entry.GetComponent()).(*privatev1.ClusterUpgradeComponent))
+				transition.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING)
+				transition.SetStateTransitionTime(timestamppb.New(entry.GetStateTransitionTime().AsTime().Add(time.Second)))
+				transition.SetTimeoutNodeCount(acceptedCount + 2)
+				update := func() *privatev1.ClusterUpgradeHistoryEntry {
+					response, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+						Object: privatev1.Cluster_builder{Id: cluster.GetId(),
+							Status: privatev1.ClusterStatus_builder{UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{transition}}.Build()}.Build(),
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.upgrade_history"}},
+					}.Build())
+					Expect(err).NotTo(HaveOccurred())
+					return response.GetObject().GetStatus().GetUpgradeHistory()[0]
+				}
+				progressing := update()
+				Expect(progressing.GetTimeoutNodeCount()).To(Equal(acceptedCount))
+				transition.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT)
+				transition.SetStateTransitionTime(timestamppb.New(progressing.GetStateTransitionTime().AsTime().Add(time.Second)))
+				transition.SetTimeoutNodeCount(acceptedCount + 4)
+				Expect(update().GetTimeoutNodeCount()).To(Equal(acceptedCount))
 			})
 
 			It("preserves server-owned attempt IDs on full-object and parent-spec edits", func() {
@@ -6069,7 +6275,6 @@ var _ = Describe("Private clusters server", func() {
 				Expect(getCluster.GetObject().GetSpec().GetNodeSets()["compute"].GetFabricInterface()).
 					To(Equal("data-0"), "stored fabric_interface must not track later BMIT changes")
 			})
-
 			It("Returns FailedPrecondition when BMIT has no fabric port", func() {
 				_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
@@ -6097,10 +6302,25 @@ var _ = Describe("Private clusters server", func() {
 				Expect(st.Message()).To(ContainSubstring("no network port with role 'fabric'"))
 			})
 
-			It("Skips fabric resolution when cluster has no network attachment", func() {
+			It("Rejects an omitted network attachment when tenant defaults are not ready", func() {
+				seedReadyDefaultNetworking(testTenant, 0)
+				tenantDao := fixtureDAO[*privatev1.Tenant]()
+				tenantResponse, err := tenantDao.Get().SetId(testTenant).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				tenant := tenantResponse.GetObject()
+				tenant.GetStatus().SetConditions([]*privatev1.TenantCondition{
+					privatev1.TenantCondition_builder{
+						Type:   privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+						Status: privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+					}.Build(),
+				})
+				_, err = tenantDao.Update().SetObject(tenant).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				const name = "default-network-not-ready"
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
-						Metadata: privatev1.Metadata_builder{Name: "fabric-no-net"}.Build(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
@@ -6113,12 +6333,44 @@ var _ = Describe("Private clusters server", func() {
 						}.Build(),
 					}.Build(),
 				}.Build())
+				Expect(response).To(BeNil())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(grpcstatus.Convert(err).Message()).To(Equal("tenant default networking is not ready"))
+
+				listed, err := server.List(ctx, privatev1.ClustersListRequest_builder{
+					Filter: new(fmt.Sprintf("this.metadata.name == %q", name)),
+				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(response).ToNot(BeNil())
-				nodeSet := response.GetObject().GetSpec().GetNodeSets()["compute"]
-				Expect(nodeSet).ToNot(BeNil())
-				// Without network_attachment, fabric_interface should be empty
-				Expect(nodeSet.GetFabricInterface()).To(BeEmpty())
+				Expect(listed.GetTotal()).To(BeZero(), "a rejected Cluster Create must not persist the Cluster")
+			})
+
+			It("Resolves tenant defaults when provider networking is disabled", func() {
+				server.settings.ProvisioningEnabled = false
+				defaults := seedReadyDefaultNetworking(testTenant, 0)
+
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "networking-disabled"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+										Id: "bmit-fabric-id", Shared: true,
+									}.Build(),
+									Size: proto.Int32(3),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+
+				Expect(err).NotTo(HaveOccurred())
+				networkAttachment := response.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(networkAttachment.GetSubnet().GetId()).To(Equal(defaults.subnetID))
+				Expect(networkAttachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(networkAttachment.GetSecurityGroups()[0].GetId()).To(Equal(defaults.securityGroupID))
+				Expect(response.GetObject().GetSpec().GetNodeSets()["compute"].GetFabricInterface()).To(Equal("data-0"))
 			})
 
 			It("Selects the first fabric port when multiple exist", func() {

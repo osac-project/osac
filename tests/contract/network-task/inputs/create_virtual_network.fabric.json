@@ -1,0 +1,24 @@
+{
+  "manager": {
+    "ansible_role": "osac.templates.netris",
+    "name": "netris",
+    "type": "fabric"
+  },
+  "network_type": "evpn",
+  "resource": {
+    "apiVersion": "osac.openshift.io/v1alpha1",
+    "id": "3f1c9a2e-7b4d-4e8a-9c6f-0d2e4b6a8c10",
+    "kind": "VirtualNetwork",
+    "metadata": {
+      "generation": 1,
+      "name": "vn-3f1c9a2e",
+      "namespace": "osac-networking",
+      "uid": "00000000-0000-4000-8000-000000000001"
+    },
+    "spec": {
+      "ipv4Cidr": "10.0.0.0/16"
+    }
+  },
+  "task": "create_virtual_network",
+  "tenant": "tenant-a"
+}

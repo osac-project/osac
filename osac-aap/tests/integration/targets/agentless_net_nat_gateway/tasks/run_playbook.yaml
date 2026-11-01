@@ -1,0 +1,51 @@
+---
+# Run playbook_osac_network_task.yml in a child process with only osac_job_vars
+# as extra vars, as AAP runs a networking job. The inventory file, not an extra
+# var, keeps the delegated provider tasks local.
+- name: Write the NATGateway job input
+  ansible.builtin.copy:
+    dest: "{{ agentless_natgw_tempdir.path }}/job.json"
+    mode: "0600"
+    content: "{{ {'osac_job_vars': agentless_natgw_job_vars} | to_json }}"
+
+- name: Run the generic network task playbook
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+      - -i
+      - "{{ agentless_natgw_tempdir.path }}/inventory.yaml"
+      - "{{ playbook_dir }}/../../../../../playbook_osac_network_task.yml"
+      - -e
+      - "@{{ agentless_natgw_tempdir.path }}/job.json"
+  args:
+    chdir: "{{ playbook_dir }}/../../../../../"
+  environment:
+    AGENTLESS_NET_VN_INVENTORY: "{{ agentless_natgw_inventory | to_json }}"
+    AGENTLESS_NET_STATE_FILE: "{{ agentless_natgw_state_file }}"
+    AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+    ANSIBLE_CONFIG: "{{ playbook_dir }}/../../../../../ansible.cfg"
+    ANSIBLE_COLLECTIONS_PATH: "{{ playbook_dir }}/../../../../../collections:{{ playbook_dir }}/../../../../../vendor"
+    ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
+    ANSIBLE_SHOW_CUSTOM_STATS: "true"
+    ANSIBLE_LOCALHOST_WARNING: "False"
+    PYTHONPATH: "{{ playbook_dir }}/../files/python"
+    OSAC_AGENTLESS_NATGW_TEST_MODE: "true"
+    OSAC_AGENTLESS_NATGW_FAIL_DELETE: >-
+      {{ agentless_natgw_fail_delete | default(false) | ternary('true', 'false') }}
+  register: agentless_natgw_job
+  changed_when: false
+  failed_when: false
+
+- name: Check the job outcome against the contract
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/../../network_task_playbook/tasks/parse_job.yaml"
+  vars:
+    sft_label: "{{ agentless_natgw_job_vars.task }}"
+    sft_raw: "{{ agentless_natgw_job }}"
+    sft_expect: "{{ agentless_natgw_expect }}"
+
+- name: Check a NATGateway task publishes no typed output
+  ansible.builtin.assert:
+    that:
+      - sft_last.stats == {}
+  when: agentless_natgw_expect == 'success'

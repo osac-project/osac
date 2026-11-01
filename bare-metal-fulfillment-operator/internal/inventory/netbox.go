@@ -71,6 +71,7 @@ var (
 type NetBoxAPI interface {
 	ForEachDevice(ctx context.Context, query netboxclient.DeviceQuery, visit func(netboxclient.Device) (bool, error)) error
 	ForEachDeviceCustomField(ctx context.Context, visit func(netboxclient.CustomField) (bool, error)) error
+	ListDeviceInterfaces(ctx context.Context, id string) ([]netboxclient.DeviceInterface, error)
 	GetDevice(ctx context.Context, id string) (netboxclient.DeviceSnapshot, error)
 	PatchDevice(ctx context.Context, id string, patch netboxclient.DevicePatch, etag string) (netboxclient.DeviceSnapshot, error)
 }
@@ -584,13 +585,95 @@ func (c *NetBoxClient) stageNetBoxDevice(ctx context.Context, deviceID, etag str
 	return err
 }
 
-func (*NetBoxClient) GetHostNICs(_ context.Context, _ string) ([]HostNIC, error) {
-	return nil, errNetBoxClientNotImplemented
+// GetHostNICs reads inspected NICs from the allocated BareMetalHost.
+func (c *NetBoxClient) GetHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error) {
+	_, deviceID, err := c.parseNetBoxHostID(inventoryHostID)
+	if err != nil {
+		return nil, err
+	}
+	bmhName := netBoxHostPrefix + deviceID
+	ready, err := c.bmhManager.IsBMHReady(ctx, bmhName)
+	if err != nil {
+		return nil, err
+	}
+	if !ready {
+		return nil, fmt.Errorf("BareMetalHost %s is not ready for NIC metadata", bmhName)
+	}
+	macs, err := c.bmhManager.GetHardwareNICs(ctx, bmhName)
+	if err != nil {
+		return nil, err
+	}
+	nics := make([]HostNIC, len(macs))
+	for i, mac := range macs {
+		nics[i] = HostNIC{MAC: strings.ToLower(mac)}
+	}
+	return nics, nil
 }
 
-// GetHostLogicalPortMACs is not implemented until NetBox inventory operations are added.
-func (*NetBoxClient) GetHostLogicalPortMACs(_ context.Context, _ string) (map[string]string, error) {
-	return nil, errNetBoxClientNotImplemented
+// GetHostLogicalPortMACs returns the logical-port MAC mapping for a NetBox device.
+func (c *NetBoxClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHostID string) (map[string]string, error) {
+	_, deviceID, err := c.parseNetBoxHostID(inventoryHostID)
+	if err != nil {
+		return nil, err
+	}
+	if c.api == nil {
+		return nil, errNetBoxClientNotImplemented
+	}
+
+	nativeMACs, err := c.nativeLogicalPortMACs(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	customMACs, err := c.customFieldLogicalPortMACs(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return mergeLogicalPortMACs(nativeMACs, customMACs), nil
+}
+
+func mergeLogicalPortMACs(nativeMACs, customMACs map[string]string) map[string]string {
+	macs := make(map[string]string)
+	for name, mac := range nativeMACs {
+		macs[name] = mac
+	}
+	for name, mac := range customMACs {
+		macs[name] = mac
+	}
+	return macs
+}
+
+func (c *NetBoxClient) nativeLogicalPortMACs(ctx context.Context, deviceID string) (map[string]string, error) {
+	interfaces, err := c.api.ListDeviceInterfaces(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	macs := make(map[string]string, len(interfaces))
+	for _, iface := range interfaces {
+		if iface.PrimaryMAC != "" {
+			macs[iface.Name] = iface.PrimaryMAC
+		}
+	}
+	return macs, nil
+}
+
+func (c *NetBoxClient) customFieldLogicalPortMACs(ctx context.Context, deviceID string) (map[string]string, error) {
+	snapshot, err := c.readNetBoxDevice(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	value := snapshot.Device.CustomFields["osac_interface_macs"]
+	if value == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	macs := map[string]string{}
+	if err := json.Unmarshal(raw, &macs); err != nil {
+		return nil, err
+	}
+	return macs, nil
 }
 
 const (

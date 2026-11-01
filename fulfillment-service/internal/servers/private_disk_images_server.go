@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 
@@ -269,6 +270,10 @@ func applyDiskImageUpdate(base, update *privatev1.DiskImage, mask *fieldmaskpb.F
 		switch path {
 		case "spec":
 			base.SetSpec(proto.Clone(update.GetSpec()).(*privatev1.DiskImageSpec))
+		case "metadata.labels":
+			base.GetMetadata().SetLabels(maps.Clone(update.GetMetadata().GetLabels()))
+		case "metadata.annotations":
+			base.GetMetadata().SetAnnotations(maps.Clone(update.GetMetadata().GetAnnotations()))
 		case "spec.lifecycle":
 			base.GetSpec().SetLifecycle(update.GetSpec().GetLifecycle())
 		case "spec.architecture":

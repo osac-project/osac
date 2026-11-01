@@ -1,0 +1,17 @@
+---
+# Check the task input and compute the names, labels and manifests of the task
+# (plugins/filter/cudn_evpn.py). An input OSAC never sends fails as final.
+- name: Plan the task from its input
+  ansible.builtin.set_fact:
+    cudn_evpn: "{{ osac_job_vars | osac.templates.cudn_evpn_plan }}"
+
+- name: Stop on an invalid task input or an implementation limit
+  when: cudn_evpn.error is not none
+  block:
+    - name: Record the final error
+      ansible.builtin.set_fact:
+        cudn_evpn_error: "{{ cudn_evpn.error }}"
+
+    - name: Fail
+      ansible.builtin.fail:
+        msg: "{{ cudn_evpn_error.message }}"

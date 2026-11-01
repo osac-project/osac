@@ -1,9 +1,14 @@
+import hmac
 import importlib.util
 import io
 import json
 import sys
+from email.message import Message
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.request import Request
+from urllib.response import addinfourl
 
 import pytest
 
@@ -36,7 +41,8 @@ from ansible_collections.osac.templates.plugins.module_utils import (  # noqa: E
     netris_external_ip as netris_eip,
 )
 
-RESOURCE_UID = "11111111-1111-4111-8111-111111111111"
+EXTERNAL_IP_ID = "44444444-4444-4444-8444-444444444444"
+POOL_ID = "22222222-2222-4222-8222-222222222222"
 TEST_COOKIE = "s%3Asecret-cookie-value"
 
 
@@ -49,28 +55,19 @@ def load_module():
 
 def make_resource():
     return {
-        "metadata": {
-            "name": "eip-test",
-            "namespace": "osac",
-            "uid": RESOURCE_UID,
-            "generation": 3,
-            "labels": {"osac.openshift.io/externalip-uuid": "44444444-4444-4444-8444-444444444444"},
-            "annotations": {
-                "osac.openshift.io/tenant": "tenant-a",
-                "osac.openshift.io/externalip-contract-version": "v1",
-            },
-        },
-        "spec": {"pool": "22222222-2222-4222-8222-222222222222"},
+        "kind": "ExternalIP",
+        "id": EXTERNAL_IP_ID,
+        "metadata": {"name": "eip-test", "namespace": "osac", "uid": "kube-uid", "generation": 3},
+        "spec": {"pool": POOL_ID},
     }
 
 
 def make_pool():
     return {
-        "fulfillment_id": "22222222-2222-4222-8222-222222222222",
-        "kubernetes_uid": "33333333-3333-4333-8333-333333333333",
-        "tenant_id": "tenant-a",
-        "cidr": "10.20.0.0/24",
-        "phase": "Ready",
+        "kind": "ExternalIPPool",
+        "id": POOL_ID,
+        "metadata": {"name": "pool", "namespace": "osac", "uid": "kube-pool-uid", "generation": 1},
+        "spec": {"cidrs": ["10.20.0.0/24"]},
     }
 
 
@@ -79,6 +76,7 @@ def module_args(**overrides):
         "operation": "external_ip.allocate",
         "resource": make_resource(),
         "pool": make_pool(),
+        "reservation_name": f"osac-eip-{EXTERNAL_IP_ID}",
         "controller_url": "https://netris.example",
         "session_cookie": TEST_COOKIE,
         "site_id": 1,
@@ -193,7 +191,7 @@ def test_check_mode_validates_inputs_without_any_provider_write(monkeypatch, cap
 def test_successful_allocation_returns_changed_and_address(monkeypatch, capsys):
     record = {
         "id": 101,
-        "name": f"osac-eip-{RESOURCE_UID}",
+        "name": f"osac-eip-{EXTERNAL_IP_ID}",
         "prefix": "10.20.0.5/32",
         "purpose": "nat",
         "site_id": 1,
@@ -226,10 +224,10 @@ def test_allocation_returns_address_intact_when_resource_leaf_values_collide(
     resource = make_resource()
     resource["metadata"]["generation"] = 1
     pool = make_pool()
-    pool["cidr"] = "192.0.2.0/30"
+    pool["spec"]["cidrs"] = ["192.0.2.0/30"]
     record = {
         "id": 101,
-        "name": f"osac-eip-{RESOURCE_UID}",
+        "name": f"osac-eip-{EXTERNAL_IP_ID}",
         "prefix": "192.0.2.1/32",
         "purpose": "nat",
         "site_id": 1,
@@ -253,7 +251,7 @@ def test_allocation_returns_address_intact_when_resource_leaf_values_collide(
 def test_invocation_redacts_provider_inputs(monkeypatch, capsys):
     record = {
         "id": 101,
-        "name": f"osac-eip-{RESOURCE_UID}",
+        "name": f"osac-eip-{EXTERNAL_IP_ID}",
         "prefix": "10.20.0.5/32",
         "purpose": "nat",
         "site_id": 1,
@@ -302,7 +300,7 @@ def test_unknown_response_shape_fails_the_module(monkeypatch, capsys):
 
 def test_release_module_returns_empty_address(monkeypatch, capsys):
     resource = make_resource()
-    resource["metadata"]["deletionTimestamp"] = "2026-10-19T00:00:00Z"
+    pass
     args = module_args(
         operation="external_ip.release",
         resource=resource,
@@ -316,9 +314,11 @@ def test_release_module_returns_empty_address(monkeypatch, capsys):
 
 
 def test_transport_configuration_is_passed_to_fetch_url(monkeypatch):
+    """Preserve session, redirect isolation, and caller transport settings."""
     captured = {}
 
     def fake_fetch_url(module, url, **kwargs):
+        """Capture transport arguments while returning an empty provider list."""
         captured["url"] = url
         captured["module"] = module
         captured.update(kwargs)
@@ -342,16 +342,26 @@ def test_transport_configuration_is_passed_to_fetch_url(monkeypatch):
 
     assert records == []
     assert captured["url"] == "https://netris.example/api/v2/ipam/subnets"
-    assert captured["unredirected_headers"]["Cookie"] == f"connect.sid={TEST_COOKIE}"
+    cookie_matches = hmac.compare_digest(
+        captured["headers"].get("Cookie", "").encode("utf-8"),
+        f"connect.sid={TEST_COOKIE}".encode("utf-8"),
+    )
+    assert cookie_matches
+    assert captured["unredirected_headers"] == ["Cookie"]
+    assert "Content-Type" not in captured["headers"]
     assert captured["timeout"] == 45
     assert captured["ca_path"] == "/tmp/netris-ca.pem"
+    assert captured["use_proxy"] is True
+    assert captured["force"] is True
     assert module_stub.params["validate_certs"] is False
 
 
-def test_session_cookie_never_follows_redirects(monkeypatch):
+def test_session_cookie_is_marked_unredirected(monkeypatch):
+    """Pass only the Cookie header name to Ansible's redirect exclusion."""
     captured = {}
 
     def fake_fetch_url(module, url, **kwargs):
+        """Record redirect-exclusion arguments without sending a request."""
         captured.update(kwargs)
         return (io.BytesIO(json.dumps({"data": []}).encode()), {"status": 200})
 
@@ -362,7 +372,45 @@ def test_session_cookie_never_follows_redirects(monkeypatch):
 
     client.list_subnets()
 
-    assert captured["unredirected_headers"]["Cookie"] == f"connect.sid={TEST_COOKIE}"
+    assert captured["unredirected_headers"] == ["Cookie"]
+
+
+def test_requests_reject_response_cookies_with_fresh_jars(monkeypatch):
+    """Reject provider cookies and never reuse mutable jar state across calls."""
+    jars = []
+
+    def fake_fetch_url(module, url, **kwargs):
+        """Capture the real jar without replacing its cookie policy behavior."""
+        jars.append(kwargs["cookies"])
+        return (io.BytesIO(json.dumps({"data": []}).encode()), {"status": 200})
+
+    def extract_cookies(jar, url):
+        """Present synthetic response cookies through the public CookieJar API."""
+        headers = Message()
+        headers.add_header("Set-Cookie", "connect.sid=synthetic-response; Path=/")
+        headers.add_header("Set-Cookie", "probe=synthetic-response; Path=/")
+        with addinfourl(io.BytesIO(b""), headers, url, 200) as response:
+            jar.extract_cookies(response, Request(url))
+
+    monkeypatch.setattr(netris_eip, "fetch_url", fake_fetch_url)
+    client = netris_eip.NetrisSubnetClient(
+        SimpleNamespace(params={}), "https://netris.example", TEST_COOKIE
+    )
+    client.list_subnets()
+    first_jar = jars[0]
+    assert isinstance(first_jar, CookieJar)
+    for url in ("https://netris.example/", "https://other.example/", "http://127.0.0.1/"):
+        extract_cookies(first_jar, url)
+        assert not list(first_jar)
+    first_jar.set_policy(DefaultCookiePolicy())
+    extract_cookies(first_jar, "https://netris.example/")
+    assert len(first_jar) == 2
+
+    client.list_subnets()
+    assert jars[1] is not first_jar
+    assert not list(jars[1])
+    extract_cookies(jars[1], "https://netris.example/")
+    assert not list(jars[1])
 
 
 def _client_with_response(monkeypatch, status, payload=b""):

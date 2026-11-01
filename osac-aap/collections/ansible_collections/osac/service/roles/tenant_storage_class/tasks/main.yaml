@@ -2,8 +2,9 @@
 # Resolve a StorageClass for a specific storage tier from the pre-resolved
 # storageClasses list injected via extra_vars by the ComputeInstance controller.
 # The Tenant controller is the single source of truth for StorageClass
-# resolution (per-tier duplicate detection, tenant vs shared Default fallback).
-# This role performs tier selection only.
+# resolution (tenant vs shared Default fallback).
+# Repeated entries are valid when JIT returns an already-resolved class.
+# Different class names for the requested tier are ambiguous.
 # Sets tenant_storage_class_name or fails.
 
 - name: Fail if storageClasses list is empty
@@ -11,25 +12,54 @@
     msg: >-
       No resolved storage tiers available for tenant
       "{{ tenant_storage_class_tenant_name }}"
-      {{ ('(resolving ' + tenant_storage_class_disk_label + ')') if tenant_storage_class_disk_label | length > 0 else '' }}.
+      {{ ('(resolving ' + tenant_storage_class_disk_label + ')') if (tenant_storage_class_disk_label | default('')) | length > 0 else '' }}.
       The storageClasses list injected by the ComputeInstance controller
-      is empty. Check the Tenant StorageClassReady condition.
+      is empty. Check the Tenant StorageReady and ClusterStorageReady conditions.
   when: tenant_storage_class_storage_classes | length == 0
 
+# StorageClass names are trimmed before comparison, so whitespace-only names
+# never resolve and padded duplicates of one name are not ambiguous.
 - name: Resolve StorageClass for requested tier
   ansible.builtin.set_fact:
-    _tenant_sc_match: "{{ tenant_storage_class_storage_classes | selectattr('tier', 'equalto', tenant_storage_class_storage_tier) | list }}"
-    _tenant_sc_available_tiers: "{{ tenant_storage_class_storage_classes | map(attribute='tier') | unique | sort | join(', ') }}"
+    _tenant_sc_unique_names: >-
+      {% set _req_tier = tenant_storage_class_storage_tier | string | trim | lower -%}
+      {% set _names = [] -%}
+      {% for _sc in tenant_storage_class_storage_classes -%}
+      {% set _name = _sc.name | default('', true) | string | trim -%}
+      {% if (_name != '') and ((_sc.tier | default('', true) | string | trim | lower) == _req_tier) and (_name not in _names) -%}
+      {% set _ = _names.append(_name) -%}
+      {% endif -%}
+      {% endfor -%}
+      {{ _names }}
+    _tenant_sc_available_tiers: >-
+      {% set _tiers = [] -%}
+      {% for _sc in tenant_storage_class_storage_classes -%}
+      {% set _tier = _sc.tier | default('', true) | string | trim | lower -%}
+      {% if ((_sc.name | default('', true) | string | trim) != '') and (_tier != '') and (_tier not in _tiers) -%}
+      {% set _ = _tiers.append(_tier) -%}
+      {% endif -%}
+      {% endfor -%}
+      {{ _tiers | sort | join(', ') }}
 
 - name: Fail if requested tier is not available
   ansible.builtin.fail:
     msg: >-
       Storage tier "{{ tenant_storage_class_storage_tier }}" is not available
       for tenant "{{ tenant_storage_class_tenant_name }}"
-      {{ ('(resolving ' + tenant_storage_class_disk_label + ')') if tenant_storage_class_disk_label | length > 0 else '' }}.
+      {{ ('(resolving ' + tenant_storage_class_disk_label + ')') if (tenant_storage_class_disk_label | default('')) | length > 0 else '' }}.
       Available tiers: {{ _tenant_sc_available_tiers }}.
-  when: _tenant_sc_match | length == 0
+  when: _tenant_sc_unique_names | length == 0
+
+- name: Fail if requested tier maps to multiple conflicting StorageClasses
+  ansible.builtin.fail:
+    msg: >-
+      Storage tier "{{ tenant_storage_class_storage_tier }}" is ambiguous
+      for tenant "{{ tenant_storage_class_tenant_name }}"
+      {{ ('(resolving ' + tenant_storage_class_disk_label + ')') if (tenant_storage_class_disk_label | default('')) | length > 0 else '' }}:
+      multiple resolved StorageClasses matched ({{ _tenant_sc_unique_names | sort | join(', ') }}).
+      Supply one distinct StorageClass name per requested tier.
+  when: _tenant_sc_unique_names | length > 1
 
 - name: Set StorageClass name from resolved tier
   ansible.builtin.set_fact:
-    tenant_storage_class_name: "{{ _tenant_sc_match[0].name }}"
+    tenant_storage_class_name: "{{ _tenant_sc_unique_names[0] }}"

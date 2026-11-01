@@ -37,6 +37,7 @@ func validateAndCanonicalizeClusterCatalogItemPolicies(
 	secretsDao *dao.GenericDAO[*privatev1.Secret],
 	subnetsDao *dao.GenericDAO[*privatev1.Subnet],
 	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup],
+	addOnOperatorsDao *dao.GenericDAO[*privatev1.AddOnOperator],
 ) error {
 	if item == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "catalog item is mandatory")
@@ -64,6 +65,10 @@ func validateAndCanonicalizeClusterCatalogItemPolicies(
 	}
 
 	if err := validateClusterCatalogItemNetworkAttachmentPolicy(ctx, scope, fields.GetNetworkAttachment(), subnetsDao, securityGroupsDao); err != nil {
+		return err
+	}
+
+	if err := validateClusterCatalogItemAddOnOperatorPolicy(ctx, fields.GetAddOnOperators(), addOnOperatorsDao); err != nil {
 		return err
 	}
 	return validateClusterCatalogItemNodeSetPolicy(ctx, item, instanceTypesDao)
@@ -96,7 +101,73 @@ func applyClusterCatalogItemPolicies(spec *privatev1.ClusterSpec, fields *privat
 	if err := applyPolicy(fields.GetNodeSets(), len(spec.GetNodeSets()) > 0, spec.SetNodeSets, decodeClusterNodeSetMapPolicy, cloneClusterNodeSets); err != nil {
 		return fmt.Errorf("node_sets: %w", err)
 	}
+	if err := applyPolicy(fields.GetAddOnOperators(), len(spec.GetAddOnOperators()) > 0, func(value *privatev1.AddOnOperatorReferenceList) {
+		spec.SetAddOnOperators(value.GetItems())
+	}, decodeAddOnOperatorReferenceListPolicy, cloneMessage[*privatev1.AddOnOperatorReferenceList]); err != nil {
+		return fmt.Errorf("add_on_operators: %w", err)
+	}
 	return applyClusterCatalogItemNetworkPolicies(spec, fields.GetNetwork())
+}
+
+// validateClusterCatalogItemAddOnOperatorPolicy resolves both governed policy branches against
+// the published shared operator catalog and stores canonical references in the detached item.
+func validateClusterCatalogItemAddOnOperatorPolicy(
+	ctx context.Context,
+	policy *privatev1.AddOnOperatorReferenceListFieldPolicy,
+	operatorsDao *dao.GenericDAO[*privatev1.AddOnOperator],
+) error {
+	if policy == nil {
+		return nil
+	}
+	state, err := decodeAddOnOperatorReferenceListPolicy(policy)
+	if err != nil {
+		return catalogItemPolicyError("fields.add_on_operators", err.Error())
+	}
+	resolveList := func(list *privatev1.AddOnOperatorReferenceList, field string) error {
+		if list == nil {
+			return nil
+		}
+		for index, ref := range list.GetItems() {
+			if ref == nil {
+				return catalogItemPolicyError(fmt.Sprintf("%s.items[%d]", field, index), "reference must not be null")
+			}
+			itemField := fmt.Sprintf("%s.items[%d]", field, index)
+			if err := validatePlatformReference(ref, "add-on operator", " in "+itemField); err != nil {
+				return catalogItemPolicyError(itemField, grpcstatus.Convert(err).Message())
+			}
+			operator, err := resolveLockedPlatformResource(
+				ctx, operatorsDao, ref.GetId(), ref.GetName(),
+				"add-on operator", " in "+itemField, grpccodes.InvalidArgument,
+			)
+			if err != nil {
+				status := grpcstatus.Convert(err)
+				if status.Code() == grpccodes.InvalidArgument || status.Code() == grpccodes.NotFound {
+					return catalogItemPolicyError(itemField, status.Message())
+				}
+				return err
+			}
+			if err := validateResourceNotDeleted("add-on operator", refKey(ref), " in "+itemField, operator.GetMetadata()); err != nil {
+				return catalogItemPolicyError(itemField, grpcstatus.Convert(err).Message())
+			}
+			if !operator.GetPublished() {
+				return catalogItemPolicyError(itemField,
+					fmt.Sprintf("add-on operator %q is not published", operator.GetMetadata().GetName()))
+			}
+			canonicalizeResourceReference(ref, operator)
+		}
+		return nil
+	}
+	if state.hasLocked {
+		if err := resolveList(state.lockedValue, "fields.add_on_operators.locked"); err != nil {
+			return err
+		}
+	}
+	if state.hasDefault {
+		if err := resolveList(state.defaultValue, "fields.add_on_operators.editable.default_value"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // applyClusterCatalogItemNetworkPolicies applies pod and service CIDR policies to a detached spec.

@@ -103,12 +103,13 @@ jobs:
           fi
 
   # Only osac-project/osac sends Slack; forks keep their GitHub reports.
-  # Send bounded Slack summaries even when the reporting job marked them incomplete.
+  # Send Slack summaries after the reporting job succeeds.
   # The osac-ci runner has access to Vault, which stores the shared Slack webhook.
   notify:
     needs: report
     if: >-
       always() &&
+      needs.report.result == 'success' &&
       github.repository == 'osac-project/osac' &&
       needs.report.outputs.slack_payload != '' &&
       github.event.workflow_run.conclusion != 'cancelled'

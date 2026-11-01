@@ -51,15 +51,11 @@ var _ = Describe("Virtual networks server", func() {
 
 		nc := privatev1.NetworkClass_builder{
 			Id:            "default",
-			FabricManager: new("ovn-kubernetes"),
+			FabricManager: "ovn-kubernetes",
 			Metadata: privatev1.Metadata_builder{
 				Tenant: testTenant,
 			}.Build(),
-			Capabilities: privatev1.NetworkClassCapabilities_builder{
-				SupportsIpv4:      true,
-				SupportsIpv6:      true,
-				SupportsDualStack: true,
-			}.Build(),
+			Spec: privatev1.NetworkClassSpec_builder{AddressPlan: fixtureAddressPlan()}.Build(),
 			Status: privatev1.NetworkClassStatus_builder{
 				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
 			}.Build(),
@@ -148,9 +144,7 @@ var _ = Describe("Virtual networks server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:       "us-east-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "default"}.Build(),
-						Ipv4Cidr:     new("10.0.0.0/16"),
+						Ipv4Cidr: new("10.0.0.0/16"),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -236,29 +230,6 @@ var _ = Describe("Virtual networks server", func() {
 			Expect(publicObj.GetId()).To(Equal(privateObj.GetId()))
 		})
 
-		It("Create object via public API sets default region", func() {
-			// Create a VirtualNetwork via the public server (no region field):
-			createResponse, err := publicServer.Create(ctx, publicv1.VirtualNetworksCreateRequest_builder{
-				Object: publicv1.VirtualNetwork_builder{
-					Metadata: publicv1.Metadata_builder{
-						Name: "public-vn",
-					}.Build(),
-					Spec: publicv1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.0.0.0/16"),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			publicObj := createResponse.GetObject()
-
-			// Verify via private server that region was set to "default":
-			privateGetResponse, err := privateServer.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-				Id: publicObj.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(privateGetResponse.GetObject().GetSpec().GetRegion()).To(Equal("default"))
-		})
-
 		It("Delete object", func() {
 			// Create the object via the private server:
 			privateObj := createVirtualNetwork()
@@ -290,29 +261,6 @@ var _ = Describe("Virtual networks server", func() {
 			Expect(object.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 		})
 
-		It("Public Create without network_class resolves the singleton NetworkClass", func() {
-			// Create VN via public server (network_class is not exposed publicly; the
-			// private server resolves it from the deployment singleton):
-			createResponse, err := publicServer.Create(ctx, publicv1.VirtualNetworksCreateRequest_builder{
-				Object: publicv1.VirtualNetwork_builder{
-					Metadata: publicv1.Metadata_builder{
-						Name: "default-nc-vn",
-					}.Build(),
-					Spec: publicv1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.2.0.0/16"),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			// Verify via the private server that network_class is the singleton's ID:
-			privateGetResponse, err := privateServer.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-				Id: createResponse.GetObject().GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(privateGetResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal("default"))
-		})
-
 		It("Public Create without network_class when no singleton exists returns InvalidArgument", func() {
 			// Remove the singleton NC that BeforeEach created:
 			ncDao, ncErr := dao.NewGenericDAO[*privatev1.NetworkClass]().
@@ -337,7 +285,7 @@ var _ = Describe("Virtual networks server", func() {
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
 			Expect(err.Error()).To(ContainSubstring("no NetworkClass is configured"))
 		})
 	})

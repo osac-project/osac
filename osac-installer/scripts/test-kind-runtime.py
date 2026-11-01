@@ -630,7 +630,7 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
         (module / "it").mkdir(parents=True)
         shutil.copy(INSTALLER / "Makefile", installer / "Makefile")
         env = {key: value for key, value in self.env.items() if key != "FULFILLMENT_IT_REPORT_DIR"}
-        phases = ["service-only", "manager-capability", "manager-readiness", "bmaas-disabled"]
+        phases = ["service-only", "networking-operator", "bmaas-disabled"]
         cases = [("default", None), ("disabled", ""), ("relative", "../local-reports"),
                  ("absolute", str(module / "logs/timings"))]
         for name, directory in cases:
@@ -645,13 +645,13 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
                 result = subprocess.run(args, env=case_env, text=True, capture_output=True, timeout=15)
                 self.assert_success(result)
                 commands = [shlex.split(line) for line in result.stdout.splitlines() if "ginkgo run " in line]
-                self.assertEqual(len(commands), 4)
+                self.assertEqual(len(commands), len(phases))
                 reports = [[word.split("=", 1)[1] for word in command
                             if word.startswith("--json-report=")] for command in commands]
                 cleanup = [word for line in result.stdout.splitlines() if line.startswith("rm -f ")
                            for word in shlex.split(line)[2:] if word.endswith(".json")]
                 if not directory:
-                    self.assertEqual(reports, [[], [], [], []])
+                    self.assertEqual(reports, [[] for _ in phases])
                     self.assertEqual(cleanup, [])
                     continue
                 report_dir = (installer / directory).resolve()
@@ -660,6 +660,32 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
                 self.assertEqual([[Path(path).resolve() for path in paths] for paths in reports],
                                  [[path] for path in expected])
                 self.assertEqual([Path(path).resolve() for path in cleanup], expected)
+
+    def test_fulfillment_service_only_phase_runs_without_the_operator(self):
+        # The service-only specs report networking and tenant status through the
+        # private API in place of the operator's feedback controllers. A running
+        # operator makes those resources READY first, so only the
+        # networking-operator phase deploys it.
+        checkout = self.directory / "checkout"
+        installer = checkout / "osac-installer"
+        installer.mkdir(parents=True)
+        (checkout / "fulfillment-service" / "it").mkdir(parents=True)
+        shutil.copy(INSTALLER / "Makefile", installer / "Makefile")
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-n", "-C", str(installer), "test",
+             "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=fulfillment", "MAKE=true"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assert_success(result)
+        enabled = []
+        for line in result.stdout.replace("\\\n", " ").splitlines():
+            if " install-osac " not in line:
+                continue
+            words = shlex.split(line)
+            helm = [word.split("=", 1)[1] for word in words if word.startswith("EXTRA_HELM_ARGS=")][0].split()
+            enabled.append([value for value in helm if value.startswith("operator.enabled=")])
+        self.assertEqual(enabled, [["operator.enabled=false"], ["operator.enabled=true"],
+                                   ["operator.enabled=false"]])
 
     def prepare_helm_dependencies(self):
         installer = self.directory / "installer"

@@ -1,114 +1,55 @@
 ---
-# NATGateway maps to a Netris SNAT rule
-# Creates an SNAT rule on the SoftGate: VN CIDR -> ExternalIP address
-# All egress from the VirtualNetwork is source-NATted to the ExternalIP
+# NATGateway -> Netris SNAT rule osac-natgw-<NATGateway id>: the IPv4 CIDR of
+# the VirtualNetwork -> external_ip.address, in the VPC osac-vn-<VN id>.
+# Get-or-create by name; a rule of the same name in another VPC or with other
+# addresses is a final error.
+- name: Create the NATGateway on Netris
+  block:
+    - name: Check the settings
+      ansible.builtin.include_tasks: _settings.yaml
+      vars:
+        netris_require: [controller, credentials, site, tenant]
 
-- name: Validate NATGateway annotations
-  ansible.builtin.assert:
-    that:
-      - nat_gateway.metadata is defined
-      - nat_gateway.metadata.annotations is defined
-      - "'osac.openshift.io/externalip-name' in nat_gateway.metadata.annotations"
-      - "'osac.openshift.io/vn-ipv4-cidr' in nat_gateway.metadata.annotations"
-    fail_msg: >-
-      NATGateway requires annotations
-      'osac.openshift.io/externalip-name' (ExternalIP CR name) and
-      'osac.openshift.io/vn-ipv4-cidr' (VirtualNetwork IPv4 CIDR).
+    - name: Check the task input
+      ansible.builtin.include_tasks: _input.yaml
+      vars:
+        netris_require_parents: [virtual_network]
 
-- name: Extract NATGateway configuration
-  ansible.builtin.set_fact:
-    natgw_name: "{{ nat_gateway.metadata.name }}"
-    natgw_namespace: "{{ nat_gateway.metadata.namespace }}"
-    natgw_externalip_name: >-
-      {{ nat_gateway.metadata.annotations['osac.openshift.io/externalip-name'] }}
-    natgw_vn_ipv4_cidr: >-
-      {{ nat_gateway.metadata.annotations['osac.openshift.io/vn-ipv4-cidr'] }}
+    - name: Plan the SNAT rule
+      ansible.builtin.set_fact:
+        _netris_nat: "{{ osac_job_vars | osac.templates.netris_nat_plan }}"
 
-- name: Look up ExternalIP CR to get allocated address
-  kubernetes.core.k8s_info:
-    api_version: osac.openshift.io/v1alpha1
-    kind: ExternalIP
-    name: "{{ natgw_externalip_name }}"
-    namespace: "{{ natgw_namespace }}"
-  register: _natgw_eip_lookup
+    - name: Stop on an invalid NATGateway input
+      vars:
+        netris_fail:
+          message: "{{ _netris_nat.error }}"
+          retryable: false
+      when: _netris_nat.error | length > 0
+      ansible.builtin.include_tasks: _fail.yaml
 
-- name: Validate ExternalIP CR found with allocated address
-  ansible.builtin.assert:
-    that:
-      - _natgw_eip_lookup.resources | length > 0
-      - _natgw_eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] is defined
-    fail_msg: >-
-      ExternalIP '{{ natgw_externalip_name }}' not found or missing
-      'osac.openshift.io/allocated-address' annotation. The ExternalIP must
-      be allocated before creating a NATGateway.
+    - name: Build the object names
+      ansible.builtin.include_tasks: _names.yaml
 
-- name: Extract allocated external IP address
-  ansible.builtin.set_fact:
-    natgw_snat_ip: >-
-      {{ _natgw_eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] }}
+    - name: Find the VPC of the VirtualNetwork
+      ansible.builtin.include_tasks: _nat_vpc.yaml
+      vars:
+        netris_nat_domain: "{{ _netris_nat.domain }}"
+        netris_nat_vpc_required: true
 
-- name: Display NATGateway information
-  ansible.builtin.debug:
-    msg:
-      - "Creating Netris SNAT rule for NATGateway '{{ natgw_name }}'"
-      - "VN CIDR (source): {{ natgw_vn_ipv4_cidr }}"
-      - "ExternalIP (SNAT to): {{ natgw_snat_ip }} (from ExternalIP '{{ natgw_externalip_name }}')"
-
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
-
-# The SNAT rule must live in the tenant VPC (the one owning the VN CIDR). The
-# operator passes the tenant VirtualNetwork name; the Netris VPC is named after it.
-# Default to the mgmt VPC and override when a tenant VPC is resolved.
-- name: Determine tenant VirtualNetwork name
-  ansible.builtin.set_fact:
-    natgw_vn_name: >-
-      {{ nat_gateway.metadata.annotations['osac.openshift.io/virtual-network-name']
-         | default('', true) }}
-
-- name: Default NAT VPC to the management VPC
-  ansible.builtin.set_fact:
-    natgw_nat_vpc_id: "{{ netris_mgmt_vpc_id }}"
-    natgw_nat_vpc_name: "{{ netris_mgmt_vpc_name | default('') }}"
-
-- name: Look up tenant VPC by VirtualNetwork name
-  ansible.builtin.include_role:
-    name: netris.controller.vpc
-    tasks_from: read
-  vars:
-    vpc_name: "{{ natgw_vn_name }}"
-  when: natgw_vn_name | length > 0
-
-- name: Use tenant VPC when resolved
-  ansible.builtin.set_fact:
-    natgw_nat_vpc_id: "{{ netris_vpc.id }}"
-    natgw_nat_vpc_name: "{{ netris_vpc.name }}"
-  when:
-    - natgw_vn_name | length > 0
-    - netris_vpc is defined
-    - netris_vpc is not none
-
-- name: Create SNAT rule for NATGateway
-  ansible.builtin.include_role:
-    name: netris.controller.nat
-    tasks_from: create
-  vars:
-    nat_name: "{{ natgw_name }}-snat"
-    nat_site_id: "{{ netris_site_id }}"
-    nat_vpc_id: "{{ natgw_nat_vpc_id }}"
-    nat_vpc_name: "{{ natgw_nat_vpc_name }}"
-    nat_action: snat
-    nat_protocol: all
-    nat_source_address: "{{ natgw_vn_ipv4_cidr }}"
-    nat_snat_to_ip: "{{ natgw_snat_ip }}/32"
-    nat_comment: "OSAC NATGateway {{ natgw_name }}"
-
-- name: Display SNAT rule creation result
-  ansible.builtin.debug:
-    msg: >-
-      SNAT rule '{{ natgw_name }}-snat'
-      {{ (nat_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
-      (ID: {{ nat_id | default('unknown') }})
-      — {{ natgw_vn_ipv4_cidr }} -> {{ natgw_snat_ip }}
+    - name: Create the SNAT rule
+      ansible.builtin.include_role:
+        name: netris.controller.nat
+        tasks_from: create
+      vars:
+        nat_name: "{{ netris_names.natgw_snat }}"
+        nat_site_id: "{{ netris_site_id | int }}"
+        nat_vpc_id: "{{ netris_nat_vpc.id }}"
+        nat_vpc_name: "{{ netris_nat_vpc.name }}"
+        nat_action: snat
+        nat_protocol: all
+        nat_source_address: "{{ _netris_nat.source }}"
+        nat_snat_to_ip: "{{ _netris_nat.external }}/32"
+        nat_comment: "OSAC NATGateway {{ netris_in.resource_id }}"
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

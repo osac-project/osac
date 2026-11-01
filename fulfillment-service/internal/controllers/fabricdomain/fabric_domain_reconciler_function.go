@@ -146,13 +146,8 @@ func (t *task) update(ctx context.Context) error {
 	if recovered, err := t.initHub(ctx); err != nil || recovered {
 		return err
 	}
-	hubJustSelected := t.fabricDomain.GetStatus().GetHub() == ""
 	if err := t.selectHub(ctx); err != nil {
 		return err
-	}
-	// Persist placement before any hub writes, so deletion never needs a live VN to find the CR.
-	if hubJustSelected {
-		return nil
 	}
 	object, err := t.getKubeObject(ctx)
 	if err != nil {

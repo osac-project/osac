@@ -254,7 +254,7 @@ class TestRealTemplateMetadata:
         assert metadata.capabilities["supports_east_west_ethernet"] is True
         assert "supports_east_west" not in metadata.capabilities
 
-    @pytest.mark.parametrize("role_name", ["cudn_net", "metallb_l2", "netris", "openstack"])
+    @pytest.mark.parametrize("role_name", ["cudn_evpn", "netris", "openstack"])
     def test_network_metadata_is_ipv4_only(self, role_name):
         metadata = _load_metadata(_roles_dir_path(), role_name)
 
@@ -291,11 +291,122 @@ class TestTypeMappingCompleteness:
 class TestMetadataTemplateTypes:
 
     @pytest.mark.parametrize(
+        ("role_name", "expected_dependencies"),
+        [
+            ("openshift_ai", ["authorino", "pipelines", "serverless", "servicemesh"]),
+            ("amd_gpu", ["node-feature-discovery", "kmm"]),
+            ("nvidia_gpu", ["node-feature-discovery"]),
+            ("authorino", []),
+            ("pipelines", []),
+            ("serverless", []),
+            ("servicemesh", []),
+            ("node_feature_discovery", []),
+            ("kmm", []),
+            ("lso", []),
+        ],
+    )
+    def test_open_shift_ai_operator_dependency_metadata(
+        self, roles_dir, role_name, expected_dependencies
+    ):
+        metadata = _load_metadata(roles_dir, role_name)
+        assert metadata.template_type == TemplateTypeEnum.addon_operator
+        assert metadata.dependencies == expected_dependencies
+
+    @pytest.mark.parametrize(
+        ("role_name", "expected_namespace"),
+        [
+            ("openshift_ai", "redhat-ods-operator"),
+            ("amd_gpu", "openshift-amd-gpu"),
+            ("authorino", "openshift-operators"),
+            ("nvidia_gpu", "nvidia-gpu-operator"),
+            ("pipelines", "openshift-operators"),
+            ("serverless", "openshift-serverless"),
+            ("servicemesh", "openshift-operators"),
+            ("node_feature_discovery", "openshift-nfd"),
+            ("kmm", "openshift-kmm"),
+            ("lso", "openshift-local-storage"),
+        ],
+    )
+    def test_addon_operator_subscription_namespace(
+        self, roles_dir, role_name, expected_namespace
+    ):
+        metadata = _load_metadata(roles_dir, role_name)
+        with (roles_dir / role_name / "meta" / "osac.yaml").open(
+            "r", encoding="utf-8"
+        ) as metadata_file:
+            raw_metadata = yaml.safe_load(metadata_file)
+
+        assert metadata.template_type == TemplateTypeEnum.addon_operator
+        assert raw_metadata["subscription_namespace"] == expected_namespace
+
+    @pytest.mark.parametrize(
+        ("role_name", "expected_package", "expected_channel", "expected_catalog"),
+        [
+            ("openshift_ai", "rhods-operator", "stable", "redhat-operators"),
+            ("amd_gpu", "amd-gpu-operator", "alpha", "certified-operators"),
+            ("authorino", "authorino-operator", "tech-preview-v1", "redhat-operators"),
+            ("nvidia_gpu", "gpu-operator-certified", "stable", "certified-operators"),
+            ("pipelines", "openshift-pipelines-operator-rh", "latest", "redhat-operators"),
+            ("serverless", "serverless-operator", "stable", "redhat-operators"),
+            ("servicemesh", "servicemeshoperator", "stable", "redhat-operators"),
+            ("node_feature_discovery", "nfd", "stable", "redhat-operators"),
+            ("kmm", "kernel-module-management", "stable", "redhat-operators"),
+            ("lso", "local-storage-operator", "stable", "redhat-operators"),
+        ],
+    )
+    def test_addon_operator_olm_metadata(
+        self, roles_dir, role_name, expected_package, expected_channel, expected_catalog
+    ):
+        metadata = _load_metadata(roles_dir, role_name)
+
+        assert metadata.package_name == expected_package
+        assert metadata.channel == expected_channel
+        assert metadata.catalog_source == expected_catalog
+        assert metadata.catalog_source_namespace == "openshift-marketplace"
+
+    @pytest.mark.parametrize(
+        ("role_name", "expected_operator_group"),
+        [
+            ("openshift_ai", "rhods-operator"),
+            ("amd_gpu", "kube-amd-gpu"),
+            ("nvidia_gpu", "gpu-operator-certified"),
+            ("kmm", "openshift-kmm"),
+            ("node_feature_discovery", "openshift-nfd"),
+            ("serverless", "openshift-serverless"),
+            ("lso", "local-storage"),
+        ],
+    )
+    def test_addon_operator_operator_group_metadata(
+        self, roles_dir, role_name, expected_operator_group
+    ):
+        with (roles_dir / role_name / "meta" / "osac.yaml").open(
+            "r", encoding="utf-8"
+        ) as metadata_file:
+            raw_metadata = yaml.safe_load(metadata_file)
+
+        assert raw_metadata["operator_group_name"] == expected_operator_group
+
+    @pytest.mark.parametrize(
+        ("role_name", "expected_min_ocp_version"),
+        [
+            ("openshift_ai", "4.12.0"),
+            ("node_feature_discovery", "4.6.0"),
+        ],
+    )
+    def test_addon_operator_explicit_minimum_ocp_version(
+        self, roles_dir, role_name, expected_min_ocp_version
+    ):
+        metadata = _load_metadata(roles_dir, role_name)
+
+        assert metadata.min_ocp_version == expected_min_ocp_version
+        assert metadata.max_ocp_version == ""
+
+    @pytest.mark.parametrize(
         ("role_name", "expected_type"),
         [
             ("ocp_small", TemplateTypeEnum.cluster),
             ("ocp_virt_vm", TemplateTypeEnum.compute_instance),
-            ("cudn_net", TemplateTypeEnum.network),
+            ("cudn_evpn", TemplateTypeEnum.network),
             ("agentless_net", TemplateTypeEnum.network),
             ("bm_host_agent_provisioning", TemplateTypeEnum.bare_metal_instance),
             ("vast_storage", TemplateTypeEnum.storage_provider),
@@ -393,7 +504,7 @@ class TestAddOnOperatorTemplate:
     def test_registered_filter_returns_only_addon_operator_api_payload(
         self, monkeypatch
     ):
-        addon_operator = _make_addon_operator_template()
+        addon_operator = _make_addon_operator_template(dependencies=[])
         cluster = ClusterTemplate(
             collection="osac.templates",
             path=Path("roles/ocp_small"),
@@ -415,6 +526,35 @@ class TestAddOnOperatorTemplate:
         assert len(result) == 1
         assert result[0]["id"] == "osac.templates.cert_manager"
         assert "package_name" not in result[0]
+
+    def test_registered_filter_orders_addon_operators_after_dependencies(
+        self, monkeypatch
+    ):
+        dependency = _make_addon_operator_template(
+            name="dependency_operator",
+            path=Path("roles/dependency_operator"),
+            title="Dependency Operator",
+            dependencies=[],
+        )
+        dependent = _make_addon_operator_template(
+            name="dependent_operator",
+            path=Path("roles/dependent_operator"),
+            dependencies=["dependency_operator"]
+        )
+        monkeypatch.setattr(
+            filter_plugin,
+            "find_template_roles",
+            lambda requested: iter([dependent, dependency]),
+        )
+
+        result = FilterModule().filters()["find_addon_operator_template_roles"](
+            ["osac.templates"]
+        )
+
+        assert [template["id"] for template in result] == [
+            "osac.templates.dependency_operator",
+            "osac.templates.dependent_operator",
+        ]
 
     def test_serializes_api_fields_and_local_references(self):
         template = _make_addon_operator_template()

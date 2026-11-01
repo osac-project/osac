@@ -5,6 +5,14 @@ global:
   osacDeploymentId: "ci/osac"
   fulfillmentTrust:
     enabled: false
+  # Provider networking disabled: networking resources become READY without
+  # provider work. The osac chart renders the Netris Fabric Manager and
+  # cudn_evpn Kubernetes Manager registrations from fabricManager and
+  # k8sManager; no Netris connection settings are needed.
+  networking:
+    provisioningEnabled: false
+    fabricManager: netris
+    k8sManager: cudn_evpn
   services:
     caas:
       enabled: true

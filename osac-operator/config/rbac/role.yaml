@@ -12,6 +12,7 @@ rules:
   - ""
   resources:
   - configmaps
+  - pods
   verbs:
   - get
   - list
@@ -39,12 +40,6 @@ rules:
   - list
   - watch
 - apiGroups:
-  - ""
-  resources:
-  - services
-  verbs:
-  - get
-- apiGroups:
   - agent-install.openshift.io
   resources:
   - agents
@@ -67,13 +62,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - coordination.k8s.io
+  - cdi.kubevirt.io
   resources:
-  - leases
+  - datavolumes
   verbs:
-  - create
   - get
-  - update
+  - list
+  - watch
 - apiGroups:
   - events.k8s.io
   resources:
@@ -101,18 +96,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - k8s.ovn.org
-  resources:
-  - userdefinednetworks
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - kubevirt.io
   resources:
   - virtualmachineinstances
@@ -123,23 +106,12 @@ rules:
   - list
   - watch
 - apiGroups:
-  - metallb.io
-  resources:
-  - ipaddresspools
-  verbs:
-  - create
-  - delete
-  - get
-  - update
-- apiGroups:
   - osac.openshift.io
   resources:
   - baremetalinstances
-  - fabricdomains
   verbs:
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
@@ -153,6 +125,8 @@ rules:
   - externalips/finalizers
   - fabricdomains/finalizers
   - natgateways/finalizers
+  - networkattachments/finalizers
+  - networkclasses/finalizers
   - securitygroups/finalizers
   - subnets/finalizers
   - tenants/finalizers
@@ -168,7 +142,9 @@ rules:
   - externalipattachments
   - externalippools
   - externalips
+  - fabricdomains
   - natgateways
+  - networkattachments
   - securitygroups
   - subnets
   - tenants
@@ -192,6 +168,8 @@ rules:
   - externalips/status
   - fabricdomains/status
   - natgateways/status
+  - networkattachments/status
+  - networkclasses/status
   - securitygroups/status
   - subnets/status
   - tenants/status
@@ -208,6 +186,8 @@ rules:
   verbs:
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io

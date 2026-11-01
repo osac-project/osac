@@ -15,7 +15,7 @@ from typing import Any
 from unittest.mock import patch
 
 import yaml
-from umbrella_release import GUIDE, PACKAGE_URL, package_manifest
+from umbrella_release import GUIDE, PACKAGE_URL, package_manifest, slack_chart_summary
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = yaml.safe_load((ROOT / ".github/workflows/osac-build-and-publish.yaml").read_text())
@@ -64,7 +64,7 @@ def condition(job: str, mode: str, results: dict[str, str], cancelled: bool = Fa
     expression = expression.replace("!cancelled()", "not cancelled()")
     statuses = {"always": True, "cancelled": cancelled, "failure": "failure" in results.values()}
 
-    def interpret(node: ast.AST) -> Any:
+    def interpret(node: ast.AST) -> str | bool | list[str]:
         """Allow literals, boolean operators, equality, and named workflow functions."""
         if isinstance(node, ast.Constant) and isinstance(node.value, (str, bool)):
             return node.value
@@ -112,8 +112,9 @@ class UmbrellaReleaseTests(unittest.TestCase):
         (self.bin / "gh").chmod(0o755)
         (self.bin / "uv").write_text(
             "#!/bin/bash\nset -euo pipefail\n"
-            '[[ "$*" == "run --no-project --with pyyaml==6.0.3 python .github/scripts/umbrella_release.py" ]]\n'
-            'exec "$PYTHON" .github/scripts/umbrella_release.py\n'
+            'expected="run --no-project --with pyyaml==6.0.3 python .github/scripts/umbrella_release.py"\n'
+            '[[ "$*" == "$expected" || "$*" == "$expected --slack-summary" ]]\n'
+            'exec "$PYTHON" "${@:6}"\n'
         )
         (self.bin / "uv").chmod(0o755)
         script_dir = self.directory / ".github/scripts"
@@ -208,6 +209,188 @@ class UmbrellaReleaseTests(unittest.TestCase):
     def calls(self) -> list[list[str]]:
         """Read captured GitHub CLI arguments to inspect publication side effects."""
         return [json.loads(line) for line in (self.directory / "gh-calls.jsonl").read_text().splitlines()]
+
+    def run_notification(
+        self, job_name: str = "notify-release", **environment: str
+    ) -> subprocess.CompletedProcess[str]:
+        """Execute the actual notification shell with curl captured locally and uv offline."""
+        scripts = self.directory / "osac-installer/scripts"
+        if not scripts.exists():
+            scripts.parent.mkdir()
+            scripts.symlink_to(ROOT / "osac-installer/scripts", target_is_directory=True)
+        artifacts = self.directory / "nightly-artifacts"
+        if not artifacts.exists():
+            artifacts.mkdir()
+            (artifacts / "images.txt").write_text("ghcr.io/osac-project/osac-operator:2.9.3\n")
+            # Reproduce the real all-pinned release: no component source fragments.
+            (artifacts / "chart-sources.txt").write_text(f"osac {self.version}\n")
+            (artifacts / "osac-installer").mkdir()
+            (artifacts / f"osac-installer/osac-{self.version}.tgz").symlink_to(self.package)
+        (self.bin / "curl").write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, sys\n"
+            "from pathlib import Path\n"
+            "arguments = sys.argv[1:]\n"
+            "assert arguments[arguments.index('-X') + 1] == 'POST'\n"
+            "assert 'https://slack.invalid/local-capture' in arguments\n"
+            "payload = arguments[arguments.index('-d') + 1]\n"
+            "assert payload.startswith('@')\n"
+            "with Path('slack-payloads.jsonl').open('a') as output:\n"
+            "    output.write(json.dumps(json.loads(Path(payload[1:]).read_text())) + '\\n')\n"
+            "sys.exit(int(os.environ.get('CURL_EXIT', '0')))\n"
+        )
+        (self.bin / "curl").chmod(0o755)
+        (self.directory / "outputs.txt").write_text("")
+        script = next(step["run"] for step in WORKFLOW["jobs"][job_name]["steps"] if "run" in step)
+        script = script.replace("/tmp/slack-payload.json", str(self.directory / "slack-payload.json"))
+        inputs = {
+            "PACKAGE": str(artifacts / f"osac-installer/osac-{self.version}.tgz"),
+            "MODE": "release",
+            "SERVER_URL": "https://github.com",
+            "REPOSITORY": "osac-project/osac",
+            "RUN_ID": "12345",
+            "SLACK_WEBHOOK_URL": "https://slack.invalid/local-capture",
+            "GITHUB_OUTPUT": str(self.directory / "outputs.txt"),
+            "SKIP_E2E": "false",
+            "SKIP_INTEGRATION": "false",
+            "SKIP_UNIT": "false",
+            "SKIPPED_TESTS": "",
+            "IMAGE_BUILDS": "success",
+            "IMAGE_RELEASE": "success",
+            "CHART_TAG_PUSHED": "true",
+            "CHART_RELEASE": "success",
+            "WORKFLOW_URL": "https://github.com/osac-project/osac/actions/runs/12345",
+        }
+        return self.run_shell(script, **(inputs | environment))
+
+    def slack_payload(self) -> dict[str, Any]:
+        """Read the most recently captured Slack request, checking Slack block limits."""
+        payload = json.loads((self.directory / "slack-payloads.jsonl").read_text().splitlines()[-1])
+        for block in payload["blocks"]:
+            if block["type"] in ("header", "section"):
+                self.assertLessEqual(len(block["text"]["text"]), 150 if block["type"] == "header" else 3000)
+        return payload
+
+    def test_slack_inventory_includes_reused_dependencies_and_separates_csi(self) -> None:
+        """An all-pinned cut must show the package inventory even with no chart fragments."""
+        result = self.run_notification()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = self.slack_payload()
+        self.assertIn("Release 7.4.2 - GHCR published", payload["blocks"][0]["text"]["text"])
+        self.assertIn("Konflux staging:* pending", payload["blocks"][1]["text"]["text"])
+        self.assertIn("\n", payload["blocks"][1]["text"]["text"])
+        summary = payload["blocks"][2]["text"]["text"]
+        self.assertTrue(summary.startswith("*OSAC umbrella chart:* `osac 7.4.2`"))
+        self.assertIn(PACKAGE_URL, summary)
+        bundled, standalone = summary.split("*Standalone charts")
+        for entry in package_manifest(self.package, self.version)["dependencies"]:
+            self.assertRegex(bundled, rf"{re.escape(entry['chart'])}\s+{re.escape(entry['version'])}")
+        self.assertNotIn("csi-driver", bundled)
+        self.assertIn("csi-driver    3.2.1", standalone)
+        self.assertIn("csi-backends  3.2.1", standalone)
+        self.assertFalse((self.directory / "gh-calls.jsonl").exists())
+        self.assertEqual((self.directory / "outputs.txt").read_text(), "skipped-tests=\n")
+
+    def test_slack_inventory_fallback_and_unresolved_versions(self) -> None:
+        """Local and missing dependency metadata must be visible instead of claimed as published."""
+        for nested, missing_metadata in ((False, False), (True, False), (False, True)):
+            with self.subTest(nested=nested, missing_metadata=missing_metadata):
+                self.fixture(fallback=True, missing_lock=True, nested=nested, missing_metadata=missing_metadata)
+                result = self.run_notification(COMPONENT_VERSIONS="{}")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                summary = self.slack_payload()["blocks"][2]["text"]["text"]
+                self.assertIn("local fallback; not a published dependency", summary)
+                self.assertIn("missing lock entry", summary)
+                self.assertIn("unknown (not recorded)" if missing_metadata else "2.9.3", summary)
+                self.assertIn("not resolved this run", summary)
+
+    def test_slack_invalid_package_prevents_send(self) -> None:
+        """Missing packages and version mismatches must fail before sending Slack."""
+        for inputs in ({"PACKAGE": str(self.directory / "missing.tgz")}, {"VERSION": "0.0.0"}):
+            with self.subTest(inputs=inputs):
+                self.assertNotEqual(self.run_notification(**inputs).returncode, 0)
+                self.assertFalse((self.directory / "slack-payloads.jsonl").exists())
+        self.fixture(mismatch=True)
+        self.assertNotEqual(self.run_notification().returncode, 0)
+        self.assertFalse((self.directory / "slack-payloads.jsonl").exists())
+        self.assertFalse((self.directory / "gh-calls.jsonl").exists())
+
+    def test_slack_nightly_and_skipped_validation_gates(self) -> None:
+        """Nightly messaging must exclude Konflux and carry skipped gates to the final message."""
+        self.env["VERSION"] = "7.4.2-nightly.20261029.abc.123.1"
+        self.fixture()
+        result = self.run_notification(MODE="nightly", SKIP_E2E="true", SKIP_INTEGRATION="true", SKIP_UNIT="true")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = self.slack_payload()
+        self.assertIn("Nightly Build", payload["blocks"][0]["text"]["text"])
+        self.assertIn("e2e,integration,unit SKIPPED", payload["blocks"][0]["text"]["text"])
+        self.assertIn("not run for nightly builds", payload["blocks"][1]["text"]["text"])
+        self.assertIn(self.env["VERSION"], payload["blocks"][2]["text"]["text"])
+        self.assertEqual((self.directory / "outputs.txt").read_text(), "skipped-tests=e2e,integration,unit\n")
+
+    def test_konflux_complete_only_after_both_staging_releases_succeed(self) -> None:
+        """Complete must retain the warning when the release skipped validation gates."""
+        for skipped in ("", "e2e,integration,unit"):
+            with self.subTest(skipped=skipped):
+                result = self.run_notification("notify-konflux", SKIPPED_TESTS=skipped)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = self.slack_payload()
+                header = payload["blocks"][0]["text"]["text"]
+                self.assertIn("Release 7.4.2 - Complete", header)
+                self.assertTrue(header.startswith(":warning:" if skipped else ":white_check_mark:"))
+                if skipped:
+                    self.assertIn(f"{skipped} SKIPPED", header)
+                text = payload["blocks"][1]["text"]["text"]
+                self.assertIn("Konflux image staging:* success", text)
+                self.assertIn("Konflux chart staging:* success", text)
+
+    def test_konflux_build_and_release_failures_never_announce_complete(self) -> None:
+        """Required image failures and tolerated chart failures must report failed staging."""
+        cases = (
+            {"IMAGE_BUILDS": "failure", "IMAGE_RELEASE": "skipped", "CHART_RELEASE": "not completed"},
+            {"IMAGE_RELEASE": "failure", "CHART_RELEASE": "skipped"},
+            {"CHART_RELEASE": "failure"},
+        )
+        for inputs in cases:
+            with self.subTest(inputs=inputs):
+                result = self.run_notification("notify-konflux", **inputs)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                header = self.slack_payload()["blocks"][0]["text"]["text"]
+                self.assertTrue(header.startswith(":x:"))
+                self.assertIn("Konflux staging failed", header)
+                self.assertNotIn("Complete", header)
+
+    def test_konflux_skips_and_missing_outputs_report_incomplete(self) -> None:
+        """A failed stamping step, skipped release, or timeout must never look complete."""
+        for outcome in ("skipped", "not completed", "cancelled"):
+            with self.subTest(outcome=outcome):
+                result = self.run_notification("notify-konflux", CHART_TAG_PUSHED="", CHART_RELEASE=outcome)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = self.slack_payload()
+                self.assertIn("Konflux staging incomplete", payload["blocks"][0]["text"]["text"])
+                self.assertIn("chart build tag pushed:* false", payload["blocks"][1]["text"]["text"])
+                self.assertIn(f"chart staging:* {outcome}", payload["blocks"][1]["text"]["text"])
+
+    def test_slack_send_errors_fail_the_notification(self) -> None:
+        """Slack HTTP/transport failure must propagate from both actual notification consumers."""
+        for job in ("notify-release", "notify-konflux"):
+            with self.subTest(job=job):
+                self.assertEqual(self.run_notification(job, CURL_EXIT="22").returncode, 22)
+                self.assertIn("blocks", self.slack_payload())
+
+    def test_slack_inventory_escapes_metadata_and_rejects_oversized_sections(self) -> None:
+        """Untrusted chart metadata cannot inject Slack mentions or overflow section limits."""
+        manifest = {"dependencies": [{"chart": "unsafe<@here>`\nname", "version": "1.2.3", "source": "oci://example"}]}
+        with patch("umbrella_release.package_manifest", return_value=manifest):
+            summary = slack_chart_summary(self.package, self.version, {})
+            self.assertIn("unsafe&lt;@here&gt;' name", summary)
+            self.assertNotIn("<@here>", summary)
+        manifest["dependencies"][0]["chart"] = "x" * 3001
+        with (
+            patch("umbrella_release.package_manifest", return_value=manifest),
+            self.assertRaisesRegex(ValueError, "section limit"),
+        ):
+            slack_chart_summary(self.package, self.version, {})
 
     def test_create_edit_and_deterministic_inventory(self) -> None:
         """Retries must retain package-derived inventory and customer install guidance."""
@@ -435,6 +618,67 @@ class UmbrellaReleaseTests(unittest.TestCase):
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
+    def test_final_notification_waits_for_every_konflux_stage_and_cleanup_waits_for_it(self) -> None:
+        """Final status must not race any stage, while GHCR publication stays independent."""
+        jobs = WORKFLOW["jobs"]
+        stages = {
+            "wait-for-konflux-build",
+            "trigger-konflux-staging-release",
+            "stamp-and-release-charts",
+            "wait-for-konflux-chart-build",
+            "trigger-konflux-chart-staging-release",
+        }
+        self.assertTrue(stages.issubset(jobs["notify-konflux"]["needs"]))
+        self.assertIn("notify-release", jobs["notify-konflux"]["needs"])
+        self.assertIn("notify-konflux", jobs["cleanup"]["needs"])
+        self.assertTrue(stages.isdisjoint(jobs["notify-release"]["needs"]))
+        self.assertTrue(stages.isdisjoint(jobs["create-umbrella-release"]["needs"]))
+
+    def test_final_notification_covers_failed_and_skipped_stages_but_not_cancellation(self) -> None:
+        """Failure/skip must still report a final outcome; nightly/cancelled runs must not."""
+        results = {name: "success" for name in WORKFLOW["jobs"]}
+        stages = [name for name in WORKFLOW["jobs"]["notify-konflux"]["needs"] if "konflux" in name]
+        stages.append("stamp-and-release-charts")
+        for mode in ("release", "nightly"):
+            for cancelled in (False, True):
+                for stage in stages:
+                    for outcome in ("success", "failure", "skipped", "cancelled"):
+                        with self.subTest(mode=mode, cancelled=cancelled, stage=stage, outcome=outcome):
+                            self.assertEqual(
+                                condition("notify-konflux", mode, results | {stage: outcome}, cancelled),
+                                mode == "release" and not cancelled,
+                            )
+        for dependency in ("tag", "notify-release"):
+            for outcome in ("failure", "skipped", "cancelled"):
+                self.assertFalse(condition("notify-konflux", "release", results | {dependency: outcome}))
+
+    def test_tolerated_chart_failures_use_step_outcome_instead_of_job_result(self) -> None:
+        """A continue-on-error job result is not proof that chart staging succeeded."""
+        jobs = WORKFLOW["jobs"]
+        charts = jobs["trigger-konflux-chart-staging-release"]
+        self.assertIs(charts["continue-on-error"], True)
+        self.assertEqual(charts["outputs"]["release-outcome"], "${{ steps.release.outcome }}")
+        release_step = next(step for step in charts["steps"] if step.get("id") == "release")
+        self.assertIn("if not released:", release_step["run"])
+        self.assertIn("sys.exit(1)", release_step["run"])
+        notification = next(step for step in jobs["notify-konflux"]["steps"] if "run" in step)
+        self.assertEqual(
+            notification["env"]["CHART_RELEASE"],
+            "${{ needs.trigger-konflux-chart-staging-release.outputs.release-outcome || 'not completed' }}",
+        )
+        self.assertEqual(notification["env"]["SKIPPED_TESTS"], "${{ needs.notify-release.outputs.skipped-tests }}")
+
+    def test_ghcr_notification_consumes_exact_package_and_no_package_lookup_token(self) -> None:
+        """The Slack inventory must use the published archive even without component fragments."""
+        job = WORKFLOW["jobs"]["notify-release"]
+        self.assertEqual(
+            job["env"]["PACKAGE"], "nightly-artifacts/osac-installer/osac-${{ needs.prepare.outputs.version }}.tgz"
+        )
+        script = next(step["run"] for step in job["steps"] if "run" in step)
+        self.assertIn("python .github/scripts/umbrella_release.py --slack-summary", script)
+        self.assertNotIn("build_slack_charts_published_summary", script)
+        self.assertNotIn("packages", job["permissions"])
+
     def test_conditions_reject_python_execution_and_unsupported_syntax(self) -> None:
         """Reject executable Python, including code in an unused boolean branch."""
         expressions = (
@@ -454,10 +698,12 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "cancelled() && ().__class__.__bases__[0].__subclasses__()",
         )
         for expression in expressions:
-            with self.subTest(expression=expression):
-                with patch.dict(WORKFLOW["jobs"], {"condition-fixture": {"if": expression}}):
-                    with self.assertRaises(ValueError):
-                        condition("condition-fixture", "release", {})
+            with (
+                self.subTest(expression=expression),
+                patch.dict(WORKFLOW["jobs"], {"condition-fixture": {"if": expression}}),
+                self.assertRaises(ValueError),
+            ):
+                condition("condition-fixture", "release", {})
 
     def test_notification_and_publication_matrix(self) -> None:
         """Notifications must reflect publication outcomes and respect cancellation."""

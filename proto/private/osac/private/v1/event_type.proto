@@ -45,6 +45,7 @@ import "osac/private/v1/role_binding_type.proto";
 import "osac/private/v1/role_type.proto";
 import "osac/private/v1/secret_type.proto";
 import "osac/private/v1/security_group_type.proto";
+import "osac/private/v1/service_account_type.proto";
 import "osac/private/v1/storage_backend_type.proto";
 import "osac/private/v1/storage_tier_type.proto";
 import "osac/private/v1/subnet_type.proto";
@@ -105,6 +106,7 @@ message Event {
     Volume volume = 35 [(cleanapi.field).private = true];
     AddOnOperator add_on_operator = 37 [(cleanapi.field).private = true];
     FabricDomain fabric_domain = 38 [(cleanapi.field).private = true];
+    ServiceAccount service_account = 39 [(cleanapi.field).private = true];
   }
 
   reserved 10;

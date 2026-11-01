@@ -37,7 +37,7 @@ class TestNetworkingReferences:
                     "metadata": {"name": subnet_name},
                     "spec": {
                         "virtual_network": {"name": networking_ref_virtual_network["name"]},
-                        "ipv4_cidr": "10.210.200.0/24",
+                        "ipv4_cidr": "172.26.200.0/24",
                     },
                 }
             },
@@ -93,7 +93,7 @@ class TestNetworkingReferences:
                 data={
                     "object": {
                         "metadata": {"name": f"ref-bad-vn-{ref_test_run_id}"},
-                        "spec": {"virtual_network": {"name": "nonexistent-vn"}, "ipv4_cidr": "10.212.0.0/24"},
+                        "spec": {"virtual_network": {"name": "nonexistent-vn"}, "ipv4_cidr": "172.28.0.0/24"},
                     }
                 },
             )

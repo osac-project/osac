@@ -2010,15 +2010,25 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			})
 		})
 
-		Context("when GetHostNICs succeeds after a prior transient failure", func() {
-			It("populates NICs and does not return an error", func() {
+		Context("when NIC data becomes available after a transient failure", func() {
+			It("leaves Hardware unset, then populates it on retry", func() {
+				attempts := 0
+				unavailableErr := errors.New("BMH is not ready")
 				invClient.getHostNICsFunc = func(_ context.Context, _ string) ([]inventory.HostNIC, error) {
+					attempts++
+					if attempts == 1 {
+						return nil, unavailableErr
+					}
 					return []inventory.HostNIC{{MAC: "aa:bb:cc:dd:ee:01"}}, nil
 				}
 
 				err := reconcilerForNICs.reconcileNICMetadata(ctx, bmi)
+				Expect(err).To(MatchError(unavailableErr))
+				Expect(bmi.Status.Hardware).To(BeNil())
 
+				err = reconcilerForNICs.reconcileNICMetadata(ctx, bmi)
 				Expect(err).NotTo(HaveOccurred())
+				Expect(attempts).To(Equal(2))
 				Expect(bmi.Status.Hardware).NotTo(BeNil())
 				Expect(bmi.Status.Hardware.NICs).To(HaveLen(1))
 			})

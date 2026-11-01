@@ -14,6 +14,8 @@ language governing permissions and limitations under the License.
 package computeinstance
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/pflag"
@@ -21,48 +23,6 @@ import (
 
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
-
-var _ = Describe("parseNetworkAttachmentFlag", func() {
-	DescribeTable("when input is valid it should parse",
-		func(input, wantSubnet string, wantSGs []string) {
-			got, err := parseNetworkAttachmentFlag(input)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(got.GetSubnet().GetId()).To(Equal(wantSubnet))
-			var gotSGs []string
-			for _, sg := range got.GetSecurityGroups() {
-				gotSGs = append(gotSGs, sg.GetId())
-			}
-			if wantSGs == nil {
-				Expect(gotSGs).To(BeNil())
-			} else {
-				Expect(gotSGs).To(Equal(wantSGs))
-			}
-		},
-		Entry("when value is bare subnet id it should use it as subnet",
-			"  sub-1  ", "sub-1", nil),
-		Entry("when value is subnet=key form it should parse subnet",
-			"subnet=sub-2", "sub-2", nil),
-		Entry("when value includes security_groups alias it should parse groups",
-			"subnet=a,security_groups=g1,g2", "a", []string{"g1", "g2"}),
-		Entry("when value lists security-groups after subnet it should parse groups",
-			"subnet=b,security-groups=x", "b", []string{"x"}),
-	)
-
-	DescribeTable("when input is invalid it should error",
-		func(input string) {
-			_, err := parseNetworkAttachmentFlag(input)
-			Expect(err).To(HaveOccurred())
-		},
-		Entry("when value is empty it should error", "   "),
-		Entry("when key is unknown it should error", "subnet=a,foo=bar"),
-		Entry("when subnet= form omits subnet it should error", "security-groups=g1"),
-		Entry("when fragment has no equals it should error", "subnet=sub,noglue"),
-		Entry("when value after equals is empty it should error", "subnet="),
-		Entry("when subnet is duplicated it should error", "subnet=a,subnet=b"),
-	)
-})
-
-// Legacy subnet and security-groups tests removed - these fields are no longer supported
 
 var _ = Describe("buildSpec", func() {
 	It("should populate a registered SSH key reference from the flag", func() {
@@ -107,15 +67,18 @@ var _ = Describe("buildSpec", func() {
 	})
 
 	It("should populate attachments when network-attachment flags are set", func() {
-		c := &runnerContext{}
-		c.args.networkAttachments = []string{"n1", "subnet=n2,security-groups=g1"}
+		c := &runnerContext{
+			networkAttachment: publicv1.ComputeNetworkAttachment_builder{
+				Subnet:         publicv1.SubnetLocalReference_builder{Id: "n2"}.Build(),
+				SecurityGroups: []*publicv1.SecurityGroupLocalReference{publicv1.SecurityGroupLocalReference_builder{Id: "g1"}.Build()},
+			}.Build(),
+		}
 		spec, err := c.buildSpec("tmpl", nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		want := publicv1.ComputeInstanceSpec_builder{
 			Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "tmpl"}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
-				publicv1.ComputeNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Id: "n1"}.Build()}.Build(),
 				publicv1.ComputeNetworkAttachment_builder{
 					Subnet:         publicv1.SubnetLocalReference_builder{Id: "n2"}.Build(),
 					SecurityGroups: []*publicv1.SecurityGroupLocalReference{publicv1.SecurityGroupLocalReference_builder{Id: "g1"}.Build()},
@@ -189,15 +152,18 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 	})
 
 	It("should populate attachments when network-attachment flags are set", func() {
-		c := &runnerContext{}
-		c.args.networkAttachments = []string{"n1", "subnet=n2,security-groups=g1"}
+		c := &runnerContext{
+			networkAttachment: publicv1.ComputeNetworkAttachment_builder{
+				Subnet:         publicv1.SubnetLocalReference_builder{Id: "n2"}.Build(),
+				SecurityGroups: []*publicv1.SecurityGroupLocalReference{publicv1.SecurityGroupLocalReference_builder{Id: "g1"}.Build()},
+			}.Build(),
+		}
 		spec, err := c.buildSpecFromCatalogItem("cat-001")
 		Expect(err).NotTo(HaveOccurred())
 
 		want := publicv1.ComputeInstanceSpec_builder{
 			CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: "cat-001"}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
-				publicv1.ComputeNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Id: "n1"}.Build()}.Build(),
 				publicv1.ComputeNetworkAttachment_builder{
 					Subnet:         publicv1.SubnetLocalReference_builder{Id: "n2"}.Build(),
 					SecurityGroups: []*publicv1.SecurityGroupLocalReference{publicv1.SecurityGroupLocalReference_builder{Id: "g1"}.Build()},
@@ -218,10 +184,17 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 		Expect(proto.Equal(spec, want)).To(BeTrue(), "spec should equal expected spec")
 	})
 
-	It("should return error when network-attachment value is invalid", func() {
+	It("should reject more than one network-attachment flag", func() {
+		c := &runnerContext{}
+		c.args.networkAttachments = []string{"n1", "n2"}
+		err := c.resolveNetworkAttachment(context.Background(), nil)
+		Expect(err).To(MatchError(ContainSubstring("at most one --network-attachment")))
+	})
+
+	It("should reject an invalid network-attachment value before resolving names", func() {
 		c := &runnerContext{}
 		c.args.networkAttachments = []string{"subnet=a,foo=bar"}
-		_, err := c.buildSpecFromCatalogItem("cat-003")
+		err := c.resolveNetworkAttachment(context.Background(), nil)
 		Expect(err).To(HaveOccurred())
 	})
 

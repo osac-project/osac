@@ -81,9 +81,15 @@ func deleteProject(ctx context.Context, client privatev1.ProjectsClient, id stri
 	_, err := client.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{
 		Id: id,
 	}.Build())
-	Expect(err).ToNot(HaveOccurred())
+	if err != nil && !isGRPCCode(err, grpccodes.NotFound) {
+		Expect(err).ToNot(HaveOccurred())
+	}
 	Eventually(
 		func(g Gomega) {
+			_, signalErr := client.Signal(ctx, privatev1.ProjectsSignalRequest_builder{Id: id}.Build())
+			if signalErr != nil && !isGRPCCode(signalErr, grpccodes.NotFound) {
+				g.Expect(signalErr).ToNot(HaveOccurred())
+			}
 			_, err := client.Get(ctx, privatev1.ProjectsGetRequest_builder{
 				Id: id,
 			}.Build())
@@ -98,7 +104,7 @@ func deleteProject(ctx context.Context, client privatev1.ProjectsClient, id stri
 }
 
 func deleteSecrets(ctx context.Context, client privatev1.SecretsClient, tenant string) {
-	listFilter := fmt.Sprintf("this.metadata.tenant == %q && !has(this.metadata.deletion_timestamp)", tenant)
+	listFilter := fmt.Sprintf("this.metadata.tenant == %q", tenant)
 	listRequest := privatev1.SecretsListRequest_builder{
 		Filter: &listFilter,
 	}.Build()
@@ -107,12 +113,13 @@ func deleteSecrets(ctx context.Context, client privatev1.SecretsClient, tenant s
 			listResponse, err := client.List(ctx, listRequest)
 			g.Expect(err).ToNot(HaveOccurred())
 			for _, item := range listResponse.GetItems() {
-				_, err := client.Delete(ctx, privatev1.SecretsDeleteRequest_builder{
-					Id: item.GetId(),
-				}.Build())
-				g.Expect(err).ToNot(HaveOccurred())
+				if item.GetMetadata().GetDeletionTimestamp() == nil {
+					_, err := client.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: item.GetId()}.Build())
+					g.Expect(err).ToNot(HaveOccurred())
+				}
 			}
-			g.Expect(listResponse.GetTotal()).To(BeZero())
+			g.Expect(listResponse.GetTotal()).To(BeZero(),
+				"tenant secrets must be fully removed before deleting their project")
 		},
 		time.Minute,
 		time.Second,
@@ -152,23 +159,22 @@ func deleteTenantUsers(ctx context.Context, tenant string) {
 
 func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, projectsClient privatev1.ProjectsClient,
 	id, name string) {
-	// Break-glass secrets are stored against the tenant's default project, so they
-	// must be removed before projects (secrets_project_fk) and the tenant
-	// (secrets_tenant_fk) can be deleted. Repeat on each loop in case the
-	// reconciler persists a secret between cleanup steps.
-	secretsClient := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
-
-	// Request tenant deletion first so the tenant reconciler can remove its default
-	// networking resources before project deletion waits on those references.
-	_, err := tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
-		Id: id,
+	rootProjectFilter := fmt.Sprintf("this.metadata.name == '' && this.metadata.tenant == %q", name)
+	rootProjects, err := projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
+		Filter: &rootProjectFilter,
 	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	rootProjectIDs := make([]string, 0, len(rootProjects.GetItems()))
+	for _, project := range rootProjects.GetItems() {
+		rootProjectIDs = append(rootProjectIDs, project.GetId())
+	}
+
+	// Delete the tenant first so its reconciler removes default networking before
+	// project cleanup waits on those references.
+	_, err = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
 	if grpcstatus.Code(err) == grpccodes.FailedPrecondition {
-		// A tenant created immediately before deletion may not have its controller
-		// finalizer yet. Without it, the database correctly rejects deletion while
-		// the auto-created root project exists. Wait for reconciliation to install
-		// the finalizer, then retry so the tenant controller can remove networking
-		// before it deletes that root project.
+		// A newly created tenant may not have its controller finalizer yet.
+		// Wait for reconciliation to install it, then retry the deletion.
 		Eventually(func(g Gomega) {
 			getResponse, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
 			g.Expect(getErr).ToNot(HaveOccurred())
@@ -176,29 +182,64 @@ func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, pr
 		}, time.Minute, time.Second).Should(Succeed())
 		_, err = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
 	}
-	if err != nil {
-		status, ok := grpcstatus.FromError(err)
-		Expect(ok && status.Code() == grpccodes.NotFound).To(BeTrue(), "tenant deletion failed: %v", err)
+	if err != nil && !isGRPCCode(err, grpccodes.NotFound) {
+		Expect(err).ToNot(HaveOccurred())
+	}
+	_, err = tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{Id: id}.Build())
+	if err != nil && !isGRPCCode(err, grpccodes.NotFound) {
+		Expect(err).ToNot(HaveOccurred())
 	}
 
-	// Wake the tenant reconciler so default networking cleanup starts before the
-	// project cleanup below. Tolerate NotFound if reconciliation already finished.
-	_, err = tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{
-		Id: id,
-	}.Build())
-	if err != nil {
-		signalStatus, ok := grpcstatus.FromError(err)
-		Expect(ok).To(BeTrue())
-		Expect(signalStatus.Code()).To(Equal(grpccodes.NotFound))
+	secretsClient := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+	Eventually(
+		func(g Gomega) bool {
+			tenant, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+			if isGRPCCode(getErr, grpccodes.NotFound) {
+				return true
+			}
+			g.Expect(getErr).ToNot(HaveOccurred())
+			if tenant.GetObject().GetSpec().GetBreakGlassCredentialsSecret() == nil {
+				return true
+			}
+			_, signalErr := tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{Id: id}.Build())
+			if signalErr != nil && !isGRPCCode(signalErr, grpccodes.NotFound) {
+				g.Expect(signalErr).ToNot(HaveOccurred())
+			}
+			return false
+		},
+		3*time.Minute,
+		time.Second,
+	).Should(BeTrue(), "tenant deletion should clear the break-glass secret reference before secret cleanup")
+	deleteSecrets(ctx, secretsClient, name)
+
+	// Wait on captured root project IDs because List can omit a deleting project
+	// while Get still sees it. The tenant reconciler removes these after networking.
+	for _, projectID := range rootProjectIDs {
+		Eventually(
+			func(g Gomega) bool {
+				_, getErr := projectsClient.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: projectID}.Build())
+				if isGRPCCode(getErr, grpccodes.NotFound) {
+					return true
+				}
+				g.Expect(getErr).ToNot(HaveOccurred())
+				_, signalErr := projectsClient.Signal(ctx, privatev1.ProjectsSignalRequest_builder{Id: projectID}.Build())
+				if signalErr != nil && !isGRPCCode(signalErr, grpccodes.NotFound) {
+					g.Expect(signalErr).ToNot(HaveOccurred())
+				}
+				return false
+			},
+			3*time.Minute,
+			time.Second,
+		).Should(BeTrue())
 	}
 
+	// The tenant finalizer waits for remaining named projects.
 	listProjectsFilter := fmt.Sprintf(
 		"this.metadata.tenant == %q && this.metadata.name != '' && !has(this.metadata.deletion_timestamp)", name)
 	listProjectsRequest := privatev1.ProjectsListRequest_builder{
 		Filter: &listProjectsFilter,
 	}.Build()
 	for {
-		deleteSecrets(ctx, secretsClient, name)
 		listProjectsResponse, err := projectsClient.List(ctx, listProjectsRequest)
 		Expect(err).ToNot(HaveOccurred())
 		if listProjectsResponse.GetTotal() == 0 {
@@ -214,6 +255,10 @@ func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, pr
 
 	Eventually(
 		func(g Gomega) {
+			_, signalErr := tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{Id: id}.Build())
+			if signalErr != nil && !isGRPCCode(signalErr, grpccodes.NotFound) {
+				g.Expect(signalErr).ToNot(HaveOccurred())
+			}
 			_, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
 				Id: id,
 			}.Build())
@@ -266,6 +311,50 @@ func waitForTenantDefaultNetworkingReady(ctx context.Context, client privatev1.T
 		2*time.Minute,
 		time.Second,
 	).Should(Succeed())
+}
+
+func setTenantDefaultNetworkingResourcesReady(
+	ctx context.Context,
+	tenantName string,
+	virtualNetworksClient privatev1.VirtualNetworksClient,
+	subnetsClient privatev1.SubnetsClient,
+	securityGroupsClient privatev1.SecurityGroupsClient,
+) {
+	GinkgoHelper()
+
+	var virtualNetworkID string
+	virtualNetworkFilter := ndDefaultFilter(tenantName, "default")
+	Eventually(func(g Gomega) {
+		response, err := virtualNetworksClient.List(ctx, privatev1.VirtualNetworksListRequest_builder{
+			Filter: &virtualNetworkFilter,
+		}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(response.GetItems()).To(HaveLen(1))
+		virtualNetworkID = response.GetItems()[0].GetId()
+	}, time.Minute, time.Second).Should(Succeed())
+	setComputeInstanceFixtureVirtualNetworkReady(ctx, virtualNetworksClient, virtualNetworkID)
+
+	var subnetID string
+	var securityGroupID string
+	subnetFilter := ndDefaultFilter(tenantName, "default-ipv4")
+	securityGroupFilter := ndDefaultFilter(tenantName, "default")
+	Eventually(func(g Gomega) {
+		subnets, err := subnetsClient.List(ctx, privatev1.SubnetsListRequest_builder{
+			Filter: &subnetFilter,
+		}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(subnets.GetItems()).To(HaveLen(1))
+		subnetID = subnets.GetItems()[0].GetId()
+
+		securityGroups, err := securityGroupsClient.List(ctx, privatev1.SecurityGroupsListRequest_builder{
+			Filter: &securityGroupFilter,
+		}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(securityGroups.GetItems()).To(HaveLen(1))
+		securityGroupID = securityGroups.GetItems()[0].GetId()
+	}, time.Minute, time.Second).Should(Succeed())
+	setSubnetReady(ctx, subnetsClient, subnetID)
+	setSecurityGroupReady(ctx, securityGroupsClient, securityGroupID)
 }
 
 func verifyTenantInKeycloak(ctx context.Context, name string) {
@@ -430,11 +519,18 @@ var _ = Describe("Tenant lifecycle", func() {
 	})
 
 	It("deletes a tenant with domains configured", func(ctx context.Context) {
+		getOrCreateTenantDefaultNetworkClassFixture(ctx)
 		name := fmt.Sprintf("test-%s", uuid.New())
 		id := createTenant(ctx, tenantsClient, name)
+		virtualNetworksClient := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
+		subnetsClient := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
+		securityGroupsClient := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
 
-		By("Waiting for the tenant and its default networking to become ready")
+		By("Waiting for the tenant to sync")
 		waitForTenantSynced(ctx, tenantsClient, id)
+		By("Simulating operator readiness for the tenant's default networking")
+		setTenantDefaultNetworkingResourcesReady(ctx, name, virtualNetworksClient, subnetsClient, securityGroupsClient)
+		By("Waiting for the tenant's default networking readiness condition")
 		waitForTenantDefaultNetworkingReady(ctx, tenantsClient, id)
 
 		By("Recording the automatically created root project")
@@ -999,32 +1095,11 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 
 		// The public VirtualNetworks API no longer accepts a network_class, so creation
 		// resolves the deployment singleton. Seed one for the duration of each test.
-		ncResp, err := networkClassClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-default-nc-%s", uuid.New()),
-				}.Build(),
-				Title:         "Deployment Network Class",
-				FabricManager: new("netris"),
-			}.Build(),
-		}.Build())
+		ncResp, err := sharedNetworkClass(ctx, networkClassClient)
 		Expect(err).ToNot(HaveOccurred())
 		networkClassID := ncResp.GetObject().GetId()
 		waitForNetworkClassReady(ctx, networkClassClient, networkClassID)
-		// Use a fresh context for cleanup: the ctx from this BeforeEach is cancelled by Ginkgo as soon as this
-		// node returns, so reusing it here would make the Delete call fail with "context canceled" and leak the
-		// NetworkClass — which is fatal now that only one NetworkClass may exist per deployment (OSAC-4073).
-		DeferCleanup(func(cleanupCtx context.Context) {
-			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
-				func(deleteCtx context.Context) error {
-					_, err := networkClassClient.Delete(deleteCtx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
-					return err
-				},
-				func(getCtx context.Context) error {
-					_, err := networkClassClient.Get(getCtx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
-					return err
-				})
-		})
+		// The NetworkClass is the installer's deployment singleton: the spec never deletes it.
 	})
 
 	It("Resources created by tenant-A are not visible to tenant-B", func(ctx context.Context) {

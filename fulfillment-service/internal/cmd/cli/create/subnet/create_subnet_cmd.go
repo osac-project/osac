@@ -60,12 +60,6 @@ func Cmd() *cobra.Command {
 		"",
 		ipv4CidrFlagHelp,
 	)
-	flags.StringVar(
-		&runner.args.ipv6Cidr,
-		"ipv6-cidr",
-		"",
-		ipv6CidrFlagHelp,
-	)
 	return result
 }
 
@@ -74,7 +68,6 @@ type runnerContext struct {
 		name           string
 		virtualNetwork string
 		ipv4Cidr       string
-		ipv6Cidr       string
 	}
 	logger   *slog.Logger
 	console  *terminal.Console
@@ -95,7 +88,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	if err := netutil.ValidateVirtualNetwork(c.args.virtualNetwork); err != nil {
 		return err
 	}
-	if err := netutil.ValidateCIDRs(c.args.ipv4Cidr, c.args.ipv6Cidr); err != nil {
+	if err := netutil.ValidateIPv4CIDR(c.args.ipv4Cidr); err != nil {
 		return err
 	}
 
@@ -128,9 +121,6 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	if c.args.ipv4Cidr != "" {
 		spec.Ipv4Cidr = &c.args.ipv4Cidr
 	}
-	if c.args.ipv6Cidr != "" {
-		spec.Ipv6Cidr = &c.args.ipv6Cidr
-	}
 	subnet := publicv1.Subnet_builder{
 		Metadata: metautil.ForCreate(ctx, c.args.name).Build(),
 		Spec:     spec.Build(),
@@ -149,19 +139,13 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 const shortHelp = `Create a subnet`
 
 const longHelp = `
-Create a subnet within an existing virtual network. At least one of
-{{ bt }}--ipv4-cidr{{ bt }} or {{ bt }}--ipv6-cidr{{ bt }} must be provided.
+Create an IPv4 subnet within an existing virtual network. The
+{{ bt }}--ipv4-cidr{{ bt }} flag is required.
 
-To create an IPv4-only subnet:
+To create a subnet:
 
 {{ bt 3 }}shell
 {{ binary }} create subnet --name my-subnet --virtual-network vnet-abc123 --ipv4-cidr 10.0.1.0/24
-{{ bt 3 }}
-
-To create a dual-stack subnet:
-
-{{ bt 3 }}shell
-{{ binary }} create subnet --name my-subnet --virtual-network vnet-abc123 --ipv4-cidr 10.0.1.0/24 --ipv6-cidr fd00:1234::/64
 {{ bt 3 }}
 `
 
@@ -176,9 +160,4 @@ _ID|NAME_ - ID or name of the parent virtual network.
 const ipv4CidrFlagHelp = `
 _CIDR_ - IPv4 CIDR block for this subnet, for example
 {{ bt }}10.0.1.0/24{{ bt }}.
-`
-
-const ipv6CidrFlagHelp = `
-_CIDR_ - IPv6 CIDR block for this subnet, for example
-{{ bt }}fd00:1234::/64{{ bt }}.
 `

@@ -23,6 +23,9 @@
         user_data_secret_ref: ""
         bmh_name: "test-bmh"
         bmh_namespace: "test-ns"
+        bmh_info:
+          spec: {}
+        fallback_root_disk: ""
 
     - name: Build BMH patch using actual role code
       ansible.builtin.include_role:
@@ -35,6 +38,8 @@
           - bmh_patch.spec.image.url == "oci://quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:abc123"
           - "'checksum' not in bmh_patch.spec.image"
           - "'checksumType' not in bmh_patch.spec.image"
+          - "'rootDeviceHints' not in bmh_patch.spec"
+          - "'metadata' not in bmh_patch"
         fail_msg: "OCI image BMH patch must not contain checksum or checksumType"
 
 - name: BMH Patch Construction - Non-OCI image includes checksum
@@ -62,6 +67,15 @@
         user_data_secret_ref: ""
         bmh_name: "test-bmh"
         bmh_namespace: "test-ns"
+        bmh_info:
+          metadata:
+            resourceVersion: "123"
+          spec: {}
+        fallback_root_disk: >-
+          {{ [] | osac.templates.smallest_root_disk(
+            {'status': {'hardware': {'storage': [
+              {'name': '/dev/vda', 'sizeBytes': 17179869184}
+            ]}}}, 4) }}
 
     - name: Build BMH patch using actual role code
       ansible.builtin.include_role:
@@ -74,4 +88,25 @@
           - bmh_patch.spec.image.url == "https://example.com/image.qcow2"
           - bmh_patch.spec.image.checksum == "deadbeef1234"
           - bmh_patch.spec.image.checksumType == "md5"
+          - bmh_patch.spec.rootDeviceHints.deviceName == "/dev/vda"
+          - bmh_patch.metadata.annotations['osac.openshift.io/fallback-root-device'] == "/dev/vda"
+          - bmh_patch.metadata.resourceVersion == "123"
         fail_msg: "Non-OCI image BMH patch must contain checksum and checksumType"
+
+    - name: Set an existing root device hint
+      ansible.builtin.set_fact:
+        bmh_info:
+          spec:
+            rootDeviceHints:
+              deviceName: "/dev/sdz"
+
+    - name: Rebuild BMH patch with existing hint
+      ansible.builtin.include_role:
+        name: osac.templates.bm_host_provisioning
+        tasks_from: build_bmh_patch.yaml
+
+    - name: Assert fallback does not replace existing hint
+      ansible.builtin.assert:
+        that:
+          - "'rootDeviceHints' not in bmh_patch.spec"
+          - "'metadata' not in bmh_patch"

@@ -156,22 +156,43 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		Entry("a non-positive boot disk size", CreateComputeInstanceInput{
 			Name: "demo-vm", CatalogItem: "catalog-item-1", BootDisk: &ComputeInstanceBootDiskInput{SizeGiB: int32Pointer(0)},
 		}, "boot_disk.size_gib must be greater than zero"),
-		Entry("an empty attachment list", CreateComputeInstanceInput{
-			Name: "demo-vm", CatalogItem: "catalog-item-1", NetworkAttachments: []ComputeInstanceNetworkAttachmentInput{},
-		}, "network_attachments must contain at least one"),
 		Entry("more than one attachment", CreateComputeInstanceInput{
 			Name: "demo-vm", CatalogItem: "catalog-item-1", NetworkAttachments: []ComputeInstanceNetworkAttachmentInput{
 				{SubnetID: "subnet-1"}, {SubnetID: "subnet-2"},
 			},
 		}, "network_attachments must contain at most one"),
-		Entry("an attachment without a subnet", CreateComputeInstanceInput{
-			Name: "demo-vm", CatalogItem: "catalog-item-1", NetworkAttachments: []ComputeInstanceNetworkAttachmentInput{{}},
-		}, "network_attachments[0].subnet_id is required"),
 		Entry("an empty security group ID", CreateComputeInstanceInput{
 			Name: "demo-vm", CatalogItem: "catalog-item-1", NetworkAttachments: []ComputeInstanceNetworkAttachmentInput{{
 				SubnetID: "subnet-1", SecurityGroupIDs: []string{""},
 			}},
 		}, "network_attachments[0].security_group_ids[0] is required"),
+	)
+
+	DescribeTable("Leaves the network attachment to the tenant defaults",
+		func(input []ComputeInstanceNetworkAttachmentInput, attachments int) {
+			var capturedObject *publicv1.ComputeInstance
+			instances := &mockComputeInstancesClient{
+				createFunc: func(
+					ctx context.Context, request *publicv1.ComputeInstancesCreateRequest, options ...grpc.CallOption,
+				) (*publicv1.ComputeInstancesCreateResponse, error) {
+					capturedObject = request.GetObject()
+					return publicv1.ComputeInstancesCreateResponse_builder{Object: request.GetObject()}.Build(), nil
+				},
+			}
+			handler := handleCreateComputeInstance(instances)
+			_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+				Name: "demo-vm", CatalogItem: "catalog-item-1", NetworkAttachments: input,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedObject.GetSpec().GetNetworkAttachments()).To(HaveLen(attachments))
+			for _, attachment := range capturedObject.GetSpec().GetNetworkAttachments() {
+				Expect(attachment.HasSubnet()).To(BeFalse())
+			}
+		},
+		Entry("an empty attachment list", []ComputeInstanceNetworkAttachmentInput{}, 0),
+		Entry("an attachment without a subnet", []ComputeInstanceNetworkAttachmentInput{{
+			SecurityGroupIDs: []string{"security-group-1"},
+		}}, 1),
 	)
 
 	It("Hides a ComputeInstance Create error description", func() {

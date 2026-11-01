@@ -10,17 +10,17 @@ Requirements: Python 3.9+ and PyYAML. No other dependencies.
 
 ```sh
 # Every feature
-make coverage-report
+tools/coverage-report/coverage-report
 
 # One feature, measured against a Go coverprofile
-make coverage-report FEATURE=OSAC-5731 ARGS="--coverprofile /tmp/small.out"
+tools/coverage-report/coverage-report OSAC-5731 --coverprofile /tmp/small.out
 
 # Merge several profiles (statement blocks are deduplicated, max count wins)
-make coverage-report FEATURE=OSAC-2540 \
-  ARGS="--coverprofile /tmp/servers.out --coverprofile /tmp/small.out"
+tools/coverage-report/coverage-report OSAC-2540 \
+  --coverprofile /tmp/servers.out --coverprofile /tmp/small.out
 ```
 
-The tool is also directly runnable:
+The launcher accepts the full flag set:
 
 ```sh
 tools/coverage-report/coverage-report [FEATURE] \

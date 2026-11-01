@@ -1,7 +1,7 @@
 ---
-# Optional Netris stretched networking suite. It uses the full-ci profile
-# because the shared-subnet test creates both a ComputeInstance and a BMI.
-name: E2E Stretched Networking Netris Full Install
+# Netris full-ci deployment running only the stretched networking test suite.
+# The shared-subnet test creates both a ComputeInstance and a BMI.
+name: E2E Stretched Netris Full Install
 
 permissions:
   contents: read
@@ -41,8 +41,8 @@ jobs:
       pull-requests: read
     uses: osac-project/osac-test-infra/.github/workflows/e2e-stretched-netris-full-install.yml@main
     with:
-      suite: stretched_networking
-      osac-profile: full-ci
+      deploy-suite: full
+      test-suite: stretched
       osac-repo: https://github.com/${{ inputs.repo }}.git
       osac-branch: ${{ inputs.sha }}
       components: >-

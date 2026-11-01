@@ -49,6 +49,9 @@ type ResourceServerDeps struct {
 	PrivateUsersServer privatev1.UsersServer
 
 	Services *services.Flags
+
+	// NetworkingSettings are the networking installation settings.
+	NetworkingSettings servers.NetworkingSettings
 }
 
 // ResourceServers exposes the constructed servers and shared infrastructure that code outside the
@@ -177,6 +180,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetNetworkingSettings(deps.NetworkingSettings).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create clusters server: %w", err)
@@ -189,6 +193,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetNetworkingSettings(deps.NetworkingSettings).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private clusters server: %w", err)
@@ -230,6 +235,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetSecretStore(deps.SecretStore).
+			SetNetworkingSettings(deps.NetworkingSettings).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create compute instances server: %w", err)
@@ -243,6 +249,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetSecretStore(deps.SecretStore).
+			SetNetworkingSettings(deps.NetworkingSettings).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private compute instances server: %w", err)
@@ -400,6 +407,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create virtual networks server: %w", err)
@@ -413,6 +421,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private virtual networks server: %w", err)
@@ -426,7 +435,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetHubClientProvider(hubClientProvider).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create subnets server: %w", err)
@@ -439,7 +447,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetLogger(deps.Logger).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
-		SetHubClientProvider(hubClientProvider).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
 		Build()
 	if err != nil {
@@ -454,6 +461,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create security groups server: %w", err)
@@ -467,6 +475,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private security groups server: %w", err)
@@ -480,6 +489,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private network classes server: %w", err)
@@ -493,6 +503,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fabric domains server: %w", err)
@@ -506,6 +517,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private fabric domains server: %w", err)
@@ -724,6 +736,28 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterRoleBindingsServer(registrar, privateRoleBindingsServer)
 
+	serviceAccountsServer, err := servers.NewServiceAccountsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create service accounts server: %w", err)
+	}
+	publicv1.RegisterServiceAccountsServer(registrar, serviceAccountsServer)
+
+	privateServiceAccountsServer, err := servers.NewPrivateServiceAccountsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private service accounts server: %w", err)
+	}
+	privatev1.RegisterServiceAccountsServer(registrar, privateServiceAccountsServer)
+
 	// Create the project memberships server:
 	deps.Logger.InfoContext(ctx, "Creating project memberships server")
 	projectMembershipsServer, err := servers.NewProjectMembershipsServer().
@@ -757,6 +791,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create external IP pools server: %w", err)
@@ -770,6 +805,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private external IP pools server: %w", err)
@@ -783,6 +819,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create external IPs server: %w", err)
@@ -796,6 +833,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private external IPs server: %w", err)
@@ -809,6 +847,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create external IP attachments server: %w", err)
@@ -822,6 +861,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNetworkingSettings(deps.NetworkingSettings).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private external IP attachments server: %w", err)

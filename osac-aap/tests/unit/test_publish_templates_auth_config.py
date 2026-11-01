@@ -1,6 +1,7 @@
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -67,25 +68,122 @@ def test_config_as_code_secret_tracks_publish_templates_enabled():
         assert secret["stringData"]["OSAC_PUBLISH_TEMPLATES_ENABLED"] == str(enabled).lower()
 
 
-def test_config_as_code_secret_always_tracks_netris_ca_configmap():
+def _render_config_as_code_secret(*set_strings):
     chart_path = Path(__file__).resolve().parents[2] / "charts/aap"
+    args = []
+    for value in set_strings:
+        args += ["--set-string", value]
+    return subprocess.run(
+        [
+            "helm",
+            "template",
+            "aap-test",
+            str(chart_path),
+            "--show-only",
+            "templates/config-as-code-secret.yaml",
+            *args,
+        ],
+        capture_output=True,
+        text=True,
+    )
 
-    for config_map in ("", "customer-netris-ca"):
-        result = subprocess.run(
-            [
-                "helm",
-                "template",
-                "aap-test",
-                str(chart_path),
-                "--show-only",
-                "templates/config-as-code-secret.yaml",
-                "--set-string",
-                f"global.networking.netris.caBundle.configMap={config_map}",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        secret = yaml.safe_load(result.stdout)
 
-        assert secret["stringData"]["NETRIS_CA_CONFIGMAP"] == config_map
+def test_config_as_code_secret_takes_caas_netris_settings_from_network_fulfillment():
+    prefix = "instanceGroups.networkFulfillment.config"
+    result = _render_config_as_code_secret(
+        f"{prefix}.NETRIS_CONTROLLER_URL=https://netris.example.com",
+        f"{prefix}.NETRIS_VALIDATE_CERTS=false",
+        f"{prefix}.NETRIS_CA_CONFIGMAP=customer.netris-ca",
+        f"{prefix}.NETRIS_USERNAME=netris",
+    )
+    assert result.returncode == 0, result.stderr
+    data = yaml.safe_load(result.stdout)["stringData"]
+
+    assert data["NETRIS_CONTROLLER_URL"] == "https://netris.example.com"
+    assert data["NETRIS_VALIDATE_CERTS"] == "false"
+    assert data["NETRIS_CA_CONFIGMAP"] == "customer.netris-ca"
+    assert "NETRIS_USERNAME" not in data
+
+
+def test_config_as_code_secret_omits_netris_settings_without_netris():
+    result = _render_config_as_code_secret()
+    assert result.returncode == 0, result.stderr
+    data = yaml.safe_load(result.stdout)["stringData"]
+
+    assert not any(key.startswith("NETRIS_") for key in data)
+
+
+def test_config_as_code_secret_rejects_an_invalid_netris_ca_configmap_name():
+    chart_path = Path(__file__).resolve().parents[2] / "charts/aap"
+    result = subprocess.run(
+        [
+            "helm",
+            "template",
+            "aap-test",
+            str(chart_path),
+            "--set-string",
+            "instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP=.customer-netris-ca",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "NETRIS_CA_CONFIGMAP must be a ConfigMap name" in result.stderr
+
+
+def _render_aap_chart(*set_strings):
+    chart_path = Path(__file__).resolve().parents[2] / "charts/aap"
+    args = []
+    for value in set_strings:
+        args += ["--set-string", value]
+    return subprocess.run(
+        ["helm", "template", "aap-test", str(chart_path), *args],
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize("value", ["", "flase", "no", "yes", "0", " true"])
+def test_config_as_code_secret_rejects_a_non_boolean_netris_validate_certs(value):
+    result = _render_aap_chart(f"instanceGroups.networkFulfillment.config.NETRIS_VALIDATE_CERTS={value}")
+
+    assert result.returncode != 0
+    assert 'NETRIS_VALIDATE_CERTS must be "true" or "false"' in result.stderr
+
+
+@pytest.mark.parametrize("value,rendered", [("true", "true"), ("false", "false"), ("False", "false"), ("TRUE", "true")])
+def test_config_as_code_secret_accepts_a_boolean_netris_validate_certs(value, rendered):
+    result = _render_config_as_code_secret(f"instanceGroups.networkFulfillment.config.NETRIS_VALIDATE_CERTS={value}")
+
+    assert result.returncode == 0, result.stderr
+    assert yaml.safe_load(result.stdout)["stringData"]["NETRIS_VALIDATE_CERTS"] == rendered
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://netris.example.com",
+        "https://netris.example.com/api path",
+        "https:// netris.example.com",
+        "https://",
+        "netris.example.com",
+        "https://user:pass@netris.example.com",
+    ],
+)
+def test_config_as_code_secret_rejects_a_non_https_netris_controller_url(url):
+    result = _render_aap_chart(f"instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL={url}")
+
+    assert result.returncode != 0
+    assert "NETRIS_CONTROLLER_URL must be an https:// URL" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://netris.example.com", "https://netris.example.com:8443", "https://10.0.0.1/netris/"],
+)
+def test_config_as_code_secret_accepts_an_https_netris_controller_url(url):
+    result = _render_config_as_code_secret(f"instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL={url}")
+
+    assert result.returncode == 0, result.stderr
+    assert yaml.safe_load(result.stdout)["stringData"]["NETRIS_CONTROLLER_URL"] == url

@@ -1,0 +1,338 @@
+---
+# Cases 6 and 7: ExternalIPPool, ExternalIP, ExternalIPAttachment, NATGateway
+# and FabricDomain object names and addresses, refused deletes, cluster ingress.
+- name: EIP - start with an EVPN VirtualNetwork
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: "{{ nf_reset + nf_seed_servers }}"}
+
+- name: EIP - create the VirtualNetwork
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: eip-vn-create
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: EIP - create the pool
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_external_ip_pool
+    sft_label: eip-pool-create
+    sft_expect: success
+    nf_job: "{{ nf_pool_job }}"
+    nf_result: {}
+
+- name: EIP - the pool is an IPAM allocation named by the API ID, with no common subnet
+  vars:
+    _pool: "{{ nf_state.allocations | selectattr('name', 'equalto', 'osac-pool-' ~ nf_ids.pool) | list }}"
+  ansible.builtin.assert:
+    that:
+      - _pool | length == 1
+      - _pool[0].prefix == nf_pool_cidr
+      - _pool[0].tenant.id == 2
+      - nf_state.ipam_subnets | selectattr('name', 'search', '-common$') | list == []
+      - nf_state.ipam_subnets == []
+    quiet: true
+
+- name: EIP - the pool rerun writes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_external_ip_pool
+    sft_label: eip-pool-create-rerun
+    sft_expect: success
+    nf_job: "{{ nf_pool_job }}"
+    nf_result: {}
+
+- name: EIP - the pool rerun wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: EIP - create the ExternalIP
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_external_ip
+    sft_label: eip-create
+    sft_expect: success
+    nf_job: "{{ nf_eip_job }}"
+    nf_result: {external_ip: {address: 203.0.113.1}}
+
+- name: EIP - the reservation is a /32 named by the API ID
+  vars:
+    _eip: "{{ nf_state.ipam_subnets | selectattr('name', 'equalto', 'osac-eip-' ~ nf_ids.eip) | list }}"
+  ansible.builtin.assert:
+    that:
+      - sft_last.result.keys() | list == ['external_ip']
+      - sft_last.result.external_ip.keys() | list == ['address']
+      - sft_last.result.external_ip.address is not search('/')
+      - _eip | length == 1
+      - _eip[0].prefix == '203.0.113.1/32'
+      - _eip[0].purpose == 'nat'
+      - _eip[0].tenant.id == 2
+      - nf_state.ipam_subnets | length == 1
+    quiet: true
+
+- name: EIP - a rerun returns the same address and writes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_external_ip
+    sft_label: eip-create-rerun
+    sft_expect: success
+    nf_job: "{{ nf_eip_job }}"
+    nf_result: {external_ip: {address: 203.0.113.1}}
+
+- name: EIP - the ExternalIP rerun wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: EIP - a second ExternalIP gets the next address
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_external_ip
+    nf_eip_id: "{{ nf_ids.eip2 }}"
+    sft_label: eip-create-second
+    sft_expect: success
+    nf_job: "{{ nf_eip_job }}"
+    nf_result: {external_ip: {address: 203.0.113.2}}
+
+- name: EIP - release the second ExternalIP
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_external_ip
+    nf_eip_id: "{{ nf_ids.eip2 }}"
+    sft_label: eip-delete-second
+    sft_expect: success
+    nf_job: "{{ nf_eip_job }}"
+    nf_result: {}
+
+- name: EIP - attach creates the DNAT rule in the VPC of the destination
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: attach_external_ip
+    sft_label: eip-attach
+    sft_expect: success
+    nf_job: "{{ nf_eipa_job }}"
+    nf_result: {}
+
+- name: EIP - the DNAT rule
+  vars:
+    _rule: "{{ nf_state.nats | selectattr('name', 'equalto', 'osac-eipa-' ~ nf_ids.eipa) | list }}"
+  ansible.builtin.assert:
+    that:
+      - _rule | length == 1
+      - _rule[0].action | upper == 'DNAT'
+      - _rule[0].vpc.id == 101
+      - _rule[0].destinationAddress == '203.0.113.1/32'
+      - _rule[0].dnatToIP == '10.20.1.10/32'
+    quiet: true
+
+- name: EIP - attach in the management domain uses the management VPC
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: attach_external_ip
+    sft_label: eip-attach-management
+    sft_expect: success
+    nf_job: >-
+      {{ nf_eipa_job | combine({'resource': nf_eipa_job.resource | combine({'id': nf_ids.eip2}),
+         'destination': {'address': '10.99.0.5', 'routing_domain': {'type': 'provider_management'}}}) }}
+    nf_result: {}
+
+- name: EIP - the management rule is in the management VPC
+  vars:
+    _rule: "{{ nf_state.nats | selectattr('name', 'equalto', 'osac-eipa-' ~ nf_ids.eip2) | list }}"
+  ansible.builtin.assert:
+    that:
+      - _rule | length == 1
+      - _rule[0].vpc.id == 3
+    quiet: true
+
+- name: EIP - detach the management rule
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: detach_external_ip
+    sft_label: eip-detach-management
+    sft_expect: success
+    nf_job: >-
+      {{ nf_eipa_job | combine({'resource': nf_eipa_job.resource | combine({'id': nf_ids.eip2}),
+         'destination': {'address': '10.99.0.5', 'routing_domain': {'type': 'provider_management'}}}) }}
+    nf_result: {}
+
+- name: EIP - the management rule is gone
+  ansible.builtin.assert:
+    that:
+      - nf_state.nats | selectattr('name', 'equalto', 'osac-eipa-' ~ nf_ids.eip2) | list == []
+      - nf_write_kinds == ['DELETE /api/v2/nat']
+    quiet: true
+
+- name: EIP - attach to another target is refused and writes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: attach_external_ip
+    nf_dnat_target: 10.20.1.99
+    sft_label: eip-attach-other-target
+    sft_expect: final
+    nf_job: "{{ nf_eipa_job }}"
+
+- name: EIP - the refused attach wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: EIP - create the NAT gateway
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_nat_gateway
+    sft_label: natgw-create
+    sft_expect: success
+    nf_job: "{{ nf_natgw_job }}"
+    nf_result: {}
+
+- name: EIP - the SNAT rule
+  vars:
+    _rule: "{{ nf_state.nats | selectattr('name', 'equalto', 'osac-natgw-' ~ nf_ids.natgw) | list }}"
+  ansible.builtin.assert:
+    that:
+      - _rule | length == 1
+      - _rule[0].action | upper == 'SNAT'
+      - _rule[0].vpc.id == 101
+      - _rule[0].sourceAddress == nf_vn_cidr
+      - _rule[0].snatToIP == '203.0.113.1/32'
+    quiet: true
+
+- name: EIP - the NAT gateway rerun writes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_nat_gateway
+    sft_label: natgw-create-rerun
+    sft_expect: success
+    nf_job: "{{ nf_natgw_job }}"
+    nf_result: {}
+
+- name: EIP - the NAT gateway rerun wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: EIP - a detach refuses a rule whose target changed
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - path: update
+        body:
+          collection: nats
+          id: "{{ (nf_state.nats | selectattr('name', 'equalto', 'osac-eipa-' ~ nf_ids.eipa) | first).id }}"
+          fields: {dnatToIP: 10.20.1.99/32}
+
+- name: EIP - detach on an address mismatch
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: detach_external_ip
+    sft_label: eip-detach-mismatch
+    sft_expect: final
+    nf_job: "{{ nf_eipa_job }}"
+
+- name: EIP - the refused detach wrote nothing and the rule is still there
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_state.nats | selectattr('name', 'equalto', 'osac-eipa-' ~ nf_ids.eipa) | list | length == 1
+    quiet: true
+
+- name: EIP - a NAT gateway delete refuses a rule whose address changed
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - path: update
+        body:
+          collection: nats
+          id: "{{ (nf_state.nats | selectattr('name', 'equalto', 'osac-natgw-' ~ nf_ids.natgw) | first).id }}"
+          fields: {snatToIP: 203.0.113.2/32}
+
+- name: EIP - delete the NAT gateway on an address mismatch
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_nat_gateway
+    sft_label: natgw-delete-mismatch
+    sft_expect: final
+    nf_job: "{{ nf_natgw_job }}"
+
+- name: EIP - the refused NAT gateway delete wrote nothing
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_state.nats | selectattr('name', 'equalto', 'osac-natgw-' ~ nf_ids.natgw) | list | length == 1
+    quiet: true
+
+# Case 7: FabricDomain and cluster ingress.
+- name: FabricDomain - create
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_fabric_domain
+    sft_label: fd-create
+    sft_expect: success
+    nf_job: "{{ nf_fd_job }}"
+    nf_result: {backend_id: "601"}
+
+- name: FabricDomain - the Server Cluster is named by the API ID, in the VPC, with both servers
+  vars:
+    _cluster: "{{ nf_state.clusters | selectattr('name', 'equalto', 'osac-fd-' ~ nf_ids.fd) | list }}"
+  ansible.builtin.assert:
+    that:
+      - _cluster | length == 1
+      - _cluster[0].vpc.id == 101
+      - _cluster[0].site.id == 1
+      - _cluster[0].srvClusterTemplate.id == 7
+      - _cluster[0].servers | map(attribute='name') | sort == ['server-a', 'server-b']
+    quiet: true
+
+- name: FabricDomain - delete
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_fabric_domain
+    sft_label: fd-delete
+    sft_expect: success
+    nf_job: "{{ nf_fd_job }}"
+    nf_result: {}
+
+- name: FabricDomain - the Server Cluster is gone
+  ansible.builtin.assert:
+    that: nf_state.clusters == []
+    quiet: true
+
+- name: FabricDomain - delete of an absent domain succeeds without a write
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_fabric_domain
+    sft_label: fd-delete-absent
+    sft_expect: success
+    nf_job: "{{ nf_fd_job }}"
+    nf_result: {}
+
+- name: FabricDomain - nothing was written
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: Ingress - reserve_cluster_ingress_ip is final and calls Netris not at all
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: reserve_cluster_ingress_ip
+    sft_label: ingress-reserve
+    sft_expect: final
+    sft_message_search: "not supported by the Netris Fabric Manager yet"
+    nf_job: "{{ nf_ingress_job }}"
+
+- name: Ingress - release_cluster_ingress_ip is a no-op that calls Netris not at all
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: release_cluster_ingress_ip
+    sft_label: ingress-release
+    sft_expect: success
+    nf_job: "{{ nf_ingress_job }}"
+    nf_result: {}
+
+- name: Ingress - neither call reached Netris
+  ansible.builtin.assert:
+    that: nf_calls == []
+    quiet: true

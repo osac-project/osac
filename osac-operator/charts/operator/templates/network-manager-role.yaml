@@ -1,4 +1,7 @@
-{{- if .Values.networkManagers.enabled }}
+{{- /*
+The operator reads the manager registration ConfigMaps in its namespace
+(network manager contract §4.2).
+*/ -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -31,4 +34,3 @@ subjects:
 - kind: ServiceAccount
   name: {{ include "osac-operator.serviceAccountName" . }}
   namespace: {{ .Release.Namespace }}
-{{- end }}

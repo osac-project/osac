@@ -47,6 +47,7 @@ metadata:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-output-log-policy": hook-failed
 spec:
   backoffLimit: {{ .Values.bootstrap.backoffLimit }}
   # Cumulative across all backoffLimit retries; must exceed both init containers'

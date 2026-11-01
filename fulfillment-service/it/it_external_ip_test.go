@@ -35,8 +35,11 @@ import (
 
 // cidrCounter and cidrOffset provide a process-wide sequence with a different starting
 // subnet on each run, avoiding pool CIDR collisions within and across repeated test runs.
+// The pools live in 100.64.0.0/10, which no VirtualNetwork, NetworkClass default or default
+// Cluster pod or service network of the suite uses: an ExternalIPPool that overlaps one of
+// them is rejected.
 var cidrCounter atomic.Int64
-var cidrOffset = time.Now().UnixNano() % (200 * 256)
+var cidrOffset = time.Now().UnixNano() % (64 * 256)
 
 const externalIPTestFinalizer = "integration-test-external-ip-capacity"
 
@@ -170,8 +173,8 @@ func deleteExternalIPAttachmentFixtureAndWait(
 }
 
 func uniqueCIDR() string {
-	subnet := (cidrOffset + cidrCounter.Add(1) - 1) % (200 * 256)
-	return fmt.Sprintf("10.%d.%d.0/28", 20+subnet/256, subnet%256)
+	subnet := (cidrOffset + cidrCounter.Add(1) - 1) % (64 * 256)
+	return fmt.Sprintf("100.%d.%d.0/28", 64+subnet/256, subnet%256)
 }
 
 func createReadyExternalIPNetworkClass(ctx context.Context, client privatev1.NetworkClassesClient) string {
@@ -376,7 +379,7 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).To(HaveOccurred())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists))
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 
 		DeferCleanup(func() {
 			_, _ = client.Delete(ctx, privatev1.ExternalIPPoolsDeleteRequest_builder{
@@ -386,6 +389,7 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 	})
 
 	It("Rejects delete when IPs are allocated", func() {
+		ndSkipUnlessProviderNetworkingEnabled(ctx, "An ExternalIPPool with allocated ExternalIPs")
 		networkClassesClient := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		createReadyExternalIPNetworkClass(ctx, networkClassesClient)
 
@@ -501,6 +505,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		ndSkipUnlessProviderNetworkingEnabled(ctx, "ExternalIP lifecycle")
 		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		poolsClient = privatev1.NewExternalIPPoolsClient(tool.InternalView().AdminConn())
 		externalIPsClient = publicv1.NewExternalIPsClient(tool.ExternalView().UserConn())
@@ -829,6 +834,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		ndSkipUnlessProviderNetworkingEnabled(ctx, "ExternalIPAttachment validation")
 		attachmentIDs = nil
 		additionalExternalIPIDs = nil
 		racingClusterID = ""
@@ -990,7 +996,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 				})
 		})
 
-		templateId = fmt.Sprintf("test-tmpl-%s", uuid.New())
+		templateId = newTemplateID("test_tmpl")
 		_, err = clusterTemplatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:    templateId,
@@ -1024,9 +1030,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 					Tenant: usersGroup,
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassID}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.230.0.0/16"),
+					Ipv4Cidr: new("10.230.0.0/16"),
 				}.Build(),
 			}.Build(),
 		}.Build())

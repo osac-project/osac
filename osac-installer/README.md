@@ -65,8 +65,8 @@ The OSAC platform relies on five core components to deliver governed self-servic
 > - Red Hat OpenShift Advanced Cluster Management (RHACM)
 > - Red Hat OpenShift Virtualization (OCP-Virt) - **Optional**: Only required for VM as a Service (VMaaS) support
 > - Red Hat Ansible Automation Platform (AAP)
-> - A network backend for bare metal provisioning: **Netris** or agentless
->   (`global.networking` — see [Network Backend Configuration](#network-backend-configuration-caas))
+> - A Fabric Manager for bare metal networking, registered by the admin
+>   (`global.networking` — see [Networking Configuration](#networking-configuration))
 
 **Configuration Manifests**
 
@@ -156,7 +156,7 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | Variable | Description |
 | ---------- | ------------- |
 | `PLATFORM` | `kind` or `openshift` (required) |
-| `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, `full-ci`, or `cudn-evpn-netris-test` (required; `dev-full` is kind only) |
+| `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
 | `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args for the OSAC chart only |
 | `DRY_RUN=1` | Render all releases from `make install` with `helm template`; no cluster connections or cluster commands are used |
@@ -342,31 +342,79 @@ for an ordinary Kind cluster. Image loading checks the required tools and
 cluster availability without requiring KVM or the virtualization install tools.
 `CONTAINER_TOOL` selects the runtime unless `KIND_EXPERIMENTAL_PROVIDER` is set.
 
-#### CUDN EVPN/Netris E2E environment
+#### Netris + CUDN EVPN CI overlays
 
-`PROFILE=cudn-evpn-netris-test` is an explicit OpenShift-only profile. It
-contains the normal VMaaS + BMaaS instance and infrastructure values, registers
-both `netris` (fabric) and `cudn_evpn` (k8s) through the operator's nested
-`networkManagers` map, and selects them on the default NetworkClass. It does
-not install the FRR operator, create the Phase 1 EVPN
-`FRRConfiguration`, create the external EVPN/BGP/VTEP fabric, or provide the
-`cudn_evpn` implementation; those prerequisites must be prepared before
-installation.
+Netris networking is an overlay on the service profile, not a separate
+deployment profile. The Netris CI workflows layer one values file after the
+base profile:
 
-Install it with:
+| Deployment suite | Base profile | Netris overlay | `k8sManager` |
+| --- | --- | --- | --- |
+| VMaaS | `vmaas-ci` | `values/vmaas-ci/netris.yaml` | `cudn_evpn` |
+| BMaaS | `bmaas-ci` | `values/bmaas-ci/netris.yaml` | none |
+| Full and stretched | `full-ci` | `values/full-ci/netris.yaml` | `cudn_evpn` |
 
-```bash
-make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac
+The overlay enables provider networking and selects the managers. Supply the
+site-specific settings in a private values file, which the Netris backend of
+osac-test-infra generates as `netris-runtime.yaml` (gitignored):
+
+```yaml
+global:
+  networking:
+    excludedIpv4Cidrs:
+    - 192.0.2.0/24        # management, provisioning and node networks
+aap:
+  instanceGroups:
+    networkFulfillment:
+      config:
+        NETRIS_CONTROLLER_URL: "https://netris.example.com"
+        NETRIS_SITE_ID: "1"
+        NETRIS_TENANT_ID: "1"
+      secret:
+        NETRIS_PASSWORD: "<password>"
 ```
 
-The profile includes the non-secret Netris controller/site/tenant settings.
-Supply the controller password and any site-specific Netris or SSH values in
-a private values file and pass it through `INSTANCE_VALUES_EXTRA`, for example:
-
 ```bash
-make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac \
-  INSTANCE_VALUES_EXTRA="-f cudn-evpn-netris-test-secrets.local.yaml"
+make install PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+  INFRA_VALUES_EXTRA="-f evpn.private.yaml" \
+  INSTANCE_VALUES_EXTRA="-f values/vmaas-ci/netris.yaml -f netris-secrets.local.yaml"
 ```
+
+With `evpn.enabled: true` in an infra values file, the installer configures the
+OpenShift side of EVPN: FRR, route advertisements, NMState, per-node uplink and
+VTEP addresses, the `tenant-vtep`, and fabric BGP sessions. Replace the sample
+node, interfaces, addresses, and ASNs with values from the cluster and fabric
+admins:
+
+```yaml
+evpn:
+  enabled: true
+  nmstate:
+    install: true
+    channel: stable
+  configureClusterNetwork: true
+  vtepCIDR: 10.200.255.0/24
+  bgp:
+    asn: 4209999999
+    acceptPrefixes:
+      - 10.200.0.0/16
+    waitForEstablished: true
+    timeoutSeconds: 900
+  nodes:
+    - name: worker-0
+      vtepIP: 10.200.255.1
+      uplinks:
+        - interface: ens6
+          address: 169.254.133.2/31
+          peerAddress: 169.254.133.3
+          peerASN: 4200300002
+```
+
+The Netris fabric side stays external: the fabric admin configures the links,
+VTEP range, and switch-side node ASN. VMs use the cluster DNS that
+OVN-Kubernetes DHCP gives on the primary network, and OSAC configures no
+per-resource DNS. Bare metal gets its resolver (default 8.8.8.8) from the
+default DHCP option set of the Netris installation, a provider install step.
 
 On top of `dev`, `dev-full` adds virtualization, AWX, and seeded test data using
 the `osac` and `osac-devstack` releases plus `scripts/dev-full/`:
@@ -394,15 +442,8 @@ the `osac` and `osac-devstack` releases plus `scripts/dev-full/`:
   its default VirtualNetwork + Subnet + SecurityGroup via tenant onboarding, so those are
   ready without manual seeding.
 
-The `dev-full` overlay enables `operator.controllers.networkingProvisioning` so
-Subnet AAP jobs create a target namespace and `ClusterUserDefinedNetwork` object
-for every tenant. The Kind-only `ClusterUserDefinedNetwork` CRD is installed by
-the earlier `osac-infra` phase and accepts the object without running an OVN
-controller. This supports VM target-namespace provisioning but creates no CUDN
-dataplane and does not validate tenant subnet isolation. Kind VMs continue
-to use the default pod network and the cluster-wide `l2bridge` binding. The
-dev-full tenant hook waits for the starter tenant's namespace and CUDN object so
-missing AAP provisioning or CRD installation fails the install visibly.
+The Kind profiles set `global.networking.provisioningEnabled: false`, so
+networking resources reconcile to READY without a real fabric (Kind has none).
 
 **Prerequisites** (beyond the base tools) — enforced by `scripts/dev-full/kind-runtime.sh check`:
 
@@ -413,8 +454,6 @@ missing AAP provisioning or CRD installation fails the install visibly.
     install. Rootless Podman, including the socket started by
     `systemctl --user start podman.socket`, cannot provide the TopoLVM loop device
     and volume group used by this profile.
-  - **Linux + Distrobox** — the rootful podman host socket (`/run/podman/podman.sock`);
-    install the drop-in at `scripts/dev-full/manifests/podman-socket-rootful.conf`
   - **macOS** — Docker Desktop or Podman Desktop. For Podman, start its machine and
     verify `podman info` succeeds before installing.
 - **`/dev/kvm`** present (Linux), **`fs.inotify.max_user_instances >= 256`**, and
@@ -594,81 +633,19 @@ Configure via Helm values under `aap.instanceGroups.*` in your values file.
 
 See [docs/aap-configuration.md](docs/aap-configuration.md) for details.
 
-#### Network Backend Configuration (CaaS)
+#### Networking Configuration
 
-Default networking is agentless (`global.networking.fabricManager: ""`,
-`k8sManager: k8s_only`). For **Netris**, set the facade and enable both AAP
-instance groups:
+Networking is configured under `global.networking`: `provisioningEnabled`
+(fixed at installation), `excludedIpv4Cidrs`, the required `fabricManager`
+(the name in the provider's Fabric Manager registration), `k8sManager`
+(`cudn_evpn`, required with VMaaS), and `networkClass` (tenant defaults,
+east-west capabilities and the optional address plan). Network manager
+settings and credentials go in `aap.instanceGroups.networkFulfillment.config`
+and `.secret`. The admin applies the Fabric Manager registration ConfigMap;
+it is not a Helm value.
 
-```yaml
-global:
-  networking:
-    fabricManager: netris
-    k8sManager: ""
-    netris:
-      controllerUrl: "https://redhat-ctl.netris.io"
-      credentials:
-        username: "netris"
-        externalSecret: true
-      siteId: "5"
-      tenantId: "1"
-      tenantName: "Admin"
-
-aap:
-  instanceGroups:
-    clusterFulfillment:
-      enabled: true
-    networkFulfillment:
-      enabled: true
-```
-
-Helm derives `NETWORK_CLASS`, manager ConfigMaps, and the default NetworkClass
-from this block. Do not set those by hand unless using expert overrides.
-
-See [docs/network-backend.md](docs/network-backend.md) for profiles,
-credentials, and the advanced/manual path.
-
-#### FabricDomain admin onboarding (Phase 1)
-
-For Netris Ethernet east-west networking, first register each
-BareMetalInstanceType through the fulfillment **private API** and author its
-backend binding there. This fragment belongs to the instance type, not Helm:
-
-```yaml
-spec:
-  fabric_bindings:
-    ethernet_ew:
-      netris: "42" # opaque Ethernet profile reference; Netris uses a Server Cluster Template ID
-```
-
-Then map every participating server's **exact Netris hostname** to its
-BareMetalInstanceType ID in the umbrella values:
-
-```yaml
-operator:
-  fabricDomainInventory:
-    gpu-01.example.com: "gpu-bmit-id"
-    gpu-02.example.com: "gpu-bmit-id"
-```
-
-The umbrella's `operator` dependency alias forwards this to the standalone
-`osac-operator` chart's `fabricDomainInventory` value. A nonempty map creates
-the fixed ConfigMap `osac-fabric-domain-inventory` in the Helm release namespace,
-which is also the operator's networking namespace. Its `data` is exactly the
-hostname-to-ID map; hostname spelling and case are preserved. The default `{}`
-does not create the ConfigMap. Keep this inventory current during onboarding
-and update it through your Helm values.
-
-The NetworkClass of the domain's VirtualNetwork selects the fabric manager; the
-manager name must have a corresponding entry in the instance type's
-`fabric_bindings.ethernet_ew` map. For Netris, that entry is the Server Cluster
-Template ID. The profile belongs to the hardware type and is not scoped to a
-NetworkClass. NetworkClass no longer accepts `template_id`, and FabricDomain
-has no `instance_type` field: the operator resolves the manager-specific profile
-through the server inventory and instance types. Keep Netris credentials in
-the existing AAP Secret configuration; the inventory contains only hostnames
-and catalog IDs.
-The FabricDomain CRD is included when `operatorCrds.install` is enabled.
+See [docs/network-backend.md](docs/network-backend.md) for the values, the
+checks a rollout runs, and the CI profiles.
 
 #### DNS Backend Configuration (CaaS)
 

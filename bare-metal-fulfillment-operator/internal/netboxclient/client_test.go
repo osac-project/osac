@@ -158,6 +158,31 @@ var _ = Describe("NetBox client", func() {
 		Expect(snapshot.Device.CustomFields["osac_instance_id"]).To(Equal("instance-42"))
 	})
 
+	It("lists native interfaces for a device", func() {
+		_, client := newTrustedClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			Expect(r.Method).To(Equal(http.MethodGet))
+			Expect(r.URL.Path).To(Equal("/api/dcim/interfaces/"))
+			Expect(r.URL.Query().Get("device_id")).To(Equal("42"))
+			writeJSON(w, http.StatusOK, interfacePage(interfaceResponse("data-0", "52:54:00:16:04:83")))
+		}))
+
+		interfaces, err := client.ListDeviceInterfaces(context.Background(), "42")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(interfaces).To(Equal([]DeviceInterface{{Name: "data-0", PrimaryMAC: "52:54:00:16:04:83"}}))
+	})
+
+	It("returns an interface without a primary MAC", func() {
+		_, client := newTrustedClient(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusOK, interfacePage(interfaceResponse("data-0", "")))
+		}))
+
+		interfaces, err := client.ListDeviceInterfaces(context.Background(), "42")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(interfaces).To(Equal([]DeviceInterface{{Name: "data-0"}}))
+	})
+
 	It("encodes status and custom-field filters for device queries", func() {
 		longFieldName := strings.Repeat("x", 51)
 		freeDevice := strings.Replace(
@@ -759,6 +784,27 @@ func deviceResponse(id int, name, status string) string {
 		"module_bay_count": 0,
 		"inventory_item_count": 0
 	}`, id, id, name, name, status)
+}
+
+func interfacePage(results ...map[string]any) map[string]any {
+	return map[string]any{"count": len(results), "next": nil, "previous": nil, "results": results}
+}
+
+func interfaceResponse(name, primaryMAC string) map[string]any {
+	var primary any
+	if primaryMAC != "" {
+		primary = map[string]any{
+			"id": 701, "url": "/api/dcim/mac-addresses/701/", "display": primaryMAC, "mac_address": primaryMAC,
+		}
+	}
+	return map[string]any{
+		"id": 501, "url": "/api/dcim/interfaces/501/", "display": name,
+		"device": map[string]any{"id": 42, "url": "/api/dcim/devices/42/", "display": "host-42"},
+		"name":   name, "type": map[string]any{"value": "1000base-t", "label": "1000BASE-T (1GE)"},
+		"link_peers": []any{}, "connected_endpoints_reachable": false,
+		"count_ipaddresses": 0, "count_fhrp_groups": 0, "_occupied": false,
+		"primary_mac_address": primary,
+	}
 }
 
 func customFieldResult(id int, name string) map[string]any {

@@ -22,10 +22,18 @@ In release mode, `tag` also fans out to three more jobs —
 `publish-fulfillment-service-proto`. After those finish,
 `create-umbrella-release` publishes the OSAC chart's GitHub Release and
 marks the highest stable umbrella version as the repository's Latest release.
-Prereleases are explicitly marked and never become Latest. `notify-release` waits for all
-four jobs before announcing success, so a failure cannot be contradicted by
-an already-sent success message. See "What you get on success" below for
-the release pages and artifacts this produces.
+Prereleases are explicitly marked and never become Latest. `notify-release`
+waits for all four jobs before announcing **GHCR publication**. This message
+does not claim that Konflux has finished: a separate `notify-konflux` job
+waits for the image and chart staging jobs and reports their final outcomes.
+See "What you get on success" below for the release pages and artifacts.
+
+Slack lists the umbrella chart first, followed by every bundled subchart
+version from the exact published package and `Chart.lock`, including reused
+versions and CRD charts. Local fallbacks and missing lock entries are labeled.
+The standalone CSI charts are listed separately because the umbrella does not
+install them. This inventory is independent of which components were newly
+published during the run.
 
 - **`osac-build-and-publish.yaml`** — the real pipeline: resolves every
   component's version, builds and tests whatever needs building, packages
@@ -206,6 +214,21 @@ signed and with an SBOM attached, and gets a real Pyxis catalog entry
 plus a stage errata advisory. The GHCR-side publish and the Konflux
 staging release are independent — a failure in one doesn't undo the
 other.
+
+Release runs send two Slack notifications:
+
+1. **GHCR published** after the GHCR artifacts and GitHub Release are ready,
+   with the complete chart inventory and a notice that Konflux is pending.
+2. A **final Konflux status** after image builds, image staging, chart
+   stamping/builds, and chart staging finish or are skipped. It says
+   **Complete** only when both image and chart staging succeeded. A chart
+   staging failure or skip is reported explicitly even though those jobs
+   currently use `continue-on-error`. Skipped validation gates remain visible
+   in the final Complete message.
+
+Nightlies send only the GHCR notification because they do not run Konflux.
+Cancellation prevents new notifications from starting. Re-running a
+notification job sends another message for the same run.
 
 ## Release retries and upgrades
 

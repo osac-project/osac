@@ -18,15 +18,19 @@ package it
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 
 	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/dynamicpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/client-go/util/retry"
 
@@ -60,6 +64,504 @@ type metadataTestAccounts struct {
 	tenantAdmin      metadataTestIdentity
 	tenantUser       metadataTestIdentity
 	secondTenantUser metadataTestIdentity
+}
+
+// metadataResourceServiceNames is the persistent-resource matrix split across
+// the two metadata implementation stories. Keeping service names alongside
+// the expected method capabilities makes additions visible to the unit test
+// matrix without coupling the test helpers to generated client interfaces.
+var metadataResourceServiceNames = []string{
+	"AddOnOperators",
+	"BareMetalInstanceCatalogItems",
+	"BareMetalInstanceTemplates",
+	"BareMetalInstanceTypes",
+	"BareMetalInstances",
+	"ClusterCatalogItems",
+	"ClusterTemplates",
+	"ClusterVersions",
+	"Clusters",
+	"ComputeInstanceCatalogItems",
+	"ComputeInstanceTemplates",
+	"ComputeInstances",
+	"DiskImages",
+	"Hubs",
+	"IdentityProviders",
+	"InstanceTypes",
+	"ProjectMemberships",
+	"Projects",
+	"RoleBindings",
+	"Roles",
+	"Secrets",
+	"StorageBackends",
+	"StorageTiers",
+	"Tenants",
+	"Users",
+	"Volumes",
+}
+
+type metadataServiceDescriptors struct {
+	private protoreflect.ServiceDescriptor
+	public  protoreflect.ServiceDescriptor
+}
+
+// metadataServices finds both API views for a resource service. Some resources
+// intentionally have no public service; callers use a nil public descriptor
+// to assert the existing method boundary.
+func metadataServices(name string) (metadataServiceDescriptors, error) {
+	find := func(prefix string) (protoreflect.ServiceDescriptor, error) {
+		descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(prefix + name))
+		if err != nil {
+			return nil, err
+		}
+		service, ok := descriptor.(protoreflect.ServiceDescriptor)
+		if !ok {
+			return nil, fmt.Errorf("descriptor %q is %T, not a service", prefix+name, descriptor)
+		}
+		return service, nil
+	}
+
+	private, err := find("osac.private.v1.")
+	if err != nil {
+		return metadataServiceDescriptors{}, fmt.Errorf("find private %s service: %w", name, err)
+	}
+	public, err := find("osac.public.v1.")
+	if err != nil {
+		return metadataServiceDescriptors{private: private}, nil
+	}
+	return metadataServiceDescriptors{private: private, public: public}, nil
+}
+
+func metadataRPCMethodName(service protoreflect.ServiceDescriptor, method protoreflect.Name) string {
+	return "/" + string(service.FullName()) + "/" + string(method)
+}
+
+// privateMetadataSnapshot performs a descriptor-driven private Get and
+// returns the complete object message, including private metadata fields.
+func privateMetadataSnapshot(
+	ctx context.Context,
+	conn grpc.ClientConnInterface,
+	service protoreflect.ServiceDescriptor,
+	id string,
+) (*dynamicpb.Message, error) {
+	return metadataObjectSnapshot(ctx, conn, service, id)
+}
+
+func metadataObjectSnapshot(
+	ctx context.Context,
+	conn grpc.ClientConnInterface,
+	service protoreflect.ServiceDescriptor,
+	id string,
+) (*dynamicpb.Message, error) {
+	if conn == nil {
+		return nil, fmt.Errorf("metadata gRPC connection is required")
+	}
+	if service == nil || id == "" {
+		return nil, fmt.Errorf("metadata service and object ID are required")
+	}
+	method := service.Methods().ByName("Get")
+	if method == nil {
+		return nil, fmt.Errorf("metadata service %q has no Get method", service.FullName())
+	}
+	request := dynamicpb.NewMessage(method.Input())
+	idField := method.Input().Fields().ByName("id")
+	if idField == nil || idField.Kind() != protoreflect.StringKind {
+		return nil, fmt.Errorf("private metadata Get request %q has no string id field", method.Input().FullName())
+	}
+	request.Set(idField, protoreflect.ValueOfString(id))
+	response := dynamicpb.NewMessage(method.Output())
+	if err := conn.Invoke(ctx, metadataRPCMethodName(service, method.Name()), request, response); err != nil {
+		return nil, fmt.Errorf("metadata Get %q: %w", service.FullName(), err)
+	}
+	objectField := method.Output().Fields().ByName("object")
+	if objectField == nil || !response.Has(objectField) {
+		return nil, fmt.Errorf("metadata Get %q returned no object", service.FullName())
+	}
+	object := response.Get(objectField).Message()
+	if object == nil || !object.IsValid() {
+		return nil, fmt.Errorf("metadata Get %q returned an invalid object", service.FullName())
+	}
+	metadataField := object.Descriptor().Fields().ByName("metadata")
+	if metadataField == nil || !object.Has(metadataField) {
+		return nil, fmt.Errorf("metadata Get %q returned an object without metadata", service.FullName())
+	}
+	return proto.Clone(object.Interface()).(*dynamicpb.Message), nil
+}
+
+func metadataList(
+	ctx context.Context,
+	conn grpc.ClientConnInterface,
+	service protoreflect.ServiceDescriptor,
+	filter string,
+) (*dynamicpb.Message, error) {
+	if conn == nil {
+		return nil, fmt.Errorf("metadata gRPC connection is required")
+	}
+	if service == nil {
+		return nil, fmt.Errorf("metadata service is required")
+	}
+	method := service.Methods().ByName("List")
+	if method == nil {
+		return nil, fmt.Errorf("metadata service %q has no List method", service.FullName())
+	}
+	filterField := method.Input().Fields().ByName("filter")
+	if filterField == nil || filterField.Kind() != protoreflect.StringKind {
+		return nil, fmt.Errorf("metadata List request %q has no string filter field", method.Input().FullName())
+	}
+	request := dynamicpb.NewMessage(method.Input())
+	request.Set(filterField, protoreflect.ValueOfString(filter))
+	response := dynamicpb.NewMessage(method.Output())
+	if err := conn.Invoke(ctx, metadataRPCMethodName(service, method.Name()), request, response); err != nil {
+		return nil, fmt.Errorf("metadata List %q: %w", service.FullName(), err)
+	}
+	return response, nil
+}
+
+func metadataListObjects(response *dynamicpb.Message) ([]*dynamicpb.Message, int32, error) {
+	if response == nil {
+		return nil, 0, fmt.Errorf("metadata List response is required")
+	}
+	fields := response.Descriptor().Fields()
+	itemsField := fields.ByName("items")
+	if itemsField == nil || !itemsField.IsList() || itemsField.Kind() != protoreflect.MessageKind {
+		return nil, 0, fmt.Errorf("metadata List response %q has no message items field", response.Descriptor().FullName())
+	}
+	totalField := fields.ByName("total")
+	if totalField == nil || totalField.Kind() != protoreflect.Int32Kind {
+		return nil, 0, fmt.Errorf("metadata List response %q has no int32 total field", response.Descriptor().FullName())
+	}
+	list := response.Get(itemsField).List()
+	items := make([]*dynamicpb.Message, 0, list.Len())
+	for index := 0; index < list.Len(); index++ {
+		items = append(items, proto.Clone(list.Get(index).Message().Interface()).(*dynamicpb.Message))
+	}
+	return items, int32(response.Get(totalField).Int()), nil
+}
+
+func publicMetadataCreateObject(
+	existing *dynamicpb.Message,
+	name string,
+	labels, annotations map[string]string,
+) (*dynamicpb.Message, error) {
+	if existing == nil || name == "" {
+		return nil, fmt.Errorf("public metadata create object and name are required")
+	}
+	object := proto.Clone(existing).(*dynamicpb.Message)
+	fields := object.Descriptor().Fields()
+	if idField := fields.ByName("id"); idField != nil {
+		object.Clear(idField)
+	}
+	if statusField := fields.ByName("status"); statusField != nil {
+		object.Clear(statusField)
+	}
+	metadataField := fields.ByName("metadata")
+	if metadataField == nil || metadataField.Message() == nil {
+		return nil, fmt.Errorf("public create object %q has no metadata", object.Descriptor().FullName())
+	}
+	metadata := object.Mutable(metadataField).Message()
+	nameField := metadata.Descriptor().Fields().ByName("name")
+	if nameField == nil || nameField.Kind() != protoreflect.StringKind {
+		return nil, fmt.Errorf("public metadata %q has no string name field", metadata.Descriptor().FullName())
+	}
+	metadata.Set(nameField, protoreflect.ValueOfString(name))
+	for _, fieldName := range []protoreflect.Name{"creation_timestamp", "deletion_timestamp", "creator", "version"} {
+		if field := metadata.Descriptor().Fields().ByName(fieldName); field != nil {
+			metadata.Clear(field)
+		}
+	}
+	if err := replaceMetadataMap(metadata, "labels", labels); err != nil {
+		return nil, err
+	}
+	if err := replaceMetadataMap(metadata, "annotations", annotations); err != nil {
+		return nil, err
+	}
+	return object, nil
+}
+
+func createPublicMetadataObject(
+	ctx context.Context,
+	conn grpc.ClientConnInterface,
+	service protoreflect.ServiceDescriptor,
+	object *dynamicpb.Message,
+) (*dynamicpb.Message, error) {
+	if conn == nil || service == nil || object == nil {
+		return nil, fmt.Errorf("public metadata Create connection, service, and object are required")
+	}
+	method := service.Methods().ByName("Create")
+	if method == nil {
+		return nil, fmt.Errorf("public metadata service %q has no Create method", service.FullName())
+	}
+	objectField := method.Input().Fields().ByName("object")
+	if objectField == nil || objectField.Message() == nil {
+		return nil, fmt.Errorf("public metadata Create request %q has no object field", method.Input().FullName())
+	}
+	request := dynamicpb.NewMessage(method.Input())
+	request.Set(objectField, protoreflect.ValueOfMessage(object.ProtoReflect()))
+	response := dynamicpb.NewMessage(method.Output())
+	if err := conn.Invoke(ctx, metadataRPCMethodName(service, method.Name()), request, response); err != nil {
+		return nil, fmt.Errorf("public metadata Create %q: %w", service.FullName(), err)
+	}
+	createdField := method.Output().Fields().ByName("object")
+	if createdField == nil || !response.Has(createdField) {
+		return nil, fmt.Errorf("public metadata Create %q returned no object", service.FullName())
+	}
+	return proto.Clone(response.Get(createdField).Message().Interface()).(*dynamicpb.Message), nil
+}
+
+func deleteMetadataObject(
+	ctx context.Context,
+	conn grpc.ClientConnInterface,
+	service protoreflect.ServiceDescriptor,
+	id string,
+) error {
+	if conn == nil || service == nil || id == "" {
+		return fmt.Errorf("metadata Delete connection, service, and object ID are required")
+	}
+	method := service.Methods().ByName("Delete")
+	if method == nil {
+		return fmt.Errorf("metadata service %q has no Delete method", service.FullName())
+	}
+	idField := method.Input().Fields().ByName("id")
+	if idField == nil || idField.Kind() != protoreflect.StringKind {
+		return fmt.Errorf("metadata Delete request %q has no string id field", method.Input().FullName())
+	}
+	request := dynamicpb.NewMessage(method.Input())
+	request.Set(idField, protoreflect.ValueOfString(id))
+	response := dynamicpb.NewMessage(method.Output())
+	if err := conn.Invoke(ctx, metadataRPCMethodName(service, method.Name()), request, response); err != nil {
+		return fmt.Errorf("metadata Delete %q: %w", service.FullName(), err)
+	}
+	return nil
+}
+
+func cleanupMetadataObjectsNamed(
+	ctx context.Context,
+	conn grpc.ClientConnInterface,
+	service protoreflect.ServiceDescriptor,
+	name string,
+) error {
+	filter := fmt.Sprintf("this.metadata.name == %q", name)
+	response, err := metadataList(ctx, conn, service, filter)
+	if err != nil {
+		return err
+	}
+	items, _, err := metadataListObjects(response)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		idField := item.Descriptor().Fields().ByName("id")
+		if idField == nil || idField.Kind() != protoreflect.StringKind {
+			return fmt.Errorf("metadata object %q has no string id field", item.Descriptor().FullName())
+		}
+		if err := deleteMetadataObject(ctx, conn, service, item.Get(idField).String()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// updatePrivateMetadata replaces only the selected metadata maps and keeps the
+// complete object snapshot intact for Update APIs that require a full object.
+func updatePrivateMetadata(
+	ctx context.Context,
+	conn grpc.ClientConnInterface,
+	service protoreflect.ServiceDescriptor,
+	id string,
+	labels, annotations map[string]string,
+) (*dynamicpb.Message, error) {
+	if service == nil || !serviceHasMetadataMethod(service, "Update") {
+		return nil, fmt.Errorf("private metadata service has no Update method")
+	}
+	method := service.Methods().ByName("Update")
+	var updated *dynamicpb.Message
+	err := retry.OnError(retry.DefaultBackoff, func(err error) bool {
+		return status.Code(err) == codes.Aborted
+	}, func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		current, err := privateMetadataSnapshot(ctx, conn, service, id)
+		if err != nil {
+			return err
+		}
+		metadataField := current.Descriptor().Fields().ByName("metadata")
+		metadata := current.Mutable(metadataField).Message()
+		if err := replaceMetadataMap(metadata, "labels", labels); err != nil {
+			return err
+		}
+		if err := replaceMetadataMap(metadata, "annotations", annotations); err != nil {
+			return err
+		}
+
+		request := dynamicpb.NewMessage(method.Input())
+		objectField := method.Input().Fields().ByName("object")
+		if objectField == nil {
+			return fmt.Errorf("private metadata Update request %q has no object field", method.Input().FullName())
+		}
+		request.Set(objectField, protoreflect.ValueOfMessage(current.ProtoReflect()))
+		maskField := method.Input().Fields().ByName("update_mask")
+		if maskField != nil {
+			mask := dynamicpb.NewMessage(maskField.Message())
+			pathsField := maskField.Message().Fields().ByName("paths")
+			if pathsField == nil || pathsField.Kind() != protoreflect.StringKind || !pathsField.IsList() {
+				return fmt.Errorf("private metadata Update mask %q has no string paths", maskField.Message().FullName())
+			}
+			paths := mask.Mutable(pathsField).List()
+			paths.Append(protoreflect.ValueOfString("metadata.labels"))
+			paths.Append(protoreflect.ValueOfString("metadata.annotations"))
+			request.Set(maskField, protoreflect.ValueOfMessage(mask))
+		}
+		if lockField := method.Input().Fields().ByName("lock"); lockField != nil && lockField.Kind() == protoreflect.BoolKind {
+			request.Set(lockField, protoreflect.ValueOfBool(true))
+		}
+		response := dynamicpb.NewMessage(method.Output())
+		if err := conn.Invoke(ctx, metadataRPCMethodName(service, method.Name()), request, response); err != nil {
+			return fmt.Errorf("private metadata Update %q: %w", service.FullName(), err)
+		}
+		updatedField := method.Output().Fields().ByName("object")
+		if updatedField == nil || !response.Has(updatedField) {
+			return fmt.Errorf("private metadata Update %q returned no object", service.FullName())
+		}
+		updated = proto.Clone(response.Get(updatedField).Message().Interface()).(*dynamicpb.Message)
+		return nil
+	})
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+	return updated, nil
+}
+
+// updatePublicMetadata submits a map-level public update with only the object
+// ID and metadata name populated. Keeping the object partial avoids copying
+// sensitive resource payloads (for example Secret data) through this helper.
+func updatePublicMetadata(
+	ctx context.Context,
+	conn grpc.ClientConnInterface,
+	service protoreflect.ServiceDescriptor,
+	id string,
+	labels, annotations map[string]string,
+) error {
+	if conn == nil {
+		return fmt.Errorf("public metadata connection is required")
+	}
+	if service == nil {
+		return fmt.Errorf("public metadata service is required")
+	}
+	method := service.Methods().ByName("Update")
+	if method == nil {
+		return fmt.Errorf("public metadata service %q has no Update method", service.FullName())
+	}
+	request := dynamicpb.NewMessage(method.Input())
+	objectField := method.Input().Fields().ByName("object")
+	if objectField == nil || objectField.Message() == nil {
+		return fmt.Errorf("public metadata Update request %q has no object field", method.Input().FullName())
+	}
+	object := dynamicpb.NewMessage(objectField.Message())
+	idField := object.Descriptor().Fields().ByName("id")
+	if idField == nil || idField.Kind() != protoreflect.StringKind {
+		return fmt.Errorf("public metadata Update object %q has no string id field", object.Descriptor().FullName())
+	}
+	object.Set(idField, protoreflect.ValueOfString(id))
+	metadataField := object.Descriptor().Fields().ByName("metadata")
+	if metadataField == nil || metadataField.Message() == nil {
+		return fmt.Errorf("public metadata Update object %q has no metadata field", object.Descriptor().FullName())
+	}
+	current, err := metadataObjectSnapshot(ctx, conn, service, id)
+	if err != nil {
+		return fmt.Errorf("get public metadata name for %q: %w", service.FullName(), err)
+	}
+	currentMetadataField := current.Descriptor().Fields().ByName("metadata")
+	if currentMetadataField == nil || !current.Has(currentMetadataField) {
+		return fmt.Errorf("public metadata Get %q returned an object without metadata", service.FullName())
+	}
+	currentMetadata := current.Get(currentMetadataField).Message()
+	nameField := currentMetadata.Descriptor().Fields().ByName("name")
+	if nameField == nil || nameField.Kind() != protoreflect.StringKind {
+		return fmt.Errorf("public metadata Get %q returned metadata without a string name", service.FullName())
+	}
+	metadata := object.Mutable(metadataField).Message()
+	metadataNameField := metadata.Descriptor().Fields().ByName("name")
+	if metadataNameField == nil || metadataNameField.Kind() != protoreflect.StringKind {
+		return fmt.Errorf("public metadata Update object %q has metadata without a string name", object.Descriptor().FullName())
+	}
+	metadata.Set(metadataNameField, protoreflect.ValueOfString(currentMetadata.Get(nameField).String()))
+	paths := make([]string, 0, 2)
+	if labels != nil {
+		if err := replaceMetadataMap(metadata, "labels", labels); err != nil {
+			return err
+		}
+		paths = append(paths, "metadata.labels")
+	}
+	if annotations != nil {
+		if err := replaceMetadataMap(metadata, "annotations", annotations); err != nil {
+			return err
+		}
+		paths = append(paths, "metadata.annotations")
+	}
+	if len(paths) == 0 {
+		return fmt.Errorf("public metadata Update requires at least one map")
+	}
+	maskField := method.Input().Fields().ByName("update_mask")
+	if maskField == nil || maskField.Message() == nil {
+		return fmt.Errorf("public metadata Update request %q has no update_mask", method.Input().FullName())
+	}
+	mask := dynamicpb.NewMessage(maskField.Message())
+	pathsField := maskField.Message().Fields().ByName("paths")
+	if pathsField == nil || !pathsField.IsList() || pathsField.Kind() != protoreflect.StringKind {
+		return fmt.Errorf("public metadata Update mask %q has no string paths", maskField.Message().FullName())
+	}
+	maskPaths := mask.Mutable(pathsField).List()
+	for _, path := range paths {
+		maskPaths.Append(protoreflect.ValueOfString(path))
+	}
+	request.Set(objectField, protoreflect.ValueOfMessage(object))
+	request.Set(maskField, protoreflect.ValueOfMessage(mask))
+	response := dynamicpb.NewMessage(method.Output())
+	if err := conn.Invoke(ctx, metadataRPCMethodName(service, method.Name()), request, response); err != nil {
+		return fmt.Errorf("public metadata Update %q: %w", service.FullName(), err)
+	}
+	return nil
+}
+
+func replaceMetadataMap(metadata protoreflect.Message, fieldName protoreflect.Name, values map[string]string) error {
+	field := metadata.Descriptor().Fields().ByName(fieldName)
+	if field == nil || !field.IsMap() || field.MapKey().Kind() != protoreflect.StringKind || field.MapValue().Kind() != protoreflect.StringKind {
+		return fmt.Errorf("metadata field %q is not a string map", fieldName)
+	}
+	valueMap := metadata.Mutable(field).Map()
+	keys := make([]protoreflect.MapKey, 0, valueMap.Len())
+	valueMap.Range(func(key protoreflect.MapKey, _ protoreflect.Value) bool {
+		keys = append(keys, key)
+		return true
+	})
+	for _, key := range keys {
+		valueMap.Clear(key)
+	}
+	for key, value := range values {
+		valueMap.Set(protoreflect.ValueOfString(key).MapKey(), protoreflect.ValueOfString(value))
+	}
+	return nil
+}
+
+func metadataMapValues(object protoreflect.Message, fieldName protoreflect.Name) (map[string]string, error) {
+	metadataField := object.Descriptor().Fields().ByName("metadata")
+	if metadataField == nil || !object.Has(metadataField) {
+		return nil, fmt.Errorf("object %q has no metadata", object.Descriptor().FullName())
+	}
+	metadata := object.Get(metadataField).Message()
+	mapField := metadata.Descriptor().Fields().ByName(fieldName)
+	if mapField == nil || !mapField.IsMap() {
+		return nil, fmt.Errorf("metadata field %q is not a map", fieldName)
+	}
+	values := make(map[string]string, metadata.Get(mapField).Map().Len())
+	metadata.Get(mapField).Map().Range(func(key protoreflect.MapKey, value protoreflect.Value) bool {
+		values[key.String()] = value.String()
+		return true
+	})
+	return values, nil
 }
 
 type computeInstanceMetadataClient interface {
@@ -128,6 +630,52 @@ func metadataIdentityForExistingUser(
 		Username:   username,
 		Password:   password,
 	}, nil
+}
+
+// createMetadataUserFixture creates an OSAC User backed by an ephemeral
+// Keycloak identity. The OSAC User cleanup is registered after the identity
+// cleanup so Ginkgo removes the dependent object first.
+func createMetadataUserFixture(ctx context.Context) string {
+	GinkgoHelper()
+	username := catalogItemFixtureName()
+	statusCode, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPost, "/users", map[string]any{
+		"username": username,
+		"enabled":  true,
+	})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(statusCode).To(Equal(http.StatusCreated))
+
+	statusCode, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet,
+		"/users?username="+username+"&exact=true", nil)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(statusCode).To(Equal(http.StatusOK))
+	var keycloakUsers []map[string]any
+	Expect(json.Unmarshal(body, &keycloakUsers)).To(Succeed())
+	Expect(keycloakUsers).To(HaveLen(1))
+	keycloakID, ok := keycloakUsers[0]["id"].(string)
+	Expect(ok).To(BeTrue())
+	Expect(keycloakID).NotTo(BeEmpty())
+	DeferCleanup(func(cleanupCtx context.Context) {
+		_, _, deleteErr := tool.KeycloakAdminRequest(cleanupCtx, http.MethodDelete, "/users/"+keycloakID, nil)
+		Expect(deleteErr).NotTo(HaveOccurred())
+	})
+	_, err = tool.keycloakEnsureUserReady(ctx, username)
+	Expect(err).NotTo(HaveOccurred())
+
+	users := privatev1.NewUsersClient(tool.InternalView().AdminConn())
+	created, err := users.Create(ctx, privatev1.UsersCreateRequest_builder{
+		Object: privatev1.User_builder{
+			Metadata: privatev1.Metadata_builder{Name: username}.Build(),
+			Status:   privatev1.UserStatus_builder{KeycloakUserId: keycloakID}.Build(),
+		}.Build(),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	userID := created.GetObject().GetId()
+	DeferCleanup(func(cleanupCtx context.Context) {
+		_, deleteErr := users.Delete(cleanupCtx, privatev1.UsersDeleteRequest_builder{Id: userID}.Build())
+		Expect(deleteErr).NotTo(HaveOccurred())
+	})
+	return userID
 }
 
 // newComputeInstanceMetadataFixture creates an instance in the tenant user's scope. The catalog

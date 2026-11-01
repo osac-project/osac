@@ -55,9 +55,47 @@ jobs:
       sha: ${{ inputs.sha }}
       pr-number: ${{ inputs.pr-number }}
 
+  # The pull request's ci-observe label, read from the pull request itself: this run
+  # is a dispatch, so its event carries no labels. Labelling needs write access to
+  # this repository, like every other way of starting the suite. The flag only adds
+  # telemetry capture in osac-test-infra; it never changes the test outcome.
+  labels:
+    permissions:
+      pull-requests: read
+    runs-on: ubuntu-latest
+    outputs:
+      ci-observe: ${{ steps.read.outputs.ci-observe }}
+    steps:
+      - name: Read the ci-observe label
+        id: read
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+        run: |
+          # Every input reaches the shell through an environment variable, never
+          # through the script text (the convention of the osac-ci e2e dispatch).
+          case "${PR_NUMBER}" in
+            "" | *[!0-9]*)
+              echo 'ci-observe=false' >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          if ! labels_json="$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.labels[].name')"; then
+            # An API failure must be visible, not silent: without this warning
+            # a labeled pull request would quietly run without telemetry.
+            echo "::warning::ci-observe: could not read the pull request labels; running without capture"
+            echo 'ci-observe=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if grep -qx 'ci-observe' <<<"${labels_json}"; then
+            echo 'ci-observe=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ci-observe=false' >> "$GITHUB_OUTPUT"
+          fi
+
   # Named after the suite id of .github/e2e-policy.yml: the line of the suite follows the deepest job of this run.
   vmaas:
-    needs: verify
+    needs: [verify, labels]
     permissions:
       contents: read
       id-token: write
@@ -68,3 +106,4 @@ jobs:
       pr-number: ${{ inputs.pr-number }}
       fork-pr-author: ${{ needs.verify.outputs.fork-author }}
       fork-pr-author-association: ${{ needs.verify.outputs.fork-association }}
+      ci-observe: ${{ needs.labels.outputs.ci-observe == 'true' }}

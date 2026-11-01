@@ -160,13 +160,21 @@ else
   exit 1
 fi
 
-# ── 1b. Verify Subnet AAP provisioning created its target namespace and CUDN ────
-# Each Subnet gets a namespace named after its CR. ComputeInstance provisioning
-# targets that namespace. networkingProvisioning is enabled in dev-full, and the
-# cudn_net AAP role creates both the namespace and CUDN object. The Kind-only CUDN
-# CRD is an API placeholder: it makes no OVN dataplane or NAD. These checks make
-# the starter-tenant hook fail if Subnet AAP provisioning or CRD installation is
-# missing instead of silently creating a plain namespace.
+# ── 1b. Create the subnet target namespace(s) ───────────────────────────────────
+# Each Subnet gets its own k8s namespace named after the Subnet CR: the osac-operator
+# ComputeInstance controller creates/looks for the KubeVirt VM in that
+# subnet-target namespace (osac.openshift.io/subnet-target-namespace annotation),
+# NOT in the tenant namespace. In a real environment that namespace is created by
+# subnet provisioning (the cudn_evpn role, which also builds the OVN CUDN). On kind
+# global.networking.provisioningEnabled=false makes subnets reconcile to Ready without any AAP
+# dispatch, so nothing creates the namespace and the VM would have nowhere to live
+# (the CI would hang at Provisioned=False/WaitingForVM). kind VMs use the default
+# pod network + cluster-wide l2bridge binding — no per-namespace CUDN/NAD — so a
+# plain namespace is all that's needed. Create one per onboarded subnet (idempotent).
+#
+# Subnets are scoped to a tenant by the osac.openshift.io/tenant annotation (not a
+# label), and onboarding creates them asynchronously, so poll for the tenant's
+# subnet(s) to appear before creating their namespaces.
 subnets_for_tenant() {
   kubectl -n "${NS}" get subnets -o json 2>/dev/null | TENANT="${TENANT}" python3 -c '
 import json,os,sys

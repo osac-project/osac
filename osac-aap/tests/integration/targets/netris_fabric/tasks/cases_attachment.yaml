@@ -1,0 +1,279 @@
+---
+# Cases 5 and the attachment part of 10: physical attachment on an EVPN Subnet
+# moves the host port, switches DHCP on over the physical range, query_dhcp_lease
+# finds the lease, delete moves the port back. Overlay attachments are no-ops.
+- name: Attachment - start with a host, a VirtualNetwork and an EVPN Subnet
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: "{{ nf_reset + nf_seed_host }}"}
+
+- name: Attachment - create the VirtualNetwork
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: att-vn-create
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Attachment - create the Subnet
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: att-subnet-create
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Attachment - an overlay interface is a no-op that calls Netris not at all
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: apply_network_attachment
+    nf_iface: "{{ nf_overlay }}"
+    sft_label: att-overlay-apply
+    sft_expect: success
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Attachment - the overlay no-op sent no request
+  ansible.builtin.assert:
+    that: nf_calls == []
+    quiet: true
+
+- name: Attachment - a physical interface on an interface the host does not have is final
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: apply_network_attachment
+    nf_iface: {type: physical, name: eth9, mac_address: "{{ nf_mac }}"}
+    sft_label: att-physical-unknown-interface
+    sft_expect: final
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+
+- name: Attachment - nothing was written for the unknown interface
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: Attachment - a Subnet without a physical range cannot serve DHCP (final, no write)
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: apply_network_attachment
+    sft_label: att-physical-no-range
+    sft_expect: final
+    nf_job: "{{ nf_na_job | combine(nf_evpn) | combine({'ipam': {'gateway_ipv4': '10.20.1.1', 'physical_ipv4_cidrs': []}}) }}"
+
+- name: Attachment - nothing was written without a physical range
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: Attachment - apply a physical interface on the EVPN Subnet
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: apply_network_attachment
+    sft_label: att-physical-apply
+    sft_expect: success
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Attachment - the port moved and DHCP serves the physical range only
+  vars:
+    _vnet: "{{ nf_state.vnets | selectattr('name', 'equalto', nf_sn_name) | first }}"
+    _prov: "{{ nf_state.vnets | selectattr('name', 'equalto', 'provisioning') | first }}"
+  ansible.builtin.assert:
+    that:
+      - _vnet.ports | map(attribute='id') | sort == [62]
+      - _prov.ports | default([]) | length == 0
+      - _vnet.gateways[0].prefix == '10.20.1.1/24'
+      - _vnet.gateways[0].dhcpEnabled
+      - _vnet.gateways[0].dhcpStartIp == '10.20.1.8'
+      - _vnet.gateways[0].dhcpEndIp == '10.20.1.31'
+    quiet: true
+
+- name: Attachment - a rerun of the apply writes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: apply_network_attachment
+    sft_label: att-physical-apply-rerun
+    sft_expect: success
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Attachment - the apply rerun wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: Attachment - a rerun of create_subnet keeps the DHCP the attachment switched on
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: att-subnet-rerun-keeps-dhcp
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {network_segment: {type: evpn, l2_vni: 5000001}}
+
+- name: Attachment - the Subnet rerun wrote nothing
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - (nf_state.vnets | selectattr('name', 'equalto', nf_sn_name) | first).gateways[0].dhcpEnabled
+    quiet: true
+
+- name: Attachment - the DHCP lease of the interface MAC
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: "{{ nf_lease }}"}
+
+- name: Attachment - query_dhcp_lease returns the lease
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: query_dhcp_lease
+    sft_label: att-query-lease
+    sft_expect: success
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+    nf_result: {dhcp_lease: {ip_address: 10.20.1.10, mac_address: "{{ nf_mac }}"}}
+
+- name: Attachment - a lease of another MAC is not returned
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: query_dhcp_lease
+    nf_iface: {type: physical, name: eth1, mac_address: "AA:BB:CC:DD:EE:99"}
+    sft_label: att-query-lease-none
+    sft_expect: retryable
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+
+- name: Attachment - delete moves the port back to the provisioning V-Net
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_network_attachment
+    sft_label: att-physical-delete
+    sft_expect: success
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Attachment - the port is back and DHCP stays on
+  vars:
+    _vnet: "{{ nf_state.vnets | selectattr('name', 'equalto', nf_sn_name) | first }}"
+    _prov: "{{ nf_state.vnets | selectattr('name', 'equalto', 'provisioning') | first }}"
+  ansible.builtin.assert:
+    that:
+      - _vnet.ports | default([]) | length == 0
+      - _prov.ports | map(attribute='id') | sort == [62]
+      - _vnet.gateways[0].dhcpEnabled
+    quiet: true
+
+- name: Attachment - a rerun of the delete writes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_network_attachment
+    sft_label: att-physical-delete-rerun
+    sft_expect: success
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Attachment - the delete rerun wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+# Lost responses of the port move: the move is applied, the client sees a reset.
+- name: Attachment - the detach from the provisioning V-Net commits but the response is lost
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "PUT /api/v2/vnet/900", mode: commit_then_drop}}
+
+- name: Attachment - the apply fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: apply_network_attachment
+    sft_label: att-apply-lost-detach-response
+    sft_expect: retryable
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+
+- name: Attachment - the apply rerun completes the move
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: apply_network_attachment
+    sft_label: att-apply-after-lost-detach-response
+    sft_expect: success
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Attachment - the port is on the Subnet V-Net and nowhere else
+  ansible.builtin.assert:
+    that:
+      - (nf_state.vnets | selectattr('name', 'equalto', nf_sn_name) | first).ports | map(attribute='id') | sort == [62]
+      - (nf_state.vnets | selectattr('name', 'equalto', 'provisioning') | first).ports | default([]) | length == 0
+    quiet: true
+
+- name: Attachment - the attach to the Subnet V-Net commits but the response is lost (after a move back)
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_network_attachment
+    sft_label: att-delete-before-lost-attach
+    sft_expect: success
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+
+- name: Attachment - arm the lost response of the attach
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "PUT /api/v2/vnet/401", mode: commit_then_drop}}
+
+- name: Attachment - the apply fails retryably after the attach committed
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: apply_network_attachment
+    sft_label: att-apply-lost-attach-response
+    sft_expect: retryable
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+
+- name: Attachment - the apply rerun succeeds and the port is attached once
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: apply_network_attachment
+    sft_label: att-apply-after-lost-attach-response
+    sft_expect: success
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Attachment - exactly one port on the Subnet V-Net
+  ansible.builtin.assert:
+    that:
+      - (nf_state.vnets | selectattr('name', 'equalto', nf_sn_name) | first).ports | map(attribute='id') | sort == [62]
+    quiet: true
+
+# Tenant isolation of the delete: a V-Net with our name in another tenant is never touched.
+- name: Attachment - a V-Net of another tenant with the Subnet's name
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: reset}
+      - path: seed
+        body:
+          collection: vnets
+          objects: [{id: 777, name: "{{ nf_sn_name }}", state: active, tenant: {id: 99}, vpc: {id: 101}, gateways: [], ports: [{id: 62}]}]
+      - path: seed
+        body:
+          collection: servers
+          objects: [{id: 50, name: host1, site: {id: 1}}]
+      - path: seed
+        body:
+          collection: server_ports
+          objects: [{key: "50", rows: [{id: 61, port: eth0}, {id: 62, port: eth1}]}]
+      - path: seed
+        body:
+          collection: vpcs
+          objects: [{id: 101, name: "{{ nf_vpc_name }}", adminTenant: {id: 2}, vni: 10001}]
+
+- name: Attachment - the delete refuses the foreign V-Net as final and writes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_network_attachment
+    sft_label: att-delete-foreign-vnet
+    sft_expect: final
+    sft_message_search: "another tenant or VPC"
+    nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
+
+- name: Attachment - nothing was written
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true

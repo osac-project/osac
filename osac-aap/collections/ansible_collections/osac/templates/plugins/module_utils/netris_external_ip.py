@@ -1,24 +1,20 @@
-"""Netris ExternalIP reservation contracts for the v1 job-result path."""
+"""Netris ExternalIP reservation, owned by the ExternalIP API ID."""
 
 from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import time
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 
 from ansible.module_utils.urls import fetch_url
 
 OPERATIONS = ("external_ip.allocate", "external_ip.release")
 
-CONTRACT_VERSION = "v1"
-TENANT_ANNOTATION = "osac.openshift.io/tenant"
-EXTERNAL_IP_ID_LABEL = "osac.openshift.io/externalip-uuid"
-CONTRACT_VERSION_ANNOTATION = "osac.openshift.io/externalip-contract-version"
-RESERVATION_NAME_PREFIX = "osac-eip-"
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
 
 RESERVATION_PURPOSE = "nat"
-
-POOL_SNAPSHOT_KEYS = ("fulfillment_id", "kubernetes_uid", "tenant_id", "cidr", "phase")
 
 MAX_ALLOCATE_ATTEMPTS = 5
 MAX_RELEASE_OBSERVATIONS = 5
@@ -38,24 +34,17 @@ class NetrisExternalIPError(ValueError):
         self.http_status = http_status
 
 
-def _required_text(value, context: str) -> str:
-    """Return the value, or raise ValueError unless it is nonempty stripped text."""
-    if not isinstance(value, str) or not value or value != value.strip():
-        raise ValueError(f"{context} must be a nonempty string")
-    return value
-
-
-def _positive_int(value, context: str) -> int:
-    """Return the value, or raise ValueError unless it is a positive non-bool int."""
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{context} must be a positive integer")
+def _api_id(value, context: str) -> str:
+    """Return the value, or raise ValueError unless it is a lowercase UUID API ID."""
+    if not isinstance(value, str) or not _UUID.match(value):
+        raise ValueError(f"{context} must be a lowercase UUID API ID")
     return value
 
 
 def _canonical_ipv4(value, context: str) -> ipaddress.IPv4Network:
     """Parse a strict canonical IPv4 CIDR string, or raise ValueError."""
     if not isinstance(value, str) or "/" not in value:
-        raise ValueError(f"{context} must be a canonical IPv4 CIDR string")
+        raise ValueError(f"{context} must be a canonical IPv4 CIDR")
     try:
         network = ipaddress.ip_network(value, strict=True)
     except ValueError as error:
@@ -65,8 +54,14 @@ def _canonical_ipv4(value, context: str) -> ipaddress.IPv4Network:
     return network
 
 
-def validate_request(resource: dict, pool: dict, operation: str) -> dict:
-    """Normalize and validate resource + pool snapshots before any provider I/O."""
+def validate_request(resource: dict, pool: dict, operation: str, reservation_name: str) -> dict:
+    """Normalize and validate the contract snapshots before any provider I/O.
+
+    ``resource`` is the ExternalIP snapshot (its ``id`` is the API ID that owns
+    the reservation) and ``pool`` the ExternalIPPool snapshot (``id`` and
+    ``spec.cidrs`` with exactly one CIDR). ``reservation_name`` is the name the
+    role built from the ExternalIP API ID (netris_contract_names).
+    """
     if operation not in OPERATIONS:
         raise ValueError(f"unsupported ExternalIP operation {operation!r}")
     if not isinstance(resource, dict):
@@ -74,68 +69,22 @@ def validate_request(resource: dict, pool: dict, operation: str) -> dict:
     if not isinstance(pool, dict):
         raise ValueError("ExternalIP pool snapshot must be a dictionary")
 
-    metadata = resource.get("metadata")
-    if not isinstance(metadata, dict):
-        raise ValueError("ExternalIP resource snapshot omits metadata")
-    uid = _required_text(metadata.get("uid"), "ExternalIP resource UID")
-    generation = _positive_int(metadata.get("generation"), "ExternalIP generation")
-    labels = metadata.get("labels")
-    if not isinstance(labels, dict):
-        raise ValueError("ExternalIP resource snapshot omits metadata labels")
-    resource_id = _required_text(
-        labels.get(EXTERNAL_IP_ID_LABEL), "ExternalIP UUID label"
-    )
-    annotations = metadata.get("annotations")
-    if not isinstance(annotations, dict):
-        raise ValueError("ExternalIP resource snapshot omits metadata annotations")
-    version = annotations.get(CONTRACT_VERSION_ANNOTATION)
-    if version != CONTRACT_VERSION:
-        raise ValueError(f"unsupported ExternalIP contract version {version!r}")
-    tenant_id = _required_text(
-        annotations.get(TENANT_ANNOTATION), "ExternalIP tenant annotation"
-    )
-
-    deleting = metadata.get("deletionTimestamp")
-    if deleting is not None and not isinstance(deleting, str):
-        raise ValueError("ExternalIP deletionTimestamp must be a timestamp string or null")
-    if operation == "external_ip.allocate" and deleting:
-        raise ValueError("ExternalIP allocation rejects a deleting resource")
-    if operation == "external_ip.release" and not deleting:
-        raise ValueError("ExternalIP release requires a deleting resource")
-
-    spec = resource.get("spec")
-    if not isinstance(spec, dict):
-        raise ValueError("ExternalIP resource snapshot omits spec")
-    pool_reference = _required_text(spec.get("pool"), "ExternalIP pool reference")
-
-    for key in POOL_SNAPSHOT_KEYS:
-        if key not in pool:
-            raise ValueError(f"ExternalIP pool snapshot omits {key}")
-    pool_id = _required_text(pool["fulfillment_id"], "ExternalIPPool fulfillment ID")
-    pool_uid = _required_text(pool["kubernetes_uid"], "ExternalIPPool Kubernetes UID")
-    pool_tenant_id = _required_text(pool["tenant_id"], "ExternalIPPool tenant ID")
-    pool_phase = _required_text(pool["phase"], "ExternalIPPool phase")
-    if pool_id != pool_reference:
-        raise ValueError("ExternalIP pool reference does not match the pool snapshot")
-    if tenant_id != pool_tenant_id and pool_tenant_id != "shared":
-        raise ValueError("ExternalIP tenant does not match its pool")
-
-    pool_network = _canonical_ipv4(pool["cidr"], "ExternalIPPool CIDR")
-    if operation == "external_ip.allocate" and pool_phase != "Ready":
-        raise ValueError("ExternalIP allocation requires a Ready pool")
+    if not isinstance(reservation_name, str) or not reservation_name.strip() or reservation_name != reservation_name.strip():
+        raise ValueError("reservation_name must be a non-empty string")
+    resource_id = _api_id(resource.get("id"), "ExternalIP resource.id")
+    pool_id = _api_id(pool.get("id"), "ExternalIPPool id")
+    spec = pool.get("spec")
+    cidrs = spec.get("cidrs") if isinstance(spec, dict) else None
+    if not isinstance(cidrs, list) or len(cidrs) != 1:
+        raise ValueError("ExternalIPPool spec.cidrs must hold exactly one CIDR")
+    pool_network = _canonical_ipv4(cidrs[0], "ExternalIPPool CIDR")
 
     return {
         "operation": operation,
-        "uid": uid,
-        "generation": generation,
-        "reservation_name": f"{RESERVATION_NAME_PREFIX}{uid}",
+        "reservation_name": reservation_name,
         "resource_id": resource_id,
-        "tenant_id": tenant_id,
         "pool_id": pool_id,
-        "pool_uid": pool_uid,
-        "pool_tenant_id": pool_tenant_id,
         "cidr": str(pool_network),
-        "phase": pool_phase,
     }
 
 
@@ -187,7 +136,7 @@ def select_address(cidr: str, reserved_prefixes: list[str]) -> str:
 def owned_address(
     request: dict, subnets: list[dict], site_id: int, tenant_id: int
 ) -> str | None:
-    """Validate/reuse one UID reservation, or return None if it is absent."""
+    """Validate/reuse one reservation, or return None if it is absent."""
     record = _owned_record(request, subnets, site_id, tenant_id)
     if record is None:
         return None
@@ -197,7 +146,7 @@ def owned_address(
 def _owned_record(
     request: dict, subnets: list[dict], site_id: int, tenant_id: int
 ) -> dict | None:
-    """Return the validated UID reservation record, or None if absent."""
+    """Return the validated reservation record, or None if absent."""
     matches = []
     for record in subnets:
         if not isinstance(record, dict):
@@ -339,12 +288,17 @@ class NetrisSubnetClient:
         params = getattr(self._module, "params", None)
         if params is not None:
             params["validate_certs"] = self._validate_certs
+        headers = {"Cookie": f"connect.sid={self._session_cookie}"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
         response, info = fetch_url(
             self._module,
             f"{self._controller_url}{path}",
             data=json.dumps(body).encode() if body is not None else None,
-            headers={"Content-Type": "application/json"} if body is not None else {},
-            unredirected_headers={"Cookie": f"connect.sid={self._session_cookie}"},
+            headers=headers,
+            unredirected_headers=["Cookie"],
+            # An empty allowlist prevents response cookies from reappearing on redirects.
+            cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=[])),
             method=method,
             timeout=self._timeout,
             use_proxy=True,
@@ -418,7 +372,9 @@ def _read_owned(request: dict, client, site_id: int, tenant_id: int):
     try:
         owned = _owned_record(request, subnets, site_id, tenant_id)
     except ValueError as error:
-        raise NetrisExternalIPError(str(error)) from error
+        # The reservation of this ExternalIP exists but is not ours (ambiguous, or
+        # another pool, site, tenant or purpose): a retry cannot fix that.
+        raise NetrisExternalIPError(str(error), category="foreign_object") from error
     return subnets, owned
 
 
@@ -429,7 +385,7 @@ def _pause(delay_seconds: float, attempt: int, max_attempts: int) -> None:
 
 
 def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> dict:
-    """Allocate or reuse the UID reservation; return changed + address."""
+    """Allocate or reuse the reservation; return changed + address."""
     wrote = False
     last_error = None
     attempt = 0
@@ -463,7 +419,7 @@ def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> d
             observed = _reservation_address(owned)
             if observed != address:
                 raise NetrisExternalIPError(
-                    "Netris returned a UID reservation at an unexpected address",
+                    "Netris returned a reservation at an unexpected address",
                     category="uncertain_state",
                 )
             return {"changed": True, "address": address}
@@ -477,7 +433,7 @@ def _reconcile_allocate(request, client, site_id, tenant_id, delay_seconds) -> d
 
 
 def _reconcile_release(request, client, site_id, tenant_id, delay_seconds) -> dict:
-    """Delete the UID reservation and confirm absence within the bound."""
+    """Delete the reservation and confirm absence within the bound."""
     changed = False
     for observation in range(1, MAX_RELEASE_OBSERVATIONS + 1):
         subnets, owned = _read_owned(request, client, site_id, tenant_id)
@@ -491,7 +447,7 @@ def _reconcile_release(request, client, site_id, tenant_id, delay_seconds) -> di
                 raise
         _pause(delay_seconds, observation, MAX_RELEASE_OBSERVATIONS)
     raise NetrisExternalIPError(
-        "Netris UID reservation persists after the observation bound",
+        "Netris reservation persists after the observation bound",
         category="exhausted_observations",
     )
 

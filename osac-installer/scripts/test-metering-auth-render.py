@@ -21,12 +21,14 @@ def check_profile(profile: str) -> None:
     )
     policy = select_one(
         docs,
-        lambda doc: "kind: ValidatingAdmissionPolicy\n" in doc,
+        lambda doc: "kind: ValidatingAdmissionPolicy\n" in doc
+        and "  name: osac-metering-protect-rules\n" in doc,
         f"rules admission policy for {profile}",
     )
     binding = select_one(
         docs,
-        lambda doc: "kind: ValidatingAdmissionPolicyBinding\n" in doc,
+        lambda doc: "kind: ValidatingAdmissionPolicyBinding\n" in doc
+        and "  name: osac-metering-protect-rules\n" in doc,
         f"rules admission policy binding for {profile}",
     )
 

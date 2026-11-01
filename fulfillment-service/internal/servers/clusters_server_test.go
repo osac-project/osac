@@ -148,6 +148,7 @@ var _ = Describe("Clusters server", func() {
 
 		BeforeEach(func() {
 			var err error
+			seedReadyDefaultNetworking(testTenant, 0)
 
 			// Create the server:
 			publicServer, buildErr := NewClustersServer().
@@ -1436,7 +1437,7 @@ var _ = Describe("Clusters server", func() {
 			Entry("named node set", "spec.node_set_attempt_ids.compute"),
 		)
 
-		It("preserves component attempt IDs through a public full-object edit", func() {
+		It("preserves attempt IDs and history through a public full-object edit", func() {
 			created, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: "test-cluster"}.Build(),
@@ -1481,6 +1482,10 @@ var _ = Describe("Clusters server", func() {
 
 			full := proto.Clone(updated.GetObject()).(*publicv1.Cluster)
 			full.GetMetadata().SetLabels(map[string]string{"example.com/review": "updated"})
+			Expect(full.GetStatus().GetUpgradeHistory()).To(HaveLen(2))
+			for _, attempt := range full.GetStatus().GetUpgradeHistory() {
+				attempt.SetState(publicv1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED)
+			}
 			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{Object: full}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			after, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
@@ -1491,6 +1496,8 @@ var _ = Describe("Clusters server", func() {
 			Expect(after.GetObject().GetStatus().GetUpgradeHistory()).To(HaveLen(2))
 			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[0].GetAttemptId()).To(Equal(computeID))
 			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[1].GetAttemptId()).To(Equal(cpID))
+			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[1].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
 		})
 
 		It("updates node-set size then version in separate masked requests", func() {
@@ -2164,7 +2171,7 @@ var _ = Describe("Clusters server", func() {
 							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template"}.Build(),
 							NodeSets: map[string]*publicv1.ClusterNodeSet{
 								"workers": publicv1.ClusterNodeSet_builder{
-									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_no_fabric", Shared: true}.
+									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_gpu", Shared: true}.
 										Build(),
 									Size: proto.Int32(3),
 								}.Build(),
@@ -2173,7 +2180,7 @@ var _ = Describe("Clusters server", func() {
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(response.GetObject().GetSpec().GetNodeSets()["workers"].GetBaremetalInstanceType().GetId()).To(Equal("bmit_no_fabric"))
+				Expect(response.GetObject().GetSpec().GetNodeSets()["workers"].GetBaremetalInstanceType().GetId()).To(Equal("bmit_gpu"))
 			})
 
 			It("Accepts node set with baremetal_instance_type when template has none", func() {
@@ -2378,6 +2385,7 @@ var _ = Describe("Clusters server", func() {
 
 		BeforeEach(func() {
 			var err error
+			seedReadyDefaultNetworking(testTenant, 0)
 
 			publicServer, buildErr := NewClustersServer().
 				SetLogger(logger).

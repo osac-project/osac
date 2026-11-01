@@ -24,7 +24,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -74,6 +73,11 @@ func NewNATGatewayFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.Client
 					feedbackStatusStatePath, feedbackStatusMessagePath, "status.hub", feedbackStatusStateTransitionTimePath,
 				}},
 			}.Build())
+			if err != nil {
+				return err
+			}
+			// Signal on change, so the fulfillment service acts on the new state.
+			_, err = ngClient.Signal(ctx, privatev1.NATGatewaysSignalRequest_builder{Id: remote.GetId()}.Build())
 			return err
 		},
 		Signal: func(ctx context.Context, id string) error {
@@ -106,66 +110,38 @@ func (r *NATGatewayFeedbackReconciler) Reconcile(ctx context.Context, request ct
 	return r.bridge.Reconcile(ctx, request)
 }
 
-func syncNATGatewayUpdate(ctx context.Context, obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) error {
-	syncNATGatewayPhase(ctx, obj, remote)
+func syncNATGatewayUpdate(_ context.Context, obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) error {
+	status := remote.GetStatus()
+	state, message := networkFeedback(obj, obj.Status.Conditions)
+	switch state {
+	case networkFeedbackReady:
+		status.SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY)
+	case networkFeedbackFailed:
+		status.SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED)
+	case networkFeedbackDeleting:
+		status.SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_DELETING)
+	default:
+		status.SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING)
+	}
+	feedbackMessage(message, status.SetMessage, status.ClearMessage)
+	if obj.Status.StateTransitionTime == nil {
+		status.ClearStateTransitionTime()
+	} else {
+		status.SetStateTransitionTime(timestamppb.New(obj.Status.StateTransitionTime.Time))
+	}
 	return nil
 }
 
-// syncNATGatewayDelete maps NATGateway CR status during deletion. Failed gateways report
-// FAILED, and everything else reports DELETING: a gateway whose deletion timestamp is set
-// is going away whatever phase its status still carries, including the empty phase of a
-// gateway deleted before any controller status write.
-//
-// The state and its time come from the same place. The Failed phase the CR records dates
-// its own transition, an event the controller observed. The DELETING reported for every
-// other phase is forced: the phase predates the deletion, so its time is not the
-// deletion's — the deletion started at the deletion timestamp, and dating the report at
-// the old phase's time would erase the billed span up to the deletion. A gateway deleted
-// before any controller status write has no phase time either, and the deletion timestamp
-// covers it.
-func syncNATGatewayDelete(_ context.Context, obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) error {
-	var at *timestamppb.Timestamp
-	switch obj.Status.Phase {
-	case v1alpha1.NATGatewayPhaseFailed:
-		remote.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED)
-		at = stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
-	default:
-		remote.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_DELETING)
-		at = laterTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
+func syncNATGatewayDelete(ctx context.Context, obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) error {
+	stored := remote.GetStatus().GetStateTransitionTime()
+	if err := syncNATGatewayUpdate(ctx, obj, remote); err != nil {
+		return err
 	}
-	if at == nil {
-		if remote.GetStatus().GetStateTransitionTime() != nil {
-			return nil
-		}
-		return fmt.Errorf("NAT gateway %s has no state transition time", remote.GetId())
+	at, err := deletingTransitionTime(obj.Status.StateTransitionTime, obj.DeletionTimestamp, stored,
+		"NAT gateway", remote.GetId())
+	if err != nil {
+		return err
 	}
 	remote.GetStatus().SetStateTransitionTime(at)
 	return nil
-}
-
-func syncNATGatewayStateTransitionTime(obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) {
-	at := stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
-	if at == nil {
-		remote.GetStatus().ClearStateTransitionTime()
-		return
-	}
-	remote.GetStatus().SetStateTransitionTime(at)
-}
-
-func syncNATGatewayPhase(ctx context.Context, obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) {
-	switch obj.Status.Phase {
-	case v1alpha1.NATGatewayPhaseProgressing:
-		remote.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING)
-	case v1alpha1.NATGatewayPhaseFailed:
-		remote.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED)
-	case v1alpha1.NATGatewayPhaseReady:
-		remote.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY)
-	case v1alpha1.NATGatewayPhaseDeleting:
-		remote.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_DELETING)
-	default:
-		log := ctrllog.FromContext(ctx)
-		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
-	}
-
-	syncNATGatewayStateTransitionTime(obj, remote)
 }

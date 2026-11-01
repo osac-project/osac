@@ -22,9 +22,6 @@ import (
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
-// AAPJobLaunchIDExtraVar is the correlation variable carried in AAP job input.
-const AAPJobLaunchIDExtraVar = "osac_job_launch_id"
-
 type contextKey int
 
 const (
@@ -33,11 +30,8 @@ const (
 	storageTierDefinitionsKey
 	storageBackendConnectionsKey
 	networkAttachmentMACsKey
-	subnetParentVirtualNetworkKey
 	aapExtraVarsKey
 	addOnOperatorNameKey
-	externalIPPoolKey
-	externalIPAttachmentContextKey
 )
 
 // TierDefinition is the flat, AAP-schema-shaped representation of a storage tier
@@ -66,114 +60,6 @@ type BackendConnection struct {
 	Endpoint string
 	Username string
 	Password string
-}
-
-// SubnetParentVirtualNetwork carries the parent identity the Subnet controller
-// resolved in the Subnet's namespace. AAP uses this snapshot to associate
-// provider state with the Kubernetes VirtualNetwork UID without requiring the
-// isolated execution environment to authenticate to the Kubernetes API.
-type SubnetParentVirtualNetwork struct {
-	FulfillmentID string
-	KubernetesUID string
-	TenantID      string
-	Phase         string
-}
-
-// WithSubnetParentVirtualNetwork returns a context carrying the resolved
-// parent VirtualNetwork identity for a Subnet provisioning job.
-func WithSubnetParentVirtualNetwork(ctx context.Context, parent SubnetParentVirtualNetwork) context.Context {
-	return context.WithValue(ctx, subnetParentVirtualNetworkKey, parent)
-}
-
-// SubnetParentVirtualNetworkFromContext retrieves the resolved parent
-// VirtualNetwork identity, or its zero value when it is not set.
-func SubnetParentVirtualNetworkFromContext(ctx context.Context) SubnetParentVirtualNetwork {
-	parent, _ := ctx.Value(subnetParentVirtualNetworkKey).(SubnetParentVirtualNetwork)
-	return parent
-}
-
-// ExternalIPPoolContext carries the pool identity selected for an ExternalIP job.
-type ExternalIPPoolContext struct {
-	FulfillmentID string
-	KubernetesUID string
-	TenantID      string
-	CIDR          string
-	Phase         string
-}
-
-// ExternalIPAttachmentContext is the controller-resolved dependency snapshot
-// supplied to v1 attachment jobs. AAP consumes it without querying Kubernetes.
-type ExternalIPAttachmentContext struct {
-	ExternalIP     ExternalIPAttachmentExternalIPContext     `json:"external_ip"`
-	Target         ExternalIPAttachmentTargetContext         `json:"target"`
-	Subnet         ExternalIPAttachmentSubnetContext         `json:"subnet"`
-	VirtualNetwork ExternalIPAttachmentVirtualNetworkContext `json:"virtual_network"`
-}
-
-type ExternalIPAttachmentExternalIPContext struct {
-	Name          string `json:"name"`
-	Namespace     string `json:"namespace"`
-	FulfillmentID string `json:"fulfillment_id"`
-	KubernetesUID string `json:"kubernetes_uid"`
-	TenantID      string `json:"tenant_id"`
-	Address       string `json:"address"`
-	State         string `json:"state"`
-	Phase         string `json:"phase"`
-}
-
-type ExternalIPAttachmentTargetContext struct {
-	Kind          string `json:"kind"`
-	Name          string `json:"name"`
-	Namespace     string `json:"namespace"`
-	FulfillmentID string `json:"fulfillment_id"`
-	KubernetesUID string `json:"kubernetes_uid"`
-	TenantID      string `json:"tenant_id"`
-	IPAddress     string `json:"ip_address"`
-	Ready         bool   `json:"ready"`
-}
-
-type ExternalIPAttachmentSubnetContext struct {
-	Name             string `json:"name"`
-	Namespace        string `json:"namespace"`
-	FulfillmentID    string `json:"fulfillment_id"`
-	KubernetesUID    string `json:"kubernetes_uid"`
-	TenantID         string `json:"tenant_id"`
-	IPv4CIDR         string `json:"ipv4_cidr"`
-	VirtualNetworkID string `json:"virtual_network_id"`
-	Phase            string `json:"phase"`
-}
-
-type ExternalIPAttachmentVirtualNetworkContext struct {
-	Name          string `json:"name"`
-	Namespace     string `json:"namespace"`
-	FulfillmentID string `json:"fulfillment_id"`
-	KubernetesUID string `json:"kubernetes_uid"`
-	TenantID      string `json:"tenant_id"`
-	Phase         string `json:"phase"`
-}
-
-// WithExternalIPAttachmentContext returns a context carrying the current
-// attachment dependency snapshot for AAP extra_vars.
-func WithExternalIPAttachmentContext(ctx context.Context, value ExternalIPAttachmentContext) context.Context {
-	return context.WithValue(ctx, externalIPAttachmentContextKey, value)
-}
-
-// ExternalIPAttachmentContextFromContext retrieves the controller-supplied
-// snapshot, or its zero value when the job is not an attachment job.
-func ExternalIPAttachmentContextFromContext(ctx context.Context) ExternalIPAttachmentContext {
-	value, _ := ctx.Value(externalIPAttachmentContextKey).(ExternalIPAttachmentContext)
-	return value
-}
-
-// WithExternalIPPool returns a context carrying the selected ExternalIPPool.
-func WithExternalIPPool(ctx context.Context, pool ExternalIPPoolContext) context.Context {
-	return context.WithValue(ctx, externalIPPoolKey, pool)
-}
-
-// ExternalIPPoolFromContext retrieves the selected ExternalIPPool or its zero value.
-func ExternalIPPoolFromContext(ctx context.Context) ExternalIPPoolContext {
-	pool, _ := ctx.Value(externalIPPoolKey).(ExternalIPPoolContext)
-	return pool
 }
 
 // WithTenantStorageClasses returns a context carrying the tenant's resolved
@@ -242,15 +128,14 @@ func StorageBackendConnectionsFromContext(ctx context.Context) map[string]Backen
 	return conns
 }
 
-// WithNetworkAttachmentMACs returns a context carrying the subnet-ref → MAC-address
-// map for a resource's network attachments. The AAP provider reads this when building
-// extra_vars so the query_dhcp_lease role can match a DHCP lease by MAC.
+// WithNetworkAttachmentMACs carries the subnet-ref to MAC-address map used by
+// the bare-metal IP discovery provider when building AAP extra_vars.
 func WithNetworkAttachmentMACs(ctx context.Context, macs map[string]string) context.Context {
 	return context.WithValue(ctx, networkAttachmentMACsKey, macs)
 }
 
-// NetworkAttachmentMACsFromContext retrieves the subnet-ref → MAC-address map from the
-// context, or nil if not set.
+// NetworkAttachmentMACsFromContext retrieves the network attachment MAC map,
+// or nil when it was not set.
 func NetworkAttachmentMACsFromContext(ctx context.Context) map[string]string {
 	macs, _ := ctx.Value(networkAttachmentMACsKey).(map[string]string)
 	return macs
@@ -266,20 +151,4 @@ func WithAAPExtraVars(ctx context.Context, extraVars map[string]any) context.Con
 func AAPExtraVarsFromContext(ctx context.Context) map[string]any {
 	extraVars, _ := ctx.Value(aapExtraVarsKey).(map[string]any)
 	return extraVars
-}
-
-// WithAAPJobLaunchID adds a stable launch identifier to AAP extra vars.
-func WithAAPJobLaunchID(ctx context.Context, launchID string) context.Context {
-	extraVars := make(map[string]any, len(AAPExtraVarsFromContext(ctx))+1)
-	for key, value := range AAPExtraVarsFromContext(ctx) {
-		extraVars[key] = value
-	}
-	extraVars[AAPJobLaunchIDExtraVar] = launchID
-	return WithAAPExtraVars(ctx, extraVars)
-}
-
-// AAPJobLaunchIDFromContext returns the AAP launch identifier from context.
-func AAPJobLaunchIDFromContext(ctx context.Context) string {
-	launchID, _ := AAPExtraVarsFromContext(ctx)[AAPJobLaunchIDExtraVar].(string)
-	return launchID
 }

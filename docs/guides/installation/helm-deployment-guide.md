@@ -356,7 +356,14 @@ incompatible with OpenShift 4.17's Kubernetes 1.30; use Helm 3.17.x or 3.18.x
 for OpenShift 4.17. For other cluster versions, choose a Helm 3 minor that
 supports the cluster's Kubernetes version; see the
 [Helm 3 version-skew documentation](https://helm.sh/docs/v3/topics/version_skew/).
-Helm 3.17.0 is the minimum version required for `--take-ownership`.
+Helm 3.17.0 is the minimum version required for `--take-ownership`. It is
+also the minimum version that can install a chart pinned by content digest
+(`OSAC_CHART_OCI_REF` containing `@sha256:...`, the `install-osac` Makefile
+target's escape hatch for validating a staged OCI chart build by exact
+artifact rather than by semver tag) — on an older Helm, `make install-osac`
+rejects a digest-pinned `OSAC_CHART_OCI_REF` outright with an explicit
+version error instead of failing deep inside Helm's own tag-constraint
+parsing.
 
 ```bash
 helm dependency update ./charts/osac
@@ -526,8 +533,8 @@ mce:          { enabled: false }
 
 ### How Toggles Affect Operands
 
-- Even with `certManager.enabled: false`, the pre-installation validation hook
-  requires the `certificates.cert-manager.io` CRD. Any cert-manager
+- Even with `certManager.enabled: false`, the `osac` chart's install preflight
+  (check `cert-manager-crds`) requires the `certificates.cert-manager.io` CRD. Any cert-manager
   distribution satisfies it.
 - Disabling `cnv.enabled` skips the `HyperConverged` custom resource.
   Disabling `lvms.enabled` skips an `LVMCluster` custom resource that uses
@@ -643,6 +650,38 @@ above sets the same public hostname and enables `publicIngress`.
 
 - Production clusters where browser cert warnings are unacceptable.
 - Environments with corporate CA or Let's Encrypt ingress certs.
+
+### Keycloak osac-ui redirect URIs
+
+Keycloak validates the browser's `redirect_uri` against the `osac-ui` client's
+`redirectUris` and does **not** resolve relative entries against the Route
+hostname, so the UI's real URL has to be known at realm-import time:
+
+```yaml
+# my-infra-values.yaml
+keycloak:
+  uiUrl: https://osac-ui-osac.apps.example.com  # scheme://host[:port], no path
+```
+
+The scheme must be `https`. Plain `http` is accepted only for the
+local-development hosts `localhost`, `*.localhost` and `127.0.0.1` (the chart
+default is the kind `dev-full` UI, `http://ui.osac.localhost:8080`); for any
+other host the `resolve-realm-secrets` initContainer fails the install rather
+than register a redirect URI that would return the authorization code
+unencrypted.
+
+`keycloak.uiUrl` is substituted into the `osac-ui` client's `rootUrl`,
+`redirectUris` (`/callback` and `/*`) and `webOrigins` by the
+`resolve-realm-secrets` initContainer. `make install-infra` sets it
+automatically on OpenShift from the cluster ingress domain
+(`https://osac-ui-<NS>.<DOMAIN>`), and `make install-osac` pins
+`ui.externalHostname` to the same host so the Route matches. The chart default
+targets the kind `dev-full` UI HTTPRoute.
+
+If the value does not match the URL the browser actually uses, login fails at
+Keycloak with `Invalid parameter: redirect_uri`. `make helm-validate` runs
+`scripts/validate-keycloak-ui-redirect-uris.py`, which fails if the client ever
+regains relative redirect URIs.
 
 ## Uninstall
 

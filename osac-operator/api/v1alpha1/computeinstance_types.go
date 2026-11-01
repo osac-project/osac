@@ -92,15 +92,15 @@ const (
 	RunStrategyHalted RunStrategyType = "Halted"
 )
 
-// ComputeNetworkAttachment defines one NIC: a Subnet CR on the hub plus optional SecurityGroup CR names.
+// ComputeNetworkAttachment defines one NIC: a Subnet plus its SecurityGroups, by API ID.
 type ComputeNetworkAttachment struct {
-	// SubnetRef is the name of the Subnet CR in the same namespace as the ComputeInstance.
+	// SubnetRef is the API ID of the Subnet.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	SubnetRef string `json:"subnetRef"`
 
-	// SecurityGroupRefs lists SecurityGroup CR names in the same namespace as the ComputeInstance.
+	// SecurityGroupRefs lists the SecurityGroup API IDs.
 	// +kubebuilder:validation:Optional
 	SecurityGroupRefs []string `json:"securityGroupRefs,omitempty"`
 }
@@ -249,6 +249,21 @@ const (
 	// ComputeInstanceConditionRestartRequired means the compute instance requires a restart for
 	// configuration changes to take effect. Synced from KubeVirt VM.Status.Conditions[RestartRequired].
 	ComputeInstanceConditionRestartRequired ComputeInstanceConditionType = "RestartRequired"
+
+	// ComputeInstanceConditionNetworkReady means the VM's NetworkAttachment is Ready and
+	// its address is known (VMaaS networking design).
+	ComputeInstanceConditionNetworkReady ComputeInstanceConditionType = "NetworkReady"
+)
+
+// NetworkReady condition reasons of a ComputeInstance (VMaaS networking design).
+const (
+	ComputeInstanceReasonNetworkAttachmentProgressing = "NetworkAttachmentProgressing"
+	ComputeInstanceReasonNetworkAttachmentFailed      = "NetworkAttachmentFailed"
+	ComputeInstanceReasonVMNotRunning                 = "VMNotRunning"
+	ComputeInstanceReasonWaitingForIPAddress          = "WaitingForIPAddress"
+	ComputeInstanceReasonWaitingForFabricBinding      = "WaitingForFabricBinding"
+	ComputeInstanceReasonIPDiscovered                 = "IPDiscovered"
+	// ReasonProvisioningDisabled (networking_common_types.go) is also a NetworkReady reason.
 )
 
 // VirtualMachineReferenceType contains a reference to the KubeVirt VirtualMachine CR created by this ComputeInstance
@@ -334,11 +349,26 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Format=date-time
 	RunningConfigSince *metav1.Time `json:"runningConfigSince,omitempty"`
 
+	// ProvisionConfigVersion is the desiredConfigVersion the latest provision
+	// attempt ran with. The configuration is applied when the provision entry
+	// succeeded with the current desiredConfigVersion; a later spec change
+	// (for example a restart request) runs the provision job again as a new attempt.
+	// +kubebuilder:validation:Optional
+	ProvisionConfigVersion string `json:"provisionConfigVersion,omitempty"`
+
 	// ProvisioningJobs tracks the history of provision and deprovision operations
 	// Ordered chronologically, with latest operations at the end
 	// Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
 	// +kubebuilder:validation:Optional
 	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
+
+	// Jobs tracks the provision and deprovision jobs (manager none), one entry
+	// per task (network manager contract §4.7 Job tracking).
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=task
+	// +listMapKey=manager
+	Jobs []NetworkJobStatus `json:"jobs,omitempty"`
 
 	// ComputeNetworkAttachmentStatuses reports the Subnet ID and IPv4 address for each configured network attachment.
 	// +kubebuilder:validation:Optional

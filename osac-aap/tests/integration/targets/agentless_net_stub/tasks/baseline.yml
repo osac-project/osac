@@ -1,24 +1,14 @@
 ---
-- name: Verify AgentlessNet resource-operation stubs
+- name: Verify AgentlessNet inventory and SecurityGroup no-op lifecycle
   hosts: localhost
   gather_facts: false
   vars:
-    expected_error: "NotImplemented: agentless_net resource operations are not implemented."
-    agentless_operations:
-      - create_nat_gateway
-      - delete_nat_gateway
     noop_operations:
       - create_security_group
       - delete_security_group
-    resource_playbooks:
-      - playbook_osac_create_nat_gateway.yml
-      - playbook_osac_delete_nat_gateway.yml
     noop_playbooks:
       - playbook_osac_create_security_group.yml
       - playbook_osac_delete_security_group.yml
-    subnet_playbooks:
-      - playbook_osac_create_subnet.yml
-      - playbook_osac_delete_subnet.yml
     resource_extra_vars:
       osac_job_vars:
         resource:
@@ -254,43 +244,11 @@
       loop: "{{ vn_password_inventory_result.results }}"
       no_log: true
 
-    - name: Invoke every unimplemented AgentlessNet operation
-      ansible.builtin.include_tasks: ../expect_failure.yaml
-      loop: "{{ agentless_operations }}"
-      loop_control:
-        loop_var: operation_name
-
     - name: Invoke every AgentlessNet no-op operation
       ansible.builtin.include_tasks: ../expect_noop.yaml
       loop: "{{ noop_operations }}"
       loop_control:
         loop_var: operation_name
-
-    - name: Execute every generic AgentlessNet resource playbook
-      ansible.builtin.command:
-        argv:
-          - ansible-playbook
-          - --check
-          - "{{ playbook_dir }}/../../../../../{{ item }}"
-          - -e
-          - "{{ resource_extra_vars | to_json }}"
-        chdir: "{{ playbook_dir }}/../../../../../"
-      register: playbook_result
-      changed_when: false
-      failed_when: false
-      loop: "{{ resource_playbooks }}"
-      loop_control:
-        label: "{{ item }}"
-
-    - name: Verify unimplemented playbooks fail with the stub error
-      ansible.builtin.assert:
-        that:
-          - item.rc != 0
-          - expected_error in (item.stdout + item.stderr)
-        fail_msg: >-
-          {{ item.item }} did not fail with the expected error:
-          {{ item.stdout + item.stderr }}
-      loop: "{{ playbook_result.results }}"
 
     - name: Execute every no-op SecurityGroup playbook in check mode
       ansible.builtin.command:
@@ -316,31 +274,6 @@
           {{ item.item }} did not succeed as a no-op:
           rc={{ item.rc }}, output={{ item.stdout + item.stderr }}
       loop: "{{ noop_check_result.results }}"
-
-    - name: Execute every generic AgentlessNet resource playbook in normal mode
-      ansible.builtin.command:
-        argv:
-          - ansible-playbook
-          - "{{ playbook_dir }}/../../../../../{{ item }}"
-          - -e
-          - "{{ resource_extra_vars | to_json }}"
-        chdir: "{{ playbook_dir }}/../../../../../"
-      register: normal_playbook_result
-      changed_when: false
-      failed_when: false
-      loop: "{{ resource_playbooks }}"
-      loop_control:
-        label: "{{ item }}"
-
-    - name: Verify normal-mode unimplemented playbooks fail with stub error
-      ansible.builtin.assert:
-        that:
-          - item.rc != 0
-          - expected_error in (item.stdout + item.stderr)
-        fail_msg: >-
-          {{ item.item }} did not fail with the expected error:
-          {{ item.stdout + item.stderr }}
-      loop: "{{ normal_playbook_result.results }}"
 
     - name: Execute no-op SecurityGroup playbooks in normal mode
       ansible.builtin.command:

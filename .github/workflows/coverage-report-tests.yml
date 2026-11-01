@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - "tools/coverage-report/**"
-      - "Makefile"
       - ".github/workflows/coverage-report-tests.yml"
   merge_group:
 

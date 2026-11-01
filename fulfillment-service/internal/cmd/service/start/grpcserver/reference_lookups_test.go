@@ -33,6 +33,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
@@ -273,6 +274,50 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Expect(called).To(BeTrue())
 	})
 
+	It("leaves NATGateway Create ExternalIP references for the handler to resolve", func() {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+		Expect(err).NotTo(HaveOccurred())
+		v, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, testCase := range []struct {
+			name       string
+			fullMethod string
+			request    proto.Message
+		}{
+			{
+				name:       "private API",
+				fullMethod: privatev1.NATGateways_Create_FullMethodName,
+				request: privatev1.NATGatewaysCreateRequest_builder{Object: privatev1.NATGateway_builder{
+					Spec: privatev1.NATGatewaySpec_builder{
+						ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "missing-external-ip"}.Build(),
+					}.Build(),
+				}.Build()}.Build(),
+			},
+			{
+				name:       "public API",
+				fullMethod: publicv1.NATGateways_Create_FullMethodName,
+				request: publicv1.NATGatewaysCreateRequest_builder{Object: publicv1.NATGateway_builder{
+					Spec: publicv1.NATGatewaySpec_builder{
+						ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: "missing-external-ip"}.Build(),
+					}.Build(),
+				}.Build()}.Build(),
+			},
+		} {
+			By("passing the " + testCase.name + " request to the handler")
+			called := false
+			_, err = v.UnaryServer(context.Background(), testCase.request,
+				&grpc.UnaryServerInfo{FullMethod: testCase.fullMethod},
+				func(_ context.Context, actual any) (any, error) {
+					called = true
+					return "ok", nil
+				})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(called).To(BeTrue(), "ExternalIP lookup must happen after the NATGateway handler's default-NAT guard")
+		}
+	})
+
 	It("does not reject identity provider client_secret_secret as unregistered", func() {
 		request := privatev1.IdentityProvidersCreateRequest_builder{
 			Object: privatev1.IdentityProvider_builder{
@@ -298,6 +343,39 @@ var _ = Describe("RegisterReferenceLookups", func() {
 				"SecretLocalReference is not registered with the interceptor: %v", err)
 		}
 	})
+
+	It("leaves private service-account Secret references for controller validation", func() {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+		Expect(err).ToNot(HaveOccurred())
+		validator, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+		Expect(err).ToNot(HaveOccurred())
+		request := privatev1.ServiceAccountsUpdateRequest_builder{
+			Object: privatev1.ServiceAccount_builder{
+				Id:       "service-account-id",
+				Metadata: privatev1.Metadata_builder{Tenant: "tenant-a"}.Build(),
+				Status: privatev1.ServiceAccountStatus_builder{
+					ClientSecret: privatev1.SecretLocalReference_builder{
+						Id: "tenant-secret-id", Name: "osac-service-account-service-account-id",
+					}.Build(),
+					RegistrationSecret: privatev1.SecretLocalReference_builder{
+						Id: "system-secret-id", Name: "robot",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.client_secret", "status.registration_secret"}},
+		}.Build()
+		called := false
+		_, err = validator.UnaryServer(context.Background(), request,
+			&grpc.UnaryServerInfo{FullMethod: privatev1.ServiceAccounts_Update_FullMethodName},
+			func(context.Context, any) (any, error) {
+				called = true
+				return "ok", nil
+			})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(called).To(BeTrue())
+	})
+
 })
 
 type referenceUse struct {

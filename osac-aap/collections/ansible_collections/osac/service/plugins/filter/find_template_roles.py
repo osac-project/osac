@@ -742,6 +742,78 @@ def find_template_roles(requested: list[str]) -> Generator[BaseTemplate, None, N
         yield from collection.templates()
 
 
+def _sort_addon_operator_templates(
+    templates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return add-on templates in stable dependency-first order.
+
+    Dependencies can be published automatically. When that behavior is enabled,
+    each dependency must be published before any operator that depends on it.
+
+    A depth-first post-order traversal keeps each dependency immediately
+    before its dependent while preserving discovery order for independent
+    templates. The active stack also provides a useful cycle description.
+    """
+    templates_by_id: dict[str, dict[str, Any]] = {}
+    template_id_by_reference: dict[str, str] = {}
+
+    for template in templates:
+        template_id = template["id"]
+        if template_id in templates_by_id:
+            raise AnsibleFilterError(
+                f"Duplicate add-on operator template ID '{template_id}'"
+            )
+        templates_by_id[template_id] = template
+        template_id_by_reference[template_id] = template_id
+        template_id_by_reference[template_id.rsplit(".", 1)[-1]] = template_id
+        metadata_name = template.get("metadata", {}).get("name")
+        if metadata_name:
+            template_id_by_reference[metadata_name] = template_id
+
+    visiting = 1
+    visited = 2
+    state: dict[str, int] = {}
+    stack: list[str] = []
+    result: list[str] = []
+
+    def visit(template_id: str) -> None:
+        current_state = state.get(template_id, 0)
+        if current_state == visited:
+            return
+        if current_state == visiting:
+            cycle_start = stack.index(template_id)
+            cycle = stack[cycle_start:] + [template_id]
+            raise AnsibleFilterError(
+                "Cyclic add-on operator dependencies: " + " -> ".join(cycle)
+            )
+
+        state[template_id] = visiting
+        stack.append(template_id)
+        for dependency in templates_by_id[template_id].get("dependencies", []):
+            dependency_name = (
+                dependency.get("name") if isinstance(dependency, dict) else dependency
+            )
+            dependency_id = template_id_by_reference.get(dependency_name)
+            if dependency_id is None:
+                raise AnsibleFilterError(
+                    f"Add-on operator '{template_id}' depends on unknown "
+                    f"operator '{dependency_name}'"
+                )
+            if template_id == dependency_id:
+                raise AnsibleFilterError(
+                    f"Add-on operator '{template_id}' cannot depend on itself"
+                )
+            visit(dependency_id)
+        stack.pop()
+        state[template_id] = visited
+        result.append(template_id)
+
+    for template_id in templates_by_id:
+        visit(template_id)
+
+    return [templates_by_id[template_id] for template_id in result]
+
+
 def find_template_roles_filter(template_type: TemplateTypeEnum):
     """Factory function that returns a filter for the specified template type.
 
@@ -762,6 +834,8 @@ def find_template_roles_filter(template_type: TemplateTypeEnum):
                 role.model_dump(by_alias=True, exclude_none=True)
                 for role in roles
             ]
+            if template_type == TemplateTypeEnum.addon_operator:
+                result = _sort_addon_operator_templates(result)
             display.vv(f"Returning {len(result)} {template_type} template(s)")
             return result
 

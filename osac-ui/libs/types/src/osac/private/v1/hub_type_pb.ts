@@ -18,6 +18,7 @@
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
+import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
 import type { SecretLocalReference } from "./secret_type_pb";
@@ -28,7 +29,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/hub_type.proto.
  */
 export const file_osac_private_v1_hub_type: GenFile = /*@__PURE__*/
-  fileDesc("Ch5vc2FjL3ByaXZhdGUvdjEvaHViX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKSAQoDSHViEgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEiYKBHNwZWMYAyABKAsyGC5vc2FjLnByaXZhdGUudjEuSHViU3BlYxIqCgZzdGF0dXMYBCABKAsyGi5vc2FjLnByaXZhdGUudjEuSHViU3RhdHVzInIKB0h1YlNwZWMSEgoKa3ViZWNvbmZpZxgDIAEoDBIRCgluYW1lc3BhY2UYBCABKAkSQAoRa3ViZWNvbmZpZ19zZWNyZXQYBSABKAsyJS5vc2FjLnByaXZhdGUudjEuU2VjcmV0TG9jYWxSZWZlcmVuY2UiCwoJSHViU3RhdHVzQgaKtRgCCAFiBnByb3RvMw", [file_cleanapi_cleanapi, file_osac_private_v1_metadata_type, file_osac_private_v1_secret_type]);
+  fileDesc("Ch5vc2FjL3ByaXZhdGUvdjEvaHViX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKYAQoDSHViEgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEiYKBHNwZWMYAyABKAsyGC5vc2FjLnByaXZhdGUudjEuSHViU3BlYxIwCgZzdGF0dXMYBCABKAsyGi5vc2FjLnByaXZhdGUudjEuSHViU3RhdHVzQgTiQQEDInIKB0h1YlNwZWMSEgoKa3ViZWNvbmZpZxgDIAEoDBIRCgluYW1lc3BhY2UYBCABKAkSQAoRa3ViZWNvbmZpZ19zZWNyZXQYBSABKAsyJS5vc2FjLnByaXZhdGUudjEuU2VjcmV0TG9jYWxSZWZlcmVuY2UiCwoJSHViU3RhdHVzQgaKtRgCCAFiBnByb3RvMw", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_secret_type]);
 
 /**
  * Contains the details of a hub.

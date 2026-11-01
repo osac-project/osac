@@ -20,9 +20,11 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -266,6 +268,49 @@ var _ = Describe("Private add-on operators server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updateResponse.GetObject().GetTitle()).To(Equal("Updated GPU Operator"))
 			Expect(updateResponse.GetObject().GetDescription()).To(Equal("Original description."))
+		})
+
+		It("Rejects unpublishing an operator referenced by an active catalog item", func() {
+			createResponse, err := server.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata:  privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+					Title:     "GPU Operator",
+					Published: proto.Bool(true),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			catalogDao, err := dao.NewGenericDAO[*privatev1.ClusterCatalogItem]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = catalogDao.Create().SetObject(privatev1.ClusterCatalogItem_builder{
+				Id: "catalog-item-addon-reference",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "catalog-item-addon-reference",
+					Tenant: auth.SharedTenant,
+				}.Build(),
+				Fields: privatev1.ClusterCatalogItemFields_builder{
+					AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
+						Locked: privatev1.AddOnOperatorReferenceList_builder{
+							Items: []*privatev1.AddOnOperatorReference{
+								privatev1.AddOnOperatorReference_builder{Id: createResponse.GetObject().GetId()}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.AddOnOperatorsUpdateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Id:        createResponse.GetObject().GetId(),
+					Published: proto.Bool(false),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"published"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
 		})
 
 		It("Rejects update that creates inverted version range", func() {

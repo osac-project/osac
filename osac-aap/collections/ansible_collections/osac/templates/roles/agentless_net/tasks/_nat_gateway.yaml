@@ -1,0 +1,92 @@
+---
+# NATGateway task of the generic network task playbook: the operator stores
+# resource, tenant, virtual_network, external_ip and nat_gateway_context once
+# and sends them to create_nat_gateway and to every delete_nat_gateway retry.
+# The task has no typed output. A failure publishes osac_error: retryable once
+# the input is valid, so that a provider failure is retried and an invalid input
+# is final.
+- name: Apply AgentlessNet NATGateway provider state
+  block:
+    - name: Read the task input
+      ansible.builtin.set_fact:
+        _agentless_net_nat_gateway_resource: "{{ osac_job_vars.resource | default({}) }}"
+        _agentless_net_nat_gateway_tenant: "{{ osac_job_vars.tenant | default('') }}"
+        _agentless_net_nat_gateway_context: >-
+          {{ osac_job_vars.get('nat_gateway_context', {}) }}
+      no_log: true
+
+    - name: Validate the NATGateway identity
+      ansible.builtin.assert:
+        that:
+          - _agentless_net_nat_gateway_resource.metadata.uid is string
+          - _agentless_net_nat_gateway_resource.metadata.uid | length > 0
+          - _agentless_net_nat_gateway_resource.metadata.generation is number
+          - _agentless_net_nat_gateway_resource.id is string
+          - _agentless_net_nat_gateway_resource.id | length > 0
+          - _agentless_net_nat_gateway_tenant | length > 0
+        fail_msg: >-
+          AgentlessNet NATGateway tasks require a stable resource identity and
+          a tenant.
+      no_log: true
+
+    - name: Validate the controller-resolved dependency snapshot
+      ansible.builtin.assert:
+        that:
+          - osac_job_vars.virtual_network.id == _agentless_net_nat_gateway_context.virtual_network.fulfillment_id
+          - osac_job_vars.external_ip.id == _agentless_net_nat_gateway_context.external_ip.fulfillment_id
+          - osac_job_vars.external_ip.address == _agentless_net_nat_gateway_context.external_ip.address
+          - _agentless_net_nat_gateway_context.external_ip.state == 'Allocated'
+          - _agentless_net_nat_gateway_context.external_ip.phase == 'Ready'
+          - _agentless_net_nat_gateway_context.virtual_network.phase == 'Ready'
+          - _agentless_net_nat_gateway_context.external_ip.tenant_id == _agentless_net_nat_gateway_tenant
+          - _agentless_net_nat_gateway_context.virtual_network.tenant_id == _agentless_net_nat_gateway_tenant
+          - _agentless_net_nat_gateway_context.external_ip.namespace == _agentless_net_nat_gateway_resource.metadata.namespace
+          - _agentless_net_nat_gateway_context.virtual_network.namespace == _agentless_net_nat_gateway_resource.metadata.namespace
+          - _agentless_net_nat_gateway_context.external_ip.address is string
+          - _agentless_net_nat_gateway_context.virtual_network.ipv4_cidr is string
+        fail_msg: >-
+          AgentlessNet NATGateway ensure requires a current controller-supplied
+          ExternalIP and VirtualNetwork snapshot of the same tenant.
+      when: agentless_net_nat_gateway_action == 'ensure_nat_gateway'
+      no_log: true
+
+    - name: Mark the task input as valid
+      ansible.builtin.set_fact:
+        _agentless_net_nat_gateway_input_valid: true
+
+    - name: Load AgentlessNet network-node inventory
+      ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+      vars:
+        agentless_net_require_switches: false
+
+    - name: Reconcile or delete AgentlessNet NATGateway state
+      osac.templates.agentless_net_state:
+        action: "{{ agentless_net_nat_gateway_action }}"
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ _agentless_net_nat_gateway_resource.metadata.uid }}"
+        fulfillment_id: "{{ _agentless_net_nat_gateway_resource.id }}"
+        tenant_id: "{{ _agentless_net_nat_gateway_tenant }}"
+        nat_gateway_context: "{{ _agentless_net_nat_gateway_context }}"
+        external_interface: "{{ agentless_net_external_interface }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      no_log: true
+  rescue:
+    - name: Report the failed NATGateway task
+      ansible.builtin.set_stats:
+        data:
+          osac_error:
+            message: >-
+              AgentlessNet {{ osac_job_vars.task }} failed at step
+              "{{ ansible_failed_task.name | default('a step') }}". The job log
+              has the details.
+            retryable: "{{ _agentless_net_nat_gateway_input_valid | default(false) }}"
+        per_host: false
+        aggregate: false
+
+    - name: Fail the NATGateway task
+      ansible.builtin.fail:
+        msg: "AgentlessNet {{ osac_job_vars.task }} failed."
+  always:
+    - name: Remove the temporary AgentlessNet SSH key file
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

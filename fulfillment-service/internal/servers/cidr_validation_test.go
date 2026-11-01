@@ -81,20 +81,4 @@ var _ = Describe("cidr validation helpers", func() {
 			Expect(err.Error()).To(ContainSubstring("192.168.0.0/16"))
 		})
 	})
-
-	Describe("canonicalizeDualStackCIDRs", func() {
-		It("canonicalizes both address families when present", func() {
-			ipv4 := "10.0.1.5/24"
-			ipv6 := "2001:db8::1/32"
-			err := canonicalizeDualStackCIDRs(
-				func() string { return ipv4 },
-				func(v string) { ipv4 = v },
-				func() string { return ipv6 },
-				func(v string) { ipv6 = v },
-			)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(ipv4).To(Equal("10.0.1.0/24"))
-			Expect(ipv6).To(Equal("2001:db8::/32"))
-		})
-	})
 })

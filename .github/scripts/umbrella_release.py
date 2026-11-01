@@ -1,5 +1,7 @@
 """Publish package-derived platform notes without changing immutable tags."""
 
+import argparse
+import html
 import io
 import json
 import os
@@ -131,6 +133,35 @@ asserted here. Prereleases/nightlies are for evaluation, not the stable recommen
 """
 
 
+def slack_chart_summary(package: Path, version: str, component_versions: dict[str, str]) -> str:
+    """List the exact bundled versions, including dependencies reused from earlier releases."""
+    manifest = package_manifest(package, version)
+
+    def cell(value: str) -> str:
+        return html.escape(value.replace("\r", " ").replace("\n", " ").replace("`", "'"), quote=False)
+
+    rows = []
+    for dependency in manifest["dependencies"]:
+        resolved = dependency["version"] or "unknown (not recorded)"
+        source = dependency["source"]
+        if not source.startswith("oci://") or "missing lock entry" in source:
+            resolved += f" [{source}]"
+        rows.append((cell(dependency["chart"]), cell(resolved)))
+    width = max([len("Chart"), *(len(name) for name, _ in rows)])
+    table = "\n".join([f"{'Chart':<{width}}  Version", *(f"{name:<{width}}  {value}" for name, value in rows)])
+    standalone = cell(component_versions.get("osac-csi-driver") or "not resolved this run")
+    summary = (
+        f"*OSAC umbrella chart:* `osac {cell(version)}`\n"
+        f"<{PACKAGE_URL}|Published umbrella package>\n\n"
+        f"*Bundled subcharts (includes reused versions):*\n```\n{table}\n```\n\n"
+        "*Standalone charts (not installed by the umbrella):*\n"
+        f"```\ncsi-driver    {standalone}\ncsi-backends  {standalone}\n```"
+    )
+    if len(summary) > 3000:
+        raise ValueError("Chart inventory exceeds Slack's section limit; split the inventory into more sections")
+    return summary
+
+
 def publish(package: Path, version: str, component_versions: dict[str, str], repo: str) -> None:
     """Publish the inventory and notes while preserving any newer stable Latest."""
     manifest = package_manifest(package, version)
@@ -167,9 +198,13 @@ def publish(package: Path, version: str, component_versions: dict[str, str], rep
 
 
 if __name__ == "__main__":
-    publish(
-        Path(os.environ["PACKAGE"]),
-        os.environ["VERSION"],
-        json.loads(os.environ["COMPONENT_VERSIONS"]),
-        os.environ["REPO"],
-    )
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--slack-summary", action="store_true", help="Print the chart inventory without publishing")
+    arguments = parser.parse_args()
+    package = Path(os.environ["PACKAGE"])
+    version = os.environ["VERSION"]
+    component_versions = json.loads(os.environ["COMPONENT_VERSIONS"])
+    if arguments.slack_summary:
+        print(slack_chart_summary(package, version, component_versions))
+    else:
+        publish(package, version, component_versions, os.environ["REPO"])

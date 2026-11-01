@@ -19,7 +19,6 @@ import (
 // AAPClient is the interface for AAP operations used by the provider.
 type AAPClient interface {
 	GetTemplate(ctx context.Context, templateName string) (*aap.Template, error)
-	ListJobs(ctx context.Context, templateID int) ([]aap.Job, error)
 	LaunchJobTemplate(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error)
 	LaunchWorkflowTemplate(ctx context.Context, req aap.LaunchWorkflowTemplateRequest) (*aap.LaunchWorkflowTemplateResponse, error)
 	GetJob(ctx context.Context, jobID string) (*aap.Job, error)
@@ -133,43 +132,6 @@ func (p *AAPProvider) GetProvisionStatus(ctx context.Context, resource client.Ob
 // CancelJob cancels a running provisioning job during resource deletion.
 func (p *AAPProvider) CancelJob(ctx context.Context, jobID string) error {
 	return p.cancelProvisionJob(ctx, jobID)
-}
-
-func (p *AAPProvider) FindJobByLaunchID(
-	ctx context.Context,
-	resource client.Object,
-	jobType v1alpha1.JobType,
-	launchID string,
-) (ProvisionStatus, bool, error) {
-	if launchID == "" {
-		return ProvisionStatus{}, false, fmt.Errorf("provider job launch ID must not be empty")
-	}
-	action := ""
-	switch jobType {
-	case v1alpha1.JobTypeProvision:
-		action = "create"
-	case v1alpha1.JobTypeDeprovision:
-		action = "delete"
-	default:
-		return ProvisionStatus{}, false, fmt.Errorf("unsupported provider job type %q", jobType)
-	}
-	templateName, err := p.resolveTemplateName(action, resource)
-	if err != nil {
-		return ProvisionStatus{}, false, err
-	}
-	template, err := p.client.GetTemplate(ctx, templateName)
-	if err != nil {
-		return ProvisionStatus{}, false, fmt.Errorf("failed to get template: %w", err)
-	}
-	jobID, found, err := p.findJobByLaunchID(ctx, template.ID, launchID)
-	if err != nil || !found {
-		return ProvisionStatus{}, found, err
-	}
-	status, err := p.getJobStatus(ctx, jobID)
-	if err != nil {
-		return ProvisionStatus{}, false, err
-	}
-	return status, true, nil
 }
 
 // GetProvisionStatusWithExtraVars checks provisioning job status and returns its submitted inputs
@@ -332,16 +294,6 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 	if err != nil {
 		return "", fmt.Errorf("failed to get template: %w", err)
 	}
-	if launchID := AAPJobLaunchIDFromContext(ctx); launchID != "" {
-		jobID, found, err := p.findJobByLaunchID(ctx, template.ID, launchID)
-		if err != nil {
-			return "", err
-		}
-		if found {
-			return jobID, nil
-		}
-	}
-
 	extraVars, err := p.extractExtraVars(ctx, resource)
 	if err != nil {
 		return "", fmt.Errorf("failed to extract extra vars: %w", err)
@@ -378,26 +330,6 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 	}
 
 	return strconv.Itoa(jobID), nil
-}
-
-func (p *AAPProvider) findJobByLaunchID(ctx context.Context, templateID int, launchID string) (string, bool, error) {
-	jobs, err := p.client.ListJobs(ctx, templateID)
-	if err != nil {
-		return "", false, fmt.Errorf("failed to list jobs for launch claim: %w", err)
-	}
-	for _, job := range jobs {
-		if job.ID <= 0 || strings.TrimSpace(job.ExtraVars) == "" {
-			continue
-		}
-		var extraVars map[string]any
-		if err := json.Unmarshal([]byte(job.ExtraVars), &extraVars); err != nil {
-			continue
-		}
-		if extraVars[AAPJobLaunchIDExtraVar] == launchID {
-			return strconv.Itoa(job.ID), true, nil
-		}
-	}
-	return "", false, nil
 }
 
 func adminKubeconfigInExtraVars(extraVars map[string]any) bool {
@@ -561,38 +493,22 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 		vars["network_attachment_macs"] = macs
 	}
 
-	if parent := SubnetParentVirtualNetworkFromContext(ctx); parent != (SubnetParentVirtualNetwork{}) {
-		vars["parent_virtual_network"] = map[string]any{
-			"fulfillment_id": parent.FulfillmentID,
-			"kubernetes_uid": parent.KubernetesUID,
-			"tenant_id":      parent.TenantID,
-			"phase":          parent.Phase,
-		}
-	}
-	if pool := ExternalIPPoolFromContext(ctx); pool != (ExternalIPPoolContext{}) {
-		vars["external_ip_pool"] = map[string]any{
-			"fulfillment_id": pool.FulfillmentID,
-			"kubernetes_uid": pool.KubernetesUID,
-			"tenant_id":      pool.TenantID,
-			"cidr":           pool.CIDR,
-			"phase":          pool.Phase,
-		}
-	}
-	if attachment := ExternalIPAttachmentContextFromContext(ctx); attachment != (ExternalIPAttachmentContext{}) {
-		encoded, err := json.Marshal(attachment)
-		if err != nil {
-			return nil, fmt.Errorf("failed to serialize ExternalIPAttachment context: %w", err)
-		}
-		var attachmentContext map[string]any
-		if err := json.Unmarshal(encoded, &attachmentContext); err != nil {
-			return nil, fmt.Errorf("failed to serialize ExternalIPAttachment context: %w", err)
-		}
-		vars["external_ip_attachment_context"] = attachmentContext
-	}
-
 	return map[string]any{
 		"osac_job_vars": vars,
 	}, nil
+}
+
+// JobVars returns the osac_job_vars of a job for resource: the serialized
+// resource plus the job inputs carried by ctx (tenant storage classes, storage
+// tier definitions and backend connections). Controllers that launch their jobs
+// through the network task engine use it to build the same input the AAP
+// provider sends.
+func JobVars(ctx context.Context, resource client.Object) (map[string]any, error) {
+	extraVars, err := extractExtraVars(ctx, resource)
+	if err != nil {
+		return nil, err
+	}
+	return extraVars["osac_job_vars"].(map[string]any), nil
 }
 
 // tierDefinitionsToExtraVars converts tier definitions to the AAP-schema-shaped map

@@ -84,12 +84,15 @@ export const buildComputeInstanceCreatePayload = (
   if (values.spec.userDataSource.value === 'secret') {
     const userDataSecretName = values.spec.userDataSecret.value.trim();
     if (!values.spec.userDataSecret.locked && userDataSecretName) {
-      //spec.userDataSecret = { name: userDataSecretName };
+      // OSAC-7033: serialize the selected source through the current API oneof.
+      spec.userDataSource = {
+        source: { case: 'secret', value: { name: userDataSecretName } },
+      };
     }
   } else {
     const userData = values.spec.userData.value.trim();
     if (!values.spec.userData.locked && userData) {
-      //spec.userData = userData;
+      spec.userDataSource = { source: { case: 'inline', value: userData } };
     }
   }
 

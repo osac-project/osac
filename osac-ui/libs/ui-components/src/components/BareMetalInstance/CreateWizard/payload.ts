@@ -30,8 +30,16 @@ export const buildBareMetalInstanceCreatePayload = (
       ...(!values.spec.sshKey.locked && sshKey && { sshPublicKey: sshKey }),
       ...(values.spec.userDataSource.value === 'secret'
         ? !values.spec.userDataSecret.locked &&
-          userDataSecretName && { userDataSecret: { name: userDataSecretName } }
-        : !values.spec.userData.locked && userData && { userData }),
+          userDataSecretName && {
+            // OSAC-7033: the legacy userData fields are no longer API fields.
+            userDataSource: {
+              source: { case: 'secret', value: { name: userDataSecretName } },
+            },
+          }
+        : !values.spec.userData.locked &&
+          userData && {
+            userDataSource: { source: { case: 'inline', value: userData } },
+          }),
       ...(!values.spec.instanceType.locked &&
         values.spec.instanceType.value && {
           instanceType: {

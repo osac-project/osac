@@ -1,7 +1,11 @@
 import { create } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
 
-import { BareMetalInstanceCatalogItemSchema, BareMetalInstanceRunStrategy } from '@osac/types';
+import {
+  BareMetalInstanceCatalogItemSchema,
+  BareMetalInstanceRunStrategy,
+  BareMetalInstanceSchema,
+} from '@osac/types';
 
 import { createEmptyBareMetalInstanceValues } from './fields';
 import { buildBareMetalInstanceCreatePayload } from './payload';
@@ -117,7 +121,14 @@ describe('buildBareMetalInstanceCreatePayload', () => {
 
     const payload = buildBareMetalInstanceCreatePayload(values);
 
-    //expect(payload.spec?.userData).toBe('#cloud-config\nusers: []');
+    expect(payload.spec?.userDataSource).toEqual({
+      source: { case: 'inline', value: '#cloud-config\nusers: []' },
+    });
+    expect(create(BareMetalInstanceSchema, payload).spec?.userDataSource?.source).toEqual({
+      case: 'inline',
+      value: '#cloud-config\nusers: []',
+    });
+    expect(payload.spec).not.toHaveProperty('userData');
     expect(payload.spec).not.toHaveProperty('userDataSecret');
   });
 
@@ -129,8 +140,15 @@ describe('buildBareMetalInstanceCreatePayload', () => {
 
     const payload = buildBareMetalInstanceCreatePayload(values);
 
-    //expect(payload.spec?.userDataSecret).toEqual({ name: 'cloud-init' });
+    expect(payload.spec?.userDataSource).toEqual({
+      source: { case: 'secret', value: { name: 'cloud-init' } },
+    });
+    expect(create(BareMetalInstanceSchema, payload).spec?.userDataSource?.source).toMatchObject({
+      case: 'secret',
+      value: { name: 'cloud-init' },
+    });
     expect(payload.spec).not.toHaveProperty('userData');
+    expect(payload.spec).not.toHaveProperty('userDataSecret');
   });
 
   it('omits user data when the selected source is empty', () => {
@@ -143,6 +161,17 @@ describe('buildBareMetalInstanceCreatePayload', () => {
 
     expect(payload.spec).not.toHaveProperty('userData');
     expect(payload.spec).not.toHaveProperty('userDataSecret');
+  });
+
+  it('omits a locked user data source so the catalog policy can apply it', () => {
+    const values = buildValues('');
+    values.spec.userDataSource = provisioningFieldValue('secret', true);
+    values.spec.userData = provisioningFieldValue('stale inline data', true);
+    values.spec.userDataSecret = provisioningFieldValue('cloud-init', true);
+
+    const payload = buildBareMetalInstanceCreatePayload(values);
+
+    expect(payload.spec).not.toHaveProperty('userDataSource');
   });
 });
 

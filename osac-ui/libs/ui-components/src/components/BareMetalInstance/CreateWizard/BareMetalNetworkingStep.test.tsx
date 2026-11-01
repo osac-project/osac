@@ -102,7 +102,9 @@ describe('BareMetalNetworkingStep', () => {
     await waitFor(() =>
       expect(getResourceSelectCombobox(/^Virtual network/)).toHaveValue('vn-prod'),
     );
-    await waitFor(() => expect(getResourceSelectCombobox(/^Subnet/)).toHaveValue('subnet-a · 10.0.1.0/24'));
+    await waitFor(() =>
+      expect(getResourceSelectCombobox(/^Subnet/)).toHaveValue('subnet-a · 10.0.1.0/24'),
+    );
     expectResourceSelectDisabled(/^Virtual network/);
     expectResourceSelectDisabled(/^Subnet/);
     expect(screen.getByRole('switch', { name: 'Auto-attach external IP' })).not.toBeChecked();

@@ -1419,7 +1419,7 @@ configured by the `evpn` values of the phase-1 releases
 | Parameter | Description |
 |---|---|
 | `service.externalHostname`, `service.internalHostname` | Public and internal API route host names. Set at installation. |
-| `service.variant` | `openshift` or `kind`. Use `openshift`. |
+| `service.variant` | `openshift`, `kind` or `vcluster`. Use `openshift`; `kind` is for local development and `vcluster` for CI virtual clusters, where the run setup creates the routes outside the chart. |
 | `service.images.service`, `service.images.envoy` | Fulfillment Service and Envoy sidecar images. |
 | `service.certs.issuerRef.kind`, `service.certs.issuerRef.name` | cert-manager issuer for the service certificates. |
 | `service.certs.caBundle.configMap` | `ConfigMap` that holds the CA bundle. |
@@ -1470,9 +1470,12 @@ configured by the `evpn` values of the phase-1 releases
 | `service.kafka.connection` | schema | ConfigMap/Secret mappings for the required `brokers`, `user`, and `password` parameters. Supply resources in the OSAC namespace. | `fulfillment-service-kafka` Secret |
 | `metering.database.connection` | schema | Metering service database connection. The metering service is always deployed: billing is not optional, and the event publisher writes usage events unconditionally. Requires Strimzi-managed Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml) and [Kafka configuration](kafka-configuration.md#metering)). | Secret-based default |
 | `metering.heartbeat.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.m360.apiKeySecret` | subchart | Heartbeat round interval and the Monetize360 billing adapter. | Not applicable |
+| `metering.variant` | schema | Metering deployment variant: the echo adapter's OpenShift Route renders only with `openshift`. | `openshift` |
+| `metering.kafka.strimziResources` | schema | Creates the metering Strimzi `KafkaUser` and `KafkaTopic` objects. Set `false` with an external Kafka cluster, together with `kafka.enabled: false` (see [Kafka configuration](kafka-configuration.md#metering)). | `true` |
 | `validation.enabled` | schema | Runs the install preflight. When `false`, every check is skipped and recorded as skipped in the report. | `true` |
 | `preflight.mode` | schema | `enforce` stops the installation on a blocking problem. `report` records problems without stopping. `strict` also stops on warnings. See [Section 11.1](#111-the-install-preflight-stops-the-installation). | `enforce` |
 | `preflight.skip.<check_id>` | schema | Skips one preflight check. The value is the reason, which the report records. | `{}` |
+| `preflight.skipChecks` | schema | Check ids to skip without reasons, for automation. Each is reported as skipped with a fixed reason. An id that does not exist stops the install. | `[]` |
 | `bundledVault.enabled`, `bundledVault.image` | `osac-infra` | In-cluster OpenBao for testing and CI. Not intended for production. | `false` and `ghcr.io/openbao/openbao:2.6.2` |
 | `hubAccess.enabled` | schema | Creates hub-access RBAC and registers the local cluster as its own hub. Single-cluster development only. | `false` |
 | `bundledPostgres.enabled` | schema | Bundled PostgreSQL for testing only; not intended for production. | `false` |
@@ -2539,8 +2542,12 @@ oc delete clusterrolebinding,clusterrole osac-validate-<namespace> --ignore-not-
 
 **Skipping a check.** Set `preflight.skip.<check_id>` to the reason, for
 example `--set preflight.skip.cert-issuer-ready="created by GitOps after this
-install"`. The report records the reason. A check id that does not exist is
-reported as a warning. `validation.enabled=false` skips every check.
+install"`. The report records the reason. Automation without reasons can list
+ids in `preflight.skipChecks` instead; an unknown id there stops the install,
+while an unknown `preflight.skip` id is only reported as a warning.
+`validation.enabled=false` skips every check, with one exception: a
+`preflight.skipChecks` entry naming a check id that does not exist still stops
+the install, because the skip list itself is broken.
 
 **Access needed.** The preflight reads the cluster with the credentials of
 whoever runs `helm install`: the `kube-system` Namespace (to tell that the

@@ -211,6 +211,34 @@ def check_values_are_closed() -> None:
         )
         assert proc.returncode != 0, f"{bad} was accepted"
         assert "values don't meet the specifications of the schema" in proc.stderr, (bad, proc.stderr)
+    # Not an array: the schema rejects it before the engine runs.
+    proc = subprocess.run(
+        ["helm", "template", "osac", str(CHART), "--values", str(CHART / "ci/default-values.yaml"),
+         "--set", "preflight.skipChecks=default-storageclass"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0, "a scalar preflight.skipChecks was accepted"
+    assert "values don't meet the specifications of the schema" in proc.stderr, proc.stderr
+
+
+def check_skipchecks() -> None:
+    """skipChecks marks checks skipped by configuration; a typo fails the render."""
+    report = offline_report("--set", "preflight.skipChecks={db-init-host-endpoints,default-storageclass}")
+    by_id = {r["id"]: r for r in report["results"]}
+    for check in ("db-init-host-endpoints", "default-storageclass"):
+        result = by_id[check]
+        assert result["status"] == "skipped", result
+        assert result["skipReason"] == "skipped by preflight.skipChecks", result
+    proc = subprocess.run(
+        ["helm", "template", "osac", str(CHART), "--values", str(CHART / "ci/default-values.yaml"),
+         "--set", "preflight.skipChecks={db-init-host-endpoints,db-init-host-endpint}"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0, "an unknown skipChecks id was accepted"
+    assert "preflight-skipchecks-unknown-id" in proc.stderr, proc.stderr
+    assert "db-init-host-endpint" in proc.stderr, proc.stderr
 
 
 PACKAGED = (
@@ -247,5 +275,6 @@ if __name__ == "__main__":
     check_offline_never_blocks()
     check_catalog_matches_engine_and_schema()
     check_values_are_closed()
+    check_skipchecks()
     check_chart_archive_carries_the_preflight()
     print("Preflight render checks passed.")

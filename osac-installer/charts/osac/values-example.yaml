@@ -136,7 +136,9 @@ operator:
 # Fulfillment Service
 # ---------------------
 service:
-  # Deployment variant: "openshift" for OCP clusters, "kind" for local dev.
+  # Deployment variant: "openshift" for OCP clusters, "kind" for local dev,
+  # "vcluster" for a CI vcluster (no routes; the run setup creates them in
+  # the outer cluster).
   variant: openshift
 
   # [REQUIRED] Hostname used to access the public API from outside the cluster.

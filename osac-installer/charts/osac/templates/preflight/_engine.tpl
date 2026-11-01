@@ -11,10 +11,11 @@ Evaluation order for one check (the first rule that applies decides):
   1. validation.enabled=false          -> skipped "validation disabled"
   2. requiredFor / when / unless gate  -> skipped "<service> not enabled"
   3. preflight.skip.<id>               -> skipped, with the user's reason
-  4. no cluster access (offline)       -> unknown; never blocks
-  5. platforms: [openshift] mismatch   -> skipped "not OpenShift"
-  6. dependsOn did not pass            -> unknown "depends on <id>"
-  7. kind handler                      -> pass | fail | warn | unknown | skipped
+  4. preflight.skipChecks entry        -> skipped "by preflight.skipChecks"
+  5. no cluster access (offline)       -> unknown; never blocks
+  6. platforms: [openshift] mismatch   -> skipped "not OpenShift"
+  7. dependsOn did not pass            -> unknown "depends on <id>"
+  8. kind handler                      -> pass | fail | warn | unknown | skipped
 
 Outcome table (see `osac.preflight.run`):
 
@@ -145,6 +146,7 @@ certificate follows the fullname.
   "enabled" $enabled
   "mode" ($pf.mode | default "enforce")
   "skip" ($pf.skip | default (dict))
+  "skipChecks" ($pf.skipChecks | default list)
   "online" $online
   "deployed" $deployed
   "openshift" $openshift
@@ -215,6 +217,9 @@ certificate follows the fullname.
   {{- if hasKey $ctx.skip $c.id -}}
     {{- $state = "skipped" -}}
     {{- $msg = (index $ctx.skip $c.id) | toString | default "skipped by preflight.skip" -}}
+  {{- else if has $c.id $ctx.skipChecks -}}
+    {{- $state = "skipped" -}}
+    {{- $msg = "skipped by preflight.skipChecks" -}}
   {{- end -}}
 {{- end -}}
 {{- if not $state -}}
@@ -292,6 +297,19 @@ against files/preflight/report.schema.json.
 {{- if $unknownSkips -}}
   {{- $results = append $results (dict "id" "preflight-skip-unknown-id" "title" "preflight.skip names only known check ids" "category" "cluster" "severity" "warning" "requiredFor" (list "core") "status" "warn" "message" (printf "preflight.skip names unknown check id(s): %s" (join ", " (sortAlpha $unknownSkips))) "remediation" "Fix the spelling; the ids are listed in files/preflight/catalog.yaml." "docsURL" "" "observed" (dict "unknownIds" (sortAlpha $unknownSkips)) "skipReason" "") -}}
 {{- end -}}
+{{- /*
+skipChecks is automation-facing: a typo would silently disable a check the
+operator meant to skip, so an unknown id is a blocking failure, not a warning.
+*/}}
+{{- $unknownSkipChecks := list -}}
+{{- range $id := $ctx.skipChecks -}}
+  {{- if not (hasKey $known $id) -}}
+    {{- $unknownSkipChecks = append $unknownSkipChecks $id -}}
+  {{- end -}}
+{{- end -}}
+{{- if $unknownSkipChecks -}}
+  {{- $results = append $results (dict "id" "preflight-skipchecks-unknown-id" "title" "preflight.skipChecks names only known check ids" "category" "cluster" "severity" "required" "requiredFor" (list "core") "status" "fail" "message" (printf "preflight.skipChecks names unknown check id(s): %s" (join ", " (sortAlpha $unknownSkipChecks))) "remediation" "Fix the spelling; the ids are listed in files/preflight/catalog.yaml." "docsURL" "" "observed" (dict "unknownIds" (sortAlpha $unknownSkipChecks)) "skipReason" "") -}}
+{{- end -}}
 {{- $summary := dict "pass" 0 "fail" 0 "warn" 0 "unknown" 0 "skipped" 0 "blocking" 0 -}}
 {{- $out := list -}}
 {{- range $r := $results -}}
@@ -347,6 +365,7 @@ OSAC preflight: {{ $r.summary.blocking }} blocking problem(s), {{ $warns }} warn
 {{ end }}
 {{- end }}
 To skip a check: --set preflight.skip.<id>="<reason>"
+To skip checks without reasons: --set preflight.skipChecks={<id>,<id>}
 To only report, never block: --set preflight.mode=report
 {{- /*
 The JSON line is embedded in an error message. Tools that scan error text for

@@ -536,7 +536,14 @@ ifneq ($(PLATFORM),kind)
 		osac.openshift.io/project=osac-aap \
 		-n $(NS) --overwrite
 	@bash -c 'source scripts/lib.sh && check_postgres_prerequisites "$(NS)" "$(INFRA_VALUES)"'
+	# CLUSTER_DOMAIN overrides the cluster read: a vcluster has no
+	# ingresses.config.openshift.io API to ask, so a run against one must
+	# carry the outer cluster's domain explicitly.
+ifneq ($(strip $(CLUSTER_DOMAIN)),)
+	$(eval DOMAIN := $(CLUSTER_DOMAIN))
+else
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
+endif
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }
 endif
 	@remote_cluster_helm_args=(); \

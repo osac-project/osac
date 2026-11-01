@@ -7,8 +7,11 @@ Records the provider rejects land on the inference dead-letter topic;
 like the per-tenant dead-letter topics, it is never consumed back. The
 per-tenant event topics are created by fulfillment's event publisher, and
 the per-tenant heartbeat and dead-letter topics by metering itself, not
-here.
+here. Not rendered with an external Kafka cluster
+(kafka.strimziResources=false): the topics must already exist, created
+outside the chart.
 */}}
+{{- if .Values.kafka.strimziResources }}
 {{- $ns := include "osac-metering.kafkaClusterNamespace" . -}}
 {{- $cluster := include "osac-metering.kafkaClusterName" . -}}
 {{- /*
@@ -46,3 +49,4 @@ spec:
     retention.ms: "{{ mul 30 86400000 }}"
     min.insync.replicas: "1"
     cleanup.policy: delete
+{{- end }}

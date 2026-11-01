@@ -1,0 +1,305 @@
+# vcluster CI environment -- instance values for the osac chart, shared by
+# every E2E run that installs OSAC into its own vcluster on a CI machine's
+# outer cluster. The infrastructure (Keycloak, Kafka, PostgreSQL, OpenBao,
+# AAP) lives once on the outer cluster and is installed nightly with the
+# outer-ci values, not per run. The run setup (osac-test-infra) creates the
+# vcluster, the run's shares of the shared services, and the run's routes
+# in the outer cluster; this file only configures the chart.
+#
+# Everything not commented is copied from values/vmaas-ci/instance.yaml;
+# each deviation from it is commented inline.
+
+# --- Service Enablement ---
+global:
+  osacDeploymentId: "ci/osac"
+  fulfillmentTrust:
+    enabled: false
+  services:
+    caas:
+      enabled: false
+    vmaas:
+      enabled: true
+    bmaas:
+      enabled: false
+    maas:
+      enabled: false
+  # Provider networking disabled: networking resources become READY without
+  # provider work. The osac chart renders the Netris Fabric Manager and
+  # cudn_evpn Kubernetes Manager registrations from fabricManager and
+  # k8sManager; no Netris connection settings are needed.
+  networking:
+    provisioningEnabled: false
+    fabricManager: netris
+    k8sManager: cudn_evpn
+  # clusterDomain is NOT set here, unlike the make install-osac flow: the
+  # vcluster has no ingress config to read it from. The run's install
+  # command passes the OUTER cluster's domain, so the tpl-backed defaults
+  # (service.auth.issuerUrl, service.idp.url, service.vault.keycloakIssuerUrl)
+  # resolve to the outer cluster's Keycloak route, which the vcluster reaches
+  # by DNS.
+
+# --- Operator ---
+operator:
+  image:
+    repository: ghcr.io/osac-project/osac-operator
+    tag: latest
+    pullPolicy: Always
+  provisioning:
+    provider: "aap"
+  vendorControllers:
+    lvms: none
+  aap:
+    insecureSkipVerify: "true"
+    tokenSecret:
+      name: osac-aap-api-token
+      key: token
+  fulfillment:
+    serverAddress: "fulfillment-internal-api:8001"
+    credentials:
+      secretName: fulfillment-controller-credentials
+      clientIdKey: client-id
+      clientSecretKey: client-secret
+  controllers:
+    tenant: true
+    networking: true
+    storage: true
+  hubAccess:
+    enabled: true
+  tenants:
+  - name: shared
+  - name: osac-e2e-ci
+
+# --- Fulfillment Service ---
+service:
+  # vcluster: the chart renders no Route and no TLSRoute. The run setup
+  # publishes the run's routes in the outer cluster, pointing at the
+  # Services the vcluster syncs into its host namespace.
+  variant: vcluster
+  # Set dynamically by the run's install command to the run's outer route
+  # hostnames (fulfillment-api-<run id>.apps.<domain> and
+  # fulfillment-internal-api-<run id>.apps.<domain>): the chart still uses
+  # them for the API certificate's DNS names, CORS origins and the token
+  # issuer URL.
+  externalHostname: ""
+  internalHostname: ""
+  images:
+    service:
+      repository: ghcr.io/osac-project/fulfillment-service
+      tag: latest
+      pullPolicy: Always
+    envoy:
+      repository: ghcr.io/osac-project/envoy
+      tag: v1.33.0
+      pullPolicy: IfNotPresent
+  certs:
+    issuerRef:
+      kind: ClusterIssuer
+      name: default-ca
+    caBundle:
+      configMap: ca-bundle
+  auth:
+    # issuerUrl defaults to a global.clusterDomain-backed external route URL
+    # (see charts/osac/values.yaml) -- correct automatically once the run's
+    # install command passes the outer cluster's domain.
+    emergencyServiceAccounts:
+    - admin
+    - template-publisher
+    - osac-metering
+    controllerCredentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-id
+          param: client-id
+        - key: client-secret
+          param: client-secret
+  idp:
+    provider: keycloak
+    # url defaults to a global.clusterDomain-backed external route URL (see
+    # charts/osac/values.yaml) -- correct automatically once the run's
+    # install command passes the outer cluster's domain.
+    credentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-id
+          param: client-id
+        - key: client-secret
+          param: client-secret
+  database:
+    connection:
+    - secret:
+        name: osac-db-config
+        items:
+        - key: url
+          param: url
+    - secret:
+        name: osac-db-client-cert
+        items:
+        - key: tls.crt
+          param: sslcert
+        - key: tls.key
+          param: sslkey
+        - key: ca.crt
+          param: sslrootcert
+  # External Kafka: the brokers run once on the outer cluster and the run
+  # setup creates the run's users and topics there as Strimzi objects. The
+  # chart renders no KafkaUser, no KafkaTopic and no secret-copy hook; the
+  # run setup copies the connection Secret below into the vcluster.
+  kafka:
+    connection:
+    - secret:
+        name: fulfillment-service-kafka
+        items:
+        - key: brokers
+          param: brokers
+        - key: user
+          param: user
+        - key: password
+          param: password
+  log:
+    level: debug
+  vault:
+    # endpoint and keycloakIssuerUrl both default correctly (see
+    # charts/osac/values.yaml): the outer OpenBao is reachable by its
+    # in-cluster service name through the vcluster's forwarded DNS zones.
+    namespace: osac
+    kvMountPath: secret
+    lifecycleRole: lifecycle
+    lifecycleMountPath: jwt
+    keycloakClientId: osac-controller
+    keycloakAudience: osac-api
+    caBundle:
+      configMap: ca-bundle
+    credentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-secret
+          param: client-secret
+
+# --- Kafka (umbrella-level switch) ---
+# External Kafka on the outer cluster: no Strimzi objects from this chart.
+# The metering subchart needs its own switch below for the same reason.
+kafka:
+  enabled: false
+
+# --- UI ---
+ui:
+  enabled: true
+  # No OpenShift Route from the chart: the vcluster has no Route API. The
+  # run setup publishes the run's UI route in the outer cluster.
+  route:
+    enabled: false
+  images:
+    ui: ghcr.io/osac-project/osac-ui:latest
+  api:
+    fulfillment:
+      certs:
+        caBundle:
+          configMap: ca-bundle
+  auth:
+    # oidcIssuerURL is set by the run's install command (like make
+    # install-osac does) once the outer cluster's domain is known.
+    certs:
+      caBundle:
+        configMap: ca-bundle
+
+# --- AAP ---
+aap:
+  aap:
+    instance:
+      # No AAP instance in the vcluster: one shared AAP serves every run on
+      # the machine, from the outer cluster. The bootstrap job and the
+      # operator reach it by its outer route; their external-AAP wiring
+      # (address and admin credentials from values and a Secret) is tracked
+      # separately in the osac-aap chart.
+      enabled: false
+  bootstrap:
+    enabled: true
+    image: ghcr.io/osac-project/osac-aap:latest
+    backoffLimit: 15
+  configAsCode:
+    manifestSecret: "config-as-code-manifest-ig"
+    secret: "config-as-code-ig"
+    # NOTE: e2e's COMPONENT_BUILD_RESULTS image-override step overrides
+    # bootstrap.image with this PR's own built image but does not touch
+    # eeImage, so the two can diverge at e2e runtime even though they're the
+    # same base value here. Extending that override to cover eeImage too is
+    # tracked separately (OSAC-3545), since it lives in osac-test-infra,
+    # not this repo.
+    eeImage: "ghcr.io/osac-project/osac-aap:latest"
+    projectGitUri: "https://github.com/osac-project/osac"
+    projectGitBranch: "main"
+  instanceGroups:
+    storageFulfillment:
+      enabled: true
+
+# --- Validation ---
+validation:
+  enabled: true
+
+# --- Hub Access ---
+hubAccess:
+  enabled: true
+
+# --- Metering ---
+metering:
+  # vcluster: the echo adapter's Route is OpenShift-only; the run setup
+  # publishes the run's echo adapter route in the outer cluster.
+  variant: vcluster
+  echoAdapter:
+    enabled: true
+    image:
+      repository: ghcr.io/osac-project/metering-echo-adapter
+      tag: latest
+      pullPolicy: Always
+  m360Adapter:
+    enabled: false
+    image:
+      repository: ghcr.io/osac-project/metering-m360-adapter
+      tag: latest
+      pullPolicy: Always
+    m360:
+      apiUrl: "api-url"          # Set to your Monetize360 Usage API endpoint
+      apiKeySecret: "m360-api-key"  # K8s Secret with key "api-key" — create before deploying
+      apiVersion: "v1"
+  # External Kafka: no Strimzi KafkaUsers or KafkaTopics from the metering
+  # chart either; the run setup creates the run's users and topics on the
+  # outer cluster.
+  kafka:
+    strimziResources: false
+  database:
+    connection:
+    - secret:
+        name: osac-db-metering-config
+        items:
+        - key: url
+          param: url
+    - secret:
+        name: osac-db-metering-client-cert
+        items:
+        - key: tls.crt
+          param: sslcert
+        - key: tls.key
+          param: sslkey
+        - key: ca.crt
+          param: sslrootcert
+
+# --- Install preflight ---
+preflight:
+  # Both checks are platform-neutral but read the local API, which in a
+  # vcluster holds only the run's objects:
+  # - db-init-host-endpoints: the PostgreSQL Service lives in the outer
+  #   cluster and is reached through forwarded DNS, so the vcluster has no
+  #   EndpointSlices for it;
+  # - default-storageclass: a vanilla vcluster ships no default
+  #   StorageClass, and the AAP that would need one runs on the outer
+  #   cluster, not here.
+  skipChecks:
+  - db-init-host-endpoints
+  - default-storageclass
+
+# --- LVMS StorageBackend registration ---
+lvms:
+  enabled: true

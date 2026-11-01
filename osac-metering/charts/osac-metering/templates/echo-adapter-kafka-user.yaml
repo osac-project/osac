@@ -1,4 +1,4 @@
-{{- if .Values.echoAdapter.enabled }}
+{{- if and .Values.echoAdapter.enabled .Values.kafka.strimziResources }}
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:

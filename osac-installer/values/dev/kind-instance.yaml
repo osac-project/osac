@@ -177,6 +177,12 @@ ui:
 capiProvider:
   enabled: false
 
+# --- Metering ---
+# No Strimzi/Route platform objects on kind: the echo adapter's OpenShift
+# Route is OpenShift-only (it renders only with variant "openshift").
+metering:
+  variant: kind
+
 kafka:
   enabled: true
   replicas: 1

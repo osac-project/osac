@@ -1,11 +1,15 @@
-import { ReactNode } from 'react';
+import { FC, ReactNode } from 'react';
 import { CardBody, CardFooter, Divider, Stack, StackItem } from '@patternfly/react-core';
+import { RhUiClusterIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-cluster-icon';
+import { RhUiServerStackIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-server-stack-icon';
+import { RhUiVirtualServerIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-virtual-server-icon';
 
 import ListPageCard from '@osac/ui-components/components/Page/ListPageCard';
-import { CatalogItemIcon } from '@osac/ui-components/icons';
+
+type InstanceKind = 'vm' | 'bm' | 'cluster';
 
 interface InstanceCardProps {
-  kind?: 'vm' | 'bm' | 'cluster';
+  kind?: InstanceKind;
   statusLabel: ReactNode;
   actionMenu: ReactNode;
   title: ReactNode;
@@ -13,6 +17,20 @@ interface InstanceCardProps {
   footer: ReactNode;
   actionButton?: ReactNode;
 }
+
+export const InstanceTypeIcon: FC<{ kind?: InstanceKind }> = ({ kind }) => {
+  switch (kind) {
+    case 'cluster':
+      return <RhUiClusterIcon />;
+    case 'bm':
+      return <RhUiServerStackIcon />;
+    case 'vm':
+      return <RhUiVirtualServerIcon />;
+      break;
+    default:
+      return null;
+  }
+};
 
 const InstanceCard = ({
   kind,
@@ -27,7 +45,7 @@ const InstanceCard = ({
     title={title}
     statusLabel={statusLabel}
     actionMenu={actionMenu}
-    icon={<CatalogItemIcon kind={kind} />}
+    icon={<InstanceTypeIcon kind={kind} />}
   >
     <CardBody>{body}</CardBody>
     {footer || actionButton ? <Divider /> : null}

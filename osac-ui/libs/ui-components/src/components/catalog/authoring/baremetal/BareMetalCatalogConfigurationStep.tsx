@@ -1,4 +1,4 @@
-import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
+import { Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 import BareMetalInstanceTypeField from '../../../BareMetalInstance/CreateWizard/fields/BareMetalInstanceTypeField';
@@ -7,6 +7,7 @@ import { InputField } from '../../../Form/InputField';
 import OsacForm from '../../../Form/OsacForm';
 import DiskImageField from '../../../ProvisioningWizard/fields/DiskImageField';
 import CatalogField from '../CatalogField';
+import CatalogFieldPolicyDescription from '../CatalogFieldPolicyDescription';
 
 const BareMetalCatalogConfigurationStep = () => {
   const { t } = useTranslation();
@@ -19,11 +20,11 @@ const BareMetalCatalogConfigurationStep = () => {
         </Title>
       </StackItem>
       <StackItem>
-        <Content component="p">
-          {t(
-            'Optionally set instance type, disk image, and user data defaults for this catalog item. Leave fields Not set if tenants should choose when creating a bare metal instance.',
+        <CatalogFieldPolicyDescription
+          description={t(
+            'Configure the instance type, disk image, and user data for bare metal instances created from this catalog item.',
           )}
-        </Content>
+        />
       </StackItem>
       <StackItem>
         <OsacForm>

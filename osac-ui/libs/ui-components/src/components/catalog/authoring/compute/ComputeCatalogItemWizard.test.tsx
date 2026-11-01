@@ -133,7 +133,7 @@ describe('ComputeCatalogItemWizard', () => {
 
     expect(
       await screen.findByText(
-        'Set the default disk image and instance type for virtual machines created from this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
+        'Configure the disk image and instance type for virtual machines created from this catalog item. Users can change editable fields, which may have a default value. Lock fields to enforce their configured values.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Compute configuration' })).toBeInTheDocument();
@@ -174,7 +174,7 @@ describe('ComputeCatalogItemWizard', () => {
 
     expect(
       await screen.findByText(
-        'Optionally set boot disk size, storage tier, and additional disk defaults for this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
+        'Configure the boot disk size, storage tier, and additional disks for virtual machines created from this catalog item. Users can change editable fields, which may have a default value. Lock fields to enforce their configured values.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Boot storage tier' })).toBeInTheDocument();
@@ -190,7 +190,9 @@ describe('ComputeCatalogItemWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Next' }));
 
     expect(
-      await screen.findByText('Add optional user data, or skip this step to continue.'),
+      await screen.findByText(
+        'Configure optional user data for virtual machines created from this catalog item, or skip this step to continue. Users can change editable fields, which may have a default value. Lock fields to enforce their configured values.',
+      ),
     ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'User data' })).toBeInTheDocument();
@@ -338,7 +340,7 @@ describe('ComputeCatalogItemWizard', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Set the default disk image and instance type for virtual machines created from this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
+        'Configure the disk image and instance type for virtual machines created from this catalog item. Users can change editable fields, which may have a default value. Lock fields to enforce their configured values.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByText('Disk image is required when locked')).toBeInTheDocument();

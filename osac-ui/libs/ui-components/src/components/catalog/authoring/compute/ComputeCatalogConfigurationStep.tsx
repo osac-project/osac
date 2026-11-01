@@ -1,10 +1,11 @@
-import { Content, Divider, Stack, StackItem, Title } from '@patternfly/react-core';
+import { Divider, Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 import OsacForm from '../../../Form/OsacForm';
 import DiskImageField from '../../../ProvisioningWizard/fields/DiskImageField';
 import ComputeInstanceTypeField from '../../../vm/CreateWizard/fields/ComputeInstanceTypeField';
 import CatalogField from '../CatalogField';
+import CatalogFieldPolicyDescription from '../CatalogFieldPolicyDescription';
 
 const ComputeCatalogConfigurationStep = () => {
   const { t } = useTranslation();
@@ -17,11 +18,11 @@ const ComputeCatalogConfigurationStep = () => {
         </Title>
       </StackItem>
       <StackItem>
-        <Content component="p">
-          {t(
-            'Set the default disk image and instance type for virtual machines created from this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
+        <CatalogFieldPolicyDescription
+          description={t(
+            'Configure the disk image and instance type for virtual machines created from this catalog item.',
           )}
-        </Content>
+        />
       </StackItem>
       <StackItem>
         <OsacForm>

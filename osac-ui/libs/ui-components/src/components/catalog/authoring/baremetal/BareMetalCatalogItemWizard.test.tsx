@@ -117,7 +117,7 @@ describe('BareMetalCatalogItemWizard', () => {
 
     expect(
       await screen.findByText(
-        'Optionally set instance type, disk image, and user data defaults for this catalog item. Leave fields Not set if tenants should choose when creating a bare metal instance.',
+        'Configure the instance type, disk image, and user data for bare metal instances created from this catalog item. Users can change editable fields, which may have a default value. Lock fields to enforce their configured values.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Instance type')).toBeInTheDocument();

@@ -87,14 +87,21 @@ func Cmd() *cobra.Command {
 		false,
 		watchFlagHelp,
 	)
+	flags.BoolVar(
+		&runner.args.includeShared,
+		"include-shared",
+		false,
+		includeSharedFlagHelp,
+	)
 	return result
 }
 
 type runnerContext struct {
 	args struct {
-		format string
-		filter string
-		watch  bool
+		format        string
+		filter        string
+		watch         bool
+		includeShared bool
 	}
 	ctx            context.Context
 	logger         *slog.Logger
@@ -199,6 +206,13 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	default:
 		render = c.renderTable
 	}
+
+	// If include-shared mode is enabled, mark it in the context so the table renderer
+	// can show which resources are from the shared tenant.
+	if c.args.includeShared {
+		ctx = config.ShowSharedIntoContext(ctx, true)
+	}
+
 	return render(ctx, objects)
 }
 
@@ -239,6 +253,9 @@ func (c *runnerContext) getByKeys(ctx context.Context, keys []string) ([]proto.M
 
 func (c *runnerContext) list(ctx context.Context, keys []string) (results []proto.Message, err error) {
 	var options reflection.ListOptions
+
+	// Enable include-shared mode if requested (includes shared tenant resources).
+	options.AllTenants = c.args.includeShared
 
 	// If keys (identifiers or names) were provided, build a CEL filter to match them.
 	if len(keys) > 0 {
@@ -419,4 +436,8 @@ for which it returns true are included in the output.
 
 const watchFlagHelp = `
 _[BOOLEAN]_ - Watch for changes to objects and display events in real time instead of listing the current state.
+`
+
+const includeSharedFlagHelp = `
+_[BOOLEAN]_ - Include global platform resources from the {{ bt }}shared{{ bt }} tenant in addition to the current tenant's resources.
 `

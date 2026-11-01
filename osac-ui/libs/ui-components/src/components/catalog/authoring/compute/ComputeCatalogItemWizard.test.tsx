@@ -9,6 +9,7 @@ import {
   type ComputeInstanceTemplate,
   type DiskImage,
   type InstanceType,
+  InstanceTypeState,
   StorageProtocol,
   type StorageTier,
   StorageTierSchema,
@@ -62,7 +63,11 @@ const makeTemplate = (id: string, name: string): ComputeInstanceTemplate =>
   ({ id, metadata: { name } }) as ComputeInstanceTemplate;
 
 const makeInstanceType = (id: string, name: string): InstanceType =>
-  ({ id, metadata: { name }, spec: { vcpus: 4, memoryGib: 8 } }) as InstanceType;
+  ({
+    id,
+    metadata: { name },
+    spec: { vcpus: 4, memoryGib: 8, state: InstanceTypeState.ACTIVE },
+  }) as InstanceType;
 
 const makeDiskImage = (id: string, name: string): DiskImage =>
   ({ id, metadata: { name } }) as DiskImage;
@@ -232,6 +237,22 @@ describe('ComputeCatalogItemWizard', () => {
       expect(screen.getAllByText('Editable')).toHaveLength(5);
       expect(screen.getByRole('button', { name: 'Create catalog item' })).toBeInTheDocument();
       expect(screen.queryByText('Project')).not.toBeInTheDocument();
+    });
+
+    it('uses the selected instance type name without fetching instance type details', async () => {
+      const onInstanceTypeGet = vi.fn(() => ({ object: INSTANCE_TYPE }));
+      const { user } = renderWizard(undefined, { onInstanceTypeGet });
+
+      await fillGeneralStep(user, 'my-item');
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Instance type' }));
+      await user.click(await screen.findByRole('option', { name: /standard-4-8/ }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+
+      expect(await screen.findByText('standard-4-8')).toBeInTheDocument();
+      expect(onInstanceTypeGet).not.toHaveBeenCalled();
     });
 
     it('shows the global scope row for an administrator', async () => {

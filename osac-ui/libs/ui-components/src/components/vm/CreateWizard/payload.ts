@@ -39,9 +39,10 @@ export const buildComputeInstanceCreatePayload = (
     spec.runStrategy = ComputeInstanceRunStrategy.COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS;
   }
 
-  if (!values.spec.instanceType.locked && values.spec.instanceType.value) {
+  const instanceTypeId = values.spec.instanceType.value.id.trim();
+  if (!values.spec.instanceType.locked && instanceTypeId) {
     spec.instanceType = {
-      id: values.spec.instanceType.value,
+      id: instanceTypeId,
     };
   }
 

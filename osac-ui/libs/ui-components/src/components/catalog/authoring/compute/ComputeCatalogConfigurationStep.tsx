@@ -42,7 +42,7 @@ const ComputeCatalogConfigurationStep = () => {
           <CatalogField name="instanceType">
             {({ valueName, isDisabled, isRequired, labelInfo }) => (
               <ComputeInstanceTypeField
-                name={`${valueName}.id`}
+                name={valueName}
                 fieldId="compute-catalog-instance-type"
                 isDisabled={isDisabled}
                 isRequired={isRequired}

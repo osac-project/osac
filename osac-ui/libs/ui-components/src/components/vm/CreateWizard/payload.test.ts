@@ -41,7 +41,7 @@ const buildValues = (project: string) => ({
   metadata: { name: 'my-vm', project },
   spec: {
     ...createEmptyComputeInstanceValues().spec,
-    instanceType: provisioningFieldValue('standard-4-8'),
+    instanceType: provisioningFieldValue({ id: 'standard-4-8', name: 'standard-4-8' }),
     networking: {
       networkAttachment: provisioningFieldValue({
         useDefaultNetwork: false,
@@ -62,7 +62,7 @@ const baseValues = () => {
     metadata: { name: 'web-01', project: '' },
     spec: {
       ...values.spec,
-      instanceType: provisioningFieldValue('standard-4-8'),
+      instanceType: provisioningFieldValue({ id: 'standard-4-8', name: 'standard-4-8' }),
       networking: {
         networkAttachment: provisioningFieldValue({
           useDefaultNetwork: false,
@@ -306,7 +306,10 @@ describe('getComputeInstanceInitialValues — instance type', () => {
       },
     } as ComputeInstanceCatalogItem);
 
-    expect(values.spec.instanceType).toEqual({ value: 'it-small', locked: false });
+    expect(values.spec.instanceType).toEqual({
+      value: { id: 'it-small', name: 'u1-small' },
+      locked: false,
+    });
   });
 
   it('locks the instance type when the catalog policy is locked', () => {
@@ -322,7 +325,10 @@ describe('getComputeInstanceInitialValues — instance type', () => {
       },
     } as ComputeInstanceCatalogItem);
 
-    expect(values.spec.instanceType).toEqual({ value: 'it-small', locked: true });
+    expect(values.spec.instanceType).toEqual({
+      value: { id: 'it-small', name: 'u1-small' },
+      locked: true,
+    });
   });
 });
 
@@ -431,7 +437,10 @@ describe('getComputeInstanceInitialValues — network attachments', () => {
 describe('buildComputeInstanceCreatePayload — locked catalog fields', () => {
   it('omits a locked instance type so the catalog policy can apply it', () => {
     const values = baseValues();
-    values.spec.instanceType = provisioningFieldValue('standard-4-8', true);
+    values.spec.instanceType = provisioningFieldValue(
+      { id: 'standard-4-8', name: 'standard-4-8' },
+      true,
+    );
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
@@ -440,7 +449,7 @@ describe('buildComputeInstanceCreatePayload — locked catalog fields', () => {
 
   it('sends instance type when the catalog policy is not locked', () => {
     const values = baseValues();
-    values.spec.instanceType = provisioningFieldValue('standard-4-8');
+    values.spec.instanceType = provisioningFieldValue({ id: 'standard-4-8', name: 'standard-4-8' });
 
     expect(buildComputeInstanceCreatePayload(values, vmCatalogItem).spec?.instanceType).toEqual({
       id: 'standard-4-8',

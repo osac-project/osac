@@ -42,7 +42,7 @@ export interface ComputeInstanceWizardValues {
     sshKey: ProvisioningFieldValue<string>;
     guestOsFamily: GuestOSFamily;
     diskImage: ProvisioningFieldValue<ResourceSelectValue>;
-    instanceType: ProvisioningFieldValue<string>;
+    instanceType: ProvisioningFieldValue<ResourceSelectValue>;
     userDataSource: ProvisioningFieldValue<UserDataSource>;
     userData: ProvisioningFieldValue<string>;
     userDataSecret: ProvisioningFieldValue<string>;
@@ -62,7 +62,7 @@ export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues 
     sshKey: provisioningFieldValue(''),
     guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     diskImage: provisioningFieldValue(emptyResourceSelectValue()),
-    instanceType: provisioningFieldValue(''),
+    instanceType: provisioningFieldValue(emptyResourceSelectValue()),
     userDataSource: provisioningFieldValue('inline'),
     userData: provisioningFieldValue(''),
     userDataSecret: provisioningFieldValue(''),
@@ -121,11 +121,14 @@ export const getComputeInstanceInitialValues = (
         emptyResourceSelectValue(),
       ),
       instanceType: (() => {
-        const field = getFieldFromCatalogItemPolicy<{ id: string; name: string }>(
+        const field = getFieldFromCatalogItemPolicy<ResourceSelectValue>(
           catalogItem.fields?.instanceType,
-          { id: '', name: '' },
+          emptyResourceSelectValue(),
         );
-        return provisioningFieldValue(field.value.id || '', field.locked);
+        return provisioningFieldValue(
+          { id: field.value.id || '', name: field.value.name || '' },
+          field.locked,
+        );
       })(),
       bootDisk: {
         sizeGib: (() => {

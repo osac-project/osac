@@ -12,14 +12,13 @@ import {
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
+<<<<<<< HEAD
 import { Projects } from '@osac/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
-import { useInstanceType } from '@osac/ui-components/api/v1/instance-types';
 import {
   fullProjectPathToQueryFilter,
   getProjectName,
 } from '@osac/ui-components/components/Project/utils';
-import { formatInstanceTypeReviewLabelFromType } from '@osac/ui-components/components/vm/utils';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
 import { ComputeInstanceWizardValues } from './fields';
@@ -33,18 +32,12 @@ export const VmReviewStep = () => {
   const { values } = useFormikContext<ComputeInstanceWizardValues>();
 
   const {
-    data: instanceType,
-    isLoading: instanceLoading,
-    error: instanceErr,
-  } = useInstanceType(values.spec.instanceType.value);
-
-  const {
     data: projects,
     isLoading: projectsLoading,
     error: projectsError,
   } = useListResource(Projects, { filter: fullProjectPathToQueryFilter(values.metadata.project) });
 
-  if (instanceLoading || projectsLoading) {
+  if (projectsLoading) {
     return (
       <Bullseye>
         <Spinner />
@@ -68,14 +61,6 @@ export const VmReviewStep = () => {
 
   return (
     <Stack hasGutter>
-      {!!instanceErr && (
-        <StackItem>
-          <Alert variant="warning" isInline title={t('Failed to fetch instance type')}>
-            {getErrorMessage(instanceErr)}
-          </Alert>
-        </StackItem>
-      )}
-
       {!!projectsError && (
         <StackItem>
           <Alert variant="warning" isInline title={t('Failed to fetch project')}>
@@ -124,11 +109,7 @@ export const VmReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Instance type')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatInstanceTypeReviewLabelFromType(
-                instanceType,
-                undefined,
-                values.spec.instanceType.value,
-              )}
+              {values.spec.instanceType.value.name || values.spec.instanceType.value.id || '—'}
             </DescriptionListDescription>
           </DescriptionListGroup>
 

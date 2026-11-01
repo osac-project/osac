@@ -18,7 +18,6 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
@@ -35,21 +34,4 @@ func validateNotDefault(ctx context.Context, labels map[string]string, resourceT
 			"cannot delete default %s: default networking resources are system-managed", resourceType)
 	}
 	return nil
-}
-
-// validateDefaultLabelUpdate rejects updates that strip the default marker from
-// system-managed networking resources.
-func validateDefaultLabelUpdate(
-	existingLabels, updatedLabels map[string]string,
-	updateMask *fieldmaskpb.FieldMask,
-	resourceType string,
-) error {
-	if existingLabels[defaultLabel] != "true" || !updateIncludesField(updateMask, "metadata.labels") {
-		return nil
-	}
-	if updatedLabels[defaultLabel] == "true" {
-		return nil
-	}
-	return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-		"cannot modify default %s: default networking resources are system-managed", resourceType)
 }

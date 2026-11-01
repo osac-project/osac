@@ -90,13 +90,37 @@
         that:
           - osac_addon_operator_templates is defined
           - osac_addon_operator_templates | length >= 1
-          - osac_addon_operator_templates | map(attribute='id') | list is superset(['osac.templates.cert_manager'])
-          - osac_addon_operator_templates[0].min_ocp_version is defined
-          - osac_addon_operator_templates[0].dependencies is defined
-        fail_msg: >-
-          Expected the cert_manager AddOnOperator template.
-          Got: {{ osac_addon_operator_templates | default([]) | map(attribute='id') | list }}
+        fail_msg: "Expected at least one supported add-on operator template"
         success_msg: "Found {{ osac_addon_operator_templates | length }} add-on operator template(s)"
+      when: test_discover_all | default(false) | bool
+
+    - name: Verify add-on operator template metadata fields
+      ansible.builtin.assert:
+        that:
+          - >-
+            osac_addon_operator_templates | selectattr('id', 'defined') | list | length
+            == osac_addon_operator_templates | length
+          - >-
+            osac_addon_operator_templates | selectattr('min_ocp_version', 'defined') | list | length
+            == osac_addon_operator_templates | length
+          - >-
+            osac_addon_operator_templates | selectattr('dependencies', 'defined') | list | length
+            == osac_addon_operator_templates | length
+        fail_msg: >-
+          Expected every add-on operator template to include id, min_ocp_version,
+          and dependencies.
+          Got: {{ osac_addon_operator_templates | default([]) | map(attribute='id') | list }}
+      when: test_discover_all | default(false) | bool
+
+    - name: Verify add-on operator template IDs are unique
+      ansible.builtin.assert:
+        that:
+          - >-
+            osac_addon_operator_templates | map(attribute='id') | list | unique | length
+            == osac_addon_operator_templates | length
+        fail_msg: >-
+          Expected add-on operator template IDs to be unique.
+          Got: {{ osac_addon_operator_templates | default([]) | map(attribute='id') | list }}
       when: test_discover_all | default(false) | bool
 
 # ──────────────────────────────────────────────────────────────

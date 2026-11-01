@@ -52,13 +52,6 @@ var _ = Describe("Bare metal fabric bindings contract", func() {
 		Expect(privateSpec.Fields().ByName("fabric_bindings").Number()).To(Equal(protoreflect.FieldNumber(4)))
 	})
 
-	It("reserves the removed NetworkClass template field", func() {
-		config := (&privatev1.EthernetEastWestConfig{}).ProtoReflect().Descriptor()
-		Expect(config.Fields().Len()).To(BeZero())
-		Expect(config.ReservedNames().Has("template_id")).To(BeTrue())
-		Expect(config.ReservedRanges().Has(1)).To(BeTrue())
-	})
-
 	It("does not add an instance type to FabricDomain", func() {
 		for _, spec := range []protoreflect.MessageDescriptor{
 			(&privatev1.FabricDomainSpec{}).ProtoReflect().Descriptor(),

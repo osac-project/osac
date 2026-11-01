@@ -182,16 +182,12 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
-	// Select the hub and return immediately if it was just selected. This ensures the hub is
-	// persisted before any Kubernetes objects are created.
-	hubJustSelected := t.externalIPPool.GetStatus().GetHub() == ""
+	// Resolve the hub. The CR is created (or adopted by its label) before status.hub is written, at the end of the
+	// run, so a restart between the two never creates a second CR.
 	if err := t.selectHub(ctx); err != nil {
 		return err
 	}
 	t.externalIPPool.GetStatus().SetHub(t.hubId)
-	if hubJustSelected {
-		return nil
-	}
 
 	existingObject, err := t.getKubeObject(ctx)
 	if err != nil {
@@ -261,7 +257,7 @@ func (t *task) validateTenant() error {
 func (t *task) validateIPFamily() error {
 	ipFamily := t.externalIPPool.GetSpec().GetIpFamily()
 	switch ipFamily {
-	case privatev1.IPFamily_IP_FAMILY_IPV4, privatev1.IPFamily_IP_FAMILY_IPV6:
+	case privatev1.IPFamily_IP_FAMILY_IPV4:
 		return nil
 	default:
 		return fmt.Errorf("%w: %v", errUnsupportedIPFamily, ipFamily)
@@ -270,11 +266,17 @@ func (t *task) validateIPFamily() error {
 
 func (t *task) delete(ctx context.Context) error {
 	t.hubId = t.externalIPPool.GetStatus().GetHub()
+	var err error
 	if t.hubId == "" {
-		t.removeFinalizer()
-		return nil
+		// The CR may exist without status.hub when the controller restarted between its create and the hub
+		// write, so look it up in the canonical hub.
+		if selectErr := t.selectHub(ctx); selectErr != nil {
+			t.removeFinalizer()
+			return nil
+		}
+	} else {
+		err = t.getHub(ctx)
 	}
-	err := t.getHub(ctx)
 	if err != nil {
 		// Check if the hub has been decommissioned (deleted from database)
 		if errors.Is(err, controllers.ErrHubNotFound) {
@@ -423,13 +425,6 @@ func (t *task) buildSpec() osacv1alpha1.ExternalIPPoolSpec {
 	switch t.externalIPPool.GetSpec().GetIpFamily() {
 	case privatev1.IPFamily_IP_FAMILY_IPV4:
 		spec.IPFamily = "IPv4"
-	case privatev1.IPFamily_IP_FAMILY_IPV6:
-		spec.IPFamily = "IPv6"
-	}
-
-	implStrategy := t.externalIPPool.GetSpec().GetImplementationStrategy()
-	if implStrategy != "" {
-		spec.ImplementationStrategy = implStrategy
 	}
 
 	return spec

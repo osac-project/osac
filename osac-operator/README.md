@@ -18,10 +18,14 @@ custom resources and reconciles them to their desired state:
   a namespace that may not exist. VMs with a subnet use the subnet namespace;
   VMs without one fall back to the tenant name when locating a VM.
 - **VirtualNetwork** (`vnet`) — represents a cloud virtual network / VPC with
-  IPv4/IPv6 CIDR blocks and a NetworkClass.
+  an IPv4 CIDR block.
 - **Subnet** (`subnet`) — represents a subnet within a VirtualNetwork.
 - **SecurityGroup** (`sg`) — defines network security (firewall) rules with
   ingress/egress rules, protocols, port ranges, and CIDR blocks.
+- **NetworkClass**, **NetworkAttachment**, **ExternalIPPool**, **ExternalIP**,
+  **ExternalIPAttachment**, **NATGateway**, **FabricDomain** — the other
+  networking resources. Networking CRs report the `Ready` condition and their
+  network manager jobs in `status.jobs` (see `internal/networktask/doc.go`).
 - **Volume** (`vol`) — provisions block storage on vendor arrays via the
   VendorProvisioner interface (vendor CSI controllers).
 
@@ -48,8 +52,13 @@ fulfillment service over gRPC only (no AAP integration).
 - `OSAC_AAP_DEPROVISION_TEMPLATE` — default AAP template name for
   deprovisioning (optional).
 - `OSAC_AAP_TEMPLATE_PREFIX` — prefix for convention-based template name
-  resolution (default: `"osac"`). Used by networking controllers to derive
-  template names (e.g. `osac-create-virtual-network`).
+  resolution (default: `"osac"`). Networking controllers launch
+  `{prefix}-{task with dashes}` (e.g. `osac-create-virtual-network`).
+- `OSAC_AAP_ORGANIZATION` — AAP organization (name or ID) where networking job
+  labels are created (default: `osac`).
+- `OSAC_PROVISIONING_ENABLED` — provider networking (default: `true`). When
+  `false`, no networking job runs and networking resources become Ready with
+  reason `ProvisioningDisabled`.
 - `OSAC_AAP_STATUS_POLL_INTERVAL` — job status polling interval (default:
   `30s`). Duration string, e.g. `30s`, `1m`.
 - `OSAC_AAP_INSECURE_SKIP_VERIFY` — skip TLS verification for AAP (default:
@@ -61,9 +70,10 @@ defaults):
 - `OSAC_CLUSTER_AAP_PROVISION_TEMPLATE` /
   `OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE` — override for ClusterOrder.
 
-Networking controllers derive template names from the prefix:
-`{prefix}-{action}-{kind}` (e.g. `osac-create-subnet`,
-`osac-delete-security-group`).
+Networking controllers launch one job template per network manager task:
+`{prefix}-{task with dashes}` (e.g. `osac-create-subnet`,
+`osac-apply-network-attachment`), all running the generic playbook
+`playbook_osac_network_task.yml`. See `internal/networktask/doc.go`.
 
 ### Assisted Service discovery ignition TLS
 
@@ -90,8 +100,9 @@ Networking controllers derive template names from the prefix:
 ### Remote cluster
 
 - `OSAC_REMOTE_CLUSTER_KUBECONFIG` — path to kubeconfig for the remote cluster
-  used by Tenant and ComputeInstance controllers (optional). Not supported when
-  ClusterOrder controller is enabled.
+  used by Tenant, ComputeInstance, Storage, and Networking controllers
+  (optional). Not supported when the ClusterOrder or BareMetalInstance
+  controller is enabled.
 
 ### Job history
 
@@ -161,8 +172,12 @@ enabled.
 - `OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER` — enable ComputeInstance controller
   (truthy/falsy).
 - `OSAC_ENABLE_TENANT_CONTROLLER` — enable Tenant controller (truthy/falsy).
+- `OSAC_ENABLE_STORAGE_CONTROLLER` — enable Storage controller (truthy/falsy).
+- `OSAC_ENABLE_VOLUME_CONTROLLER` — enable Volume controller (truthy/falsy).
 - `OSAC_ENABLE_NETWORKING_CONTROLLER` — enable networking controllers
   (VirtualNetwork, Subnet, SecurityGroup) (truthy/falsy).
+- `OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER` — enable BareMetalInstance
+  controller (truthy/falsy).
 
 ### Fulfillment trust reconciliation
 

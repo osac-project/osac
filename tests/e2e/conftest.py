@@ -3,13 +3,13 @@ from __future__ import annotations
 import contextlib
 import os
 import subprocess
-import textwrap
 import time
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from tests.e2e.core import failure_report, failure_snapshot
 from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import unique_name, wait_for_grpc_subnet_ready, wait_for_tenant_condition
@@ -26,6 +26,7 @@ from tests.e2e.core.keycloak_admin import (
 from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, poll_until, run, run_unchecked
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
 @pytest.fixture(scope="session")
@@ -94,12 +95,6 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "requires_caas: test requires the CaaS service to be enabled")
     config.addinivalue_line("markers", "requires_bmaas: test requires the BMaaS service to be enabled")
     config.addinivalue_line("markers", "requires_vmaas: test requires the VMaaS service to be enabled")
-    config.addinivalue_line("markers", "requires_netris: test requires the Netris EVPN fabric")
-    config.addinivalue_line("markers", "requires_netris_vmaas: test requires Netris VMaaS networking")
-    config.addinivalue_line("markers", "requires_netris_bmaas: test requires Netris BMaaS networking")
-    config.addinivalue_line(
-        "markers", "requires_stretched_networking: test requires BM and VM connectivity on a shared subnet"
-    )
     config.addinivalue_line("markers", "reference_common: reference test shared by all service profiles")
     config.addinivalue_line("markers", "reference_networking: shared networking reference test")
     config.addinivalue_line("markers", "sanity: fast, low-risk smoke test suitable for every PR")
@@ -107,6 +102,11 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "serial: must run alone, not in parallel with other tests (e.g. exhausts a shared resource)"
     )
+    failure_report.register(config)
+    if config.option.tbstyle == "auto":
+        # The long style prints every frame's arguments: tokens, passwords and kubeconfig values. An explicit
+        # --tb on the command line is left alone.
+        config.option.tbstyle = "short"
     worker_id = os.environ.get("PYTEST_XDIST_WORKER")
     if worker_id is not None:
         log_dir = Path(config.getini("log_file")).parent
@@ -117,6 +117,17 @@ def pytest_configure(config: pytest.Config) -> None:
 @pytest.fixture(scope="session")
 def namespace() -> str:
     return env("OSAC_NAMESPACE", "osac-devel")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def failure_snapshot_sources(private_grpc: GRPCClient, k8s_hub_client: K8sClient, namespace: str) -> Iterator[None]:
+    """Register the generic snapshot sources (API, Kubernetes, logs, fabric) for the failure reporter."""
+    names = failure_snapshot.register_generic_sources(
+        failure_snapshot.SOURCES, private_grpc=private_grpc, k8s=k8s_hub_client, namespace=namespace
+    )
+    yield
+    for name in names:
+        failure_snapshot.SOURCES.unregister(name)
 
 
 def _apply_manifest(manifest: str) -> None:
@@ -238,14 +249,14 @@ def caas_disk_image_version(private_grpc: GRPCClient) -> str:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def ensure_tenants(ensure_k8s_only_network_class: None, private_grpc: GRPCClient) -> None:
+def ensure_tenants(private_grpc: GRPCClient) -> None:
     for name in ("tenant1", "tenant2"):
         private_grpc.ensure_tenant(name=name)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _wait_for_default_subnets_ready(
-    ensure_jwt_users: None, setup_organization_memberships: None, grpc: GRPCClient
+    ensure_jwt_users: None, setup_organization_memberships: None, grpc: GRPCClient, jwt_tenant: str
 ) -> None:
     """Wait for tenant-default subnets to reach READY in the fulfillment database.
 
@@ -276,6 +287,8 @@ def _wait_for_default_subnets_ready(
         delay=2,
         description="at least one subnet to appear in gRPC",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.TENANT,
+        resource_id=jwt_tenant,
     )
     for subnet_id in subnet_ids:
         wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)
@@ -366,42 +379,6 @@ def k8s_hub_client(namespace: str) -> K8sClient:
     return client
 
 
-_K8S_ONLY_NETWORK_MANAGER_CONFIGMAP = textwrap.dedent("""\
-    apiVersion: v1
-    kind: ConfigMap
-    metadata:
-      name: osac-network-k8s-manager-k8s-only
-      namespace: {namespace}
-      labels:
-        osac.openshift.io/network-k8s-manager: "true"
-    data:
-      name: k8s_only
-      description: "Composite k8s-only manager (CUDN + NetworkPolicy + MetalLB), no separate physical fabric"
-      capabilities: "ipv4"
-""")
-
-
-@pytest.fixture(scope="session", autouse=True)
-def ensure_k8s_only_network_class(private_grpc: GRPCClient, k8s_hub_client: K8sClient, namespace: str) -> None:
-    """No-op unless OSAC_NETWORK_CLASS_K8S_ONLY is set. When set, registers the
-    k8s_only k8s-manager ConfigMap and points the environment's singleton
-    NetworkClass at it (k8s_manager: k8s_only, fabric_manager cleared)."""
-    if not env("OSAC_NETWORK_CLASS_K8S_ONLY", ""):
-        return
-
-    k8s_hub_client.apply(manifest=_K8S_ONLY_NETWORK_MANAGER_CONFIGMAP.format(namespace=namespace))
-
-    network_classes = private_grpc.list_network_classes()
-    if not network_classes:
-        raise RuntimeError(
-            "OSAC_NETWORK_CLASS_K8S_ONLY is set but no NetworkClass exists — "
-            "expected the platform default to already be published by the publish-templates job"
-        )
-    private_grpc.update_network_class(
-        network_class_id=network_classes[0]["id"], fabric_manager="", k8s_manager="k8s_only"
-    )
-
-
 @pytest.fixture(scope="session")
 def cli(
     namespace: str, fulfillment_address: str, keycloak_url: str, jwt_username: str, jwt_password: str
@@ -481,6 +458,34 @@ def jwt_cli_admin(namespace: str, fulfillment_address: str, keycloak_url: str, j
     )
     yield instance
     instance.close()
+
+
+@pytest.fixture(scope="session")
+def jwt_cli_tenant2_admin(
+    namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str
+) -> Iterator[OsacCLI]:
+    instance = OsacCLI(
+        binary=env("OSAC_CLI_PATH", "osac"),
+        address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
+        token_script=_make_jwt_token_script(keycloak_url, "tenant2_admin", jwt_password),
+        namespace=namespace,
+    )
+    yield instance
+    instance.close()
+
+
+@pytest.fixture(scope="session")
+def jwt_grpc_tenant2_admin(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+    return GRPCClient(
+        address=fulfillment_address,
+        token_factory=lambda: get_jwt(
+            keycloak_url=keycloak_url,
+            realm="osac",
+            client_id="osac-cli",
+            username="tenant2_admin",
+            password=jwt_password,
+        ),
+    )
 
 
 @pytest.fixture(scope="session")

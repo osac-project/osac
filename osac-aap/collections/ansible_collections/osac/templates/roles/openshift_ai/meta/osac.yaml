@@ -1,0 +1,20 @@
+---
+name: openshift-ai
+title: OpenShift AI Operator
+description: >
+  Installs the OpenShift AI Operator.
+template_type: addon_operator
+min_ocp_version: "4.12.0"
+max_ocp_version: ""
+exclusions: []
+dependencies:
+  - authorino
+  - pipelines
+  - serverless
+  - servicemesh
+package_name: rhods-operator
+channel: stable
+catalog_source: redhat-operators
+catalog_source_namespace: openshift-marketplace
+subscription_namespace: redhat-ods-operator
+operator_group_name: rhods-operator

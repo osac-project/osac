@@ -1,0 +1,402 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: networkclasses.osac.openshift.io
+spec:
+  group: osac.openshift.io
+  names:
+    kind: NetworkClass
+    listKind: NetworkClassList
+    plural: networkclasses
+    shortNames:
+    - nc
+    singular: networkclass
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.fabricManager
+      name: FabricManager
+      type: string
+    - jsonPath: .spec.k8sManager
+      name: K8sManager
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          NetworkClass is the deployment's network manager selection, tenant defaults
+          and Subnet address plan. The fulfillment controller creates it in the hub
+          networking namespace with the label osac.openshift.io/networkclass-uuid.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of NetworkClass
+            properties:
+              addressPlan:
+                description: AddressPlan is the Subnet address plan, in sixteenths.
+                properties:
+                  fabric:
+                    description: Fabric is the share of the Fabric Manager's range,
+                      in sixteenths.
+                    format: int32
+                    maximum: 16
+                    minimum: 0
+                    type: integer
+                  lbVip:
+                    description: LBVIP is the share of LoadBalancer VIP reservations,
+                      in sixteenths.
+                    format: int32
+                    maximum: 16
+                    minimum: 0
+                    type: integer
+                  overlay:
+                    description: Overlay is the share of VM addresses from the Kubernetes
+                      Manager, in sixteenths.
+                    format: int32
+                    maximum: 16
+                    minimum: 0
+                    type: integer
+                required:
+                - fabric
+                - lbVip
+                - overlay
+                type: object
+                x-kubernetes-validations:
+                - message: addressPlan is immutable
+                  rule: self == oldSelf
+                - message: addressPlan shares must sum to 16 sixteenths
+                  rule: self.overlay + self.fabric + self.lbVip == 16
+              defaults:
+                description: Defaults are the tenant networking defaults.
+                properties:
+                  egressRules:
+                    description: EgressRules are the rules of the default SecurityGroup
+                      for egress traffic.
+                    items:
+                      description: |-
+                        SecurityRule defines a single security rule for ingress or egress traffic.
+                        Ports are set exactly for tcp and udp, both of them, with portFrom <= portTo.
+                      properties:
+                        destinationCidr:
+                          description: DestinationCIDR specifies the destination CIDR
+                            block for this rule
+                          maxLength: 18
+                          type: string
+                          x-kubernetes-validations:
+                          - message: destinationCidr must be a canonical IPv4 CIDR
+                            rule: self == '' || (string(cidr(self).masked()) == self
+                              && !self.contains(':'))
+                        portFrom:
+                          description: PortFrom specifies the start of the port range
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                        portTo:
+                          description: PortTo specifies the end of the port range
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                        protocol:
+                          allOf:
+                          - enum:
+                            - tcp
+                            - udp
+                            - icmp
+                            - all
+                          - enum:
+                            - tcp
+                            - udp
+                            - icmp
+                            - all
+                          description: Protocol specifies the network protocol
+                          type: string
+                        sourceCidr:
+                          description: SourceCIDR specifies the source CIDR block
+                            for this rule
+                          maxLength: 18
+                          type: string
+                          x-kubernetes-validations:
+                          - message: sourceCidr must be a canonical IPv4 CIDR
+                            rule: self == '' || (string(cidr(self).masked()) == self
+                              && !self.contains(':'))
+                      required:
+                      - protocol
+                      type: object
+                      x-kubernetes-validations:
+                      - message: portFrom and portTo are set exactly for tcp and udp
+                          rules
+                        rule: '(self.protocol in [''tcp'',''udp'']) ? (has(self.portFrom)
+                          && has(self.portTo)) : (!has(self.portFrom) && !has(self.portTo))'
+                      - message: portFrom must not exceed portTo
+                        rule: '!has(self.portFrom) || !has(self.portTo) || self.portFrom
+                          <= self.portTo'
+                    maxItems: 100
+                    type: array
+                  ingressRules:
+                    description: IngressRules are the rules of the default SecurityGroup
+                      for ingress traffic.
+                    items:
+                      description: |-
+                        SecurityRule defines a single security rule for ingress or egress traffic.
+                        Ports are set exactly for tcp and udp, both of them, with portFrom <= portTo.
+                      properties:
+                        destinationCidr:
+                          description: DestinationCIDR specifies the destination CIDR
+                            block for this rule
+                          maxLength: 18
+                          type: string
+                          x-kubernetes-validations:
+                          - message: destinationCidr must be a canonical IPv4 CIDR
+                            rule: self == '' || (string(cidr(self).masked()) == self
+                              && !self.contains(':'))
+                        portFrom:
+                          description: PortFrom specifies the start of the port range
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                        portTo:
+                          description: PortTo specifies the end of the port range
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                        protocol:
+                          allOf:
+                          - enum:
+                            - tcp
+                            - udp
+                            - icmp
+                            - all
+                          - enum:
+                            - tcp
+                            - udp
+                            - icmp
+                            - all
+                          description: Protocol specifies the network protocol
+                          type: string
+                        sourceCidr:
+                          description: SourceCIDR specifies the source CIDR block
+                            for this rule
+                          maxLength: 18
+                          type: string
+                          x-kubernetes-validations:
+                          - message: sourceCidr must be a canonical IPv4 CIDR
+                            rule: self == '' || (string(cidr(self).masked()) == self
+                              && !self.contains(':'))
+                      required:
+                      - protocol
+                      type: object
+                      x-kubernetes-validations:
+                      - message: portFrom and portTo are set exactly for tcp and udp
+                          rules
+                        rule: '(self.protocol in [''tcp'',''udp'']) ? (has(self.portFrom)
+                          && has(self.portTo)) : (!has(self.portFrom) && !has(self.portTo))'
+                      - message: portFrom must not exceed portTo
+                        rule: '!has(self.portFrom) || !has(self.portTo) || self.portFrom
+                          <= self.portTo'
+                    maxItems: 100
+                    type: array
+                  subnetIpv4Cidr:
+                    description: SubnetIPv4CIDR is the default Subnet CIDR, inside
+                      VirtualNetworkIPv4CIDR.
+                    maxLength: 18
+                    type: string
+                    x-kubernetes-validations:
+                    - message: subnetIpv4Cidr must be a canonical IPv4 CIDR
+                      rule: string(cidr(self).masked()) == self && !self.contains(':')
+                  virtualNetworkIpv4Cidr:
+                    description: VirtualNetworkIPv4CIDR is the default VirtualNetwork
+                      CIDR.
+                    maxLength: 18
+                    type: string
+                    x-kubernetes-validations:
+                    - message: virtualNetworkIpv4Cidr must be a canonical IPv4 CIDR
+                      rule: string(cidr(self).masked()) == self && !self.contains(':')
+                required:
+                - subnetIpv4Cidr
+                - virtualNetworkIpv4Cidr
+                type: object
+                x-kubernetes-validations:
+                - message: defaults is immutable
+                  rule: self == oldSelf
+              eastWestCapabilities:
+                description: EastWestCapabilities enables east-west fabrics.
+                properties:
+                  supportsEastWestEthernet:
+                    description: SupportsEastWestEthernet enables Ethernet east-west
+                      FabricDomains.
+                    type: boolean
+                type: object
+              fabricManager:
+                description: FabricManager is the registration name of the Fabric
+                  Manager.
+                maxLength: 63
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: fabricManager is immutable
+                  rule: self == oldSelf
+              k8sManager:
+                description: K8sManager is the registration name of the OSAC Kubernetes
+                  Manager; empty for none.
+                maxLength: 63
+                type: string
+            required:
+            - addressPlan
+            - defaults
+            - fabricManager
+            type: object
+            x-kubernetes-validations:
+            - message: k8sManager is immutable
+              rule: has(self.k8sManager) == has(oldSelf.k8sManager) && (!has(self.k8sManager)
+                || self.k8sManager == oldSelf.k8sManager)
+            - message: eastWestCapabilities is immutable
+              rule: has(self.eastWestCapabilities) == has(oldSelf.eastWestCapabilities)
+                && (!has(self.eastWestCapabilities) || self.eastWestCapabilities ==
+                oldSelf.eastWestCapabilities)
+          status:
+            description: status defines the observed state of NetworkClass
+            properties:
+              conditions:
+                description: |-
+                  Conditions holds the Ready condition: True with reason Succeeded once the
+                  managers resolved, False with reason Failed and the reason in its message.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              networkManagers:
+                description: NetworkManagers are the resolved managers.
+                properties:
+                  fabric:
+                    description: Fabric is the Fabric Manager.
+                    properties:
+                      ansibleRole:
+                        description: AnsibleRole is the fully qualified Ansible role
+                          of the manager.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the registration name of the manager.
+                        minLength: 1
+                        type: string
+                    required:
+                    - ansibleRole
+                    - name
+                    type: object
+                  kubernetes:
+                    description: Kubernetes is the OSAC Kubernetes Manager; absent
+                      when none is selected.
+                    properties:
+                      ansibleRole:
+                        description: AnsibleRole is the fully qualified Ansible role
+                          of the manager.
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the registration name of the manager.
+                        minLength: 1
+                        type: string
+                    required:
+                    - ansibleRole
+                    - name
+                    type: object
+                type: object
+              networkType:
+                description: NetworkType is the resolved network type; empty without
+                  a Kubernetes Manager.
+                enum:
+                - evpn
+                type: string
+              securityGroupIcmp:
+                description: |-
+                  SecurityGroupICMP is true when every resolved manager declares
+                  security_group_icmp. Unset while the managers are not resolved.
+                type: boolean
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

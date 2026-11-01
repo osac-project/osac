@@ -49,6 +49,7 @@ import (
 // and namespace routing; it does not model isolation between separate clusters.
 var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 	It("places all networking CR families on the canonical Hub when an alternate Hub is available", func(ctx context.Context) {
+		ndSkipUnlessProviderNetworkingEnabled(ctx, "ExternalIP, ExternalIPAttachment and NATGateway placement")
 		hubsClient := privatev1.NewHubsClient(tool.InternalView().AdminConn())
 		hubAResponse, err := hubsClient.Get(ctx, privatev1.HubsGetRequest_builder{Id: hubId}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -74,14 +75,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		privateClustersClient := privatev1.NewClustersClient(tool.InternalView().AdminConn())
 		clustersClient := publicv1.NewClustersClient(tool.ExternalView().UserConn())
 
-		networkClassName := fmt.Sprintf("test-hub-routing-nc-%s", uuid.New())
-		networkClassResponse, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata:      privatev1.Metadata_builder{Name: networkClassName, Tenant: usersGroup}.Build(),
-				Title:         "Hub canonical placement test",
-				FabricManager: new("netris"),
-			}.Build(),
-		}.Build())
+		networkClassResponse, err := sharedNetworkClass(ctx, networkClassesClient)
 		Expect(err).ToNot(HaveOccurred())
 		networkClassID := networkClassResponse.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
@@ -104,9 +98,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 				Id:       virtualNetworkID,
 				Metadata: privatev1.Metadata_builder{Name: virtualNetworkID, Tenant: usersGroup}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassID}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.232.0.0/16"),
+					Ipv4Cidr: new("10.232.0.0/16"),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -258,12 +250,12 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		By("creating a Cluster target and an ExternalIPAttachment")
 		instanceTypeID := createCatalogItemBareMetalInstanceTypeFixture(ctx, "")
 
-		clusterTemplateID := fmt.Sprintf("test-hub-a-template-%s", uuid.New())
+		clusterTemplateID := newTemplateID("test_hub_a_template")
 		_, err = clusterTemplatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:       clusterTemplateID,
 				Title:    "Hub placement test template",
-				Metadata: privatev1.Metadata_builder{Name: clusterTemplateID}.Build(),
+				Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-hub-a-tmpl-%s", uuid.New()[24:32])}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

@@ -1,0 +1,33 @@
+---
+# Kubernetes delete_network_attachment (after the VM is gone): unbind the VM
+# from every SecurityGroup policy of the VirtualNetwork that still selects
+# it, keeping each policy's rules and other VMs. The namespace and the hub
+# network stay; they belong to the VirtualNetwork and its owner Subnet. A
+# missing namespace or policy means there is nothing left to unbind.
+- name: Run cudn_evpn delete_network_attachment
+  block:
+    - name: Plan the task
+      ansible.builtin.include_tasks: _plan.yaml
+
+    - name: List the SecurityGroup policies of the VirtualNetwork
+      kubernetes.core.k8s_info:
+        api_version: networking.k8s.io/v1
+        kind: NetworkPolicy
+        namespace: "{{ cudn_evpn.namespace }}"
+        label_selectors:
+          - "{{ cudn_evpn.labels.owner_kind }}=securitygroup"
+          - "{{ cudn_evpn.labels.vn }}={{ cudn_evpn.vn_id }}"
+      register: _cudn_evpn_policies
+
+    - name: Remove the VM from each policy that selects it
+      ansible.builtin.include_tasks: _patch_policy.yaml
+      loop: "{{ _cudn_evpn_policies.resources }}"
+      loop_control:
+        loop_var: cudn_evpn_policy
+        label: "{{ cudn_evpn_policy.metadata.name }}"
+      vars:
+        cudn_evpn_patch: "{{ cudn_evpn_policy | osac.templates.cudn_evpn_membership_patch([], [cudn_evpn.target_id]) }}"
+
+  rescue:
+    - name: Report the failure to OSAC
+      ansible.builtin.include_tasks: _fail.yaml

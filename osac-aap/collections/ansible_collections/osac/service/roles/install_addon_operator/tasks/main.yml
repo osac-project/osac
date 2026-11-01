@@ -1,0 +1,208 @@
+---
+- name: Ensure add-on operator namespace exists
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ addon_operator_metadata.subscription_namespace }}"
+
+- name: Ensure add-on operator group exists
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: "{{ addon_operator_metadata.operator_group_name }}"
+        namespace: "{{ addon_operator_metadata.subscription_namespace }}"
+  when:
+    - addon_operator_metadata.operator_group_name is defined
+    - addon_operator_metadata.operator_group_target_namespaces is not defined
+
+- name: Ensure namespaced add-on operator group exists
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: "{{ addon_operator_metadata.operator_group_name }}"
+        namespace: "{{ addon_operator_metadata.subscription_namespace }}"
+      spec:
+        targetNamespaces: "{{ addon_operator_metadata.operator_group_target_namespaces }}"
+  when:
+    - addon_operator_metadata.operator_group_name is defined
+    - addon_operator_metadata.operator_group_target_namespaces is defined
+
+- name: Read add-on operator package manifest
+  kubernetes.core.k8s_info:
+    api_version: packages.operators.coreos.com/v1
+    kind: PackageManifest
+    namespace: default
+    label_selectors:
+      - "catalog={{ addon_operator_metadata.catalog_source }}"
+    field_selectors:
+      - "metadata.name={{ addon_operator_metadata.package_name }}"
+  register: addon_operator_package_manifest
+  until: addon_operator_package_manifest.resources | length > 0
+  retries: 60
+  delay: 10
+
+- name: Select add-on operator package manifest
+  ansible.builtin.set_fact:
+    addon_operator_package_manifest_resource: "{{ addon_operator_package_manifest.resources[0] }}"
+
+- name: Resolve add-on operator channel
+  ansible.builtin.set_fact:
+    addon_operator_channel: >-
+      {{ addon_operator_metadata.channel
+         if addon_operator_metadata.channel | default('') in
+            (addon_operator_package_manifest_resource.status.channels
+             | map(attribute='name') | list)
+         else addon_operator_package_manifest_resource.status.defaultChannel }}
+
+- name: Select add-on operator catalog channel entry
+  ansible.builtin.set_fact:
+    addon_operator_catalog_channel: >-
+      {{ addon_operator_package_manifest_resource.status.channels
+         | selectattr('name', 'equalto', addon_operator_channel)
+         | list | first }}
+
+- name: Verify add-on operator catalog source and target CSV
+  ansible.builtin.assert:
+    that:
+      - addon_operator_package_manifest_resource.status.catalogSource
+        == addon_operator_metadata.catalog_source
+      - addon_operator_package_manifest_resource.status.catalogSourceNamespace
+        == addon_operator_metadata.catalog_source_namespace
+      - addon_operator_catalog_channel.currentCSV | default('') | length > 0
+    fail_msg: >-
+      PackageManifest {{ addon_operator_metadata.package_name }} does not match
+      the requested catalog or does not report a target CSV.
+
+- name: Verify add-on operator channel was resolved
+  ansible.builtin.assert:
+    that:
+      - addon_operator_channel | default('') | length > 0
+    fail_msg: >-
+      No catalog channel is available for {{ addon_operator_metadata.package_name }}
+
+- name: Create add-on operator Subscription
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: "{{ addon_operator_metadata.package_name }}"
+        namespace: "{{ addon_operator_metadata.subscription_namespace }}"
+      spec:
+        channel: "{{ addon_operator_channel }}"
+        installPlanApproval: Automatic
+        name: "{{ addon_operator_metadata.package_name }}"
+        source: "{{ addon_operator_metadata.catalog_source }}"
+        sourceNamespace: "{{ addon_operator_metadata.catalog_source_namespace }}"
+
+- name: Wait for add-on operator InstallPlan to be assigned
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: "{{ addon_operator_metadata.package_name }}"
+    namespace: "{{ addon_operator_metadata.subscription_namespace }}"
+  register: addon_operator_subscription
+  until:
+    - addon_operator_subscription.resources | length > 0
+    - addon_operator_subscription.resources[0].status.installplan.name is defined
+    - addon_operator_subscription.resources[0].status.currentCSV
+      == addon_operator_catalog_channel.currentCSV
+  retries: 60
+  delay: 10
+
+- name: Wait for add-on operator InstallPlan to complete
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: InstallPlan
+    name: "{{ addon_operator_subscription.resources[0].status.installplan.name }}"
+    namespace: "{{ addon_operator_metadata.subscription_namespace }}"
+  register: addon_operator_install_plan
+  until:
+    - addon_operator_install_plan.resources | length > 0
+    - addon_operator_install_plan.resources[0].status.phase | default('') == 'Complete'
+  retries: 60
+  delay: 10
+  failed_when:
+    - addon_operator_install_plan.resources | length > 0
+    - addon_operator_install_plan.resources[0].status.phase | default('') == 'Failed'
+
+- name: Refresh add-on operator Subscription status after InstallPlan completion
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: "{{ addon_operator_metadata.package_name }}"
+    namespace: "{{ addon_operator_metadata.subscription_namespace }}"
+  register: addon_operator_subscription
+
+- name: Verify add-on operator Subscription still reports its target CSV
+  ansible.builtin.assert:
+    that:
+      - addon_operator_subscription.resources | length > 0
+      - addon_operator_subscription.resources[0].status.currentCSV
+        == addon_operator_catalog_channel.currentCSV
+    fail_msg: >-
+      Subscription {{ addon_operator_metadata.package_name }} did not report
+      the expected target CSV {{ addon_operator_catalog_channel.currentCSV }}.
+
+- name: Select target add-on operator ClusterServiceVersion
+  ansible.builtin.set_fact:
+    addon_operator_csv_name: "{{ addon_operator_subscription.resources[0].status.currentCSV }}"
+
+- name: Verify add-on operator ClusterServiceVersion was selected
+  ansible.builtin.assert:
+    that:
+      - addon_operator_csv_name | length > 0
+    fail_msg: >-
+       Subscription {{ addon_operator_metadata.package_name }} completed its InstallPlan
+       without reporting its target ClusterServiceVersion.
+
+- name: Wait for add-on operator ClusterServiceVersion to succeed
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    name: "{{ addon_operator_csv_name }}"
+    namespace: "{{ addon_operator_metadata.subscription_namespace }}"
+  register: addon_operator_csv
+  until:
+    - addon_operator_csv.resources | length > 0
+    - addon_operator_csv.resources[0].status.phase | default('') == 'Succeeded'
+  retries: 60
+  delay: 10
+  failed_when:
+    - addon_operator_csv.resources | length > 0
+    - addon_operator_csv.resources[0].status.phase | default('') in ['Failed', 'Replacing']
+
+- name: Verify target add-on operator ClusterServiceVersion succeeded
+  ansible.builtin.assert:
+    that:
+      - addon_operator_csv.resources | length > 0
+      - addon_operator_csv.resources[0].status.phase | default('') == 'Succeeded'
+    fail_msg: >-
+      Target ClusterServiceVersion {{ addon_operator_csv_name }} did not reach
+      Succeeded phase.
+
+- name: Wait for add-on operator deployments to become available
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: "{{ item.name }}"
+    namespace: "{{ item.namespace | default(addon_operator_metadata.subscription_namespace) }}"
+  loop: "{{ addon_operator_csv.resources[0].spec.install.spec.deployments | default([]) }}"
+  loop_control:
+    label: "{{ item.namespace | default(addon_operator_metadata.subscription_namespace) }}/{{ item.name }}"
+  register: addon_operator_deployments
+  until:
+    - addon_operator_deployments.resources | length > 0
+    - addon_operator_deployments.resources[0].status.availableReplicas | default(0) | int > 0
+  retries: 60
+  delay: 10

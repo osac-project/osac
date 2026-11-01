@@ -17,18 +17,7 @@ import (
 	"fmt"
 )
 
-const (
-	// Legacy LoadBalancer fallback constants — used until all strategies write the allocated-address annotation.
-	externalIPServiceNamePrefix       = "osac-eip-"
-	externalIPDefaultMetalLBNamespace = "metallb-system"
-	externalIPNoProvisioningAddress   = "0.0.0.0"
-)
-
 var (
-	osacExternalIPIDLabel                    string = fmt.Sprintf("%s/externalip-uuid", osacPrefix)
-	osacExternalIPFeedbackFinalizer          string = fmt.Sprintf("%s/externalip-feedback", osacPrefix)
-	osacExternalIPTargetNamespaceAnnotation  string = fmt.Sprintf("%s/externalip-target-namespace", osacPrefix)
-	osacExternalIPDetachFinalizer            string = fmt.Sprintf("%s/externalip-detach", osacPrefix)
-	osacExternalIPAllocatedAddressAnnotation string = fmt.Sprintf("%s/allocated-address", osacPrefix)
-	osacExternalIPContractVersionAnnotation  string = fmt.Sprintf("%s/externalip-contract-version", osacPrefix)
+	osacExternalIPIDLabel           string = fmt.Sprintf("%s/externalip-uuid", osacPrefix)
+	osacExternalIPFeedbackFinalizer string = fmt.Sprintf("%s/externalip-feedback", osacPrefix)
 )

@@ -40,7 +40,6 @@ Accepts either a string (legacy) or an array of capability tokens.
 {{- else if eq $fabricManager "" -}}
 {{- $k8sManager = "k8s_only" -}}
 {{- end -}}
-{{- $netrisEnabled := eq $fabricManager "netris" -}}
 {{- $agentlessStubEnabled := eq $fabricManager "agentless_net" -}}
 {{- $agentlessEnabled := eq $k8sManager "k8s_only" -}}
 {{- $netExpert := false -}}
@@ -49,9 +48,6 @@ Accepts either a string (legacy) or an array of capability tokens.
 {{- end }}
 {{- range $name, $mgr := .Values.networkManagers.fabricManagers }}
 {{- $mgrEnabled := $mgr.enabled -}}
-{{- if and (not $netExpert) $netrisEnabled (eq $name "netris") }}
-{{- $mgrEnabled = true -}}
-{{- end }}
 {{- if and (not $netExpert) $agentlessStubEnabled (eq $name "agentless_net") }}
 {{- $mgrEnabled = true -}}
 {{- end }}
@@ -77,9 +73,6 @@ data:
   {{- end }}
   {{- if $mgr.externalIPAttachmentContractVersion }}
   externalIPAttachmentContractVersion: {{ $mgr.externalIPAttachmentContractVersion | quote }}
-  {{- end }}
-  {{- if $mgr.natGatewayContractVersion }}
-  natGatewayContractVersion: {{ $mgr.natGatewayContractVersion | quote }}
   {{- end }}
 {{- end }}
 {{- end }}
@@ -110,9 +103,6 @@ data:
   {{- end }}
   {{- if $mgr.externalIPAttachmentContractVersion }}
   externalIPAttachmentContractVersion: {{ $mgr.externalIPAttachmentContractVersion | quote }}
-  {{- end }}
-  {{- if $mgr.natGatewayContractVersion }}
-  natGatewayContractVersion: {{ $mgr.natGatewayContractVersion | quote }}
   {{- end }}
 {{- end }}
 {{- end }}

@@ -13,41 +13,36 @@ language governing permissions and limitations under the License.
 
 package v1alpha1
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+)
 
 // FabricDomainType identifies the physical fabric used for east-west connectivity.
-// Phase 1 supports EthernetEW; InfiniBandEW and NVLink are reserved for later phases.
-// +kubebuilder:validation:Enum=EthernetEW;InfiniBandEW;NVLink
+// This release supports only ethernet_ew.
+// +kubebuilder:validation:Enum=ethernet_ew
 type FabricDomainType string
 
 const (
 	// FabricDomainTypeEthernetEW identifies an Ethernet east-west fabric.
-	FabricDomainTypeEthernetEW FabricDomainType = "EthernetEW"
-
-	// FabricDomainTypeInfiniBandEW identifies an InfiniBand east-west fabric, reserved for Phase 2.
-	FabricDomainTypeInfiniBandEW FabricDomainType = "InfiniBandEW"
-
-	// FabricDomainTypeNVLink identifies an NVIDIA NVLink fabric, reserved for Phase 3.
-	FabricDomainTypeNVLink FabricDomainType = "NVLink"
+	FabricDomainTypeEthernetEW FabricDomainType = "ethernet_ew"
 )
 
 // FabricDomainSpec defines the desired state of FabricDomain.
+// +kubebuilder:validation:XValidation:rule="self.servers == oldSelf.servers",message="FabricDomain servers cannot change in this release; delete and recreate the FabricDomain"
 type FabricDomainSpec struct {
 	// Type is the physical fabric type. It cannot be changed after creation.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="type is immutable"
 	Type FabricDomainType `json:"type"`
 
-	// Servers lists the hostnames of the servers that belong to the fabric domain.
+	// Servers lists the inventory host names of the servers that belong to the fabric domain.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:items:MinLength=1
 	Servers []string `json:"servers"`
 
-	// VirtualNetwork is the ID of the OSAC VirtualNetwork associated with the domain.
-	// For Netris EthernetEW, this VirtualNetwork is the source of truth for the VPC where the Server
-	// Cluster is created. Hardware instance types supply the Server Cluster template binding.
-	// InfiniBandEW and NVLink are reserved for later phases and may define different connectivity.
+	// VirtualNetwork is the API ID of the VirtualNetwork the domain is bound to.
 	// This reference is immutable after creation.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
@@ -55,124 +50,35 @@ type FabricDomainSpec struct {
 	VirtualNetwork string `json:"virtualNetwork"`
 }
 
-// FabricDomainMemberState describes the provisioning state of an individual server.
-// +kubebuilder:validation:Enum=Pending;Active;Failed
-type FabricDomainMemberState string
-
-const (
-	// FabricDomainMemberStatePending means the server is awaiting provisioning.
-	FabricDomainMemberStatePending FabricDomainMemberState = "Pending"
-
-	// FabricDomainMemberStateActive means the server is active in the fabric domain.
-	FabricDomainMemberStateActive FabricDomainMemberState = "Active"
-
-	// FabricDomainMemberStateFailed means provisioning failed for the server.
-	FabricDomainMemberStateFailed FabricDomainMemberState = "Failed"
-)
-
-// FabricDomainMemberStatus describes the observed state of one server in a fabric domain.
-type FabricDomainMemberStatus struct {
-	// Server is the hostname of the server.
-	// +kubebuilder:validation:Required
-	Server string `json:"server"`
-
-	// State is the provisioning state of the server.
-	// +kubebuilder:validation:Optional
-	State FabricDomainMemberState `json:"state,omitempty"`
-
-	// Message contains additional information about the server state.
-	// +kubebuilder:validation:Optional
-	Message string `json:"message,omitempty"`
-}
-
-// FabricDomainPhase is a high-level summary of FabricDomain provisioning.
-// +kubebuilder:validation:Enum=Progressing;Ready;Failed;Deleting
-type FabricDomainPhase string
-
-const (
-	// FabricDomainPhaseProgressing means provisioning or an update is in progress.
-	FabricDomainPhaseProgressing FabricDomainPhase = "Progressing"
-	// FabricDomainPhaseReady means the backend server cluster matches the desired configuration.
-	FabricDomainPhaseReady FabricDomainPhase = "Ready"
-	// FabricDomainPhaseFailed means the most recent provisioning attempt failed.
-	FabricDomainPhaseFailed FabricDomainPhase = "Failed"
-	// FabricDomainPhaseDeleting means cleanup is in progress.
-	FabricDomainPhaseDeleting FabricDomainPhase = "Deleting"
-)
-
 // FabricDomainStatus defines the observed state of FabricDomain.
 type FabricDomainStatus struct {
-	// ProvisionedAt records the first persisted Ready transition. It survives
-	// membership updates and recovery so provisioning duration is observed once.
-	// +kubebuilder:validation:Optional
-	ProvisionedAt *metav1.Time `json:"provisionedAt,omitempty"`
-
-	// Phase provides a single-value overview of FabricDomain provisioning.
-	// +kubebuilder:validation:Optional
-	Phase FabricDomainPhase `json:"phase,omitempty"`
-
-	// Conditions describes the current state of the FabricDomain.
+	// Conditions holds the Ready condition of the FabricDomain.
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 
-	// BackendID is the provider-specific identifier of the server cluster.
+	// NetworkManagers records the managers copied from the parent at create.
+	// +kubebuilder:validation:Optional
+	NetworkManagers *NetworkManagers `json:"networkManagers,omitempty"`
+
+	// NetworkType records the network type copied from the parent at create; empty without a Kubernetes Manager.
+	// +kubebuilder:validation:Optional
+	NetworkType NetworkType `json:"networkType,omitempty"`
+
+	// TaskInput is the task input stored before the first job (contract §4.5).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	TaskInput *runtime.RawExtension `json:"taskInput,omitempty"`
+
+	// Jobs tracks the latest job per task and manager (contract §4.7).
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=task
+	// +listMapKey=manager
+	Jobs []NetworkJobStatus `json:"jobs,omitempty"`
+
+	// BackendID is the backend_id the Fabric Manager returned.
 	// +kubebuilder:validation:Optional
 	BackendID string `json:"backendId,omitempty"`
-
-	// UnverifiedBackendArtifact indicates that a successful AAP job may have created a
-	// ServerCluster that OSAC cannot safely identify or associate with the requested VPC.
-	// It blocks retries and deletion until an administrator resolves the artifact in Netris
-	// and clears this field and UnverifiedBackendID.
-	// +kubebuilder:validation:Optional
-	UnverifiedBackendArtifact bool `json:"unverifiedBackendArtifact,omitempty"`
-
-	// UnverifiedBackendID is the ServerCluster ID returned with an unverified artifact,
-	// when AAP provided one. It is never used as the trusted BackendID.
-	// +kubebuilder:validation:Optional
-	UnverifiedBackendID string `json:"unverifiedBackendId,omitempty"`
-
-	// ProvisioningConfig records the resolved backend binding before the first provisioning job.
-	// A live Server Cluster cannot change its template, VPC, or site. Catalog and inventory
-	// updates must remain compatible with this binding; deletion does not depend on those lookups.
-	// +kubebuilder:validation:Optional
-	ProvisioningConfig *FabricDomainProvisioningConfig `json:"provisioningConfig,omitempty"`
-
-	// DesiredConfigVersion hashes the applied FabricDomain and resolved backend configuration.
-	// +kubebuilder:validation:Optional
-	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
-
-	// ProvisioningIntent records that an AAP provisioning job may have been launched.
-	// It is persisted before launch so deletion still attempts cleanup if job status cannot be saved.
-	// +kubebuilder:validation:Optional
-	ProvisioningIntent bool `json:"provisioningIntent,omitempty"`
-
-	// ProvisioningJobs tracks AAP provisioning and cleanup jobs across reconciles.
-	// +kubebuilder:validation:Optional
-	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
-
-	// VPCID is the provider-specific identifier of the VPC containing the fabric domain.
-	// +kubebuilder:validation:Optional
-	VPCID string `json:"vpcId,omitempty"`
-
-	// Members contains the observed state of each server in the domain.
-	// +kubebuilder:validation:Optional
-	Members []FabricDomainMemberStatus `json:"members,omitempty"`
-}
-
-// FabricDomainProvisioningConfig identifies the backend configuration selected for a domain.
-type FabricDomainProvisioningConfig struct {
-	// NetworkClass is the ID of the class that scopes the hardware template binding.
-	// +kubebuilder:validation:MinLength=1
-	NetworkClass string `json:"networkClass"`
-	// TemplateID is the Netris Server Cluster template selected from the members' instance types.
-	// +kubebuilder:validation:Pattern=`^[1-9][0-9]*$`
-	TemplateID string `json:"templateId"`
-	// VPCID is the VirtualNetwork's Netris VPC at initial provisioning.
-	// +kubebuilder:validation:Pattern=`^[1-9][0-9]*$`
-	VPCID string `json:"vpcId"`
-	// Region selects the configured Netris site for this domain.
-	// +kubebuilder:validation:Optional
-	Region string `json:"region,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -180,6 +86,7 @@ type FabricDomainProvisioningConfig struct {
 // +kubebuilder:resource:shortName=fd
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Servers",type=string,JSONPath=`.spec.servers`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // FabricDomain is the Schema for the fabricdomains API.

@@ -59,6 +59,7 @@ WORKFLOWS=(
 # list each scenario file separately in ROLE_SCENARIO_TESTS.
 ROLE_TESTS=(
   "config_as_code_pod_specs"
+  "config_as_code_job_templates"
   "finalizer"
   "fulfillment_trust_sync"
   "lease"
@@ -71,11 +72,10 @@ ROLE_TESTS=(
   "agentless_net_attachment"
   "compute_instance_delete_vmi_recovery"
   "metallb_l2_detach_annotation"
-  "netris_subnet_delete"
-  "netris_parent_delete"
   "netris_protected_launch"
-  "netris_external_ip"
-  "netris_idempotency"
+  "netris_fabric"
+  "cudn_evpn"
+  "network_task_playbook"
 )
 
 ROLE_SCENARIO_TESTS=(
@@ -86,6 +86,7 @@ ROLE_SCENARIO_TESTS=(
   "compute_instance_create:volume_id_validation"
   "compute_instance_create:volume_id_annotations"
   "compute_instance_create:storage_tier_mapping"
+  "compute_instance_create:csp_storage_tiers"
 )
 
 echo "=== Running Workflow Integration Tests ==="
@@ -205,6 +206,21 @@ for scenario in test_windows_userdata_sysprep test_windows_no_userdata test_linu
     PASSED+=("ocp_virt_vm:${scenario}")
   else
     FAILED+=("ocp_virt_vm:${scenario}")
+  fi
+done
+echo ""
+
+echo "=== Running Tenant StorageClass Role Tests ==="
+echo ""
+
+TENANT_STORAGE_CLASS_TEST="${SCRIPT_DIR}/../../collections/ansible_collections/osac/service/roles/tenant_storage_class/tests/test.yml"
+
+for scenario in test_happy_path test_tier_not_available test_empty_list test_duplicate_tier test_disk_label test_identical_duplicate_tier test_csp_filtered_tiers; do
+  echo "Testing tenant_storage_class: ${scenario}"
+  if run_ansible_playbook "${TENANT_STORAGE_CLASS_TEST}" -e "${scenario}=true"; then
+    PASSED+=("tenant_storage_class:${scenario}")
+  else
+    FAILED+=("tenant_storage_class:${scenario}")
   fi
 done
 echo ""

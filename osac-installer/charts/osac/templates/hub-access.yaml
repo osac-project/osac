@@ -36,6 +36,7 @@ rules:
       - externalips
       - fabricdomains
       - natgateways
+      - networkclasses
       - securitygroups
       - subnets
       - tenants
@@ -60,6 +61,7 @@ rules:
       - externalips/status
       - fabricdomains/status
       - natgateways/status
+      - networkclasses/status
       - securitygroups/status
       - subnets/status
       - tenants/status

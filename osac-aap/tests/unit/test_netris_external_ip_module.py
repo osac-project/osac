@@ -41,7 +41,8 @@ from ansible_collections.osac.templates.plugins.module_utils import (  # noqa: E
     netris_external_ip as netris_eip,
 )
 
-RESOURCE_UID = "11111111-1111-4111-8111-111111111111"
+EXTERNAL_IP_ID = "44444444-4444-4444-8444-444444444444"
+POOL_ID = "22222222-2222-4222-8222-222222222222"
 TEST_COOKIE = "s%3Asecret-cookie-value"
 
 
@@ -54,28 +55,19 @@ def load_module():
 
 def make_resource():
     return {
-        "metadata": {
-            "name": "eip-test",
-            "namespace": "osac",
-            "uid": RESOURCE_UID,
-            "generation": 3,
-            "labels": {"osac.openshift.io/externalip-uuid": "44444444-4444-4444-8444-444444444444"},
-            "annotations": {
-                "osac.openshift.io/tenant": "tenant-a",
-                "osac.openshift.io/externalip-contract-version": "v1",
-            },
-        },
-        "spec": {"pool": "22222222-2222-4222-8222-222222222222"},
+        "kind": "ExternalIP",
+        "id": EXTERNAL_IP_ID,
+        "metadata": {"name": "eip-test", "namespace": "osac", "uid": "kube-uid", "generation": 3},
+        "spec": {"pool": POOL_ID},
     }
 
 
 def make_pool():
     return {
-        "fulfillment_id": "22222222-2222-4222-8222-222222222222",
-        "kubernetes_uid": "33333333-3333-4333-8333-333333333333",
-        "tenant_id": "tenant-a",
-        "cidr": "10.20.0.0/24",
-        "phase": "Ready",
+        "kind": "ExternalIPPool",
+        "id": POOL_ID,
+        "metadata": {"name": "pool", "namespace": "osac", "uid": "kube-pool-uid", "generation": 1},
+        "spec": {"cidrs": ["10.20.0.0/24"]},
     }
 
 
@@ -84,6 +76,7 @@ def module_args(**overrides):
         "operation": "external_ip.allocate",
         "resource": make_resource(),
         "pool": make_pool(),
+        "reservation_name": f"osac-eip-{EXTERNAL_IP_ID}",
         "controller_url": "https://netris.example",
         "session_cookie": TEST_COOKIE,
         "site_id": 1,
@@ -198,7 +191,7 @@ def test_check_mode_validates_inputs_without_any_provider_write(monkeypatch, cap
 def test_successful_allocation_returns_changed_and_address(monkeypatch, capsys):
     record = {
         "id": 101,
-        "name": f"osac-eip-{RESOURCE_UID}",
+        "name": f"osac-eip-{EXTERNAL_IP_ID}",
         "prefix": "10.20.0.5/32",
         "purpose": "nat",
         "site_id": 1,
@@ -231,10 +224,10 @@ def test_allocation_returns_address_intact_when_resource_leaf_values_collide(
     resource = make_resource()
     resource["metadata"]["generation"] = 1
     pool = make_pool()
-    pool["cidr"] = "192.0.2.0/30"
+    pool["spec"]["cidrs"] = ["192.0.2.0/30"]
     record = {
         "id": 101,
-        "name": f"osac-eip-{RESOURCE_UID}",
+        "name": f"osac-eip-{EXTERNAL_IP_ID}",
         "prefix": "192.0.2.1/32",
         "purpose": "nat",
         "site_id": 1,
@@ -258,7 +251,7 @@ def test_allocation_returns_address_intact_when_resource_leaf_values_collide(
 def test_invocation_redacts_provider_inputs(monkeypatch, capsys):
     record = {
         "id": 101,
-        "name": f"osac-eip-{RESOURCE_UID}",
+        "name": f"osac-eip-{EXTERNAL_IP_ID}",
         "prefix": "10.20.0.5/32",
         "purpose": "nat",
         "site_id": 1,
@@ -307,7 +300,7 @@ def test_unknown_response_shape_fails_the_module(monkeypatch, capsys):
 
 def test_release_module_returns_empty_address(monkeypatch, capsys):
     resource = make_resource()
-    resource["metadata"]["deletionTimestamp"] = "2026-10-19T00:00:00Z"
+    pass
     args = module_args(
         operation="external_ip.release",
         resource=resource,

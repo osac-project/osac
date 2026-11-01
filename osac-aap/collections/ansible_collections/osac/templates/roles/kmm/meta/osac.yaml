@@ -1,0 +1,16 @@
+---
+name: kmm
+title: Kernel Module Management Operator
+description: >
+  Installs the Kernel Module Management Operator.
+template_type: addon_operator
+min_ocp_version: ""
+max_ocp_version: ""
+exclusions: []
+dependencies: []
+package_name: kernel-module-management
+channel: stable
+catalog_source: redhat-operators
+catalog_source_namespace: openshift-marketplace
+subscription_namespace: openshift-kmm
+operator_group_name: openshift-kmm

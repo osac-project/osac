@@ -44,6 +44,11 @@ on:
         required: false
         type: string
         default: ""
+      ci-observe:
+        description: Run the tests under ci-observe telemetry capture (osac-test-infra); the capture lands in the CI Grafana after the run
+        required: false
+        type: boolean
+        default: false
   # 5x/day. Offset 38 minutes past the hour, not on the hour -- GitHub
   # Actions' shared cron scheduler queues everyone's on-the-hour
   # schedules together and can delay/drop them under load.
@@ -67,6 +72,11 @@ on:
         description: "Branch/ref of osac-test-infra"
         required: false
         default: "main"
+      ci-observe:
+        description: "Run the tests under ci-observe telemetry capture (osac-test-infra); the capture lands in the CI Grafana after the run"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   e2e-caas-full-install:
@@ -129,6 +139,10 @@ jobs:
       # Checkout upstream test-infra, defaulting to the reusable workflow's main branch.
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
+      # Off unless the flag was asked for: by hand (workflow_dispatch input) or by
+      # the pull request's ci-observe label (e2e-pr-caas.yml reads it). The capture
+      # itself never changes the test outcome; see osac-test-infra's ci-observe-capture.
+      ci-observe: ${{ inputs.ci-observe || false }}
       test-repository: ${{ inputs.repo || github.repository }}
       test-ref: ${{ inputs.sha || github.sha }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}
@@ -139,3 +153,8 @@ jobs:
       # Only a run on main (schedule, or a manual run against main): that is where the workload identity trusts this
       # workflow. A run for a pull request or a queue entry passes inputs.sha and never gets it.
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' && inputs.sha == '' }}
+    secrets:
+      # The central ci-observe OTLP ingest password, for the live telemetry
+      # push when the ci-observe input is on. The reusable workflow degrades
+      # to running the test without telemetry when it is empty.
+      ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}

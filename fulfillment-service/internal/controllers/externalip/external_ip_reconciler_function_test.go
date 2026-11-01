@@ -309,7 +309,8 @@ var _ = Describe("delete", func() {
 		}.Build()
 
 		f := &function{
-			logger: logger,
+			logger:              logger,
+			networkingHubReader: &fakeNetworkingHubReader{err: controllers.ErrNoNetworkingHubs},
 		}
 
 		t := &task{
@@ -732,7 +733,7 @@ var _ = Describe("hub persistence", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	It("should select hub and return without creating ExternalIP CR", func() {
+	It("should persist the hub and create the ExternalIP CR in the same reconcile", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 
@@ -776,7 +777,7 @@ var _ = Describe("hub persistence", func() {
 		list := &osacv1alpha1.ExternalIPList{}
 		err = fakeClient.List(ctx, list)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(list.Items).To(BeEmpty())
+		Expect(list.Items).To(HaveLen(1))
 	})
 
 	It("should not create CR when no hubs available", func() {
@@ -876,7 +877,7 @@ var _ = Describe("hub persistence", func() {
 		Expect(list.Items[0].Namespace).To(Equal(hubNamespace))
 	})
 
-	It("should create CR on second reconcile after hub is persisted", func() {
+	It("should adopt the CR created by an earlier reconcile", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 
@@ -923,7 +924,7 @@ var _ = Describe("hub persistence", func() {
 		list := &osacv1alpha1.ExternalIPList{}
 		err = fakeClient.List(ctx, list)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(list.Items).To(BeEmpty())
+		Expect(list.Items).To(HaveLen(1))
 
 		// Second reconcile: hub already set -> CR created
 		externalIP.GetStatus().SetHub(hubID)

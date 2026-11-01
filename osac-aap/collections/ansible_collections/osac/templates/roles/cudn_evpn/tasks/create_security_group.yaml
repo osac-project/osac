@@ -1,0 +1,76 @@
+---
+# Kubernetes create_security_group: one NetworkPolicy per SecurityGroup,
+# osac-sg-<SecurityGroup API ID>, in the VirtualNetwork namespace. Its rules
+# are the group's rules (policyTypes always Ingress and Egress); its
+# podSelector holds the VMs bound to the group and matches no pod until an
+# attachment binds one, so the create needs no Subnet, hub network or VM.
+# A re-run (rule update) replaces the rules and keeps the bound VMs.
+# NetworkPolicy cannot match ICMP: an icmp rule fails as final before any write.
+- name: Run cudn_evpn create_security_group
+  block:
+    - name: Plan the task
+      ansible.builtin.include_tasks: _plan.yaml
+
+    - name: Read the VirtualNetwork namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ cudn_evpn.namespace }}"
+      register: _cudn_evpn_ns
+
+    - name: Stop while the VirtualNetwork namespace is not usable
+      when: >-
+        _cudn_evpn_ns.resources | length == 0
+        or not (_cudn_evpn_ns.resources[0] | osac.templates.cudn_evpn_owned('virtualnetwork', cudn_evpn.vn_id, cudn_evpn.tenant))
+        or _cudn_evpn_ns.resources[0].metadata.deletionTimestamp is defined
+      ansible.builtin.include_tasks: _stop.yaml
+      vars:
+        cudn_evpn_stop:
+          message: >-
+            cudn_evpn create_security_group: the VirtualNetwork namespace {{ cudn_evpn.namespace }}
+            does not exist or is being deleted; OSAC retries the task.
+          retryable: true
+
+    - name: Read the SecurityGroup policy
+      kubernetes.core.k8s_info:
+        api_version: networking.k8s.io/v1
+        kind: NetworkPolicy
+        namespace: "{{ cudn_evpn.namespace }}"
+        name: "{{ cudn_evpn.policy_name }}"
+      register: _cudn_evpn_policy
+
+    # Server-side apply without force under this group's field manager, so a
+    # policy that appeared since the read conflicts instead of being merged.
+    - name: Create the SecurityGroup policy
+      when: _cudn_evpn_policy.resources | length == 0
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        server_side_apply:
+          field_manager: "cudn-evpn-{{ cudn_evpn.sg_id }}"
+          force_conflicts: false
+        definition: "{{ cudn_evpn.policy_manifest }}"
+
+    - name: Replace the rules of the existing policy
+      when: _cudn_evpn_policy.resources | length > 0
+      block:
+        - name: Stop when the policy belongs to something else
+          when: not (_cudn_evpn_policy.resources[0] | osac.templates.cudn_evpn_owned('securitygroup', cudn_evpn.sg_id, cudn_evpn.tenant))
+          ansible.builtin.include_tasks: _stop.yaml
+          vars:
+            cudn_evpn_stop:
+              message: >-
+                cudn_evpn create_security_group: NetworkPolicy {{ cudn_evpn.policy_name }} in
+                {{ cudn_evpn.namespace }} exists without this SecurityGroup's owner labels. A cluster
+                administrator must remove it.
+              retryable: false
+
+        - name: Replace the rules and keep the bound VMs
+          ansible.builtin.include_tasks: _patch_policy.yaml
+          vars:
+            cudn_evpn_policy: "{{ _cudn_evpn_policy.resources[0] }}"
+            cudn_evpn_patch: "{{ _cudn_evpn_policy.resources[0] | osac.templates.cudn_evpn_rules_patch(cudn_evpn.rules) }}"
+
+  rescue:
+    - name: Report the failure to OSAC
+      ansible.builtin.include_tasks: _fail.yaml

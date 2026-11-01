@@ -10,7 +10,7 @@ import pytest
 from tests.e2e.core import helpers, runner
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.vmaas.regression.external_ip import test_external_ip_pool_capacity as capacity
+from tests.e2e.networking.vmaas.external_ip import test_external_ip_pool_capacity as capacity
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 @pytest.fixture(params=["test_release_restores_capacity", "test_pool_deletion_succeeds_after_all_ips_released"])
 def consumer(request: pytest.FixtureRequest) -> Callable[..., None]:
     """Exercise each real capacity consumer with the same lifecycle scenarios."""
-    return getattr(capacity.TestPoolCapacity(), request.param)
+    return getattr(capacity.TestPoolAllocation(), request.param)
 
 
 def test_capacity_consumers_wait_for_natural_deletion_before_reading_capacity(
@@ -121,7 +121,7 @@ def test_capacity_consumers_retain_pending_ips_on_natural_deletion_timeout(
     pool_wait = Mock()
     monkeypatch.setattr(capacity, "wait_for_external_ip_pool_deletion", pool_wait)
 
-    with pytest.raises(TimeoutError, match="timed out after 595s"):
+    with pytest.raises(TimeoutError, match="not reached after 595s"):
         consumer(
             small_pool=("pool-id", "pool-cr"),
             grpc=grpc,
@@ -181,7 +181,7 @@ def test_external_ip_deletion_requires_confirmed_absence(
     if absent:
         helpers.wait_for_external_ip_deletion(k8s=k8s, name="cr-first")
     else:
-        with pytest.raises(TimeoutError, match="timed out after 595s"):
+        with pytest.raises(TimeoutError, match="not reached after 595s"):
             helpers.wait_for_external_ip_deletion(k8s=k8s, name="cr-first")
 
     assert clock[0] == (0 if absent else 595)
@@ -237,7 +237,7 @@ def test_successive_capacity_consumers_do_not_retry_confirmed_deletion(
     monkeypatch.setattr(capacity, "create_ip", refill)
     pool_wait = Mock()
     monkeypatch.setattr(capacity, "wait_for_external_ip_pool_deletion", pool_wait)
-    consumers = capacity.TestPoolCapacity()
+    consumers = capacity.TestPoolAllocation()
 
     consumers.test_release_restores_capacity(
         small_pool=("pool-id", "pool-cr"), grpc=grpc, private_grpc=private_grpc, k8s_hub_client=k8s, created_ips=tracked

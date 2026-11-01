@@ -98,6 +98,18 @@ var _ = BeforeSuite(func() {
 	}, 5*time.Minute, 5*time.Second).Should(Succeed())
 })
 
+// On a failed spec, print the operator's recent log: most failures of the
+// deployed suite are explained by what the controller logged.
+var _ = AfterEach(func() {
+	if !CurrentSpecReport().Failed() {
+		return
+	}
+	output, _ := exec.Command("kubectl", "logs", "-n", operatorNamespace,
+		"-l", "control-plane=controller-manager,app.kubernetes.io/name=operator",
+		"--tail=300", "--all-containers").CombinedOutput()
+	_, _ = fmt.Fprintf(GinkgoWriter, "osac-operator log (last 300 lines):\n%s\n", output)
+})
+
 func TestIntegration(t *testing.T) {
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting osac-operator suite\n")

@@ -27,7 +27,8 @@ respective areas.
 - `StorageReconciler` is an intentional exception to the dual-controller pattern: it reconciles Tenant storage and does not own a separate CRD.
 - Preserve tenant namespace isolation and established predicates when creating or watching resources.
 - When changing shared controller behavior, inspect every controller using the same lifecycle.
-- `pkg/provisioning`, `pkg/aap`, and `pkg/dispatcher` have external consumers, including the bare-metal fulfillment operator; interface changes are cross-component changes.
+- `pkg/provisioning` and `pkg/aap` have external consumers, including the bare-metal fulfillment operator; interface changes are cross-component changes.
+- Networking manager tasks run only through `internal/networktask` (see its `doc.go`): one generic job template per task, `status.jobs` entries, typed result validation.
 - When debugging operators, check for stale `vendor/` dependencies and cached images before rebuilding.
 - The fulfillment proto types are the shared top-level `proto/` module, imported as `github.com/osac-project/osac/proto/gen/...`. This component no longer generates its own copy.
 - Never put credentials in logs, samples, or manifests.
@@ -46,15 +47,15 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-ope
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | Pure helpers, validation, or state calculations | Unit | `make test` |
-| AgentlessNet ExternalIPAttachment v1 context, AAP result validation, readiness, and detach-finalizer gating | Unit | `internal/controller/externalipattachment_contract_unit_test.go`, `internal/controller/externalipattachment_contract_test.go`, and `pkg/provisioning/external_ip_attachment_result_test.go`; run `make test` |
-| NATGateway v1 manager registration, dependency snapshot, same-job result validation, readiness, delete-finalizer gating, and Subnet-independent desired configuration | Unit / Envtest | `internal/controller/natgateway_contract_test.go`, `internal/controller/natgateway_contract_envtest_test.go`, `pkg/networkmanager/types_test.go`, `pkg/provisioning/extra_vars_context_test.go`, `pkg/provisioning/aap_provider_test.go`, and `pkg/provisioning/nat_gateway_result_test.go`; run `make test` |
+| NATGateway dependency snapshot, tenant and identity checks, result rejection on changed dependencies, and Subnet-independent input | Unit / Envtest | `internal/controller/natgateway_contract_test.go` and the NATGateway specs in `internal/controller/networking_attachments_test.go`; run `make test` |
 | Fulfillment client CA parsing, TLS verification, or bundle rotation | Unit with local TLS endpoint; component integration for deployment | `make test`, then [installer Kind target](../docs/INTEGRATION-TESTING.md#osac-operator) and `make -C ../osac-installer fulfillment-trust-render-test` |
 | Controller reconciliation, finalizers, status, or CRD interactions | Envtest | `make test` |
+| Controller deployment, watches (including optional TopoLVM watch and remote VMaaS `StorageClass` watch), RBAC, console proxy, networking, or Helm wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#osac-operator) |
 | ClusterOrder upgrade observation admission and deployed timeout settings | Kind component integration | `test/integration/clusterorder_upgrade_contract_test.go`; deploy the current operator, then run `make integration-tests` |
-| Controller deployment, watches (including optional TopoLVM watch), RBAC, console proxy, networking, or Helm wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#osac-operator) |
 | ComputeInstance `diskVolumeIDs` schema round-trip and AAP payload preservation | Envtest, provider Unit, and Kind CRD component integration | `make test` and `make integration-tests` |
 | Automatic ExternalIP cleanup for ClusterOrder, ComputeInstance, and BareMetalInstance (NET-CLEAN-07) | Kind component integration — DEV | Isolated installer run and coverage boundary: [NET-CLEAN-07](../docs/INTEGRATION-TESTING.md#net-clean-07-deployed-osac-cleanup) |
-| AAP, dispatcher, provisioning-provider, KubeVirt, or fulfillment boundary | Qualifying Contract or E2E | Use a boundary-specific suite; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) when coverage is missing |
+| Networking task inputs, `network_type`/`network_segment` launch keys, `nat_gateway_context`, or accepted manager results (`l3_vni`, `l2_vni`, `external_ip`, `vm_attachment`) | Unit / Envtest against the shared wire goldens | `internal/controller/networking_wire_golden_test.go` and `internal/networktask/wire_golden_test.go` read `../tests/contract/network-task`; run `make test`. The osac-aap half is `test_network_task_wire_contract.py`; change both in one PR. Bound: create/apply/attach tasks of VirtualNetwork, Subnet, ExternalIPPool, ExternalIP, ExternalIPAttachment, NetworkAttachment (overlay) and NATGateway. Not bound (no ticket): delete_*/detach_* tasks, SecurityGroup tasks, query_dhcp_lease, FabricDomain, cluster ingress, physical interfaces |
+| AAP, network task engine, provisioning-provider, KubeVirt, or fulfillment boundary | Qualifying Contract or E2E | Use a boundary-specific suite; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) when coverage is missing |
 | Generated CRDs or manifests | Envtest plus applicable Kind suite | `make manifests generate helm-crds check-helm-crds`, then the required test command |
 
 Envtest runs via `make test`; Kind tests require the current operator deployment.

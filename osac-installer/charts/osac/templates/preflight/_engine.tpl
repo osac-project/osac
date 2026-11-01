@@ -190,6 +190,10 @@ certificate follows the fullname.
   {{- range $path := ($c.whenAny | default list) -}}
     {{- if include "osac.preflight.truthy" (dict "root" $root "path" $path) -}}{{- $anyOn = true -}}{{- end -}}
   {{- end -}}
+  {{- $firstOff := "" -}}
+  {{- range $path := ($c.whenAll | default list) -}}
+    {{- if and (not $firstOff) (not (include "osac.preflight.truthy" (dict "root" $root "path" $path))) -}}{{- $firstOff = $path -}}{{- end -}}
+  {{- end -}}
   {{- if not $on -}}
     {{- $state = "skipped" -}}
     {{- $msg = printf "%s not enabled" (first $c.requiredFor) -}}
@@ -199,6 +203,9 @@ certificate follows the fullname.
   {{- else if and $c.whenAny (not $anyOn) -}}
     {{- $state = "skipped" -}}
     {{- $msg = printf "none of %s is set" (join ", " $c.whenAny) -}}
+  {{- else if $firstOff -}}
+    {{- $state = "skipped" -}}
+    {{- $msg = printf "%s is not set" $firstOff -}}
   {{- else if and $c.unless (include "osac.preflight.truthy" (dict "root" $root "path" $c.unless)) -}}
     {{- $state = "skipped" -}}
     {{- $msg = printf "%s is set, so this release creates the resource itself" $c.unless -}}
@@ -417,9 +424,10 @@ OSAC-PREFLIGHT-JSON v1: {{ $r | toJson | replace $r.generatedAt (replace ":" "\\
 {{- end -}}
 
 {{/*
-nodes-schedulable: at least one node is Ready, not cordoned, and free of the
-taints that keep ordinary pods off (node.kubernetes.io/*, control-plane).
-Custom taints are ignored: pod tolerations are not known here.
+nodes-schedulable: at least one node is Ready, not cordoned, and has no
+NoSchedule or NoExecute taint. The chart sets no nodeSelector and no
+tolerations on any workload, so a node with such a taint, custom or not, cannot
+run its pods. PreferNoSchedule does not keep pods off.
 */}}
 {{- define "osac.preflight.kind.nodes-schedulable" -}}
 {{- $nodes := (lookup "v1" "Node" "" "").items | default list -}}
@@ -434,7 +442,7 @@ Custom taints are ignored: pod tolerations are not known here.
   {{- end -}}
   {{- $blockingTaint := false -}}
   {{- range (dig "spec" "taints" (list) $n) -}}
-    {{- if and (has .effect (list "NoSchedule" "NoExecute")) (or (hasPrefix "node.kubernetes.io/" .key) (has .key (list "node-role.kubernetes.io/master" "node-role.kubernetes.io/control-plane"))) -}}
+    {{- if has .effect (list "NoSchedule" "NoExecute") -}}
       {{- $blockingTaint = true -}}
     {{- end -}}
   {{- end -}}
@@ -636,26 +644,30 @@ and database.
 {{- end -}}
 {{- end -}}
 
-{{/* configmap-keys: ConfigMaps referenced by the values exist. params.configmaps: nameFrom|name, keys, optional. */}}
+{{/*
+configmap-keys: ConfigMaps referenced by the values exist. params.configmaps:
+nameFrom|name, keys, optional, namespace (default: the release namespace).
+*/}}
 {{- define "osac.preflight.kind.configmap-keys" -}}
 {{- $root := .root -}}
-{{- $ns := $root.Release.Namespace -}}
 {{- $problems := list -}}
 {{- $obsList := list -}}
 {{- range $e := (.params.configmaps | default list) -}}
+  {{- $ns := $e.namespace | default $root.Release.Namespace -}}
   {{- $name := $e.name | default "" -}}
   {{- if $e.nameFrom -}}{{- $name = (include "osac.preflight.at" (dict "root" $root "path" $e.nameFrom) | fromJson).v | default "" -}}{{- end -}}
   {{- if $name -}}
+    {{- $shown := ternary (printf "%s/%s" $e.namespace $name) $name (not (empty $e.namespace)) -}}
     {{- $o := lookup "v1" "ConfigMap" $ns $name -}}
     {{- if not $o -}}
-      {{- $problems = append $problems (printf "ConfigMap %s not found" $name) -}}
+      {{- $problems = append $problems (printf "ConfigMap %s not found" $shown) -}}
       {{- $obsList = append $obsList (dict "name" $name "found" false) -}}
     {{- else -}}
       {{- $missing := list -}}
       {{- range $k := ($e.keys | default list) -}}
         {{- if not (hasKey (dig "data" (dict) $o) $k) -}}{{- $missing = append $missing $k -}}{{- end -}}
       {{- end -}}
-      {{- if $missing -}}{{- $problems = append $problems (printf "ConfigMap %s is missing key(s) %s" $name (join ", " $missing)) -}}{{- end -}}
+      {{- if $missing -}}{{- $problems = append $problems (printf "ConfigMap %s is missing key(s) %s" $shown (join ", " $missing)) -}}{{- end -}}
       {{- $obsList = append $obsList (dict "name" $name "found" true "missingKeys" $missing) -}}
     {{- end -}}
   {{- else if not $e.optional -}}

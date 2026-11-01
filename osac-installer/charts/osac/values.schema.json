@@ -100,9 +100,6 @@
         },
         "networking": {
           "$ref": "#/$defs/globalNetworking"
-        },
-        "expertOverrides": {
-          "$ref": "#/$defs/globalExpertOverrides"
         }
       },
       "additionalProperties": false
@@ -266,22 +263,6 @@
           },
           "additionalProperties": false
         },
-        "stall": {
-          "type": "object",
-          "description": "ClusterOrder provisioning stage stall thresholds",
-          "properties": {
-            "preparingInfrastructureThreshold": {"$ref": "#/$defs/positiveDuration"},
-            "controlPlaneStartingThreshold": {"$ref": "#/$defs/positiveDuration"},
-            "workersJoiningThreshold": {"$ref": "#/$defs/positiveDuration"},
-            "workersJoiningByInstanceType": {
-              "type": "object",
-              "description": "Per-BareMetalInstanceType worker-join threshold durations, keyed by the exact instance type name",
-              "propertyNames": {"minLength": 1, "maxLength": 253},
-              "additionalProperties": {"$ref": "#/$defs/positiveDuration"}
-            }
-          },
-          "additionalProperties": false
-        },
         "upgradeTimeouts": {
           "type": "object",
           "description": "Cluster upgrade deadlines. Each value is a positive Go duration string.",
@@ -346,6 +327,11 @@
                 }
               },
               "additionalProperties": false
+            },
+            "organization": {
+              "type": "string",
+              "minLength": 1,
+              "description": "AAP organization the operator's job labels are created in (default osac)."
             }
           },
           "additionalProperties": false
@@ -453,11 +439,6 @@
               "description": "Enable Storage controller",
               "default": true
             },
-            "networkingProvisioning": {
-              "type": "boolean",
-              "description": "Enable networking resource provisioning (VirtualNetwork, Subnet, SecurityGroup, NATGateway). Distinct from controllers.networking, which only reconciles NetworkClass.",
-              "default": true
-            },
             "volume": {
               "type": "boolean",
               "description": "Enable the volume controller"
@@ -511,112 +492,24 @@
         },
         "networkManagers": {
           "type": "object",
-          "description": "Network manager ConfigMaps consumed by the operator subchart (nested fabricManagers/k8sManagers map). This is the user-facing registration API — there is no top-level networkManagers array on the umbrella chart. Defaults live in the osac-operator subchart; override here to enable extra managers or change the sync interval.",
+          "description": "Generic network manager registrations passed through to the operator subchart; registration content is owned by manager teams.",
           "properties": {
             "enabled": {
-              "type": "boolean",
-              "description": "Create fabric/k8s manager ConfigMaps from the maps below",
-              "default": true
+              "type": "boolean"
             },
             "capabilitiesSyncInterval": {
-              "type": "string",
-              "description": "How often the operator recomputes NetworkClass capabilities from manager ConfigMaps, in addition to reacting immediately to ConfigMap changes. Common values: 30s, 1m, 5m, 15m, 30m, 1h (any valid Go duration is accepted).",
-              "default": "5m",
-              "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+              "type": "string"
             },
             "fabricManagers": {
               "type": "object",
-              "description": "Map of fabric manager name → registration. Keys become ConfigMap names (underscores converted to hyphens) and the NetworkClass fabricManager value.",
               "additionalProperties": {
-                "type": "object",
-                "properties": {
-                  "enabled": {
-                    "type": "boolean",
-                    "description": "Create a ConfigMap for this fabric manager"
-                  },
-                  "description": {
-                    "type": "string",
-                    "description": "Human-readable description stored on the ConfigMap"
-                  },
-                  "capabilities": {
-                    "type": "array",
-                    "description": "Fabric manager capability tokens: ipv4 and eastWestEthernet (physical Ethernet east-west). eastWestEthernet publishes supports_east_west_ethernet independently of k8s manager capabilities, unless disabled by NetworkClass.spec.disable_capabilities.",
-                    "items": {
-                      "type": "string",
-                      "enum": [
-                        "ipv4",
-                        "eastWestEthernet"
-                      ]
-                    },
-                    "uniqueItems": true
-                  },
-                  "externalIPContractVersion": {
-                    "type": "string",
-                    "description": "ExternalIP result contract supported by this manager. Empty uses the unversioned flow.",
-                    "enum": ["", "v1"],
-                    "default": ""
-                  },
-                  "externalIPAttachmentContractVersion": {
-                    "type": "string",
-                    "description": "ExternalIPAttachment input/result contract supported by this manager. Empty uses the unversioned flow.",
-                    "enum": ["", "v1"],
-                    "default": ""
-                  },
-                  "natGatewayContractVersion": {
-                    "type": "string",
-                    "description": "NATGateway input/result contract supported by this manager. Empty uses the unversioned flow.",
-                    "enum": ["", "v1"],
-                    "default": ""
-                  }
-                },
-                "additionalProperties": false
+                "type": "object"
               }
             },
             "k8sManagers": {
               "type": "object",
-              "description": "Map of k8s manager name → registration. Keys become ConfigMap names and the NetworkClass k8sManager value.",
               "additionalProperties": {
-                "type": "object",
-                "properties": {
-                  "enabled": {
-                    "type": "boolean",
-                    "description": "Create a ConfigMap for this k8s manager"
-                  },
-                  "description": {
-                    "type": "string",
-                    "description": "Human-readable description stored on the ConfigMap"
-                  },
-                  "capabilities": {
-                    "type": "array",
-                    "description": "Capability tokens advertised for this manager. Only ipv4 is supported in the current release.",
-                    "items": {
-                      "type": "string",
-                      "enum": [
-                        "ipv4"
-                      ]
-                    },
-                    "uniqueItems": true
-                  },
-                  "externalIPContractVersion": {
-                    "type": "string",
-                    "description": "ExternalIP result contract supported by this manager. Empty uses the unversioned flow.",
-                    "enum": ["", "v1"],
-                    "default": ""
-                  },
-                  "externalIPAttachmentContractVersion": {
-                    "type": "string",
-                    "description": "ExternalIPAttachment input/result contract supported by this manager. Empty uses the unversioned flow.",
-                    "enum": ["", "v1"],
-                    "default": ""
-                  },
-                  "natGatewayContractVersion": {
-                    "type": "string",
-                    "description": "NATGateway input/result contract supported by this manager. Empty uses the unversioned flow.",
-                    "enum": ["", "v1"],
-                    "default": ""
-                  }
-                },
-                "additionalProperties": false
+                "type": "object"
               }
             }
           },
@@ -635,7 +528,7 @@
         },
         "stall": {
           "type": "object",
-          "description": "Stall detection thresholds for CaaS cluster provisioning stages. Each value is a Go duration string (e.g. 15m, 30m, 1h).",
+          "description": "Stall detection thresholds for ClusterOrder provisioning stages. Each value is a Go duration string (e.g. 15m, 30m, 1h); the operator marks the cluster stalled when a stage exceeds its threshold.",
           "properties": {
             "preparingInfrastructureThreshold": {
               "type": "string",
@@ -658,6 +551,7 @@
             "workersJoiningByInstanceType": {
               "type": "object",
               "description": "Per-BareMetalInstanceType overrides for the WorkersJoining stall threshold. Keys are exact instance type names, values are Go duration strings.",
+              "propertyNames": {"minLength": 1, "maxLength": 253},
               "additionalProperties": {
                 "type": "string",
                 "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
@@ -1332,7 +1226,7 @@
             },
             "eeImage": {
               "type": "string",
-              "description": "Execution environment image for config-as-code"
+              "description": "Execution environment and job pod image of every OSAC instance group; with a provider Fabric Manager, the provider's image built on aap.bootstrap.image"
             },
             "projectGitUri": {
               "type": "string",
@@ -1397,11 +1291,6 @@
                 "config": {
                   "type": "object",
                   "description": "Environment variables for the cluster-fulfillment instance group",
-                  "allOf": [
-                    {
-                      "$ref": "#/$defs/aapNetrisConfig"
-                    }
-                  ],
                   "properties": {
                     "NETWORK_CLASS": {
                       "type": "string",
@@ -1415,7 +1304,7 @@
                     },
                     "NETWORK_STEPS_COLLECTION": {
                       "type": "string",
-                      "description": "Supported values: netris.steps, ci.steps, agentless_net.steps. Legacy collections (nico.steps, osac.steps) are removed from the standard schema; direct AAP configuration via expertOverrides.aap accepts any free-form string.",
+                      "description": "Supported values: netris.steps, ci.steps, agentless_net.steps. Legacy collections (nico.steps, osac.steps) are removed from the standard schema.",
                       "enum": [
                         "",
                         "netris.steps",
@@ -1530,7 +1419,7 @@
                   "properties": {
                     "NETRIS_PASSWORD": {
                       "type": "string",
-                      "description": "Expert override for the Netris controller password. Normal deployments should use global.networking.netris.credentials."
+                      "description": "Netris controller password for the CaaS Netris steps"
                     },
                     "AWS_ACCESS_KEY_ID": {
                       "type": "string",
@@ -1556,32 +1445,20 @@
             },
             "networkFulfillment": {
               "type": "object",
-              "description": "ConfigMap and Secret for the AAP network-fulfillment instance group",
+              "description": "ConfigMap and Secret network-fulfillment-ig: the network managers' settings and credentials, written verbatim (network manager contract section 4.3). Keys start with the manager's registration name in upper case, for example NETRIS_CONTROLLER_URL. Required when global.networking.provisioningEnabled is true.",
               "properties": {
                 "enabled": {
                   "type": "boolean",
-                  "description": "Create network-fulfillment ConfigMap and Secret",
-                  "default": false
+                  "description": "Write config and secret into the network-fulfillment-ig ConfigMap and Secret; when false both are written empty",
+                  "default": true
                 },
                 "config": {
-                  "type": "object",
-                  "description": "Environment variables for the network-fulfillment instance group",
-                  "allOf": [
-                    {
-                      "$ref": "#/$defs/aapNetrisConfig"
-                    }
-                  ]
+                  "$ref": "#/$defs/managerSettings",
+                  "description": "Network manager settings (ConfigMap network-fulfillment-ig). Any keys; values are strings and may span several lines (for example a CA bundle)."
                 },
                 "secret": {
-                  "type": "object",
-                  "description": "Secret values for the network-fulfillment instance group",
-                  "properties": {
-                    "NETRIS_PASSWORD": {
-                      "type": "string",
-                      "description": "Expert override for the Netris controller password. Normal deployments should use global.networking.netris.credentials."
-                    }
-                  },
-                  "additionalProperties": false
+                  "$ref": "#/$defs/managerSettings",
+                  "description": "Network manager credentials (Secret network-fulfillment-ig), for example NETRIS_PASSWORD."
                 }
               },
               "additionalProperties": false
@@ -2515,200 +2392,6 @@
       },
       "additionalProperties": false
     },
-    "networkClass": {
-      "type": "object",
-      "description": "Create a NetworkClass in the fulfillment service after install. When enabled, title is required and at least one of k8sManager/fabricManager must be set. k8sManager k8s_only is only valid when fabricManager is empty.",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Run the create-network-class hook job. Legacy expert path only — normal deployments use global.networking.",
-          "default": false
-        },
-        "title": {
-          "type": "string",
-          "description": "Human-friendly short title for the NetworkClass. Required when enabled — the fulfillment service rejects NetworkClass creation without one.",
-          "default": ""
-        },
-        "description": {
-          "type": "string",
-          "description": "Human-friendly long description for the NetworkClass (Markdown)",
-          "default": ""
-        },
-        "k8sManager": {
-          "type": "string",
-          "description": "k8sManager name to set on the NetworkClass (must match a manager already registered via operator.networkManagers.k8sManagers). k8s_only is only valid when fabricManager is empty.",
-          "default": ""
-        },
-        "fabricManager": {
-          "type": "string",
-          "description": "fabricManager name to set on the NetworkClass (must match a manager already registered via operator.networkManagers.fabricManagers)",
-          "default": ""
-        },
-        "defaults": {
-          "type": "object",
-          "description": "Tenant-onboarding defaults. Required for this NetworkClass to auto-create a default VirtualNetwork/Subnet/SecurityGroup for new tenants.",
-          "properties": {
-            "virtualNetworkIPv4CIDR": {
-              "type": "string",
-              "description": "IPv4 CIDR for the auto-created tenant VirtualNetwork (e.g. 10.200.0.0/16)",
-              "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
-            },
-            "subnetIPv4CIDR": {
-              "type": "string",
-              "description": "IPv4 CIDR for the auto-created tenant Subnet (e.g. 10.200.0.0/20)",
-              "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
-            },
-            "enableNatGateway": {
-              "type": "boolean",
-              "description": "Auto-create a NATGateway for the tenant's default VirtualNetwork",
-              "default": false
-            },
-            "egressRules": {
-              "type": "array",
-              "description": "Default egress rules for the auto-created tenant SecurityGroup (applied whenever defaults are used, not only when enableNatGateway is true)",
-              "items": {
-                "type": "object",
-                "required": [
-                  "protocol"
-                ],
-                "properties": {
-                  "protocol": {
-                    "type": "string",
-                    "description": "Rule protocol",
-                    "enum": [
-                      "PROTOCOL_TCP",
-                      "PROTOCOL_UDP",
-                      "PROTOCOL_ICMP",
-                      "PROTOCOL_ALL"
-                    ]
-                  },
-                  "ipv4Cidr": {
-                    "type": "string",
-                    "description": "IPv4 CIDR for this rule (e.g. 0.0.0.0/0)",
-                    "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
-                  },
-                  "portFrom": {
-                    "type": "integer",
-                    "description": "Starting port (tcp/udp only)",
-                    "minimum": 1,
-                    "maximum": 65535
-                  },
-                  "portTo": {
-                    "type": "integer",
-                    "description": "Ending port (tcp/udp only)",
-                    "minimum": 1,
-                    "maximum": 65535
-                  }
-                },
-                "allOf": [
-                  {
-                    "if": {
-                      "properties": {
-                        "protocol": {
-                          "enum": [
-                            "PROTOCOL_ICMP",
-                            "PROTOCOL_ALL"
-                          ]
-                        }
-                      },
-                      "required": [
-                        "protocol"
-                      ]
-                    },
-                    "then": {
-                      "properties": {
-                        "portFrom": {
-                          "not": {}
-                        },
-                        "portTo": {
-                          "not": {}
-                        }
-                      }
-                    }
-                  }
-                ],
-                "additionalProperties": false
-              }
-            }
-          },
-          "additionalProperties": false
-        },
-        "isDefault": {
-          "type": "boolean",
-          "description": "Mark this NetworkClass as the default for new tenants"
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "enabled": {
-                "const": true
-              }
-            },
-            "required": [
-              "enabled"
-            ]
-          },
-          "then": {
-            "properties": {
-              "title": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "required": [
-              "title"
-            ],
-            "anyOf": [
-              {
-                "properties": {
-                  "k8sManager": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                },
-                "required": [
-                  "k8sManager"
-                ]
-              },
-              {
-                "properties": {
-                  "fabricManager": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                },
-                "required": [
-                  "fabricManager"
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "k8sManager": {
-                "const": "k8s_only"
-              }
-            },
-            "required": [
-              "k8sManager"
-            ]
-          },
-          "then": {
-            "properties": {
-              "fabricManager": {
-                "type": "string",
-                "maxLength": 0
-              }
-            }
-          }
-        }
-      ],
-      "additionalProperties": false
-    },
     "bundledPostgres": {
       "type": "object",
       "description": "Bundled PostgreSQL configuration (pass-through for osac-infra shared values)"
@@ -2756,388 +2439,203 @@
     },
     "globalNetworking": {
       "type": "object",
-      "description": "High-level networking profile shared by the umbrella, operator, and AAP charts. Select fabricManager and/or k8sManager; Helm derives AAP backends and NetworkClass defaults.",
-      "additionalProperties": false,
+      "description": "Networking installation settings shared by the osac chart and its subcharts. The installer's NetworkClass step creates the NetworkClass from fabricManager, k8sManager and networkClass; none of them, addressPlan included, can change after installation.",
+      "required": [
+        "fabricManager"
+      ],
       "properties": {
+        "provisioningEnabled": {
+          "type": "boolean",
+          "description": "Run networking jobs through the network managers. Set at installation; the fulfillment service refuses to start when it changes later. With false, networking resources become READY without provider work.",
+          "default": true
+        },
+        "excludedIpv4Cidrs": {
+          "type": "array",
+          "description": "Canonical IPv4 CIDRs used by the provider's infrastructure (for example management, provisioning and node networks). VirtualNetwork and ExternalIPPool CIDRs may not overlap them.",
+          "default": [],
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ipv4Cidr"
+          }
+        },
         "fabricManager": {
           "type": "string",
-          "description": "Fabric manager profile. Supported: empty string, netris, agentless_net (stub), or cudn_net for CaaS with ci.steps. vlan is reserved and fails Helm rendering.",
-          "enum": [
-            "",
-            "netris",
-            "agentless_net",
-            "cudn_net",
-            "vlan"
-          ],
-          "default": ""
+          "description": "Registration name of the provider's Fabric Manager (the name in its registration ConfigMap). Required; there is no default.",
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$"
         },
         "k8sManager": {
           "type": "string",
-          "description": "Kubernetes manager profile. Supported: empty string or k8s_only. Cannot be set together with a non-empty fabricManager.",
+          "description": "OSAC Kubernetes Manager. Required when VMaaS is enabled. Fixed at installation.",
           "enum": [
             "",
-            "k8s_only"
+            "cudn_evpn"
           ],
-          "default": "k8s_only"
-        },
-        "netris": {
-          "$ref": "#/$defs/networkingNetris"
+          "default": ""
         },
         "networkClass": {
-          "$ref": "#/$defs/networkingNetworkClass"
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "fabricManager": {
-                "const": "netris"
-              }
-            },
-            "required": [
-              "fabricManager"
-            ]
-          },
-          "then": {
-            "required": [
-              "netris"
-            ],
-            "properties": {
-              "k8sManager": {
-                "enum": [
-                  ""
-                ]
-              },
-              "netris": {
-                "required": [
-                  "controllerUrl",
-                  "credentials",
-                  "siteId",
-                  "tenantId",
-                  "tenantName"
-                ],
-                "properties": {
-                  "controllerUrl": {
-                    "minLength": 1,
-                    "pattern": "^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
-                  },
-                  "credentials": {
-                    "required": [
-                      "username"
-                    ],
-                    "oneOf": [
-                      {
-                        "required": [
-                          "password"
-                        ]
-                      },
-                      {
-                        "required": [
-                          "externalSecret"
-                        ],
-                        "properties": {
-                          "externalSecret": {
-                            "const": true
-                          }
-                        }
-                      }
-                    ],
-                    "properties": {
-                      "username": {
-                        "minLength": 1
-                      },
-                      "password": {
-                        "minLength": 1
-                      },
-                      "externalSecret": {
-                        "type": "boolean",
-                        "const": true,
-                        "description": "Use the externally managed netris-credentials Secret (NETRIS_PASSWORD key) in the AAP namespace instead of an inline password."
-                      }
-                    }
-                  },
-                  "siteId": {
-                    "minLength": 1
-                  },
-                  "tenantId": {
-                    "minLength": 1
-                  },
-                  "tenantName": {
-                    "minLength": 1
+          "type": "object",
+          "description": "NetworkClass values. defaults and eastWestCapabilities cannot change after installation.",
+          "properties": {
+            "defaults": {
+              "type": "object",
+              "description": "Tenant Default Networking values: the default VirtualNetwork and Subnet CIDRs and the default SecurityGroup rules.",
+              "required": [
+                "virtualNetworkIPv4CIDR",
+                "subnetIPv4CIDR"
+              ],
+              "properties": {
+                "virtualNetworkIPv4CIDR": {
+                  "$ref": "#/$defs/ipv4Cidr",
+                  "description": "Canonical IPv4 CIDR of each tenant's default VirtualNetwork."
+                },
+                "subnetIPv4CIDR": {
+                  "$ref": "#/$defs/ipv4Cidr",
+                  "description": "Canonical IPv4 CIDR of each tenant's default Subnet, inside virtualNetworkIPv4CIDR and within the address plan's prefix limit."
+                },
+                "ingressRules": {
+                  "type": "array",
+                  "description": "Ingress rules of the default SecurityGroup.",
+                  "default": [],
+                  "items": {
+                    "$ref": "#/$defs/securityRule"
+                  }
+                },
+                "egressRules": {
+                  "type": "array",
+                  "description": "Egress rules of the default SecurityGroup.",
+                  "items": {
+                    "$ref": "#/$defs/securityRule"
                   }
                 }
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "k8sManager": {
-                "const": "k8s_only"
-              }
+              },
+              "additionalProperties": false
             },
-            "required": [
-              "k8sManager"
-            ]
-          },
-          "then": {
-            "properties": {
-              "fabricManager": {
-                "enum": [
-                  ""
-                ]
-              }
-            }
-          }
-        }
-      ]
-    },
-    "networkingNetris": {
-      "type": "object",
-      "description": "Netris fabric manager configuration.",
-      "properties": {
-        "controllerUrl": {
-          "type": "string",
-          "description": "Netris controller API URL (HTTPS only).",
-          "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
-        },
-        "validateCerts": {
-          "type": "boolean",
-          "default": true,
-          "description": "Verify Netris HTTPS certificates. Disable only for trusted non-production endpoints with self-signed certificates."
-        },
-        "caBundle": {
-          "type": "object",
-          "description": "Optional customer-created ConfigMap containing the Netris CA chain under the fixed bundle.pem key.",
-          "properties": {
-            "configMap": {
-              "type": "string",
-              "description": "Name of the customer-created ConfigMap in the AAP namespace. It must contain bundle.pem and is mounted read-only into Netris execution pods.",
-              "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
-              "maxLength": 253
+            "eastWestCapabilities": {
+              "type": "object",
+              "description": "East-west capabilities requested from the network managers.",
+              "properties": {
+                "supportsEastWestEthernet": {
+                  "type": "boolean",
+                  "description": "Request physical Ethernet east-west connectivity (FabricDomains). The Fabric Manager registration must declare the eastWestEthernet capability.",
+                  "default": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "addressPlan": {
+              "type": "object",
+              "description": "Subnet address plan: shares of each Subnet for the Kubernetes Manager (overlay), the Fabric Manager (fabric) and CaaS ingress reservations (lbVip). Each share is a multiple of 0.0625 from 0 to 1 and the shares sum to 1. Without it the installer derives the plan from the enabled services and k8sManager.",
+              "required": [
+                "overlay",
+                "fabric",
+                "lbVip"
+              ],
+              "properties": {
+                "overlay": {
+                  "$ref": "#/$defs/addressShare"
+                },
+                "fabric": {
+                  "$ref": "#/$defs/addressShare"
+                },
+                "lbVip": {
+                  "$ref": "#/$defs/addressShare"
+                }
+              },
+              "additionalProperties": false
             }
           },
+          "required": [
+            "defaults"
+          ],
           "additionalProperties": false
-        },
-        "credentials": {
-          "type": "object",
-          "properties": {
-            "username": {
-              "type": "string"
-            },
-            "password": {
-              "type": "string"
-            },
-            "externalSecret": {
-              "type": "boolean",
-              "const": true,
-              "description": "Use the externally managed netris-credentials Secret (NETRIS_PASSWORD key) in the AAP namespace instead of an inline password."
-            }
-          },
-          "additionalProperties": false
-        },
-        "siteId": {
-          "type": "string"
-        },
-        "tenantId": {
-          "type": "string"
-        },
-        "tenantName": {
-          "type": "string"
-        },
-        "mgmtVpcId": {
-          "type": "string"
-        },
-        "mgmtVpcName": {
-          "type": "string"
-        },
-        "resourceClassMap": {
-          "type": "string"
         }
       },
       "additionalProperties": false
     },
-    "networkingNetworkClass": {
+    "addressShare": {
+      "type": "number",
+      "description": "Share of each Subnet's addresses: a multiple of 0.0625 from 0 to 1.",
+      "minimum": 0,
+      "maximum": 1,
+      "multipleOf": 0.0625
+    },
+    "securityRule": {
       "type": "object",
-      "description": "Optional NetworkClass override. Empty or partial values are merged with the manager-specific default generated by Helm. Explicit values take precedence.",
+      "description": "SecurityGroup rule. TCP and UDP rules need portFrom and portTo; ICMP and ALL rules have no ports. ICMP rules need the security_group_icmp capability of every network manager; ALL includes ICMP.",
+      "required": [
+        "protocol",
+        "ipv4Cidr"
+      ],
       "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true
-        },
-        "title": {
+        "protocol": {
           "type": "string",
-          "minLength": 1,
-          "description": "Human-friendly short title. If omitted, Helm generates one from fabricManager/k8sManager."
+          "enum": [
+            "PROTOCOL_TCP",
+            "PROTOCOL_UDP",
+            "PROTOCOL_ICMP",
+            "PROTOCOL_ALL"
+          ]
         },
-        "description": {
-          "type": "string"
+        "ipv4Cidr": {
+          "$ref": "#/$defs/ipv4Cidr",
+          "description": "Canonical IPv4 CIDR of the remote addresses."
         },
-        "fabricManager": {
-          "type": "string",
-          "description": "Fabric manager override. If omitted, Helm derives it from global.networking.fabricManager."
+        "portFrom": {
+          "type": "integer",
+          "description": "First port (TCP and UDP only).",
+          "minimum": 1,
+          "maximum": 65535
         },
-        "k8sManager": {
-          "type": "string",
-          "description": "Kubernetes manager override. If omitted, Helm derives it from global.networking.k8sManager."
-        },
-        "isDefault": {
-          "type": "boolean",
-          "default": true
-        },
-        "defaults": {
-          "type": "object",
-          "properties": {
-            "virtualNetworkIPv4CIDR": {
-              "type": "string",
-              "description": "IPv4 CIDR for the auto-created tenant VirtualNetwork.",
-              "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
-            },
-            "subnetIPv4CIDR": {
-              "type": "string",
-              "description": "IPv4 CIDR for the auto-created tenant Subnet.",
-              "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
-            },
-            "enableNatGateway": {
-              "type": "boolean",
-              "description": "Auto-create a NATGateway for the tenant's default VirtualNetwork."
-            },
-            "egressRules": {
-              "type": "array",
-              "description": "Default egress rules for the auto-created tenant SecurityGroup.",
-              "items": {
-                "type": "object",
-                "required": [
-                  "protocol"
-                ],
-                "properties": {
-                  "protocol": {
-                    "type": "string",
-                    "enum": [
-                      "PROTOCOL_TCP",
-                      "PROTOCOL_UDP",
-                      "PROTOCOL_ICMP",
-                      "PROTOCOL_ALL"
-                    ]
-                  },
-                  "ipv4Cidr": {
-                    "type": "string",
-                    "description": "IPv4 CIDR for this rule.",
-                    "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
-                  },
-                  "portFrom": {
-                    "type": "integer",
-                    "description": "Starting port (TCP/UDP only).",
-                    "minimum": 1,
-                    "maximum": 65535
-                  },
-                  "portTo": {
-                    "type": "integer",
-                    "description": "Ending port (TCP/UDP only).",
-                    "minimum": 1,
-                    "maximum": 65535
-                  }
-                },
-                "allOf": [
-                  {
-                    "if": {
-                      "properties": {
-                        "protocol": {
-                          "enum": [
-                            "PROTOCOL_ICMP",
-                            "PROTOCOL_ALL"
-                          ]
-                        }
-                      },
-                      "required": [
-                        "protocol"
-                      ]
-                    },
-                    "then": {
-                      "properties": {
-                        "portFrom": {
-                          "not": {}
-                        },
-                        "portTo": {
-                          "not": {}
-                        }
-                      }
-                    }
-                  }
-                ],
-                "additionalProperties": false
-              }
-            }
-          },
-          "additionalProperties": false
+        "portTo": {
+          "type": "integer",
+          "description": "Last port (TCP and UDP only).",
+          "minimum": 1,
+          "maximum": 65535
         }
       },
       "allOf": [
         {
           "if": {
             "properties": {
-              "k8sManager": {
-                "const": "k8s_only"
+              "protocol": {
+                "enum": [
+                  "PROTOCOL_TCP",
+                  "PROTOCOL_UDP"
+                ]
               }
-            },
-            "required": [
-              "k8sManager"
-            ]
+            }
           },
           "then": {
+            "required": [
+              "portFrom",
+              "portTo"
+            ]
+          },
+          "else": {
             "properties": {
-              "fabricManager": {
-                "type": "string",
-                "maxLength": 0
-              }
+              "portFrom": false,
+              "portTo": false
             }
           }
         }
       ],
       "additionalProperties": false
     },
-    "aapNetrisConfig": {
-      "type": "object",
-      "description": "Shared expert-overridable Netris identity properties composed into AAP instance group config objects via allOf. Installation-owned URL, TLS validation, and CA path settings are intentionally excluded. Do not set additionalProperties here; the consuming schema controls that.",
-      "properties": {
-        "NETRIS_USERNAME": {
-          "type": "string",
-          "description": "Netris controller username. Must match between AAP instance groups."
-        },
-        "NETRIS_SITE_ID": {
-          "type": "string",
-          "description": "Netris site ID. Must match between AAP instance groups."
-        },
-        "NETRIS_TENANT_ID": {
-          "type": "string",
-          "description": "Netris tenant ID. Must match between AAP instance groups."
-        },
-        "NETRIS_TENANT_NAME": {
-          "type": "string",
-          "description": "Netris tenant name. Must match between AAP instance groups."
-        }
-      }
+    "ipv4Cidr": {
+      "type": "string",
+      "description": "IPv4 CIDR.",
+      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$"
     },
-    "globalExpertOverrides": {
+    "managerSettings": {
       "type": "object",
-      "description": "When true, the corresponding low-level values block is authoritative and the facade does not auto-fill that surface",
-      "properties": {
-        "aap": {
-          "type": "boolean",
-          "default": false
-        },
-        "networkClass": {
-          "type": "boolean",
-          "default": false
-        },
-        "networkManagers": {
-          "type": "boolean",
-          "default": false
-        }
+      "description": "Settings written verbatim, one key per setting. Keys start with the network manager's registration name in upper case.",
+      "propertyNames": {
+        "pattern": "^[A-Z][A-Z0-9_]*$"
       },
-      "additionalProperties": false
+      "additionalProperties": {
+        "type": "string"
+      }
     }
   },
   "required": [],

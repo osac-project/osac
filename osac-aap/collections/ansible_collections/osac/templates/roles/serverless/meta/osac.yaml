@@ -1,0 +1,16 @@
+---
+name: serverless
+title: OpenShift Serverless Operator
+description: >
+  Installs the OpenShift Serverless Operator.
+template_type: addon_operator
+min_ocp_version: ""
+max_ocp_version: ""
+exclusions: []
+dependencies: []
+package_name: serverless-operator
+channel: stable
+catalog_source: redhat-operators
+catalog_source_namespace: openshift-marketplace
+subscription_namespace: openshift-serverless
+operator_group_name: openshift-serverless

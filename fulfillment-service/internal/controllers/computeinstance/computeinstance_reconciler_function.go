@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"net"
 	"slices"
 	"time"
 
@@ -277,16 +276,12 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
-	// Select the hub and return immediately if it was just selected. This ensures the hub is
-	// persisted before any Kubernetes objects are created.
-	hubJustSelected := t.computeInstance.GetStatus().GetHub() == ""
+	// Resolve the hub. The CR is created (or adopted by its label) before status.hub is written, at the end of the
+	// run, so a restart between the two never creates a second CR.
 	if err := t.selectHub(ctx); err != nil {
 		return err
 	}
 	t.computeInstance.GetStatus().SetHub(t.hubId)
-	if hubJustSelected {
-		return nil
-	}
 
 	// Get the K8S object:
 	object, err := t.getKubeObject(ctx)
@@ -387,7 +382,7 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
-	return t.reconcileAutoExternalIPAttachment(ctx)
+	return nil
 }
 
 func (t *task) reconcileDiskRegistrationForWorkload(ctx context.Context, workloadAbsent bool) (bool, error) {
@@ -563,131 +558,6 @@ func (t *task) delete(ctx context.Context) (err error) {
 
 	// Don't remove finalizer — K8s object still exists with finalizers being processed.
 	return controllers.RequeueAfterKubernetesDeletion("compute instance")
-}
-
-func (t *task) reconcileAutoExternalIPAttachment(ctx context.Context) error {
-	ci := t.computeInstance
-	if !ci.GetSpec().GetAutoExternalIpAttachment() || !computeInstanceReadyForExternalIPAttachment(ci) {
-		return nil
-	}
-	if t.r.externalIPAttachmentsClient == nil {
-		return errors.New("ExternalIPAttachment client is not configured")
-	}
-
-	attachmentFilter := computeInstanceExternalIPAttachmentFilter(ci)
-	attachments, err := t.r.externalIPAttachmentsClient.List(ctx, privatev1.ExternalIPAttachmentsListRequest_builder{
-		Filter: &attachmentFilter,
-		Limit:  new(int32(1000)),
-	}.Build())
-	if err != nil {
-		return fmt.Errorf("failed to list ExternalIPAttachments for ComputeInstance '%s': %w", ci.GetId(), err)
-	}
-	if len(attachments.GetItems()) > 0 {
-		// Any existing attachment wins. This makes reconciliation idempotent and avoids
-		// replacing a user-created attachment with an automatically managed one.
-		return nil
-	}
-	if attachments.GetTotal() > 0 {
-		return fmt.Errorf("ExternalIPAttachment list for ComputeInstance '%s' was incomplete", ci.GetId())
-	}
-	if t.r.externalIPsClient == nil {
-		return errors.New("ExternalIP client is not configured")
-	}
-
-	eipFilter := autoCreatedExternalIPFilter(ci.GetMetadata().GetTenant(), ci.GetId())
-	eips, err := t.r.externalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{
-		Filter: &eipFilter,
-		Limit:  new(int32(1000)),
-	}.Build())
-	if err != nil {
-		return fmt.Errorf("failed to list auto-created ExternalIPs for ComputeInstance '%s': %w", ci.GetId(), err)
-	}
-	if int(eips.GetTotal()) > len(eips.GetItems()) {
-		return fmt.Errorf("ExternalIP list for ComputeInstance '%s' was incomplete", ci.GetId())
-	}
-	if len(eips.GetItems()) == 0 {
-		return nil
-	}
-	if len(eips.GetItems()) != 1 {
-		return fmt.Errorf("expected one auto-created ExternalIP for ComputeInstance '%s', found %d", ci.GetId(), len(eips.GetItems()))
-	}
-	eip := eips.GetItems()[0]
-	if eip.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED || eip.GetStatus().GetAddress() == "" {
-		return nil
-	}
-	if eip.GetStatus().GetAttached() {
-		return fmt.Errorf("auto-created ExternalIP '%s' is already attached before its ComputeInstance attachment was reconciled", eip.GetId())
-	}
-	if eip.GetMetadata().GetAnnotations()[annotations.OwnerReference] != ci.GetId() {
-		return fmt.Errorf("auto-created ExternalIP '%s' is not owned by ComputeInstance '%s'", eip.GetId(), ci.GetId())
-	}
-
-	shortID := ci.GetId()
-	if len(shortID) > 53 {
-		shortID = shortID[:53]
-	}
-	attachment := privatev1.ExternalIPAttachment_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:    "auto-eipa-" + shortID,
-			Tenant:  ci.GetMetadata().GetTenant(),
-			Creator: "system",
-			Labels: map[string]string{
-				labels.AutoCreated:    "true",
-				labels.AutoCreatedFor: ci.GetId(),
-			},
-			Annotations: map[string]string{
-				annotations.OwnerReference: ci.GetId(),
-			},
-		}.Build(),
-		Spec: privatev1.ExternalIPAttachmentSpec_builder{
-			ExternalIp:      &privatev1.ExternalIPLocalReference{Id: eip.GetId()},
-			ComputeInstance: &privatev1.ComputeInstanceLocalReference{Id: ci.GetId()},
-		}.Build(),
-	}.Build()
-	_, err = t.r.externalIPAttachmentsClient.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
-		Object: attachment,
-	}.Build())
-	if status.Code(err) == codes.AlreadyExists {
-		// A parallel reconcile may have created the same attachment after our list.
-		attachments, listErr := t.r.externalIPAttachmentsClient.List(ctx, privatev1.ExternalIPAttachmentsListRequest_builder{
-			Filter: &attachmentFilter,
-			Limit:  new(int32(1000)),
-		}.Build())
-		if listErr != nil {
-			return fmt.Errorf("ExternalIPAttachment already exists but could not be looked up: %w", listErr)
-		}
-		if len(attachments.GetItems()) == 0 {
-			return fmt.Errorf("ExternalIPAttachment already exists but none targets ComputeInstance '%s'", ci.GetId())
-		}
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("failed to create ExternalIPAttachment for ComputeInstance '%s': %w", ci.GetId(), err)
-	}
-	return nil
-}
-
-func computeInstanceReadyForExternalIPAttachment(ci *privatev1.ComputeInstance) bool {
-	if ci.GetStatus().GetState() != privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING {
-		return false
-	}
-	ready := false
-	for _, condition := range ci.GetStatus().GetConditions() {
-		if condition.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_READY {
-			ready = condition.GetStatus() == privatev1.ConditionStatus_CONDITION_STATUS_TRUE
-			break
-		}
-	}
-	if !ready || len(ci.GetSpec().GetNetworkAttachments()) != 1 || len(ci.GetStatus().GetComputeNetworkAttachmentStatuses()) != 1 {
-		return false
-	}
-
-	specAttachment := ci.GetSpec().GetNetworkAttachments()[0]
-	statusAttachment := ci.GetStatus().GetComputeNetworkAttachmentStatuses()[0]
-	attachmentIP := net.ParseIP(statusAttachment.GetIpAddress())
-	return specAttachment.GetSubnet().GetId() != "" &&
-		statusAttachment.GetSubnetRef() == specAttachment.GetSubnet().GetId() &&
-		attachmentIP != nil && attachmentIP.To4() != nil
 }
 
 func computeInstanceExternalIPAttachmentFilter(ci *privatev1.ComputeInstance) string {
@@ -875,61 +745,6 @@ func (t *task) getKubeObject(ctx context.Context) (result *osacv1alpha1.ComputeI
 	return
 }
 
-// getSubnetCR looks up a Subnet CR in the hub cluster by its fulfillment UUID label.
-// Returns the Subnet CR if exactly one is found, nil if none found, or an error if multiple found.
-func (t *task) getSubnetCR(ctx context.Context, subnetID string) (*osacv1alpha1.Subnet, error) {
-	list := &osacv1alpha1.SubnetList{}
-	err := t.hubClient.List(
-		ctx, list,
-		clnt.InNamespace(t.hubNamespace),
-		clnt.MatchingLabels{
-			labels.SubnetUuid: subnetID,
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	items := list.Items
-	count := len(items)
-	if count > 1 {
-		return nil, fmt.Errorf(
-			"expected at most one subnet with identifier '%s' but found %d",
-			subnetID, count,
-		)
-	}
-	if count == 0 {
-		return nil, nil
-	}
-	return &items[0], nil
-}
-
-// getSecurityGroupCR looks up a SecurityGroup CR in the hub cluster by its fulfillment UUID label.
-func (t *task) getSecurityGroupCR(ctx context.Context, securityGroupID string) (*osacv1alpha1.SecurityGroup, error) {
-	list := &osacv1alpha1.SecurityGroupList{}
-	err := t.hubClient.List(
-		ctx, list,
-		clnt.InNamespace(t.hubNamespace),
-		clnt.MatchingLabels{
-			labels.SecurityGroupUuid: securityGroupID,
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-	items := list.Items
-	count := len(items)
-	if count > 1 {
-		return nil, fmt.Errorf(
-			"expected at most one security group with identifier '%s' but found %d",
-			securityGroupID, count,
-		)
-	}
-	if count == 0 {
-		return nil, nil
-	}
-	return &items[0], nil
-}
-
 // addFinalizer adds the controller finalizer if it is not already present. Returns true if the finalizer was added,
 // false if it was already present.
 func (t *task) addFinalizer() bool {
@@ -1077,76 +892,30 @@ func equalNetworkAttachments(left, right []osacv1alpha1.ComputeNetworkAttachment
 	return apiequality.Semantic.DeepEqual(left, right)
 }
 
-// buildSpecNetworkAttachments handles the network_attachments field.
-func (t *task) buildSpecNetworkAttachments(ctx context.Context, spec *osacv1alpha1.ComputeInstanceSpec) error {
+// buildSpecNetworkAttachments copies the network attachment field to the CR. The references hold the API IDs of the
+// Subnet and SecurityGroups.
+func (t *task) buildSpecNetworkAttachments(_ context.Context, spec *osacv1alpha1.ComputeInstanceSpec) error {
 	ciSpec := t.computeInstance.GetSpec()
-
-	// Validate network_attachments structure before processing
 	err := computeinstancespec.ValidateNetworkAttachments(ciSpec.GetNetworkAttachments())
 	if err != nil {
-		return fmt.Errorf(
-			"invalid network_attachments in database: %w", err)
+		return fmt.Errorf("invalid network_attachments in database: %w", err)
 	}
-
 	networkAttachments := make([]osacv1alpha1.ComputeNetworkAttachment, 0, len(ciSpec.GetNetworkAttachments()))
-	for i, att := range ciSpec.GetNetworkAttachments() {
-		subnetID := att.GetSubnet()
-		// subnetID is guaranteed to be non-empty by ValidateNetworkAttachments
-
-		subnetCR, err := t.getSubnetCR(ctx, subnetID.GetId())
-		if err != nil {
-			return fmt.Errorf(
-				"failed to look up Subnet CR for network_attachments[%d] subnet %s: %w",
-				i, subnetID, err)
-		}
-		if subnetCR == nil {
-			return fmt.Errorf( //nolint:staticcheck // ST1005: Subnet is an API resource name
-				"Subnet CR not found for network_attachments[%d] subnet %s",
-				i, subnetID)
-		}
-		subnetRef := subnetCR.GetName()
-		t.r.logger.DebugContext(
-			ctx,
-			"Resolved subnetRef from Subnet CR",
-			slog.String("subnet_id", subnetID.GetId()),
-			slog.String("subnet_ref", subnetRef),
-		)
-
+	for _, att := range ciSpec.GetNetworkAttachments() {
 		sgRefs := make([]string, 0, len(att.GetSecurityGroups()))
-		for _, sgID := range att.GetSecurityGroups() {
-			if sgID == nil {
-				continue
+		for _, group := range att.GetSecurityGroups() {
+			if group != nil {
+				sgRefs = append(sgRefs, controllers.RefKeyStr(group))
 			}
-			sgCR, sgErr := t.getSecurityGroupCR(ctx, sgID.GetId())
-			if sgErr != nil {
-				return fmt.Errorf(
-					"failed to look up SecurityGroup CR for network_attachments[%d] security group %s: %w",
-					i, sgID, sgErr)
-			}
-			if sgCR == nil {
-				return fmt.Errorf(
-					"SecurityGroup CR not found for network_attachments[%d] security group %s",
-					i, sgID)
-			}
-			sgRefs = append(sgRefs, sgCR.GetName())
-			t.r.logger.DebugContext(
-				ctx,
-				"Resolved securityGroupRef from SecurityGroup CR",
-				slog.String("security_group_id", sgID.GetId()),
-				slog.String("security_group_ref", sgCR.GetName()),
-			)
 		}
-
 		networkAttachments = append(networkAttachments, osacv1alpha1.ComputeNetworkAttachment{
-			SubnetRef:         subnetRef,
+			SubnetRef:         controllers.RefKeyStr(att.GetSubnet()),
 			SecurityGroupRefs: sgRefs,
 		})
 	}
-
 	if len(networkAttachments) > 0 {
 		spec.NetworkAttachments = networkAttachments
 	}
-
 	return nil
 }
 

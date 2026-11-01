@@ -19,12 +19,12 @@ pytestmark = pytest.mark.sanity
 
 def test_subnet_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
     vn_name: str = f"test-vnet-{uuid4().hex[:8]}"
-    vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_name, "10.200.0.0/16")
+    vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_name, "172.19.0.0/16")
 
     subnet_id: str | None = None
     subnet_cr_name: str | None = None
     try:
-        subnet_id, subnet_cr_name = create_and_wait_for_subnet(grpc, k8s_hub_client, vn_id, "10.200.1.0/24")
+        subnet_id, subnet_cr_name = create_and_wait_for_subnet(grpc, k8s_hub_client, vn_id, "172.19.1.0/24")
         wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)
     finally:
         try:

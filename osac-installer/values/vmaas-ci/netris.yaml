@@ -1,0 +1,23 @@
+# Netris + CUDN EVPN overlay for the VMaaS CI profile, layered after
+# instance.yaml. The Netris backend of osac-test-infra generates the lab values
+# (controller, site, excluded ranges, secrets) in netris-runtime.yaml. The EVPN
+# underlay is provisioned separately.
+global:
+  networking:
+    provisioningEnabled: true
+    fabricManager: netris
+    k8sManager: cudn_evpn
+
+aap:
+  instanceGroups:
+    networkFulfillment:
+      enabled: true
+      config:
+        NETRIS_USERNAME: "netris"
+        NETRIS_VALIDATE_CERTS: "false"
+
+# The operator reads AAP job status once per interval and waits a full interval after each launch, so
+# the 30s default adds that wait to every networking task and every VM. Fall back to 30s if unparsable.
+operator:
+  aap:
+    statusPollInterval: "5s"

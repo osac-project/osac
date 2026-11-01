@@ -34,18 +34,18 @@ import (
 )
 
 const (
-	autoCreatedLabel            = "osac.openshift.io/auto-created"
-	autoCreatedForLabel         = "osac.openshift.io/auto-created-for"
-	autoAttachmentDeferredLabel = "osac.openshift.io/auto-attachment-deferred"
-	autoCreatedKindLabel        = "osac.openshift.io/auto-created-kind"
-	autoCreatedEndpointLabel    = "osac.openshift.io/auto-created-endpoint"
-	tenantAnnotation            = "osac.openshift.io/tenant"
-	ownerReferenceAnnotation    = "osac.openshift.io/owner-reference"
-	systemCreator               = "system"
+	autoCreatedLabel         = "osac.openshift.io/auto-created"
+	autoCreatedForLabel      = "osac.openshift.io/auto-created-for"
+	autoCreatedKindLabel     = "osac.openshift.io/auto-created-kind"
+	tenantAnnotation         = "osac.openshift.io/tenant"
+	ownerReferenceAnnotation = "osac.openshift.io/owner-reference"
+	systemCreator            = "system"
 
-	computeInstanceKind   = "compute_instance"
-	clusterKind           = "cluster"
-	bareMetalInstanceKind = "bare_metal_instance"
+	computeInstanceKind = "compute_instance"
+
+	// recheckInterval is how often an automatic ExternalIP without its ExternalIPAttachment is checked again, while
+	// neither the ExternalIP nor the workload is FAILED or being deleted.
+	recheckInterval = 30 * time.Second
 
 	autoAttachmentRetryDelay = time.Second
 )
@@ -59,14 +59,6 @@ type computeInstancesClient interface {
 	Get(context.Context, *privatev1.ComputeInstancesGetRequest, ...grpc.CallOption) (*privatev1.ComputeInstancesGetResponse, error)
 }
 
-type clustersClient interface {
-	Get(context.Context, *privatev1.ClustersGetRequest, ...grpc.CallOption) (*privatev1.ClustersGetResponse, error)
-}
-
-type bareMetalInstancesClient interface {
-	Get(context.Context, *privatev1.BareMetalInstancesGetRequest, ...grpc.CallOption) (*privatev1.BareMetalInstancesGetResponse, error)
-}
-
 // FunctionBuilder holds the dependencies needed to create automatic ExternalIPAttachments.
 type FunctionBuilder struct {
 	logger     *slog.Logger
@@ -77,11 +69,11 @@ type function struct {
 	logger                      *slog.Logger
 	externalIPAttachmentsClient externalIPAttachmentsClient
 	computeInstancesClient      computeInstancesClient
-	clustersClient              clustersClient
-	bareMetalInstancesClient    bareMetalInstancesClient
 }
 
-// NewFunction creates a builder for the deferred automatic ExternalIPAttachment reconciler.
+// NewFunction creates a builder for the automatic ExternalIPAttachment reconciler. It creates the automatic
+// ExternalIPAttachment of a ComputeInstance once its automatic ExternalIP is ALLOCATED and the VM is a ready endpoint.
+// The OSAC operator requests the attachments of Clusters and BareMetalInstances.
 func NewFunction() *FunctionBuilder {
 	return &FunctionBuilder{}
 }
@@ -110,11 +102,12 @@ func (b *FunctionBuilder) Build() (controllers.ReconcilerFunction[*privatev1.Ext
 		logger:                      b.logger,
 		externalIPAttachmentsClient: privatev1.NewExternalIPAttachmentsClient(b.connection),
 		computeInstancesClient:      privatev1.NewComputeInstancesClient(b.connection),
-		clustersClient:              privatev1.NewClustersClient(b.connection),
-		bareMetalInstancesClient:    privatev1.NewBareMetalInstancesClient(b.connection),
 	}
 	return r.run, nil
 }
+
+// errWaiting tells the reconciler to check the automatic ExternalIP again later.
+var errWaiting = errors.New("automatic ExternalIPAttachment waits for its ExternalIP and ComputeInstance")
 
 func (r *function) run(ctx context.Context, externalIP *privatev1.ExternalIP) error {
 	if externalIP == nil || !externalIP.HasMetadata() || externalIP.GetMetadata().HasDeletionTimestamp() {
@@ -122,173 +115,110 @@ func (r *function) run(ctx context.Context, externalIP *privatev1.ExternalIP) er
 	}
 	metadata := externalIP.GetMetadata()
 	labels := metadata.GetLabels()
-	if labels[autoCreatedLabel] != "true" || labels[autoAttachmentDeferredLabel] != "true" {
+	// Only resources with creator system and both auto-created labels are automatic; labels that a tenant sets never
+	// make a resource automatic.
+	if metadata.GetCreator() != systemCreator || labels[autoCreatedLabel] != "true" ||
+		labels[autoCreatedForLabel] == "" || labels[autoCreatedKindLabel] != computeInstanceKind {
 		return nil
 	}
-	// GenericServer assigns creator from the authenticated caller. Automatic
-	// workload ExternalIPs are created directly by the server with creator=system,
-	// so caller-supplied labels and annotations cannot opt a tenant IP into this
-	// privileged reconciler.
-	if metadata.GetCreator() != systemCreator {
-		r.logger.DebugContext(ctx, "Skipping deferred automatic attachment for non-system ExternalIP")
+	switch externalIP.GetStatus().GetState() {
+	case privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED:
 		return nil
-	}
-	if externalIP.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED {
-		return nil
-	}
-	if externalIP.GetId() == "" {
-		return errors.New("deferred automatic ExternalIP has no ID")
+	case privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED:
+	default:
+		return controllers.RequeueAtInterval(errWaiting, recheckInterval)
 	}
 
 	tenant := metadata.GetTenant()
 	ownerID := labels[autoCreatedForLabel]
-	if tenant == "" {
-		return fmt.Errorf("deferred automatic ExternalIP %q has no tenant", externalIP.GetId())
-	}
-	if ownerID == "" {
-		return fmt.Errorf("deferred automatic ExternalIP %q has no owner reference", externalIP.GetId())
-	}
-
-	attachmentSpec, ready, err := r.targetSpec(ctx, labels[autoCreatedKindLabel], ownerID, tenant, labels[autoCreatedEndpointLabel])
-	if err != nil || !ready {
-		return err
-	}
-	attachmentSpec.ExternalIp = privatev1.ExternalIPLocalReference_builder{Id: externalIP.GetId()}.Build()
-	expectedSpec := attachmentSpec.Build()
-
 	existing, err := r.findAttachment(ctx, externalIP.GetId())
 	if err != nil {
 		return err
 	}
 	if existing != nil {
-		return r.validateExisting(existing, ownerID, tenant, expectedSpec)
+		return nil
 	}
 
-	attachmentLabels := map[string]string{
-		autoCreatedLabel:    "true",
-		autoCreatedForLabel: ownerID,
+	response, err := r.computeInstancesClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: ownerID}.Build())
+	if status.Code(err) == codes.NotFound {
+		return nil
 	}
-	if endpoint := labels[autoCreatedEndpointLabel]; endpoint != "" {
-		attachmentLabels[autoCreatedEndpointLabel] = endpoint
+	if err != nil {
+		return retryOnTransientError(fmt.Errorf("failed to get ComputeInstance %q: %w", ownerID, err))
 	}
+	instance := response.GetObject()
+	if instance.GetMetadata().GetTenant() != tenant || instance.GetMetadata().HasDeletionTimestamp() ||
+		instance.GetStatus().GetState() == privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED {
+		return nil
+	}
+	if !isReadyEndpoint(instance) {
+		return controllers.RequeueAtInterval(errWaiting, recheckInterval)
+	}
+
 	attachment := privatev1.ExternalIPAttachment_builder{
 		Metadata: privatev1.Metadata_builder{
-			Name:   fmt.Sprintf("auto-eipa-%s", externalIP.GetId()),
+			Name:   "auto-eipa-" + externalIP.GetId(),
 			Tenant: tenant,
-			Labels: attachmentLabels,
+			Labels: map[string]string{
+				autoCreatedLabel:    "true",
+				autoCreatedForLabel: ownerID,
+			},
 			Annotations: map[string]string{
 				tenantAnnotation:         tenant,
 				ownerReferenceAnnotation: ownerID,
 			},
 		}.Build(),
-		Spec: expectedSpec,
+		Spec: privatev1.ExternalIPAttachmentSpec_builder{
+			ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: externalIP.GetId()}.Build(),
+			ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ownerID}.Build(),
+		}.Build(),
 	}.Build()
-	_, err = r.externalIPAttachmentsClient.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{Object: attachment}.Build())
-	if status.Code(err) != codes.AlreadyExists {
-		if err != nil {
-			return retryOnTransientError(fmt.Errorf("failed to create automatic ExternalIPAttachment for ExternalIP %q: %w", externalIP.GetId(), err))
-		}
-		r.logger.InfoContext(ctx, "Created deferred automatic ExternalIPAttachment")
+	_, err = r.externalIPAttachmentsClient.Create(ctx,
+		privatev1.ExternalIPAttachmentsCreateRequest_builder{Object: attachment}.Build())
+	switch {
+	case err == nil:
+		r.logger.InfoContext(ctx, "Created automatic ExternalIPAttachment",
+			slog.String("external_ip_id", externalIP.GetId()), slog.String("compute_instance_id", ownerID))
 		return nil
+	case status.Code(err) == codes.AlreadyExists:
+		// The create is idempotent by name.
+		return nil
+	case status.Code(err) == codes.FailedPrecondition:
+		// A gate isn't met yet, for example the VM became not ready meanwhile.
+		return controllers.RequeueAtInterval(err, recheckInterval)
+	default:
+		return retryOnTransientError(fmt.Errorf(
+			"failed to create automatic ExternalIPAttachment for ExternalIP %q: %w", externalIP.GetId(), err))
 	}
-
-	// A concurrent reconcile may have created the unique attachment after our lookup.
-	existing, listErr := r.findAttachment(ctx, externalIP.GetId())
-	if listErr != nil {
-		return listErr
-	}
-	if existing == nil {
-		return controllers.RequeueAfter(
-			fmt.Errorf("ExternalIPAttachment for ExternalIP %q already exists but could not be found", externalIP.GetId()),
-			autoAttachmentRetryDelay,
-		)
-	}
-	return r.validateExisting(existing, ownerID, tenant, expectedSpec)
 }
 
-func (r *function) targetSpec(
-	ctx context.Context,
-	kind string,
-	ownerID string,
-	tenant string,
-	endpoint string,
-) (*privatev1.ExternalIPAttachmentSpec_builder, bool, error) {
-	spec := &privatev1.ExternalIPAttachmentSpec_builder{}
-	switch kind {
-	case computeInstanceKind:
-		response, err := r.computeInstancesClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: ownerID}.Build())
-		if err != nil {
-			return nil, false, retryOnTransientError(fmt.Errorf("failed to get ComputeInstance %q: %w", ownerID, err))
-		}
-		instance := response.GetObject()
-		if !sameTenant(instance.GetMetadata(), tenant) || instance.GetMetadata().HasDeletionTimestamp() {
-			return nil, false, nil
-		}
-		if instance.GetStatus().GetState() != privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING ||
-			!hasComputeInstanceReadyCondition(instance) || instance.GetStatus().GetInternalIpAddress() == "" {
-			return nil, false, nil
-		}
-		spec.ComputeInstance = privatev1.ComputeInstanceLocalReference_builder{Id: ownerID}.Build()
-	case clusterKind:
-		response, err := r.clustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: ownerID}.Build())
-		if err != nil {
-			return nil, false, retryOnTransientError(fmt.Errorf("failed to get Cluster %q: %w", ownerID, err))
-		}
-		cluster := response.GetObject()
-		if !sameTenant(cluster.GetMetadata(), tenant) || cluster.GetMetadata().HasDeletionTimestamp() {
-			return nil, false, nil
-		}
-		if cluster.GetStatus().GetState() != privatev1.ClusterState_CLUSTER_STATE_READY {
-			return nil, false, nil
-		}
-		var targetEndpoint privatev1.ExternalIPAttachmentEndpoint
-		switch endpoint {
-		case "api":
-			targetEndpoint = privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API
-			if cluster.GetStatus().GetApiEndpoint() == "" {
-				return nil, false, nil
-			}
-		case "ingress":
-			targetEndpoint = privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS
-			if cluster.GetStatus().GetIngressEndpoint() == "" {
-				return nil, false, nil
-			}
-		default:
-			return nil, false, fmt.Errorf("deferred Cluster ExternalIP has invalid endpoint %q", endpoint)
-		}
-		spec.Cluster = privatev1.ClusterLocalReference_builder{Id: ownerID}.Build()
-		spec.TargetEndpoint = targetEndpoint
-	case bareMetalInstanceKind:
-		response, err := r.bareMetalInstancesClient.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: ownerID}.Build())
-		if err != nil {
-			return nil, false, retryOnTransientError(fmt.Errorf("failed to get BareMetalInstance %q: %w", ownerID, err))
-		}
-		instance := response.GetObject()
-		if !sameTenant(instance.GetMetadata(), tenant) || instance.GetMetadata().HasDeletionTimestamp() {
-			return nil, false, nil
-		}
-		if instance.GetStatus().GetState() != privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING ||
-			!hasBareMetalReadyCondition(instance) || !hasPrimaryBareMetalAddress(instance) {
-			return nil, false, nil
-		}
-		spec.BaremetalInstance = privatev1.BareMetalInstanceLocalReference_builder{Id: ownerID}.Build()
-	default:
-		return nil, false, fmt.Errorf("deferred automatic ExternalIP has unsupported owner kind %q", kind)
+// isReadyEndpoint reports whether a VM is a ready ExternalIPAttachment endpoint: RUNNING, condition READY true, and
+// the address of its network attachment reported.
+func isReadyEndpoint(instance *privatev1.ComputeInstance) bool {
+	if instance.GetStatus().GetState() != privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING {
+		return false
 	}
-	return spec, true, nil
+	statuses := instance.GetStatus().GetComputeNetworkAttachmentStatuses()
+	if len(statuses) == 0 || statuses[0].GetIpAddress() == "" {
+		return false
+	}
+	for _, condition := range instance.GetStatus().GetConditions() {
+		if condition.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_READY &&
+			condition.GetStatus() == privatev1.ConditionStatus_CONDITION_STATUS_TRUE {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *function) findAttachment(ctx context.Context, externalIPID string) (*privatev1.ExternalIPAttachment, error) {
-	filter := fmt.Sprintf("this.spec.external_ip.id == %s && !has(this.metadata.deletion_timestamp)", strconv.Quote(externalIPID))
+	filter := fmt.Sprintf("this.spec.external_ip.id == %s", strconv.Quote(externalIPID))
 	response, err := r.externalIPAttachmentsClient.List(ctx, privatev1.ExternalIPAttachmentsListRequest_builder{
 		Filter: proto.String(filter),
-		Limit:  proto.Int32(2),
+		Limit:  proto.Int32(1),
 	}.Build())
 	if err != nil {
 		return nil, retryOnTransientError(fmt.Errorf("failed to list ExternalIPAttachments for ExternalIP %q: %w", externalIPID, err))
-	}
-	if len(response.GetItems()) > 1 {
-		return nil, fmt.Errorf("multiple ExternalIPAttachments exist for ExternalIP %q", externalIPID)
 	}
 	if len(response.GetItems()) == 0 {
 		return nil, nil
@@ -303,53 +233,4 @@ func retryOnTransientError(err error) error {
 	default:
 		return err
 	}
-}
-
-func (r *function) validateExisting(
-	attachment *privatev1.ExternalIPAttachment,
-	ownerID string,
-	tenant string,
-	expectedSpec *privatev1.ExternalIPAttachmentSpec,
-) error {
-	externalIPID := expectedSpec.GetExternalIp().GetId()
-	metadata := attachment.GetMetadata()
-	labels := metadata.GetLabels()
-	if labels[autoCreatedLabel] != "true" || labels[autoCreatedForLabel] != ownerID ||
-		metadata.GetTenant() != tenant || !proto.Equal(attachment.GetSpec(), expectedSpec) {
-		return fmt.Errorf("ExternalIP %q is already attached by a different or inconsistent ExternalIPAttachment", externalIPID)
-	}
-	return nil
-}
-
-func sameTenant(metadata *privatev1.Metadata, tenant string) bool {
-	return metadata != nil && metadata.GetTenant() == tenant
-}
-
-func hasComputeInstanceReadyCondition(instance *privatev1.ComputeInstance) bool {
-	for _, condition := range instance.GetStatus().GetConditions() {
-		if condition.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_READY &&
-			condition.GetStatus() == privatev1.ConditionStatus_CONDITION_STATUS_TRUE {
-			return true
-		}
-	}
-	return false
-}
-
-func hasBareMetalReadyCondition(instance *privatev1.BareMetalInstance) bool {
-	for _, condition := range instance.GetStatus().GetConditions() {
-		if condition.GetType() == privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY &&
-			condition.GetStatus() == privatev1.ConditionStatus_CONDITION_STATUS_TRUE {
-			return true
-		}
-	}
-	return false
-}
-
-func hasPrimaryBareMetalAddress(instance *privatev1.BareMetalInstance) bool {
-	for _, attachment := range instance.GetStatus().GetNetworkAttachmentStatuses() {
-		if attachment.GetPrimary() && attachment.GetIpAddress() != "" {
-			return true
-		}
-	}
-	return false
 }

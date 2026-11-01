@@ -348,6 +348,15 @@ Keycloak, this means the `realm-management` client roles: `manage-realm`, `manag
 `view-realm`, `view-users`). You can reuse the same credentials as `auth.controllerCredentials`
 if the service account has both API access and IDP management permissions.
 
+The same `idp.credentials` principal creates and deletes service-account clients. Grant it the
+`realm-management` client roles `create-client` and `view-clients` in addition to its existing
+roles. `view-clients` is read-only; the controller uses it to check one stored client UUID when a
+registration-token delete returns HTTP 401. Each created client's registration access token is
+stored in a system-scoped Secret through the private Secrets API and authorizes its deletion. The
+client credential is stored in a tenant-scoped Secret referenced by the service account's status.
+The Fulfillment gRPC server reads the IDP credentials from `/etc/fulfillment-grpc-server/idp`; no
+`realm-admin` or `manage-clients` grant is required.
+
 ### 6. Trusted Token Issuers
 
 The fulfillment service maintains a single list of trusted token issuers, configured via the
@@ -577,7 +586,8 @@ The authorization policy distinguishes between the following subject categories:
 2. **Tenant Admin Subjects**: Users with the `tenant-admin` realm role.
    They inherit all client permissions **plus** access to user management methods
    (`Users/Create`, `Users/Get`, `Users/List`, `Users/Update`, `Users/Delete`) and IdP management
-   methods (`IdentityProviders/Create`, `Get`, `List`, `Update`, `Delete`).
+   methods (`IdentityProviders/Create`, `Get`, `List`, `Update`, `Delete`) and service-account
+   management methods (`ServiceAccounts/Create`, `Get`, `List`, `Update`, `Delete`).
 
 3. **Tenant IdP Manager Subjects**: Users with the `tenant-idp-manager` realm role.
    They inherit all client permissions **plus** access to IdP management methods
@@ -620,6 +630,7 @@ The authorization policy allows:
 
 4. **Tenant Admins** (in addition to client permissions):
    - Users: `Create`, `Get`, `List`, `Update`, `Delete`
+   - Service accounts: `Create`, `Get`, `List`, `Update`, `Delete`
 
 5. **Admin Users**:
    - All methods (full access)
@@ -649,6 +660,8 @@ The fulfillment service implements a comprehensive authorization model that comb
 - All client-level permissions (inherits from `has_client_permissions`)
 - User management (Create/Get/List/Update/Delete users within their tenant)
 - IdP management (Full CRUD on IdentityProviders within their tenant)
+- Service-account management (Create/Get/List/Update/Delete service accounts within
+  their tenant)
 - Bare-metal catalog item management (Create/Update/Delete tenant-scoped catalog items)
 - Project creation
 

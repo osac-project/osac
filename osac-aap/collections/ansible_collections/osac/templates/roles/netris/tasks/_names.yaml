@@ -1,0 +1,9 @@
+---
+# The only place that builds Netris object names from API IDs.
+# Needs netris_in from _input.yaml. Sets netris_names {vpc, vn_ipam, vnet,
+#   subnet_ipam, pool_ipam, natgw_snat, eipa_dnat, server_cluster,
+#   eip_reservation};
+#   a name whose source ID the task does not have is "".
+- name: Build the Netris object names
+  ansible.builtin.set_fact:
+    netris_names: "{{ netris_in | osac.templates.netris_contract_names }}"

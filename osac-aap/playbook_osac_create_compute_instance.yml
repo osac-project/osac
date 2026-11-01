@@ -53,22 +53,36 @@
         _cr_requested_tiers: >-
           {{ ([compute_instance.spec.bootDisk.storageTier | default('')]
               + (compute_instance.spec.additionalDisks | default([]) | map(attribute='storageTier', default='') | list))
-             | select | unique | list }}
+             | map('trim') | map('lower') | select | unique | list }}
 
     - name: Filter storage tier definitions to requested tiers for JIT storage
       when: (osac_job_vars.storage_tier_definitions | default([])) | length > 0
       block:
-        - name: Filter to only the requested tiers
+        - name: Filter to only the requested tiers without an existing StorageClass mapping
           ansible.builtin.set_fact:
             _jit_storage_tiers: >-
-              {{ osac_job_vars.storage_tier_definitions
-                 | selectattr('name', 'in', _cr_requested_tiers) | list }}
+              {% set _mapped_tiers = [] -%}
+              {% for _sc in tenant_storage_class_storage_classes -%}
+              {% set _sc_name = _sc.name | default('', true) | string | trim -%}
+              {% set _sc_tier = _sc.tier | default('', true) | string | trim | lower -%}
+              {% if (_sc_name != '') and (_sc_tier != '') and (_sc_tier not in _mapped_tiers) -%}
+              {% set _ = _mapped_tiers.append(_sc_tier) -%}
+              {% endif -%}
+              {% endfor -%}
+              {% set _matched = [] -%}
+              {% for _td in osac_job_vars.storage_tier_definitions -%}
+              {% set _td_tier = _td.name | default('', true) | string | trim | lower -%}
+              {% if (_td_tier in _cr_requested_tiers) and (_td_tier not in _mapped_tiers) -%}
+              {% set _ = _matched.append(_td) -%}
+              {% endif -%}
+              {% endfor -%}
+              {{ _matched }}
 
-        - name: Warn if no requested tiers found in storage_tier_definitions
+        - name: Warn if no unmapped requested tiers found in storage_tier_definitions
           ansible.builtin.debug:
             msg: >-
               None of the requested storage tiers {{ _cr_requested_tiers | to_json }}
-              found in storage_tier_definitions.
+              require JIT provisioning from storage_tier_definitions.
               Available tiers: {{ osac_job_vars.storage_tier_definitions | map(attribute='name') | list | to_json }}.
               JIT storage provisioning will be skipped.
           when: _jit_storage_tiers | length == 0
@@ -103,11 +117,30 @@
         msg: >-
           ComputeInstance '{{ compute_instance_name }}' has no tenant_storage_classes
           available. Either the osac-operator CI controller should inject the resolved
-          storageClasses list before triggering provisioning, or JIT storage provisioning
-          via storage_tier_definitions must succeed.
+          storageClasses list before triggering provisioning (check Tenant StorageReady
+          and ClusterStorageReady conditions), or JIT storage provisioning via
+          storage_tier_definitions must succeed.
       when:
         - tenant_storage_class_storage_classes | length == 0
         - _jit_storage_tiers is not defined or _jit_storage_tiers | length == 0
+
+    - name: Deduplicate resolved tenant storage classes
+      ansible.builtin.set_fact:
+        tenant_storage_class_storage_classes: >-
+          {% set _normalized = [] -%}
+          {% for _sc in tenant_storage_class_storage_classes -%}
+          {% set _ = _normalized.append(_sc | combine({'tier': (_sc.tier | default('') | string | trim | lower)})) -%}
+          {% endfor -%}
+          {{ _normalized | unique | list }}
+
+    - name: Validate requested storage tiers resolve unambiguously before finalizer attachment
+      ansible.builtin.include_role:
+        name: osac.service.tenant_storage_class
+      vars:
+        tenant_storage_class_storage_tier: "{{ _req_tier }}"
+      loop: "{{ _cr_requested_tiers }}"
+      loop_control:
+        loop_var: _req_tier
 
   tasks:
     - name: Display compute instance information

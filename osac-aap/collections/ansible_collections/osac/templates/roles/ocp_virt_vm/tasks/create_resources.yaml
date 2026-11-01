@@ -64,6 +64,9 @@
         source:
           registry:
             url: "docker://{{ vm_image_source }}"
+            # The node pulls the image, so the import needs no tenant network
+            # (VMaaS networking design, DataVolumes).
+            pullMethod: node
         pvc:
           accessModes:
             - ReadWriteOnce

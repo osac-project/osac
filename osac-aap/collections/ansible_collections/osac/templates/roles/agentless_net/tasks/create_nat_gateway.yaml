@@ -1,3 +1,5 @@
 ---
 - name: Ensure AgentlessNet NATGateway SNAT state
   ansible.builtin.include_tasks: _nat_gateway.yaml
+  vars:
+    agentless_net_nat_gateway_action: ensure_nat_gateway

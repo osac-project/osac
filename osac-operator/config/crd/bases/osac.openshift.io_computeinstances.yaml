@@ -189,17 +189,15 @@ spec:
                   At most one attachment is supported, and the complete value is immutable after creation.
                 items:
                   description: 'ComputeNetworkAttachment defines one NIC: a Subnet
-                    CR on the hub plus optional SecurityGroup CR names.'
+                    plus its SecurityGroups, by API ID.'
                   properties:
                     securityGroupRefs:
-                      description: SecurityGroupRefs lists SecurityGroup CR names
-                        in the same namespace as the ComputeInstance.
+                      description: SecurityGroupRefs lists the SecurityGroup API IDs.
                       items:
                         type: string
                       type: array
                     subnetRef:
-                      description: SubnetRef is the name of the Subnet CR in the same
-                        namespace as the ComputeInstance.
+                      description: SubnetRef is the API ID of the Subnet.
                       maxLength: 253
                       minLength: 1
                       type: string
@@ -386,6 +384,60 @@ spec:
                   IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
                   Populated when the instance is ready (phase Running).
                 type: string
+              jobs:
+                description: |-
+                  Jobs tracks the provision and deprovision jobs (manager none), one entry
+                  per task (network manager contract §4.7 Job tracking).
+                items:
+                  description: |-
+                    NetworkJobStatus tracks the latest AAP job of one task on one manager
+                    (contract §4.7 Job tracking). OSAC never removes an entry.
+                  properties:
+                    attempt:
+                      description: Attempt counts the task's launches on this manager.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                    jobID:
+                      description: JobID is the AAP job ID; empty until AAP returned
+                        it.
+                      type: string
+                    manager:
+                      description: Manager is the manager type the task runs on.
+                      enum:
+                      - fabric
+                      - kubernetes
+                      - none
+                      type: string
+                    message:
+                      description: |-
+                        Message is the job's osac_error message, the AAP failure text, or why
+                        OSAC rejected the result; while retrying it also names the next retry time.
+                      type: string
+                    state:
+                      description: State is the state of the latest job.
+                      enum:
+                      - Running
+                      - Retrying
+                      - Succeeded
+                      - Failed
+                      - Cancelled
+                      type: string
+                    task:
+                      description: Task is the task name, for example create_subnet.
+                      minLength: 1
+                      type: string
+                  required:
+                  - attempt
+                  - manager
+                  - state
+                  - task
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - task
+                - manager
+                x-kubernetes-list-type: map
               lastRestartedAt:
                 description: |-
                   LastRestartedAt records when the last restart was initiated by the controller.
@@ -414,6 +466,13 @@ spec:
                   transition would otherwise be dated at recovery. It follows the RunningConfigSince
                   pattern: stamped once per phase change, kept when unchanged.
                 format: date-time
+                type: string
+              provisionConfigVersion:
+                description: |-
+                  ProvisionConfigVersion is the desiredConfigVersion the latest provision
+                  attempt ran with. The configuration is applied when the provision entry
+                  succeeded with the current desiredConfigVersion; a later spec change
+                  (for example a restart request) runs the provision job again as a new attempt.
                 type: string
               provisioningJobs:
                 description: |-

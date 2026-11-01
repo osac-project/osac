@@ -1,15 +1,11 @@
 # Kind dev-full overlay -- layered on top of kind-instance.yaml (PROFILE=dev-full).
 #
-# Keep Subnet provisioning enabled so every tenant's cudn_net AAP job creates
-# its target namespace and ClusterUserDefinedNetwork object. Kind installs an
-# API-only fake CUDN CRD from kind-infra.yaml; it accepts the object but does not
-# provide a CUDN/OVN dataplane or validate tenant subnet isolation. VMs continue
-# to use Kind's default pod network and the cluster-wide l2bridge binding.
+# kind-instance.yaml disables provider networking, so the seeded
+# VirtualNetwork/Subnet/SecurityGroup become READY without AAP networking jobs.
 operator:
   image:
     pullPolicy: IfNotPresent
   controllers:
-    networkingProvisioning: true
     storage: true
     volume: true
 

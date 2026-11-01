@@ -1,0 +1,14 @@
+---
+# Apply a conditional JSON patch to a SecurityGroup NetworkPolicy. Input:
+# cudn_evpn_policy (as read) and cudn_evpn_patch {changed, patch}. The patch
+# starts with test ops on uid and resourceVersion: when anything changed the
+# policy since it was read, the API server rejects it (HTTP 422) and the task
+# fails as retryable, so a rule update and a bind never overwrite each other.
+- name: Patch the SecurityGroup policy
+  when: cudn_evpn_patch.changed
+  kubernetes.core.k8s_json_patch:
+    api_version: networking.k8s.io/v1
+    kind: NetworkPolicy
+    namespace: "{{ cudn_evpn_policy.metadata.namespace }}"
+    name: "{{ cudn_evpn_policy.metadata.name }}"
+    patch: "{{ cudn_evpn_patch.patch }}"

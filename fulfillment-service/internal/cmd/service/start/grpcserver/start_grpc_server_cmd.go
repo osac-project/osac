@@ -55,9 +55,11 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
+	"github.com/osac-project/osac/fulfillment-service/internal/startup"
 	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
+	"github.com/osac-project/osac/fulfillment-service/internal/version"
 	_ "github.com/osac-project/osac/proto/gen/cleanapi"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -196,6 +198,20 @@ func Cmd() *cobra.Command {
 		},
 		emergencyServiceAccountsFlagHelp,
 	)
+	flags.BoolVar(
+		&runner.args.networkingProvisioningEnabled,
+		"networking-provisioning-enabled",
+		true,
+		"Value of global.networking.provisioningEnabled: whether OSAC runs provider networking jobs. "+
+			"It can't change after installation.",
+	)
+	flags.StringSliceVar(
+		&runner.args.networkingExcludedIPv4CIDRs,
+		"networking-excluded-ipv4-cidrs",
+		nil,
+		"Value of global.networking.excludedIpv4Cidrs: comma separated canonical IPv4 CIDRs that the "+
+			"provider's infrastructure uses.",
+	)
 	vault.AddBaseFlags(flags)
 	network.AddGrpcKeepaliveFlags(flags)
 	runner.args.services = services.RegisterFlags(flags)
@@ -220,6 +236,9 @@ type runnerContext struct {
 		emergencyServiceAccounts []string
 		vaultBase                vault.BaseConfig
 		services                 *services.Flags
+
+		networkingProvisioningEnabled bool
+		networkingExcludedIPv4CIDRs   []string
 	}
 }
 
@@ -229,6 +248,15 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	c.args.services.EnableAllIfNoneSet(cmd.Flags())
 	if err := c.args.services.Validate(); err != nil {
 		return fmt.Errorf("invalid service flags: %w", err)
+	}
+	excludedIPv4CIDRs, err := servers.ParseExcludedIPv4CIDRs(c.args.networkingExcludedIPv4CIDRs)
+	if err != nil {
+		return fmt.Errorf("invalid --networking-excluded-ipv4-cidrs: %w", err)
+	}
+	networkingSettings := servers.NetworkingSettings{
+		ProvisioningEnabled: c.args.networkingProvisioningEnabled,
+		ExcludedIPv4CIDRs:   excludedIPv4CIDRs,
+		BareMetalEnabled:    c.args.services.BMaaS,
 	}
 
 	// Get the context and create a cancellable version:
@@ -374,6 +402,19 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return err
 	}
 	shutdown.AddDatabasePool("database", 0, dbPool)
+
+	// Compare the installation settings with the ones stored at the first start, and refuse to start on a change
+	// that the installation doesn't support:
+	c.logger.InfoContext(ctx, "Checking installation settings")
+	err = startup.CheckInstallationSettings(ctx, c.logger, dbPool, startup.InstallationSettings{
+		ProvisioningEnabled: networkingSettings.ProvisioningEnabled,
+		EnabledServices:     c.args.services.EnabledServices(),
+		Release:             version.Get(),
+		ExcludedIPv4CIDRs:   networkingSettings.ExcludedIPv4CIDRs,
+	})
+	if err != nil {
+		return err
+	}
 
 	// Create the network listener:
 	listener, err := network.NewListener().
@@ -669,6 +710,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	privateCapabilitiesServer, err := servers.NewPrivateCapabilitiesServer().
 		SetLogger(c.logger).
 		SetServiceFlags(c.args.services).
+		SetNetworkingProvisioningEnabled(networkingSettings.ProvisioningEnabled).
 		AddAuthnTrustedTokenIssuers(c.args.trustedTokenIssuers...).
 		Build()
 	if err != nil {
@@ -713,6 +755,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      privateUsersServer,
 		Services:                c.args.services,
+		NetworkingSettings:      networkingSettings,
 	})
 	if err != nil {
 		return err

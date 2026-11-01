@@ -398,6 +398,18 @@ allow if {
   }
 }
 
+# Tenant admins manage machine identities within their tenant.
+allow if {
+  is_tenant_admin
+  grpc_method in {
+    "/osac.public.v1.ServiceAccounts/Create",
+    "/osac.public.v1.ServiceAccounts/Get",
+    "/osac.public.v1.ServiceAccounts/List",
+    "/osac.public.v1.ServiceAccounts/Update",
+    "/osac.public.v1.ServiceAccounts/Delete",
+  }
+}
+
 # Tenant IdP managers can manage identity providers and assign users to roles
 allow if {
   is_tenant_idp_manager

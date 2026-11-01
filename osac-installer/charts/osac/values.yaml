@@ -39,41 +39,39 @@ global:
       enabled: true
     maas:
       enabled: true
-  # Primary networking configuration shared with the operator and AAP
-  # subcharts. Select fabricManager and/or k8sManager; Helm derives AAP
-  # backends and NetworkClass defaults from those manager names.
+  # Networking settings (unified networking design). provisioningEnabled is
+  # fixed at installation. fabricManager names the provider's Fabric Manager
+  # registration (a ConfigMap the admin applies; it is not a Helm value) and
+  # has no default. The installer's NetworkClass step creates the NetworkClass
+  # from these values; none of them can change after installation.
   networking:
-    # Supported facade profiles:
-    #   - fabricManager: netris, k8sManager: ""     → fabricManager netris
-    #   - fabricManager: "", k8sManager: k8s_only   → k8sManager k8s_only (default)
-    # CUDN is supported only for CaaS/BMaaS with an enabled operator and
-    # ci.steps; vlan remains reserved and fails during render.
+    # Run networking jobs through the network managers. false: networking
+    # resources become READY without provider work (reason ProvisioningDisabled).
+    provisioningEnabled: true
+    # Canonical IPv4 CIDRs of the provider's infrastructure (management,
+    # provisioning, node networks, and the DNS resolvers given to workloads).
+    excludedIpv4Cidrs: []
+    # [REQUIRED] Registration name of the provider's Fabric Manager.
     fabricManager: ""
-    k8sManager: k8s_only
-    netris:
-      controllerUrl: ""
-      # Validate the Netris controller certificate. Keep enabled for production;
-      # set false only in a separately managed test profile.
-      validateCerts: true
-      # Optional customer-created ConfigMap in the AAP namespace. It must
-      # contain the PEM bundle under the fixed key bundle.pem.
-      caBundle:
-        configMap: ""
-      credentials:
-        username: ""
-      siteId: ""
-      tenantId: ""
-      tenantName: ""
-      mgmtVpcId: ""
-      mgmtVpcName: ""
-      resourceClassMap: ""
-    # An empty block causes Helm to generate the default NetworkClass from
-    # fabricManager/k8sManager. Explicit fields override generated values.
-    networkClass: {}
-  expertOverrides:
-    aap: false
-    networkClass: false
-    networkManagers: false
+    # OSAC Kubernetes Manager; required with VMaaS. "" or cudn_evpn.
+    k8sManager: ""
+    networkClass:
+      defaults:
+        virtualNetworkIPv4CIDR: 10.200.0.0/16
+        subnetIPv4CIDR: 10.200.0.0/20
+        ingressRules: []
+        egressRules:
+        - protocol: PROTOCOL_ALL
+          ipv4Cidr: 0.0.0.0/0
+      eastWestCapabilities:
+        supportsEastWestEthernet: false
+      # Optional Subnet address plan; without it the installer derives one
+      # from the enabled services and k8sManager. Shares are multiples of
+      # 0.0625 that sum to 1.
+      # addressPlan:
+      #   overlay: 0.5
+      #   fabric: 0.25
+      #   lbVip: 0.25
 
 cliImage: quay.io/openshift/origin-cli:4.20.0
 
@@ -96,9 +94,6 @@ operatorCrds:
 # --- Operator ---
 operator:
   enabled: true
-  # Exact Netris hostname -> BareMetalInstanceType ID (private API catalog).
-  # Nonempty maps create osac-fabric-domain-inventory in the release namespace.
-  fabricDomainInventory: {}
   image:
     repository: ghcr.io/osac-project/osac-operator
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
@@ -144,10 +139,6 @@ operator:
   controllers:
     tenant: true
     networking: true
-    # networkingProvisioning dispatches VirtualNetwork/Subnet/SecurityGroup/
-    # NATGateway to AAP. Distinct from controllers.networking, which only
-    # reconciles NetworkClass. Set false for local environments without a fabric.
-    networkingProvisioning: true
     storage: true
   # Provider-to-endpoint map consumed by the Volume controller. Node-local
   # providers such as LVMS use "none" because they do not dial a vendor gRPC endpoint.
@@ -161,12 +152,6 @@ operator:
   remoteClusterKubeconfigSecretKey: kubeconfig
   hubAccess:
     enabled: false
-  # Network manager ConfigMaps use the nested operator.networkManagers map
-  # (fabricManagers / k8sManagers). Defaults live in the osac-operator subchart;
-  # override operator.networkManagers here to enable netris/k8s_only or change
-  # capabilitiesSyncInterval. Manager registrations can set
-  # externalIPContractVersion / externalIPAttachmentContractVersion /
-  # natGatewayContractVersion select independent v1 result contracts.
 
 # --- Fulfillment Service ---
 service:
@@ -320,29 +305,23 @@ aap:
     clusterFulfillment:
       enabled: false
       config:
-        NETWORK_CLASS: ""
-        NETWORK_STEPS_COLLECTION: ""
         DNS_CLASS: "dns.route53.dns"
         DNS_ZONE: ""
-        SERVER_SSH_BASTION_HOST: ""
-        SERVER_SSH_BASTION_USER: ""
-        SERVER_SSH_USER: ""
-        SERVER_MGMT_ROUTE_DESTINATION: ""
-        SERVER_MGMT_ROUTE_GATEWAY: ""
         EXTERNAL_ACCESS_BASE_DOMAIN: ""
         EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: ""
         EXTERNAL_ACCESS_API_INTERNAL_NETWORK: ""
         HOSTED_CLUSTER_BASE_DOMAIN: ""
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
-        PARKING_VNET_NAME: ""
       secret:
         AWS_ACCESS_KEY_ID: ""
         AWS_SECRET_ACCESS_KEY: ""
-        SERVER_SSH_KEY: ""
-        SERVER_SSH_BASTION_KEY: ""
+    # ConfigMap and Secret network-fulfillment-ig: network manager settings
+    # and credentials, written verbatim. Keys start with the registration
+    # name in upper case (for example NETRIS_CONTROLLER_URL). Required with
+    # provisioningEnabled.
     networkFulfillment:
-      enabled: false
+      enabled: true
       config: {}
       secret: {}
     storageFulfillment:
@@ -530,34 +509,3 @@ lvms:
   # after install. For CI/development environments only — production deployments
   # should use their own storage operators (Ceph, Pure, VAST, etc.).
   enabled: false
-
-networkClass:
-  # Legacy expert override. Used only when global.expertOverrides.networkClass
-  # is true. Normal deployments leave this block disabled and configure
-  # global.networking (and optional global.networking.networkClass overrides)
-  # instead — the create-network-class hook derives the NetworkClass from the
-  # facade.
-  #
-  # When enabling this expert path, set title and at least one of
-  # k8sManager/fabricManager. The corresponding manager must already be
-  # registered via operator.networkManagers.
-  enabled: false
-  # [REQUIRED when enabled] Human-friendly short title — the fulfillment service
-  # rejects NetworkClass creation without one (NC-VAL-02).
-  title: ""
-  description: ""
-  k8sManager: ""
-  fabricManager: ""
-  defaults:
-    # Tenant-onboarding defaults used when this expert block is enabled.
-    virtualNetworkIPv4CIDR: "10.200.0.0/16"
-    subnetIPv4CIDR: "10.200.0.0/20"
-    enableNatGateway: false
-    egressRules:
-    - protocol: PROTOCOL_ALL
-      ipv4Cidr: "0.0.0.0/0"
-  # Example expert override (k8s-only):
-  # enabled: true
-  # title: "K8s-only networking"
-  # fabricManager: ""
-  # k8sManager: "k8s_only"

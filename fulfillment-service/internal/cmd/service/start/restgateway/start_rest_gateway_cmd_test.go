@@ -108,6 +108,8 @@ var sharedHandlers = []string{
 	"public/v1.RegisterExternalIPAttachmentsHandler",
 	"public/v1.RegisterRolesHandler",
 	"public/v1.RegisterRoleBindingsHandler",
+	"public/v1.RegisterServiceAccountsHandler",
+	"public/v1.RegisterSecretsHandler",
 	"public/v1.RegisterJsonWebKeySetHandler",
 	"public/v1.RegisterStorageTiersHandler",
 	"public/v1.RegisterSelfSubjectAccessReviewsHandler",
@@ -127,6 +129,7 @@ var sharedHandlers = []string{
 	"private/v1.RegisterExternalIPAttachmentsHandler",
 	"private/v1.RegisterRolesHandler",
 	"private/v1.RegisterRoleBindingsHandler",
+	"private/v1.RegisterServiceAccountsHandler",
 	"private/v1.RegisterSelfSubjectAccessReviewsHandler",
 }
 

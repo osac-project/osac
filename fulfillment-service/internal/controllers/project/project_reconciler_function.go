@@ -150,6 +150,11 @@ func (r *function) Run(ctx context.Context, project *privatev1.Project) error {
 			UpdateMask: updateMask,
 		}.Build())
 		if err != nil {
+			if project.HasMetadata() &&
+				project.GetMetadata().HasDeletionTimestamp() &&
+				status.Code(err) == codes.FailedPrecondition {
+				return controllers.RequeueAfter(err, defaultNetworkingDeleteRetryDelay)
+			}
 			return err
 		}
 	}

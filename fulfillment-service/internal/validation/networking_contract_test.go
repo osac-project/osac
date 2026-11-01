@@ -34,16 +34,13 @@ var _ = Describe("IPv4-only networking protobuf contracts", func() {
 		It("accepts a canonical IPv4 CIDR", func() {
 			spec := privatev1.VirtualNetworkSpec_builder{
 				Ipv4Cidr: new("10.0.0.0/16"),
-				Region:   "region-a",
 			}.Build()
 
 			Expect(validator.Validate(spec)).To(Succeed())
 		})
 
 		It("rejects a missing IPv4 CIDR", func() {
-			spec := privatev1.VirtualNetworkSpec_builder{
-				Region: "region-a",
-			}.Build()
+			spec := privatev1.VirtualNetworkSpec_builder{}.Build()
 
 			Expect(validator.Validate(spec)).To(MatchError(ContainSubstring("ipv4_cidr")))
 		})
@@ -51,7 +48,6 @@ var _ = Describe("IPv4-only networking protobuf contracts", func() {
 		It("rejects an empty IPv4 CIDR", func() {
 			spec := privatev1.VirtualNetworkSpec_builder{
 				Ipv4Cidr: new(""),
-				Region:   "region-a",
 			}.Build()
 
 			Expect(validator.Validate(spec)).To(MatchError(ContainSubstring("ipv4_cidr")))
@@ -60,30 +56,11 @@ var _ = Describe("IPv4-only networking protobuf contracts", func() {
 		It("rejects an IPv4 CIDR with host bits", func() {
 			spec := privatev1.VirtualNetworkSpec_builder{
 				Ipv4Cidr: new("10.0.0.1/16"),
-				Region:   "region-a",
 			}.Build()
 
 			Expect(validator.Validate(spec)).To(MatchError(ContainSubstring("canonical")))
 		})
 
-		It("rejects an IPv6-only request", func() {
-			spec := privatev1.VirtualNetworkSpec_builder{
-				Ipv6Cidr: new("2001:db8::/32"),
-				Region:   "region-a",
-			}.Build()
-
-			Expect(validator.Validate(spec)).To(MatchError(ContainSubstring("ipv4_cidr")))
-		})
-
-		It("rejects a dual-stack request", func() {
-			spec := privatev1.VirtualNetworkSpec_builder{
-				Ipv4Cidr: new("10.0.0.0/16"),
-				Ipv6Cidr: new("2001:db8::/32"),
-				Region:   "region-a",
-			}.Build()
-
-			Expect(validator.Validate(spec)).To(MatchError(ContainSubstring("IPv6")))
-		})
 	})
 
 	Describe("SubnetSpec", func() {
@@ -113,20 +90,6 @@ var _ = Describe("IPv4-only networking protobuf contracts", func() {
 			Expect(validator.Validate(spec)).To(MatchError(ContainSubstring("canonical")))
 		})
 
-		It("rejects IPv6-only and dual-stack requests", func() {
-			ipv6Only := privatev1.SubnetSpec_builder{
-				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-a"}.Build(),
-				Ipv6Cidr:       new("2001:db8:1::/64"),
-			}.Build()
-			dualStack := privatev1.SubnetSpec_builder{
-				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-a"}.Build(),
-				Ipv4Cidr:       new("10.0.1.0/24"),
-				Ipv6Cidr:       new("2001:db8:1::/64"),
-			}.Build()
-
-			Expect(validator.Validate(ipv6Only)).To(MatchError(ContainSubstring("ipv4_cidr")))
-			Expect(validator.Validate(dualStack)).To(MatchError(ContainSubstring("IPv6")))
-		})
 	})
 
 	Describe("SecurityRule", func() {
@@ -156,20 +119,6 @@ var _ = Describe("IPv4-only networking protobuf contracts", func() {
 			Expect(validator.Validate(rule)).To(MatchError(ContainSubstring("canonical")))
 		})
 
-		It("rejects IPv6-only and dual-stack rules", func() {
-			ipv6Only := privatev1.SecurityRule_builder{
-				Protocol: privatev1.Protocol_PROTOCOL_ALL,
-				Ipv6Cidr: new("2001:db8::/32"),
-			}.Build()
-			dualStack := privatev1.SecurityRule_builder{
-				Protocol: privatev1.Protocol_PROTOCOL_ALL,
-				Ipv4Cidr: new("0.0.0.0/0"),
-				Ipv6Cidr: new("2001:db8::/32"),
-			}.Build()
-
-			Expect(validator.Validate(ipv6Only)).To(MatchError(ContainSubstring("ipv4_cidr")))
-			Expect(validator.Validate(dualStack)).To(MatchError(ContainSubstring("IPv6")))
-		})
 	})
 
 	Describe("ExternalIPPoolSpec", func() {

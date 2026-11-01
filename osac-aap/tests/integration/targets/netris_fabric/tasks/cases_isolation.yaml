@@ -1,0 +1,400 @@
+---
+# Case 10 (part 1): cases the deleted netris_idempotency and netris_external_ip
+# targets covered: tenant isolation, drift, owner proof that fails closed and a
+# list error before any POST.
+
+# --- tenant isolation ---------------------------------------------------------
+- name: Isolation - a VPC of another tenant with the name
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: reset}
+      - path: seed
+        body:
+          collection: vpcs
+          objects: [{id: 55, name: "{{ nf_vpc_name }}", adminTenant: {id: 999}, vni: 5}]
+
+- name: Isolation - create refuses the foreign VPC as final
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: iso-vn-create-foreign
+    sft_expect: final
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Isolation - the refused create wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: Isolation - delete never deletes the foreign VPC
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_virtual_network
+    sft_label: iso-vn-delete-foreign
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Isolation - the foreign VPC is untouched
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_state.vpcs | length == 1
+    quiet: true
+
+- name: Isolation - a pool allocation of another tenant
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: reset}
+      - path: seed
+        body:
+          collection: allocations
+          objects: [{id: 900, name: "osac-pool-{{ nf_ids.pool }}", prefix: "{{ nf_pool_cidr }}", tenant: {id: 99}}]
+
+- name: Isolation - pool create refuses the foreign allocation
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_external_ip_pool
+    sft_label: iso-pool-create-foreign
+    sft_expect: final
+    nf_job: "{{ nf_pool_job }}"
+
+- name: Isolation - pool delete never deletes the foreign allocation
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_external_ip_pool
+    sft_label: iso-pool-delete-foreign
+    sft_expect: final
+    nf_job: "{{ nf_pool_job }}"
+
+- name: Isolation - the foreign allocation is untouched
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_state.allocations | length == 1
+    quiet: true
+
+- name: Isolation - a V-Net of another tenant, an IPAM subnet of ours, in a VirtualNetwork of ours
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: "{{ nf_reset }}"}
+
+- name: Isolation - create the VirtualNetwork
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: iso-vn-create
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Isolation - a V-Net of another tenant with the Subnet's name
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - path: seed
+        body:
+          collection: vnets
+          objects: [{id: 77, name: "{{ nf_sn_name }}", vpc: {id: 101}, tenant: {id: 999}, sites: [{id: 1}], vxlanID: 4242}]
+
+- name: Isolation - create_subnet refuses the foreign V-Net as final
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: iso-subnet-create-foreign-vnet
+    sft_expect: final
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Isolation - the refused create wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: Isolation - the Subnet's IPAM subnet is ours
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - path: seed
+        body:
+          collection: ipam_subnets
+          objects: [{id: 88, name: "{{ nf_sn_name }}", prefix: "{{ nf_subnet_cidr }}", purpose: common, vpc: {id: 101}, tenant: {id: 2}, sites: [{id: 1}]}]
+
+- name: Isolation - delete_subnet deletes only its own IPAM subnet and leaves the foreign V-Net
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_subnet
+    sft_label: iso-subnet-delete-foreign-vnet
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Isolation - only the IPAM subnet was deleted
+  ansible.builtin.assert:
+    that:
+      - nf_write_kinds == ['DELETE /api/v2/ipam/subnet']
+      - nf_state.vnets | map(attribute='id') | list == [77]
+    quiet: true
+
+- name: Isolation - an IPAM subnet of another tenant with the Subnet's name
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: remove, body: {collection: vnets, id: 77}}
+      - path: seed
+        body:
+          collection: ipam_subnets
+          objects: [{id: 89, name: "{{ nf_sn_name }}", prefix: "{{ nf_subnet_cidr }}", purpose: common, vpc: {id: 101}, tenant: {id: 999}, sites: [{id: 1}]}]
+
+- name: Isolation - create_subnet refuses the foreign IPAM subnet as final
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: iso-subnet-create-foreign-ipam
+    sft_expect: final
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Isolation - the refused create wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+# --- drift ---------------------------------------------------------------------
+- name: Drift - an IPAM subnet of ours with another prefix, and a V-Net of ours in another VPC
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: remove, body: {collection: ipam_subnets, id: 89}}
+      - path: seed
+        body:
+          collection: ipam_subnets
+          objects: [{id: 90, name: "{{ nf_sn_name }}", prefix: 10.99.1.0/24, purpose: common, vpc: {id: 101}, tenant: {id: 2}, sites: [{id: 1}]}]
+
+- name: Drift - create_subnet fails final on the IPAM prefix drift before any write
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: drift-subnet-ipam-prefix
+    sft_expect: final
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Drift - the IPAM prefix drift wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: Drift - replace the drifted IPAM subnet by a V-Net in another VPC
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: remove, body: {collection: ipam_subnets, id: 90}}
+      - path: seed
+        body:
+          collection: vnets
+          objects: [{id: 78, name: "{{ nf_sn_name }}", vpc: {id: 555}, tenant: {id: 2}, sites: [{id: 1}], vxlanID: 4243}]
+
+- name: Drift - create_subnet fails final on the VPC drift without re-creating the V-Net
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: drift-subnet-vpc
+    sft_expect: final
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Drift - the VPC drift wrote nothing
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_state.vnets | length == 1
+    quiet: true
+
+- name: Drift - an IPAM allocation of the VirtualNetwork with another prefix
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: reset}
+      - path: seed
+        body:
+          collection: allocations
+          objects: [{id: 91, name: "{{ nf_vpc_name }}", prefix: 10.99.0.0/16, purpose: common, tenant: {id: 2}, sites: [{id: 1}]}]
+
+- name: Drift - create_virtual_network fails final on the allocation prefix drift
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: drift-vn-ipam-prefix
+    sft_expect: final
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Drift - the allocation was neither replaced nor duplicated
+  ansible.builtin.assert:
+    that:
+      - nf_state.allocations | length == 1
+      - nf_state.allocations[0].prefix == '10.99.0.0/16'
+      - nf_write_kinds | select('search', 'allocation') | list == []
+    quiet: true
+
+# --- owner proof: the list omits tenant or VPC ---------------------------------
+- name: Detail - create the VirtualNetwork and Subnet
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: "{{ nf_reset }}"}
+
+- name: Detail - create the VirtualNetwork
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: detail-vn-create
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Detail - create the Subnet
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: detail-subnet-create
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Detail - the VPC list leaves out the admin tenant
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: set, body: {values: {list_omit: {"101": [adminTenant]}}}}
+
+# With a network type the VPC is also read again for its L3 VNI.
+- name: Detail - create_virtual_network reads the VPC detail and changes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: detail-vn-rerun
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+    nf_result: {backend_id: "101", l3_vni: 10001}
+
+- name: Detail - the VPC detail read replaced a second create
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_calls | selectattr(1, 'equalto', '/api/v2/vpc/101') | list | length >= 1
+    quiet: true
+
+- name: Detail - the V-Net list leaves out the VPC and the tenant, the VPC list its admin tenant
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: set, body: {values: {list_omit: {"101": [adminTenant], "401": [vpc, tenant]}}}}
+
+- name: Detail - create_subnet reads the V-Net detail and changes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: detail-subnet-rerun
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {network_segment: {type: evpn, l2_vni: 5000001}}
+
+- name: Detail - the VPC and V-Net detail reads replaced a second create
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_calls | selectattr(1, 'equalto', '/api/v2/vpc/101') | list | length >= 1
+      - nf_calls | selectattr(1, 'equalto', '/api/v2/vnet/401') | list | length >= 1
+    quiet: true
+
+- name: Detail - the VPC no longer reports its tenant even in the detail
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: update, body: {collection: vpcs, id: 101, drop: [adminTenant]}}
+
+- name: Detail - create_virtual_network fails closed
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: detail-vn-fail-closed
+    sft_expect: final
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Detail - failing closed wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: Detail - create_subnet fails closed too when the VPC owner cannot be proven
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: detail-subnet-vpc-fail-closed
+    sft_expect: final
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Detail - the VPC fail-closed subnet wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: Detail - a V-Net with our name and an unknown owner
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: reset}
+      - path: seed
+        body:
+          collection: vpcs
+          objects: [{id: 101, name: "{{ nf_vpc_name }}", adminTenant: {id: 2}, vni: 10001}]
+      - path: seed
+        body:
+          collection: vnets
+          objects: [{id: 77, name: "{{ nf_sn_name }}", sites: [{id: 1}]}]
+
+- name: Detail - create_subnet fails closed when the owner stays unknown
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: detail-subnet-fail-closed
+    sft_expect: final
+    sft_message_search: "{{ nf_sn_name }}"
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Detail - failing closed wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+- name: Detail - delete_subnet with nothing provable fails final and deletes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_subnet
+    sft_label: detail-subnet-delete-fail-closed
+    sft_expect: final
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Detail - the unproven V-Net is still there
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_state.vnets | map(attribute='id') | list == [77]
+    quiet: true
+
+# --- a list error before any POST ----------------------------------------------
+- name: List error - the VPC list fails
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: reset}
+      - {path: faults, body: {key: "GET /api/v2/vpc", status: 500, body: {message: boom}, sticky: true}}
+
+- name: List error - create_virtual_network fails retryably
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: list-error-vn
+    sft_expect: retryable
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: List error - nothing was created
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_state.vpcs == []
+      - nf_state.allocations == []
+    quiet: true

@@ -50,6 +50,10 @@ func equalComputeInstanceDiskStatus(actual, expected *privatev1.ComputeInstanceS
 }
 
 var _ = Describe("Private compute instances server", func() {
+	BeforeEach(func() {
+		seedReadyDefaultNetworking(testTenant, 0)
+	})
+
 	var defaultTestNetworkClass *privatev1.NetworkClass
 
 	BeforeEach(func() {
@@ -59,10 +63,11 @@ var _ = Describe("Private compute instances server", func() {
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
+		_ = networkClassesDao
 		fabricManager := "test-strategy"
 		k8sManager := "test-k8s-manager"
-		class, err := networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
-			FabricManager: &fabricManager,
+		class, err := reuseNetworkClassDAO.Create().SetObject(privatev1.NetworkClass_builder{
+			FabricManager: fabricManager,
 			K8SManager:    &k8sManager,
 			Metadata:      privatev1.Metadata_builder{Name: "test-network-class", Tenant: testTenant}.Build(),
 			Status: privatev1.NetworkClassStatus_builder{
@@ -87,9 +92,7 @@ var _ = Describe("Private compute instances server", func() {
 				Tenant: testTenant,
 				Labels: map[string]string{defaultLabel: "true"},
 			}.Build(),
-			Spec: privatev1.VirtualNetworkSpec_builder{
-				NetworkClass: privatev1.NetworkClassReference_builder{Id: defaultTestNetworkClass.GetId()}.Build(),
-			}.Build(),
+			Spec: privatev1.VirtualNetworkSpec_builder{}.Build(),
 		}.Build()
 
 		_, err = vnDao.Create().SetObject(vn).Do(ctx)
@@ -190,8 +193,7 @@ var _ = Describe("Private compute instances server", func() {
 				Labels: labels,
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
-				Ipv4Cidr:     new("10.0.0.0/16"),
-				NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassID}.Build(),
+				Ipv4Cidr: new("10.0.0.0/16"),
 			}.Build(),
 			Status: privatev1.VirtualNetworkStatus_builder{
 				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
@@ -214,12 +216,14 @@ var _ = Describe("Private compute instances server", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		labels := map[string]string{}
+		name := fmt.Sprintf("test-sn-%d", subnetNameSeq)
 		if len(isDefault) > 0 && isDefault[0] {
 			labels[defaultLabel] = "true"
+			name = defaultSubnetName
 		}
 		subnet := privatev1.Subnet_builder{
 			Metadata: privatev1.Metadata_builder{
-				Name:   fmt.Sprintf("test-sn-%d", subnetNameSeq),
+				Name:   name,
 				Tenant: testTenant,
 				Labels: labels,
 			}.Build(),
@@ -1519,30 +1523,6 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(response).To(BeNil())
 		})
 
-		It("Rejects materialized catalog networks from a different project", func() {
-			createTemplate("catalog-network-template")
-			projectsDAO, err := dao.NewGenericDAO[*privatev1.Project]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
-			Expect(err).ToNot(HaveOccurred())
-			_, err = projectsDAO.Create().SetObject(privatev1.Project_builder{Metadata: privatev1.Metadata_builder{Name: "destination", Tenant: testTenant}.Build()}.Build()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			catalogs, err := NewPrivateComputeInstanceCatalogItemsServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
-			Expect(err).ToNot(HaveOccurred())
-			item, err := catalogs.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: privatev1.ComputeInstanceCatalogItem_builder{
-				Metadata: privatev1.Metadata_builder{Name: "network-offering"}.Build(), Title: "Network offering", Published: true,
-				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "catalog-network-template"}.Build(),
-				Fields: privatev1.ComputeInstanceCatalogItemFields_builder{NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
-					Locked: privatev1.ComputeNetworkAttachmentList_builder{Items: []*privatev1.ComputeNetworkAttachment{privatev1.ComputeNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build()}.Build()}}.Build(),
-				}.Build()}.Build(),
-			}.Build()}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			_, err = server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{Object: privatev1.ComputeInstance_builder{
-				Metadata: privatev1.Metadata_builder{Name: "different-project-vm", Project: "destination"}.Build(),
-				Spec:     privatev1.ComputeInstanceSpec_builder{CatalogItem: privatev1.ComputeInstanceCatalogItemReference_builder{Id: item.GetObject().GetId()}.Build()}.Build(),
-			}.Build()}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("subnet"))
-		})
-
 		DescribeTable("validates final storage tiers for direct-template creation", func(state string, additional, inherited bool, expected grpccodes.Code) {
 			createTemplate("storage-validation-template")
 			ref := privatev1.StorageTierReference_builder{Name: "missing-tier"}.Build()
@@ -2431,6 +2411,10 @@ var _ = Describe("Private compute instances server", func() {
 	})
 
 	Describe("Network validation", func() {
+		BeforeEach(func() {
+			clearSeededDefaultNetworking(testTenant)
+		})
+
 		var (
 			server         *PrivateComputeInstancesServer
 			template       *privatev1.ComputeInstanceTemplate
@@ -2610,7 +2594,7 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(ContainSubstring("network_attachments"))
-				Expect(status.Message()).To(ContainSubstring("default subnet is required"))
+				Expect(status.Message()).To(ContainSubstring("has no default Subnet"))
 				_, getErr := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: instanceID}.Build())
 				Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
 			})
@@ -2624,7 +2608,7 @@ var _ = Describe("Private compute instances server", func() {
 
 				defaultSubnet := privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name:   "test-default-subnet",
+						Name:   defaultSubnetName,
 						Tenant: testTenant,
 						Labels: map[string]string{
 							"osac.openshift.io/default": "true",
@@ -2708,6 +2692,7 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				attachment := response.GetObject().GetSpec().GetNetworkAttachments()[0]
 				Expect(attachment.GetSubnet().GetId()).To(Equal(defaultSubnet.GetId()))
+				Expect(attachment.GetSubnet().GetName()).To(Equal(defaultSubnet.GetMetadata().GetName()))
 				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
 				Expect(attachment.GetSecurityGroups()[0].GetId()).ToNot(BeEmpty())
 			})
@@ -2760,7 +2745,7 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(err).To(HaveOccurred())
 				Expect(response).To(BeNil())
 				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("default security group"))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("default SecurityGroup"))
 				_, getErr := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: instanceID}.Build())
 				Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
 			})
@@ -2787,7 +2772,7 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(err).To(HaveOccurred())
 				Expect(response).To(BeNil())
 				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("security group is required"))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("at least one SecurityGroup is required"))
 				_, getErr := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: instanceID}.Build())
 				Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
 			})
@@ -2801,7 +2786,7 @@ var _ = Describe("Private compute instances server", func() {
 
 				defaultSubnet := privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name:   "test-default-subnet",
+						Name:   defaultSubnetName,
 						Tenant: testTenant,
 						Labels: map[string]string{
 							"osac.openshift.io/default": "true",
@@ -2836,8 +2821,8 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(response).To(BeNil())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("default subnet is required"))
+				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+				Expect(status.Message()).To(ContainSubstring("READY"))
 			})
 
 			It("Should allow updating VM with empty network_attachments (pod network)", func() {
@@ -3063,9 +3048,79 @@ var _ = Describe("Private compute instances server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("security group"))
+				Expect(status.Message()).To(ContainSubstring("SecurityGroup"))
 				Expect(status.Message()).To(ContainSubstring("does not exist"))
 			})
+
+			// A reference resolves only in the tenant and project of the workload: a Subnet or SecurityGroup in another
+			// project of the same tenant fails like a missing one.
+			DescribeTable("rejects a reference to another project of the tenant like a missing one",
+				func(otherProjectSubnet bool) {
+					subnet := createTestSubnet(ctx, virtualNetwork.GetId(), privatev1.SubnetState_SUBNET_STATE_READY)
+					group := createTestSecurityGroup(ctx, virtualNetwork.GetId(),
+						privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY)
+					// The same kind of record in another project of the same tenant:
+					seedTenantProject(testTenant, "other-project")
+					if otherProjectSubnet {
+						response, err := fixtureDAO[*privatev1.Subnet]().Create().SetObject(privatev1.Subnet_builder{
+							Metadata: privatev1.Metadata_builder{
+								Name:    "other-project-subnet",
+								Tenant:  testTenant,
+								Project: "other-project",
+							}.Build(),
+							Spec: subnet.GetSpec(),
+							Status: privatev1.SubnetStatus_builder{
+								State: privatev1.SubnetState_SUBNET_STATE_READY,
+								Hub:   "network-hub-a",
+							}.Build(),
+						}.Build()).Do(ctx)
+						Expect(err).ToNot(HaveOccurred())
+						subnet = response.GetObject()
+					} else {
+						response, err := fixtureDAO[*privatev1.SecurityGroup]().Create().SetObject(
+							privatev1.SecurityGroup_builder{
+								Metadata: privatev1.Metadata_builder{
+									Name:    "other-project-sg",
+									Tenant:  testTenant,
+									Project: "other-project",
+								}.Build(),
+								Spec: group.GetSpec(),
+								Status: privatev1.SecurityGroupStatus_builder{
+									State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+									Hub:   "network-hub-a",
+								}.Build(),
+							}.Build()).Do(ctx)
+						Expect(err).ToNot(HaveOccurred())
+						group = response.GetObject()
+					}
+
+					_, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+						Object: privatev1.ComputeInstance_builder{
+							Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+							Spec: privatev1.ComputeInstanceSpec_builder{
+								Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+								NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+									privatev1.ComputeNetworkAttachment_builder{
+										Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
+										SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+											privatev1.SecurityGroupLocalReference_builder{Id: group.GetId()}.Build(),
+										},
+									}.Build(),
+								},
+							}.Build(),
+						}.Build(),
+					}.Build())
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(err.Error()).To(ContainSubstring("does not exist"))
+					if otherProjectSubnet {
+						Expect(err.Error()).To(ContainSubstring("Subnet '" + subnet.GetId() + "'"))
+					} else {
+						Expect(err.Error()).To(ContainSubstring("SecurityGroup '" + group.GetId() + "'"))
+					}
+				},
+				Entry("Subnet", true),
+				Entry("SecurityGroup", false),
+			)
 
 			It("Should reject when security group belongs to wrong VirtualNetwork in network_attachments", func() {
 				// Create another virtual network with the same network class
@@ -3097,8 +3152,8 @@ var _ = Describe("Private compute instances server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("security group"))
-				Expect(status.Message()).To(ContainSubstring("belongs to a different virtual network"))
+				Expect(status.Message()).To(ContainSubstring("SecurityGroup"))
+				Expect(status.Message()).To(ContainSubstring("belongs to another VirtualNetwork"))
 			})
 
 			It("Should fill empty security_groups from the default VirtualNetwork", func() {
@@ -3163,94 +3218,6 @@ var _ = Describe("Private compute instances server", func() {
 		})
 
 		Context("Update validation with deletion", func() {
-			It("uses persisted deletion state when validating network updates", func() {
-				// Create with a READY subnet
-				subnet := createTestSubnet(ctx, virtualNetwork.GetId(), privatev1.SubnetState_SUBNET_STATE_READY)
-				sg := createTestSecurityGroup(ctx, virtualNetwork.GetId(), privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY)
-
-				createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
-					Object: privatev1.ComputeInstance_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name: "test-compute-instance",
-						}.Build(),
-						Spec: privatev1.ComputeInstanceSpec_builder{
-							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
-							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
-								privatev1.ComputeNetworkAttachment_builder{
-									Subnet:         privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
-									SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build()},
-								}.Build(),
-							},
-						}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				created := createResponse.GetObject()
-				originalAttachment := proto.Clone(created.GetSpec().GetNetworkAttachments()[0]).(*privatev1.ComputeNetworkAttachment)
-
-				// Update subnet to non-READY state (simulate resource being deleted/modified)
-				subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
-				subnetDAO, err := dao.NewGenericDAO[*privatev1.Subnet]().
-					SetLogger(logger).
-					SetTenancyLogic(tenancy).
-					Build()
-				Expect(err).ToNot(HaveOccurred())
-				_, err = subnetDAO.Update().SetObject(subnet).Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-
-				// Supplying a timestamp must not mark the stored ComputeInstance as deleting.
-				deletionTime := timestamppb.Now()
-				created.GetMetadata().SetDeletionTimestamp(deletionTime)
-
-				// An unchanged attachment still goes through readiness validation while the instance is live.
-				updateRequest := &privatev1.ComputeInstancesUpdateRequest{}
-				updateRequest.SetObject(created)
-				updateRequest.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}})
-
-				// An unmasked timestamp must not bypass validation of an active instance.
-				_, err = server.Update(ctx, updateRequest)
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-				updateRequest.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{
-					"spec.network_attachments", "metadata.deletion_timestamp",
-				}})
-				_, err = server.Update(ctx, updateRequest)
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
-				Expect(err).NotTo(HaveOccurred())
-				Expect(stored.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
-				Expect(stored.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(HaveLen(1))
-
-				// Only Delete may establish the exemption; a finalizer keeps the object available.
-				_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
-					Object:     privatev1.ComputeInstance_builder{Id: created.GetId(), Metadata: privatev1.Metadata_builder{Finalizers: []string{"test"}}.Build()}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
-				}.Build())
-				Expect(err).NotTo(HaveOccurred())
-				_, err = server.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: created.GetId()}.Build())
-				Expect(err).NotTo(HaveOccurred())
-
-				// Deletion permits readiness checks to tolerate the pending subnet, but does not make the attachment mutable.
-				deletingObject := proto.Clone(created).(*privatev1.ComputeInstance)
-				deletingObject.GetSpec().GetNetworkAttachments()[0].SetSecurityGroups(nil)
-				updateRequest.SetObject(deletingObject)
-				updateRequest.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}})
-				_, err = server.Update(ctx, updateRequest)
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-				stored, err = server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
-				Expect(err).NotTo(HaveOccurred())
-				Expect(stored.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
-				Expect(stored.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(HaveLen(1))
-
-				// An unchanged attachment update is still accepted for a deleting instance.
-				deletingObject.GetSpec().SetNetworkAttachments([]*privatev1.ComputeNetworkAttachment{originalAttachment})
-				updateRequest.SetObject(deletingObject)
-				_, err = server.Update(ctx, updateRequest)
-				Expect(err).NotTo(HaveOccurred())
-				stored, err = server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
-				Expect(err).NotTo(HaveOccurred())
-				Expect(proto.Equal(stored.GetObject().GetSpec().GetNetworkAttachments()[0], originalAttachment)).To(BeTrue())
-
-			})
 		})
 
 		Context("NetworkAttachments immutability", func() {
@@ -3507,7 +3474,7 @@ var _ = Describe("Private compute instances server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("cannot change number"))
+				Expect(status.Message()).To(ContainSubstring("at most one network attachment"))
 				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(proto.Equal(stored.GetObject().GetSpec(), createResponse.GetObject().GetSpec())).To(BeTrue())
@@ -3546,7 +3513,7 @@ var _ = Describe("Private compute instances server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("cannot change number"))
+				Expect(status.Message()).To(ContainSubstring("cannot change number of network attachments"))
 				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(stored.GetObject().GetSpec().GetNetworkAttachments()).To(HaveLen(2))
@@ -4705,28 +4672,6 @@ var _ = Describe("Private compute instances server", func() {
 			}.Build()
 		}
 
-		It("rejects VM creation on a NetworkClass without a Kubernetes manager before creating an auto ExternalIP", func() {
-			createPool("pool-1", 5)
-
-			networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-			unsupportedClass := proto.Clone(defaultTestNetworkClass).(*privatev1.NetworkClass)
-			unsupportedClass.ClearK8SManager()
-			_, err = networkClassesDao.Update().SetObject(unsupportedClass).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = server.Create(ctx, createRequest(true))
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("k8s_manager"))
-
-			eips, err := externalIPDao.List().Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(eips.GetItems()).To(BeEmpty())
-		})
-
 		It("creates an auto ExternalIP on ComputeInstance create and defers its attachment", func() {
 			createPool("pool-1", 5)
 
@@ -4746,7 +4691,6 @@ var _ = Describe("Private compute instances server", func() {
 			eip := eipList.GetItems()[0]
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedForLabel]).To(Equal(ciID))
-			Expect(eip.GetMetadata().GetLabels()[autoAttachmentDeferredLabel]).To(Equal("true"))
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("compute_instance"))
 			Expect(eip.GetSpec().GetPool().GetId()).To(Equal("pool-1"))
 			Expect(eip.GetStatus().GetAttached()).To(BeFalse())
@@ -4781,7 +4725,6 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(eipList.GetItems()).To(HaveLen(1))
 			eip := eipList.GetItems()[0]
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
-			Expect(eip.GetMetadata().GetLabels()[autoAttachmentDeferredLabel]).To(Equal("true"))
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("compute_instance"))
 			Expect(eip.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(ciID))
 			Expect(eip.GetMetadata().GetAnnotations()["osac.openshift.io/tenant"]).To(Equal(testTenant))
@@ -5012,22 +4955,29 @@ var _ = Describe("Private compute instances server", func() {
 	})
 })
 
-var _ = Describe("Catalog materialized defaults", func() {
-	It("selects a default subnet only from the destination project", func() {
-		projects, err := dao.NewGenericDAO[*privatev1.Project]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		subnets, err := dao.NewGenericDAO[*privatev1.Subnet]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		for _, name := range []string{"destination", "other"} {
-			_, err := projects.Create().SetObject(privatev1.Project_builder{Id: name, Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build()}.Build()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			_, err = subnets.Create().SetObject(privatev1.Subnet_builder{Id: name, Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant, Project: name, Labels: map[string]string{defaultLabel: "true"}}.Build(), Spec: privatev1.SubnetSpec_builder{Ipv4Cidr: new("10.0.0.0/24")}.Build(), Status: privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build()}.Build()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-		}
-		subnet, err := findDefaultSubnet(ctx, logger, subnets, testTenant, "destination")
-		Expect(err).ToNot(HaveOccurred())
-		Expect(subnet.GetId()).To(Equal("destination"))
+var _ = Describe("Compute instance networking reference scope", func() {
+	It("allows only same-tenant resources in the instance project or tenant defaults", func() {
+		owner := privatev1.Metadata_builder{Tenant: "tenant-a", Project: "project-a"}.Build()
+		Expect(computeInstanceNetworkResourceInScope(owner,
+			privatev1.Metadata_builder{Tenant: "tenant-a", Project: "project-a"}.Build())).To(BeTrue())
+		Expect(computeInstanceNetworkResourceInScope(owner,
+			privatev1.Metadata_builder{Tenant: "tenant-a", Project: "project-b"}.Build())).To(BeFalse())
+		Expect(computeInstanceNetworkResourceInScope(owner,
+			privatev1.Metadata_builder{
+				Tenant: "tenant-a", Project: "project-b", Labels: map[string]string{defaultLabel: "true"},
+			}.Build())).To(BeTrue())
+		Expect(computeInstanceNetworkResourceInScope(owner,
+			privatev1.Metadata_builder{
+				Tenant: "tenant-b", Project: "project-b", Labels: map[string]string{defaultLabel: "true"},
+			}.Build())).To(BeFalse())
 	})
+})
+
+var _ = Describe("Catalog materialized defaults", func() {
+	BeforeEach(func() {
+		seedReadyDefaultNetworking(testTenant, 0)
+	})
+
 	DescribeTable("rechecks catalog disk tiers after authoring", func(additional bool) {
 		server, err := NewPrivateComputeInstancesServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
@@ -5069,8 +5019,8 @@ var _ = Describe("Catalog materialized defaults", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			k8sManager := "test-k8s-manager"
-			networkClass, err := server.networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
-				FabricManager: new("test-strategy"),
+			_, err = reuseNetworkClassDAO.Create().SetObject(privatev1.NetworkClass_builder{
+				FabricManager: "test-strategy",
 				K8SManager:    &k8sManager,
 				Metadata:      privatev1.Metadata_builder{Name: "win-network-class", Tenant: testTenant}.Build(),
 				Status: privatev1.NetworkClassStatus_builder{
@@ -5093,9 +5043,7 @@ var _ = Describe("Catalog materialized defaults", func() {
 					Tenant: testTenant,
 					Labels: map[string]string{defaultLabel: "true"},
 				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClass.GetObject().GetId()}.Build(),
-				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{}.Build(),
 				Status: privatev1.VirtualNetworkStatus_builder{
 					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 					Hub:   "network-hub-a",

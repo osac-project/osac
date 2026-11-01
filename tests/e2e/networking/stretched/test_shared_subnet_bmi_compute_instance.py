@@ -33,10 +33,13 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
+from tests.e2e.networking import cidrs
 from tests.e2e.networking.bmaas import bmi_ssh
+from tests.e2e.networking.teardown import describe_delete_error
 from tests.e2e.networking.vmaas import guest_ssh
 
-pytestmark = [pytest.mark.regression, pytest.mark.requires_stretched_networking]
+pytestmark = pytest.mark.regression
 
 
 @pytest.fixture(scope="module")
@@ -62,11 +65,10 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
     vm_kubeconfig = os.environ["OSAC_VM_KUBECONFIG"]
     k8s_virt_client = K8sClient(namespace=namespace, kubeconfig=vm_kubeconfig)
     suffix = net_test_run_id
-    octet = 160 + int(suffix[:2], 16) % 60
     virtual_network_name = f"stretched-shared-vn-{suffix}"
-    virtual_network_cidr = f"10.{octet}.0.0/16"
+    virtual_network_cidr = cidrs.tenant_vn_cidr(0, offset=cidrs.run_offset(suffix))
     subnet_name = f"stretched-shared-subnet-{suffix}"
-    subnet_cidr = f"10.{octet}.1.0/24"
+    subnet_cidr = cidrs.subnet_cidr(virtual_network_cidr, 1)
     security_group_name = f"stretched-shared-sg-{suffix}"
     bmi_name = f"stretched-shared-bmi-{suffix}"
     compute_instance_name = f"stretched-shared-vm-{suffix}"
@@ -82,6 +84,7 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
     bmi_cr: str | None = None
     compute_instance_id: str | None = None
     compute_instance_cr: str | None = None
+    vm_namespace = ""
     ssh_secret_created = False
     private_key = tmp_path / "id_ed25519"
     public_key_file = private_key.with_suffix(".pub")
@@ -101,7 +104,9 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
             virtual_network=virtual_network_id,
             ingress=[
                 {"protocol": "PROTOCOL_TCP", "port_from": 22, "port_to": 22, "ipv4_cidr": "0.0.0.0/0"},
-                {"protocol": "PROTOCOL_ICMP", "ipv4_cidr": subnet_cidr},
+                # the API rejects icmp rules without security_group_icmp; all
+                # includes the ICMP the connectivity checks send.
+                {"protocol": "PROTOCOL_ALL", "ipv4_cidr": subnet_cidr},
             ],
             egress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
         )
@@ -137,6 +142,8 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
             retries=60,
             delay=10,
             description=f"BMI {bmi_name} tenant IP assignment",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi_cr,
         )
         external_host_id = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr)
         bmh_name = external_host_id.split("/", 1)[1]
@@ -157,10 +164,14 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
             retries=60,
             delay=5,
             description=f"VMI namespace for {compute_instance_name}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=compute_instance_cr,
         )
         vm_ip = wait_for_vmi_ip(
             k8s=k8s_virt_client, vmi_namespace=vm_namespace, compute_instance_name=compute_instance_cr
         )
+        # Running does not mean sshd is up; this also creates the helper Pod and classifies a failure.
+        guest_ssh.wait_for_guest_ssh(vm_namespace, compute_instance_cr, str(private_key))
 
         subnet = ipaddress.IPv4Network(subnet_cidr)
         assert ipaddress.IPv4Address(bmi_ip) in subnet, f"BMI address {bmi_ip} is outside {subnet}"
@@ -173,6 +184,8 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
             retries=5,
             delay=10,
             description=f"BMI ARP resolution for ComputeInstance {vm_ip}",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi_cr,
         )
         poll_until(
             fn=lambda: guest_ssh.arping(vm_namespace, compute_instance_cr, str(private_key), bmi_ip),
@@ -180,6 +193,8 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
             retries=5,
             delay=10,
             description=f"ComputeInstance ARP resolution for BMI {bmi_ip}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=compute_instance_cr,
         )
         poll_until(
             fn=lambda: bmi_ssh.ping(bmi_ssh_host, vm_ip),
@@ -187,6 +202,8 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
             retries=5,
             delay=10,
             description=f"BMI ping to ComputeInstance {vm_ip}",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi_cr,
         )
         poll_until(
             fn=lambda: guest_ssh.ping(vm_namespace, compute_instance_cr, str(private_key), bmi_ip),
@@ -194,6 +211,8 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
             retries=5,
             delay=10,
             description=f"ComputeInstance ping to BMI {bmi_ip}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=compute_instance_cr,
         )
     finally:
         cleanup_errors: list[str] = []
@@ -202,8 +221,11 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
             try:
                 operation()
             except Exception as exc:
-                cleanup_errors.append(f"{label}: {exc}")
+                cleanup_errors.append(f"{label}: {describe_delete_error(exc)}")
 
+        if vm_namespace:
+            # The SSH helper Pod lives in the VM namespace and must go before the VirtualNetwork.
+            cleanup(f"SSH helper in {vm_namespace}", lambda: guest_ssh.remove_helper(vm_namespace))
         if compute_instance_id:
             ci_id = compute_instance_id
 
@@ -217,6 +239,8 @@ def test_bmi_and_compute_instance_reach_each_other_on_shared_subnet(
                     retries=30,
                     delay=5,
                     description=f"ComputeInstance {ci_id} API deletion",
+                    resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                    resource_id=ci_id,
                 )
 
             cleanup(f"ComputeInstance {ci_id}", delete_compute_instance)

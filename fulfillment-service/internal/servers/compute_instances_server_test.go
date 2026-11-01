@@ -44,6 +44,10 @@ import (
 )
 
 var _ = Describe("Compute instances server", func() {
+	BeforeEach(func() {
+		seedReadyDefaultNetworking(testTenant, 0)
+	})
+
 	Describe("Builder", func() {
 		It("Creates server with logger and tenancy logic", func() {
 			// Create the public server:
@@ -108,7 +112,8 @@ var _ = Describe("Compute instances server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			_, err = networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
+			_ = networkClassesDao
+			_, err = reuseNetworkClassDAO.Create().SetObject(privatev1.NetworkClass_builder{
 				Id:         "test-network-class",
 				K8SManager: &k8sManager,
 				Metadata: privatev1.Metadata_builder{
@@ -135,9 +140,7 @@ var _ = Describe("Compute instances server", func() {
 					Tenant: testTenant,
 					Labels: map[string]string{defaultLabel: "true"},
 				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-network-class"}.Build(),
-				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{}.Build(),
 				Status: privatev1.VirtualNetworkStatus_builder{
 					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 					Hub:   "network-hub-a",
@@ -2238,6 +2241,10 @@ var _ = Describe("Compute instances server", func() {
 })
 
 var _ = Describe("Catalog publication and references", func() {
+	BeforeEach(func() {
+		seedReadyDefaultNetworking(testTenant, 0)
+	})
+
 	DescribeTable("resolves same-name catalog creation sources in the requested tenant", func(shared bool) {
 		Expect(seedComputeCatalogItemTemplate(ctx, auth.SharedTenant, "", "source-template")).To(Succeed())
 		catalogs, err := NewPrivateComputeInstanceCatalogItemsServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()

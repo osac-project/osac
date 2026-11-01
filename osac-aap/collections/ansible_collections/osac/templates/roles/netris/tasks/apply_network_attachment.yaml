@@ -1,0 +1,143 @@
+---
+# NetworkAttachment -> Netris. An overlay interface is a documented no-op (the
+# Kubernetes manager bound the VM; SecurityGroups are no-ops on Netris). A
+# physical interface moves the host's fabric ports: every port of the host
+# leaves NETRIS_BM_PROVISIONING_VNET and interface.name joins the V-Net
+# osac-sn-<Subnet ID>. Before the move the V-Net gets DHCP over
+# ipam.physical_ipv4_cidrs (EVPN Subnets too; the gateway stays as it is), so
+# the host can boot on it. Everything that can fail is checked before the
+# first write. Nothing is published. Rerun-safe: a port already moved stays.
+#
+# Known gap: port changes read and write the whole ports list of a V-Net with
+# no lock, so concurrent attachment jobs on the same V-Net can lose a port
+# change; serialization belongs to the controller.
+#
+# Known limit: the DHCP range serves any MAC, not only the attachment MACs
+# (the Netris collection has no host reservations); the MAC is checked as
+# well-formed and the lease query matches it.
+- name: Apply the NetworkAttachment on Netris
+  block:
+    - name: Check the interface of the attachment
+      ansible.builtin.set_fact:
+        _netris_att: "{{ osac_job_vars | osac.templates.netris_attachment_plan }}"
+
+    - name: Stop on an invalid attachment input
+      vars:
+        netris_fail:
+          message: "{{ _netris_att.error }}"
+          retryable: false
+      when: _netris_att.error | length > 0
+      ansible.builtin.include_tasks: _fail.yaml
+
+    - name: Skip an overlay interface
+      when: _netris_att.kind == 'overlay'
+      ansible.builtin.include_tasks: _noop.yaml
+      vars:
+        netris_noop: bind the SecurityGroups of an overlay attachment (the Kubernetes manager does)
+
+    - name: Move the ports of a physical interface
+      when: _netris_att.kind == 'physical'
+      block:
+        - name: Check the settings
+          ansible.builtin.include_tasks: _settings.yaml
+          vars:
+            netris_require: [controller, credentials, tenant, bm_provisioning_vnet]
+
+        - name: Check the task input
+          ansible.builtin.include_tasks: _input.yaml
+          vars:
+            netris_require_parents: [virtual_network, subnet]
+
+        - name: Check the network type
+          ansible.builtin.include_tasks: _network_type.yaml
+
+        - name: Build the object names
+          ansible.builtin.include_tasks: _names.yaml
+
+        - name: Find the V-Net of the Subnet
+          ansible.builtin.include_tasks: _find_subnet_vnet.yaml
+
+        - name: Wait for the V-Net of the Subnet
+          vars:
+            netris_fail:
+              message: >-
+                Netris V-Net {{ netris_names.vnet }} does not exist yet; the Subnet must be
+                created first. OSAC retries the task.
+              retryable: true
+          when: netris_subnet_vnet_id | string | length == 0
+          ansible.builtin.include_tasks: _fail.yaml
+
+        - name: Plan DHCP over the physical range on the V-Net
+          ansible.builtin.set_fact:
+            _netris_dhcp: "{{ netris_vnet_detail | osac.templates.netris_vnet_dhcp_update(osac_job_vars) }}"
+
+        - name: Stop when the V-Net cannot serve DHCP
+          vars:
+            netris_fail:
+              message: "Netris invalid task input: {{ _netris_dhcp.error }}"
+              retryable: false
+          when: _netris_dhcp.error | length > 0
+          ansible.builtin.include_tasks: _fail.yaml
+
+        - name: Resolve the host port
+          vars:
+            na_host_name: "{{ _netris_att.host_name }}"
+            na_logical_interface: "{{ _netris_att.port }}"
+          ansible.builtin.include_tasks: _resolve_server_port.yaml
+
+        - name: Wait for the host to be registered in Netris
+          vars:
+            netris_fail:
+              message: >-
+                Netris has no server named {{ _netris_att.host_name }} yet; the host must be
+                registered in Netris. OSAC retries the task.
+              retryable: true
+          when: netris_server is none
+          ansible.builtin.include_tasks: _fail.yaml
+
+        - name: Stop when the interface is not a port of the host
+          vars:
+            netris_fail:
+              message: >-
+                Netris server {{ _netris_att.host_name }} has no port named {{ _netris_att.port }}
+                (check network_attachment.interface.name). OSAC does not retry.
+              retryable: false
+          when: _target_port is none
+          ansible.builtin.include_tasks: _fail.yaml
+
+        - name: Switch DHCP on over the physical range
+          when: not _netris_dhcp.matches
+          ansible.builtin.include_role:
+            name: netris.controller.vnet
+            tasks_from: update
+          vars:
+            vnet_id: "{{ netris_subnet_vnet_id }}"
+            vnet_body: "{{ _netris_dhcp.body }}"
+
+        - name: Take every host port off the provisioning V-Net
+          ansible.builtin.include_tasks: _detach_port_from_vnet.yaml
+          loop: "{{ netris_server_ports }}"
+          loop_control:
+            loop_var: netris_host_port
+            label: "{{ netris_host_port.port | default('') }}"
+          vars:
+            _target_port: "{{ netris_host_port }}"
+            _op_vnet_name: "{{ netris_bm_provisioning_vnet }}"
+            _op_vnet_id: ""
+            na_logical_interface: "{{ netris_host_port.port | default('') }}"
+
+        - name: Wait for the fabric to settle after the detach
+          ansible.builtin.pause:
+            seconds: "{{ netris_port_settle_seconds | int }}"
+          when: netris_detached | default([]) | length > 0 and netris_port_settle_seconds | int > 0
+
+        - name: Attach the interface port to the V-Net of the Subnet
+          ansible.builtin.include_tasks: _attach_port_to_vnet.yaml
+          vars:
+            na_host_name: "{{ _netris_att.host_name }}"
+            na_logical_interface: "{{ _netris_att.port }}"
+            _op_vnet_name: "{{ netris_names.vnet }}"
+            _op_vnet_id: "{{ netris_subnet_vnet_id }}"
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

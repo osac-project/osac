@@ -52,6 +52,56 @@
          | list }}
   when: vpc_lookup_id is defined
 
+# A list entry can omit the admin tenant. Read such a VPC by ID; if the detail
+# still has no admin tenant, ownership cannot be proven and the lookup fails.
+- name: Find VPCs whose list entry omits the admin tenant
+  ansible.builtin.set_fact:
+    _netris_vpc_known: "{{ _netris_vpc_matches | selectattr('adminTenant.id', 'defined') | list }}"
+    _netris_vpc_unknown: "{{ _netris_vpc_matches | difference(_netris_vpc_matches | selectattr('adminTenant.id', 'defined') | list) }}"
+  when:
+    - vpc_tenant_id is defined
+
+- name: Read the VPCs whose list entry omits the admin tenant
+  netris.controller.protected_uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/vpc/{{ item.id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    ca_path: "{{ netris_ca_path | default(omit, true) }}"
+  register: _vpc_read_detail
+  no_log: true
+  loop: "{{ _netris_vpc_unknown | default([]) }}"
+  loop_control:
+    label: "{{ item.id }}"
+  when:
+    - vpc_tenant_id is defined
+
+- name: Use the detailed VPCs for the tenant comparison
+  ansible.builtin.set_fact:
+    _netris_vpc_matches: >-
+      {{ _netris_vpc_known + (_vpc_read_detail.results | default([])
+         | selectattr('json', 'defined')
+         | map(attribute='json') | map(attribute='data') | list) }}
+  when:
+    - vpc_tenant_id is defined
+
+- name: Fail closed when a VPC does not report its admin tenant
+  ansible.builtin.assert:
+    that:
+      - _netris_vpc_matches | rejectattr('adminTenant.id', 'defined') | list | length == 0
+    fail_msg: >-
+      Refusing to use a Netris VPC that does not report its admin tenant: ownership
+      cannot be verified (immutable field adminTenant.id is unverifiable).
+  when:
+    - vpc_tenant_id is defined
+
 - name: Filter VPCs by admin tenant
   ansible.builtin.set_fact:
     _netris_vpc_matches: >-

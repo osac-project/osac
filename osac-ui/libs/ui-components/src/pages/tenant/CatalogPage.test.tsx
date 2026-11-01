@@ -972,10 +972,10 @@ describe('CatalogPage', () => {
 
   describe('Create catalog item action', () => {
     it.each([
-      { kind: 'bm', item: bareMetalCatalogItem },
-      { kind: 'cluster', item: clusterCatalogItem },
-      { kind: 'vm', item: vmCatalogItem },
-    ] as const)('maps $kind to its create service', async ({ kind, item }) => {
+      { kind: 'bm', item: bareMetalCatalogItem, label: 'Create bare metal catalog item' },
+      { kind: 'cluster', item: clusterCatalogItem, label: 'Create cluster catalog item' },
+      { kind: 'vm', item: vmCatalogItem, label: 'Create VM catalog item' },
+    ] as const)('maps $kind to its create service and label', async ({ kind, item, label }) => {
       const { user } = renderCatalogPageWithCreateRoute(
         createCatalogPageTransport({
           vmItems: [vmCatalogItem],
@@ -989,7 +989,7 @@ describe('CatalogPage', () => {
         expect(screen.getByText(item.metadata?.name ?? '')).toBeInTheDocument();
       });
 
-      const createLink = screen.getByRole('link', { name: 'Create catalog item' });
+      const createLink = screen.getByRole('link', { name: label });
       await waitFor(() => expect(createLink).not.toHaveAttribute('aria-disabled', 'true'));
       expect(createLink).toHaveAttribute('href', `/catalog/${kind}/create`);
 
@@ -998,10 +998,36 @@ describe('CatalogPage', () => {
       expect(screen.getByText('Create catalog item page')).toBeInTheDocument();
     });
 
+    it('updates the label when the selected type changes', async () => {
+      const { user } = renderCatalogPageWithCreateRoute(
+        createCatalogPageTransport({
+          vmItems: [vmCatalogItem],
+          clusterItems: [clusterCatalogItem],
+          bmItems: [bareMetalCatalogItem],
+        }),
+        ['/catalog?types=vm'],
+      );
+
+      expect(
+        await screen.findByRole('link', { name: 'Create VM catalog item' }),
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /Clusters/ }));
+
+      expect(
+        await screen.findByRole('link', { name: 'Create cluster catalog item' }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: 'Create VM catalog item' }),
+      ).not.toBeInTheDocument();
+    });
+
     it('is shown for tenant-admin', async () => {
       renderCatalogPageWithCreateRoute(undefined, ['/catalog'], 'tenant-admin');
 
-      expect(await screen.findByRole('link', { name: 'Create catalog item' })).toBeInTheDocument();
+      expect(
+        await screen.findByRole('link', { name: 'Create bare metal catalog item' }),
+      ).toBeInTheDocument();
     });
 
     it('is hidden for tenant-user', async () => {
@@ -1012,7 +1038,9 @@ describe('CatalogPage', () => {
           screen.getByRole('group', { name: 'Filter catalog by resource type' }),
         ).toBeInTheDocument();
       });
-      expect(screen.queryByRole('link', { name: 'Create catalog item' })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: 'Create bare metal catalog item' }),
+      ).not.toBeInTheDocument();
     });
 
     it('is hidden when no catalog services are enabled', async () => {
@@ -1021,7 +1049,9 @@ describe('CatalogPage', () => {
       expect(
         await screen.findByRole('heading', { name: 'No catalog items found' }),
       ).toBeInTheDocument();
-      expect(screen.queryByRole('link', { name: 'Create catalog item' })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: 'Create bare metal catalog item' }),
+      ).not.toBeInTheDocument();
     });
   });
 });

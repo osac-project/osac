@@ -153,6 +153,21 @@ const catalogKindForServiceTier = (tier: ServiceTier): CatalogItemKind | undefin
   }
 };
 
+const catalogCreateLabelForKind = (kind: CatalogItemKind | undefined, t: TFunction): string => {
+  if (!kind) {
+    return t('Create catalog item');
+  }
+
+  switch (kind) {
+    case 'bm':
+      return t('Create bare metal catalog item');
+    case 'cluster':
+      return t('Create cluster catalog item');
+    case 'vm':
+      return t('Create VM catalog item');
+  }
+};
+
 const catalogServiceForKind = (
   kind: CatalogItemKind | undefined,
 ): ServiceWithMethod<'create'> | undefined => {
@@ -297,7 +312,7 @@ const CatalogPage = () => {
       actions={
         canCreateCatalogItem ? (
           <CreateButton service={catalogCreateService} to={`/catalog/${selectedKind}/create`}>
-            {t('Create catalog item')}
+            {catalogCreateLabelForKind(selectedKind, t)}
           </CreateButton>
         ) : null
       }

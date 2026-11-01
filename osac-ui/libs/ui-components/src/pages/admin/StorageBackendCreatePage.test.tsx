@@ -55,6 +55,12 @@ const existingBackend = create(StorageBackendSchema, {
   },
 });
 
+const existingCspBackend = create(StorageBackendSchema, {
+  id: 'b-1',
+  metadata: { name: 'netapp-shared', version: 7 },
+  spec: { provider: 'netapp', cspManaged: true },
+});
+
 const renderEditPage = (overrides?: MockTransportOverrides, apiFixtures?: MockApiFixtures) =>
   renderWithProviders(
     <Routes>
@@ -104,14 +110,45 @@ describe('StorageBackendCreatePage', () => {
       expect(screen.getByLabelText(/^Provider/)).toBeEnabled();
     });
 
-    it('renders the provider select with exactly vast, ceph, and pure options', async () => {
+    it('renders the provider select with existing providers and NetApp', async () => {
       const { user } = renderCreatePage();
 
       await user.click(screen.getByLabelText(/^Provider/));
 
       const options = screen.getAllByRole('option');
-      expect(options).toHaveLength(3);
-      expect(options.map((option) => option.textContent)).toEqual(['VAST', 'Ceph', 'Pure']);
+      expect(options).toHaveLength(4);
+      expect(options.map((option) => option.textContent)).toEqual([
+        'VAST',
+        'Ceph',
+        'Pure',
+        'NetApp',
+      ]);
+    });
+
+    it('offers CSP-managed ownership only for NetApp and clears it when provider changes', async () => {
+      const { user } = renderCreatePage();
+      const provider = screen.getByLabelText(/^Provider/);
+
+      for (const option of ['VAST', 'Ceph', 'Pure']) {
+        await user.click(provider);
+        await user.click(screen.getByRole('option', { name: option }));
+        expect(screen.queryByRole('checkbox', { name: 'CSP-managed' })).not.toBeInTheDocument();
+      }
+
+      await user.click(provider);
+      await user.click(screen.getByRole('option', { name: 'NetApp' }));
+      const ownership = screen.getByRole('checkbox', { name: 'CSP-managed' });
+      expect(ownership).not.toBeChecked();
+      await user.click(ownership);
+      expect(ownership).toBeChecked();
+
+      await user.click(provider);
+      await user.click(screen.getByRole('option', { name: 'VAST' }));
+      expect(screen.queryByRole('checkbox', { name: 'CSP-managed' })).not.toBeInTheDocument();
+
+      await user.click(provider);
+      await user.click(screen.getByRole('option', { name: 'NetApp' }));
+      expect(screen.getByRole('checkbox', { name: 'CSP-managed' })).not.toBeChecked();
     });
 
     it('renders the password field as a masked input', () => {
@@ -148,11 +185,74 @@ describe('StorageBackendCreatePage', () => {
       await user.click(screen.getByRole('option', { name: 'VAST' }));
       await user.click(screen.getByRole('button', { name: 'Create' }));
 
+      expect(screen.getByText('Endpoint').closest('label')).toHaveTextContent('*');
+      expect(screen.getByText('Username').closest('label')).toHaveTextContent('*');
+      expect(screen.getByText('Password').closest('label')).toHaveTextContent('*');
       await waitFor(() => {
         expect(screen.getByText('Endpoint is required')).toBeInTheDocument();
       });
       expect(screen.getByText('Username is required')).toBeInTheDocument();
       expect(screen.getByText('Password is required')).toBeInTheDocument();
+      expect(onStorageBackendCreate).not.toHaveBeenCalled();
+    });
+
+    it('requires CSP-managed ownership for NetApp', async () => {
+      const onStorageBackendCreate = vi.fn();
+      const { user } = renderCreatePage({ onStorageBackendCreate });
+
+      await user.type(screen.getByRole('textbox', { name: 'Name' }), 'netapp-shared');
+      await user.click(screen.getByLabelText(/^Provider/));
+      await user.click(screen.getByRole('option', { name: 'NetApp' }));
+      await user.click(screen.getByRole('button', { name: 'Create' }));
+
+      expect(await screen.findByText('NetApp requires CSP-managed ownership')).toBeInTheDocument();
+      expect(onStorageBackendCreate).not.toHaveBeenCalled();
+    });
+
+    it('creates a NetApp CSP-managed backend without endpoint or credentials', async () => {
+      let capturedRequest: StorageBackendsCreateRequest | undefined;
+      const { user } = renderCreatePage({
+        onStorageBackendCreate: (req) => {
+          capturedRequest = req;
+          return create(StorageBackendsCreateResponseSchema, { object: { id: 'netapp-1' } });
+        },
+      });
+
+      await user.type(screen.getByRole('textbox', { name: 'Name' }), 'netapp-shared');
+      await user.click(screen.getByLabelText(/^Provider/));
+      await user.click(screen.getByRole('option', { name: 'NetApp' }));
+      await user.click(screen.getByRole('checkbox', { name: 'CSP-managed' }));
+
+      expect(screen.getByText('Endpoint').closest('label')).not.toHaveTextContent('*');
+      expect(screen.getByText('Username').closest('label')).not.toHaveTextContent('*');
+      expect(screen.getByText('Password').closest('label')).not.toHaveTextContent('*');
+      await user.click(screen.getByRole('button', { name: 'Create' }));
+
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith(
+          '/admin/infrastructure/storage/backends/netapp-1',
+        );
+      });
+      expect(capturedRequest?.object?.spec?.provider).toBe('netapp');
+      expect(capturedRequest?.object?.spec?.cspManaged).toBe(true);
+      expect(capturedRequest?.object?.spec?.endpoint).toBe('');
+      expect(capturedRequest?.object?.spec?.credentials).toBeUndefined();
+    });
+
+    it('rejects incomplete optional credentials for a CSP-managed backend', async () => {
+      const onStorageBackendCreate = vi.fn();
+      const { user } = renderCreatePage({ onStorageBackendCreate });
+
+      await user.type(screen.getByRole('textbox', { name: 'Name' }), 'netapp-shared');
+      await user.click(screen.getByLabelText(/^Provider/));
+      await user.click(screen.getByRole('option', { name: 'NetApp' }));
+      await user.click(screen.getByRole('checkbox', { name: 'CSP-managed' }));
+      await user.type(screen.getByLabelText(/^Username/), 'test-admin');
+      await user.click(screen.getByRole('button', { name: 'Create' }));
+
+      expect(
+        await screen.findAllByText('Enter both username and password, or leave both blank'),
+      ).not.toHaveLength(0);
       expect(onStorageBackendCreate).not.toHaveBeenCalled();
     });
 
@@ -234,6 +334,7 @@ describe('StorageBackendCreatePage', () => {
 
       expect(capturedRequest?.object?.metadata?.name).toBe('vast-prod-1');
       expect(capturedRequest?.object?.spec?.provider).toBe('vast');
+      expect(capturedRequest?.object?.spec?.cspManaged).toBe(false);
       expect(capturedRequest?.object?.spec?.endpoint).toBe('vast.example.com:443');
       expect(capturedRequest?.object?.spec?.credentials?.username).toBe('test-admin');
       expect(capturedRequest?.object?.spec?.credentials?.password).toBe(testBackendPassword);
@@ -300,6 +401,34 @@ describe('StorageBackendCreatePage', () => {
       });
       expect(screen.getByRole('textbox', { name: 'Name' })).toBeDisabled();
       expect(screen.getByLabelText(/^Provider/)).toBeDisabled();
+      expect(screen.queryByRole('checkbox', { name: 'CSP-managed' })).not.toBeInTheDocument();
+    });
+
+    it('edits a CSP-managed backend without requiring an endpoint or changing ownership', async () => {
+      let capturedRequest: StorageBackendsUpdateRequest | undefined;
+      const { user } = renderEditPage(
+        {
+          onStorageBackendUpdate: (req) => {
+            capturedRequest = req;
+            return create(StorageBackendsUpdateResponseSchema, { object: existingCspBackend });
+          },
+        },
+        { storageBackends: [existingCspBackend] },
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('netapp-shared');
+      });
+      expect(screen.getByRole('textbox', { name: 'Endpoint' })).toHaveValue('');
+      expect(screen.queryByRole('checkbox', { name: 'CSP-managed' })).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith('/admin/infrastructure/storage/backends');
+      });
+      expect(capturedRequest?.object?.spec?.credentials).toBeUndefined();
+      expect(capturedRequest?.updateMask?.paths).not.toContain('spec.csp_managed');
+      expect(capturedRequest?.updateMask?.paths).not.toContain('spec.cspManaged');
     });
 
     it('renders credential fields blank regardless of the fetched record', async () => {

@@ -99,6 +99,12 @@ export const StorageBackendDetailsPage = () => {
                 </DescriptionListDescription>
               </DescriptionListGroup>
               <DescriptionListGroup>
+                <DescriptionListTerm>{t('Ownership mode')}</DescriptionListTerm>
+                <DescriptionListDescription>
+                  {backend.spec?.cspManaged ? t('CSP-managed') : t('OSAC-managed')}
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+              <DescriptionListGroup>
                 <DescriptionListTerm>{t('Endpoint')}</DescriptionListTerm>
                 <DescriptionListDescription>
                   {displayValue(backend.spec?.endpoint)}

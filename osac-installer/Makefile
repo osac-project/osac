@@ -114,8 +114,8 @@ ifneq ($(filter install-multicluster,$(MAKECMDGOALS)),)
 ifneq ($(PLATFORM),openshift)
 $(error install-multicluster requires PLATFORM=openshift)
 endif
-ifneq ($(PROFILE),vmaas-ci)
-$(error install-multicluster requires PROFILE=vmaas-ci)
+ifeq ($(filter $(PROFILE),vmaas-ci vcluster-ci),)
+$(error install-multicluster requires PROFILE=vmaas-ci or PROFILE=vcluster-ci)
 endif
 ifndef REMOTE_KUBECONFIG
 $(error REMOTE_KUBECONFIG is required (workload cluster kubeconfig))
@@ -126,8 +126,8 @@ ifneq ($(strip $(REMOTE_KUBECONFIG)$(REMOTE_API_ADDRESS)),)
 ifneq ($(PLATFORM),openshift)
 $(error remote-cluster installation requires PLATFORM=openshift)
 endif
-ifneq ($(PROFILE),vmaas-ci)
-$(error remote-cluster installation requires PROFILE=vmaas-ci)
+ifeq ($(filter $(PROFILE),vmaas-ci vcluster-ci),)
+$(error remote-cluster installation requires PROFILE=vmaas-ci or PROFILE=vcluster-ci)
 endif
 ifeq ($(strip $(REMOTE_KUBECONFIG)),)
 $(error REMOTE_KUBECONFIG is required when REMOTE_API_ADDRESS is set)

@@ -187,16 +187,15 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
                     isRequired
                     isDisabled={isEdit}
                     options={providerOptions}
-                    onSelect={() => void setFieldValue('cspManaged', false, false)}
+                    onSelect={(provider) => void setFieldValue('cspManaged', provider === 'netapp')}
                   />
-                  {!isEdit && values.provider === 'netapp' && (
-                    <CheckboxField
-                      name="cspManaged"
-                      label={t('CSP-managed')}
-                      fieldId="storage-backend-csp-managed"
-                      helperText={t('Required for NetApp storage backends.')}
-                    />
-                  )}
+                  <CheckboxField
+                    name="cspManaged"
+                    label={t('CSP-managed')}
+                    fieldId="storage-backend-csp-managed"
+                    isDisabled
+                    helperText={t('Automatically set based on the provider.')}
+                  />
                   <InputField
                     name="endpoint"
                     label={t('Endpoint')}

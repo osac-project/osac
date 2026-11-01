@@ -22,7 +22,6 @@ import {
   bareMetalCatalogItemFields,
   bareMetalDiskImageReferenceFromPolicy,
   bareMetalInstanceTypeReferenceFromPolicy,
-  findBareMetalInstanceTypeForReference,
   findDiskImageForReference,
   formatBareMetalCatalogDiskImage,
 } from '../bareMetalCatalogItemResourceDisplay';
@@ -46,7 +45,6 @@ import {
 import {
   computeDiskImageReferenceFromPolicy,
   computeInstanceTypeReferenceFromPolicy,
-  findComputeInstanceTypeForReference,
   formatComputeCatalogDiskImage,
 } from '../computeCatalogItemResourceDisplay';
 import CatalogNodeSets from './CatalogNodeSets';
@@ -133,10 +131,6 @@ const computeConfiguration = (
   const fields = item.fields;
   const instanceTypeReference = computeInstanceTypeReferenceFromPolicy(fields?.instanceType);
   const diskImageReference = computeDiskImageReferenceFromPolicy(fields?.diskImage);
-  const instanceType = findComputeInstanceTypeForReference(
-    resourceLookups.computeInstanceTypes,
-    instanceTypeReference,
-  );
   const diskImage = findDiskImageForReference(resourceLookups.diskImages, diskImageReference);
   const bootDisk = fields?.bootDisk;
   const bootDiskSize = catalogFieldPolicyValue(bootDisk?.sizeGib);
@@ -148,7 +142,7 @@ const computeConfiguration = (
       <>
         <CatalogConfigurationRow
           label={t('Instance type')}
-          value={instanceType?.metadata?.name || instanceTypeReference?.name || ''}
+          value={instanceTypeReference?.name || undefined}
           policy={fields?.instanceType}
         />
         <CatalogConfigurationRow
@@ -246,10 +240,6 @@ const bareMetalConfiguration = (
   const fields = bareMetalCatalogItemFields(item);
   const instanceTypeReference = bareMetalInstanceTypeReferenceFromPolicy(fields?.instanceType);
   const diskImageReference = bareMetalDiskImageReferenceFromPolicy(fields?.diskImage);
-  const instanceType = findBareMetalInstanceTypeForReference(
-    resourceLookups.bareMetalInstanceTypes,
-    instanceTypeReference,
-  );
   const diskImage = findDiskImageForReference(resourceLookups.diskImages, diskImageReference);
 
   return {
@@ -257,7 +247,7 @@ const bareMetalConfiguration = (
       <>
         <CatalogConfigurationRow
           label={t('Instance type')}
-          value={instanceType?.metadata?.name || instanceTypeReference?.name || ''}
+          value={instanceTypeReference?.name || undefined}
           policy={fields?.instanceType}
         />
         <CatalogConfigurationRow

@@ -253,18 +253,14 @@ const CatalogPage = () => {
     [selectedServiceTier],
   );
 
-  const {
-    vms,
-    bms,
-    clusters,
-    isLoading,
-    error,
-    hasSuccessfulQuery,
-    typeCounts,
-    unfilteredTotalItems,
-  } = useCatalogItems(filterCriteria, serviceTierFilter, false);
+  const { vms, bms, clusters, isLoading, error, hasSuccessfulQuery, typeCounts } = useCatalogItems(
+    filterCriteria,
+    serviceTierFilter,
+    false,
+  );
 
   const data = [...vms, ...clusters, ...bms];
+  const selectedTotalItems = selectedServiceTier ? typeCounts[selectedServiceTier] : 0;
 
   const shouldLoadResourceLookups =
     data.length > 0 && !isLoading && !error && (viewType === 'cards' || selectedKind !== 'vm');
@@ -297,11 +293,11 @@ const CatalogPage = () => {
   };
 
   const filteredText =
-    data.length === unfilteredTotalItems
-      ? t('{{count}} catalog item', { count: unfilteredTotalItems })
+    data.length === selectedTotalItems
+      ? t('{{count}} catalog item', { count: selectedTotalItems })
       : t('{{shown}} of {{count}} catalog item', {
           shown: data.length,
-          count: unfilteredTotalItems,
+          count: selectedTotalItems,
         });
 
   return (
@@ -376,7 +372,7 @@ const CatalogPage = () => {
         <StackItem>
           <ListPageBody isLoading={isLoading} error={error}>
             {!data.length ? (
-              unfilteredTotalItems === 0 ? (
+              selectedTotalItems === 0 ? (
                 <EmptyState titleText={t('No catalog items found')} headingLevel="h2">
                   {enabledServices.length === 0 ? (
                     <EmptyStateBody>{t('No catalog services are enabled.')}</EmptyStateBody>

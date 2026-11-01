@@ -5,6 +5,7 @@ import type { ComputeInstanceCatalogItem } from '@osac/types';
 import {
   buildComputeCatalogItemCreatePayload,
   buildComputeCatalogItemUpdatePayload,
+  buildComputeCatalogItemUpdateRequest,
 } from './payload';
 import { emptyComputeCatalogItemValues, getComputeCatalogItemInitialValues } from './values';
 import { emptyResourceSelectValue } from '../../../Form/resourceSelectValue';
@@ -150,6 +151,20 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     expect(secretValues.userData).toEqual({ value: '', locked: false });
     expect(secretValues.userDataSource).toEqual({ value: 'secret', locked: false });
     expect(secretValues.userDataSecret).toEqual({ value: 'cloud-init', locked: false });
+
+    const lockedSecretValues = getComputeCatalogItemInitialValues({
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'locked',
+            value: { source: { case: 'secret', value: { name: 'cloud-init' } } },
+          },
+        },
+      },
+    } as ComputeInstanceCatalogItem);
+
+    expect(lockedSecretValues.userData).toEqual({ value: '', locked: true });
+    expect(lockedSecretValues.userDataSecret).toEqual({ value: 'cloud-init', locked: true });
   });
 
   it('writes a locked additional-disks list and omits an empty editable one', () => {
@@ -193,5 +208,26 @@ describe('buildComputeCatalogItemUpdatePayload', () => {
         value: { source: { case: 'inline', value: 'echo hi' } },
       },
     });
+  });
+
+  it('includes clear paths for policies omitted from an edit', () => {
+    const item = {
+      id: 'catalog-item-1',
+      fields: {
+        instanceType: { behavior: { case: 'editable', value: { defaultValue: { id: 'it-1' } } } },
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: { defaultValue: { source: { case: 'inline', value: 'cloud-init' } } },
+          },
+        },
+      },
+    } as ComputeInstanceCatalogItem;
+
+    const request = buildComputeCatalogItemUpdateRequest(item, emptyComputeCatalogItemValues());
+
+    expect(request.updateMask.paths).toEqual(
+      expect.arrayContaining(['id', 'fields.instance_type', 'fields.user_data_source']),
+    );
   });
 });

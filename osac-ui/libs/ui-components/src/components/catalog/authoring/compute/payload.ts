@@ -3,10 +3,11 @@ import type { MessageInitShape } from '@bufbuild/protobuf';
 import { type ComputeInstanceCatalogItem, ComputeInstanceCatalogItemSchema } from '@osac/types';
 
 import type { ComputeCatalogItemValues } from './values';
+import { buildUpdateMaskPaths } from '../../../../api/v1/update-mask';
 import { type ResourceSelectValue } from '../../../Form/resourceSelectValue';
 import type { ComputeInstanceDiskValues } from '../../../vm/CreateWizard/fields';
 import { catalogGeneralItemPayload } from '../CatalogGeneralStep';
-import { catalogFieldPolicyFromValue } from '../catalogItemPolicy';
+import { catalogFieldPolicyClearPath, catalogFieldPolicyFromValue } from '../catalogItemPolicy';
 import { catalogUserDataPolicyFromValues } from '../catalogUserData';
 
 type CatalogItemFieldsInit = NonNullable<
@@ -110,3 +111,52 @@ export const buildComputeCatalogItemUpdatePayload = (
 ): MessageInitShape<typeof ComputeInstanceCatalogItemSchema> => ({
   fields: buildComputeCatalogItemFieldsPayload(values),
 });
+
+export const buildComputeCatalogItemUpdateRequest = (
+  item: ComputeInstanceCatalogItem,
+  values: ComputeCatalogItemValues,
+) => {
+  const payload = buildComputeCatalogItemUpdatePayload(item, values);
+  const object = { id: item.id, ...payload };
+  const fields = payload.fields;
+  const clearPaths = [
+    catalogFieldPolicyClearPath(item.fields?.diskImage, fields?.diskImage, 'fields.disk_image'),
+    catalogFieldPolicyClearPath(
+      item.fields?.instanceType,
+      fields?.instanceType,
+      'fields.instance_type',
+    ),
+    catalogFieldPolicyClearPath(
+      item.fields?.userDataSource,
+      fields?.userDataSource,
+      'fields.user_data_source',
+    ),
+    catalogFieldPolicyClearPath(
+      item.fields?.bootDisk?.sizeGib,
+      fields?.bootDisk?.sizeGib,
+      'fields.boot_disk.size_gib',
+    ),
+    catalogFieldPolicyClearPath(
+      item.fields?.bootDisk?.storageTier,
+      fields?.bootDisk?.storageTier,
+      'fields.boot_disk.storage_tier',
+    ),
+    catalogFieldPolicyClearPath(
+      item.fields?.additionalDisks,
+      fields?.additionalDisks,
+      'fields.additional_disks',
+    ),
+  ].flat();
+
+  return {
+    object,
+    updateMask: {
+      paths: [
+        ...new Set([
+          ...buildUpdateMaskPaths(object, { schema: ComputeInstanceCatalogItemSchema }),
+          ...clearPaths,
+        ]),
+      ],
+    },
+  };
+};

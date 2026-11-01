@@ -74,6 +74,7 @@ export const getUserDataSourceFieldsFromPolicy = (
 /** Serializes the selected user-data source unless it is locked or empty. */
 export const getUserDataSourcePayload = (
   fields: UserDataSourceFormField,
+  initialFields?: UserDataSourceFormField,
 ): MessageInitShape<typeof UserDataSourceSchema> | undefined => {
   if (fields.locked) {
     return undefined;
@@ -82,7 +83,10 @@ export const getUserDataSourcePayload = (
   const { source, inline, secret } = fields.value;
   const value = (source === 'secret' ? secret : inline).trim();
   if (!value) {
-    return undefined;
+    const initialValue = initialFields
+      ? (initialFields.value[initialFields.value.source] ?? '').trim()
+      : '';
+    return initialValue ? { source: { case: 'inline', value: '' } } : undefined;
   }
 
   return source === 'secret'

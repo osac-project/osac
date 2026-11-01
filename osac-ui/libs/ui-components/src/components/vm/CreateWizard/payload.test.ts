@@ -170,6 +170,26 @@ describe('buildComputeInstanceCreatePayload', () => {
     expect(payload.spec).not.toHaveProperty('userDataSecret');
   });
 
+  it('sends an explicit empty inline source when an editable default is cleared', () => {
+    const values = baseValues();
+    values.spec.userData = provisioningFieldValue({ source: 'inline', inline: '', secret: '' });
+    const catalogItem = create(ComputeInstanceCatalogItemSchema, {
+      id: vmCatalogItem.id,
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: { defaultValue: { source: { case: 'inline', value: 'cloud-init' } } },
+          },
+        },
+      },
+    });
+
+    expect(buildComputeInstanceCreatePayload(values, catalogItem).spec?.userDataSource).toEqual({
+      source: { case: 'inline', value: '' },
+    });
+  });
+
   it('omits a locked user data source so the catalog policy can apply it', () => {
     const values = baseValues();
     values.spec.userData = provisioningFieldValue(

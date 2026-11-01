@@ -77,7 +77,7 @@ export const buildClusterCatalogStepSchema = (
               return true;
             }
             return this.createError({
-              path: `${this.path}.serviceCidr.value`,
+              path: 'serviceCidr.value',
               message: t('Service CIDR must not overlap the pod CIDR.'),
             });
           },

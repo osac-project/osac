@@ -3,9 +3,10 @@ import type { MessageInitShape } from '@bufbuild/protobuf';
 import { type BareMetalInstanceCatalogItem, BareMetalInstanceCatalogItemSchema } from '@osac/types';
 
 import type { BareMetalCatalogItemValues } from './values';
+import { buildUpdateMaskPaths } from '../../../../api/v1/update-mask';
 import { type ResourceSelectValue } from '../../../Form/resourceSelectValue';
 import { catalogGeneralItemPayload } from '../CatalogGeneralStep';
-import { catalogFieldPolicyFromValue } from '../catalogItemPolicy';
+import { catalogFieldPolicyClearPath, catalogFieldPolicyFromValue } from '../catalogItemPolicy';
 import { catalogUserDataPolicyFromValues } from '../catalogUserData';
 
 type CatalogItemFieldsInit = NonNullable<
@@ -71,3 +72,37 @@ export const buildBareMetalCatalogItemUpdatePayload = (
 ): MessageInitShape<typeof BareMetalInstanceCatalogItemSchema> => ({
   fields: buildBareMetalCatalogItemFieldsPayload(values),
 });
+
+export const buildBareMetalCatalogItemUpdateRequest = (
+  item: BareMetalInstanceCatalogItem,
+  values: BareMetalCatalogItemValues,
+) => {
+  const payload = buildBareMetalCatalogItemUpdatePayload(item, values);
+  const object = { id: item.id, ...payload };
+  const fields = payload.fields;
+  const clearPaths = [
+    catalogFieldPolicyClearPath(
+      item.fields?.instanceType,
+      fields?.instanceType,
+      'fields.instance_type',
+    ),
+    catalogFieldPolicyClearPath(item.fields?.diskImage, fields?.diskImage, 'fields.disk_image'),
+    catalogFieldPolicyClearPath(
+      item.fields?.userDataSource,
+      fields?.userDataSource,
+      'fields.user_data_source',
+    ),
+  ].flat();
+
+  return {
+    object,
+    updateMask: {
+      paths: [
+        ...new Set([
+          ...buildUpdateMaskPaths(object, { schema: BareMetalInstanceCatalogItemSchema }),
+          ...clearPaths,
+        ]),
+      ],
+    },
+  };
+};

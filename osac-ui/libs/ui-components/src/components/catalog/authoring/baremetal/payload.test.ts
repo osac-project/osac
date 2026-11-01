@@ -5,6 +5,7 @@ import type { BareMetalInstanceCatalogItem } from '@osac/types';
 import {
   buildBareMetalCatalogItemCreatePayload,
   buildBareMetalCatalogItemUpdatePayload,
+  buildBareMetalCatalogItemUpdateRequest,
 } from './payload';
 import { emptyBareMetalCatalogItemValues, getBareMetalCatalogItemInitialValues } from './values';
 import { emptyResourceSelectValue } from '../../../Form/resourceSelectValue';
@@ -178,5 +179,28 @@ describe('bare metal catalog item initial values and updates', () => {
         value: { source: { case: 'inline', value: 'echo hi' } },
       },
     });
+  });
+
+  it('includes clear paths for policies omitted from an edit', () => {
+    const item = {
+      id: 'catalog-item-1',
+      fields: {
+        instanceType: {
+          behavior: {
+            case: 'editable',
+            value: { defaultValue: { name: 'bare-metal.large', shared: true } },
+          },
+        },
+        diskImage: {
+          behavior: { case: 'editable', value: { defaultValue: { id: 'image-1' } } },
+        },
+      },
+    } as BareMetalInstanceCatalogItem;
+
+    const request = buildBareMetalCatalogItemUpdateRequest(item, emptyBareMetalCatalogItemValues());
+
+    expect(request.updateMask.paths).toEqual(
+      expect.arrayContaining(['id', 'fields.instance_type', 'fields.disk_image']),
+    );
   });
 });

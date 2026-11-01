@@ -6,6 +6,7 @@ import { ClusterCatalogItemSchema } from '@osac/types';
 import {
   buildClusterCatalogItemCreatePayload,
   buildClusterCatalogItemUpdatePayload,
+  buildClusterCatalogItemUpdateRequest,
 } from './payload';
 import { emptyClusterCatalogItemValues } from './values';
 
@@ -121,5 +122,30 @@ describe('buildClusterCatalogItemUpdatePayload', () => {
     expect(payload.fields?.network?.podCidr).toEqual({
       behavior: { case: 'locked', value: '10.128.0.0/14' },
     });
+  });
+
+  it('includes clear paths for policies omitted from an edit', () => {
+    const item = create(ClusterCatalogItemSchema, {
+      id: 'item-1',
+      fields: {
+        version: {
+          behavior: {
+            case: 'editable',
+            value: { defaultValue: { name: '4-17-0', shared: true } },
+          },
+        },
+        network: {
+          serviceCidr: {
+            behavior: { case: 'editable', value: { defaultValue: '10.0.0.0/16' } },
+          },
+        },
+      },
+    });
+
+    const request = buildClusterCatalogItemUpdateRequest(item, emptyClusterCatalogItemValues());
+
+    expect(request.updateMask.paths).toEqual(
+      expect.arrayContaining(['id', 'fields.version', 'fields.network.service_cidr']),
+    );
   });
 });

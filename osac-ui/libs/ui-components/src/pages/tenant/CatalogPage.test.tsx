@@ -635,6 +635,21 @@ describe('CatalogPage', () => {
     expect(screen.queryByText(vmCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
   });
 
+  it('uses the selected service count for the catalog summary', async () => {
+    renderCatalogPage(
+      createCatalogPageTransport({ clusterItems: [clusterCatalogItem] }),
+      allCatalogServiceTiers,
+      ['/catalog?types=vm'],
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('1 catalog item')).toBeInTheDocument();
+    expect(screen.queryByText(/of 2 catalog items/)).not.toBeInTheDocument();
+  });
+
   it('filters catalog items by publication status', async () => {
     const unpublishedVmItem: ComputeInstanceCatalogItem = {
       ...vmCatalogItem,

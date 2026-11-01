@@ -54,10 +54,8 @@ const matchesFilterTerms = (
     return false;
   }
 
-  if (
-    terms.search &&
-    ![item.metadata?.name, item.title].filter(Boolean).join(' ').includes(terms.search)
-  ) {
+  const search = terms.search;
+  if (search && ![item.metadata?.name, item.title].some((value) => value?.includes(search))) {
     return false;
   }
 

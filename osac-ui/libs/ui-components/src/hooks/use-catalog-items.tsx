@@ -26,7 +26,6 @@ export const useCatalogItems = (
   clusters: ClusterCatalogItem[];
   bms: BareMetalInstanceCatalogItem[];
   typeCounts: Record<ServiceTier, number>;
-  unfilteredTotalItems: number;
 } => {
   const { enabledServices, role } = useSession();
   const visibilityCriteria: CatalogListFilterCriteria =
@@ -109,6 +108,5 @@ export const useCatalogItems = (
       [ServiceTier.UNSPECIFIED]: 0,
       [ServiceTier.MAAS]: 0,
     },
-    unfilteredTotalItems: totalVmsCount + totalClustersCount + totalBmsCount,
   };
 };

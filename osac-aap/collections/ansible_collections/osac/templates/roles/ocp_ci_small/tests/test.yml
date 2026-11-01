@@ -1,5 +1,5 @@
 ---
-- name: CI cluster deletion passes only requested instance types to cleanup
+- name: CI cluster deletion uses service-owned infrastructure and access tasks
   hosts: localhost
   gather_facts: false
   vars:
@@ -18,9 +18,6 @@
       pull_secret: test-secret
       ssh_public_key: ssh-rsa
     delete_step_hosted_cluster_override:
-      name: osac.test_overrides.cluster_hooks
-      tasks_from: assert_delete_node_requests.yml
-    delete_step_cluster_network_override:
       name: osac.workflows.workflow_helpers
       tasks_from: noop.yml
     delete_step_external_access_override:
@@ -32,8 +29,11 @@
         name: osac.templates.ocp_ci_small
         tasks_from: delete.yaml
 
-    - name: Verify instance type requests are not translated to resource classes
+    - name: Verify CI delete uses service-owned external access tasks
       ansible.builtin.assert:
         that:
-          - normalized_node_requests == cluster_order.spec.nodeRequests
-          - normalized_node_requests[0].resourceClass is not defined
+          - delete_step_cluster_infra_default is not defined
+          - delete_step_external_access_default is defined
+          - delete_step_external_access_default.name == "osac.service.external_access"
+          - delete_step_external_access_default.tasks_from == "caas_delete.yaml"
+          - delete_step_cluster_network_default is not defined

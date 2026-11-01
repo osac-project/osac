@@ -13,7 +13,9 @@ import {
   Stack,
   StackItem,
   Title,
+  Tooltip,
 } from '@patternfly/react-core';
+import HelpIcon from '@patternfly/react-icons/dist/esm/icons/help-icon';
 import { Formik } from 'formik';
 import type { TFunction } from 'i18next';
 import * as Yup from 'yup';
@@ -191,10 +193,23 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
                   />
                   <CheckboxField
                     name="cspManaged"
-                    label={t('CSP-managed')}
+                    label={
+                      <>
+                        {t('CSP-managed')}{' '}
+                        <Tooltip content={t('Automatically set based on the provider.')}>
+                          <span
+                            role="img"
+                            aria-label={t('Automatically set based on the provider.')}
+                            tabIndex={0}
+                          >
+                            <HelpIcon aria-hidden />
+                          </span>
+                        </Tooltip>
+                      </>
+                    }
+                    ariaLabel={t('CSP-managed')}
                     fieldId="storage-backend-csp-managed"
                     isDisabled
-                    helperText={t('Automatically set based on the provider.')}
                   />
                   <InputField
                     name="endpoint"

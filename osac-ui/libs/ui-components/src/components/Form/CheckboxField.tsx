@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Checkbox, FormGroup } from '@patternfly/react-core';
 import { useField } from 'formik';
 
@@ -7,7 +8,8 @@ import { FormFieldHelper } from './FormFieldHelper';
 
 interface CheckboxFieldProps {
   name: string;
-  label: string;
+  label: ReactNode;
+  ariaLabel?: string;
   fieldId: string;
   isDisabled?: boolean;
   helperText?: string;
@@ -18,6 +20,7 @@ interface CheckboxFieldProps {
 export const CheckboxField = ({
   name,
   label,
+  ariaLabel,
   fieldId,
   isDisabled = false,
   helperText,
@@ -33,6 +36,7 @@ export const CheckboxField = ({
         id={fieldId}
         name={name}
         label={label}
+        aria-label={ariaLabel}
         isChecked={field.value}
         isDisabled={isDisabled}
         onChange={(_event, checked) => {

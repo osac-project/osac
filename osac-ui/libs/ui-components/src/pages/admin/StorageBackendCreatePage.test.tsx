@@ -111,6 +111,15 @@ describe('StorageBackendCreatePage', () => {
       expect(screen.getByLabelText(/^Provider/)).toBeEnabled();
     });
 
+    it('shows the ownership explanation in a tooltip', async () => {
+      const { user } = renderCreatePage();
+      const explanation = 'Automatically set based on the provider.';
+
+      expect(screen.queryByText(explanation)).not.toBeInTheDocument();
+      await user.hover(screen.getByRole('img', { name: explanation }));
+      expect(await screen.findByRole('tooltip')).toHaveTextContent(explanation);
+    });
+
     it('renders the provider select with existing providers and NetApp', async () => {
       const { user } = renderCreatePage();
 

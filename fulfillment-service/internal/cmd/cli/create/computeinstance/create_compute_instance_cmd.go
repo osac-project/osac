@@ -38,6 +38,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/wait"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -166,6 +167,18 @@ func Cmd() *cobra.Command {
 		false,
 		externalIPAttachmentFlagHelp,
 	)
+	flags.StringVar(
+		&runner.args.externalIP,
+		"externalip",
+		"",
+		externalIPFlagHelp,
+	)
+	flags.DurationVar(
+		&runner.args.timeout,
+		"timeout",
+		10*time.Minute,
+		timeoutFlagHelp,
+	)
 	flags.StringArrayVar(
 		&runner.args.setFields,
 		"set",
@@ -175,6 +188,7 @@ func Cmd() *cobra.Command {
 
 	result.MarkFlagsMutuallyExclusive("catalog-item", "template")
 	result.MarkFlagsMutuallyExclusive("user-data", "user-data-secret")
+	result.MarkFlagsMutuallyExclusive("externalip", "external-ip-attachment")
 	result.MarkFlagsOneRequired("catalog-item", "template")
 	return result
 }
@@ -198,15 +212,19 @@ type runnerContext struct {
 		userDataSecret          string
 		networkAttachments      []string
 		externalIPAttachment    bool
+		externalIP              string
+		timeout                 time.Duration
 	}
-	logger                 *slog.Logger
-	parsedSSHKeyRef        *publicv1.SecretReference
-	console                *terminal.Console
-	settings               *config.Settings
-	networkAttachment      *publicv1.ComputeNetworkAttachment
-	templatesClient        publicv1.ComputeInstanceTemplatesClient
-	catalogItemsClient     publicv1.ComputeInstanceCatalogItemsClient
-	computeInstancesClient publicv1.ComputeInstancesClient
+	logger                      *slog.Logger
+	parsedSSHKeyRef             *publicv1.SecretReference
+	console                     *terminal.Console
+	settings                    *config.Settings
+	networkAttachment           *publicv1.ComputeNetworkAttachment
+	templatesClient             publicv1.ComputeInstanceTemplatesClient
+	catalogItemsClient          publicv1.ComputeInstanceCatalogItemsClient
+	computeInstancesClient      publicv1.ComputeInstancesClient
+	externalIPsClient           publicv1.ExternalIPsClient
+	externalIPAttachmentsClient publicv1.ExternalIPAttachmentsClient
 }
 
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
@@ -279,6 +297,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	c.templatesClient = publicv1.NewComputeInstanceTemplatesClient(conn)
 	c.catalogItemsClient = publicv1.NewComputeInstanceCatalogItemsClient(conn)
 	c.computeInstancesClient = publicv1.NewComputeInstancesClient(conn)
+	c.externalIPsClient = publicv1.NewExternalIPsClient(conn)
+	c.externalIPAttachmentsClient = publicv1.NewExternalIPAttachmentsClient(conn)
 
 	if c.args.catalogItem != "" {
 		// Catalog item path: resolve an ID or visible name, then skip template lookup (per D-04).
@@ -325,7 +345,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 		computeInstance = response.Object
 		c.console.Infof(ctx, "Created compute instance '%s'.\n", computeInstance.Id)
-		return nil
+		return c.maybeAttachExistingExternalIP(ctx, computeInstance)
 	}
 
 	// Legacy template path (existing code continues below):
@@ -383,7 +403,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	computeInstance = response.Object
 	c.console.Infof(ctx, "Created compute instance '%s'.\n", computeInstance.Id)
 
-	return nil
+	return c.maybeAttachExistingExternalIP(ctx, computeInstance)
 }
 
 func (c *runnerContext) sshKeyReference() (*publicv1.SecretReference, error) {
@@ -920,6 +940,95 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 	return spec.Build(), nil
 }
 
+// maybeAttachExistingExternalIP is a no-op unless --externalip is provided. When set it:
+//  1. Resolves the named ExternalIP by name or ID.
+//  2. Fails early if the ExternalIP is not in ALLOCATED state.
+//  3. Polls until the ComputeInstance reaches RUNNING state.
+//  4. Creates an ExternalIPAttachment linking the two resources.
+func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *publicv1.ComputeInstance) error {
+	if c.args.externalIP == "" {
+		return nil
+	}
+
+	// Step 1: resolve the ExternalIP by name or ID.
+	eip, err := lookup.Find(c.args.externalIP, "external IP", func(filter string, limit int32) ([]*publicv1.ExternalIP, error) {
+		resp, err := c.externalIPsClient.List(ctx, publicv1.ExternalIPsListRequest_builder{
+			Filter: proto.String(filter),
+			Limit:  proto.Int32(limit),
+		}.Build())
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve external IP %q: %w", c.args.externalIP, err)
+		}
+		return resp.GetItems(), nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// Step 2: fail early if not ALLOCATED.
+	state := eip.GetStatus().GetState()
+	if state != publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED {
+		return fmt.Errorf(
+			"external IP %q is in state %s, must be ALLOCATED before attaching to a new compute instance",
+			eip.GetMetadata().GetName(), state.String(),
+		)
+	}
+
+	// Step 3: poll until the ComputeInstance reaches RUNNING.
+	c.console.Infof(ctx, "Waiting for compute instance '%s' to reach RUNNING...\n", ci.GetMetadata().GetName())
+
+	ci, err = wait.Poll(ctx, wait.Options[*publicv1.ComputeInstance]{
+		Fetch: func(ctx context.Context) (*publicv1.ComputeInstance, error) {
+			resp, err := c.computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: ci.GetId(),
+			}.Build())
+			if err != nil {
+				return nil, fmt.Errorf("failed to poll compute instance: %w", err)
+			}
+			return resp.GetObject(), nil
+		},
+		StateOf: func(r *publicv1.ComputeInstance) string {
+			return r.GetStatus().GetState().String()
+		},
+		TargetState: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING.String(),
+		FailureStates: []string{
+			publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED.String(),
+			publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING.String(),
+		},
+		Timeout: c.args.timeout,
+		OnProgress: func(r *publicv1.ComputeInstance) {
+			c.console.Infof(ctx, "  compute instance '%s': %s\n",
+				r.GetMetadata().GetName(), r.GetStatus().GetState().String())
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("compute instance '%s' did not reach RUNNING: %w", ci.GetMetadata().GetName(), err)
+	}
+
+	// Step 4: create the attachment.
+	attachResp, err := c.externalIPAttachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
+		Object: publicv1.ExternalIPAttachment_builder{
+			Metadata: metautil.ForCreate(ctx, "").Build(),
+			Spec: publicv1.ExternalIPAttachmentSpec_builder{
+				ExternalIp:      &publicv1.ExternalIPLocalReference{Id: eip.GetId()},
+				ComputeInstance: &publicv1.ComputeInstanceLocalReference{Id: ci.GetId()},
+			}.Build(),
+		}.Build(),
+	}.Build())
+	if err != nil {
+		return fmt.Errorf(
+			"compute instance '%s' is RUNNING but attachment of external IP '%s' failed: %w",
+			ci.GetMetadata().GetName(), eip.GetMetadata().GetName(), err,
+		)
+	}
+
+	c.console.Infof(ctx,
+		"Attached external IP '%s' (address: %s) to compute instance '%s' (attachment ID: %s).\n",
+		eip.GetMetadata().GetName(), eip.GetStatus().GetAddress(),
+		ci.GetMetadata().GetName(), attachResp.GetObject().GetId(),
+	)
+	return nil
+}
 // parseAdditionalDisks parses disk specifications in key=value format:
 // "size=100,storage-tier=standard".
 func parseAdditionalDisks(diskArgs []string) (*publicv1.ComputeInstanceDiskList, error) {
@@ -1152,4 +1261,17 @@ _KEY=VALUE_ - Set a spec field or template parameter on the resource.
 Use dot notation for nested fields (e.g.
 {{ bt }}template_parameters.vpc_id=vpc-123{{ bt }}). Only supported
 with {{ bt }}--catalog-item{{ bt }}. Can be specified multiple times.
+`
+
+const externalIPFlagHelp = `
+_ID|NAME_ - ID or name of an existing ExternalIP to attach once the compute
+instance reaches RUNNING state. The ExternalIP must already be in ALLOCATED
+state; the command fails immediately if it is not. Mutually exclusive with
+{{ bt }}--external-ip-attachment{{ bt }}.
+`
+
+const timeoutFlagHelp = `
+_DURATION_ - Maximum time to wait for the compute instance to reach RUNNING
+state when {{ bt }}--externalip{{ bt }} is provided (e.g. "10m", "30m").
+Defaults to 10 minutes.
 `

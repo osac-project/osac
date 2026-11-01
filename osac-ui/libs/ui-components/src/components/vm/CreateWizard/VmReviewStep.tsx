@@ -12,7 +12,6 @@ import {
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
-<<<<<<< HEAD
 import { Projects } from '@osac/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
 import {

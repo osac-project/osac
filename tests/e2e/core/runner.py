@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
 from tests.e2e.core.sanitize import sanitize_args, sanitize_text
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 T = TypeVar("T")
 
@@ -145,9 +146,22 @@ def poll_until(
     delay: int = 5,
     description: str,
     retry_on_error: bool = False,
-    resource_kind: str | None = None,
-    resource_id: str | None = None,
+    resource_kind: WaitResourceKind,
+    resource_id: str,
 ) -> T:
+    """Poll fn() until its value passes until(), raising StuckState on timeout.
+
+    resource_kind and resource_id are mandatory: the kind and the name or
+    UUID of the single resource the wait observes (e.g. "Subnet" and its
+    name). A wait that cannot name what it waits on is a bug to fix, not a
+    case to silence. The kind must be a WaitResourceKind member (or an
+    equal string) and the id a non-empty string; anything else fails fast.
+    """
+    if resource_kind not in WaitResourceKind:
+        valid = ", ".join(kind.value for kind in WaitResourceKind)
+        raise ValueError(f"poll_until got unknown resource_kind {resource_kind!r}; valid kinds: {valid}")
+    if not isinstance(resource_id, str) or not resource_id.strip():
+        raise ValueError(f"poll_until requires a non-empty resource_id, got {resource_id!r}")
     value: T | None = None
     last_error: subprocess.CalledProcessError | None = None
     start = time.monotonic()
@@ -216,7 +230,7 @@ _NO_OP_WAIT_SPAN = _NoOpWaitSpan()
 
 @contextmanager
 def _wait_span(
-    description: str, *, delay: int, retries: int, resource_kind: str | None = None, resource_id: str | None = None
+    description: str, *, delay: int, retries: int, resource_kind: WaitResourceKind, resource_id: str
 ) -> Iterator[Span | _NoOpWaitSpan]:
     """Track one poll_until wait as a span named after its description.
 
@@ -225,9 +239,8 @@ def _wait_span(
     own duration in the trace waterfall.
 
     ``resource_kind`` and ``resource_id`` name the single resource the wait
-    targets (e.g. "BareMetalInstance" / its name), so a wait can be linked
-    to that resource in Grafana; waits without one resource identity omit
-    both attributes.
+    observes (e.g. "BareMetalInstance" / its name), so a wait can be linked
+    to that resource in Grafana.
 
     Exception recording is disabled: an escaping CalledProcessError carries
     the command and its output, which may contain secrets -- poll_until's
@@ -242,10 +255,8 @@ def _wait_span(
     ) as span:
         span.set_attribute("poll.delay", delay)
         span.set_attribute("poll.retries", retries)
-        if resource_kind is not None:
-            span.set_attribute("osac.wait.resource_kind", resource_kind)
-        if resource_id is not None:
-            span.set_attribute("osac.wait.resource_id", resource_id)
+        span.set_attribute("osac.wait.resource_kind", str(resource_kind))
+        span.set_attribute("osac.wait.resource_id", resource_id)
         try:
             yield span
         except TimeoutError:

@@ -288,7 +288,7 @@ def test_guest_health_recovers_from_access_and_readiness_delays(monkeypatch: pyt
 
     monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
 
-    helpers.wait_for_workload_cluster_health(k8s=k8s, expected_workers=1)
+    helpers.wait_for_workload_cluster_health(k8s=k8s, cluster_name="guest-cluster", expected_workers=1)
 
 
 def test_guest_health_has_at_most_five_minutes_of_scheduled_waits() -> None:
@@ -323,10 +323,12 @@ def test_wait_for_cluster_guest_readiness_waits_for_hub_ready_before_guest_check
         k8s=Mock(),
         name="order-test",
         workload_k8s=Mock(),
+        cluster_name="guest-cluster",
         expected_workers=1,
         get_node_pool=lambda: node_pool,
         expected_ready_nodes=1,
         node_pool_description="order-test NodePool",
+        node_pool_id="worker-node-set",
     )
 
     assert events == ["ready", "guest", "nodepool"]

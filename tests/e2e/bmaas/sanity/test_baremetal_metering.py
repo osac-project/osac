@@ -35,6 +35,7 @@ from tests.e2e.core.metering import (
 )
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = [pytest.mark.sanity, pytest.mark.metering]
 
@@ -49,6 +50,8 @@ def _wait_for_meter(metering: MeteringCollector, bmi_id: str, meter: str, instan
         retries=HEARTBEAT_TIMEOUT // 10,
         delay=10,
         description=f"first {meter} heartbeat of {bmi_id} with instance_type",
+        resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+        resource_id=bmi_id,
     )[0]
 
 
@@ -116,6 +119,8 @@ def test_baremetal_instance_bills_allocation_and_consumption(
                 retries=HEARTBEAT_TIMEOUT // 10,
                 delay=10,
                 description=f"two typed {meter} heartbeats of {bmi_id}",
+                resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+                resource_id=bmi_id,
             )
             _assert_contiguous_exact_seconds(
                 metering.typed_heartbeats(bmi_id, meter=meter, dimension="instance_type"), meter
@@ -187,6 +192,8 @@ def _delete_bmi(cli: OsacCLI, grpc: GRPCClient, k8s: K8sClient, *, uuid: str, cr
                             retries=30,
                             delay=2,
                             description=f"deletion timestamp of {cr_name}",
+                            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+                            resource_id=cr_name,
                         )
                     )
         except Exception:

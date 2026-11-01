@@ -37,6 +37,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.bmaas import bmi_ssh, guest_ssh
 
 pytestmark = pytest.mark.regression
@@ -157,6 +158,8 @@ class TestBmaasNetworking:
             retries=30,
             delay=5,
             description=f"NATGateway {nat_name} to become Ready",
+            resource_kind=WaitResourceKind.NAT_GATEWAY,
+            resource_id=nat_id,
         )
         nat_cr_name = poll_until(
             fn=lambda: k8s_hub_client.get_nat_gateway_name(uuid=nat_id, checked=False),
@@ -164,6 +167,8 @@ class TestBmaasNetworking:
             retries=30,
             delay=5,
             description=f"NATGateway CR for {nat_name}",
+            resource_kind=WaitResourceKind.NAT_GATEWAY,
+            resource_id=nat_id,
         )
         assert k8s_hub_client.get_jsonpath(
             resource="natgateway", name=nat_cr_name, jsonpath="{.status.stateTransitionTime}"
@@ -230,6 +235,8 @@ class TestBmaasNetworking:
                 retries=60,
                 delay=10,
                 description=f"BMI {bmi['name']} tenant IP assignment",
+                resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+                resource_id=bmi["cr"],
             )
 
             ext_host = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi["cr"])
@@ -274,6 +281,8 @@ class TestBmaasNetworking:
             retries=60,
             delay=5,
             description="auto-created ExternalIPAttachment for BMI3",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi3["id"],
         )
 
         auto_attach_id = attachment["id"]
@@ -294,6 +303,8 @@ class TestBmaasNetworking:
             retries=30,
             delay=5,
             description="auto-created ExternalIP attribution settlement for BMI3",
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=auto_eip_ref,
         )
 
         self.__class__.state.update(
@@ -314,6 +325,8 @@ class TestBmaasNetworking:
             retries=5,
             delay=10,
             description=f"L2 arping BMI1 ({bmi1['ip']}) → BMI2 ({bmi2['ip']})",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi1["id"],
         )
 
     def test_07_l3_ping_same_subnet(self) -> None:
@@ -327,6 +340,8 @@ class TestBmaasNetworking:
             retries=5,
             delay=10,
             description=f"L3 ping BMI1 ({bmi1['ip']}) → BMI2 ({bmi2['ip']})",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi1["id"],
         )
 
     def test_08_l3_ping_cross_subnet(self) -> None:
@@ -340,6 +355,8 @@ class TestBmaasNetworking:
             retries=5,
             delay=10,
             description=f"L3 ping BMI1 ({bmi1['ip']}) → BMI3 ({bmi3['ip']}) cross-subnet",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi1["id"],
         )
 
     def test_09_l2_arping_cross_subnet_fails(self) -> None:
@@ -373,6 +390,8 @@ class TestBmaasNetworking:
             retries=5,
             delay=15,
             description=f"NAT gateway egress curl quay.io (ssh_host={bmi1['ssh_host']}, tenant_ip={bmi1['ip']})",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi1["id"],
         )
 
     def test_12_external_ip_ingress(
@@ -401,6 +420,8 @@ class TestBmaasNetworking:
             retries=30,
             delay=5,
             description="ingress ExternalIP attribution settlement",
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=eip_id,
         )
 
         eip_data = grpc.get_external_ip(external_ip_id=eip_id)
@@ -414,7 +435,13 @@ class TestBmaasNetworking:
                 return ""
 
         poll_until(
-            fn=_try_ssh_eip, until=lambda h: bool(h), retries=5, delay=15, description=f"SSH via external IP {ext_addr}"
+            fn=_try_ssh_eip,
+            until=lambda h: bool(h),
+            retries=5,
+            delay=15,
+            description=f"SSH via external IP {ext_addr}",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi1["id"],
         )
 
         self.__class__.state.update(
@@ -466,6 +493,8 @@ class TestBmaasNetworking:
             retries=30,
             delay=5,
             description="auto-created ExternalIPAttachment garbage collection",
+            resource_kind=WaitResourceKind.EXTERNAL_IP_ATTACHMENT,
+            resource_id=self.state["auto_attach_id"],
         )
 
         poll_until(
@@ -474,6 +503,8 @@ class TestBmaasNetworking:
             retries=30,
             delay=5,
             description="auto-created ExternalIP garbage collection",
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=self.state["auto_eip_id"],
         )
         print("Auto EIP and attachment garbage collected after BMI3 deletion")
 
@@ -491,6 +522,8 @@ class TestBmaasNetworking:
             retries=60,
             delay=5,
             description=f"NATGateway {self.state['nat_name']} deletion",
+            resource_kind=WaitResourceKind.NAT_GATEWAY,
+            resource_id=self.state["nat_id"],
         )
 
         grpc.delete_external_ip(external_ip_id=self.state["nat_eip_id"])

@@ -36,6 +36,7 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, poll_until, run
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.sanity
 
@@ -154,6 +155,8 @@ def _wait_for_cluster_and_infraenv_deletion(
             delay=5,
             description="InfraEnv removal after ClusterOrder deletion",
             retry_on_error=True,
+            resource_kind=WaitResourceKind.INFRA_ENV,
+            resource_id=infra_env_name,
         )
     except TimeoutError:
         on_timeout()
@@ -188,6 +191,8 @@ def _assert_worker_agent_installing(*, k8s: K8sClient, co_name: str, namespace: 
         delay=10,
         description="CaaS worker Agent registration",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
     agent_name = agents[0]["metadata"]["name"]
     logger.info("CaaS: Agent found; waiting for installing state")
@@ -216,6 +221,8 @@ def _assert_worker_agent_installing(*, k8s: K8sClient, co_name: str, namespace: 
         delay=10,
         description="CaaS worker Agent installing state",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
     logger.info("CaaS: Agent entered installing state")
 
@@ -229,6 +236,8 @@ def _assert_operator_worker_metrics(*, k8s: K8sClient, co_name: str) -> None:
             delay=5,
             description=f"{co_name} worker metrics",
             retry_on_error=True,
+            resource_kind=WaitResourceKind.CLUSTER_ORDER,
+            resource_id=co_name,
         )
     except (subprocess.CalledProcessError, RuntimeError) as exc:
         detail = (
@@ -266,6 +275,8 @@ def _assert_cluster_version_propagated(
         delay=5,
         description=f"{co_name} HostedCluster reference",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
     hosted_cluster_image = run(
         *k8s._base(),
@@ -335,10 +346,12 @@ def _assert_guest_workers_ready(
             k8s=k8s,
             name=co_name,
             workload_k8s=workload_k8s_client,
+            cluster_name=hosted_cluster_name,
             expected_workers=expected_workers,
             get_node_pool=_get_node_pool,
             expected_ready_nodes=expected_workers,
             node_pool_description=f"{hosted_cluster_name} NodePool {worker_node_set} ready nodes",
+            node_pool_id=worker_node_set,
         )
     assert node_pool is not None, f"No NodePool found for NodeSet {worker_node_set!r}"
     labels = node_pool.get("metadata", {}).get("labels", {})
@@ -371,6 +384,8 @@ def _assert_worker_bmi_resources(
             delay=2,
             description=f"{co_name} worker {bmi_id} Kubernetes BMI CR",
             retry_on_error=True,
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi_id,
         )
         cr = k8s.get_json(resource="baremetalinstance", name=cr_name)
         assert cr["metadata"]["labels"]["osac.openshift.io/baremetalinstance-uuid"] == bmi_id
@@ -387,6 +402,8 @@ def _wait_for_cluster_infra_env_name(*, k8s: K8sClient, co_name: str) -> str:
         delay=2,
         description=f"{co_name} InfraEnv name",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
 
 
@@ -404,6 +421,8 @@ def _assert_worker_provisioning(
         retries=60,
         delay=5,
         description=f"{co_name} tenant-visible child BareMetalInstances",
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
     logger.info("CaaS: child BareMetalInstance found")
 
@@ -436,7 +455,7 @@ def assert_cluster_available(
     # ClusterVersion success and all NodePools ready), so wait for the phase
     # the billing gate actually keys on before expecting the heartbeat.
     wait_for_cluster_ready(k8s=k8s, name=co_name)
-    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=300)
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=300, resource_kind=WaitResourceKind.CLUSTER_ORDER)
     metering.verify()
 
     cluster = grpc.get_cluster(cluster_id=uuid)
@@ -482,7 +501,9 @@ def _assert_cluster_metering(*, metering: MeteringCollector, uuid: str, cluster_
     Worker nodes no longer bill through the cluster: they bill as the bare-metal
     instances they are, so the cluster sends only its control_plane meter.
     """
-    heartbeat = metering.get_event(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+    heartbeat = metering.get_event(
+        HEARTBEAT_TYPE, resource_id=uuid, timeout=180, resource_kind=WaitResourceKind.CLUSTER_ORDER
+    )
     assert heartbeat.get("osacresourcetype") == "cluster_order"
     data = heartbeat.get("data", {})
     assert data.get("meter") == "control_plane", f"Wrong cluster meter: {data.get('meter')!r}"
@@ -503,7 +524,10 @@ def _assert_worker_metering(*, metering: MeteringCollector, uuid: str, cluster: 
     assert cluster.owned_bmi_ids, "the available cluster has no workers to assert billing on"
     for bmi_id in sorted(cluster.owned_bmi_ids):
         heartbeat = metering.heartbeat_with_dimensions(
-            bmi_id, {"cluster": uuid, "node_set": cluster.worker_node_set}, timeout=180
+            bmi_id,
+            {"cluster": uuid, "node_set": cluster.worker_node_set},
+            timeout=180,
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
         )
         dimensions = heartbeat["data"]["billing_dimensions"]
         assert dimensions.get("instance_type") == cluster.worker_instance_type, (
@@ -611,6 +635,8 @@ def _assert_cluster_deleted(
         retries=480,
         delay=5,
         description=f"{co_name} CaaS worker BMI removal",
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
     assert cluster.infra_env_name is not None
     _wait_for_cluster_and_infraenv_deletion(
@@ -758,6 +784,8 @@ def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers:
         delay=10,
         description=f"{co_name} worker aggregates before NodePool isolation check",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
 
 
@@ -798,6 +826,8 @@ def _assert_installed_agents_by_node_set(
         delay=10,
         description=f"{co_name} installed Agents by NodeSet",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
 
 
@@ -837,6 +867,8 @@ def _assert_isolated_node_pools(
         delay=10,
         description=f"{co_name} per-NodeSet NodePool replicas",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
     for node_set, node_pool in node_pools.items():
         labels = node_pool.get("metadata", {}).get("labels", {})
@@ -861,6 +893,8 @@ def _assert_owned_workers_for_node_sets(
         retries=60,
         delay=5,
         description=f"{co_name} tenant-visible child BareMetalInstances",
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
     return _assert_worker_bmi_resources(
         k8s=k8s, co_name=co_name, tenant=tenant, candidate_bmis=candidate_bmis, instance_types=instance_types
@@ -903,7 +937,7 @@ def assert_cluster_with_two_node_sets_available(
     # success and all NodePools ready), so wait for the phase the billing gate
     # actually keys on before expecting the heartbeat.
     wait_for_cluster_ready(k8s=k8s, name=co_name)
-    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=300)
+    metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=300, resource_kind=WaitResourceKind.CLUSTER_ORDER)
     metering.verify()
 
     cluster_tenant = cluster["metadata"]["tenant"]

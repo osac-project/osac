@@ -21,6 +21,7 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.sanity
 
@@ -81,6 +82,8 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
             retries=60,
             delay=5,
             description=f"{co_name} worker BareMetalInstances",
+            resource_kind=WaitResourceKind.CLUSTER_ORDER,
+            resource_id=co_name,
         )
         logger.info("CaaS: %d worker BMI(s) allocated before the delete: %s", len(worker_bmi_ids), worker_bmi_ids)
 

@@ -45,6 +45,7 @@ from tests.e2e.core.metering import (
 )
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.sanity
 
@@ -191,6 +192,8 @@ def _delete_vm(cli: OsacCLI, grpc: GRPCClient, k8s: K8sClient, *, uuid: str, ci_
                 retries=30,
                 delay=2,
                 description=f"deletion timestamp of {ci_name}",
+                resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                resource_id=ci_name,
             )
         )
         wait_for_deletion(k8s=k8s, name=ci_name)
@@ -226,7 +229,10 @@ def test_metering_heartbeat_envelope(
         # carries the dimension, as the resize scenario does, and verify that
         # event's envelope.
         heartbeat = metering.heartbeat_with_dimensions(
-            uuid, {"instance_type": cli.default_instance_type}, timeout=HEARTBEAT_TIMEOUT
+            uuid,
+            {"instance_type": cli.default_instance_type},
+            timeout=HEARTBEAT_TIMEOUT,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
         )
         # verify_event checks the full envelope: CloudEvent type, source,
         # extensions, interval semantics, unit, precision, fixed-point quantity,
@@ -261,6 +267,8 @@ def test_metering_heartbeat_envelope(
             retries=45,
             delay=10,
             description=f"two heartbeats of {uuid} on the {cli.default_instance_type} meter",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
     finally:
         _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
@@ -287,7 +295,10 @@ def test_metering_stop_ends_billing(
         # Anchor on a heartbeat that carries the running instance type: early
         # heartbeats legitimately lack it until the fact lands.
         heartbeat = metering.heartbeat_with_dimensions(
-            uuid, {"instance_type": cli.default_instance_type}, timeout=HEARTBEAT_TIMEOUT
+            uuid,
+            {"instance_type": cli.default_instance_type},
+            timeout=HEARTBEAT_TIMEOUT,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
         )
         metering.verify_event(heartbeat, resource_id=uuid)
 
@@ -300,6 +311,8 @@ def test_metering_stop_ends_billing(
             retries=30,
             delay=10,
             description=f"{ci_name} VM stopped",
+            resource_kind=WaitResourceKind.VIRTUAL_MACHINE,
+            resource_id=ci_name,
         )
 
         # Anchor the final interval on the stop time fulfillment recorded, not on the
@@ -313,6 +326,8 @@ def test_metering_stop_ends_billing(
             retries=30,
             delay=5,
             description=f"{ci_name} instance STOPPED in fulfillment",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
         stopped_at = parse_time(instance["object"]["status"]["stateTransitionTime"])
 
@@ -331,6 +346,8 @@ def test_metering_stop_ends_billing(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"final partial-interval heartbeat of {uuid}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
         _, final_to, _ = usage_interval(final)
 
@@ -345,6 +362,8 @@ def test_metering_stop_ends_billing(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"net billing of {uuid} to end at the stop at {stopped_at}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
 
         # Past the final interval nothing more arrives: the meter stopped.
@@ -394,7 +413,12 @@ def test_metering_resize_splits_dimensions(
             cli, vm_template=vm_template, network_attachment=metering_network_attachment, project=metering_project
         )
         ci_name = _wait_for_running_vm(k8s_hub_client, uuid=uuid)
-        metering.heartbeat_with_dimensions(uuid, {"instance_type": old_type}, timeout=HEARTBEAT_TIMEOUT)
+        metering.heartbeat_with_dimensions(
+            uuid,
+            {"instance_type": old_type},
+            timeout=HEARTBEAT_TIMEOUT,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        )
 
         # Resize and restart, so the running instance type actually changes: the
         # billing dimension follows the type the VM runs, not the request.
@@ -408,6 +432,8 @@ def test_metering_resize_splits_dimensions(
             retries=60,
             delay=5,
             description=f"{ci_name} RestartRequired after resize",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=ci_name,
         )
         previous_restart = k8s_hub_client.get_compute_instance_last_restarted_at(name=ci_name)
         restart_requested = datetime.now(tz=UTC)
@@ -426,11 +452,15 @@ def test_metering_resize_splits_dimensions(
             retries=60,
             delay=5,
             description=f"{ci_name} RestartRequired cleared after restart",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=ci_name,
         )
         running_observed = datetime.now(tz=UTC)
 
         # The new meter starts: a heartbeat with the new dimension arrives.
-        metering.heartbeat_with_dimensions(uuid, {"instance_type": new_type})
+        metering.heartbeat_with_dimensions(
+            uuid, {"instance_type": new_type}, resource_kind=WaitResourceKind.COMPUTE_INSTANCE
+        )
 
         def split_intervals() -> tuple[list, list]:
             events = metering.get_all_events(HEARTBEAT_TYPE, uuid)
@@ -451,6 +481,8 @@ def test_metering_resize_splits_dimensions(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"old meter of {uuid} to end before the new meter starts",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
         assert old_intervals, "no heartbeat arrived on the old instance_type meter"
         assert new_intervals, "no heartbeat arrived on the new instance_type meter"
@@ -551,7 +583,10 @@ def test_metering_delete_ends_billing(
         # Anchor on a heartbeat that carries the running instance type: early
         # heartbeats legitimately lack it until the fact lands.
         heartbeat = metering.heartbeat_with_dimensions(
-            uuid, {"instance_type": cli.default_instance_type}, timeout=HEARTBEAT_TIMEOUT
+            uuid,
+            {"instance_type": cli.default_instance_type},
+            timeout=HEARTBEAT_TIMEOUT,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
         )
         metering.verify_event(heartbeat, resource_id=uuid)
         running_since, _, _ = usage_interval(heartbeat)
@@ -571,6 +606,8 @@ def test_metering_delete_ends_billing(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"final partial-interval heartbeat of {uuid}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
         _, final_to, _ = usage_interval(final)
 
@@ -613,6 +650,8 @@ def test_metering_delete_ends_billing(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"net billing of {uuid} to end at the recorded deletion",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
 
         # Past the final interval nothing more arrives: the meter stopped.

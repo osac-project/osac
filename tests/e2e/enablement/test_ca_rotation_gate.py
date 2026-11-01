@@ -26,6 +26,7 @@ import pytest
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import env, poll_until, run
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = [
     pytest.mark.regression,
@@ -98,6 +99,8 @@ def test_all_clients_converged_before_rotation_advance(k8s_hub_client: K8sClient
         retries=60,
         delay=5,
         description=f"management CA bundle hash {expected_hash}",
+        resource_kind=WaitResourceKind.CONFIG_MAP,
+        resource_id="ca-bundle",
     )
     certificates = re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", bundle, re.DOTALL)
     roots = {hashlib.sha256(ssl.PEM_cert_to_DER_cert(cert)).hexdigest() for cert in certificates}
@@ -146,6 +149,8 @@ def test_all_clients_converged_before_rotation_advance(k8s_hub_client: K8sClient
                 retries=60,
                 delay=5,
                 description=f"{deployment} verifying bundle hash {expected_hash}",
+                resource_kind=WaitResourceKind.DEPLOYMENT,
+                resource_id=deployment,
             )
 
     endpoint = urlsplit("https://" + env("OSAC_TRUST_LEAF_ENDPOINT"))

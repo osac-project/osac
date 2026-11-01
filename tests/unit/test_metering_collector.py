@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector, parse_time
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
 def _heartbeat(
@@ -85,7 +86,7 @@ def test_verify_event_accepts_a_well_formed_heartbeat(collector: MeteringCollect
 
     collector.verify_event(event, resource_id="vm-7")
 
-    assert collector.get_event(HEARTBEAT_TYPE, "vm-7") is event
+    assert collector.get_event(HEARTBEAT_TYPE, "vm-7", resource_kind=WaitResourceKind.COMPUTE_INSTANCE) is event
 
 
 def test_verify_event_rejects_a_heartbeat_missing_its_dimension(collector: MeteringCollector) -> None:
@@ -115,7 +116,7 @@ def test_verify_accepts_early_heartbeats_that_precede_the_late_dimension(
     # The adapter's order must not matter: the collector orders by interval.
     _serve(collector, monkeypatch, list(reversed(events)))
 
-    collector.expect(HEARTBEAT_TYPE, "vm-7")
+    collector.expect(HEARTBEAT_TYPE, "vm-7", resource_kind=WaitResourceKind.COMPUTE_INSTANCE)
     collector.verify()
 
 
@@ -131,7 +132,7 @@ def test_verify_rejects_a_heartbeat_that_loses_the_dimension_after_it_landed(
     ]
     _serve(collector, monkeypatch, events)
 
-    collector.expect(HEARTBEAT_TYPE, "vm-7")
+    collector.expect(HEARTBEAT_TYPE, "vm-7", resource_kind=WaitResourceKind.COMPUTE_INSTANCE)
     with pytest.raises(AssertionError, match="instance_type"):
         collector.verify()
 

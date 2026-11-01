@@ -418,7 +418,8 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	}
 	// Version validation canonicalizes selected references; keep the caller's request intact.
 	request = proto.Clone(request).(*privatev1.ClustersUpdateRequest)
-	if err = s.validateClusterUpdateRequest(ctx, request); err != nil {
+	resolvedTarget, err := s.validateClusterUpdateRequest(ctx, request)
+	if err != nil {
 		return
 	}
 	// Upgrade-history updates identify the attempt and component, then supply its
@@ -426,27 +427,35 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	// Merge the stored audit fields before validating the completed candidate.
 	err = s.generic.updateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context,
 		current, candidate *privatev1.Cluster) error {
-		return s.prepareUpdatedCluster(ctx, current, candidate, request)
+		return s.prepareUpdatedCluster(ctx, current, candidate, request, resolvedTarget)
 	}, true)
 	return
 }
 
+// validateClusterUpdateRequest validates an update request and returns the
+// ClusterVersion resolved during version validation.
 func (s *PrivateClustersServer) validateClusterUpdateRequest(ctx context.Context,
-	request *privatev1.ClustersUpdateRequest) error {
-	if err := s.validateVersionUpdate(ctx, request); err != nil {
-		return err
+	request *privatev1.ClustersUpdateRequest) (*privatev1.ClusterVersion, error) {
+	resolvedTarget, err := s.validateVersionUpdate(ctx, request)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.validateNodeSetsUpdate(ctx, request); err != nil {
-		return err
+		return nil, err
 	}
 	if err := s.validateAutoExternalIPImmutability(ctx, request); err != nil {
-		return err
+		return nil, err
 	}
-	return s.validateSpecUpdateRequest(request)
+	if err := s.validateSpecUpdateRequest(request); err != nil {
+		return nil, err
+	}
+	return resolvedTarget, nil
 }
 
+// prepareUpdatedCluster applies server-owned defaults and validation to the
+// completed update candidate before it is persisted.
 func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, current, candidate *privatev1.Cluster,
-	request *privatev1.ClustersUpdateRequest) error {
+	request *privatev1.ClustersUpdateRequest, resolvedTarget *privatev1.ClusterVersion) error {
 	// An unmasked metadata-only request omits spec. Keep the stored spec so its
 	// version and node sets are not interpreted as a metering-relevant change.
 	if request.GetUpdateMask() == nil && request.GetObject().GetSpec() == nil && current.GetSpec() != nil {
@@ -478,7 +487,7 @@ func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, curre
 	}
 	candidate.GetSpec().SetNodeSetAttemptIds(attemptIDs)
 	mergeClusterUpgradeHistory(current, candidate, mask)
-	if err := s.prepareClusterVersionChange(ctx, current, candidate, mask); err != nil {
+	if err := s.prepareClusterVersionChange(ctx, current, candidate, mask, resolvedTarget); err != nil {
 		return err
 	}
 	if err := s.initializeAddedNodeSetVersions(ctx, current, candidate); err != nil {
@@ -490,13 +499,15 @@ func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, curre
 	return s.prepareUpdatedClusterReferences(ctx, current, candidate, mask, sizeOnlyNodeSets)
 }
 
+// initializeAddedNodeSetVersions seeds observed versions for node sets added
+// by an update.
 func (s *PrivateClustersServer) initializeAddedNodeSetVersions(ctx context.Context,
 	current, candidate *privatev1.Cluster) error {
 	for name, nodeSet := range candidate.GetSpec().GetNodeSets() {
 		if current.GetSpec().GetNodeSets()[name] != nil || nodeSet == nil {
 			continue
 		}
-		version, err := s.clusterVersionSemver(ctx, nodeSet.GetVersion())
+		version, err := s.clusterVersionSemver(ctx, current.GetMetadata(), nodeSet.GetVersion())
 		if err != nil {
 			return err
 		}

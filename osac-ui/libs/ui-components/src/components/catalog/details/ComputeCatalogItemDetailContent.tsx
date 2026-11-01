@@ -110,7 +110,7 @@ const referenceLabel = (reference: unknown): string | undefined => {
     return undefined;
   }
   const value = reference as { id?: string; name?: string };
-  return value.name?.trim() || value.id?.trim() || undefined;
+  return value.name || '';
 };
 
 interface AdditionalDisk {
@@ -159,9 +159,7 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
   const diskImageValue =
     formatComputeCatalogDiskImage(fields, diskImage, diskImageReference) ??
     displayReference(diskImageReference, t);
-  const instanceTypeValue = instanceType?.metadata?.name
-    ? instanceType.metadata.name
-    : displayReference(instanceTypeReference, t);
+  const instanceTypeValue = instanceType?.metadata?.name || '';
   const vcpuValue = formatComputeCatalogVCpu(fields, instanceType, t) ?? t('Not set');
   const memoryValue = formatComputeCatalogMemory(fields, instanceType, t) ?? t('Not set');
   const gpu = instanceType?.spec?.gpu;

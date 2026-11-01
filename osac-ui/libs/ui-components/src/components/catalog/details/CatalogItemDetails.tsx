@@ -48,7 +48,7 @@ const CatalogItemDetails = ({
   const { isPending, setPublished } = useSetCatalogItemPublished(item);
   const canManage = canManageCatalogItem(role, tenantId, item);
   const canLaunch = (role === 'tenant-admin' || role === 'tenant-user') && item.published;
-  const resourceName = item.metadata?.name || item.title;
+  const resourceName = item.metadata?.name || '';
 
   return (
     <>

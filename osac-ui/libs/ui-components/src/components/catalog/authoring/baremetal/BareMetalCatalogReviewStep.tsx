@@ -51,7 +51,7 @@ const BareMetalCatalogReviewStep = () => {
               <DescriptionListDescription>
                 {values.scope === 'global'
                   ? t('Global')
-                  : formatReviewScalar(values.metadata.tenant.name || values.metadata.tenant.id)}
+                  : formatReviewScalar(values.metadata.tenant.name || '')}
               </DescriptionListDescription>
             </DescriptionListGroup>
           ) : values.metadata.project.trim() ? (
@@ -65,7 +65,7 @@ const BareMetalCatalogReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Provisioning template')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.template.name || values.template.id)}
+              {formatReviewScalar(values.template.name || '')}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>
@@ -84,7 +84,7 @@ const BareMetalCatalogReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Disk image')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.diskImage.value.name || values.diskImage.value.id)}
+              {formatReviewScalar(values.diskImage.value.name || '')}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

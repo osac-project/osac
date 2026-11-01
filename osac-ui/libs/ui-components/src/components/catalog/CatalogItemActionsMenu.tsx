@@ -52,7 +52,7 @@ const CatalogItemActionsMenu = ({ item, role, tenantId }: CatalogItemActionsMenu
               event.stopPropagation();
               setOpen((isOpen) => !isOpen);
             }}
-            aria-label={t('Actions for {{name}}', { name: item.metadata?.name ?? item.id })}
+            aria-label={t('Actions for {{name}}', { name: item.metadata?.name || '' })}
           >
             <EllipsisVIcon />
           </MenuToggle>

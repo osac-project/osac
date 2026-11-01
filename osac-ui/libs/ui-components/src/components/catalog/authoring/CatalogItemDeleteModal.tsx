@@ -30,7 +30,7 @@ const CatalogItemDeleteModal = ({ item, onClose, onSuccess }: CatalogItemDeleteM
 
   return (
     <DeleteResourceModal
-      resourceName={item.metadata?.name ?? item.id}
+      resourceName={item.metadata?.name || ''}
       label={t(
         'This permanently deletes the catalog item. It does not affect resources that tenants have already provisioned from it.',
       )}

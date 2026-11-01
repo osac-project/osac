@@ -51,7 +51,7 @@ const ClusterCatalogReviewStep = () => {
               <DescriptionListDescription>
                 {values.scope === 'global'
                   ? t('Global')
-                  : formatReviewScalar(values.metadata.tenant.name || values.metadata.tenant.id)}
+                  : formatReviewScalar(values.metadata.tenant.name || '')}
               </DescriptionListDescription>
             </DescriptionListGroup>
           ) : values.metadata.project.trim() ? (
@@ -65,7 +65,7 @@ const ClusterCatalogReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Provisioning template')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.template.name || values.template.id)}
+              {formatReviewScalar(values.template.name || '')}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>

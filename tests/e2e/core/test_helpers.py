@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import subprocess
 from collections.abc import Callable
 from unittest.mock import Mock
@@ -24,6 +25,28 @@ def test_wait_for_cluster_ready_fails_immediately_on_failed_order(monkeypatch: p
 
     with pytest.raises(AssertionError, match="order-test entered Failed phase"):
         helpers.wait_for_cluster_ready(k8s=k8s, name="order-test")
+
+
+def test_wait_for_cluster_ready_logs_sanitized_timeout_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    k8s = Mock()
+    k8s.get_cluster_order_phase.return_value = "Progressing"
+    diagnostics = ["clusterorder phase=Progressing", "agent state=installing count=1"]
+    monkeypatch.setattr(helpers, "snapshot_cluster_readiness", Mock(return_value=diagnostics))
+
+    def run_once(**_kwargs: object) -> None:
+        raise runner.StuckState("order-test ClusterOrder Ready", "'Progressing'", 7185)
+
+    monkeypatch.setattr(helpers, "poll_until", run_once)
+    caplog.set_level(logging.ERROR)
+
+    with pytest.raises(runner.StuckState):
+        helpers.wait_for_cluster_ready(k8s=k8s, name="order-test")
+
+    assert "CaaS readiness timeout: clusterorder phase=Progressing" in caplog.text
+    assert "CaaS readiness timeout: agent state=installing count=1" in caplog.text
+    helpers.snapshot_cluster_readiness.assert_called_once_with(k8s, "order-test")
 
 
 def test_node_pool_ready_node_count_uses_node_versions() -> None:

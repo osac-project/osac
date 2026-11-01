@@ -9,8 +9,16 @@ ESI-based step implementations for cluster infrastructure and external access pr
 
 ## Usage
 
-This collection is selected at runtime via the `network_steps_collection` variable (default: `osac.steps`).
-It is used as the ESI network backend by the `osac.service` roles `cluster_infra` and `external_access`.
+This collection can be selected at runtime via the `network_steps_collection`
+variable for legacy/provider-driven workflows. The generic
+`osac.service.cluster_infra` and `osac.service.external_access` roles dispatch
+through that variable.
+
+The CaaS `osac.templates.ocp_ci_small` workflow uses the service role's
+`caas_*` external-access entry points. The current CI endpoint contract uses
+the inventory IP of a ClusterOrder-labeled Agent for wildcard application DNS;
+the service role waits for that endpoint data directly. Agent lifecycle is
+owned by the operator and is not implemented in this provider step collection.
 
 ## License
 

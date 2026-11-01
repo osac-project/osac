@@ -250,7 +250,7 @@ py-pure-client==1.94.2
     # via osac-aap (pyproject.toml)
 pycparser==3.0
     # via cffi
-pydantic==2.12.5
+pydantic==2.14.2
     # via
     #   osac-aap (pyproject.toml)
     #   py-pure-client

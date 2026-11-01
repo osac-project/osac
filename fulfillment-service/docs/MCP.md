@@ -8,10 +8,24 @@ public Fulfillment API remains the authorization boundary.
 ## Supported resources
 
 `list_resources` supports the baseline compute and networking prerequisites,
-`project`, and `secret_reference`. `get_resource` supports only resources with
-a registered public Get adapter. Secret references are list-only: MCP returns
-the reference's ID, name, and type, and never Secret bytes, credentials,
-tokens, provider data, or the underlying Secret object.
+`project`, and `secret_reference`.
+
+`get_resource` accepts only:
+
+- `compute_instance_catalog_item`
+- `compute_instance_template`
+- `instance_type`
+- `disk_image`
+- `storage_tier`
+- `project`
+- `virtual_network`
+- `subnet`
+- `security_group`
+- `compute_instance`
+
+Secret references are list-only: MCP returns the reference's ID, name, and
+type, and never Secret bytes, credentials, tokens, provider data, or the
+underlying Secret object.
 
 List requests use the explicit `filter` field and bounded pagination. The
 default page size is 50, the maximum is 100, and negative offsets or invalid
@@ -31,12 +45,11 @@ A resource-family task extends the registry in
    filters, pagination bounds, supported and unsupported methods, and no
    mutation on rejection.
 
-Omit the `get` function when the public API has no safe Get path. The shared
-handler then returns the `invalid_request` safe-error envelope without calling
-Fulfillment. Every registry entry must support List; get-only entries are not
-part of this registry contract. The `get_resource` schema accepts all listed
-types so list-only resources reach the shared handler and receive the safe
-rejection rather than host-side schema validation.
+Omit the `get` function when the public API has no safe Get path. The
+`get_resource` input schema lists only resource types with a registered Get
+adapter, so clients reject list-only types during schema validation. The shared
+handler still returns the `invalid_request` safe-error envelope without calling
+Fulfillment if a request for an unsupported type reaches it.
 
 Registry entries must not add arbitrary method names, reflection, arbitrary
 request messages, in-place edits, or unbounded pagination. If a family lacks

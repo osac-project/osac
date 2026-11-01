@@ -36,6 +36,16 @@ type resourceOperations struct {
 
 type resourceRegistry map[ResourceType]resourceOperations
 
+type resourceListResponse[Item any] interface {
+	GetSize() int32
+	GetTotal() int32
+	GetItems() []Item
+}
+
+type resourceGetResponse[Object proto.Message] interface {
+	GetObject() Object
+}
+
 func (r resourceRegistry) resourceTypes() []ResourceType {
 	result := make([]ResourceType, 0, len(r))
 	for resourceType := range r {
@@ -56,66 +66,120 @@ func (r resourceRegistry) listResourceTypes() []ResourceType {
 	return result
 }
 
+func (r resourceRegistry) getResourceTypes() []ResourceType {
+	result := make([]ResourceType, 0, len(r))
+	for resourceType, operations := range r {
+		if operations.get != nil {
+			result = append(result, resourceType)
+		}
+	}
+	slices.Sort(result)
+	return result
+}
+
 func projectResourceOperations(deps ServerDeps) resourceOperations {
+	list := func(ctx context.Context, request *publicv1.ProjectsListRequest) (*publicv1.ProjectsListResponse, error) {
+		return deps.ProjectsClient.List(ctx, request)
+	}
+	get := func(ctx context.Context, request *publicv1.ProjectsGetRequest) (*publicv1.ProjectsGetResponse, error) {
+		return deps.ProjectsClient.Get(ctx, request)
+	}
 	return resourceOperations{
 		label: "project",
-		list: func(ctx context.Context, filter string, page resourcePageRequest) (ListResourcesOutput, error) {
-			request := publicv1.ProjectsListRequest_builder{
-				Offset: &page.offset,
-				Limit:  &page.limit,
-			}
-			if filter != "" {
-				request.Filter = &filter
-			}
-			response, err := deps.ProjectsClient.List(ctx, request.Build())
-			if err != nil {
-				return ListResourcesOutput{}, fmt.Errorf("failed to list projects: %w", err)
-			}
-			items := summaries(response.GetItems(), func(item *publicv1.Project) ResourceSummary {
-				return ResourceSummary{
-					ID:          item.GetId(),
-					Name:        item.GetMetadata().GetName(),
-					Title:       item.GetSpec().GetTitle(),
-					Description: item.GetSpec().GetDescription(),
-					State:       item.GetStatus().GetState().String(),
-				}
-			})
-			return resourceListOutput(page, response.GetSize(), response.GetTotal(), items), nil
-		},
-		get: func(ctx context.Context, id string) (proto.Message, error) {
-			response, err := deps.ProjectsClient.Get(ctx, publicv1.ProjectsGetRequest_builder{Id: id}.Build())
-			if err != nil {
-				return nil, fmt.Errorf("failed to get project %q: %w", id, err)
-			}
-			return response.GetObject(), nil
-		},
+		list:  typedResourceList("projects", list, projectListRequest, projectSummary),
+		get:   typedResourceGet("project", get, projectGetRequest),
 	}
 }
 
 func secretReferenceResourceOperations(deps ServerDeps) resourceOperations {
+	list := func(ctx context.Context, request *publicv1.SecretsListRequest) (*publicv1.SecretsListResponse, error) {
+		return deps.SecretsClient.List(ctx, request)
+	}
 	return resourceOperations{
 		label: "secret reference",
-		list: func(ctx context.Context, filter string, page resourcePageRequest) (ListResourcesOutput, error) {
-			request := publicv1.SecretsListRequest_builder{
-				Offset: &page.offset,
-				Limit:  &page.limit,
-			}
-			if filter != "" {
-				request.Filter = &filter
-			}
-			response, err := deps.SecretsClient.List(ctx, request.Build())
-			if err != nil {
-				return ListResourcesOutput{}, fmt.Errorf("failed to list secret references: %w", err)
-			}
-			items := summaries(response.GetItems(), func(item *publicv1.Secret) ResourceSummary {
-				return ResourceSummary{
-					ID:   item.GetId(),
-					Name: item.GetMetadata().GetName(),
-					Type: secretReferenceType(item.GetType()),
-				}
-			})
-			return resourceListOutput(page, response.GetSize(), response.GetTotal(), items), nil
-		},
+		list:  typedResourceList("secret references", list, secretListRequest, secretSummary),
+	}
+}
+
+func typedResourceList[
+	Request any,
+	Response resourceListResponse[Item],
+	Item any,
+](
+	label string,
+	list func(context.Context, *Request) (Response, error),
+	buildRequest func(string, resourcePageRequest) *Request,
+	summary func(Item) ResourceSummary,
+) func(context.Context, string, resourcePageRequest) (ListResourcesOutput, error) {
+	return func(ctx context.Context, filter string, page resourcePageRequest) (ListResourcesOutput, error) {
+		response, err := list(ctx, buildRequest(filter, page))
+		if err != nil {
+			return ListResourcesOutput{}, fmt.Errorf("failed to list %s: %w", label, err)
+		}
+		items := summaries(response.GetItems(), summary)
+		return resourceListOutput(page, response.GetSize(), response.GetTotal(), items), nil
+	}
+}
+
+func typedResourceGet[
+	Request any,
+	Response resourceGetResponse[Object],
+	Object proto.Message,
+](
+	label string,
+	get func(context.Context, *Request) (Response, error),
+	buildRequest func(string) *Request,
+) func(context.Context, string) (proto.Message, error) {
+	return func(ctx context.Context, id string) (proto.Message, error) {
+		response, err := get(ctx, buildRequest(id))
+		if err != nil {
+			return nil, fmt.Errorf("failed to get %s %q: %w", label, id, err)
+		}
+		return response.GetObject(), nil
+	}
+}
+
+func projectListRequest(filter string, page resourcePageRequest) *publicv1.ProjectsListRequest {
+	request := publicv1.ProjectsListRequest_builder{
+		Offset: &page.offset,
+		Limit:  &page.limit,
+	}
+	if filter != "" {
+		request.Filter = &filter
+	}
+	return request.Build()
+}
+
+func projectGetRequest(id string) *publicv1.ProjectsGetRequest {
+	return publicv1.ProjectsGetRequest_builder{Id: id}.Build()
+}
+
+func projectSummary(item *publicv1.Project) ResourceSummary {
+	return ResourceSummary{
+		ID:          item.GetId(),
+		Name:        item.GetMetadata().GetName(),
+		Title:       item.GetSpec().GetTitle(),
+		Description: item.GetSpec().GetDescription(),
+		State:       item.GetStatus().GetState().String(),
+	}
+}
+
+func secretListRequest(filter string, page resourcePageRequest) *publicv1.SecretsListRequest {
+	request := publicv1.SecretsListRequest_builder{
+		Offset: &page.offset,
+		Limit:  &page.limit,
+	}
+	if filter != "" {
+		request.Filter = &filter
+	}
+	return request.Build()
+}
+
+func secretSummary(item *publicv1.Secret) ResourceSummary {
+	return ResourceSummary{
+		ID:   item.GetId(),
+		Name: item.GetMetadata().GetName(),
+		Type: secretReferenceType(item.GetType()),
 	}
 }
 

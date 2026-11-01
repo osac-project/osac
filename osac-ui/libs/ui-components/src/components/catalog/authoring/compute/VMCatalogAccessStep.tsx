@@ -6,7 +6,7 @@ import CatalogField from '../CatalogField';
 import CatalogFieldPolicyDescription from '../CatalogFieldPolicyDescription';
 import CatalogUserDataInput from '../CatalogUserDataInput';
 
-const ComputeCatalogAccessStep = () => {
+const VMCatalogAccessStep = () => {
   const { t } = useTranslation();
 
   return (
@@ -41,4 +41,4 @@ const ComputeCatalogAccessStep = () => {
   );
 };
 
-export default ComputeCatalogAccessStep;
+export default VMCatalogAccessStep;

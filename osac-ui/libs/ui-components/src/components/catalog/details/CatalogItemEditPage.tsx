@@ -6,7 +6,7 @@ import ResourceDetailsPage from '../../Resource/ResourceDetailsPage';
 import { ResourceDetailsPageError } from '../../Resource/ResourceDetailsPageError';
 import BareMetalCatalogItemWizard from '../authoring/baremetal/BareMetalCatalogItemWizard';
 import ClusterCatalogItemWizard from '../authoring/cluster/ClusterCatalogItemWizard';
-import ComputeCatalogItemWizard from '../authoring/compute/ComputeCatalogItemWizard';
+import VMCatalogItemWizard from '../authoring/compute/VMCatalogItemWizard';
 import { isCatalogItemKind } from '../catalogItemDisplay';
 
 const CatalogItemEditWizard = ({
@@ -16,7 +16,7 @@ const CatalogItemEditWizard = ({
 }) => {
   switch (item.$typeName) {
     case 'osac.public.v1.ComputeInstanceCatalogItem':
-      return <ComputeCatalogItemWizard item={item} />;
+      return <VMCatalogItemWizard item={item} />;
     case 'osac.public.v1.ClusterCatalogItem':
       return <ClusterCatalogItemWizard item={item} />;
     case 'osac.public.v1.BareMetalInstanceCatalogItem':

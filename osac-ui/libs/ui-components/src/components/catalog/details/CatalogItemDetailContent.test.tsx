@@ -18,7 +18,7 @@ import {
 import { BareMetalInstanceTypeSchema } from '@osac/types/private';
 
 import { CatalogItemDetailContent } from './CatalogItemDetailContent';
-import VmCatalogItemDetailContent from './ComputeCatalogItemDetailContent';
+import VMCatalogItemDetailContent from './VMCatalogItemDetailContent';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 const INSTANCE_TYPE_ID = 'it-4-8';
@@ -174,7 +174,7 @@ const bareMetalItem = create(BareMetalInstanceCatalogItemSchema, {
 
 describe('CatalogItemDetailContent', () => {
   it('shows VM detail columns with lookups, governance, and safe access summaries', async () => {
-    const { container, user } = renderWithProviders(<VmCatalogItemDetailContent item={vmItem} />, {
+    const { container, user } = renderWithProviders(<VMCatalogItemDetailContent item={vmItem} />, {
       apiFixtures: catalogApiFixtures,
     });
 
@@ -285,7 +285,7 @@ describe('CatalogItemDetailContent', () => {
       fields: {},
     });
 
-    renderWithProviders(<VmCatalogItemDetailContent item={item} />, {
+    renderWithProviders(<VMCatalogItemDetailContent item={item} />, {
       apiFixtures: catalogApiFixtures,
     });
 

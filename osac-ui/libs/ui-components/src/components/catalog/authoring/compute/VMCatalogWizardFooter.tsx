@@ -5,7 +5,7 @@ import type { ComputeCatalogItemValues } from './values';
 import { useTranslation } from '../../../../hooks/useTranslation';
 import { OSACWizardFooter } from '../../../Wizard/OSACWizardFooter';
 
-interface ComputeCatalogWizardFooterProps {
+interface VMCatalogWizardFooterProps {
   currentStep: string;
   error: unknown;
   isEdit: boolean;
@@ -14,14 +14,14 @@ interface ComputeCatalogWizardFooterProps {
   stepHasErrors: (stepId: string, errors: FormikErrors<unknown>) => boolean;
 }
 
-const ComputeCatalogWizardFooter = ({
+const VMCatalogWizardFooter = ({
   currentStep,
   error,
   isEdit,
   onCancel,
   onErrorReset,
   stepHasErrors,
-}: ComputeCatalogWizardFooterProps) => {
+}: VMCatalogWizardFooterProps) => {
   const { t } = useTranslation();
   const { dirty } = useFormikContext<ComputeCatalogItemValues>();
 
@@ -38,4 +38,4 @@ const ComputeCatalogWizardFooter = ({
   );
 };
 
-export default ComputeCatalogWizardFooter;
+export default VMCatalogWizardFooter;

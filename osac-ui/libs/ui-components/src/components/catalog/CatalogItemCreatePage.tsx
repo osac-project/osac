@@ -3,7 +3,7 @@ import { Bullseye, EmptyState, EmptyStateBody, PageSection } from '@patternfly/r
 
 import BareMetalCatalogItemWizard from './authoring/baremetal/BareMetalCatalogItemWizard';
 import ClusterCatalogItemWizard from './authoring/cluster/ClusterCatalogItemWizard';
-import ComputeCatalogItemWizard from './authoring/compute/ComputeCatalogItemWizard';
+import VMCatalogItemWizard from './authoring/compute/VMCatalogItemWizard';
 import { isCatalogItemKind } from './catalogItemDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
 import { ResourceDetailsPageError } from '../Resource/ResourceDetailsPageError';
@@ -24,7 +24,7 @@ export const CatalogItemCreatePage = () => {
   }
 
   if (kindParam === 'vm') {
-    return <ComputeCatalogItemWizard />;
+    return <VMCatalogItemWizard />;
   }
 
   if (kindParam === 'cluster') {

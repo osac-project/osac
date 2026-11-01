@@ -11,7 +11,7 @@ import {
 } from '@osac/types';
 
 import CatalogItemDetails from './CatalogItemDetails';
-import VmCatalogItemDetailContent from './ComputeCatalogItemDetailContent';
+import VMCatalogItemDetailContent from './VMCatalogItemDetailContent';
 import { useGetResource } from '../../../api/use-resource';
 import { CatalogItemIcon } from '../../../icons';
 import type { UserRole } from '../../../shellTypes';
@@ -57,7 +57,7 @@ const renderDetails = (
             showStatus={false}
             titlePrefix={<CatalogItemIcon kind="vm" isActive />}
           >
-            <VmCatalogItemDetailContent item={item} />
+            <VMCatalogItemDetailContent item={item} />
           </CatalogItemDetails>
         }
       />

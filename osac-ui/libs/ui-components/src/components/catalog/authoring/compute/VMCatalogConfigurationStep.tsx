@@ -7,7 +7,7 @@ import ComputeInstanceTypeField from '../../../vm/CreateWizard/fields/ComputeIns
 import CatalogField from '../CatalogField';
 import CatalogFieldPolicyDescription from '../CatalogFieldPolicyDescription';
 
-const ComputeCatalogConfigurationStep = () => {
+const VMCatalogConfigurationStep = () => {
   const { t } = useTranslation();
 
   return (
@@ -58,4 +58,4 @@ const ComputeCatalogConfigurationStep = () => {
   );
 };
 
-export default ComputeCatalogConfigurationStep;
+export default VMCatalogConfigurationStep;

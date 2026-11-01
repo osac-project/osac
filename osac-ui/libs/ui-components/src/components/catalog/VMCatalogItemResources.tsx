@@ -26,15 +26,12 @@ import {
 } from './computeCatalogItemResourceDisplay';
 import { GuestOsIcon } from '../shared/GuestOsIcon';
 
-interface ComputeCatalogItemResourcesProps {
+interface VMCatalogItemResourcesProps {
   catalogItem: ComputeInstanceCatalogItem;
   resourceLookups: CatalogItemResourceLookups;
 }
 
-const ComputeCatalogItemResources = ({
-  catalogItem,
-  resourceLookups,
-}: ComputeCatalogItemResourcesProps) => {
+const VMCatalogItemResources = ({ catalogItem, resourceLookups }: VMCatalogItemResourcesProps) => {
   const { t } = useTranslation();
   const fields = computeCatalogItemFields(catalogItem);
   const instanceTypeReference = computeInstanceTypeReferenceFromPolicy(fields?.instanceType);
@@ -91,4 +88,4 @@ const ComputeCatalogItemResources = ({
   );
 };
 
-export default ComputeCatalogItemResources;
+export default VMCatalogItemResources;

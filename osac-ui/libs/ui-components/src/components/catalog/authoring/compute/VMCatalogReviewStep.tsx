@@ -26,7 +26,7 @@ import type { ProvisioningFieldValue } from '../../../ProvisioningWizard/fields/
 import { formatReviewScalar } from '../../../ProvisioningWizard/reviewFormatters';
 import CatalogFieldEditabilityLabel from '../../CatalogFieldEditabilityLabel';
 
-interface ComputeCatalogReviewStepProps {
+interface VMCatalogReviewStepProps {
   item?: ComputeInstanceCatalogItem;
 }
 
@@ -247,7 +247,7 @@ const catalogEditChanges = (
     .map(({ label, before, after }) => ({ label, before, after }));
 };
 
-const ComputeCatalogReviewStep = ({ item }: ComputeCatalogReviewStepProps) => {
+const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
   const { t } = useTranslation();
   const { role } = useSession();
   const { initialValues, values } = useFormikContext<ComputeCatalogItemValues>();
@@ -405,4 +405,4 @@ const ComputeCatalogReviewStep = ({ item }: ComputeCatalogReviewStepProps) => {
   );
 };
 
-export default ComputeCatalogReviewStep;
+export default VMCatalogReviewStep;

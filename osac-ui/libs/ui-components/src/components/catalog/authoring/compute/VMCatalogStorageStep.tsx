@@ -9,7 +9,7 @@ import BootStorageTierField from '../../../vm/CreateWizard/fields/BootStorageTie
 import CatalogField from '../CatalogField';
 import CatalogFieldPolicyDescription from '../CatalogFieldPolicyDescription';
 
-const ComputeCatalogStorageStep = () => {
+const VMCatalogStorageStep = () => {
   const { t } = useTranslation();
 
   return (
@@ -76,4 +76,4 @@ const ComputeCatalogStorageStep = () => {
   );
 };
 
-export default ComputeCatalogStorageStep;
+export default VMCatalogStorageStep;

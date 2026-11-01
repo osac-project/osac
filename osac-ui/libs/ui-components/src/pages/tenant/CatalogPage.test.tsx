@@ -617,6 +617,24 @@ describe('CatalogPage', () => {
     ).toBeInTheDocument();
   });
 
+  it('ignores comma-separated type values in the URL filter', async () => {
+    renderCatalogPage(
+      createCatalogPageTransport({ bmItems: [bareMetalCatalogItem] }),
+      allCatalogServiceTiers,
+      ['/catalog?types=vm,cluster'],
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(bareMetalCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(vmCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
+    expect(screen.queryByText(clusterCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Bare Metal/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
   it('shows only the selected type when a different type is chosen', async () => {
     const { user } = renderCatalogPage(createCatalogPageTransport(), allCatalogServiceTiers, [
       '/catalog?types=vm',

@@ -397,6 +397,7 @@ endif
 		$(INFRA_HELM_ARGS) \
 		--wait-for-jobs --timeout 30m \
 	|| { echo "=== osac-infra hook jobs ==="; kubectl get jobs,pods,cm -n osac-infra || true; kubectl logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; kubectl get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
+	@bash -c 'source scripts/lib.sh && wait_for_infra_ready kubectl'
 	@for f in ../osac-operator/config/crd/fakes/*.yaml; do \
 		case "$$(basename "$$f")" in \
 			*osac.openshift.io*|kustomization.*) continue ;; \
@@ -462,6 +463,7 @@ else
 		oc logs deploy/trust-manager -n cert-manager --tail=100 || true; \
 		exit 1; \
 	}
+	@bash -c 'source scripts/lib.sh && wait_for_infra_ready oc'
 endif
 
 .PHONY: uninstall-infra
@@ -928,6 +930,10 @@ dev-full-render-test: helm-deps helm-infra-deps ## Check dev-full TLS and Helm p
 .PHONY: openbao-security-context-test
 openbao-security-context-test: helm-infra-deps ## Check OpenBao securityContext renders numeric UID on Kind, omits on OpenShift
 	./scripts/test-openbao-security-context.sh
+
+.PHONY: infra-ready-wait-test
+infra-ready-wait-test: ## Check install-infra waits for the issuer, PostgreSQL and Kafka when the profile creates them (stub kubectl)
+	bash scripts/test-infra-ready-wait.sh
 
 .PHONY: kind-runtime-test
 kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster cleanup with command stubs

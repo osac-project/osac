@@ -180,6 +180,10 @@ jobs:
       working-directory: osac-installer
       run: uv run --project .. make mce-render-test
 
+    - name: Test infra readiness waits
+      working-directory: osac-installer
+      run: make infra-ready-wait-test
+
     - name: Test BMF NetBox rendering
       if: steps.should-run.outputs.run
       working-directory: osac-installer

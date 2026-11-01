@@ -22,6 +22,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector, parse_time
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 # ExternalIPs and ExternalIPAttachments are offered only with provider networking enabled.
 pytestmark = pytest.mark.regression
@@ -50,9 +51,9 @@ class TestExternalIPPoolLifecycle:
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=ip_cr_name)
         # The IP's heartbeats carry the project it was created in, so the
         # project dimension is a real attribution check.
-        metering.expect(HEARTBEAT_TYPE, resource_id=ip_id, timeout=180)
+        metering.expect(HEARTBEAT_TYPE, resource_id=ip_id, timeout=180, resource_kind=WaitResourceKind.EXTERNAL_IP)
         metering.verify()
-        allocated = metering.get_event(HEARTBEAT_TYPE, resource_id=ip_id)
+        allocated = metering.get_event(HEARTBEAT_TYPE, resource_id=ip_id, resource_kind=WaitResourceKind.EXTERNAL_IP)
         assert allocated["data"]["meter"] == "allocation", f"meter is {allocated['data']['meter']!r}, want 'allocation'"
         # References render by name in heartbeats: the pool dimension is the pool's
         # name, the same contract as the instance_type dimension.
@@ -79,6 +80,8 @@ class TestExternalIPPoolLifecycle:
             retries=30,
             delay=5,
             description="ExternalIP attribution settlement",
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=ip_id,
         )
         ip_obj = grpc.get_external_ip(external_ip_id=ip_id)
         assert ip_obj["object"]["status"].get("attached") is True
@@ -88,7 +91,9 @@ class TestExternalIPPoolLifecycle:
         assert private_ip_obj["status"].get("attachmentTransitionTime")
         # The settled attachment is a dimension change, so the attached meter
         # starts billing: a heartbeat arrives with the attached dimensions.
-        attached_event = metering.heartbeat_with_dimensions(ip_id, {"attached": "true"}, delay=5)
+        attached_event = metering.heartbeat_with_dimensions(
+            ip_id, {"attached": "true"}, delay=5, resource_kind=WaitResourceKind.EXTERNAL_IP
+        )
         assert attached_event is not None, "no heartbeat with the attached dimensions arrived"
 
         # --- Detach (delete attachment) ---
@@ -101,13 +106,17 @@ class TestExternalIPPoolLifecycle:
             retries=30,
             delay=5,
             description=f"ExternalIP {ip_id} detached",
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=ip_id,
         )
         # Detaching is another dimension change: the unattached meter bills again. The
         # window starts at the attached heartbeat's interval end, so the check cannot be
         # satisfied by the unattached heartbeats from before the attachment.
         assert attached_event is not None
         attached_to = parse_time(str(attached_event["data"]["usage"]["to"]))
-        detached_event = metering.heartbeat_with_dimensions(ip_id, {"attached": "false"}, after=attached_to, delay=5)
+        detached_event = metering.heartbeat_with_dimensions(
+            ip_id, {"attached": "false"}, after=attached_to, delay=5, resource_kind=WaitResourceKind.EXTERNAL_IP
+        )
         assert detached_event is not None, "no heartbeat with the detached dimensions arrived"
         detached_to = parse_time(str(detached_event["data"]["usage"]["to"]))
 
@@ -126,9 +135,13 @@ class TestExternalIPPoolLifecycle:
             retries=30,
             delay=5,
             description="reattached ExternalIP attribution settlement",
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=ip_id,
         )
         assert second_private_ip["status"]["attribution"]["computeInstance"]["id"] == ci2_uuid
-        reattached_event = metering.heartbeat_with_dimensions(ip_id, {"attached": "true"}, after=detached_to, delay=5)
+        reattached_event = metering.heartbeat_with_dimensions(
+            ip_id, {"attached": "true"}, after=detached_to, delay=5, resource_kind=WaitResourceKind.EXTERNAL_IP
+        )
         assert reattached_event is not None, "no heartbeat with the reattached dimensions arrived"
 
         ip_obj = grpc.get_external_ip(external_ip_id=ip_id)
@@ -196,6 +209,8 @@ class TestExternalIPPoolLifecycle:
             retries=30,
             delay=5,
             description=f"ExternalIP {ip_id} removal from API",
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=ip_id,
         )
 
         private_grpc.delete_external_ip_pool(pool_id=pool_id)
@@ -206,6 +221,8 @@ class TestExternalIPPoolLifecycle:
             retries=30,
             delay=5,
             description=f"ExternalIPPool {pool_id} removal from API",
+            resource_kind=WaitResourceKind.EXTERNAL_IP_POOL,
+            resource_id=pool_id,
         )
 
     def test_validation_rejections(
@@ -253,6 +270,8 @@ class TestExternalIPPoolLifecycle:
             retries=30,
             delay=5,
             description="duplicate-attachment ExternalIP settlement",
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=ip_id,
         )
 
         with pytest.raises(subprocess.CalledProcessError) as exc_info:

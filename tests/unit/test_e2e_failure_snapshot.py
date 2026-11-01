@@ -18,6 +18,7 @@ from tests.e2e.core import failure_snapshot as snap
 from tests.e2e.core.failures import Kind, classify
 from tests.e2e.core.grpc_client import PRIVATE_API
 from tests.e2e.core.runner import CommandFailed
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.vmaas import guest_ssh, stack
 from tests.e2e.networking.vmaas.ssh_helper import HelperPodError
 
@@ -210,6 +211,8 @@ def test_poll_or_fail_with_a_kind_raises_a_classified_failure() -> None:
             fn=lambda: 500,
             until=lambda v: v == 200,
             description="NAT egress",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="ci-1",
             retries=1,
             delay=0,
             kind=Kind.TRAFFIC_BLOCKED,
@@ -222,7 +225,16 @@ def test_poll_or_fail_with_a_kind_raises_a_classified_failure() -> None:
 
 def test_poll_or_fail_without_a_kind_is_still_a_stuck_state() -> None:
     with pytest.raises(pytest.fail.Exception) as raised:
-        stack.poll_or_fail(hint="h", fn=lambda: 1, until=lambda v: False, description="d", retries=1, delay=0)
+        stack.poll_or_fail(
+            hint="h",
+            fn=lambda: 1,
+            until=lambda v: False,
+            description="d",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="ci-1",
+            retries=1,
+            delay=0,
+        )
     assert classify(raised.value).kind is Kind.STUCK_STATE
 
 

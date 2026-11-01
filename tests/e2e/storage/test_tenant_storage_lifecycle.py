@@ -15,6 +15,7 @@ from uuid import uuid4
 from tests.e2e.core.helpers import wait_for_tenant_condition, wait_for_tenant_cr, wait_for_tenant_deletion
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.storage.conftest import NAMESPACE_MANIFEST, TENANT_MANIFEST
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,8 @@ def _verify_provisioning(*, k8s: K8sClient, tenant_name: str, storage_config_nam
         retries=30,
         delay=2,
         description=f"Storage finalizer on {tenant_name}",
+        resource_kind=WaitResourceKind.TENANT,
+        resource_id=tenant_name,
     )
 
     # --- Stage 1: StorageBackendReady ---

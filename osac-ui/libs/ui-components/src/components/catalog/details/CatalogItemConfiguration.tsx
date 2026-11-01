@@ -166,7 +166,7 @@ const computeConfiguration = (
       <>
         <CatalogConfigurationRow
           label={t('Instance type')}
-          value={instanceType?.metadata?.name || ''}
+          value={instanceType?.metadata?.name || instanceTypeReference?.name || ''}
           policy={fields?.instanceType}
         />
         <CatalogConfigurationRow
@@ -275,7 +275,7 @@ const bareMetalConfiguration = (
       <>
         <CatalogConfigurationRow
           label={t('Instance type')}
-          value={instanceType?.metadata?.name || ''}
+          value={instanceType?.metadata?.name || instanceTypeReference?.name || ''}
           policy={fields?.instanceType}
         />
         <CatalogConfigurationRow

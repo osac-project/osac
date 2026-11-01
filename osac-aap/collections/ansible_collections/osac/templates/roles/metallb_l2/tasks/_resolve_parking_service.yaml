@@ -8,9 +8,9 @@
   ansible.builtin.set_fact:
     metallb_parking_external_ip_uid: >-
       {{ (
-           ((osac_job_vars | default({})).get('external_ip_attachment_context', {})
-             | default({})).get('external_ip', {})
-           | default({})
+           ((osac_job_vars | default({}, true)).get('external_ip_attachment_context', {})
+             | default({}, true)).get('external_ip', {})
+           | default({}, true)
          ).get('kubernetes_uid', '')
          | default('', true) | string | trim }}
 

@@ -179,12 +179,12 @@ for entry in "${ROLE_SCENARIO_TESTS[@]}"; do
   echo "Testing role: $role ($scenario)"
   echo "----------------------------------------"
 
-  native_rendering=false
-  if [ "$entry" = "compute_instance_create:volume_id_annotations" ]; then
-    native_rendering=true
-  fi
-
-  if ANSIBLE_JINJA2_NATIVE="$native_rendering" run_ansible_playbook "targets/${role}/tasks/${scenario}.yml" -e "@common_vars.yml" -v; then
+  if (
+    if [ "$entry" = "compute_instance_create:volume_id_annotations" ]; then
+      export ANSIBLE_JINJA2_NATIVE=true
+    fi
+    run_ansible_playbook "targets/${role}/tasks/${scenario}.yml" -e "@common_vars.yml" -v
+  ); then
     echo "  ✓ Passed"
     PASSED+=("$role:$scenario")
   else

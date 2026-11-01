@@ -211,20 +211,13 @@ const CatalogPage = () => {
   const isFiltered = Boolean(publishedFilter || tenantFilter || searchFilter);
   const [viewType] = useViewType(CATALOG_ITEMS_VIEW_KEY);
 
-  // The URL may carry several comma-separated kinds from an older multi-select
-  // link; keep the first one that is both a valid kind and currently enabled.
   const requestedKind = useMemo<CatalogItemKind | undefined>(() => {
-    for (const raw of typeFilterParam.split(',')) {
-      const trimmed = raw.trim();
-      if (!isCatalogItemKind(trimmed)) {
-        continue;
-      }
-      const tier = serviceTierForFilter(trimmed);
-      if (tier && enabledServices.includes(tier)) {
-        return trimmed;
-      }
+    if (!isCatalogItemKind(typeFilterParam)) {
+      return undefined;
     }
-    return undefined;
+
+    const tier = serviceTierForFilter(typeFilterParam);
+    return tier && enabledServices.includes(tier) ? typeFilterParam : undefined;
   }, [typeFilterParam, enabledServices]);
 
   const defaultKind = useMemo<CatalogItemKind | undefined>(() => {

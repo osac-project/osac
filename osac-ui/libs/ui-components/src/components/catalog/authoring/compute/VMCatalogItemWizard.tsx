@@ -5,11 +5,11 @@ import { WizardStep } from '@patternfly/react-core';
 import type { ComputeInstanceCatalogItem } from '@osac/types';
 import { ComputeInstanceCatalogItems, ComputeInstanceTemplates } from '@osac/types';
 
-import ComputeCatalogAccessStep from './ComputeCatalogAccessStep';
-import ComputeCatalogConfigurationStep from './ComputeCatalogConfigurationStep';
-import ComputeCatalogReviewStep from './ComputeCatalogReviewStep';
-import ComputeCatalogStorageStep from './ComputeCatalogStorageStep';
-import ComputeCatalogWizardFooter from './ComputeCatalogWizardFooter';
+import VMCatalogAccessStep from './VMCatalogAccessStep';
+import VMCatalogConfigurationStep from './VMCatalogConfigurationStep';
+import VMCatalogReviewStep from './VMCatalogReviewStep';
+import VMCatalogStorageStep from './VMCatalogStorageStep';
+import VMCatalogWizardFooter from './VMCatalogWizardFooter';
 import CatalogItemWizardShell from '../CatalogItemWizardShell';
 import {
   buildComputeCatalogItemCreatePayload,
@@ -26,11 +26,11 @@ import { useSession } from '../../../../hooks/use-session';
 import { useTranslation } from '../../../../hooks/useTranslation';
 import CatalogGeneralStep from '../CatalogGeneralStep';
 
-interface ComputeCatalogItemWizardProps {
+interface VMCatalogItemWizardProps {
   item?: ComputeInstanceCatalogItem;
 }
 
-const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
+const VMCatalogItemWizard = ({ item }: VMCatalogItemWizardProps) => {
   const { t } = useTranslation();
   const { role } = useSession();
   const navigate = useNavigate();
@@ -88,7 +88,7 @@ const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
       navAriaLabel={t('Create compute catalog item steps')}
       onStepChange={setCurrentStep}
       footer={
-        <ComputeCatalogWizardFooter
+        <VMCatalogWizardFooter
           currentStep={currentStep}
           onCancel={() => navigate('/catalog')}
           stepHasErrors={computeCatalogStepHasErrors}
@@ -108,19 +108,19 @@ const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
         )}
       </WizardStep>
       <WizardStep id="configuration" name={t('Compute configuration')}>
-        {currentStep === 'configuration' && <ComputeCatalogConfigurationStep />}
+        {currentStep === 'configuration' && <VMCatalogConfigurationStep />}
       </WizardStep>
       <WizardStep id="storage" name={t('Storage')}>
-        {currentStep === 'storage' && <ComputeCatalogStorageStep />}
+        {currentStep === 'storage' && <VMCatalogStorageStep />}
       </WizardStep>
       <WizardStep id="access-init" name={t('Access & Initial run')}>
-        {currentStep === 'access-init' && <ComputeCatalogAccessStep />}
+        {currentStep === 'access-init' && <VMCatalogAccessStep />}
       </WizardStep>
       <WizardStep id="review" name={t('Review')}>
-        {currentStep === 'review' && <ComputeCatalogReviewStep item={item} />}
+        {currentStep === 'review' && <VMCatalogReviewStep item={item} />}
       </WizardStep>
     </CatalogItemWizardShell>
   );
 };
 
-export default ComputeCatalogItemWizard;
+export default VMCatalogItemWizard;

@@ -44,7 +44,7 @@ import {
 import CatalogStorageTable, { type CatalogStorageTableRow } from './CatalogStorageTable';
 import CatalogUserDataDetailValue from './CatalogUserDataDetailValue';
 
-interface VmCatalogItemDetailContentProps {
+interface VMCatalogItemDetailContentProps {
   item: ComputeInstanceCatalogItem;
 }
 
@@ -114,7 +114,7 @@ const additionalDisksFromPolicy = (value: unknown): AdditionalDisk[] => {
 const displayReference = (reference: unknown, t: TFunction): string =>
   catalogReferenceLabel(reference) ?? t('Not set');
 
-const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) => {
+const VMCatalogItemDetailContent = ({ item }: VMCatalogItemDetailContentProps) => {
   const { t } = useTranslation();
   const resourceLookups = useCatalogItemResourceLookups();
   const fields = item.fields;
@@ -239,4 +239,4 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
   );
 };
 
-export default VmCatalogItemDetailContent;
+export default VMCatalogItemDetailContent;

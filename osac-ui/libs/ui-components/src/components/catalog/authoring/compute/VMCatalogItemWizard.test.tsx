@@ -17,7 +17,7 @@ import {
 } from '@osac/types';
 import type { Tenant } from '@osac/types/private';
 
-import ComputeCatalogItemWizard from './ComputeCatalogItemWizard';
+import VMCatalogItemWizard from './VMCatalogItemWizard';
 import type { UserRole } from '../../../../shellTypes';
 import { renderWithProviders } from '../../../../test-utils/TestProviders';
 
@@ -92,7 +92,7 @@ const renderWizard = (
   item?: ComputeInstanceCatalogItem,
   transportOverrides: Record<string, unknown> = {},
 ) =>
-  renderWithProviders(<ComputeCatalogItemWizard item={item} />, {
+  renderWithProviders(<VMCatalogItemWizard item={item} />, {
     apiFixtures,
     transportOverrides: transportOverrides as never,
   });
@@ -107,7 +107,7 @@ const fillGeneralStep = async (user: ReturnType<typeof renderWizard>['user'], na
   await user.click(await screen.findByText('VM template'));
 };
 
-describe('ComputeCatalogItemWizard', () => {
+describe('VMCatalogItemWizard', () => {
   beforeEach(() => {
     mockNavigate.mockReset();
     vi.mocked(useSession).mockReturnValue(makeSession('tenant-admin'));
@@ -259,7 +259,7 @@ describe('ComputeCatalogItemWizard', () => {
 
     it('shows the global scope row for an administrator', async () => {
       vi.mocked(useSession).mockReturnValue(makeSession('admin'));
-      const { user } = renderWithProviders(<ComputeCatalogItemWizard />, {
+      const { user } = renderWithProviders(<VMCatalogItemWizard />, {
         apiFixtures: {
           ...apiFixtures,
           tenants: [{ id: 'tenant-1', metadata: { name: 'Tenant One' } } as Tenant],
@@ -304,7 +304,7 @@ describe('ComputeCatalogItemWizard', () => {
     });
 
     it('formats configured storage defaults as concise disk-set summaries', async () => {
-      const { user } = renderWithProviders(<ComputeCatalogItemWizard />, {
+      const { user } = renderWithProviders(<VMCatalogItemWizard />, {
         apiFixtures: { ...apiFixtures, publicStorageTiers: [STORAGE_TIER] as StorageTier[] },
       });
 

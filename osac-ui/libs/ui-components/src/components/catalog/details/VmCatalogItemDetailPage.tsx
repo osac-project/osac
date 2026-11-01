@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { ComputeInstanceCatalogItems } from '@osac/types';
 
 import CatalogItemDetails from './CatalogItemDetails';
-import VmCatalogItemDetailContent from './ComputeCatalogItemDetailContent';
+import VMCatalogItemDetailContent from './VMCatalogItemDetailContent';
 import { useGetResource } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation.ts';
 import { CatalogItemIcon } from '../../../icons';
@@ -50,7 +50,7 @@ export const VmCatalogItemDetailPage = () => {
           showStatus={false}
           titlePrefix={<CatalogItemIcon kind="vm" isActive />}
         >
-          <VmCatalogItemDetailContent item={item} />
+          <VMCatalogItemDetailContent item={item} />
         </CatalogItemDetails>
       ) : null}
     </ResourceDetailsPage>

@@ -649,18 +649,99 @@ not supported for service accounts. Projects are not supported.
 `Create` returns the account in `PENDING` before its Keycloak client is provisioned. The controller
 provisions the client asynchronously and creates a tenant-scoped Secret containing both `client_id`
 and `client_secret`. `status.client_secret` references that Secret, and `status.state` becomes
-`READY` only after the Secret is available. Clients can read it with `Secrets/Get`; Secret data is
-omitted from list and mutation responses. Dry-run creation creates no account, client, or Secret.
+`READY` only after the Secret is available. Tenant administrators can read the Secret with
+`Secrets/Get`; ordinary client users receive `PERMISSION_DENIED`. Secret data is omitted from list
+and mutation responses. Dry-run creation creates no account, client, or Secret.
 `status.message` explains a `FAILED` state, including when a Keycloak client exists without
 recoverable registration credentials. Remove that client from Keycloak; the controller then retries
 provisioning or completes deletion.
 
-Role assignments are managed through RoleBindings; service accounts do not accept role references.
-Support for service-account subjects in RoleBindings is tracked by
-[OSAC-6554](https://redhat.atlassian.net/browse/OSAC-6554).
+Role assignments are managed through tenant-scoped RoleBindings; service accounts do not accept
+role references. A binding can include service-account IDs in `spec.service_accounts`. Fulfillment
+checks the current active bindings for each managed-token request, so removing a binding revokes
+that grant on the next request. Roles embedded in a managed account's JWT do not grant API access.
+The shared Role catalog includes `tenant-admin`, `tenant-automation`, and `tenant-idp-manager`.
+`osac-csi-driver` is stored in the system tenant and is visible to cloud administrators only.
+Migration 139 seeds `tenant-idp-manager`; migration 145 seeds `tenant-automation` and
+`osac-csi-driver`. Migration 141 creates the ServiceAccount tables.
 
-Secret rotation is tracked separately by
-[OSAC-6555](https://redhat.atlassian.net/browse/OSAC-6555).
+Tenant admins can request secret rotation with `RegenerateSecret`. The action records a pending
+rotation and returns the account status without returning credential bytes. Before updating Keycloak,
+the controller stores a generated replacement client secret and the current registration token in the
+system-scoped registration Secret. It uses that token to authorize the Keycloak client-secret update,
+persists any returned registration token, and then publishes the replacement through the tenant-scoped
+credential Secret. The controller marks rotation complete only after publication. The installer
+configures a Keycloak Client Policy to disable registration-token rotation for these updates, so
+retries can reuse the stored token and staged secret. Read the replacement through `Secrets/Get`
+after rotation completes. Repeated requests while a rotation is pending or retrying return that
+rotation instead of starting another one. Rotation has no grace period: the old secret stops working
+when the Keycloak update applies, while already-issued tokens retain their normal expiry.
+
+`RegenerateSecret` is available to tenant admins for accounts in their tenant. Its REST route is
+`POST /api/fulfillment/v1/service_accounts/{id}/regenerate_secret`; the private route is
+`POST /api/private/v1/service_accounts/{id}/regenerate_secret`.
+
+### CLI
+
+The non-interactive `osac serviceaccount` command family accepts one JSON or YAML service-account
+object for create and update. It emits JSON for every operation:
+
+```shell
+osac serviceaccount create -f service-account.json
+osac serviceaccount get batch-worker
+osac serviceaccount list --filter "this.metadata.labels['team'] == 'data'"
+osac serviceaccount update -f service-account-update.json
+osac serviceaccount delete batch-worker
+osac serviceaccount regenerate-secret batch-worker
+```
+
+The create file uses the public type URL and tenant-owned fields:
+
+```json
+{
+  "@type": "type.googleapis.com/osac.public.v1.ServiceAccount",
+  "metadata": {
+    "name": "batch-worker",
+    "labels": { "team": "data" }
+  }
+}
+```
+
+Create and `regenerate-secret` wait for the controller to report provisioning or rotation complete,
+then read `status.client_secret` through `Secrets/Get`. Their JSON output contains the new
+`client_id` and `client_secret` once. The API Create and RegenerateSecret responses themselves do
+not return secret bytes. If an older Fulfillment service does not expose the asynchronous status,
+the CLI reports that it must be upgraded. Treat the CLI output as a credential and keep it out of
+source files, shell history, and logs.
+
+Get, list, and update output only the account and its tenant-scoped Secret reference. Update files
+may set `metadata.labels`; the file identifies
+the account by its `id` or `metadata.name`. `ServiceAccountSpec` has no role grants. To grant API
+access, create a RoleBinding whose `spec.role.id` is a catalog role ID and whose
+`spec.service_accounts` includes the service-account ID. To revoke that grant, delete its
+RoleBinding. Use a separate binding per account when you want revocation to be a single
+non-interactive delete:
+
+```json
+{
+  "@type": "type.googleapis.com/osac.public.v1.RoleBinding",
+  "metadata": { "name": "batch-worker-automation" },
+  "spec": {
+    "role": { "id": "<tenant-automation-role-id>" },
+    "service_accounts": [{ "id": "<service-account-id>" }]
+  }
+}
+```
+
+```shell
+osac create -f service-account-role-binding.json
+osac delete rolebindings batch-worker-automation
+```
+
+An ordinary service-account user cannot read raw Secrets or watch managed Events. Its API calls
+are limited to the role on its active tenant RoleBinding. A tenant admin can retrieve the
+service-account credential through the authorized `Secrets/Get` API; do not expose that operation
+or the CLI's one-time credential output to the service-account workload itself.
 
 ## REST transcoding
 

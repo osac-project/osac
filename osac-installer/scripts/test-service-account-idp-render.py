@@ -28,6 +28,11 @@ def check():
             continue
         name = document.split("  name: ", 1)[1].splitlines()[0]
         consumers.add(name)
+        if name == "fulfillment-controller":
+            assert (
+                "  strategy:\n    type: RollingUpdate\n    rollingUpdate:\n"
+                "      maxSurge: 0\n      maxUnavailable: 1\n"
+            ) in document
         assert "name: idp-credentials" in document, name
         assert f"mountPath: /etc/{name}/idp\n          readOnly: true" in document, name
         for flag in (
@@ -86,6 +91,12 @@ def check():
     assert 'roles/manage-clients' in setup_script
     assert "ensure_service_account_registration_policies" in setup_script
     assert 'admin/realms/osac/components/${component_id}' in setup_script
+    assert "ensure_service_account_registration_token_policy" in setup_script
+    assert "client-policies/profiles" in setup_script
+    assert "registration-access-token-rotation-disabled" in setup_script
+    assert "client-policies/policies" in setup_script
+    assert '"condition": "client-updater-context"' in setup_script
+    assert '"update-client-source": ["ByRegistrationAccessToken"]' in setup_script
     assert 'curl --cacert "${KEYCLOAK_CA_FILE}" "$@"' in setup_script
     assert "curl -k" not in setup_script
     subprocess.run(["bash", "-n"], input=setup_script, check=True, text=True)

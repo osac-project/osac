@@ -17,7 +17,6 @@
 package serviceaccounts
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -27,32 +26,28 @@ const RegistrationServiceAccountIDKey = "service_account_id"
 const PendingClientSecretKey = "client_secret"
 const PendingClientSecretRefIDKey = "client_secret_ref_id"
 const PendingClientSecretRefNameKey = "client_secret_ref_name"
+const ManagedClientIDPrefix = "osac-sa-"
+const PendingRotationSecretKey = "rotation_client_secret"
+const PendingRotationGenerationKey = "rotation_generation"
 const clientSecretPrefix = "osac-service-account-"
+const registrationSecretPrefix = "osac-registration-"
 
 // ClientID derives an immutable client identifier from validated tenant and account identities.
 func ClientID(tenantID, accountID string) string {
-	return "osac-sa-" + tenantID + "-" + accountID
+	return ManagedClientIDPrefix + tenantID + "-" + accountID
 }
 
-// RegistrationSecretName returns a tenant name followed by an optional collision suffix.
-func RegistrationSecretName(serviceAccountName string, suffix int) string {
-	if suffix == 0 {
-		return serviceAccountName
-	}
-	suffixText := fmt.Sprintf("-%d", suffix)
-	maxBaseLength := 63 - len(suffixText)
-	if maxBaseLength < 1 {
+// RegistrationSecretName derives a stable system-tenant Secret name from the account ID.
+func RegistrationSecretName(accountID string) string {
+	if accountID == "" {
 		return ""
 	}
-	base := serviceAccountName
-	if len(base) > maxBaseLength {
-		base = base[:maxBaseLength]
+	base := registrationSecretPrefix + accountID
+	if len(base) > 63 {
+		base = base[:63]
 	}
 	base = strings.TrimRight(base, "-")
-	if base == "" {
-		return ""
-	}
-	return base + suffixText
+	return base
 }
 
 // ClientSecretName returns the tenant-scoped Secret resource name for a service-account credential.

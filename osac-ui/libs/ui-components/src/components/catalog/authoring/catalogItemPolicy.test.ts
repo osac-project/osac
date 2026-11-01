@@ -6,7 +6,7 @@ import {
   policyFromCatalogValue,
 } from './catalogItemPolicy';
 
-const asString = (value: unknown) => String(value);
+const asString = (value: string | number) => String(value);
 
 describe('catalogValueFromPolicy', () => {
   it('decodes an absent policy as unlocked and empty', () => {
@@ -14,12 +14,14 @@ describe('catalogValueFromPolicy', () => {
   });
 
   it('decodes an editable policy with no default as unlocked and empty', () => {
-    const policy: CatalogFieldPolicyLike = { behavior: { case: 'editable', value: {} } };
+    const policy: CatalogFieldPolicyLike<string> = { behavior: { case: 'editable', value: {} } };
     expect(catalogValueFromPolicy(policy, asString, '')).toEqual({ value: '', locked: false });
   });
 
   it('decodes a locked string policy as locked', () => {
-    const policy: CatalogFieldPolicyLike = { behavior: { case: 'locked', value: 'cloud-init' } };
+    const policy: CatalogFieldPolicyLike<string> = {
+      behavior: { case: 'locked', value: 'cloud-init' },
+    };
     expect(catalogValueFromPolicy(policy, asString, '')).toEqual({
       value: 'cloud-init',
       locked: true,
@@ -27,20 +29,17 @@ describe('catalogValueFromPolicy', () => {
   });
 
   it('decodes an editable int32 policy with a default', () => {
-    const policy: CatalogFieldPolicyLike = {
+    const policy: CatalogFieldPolicyLike<number> = {
       behavior: { case: 'editable', value: { defaultValue: 30 } },
     };
     expect(catalogValueFromPolicy(policy, asString, '')).toEqual({ value: '30', locked: false });
   });
 
   it('decodes a locked resource-reference policy', () => {
-    const policy: CatalogFieldPolicyLike = {
+    const policy: CatalogFieldPolicyLike<{ id: string; name: string }> = {
       behavior: { case: 'locked', value: { id: 'img-1', name: 'rhel-9' } },
     };
-    const readRef = (value: unknown) => {
-      const ref = value as { id: string; name: string };
-      return { id: ref.id, name: ref.name };
-    };
+    const readRef = (value: { id: string; name: string }) => value;
     expect(catalogValueFromPolicy(policy, readRef, { id: '', name: '' })).toEqual({
       value: { id: 'img-1', name: 'rhel-9' },
       locked: true,
@@ -48,10 +47,10 @@ describe('catalogValueFromPolicy', () => {
   });
 
   it('decodes an editable disk-list policy with a default', () => {
-    const policy: CatalogFieldPolicyLike = {
+    const policy: CatalogFieldPolicyLike<{ items: { sizeGib: number }[] }> = {
       behavior: { case: 'editable', value: { defaultValue: { items: [{ sizeGib: 20 }] } } },
     };
-    const readItems = (value: unknown) => (value as { items: { sizeGib: number }[] }).items;
+    const readItems = (value: { items: { sizeGib: number }[] }) => value.items;
     expect(catalogValueFromPolicy(policy, readItems, [])).toEqual({
       value: [{ sizeGib: 20 }],
       locked: false,
@@ -59,13 +58,17 @@ describe('catalogValueFromPolicy', () => {
   });
 
   it('decodes a locked node-set map policy', () => {
-    const policy: CatalogFieldPolicyLike = {
+    const policy: CatalogFieldPolicyLike<{
+      items: Record<string, { size: number; baremetalInstanceType: string }>;
+    }> = {
       behavior: {
         case: 'locked',
         value: { items: { workers: { size: 3, baremetalInstanceType: 'bm-large' } } },
       },
     };
-    const readNames = (value: unknown) => Object.keys((value as { items: object }).items);
+    const readNames = (value: {
+      items: Record<string, { size: number; baremetalInstanceType: string }>;
+    }) => Object.keys(value.items);
     expect(catalogValueFromPolicy(policy, readNames, [])).toEqual({
       value: ['workers'],
       locked: true,
@@ -73,16 +76,16 @@ describe('catalogValueFromPolicy', () => {
   });
 });
 
-type StringFieldPolicy =
-  | { behavior: { case: 'locked'; value: unknown } }
-  | { behavior: { case: 'editable'; value: { defaultValue: unknown } } };
+type StringFieldPolicy<TValue> =
+  | { behavior: { case: 'locked'; value: TValue } }
+  | { behavior: { case: 'editable'; value: { defaultValue: TValue } } };
 
 describe('policyFromCatalogValue', () => {
-  const isEmptyString = (value: unknown) => (value as string).trim() === '';
-  const toLocked = (value: unknown): StringFieldPolicy => ({
+  const isEmptyString = (value: string) => value.trim() === '';
+  const toLocked = (value: string): StringFieldPolicy<string> => ({
     behavior: { case: 'locked', value },
   });
-  const toEditable = (value: unknown): StringFieldPolicy => ({
+  const toEditable = (value: string): StringFieldPolicy<string> => ({
     behavior: { case: 'editable', value: { defaultValue: value } },
   });
 

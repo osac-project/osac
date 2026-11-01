@@ -25,7 +25,7 @@ export interface BareMetalCatalogItemValues extends CatalogGeneralValues {
 
 const readInstanceTypeValue = (value: unknown): string => {
   const reference = value as { id?: string; name?: string } | undefined;
-  return reference?.name?.trim() || reference?.id?.trim() || '';
+  return reference?.name || reference?.id || '';
 };
 
 const readResourceReference = (value: unknown): ResourceSelectValue => {

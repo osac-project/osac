@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { CodeBlock, CodeBlockCode, ExpandableSection } from '@patternfly/react-core';
 
+import type { UserDataSource } from '@osac/types';
+
 import { useTranslation } from '../../../hooks/useTranslation';
 import type { CatalogFieldPolicyLike } from '../authoring/catalogItemPolicy';
 import { catalogUserDataValueFromPolicy } from '../authoring/catalogUserData';
 
 interface CatalogUserDataDetailValueProps {
-  policy: CatalogFieldPolicyLike;
+  policy: CatalogFieldPolicyLike<UserDataSource>;
 }
 
 const CatalogUserDataDetailValue = ({ policy }: CatalogUserDataDetailValueProps) => {

@@ -1,3 +1,5 @@
+import type { UserDataSource } from '@osac/types';
+
 import { type CatalogFieldPolicyLike, catalogValueFromPolicy } from './catalogItemPolicy';
 import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 import { provisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
@@ -59,12 +61,12 @@ const readCatalogUserDataValue = (value: unknown): CatalogUserDataValue => {
 };
 
 const catalogUserDataFieldFromPolicy = (
-  policy: CatalogFieldPolicyLike,
+  policy: CatalogFieldPolicyLike<UserDataSource>,
 ): ProvisioningFieldValue<CatalogUserDataValue> =>
   catalogValueFromPolicy(policy, readCatalogUserDataValue, emptyCatalogUserDataValue);
 
 export const catalogUserDataValuesFromPolicy = (
-  policy: CatalogFieldPolicyLike,
+  policy: CatalogFieldPolicyLike<UserDataSource>,
 ): CatalogUserDataFormValues => {
   const field = catalogUserDataFieldFromPolicy(policy);
 
@@ -79,10 +81,12 @@ export const catalogUserDataValuesFromPolicy = (
 };
 
 export const catalogUserDataValueFromPolicy = (
-  policy: CatalogFieldPolicyLike,
+  policy: CatalogFieldPolicyLike<UserDataSource>,
 ): CatalogUserDataValue => catalogUserDataFieldFromPolicy(policy).value;
 
-export const catalogUserDataDisplayValue = (policy: CatalogFieldPolicyLike): string | undefined => {
+export const catalogUserDataDisplayValue = (
+  policy: CatalogFieldPolicyLike<UserDataSource>,
+): string | undefined => {
   const value = catalogUserDataValueFromPolicy(policy).value.trim();
   return value || undefined;
 };

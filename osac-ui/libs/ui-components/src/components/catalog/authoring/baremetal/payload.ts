@@ -31,20 +31,20 @@ const buildBareMetalCatalogItemFieldsPayload = (
 ): CatalogItemFieldsInit => {
   const fields: CatalogItemFieldsInit = {};
 
-  const instanceType = catalogFieldPolicyFromValue<FieldPolicyInit<'instanceType'>>(
-    values.instanceType,
-    isEmptyString,
-    toInstanceTypeReference,
-  );
+  const instanceType = catalogFieldPolicyFromValue<
+    string,
+    ReturnType<typeof toInstanceTypeReference>,
+    FieldPolicyInit<'instanceType'>
+  >(values.instanceType, isEmptyString, toInstanceTypeReference);
   if (instanceType) {
     fields.instanceType = instanceType;
   }
 
-  const diskImage = catalogFieldPolicyFromValue<FieldPolicyInit<'diskImage'>>(
-    values.diskImage,
-    isEmptyResource,
-    toDiskImageReference,
-  );
+  const diskImage = catalogFieldPolicyFromValue<
+    ResourceSelectValue,
+    ReturnType<typeof toDiskImageReference>,
+    FieldPolicyInit<'diskImage'>
+  >(values.diskImage, isEmptyResource, toDiskImageReference);
   if (diskImage) {
     fields.diskImage = diskImage;
   }

@@ -81,9 +81,8 @@ const getStorageBackendSchema = (t: TFunction, isEdit: boolean) => {
             schema.oneOf([false], t('CSP-managed ownership is only available for NetApp')),
         }),
     endpoint: Yup.string().when('cspManaged', {
-      is: true,
-      then: (schema) => schema,
-      otherwise: (schema) => schema.required(t('Endpoint is required')),
+      is: false,
+      then: (schema) => schema.required(t('Endpoint is required')),
     }),
     description: Yup.string(),
     // On edit, both blank keeps the credentials unchanged. CSP-managed backends
@@ -118,6 +117,10 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
   ];
 
   const onSubmit = async (values: StorageBackendFormValues) => {
+    const credentials =
+      values.credentials.username && values.credentials.password
+        ? { credentials: values.credentials }
+        : {};
     try {
       if (backend) {
         await update({
@@ -126,14 +129,7 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
           spec: {
             endpoint: values.endpoint,
             description: values.description,
-            ...(values.credentials.username && values.credentials.password
-              ? {
-                  credentials: {
-                    username: values.credentials.username,
-                    password: values.credentials.password,
-                  },
-                }
-              : {}),
+            ...credentials,
           },
         });
         navigate(BACKENDS_LIST_PATH);
@@ -145,14 +141,7 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
             cspManaged: values.cspManaged,
             endpoint: values.endpoint,
             description: values.description,
-            ...(values.credentials.username && values.credentials.password
-              ? {
-                  credentials: {
-                    username: values.credentials.username,
-                    password: values.credentials.password,
-                  },
-                }
-              : {}),
+            ...credentials,
           },
         });
         navigate(`${BACKENDS_LIST_PATH}/${created.id}`);

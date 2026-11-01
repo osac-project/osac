@@ -236,7 +236,7 @@ describe('BareMetalListPage', () => {
       expect(
         screen.getByRole('textbox', { name: 'Filter bare metal instances by name' }),
       ).toHaveValue('no-such-instance');
-      expect(screen.getByRole('button', { name: 'my-project' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Project:\s*my-project/ })).toBeInTheDocument();
     });
 
     const clearFiltersButtons = await screen.findAllByRole('button', { name: 'Clear all filters' });
@@ -251,6 +251,6 @@ describe('BareMetalListPage', () => {
       expect(getInstanceListFilter()).toBeUndefined();
     });
 
-    expect(screen.getByRole('button', { name: 'All projects' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Project:\s*All projects/ })).toBeInTheDocument();
   });
 });

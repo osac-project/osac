@@ -24,7 +24,6 @@ import { getErrorMessage } from '@osac/ui-components/utils/error';
 import ProjectMembershipActionsMenu from './ProjectMembershipActionsMenu';
 import { getRoleLabel } from './utils';
 import { Timestamp } from '../Primitives/Timestamp';
-import { getFullProjectPath } from '../Project/utils';
 import { SubtleContent } from '../SubtleContent/SubtleContent';
 
 const ProjectMembership = ({ project }: { project: Project }) => {
@@ -33,7 +32,7 @@ const ProjectMembership = ({ project }: { project: Project }) => {
   const { t } = useTranslation();
   const { data, isLoading, error } = useProjectMemberships({
     filter: cel<ProjectMembership>((filter) =>
-      filter.field('metadata.project').equals(getFullProjectPath(project)),
+      filter.field('metadata.project').equals(project.metadata?.name || ''),
     ),
   });
 

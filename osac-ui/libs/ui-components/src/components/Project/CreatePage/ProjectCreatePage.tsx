@@ -14,7 +14,8 @@ import {
 } from '@patternfly/react-core';
 import { Formik } from 'formik';
 
-import { useCreateProject } from '@osac/ui-components/api/v1/project';
+import { Projects } from '@osac/types';
+import { useCreateResource } from '@osac/ui-components/api/use-resource';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
@@ -30,7 +31,7 @@ import ProjectField from '../../Form/ProjectField';
 const ProjectCreatePage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { mutateAsync, error } = useCreateProject();
+  const { mutateAsync, error } = useCreateResource(Projects);
 
   return (
     <>
@@ -55,8 +56,8 @@ const ProjectCreatePage = () => {
           validationSchema={getProjectValidationSchema(t)}
           onSubmit={async (values) => {
             try {
-              const res = await mutateAsync(getCreateProjectPayload(values));
-              navigate(`/projects/${res.id}`);
+              const res = await mutateAsync({ object: getCreateProjectPayload(values) });
+              navigate(res.object?.id ? `/projects/${res.object.id}` : '/projects');
             } catch {
               // tanstack handles the err
             }
@@ -72,7 +73,7 @@ const ProjectCreatePage = () => {
                     <NameField />
                     <InputField name="title" label={t('Title')} fieldId="project-title" />
                     <InputField
-                      name="description"
+                      name="metadata.description"
                       label={t('Description')}
                       fieldId="project-description"
                     />

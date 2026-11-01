@@ -1,0 +1,4 @@
+.osac-project-filter__list {
+  max-block-size: 25rem;
+  overflow-y: auto;
+}

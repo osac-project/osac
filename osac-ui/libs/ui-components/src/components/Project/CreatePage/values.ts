@@ -2,13 +2,12 @@ export interface ProjectCreateValues {
   metadata: {
     name: string;
     project: string;
+    description: string;
   };
   title: string;
-  description: string;
 }
 
 export const initialValues: ProjectCreateValues = {
-  metadata: { name: '', project: '' },
+  metadata: { name: '', project: '', description: '' },
   title: '',
-  description: '',
 };

@@ -227,6 +227,11 @@ describe('ExternalIpListPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Actions for nat-ip' }));
 
-    expect(screen.getByRole('menuitem', { name: /Delete/ })).toBeDisabled();
+    const deleteItem = screen.getByRole('menuitem', { name: /Delete/ });
+    expect(deleteItem).toHaveAttribute('aria-disabled', 'true');
+    expect(deleteItem).not.toBeDisabled();
+
+    await user.click(deleteItem);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

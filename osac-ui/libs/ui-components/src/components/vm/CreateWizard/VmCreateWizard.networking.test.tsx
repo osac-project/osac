@@ -486,13 +486,10 @@ describe('VmCreateWizard', () => {
         await waitFor(() => expect(view.getCalls()).toBeGreaterThan(previous));
         await view.user.click(screen.getByRole('button', { name: 'Submit form directly' }));
         expect(view.onCreate).not.toHaveBeenCalled();
-      } finally {
         await act(async () => {
           finishGet();
           await pendingGet;
         });
-      }
-      try {
         await waitFor(() => expect(view.onCreate).toHaveBeenCalledTimes(1));
         await view.user.click(screen.getByRole('button', { name: 'Submit form directly' }));
         screen.getByRole('button', { name: /Create$/ }).focus();
@@ -501,7 +498,9 @@ describe('VmCreateWizard', () => {
         expect(mockNavigate).not.toHaveBeenCalled();
       } finally {
         await act(async () => {
+          finishGet();
           finishCreate();
+          await pendingGet;
           await pendingCreate;
         });
         await waitFor(() => expect(mockNavigate).toHaveBeenCalledTimes(1));

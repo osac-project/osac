@@ -241,6 +241,48 @@ func local_request_ServiceAccounts_Delete_0(ctx context.Context, marshaler runti
 	return msg, metadata, err
 }
 
+func request_ServiceAccounts_RegenerateSecret_0(ctx context.Context, marshaler runtime.Marshaler, client ServiceAccountsClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq ServiceAccountsRegenerateSecretRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	val, ok := pathParams["id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
+	}
+	protoReq.Id, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
+	}
+	msg, err := client.RegenerateSecret(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_ServiceAccounts_RegenerateSecret_0(ctx context.Context, marshaler runtime.Marshaler, server ServiceAccountsServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq ServiceAccountsRegenerateSecretRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	val, ok := pathParams["id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
+	}
+	protoReq.Id, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
+	}
+	msg, err := server.RegenerateSecret(ctx, &protoReq)
+	return msg, metadata, err
+}
+
 // RegisterServiceAccountsHandlerServer registers the http handlers for service ServiceAccounts to "mux".
 // UnaryRPC     :call ServiceAccountsServer directly.
 // StreamingRPC :currently unsupported pending https://github.com/grpc/grpc-go/issues/906.
@@ -346,6 +388,26 @@ func RegisterServiceAccountsHandlerServer(ctx context.Context, mux *runtime.Serv
 			return
 		}
 		forward_ServiceAccounts_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_ServiceAccounts_RegenerateSecret_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/osac.private.v1.ServiceAccounts/RegenerateSecret", runtime.WithHTTPPathPattern("/api/private/v1/service_accounts/{id}/regenerate_secret"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_ServiceAccounts_RegenerateSecret_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_ServiceAccounts_RegenerateSecret_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -472,6 +534,23 @@ func RegisterServiceAccountsHandlerClient(ctx context.Context, mux *runtime.Serv
 		}
 		forward_ServiceAccounts_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
+	mux.Handle(http.MethodPost, pattern_ServiceAccounts_RegenerateSecret_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/osac.private.v1.ServiceAccounts/RegenerateSecret", runtime.WithHTTPPathPattern("/api/private/v1/service_accounts/{id}/regenerate_secret"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_ServiceAccounts_RegenerateSecret_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_ServiceAccounts_RegenerateSecret_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
 	return nil
 }
 
@@ -492,17 +571,19 @@ func (m response_ServiceAccounts_Update_0) XXX_ResponseBody() interface{} {
 }
 
 var (
-	pattern_ServiceAccounts_List_0   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3}, []string{"api", "private", "v1", "service_accounts"}, ""))
-	pattern_ServiceAccounts_Get_0    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "private", "v1", "service_accounts", "id"}, ""))
-	pattern_ServiceAccounts_Create_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3}, []string{"api", "private", "v1", "service_accounts"}, ""))
-	pattern_ServiceAccounts_Update_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "private", "v1", "service_accounts", "object.id"}, ""))
-	pattern_ServiceAccounts_Delete_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "private", "v1", "service_accounts", "id"}, ""))
+	pattern_ServiceAccounts_List_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3}, []string{"api", "private", "v1", "service_accounts"}, ""))
+	pattern_ServiceAccounts_Get_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "private", "v1", "service_accounts", "id"}, ""))
+	pattern_ServiceAccounts_Create_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3}, []string{"api", "private", "v1", "service_accounts"}, ""))
+	pattern_ServiceAccounts_Update_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "private", "v1", "service_accounts", "object.id"}, ""))
+	pattern_ServiceAccounts_Delete_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "private", "v1", "service_accounts", "id"}, ""))
+	pattern_ServiceAccounts_RegenerateSecret_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4, 2, 5}, []string{"api", "private", "v1", "service_accounts", "id", "regenerate_secret"}, ""))
 )
 
 var (
-	forward_ServiceAccounts_List_0   = runtime.ForwardResponseMessage
-	forward_ServiceAccounts_Get_0    = runtime.ForwardResponseMessage
-	forward_ServiceAccounts_Create_0 = runtime.ForwardResponseMessage
-	forward_ServiceAccounts_Update_0 = runtime.ForwardResponseMessage
-	forward_ServiceAccounts_Delete_0 = runtime.ForwardResponseMessage
+	forward_ServiceAccounts_List_0             = runtime.ForwardResponseMessage
+	forward_ServiceAccounts_Get_0              = runtime.ForwardResponseMessage
+	forward_ServiceAccounts_Create_0           = runtime.ForwardResponseMessage
+	forward_ServiceAccounts_Update_0           = runtime.ForwardResponseMessage
+	forward_ServiceAccounts_Delete_0           = runtime.ForwardResponseMessage
+	forward_ServiceAccounts_RegenerateSecret_0 = runtime.ForwardResponseMessage
 )

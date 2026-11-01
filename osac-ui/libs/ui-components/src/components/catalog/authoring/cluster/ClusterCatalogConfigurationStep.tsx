@@ -34,6 +34,7 @@ const ClusterCatalogConfigurationStep = () => {
                 isDisabled={isDisabled}
                 isRequired={isRequired}
                 labelInfo={labelInfo}
+                autoSelectSingleOption={false}
               />
             )}
           </CatalogField>
@@ -49,6 +50,7 @@ const ClusterCatalogConfigurationStep = () => {
                   isDisabled={isDisabled}
                   isRequired={isRequired}
                   allowEmpty
+                  autoSelectSingleOption={false}
                 />
               </ProvisioningFieldGroup>
             )}

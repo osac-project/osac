@@ -15,6 +15,7 @@ import { emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 interface DiskImageFieldProps extends ProvisioningFieldControlProps {
   fieldId?: string;
   guestOsFamilyName: string;
+  autoSelectSingleOption?: boolean;
 }
 
 const DiskImageField = ({
@@ -24,6 +25,7 @@ const DiskImageField = ({
   isDisabled = false,
   isRequired = true,
   labelInfo,
+  autoSelectSingleOption = true,
 }: DiskImageFieldProps) => {
   const { t } = useTranslation();
   const [guestOsFamilyField] = useField<GuestOSFamily>(guestOsFamilyName);
@@ -79,7 +81,7 @@ const DiskImageField = ({
         request={{ filter: diskImageFilter }}
         isRequired={isRequired}
         isDisabled={isDisabled}
-        showOptionDescriptions={false}
+        autoSelectSingleOption={autoSelectSingleOption}
         placeholder={t('Select a disk image')}
         loadErrorTitle={t('Could not load disk images')}
         onSelectResource={(_, diskImage) => {

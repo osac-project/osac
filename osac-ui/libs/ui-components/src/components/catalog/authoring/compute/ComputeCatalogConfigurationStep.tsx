@@ -34,6 +34,7 @@ const ComputeCatalogConfigurationStep = () => {
                 isDisabled={isDisabled}
                 isRequired={isRequired}
                 labelInfo={labelInfo}
+                autoSelectSingleOption={false}
               />
             )}
           </CatalogField>
@@ -46,6 +47,7 @@ const ComputeCatalogConfigurationStep = () => {
                 isDisabled={isDisabled}
                 isRequired={isRequired}
                 labelInfo={labelInfo}
+                autoSelectSingleOption={false}
               />
             )}
           </CatalogField>

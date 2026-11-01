@@ -82,9 +82,7 @@ describe('CatalogGeneralStep', () => {
     );
 
     expect(
-      screen.getByText(
-        'Infrastructure automation that fulfills a VM request by resolving infrastructure dependencies, creating VM and storage resources, applying provider-specific integrations, and exposing the status.',
-      ),
+      screen.getByText('Defines the Ansible role used to provision this catalog item'),
     ).toBeInTheDocument();
   });
 
@@ -130,7 +128,7 @@ describe('CatalogGeneralStep', () => {
       const selectedLabel = screen.getByText('Selected').closest('.pf-v6-c-label');
       expect(selectedLabel).toHaveClass('pf-m-filled');
       expect(selectedLabel).not.toHaveClass('pf-m-blue');
-      expect(screen.getByRole('combobox', { name: 'Tenant' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Tenant' })).toBeInTheDocument();
     });
 
     it('hides the tenant field after choosing Global', async () => {
@@ -181,7 +179,7 @@ describe('CatalogGeneralStep', () => {
         .getByText('Tenant scoped')
         .closest('#catalog-item-scope-tenant');
       expect(tenantScopedCard).toHaveClass('pf-m-disabled');
-      expect(screen.getByRole('combobox', { name: 'Tenant' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Tenant' })).toBeInTheDocument();
     });
   });
 });

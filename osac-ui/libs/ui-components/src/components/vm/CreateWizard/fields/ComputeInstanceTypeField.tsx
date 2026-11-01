@@ -14,6 +14,7 @@ import type { ProvisioningFieldControlProps } from '../../../ProvisioningWizard/
 
 interface ComputeInstanceTypeFieldProps extends ProvisioningFieldControlProps {
   fieldId?: string;
+  autoSelectSingleOption?: boolean;
 }
 
 const ComputeInstanceTypeField = ({
@@ -22,6 +23,7 @@ const ComputeInstanceTypeField = ({
   isDisabled = false,
   isRequired = true,
   labelInfo,
+  autoSelectSingleOption = true,
 }: ComputeInstanceTypeFieldProps) => {
   const { t } = useTranslation();
   const { setFieldValue } = useFormikContext();
@@ -79,7 +81,7 @@ const ComputeInstanceTypeField = ({
           label={t('catalogProvision.vm.fields.instanceType')}
           fieldId={fieldId}
           isRequired={isRequired}
-          autoSelectSingleOption
+          autoSelectSingleOption={autoSelectSingleOption}
           isDisabled={isDisabled}
           isLoading={instanceTypesLoading}
           placeholder={t('catalogProvision.vm.placeholders.selectInstanceType')}

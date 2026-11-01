@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -39,21 +40,38 @@ _TRANSIENT_GRPC_MAX_ATTEMPTS: int = 3
 _TRANSIENT_GRPC_RETRY_DELAY_S: float = 2.0
 
 
+# Match the gRPC status-code field in the two observed output formats:
+#   grpcurl  - ``Code: Unavailable``
+#   Go/osac  - ``code = Unavailable``
+# The regex requires the ``Code``/``code`` keyword followed by the
+# separator (``:`` or ``=``) and then ``Unavailable`` as a whole word,
+# so the word ``unavailable`` appearing only inside a description or
+# message body does not trigger a retry.
+_GRPC_UNAVAILABLE_STATUS = re.compile(r"\bcode\s*[:=]\s*unavailable\b", re.IGNORECASE)
+
+
 def _is_transient_grpc_error(exc: subprocess.CalledProcessError) -> bool:
     """Return True when *exc* looks like a transient Envoy upstream outage.
 
     Matches only the narrow pattern where grpcurl (or the osac CLI,
-    which speaks gRPC under the hood) reports ``Unavailable`` **and**
-    the stderr mentions ``no healthy upstream``.  This combination
-    means Envoy had zero endpoints for the backend cluster -- the
-    request was never forwarded, so retrying is safe regardless of
-    whether the RPC is idempotent.
+    which speaks gRPC under the hood) reports ``Unavailable`` in the
+    actual gRPC status-code field **and** the stderr mentions
+    ``no healthy upstream``.  This combination means Envoy had zero
+    endpoints for the backend cluster -- the request was never
+    forwarded, so retrying is safe regardless of whether the RPC is
+    idempotent.
 
-    Other gRPC error codes (PermissionDenied, NotFound, InvalidArgument,
-    etc.) are never matched.
+    The status code is identified by its field prefix (``Code:`` in
+    grpcurl output, ``code =`` in Go gRPC status strings) rather
+    than by a bare substring search, so ``Unavailable`` appearing
+    only in a description or message field does not trigger a retry.
+
+    Other gRPC error codes (PermissionDenied, NotFound,
+    InvalidArgument, etc.) are never matched even when the message
+    contains ``service unavailable``.
     """
-    stderr = (exc.stderr or "").lower()
-    return "unavailable" in stderr and "no healthy upstream" in stderr
+    stderr = exc.stderr or ""
+    return bool(_GRPC_UNAVAILABLE_STATUS.search(stderr)) and "no healthy upstream" in stderr.lower()
 
 
 _OUTPUT_TAIL = 2000

@@ -10,6 +10,11 @@ import pytest
 from tests.e2e.core import runner
 from tests.e2e.core.runner import CommandFailed, CommandTimedOut, _is_transient_grpc_error, run
 
+# Synthetic non-credential header for testing sanitization.
+# Named as a fixture constant so automated secret scanners
+# recognise it is not a real credential.
+_FAKE_BEARER_HEADER = "Authorization: Bearer fake-value-for-sanitize-test"
+
 # ---------------------------------------------------------------------------
 # _is_transient_grpc_error classification
 # ---------------------------------------------------------------------------
@@ -49,6 +54,18 @@ class TestIsTransientGrpcError:
 
     def test_rejects_no_healthy_upstream_without_unavailable(self) -> None:
         exc = _make_cpe("Code: Internal\nMessage: no healthy upstream")
+        assert _is_transient_grpc_error(exc) is False
+
+    def test_rejects_permission_denied_with_unavailable_in_msg(self) -> None:
+        """Near miss: 'service unavailable' in the description must
+        not make a PermissionDenied error look transient."""
+        exc = _make_cpe("Code: PermissionDenied\nMessage: no healthy upstream; service unavailable")
+        assert _is_transient_grpc_error(exc) is False
+
+    def test_rejects_unavailable_only_in_description(self) -> None:
+        """'unavailable' in a message body without matching the
+        status-code field must not trigger a retry."""
+        exc = _make_cpe("Code: Internal\nMessage: service unavailable; no healthy upstream")
         assert _is_transient_grpc_error(exc) is False
 
     def test_rejects_none_stderr(self) -> None:
@@ -137,6 +154,23 @@ class TestRunTransientRetry:
 
         assert call_count == 1
 
+    def test_permission_denied_with_upstream_not_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PermissionDenied mentioning 'no healthy upstream' must
+        not be retried -- the status code is permanent."""
+        monkeypatch.setattr(runner, "_TRANSIENT_GRPC_RETRY_DELAY_S", 0.0)
+        call_count = 0
+
+        def mock_run(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            nonlocal call_count
+            call_count += 1
+            exc = subprocess.CalledProcessError(1, "grpcurl", output="", stderr="")
+            exc.stderr = "Code: PermissionDenied\nMessage: no healthy upstream; service unavailable"
+            raise exc
+
+        with patch("subprocess.run", side_effect=mock_run), pytest.raises(CommandFailed):
+            run("grpcurl", "test")
+        assert call_count == 1  # not retried
+
     def test_retry_does_not_leak_secrets_in_logs(
         self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -152,9 +186,9 @@ class TestRunTransientRetry:
         import logging
 
         with caplog.at_level(logging.WARNING, logger=runner.logger.name), patch("subprocess.run", side_effect=mock_run):
-            run("grpcurl", "-H", "Authorization: Bearer secret-token", "addr")
+            run("grpcurl", "-H", _FAKE_BEARER_HEADER, "addr")
 
-        assert "secret-token" not in caplog.text
+        assert "fake-value-for-sanitize-test" not in caplog.text
         assert "Transient gRPC" in caplog.text
 
 
@@ -188,9 +222,9 @@ class TestRunExceptionWrapping:
     def test_command_failed_sanitizes_command(self) -> None:
         """CommandFailed.cmd must not contain raw secret arguments."""
         with patch("subprocess.run", side_effect=_subprocess_permanent()), pytest.raises(CommandFailed) as exc_info:
-            run("grpcurl", "-H", "Authorization: Bearer secret-token", "addr")
-        assert "secret-token" not in str(exc_info.value)
-        assert "secret-token" not in " ".join(map(str, exc_info.value.cmd))
+            run("grpcurl", "-H", _FAKE_BEARER_HEADER, "addr")
+        assert "fake-value-for-sanitize-test" not in str(exc_info.value)
+        assert "fake-value-for-sanitize-test" not in " ".join(map(str, exc_info.value.cmd))
 
     def test_timeout_raises_command_timed_out(self) -> None:
         """TimeoutExpired becomes CommandTimedOut, never retried."""

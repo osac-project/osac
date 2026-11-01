@@ -110,6 +110,29 @@ Unit shows statement-weighted coverage plus the legacy package average.
 Integration and E2E show covered / automated behaviors at that tier. Unit-tier
 behaviors are listed but not scored: unit coverage comes from the profile.
 
+## External test plans
+
+Two areas in `features.yaml` read their test plans from the
+`enhancement-proposals` repository: `iam` (OSAC-2476) and `secrets`
+(OSAC-5343). That repository is a gitignored checkout that
+`tools/bootstrap.sh` creates; a fresh clone and CI do not have it.
+
+A missing plan file is not an error. Its behaviors are simply not loaded,
+so a tier with no other behaviors shows `na` with the evidence
+`no test plan`, and the verdict reason reads for example
+`Integration: no test plan`. In CI and fresh clones this means the plan
+is not available in the checkout, not that coverage is missing. With the
+checkout present, the same area can show `blocked` or gaps that come from
+the plan's real content.
+
+To make the plans readable, run `tools/bootstrap.sh`, which clones
+`enhancement-proposals/` into the repository root. A symlink named
+`enhancement-proposals` at the repository root pointing at an existing
+checkout also works; the reporter trusts it automatically and lists it
+under `External roots` in the report. `--allow-external-root` trusts
+other external roots, but a plan path must still resolve under the
+repository root, so it cannot substitute for the missing checkout itself.
+
 ## Verdict
 
 - `not ready` - any critical/high gap.

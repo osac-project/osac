@@ -46,19 +46,29 @@ networkClass: openstack
 - `hostClass` — host management class to use
 - `networkClass` — network class to use
 
-### Logical port MAC mappings
+### Networking and logical port MAC mappings
 
-IP discovery asks the inventory client for an administrator-supplied mapping
-from OSAC logical port names to physical MAC addresses. Each key must match the
-network attachment's `interface` and the catalog port name, as defined by the
-[BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md).
-Inventory backends provide these sources:
+With provider networking enabled, this operator orchestrates the BareMetalInstance
+network lifecycle (host assignment, NetworkAttachment create/delete, handoff
+reboot, repair mark, status mirroring) but **never** calls a Fabric Manager,
+switch, or DHCP API. The osac-operator networking controller runs Fabric tasks
+(`apply_network_attachment`, `delete_network_attachment`, `query_dhcp_lease`)
+on the NetworkAttachment. See the
+[BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md)
+([component responsibilities](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md#component-responsibilities)).
+
+At host assignment the inventory client supplies an administrator mapping from
+OSAC logical port names to physical MAC addresses. Each key must match the
+network attachment's `interface` and the catalog port name. The operator records
+the selected MAC on the BMI status and NetworkAttachment; lease discovery uses
+that MAC only (no host-name or interface-name fallback). Inventory backends:
 
 | Backend | Source | Value format |
 |---------|--------|--------------|
 | Metal3 | BareMetalHost annotation `osac.openshift.io/interface-macs` | JSON string |
 | BCM | Device `extra_values["osac_interface_macs"]` | JSON object or JSON string |
 | OpenStack | Ironic node `extra["osac_interface_macs"]` | JSON object |
+| NetBox | Device custom field `osac_interface_macs` | per design |
 
 For example, an object mapping is `{"data-0":"52:54:00:16:04:83"}`. For
 string-valued BCM metadata, the equivalent device field is:
@@ -70,9 +80,9 @@ string-valued BCM metadata, the equivalent device field is:
 BCM returns an empty mapping when its extra value is absent, null, or an empty
 string, or when an explicit empty object is configured.
 Backends return an empty mapping when none is configured, and an error for
-malformed data or backend failures. IP discovery retains its server-name lease
-matching fallback when the requested logical port has no MAC or lookup fails.
-Physical interface names and NIC ordering do not supply a logical mapping.
+malformed data or backend failures. Host selection skips a host without an
+inventory name or without a valid MAC for the selected fabric port. Physical
+interface names and NIC ordering do not supply a logical mapping.
 
 ### Management
 

@@ -102,6 +102,75 @@ osac create baremetalinstance \
   --ssh-key "$(cat ~/.ssh/id_ed25519.pub)"
 ```
 
+## Networking
+
+Bare-metal networking follows the accepted
+[BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md).
+That design is the target contract; it does not assert every step is already
+enforced in shipping code. Baseline attachment work is under closed OSAC-1448 /
+OSAC-1510; remaining PR #357 delta implementation and deployed verification are
+[OSAC-6818](https://redhat.atlassian.net/browse/OSAC-6818) and
+[OSAC-6820](https://redhat.atlassian.net/browse/OSAC-6820). Shared networking
+resources and gates are described in the
+[networking guide](networking-guide.md); this section covers only the
+BareMetalInstance lifecycle. Architecture summary:
+[Bare Metal Server Fulfillment](../../architecture/bm-server-fulfillment.md).
+
+**Ownership.** The deployment's Fabric Manager owns Fabric operations (port
+moves, SecurityGroup binding on the physical port, DHCP, and lease lookup).
+The bare-metal-fulfillment-operator orchestrates host inventory, OS
+provisioning, NetworkAttachment create/delete, the handoff reboot, repair
+marking, and status mirroring. It does **not** call Fabric Managers or switch
+or DHCP APIs directly. The osac-operator networking controller runs every
+Fabric task on the NetworkAttachment.
+
+**Attachment.** A BareMetalInstance has at most one tenant network attachment.
+Omit the attachment to use the tenant's default Subnet and SecurityGroup, or
+supply a partial selection; the resolved choice is fixed after creation. When
+several tenant-facing interfaces exist, you may select the physical interface
+(`interface`); otherwise the platform picks a consistent default. System-only
+or unknown interfaces are rejected. The sole attachment is the host's primary
+route; there is no separate primary-network choice.
+
+**Create path (provider networking enabled).** The host is imaged on the
+provider provisioning network. After OS provisioning, OSAC creates a
+NetworkAttachment; the Fabric Manager moves the selected port to the Subnet
+segment and takes other fabric ports off the provisioning network. BMF then
+requests one handoff reboot. After the handoff, the networking controller runs
+`query_dhcp_lease` for the selected NIC MAC and records the tenant address.
+Readiness with a tenant IP requires that discovery; a provisioning-network
+address is never shown as the tenant address. With no lease after ten minutes,
+OSAC warns and keeps querying.
+
+**Automatic external access.** `--external-ip-attachment` (or the equivalent
+API field) requests an ExternalIP and ExternalIPAttachment for the server.
+Inbound access starts only after the tenant endpoint is ready and a real
+address is allocated. Automatic external resources are removed when the
+server is deleted.
+
+**Delete and repair.** Deletion returns the host to inventory only after
+tenant-network cleanup completes. Fabric ports return to the provisioning
+network through the manager. If a FabricDomain still lists the host, BMF
+writes a repair mark before release; selection skips marked hosts until a
+Cloud Provider Admin clears the mark (see the design support procedures).
+
+**Provider networking disabled.** Host provisioning and deprovisioning stay
+available on the provisioning network. OSAC does not move tenant interfaces,
+discover tenant addresses, or promise tenant routing or ExternalIP access.
+Server readiness then attests OS provisioning only.
+
+Example create with an explicit attachment and automatic external access:
+
+```bash
+osac create baremetalinstance \
+  --name worker-0 \
+  --catalog-item standard-bare-metal \
+  --disk-image rhel-9-4-amd64 \
+  --network-attachment subnet=<subnet-id>,interface=data-0,security-groups=<sg-id> \
+  --external-ip-attachment \
+  --ssh-key "$(cat ~/.ssh/id_ed25519.pub)"
+```
+
 ## Validation, lifecycle, and deletion
 
 OSAC resolves the DiskImage reference before creating the instance. The

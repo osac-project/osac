@@ -737,6 +737,7 @@ Touched-area requirements: [component guide](../bare-metal-fulfillment-operator/
 - **Controller deployment, CRDs, pool flows, or Kubernetes wiring:** Envtest alone does not prove the deployed controller path.
 - **Metal3, BCM, Ironic, BMC, power, or hardware semantics:** Static CRDs and HTTP test doubles do not satisfy a real-boundary requirement.
 - **Generated CRDs or Helm CRDs:** Keep generated artifacts synchronized.
+- **BMaaS networking (PR #357 / OSAC-6817 docs):** Unit coverage for NetworkAttachment reconcile and lease discovery lives in `internal/controller/baremetalinstance_networking_test.go` and `baremetalinstance_ip_discovery_test.go` (`make test` from `bare-metal-fulfillment-operator/`). Envtest paths are `baremetalinstance_metal3_envtest_test.go` and `baremetalinstance_bcm_envtest_test.go`. Cleanup ownership is covered by `osac-operator/internal/controller/baremetalinstance_cleanup_controller_test.go` and NET-CLEAN-08. Kind `SUITE=bmf` / `make integration-tests` do **not** exercise a real Fabric port move or DHCP. Provider conformance `baremetal` profile and TC-BM-01 remain lab/contract evidence. Baseline BMI E2E: `tests/e2e/bmaas/sanity/test_baremetal_instance_lifecycle.py` (closed OSAC-1510); do not treat it as a full PR #357 delta pass. Remaining delta implementation: [OSAC-6818](https://redhat.atlassian.net/browse/OSAC-6818). Deployed handoff/lifecycle QE: [OSAC-6820](https://redhat.atlassian.net/browse/OSAC-6820). Full tier/owner matrix: [OSAC-1437 testplan](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/testplan.md).
 
 ### Coverage gaps
 
@@ -744,6 +745,9 @@ The current Kind suite deliberately stops at static Metal3 resources and
 simulated provider status. Work that changes the real Metal3/Ironic/BCM/BMC
 boundary must add the qualifying coverage under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) or its contract-test
 follow-up; extending the existing static-fixture suite alone is insufficient.
+Real Fabric Manager + hardware proof of the PR #357 BMaaS networking delta
+(port move, handoff reboot, MAC lease discovery, repair mark) is not provided
+by the BMF Kind suite; track it under [OSAC-6820](https://redhat.atlassian.net/browse/OSAC-6820).
 
 ## osac-aap
 

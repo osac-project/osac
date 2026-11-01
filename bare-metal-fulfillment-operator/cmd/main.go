@@ -141,6 +141,8 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	networkingProvisioningEnabled := loadNetworkingProvisioning()
+	setupLog.Info("networking provisioning feature gate", "enabled", networkingProvisioningEnabled)
 
 	ctx := ctrl.SetupSignalHandler()
 
@@ -303,8 +305,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		enableNetworkingProvisioning := helpers.GetEnvWithDefault(envEnableNetworkingProvisioning, false)
-		if enableNetworkingProvisioning {
+		if networkingProvisioningEnabled {
 			// Networking provisioning (onboard) and deprovisioning (offboard) are both a
 			// port move; the single move playbook derives the direction from the CR.
 			networkingProvider = provisioning.NewAAPProvider(

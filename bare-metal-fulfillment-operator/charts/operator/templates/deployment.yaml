@@ -100,7 +100,7 @@ spec:
             value: {{ .Values.env.aapInsecureSkipVerify | quote }}
           {{- end }}
           - name: OSAC_ENABLE_NETWORKING_PROVISIONING
-            value: {{ .Values.env.enableNetworkingProvisioning | default "false" | quote }}
+            value: {{ .Values.global.networking.provisioningEnabled | quote }}
           {{- if .Values.netbox.enabled }}
           - name: OSAC_SECRET_API_URL
             value: {{ .Values.secretAPI.url | quote }}

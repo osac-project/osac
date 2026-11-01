@@ -22,7 +22,6 @@ import {
   computeCatalogItemFields,
   computeDiskImageReferenceFromPolicy,
   computeInstanceTypeReferenceFromPolicy,
-  findComputeInstanceTypeForReference,
   formatComputeCatalogDiskImage,
 } from './computeCatalogItemResourceDisplay';
 import { GuestOsIcon } from '../shared/GuestOsIcon';
@@ -43,12 +42,7 @@ const ComputeCatalogItemResources = ({
   const instanceTypePolicyBehavior = catalogFieldPolicyBehavior(fields?.instanceType);
   const diskImagePolicyBehavior = catalogFieldPolicyBehavior(fields?.diskImage);
 
-  const { computeInstanceTypes, diskImages } = resourceLookups;
-
-  const instanceType = useMemo(
-    () => findComputeInstanceTypeForReference(computeInstanceTypes, instanceTypeReference),
-    [instanceTypeReference, computeInstanceTypes],
-  );
+  const { diskImages } = resourceLookups;
 
   const diskImage = useMemo(
     () => findDiskImageForReference(diskImages, diskImageReference),
@@ -57,7 +51,7 @@ const ComputeCatalogItemResources = ({
 
   const diskImageOsIcon = diskImageGuestOsIconType(diskImage);
 
-  const instanceTypeLabel = instanceType?.metadata?.name || '';
+  const instanceTypeLabel = instanceTypeReference?.name;
   const diskImageLabel = formatComputeCatalogDiskImage(fields, diskImage, diskImageReference);
 
   return (

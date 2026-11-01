@@ -55,6 +55,21 @@ describe('catalogItemMatchesListFilter', () => {
     );
   });
 
+  it('does not match a search term across separate fields', () => {
+    const splitFieldItem = {
+      ...item,
+      metadata: { ...item.metadata, name: 'catalog' },
+      title: 'RHEL',
+    };
+
+    expect(
+      catalogItemMatchesListFilter(
+        splitFieldItem,
+        buildCatalogListFilter({ search: 'catalog RHEL' }),
+      ),
+    ).toBe(false);
+  });
+
   it('matches published and tenant clauses', () => {
     expect(
       catalogItemMatchesListFilter(item, buildCatalogListFilter({ published: 'published' })),

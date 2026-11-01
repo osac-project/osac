@@ -11,7 +11,7 @@ import ClusterCatalogReviewStep from './ClusterCatalogReviewStep';
 import CatalogItemWizardShell from '../CatalogItemWizardShell';
 import {
   buildClusterCatalogItemCreatePayload,
-  buildClusterCatalogItemUpdatePayload,
+  buildClusterCatalogItemUpdateRequest,
 } from './payload';
 import {
   type ClusterCatalogWizardStepId,
@@ -66,9 +66,7 @@ const ClusterCatalogItemWizard = ({ item }: ClusterCatalogItemWizardProps) => {
   const onSubmit = async (values: ClusterCatalogItemValues) => {
     try {
       if (item) {
-        await updateAsync({
-          object: { id: item.id, ...buildClusterCatalogItemUpdatePayload(item, values) },
-        });
+        await updateAsync(buildClusterCatalogItemUpdateRequest(item, values));
         navigate(`/catalog/cluster/${item.id}`);
       } else {
         const resp = await createAsync({ object: buildClusterCatalogItemCreatePayload(values) });

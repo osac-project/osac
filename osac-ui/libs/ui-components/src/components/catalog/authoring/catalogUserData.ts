@@ -73,10 +73,7 @@ export const catalogUserDataValuesFromPolicy = (
 
   return {
     userDataSource: provisioningFieldValue(source, field.locked),
-    userData: provisioningFieldValue(
-      source === 'inline' ? value : '',
-      source === 'inline' && field.locked,
-    ),
+    userData: provisioningFieldValue(source === 'inline' ? value : '', field.locked),
     userDataSecret: provisioningFieldValue(
       source === 'secret' ? value : '',
       source === 'secret' && field.locked,

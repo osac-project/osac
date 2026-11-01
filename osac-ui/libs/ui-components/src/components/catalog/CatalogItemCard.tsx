@@ -49,6 +49,7 @@ const CatalogItemCard = ({ item, selection, resourceLookups }: CatalogItemCardPr
       variant={item.published ? 'default' : 'secondary'}
       isSelectable={isWizardMode}
       isSelected={selection?.selected}
+      isDisabled={isWizardMode && !item.published}
       isFullHeight
     >
       <CardHeader

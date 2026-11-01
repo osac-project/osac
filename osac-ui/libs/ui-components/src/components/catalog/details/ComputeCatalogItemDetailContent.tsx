@@ -144,7 +144,7 @@ const VmCatalogItemDetailContent = ({ item }: VmCatalogItemDetailContentProps) =
   const diskImageValue =
     formatComputeCatalogDiskImage(fields, diskImage, diskImageReference) ??
     displayReference(diskImageReference, t);
-  const instanceTypeValue = instanceType?.metadata?.name || '';
+  const instanceTypeValue = instanceTypeReference?.name;
   const vcpuValue = formatComputeCatalogVCpu(fields, instanceType, t) ?? t('Not set');
   const memoryValue = formatComputeCatalogMemory(fields, instanceType, t) ?? t('Not set');
   const gpu = instanceType?.spec?.gpu;

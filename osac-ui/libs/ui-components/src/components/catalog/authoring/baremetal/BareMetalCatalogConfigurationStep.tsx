@@ -2,12 +2,11 @@ import { Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 import BareMetalInstanceTypeField from '../../../BareMetalInstance/CreateWizard/fields/BareMetalInstanceTypeField';
-import { CATALOG_PROVISION_MULTILINE_TEXTAREA } from '../../../Form/constants';
-import { InputField } from '../../../Form/InputField';
 import OsacForm from '../../../Form/OsacForm';
 import DiskImageField from '../../../ProvisioningWizard/fields/DiskImageField';
 import CatalogField from '../CatalogField';
 import CatalogFieldPolicyDescription from '../CatalogFieldPolicyDescription';
+import CatalogUserDataInput from '../CatalogUserDataInput';
 
 const BareMetalCatalogConfigurationStep = () => {
   const { t } = useTranslation();
@@ -55,16 +54,8 @@ const BareMetalCatalogConfigurationStep = () => {
           </CatalogField>
           <CatalogField name="userData">
             {({ valueName, isDisabled, isRequired, labelInfo }) => (
-              // Workaround: project-scoped catalog items are not supported in
-              // the UI yet, so catalog item user data is limited to text.
-              <InputField
-                name={valueName}
-                label={t('User data')}
-                fieldId="bare-metal-catalog-user-data"
-                multiline
-                rows={CATALOG_PROVISION_MULTILINE_TEXTAREA.rows}
-                resizeOrientation={CATALOG_PROVISION_MULTILINE_TEXTAREA.resizeOrientation}
-                helperText={t('Optional cloud-init user data (max 64 KB).')}
+              <CatalogUserDataInput
+                valueName={valueName}
                 isDisabled={isDisabled}
                 isRequired={isRequired}
                 labelInfo={labelInfo}

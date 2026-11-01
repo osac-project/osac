@@ -76,3 +76,10 @@ export const catalogFieldPolicyFromValue = <TPolicy>(
     (value) =>
       ({ behavior: { case: 'editable', value: { defaultValue: toValue(value) } } }) as TPolicy,
   );
+
+/** Returns the update-mask path needed to clear an existing catalog policy. */
+export const catalogFieldPolicyClearPath = (
+  policy: CatalogFieldPolicyLike,
+  value: unknown,
+  path: string,
+): string[] => (policy?.behavior?.case && value === undefined ? [path] : []);

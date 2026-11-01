@@ -71,22 +71,26 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
             </ShellRoute>
           }
         />
-        <Route
-          path="/catalog/:kind/create"
-          element={
-            <ShellRoute>
-              <CatalogItemCreatePage />
-            </ShellRoute>
-          }
-        />
-        <Route
-          path="/catalog/:kind/:id/edit"
-          element={
-            <ShellRoute>
-              <CatalogItemEditPage />
-            </ShellRoute>
-          }
-        />
+        {(role === 'admin' || role === 'tenant-admin') && (
+          <>
+            <Route
+              path="/catalog/:kind/create"
+              element={
+                <ShellRoute>
+                  <CatalogItemCreatePage />
+                </ShellRoute>
+              }
+            />
+            <Route
+              path="/catalog/:kind/:id/edit"
+              element={
+                <ShellRoute>
+                  <CatalogItemEditPage />
+                </ShellRoute>
+              }
+            />
+          </>
+        )}
         <Route
           path="/catalog/vm/:id"
           element={

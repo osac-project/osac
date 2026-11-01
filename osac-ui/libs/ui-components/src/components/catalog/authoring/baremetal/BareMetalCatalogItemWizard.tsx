@@ -10,7 +10,7 @@ import BareMetalCatalogReviewStep from './BareMetalCatalogReviewStep';
 import CatalogItemWizardShell from '../CatalogItemWizardShell';
 import {
   buildBareMetalCatalogItemCreatePayload,
-  buildBareMetalCatalogItemUpdatePayload,
+  buildBareMetalCatalogItemUpdateRequest,
 } from './payload';
 import {
   type BareMetalCatalogWizardStepId,
@@ -65,9 +65,7 @@ const BareMetalCatalogItemWizard = ({ item }: BareMetalCatalogItemWizardProps) =
   const onSubmit = async (values: BareMetalCatalogItemValues) => {
     try {
       if (item) {
-        await updateAsync({
-          object: { id: item.id, ...buildBareMetalCatalogItemUpdatePayload(item, values) },
-        });
+        await updateAsync(buildBareMetalCatalogItemUpdateRequest(item, values));
         navigate(`/catalog/bm/${item.id}`);
       } else {
         const resp = await createAsync({

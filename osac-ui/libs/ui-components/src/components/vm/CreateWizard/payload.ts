@@ -6,7 +6,10 @@ import type { ComputeInstanceCatalogItem } from '@osac/types';
 
 import { type ComputeInstanceWizardValues } from './fields';
 import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
-import { getUserDataSourcePayload } from '../../ProvisioningWizard/fields/provisioningFieldValue';
+import {
+  getUserDataSourceFieldsFromPolicy,
+  getUserDataSourcePayload,
+} from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
 export { createEmptyComputeInstanceValues } from './fields';
 
@@ -82,7 +85,8 @@ export const buildComputeInstanceCreatePayload = (
     }
   }
 
-  const userDataSource = getUserDataSourcePayload(values.spec.userData);
+  const initialUserData = getUserDataSourceFieldsFromPolicy(catalogItem?.fields?.userDataSource);
+  const userDataSource = getUserDataSourcePayload(values.spec.userData, initialUserData);
   if (userDataSource) {
     spec.userDataSource = userDataSource;
   }

@@ -13,7 +13,7 @@ import ComputeCatalogWizardFooter from './ComputeCatalogWizardFooter';
 import CatalogItemWizardShell from '../CatalogItemWizardShell';
 import {
   buildComputeCatalogItemCreatePayload,
-  buildComputeCatalogItemUpdatePayload,
+  buildComputeCatalogItemUpdateRequest,
 } from './payload';
 import {
   type ComputeCatalogWizardStepId,
@@ -67,9 +67,7 @@ const ComputeCatalogItemWizard = ({ item }: ComputeCatalogItemWizardProps) => {
   const onSubmit = async (values: ComputeCatalogItemValues) => {
     try {
       if (item) {
-        await updateAsync({
-          object: { id: item.id, ...buildComputeCatalogItemUpdatePayload(item, values) },
-        });
+        await updateAsync(buildComputeCatalogItemUpdateRequest(item, values));
         navigate(`/catalog/vm/${item.id}`);
       } else {
         const resp = await createAsync({ object: buildComputeCatalogItemCreatePayload(values) });

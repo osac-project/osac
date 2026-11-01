@@ -27,6 +27,13 @@ bootstrap:
   cliImage: quay.io/openshift/origin-cli:4.20.0
   backoffLimit: 15
   readinessConsecutiveSuccesses: 3
+  # Admin credentials the bootstrap job and the create-token hook
+  # authenticate with when aap.instance.enabled=false. Defaults match the
+  # Secret the in-cluster instance creates, so a deployment that copies the
+  # external AAP's admin password under that name needs no override.
+  adminPasswordSecret:
+    name: "osac-aap-admin-password"
+    key: "password"
 
 configAsCode:
   manifestSecret: "config-as-code-manifest-ig"

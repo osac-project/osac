@@ -1,15 +1,21 @@
 """Deployed Netris CA rotation, rollback, and admission-control coverage.
 
-Run against a full Netris-enabled OSAC release with:
+Run against a full Netris-enabled OSAC release that runs CaaS on Netris with:
 
     OSAC_NETRIS_CA_E2E=true
     OSAC_NETRIS_CA_NEW_PEM_PATH=/path/to/new-root.pem
+    OSAC_PULL_SECRET_PATH=/path/to/pull-secret
+
+The CA consumption probe needs the CaaS lab inputs (OSAC_CLUSTER_TEMPLATE,
+OSAC_PULL_SECRET_PATH, OSAC_SSH_PUBLIC_KEY_PATH) because the ConfigMap mounts
+only in the cluster-fulfillment job pod; the test skips when the deployment has
+no cluster-fulfillment instance group.
 
 The test mutates the release: it creates temporary ConfigMaps, probes admission
 control with an impersonated ServiceAccount, performs two Helm upgrades, and
-runs real VirtualNetwork operations. It rolls the release back to the original
-CA ConfigMap and deletes only the temporary version it created. Use a lab
-installation, not a shared environment.
+creates then deletes one ClusterOrder per probe. It rolls the release back to
+the original CA ConfigMap and deletes only the temporary version it created. Use
+a lab installation, not a shared environment.
 """
 
 from __future__ import annotations
@@ -17,7 +23,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import random
 import subprocess
 from pathlib import Path
 
@@ -27,11 +32,12 @@ from tests.e2e.core.aap_job_pods import job_pod_mounting as _job_pod_mounting
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     unique_name,
-    wait_for_virtual_network_cr,
-    wait_for_virtual_network_deletion,
-    wait_for_virtual_network_ready,
+    wait_for_cluster_deletion,
+    wait_for_cluster_grpc_removal,
+    wait_for_cluster_order_cr,
 )
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, poll_until, run, run_unchecked
 
 pytestmark = [
@@ -78,6 +84,31 @@ def _expected_osac_service_account(namespace: str) -> str:
         .get("serviceAccounts", {})
         .get("osacSa", "osac-sa")
     )
+
+
+def _cluster_fulfillment_enabled(namespace: str) -> bool:
+    """Report whether the release runs CaaS jobs that mount the Netris CA.
+
+    Only cluster-fulfillment instance groups mount the CA ConfigMap: networking
+    jobs run the network manager contract without a Netris facade.
+    """
+    values = json.loads(run("helm", "get", "values", _helm_release(), "-n", namespace, "-o", "json"))
+    cluster_fulfillment = values.get("aap", {}).get("instanceGroups", {}).get("clusterFulfillment", {})
+    return bool(cluster_fulfillment.get("enabled", False))
+
+
+def _caas_probe_inputs() -> dict[str, str]:
+    """Return the CaaS inputs the probe needs to create a ClusterOrder."""
+    inputs = {
+        "template": env("OSAC_CLUSTER_TEMPLATE", "ocp-ci-small"),
+        "pull_secret_path": env("OSAC_PULL_SECRET_PATH", ""),
+        "ssh_public_key": env("OSAC_SSH_PUBLIC_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa.pub")),
+    }
+    if not Path(inputs["pull_secret_path"]).is_file():
+        pytest.skip("The Netris CA probe creates a ClusterOrder; set OSAC_PULL_SECRET_PATH to run it")
+    if not Path(inputs["ssh_public_key"]).is_file():
+        pytest.skip("The Netris CA probe creates a ClusterOrder; set OSAC_SSH_PUBLIC_KEY_PATH to a readable key")
+    return inputs
 
 
 def _configmap_bundle(k8s: K8sClient, configmap: str) -> str:
@@ -144,8 +175,8 @@ def _apply(k8s: K8sClient, manifest: str) -> None:
     )
 
 
-def _latest_virtual_network_job_id(k8s: K8sClient, name: str) -> str:
-    status = k8s.get_json(resource="virtualnetwork", name=name).get("status", {})
+def _latest_cluster_order_job_id(k8s: K8sClient, name: str) -> str:
+    status = k8s.get_json(resource="clusterorder", name=name).get("status", {})
     jobs = [
         job for job in status.get("provisioningJobs", [])
         if job.get("type") == "provision"
@@ -155,21 +186,23 @@ def _latest_virtual_network_job_id(k8s: K8sClient, name: str) -> str:
     return sorted(jobs, key=lambda job: job.get("timestamp", ""), reverse=True)[0].get("jobID", "")
 
 
-def _wait_for_virtual_network_job_id(k8s: K8sClient, name: str) -> str:
+def _wait_for_cluster_order_job_id(k8s: K8sClient, name: str) -> str:
     return poll_until(
-        fn=lambda: _latest_virtual_network_job_id(k8s, name),
+        fn=lambda: _latest_cluster_order_job_id(k8s, name),
         until=bool,
         retries=120,
         delay=2,
-        description=f"AAP job for VirtualNetwork {name}",
+        description=f"AAP provisioning job for ClusterOrder {name}",
     )
 
 
 def _wait_for_job_pod(k8s: K8sClient, configmap: str, job_id: str) -> dict:
+    # A cluster-fulfillment job can queue behind other AAP work before its pod
+    # exists, so this waits longer than a networking job needs.
     pod = poll_until(
         fn=lambda: _job_pod_mounting(k8s, configmap, job_id),
         until=lambda value: value is not None,
-        retries=120,
+        retries=300,
         delay=2,
         description=f"AAP job {job_id} pod mounting CA ConfigMap {configmap}",
     )
@@ -246,59 +279,79 @@ def _wait_for_bundle_in_job_pod(k8s: K8sClient, pod_name: str, expected_bundle: 
     assert actual_hash == expected_hash, f"{pod_name} mounted the wrong Netris CA bundle"
 
 
-def _virtual_network_id_by_name(grpc: GRPCClient, name: str) -> str:
-    """Find the probe VirtualNetwork by its unique name after a failed create.
-
-    A create call can time out after the server persisted the object and still
-    return no ID; the name is the only handle left for cleanup.
-    """
-    for vnet_id in grpc.list_virtual_network_ids():
-        try:
-            vnet = grpc.get_virtual_network(vn_id=vnet_id)
-        except subprocess.CalledProcessError:
-            continue
-        if vnet.get("object", {}).get("metadata", {}).get("name") == name:
-            return vnet_id
-    return ""
+def _cleanup_cluster(cli: OsacCLI, grpc: GRPCClient, k8s: K8sClient, uuid: str, name: str) -> None:
+    cli.delete_cluster(uuid=uuid)
+    if not name:
+        name = k8s.get_cluster_order_name(uuid=uuid, checked=False)
+    if name:
+        wait_for_cluster_deletion(k8s=k8s, name=name)
+    wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
 
 
-def _cleanup_virtual_network(grpc: GRPCClient, k8s: K8sClient, name: str, vnet_id: str) -> None:
-    if not vnet_id:
-        vnet_id = _virtual_network_id_by_name(grpc, name)
-    if not vnet_id:
-        return
-    cr_name = k8s.get_virtual_network_name(uuid=vnet_id, checked=False)
-    grpc.delete_virtual_network(vn_id=vnet_id)
-    if cr_name:
-        wait_for_virtual_network_deletion(k8s=k8s, name=cr_name)
-
-
-def _exercise_netris(
+def _exercise_cluster_fulfillment_ca(
+    cli: OsacCLI,
     grpc: GRPCClient,
     k8s: K8sClient,
     configmap: str,
     expected_bundle: str,
     expected_service_account: str,
+    caas: dict[str, str],
+    version: str,
 ) -> None:
+    """Prove a cluster-fulfillment job pod consumes the CA, then delete the cluster.
+
+    The probe stops as soon as it has read the mounted bundle: it never waits
+    for the cluster to become ready, only for the provisioning job that mounts
+    the CA in the cluster-fulfillment instance group.
+    """
     name = unique_name("netris-ca-probe")
-    cidr = f"10.{random.randint(100, 250)}.{random.randint(0, 255)}.0/24"
-    vnet_id = ""
+    pull_secret = unique_name("netris-ca-probe-pull")
+    cli.create_secret(
+        name=pull_secret, from_files={".dockerconfigjson": caas["pull_secret_path"]}, secret_type="pull-secret"
+    )
+    uuid = ""
+    cluster_order = ""
     try:
-        vnet_id = grpc.create_virtual_network(name=name, ipv4_cidr=cidr)
-        cr_name = wait_for_virtual_network_cr(k8s=k8s, uuid=vnet_id)
-        job_id = _wait_for_virtual_network_job_id(k8s, cr_name)
+        uuid = cli.create_cluster(
+            template=caas["template"],
+            name=name,
+            version=version,
+            pull_secret=pull_secret,
+            ssh_public_key_file=caas["ssh_public_key"],
+        )
+        cluster_order = wait_for_cluster_order_cr(k8s=k8s, uuid=uuid)
+        job_id = _wait_for_cluster_order_job_id(k8s, cluster_order)
         pod = _wait_for_job_pod(k8s, configmap, job_id)
         _assert_job_pod_contract(pod, configmap, expected_service_account)
         _wait_for_bundle_in_job_pod(k8s, pod["metadata"]["name"], expected_bundle)
-        wait_for_virtual_network_ready(k8s=k8s, name=cr_name)
     finally:
-        _cleanup_virtual_network(grpc, k8s, name, vnet_id)
+        try:
+            if uuid:
+                _cleanup_cluster(cli, grpc, k8s, uuid, cluster_order)
+        finally:
+            cli.delete_secret(name=pull_secret)
 
 
-def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namespace: str) -> None:
+def test_netris_ca_lifecycle(
+    request: pytest.FixtureRequest,
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    namespace: str,
+) -> None:
     chart = _helm_chart()
     if not Path(chart).exists():
         pytest.fail(f"Helm chart not found at {chart}; set OSAC_NETRIS_CA_HELM_CHART")
+
+    if not _cluster_fulfillment_enabled(namespace):
+        pytest.skip(
+            "The Netris CA mounts only in the cluster-fulfillment job pod; "
+            "enable aap.instanceGroups.clusterFulfillment to run this test"
+        )
+    caas = _caas_probe_inputs()
+    # Resolved by name so the CaaS fixtures are never built on a deployment that
+    # skipped above.
+    cli: OsacCLI = request.getfixturevalue("cli")
+    version: str = request.getfixturevalue("caas_disk_image_version")
 
     pem_path_value = os.environ.get("OSAC_NETRIS_CA_NEW_PEM_PATH")
     if not pem_path_value:
@@ -430,11 +483,15 @@ def test_netris_ca_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, namesp
             "-n",
             namespace,
         )
-        _exercise_netris(grpc, k8s_hub_client, next_name, next_bundle, service_account)
+        _exercise_cluster_fulfillment_ca(
+            cli, grpc, k8s_hub_client, next_name, next_bundle, service_account, caas, version
+        )
 
         _upgrade_ca(namespace, active)
         rotated = False
-        _exercise_netris(grpc, k8s_hub_client, active, active_bundle, service_account)
+        _exercise_cluster_fulfillment_ca(
+            cli, grpc, k8s_hub_client, active, active_bundle, service_account, caas, version
+        )
     finally:
         try:
             if rotated:

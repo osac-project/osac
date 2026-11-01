@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
-  MenuToggle,
+  Button,
+  EmptyState,
+  EmptyStateBody,
+  Gallery,
+  GalleryItem,
   SearchInput,
-  Select,
-  SelectList,
-  SelectOption,
   Stack,
   StackItem,
   Toolbar,
@@ -12,14 +14,23 @@ import {
   ToolbarGroup,
   ToolbarItem,
 } from '@patternfly/react-core';
-import type { TFunction } from 'i18next';
 
-import { type Volume, VolumeState, Volumes } from '@osac/types';
-import { type CelFilter, cel } from '@osac/ui-components/api/cel';
+import { type Volume, Volumes } from '@osac/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
+import ListPageToolbar from '@osac/ui-components/components/Page/ListPageToolbar';
 import ProjectFilter from '@osac/ui-components/components/Page/ProjectFilter';
+import ViewSwitcher from '@osac/ui-components/components/Primitives/ViewSwitcher';
+import {
+  STATE_FILTER_PARAM,
+  VOLUME_STATE_FILTER_TO_ENUM,
+  type VolumeStateFilterValue,
+  buildVolumeListFilter,
+  isVolumeStateFilterValue,
+} from '@osac/ui-components/components/Volume/utils';
+import VolumeCard from '@osac/ui-components/components/Volume/VolumeCard';
+import VolumeStateFilter from '@osac/ui-components/components/Volume/VolumeStateFilter';
 import { VolumeTable } from '@osac/ui-components/components/Volume/VolumeTable';
 import {
   SEARCH_PARAM,
@@ -27,99 +38,89 @@ import {
   usePageFilter,
 } from '@osac/ui-components/hooks/use-page-filter';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
+import { PROJECT_FILTER_PARAM, useSession } from '@osac/ui-components/hooks/use-session';
+import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
-/**
- * Map from every VolumeState to its translated label. Using Record<VolumeState, string>
- * ensures TypeScript flags any missing state when the enum is extended.
- */
-const getVolumeStateLabels = (t: TFunction): Record<VolumeState, string> => ({
-  [VolumeState.UNSPECIFIED]: t('Unknown'),
-  [VolumeState.CREATING]: t('Creating'),
-  [VolumeState.AVAILABLE]: t('Available'),
-  [VolumeState.FAILED]: t('Failed'),
-  [VolumeState.DELETING]: t('Deleting'),
-  [VolumeState.DELETED]: t('Deleted'),
-});
-
-type VolumeStateFilterValue = 'creating' | 'available' | 'failed' | 'deleting' | 'deleted';
-
-const STATE_FILTER_PARAM = 'state';
-
-const isVolumeStateFilterValue = (value: string): value is VolumeStateFilterValue =>
-  value === 'creating' ||
-  value === 'available' ||
-  value === 'failed' ||
-  value === 'deleting' ||
-  value === 'deleted';
-
-const VOLUME_STATE_FILTER_TO_ENUM: Record<VolumeStateFilterValue, VolumeState> = {
-  creating: VolumeState.CREATING,
-  available: VolumeState.AVAILABLE,
-  failed: VolumeState.FAILED,
-  deleting: VolumeState.DELETING,
-  deleted: VolumeState.DELETED,
-};
-
-/** States shown in the filter dropdown — UNSPECIFIED is excluded. */
-const FILTERABLE_STATE_OPTIONS: readonly {
-  value: VolumeStateFilterValue;
-  enumValue: VolumeState;
-}[] = [
-  { value: 'creating', enumValue: VolumeState.CREATING },
-  { value: 'available', enumValue: VolumeState.AVAILABLE },
-  { value: 'failed', enumValue: VolumeState.FAILED },
-  { value: 'deleting', enumValue: VolumeState.DELETING },
-  { value: 'deleted', enumValue: VolumeState.DELETED },
-];
-
-const buildVolumeCelFilter = (
-  projectFilter: CelFilter<Volume> | undefined,
-  stateFilters: VolumeState[],
-  nameSearch: string,
-): CelFilter<Volume> | undefined =>
-  cel<Volume>((b) =>
-    b.and(
-      projectFilter,
-      stateFilters.length > 0 ? b.field('status.state').isIn(stateFilters) : undefined,
-      nameSearch ? b.field('metadata.name').contains(nameSearch) : undefined,
-    ),
-  );
+const VOLUMES_VIEW_KEY = 'volumes';
 
 export const VolumesListPage = () => {
   const { t } = useTranslation();
-
-  const stateLabels = useMemo(() => getVolumeStateLabels(t), [t]);
-
-  const [nameSearch, setNameSearch] = usePageFilter(SEARCH_PARAM);
-  const [stateFilters, toggleStateFilter] = useArrayPageFilter(
+  const [, setSearchParams] = useSearchParams();
+  const { projects, setProjects } = useSession();
+  const [search, setSearch] = usePageFilter(SEARCH_PARAM);
+  const [stateFilters, toggleStateFilter] = useArrayPageFilter<VolumeStateFilterValue>(
     STATE_FILTER_PARAM,
     isVolumeStateFilterValue,
   );
-  const [isStateSelectOpen, setIsStateSelectOpen] = useState(false);
+  const projectFilter = useProjectFilterQuery<Volume>();
+  const [viewType] = useViewType(VOLUMES_VIEW_KEY);
 
   const stateEnumValues = useMemo(
-    () => stateFilters.map((v) => VOLUME_STATE_FILTER_TO_ENUM[v]),
+    () => stateFilters.map((value) => VOLUME_STATE_FILTER_TO_ENUM[value]),
     [stateFilters],
   );
-  const projectFilter = useProjectFilterQuery<Volume>();
 
   const filter = useMemo(
-    () => buildVolumeCelFilter(projectFilter, stateEnumValues, nameSearch.trim()),
-    [projectFilter, stateEnumValues, nameSearch],
+    () => buildVolumeListFilter(projectFilter, stateEnumValues, search.trim()),
+    [projectFilter, stateEnumValues, search],
   );
 
   const { data, isLoading, error } = useListResource(Volumes, { filter });
 
-  const volumes = data?.items ?? [];
+  const { data: totalsData, error: totalsError } = useListResource(Volumes, {
+    filter: projectFilter,
+    limit: 0,
+  });
 
-  const stateToggleLabel =
-    stateFilters.length === 0
-      ? t('All states')
-      : stateFilters
-          .map((v) => stateLabels[VOLUME_STATE_FILTER_TO_ENUM[v]])
-          .filter(Boolean)
-          .join(', ');
+  const items = data?.items ?? [];
+  const totalItems = totalsData?.total ?? 0;
+  const hasTotals = totalsData !== undefined && !totalsError;
+
+  const isFiltered = Boolean(search || projects.length || stateEnumValues.length);
+
+  const showEmptyState = !isLoading && !error && items.length === 0;
+
+  const clearAllFilters = () => {
+    setProjects([]);
+    requestAnimationFrame(() => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete(SEARCH_PARAM);
+          next.delete(PROJECT_FILTER_PARAM);
+          next.delete(STATE_FILTER_PARAM);
+          return next;
+        },
+        { replace: true },
+      );
+    });
+  };
+
+  const emptyState =
+    totalItems === 0 && !isFiltered ? (
+      <EmptyState titleText={t('No volumes found')} headingLevel="h2">
+        <EmptyStateBody>{t('No volumes are available yet.')}</EmptyStateBody>
+      </EmptyState>
+    ) : (
+      <EmptyState titleText={t('No volumes match your filters')} headingLevel="h2">
+        <EmptyStateBody>
+          {t('Try a different project, state, or search term.')}{' '}
+          <Button variant="link" isInline onClick={clearAllFilters}>
+            {t('Clear all filters')}
+          </Button>
+        </EmptyStateBody>
+      </EmptyState>
+    );
+
+  const filteredText = hasTotals
+    ? items.length === totalItems
+      ? t('{{count}} volume', { count: totalItems })
+      : t('{{shown}} of {{count}} volume', {
+          shown: items.length,
+          count: totalItems,
+        })
+    : undefined;
 
   return (
     <ListPage
@@ -129,67 +130,57 @@ export const VolumesListPage = () => {
       // TODO: re-enable when volume creation is supported after developer preview
       // actions={<CreateButton to="/storage/volumes/create">{t('Create volume')}</CreateButton>}
     >
-      <ListPageBody isLoading={isLoading} error={error}>
-        <Stack hasGutter>
-          <StackItem>
+      <Stack hasGutter>
+        <StackItem>
+          <ListPageToolbar
+            filteredText={showEmptyState ? undefined : filteredText}
+            isFiltered={isFiltered}
+            onClearAllFilters={clearAllFilters}
+          >
             <Toolbar>
               <ToolbarContent>
                 <ToolbarGroup>
                   <ToolbarItem>
                     <ProjectFilter />
                   </ToolbarItem>
+                  <VolumeStateFilter stateFilters={stateFilters} onToggle={toggleStateFilter} />
+                  <ToolbarItem>
+                    <SearchInput
+                      placeholder={t('Search volumes')}
+                      value={search}
+                      onChange={(_e, v) => setSearch(v)}
+                      onClear={() => setSearch('')}
+                      aria-label={t('Search volumes')}
+                    />
+                  </ToolbarItem>
                 </ToolbarGroup>
-                <ToolbarItem>
-                  <Select
-                    isOpen={isStateSelectOpen}
-                    onOpenChange={() => setIsStateSelectOpen((o) => !o)}
-                    onSelect={(_event, value) => {
-                      if (typeof value === 'string' && isVolumeStateFilterValue(value)) {
-                        toggleStateFilter(value);
-                      }
-                    }}
-                    toggle={(toggleRef) => (
-                      <MenuToggle
-                        ref={toggleRef}
-                        onClick={() => setIsStateSelectOpen((o) => !o)}
-                        isExpanded={isStateSelectOpen}
-                      >
-                        {stateToggleLabel}
-                      </MenuToggle>
-                    )}
-                    shouldFocusToggleOnSelect
-                  >
-                    <SelectList>
-                      {FILTERABLE_STATE_OPTIONS.map(({ value, enumValue }) => (
-                        <SelectOption
-                          key={value}
-                          value={value}
-                          hasCheckbox
-                          isSelected={stateFilters.includes(value)}
-                        >
-                          {stateLabels[enumValue]}
-                        </SelectOption>
-                      ))}
-                    </SelectList>
-                  </Select>
-                </ToolbarItem>
-                <ToolbarItem>
-                  <SearchInput
-                    placeholder={t('Search volumes by name…')}
-                    value={nameSearch}
-                    onChange={(_event, value) => setNameSearch(value)}
-                    onClear={() => setNameSearch('')}
-                    aria-label={t('Filter volumes by name')}
-                  />
-                </ToolbarItem>
+                <ToolbarGroup align={{ default: 'alignEnd' }}>
+                  <ToolbarItem>
+                    <ViewSwitcher pageKey={VOLUMES_VIEW_KEY} />
+                  </ToolbarItem>
+                </ToolbarGroup>
               </ToolbarContent>
             </Toolbar>
-          </StackItem>
-          <StackItem>
-            <VolumeTable volumes={volumes} />
-          </StackItem>
-        </Stack>
-      </ListPageBody>
+          </ListPageToolbar>
+        </StackItem>
+        <StackItem>
+          <ListPageBody isLoading={isLoading} error={error}>
+            {showEmptyState ? (
+              emptyState
+            ) : viewType === 'cards' ? (
+              <Gallery hasGutter minWidths={{ default: '300px' }} maxWidths={{ default: '1fr' }}>
+                {items.map((volume) => (
+                  <GalleryItem key={volume.id}>
+                    <VolumeCard volume={volume} />
+                  </GalleryItem>
+                ))}
+              </Gallery>
+            ) : (
+              <VolumeTable volumes={items} />
+            )}
+          </ListPageBody>
+        </StackItem>
+      </Stack>
     </ListPage>
   );
 };

@@ -31,11 +31,11 @@ describe('VolumeActionsMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toBeDisabled();
   });
 
-  it('enables Delete for a CREATING volume', async () => {
+  it('disables Delete for a CREATING volume', async () => {
     const { user } = renderMenu(makeVolume(VolumeState.CREATING));
     await openMenu(user);
 
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeDisabled();
   });
 
   it('enables Delete for a FAILED volume', async () => {
@@ -52,18 +52,18 @@ describe('VolumeActionsMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeDisabled();
   });
 
-  it('enables Delete for a DELETED volume', async () => {
+  it('disables Delete for a DELETED volume', async () => {
     const { user } = renderMenu(makeVolume(VolumeState.DELETED));
     await openMenu(user);
 
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeDisabled();
   });
 
-  it('enables Delete for an UNSPECIFIED volume', async () => {
+  it('disables Delete for an UNSPECIFIED volume', async () => {
     const { user } = renderMenu(makeVolume(VolumeState.UNSPECIFIED));
     await openMenu(user);
 
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeDisabled();
   });
 
   it('opens the delete confirmation modal when Delete is clicked', async () => {

@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
 import {
   Alert,
-  Button,
   Content,
   DescriptionList,
   DescriptionListDescription,
@@ -12,7 +11,6 @@ import {
   Stack,
   StackItem,
   Title,
-  useWizardContext,
 } from '@patternfly/react-core';
 import InfoCircleIcon from '@patternfly/react-icons/dist/esm/icons/info-circle-icon';
 import { useFormikContext } from 'formik';
@@ -36,7 +34,6 @@ interface ComputeCatalogReviewStepProps {
 
 interface ReviewSectionProps {
   children: ReactNode;
-  stepId: string;
   title: string;
 }
 
@@ -76,31 +73,12 @@ const GovernedReviewValue = ({ field, value }: GovernedReviewValueProps) => (
   </Flex>
 );
 
-const ReviewSection = ({ children, stepId, title }: ReviewSectionProps) => {
-  const { t } = useTranslation();
-  const { goToStepByIndex, steps } = useWizardContext();
-
-  const handleEdit = () => {
-    const step = steps.find(({ id }) => id === stepId);
-    if (step) {
-      goToStepByIndex(step.index);
-    }
-  };
-
+const ReviewSection = ({ children, title }: ReviewSectionProps) => {
   return (
     <StackItem>
       <Stack hasGutter>
         <StackItem>
-          <Title headingLevel="h3">
-            <Button
-              variant="link"
-              isInline
-              aria-label={t('Edit {{section}}', { section: title })}
-              onClick={handleEdit}
-            >
-              {title}
-            </Button>
-          </Title>
+          <Title headingLevel="h3">{title}</Title>
         </StackItem>
         <StackItem>
           <DescriptionList isCompact aria-label={title}>
@@ -346,12 +324,12 @@ const ComputeCatalogReviewStep = ({ item }: ComputeCatalogReviewStepProps) => {
       <StackItem>
         <Content component="p">
           {t(
-            'Confirm your settings before creating the catalog item. It will be saved as unpublished until you publish it. Click a section title to edit.',
+            'Confirm your settings before creating the catalog item. It will be saved as unpublished until you publish it.',
           )}
         </Content>
       </StackItem>
 
-      <ReviewSection title={t('Details')} stepId="details">
+      <ReviewSection title={t('Details')}>
         {role === 'admin' && (
           <ReviewRow
             label={t('Scope')}
@@ -370,7 +348,7 @@ const ComputeCatalogReviewStep = ({ item }: ComputeCatalogReviewStepProps) => {
         <ReviewRow label={t('Status')} value={t('Unpublished')} />
       </ReviewSection>
 
-      <ReviewSection title={t('Compute configuration')} stepId="configuration">
+      <ReviewSection title={t('Compute configuration')}>
         <ReviewRow
           label={t('Guest operating system')}
           value={guestOsFamilyLabel(t, values.guestOsFamily)}
@@ -385,7 +363,7 @@ const ComputeCatalogReviewStep = ({ item }: ComputeCatalogReviewStepProps) => {
         />
       </ReviewSection>
 
-      <ReviewSection title={t('Storage')} stepId="storage">
+      <ReviewSection title={t('Storage')}>
         <ReviewRow
           label={t('Boot disk size')}
           value={
@@ -429,7 +407,7 @@ const ComputeCatalogReviewStep = ({ item }: ComputeCatalogReviewStepProps) => {
         />
       </ReviewSection>
 
-      <ReviewSection title={t('Access & Initial run')} stepId="access-init">
+      <ReviewSection title={t('Access & Initial run')}>
         <ReviewRow
           label={t('Cloud-init')}
           value={<GovernedReviewValue field={values.userData} value={userDataReview} />}

@@ -210,7 +210,7 @@ describe('ComputeCatalogItemWizard', () => {
       expect(await screen.findByRole('heading', { name: 'Review and create' })).toBeInTheDocument();
       expect(
         screen.getByText(
-          'Confirm your settings before creating the catalog item. It will be saved as unpublished until you publish it. Click a section title to edit.',
+          'Confirm your settings before creating the catalog item. It will be saved as unpublished until you publish it.',
         ),
       ).toBeInTheDocument();
       expect(screen.getByRole('heading', { name: 'Details' })).toBeInTheDocument();
@@ -255,35 +255,15 @@ describe('ComputeCatalogItemWizard', () => {
       expect(screen.getByText('Unpublished')).toBeInTheDocument();
     });
 
-    it('navigates from each review section title back to its wizard step', async () => {
+    it('renders review section titles as standard text', async () => {
       const { user } = renderWizard();
 
       await goToReview(user);
 
-      const returnToReview = async (nextCount: number) => {
-        for (let index = 0; index < nextCount; index += 1) {
-          await user.click(screen.getByRole('button', { name: 'Next' }));
-        }
-      };
-
-      await user.click(screen.getByRole('button', { name: 'Edit Details' }));
-      expect(await screen.findByRole('textbox', { name: 'Name' })).toBeInTheDocument();
-      await returnToReview(4);
-
-      await user.click(screen.getByRole('button', { name: 'Edit Compute configuration' }));
-      expect(
-        await screen.findByRole('heading', { name: 'Compute configuration' }),
-      ).toBeInTheDocument();
-      await returnToReview(3);
-
-      await user.click(screen.getByRole('button', { name: 'Edit Storage' }));
-      expect(await screen.findByRole('heading', { name: 'Storage' })).toBeInTheDocument();
-      await returnToReview(2);
-
-      await user.click(screen.getByRole('button', { name: 'Edit Access & Initial run' }));
-      expect(
-        await screen.findByRole('heading', { name: 'Access & Initial run' }),
-      ).toBeInTheDocument();
+      for (const title of ['Details', 'Compute configuration', 'Storage', 'Access & Initial run']) {
+        expect(screen.getByRole('heading', { name: title })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: `Edit ${title}` })).not.toBeInTheDocument();
+      }
     });
 
     it('shows configured Cloud-init without exposing its inline contents', async () => {

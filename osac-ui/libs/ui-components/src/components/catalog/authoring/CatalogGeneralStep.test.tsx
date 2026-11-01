@@ -135,6 +135,9 @@ describe('CatalogGeneralStep', () => {
       const tenantScopedCard = screen
         .getByText('Tenant scoped')
         .closest('#catalog-item-scope-tenant');
+      const globalCard = screen.getByText('Global').closest('#catalog-item-scope-global');
+      expect(globalCard?.querySelector('svg')).toHaveAttribute('viewBox', '0 0 496 512');
+      expect(tenantScopedCard?.querySelector('svg')).toHaveAttribute('viewBox', '0 0 448 512');
       expect(tenantScopedCard).toHaveClass('pf-m-selected');
       expect(screen.getByRole('radio', { name: /Tenant scoped/ })).toHaveClass(
         'pf-v6-screen-reader',

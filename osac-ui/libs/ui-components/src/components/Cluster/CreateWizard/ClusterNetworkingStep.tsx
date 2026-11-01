@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Content, Divider, ExpandableSection } from '@patternfly/react-core';
+import { Content, Divider, ExpandableSection, Stack } from '@patternfly/react-core';
 import { useField } from 'formik';
 
 import ClusterPodCidrField from './fields/ClusterPodCidrField';
@@ -40,16 +40,18 @@ export const ClusterNetworkingStep = () => {
         <Content component="p">
           {t('Address ranges used inside the cluster for pods and services.')}
         </Content>
-        <ProvisioningField name="spec.network.podCidr">
-          {({ valueName, isDisabled }) => (
-            <ClusterPodCidrField name={valueName} isDisabled={isDisabled} />
-          )}
-        </ProvisioningField>
-        <ProvisioningField name="spec.network.serviceCidr">
-          {({ valueName, isDisabled }) => (
-            <ClusterServiceCidrField name={valueName} isDisabled={isDisabled} />
-          )}
-        </ProvisioningField>
+        <Stack hasGutter>
+          <ProvisioningField name="spec.network.podCidr">
+            {({ valueName, isDisabled }) => (
+              <ClusterPodCidrField name={valueName} isDisabled={isDisabled} />
+            )}
+          </ProvisioningField>
+          <ProvisioningField name="spec.network.serviceCidr">
+            {({ valueName, isDisabled }) => (
+              <ClusterServiceCidrField name={valueName} isDisabled={isDisabled} />
+            )}
+          </ProvisioningField>
+        </Stack>
       </ExpandableSection>
     </OsacForm>
   );

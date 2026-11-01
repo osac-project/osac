@@ -14,22 +14,22 @@ type CatalogItemFieldsInit = NonNullable<
 type NetworkFieldsInit = NonNullable<CatalogItemFieldsInit['network']>;
 type FieldPolicyInit<K extends keyof CatalogItemFieldsInit> = NonNullable<CatalogItemFieldsInit[K]>;
 
-const isEmptyString = (value: unknown) => typeof value !== 'string' || !value.trim();
-const isEmptyNodeSetList = (value: unknown) => !(value as ClusterNodeSetRow[] | undefined)?.length;
+const isEmptyString = (value: string) => !value.trim();
+const isEmptyNodeSetList = (value: ClusterNodeSetRow[]) => !value.length;
 
-const toTrimmedString = (value: unknown) => (value as string).trim();
-const toVersionReference = (value: unknown) => ({
+const toTrimmedString = (value: string) => value.trim();
+const toVersionReference = (value: string) => ({
   name: toTrimmedString(value),
   shared: true,
 });
 
-const toNodeSetMap = (value: unknown) => {
+const toNodeSetMap = (value: ClusterNodeSetRow[]) => {
   const items = Object.create(null) as Record<
     string,
     { size: number; baremetalInstanceType: { id: string } }
   >;
 
-  for (const row of value as ClusterNodeSetRow[]) {
+  for (const row of value) {
     const name = row.name.trim();
     const hostType = row.hostType.trim();
     const size = Number(row.size.trim());

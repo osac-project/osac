@@ -14,17 +14,15 @@ type CatalogItemFieldsInit = NonNullable<
 >;
 type FieldPolicyInit<K extends keyof CatalogItemFieldsInit> = NonNullable<CatalogItemFieldsInit[K]>;
 
-const isEmptyString = (value: unknown) => typeof value !== 'string' || !value.trim();
-const isEmptyResource = (value: unknown) => !(value as ResourceSelectValue | undefined)?.id?.trim();
+const isEmptyString = (value: string) => !value.trim();
+const isEmptyResource = (value: ResourceSelectValue) => !value.id.trim();
 
-const toTrimmedString = (value: unknown) => (value as string).trim();
-const toInstanceTypeReference = (value: unknown) => ({
+const toTrimmedString = (value: string) => value.trim();
+const toInstanceTypeReference = (value: string) => ({
   name: toTrimmedString(value),
   shared: true,
 });
-const toDiskImageReference = (value: unknown) => ({
-  id: (value as ResourceSelectValue).id.trim(),
-});
+const toDiskImageReference = (value: ResourceSelectValue) => ({ id: value.id.trim() });
 
 const buildBareMetalCatalogItemFieldsPayload = (
   values: BareMetalCatalogItemValues,

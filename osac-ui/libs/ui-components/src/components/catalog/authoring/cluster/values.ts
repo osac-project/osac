@@ -1,4 +1,8 @@
-import type { ClusterCatalogItem, ClusterNodeSetMapPolicy } from '@osac/types';
+import type {
+  ClusterCatalogItem,
+  ClusterNodeSetMapPolicy,
+  ClusterVersionReference,
+} from '@osac/types';
 
 import {
   type ClusterNodeSetRow,
@@ -6,6 +10,7 @@ import {
 } from '../../../Cluster/CreateWizard/fields';
 import {
   type ProvisioningFieldValue,
+  getFieldFromCatalogItemPolicy,
   provisioningFieldValue,
 } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 import {
@@ -13,8 +18,6 @@ import {
   catalogGeneralValues,
   catalogGeneralValuesFromItem,
 } from '../CatalogGeneralStep';
-import { catalogValueFromPolicy } from '../catalogItemPolicy';
-
 export interface ClusterCatalogItemValues extends CatalogGeneralValues {
   version: ProvisioningFieldValue<string>;
   nodeSets: ProvisioningFieldValue<ClusterNodeSetRow[]>;
@@ -22,17 +25,10 @@ export interface ClusterCatalogItemValues extends CatalogGeneralValues {
   serviceCidr: ProvisioningFieldValue<string>;
 }
 
-const readStringValue = (value: unknown): string => {
-  if (typeof value === 'string') {
-    return value;
-  }
-  return '';
-};
+const readStringValue = (value: string | undefined): string => value ?? '';
 
-const readVersionValue = (value: unknown): string => {
-  const reference = value as { id?: string; name?: string } | undefined;
-  return reference?.name?.trim() || reference?.id?.trim() || '';
-};
+const readVersionValue = (value: ClusterVersionReference | undefined): string =>
+  value?.name?.trim() || value?.id?.trim() || '';
 
 const readNodeSetRows = (policy: ClusterNodeSetMapPolicy | undefined) => {
   const behavior = policy?.behavior;
@@ -68,16 +64,28 @@ export const getClusterCatalogItemInitialValues = (
 
   const fields = item.fields;
   const nodeSetPolicy = fields?.nodeSets;
+  const version = getFieldFromCatalogItemPolicy<ClusterVersionReference | undefined>(
+    fields?.version,
+    undefined,
+  );
+  const podCidr = getFieldFromCatalogItemPolicy<string | undefined>(
+    fields?.network?.podCidr,
+    undefined,
+  );
+  const serviceCidr = getFieldFromCatalogItemPolicy<string | undefined>(
+    fields?.network?.serviceCidr,
+    undefined,
+  );
 
   return {
     ...catalogGeneralValuesFromItem(item),
-    version: catalogValueFromPolicy(fields?.version, readVersionValue, ''),
+    version: provisioningFieldValue(readVersionValue(version.value), version.locked),
     nodeSets: {
       value: readNodeSetRows(nodeSetPolicy),
       locked: nodeSetPolicy?.behavior.case === 'locked',
     },
-    podCidr: catalogValueFromPolicy(fields?.network?.podCidr, readStringValue, ''),
-    serviceCidr: catalogValueFromPolicy(fields?.network?.serviceCidr, readStringValue, ''),
+    podCidr: provisioningFieldValue(readStringValue(podCidr.value), podCidr.locked),
+    serviceCidr: provisioningFieldValue(readStringValue(serviceCidr.value), serviceCidr.locked),
   };
 };
 

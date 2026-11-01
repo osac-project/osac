@@ -1,9 +1,4 @@
-import {
-  type ProvisioningFieldValue,
-  provisioningFieldValue,
-} from '../../ProvisioningWizard/fields/provisioningFieldValue';
-
-type PolicyBehaviorCase = 'locked' | 'editable';
+import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
 /** Structural shape shared by every generated `*FieldPolicy` oneof. */
 export type CatalogFieldPolicyLike<TPolicyValue> =
@@ -14,32 +9,6 @@ export type CatalogFieldPolicyLike<TPolicyValue> =
         | { case: undefined; value?: undefined };
     }
   | undefined;
-
-/**
- * Decodes a generated `*FieldPolicy` message into the `{ value, locked }` shape the
- * catalog wizards share with provisioning. Absent policy and an editable policy with
- * no default both decode to `{ value: empty, locked: false }` so the UI cannot tell
- * them apart; the payload builder (`policyFromCatalogValue`) re-derives which one to
- * write based on whether the field is empty at submit time.
- */
-export const catalogValueFromPolicy = <TPolicyValue, TValue>(
-  policy: CatalogFieldPolicyLike<TPolicyValue>,
-  readValue: (policyValue: TPolicyValue, behavior: PolicyBehaviorCase) => TValue,
-  empty: TValue,
-): ProvisioningFieldValue<TValue> => {
-  const behavior = policy?.behavior;
-  if (behavior?.case === 'locked') {
-    return provisioningFieldValue(readValue(behavior.value, 'locked'), true);
-  }
-  if (behavior?.case === 'editable') {
-    const defaultValue = behavior.value.defaultValue;
-    if (defaultValue === undefined) {
-      return provisioningFieldValue(empty, false);
-    }
-    return provisioningFieldValue(readValue(defaultValue, 'editable'), false);
-  }
-  return provisioningFieldValue(empty, false);
-};
 
 /**
  * Encodes a `{ value, locked }` field back into a generated `*FieldPolicy` message.

@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Button, Flex, FlexItem, Stack, StackItem, Title } from '@patternfly/react-core';
 import MinusCircleIcon from '@patternfly/react-icons/dist/esm/icons/minus-circle-icon';
 import PlusCircleIcon from '@patternfly/react-icons/dist/esm/icons/plus-circle-icon';
@@ -15,10 +16,16 @@ interface AdditionalDisksArrayFieldProps extends ProvisioningFieldControlProps {
   autoSelectSingleOption?: boolean;
 }
 
+const createDisk = (): ComputeInstanceDiskValues => ({
+  sizeGib: '30',
+  storageTier: emptyResourceSelectValue(),
+});
+
 /** Renders the inline disk-set editor from the VMaaS storage UX. */
 export const AdditionalDisksArrayField = ({
   name = '',
   isDisabled = false,
+  isRequired = false,
   emptyMessage,
   autoSelectSingleOption = true,
 }: AdditionalDisksArrayFieldProps) => {
@@ -26,8 +33,14 @@ export const AdditionalDisksArrayField = ({
   const [field, , helpers] = useField<ComputeInstanceDiskValues[]>(name);
   const disks = field.value ?? [];
 
+  useEffect(() => {
+    if (isRequired && disks.length === 0) {
+      void helpers.setValue([createDisk()]);
+    }
+  }, [disks.length, helpers, isRequired]);
+
   const addDisk = () => {
-    void helpers.setValue([...disks, { sizeGib: '30', storageTier: emptyResourceSelectValue() }]);
+    void helpers.setValue([...disks, createDisk()]);
   };
 
   const removeDisk = (index: number) => {
@@ -58,6 +71,7 @@ export const AdditionalDisksArrayField = ({
                       isDanger
                       aria-label={t('Remove disk')}
                       onClick={() => removeDisk(index)}
+                      isDisabled={isRequired && disks.length === 1}
                       icon={<MinusCircleIcon />}
                     >
                       {t('Remove')}

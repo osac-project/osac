@@ -344,6 +344,24 @@ describe('ComputeCatalogItemWizard', () => {
     expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
   });
 
+  it('adds an additional disk when its catalog field is locked', async () => {
+    const { user } = renderWizard(undefined, {
+      publicStorageTiers: [STORAGE_TIER] as StorageTier[],
+    });
+
+    await fillGeneralStep(user, 'my-item');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    const additionalDisks = await screen.findByRole('group', { name: 'Additional disks' });
+    await user.click(within(additionalDisks).getByRole('switch', { name: 'Editable' }));
+
+    expect(
+      await within(additionalDisks).findByRole('spinbutton', { name: 'Disk size (GiB)' }),
+    ).toHaveValue(30);
+    expect(within(additionalDisks).getByRole('button', { name: 'Remove disk' })).toBeDisabled();
+  });
+
   it('creates the catalog item with empty editable fields omitted from the request', async () => {
     const onCreate = vi.fn((req: { object?: unknown }) => ({
       object: { ...(req.object as object), id: 'catalog-item-1' },

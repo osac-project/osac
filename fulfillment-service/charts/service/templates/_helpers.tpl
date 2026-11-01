@@ -25,10 +25,10 @@ On OpenShift a Route provides TLS passthrough on port 443, so the URL omits the 
 variant traffic goes directly to the Kubernetes Service on port 8000.
 */}}
 {{- define "fulfillment-api.tokenIssuerUrl" -}}
-{{- if eq .Values.variant "openshift" -}}
-https://{{ include "fulfillment-api.hostname" . }}
-{{- else -}}
+{{- if eq .Values.variant "kind" -}}
 https://{{ include "fulfillment-api.hostname" . }}:8000
+{{- else -}}
+https://{{ include "fulfillment-api.hostname" . }}
 {{- end -}}
 {{- end -}}
 

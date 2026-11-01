@@ -46,8 +46,10 @@ operator:
     pullPolicy: Always
   provisioning:
     provider: "aap"
-  vendorControllers:
-    lvms: none
+  # No vendorControllers: "lvms: none" is the in-cluster LVMS enablement
+  # marker, and it makes the operator watch TopoLVM LogicalVolumes in this
+  # API -- CRDs a vcluster does not have. Volumes live in the outer cluster,
+  # reached by the AAP jobs through the remote kubeconfig.
   aap:
     insecureSkipVerify: "true"
     tokenSecret:

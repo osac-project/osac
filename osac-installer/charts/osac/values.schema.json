@@ -263,22 +263,6 @@
           },
           "additionalProperties": false
         },
-        "stall": {
-          "type": "object",
-          "description": "ClusterOrder provisioning stage stall thresholds",
-          "properties": {
-            "preparingInfrastructureThreshold": {"$ref": "#/$defs/positiveDuration"},
-            "controlPlaneStartingThreshold": {"$ref": "#/$defs/positiveDuration"},
-            "workersJoiningThreshold": {"$ref": "#/$defs/positiveDuration"},
-            "workersJoiningByInstanceType": {
-              "type": "object",
-              "description": "Per-BareMetalInstanceType worker-join threshold durations, keyed by the exact instance type name",
-              "propertyNames": {"minLength": 1, "maxLength": 253},
-              "additionalProperties": {"$ref": "#/$defs/positiveDuration"}
-            }
-          },
-          "additionalProperties": false
-        },
         "upgradeTimeouts": {
           "type": "object",
           "description": "Cluster upgrade deadlines. Each value is a positive Go duration string.",
@@ -544,7 +528,7 @@
         },
         "stall": {
           "type": "object",
-          "description": "Stall detection thresholds for CaaS cluster provisioning stages. Each value is a Go duration string (e.g. 15m, 30m, 1h).",
+          "description": "Stall detection thresholds for ClusterOrder provisioning stages. Each value is a Go duration string (e.g. 15m, 30m, 1h); the operator marks the cluster stalled when a stage exceeds its threshold.",
           "properties": {
             "preparingInfrastructureThreshold": {
               "type": "string",
@@ -567,6 +551,7 @@
             "workersJoiningByInstanceType": {
               "type": "object",
               "description": "Per-BareMetalInstanceType overrides for the WorkersJoining stall threshold. Keys are exact instance type names, values are Go duration strings.",
+              "propertyNames": {"minLength": 1, "maxLength": 253},
               "additionalProperties": {
                 "type": "string",
                 "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"

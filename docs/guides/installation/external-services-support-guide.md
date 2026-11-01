@@ -118,7 +118,7 @@ between stages).
 | 4 | DNS names: `<kc-host>`, `<ui-origin>`, `<api-route>` | | `<kc-host>` and `<api-route>` are hostnames, `<ui-origin>` is the full UI origin including the `https://` scheme; all resolvable from cluster **and** from admin/browser machines; §1.2 hostname stability |
 | 5 | CA strategy per service | | corporate CA or self-signed per §2.2; same CA signs server + client certs where mTLS applies |
 | 6 | Keycloak: `<kc-host>`, port 8443, realm-admin + bootstrap admin credentials, client secrets (5) | | §5.2 rows 1–11; generated, stored in your credential store |
-| 7 | PostgreSQL: DB names/users, server + client cert plan | | §3.1; HBA source IPs (cluster egress, `<kc-source-ip>`) |
+| 7 | PostgreSQL: DB names/users, server + client cert plan, HBA source ranges (`<cluster-egress-cidr>`, `<cluster-egress-ipv6-cidr>`, `<kc-source-ip>`) | | §3.1/A.2; the HBA rules are scoped to these sources |
 | 8 | OpenBao: storage (file vs Raft), unseal strategy, init-output escrow location | | A.3; escrow is a §10.4 requirement, not an afterthought |
 | 9 | Kafka: listener address, SCRAM users, broker CA | | §6.1/A.5; metering is always on at current pins (§6.2 status note) |
 | 10 | Namespaces: `osac`, `osac-infra`, `osac-deps` | | chart constants — use as-is |
@@ -686,7 +686,9 @@ subs = {
   "__OSAC_UI_URL__": UI_ORIGIN,
 }
 text = open(sys.argv[1]).read()
-for k, v in subs.items(): text = text.replace(k, v)
+# JSON-escape each replacement value: a secret containing " or \
+# would otherwise corrupt the template's JSON string literals
+for k, v in subs.items(): text = text.replace(k, json.dumps(v)[1:-1])
 realm = json.loads(text)             # fail loudly on a bad resolve
 
 ui = next(c for c in realm["clients"] if c["clientId"] == "osac-ui")
@@ -733,7 +735,10 @@ curl -s --cacert /root/kc-ca.pem https://<kc-host>:8443/realms/osac \
 # token end-to-end (ROPC works for tenant users; the UI client is public
 # PKCE and cannot do it — use the browser for that flow)
 OSAC_TOKEN=$(curl -s --cacert /root/kc-ca.pem \
-  -d "client_id=admin-cli&username=<user>&password=<password>&grant_type=password" \
+  --data-urlencode "client_id=admin-cli" \
+  --data-urlencode "username=<user>" \
+  --data-urlencode "password=<password>" \
+  --data-urlencode "grant_type=password" \
   https://<kc-host>:8443/realms/osac/protocol/openid-connect/token \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 ```
@@ -1153,7 +1158,10 @@ curl -s --cacert <cluster-ca> -o /dev/null -w '%{http_code}\n' \
 # tenant-user token gets 403 here, so use the realm-admin user or an
 # osac-admin client-credentials token for this workflow:
 ADMIN_TOKEN=$(curl -s --cacert /root/kc-ca.pem \
-  -d "client_id=admin-cli&username=<realm-admin-user>&password=<realm-admin-password>&grant_type=password" \
+  --data-urlencode "client_id=admin-cli" \
+  --data-urlencode "username=<realm-admin-user>" \
+  --data-urlencode "password=<realm-admin-password>" \
+  --data-urlencode "grant_type=password" \
   https://<kc-host>:8443/realms/osac/protocol/openid-connect/token \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 NAME=smoke-$RANDOM
@@ -1172,7 +1180,7 @@ for i in $(seq 1 60); do
   BG=$(curl -s --cacert <cluster-ca> -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     https://<api-route>/api/fulfillment/v1/tenants/$TENANT_ID \
     | python3 -c "import sys,json; \
-print(json.load(sys.stdin).get('spec',{}).get('breakGlassCredentialsSecret',{}).get('name',''))" 2>/dev/null)
+print(json.load(sys.stdin).get('spec',{}).get('break_glass_credentials_secret',{}).get('name',''))" 2>/dev/null)
   [ -n "$BG" ] && break
   sleep 5
 done
@@ -1181,9 +1189,10 @@ curl -s --cacert <cluster-ca> -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   https://<api-route>/api/fulfillment/v1/tenants/$TENANT_ID    # the object
 curl -s --cacert <cluster-ca> -X DELETE -H "Authorization: Bearer ${ADMIN_TOKEN}" \
   https://<api-route>/api/fulfillment/v1/tenants/$TENANT_ID
-curl -s --cacert <cluster-ca> -o /dev/null -w '%{http_code}\n' \
+CODE=$(curl -s --cacert <cluster-ca> -o /dev/null -w '%{http_code}' \
   -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-  https://<api-route>/api/fulfillment/v1/tenants/$TENANT_ID                             # 404
+  https://<api-route>/api/fulfillment/v1/tenants/$TENANT_ID)
+[ "$CODE" = 404 ] || { echo "tenant $NAME still reachable (HTTP $CODE)" >&2; exit 1; }
 
 # Kafka canary (§6.3): a billable workflow on a real tenant —
 # its heartbeat topic's offsets advance, round metrics healthy, lag 0
@@ -1313,11 +1322,16 @@ BAO_ADDR=https://<host-ip>:8200 BAO_CACERT=/root/bao-ca.pem \
   bao operator raft snapshot save "$DIR/bao-snap-$STAMP.snap"
 find "$DIR" -name 'bao-snap-*.snap' -mtime +14 -delete
 
-# restore: stop the server, then (data dir can be empty):
+# restore: the CLI restore is an API call, so the server must be up and
+# unsealed (a stopped server has no API to restore into). A single-node
+# Raft instance can restore onto itself with the data dir present:
 BAO_ADDR=https://<host-ip>:8200 BAO_CACERT=/root/bao-ca.pem \
-  bao operator raft snapshot restore "$DIR/bao-snap-$STAMP.snap" /bao/data
-# then systemctl start and the usual health check; re-seal/unseal state
-# follows the snapshot, and the init-output escrow (§10.4) still applies.
+  bao operator raft snapshot restore "$DIR/bao-snap-$STAMP.snap"
+# OpenBao re-seals and restarts raft from the snapshot; the usual health
+# check follows, re-seal/unseal state follows the snapshot, and the
+# init-output escrow (§10.4) still applies. (For a cold restore of a
+# stopped instance, use the data-dir tar procedure above instead —
+# snapshot restore cannot run against a stopped server.)
 ```
 
 **The archive does not contain the unseal material.** `bao-data` holds the
@@ -1350,7 +1364,13 @@ KC="https://<kc-host>:8443"
 CA=/root/kc-ca.pem            # from A.4 — verify the server, don't -k it
 KC_PASS=$(podman inspect keycloak-external --format \
   '{{range .Config.Env}}{{println .}}{{end}}' | grep '^KEYCLOAK_ADMIN_PASSWORD=' | cut -d= -f2-)
-TOKEN=$(curl -sf --cacert "$CA" -d "client_id=admin-cli&username=admin&password=${KC_PASS}&grant_type=password" \
+# --data-urlencode per field: a password with &, + or % would otherwise
+# corrupt the form body
+TOKEN=$(curl -sf --cacert "$CA" \
+  --data-urlencode "client_id=admin-cli" \
+  --data-urlencode "username=admin" \
+  --data-urlencode "password=${KC_PASS}" \
+  --data-urlencode "grant_type=password" \
   "${KC}/realms/master/protocol/openid-connect/token" \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
 
@@ -1581,10 +1601,14 @@ hba_file = '/config/access/access.conf'
 ```
 
 ```ini
-# /etc/osac/postgres/access.conf
+# /etc/osac/postgres/access.conf — scope each hostssl rule to the
+# source it serves (worksheet row 7): the cluster's egress addresses
+# for cert auth, and Keycloak's source for its §5.2 scram rule (added
+# above the cert lines). `::/0`-style catch-alls would let any
+# reachable source attempt auth even though only cert holders succeed.
 local all all peer
-hostssl all all 0.0.0.0/0 cert
-hostssl all all ::0/0 cert
+hostssl all all <cluster-egress-cidr> cert
+hostssl all all <cluster-egress-ipv6-cidr> cert
 ```
 
 ```bash

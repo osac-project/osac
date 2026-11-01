@@ -718,6 +718,8 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	// filterable-resource-exempt: static introspection endpoint, no List RPC or CEL filter field
 	privatev1.RegisterCapabilitiesServer(grpcServer, privateCapabilitiesServer)
+	// filterable-resource-exempt: installation settings has only a Get RPC, with no CEL filter field
+	privatev1.RegisterInstallationSettingsServer(grpcServer, &installationSettingsServer{store: dbPool})
 
 	// Create the runtime scheme for typed OSAC API objects:
 	hubScheme, err := hubscheme.NewHub()

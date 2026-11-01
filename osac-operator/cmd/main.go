@@ -1040,7 +1040,7 @@ func setupBareMetalInstanceControllers(
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:urls=/metrics,verbs=get
 
-func main() {
+func main() { //nolint:gocyclo // Startup orchestrates many optional controllers.
 	var err error
 
 	var metricsAddr string
@@ -1280,6 +1280,14 @@ func main() {
 		}
 	} else {
 		setupLog.Info("gRPC connection to fulfillment service is disabled")
+	}
+	if grpcConn != nil {
+		if err := checkInstallationProvisioningAtStartup(
+			context.Background(), grpcConn, networkingProvisioningEnabled(),
+		); err != nil {
+			setupLog.Error(err, "unable to verify installation networking setting")
+			os.Exit(1)
+		}
 	}
 
 	maxJobHistory := helpers.GetEnvWithDefault(envMaxJobHistory, provisioning.DefaultMaxJobHistory, func(v int) bool {

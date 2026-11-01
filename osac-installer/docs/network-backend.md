@@ -87,6 +87,37 @@ installation and keep it unchanged during upgrades. When migrating from older
 component-specific settings, remove those settings and configure
 `global.networking.provisioningEnabled` once for the whole installation.
 
+Before upgrading an existing installation, check BMF's effective mode in its
+`networking provisioning feature gate` startup log and read Fulfillment's saved
+mode from the `installation_settings` row:
+
+```sql
+select provisioning_enabled from installation_settings where id = 1;
+```
+
+Older BMF charts defaulted `env.enableNetworkingProvisioning` to `"false"` when
+it was not set. The shared setting defaults to `true`. Set
+`global.networking.provisioningEnabled` explicitly to Fulfillment's saved value
+before rollout. One shared value cannot preserve a mixed setup. For example, if
+Fulfillment saved `true` while BMF previously ran with networking disabled, BMF
+will switch to enabled after the upgrade. When BMF's AAP connection is
+configured, its networking workflows can then run.
+
+Fulfillment stores the setting on its first start and rejects a later rollout
+with a different value; changing it requires reinstalling with a fresh
+Fulfillment database. When connected to Fulfillment's private API, the OSAC
+Operator and BMF compare their configured value with the saved value before
+reconciliation. The Fulfillment controller retries transient `Unavailable` and
+`DeadlineExceeded` errors for up to one minute, with a 15-second deadline for
+each request. The Operator and BMF each make one request with a 15-second
+deadline and exit if it fails. A value mismatch stops startup for every
+consumer.
+
+Standalone BMF deployments can set `secretAPI.caBundle.configMap` when the
+Fulfillment API certificate needs a custom CA bundle. The ConfigMap must exist
+in the BMF namespace before BMF starts. The OSAC installer configures its
+shared `ca-bundle` ConfigMap explicitly.
+
 ## Manager registration
 
 The installer chart renders the registration ConfigMaps of the OSAC-shipped

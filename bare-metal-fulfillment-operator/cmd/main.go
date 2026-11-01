@@ -145,6 +145,10 @@ func main() {
 	setupLog.Info("networking provisioning feature gate", "enabled", networkingProvisioningEnabled)
 
 	ctx := ctrl.SetupSignalHandler()
+	if err := checkInstallationProvisioning(ctx, networkingProvisioningEnabled); err != nil {
+		setupLog.Error(err, "unable to verify installation networking setting")
+		os.Exit(1)
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will

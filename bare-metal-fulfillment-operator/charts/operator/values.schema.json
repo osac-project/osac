@@ -11,7 +11,7 @@
             "provisioningEnabled": {
               "type": "boolean",
               "default": true,
-              "description": "Shared provider-networking provisioning setting read at startup by Fulfillment API/controller, OSAC Operator, and BMF. Independent of service and controller enablement. Complete disabled-mode behavior requires the remaining networking runtime tasks."
+              "description": "Installation-time provider-networking choice. Must match the value saved by Fulfillment; changing it requires reinstalling with a fresh Fulfillment database."
             }
           }
         }

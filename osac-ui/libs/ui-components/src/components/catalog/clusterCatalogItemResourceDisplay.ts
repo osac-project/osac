@@ -91,8 +91,7 @@ export const formatClusterCatalogVersionLabel = (
   version: ClusterVersion | undefined,
   reference: ClusterVersionReference | undefined,
 ): string => {
-  const raw =
-    version?.spec?.version || version?.metadata?.name || reference?.name || '';
+  const raw = version?.spec?.version || version?.metadata?.name || reference?.name || '';
   if (!raw) {
     return '';
   }

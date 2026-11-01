@@ -25,11 +25,23 @@ const selectedSubnet = () =>
 
 const FormControls = () => {
   const invalidate = useInvalidateServiceQueries();
-  const { submitForm } = useFormikContext();
+  const { submitForm, isSubmitting, setFieldValue } = useFormikContext();
   return (
     <>
       <Button onClick={() => void invalidate(Subnets)}>Refresh subnets</Button>
       <Button onClick={() => void submitForm()}>Direct submit</Button>
+      <Button
+        onClick={() =>
+          void setFieldValue(
+            'network.value.virtualNetwork',
+            { id: 'other-vn', name: 'other' },
+            false,
+          )
+        }
+      >
+        Change VN
+      </Button>
+      <output>{isSubmitting ? 'Submitting' : 'Idle'}</output>
     </>
   );
 };
@@ -41,11 +53,13 @@ const setup = (isDisabled = false, requireVmSupport = true) => {
   let pending: Promise<void> | undefined;
   const onSubmit = vi.fn(() => Promise.resolve());
   const onGet = vi.fn(async () => {
+    const response = current;
+    const failed = getError;
     await pending;
-    if (getError) {
+    if (failed) {
       throw new ConnectError('failed', Code.Unavailable);
     }
-    return { object: current };
+    return { object: response };
   });
   const page = Array.from({ length: 100 }, (_, index) =>
     create(SubnetSchema, { ...selectedSubnet(), id: `subnet-${index}` }),
@@ -113,6 +127,11 @@ const setup = (isDisabled = false, requireVmSupport = true) => {
     },
     failList: () => {
       listError = true;
+    },
+    recover: () => {
+      getError = false;
+      listError = false;
+      current = selectedSubnet();
     },
     defer: (value: Promise<void>) => {
       pending = value;
@@ -212,6 +231,119 @@ describe('VM subnet selection freshness', () => {
     await view.user.click(screen.getByRole('button', { name: 'Direct submit' }));
     await waitFor(() => expect(view.onSubmit).toHaveBeenCalledOnce());
     expect(view.onGet).not.toHaveBeenCalled();
+  });
+
+  it('keeps Next on the current step until ID verification finishes', async () => {
+    const view = setup();
+    await view.user.click(screen.getByRole('button', { name: 'Direct submit' }));
+    await waitFor(() => expect(view.onSubmit).toHaveBeenCalledOnce());
+    let finish!: () => void;
+    view.defer(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const previousCalls = view.onGet.mock.calls.length;
+    await view.user.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(view.onGet.mock.calls.length).toBeGreaterThan(previousCalls));
+    expect(screen.queryByRole('button', { name: 'Create' })).not.toBeInTheDocument();
+    finish();
+    await screen.findByRole('button', { name: 'Create' });
+    expect(view.onGet.mock.calls.length - previousCalls).toBeLessThan(10);
+  });
+
+  it.each(['GETerror', 'listError', 'false'])(
+    'recovers from %s after a successful refetch',
+    async (reason) => {
+      const view = setup();
+      if (reason === 'GETerror') {
+        view.failGet();
+      }
+      if (reason === 'listError') {
+        view.failList();
+      }
+      if (reason === 'false') {
+        view.change(
+          create(SubnetSchema, {
+            id: 'subnet-101',
+            status: { state: SubnetState.READY, computeInstanceSupported: false },
+          }),
+        );
+      }
+      await view.user.click(screen.getByRole('button', { name: 'Refresh subnets' }));
+      await view.user.click(screen.getByRole('button', { name: 'Direct submit' }));
+      await screen.findAllByText('A subnet must be READY and support compute instances.');
+      expect(view.onSubmit).not.toHaveBeenCalled();
+      view.recover();
+      await view.user.click(screen.getByRole('button', { name: 'Refresh subnets' }));
+      await view.user.click(screen.getByRole('button', { name: 'Direct submit' }));
+      await waitFor(() => expect(view.onSubmit).toHaveBeenCalledOnce());
+    },
+  );
+
+  it.each(['chosenIDmismatch', 'VNchange'])('rejects %s', async (reason) => {
+    const view = setup();
+    await view.user.click(screen.getByRole('button', { name: 'Direct submit' }));
+    await waitFor(() => expect(view.onSubmit).toHaveBeenCalledOnce());
+    view.onSubmit.mockClear();
+    if (reason === 'chosenIDmismatch') {
+      view.change(create(SubnetSchema, { ...selectedSubnet(), id: 'different-id' }));
+    } else {
+      await view.user.click(screen.getByRole('button', { name: 'Change VN' }));
+    }
+    await view.user.click(screen.getByRole('button', { name: 'Direct submit' }));
+    await screen.findAllByText('A subnet must be READY and support compute instances.');
+    expect(view.onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('does not let an older successful GET override a newer rejection during submission', async () => {
+    const view = setup();
+    await view.user.click(screen.getByRole('button', { name: 'Direct submit' }));
+    await waitFor(() => expect(view.onSubmit).toHaveBeenCalledOnce());
+    view.onSubmit.mockClear();
+    let finish!: () => void;
+    view.defer(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const previousCalls = view.onGet.mock.calls.length;
+    await view.user.click(screen.getByRole('button', { name: 'Direct submit' }));
+    await waitFor(() => expect(view.onGet.mock.calls.length).toBeGreaterThan(previousCalls));
+    view.change(
+      create(SubnetSchema, {
+        id: 'subnet-101',
+        status: { state: SubnetState.READY, computeInstanceSupported: false },
+      }),
+    );
+    view.defer(Promise.resolve());
+    await view.user.click(screen.getByRole('button', { name: 'Refresh subnets' }));
+    await screen.findAllByText('A subnet must be READY and support compute instances.');
+    finish();
+    await screen.findByText('Idle');
+    expect(view.onSubmit).not.toHaveBeenCalled();
+    expect(view.onGet.mock.calls.length - previousCalls).toBeLessThan(10);
+  });
+
+  it('lets a newer successful validation supersede a stale failure', async () => {
+    const view = setup();
+    view.failGet();
+    let finish!: () => void;
+    view.defer(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    await view.user.click(screen.getByRole('button', { name: 'Direct submit' }));
+    await waitFor(() => expect(view.onGet).toHaveBeenCalled());
+    const previousCalls = view.onGet.mock.calls.length;
+    view.recover();
+    view.defer(Promise.resolve());
+    await view.user.click(screen.getByRole('button', { name: 'Refresh subnets' }));
+    await waitFor(() => expect(view.onGet.mock.calls.length).toBeGreaterThan(previousCalls));
+    finish();
+    await waitFor(() => expect(view.onSubmit).toHaveBeenCalledOnce());
+    expect(view.onGet.mock.calls.length - previousCalls).toBeLessThan(10);
   });
 
   it('allows a valid locked subnet without an optional VN selection', async () => {

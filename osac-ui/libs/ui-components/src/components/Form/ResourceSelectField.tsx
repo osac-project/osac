@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useMemo } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Alert, Content, FormGroup } from '@patternfly/react-core';
 import { TypeaheadSelect } from '@patternfly/react-templates';
 import { useField, useFormikContext } from 'formik';
@@ -92,9 +92,20 @@ export const ResourceSelectField = ({
     );
     return filterItems ? listed.filter(filterItems) : listed;
   }, [data, filterItems]);
+  const latestValidation = useRef<Promise<string | undefined>>(Promise.resolve(undefined));
   const validate = useCallback(
-    (value: ResourceSelectValue) =>
-      validateSelection?.(value, items, { isFetching, hasError: Boolean(loadError) }),
+    async (value: ResourceSelectValue) => {
+      let pendingValidation = Promise.resolve(
+        validateSelection?.(value, items, { isFetching, hasError: Boolean(loadError) }),
+      );
+      latestValidation.current = pendingValidation;
+      let result = await pendingValidation;
+      while (pendingValidation !== latestValidation.current) {
+        pendingValidation = latestValidation.current;
+        result = await pendingValidation;
+      }
+      return result;
+    },
     [items, validateSelection, isFetching, loadError],
   );
   const [field, meta, helpers] = useField<ResourceSelectValue>({ name, validate });

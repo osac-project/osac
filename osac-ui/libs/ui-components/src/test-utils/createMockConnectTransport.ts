@@ -275,7 +275,12 @@ const matchesVirtualNetworkScopeFilter = (
   filter: string | undefined,
   virtualNetwork: string | undefined,
 ): boolean => {
-  return matchesStringEqualityFilter(filter, 'this.spec.virtual_network.id', virtualNetwork);
+  const scope = filter?.match(/^this\.spec\.virtual_network\.id == "(?:[^"\\]|\\.)*"/)?.[0];
+  return matchesStringEqualityFilter(
+    scope ?? filter,
+    'this.spec.virtual_network.id',
+    virtualNetwork,
+  );
 };
 
 const matchesUnallocatedExternalIpFilter = (

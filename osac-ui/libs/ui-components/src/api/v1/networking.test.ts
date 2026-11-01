@@ -1,10 +1,12 @@
-import { fromBinary, fromJson, toBinary, toJson } from '@bufbuild/protobuf';
+import { create, fromBinary, fromJson, toBinary, toJson } from '@bufbuild/protobuf';
+import { createClient } from '@connectrpc/connect';
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 
 import {
   ExternalIPState,
   SecurityGroupState,
+  SubnetSchema,
   SubnetState,
   Subnets,
   VirtualNetworkState,
@@ -22,9 +24,34 @@ import {
   virtualNetworkFilterForSubnetList,
   virtualNetworkScopeFilter,
 } from './networking';
+import { createMockConnectTransport } from '../../test-utils/createMockConnectTransport';
 import { escapeCelStringLiteral } from '../cel';
 
 describe('networking list filters', () => {
+  it.each(['vn', 'vn-"quoted'])(
+    'applies compound VN and VM capability filters in the mock: %s',
+    async (virtualNetwork) => {
+      const subnets = [
+        { id: 'eligible', virtualNetwork, supported: true, state: SubnetState.READY },
+        { id: 'other-vn', virtualNetwork: 'other', supported: true, state: SubnetState.READY },
+        { id: 'false', virtualNetwork, supported: false, state: SubnetState.READY },
+        { id: 'unknown', virtualNetwork, supported: undefined, state: SubnetState.READY },
+        { id: 'not-ready', virtualNetwork, supported: true, state: SubnetState.PENDING },
+      ].map((item) =>
+        create(SubnetSchema, {
+          id: item.id,
+          spec: { virtualNetwork: { id: item.virtualNetwork } },
+          status: { state: item.state, computeInstanceSupported: item.supported },
+        }),
+      );
+      const client = createClient(Subnets, createMockConnectTransport({ subnets }));
+      const result = await client.list({
+        filter: virtualNetworkFilterForSubnetList(virtualNetwork, true),
+      });
+      expect(result.items.map((item) => item.id)).toEqual(['eligible']);
+    },
+  );
+
   it.each([undefined, false, true])(
     'preserves optional eligibility through the stable service descriptor: %s',
     (supported) => {

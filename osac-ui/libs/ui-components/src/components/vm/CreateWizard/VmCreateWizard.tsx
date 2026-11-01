@@ -1,7 +1,7 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageSection, PageSectionTypes, Wizard, WizardStep } from '@patternfly/react-core';
-import { Formik, type FormikErrors, type FormikHelpers, setIn } from 'formik';
+import { Formik, type FormikErrors, type FormikHelpers, type FormikProps, setIn } from 'formik';
 
 import { ComputeInstanceCatalogItem, ComputeInstanceCatalogItems } from '@osac/types';
 import { useGetResource } from '@osac/ui-components/api/use-resource';
@@ -33,6 +33,7 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useProvisionComputeInstance();
+  const formRef = useRef<FormikProps<ComputeInstanceWizardValues>>(null);
   const validateVmSubnet = useVmSubnetValidator();
   const validateNetwork = useCallback(
     async (
@@ -89,6 +90,9 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
         return;
       }
       const networkErrors = await validateNetwork(values);
+      if (formRef.current?.values !== values) {
+        return;
+      }
       if (Object.keys(networkErrors).length > 0) {
         helpers.setErrors(networkErrors);
         return;
@@ -123,6 +127,7 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   );
   return (
     <Formik<ComputeInstanceWizardValues>
+      innerRef={formRef}
       initialValues={initialValues}
       enableReinitialize
       validationSchema={schema}

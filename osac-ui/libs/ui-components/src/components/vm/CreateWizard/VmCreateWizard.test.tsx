@@ -12,6 +12,7 @@ import {
 } from '@osac/types';
 
 import VmCreateWizard from './VmCreateWizard';
+import { getResourceSelectCombobox } from '../../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 const mockNavigate = vi.fn();
@@ -102,6 +103,81 @@ describe('VmCreateWizard', () => {
     mockNavigate.mockReset();
   });
 
+  it('does not dispatch an old selection after the form changes during the final GET', async () => {
+    const catalog = clone(ComputeInstanceCatalogItemSchema, vmCatalogItem);
+    const fields = create(ComputeInstanceCatalogItemFieldsSchema, {
+      networkAttachments: {
+        behavior: {
+          case: 'editable',
+          value: {
+            defaultValue: {
+              items: [
+                {
+                  subnet: { id: 'old-subnet', name: 'old-subnet' },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    if (catalog.fields) {
+      catalog.fields.networkAttachments = fields.networkAttachments;
+    }
+    const available = ['old-subnet', 'new-subnet'].map((id) =>
+      create(SubnetSchema, {
+        id,
+        metadata: { name: id },
+        spec: { virtualNetwork: { id: 'vn' } },
+        status: { state: SubnetState.READY, computeInstanceSupported: true },
+      }),
+    );
+    let submitting = false;
+    let submitGets = 0;
+    let reachedFinalGet = false;
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const onCreate = vi.fn(() => ({ object: { id: 'new-vm' } }));
+    const { user } = renderWithProviders(<VmCreateWizard onClosed={vi.fn()} />, {
+      apiFixtures: { catalogItems: [catalog], subnets: available },
+      transportOverrides: {
+        onSubnetGet: async (request) => {
+          const object = create(SubnetSchema, {
+            id: request.id,
+            spec: { virtualNetwork: { id: 'vn' } },
+            status: {
+              state: SubnetState.READY,
+              computeInstanceSupported: request.id === 'old-subnet',
+            },
+          });
+          if (submitting && request.id === 'old-subnet' && ++submitGets === 3) {
+            reachedFinalGet = true;
+            await pending;
+          }
+          return { object };
+        },
+        onComputeInstanceCreate: onCreate as never,
+      },
+    });
+    await selectCatalogItemAndFillName(user, 'changed-subnet-vm');
+    await advanceThroughRemainingSteps(user);
+    submitting = true;
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(reachedFinalGet).toBe(true));
+    expect(onCreate).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Networking' }));
+    const picker = getResourceSelectCombobox('Subnet');
+    await user.click(screen.getByLabelText('Subnet'));
+    await user.click(await screen.findByRole('option', { name: 'new-subnet' }));
+    expect(picker).toHaveValue('new-subnet');
+    finish();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     'rechecks selected subnet on Review before Create, locked=%s',
     async (locked) => {
@@ -109,7 +185,6 @@ describe('VmCreateWizard', () => {
       const attachment = {
         items: [
           {
-            virtualNetwork: { id: 'vn', name: 'network' },
             subnet: { id: 'subnet', name: 'subnet' },
           },
         ],

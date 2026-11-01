@@ -1,3 +1,10 @@
+# Base URL of the AAP controller API, without a path suffix; callers append
+# their own API paths (for example /api/controller/v2/...). Set it when the AAP
+# instance is disabled and OSAC talks to an AAP outside this release; an empty
+# value then fails the render. While the instance is enabled, consumers address
+# it by its service name and this value is not read.
+controllerUrl: ""
+
 aap:
   instance:
     enabled: true

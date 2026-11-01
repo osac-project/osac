@@ -38,7 +38,7 @@ spec:
               -o jsonpath='{.data.token}' | base64 -d)
             [[ -n "${AAP_TOKEN}" ]] || { echo "ERROR: osac-aap-api-token secret is empty"; exit 1; }
 
-            AAP_URL="http://{{ .Values.aap.aap.instance.name }}"
+            AAP_URL="{{ if .Values.aap.aap.instance.enabled }}http://{{ .Values.aap.aap.instance.name }}{{ else }}{{ .Values.aap.controllerUrl | required "aap.controllerUrl is required when the AAP instance is disabled" }}{{ end }}"
 
             TEMPLATE_NAME="{{ .Values.operator.aap.templatePrefix | default "osac" }}-publish-templates"
             echo "Looking up ${TEMPLATE_NAME} job template..."

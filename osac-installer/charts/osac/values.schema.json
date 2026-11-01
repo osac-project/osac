@@ -1062,6 +1062,11 @@
       "type": "object",
       "description": "AAP bootstrap and instance configuration",
       "properties": {
+        "controllerUrl": {
+          "type": "string",
+          "description": "Base URL of the AAP controller API without a path suffix; callers append their own API paths (for example /api/controller/v2/...). Required when the AAP instance is disabled.",
+          "default": ""
+        },
         "aap": {
           "type": "object",
           "properties": {

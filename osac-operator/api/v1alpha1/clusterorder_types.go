@@ -249,6 +249,12 @@ const (
 
 	// ClusterOrderPhaseDeleting means there has been a request to delete the ClusterOrder
 	ClusterOrderPhaseDeleting ClusterOrderPhaseType = "Deleting"
+
+	// ClusterOrderPhaseDeleteFailed means the deprovision operation failed and
+	// the controller is retrying it. The ClusterOrder stays in this phase while
+	// the latest deprovision job holds a blocking failure; a triggered retry
+	// moves the phase back to Deleting.
+	ClusterOrderPhaseDeleteFailed ClusterOrderPhaseType = "DeleteFailed"
 )
 
 // ClusterOrderConditionType is a valid value for .status.conditions.type
@@ -307,7 +313,7 @@ type ClusterOrderStatus struct {
 	// Phase provides a single-value overview of the state of the ClusterOrder
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=Progressing;Failed;Ready;Deleting
+	// +kubebuilder:validation:Enum=Progressing;Failed;Ready;Deleting;DeleteFailed
 	Phase ClusterOrderPhaseType `json:"phase,omitempty"`
 
 	// PhaseTransitionTime records when the controller last changed Phase. It moves only

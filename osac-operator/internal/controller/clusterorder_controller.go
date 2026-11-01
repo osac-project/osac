@@ -356,7 +356,16 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 			latest.HasBareMetalNodeSet() && !bareMetalWorkersReady(latest)
 		switch {
 		case deleting:
-			latest.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
+			// The delete phases are authoritative from this reconcile: the
+			// controller computed them from the freshest deprovision job state.
+			// A computed phase that is not a delete phase comes from a stale
+			// reconcile and must not revive the order.
+			switch computed.Phase {
+			case v1alpha1.ClusterOrderPhaseDeleting, v1alpha1.ClusterOrderPhaseDeleteFailed:
+				setClusterOrderPhase(&latest.Status, computed.Phase)
+			default:
+				latest.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
+			}
 		case terminalPhase:
 			// A stale reconcile must not revive a terminal order.
 		case workerPending:
@@ -383,8 +392,14 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 			apimeta.SetStatusCondition(&latest.Status.Conditions, c)
 		}
 		if deleting {
-			latest.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
-				"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
+			if latest.Status.Phase == v1alpha1.ClusterOrderPhaseDeleteFailed {
+				latest.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
+					"ClusterOrder deprovisioning failed; the controller retries it automatically",
+					v1alpha1.ReasonDeprovisionFailed)
+			} else {
+				latest.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
+					"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
+			}
 		}
 		if workerPending {
 			latest.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
@@ -1118,7 +1133,12 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting clusterorder")
 
-	setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseDeleting)
+	// A failed deprovision keeps its phase until a retry is triggered; flipping
+	// it to Deleting here would re-stamp the transition on every reconcile and
+	// hide the failure from fulfillment and metering.
+	if instance.Status.Phase != v1alpha1.ClusterOrderPhaseDeleteFailed {
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseDeleting)
+	}
 	instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
 		"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
 
@@ -1140,6 +1160,7 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	syncDeleteFailedPhase(instance)
 	// If deprovision job is still running, requeue and wait
 	if deprovisionResult.RequeueAfter > 0 {
 		return deprovisionResult, nil
@@ -1324,6 +1345,24 @@ func (r *ClusterOrderReconciler) handleDeprovisioning(ctx context.Context, insta
 		return result, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// syncDeleteFailedPhase reports a failed deprovision on the ClusterOrder phase.
+// The phase is DeleteFailed while the latest deprovision job holds a blocking
+// failure, and returns to Deleting once a retry is triggered or the job
+// otherwise leaves the failed state. A failure the provider marked as not
+// blocking deletion does not fail the phase: the controller completes the
+// deletion, so the order stays Deleting until it is gone.
+func syncDeleteFailedPhase(instance *v1alpha1.ClusterOrder) {
+	latest := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, v1alpha1.JobTypeDeprovision)
+	failed := latest != nil && latest.State == v1alpha1.JobStateFailed && latest.BlockDeletionOnFailure
+	if failed {
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseDeleteFailed)
+		return
+	}
+	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseDeleteFailed {
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseDeleting)
+	}
 }
 
 // initializeStatusConditions initializes the conditions that haven't already been initialized.

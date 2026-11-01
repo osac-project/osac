@@ -75,6 +75,9 @@ const (
 	ReasonFailed = "Failed"
 	// ReasonDeleting indicates the resource is being deleted.
 	ReasonDeleting = "Deleting"
+	// ReasonDeprovisionFailed indicates the deprovision operation failed and
+	// the controller is retrying it.
+	ReasonDeprovisionFailed = "DeprovisionFailed"
 	// ReasonWebhookTriggered indicates a webhook was triggered for the resource.
 	ReasonWebhookTriggered = "WebhookTriggered"
 	// ReasonWebhookFailed indicates a webhook invocation failed.

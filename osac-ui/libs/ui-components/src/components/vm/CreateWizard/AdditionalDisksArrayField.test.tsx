@@ -83,14 +83,14 @@ describe('AdditionalDisksArrayField', () => {
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
   });
 
-  it('appends a live, editable row with a default size when Add disk is clicked', async () => {
+  it('appends a live, editable row without selecting among multiple storage tiers', async () => {
     const { user } = renderField();
 
     await user.click(screen.getByRole('button', { name: 'Add disk' }));
 
     expect(screen.queryByRole('group')).not.toBeInTheDocument();
     expect(screen.getByRole('spinbutton', { name: 'Disk size (GiB)' })).toHaveValue(30);
-    await waitFor(() => expect(getAllResourceSelectInputs(/^Storage tier/)[0]).toHaveValue('fast'));
+    await waitFor(() => expect(getAllResourceSelectInputs(/^Storage tier/)[0]).toHaveValue(''));
   });
 
   it('adds a second row alongside the first, each independently editable', async () => {

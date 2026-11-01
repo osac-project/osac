@@ -163,9 +163,7 @@ const CatalogGeneralStep = ({
             labelHelp={
               <Popover
                 aria-label={t('Provisioning template information')}
-                bodyContent={t(
-                  'Infrastructure automation that fulfills a VM request by resolving infrastructure dependencies, creating VM and storage resources, applying provider-specific integrations, and exposing the status.',
-                )}
+                bodyContent={t('Defines the Ansible role used to provision this catalog item')}
                 headerContent={t('Provisioning template')}
                 position="right"
               >

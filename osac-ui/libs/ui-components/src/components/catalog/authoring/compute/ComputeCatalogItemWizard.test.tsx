@@ -172,7 +172,7 @@ describe('ComputeCatalogItemWizard', () => {
         'Optionally set boot disk size, storage tier, and additional disk defaults for this catalog item. Leave fields Not set if tenants should choose when creating a virtual machine.',
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: 'Boot storage tier' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Boot storage tier' })).toBeInTheDocument();
     expect(screen.getAllByRole('separator')).toHaveLength(2);
   });
 

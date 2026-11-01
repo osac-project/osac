@@ -48,6 +48,7 @@ const BareMetalCatalogConfigurationStep = () => {
                 isDisabled={isDisabled}
                 isRequired={isRequired}
                 labelInfo={labelInfo}
+                autoSelectSingleOption={false}
               />
             )}
           </CatalogField>

@@ -45,6 +45,7 @@ const ComputeCatalogStorageStep = () => {
                 name={valueName}
                 isDisabled={isDisabled}
                 labelInfo={labelInfo}
+                autoSelectSingleOption={false}
               />
             )}
           </CatalogField>
@@ -59,6 +60,7 @@ const ComputeCatalogStorageStep = () => {
                 <AdditionalDisksArrayField
                   name={valueName}
                   isDisabled={isDisabled}
+                  autoSelectSingleOption={false}
                   emptyMessage={t(
                     'No additional disks. Add disks if this catalog item should include them by default.',
                   )}

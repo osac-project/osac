@@ -14,6 +14,7 @@ import { findVersionByName, isDeprecatedVersion, versionDisplayName } from '../v
 
 interface ClusterVersionFieldProps extends ProvisioningFieldControlProps {
   fieldId?: string;
+  autoSelectSingleOption?: boolean;
 }
 
 const ClusterVersionField = ({
@@ -22,6 +23,7 @@ const ClusterVersionField = ({
   isDisabled = false,
   isRequired = true,
   labelInfo,
+  autoSelectSingleOption = true,
 }: ClusterVersionFieldProps) => {
   const { t } = useTranslation();
   const {
@@ -72,6 +74,7 @@ const ClusterVersionField = ({
           fieldId={fieldId}
           isRequired={isRequired}
           isDisabled={isDisabled}
+          autoSelectSingleOption={autoSelectSingleOption}
           isLoading={versionsLoading}
           placeholder={t('Select a version')}
           options={versionOptions}

@@ -22,6 +22,7 @@ import type { ProvisioningFieldControlProps } from '../../ProvisioningWizard/fie
 interface ClusterNodeSetsArrayFieldProps extends ProvisioningFieldControlProps {
   /** OSAC-6054: catalog policies may omit node sets; provisioning requires one row. */
   allowEmpty?: boolean;
+  autoSelectSingleOption?: boolean;
 }
 
 const ClusterNodeSetsArrayField = ({
@@ -29,6 +30,7 @@ const ClusterNodeSetsArrayField = ({
   isDisabled = false,
   isRequired = false,
   allowEmpty = false,
+  autoSelectSingleOption = true,
 }: ClusterNodeSetsArrayFieldProps) => {
   const { t } = useTranslation();
   const { setFieldValue } = useFormikContext();
@@ -132,6 +134,7 @@ const ClusterNodeSetsArrayField = ({
               options={hostTypeOptions}
               isRequired
               isLoading={hostTypesLoading}
+              autoSelectSingleOption={autoSelectSingleOption}
               placeholder={t('Select host type')}
               isDisabled={isDisabled}
             />

@@ -12,6 +12,7 @@ import type { ProvisioningFieldControlProps } from '../../ProvisioningWizard/fie
 
 interface AdditionalDisksArrayFieldProps extends ProvisioningFieldControlProps {
   emptyMessage?: string;
+  autoSelectSingleOption?: boolean;
 }
 
 /** Renders the inline disk-set editor from the VMaaS storage UX. */
@@ -19,6 +20,7 @@ export const AdditionalDisksArrayField = ({
   name = '',
   isDisabled = false,
   emptyMessage,
+  autoSelectSingleOption = true,
 }: AdditionalDisksArrayFieldProps) => {
   const { t } = useTranslation();
   const [field, , helpers] = useField<ComputeInstanceDiskValues[]>(name);
@@ -84,6 +86,7 @@ export const AdditionalDisksArrayField = ({
                 fieldId={`vm-additional-disk-${index}-storage-tier`}
                 isRequired
                 isDisabled={isDisabled}
+                autoSelectSingleOption={autoSelectSingleOption}
                 description={t('Storage tiers are defined by your cloud provider administrator.')}
               />
             </StackItem>

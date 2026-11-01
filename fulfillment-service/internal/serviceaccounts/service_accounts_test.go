@@ -36,17 +36,14 @@ var _ = Describe("Service account identity", func() {
 			"osac-sa-tenant-a-d3c4e3db-95b8-481d-8b5c-963da477da12"))
 		Expect(serviceaccounts.ClientID(strings.Repeat("t", 63), "d3c4e3db-95b8-481d-8b5c-963da477da12")).To(HaveLen(108))
 	})
-	It("uses the account ID for registration Secret names", func() {
+	It("uses a stable account ID for registration Secret names", func() {
 		accountID := "d3c4e3db-95b8-481d-8b5c-963da477da12"
-		Expect(serviceaccounts.RegistrationSecretName(accountID, 0)).To(Equal("osac-registration-" + accountID))
-		Expect(serviceaccounts.RegistrationSecretName(accountID, 1)).To(Equal("osac-registration-" + accountID + "-1"))
-		Expect(serviceaccounts.RegistrationSecretName(accountID, 0)).ToNot(Equal(
-			serviceaccounts.RegistrationSecretName("d3c4e3db-95b8-481d-8b5c-963da477da13", 0)))
+		Expect(serviceaccounts.RegistrationSecretName(accountID)).To(Equal("osac-registration-" + accountID))
+		Expect(serviceaccounts.RegistrationSecretName(accountID)).ToNot(Equal(
+			serviceaccounts.RegistrationSecretName("d3c4e3db-95b8-481d-8b5c-963da477da13")))
+		Expect(serviceaccounts.RegistrationSecretName("")).To(BeEmpty())
 		longID := strings.Repeat("a", 63)
-		Expect(len(serviceaccounts.RegistrationSecretName(longID, 2))).To(BeNumerically("<=", 63))
-		largeSuffix := serviceaccounts.RegistrationSecretName(accountID, 999999999999)
-		Expect(largeSuffix).To(HaveSuffix("-999999999999"))
-		Expect(len(largeSuffix)).To(BeNumerically("<=", 63))
+		Expect(len(serviceaccounts.RegistrationSecretName(longID))).To(BeNumerically("<=", 63))
 		Expect(serviceaccounts.RegistrationAccessTokenKey).To(Equal("registration_access_token"))
 	})
 	It("uses a tenant-safe resource name for the client credential Secret", func() {
@@ -54,7 +51,7 @@ var _ = Describe("Service account identity", func() {
 		name := serviceaccounts.ClientSecretName(accountID)
 		Expect(name).To(Equal("osac-service-account-d3c4e3db-95b8-481d-8b5c-963da477da12"))
 		Expect(len(name)).To(BeNumerically("<=", 63))
-		Expect(name).ToNot(Equal(serviceaccounts.RegistrationSecretName(accountID, 0)))
+		Expect(name).ToNot(Equal(serviceaccounts.RegistrationSecretName(accountID)))
 	})
 })
 

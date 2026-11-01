@@ -40,9 +40,9 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
   const diskImageLabel = t('Disk image');
   const tenantLabel = t('Visibility');
   const createdLabel = t('Created');
-  const addedLabel = t('Added');
   const actionsLabel = t('Actions');
   const isVmTable = items[0] ? isComputeCatalogItem(items[0]) : false;
+  const dateLabel = role === 'admin' || role === 'tenant-admin' ? createdLabel : null;
 
   return (
     <Table aria-label={t('Catalog items')} variant="compact">
@@ -58,15 +58,10 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
           ) : (
             <Th>{configurationLabel}</Th>
           )}
-          {role === 'admin' ? (
+          {dateLabel ? (
             <>
               <Th>{tenantLabel}</Th>
-              <Th>{createdLabel}</Th>
-            </>
-          ) : role === 'tenant-admin' ? (
-            <>
-              <Th>{tenantLabel}</Th>
-              <Th>{addedLabel}</Th>
+              <Th>{dateLabel}</Th>
             </>
           ) : null}
           <Th aria-label={actionsLabel} />
@@ -108,22 +103,13 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
                 <CatalogItemResources catalogItem={item} resourceLookups={resourceLookups} />
               </Td>
             )}
-            {role === 'admin' ? (
+            {dateLabel ? (
               <>
                 <Td dataLabel={tenantLabel}>
                   <CatalogItemTenant catalogItem={item} />
                 </Td>
-                <Td dataLabel={createdLabel}>
-                  <Timestamp value={item.metadata?.creationTimestamp} format="Time" />
-                </Td>
-              </>
-            ) : role === 'tenant-admin' ? (
-              <>
-                <Td dataLabel={tenantLabel}>
-                  <CatalogItemTenant catalogItem={item} />
-                </Td>
-                <Td dataLabel={addedLabel}>
-                  <Timestamp value={item.metadata?.creationTimestamp} format="Date" />
+                <Td dataLabel={dateLabel}>
+                  <Timestamp value={item.metadata?.creationTimestamp} />
                 </Td>
               </>
             ) : null}

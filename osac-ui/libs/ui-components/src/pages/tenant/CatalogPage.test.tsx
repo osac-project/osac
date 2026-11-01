@@ -1000,9 +1000,9 @@ describe('CatalogPage', () => {
       within(table)
         .getAllByRole('columnheader')
         .map((header) => header.textContent),
-    ).toEqual(['Name', 'Status', 'Instance type', 'Disk image', 'Visibility', 'Added', '']);
+    ).toEqual(['Name', 'Status', 'Instance type', 'Disk image', 'Visibility', 'Created', '']);
     expect(within(table).getByRole('columnheader', { name: 'Visibility' })).toBeInTheDocument();
-    expect(within(table).getByRole('columnheader', { name: 'Added' })).toBeInTheDocument();
+    expect(within(table).getByRole('columnheader', { name: 'Created' })).toBeInTheDocument();
     expect(within(table).getByText('Global public')).toBeInTheDocument();
   });
 

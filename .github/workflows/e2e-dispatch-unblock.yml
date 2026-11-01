@@ -1,0 +1,351 @@
+# ===========================================================================
+# E2E Dispatch Unblock
+# ===========================================================================
+#
+# Purpose:
+#   Manually trigger e2e test suites for a PR that can no longer be replayed
+#   via the label-based e2e-on-label.yml mechanism.  This happens with aged
+#   PRs whose original pull_request workflow run is no longer discoverable
+#   through the GitHub Actions API.
+#
+# How it works:
+#   1. Resolves PR metadata (head ref, head repo, author, SHA) via the
+#      GitHub API — no dependency on a prior workflow run.
+#   2. Calls the same osac-test-infra reusable e2e workflows that the
+#      normal pull_request trigger uses, passing resolved PR context.
+#   3. Posts gate check statuses (e2e-vmaas-gate, e2e-bmaas-gate,
+#      e2e-caas-gate) to the PR's head SHA so required merge checks pass.
+#
+# Usage:
+#   1. Navigate to  Actions → "E2E Dispatch Unblock" → "Run workflow"
+#   2. Enter the PR number (required).
+#   3. Optionally provide a specific head SHA; if left empty the current
+#      PR head SHA is auto-detected.
+#   4. Choose which suites to run (default: "all").
+#
+# Works for both same-repo and fork PRs.
+# ===========================================================================
+
+name: E2E Dispatch Unblock
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to run e2e tests for (required)'
+        required: true
+        type: string
+      head_sha:
+        description: 'Head SHA to post checks against (leave empty to auto-detect from PR)'
+        required: false
+        type: string
+        default: ''
+      suites:
+        description: 'Which e2e suites to run'
+        required: false
+        type: choice
+        options:
+          - all
+          - vmaas
+          - bmaas
+          - caas
+        default: 'all'
+
+# Permissions needed across all jobs:
+#   contents:read       — checkout / API reads
+#   actions:read        — query workflow runs (if needed by reusable workflows)
+#   checks:write        — post gate check statuses to the PR head SHA
+#   pull-requests:read  — fetch PR metadata via the REST API
+#   id-token:write      — OIDC token for reusable workflows that need cloud auth
+permissions:
+  contents: read
+  actions: read
+  checks: write
+  pull-requests: read
+  id-token: write
+
+jobs:
+  # ===========================================================================
+  # Job: resolve-pr
+  # Fetches PR metadata and builds the components JSON arrays that the
+  # reusable e2e workflows expect.
+  # ===========================================================================
+  resolve-pr:
+    name: Resolve PR Context
+    runs-on: ubuntu-latest
+    outputs:
+      head_ref: ${{ steps.pr.outputs.head_ref }}
+      head_repo: ${{ steps.pr.outputs.head_repo }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+      author_association: ${{ steps.pr.outputs.author_association }}
+      author: ${{ steps.pr.outputs.author }}
+      # Two component lists: "full" (8 components) for VMaaS/CaaS,
+      # and "bmaas" (7 components, no echo-adapter) for BMaaS.
+      components_full: ${{ steps.components.outputs.components_full }}
+      components_bmaas: ${{ steps.components.outputs.components_bmaas }}
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Step 1: Fetch PR metadata from the GitHub REST API
+      # -----------------------------------------------------------------------
+      - name: Fetch PR metadata
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA_INPUT: ${{ inputs.head_sha }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          echo "::group::Fetching PR #${PR_NUMBER} metadata"
+
+          PR_DATA=$(gh api "repos/${THIS_REPO}/pulls/${PR_NUMBER}")
+
+          # Validate the PR is still open
+          STATE=$(echo "$PR_DATA" | jq -r '.state')
+          if [ "$STATE" != "open" ]; then
+            echo "::error::PR #${PR_NUMBER} is not open (state: $STATE)"
+            exit 1
+          fi
+
+          HEAD_REF=$(echo "$PR_DATA" | jq -r '.head.ref')
+          HEAD_REPO=$(echo "$PR_DATA" | jq -r '.head.repo.full_name')
+          AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login')
+          PR_HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
+
+          # Only export author_association for fork PRs (head_repo != this repo)
+          if [ "$HEAD_REPO" != "$THIS_REPO" ]; then
+            AUTHOR_ASSOCIATION=$(echo "$PR_DATA" | jq -r '.author_association')
+          else
+            AUTHOR_ASSOCIATION=""
+          fi
+
+          # Use the explicitly provided head_sha, or auto-detect from the PR
+          if [ -z "$HEAD_SHA_INPUT" ]; then
+            HEAD_SHA="$PR_HEAD_SHA"
+            echo "Auto-detected head SHA: $HEAD_SHA"
+          else
+            HEAD_SHA="$HEAD_SHA_INPUT"
+            if [ "$HEAD_SHA" != "$PR_HEAD_SHA" ]; then
+              echo "::warning::Provided SHA ($HEAD_SHA) does not match current PR head ($PR_HEAD_SHA). Using provided SHA — the PR may have been updated since."
+            else
+              echo "Using provided head SHA: $HEAD_SHA"
+            fi
+          fi
+
+          {
+            echo "head_ref=$HEAD_REF"
+            echo "head_repo=$HEAD_REPO"
+            echo "head_sha=$HEAD_SHA"
+            echo "pr_number=$PR_NUMBER"
+            echo "author=$AUTHOR"
+            echo "author_association=$AUTHOR_ASSOCIATION"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "::notice::PR #${PR_NUMBER} — ${HEAD_REPO}@${HEAD_REF} (${HEAD_SHA})"
+          echo "::endgroup::"
+
+      # -----------------------------------------------------------------------
+      # Step 2: Build the components JSON arrays
+      #
+      # Each component object carries the PR's head repo and ref so the
+      # reusable workflow checks out and builds from the PR branch.
+      # Component definitions are kept in sync with the upstream callers:
+      #   - e2e-vmaas-full-install.yml (VMaaS/CaaS — 8 components)
+      #   - e2e-bmaas-full-install.yml (BMaaS — 7 components, no echo-adapter)
+      # -----------------------------------------------------------------------
+      - name: Build components JSON
+        id: components
+        env:
+          HEAD_REPO: ${{ steps.pr.outputs.head_repo }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+        run: |
+          REPO="$HEAD_REPO"
+          REF="$HEAD_REF"
+
+          # Full component list (8 components) — used by VMaaS and CaaS suites.
+          # Matches e2e-vmaas-full-install.yml and e2e-caas-full-install.yml.
+          # osac-aap's execution-environment is built twice (aap.bootstrap.image
+          # and aap.configAsCode.eeImage): the two are logically the same image
+          # but the override mechanism keys strictly off imageKey, one build per
+          # key. See OSAC-3546.
+          COMPONENTS_FULL=$(jq -n -c \
+            --arg repo "$REPO" \
+            --arg ref "$REF" \
+            '[
+              {"repo": $repo, "ref": $ref, "containerfile": "fulfillment-service/Containerfile",                        "context": ".", "imageKey": "service.images.service.repository"},
+              {"repo": $repo, "ref": $ref, "containerfile": "osac-operator/Containerfile",                              "context": ".", "imageKey": "operator.image.repository"},
+              {"repo": $repo, "ref": $ref, "containerfile": "osac-aap/execution-environment/execution-environment.yaml",               "imageKey": "aap.bootstrap.image",                     "buildType": "ansible-builder"},
+              {"repo": $repo, "ref": $ref, "containerfile": "osac-aap/execution-environment/execution-environment.yaml",               "imageKey": "aap.configAsCode.eeImage",                "buildType": "ansible-builder"},
+              {"repo": $repo, "ref": $ref, "containerfile": "bare-metal-fulfillment-operator/Containerfile",            "context": ".", "imageKey": "bmf.image.repository"},
+              {"repo": $repo, "ref": $ref, "containerfile": "osac-metering/metering-service/Containerfile",             "context": ".", "imageKey": "metering.image.repository"},
+              {"repo": $repo, "ref": $ref, "containerfile": "osac-metering/adapters/Containerfile.echo-adapter",        "context": "osac-metering", "imageKey": "metering.echoAdapter.image.repository"},
+              {"repo": $repo, "ref": $ref, "containerfile": "osac-csi-driver/Containerfile",                            "context": ".", "imageKey": "csiDriver.image.repository"}
+            ]')
+          echo "components_full=$COMPONENTS_FULL" >> "$GITHUB_OUTPUT"
+
+          # BMaaS component list (7 components — no echo-adapter).
+          # Matches e2e-bmaas-full-install.yml.
+          COMPONENTS_BMAAS=$(jq -n -c \
+            --arg repo "$REPO" \
+            --arg ref "$REF" \
+            '[
+              {"repo": $repo, "ref": $ref, "containerfile": "fulfillment-service/Containerfile",                        "context": ".", "imageKey": "service.images.service.repository"},
+              {"repo": $repo, "ref": $ref, "containerfile": "osac-operator/Containerfile",                              "context": ".", "imageKey": "operator.image.repository"},
+              {"repo": $repo, "ref": $ref, "containerfile": "osac-aap/execution-environment/execution-environment.yaml",               "imageKey": "aap.bootstrap.image",                     "buildType": "ansible-builder"},
+              {"repo": $repo, "ref": $ref, "containerfile": "osac-aap/execution-environment/execution-environment.yaml",               "imageKey": "aap.configAsCode.eeImage",                "buildType": "ansible-builder"},
+              {"repo": $repo, "ref": $ref, "containerfile": "bare-metal-fulfillment-operator/Containerfile",            "context": ".", "imageKey": "bmf.image.repository"},
+              {"repo": $repo, "ref": $ref, "containerfile": "osac-metering/metering-service/Containerfile",             "context": ".", "imageKey": "metering.image.repository"},
+              {"repo": $repo, "ref": $ref, "containerfile": "osac-csi-driver/Containerfile",                            "context": ".", "imageKey": "csiDriver.image.repository"}
+            ]')
+          echo "components_bmaas=$COMPONENTS_BMAAS" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # E2E Suite: VMaaS
+  #
+  # Runs the full VMaaS e2e install workflow with all 8 components.
+  # Uses the same test-suite/test-marker as the pull_request trigger.
+  # ===========================================================================
+  e2e-vmaas-full-install:
+    name: E2E VMaaS
+    needs: [resolve-pr]
+    if: inputs.suites == 'all' || inputs.suites == 'vmaas'
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
+    with:
+      installer-repo: ${{ needs.resolve-pr.outputs.head_repo }}
+      installer-ref: ${{ needs.resolve-pr.outputs.head_ref }}
+      components: ${{ needs.resolve-pr.outputs.components_full }}
+      pr-number: ${{ needs.resolve-pr.outputs.pr_number }}
+      fork-pr-author-association: ${{ needs.resolve-pr.outputs.author_association }}
+      fork-pr-author: ${{ needs.resolve-pr.outputs.author }}
+      test-suite: 'vmaas'
+      test-marker: 'sanity or regression or requires_vmaas or reference_common or reference_networking'
+      test-infra-repository: osac-project/osac-test-infra
+      test-repository: ${{ needs.resolve-pr.outputs.head_repo }}
+      test-ref: ${{ needs.resolve-pr.outputs.head_sha }}
+    secrets: inherit
+
+  # ===========================================================================
+  # E2E Suite: BMaaS
+  #
+  # Runs the full BMaaS e2e install workflow with 7 components (no echo-adapter).
+  # Uses BMaaS-specific test-marker and test-filter.
+  # ===========================================================================
+  e2e-bmaas-full-install:
+    name: E2E BMaaS
+    needs: [resolve-pr]
+    if: inputs.suites == 'all' || inputs.suites == 'bmaas'
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
+    with:
+      installer-repo: ${{ needs.resolve-pr.outputs.head_repo }}
+      installer-ref: ${{ needs.resolve-pr.outputs.head_ref }}
+      components: ${{ needs.resolve-pr.outputs.components_bmaas }}
+      pr-number: ${{ needs.resolve-pr.outputs.pr_number }}
+      fork-pr-author-association: ${{ needs.resolve-pr.outputs.author_association }}
+      fork-pr-author: ${{ needs.resolve-pr.outputs.author }}
+      test-suite: 'bmaas'
+      test-marker: 'sanity or regression or serial or requires_bmaas or reference_common or reference_networking'
+      test-filter: 'not TestBmaasNetworking'
+      test-infra-repository: osac-project/osac-test-infra
+      test-repository: ${{ needs.resolve-pr.outputs.head_repo }}
+      test-ref: ${{ needs.resolve-pr.outputs.head_sha }}
+    secrets: inherit
+
+  # ===========================================================================
+  # E2E Suite: CaaS
+  #
+  # Runs the full CaaS e2e install workflow with all 8 components.
+  # Uses CaaS-specific test-marker.
+  # ===========================================================================
+  e2e-caas-full-install:
+    name: E2E CaaS
+    needs: [resolve-pr]
+    if: inputs.suites == 'all' || inputs.suites == 'caas'
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
+    with:
+      installer-repo: ${{ needs.resolve-pr.outputs.head_repo }}
+      installer-ref: ${{ needs.resolve-pr.outputs.head_ref }}
+      components: ${{ needs.resolve-pr.outputs.components_full }}
+      pr-number: ${{ needs.resolve-pr.outputs.pr_number }}
+      fork-pr-author-association: ${{ needs.resolve-pr.outputs.author_association }}
+      fork-pr-author: ${{ needs.resolve-pr.outputs.author }}
+      test-suite: 'caas'
+      test-marker: 'sanity or regression or requires_caas or reference_common'
+      test-infra-repository: osac-project/osac-test-infra
+      test-repository: ${{ needs.resolve-pr.outputs.head_repo }}
+      test-ref: ${{ needs.resolve-pr.outputs.head_sha }}
+    secrets: inherit
+
+  # ===========================================================================
+  # Gate: VMaaS
+  #
+  # Posts a check run named "e2e-vmaas-gate" to the PR's head SHA.
+  # Runs even if the e2e job fails (if: always()) so the check always
+  # reflects the outcome. Skipped when the suite was not selected or
+  # when PR resolution failed (no SHA available).
+  # ===========================================================================
+  e2e-vmaas-gate:
+    name: E2E VMaaS Gate
+    needs: [resolve-pr, e2e-vmaas-full-install]
+    runs-on: ubuntu-latest
+    if: >-
+      always()
+      && needs.resolve-pr.result == 'success'
+      && (inputs.suites == 'all' || inputs.suites == 'vmaas')
+    permissions:
+      checks: write
+    steps:
+      - uses: LouisBrunner/checks-action@v2.0.0
+        with:
+          sha: ${{ needs.resolve-pr.outputs.head_sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: e2e-vmaas-gate
+          conclusion: ${{ needs.e2e-vmaas-full-install.result }}
+          output: |
+            {"summary": "E2E VMaaS gate: ${{ needs.e2e-vmaas-full-install.result }}"}
+
+  # ===========================================================================
+  # Gate: BMaaS
+  # ===========================================================================
+  e2e-bmaas-gate:
+    name: E2E BMaaS Gate
+    needs: [resolve-pr, e2e-bmaas-full-install]
+    runs-on: ubuntu-latest
+    if: >-
+      always()
+      && needs.resolve-pr.result == 'success'
+      && (inputs.suites == 'all' || inputs.suites == 'bmaas')
+    permissions:
+      checks: write
+    steps:
+      - uses: LouisBrunner/checks-action@v2.0.0
+        with:
+          sha: ${{ needs.resolve-pr.outputs.head_sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: e2e-bmaas-gate
+          conclusion: ${{ needs.e2e-bmaas-full-install.result }}
+          output: |
+            {"summary": "E2E BMaaS gate: ${{ needs.e2e-bmaas-full-install.result }}"}
+
+  # ===========================================================================
+  # Gate: CaaS
+  # ===========================================================================
+  e2e-caas-gate:
+    name: E2E CaaS Gate
+    needs: [resolve-pr, e2e-caas-full-install]
+    runs-on: ubuntu-latest
+    if: >-
+      always()
+      && needs.resolve-pr.result == 'success'
+      && (inputs.suites == 'all' || inputs.suites == 'caas')
+    permissions:
+      checks: write
+    steps:
+      - uses: LouisBrunner/checks-action@v2.0.0
+        with:
+          sha: ${{ needs.resolve-pr.outputs.head_sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: e2e-caas-gate
+          conclusion: ${{ needs.e2e-caas-full-install.result }}
+          output: |
+            {"summary": "E2E CaaS gate: ${{ needs.e2e-caas-full-install.result }}"}

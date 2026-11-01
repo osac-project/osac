@@ -33,6 +33,7 @@ from tests.e2e.core.metering import (
     usage_interval,
 )
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 # ExternalIPs and NATGateways are offered only with provider networking
 # enabled (global.networking.provisioningEnabled: true); otherwise the
@@ -81,6 +82,8 @@ def test_nat_gateway_bills_allocation(
             retries=60,
             delay=5,
             description=f"NATGateway {nat_name} READY",
+            resource_kind=WaitResourceKind.NAT_GATEWAY,
+            resource_id=nat_id,
         )
         # Resolve the CR before any delete can remove it: the deletion
         # assertions below need its recorded deletion timestamp.
@@ -90,10 +93,15 @@ def test_nat_gateway_bills_allocation(
             retries=30,
             delay=5,
             description=f"NATGateway CR for {nat_name}",
+            resource_kind=WaitResourceKind.NAT_GATEWAY,
+            resource_id=nat_id,
         )
 
         heartbeat = metering.heartbeat_with_dimensions(
-            nat_id, {"virtual_network": ref_virtual_network["name"]}, timeout=HEARTBEAT_TIMEOUT
+            nat_id,
+            {"virtual_network": ref_virtual_network["name"]},
+            timeout=HEARTBEAT_TIMEOUT,
+            resource_kind=WaitResourceKind.NAT_GATEWAY,
         )
         # The gateway was created without a project, so its heartbeats must
         # carry no project dimension: the engine emits only the facts a
@@ -113,6 +121,8 @@ def test_nat_gateway_bills_allocation(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"two heartbeats of NATGateway {nat_id}",
+            resource_kind=WaitResourceKind.NAT_GATEWAY,
+            resource_id=nat_id,
         )
         events = sorted(
             metering.get_all_events(HEARTBEAT_TYPE, nat_id), key=lambda event: event["data"]["usage"]["from"]
@@ -192,6 +202,8 @@ def _delete_nat_gateway(grpc: GRPCClient, k8s: K8sClient, *, nat_id: str, cr_nam
                             retries=30,
                             delay=2,
                             description=f"deletion timestamp of {cr_name}",
+                            resource_kind=WaitResourceKind.NAT_GATEWAY,
+                            resource_id=cr_name,
                         )
                     )
         except Exception:
@@ -212,5 +224,7 @@ def _delete_nat_gateway(grpc: GRPCClient, k8s: K8sClient, *, nat_id: str, cr_nam
             retries=60,
             delay=5,
             description=f"NATGateway {nat_id} deletion",
+            resource_kind=WaitResourceKind.NAT_GATEWAY,
+            resource_id=nat_id,
         )
     return deletion_recorded

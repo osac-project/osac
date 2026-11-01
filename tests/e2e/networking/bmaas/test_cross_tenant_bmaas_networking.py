@@ -51,6 +51,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.bmaas import bmi_ssh, guest_ssh
 from tests.e2e.networking.teardown import (
     FABRIC_RETRIES,
@@ -172,6 +173,8 @@ def _teardown_owned_resources(state: dict[str, Any], grpc: GRPCClient, k8s: K8sC
                 api_gone=lambda: aid not in grpc.list_external_ip_attachment_ids(),
                 cr_gone=lambda: k8s.get_external_ip_attachment_name(uuid=aid, checked=False) == "",
                 delete=lambda: grpc.delete_external_ip_attachment(attachment_id=aid),
+                resource_kind=WaitResourceKind.EXTERNAL_IP_ATTACHMENT,
+                resource_id=aid,
             )
         )
     if "ingress_eip_id" in state:
@@ -182,6 +185,8 @@ def _teardown_owned_resources(state: dict[str, Any], grpc: GRPCClient, k8s: K8sC
                 api_gone=lambda: eip_id not in grpc.list_external_ip_ids(),
                 cr_gone=lambda: k8s.get_external_ip_name(uuid=eip_id, checked=False) == "",
                 delete=lambda: grpc.delete_external_ip(external_ip_id=eip_id),
+                resource_kind=WaitResourceKind.EXTERNAL_IP,
+                resource_id=eip_id,
             )
         )
 
@@ -196,6 +201,8 @@ def _teardown_owned_resources(state: dict[str, Any], grpc: GRPCClient, k8s: K8sC
                     api_gone=lambda: aid not in grpc.list_external_ip_attachment_ids(),
                     cr_gone=lambda: k8s.get_external_ip_attachment_name(uuid=aid, checked=False) == "",
                     delete=lambda: grpc.delete_external_ip_attachment(attachment_id=aid),
+                    resource_kind=WaitResourceKind.EXTERNAL_IP_ATTACHMENT,
+                    resource_id=aid,
                 )
             )
         if auto_eip_id:
@@ -205,6 +212,8 @@ def _teardown_owned_resources(state: dict[str, Any], grpc: GRPCClient, k8s: K8sC
                     api_gone=lambda: eid not in grpc.list_external_ip_ids(),
                     cr_gone=lambda: k8s.get_external_ip_name(uuid=eid, checked=False) == "",
                     delete=lambda: grpc.delete_external_ip(external_ip_id=eid),
+                    resource_kind=WaitResourceKind.EXTERNAL_IP,
+                    resource_id=eid,
                 )
             )
 
@@ -250,6 +259,8 @@ def _teardown_owned_resources(state: dict[str, Any], grpc: GRPCClient, k8s: K8sC
                 api_gone=lambda: pool_id not in grpc.list_external_ip_pool_ids(),
                 cr_gone=lambda: k8s.get_external_ip_pool_name(uuid=pool_id, checked=False) == "",
                 retries=FABRIC_RETRIES,
+                resource_kind=WaitResourceKind.EXTERNAL_IP_POOL,
+                resource_id=pool_id,
             )
 
         _phase(_wait_pool)
@@ -400,6 +411,8 @@ class TestCrossTenantBmaasNetworking:
                 retries=45,
                 delay=5,
                 description=f"NATGateway for {tenant}",
+                resource_kind=WaitResourceKind.NAT_GATEWAY,
+                resource_id=net["nat_id"],
             )
             net["nat_cr"] = poll_until(
                 fn=lambda nid=net["nat_id"]: k8s_hub_client.get_nat_gateway_name(uuid=nid, checked=False),
@@ -407,6 +420,8 @@ class TestCrossTenantBmaasNetworking:
                 retries=30,
                 delay=2,
                 description=f"NATGateway CR for {tenant}",
+                resource_kind=WaitResourceKind.NAT_GATEWAY,
+                resource_id=net["nat_id"],
             )
 
     def test_03_create_bmis(
@@ -494,6 +509,8 @@ class TestCrossTenantBmaasNetworking:
                 retries=60,
                 delay=10,
                 description=f"tenant IP for {bmi['name']}",
+                resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+                resource_id=bmi["cr"],
             )
             assert bmi["ip"].startswith(bmi["ip_prefix"]), bmi["ip"]
             ext_host = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi["cr"])
@@ -519,7 +536,13 @@ class TestCrossTenantBmaasNetworking:
                 return None
 
             attachment = poll_until(
-                fn=find, until=lambda a: a is not None, retries=60, delay=5, description=f"auto-EIP {key}"
+                fn=find,
+                until=lambda a: a is not None,
+                retries=60,
+                delay=5,
+                description=f"auto-EIP {key}",
+                resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+                resource_id=bmi_id,
             )
             eip_id = (
                 attachment.get("spec", {}).get("externalIp") or attachment.get("spec", {}).get("external_ip") or {}
@@ -554,6 +577,8 @@ class TestCrossTenantBmaasNetworking:
             retries=12,
             delay=5,
             description=f"tenant2 BMI reachable to own GW {t2_gw} (from {t2_a['ip']})",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=t2_a["id"],
         )
         poll_until(
             fn=lambda: guest_ssh.ping(t1_a["ssh_host"], t1_gw),
@@ -561,6 +586,8 @@ class TestCrossTenantBmaasNetworking:
             retries=12,
             delay=5,
             description=f"tenant1 BMI reachable to own GW {t1_gw} (from {t1_a['ip']})",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=t1_a["id"],
         )
 
         assert not guest_ssh.ping(t2_a["ssh_host"], t1_a["ip"]), (
@@ -581,6 +608,8 @@ class TestCrossTenantBmaasNetworking:
             retries=5,
             delay=15,
             description="NAT egress",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=t2_a["id"],
         )
         eip_name = f"xt-ing-{net_test_run_id}"
         eip_id = private_grpc.create_external_ip(name=eip_name, pool=self.state["pool_id"], tenant=self.state["t2"])
@@ -607,7 +636,15 @@ class TestCrossTenantBmaasNetworking:
             except subprocess.CalledProcessError:
                 return ""
 
-        poll_until(fn=_try_ssh, until=lambda h: bool(h), retries=12, delay=20, description=f"SSH via {ext_addr}")
+        poll_until(
+            fn=_try_ssh,
+            until=lambda h: bool(h),
+            retries=12,
+            delay=20,
+            description=f"SSH via {ext_addr}",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=t2_a["id"],
+        )
         self.__class__.state.update(
             ingress_eip_id=eip_id, ingress_eip_cr=eip_cr, ingress_attach_id=attach_id, ingress_attach_cr=attach_cr
         )
@@ -624,6 +661,8 @@ class TestCrossTenantBmaasNetworking:
             retries=12,
             delay=5,
             description="ICMP allowed before SG deny",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=t2_a["id"],
         )
         private_grpc.update_security_group_rules(
             sg_id=t2_net["sg_id"],
@@ -637,6 +676,8 @@ class TestCrossTenantBmaasNetworking:
                 retries=8,
                 delay=5,
                 description="ICMP blocked after SG deny",
+                resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+                resource_id=t2_a["id"],
             )
         except TimeoutError:
             if _sg_deny_workaround():

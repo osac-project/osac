@@ -43,6 +43,7 @@ from tests.e2e.core.metering import (
     usage_interval,
 )
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.teardown import wait_owned_gone
 from tests.e2e.networking.vmaas import stack
 
@@ -91,6 +92,8 @@ def billing_pool(
                 api_gone=lambda: pool_id not in private_grpc.list_external_ip_pool_ids(),
                 cr_gone=lambda: k8s_hub_client.get_external_ip_pool_name(uuid=pool_id, checked=False) == "",
                 delete=lambda: private_grpc.delete_external_ip_pool(pool_id=pool_id),
+                resource_kind=WaitResourceKind.EXTERNAL_IP_POOL,
+                resource_id=pool_id,
             )
 
 
@@ -121,7 +124,10 @@ def test_external_ip_bills_allocation_through_deletion(
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr_name)
 
         heartbeat = metering.heartbeat_with_dimensions(
-            eip_id, {"pool": pool_name, "attached": "false"}, timeout=HEARTBEAT_TIMEOUT
+            eip_id,
+            {"pool": pool_name, "attached": "false"},
+            timeout=HEARTBEAT_TIMEOUT,
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
         )
         # The ExternalIP was created without a project, so its heartbeats must
         # carry no project dimension.
@@ -141,6 +147,8 @@ def test_external_ip_bills_allocation_through_deletion(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"two heartbeats of ExternalIP {eip_id}",
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=eip_id,
         )
         events = sorted(
             metering.get_all_events(HEARTBEAT_TYPE, eip_id), key=lambda event: event["data"]["usage"]["from"]
@@ -216,6 +224,8 @@ def _delete_external_ip(grpc: GRPCClient, k8s: K8sClient, *, external_ip_id: str
                         retries=30,
                         delay=2,
                         description=f"deletion timestamp of {cr_name}",
+                        resource_kind=WaitResourceKind.EXTERNAL_IP,
+                        resource_id=cr_name,
                     )
                 )
     except Exception:

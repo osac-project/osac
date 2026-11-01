@@ -11,6 +11,7 @@ from tests.e2e.core import runner
 from tests.e2e.core.failures import Classified, E2EFailure, Kind, classify
 from tests.e2e.core.runner import CommandFailed, CommandTimedOut, StuckState, poll_until, run
 from tests.e2e.core.sanitize import sanitize_args, sanitize_obj, sanitize_text
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 JWT = ".".join(["eyJhbGciOiJSUzI1NiJ9", "eyJzdWIiOiJ0ZXN0In0", "c2lnbmF0dXJl"])
 PAYLOAD = '{"object": {"metadata": {"name": "payload-marker"}}}'
@@ -132,7 +133,15 @@ class TestCommandFailed:
 class TestStuckState:
     def test_is_a_timeout_error_with_attributes(self) -> None:
         with pytest.raises(TimeoutError) as raised:
-            poll_until(fn=lambda: "pending", until=lambda _: False, retries=1, delay=0, description="thing ready")
+            poll_until(
+                fn=lambda: "pending",
+                until=lambda _: False,
+                retries=1,
+                delay=0,
+                description="thing ready",
+                resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                resource_id="thing-1",
+            )
         exc = raised.value
         assert isinstance(exc, StuckState)
         assert exc.description == "thing ready"
@@ -147,13 +156,23 @@ class TestStuckState:
                 retries=1,
                 delay=0,
                 description="object ready",
+                resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                resource_id="thing-1",
             )
         assert "container-secret" not in str(raised.value)
         assert "<dict with 2 keys>" in str(raised.value)
 
     def test_list_summary(self) -> None:
         with pytest.raises(StuckState) as raised:
-            poll_until(fn=lambda: [1, 2, 3], until=lambda _: False, retries=1, delay=0, description="d")
+            poll_until(
+                fn=lambda: [1, 2, 3],
+                until=lambda _: False,
+                retries=1,
+                delay=0,
+                description="d",
+                resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                resource_id="thing-1",
+            )
         assert "<list of 3>" in str(raised.value)
 
     def test_last_failed_call_is_named_without_the_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,7 +182,16 @@ class TestStuckState:
             raise CommandFailed(1, grpcurl_argv(), output="", stderr="Code: Unavailable")
 
         with pytest.raises(StuckState) as raised:
-            poll_until(fn=fail, until=bool, retries=2, delay=0, description="api up", retry_on_error=True)
+            poll_until(
+                fn=fail,
+                until=bool,
+                retries=2,
+                delay=0,
+                description="api up",
+                retry_on_error=True,
+                resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                resource_id="thing-1",
+            )
         text = str(raised.value)
         assert "last call failed: CommandFailed" in text
         assert "Unavailable" in text
@@ -179,7 +207,16 @@ class TestStuckState:
             raise subprocess.CalledProcessError(1, "secret-command", output="secret-response")
 
         with pytest.raises(StuckState) as raised:
-            poll_until(fn=fail, until=bool, retries=2, delay=0, description="d", retry_on_error=True)
+            poll_until(
+                fn=fail,
+                until=bool,
+                retries=2,
+                delay=0,
+                description="d",
+                retry_on_error=True,
+                resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                resource_id="thing-1",
+            )
         assert "last call failed: CalledProcessError" in str(raised.value)
         assert "secret-command" not in str(raised.value)
         assert "secret-response" not in str(raised.value)
@@ -187,7 +224,13 @@ class TestStuckState:
     def test_scalar_summary_is_sanitized_and_capped(self) -> None:
         with pytest.raises(StuckState) as raised:
             poll_until(
-                fn=lambda: f"Bearer {JWT} " + "x" * 500, until=lambda _: False, retries=1, delay=0, description="d"
+                fn=lambda: f"Bearer {JWT} " + "x" * 500,
+                until=lambda _: False,
+                retries=1,
+                delay=0,
+                description="d",
+                resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                resource_id="thing-1",
             )
         assert JWT not in str(raised.value)
         assert len(raised.value.last_value) <= 120

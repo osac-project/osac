@@ -16,6 +16,7 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_deletion,
 )
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,8 @@ class TestIPManagementReferences:
                         retries=60,
                         delay=5,
                         description=f"NATGateway {nat_id} deletion",
+                        resource_kind=WaitResourceKind.NAT_GATEWAY,
+                        resource_id=nat_id,
                     )
                 except subprocess.CalledProcessError:
                     logger.warning("Failed to cleanup NATGateway %s", nat_id)

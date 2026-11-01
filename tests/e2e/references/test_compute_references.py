@@ -14,6 +14,7 @@ from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import assert_grpc_field_violation, wait_for_cr, wait_for_provision, wait_for_running
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import env, poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,8 @@ def _delete_compute_instance_and_wait(grpc: GRPCClient, k8s: K8sClient, ci_id: s
             retries=120,
             delay=5,
             description=f"ComputeInstance {ci_id} CR deletion",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=cr_name,
         )
         poll_until(
             fn=api_is_absent,
@@ -123,6 +126,8 @@ def _delete_compute_instance_and_wait(grpc: GRPCClient, k8s: K8sClient, ci_id: s
             retries=30,
             delay=2,
             description=f"ComputeInstance {ci_id} API deletion",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=ci_id,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         # grpcurl exceptions contain the bearer token in their command arguments.

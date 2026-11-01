@@ -10,6 +10,7 @@ import pytest
 from tests.e2e.core import helpers, runner
 from tests.e2e.core import k8s_client as k8s_client_module
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
 def test_wait_for_cluster_ready_fails_immediately_on_failed_order(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -288,7 +289,7 @@ def test_guest_health_recovers_from_access_and_readiness_delays(monkeypatch: pyt
 
     monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
 
-    helpers.wait_for_workload_cluster_health(k8s=k8s, expected_workers=1)
+    helpers.wait_for_workload_cluster_health(k8s=k8s, cluster_name="guest-cluster", expected_workers=1)
 
 
 def test_guest_health_has_at_most_five_minutes_of_scheduled_waits() -> None:
@@ -301,6 +302,7 @@ def test_wait_for_cluster_guest_readiness_waits_for_hub_ready_before_guest_check
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
+    poll_identity: dict[str, object] = {}
     node_pool = {"status": {"replicas": 1, "nodesInfo": {"nodeVersions": [{"readyNodeCount": 1}]}}}
 
     monkeypatch.setattr(helpers, "wait_for_workload_cluster_health", lambda **_kwargs: events.append("guest"))
@@ -310,8 +312,10 @@ def test_wait_for_cluster_guest_readiness_waits_for_hub_ready_before_guest_check
         *,
         fn: Callable[[], dict[str, object] | None],
         until: Callable[[dict[str, object] | None], bool],
-        **_kwargs: object,
+        **kwargs: object,
     ) -> dict[str, object] | None:
+        poll_identity["resource_kind"] = kwargs["resource_kind"]
+        poll_identity["resource_id"] = kwargs["resource_id"]
         events.append("nodepool")
         value = fn()
         assert until(value)
@@ -323,13 +327,19 @@ def test_wait_for_cluster_guest_readiness_waits_for_hub_ready_before_guest_check
         k8s=Mock(),
         name="order-test",
         workload_k8s=Mock(),
+        cluster_name="guest-cluster",
         expected_workers=1,
         get_node_pool=lambda: node_pool,
         expected_ready_nodes=1,
         node_pool_description="order-test NodePool",
+        node_pool_id="nodepool-guest-cluster-worker-node-set",
     )
 
     assert events == ["ready", "guest", "nodepool"]
+    assert poll_identity == {
+        "resource_kind": WaitResourceKind.NODE_POOL,
+        "resource_id": "nodepool-guest-cluster-worker-node-set",
+    }
 
 
 def test_guest_k8s_client_does_not_impersonate_system_admin() -> None:

@@ -69,8 +69,6 @@ export const buildComputeCatalogStepSchema = (
       return yup
         .object({
           userData: yup.object({ locked: yup.boolean(), value: yup.string() }),
-          userDataSource: yup.object({ value: yup.string() }),
-          userDataSecret: yup.object({ value: yup.string() }),
         })
         .test(
           'user-data-required-when-locked',
@@ -79,14 +77,12 @@ export const buildComputeCatalogStepSchema = (
             if (!values?.userData?.locked) {
               return true;
             }
-            const source = values.userDataSource?.value === 'secret' ? 'secret' : 'inline';
-            const value =
-              source === 'secret' ? values.userDataSecret?.value : values.userData?.value;
+            const value = values.userData?.value;
             if (typeof value === 'string' && value.trim()) {
               return true;
             }
             return this.createError({
-              path: source === 'secret' ? 'userDataSecret.value' : 'userData.value',
+              path: 'userData.value',
               message: t('User data is required when locked'),
             });
           },
@@ -112,7 +108,7 @@ export const computeCatalogStepHasErrors = (
         errors.bootDiskSizeGib || errors.bootDiskStorageTier || errors.additionalDisks,
       );
     case 'access-init':
-      return Boolean(errors.userData || errors.userDataSecret);
+      return Boolean(errors.userData);
     default:
       return false;
   }

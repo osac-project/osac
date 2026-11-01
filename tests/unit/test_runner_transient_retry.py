@@ -68,6 +68,18 @@ class TestIsTransientGrpcError:
         exc = _make_cpe("Code: Internal\nMessage: service unavailable; no healthy upstream")
         assert _is_transient_grpc_error(exc) is False
 
+    def test_rejects_code_unavailable_inside_message_body(self) -> None:
+        """'code: unavailable' inside the message field must not
+        override the actual PermissionDenied status code."""
+        exc = _make_cpe("Code: PermissionDenied\nMessage: no healthy upstream; code: unavailable")
+        assert _is_transient_grpc_error(exc) is False
+
+    def test_rejects_go_unavailable_inside_desc(self) -> None:
+        """Go PermissionDenied with 'code = Unavailable' embedded
+        in the desc field must not be treated as transient."""
+        exc = _make_cpe("Error: rpc error: code = PermissionDenied desc = code = Unavailable no healthy upstream")
+        assert _is_transient_grpc_error(exc) is False
+
     def test_rejects_none_stderr(self) -> None:
         exc = subprocess.CalledProcessError(1, "grpcurl")
         exc.stderr = None  # type: ignore[assignment]

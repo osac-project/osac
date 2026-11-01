@@ -55,6 +55,7 @@ def test_cluster_create_with_two_node_sets(
             node_set: {"size": 1, "baremetal_instance_type": {"name": instance_type}}
             for node_set, instance_type in instance_types.items()
         },
+        network_attachment="subnet=default-ipv4,security-groups=default",
         pull_secret=pull_secret_name,
         ssh_public_key_file=ssh_public_key_path,
     )

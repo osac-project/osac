@@ -350,7 +350,37 @@ issuer, while `PROFILE=dev` uses `keycloak.keycloak.svc.cluster.local`.
   callback Codex sent. The Kind development client already allows
   `http://localhost:8091/callback`; configure both `callback_url` and
   `callback_port` as shown above, or register the exact callback printed by
-  `codex mcp add`. Avoid a broad redirect wildcard.
+  `codex mcp add`. Avoid a global `*` redirect. For a headless Codex CLI using
+  its random-port loopback callback, Keycloak documents special native-app
+  handling for the `127.0.0.1` loopback address
+  ([Keycloak documentation](https://www.keycloak.org/securing-apps/oidc-layers)).
+  In the test realm involved in this incident, the client had only fixed-port
+  callbacks. Adding `http://127.0.0.1/callback/*` to that public client's
+  redirect list allowed Codex's callback path and ephemeral port. This was a
+  live Keycloak edit, not a change to the Kind fixture in this guide; update
+  the environment's realm/client provisioning if the setting needs to survive
+  a realm rebuild.
+- To log in from a host without a browser, keep the Codex process running and
+  use its manual callback mode:
+
+  ```bash
+  export SSL_CERT_FILE=/path/to/osac-codex-ca-bundle.pem
+  codex mcp login osac --scopes offline_access --no-browser
+  ```
+
+  Open the printed authorization URL on a browser-capable device and sign in.
+  Copy the full callback URL from the browser address bar and paste it into
+  the waiting CLI prompt. If the callback page does not load because
+  `127.0.0.1` refers to the browser device, the full URL can still be pasted;
+  the manual flow does not require forwarding that browser's loopback port to
+  the headless host. Keep the issuer and MCP HTTPS routes reachable from the
+  Codex host, and set the CA bundle in the shell that starts Codex.
+- OAuth state is stored in the Codex user's home/config directory. Log in and
+  start new Codex sessions as the same Unix user with the same `CODEX_HOME`
+  and CA environment. `codex mcp list` confirms the server configuration, but
+  verify a fresh process with a read-only tool call as well; tool names alone
+  do not show whether the token exchange works. A fresh Codex CLI process in
+  this session successfully called `osac.list_resources` after login.
 - A successful login with denied tools means the caller lacks the required
   tenant or resource authorization. Use an appropriately authorized account;
   do not replace the caller with a privileged service token.

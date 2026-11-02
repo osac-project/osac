@@ -58,14 +58,33 @@ class Cluster:
         self.restore: list[tuple[str, ...]] = []
         self.extra_ns: list[str] = []  # namespaces created by cases that need their own release
 
-    def run(self, *cmd: str, check: bool = True, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-        proc = subprocess.run(cmd, capture_output=True, text=True, input=stdin)
+    def run(self, *cmd: str, check: bool = True, stdin: str | None = None,
+            timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+        proc = subprocess.run(cmd, capture_output=True, text=True, input=stdin, timeout=timeout)
         if check and proc.returncode != 0:
             raise AssertionError(f"{' '.join(cmd)} failed ({proc.returncode}):\n{proc.stdout}\n{proc.stderr}")
         return proc
 
-    def kubectl(self, *args: str, check: bool = True, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-        return self.run("kubectl", "--context", self.context, *args, check=check, stdin=stdin)
+    def kubectl(self, *args: str, check: bool = True, stdin: str | None = None,
+                timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+        return self.run("kubectl", "--context", self.context, *args, check=check, stdin=stdin, timeout=timeout)
+
+    def wait_for_crd(self, name: str) -> None:
+        deadline = time.monotonic() + 60
+        while True:
+            remaining = deadline - time.monotonic()
+            request_timeout_ns = int(remaining * 1_000_000_000)
+            if request_timeout_ns <= 0:
+                raise AssertionError(f"timed out waiting for crd/{name} to become Established (60s)")
+            proc = self.kubectl("get", "crd", name, "-o", "json",
+                                f"--request-timeout={request_timeout_ns}ns", timeout=remaining)
+            conditions = (json.loads(proc.stdout).get("status") or {}).get("conditions") or []
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"timed out waiting for crd/{name} to become Established (60s)")
+            if any(condition.get("type") == "Established" and condition.get("status") == "True"
+                   for condition in conditions):
+                return
+            time.sleep(min(1, max(0, deadline - time.monotonic())))
 
     def apply(self, manifest: str) -> None:
         self.kubectl("apply", "-f", "-", stdin=manifest)
@@ -174,7 +193,7 @@ def create_prerequisites(c: Cluster) -> None:
     for crd in STUB_CRDS:
         c.apply(CRD.format(**crd))
     for name in [f"{crd['plural']}.{crd['group']}" for crd in STUB_CRDS]:
-        c.kubectl("wait", "--for=condition=Established", f"crd/{name}", "--timeout=60s")
+        c.wait_for_crd(name)
     ready = '{"status":{"conditions":[{"type":"Ready","status":"True"}]}}'
     c.apply("apiVersion: cert-manager.io/v1\nkind: ClusterIssuer\nmetadata: {name: default-ca}\nspec: {}\n")
     c.kubectl("patch", "clusterissuer", "default-ca", "--subresource=status", "--type=merge", "-p", ready)
@@ -304,26 +323,40 @@ def case_fresh_install_lists_every_fault_once(c: Cluster) -> None:
     c.kubectl("cordon", node)
     c.kubectl("delete", "secret", "fulfillment-controller-credentials", "-n", c.ns)
     c.kubectl("delete", "crd", CERT_MANAGER_CRD)
+    case_error = None
+    proc = None
     try:
         started = time.monotonic()
         proc = c.install("--wait")
         elapsed = time.monotonic() - started
         report = failure_report(proc)
+        assert elapsed < FAST_FAIL_SECONDS, f"the preflight took {elapsed:.0f}s"
+        assert blocking_ids(report) == {"default-storageclass", "nodes-schedulable", "controller-credentials", "cert-manager-crds"}, blocking_ids(report)
+        issuer = result(report, "cert-issuer-ready")
+        assert issuer["status"] == "unknown" and issuer["dependsOn"] == ["cert-manager-crds"], issuer
+        assert "Nothing was changed" in proc.stderr
+        for fix in ("oc patch storageclass", "Uncordon a node", "Install the cert-manager Operator", "Create the controller credential Secret"):
+            assert fix in proc.stderr, f"missing fix text: {fix}"
+        assert c.releases() == [], "a failed render must not leave a release behind"
+        assert c.report_configmap() is None, "a failed render must not create the report"
+    except Exception as exc:
+        case_error = exc
+        if proc is not None:
+            exc.add_note(f"Helm stdout:\n{proc.stdout}\nHelm stderr:\n{proc.stderr}")
+        raise
     finally:
-        c.kubectl("uncordon", node)
-        set_default_storageclass(c, sc, "true")
-        create_namespace_prerequisites(c)
-        c.apply(CRD.format(**STUB_CRDS[0]))
-        c.kubectl("wait", "--for=condition=Established", f"crd/{CERT_MANAGER_CRD}", "--timeout=60s")
-    assert elapsed < FAST_FAIL_SECONDS, f"the preflight took {elapsed:.0f}s"
-    assert blocking_ids(report) == {"default-storageclass", "nodes-schedulable", "controller-credentials", "cert-manager-crds"}, blocking_ids(report)
-    issuer = result(report, "cert-issuer-ready")
-    assert issuer["status"] == "unknown" and issuer["dependsOn"] == ["cert-manager-crds"], issuer
-    assert "Nothing was changed" in proc.stderr
-    for fix in ("oc patch storageclass", "Uncordon a node", "Install the cert-manager Operator", "Create the controller credential Secret"):
-        assert fix in proc.stderr, f"missing fix text: {fix}"
-    assert c.releases() == [], "a failed render must not leave a release behind"
-    assert c.report_configmap() is None, "a failed render must not create the report"
+        try:
+            c.kubectl("uncordon", node)
+            set_default_storageclass(c, sc, "true")
+            create_namespace_prerequisites(c)
+            c.apply(CRD.format(**STUB_CRDS[0]))
+            c.wait_for_crd(CERT_MANAGER_CRD)
+        except Exception as cleanup_error:
+            if case_error is None:
+                if proc is not None:
+                    cleanup_error.add_note(f"Helm stdout:\n{proc.stdout}\nHelm stderr:\n{proc.stderr}")
+                raise
+            case_error.add_note(f"Fixture restoration also failed: {cleanup_error}")
 
 
 def hook_report(stdout: str) -> dict:
@@ -663,6 +696,8 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001 - report every case, then fail
                 failures += 1
                 print(f"FAIL {case.__name__}: {exc}")
+                for note in getattr(exc, "__notes__", []):
+                    print(note)
     finally:
         cleanup(c)
     print(f"{len(selected) - failures}/{len(selected)} cases passed")

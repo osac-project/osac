@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { FormGroup, Radio } from '@patternfly/react-core';
 import { useField } from 'formik';
 
@@ -18,6 +19,7 @@ interface RadioButtonFieldProps {
   isRequired?: boolean;
   isDisabled?: boolean;
   isInline?: boolean;
+  labelInfo?: ReactNode;
 }
 
 export const RadioButtonField = ({
@@ -28,6 +30,7 @@ export const RadioButtonField = ({
   isRequired = false,
   isDisabled = false,
   isInline = false,
+  labelInfo,
 }: RadioButtonFieldProps) => {
   const [field, meta] = useField<string | boolean>(name);
   const showValidationErrors = useShowFieldValidationErrors();
@@ -40,6 +43,7 @@ export const RadioButtonField = ({
       label={label}
       fieldId={fieldId}
       isRequired={isRequired}
+      labelInfo={labelInfo}
       role="radiogroup"
       isInline={isInline}
     >

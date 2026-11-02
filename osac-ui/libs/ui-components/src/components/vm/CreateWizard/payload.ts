@@ -6,6 +6,10 @@ import type { ComputeInstanceCatalogItem } from '@osac/types';
 
 import { type ComputeInstanceWizardValues } from './fields';
 import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
+import {
+  getUserDataSourceFieldsFromPolicy,
+  getUserDataSourcePayload,
+} from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
 export { createEmptyComputeInstanceValues } from './fields';
 
@@ -39,9 +43,10 @@ export const buildComputeInstanceCreatePayload = (
     spec.runStrategy = ComputeInstanceRunStrategy.COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS;
   }
 
-  if (!values.spec.instanceType.locked && values.spec.instanceType.value) {
+  const instanceTypeId = values.spec.instanceType.value.id.trim();
+  if (!values.spec.instanceType.locked && instanceTypeId) {
     spec.instanceType = {
-      id: values.spec.instanceType.value,
+      id: instanceTypeId,
     };
   }
 
@@ -80,16 +85,10 @@ export const buildComputeInstanceCreatePayload = (
     }
   }
 
-  if (values.spec.userDataSource.value === 'secret') {
-    const userDataSecretName = values.spec.userDataSecret.value.trim();
-    if (!values.spec.userDataSecret.locked && userDataSecretName) {
-      //spec.userDataSecret = { name: userDataSecretName };
-    }
-  } else {
-    const userData = values.spec.userData.value.trim();
-    if (!values.spec.userData.locked && userData) {
-      //spec.userData = userData;
-    }
+  const initialUserData = getUserDataSourceFieldsFromPolicy(catalogItem?.fields?.userDataSource);
+  const userDataSource = getUserDataSourcePayload(values.spec.userData, initialUserData);
+  if (userDataSource) {
+    spec.userDataSource = userDataSource;
   }
 
   const bootDisk: { sizeGib?: number; storageTier?: { id?: string; name?: string } } = {};

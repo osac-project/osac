@@ -100,6 +100,22 @@ describe('AppShell', () => {
     expect(await screen.findByRole('heading', { name: 'Catalog' })).toBeInTheDocument();
   });
 
+  it('does not register catalog create route for tenant-user', async () => {
+    renderAppShell('/catalog/vm/create', 'tenant-user');
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('heading', { name: 'Create VM Catalog Item' }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it('does not register catalog edit route for tenant-user', async () => {
+    renderAppShell('/catalog/vm/item-1/edit', 'tenant-user');
+
+    expect(await screen.findByRole('heading', { name: 'Catalog' })).toBeInTheDocument();
+  });
+
   it.each([
     {
       path: '/vms/vm-1',

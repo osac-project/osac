@@ -1,0 +1,10 @@
+.catalog-node-sets__list.pf-v6-c-description-list {
+  margin-block-start: var(--pf-t--global--spacer--sm);
+  padding-inline-start: var(--pf-t--global--spacer--md);
+  border-inline-start: var(--pf-t--global--border--width--regular) solid
+    var(--pf-t--global--border--color--default);
+}
+
+.catalog-node-sets__list .pf-v6-c-description-list__term {
+  white-space: nowrap;
+}

@@ -12,12 +12,16 @@ import type { ProvisioningFieldControlProps } from '../../../ProvisioningWizard/
 
 interface BareMetalInstanceTypeFieldProps extends ProvisioningFieldControlProps {
   fieldId?: string;
+  autoSelectSingleOption?: boolean;
 }
 
 const BareMetalInstanceTypeField = ({
   name,
   fieldId = 'instance-type',
   isDisabled = false,
+  isRequired = true,
+  labelInfo,
+  autoSelectSingleOption = true,
 }: BareMetalInstanceTypeFieldProps) => {
   const { t } = useTranslation();
   const { getFieldProps } = useFormikContext();
@@ -50,7 +54,9 @@ const BareMetalInstanceTypeField = ({
           fieldId={fieldId}
           isLoading={isLoading}
           isDisabled={isDisabled || !!error}
-          autoSelectSingleOption
+          isRequired={isRequired}
+          labelInfo={labelInfo}
+          autoSelectSingleOption={autoSelectSingleOption}
           placeholder={t('Select an instance type')}
           options={(data?.items || []).map((instanceType) => ({
             label: `${instanceType.metadata?.name || ''}`,

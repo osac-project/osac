@@ -8,9 +8,7 @@ const getCatalogItemCard = (page: Page, name: string): Locator =>
   });
 
 export interface ExpectedCatalogItemResources {
-  vcpus: number;
-  memoryGib: number;
-  storageGib: number;
+  instanceType: string;
   diskImage: string;
 }
 
@@ -36,9 +34,7 @@ export const expectCatalogItemListed = async (
   );
 
   const expectedResourceValues = [
-    ['vCPU', `${expectedResources.vcpus} vCPU`],
-    ['Memory', `${expectedResources.memoryGib} GiB`],
-    ['Storage', `${expectedResources.storageGib} GiB`],
+    ['Instance type', expectedResources.instanceType],
     ['Disk image', expectedResources.diskImage],
   ] as const;
 
@@ -52,6 +48,8 @@ export const expectCatalogItemListed = async (
       value,
     );
   }
+
+  await expect(catalogItemCard.getByText('Storage', { exact: true })).toHaveCount(0);
 };
 
 /** Verify that a catalog item is absent from the Catalog page. */

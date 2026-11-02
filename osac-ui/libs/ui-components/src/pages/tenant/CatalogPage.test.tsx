@@ -1,20 +1,27 @@
 import { Route, Routes } from 'react-router-dom';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   BareMetalInstanceCatalogItem,
   BareMetalInstanceCatalogItems,
+  BareMetalInstanceTypes,
   Capabilities,
   ClusterCatalogItem,
   ClusterCatalogItems,
   ClusterTemplateReferenceSchema,
+  ClusterVersions,
   ComputeInstanceCatalogItem,
+  ComputeInstanceCatalogItemSchema,
   ComputeInstanceCatalogItems,
   ComputeInstanceTemplateReferenceSchema,
+  DiskImages,
+  InstanceTypes,
   Metadata,
+  MetadataSchema,
+  SelfSubjectAccessReviews,
   ServiceTier,
 } from '@osac/types';
 import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
@@ -25,6 +32,7 @@ import {
   catalogItemMatchesListFilter,
 } from '../../api/v1/catalog-item-list-filter';
 import { CatalogItemDetailPage } from '../../components/catalog/details/CatalogItemDetailPage.tsx';
+import type { UserRole } from '../../shellTypes';
 import { wrapWithAuthInterceptor } from '../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
@@ -56,13 +64,48 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
   templateParameters: {},
 };
 
-const vmCatalogItemForDisplay: ComputeInstanceCatalogItem = {
-  ...vmCatalogItem,
-  metadata: {
-    ...vmCatalogMetaData,
-    labels: { env: 'prod' },
+const vmCatalogItemWithReferences = create(ComputeInstanceCatalogItemSchema, {
+  id: vmCatalogItem.id,
+  metadata: vmCatalogMetaData,
+  title: vmCatalogItem.title,
+  template: { id: 'tpl-rhel-9' },
+  published: true,
+  templateParameters: {},
+  fields: {
+    instanceType: {
+      behavior: {
+        case: 'locked',
+        value: { id: 'instance-type-id', name: '  General purpose  ' },
+      },
+    },
+    diskImage: {
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { id: 'disk-image-id', name: '  RHEL 10  ' } },
+      },
+    },
   },
-};
+});
+
+const vmCatalogItemWithIdOnlyReferences = create(ComputeInstanceCatalogItemSchema, {
+  id: 'catalog-rhel-8',
+  metadata: { ...vmCatalogMetaData, name: 'catalog-rhel-8' },
+  title: 'RHEL 8 catalog',
+  template: { id: 'tpl-rhel-8' },
+  published: true,
+  templateParameters: {},
+  fields: {
+    instanceType: {
+      behavior: { case: 'locked', value: { id: 'instance-type-id-only' } },
+    },
+    diskImage: {
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { id: 'disk-image-id-only' } },
+      },
+    },
+  },
+});
 
 const clusterCatalogItem: ClusterCatalogItem = {
   $typeName: 'osac.public.v1.ClusterCatalogItem',
@@ -130,6 +173,7 @@ type CatalogRequestCounts = {
   vm: number;
   cluster: number;
   bm: number;
+  resourceLookups: number;
 };
 
 const toConnectError = (error: Error) => {
@@ -149,7 +193,7 @@ const toCatalogListResponse = <T extends CatalogListFilterableItem>(
   return {
     items,
     size: items.length,
-    total: allItems.length,
+    total: filteredItems.length,
   };
 };
 
@@ -186,6 +230,10 @@ const createCatalogPageTransport = ({
           }
           return { enabledServices };
         },
+      });
+
+      router.service(SelfSubjectAccessReviews, {
+        create: () => ({ object: { status: { allowed: true } } }),
       });
 
       router.service(ComputeInstanceCatalogItems, {
@@ -241,6 +289,42 @@ const createCatalogPageTransport = ({
           object: bmItems.find((i) => i.id === req.id),
         }),
       });
+
+      router.service(InstanceTypes, {
+        list: () => {
+          if (requestCounts) {
+            requestCounts.resourceLookups += 1;
+          }
+          return { items: [] };
+        },
+      });
+
+      router.service(DiskImages, {
+        list: () => {
+          if (requestCounts) {
+            requestCounts.resourceLookups += 1;
+          }
+          return { items: [] };
+        },
+      });
+
+      router.service(BareMetalInstanceTypes, {
+        list: () => {
+          if (requestCounts) {
+            requestCounts.resourceLookups += 1;
+          }
+          return { items: [] };
+        },
+      });
+
+      router.service(ClusterVersions, {
+        list: () => {
+          if (requestCounts) {
+            requestCounts.resourceLookups += 1;
+          }
+          return { items: [] };
+        },
+      });
     }),
   );
 
@@ -255,33 +339,27 @@ const createRequestCounts = (): CatalogRequestCounts => ({
   vm: 0,
   cluster: 0,
   bm: 0,
+  resourceLookups: 0,
 });
 
 const renderCatalogPage = (
   transport = unauthorizedTransport,
   enabledServices: ServiceTier[] = allCatalogServiceTiers,
   routerEntries = ['/catalog'],
+  role: UserRole = 'admin',
 ) =>
   renderWithProviders(<CatalogPage />, {
     transport,
     routerEntries,
     apiFixtures: { enabledServices },
+    session: { role },
   });
 
-const renderVmCatalogItemList = (viewType: 'cards' | 'list') => {
-  if (viewType === 'list') {
-    localStorage.setItem(catalogItemsViewPrefKey, 'list');
-  }
-
-  return renderCatalogPage(
-    createCatalogPageTransport({
-      vmItems: [vmCatalogItemForDisplay],
-      clusterItems: [],
-    }),
-  );
-};
-
-const renderCatalogPageWithDetailRoutes = (transport = createCatalogPageTransport()) =>
+const renderCatalogPageWithDetailRoutes = (
+  transport = createCatalogPageTransport(),
+  routerEntries = ['/catalog'],
+  role: UserRole = 'admin',
+) =>
   renderWithProviders(
     <Routes>
       <Route path="/catalog" element={<CatalogPage />} />
@@ -289,7 +367,26 @@ const renderCatalogPageWithDetailRoutes = (transport = createCatalogPageTranspor
       <Route path="/clusters/create/:catalogItemId" element={<div>Create cluster page</div>} />
       <Route path="/vms/create/:catalogItemId" element={<div>Create virtual machine page</div>} />
     </Routes>,
-    { transport, routerEntries: ['/catalog'] },
+    {
+      transport,
+      routerEntries,
+      apiFixtures: { enabledServices: allCatalogServiceTiers },
+      session: { role },
+    },
+  );
+
+const renderCatalogPageWithCreateRoute = (
+  transport = createCatalogPageTransport(),
+  routerEntries = ['/catalog'],
+  role: UserRole = 'admin',
+  enabledServices: ServiceTier[] = allCatalogServiceTiers,
+) =>
+  renderWithProviders(
+    <Routes>
+      <Route path="/catalog" element={<CatalogPage />} />
+      <Route path="/catalog/:kind/create" element={<div>Create catalog item page</div>} />
+    </Routes>,
+    { transport, routerEntries, apiFixtures: { enabledServices }, session: { role } },
   );
 
 describe('CatalogPage', () => {
@@ -319,7 +416,7 @@ describe('CatalogPage', () => {
     expect(screen.getByRole('textbox', { name: 'Filter catalog by keyword' })).toBeInTheDocument();
   });
 
-  it('lets users toggle type filters after a 401', async () => {
+  it('lets users change the selected type filter after a 401', async () => {
     const { user } = renderCatalogPage();
 
     await waitFor(() => {
@@ -336,7 +433,11 @@ describe('CatalogPage', () => {
   });
 
   it('disables search while catalog queries are loading', async () => {
-    renderCatalogPage(createCatalogPageTransport({ vmDelayMs: 250, clusterItems: [] }));
+    renderCatalogPage(
+      createCatalogPageTransport({ vmDelayMs: 250, clusterItems: [] }),
+      allCatalogServiceTiers,
+      ['/catalog?types=vm'],
+    );
 
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
     const searchInput = await screen.findByRole('textbox', { name: 'Filter catalog by keyword' });
@@ -358,66 +459,31 @@ describe('CatalogPage', () => {
     expect(screen.getByRole('textbox', { name: 'Filter catalog by keyword' })).toBeDisabled();
   });
 
-  it('shows catalog items for all types by default when queries succeed', async () => {
-    renderCatalogPage(createCatalogPageTransport());
+  it('selects Bare Metal by default (first in priority order) and shows only its items', async () => {
+    renderCatalogPage(createCatalogPageTransport({ bmItems: [bareMetalCatalogItem] }));
 
     await waitFor(() => {
-      expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+      expect(screen.getByText(bareMetalCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(vmCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
+    expect(screen.queryByText(clusterCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Bare Metal/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('falls back to the next enabled tier in priority order when Bare Metal is disabled', async () => {
+    renderCatalogPage(createCatalogPageTransport(), [ServiceTier.CAAS, ServiceTier.VMAAS]);
+
+    await waitFor(() => {
       expect(screen.getByText(clusterCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
     });
-  });
-
-  it('renders catalog items as cards in card view', async () => {
-    renderVmCatalogItemList('cards');
-
-    await waitFor(() => {
-      expect(screen.getByText(vmCatalogItemForDisplay.metadata?.name ?? '')).toBeInTheDocument();
-    });
-
-    expect(screen.queryByRole('grid')).not.toBeInTheDocument();
-    expect(
-      screen.getByRole('link', {
-        name: vmCatalogItemForDisplay.metadata?.name,
-      }),
-    ).toBeInTheDocument();
-    expect(screen.getByText('Virtual Machine')).toBeInTheDocument();
-    expect(screen.getByText('foo')).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', {
-        name: `Actions for ${vmCatalogItemForDisplay.metadata?.name}`,
-      }),
-    ).toBeInTheDocument();
-  });
-
-  it('renders a table of catalog items in list view', async () => {
-    renderVmCatalogItemList('list');
-
-    await waitFor(() => {
-      expect(screen.getByRole('grid', { name: 'Catalog items' })).toBeInTheDocument();
-    });
-
-    expect(screen.getByRole('columnheader', { name: 'Name' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Configuration' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Visibility' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Created' })).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', {
-        name: `Open catalog item details for ${vmCatalogItemForDisplay.metadata?.name}`,
-      }),
-    ).not.toBeInTheDocument();
-
-    expect(
-      screen.getByRole('link', { name: vmCatalogItemForDisplay.metadata?.name }),
-    ).toHaveAttribute('href', `/catalog/vm/${vmCatalogItemForDisplay.id}`);
-    expect(screen.getByText('Virtual Machine')).toBeInTheDocument();
-    expect(screen.getByText('foo')).toBeInTheDocument();
-    expect(screen.queryByText(/env/)).not.toBeInTheDocument();
-    expect(
-      screen.getByRole('button', {
-        name: `Actions for ${vmCatalogItemForDisplay.metadata?.name}`,
-      }),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(vmCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Clusters/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
   });
 
   it.each([
@@ -481,7 +547,13 @@ describe('CatalogPage', () => {
     expect(
       screen.getByText('Create catalog items from master templates, then attach them to tenants.'),
     ).toBeInTheDocument();
-    expect(requestCounts).toEqual({ capabilities: 0, vm: 0, cluster: 0, bm: 0 });
+    expect(requestCounts).toEqual({
+      capabilities: 0,
+      vm: 0,
+      cluster: 0,
+      bm: 0,
+      resourceLookups: 0,
+    });
     expect(
       screen.queryByRole('group', { name: 'Filter catalog by resource type' }),
     ).toBeInTheDocument();
@@ -507,7 +579,13 @@ describe('CatalogPage', () => {
       screen.getByText('Create catalog items from master templates, then attach them to tenants.'),
     ).toBeInTheDocument();
     expect(screen.getByText('No catalog services are enabled.')).toBeInTheDocument();
-    expect(requestCounts).toEqual({ capabilities: 0, vm: 0, cluster: 0, bm: 0 });
+    expect(requestCounts).toEqual({
+      capabilities: 0,
+      vm: 0,
+      cluster: 0,
+      bm: 0,
+      resourceLookups: 0,
+    });
     expect(
       screen.queryByRole('group', { name: 'Filter catalog by resource type' }),
     ).toBeInTheDocument();
@@ -537,21 +615,55 @@ describe('CatalogPage', () => {
     ).toBeInTheDocument();
   });
 
-  it('filters to cluster catalog items when the cluster type toggle is selected', async () => {
-    const { user } = renderCatalogPage(createCatalogPageTransport());
+  it('ignores comma-separated type values in the URL filter', async () => {
+    renderCatalogPage(
+      createCatalogPageTransport({ bmItems: [bareMetalCatalogItem] }),
+      allCatalogServiceTiers,
+      ['/catalog?types=vm,cluster'],
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(bareMetalCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(vmCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
+    expect(screen.queryByText(clusterCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Bare Metal/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('shows only the selected type when a different type is chosen', async () => {
+    const { user } = renderCatalogPage(createCatalogPageTransport(), allCatalogServiceTiers, [
+      '/catalog?types=vm',
+    ]);
 
     await waitFor(() => {
       expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
-      expect(screen.getByText(clusterCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
     });
+    expect(screen.queryByText(clusterCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
 
-    // With no type filter every type with items is shown as selected; clicking a type deselects it.
-    await user.click(screen.getByRole('button', { name: /Virtual Machines/ }));
+    await user.click(screen.getByRole('button', { name: /Clusters/ }));
 
     await waitFor(() => {
       expect(screen.getByText(clusterCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
     });
     expect(screen.queryByText(vmCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
+  });
+
+  it('uses the selected service count for the catalog summary', async () => {
+    renderCatalogPage(
+      createCatalogPageTransport({ clusterItems: [clusterCatalogItem] }),
+      allCatalogServiceTiers,
+      ['/catalog?types=vm'],
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('1 catalog item')).toBeInTheDocument();
+    expect(screen.queryByText(/of 2 catalog items/)).not.toBeInTheDocument();
   });
 
   it('filters catalog items by publication status', async () => {
@@ -563,7 +675,6 @@ describe('CatalogPage', () => {
         name: 'catalog-rhel-8-draft',
       },
       title: 'RHEL 8 draft',
-      description: 'Unpublished RHEL 8 image',
       published: false,
     };
 
@@ -572,12 +683,18 @@ describe('CatalogPage', () => {
         vmItems: [vmCatalogItem, unpublishedVmItem],
         clusterItems: [],
       }),
+      allCatalogServiceTiers,
+      ['/catalog?types=vm'],
     );
 
     await waitFor(() => {
       expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
       expect(screen.getByText(unpublishedVmItem.metadata?.name ?? '')).toBeInTheDocument();
     });
+
+    expect(document.getElementById(`catalog-item-card-${unpublishedVmItem.id}`)).toHaveClass(
+      'pf-m-secondary',
+    );
 
     await user.click(screen.getByRole('button', { name: 'Filter catalog by publication status' }));
     await user.click(screen.getByRole('option', { name: 'Unpublished' }));
@@ -604,25 +721,59 @@ describe('CatalogPage', () => {
     });
   });
 
-  it('shows a page error when one catalog type fails even if others loaded', async () => {
+  it('hides unpublished catalog items from tenant users', async () => {
+    localStorage.setItem(catalogItemsViewPrefKey, 'list');
+
+    const unpublishedVmItem: ComputeInstanceCatalogItem = {
+      ...vmCatalogItem,
+      id: 'catalog-rhel-9-draft',
+      metadata: {
+        ...vmCatalogMetaData,
+        name: 'catalog-rhel-9-draft',
+      },
+      title: 'RHEL 9 draft',
+      published: false,
+    };
+
+    renderCatalogPage(
+      createCatalogPageTransport({
+        vmItems: [vmCatalogItem, unpublishedVmItem],
+        clusterItems: [],
+      }),
+      [ServiceTier.VMAAS],
+      ['/catalog?types=vm'],
+      'tenant-user',
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(unpublishedVmItem.metadata?.name ?? '')).not.toBeInTheDocument();
+  });
+
+  it('keeps the selected catalog visible when an unrelated total query fails', async () => {
     renderCatalogPage(
       createCatalogPageTransport({
         clusterError: Object.assign(new Error(), { name: 'UnauthorizedError' }),
       }),
+      allCatalogServiceTiers,
+      ['/catalog?types=vm'],
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Unauthorized')).toBeInTheDocument();
+      expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
     });
-    expect(screen.queryByText(vmCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
+    // The selected VM query succeeds, and the unrelated cluster total failure
+    // must not replace the selected catalog with an error state.
+    expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
     expect(screen.queryByText(clusterCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
-    // VMs loaded successfully, so search stays enabled despite the cluster error.
-    expect(screen.getByRole('textbox', { name: 'Filter catalog by keyword' })).toBeEnabled();
   });
 
-  it('shows a page error for non-401 failures', async () => {
+  it('shows a generic section error for non-401 failures', async () => {
     renderCatalogPage(
-      createCatalogPageTransport({ vmError: new Error('Catalog service unavailable') }),
+      createCatalogPageTransport({ clusterError: new Error('Catalog service unavailable') }),
+      allCatalogServiceTiers,
+      ['/catalog?types=cluster'],
     );
 
     await waitFor(() => {
@@ -630,8 +781,7 @@ describe('CatalogPage', () => {
     });
 
     expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
-    // Clusters and bare metal loaded successfully, so search stays enabled despite the VM error.
-    expect(screen.getByRole('textbox', { name: 'Filter catalog by keyword' })).toBeEnabled();
+    expect(screen.getByRole('textbox', { name: 'Filter catalog by keyword' })).toBeDisabled();
   });
 
   it('shows an empty state when no catalog items are returned', async () => {
@@ -663,7 +813,6 @@ describe('CatalogPage', () => {
         version: 1,
       },
       title: 'Fedora 40 catalog',
-      description: 'Fedora 40 workstation image',
     };
 
     renderWithProviders(<CatalogPage />, {
@@ -671,7 +820,7 @@ describe('CatalogPage', () => {
         vmItems: [vmCatalogItem, secondVmItem],
         clusterItems: [],
       }),
-      routerEntries: ['/catalog?search=fedora'],
+      routerEntries: ['/catalog?types=vm&search=fedora'],
     });
 
     await waitFor(() => {
@@ -683,7 +832,7 @@ describe('CatalogPage', () => {
   it('shows a search-specific empty state when the filter matches nothing', async () => {
     renderWithProviders(<CatalogPage />, {
       transport: createCatalogPageTransport({ clusterItems: [] }),
-      routerEntries: ['/catalog?search=no-such-catalog-item'],
+      routerEntries: ['/catalog?types=vm&search=no-such-catalog-item'],
     });
 
     await waitFor(() => {
@@ -724,22 +873,18 @@ describe('CatalogPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Clear all filters' }));
 
+    // Clearing the type param falls back to the default (highest-priority) type.
     await waitFor(() => {
-      expect(screen.getByText(vmCatalogItem.metadata?.name || 'N/A')).toBeInTheDocument();
-      expect(screen.getByText(clusterCatalogItem.metadata?.name || 'N/A')).toBeInTheDocument();
+      expect(screen.getByText(bareMetalCatalogItem.metadata?.name || 'N/A')).toBeInTheDocument();
     });
 
-    expect(screen.getByRole('button', { name: /Bare Metal Machines/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /Bare Metal/ })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
     expect(screen.getByRole('button', { name: /Clusters/ })).toHaveAttribute(
       'aria-pressed',
-      'true',
-    );
-    expect(screen.getByRole('button', { name: /Virtual Machines/ })).toHaveAttribute(
-      'aria-pressed',
-      'true',
+      'false',
     );
     expect(
       screen.getByRole('button', { name: 'Filter catalog by publication status' }),
@@ -750,7 +895,11 @@ describe('CatalogPage', () => {
   });
 
   it('navigates to cluster create from the catalog item detail page', async () => {
-    const { user } = renderCatalogPageWithDetailRoutes();
+    const { user } = renderCatalogPageWithDetailRoutes(
+      createCatalogPageTransport(),
+      ['/catalog?types=cluster'],
+      'tenant-admin',
+    );
 
     await waitFor(() => {
       expect(screen.getByText(clusterCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
@@ -771,7 +920,11 @@ describe('CatalogPage', () => {
   });
 
   it('navigates to VM create from the catalog item detail page', async () => {
-    const { user } = renderCatalogPageWithDetailRoutes();
+    const { user } = renderCatalogPageWithDetailRoutes(
+      createCatalogPageTransport(),
+      ['/catalog?types=vm'],
+      'tenant-admin',
+    );
 
     await waitFor(() => {
       expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
@@ -793,24 +946,177 @@ describe('CatalogPage', () => {
   });
 
   it('switches to a list table that links to catalog item details', async () => {
-    const { user } = renderCatalogPage(createCatalogPageTransport());
+    const requestCounts = createRequestCounts();
+    localStorage.setItem(catalogItemsViewPrefKey, 'list');
+    const { user } = renderCatalogPage(
+      createCatalogPageTransport({
+        vmItems: [vmCatalogItemWithReferences, vmCatalogItemWithIdOnlyReferences],
+        requestCounts,
+      }),
+      allCatalogServiceTiers,
+      ['/catalog?types=vm'],
+    );
 
     await waitFor(() => {
-      expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+      expect(
+        screen.getByText(vmCatalogItemWithReferences.metadata?.name ?? ''),
+      ).toBeInTheDocument();
     });
 
-    expect(screen.queryByRole('grid')).not.toBeInTheDocument();
+    const table = await screen.findByRole('grid', { name: 'Catalog items' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((header) => header.textContent),
+    ).toEqual(['Name', 'Status', 'Instance type', 'Disk image', 'Visibility', 'Created', '']);
+    expect(
+      within(table).queryByRole('columnheader', { name: 'Configuration' }),
+    ).not.toBeInTheDocument();
+    expect(within(table).getByRole('columnheader', { name: 'Visibility' })).toBeInTheDocument();
+    expect(within(table).getByRole('columnheader', { name: 'Created' })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'List view' }));
+    const row = within(table).getAllByRole('row')[1];
+    const cells = within(row).getAllByRole('cell');
+    expect(cells[2].textContent).toBe('  General purpose  ');
+    expect(cells[3].textContent).toBe('  RHEL 10  ');
+    expect(row).not.toHaveTextContent('instance-type-id');
+    expect(row).not.toHaveTextContent('disk-image-id');
 
-    expect(await screen.findByRole('grid', { name: 'Catalog items' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: vmCatalogItem.metadata?.name })).toHaveAttribute(
-      'href',
-      `/catalog/vm/${vmCatalogItem.id}`,
+    const idOnlyRow = within(table).getAllByRole('row')[2];
+    const idOnlyCells = within(idOnlyRow).getAllByRole('cell');
+    expect(idOnlyCells[2].textContent).toBe('-');
+    expect(idOnlyCells[3].textContent).toBe('-');
+    expect(idOnlyRow).not.toHaveTextContent('instance-type-id-only');
+    expect(idOnlyRow).not.toHaveTextContent('disk-image-id-only');
+    expect(requestCounts.resourceLookups).toBe(0);
+
+    expect(
+      screen.getByRole('link', { name: vmCatalogItemWithReferences.metadata?.name }),
+    ).toHaveAttribute('href', `/catalog/vm/${vmCatalogItemWithReferences.id}`);
+
+    await user.click(screen.getByRole('button', { name: /Clusters/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: clusterCatalogItem.metadata?.name })).toHaveAttribute(
+        'href',
+        `/catalog/cluster/${clusterCatalogItem.id}`,
+      );
+    });
+  });
+
+  it('shows visibility before the added date for tenant admins', async () => {
+    localStorage.setItem(catalogItemsViewPrefKey, 'list');
+
+    const catalogItem = {
+      ...vmCatalogItem,
+      metadata: create(MetadataSchema, {
+        name: vmCatalogItem.metadata?.name,
+        creator: 'creator-user-id',
+        tenant: 'shared',
+      }),
+    };
+
+    renderCatalogPage(
+      createCatalogPageTransport({ vmItems: [catalogItem], clusterItems: [] }),
+      allCatalogServiceTiers,
+      ['/catalog?types=vm'],
+      'tenant-admin',
     );
-    expect(screen.getByRole('link', { name: clusterCatalogItem.metadata?.name })).toHaveAttribute(
-      'href',
-      `/catalog/cluster/${clusterCatalogItem.id}`,
-    );
+
+    const table = await screen.findByRole('grid', { name: 'Catalog items' });
+
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((header) => header.textContent),
+    ).toEqual(['Name', 'Status', 'Instance type', 'Disk image', 'Visibility', 'Created', '']);
+    expect(within(table).getByRole('columnheader', { name: 'Visibility' })).toBeInTheDocument();
+    expect(within(table).getByRole('columnheader', { name: 'Created' })).toBeInTheDocument();
+    expect(within(table).getByText('Global public')).toBeInTheDocument();
+  });
+
+  describe('Create catalog item action', () => {
+    it.each([
+      { kind: 'bm', item: bareMetalCatalogItem, label: 'Create bare metal catalog item' },
+      { kind: 'cluster', item: clusterCatalogItem, label: 'Create cluster catalog item' },
+      { kind: 'vm', item: vmCatalogItem, label: 'Create VM catalog item' },
+    ] as const)('maps $kind to its create service and label', async ({ kind, item, label }) => {
+      const { user } = renderCatalogPageWithCreateRoute(
+        createCatalogPageTransport({
+          vmItems: [vmCatalogItem],
+          clusterItems: [clusterCatalogItem],
+          bmItems: [bareMetalCatalogItem],
+        }),
+        [`/catalog?types=${kind}`],
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(item.metadata?.name ?? '')).toBeInTheDocument();
+      });
+
+      const createLink = screen.getByRole('link', { name: label });
+      await waitFor(() => expect(createLink).not.toHaveAttribute('aria-disabled', 'true'));
+      expect(createLink).toHaveAttribute('href', `/catalog/${kind}/create`);
+
+      await user.click(createLink);
+
+      expect(screen.getByText('Create catalog item page')).toBeInTheDocument();
+    });
+
+    it('updates the label when the selected type changes', async () => {
+      const { user } = renderCatalogPageWithCreateRoute(
+        createCatalogPageTransport({
+          vmItems: [vmCatalogItem],
+          clusterItems: [clusterCatalogItem],
+          bmItems: [bareMetalCatalogItem],
+        }),
+        ['/catalog?types=vm'],
+      );
+
+      expect(
+        await screen.findByRole('link', { name: 'Create VM catalog item' }),
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /Clusters/ }));
+
+      expect(
+        await screen.findByRole('link', { name: 'Create cluster catalog item' }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: 'Create VM catalog item' }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('is shown for tenant-admin', async () => {
+      renderCatalogPageWithCreateRoute(undefined, ['/catalog'], 'tenant-admin');
+
+      expect(
+        await screen.findByRole('link', { name: 'Create bare metal catalog item' }),
+      ).toBeInTheDocument();
+    });
+
+    it('is hidden for tenant-user', async () => {
+      renderCatalogPageWithCreateRoute(undefined, ['/catalog'], 'tenant-user');
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole('group', { name: 'Filter catalog by resource type' }),
+        ).toBeInTheDocument();
+      });
+      expect(
+        screen.queryByRole('link', { name: 'Create bare metal catalog item' }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('is hidden when no catalog services are enabled', async () => {
+      renderCatalogPageWithCreateRoute(undefined, ['/catalog'], 'admin', []);
+
+      expect(
+        await screen.findByRole('heading', { name: 'No catalog items found' }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole('link', { name: 'Create bare metal catalog item' }),
+      ).not.toBeInTheDocument();
+    });
   });
 });

@@ -1,4 +1,4 @@
-import type { ComputeInstanceCatalogItem } from '@osac/types';
+import { type ComputeInstanceCatalogItem, GuestOSFamily } from '@osac/types';
 
 import { type ResourceSelectValue, emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 import {
@@ -6,9 +6,13 @@ import {
   getEmptyNetworkAttachmentFormFields,
   networkAttachmentFieldsFromPolicy,
 } from '../../ProvisioningWizard/fields/networkAttachments';
-import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
+import type {
+  ProvisioningFieldValue,
+  UserDataSourceFormField,
+} from '../../ProvisioningWizard/fields/provisioningFieldValue';
 import {
   getFieldFromCatalogItemPolicy,
+  getUserDataSourceFieldsFromPolicy,
   provisioningFieldValue,
 } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
@@ -29,8 +33,6 @@ interface ComputeInstanceDiskListPolicyValue {
   }>;
 }
 
-export type UserDataSource = 'inline' | 'secret';
-
 export interface ComputeInstanceWizardValues {
   catalogItemReference: { name: string; id: string };
   metadata: {
@@ -39,11 +41,10 @@ export interface ComputeInstanceWizardValues {
   };
   spec: {
     sshKey: ProvisioningFieldValue<string>;
+    guestOsFamily: GuestOSFamily;
     diskImage: ProvisioningFieldValue<ResourceSelectValue>;
-    instanceType: ProvisioningFieldValue<string>;
-    userDataSource: ProvisioningFieldValue<UserDataSource>;
-    userData: ProvisioningFieldValue<string>;
-    userDataSecret: ProvisioningFieldValue<string>;
+    instanceType: ProvisioningFieldValue<ResourceSelectValue>;
+    userData: UserDataSourceFormField;
     bootDisk: {
       sizeGib: ProvisioningFieldValue<string>;
       storageTier: ProvisioningFieldValue<ResourceSelectValue>;
@@ -58,11 +59,10 @@ export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues 
   metadata: { name: '', project: '' },
   spec: {
     sshKey: provisioningFieldValue(''),
+    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     diskImage: provisioningFieldValue(emptyResourceSelectValue()),
-    instanceType: provisioningFieldValue(''),
-    userDataSource: provisioningFieldValue('inline'),
-    userData: provisioningFieldValue(''),
-    userDataSecret: provisioningFieldValue(''),
+    instanceType: provisioningFieldValue(emptyResourceSelectValue()),
+    userData: provisioningFieldValue({ source: 'inline', inline: '', secret: '' }),
     bootDisk: {
       sizeGib: provisioningFieldValue(''),
       storageTier: provisioningFieldValue(emptyResourceSelectValue()),
@@ -77,9 +77,7 @@ export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues 
 
 export const VM_SSH_KEY_FORM_PATH = 'spec.sshKey';
 export const VM_DISK_IMAGE_FORM_PATH = 'spec.diskImage';
-export const VM_USER_DATA_SOURCE_FORM_PATH = 'spec.userDataSource';
 export const VM_USER_DATA_FORM_PATH = 'spec.userData';
-export const VM_USER_DATA_SECRET_FORM_PATH = 'spec.userDataSecret';
 
 export const getComputeInstanceNetworkAttachment = (
   catalogItem?: ComputeInstanceCatalogItem,
@@ -106,10 +104,7 @@ export const getComputeInstanceInitialValues = (
     },
     spec: {
       ...values.spec,
-      userData: {
-        locked: false,
-        value: '',
-      },
+      userData: getUserDataSourceFieldsFromPolicy(catalogItem.fields?.userDataSource),
       sshKey: (() => {
         const field = getFieldFromCatalogItemPolicy<{ name: string }>(catalogItem.fields?.sshKey, {
           name: '',
@@ -121,11 +116,14 @@ export const getComputeInstanceInitialValues = (
         emptyResourceSelectValue(),
       ),
       instanceType: (() => {
-        const field = getFieldFromCatalogItemPolicy<{ id: string; name: string }>(
+        const field = getFieldFromCatalogItemPolicy<ResourceSelectValue>(
           catalogItem.fields?.instanceType,
-          { id: '', name: '' },
+          emptyResourceSelectValue(),
         );
-        return provisioningFieldValue(field.value.id || '', field.locked);
+        return provisioningFieldValue(
+          { id: field.value.id || '', name: field.value.name || '' },
+          field.locked,
+        );
       })(),
       bootDisk: {
         sizeGib: (() => {
@@ -164,7 +162,7 @@ export const getComputeInstanceInitialValues = (
 };
 
 export const CONFIGURATION_CATALOG_PATHS = [
-  'spec.user_data',
+  'spec.user_data_source',
   'spec.boot_disk.size_gib',
   'spec.boot_disk.storage_tier',
 ] as const;

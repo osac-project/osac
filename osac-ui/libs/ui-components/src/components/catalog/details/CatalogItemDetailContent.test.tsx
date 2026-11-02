@@ -1,35 +1,39 @@
 import { create } from '@bufbuild/protobuf';
-import { screen, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { screen, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
+  BareMetalInstanceCatalogItemSchema,
+  BareMetalInstanceTypeReferenceSchema,
+  ClusterCatalogItemSchema,
+  ClusterVersionReferenceSchema,
   ComputeInstanceCatalogItemSchema,
-  DiskImageSchema,
-  GuestOSFamily,
-  InstanceTypeSchema,
-  InstanceTypeState,
+  ComputeInstanceTemplateReferenceSchema,
 } from '@osac/types';
 
 import { CatalogItemDetailContent } from './CatalogItemDetailContent';
+import VMCatalogItemDetailContent from './VMCatalogItemDetailContent';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
-const INSTANCE_TYPE_ID = 'it-4-8';
+const createResourceListFetches = () => ({
+  instanceTypes: vi.fn(() => ({ items: [] })),
+  diskImages: vi.fn(() => ({ items: [], size: 0, total: 0 })),
+  clusterVersions: vi.fn(() => ({ items: [] })),
+  bareMetalInstanceTypes: vi.fn(() => ({ items: [], size: 0, total: 0 })),
+});
 
-const catalogApiFixtures = {
-  instanceTypes: [
-    create(InstanceTypeSchema, {
-      id: INSTANCE_TYPE_ID,
-      metadata: { name: 'standard-4-8' },
-      spec: { vcpus: 4, memoryGib: 8, state: InstanceTypeState.ACTIVE },
-    }),
-  ],
-  diskImages: [
-    create(DiskImageSchema, {
-      id: 'di-rhel-10',
-      metadata: { name: 'RHEL 10' },
-      spec: { guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX },
-    }),
-  ],
+const noResourceListFetches = (fetches: ReturnType<typeof createResourceListFetches>) => ({
+  onPublicInstanceTypeList: fetches.instanceTypes,
+  onDiskImageList: fetches.diskImages,
+  onClusterVersionList: fetches.clusterVersions,
+  onBaremetalInstanceTypeList: fetches.bareMetalInstanceTypes,
+});
+
+const expectNoResourceListFetches = (fetches: ReturnType<typeof createResourceListFetches>) => {
+  expect(fetches.instanceTypes).not.toHaveBeenCalled();
+  expect(fetches.diskImages).not.toHaveBeenCalled();
+  expect(fetches.clusterVersions).not.toHaveBeenCalled();
+  expect(fetches.bareMetalInstanceTypes).not.toHaveBeenCalled();
 };
 
 const vmItem = create(ComputeInstanceCatalogItemSchema, {
@@ -41,32 +45,245 @@ const vmItem = create(ComputeInstanceCatalogItemSchema, {
     tenant: 'foo',
   },
   title: 'RHEL 9 catalog',
-  description: 'RHEL 9 base image',
+  template: create(ComputeInstanceTemplateReferenceSchema, {
+    id: 'template-1',
+    name: 'VM template',
+  }),
   published: true,
   fields: {
     instanceType: {
-      behavior: { case: 'locked', value: { id: INSTANCE_TYPE_ID, name: 'standard-4-8' } },
+      behavior: { case: 'locked', value: { id: 'it-4-8', name: 'standard-4-8' } },
     },
     diskImage: {
-      behavior: { case: 'editable', value: {} },
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { id: 'di-rhel-10', name: 'RHEL 10' } },
+      },
     },
+    userDataSource: {
+      behavior: {
+        case: 'locked',
+        value: { source: { case: 'inline', value: '#cloud-config' } },
+      },
+    },
+    bootDisk: {
+      sizeGib: { behavior: { case: 'locked', value: 64 } },
+      storageTier: {
+        behavior: {
+          case: 'editable',
+          value: { defaultValue: { id: 'tier-fast', name: 'fast' } },
+        },
+      },
+    },
+    additionalDisks: {
+      behavior: {
+        case: 'locked',
+        value: { items: [{ sizeGib: 100, storageTier: { id: 'tier-fast', name: 'fast' } }] },
+      },
+    },
+    runStrategy: { behavior: { case: 'locked', value: 1 } },
+    sshKey: { behavior: { case: 'locked', value: { name: 'ssh-key' } } },
+  },
+});
+
+const clusterItem = create(ClusterCatalogItemSchema, {
+  id: 'catalog-cluster',
+  metadata: { name: 'catalog-cluster', tenant: 'tenant-1' },
+  fields: {
+    version: {
+      behavior: {
+        case: 'locked',
+        value: create(ClusterVersionReferenceSchema, { name: '4.16' }),
+      },
+    },
+    nodeSets: {
+      behavior: {
+        case: 'editable',
+        value: {
+          defaultValue: {
+            items: {
+              'control-plane': {
+                size: 3,
+                baremetalInstanceType: { name: 'bm-cpu-64c' },
+              },
+              workers: {
+                size: 5,
+                baremetalInstanceType: { name: 'bm-cpu-32c' },
+              },
+              'gpu-workers': {
+                size: 2,
+                baremetalInstanceType: { name: 'bm-gpu-h100' },
+              },
+            },
+          },
+        },
+      },
+    },
+    network: {
+      podCidr: { behavior: { case: 'locked', value: '10.128.0.0/14' } },
+      serviceCidr: { behavior: { case: 'editable', value: { defaultValue: '172.30.0.0/16' } } },
+    },
+    sshPublicKey: { behavior: { case: 'locked', value: 'ssh-rsa hidden' } },
+    pullSecretSecret: { behavior: { case: 'locked', value: { name: 'pull-secret' } } },
+    autoExternalIpAttachment: { behavior: { case: 'locked', value: true } },
+    networkAttachment: { behavior: { case: 'locked', value: {} } },
+  },
+});
+
+const bareMetalItem = create(BareMetalInstanceCatalogItemSchema, {
+  id: 'catalog-bm',
+  metadata: { name: 'catalog-bm', tenant: 'tenant-1' },
+  fields: {
+    instanceType: {
+      behavior: {
+        case: 'locked',
+        value: create(BareMetalInstanceTypeReferenceSchema, { name: 'bm.large' }),
+      },
+    },
+    diskImage: {
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { id: 'di-rhel-10', name: 'RHEL 10' } },
+      },
+    },
+    userDataSource: {
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { source: { case: 'inline', value: 'echo ready' } } },
+      },
+    },
+    runStrategy: { behavior: { case: 'locked', value: 1 } },
+    networkAttachments: { behavior: { case: 'locked', value: {} } },
+    autoExternalIpAttachment: { behavior: { case: 'locked', value: true } },
   },
 });
 
 describe('CatalogItemDetailContent', () => {
-  it('shows catalog details, labels, and governed configuration', async () => {
-    renderWithProviders(<CatalogItemDetailContent item={vmItem} />, {
-      apiFixtures: catalogApiFixtures,
+  it('shows VM detail columns from resource references without list lookups', async () => {
+    const fetches = createResourceListFetches();
+    const { container, user } = renderWithProviders(<VMCatalogItemDetailContent item={vmItem} />, {
+      transportOverrides: noResourceListFetches(fetches),
     });
 
-    expect(screen.getByText('catalog-rhel-9')).toBeInTheDocument();
-    expect(screen.getByText('RHEL 9 base image')).toBeInTheDocument();
-    expect(screen.getByText('run-strategy')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Configuration' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
+    expect(screen.getAllByRole('separator')).toHaveLength(1);
+    expect(container.querySelector('.pf-v6-c-card')).toBeNull();
+    expect(screen.getByText('Virtual machines')).toBeInTheDocument();
+    expect(screen.getByText('VM template')).toBeInTheDocument();
+    expect(screen.queryByText('template-1')).not.toBeInTheDocument();
+    expect(screen.getByText('foo')).toBeInTheDocument();
+    expect(screen.getByText('Live')).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(screen.getByText('4 vCPU')).toBeInTheDocument();
-    });
+    expect(screen.getByText('Instance type')).toBeInTheDocument();
+    expect(screen.getByText('standard-4-8')).toBeInTheDocument();
+    expect(screen.getByText('RHEL 10')).toBeInTheDocument();
+    expect(screen.getByText('Disk image')).toBeInTheDocument();
+    expect(screen.getByText('Cloud-init')).toBeInTheDocument();
+    expect(screen.getByText('Configured')).toBeInTheDocument();
+    const userDataToggle = screen.getByRole('button', { name: 'Expand user data' });
+    expect(userDataToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('#cloud-config')).not.toBeVisible();
+    await user.click(userDataToggle);
+    expect(screen.getByRole('button', { name: 'Collapse user data' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.getByText('#cloud-config')).toBeVisible();
+    expect(screen.getByText('Boot disk size')).toBeInTheDocument();
+    expect(screen.getByText('Boot storage tier')).toBeInTheDocument();
+    const additionalDisksTerm = screen.getByText('Additional disks').closest('dt');
+    expect(additionalDisksTerm).not.toBeNull();
+    expect(within(additionalDisksTerm as HTMLElement).getByText('Locked')).toBeInTheDocument();
+    const storageTable = screen.getByRole('grid', { name: 'Additional disks' });
+    expect(within(storageTable).getAllByRole('columnheader')).toHaveLength(2);
+    expect(within(storageTable).getByRole('columnheader', { name: 'Size' })).toBeInTheDocument();
+    expect(
+      within(storageTable).getByRole('columnheader', { name: 'Storage tier' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('64 GiB')).toBeInTheDocument();
+    expect(within(storageTable).getByText('100 GiB')).toBeInTheDocument();
+    expect(screen.getAllByText('fast')).toHaveLength(2);
+    expect(screen.queryByText('Guest OS family')).not.toBeInTheDocument();
+    expect(screen.queryByText('vCPUs')).not.toBeInTheDocument();
+    expect(screen.queryByText('Memory')).not.toBeInTheDocument();
+    expect(screen.queryByText('GPU count')).not.toBeInTheDocument();
+    expect(screen.queryByText('Resource name')).not.toBeInTheDocument();
     expect(screen.getAllByText('Locked').length).toBeGreaterThan(0);
-    expect(screen.getByText('Editable')).toBeInTheDocument();
+    expect(screen.getAllByText('Editable').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Run strategy')).not.toBeInTheDocument();
+    expect(screen.queryByText('SSH key')).not.toBeInTheDocument();
+    expect(screen.queryByText('Network attachments')).not.toBeInTheDocument();
+    expect(screen.queryByText('Auto external IP')).not.toBeInTheDocument();
+    expectNoResourceListFetches(fetches);
+  });
+
+  it('shows configured cluster fields and excludes unsupported policies', () => {
+    const fetches = createResourceListFetches();
+    const { container } = renderWithProviders(<CatalogItemDetailContent item={clusterItem} />, {
+      transportOverrides: noResourceListFetches(fetches),
+    });
+
+    expect(screen.queryByText('Details', { exact: true })).not.toBeInTheDocument();
+    expect(screen.getByText('Cluster version')).toBeInTheDocument();
+    expect(screen.getByText('OpenShift 4.16')).toBeInTheDocument();
+    expect(screen.getByText('Node sets')).toBeInTheDocument();
+    expect(screen.getByText('control-plane')).toBeInTheDocument();
+    expect(screen.getByText('bm-cpu-64c · 3 nodes')).toBeInTheDocument();
+    expect(screen.getByText('workers')).toBeInTheDocument();
+    expect(screen.getByText('bm-cpu-32c · 5 nodes')).toBeInTheDocument();
+    expect(screen.getByText('gpu-workers')).toBeInTheDocument();
+    expect(screen.getByText('bm-gpu-h100 · 2 nodes')).toBeInTheDocument();
+    expect(screen.getAllByText('Editable').length).toBeGreaterThan(0);
+    expect(container.querySelector('dl[aria-label="Node sets"]')).toHaveClass(
+      'catalog-node-sets__list',
+    );
+    expect(screen.queryByText(/vCPU|GB RAM/)).not.toBeInTheDocument();
+    expect(screen.getByText('Pod CIDR')).toBeInTheDocument();
+    expect(screen.getByText('10.128.0.0/14')).toBeInTheDocument();
+    expect(screen.getByText('Service CIDR')).toBeInTheDocument();
+    expect(screen.getByText('172.30.0.0/16')).toBeInTheDocument();
+    expect(screen.queryByText('SSH public key')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pull secret')).not.toBeInTheDocument();
+    expect(screen.queryByText('Network attachment')).not.toBeInTheDocument();
+    expect(screen.queryByText('Automatic external IP')).not.toBeInTheDocument();
+    expectNoResourceListFetches(fetches);
+  });
+
+  it('shows configured bare metal fields and excludes run strategy', async () => {
+    const { user } = renderWithProviders(<CatalogItemDetailContent item={bareMetalItem} />);
+
+    expect(screen.queryByText('Details', { exact: true })).not.toBeInTheDocument();
+    expect(screen.getByText('Instance type')).toBeInTheDocument();
+    expect(await screen.findByText('bm.large')).toBeInTheDocument();
+    expect(screen.getByText('RHEL 10')).toBeInTheDocument();
+    const userDataToggle = screen.getByRole('button', { name: 'Expand user data' });
+    expect(screen.getByText('echo ready')).not.toBeVisible();
+    await user.click(userDataToggle);
+    expect(screen.getByText('echo ready')).toBeVisible();
+    expect(screen.queryByText('Run strategy')).not.toBeInTheDocument();
+  });
+
+  it('renders all VM sections with safe empty values when fields are unconfigured', () => {
+    const item = create(ComputeInstanceCatalogItemSchema, {
+      id: 'catalog-empty',
+      metadata: { name: 'catalog-empty', tenant: 'tenant-1' },
+      fields: {},
+    });
+
+    renderWithProviders(<VMCatalogItemDetailContent item={item} />, {
+      transportOverrides: noResourceListFetches(createResourceListFetches()),
+    });
+
+    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Configuration' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
+    expect(screen.queryByRole('grid', { name: 'Additional disks' })).not.toBeInTheDocument();
+    expect(screen.getByText('Additional disks')).toBeInTheDocument();
+    expect(screen.getAllByText('Not set').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/cloud-config|script|userdata/i)).not.toBeInTheDocument();
   });
 });

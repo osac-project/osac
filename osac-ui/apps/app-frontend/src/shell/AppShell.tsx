@@ -3,7 +3,9 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Page, SkipToContent } from '@patternfly/react-core';
 
 import { ServiceTier } from '@osac/types';
+import { CatalogItemCreatePage } from '@osac/ui-components/components/catalog/CatalogItemCreatePage';
 import { CatalogItemDetailPage } from '@osac/ui-components/components/catalog/details/CatalogItemDetailPage.tsx';
+import CatalogItemEditPage from '@osac/ui-components/components/catalog/details/CatalogItemEditPage';
 import ErrorBoundary from '@osac/ui-components/components/ErrorBoundary/ErrorBoundary';
 import ExternalIpRoutes from '@osac/ui-components/components/ExternalIp/ExternalIpRoutes';
 import { ExternalIpPoolRoutes } from '@osac/ui-components/components/ExternalIpPool/ExternalIpPoolRoutes';
@@ -68,6 +70,26 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
             </ShellRoute>
           }
         />
+        {(role === 'admin' || role === 'tenant-admin') && (
+          <>
+            <Route
+              path="/catalog/:kind/create"
+              element={
+                <ShellRoute>
+                  <CatalogItemCreatePage />
+                </ShellRoute>
+              }
+            />
+            <Route
+              path="/catalog/:kind/:id/edit"
+              element={
+                <ShellRoute>
+                  <CatalogItemEditPage />
+                </ShellRoute>
+              }
+            />
+          </>
+        )}
         <Route
           path="/catalog/:kind/:id"
           element={

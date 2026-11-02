@@ -1,4 +1,4 @@
-import { type MouseEvent, type Ref, useEffect, useMemo, useState } from 'react';
+import { type MouseEvent, type ReactNode, type Ref, useEffect, useMemo, useState } from 'react';
 import {
   FormGroup,
   MenuToggle,
@@ -35,6 +35,7 @@ export interface SelectFieldProps {
   helperText?: string;
   onSelect?: (value: string | number) => void;
   asFormGroup?: boolean;
+  labelInfo?: ReactNode;
 }
 
 export const SelectField = ({
@@ -51,6 +52,7 @@ export const SelectField = ({
   helperText,
   onSelect: onSelectProp,
   asFormGroup = true,
+  labelInfo,
 }: SelectFieldProps) => {
   const [field, meta, helpers] = useField<string | number>(name);
   const [isOpen, setIsOpen] = useState(false);
@@ -132,7 +134,7 @@ export const SelectField = ({
   );
 
   return asFormGroup ? (
-    <FormGroup label={label} fieldId={fieldId} isRequired={isRequired}>
+    <FormGroup label={label} fieldId={fieldId} isRequired={isRequired} labelInfo={labelInfo}>
       {select}
     </FormGroup>
   ) : (

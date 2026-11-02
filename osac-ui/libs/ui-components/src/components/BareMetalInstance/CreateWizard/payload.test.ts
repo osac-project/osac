@@ -1,7 +1,11 @@
 import { create } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
 
-import { BareMetalInstanceCatalogItemSchema, BareMetalInstanceRunStrategy } from '@osac/types';
+import {
+  BareMetalInstanceCatalogItemSchema,
+  BareMetalInstanceRunStrategy,
+  BareMetalInstanceSchema,
+} from '@osac/types';
 
 import { createEmptyBareMetalInstanceValues } from './fields';
 import { buildBareMetalInstanceCreatePayload } from './payload';
@@ -111,38 +115,90 @@ describe('buildBareMetalInstanceCreatePayload', () => {
 
   it('sends inline user data when the inline source is selected', () => {
     const values = buildValues('');
-    values.spec.userDataSource = provisioningFieldValue('inline');
-    values.spec.userData = provisioningFieldValue('  #cloud-config\nusers: []  ');
-    values.spec.userDataSecret = provisioningFieldValue('stale-secret');
+    values.spec.userData = provisioningFieldValue({
+      source: 'inline',
+      inline: '  #cloud-config\nusers: []  ',
+      secret: 'stale-secret',
+    });
 
     const payload = buildBareMetalInstanceCreatePayload(values);
 
-    //expect(payload.spec?.userData).toBe('#cloud-config\nusers: []');
+    expect(payload.spec?.userDataSource).toEqual({
+      source: { case: 'inline', value: '#cloud-config\nusers: []' },
+    });
+    expect(create(BareMetalInstanceSchema, payload).spec?.userDataSource?.source).toEqual({
+      case: 'inline',
+      value: '#cloud-config\nusers: []',
+    });
+    expect(payload.spec).not.toHaveProperty('userData');
     expect(payload.spec).not.toHaveProperty('userDataSecret');
   });
 
   it('sends a Secret reference when the Secret source is selected', () => {
     const values = buildValues('');
-    values.spec.userDataSource = provisioningFieldValue('secret');
-    values.spec.userData = provisioningFieldValue('stale inline data');
-    values.spec.userDataSecret = provisioningFieldValue('  cloud-init  ');
+    values.spec.userData = provisioningFieldValue({
+      source: 'secret',
+      inline: 'stale inline data',
+      secret: '  cloud-init  ',
+    });
 
     const payload = buildBareMetalInstanceCreatePayload(values);
 
-    //expect(payload.spec?.userDataSecret).toEqual({ name: 'cloud-init' });
+    expect(payload.spec?.userDataSource).toEqual({
+      source: { case: 'secret', value: { name: 'cloud-init' } },
+    });
+    expect(create(BareMetalInstanceSchema, payload).spec?.userDataSource?.source).toMatchObject({
+      case: 'secret',
+      value: { name: 'cloud-init' },
+    });
     expect(payload.spec).not.toHaveProperty('userData');
+    expect(payload.spec).not.toHaveProperty('userDataSecret');
   });
 
   it('omits user data when the selected source is empty', () => {
     const values = buildValues('');
-    values.spec.userDataSource = provisioningFieldValue('secret');
-    values.spec.userData = provisioningFieldValue('stale inline data');
-    values.spec.userDataSecret = provisioningFieldValue('   ');
+    values.spec.userData = provisioningFieldValue({
+      source: 'secret',
+      inline: 'stale inline data',
+      secret: '   ',
+    });
 
     const payload = buildBareMetalInstanceCreatePayload(values);
 
     expect(payload.spec).not.toHaveProperty('userData');
     expect(payload.spec).not.toHaveProperty('userDataSecret');
+  });
+
+  it('sends an explicit empty inline source when an editable default is cleared', () => {
+    const values = buildValues('');
+    values.spec.userData = provisioningFieldValue({ source: 'inline', inline: '', secret: '' });
+    const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
+      id: 'catalog-bm-1',
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: { defaultValue: { source: { case: 'inline', value: 'cloud-init' } } },
+          },
+        },
+      },
+    });
+
+    expect(buildBareMetalInstanceCreatePayload(values, catalogItem).spec?.userDataSource).toEqual({
+      source: { case: 'inline', value: '' },
+    });
+  });
+
+  it('omits a locked user data source so the catalog policy can apply it', () => {
+    const values = buildValues('');
+    values.spec.userData = provisioningFieldValue(
+      { source: 'secret', inline: 'stale inline data', secret: 'cloud-init' },
+      true,
+    );
+
+    const payload = buildBareMetalInstanceCreatePayload(values);
+
+    expect(payload.spec).not.toHaveProperty('userDataSource');
   });
 });
 

@@ -19,7 +19,6 @@ import { useSession } from '@osac/ui-components/hooks/use-session';
 
 import CatalogItemActionsMenu from './CatalogItemActionsMenu';
 import { CatalogItem, catalogItemDetailsPath, getCatalogItemKind } from './catalogItemDisplay';
-import { catalogItemTypeBadgeLabel } from './catalogItemDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
 import { CatalogItemIcon } from '../../icons';
 
@@ -38,7 +37,7 @@ interface CatalogItemCardProps {
 
 const CatalogItemCard = ({ item, selection, resourceLookups }: CatalogItemCardProps) => {
   const { t } = useTranslation();
-  const { role } = useSession();
+  const { role, tenantId } = useSession();
   const isWizardMode = Boolean(selection);
   const cardId = `catalog-item-card-${item.id}`;
   const titleId = `${cardId}-title`;
@@ -47,19 +46,17 @@ const CatalogItemCard = ({ item, selection, resourceLookups }: CatalogItemCardPr
     <Card
       id={cardId}
       ouiaId={`catalog-item-option-${item.id}`}
+      variant={item.published ? 'default' : 'secondary'}
       isSelectable={isWizardMode}
       isSelected={selection?.selected}
+      isDisabled={isWizardMode && !item.published}
       isFullHeight
-      isDisabled={!item.published}
     >
       <CardHeader
         className="catalog-item-card-header"
         actions={{
           actions: !isWizardMode ? (
             <Flex flexWrap={{ default: 'nowrap' }} spaceItems={{ default: 'spaceItemsSm' }}>
-              <FlexItem>
-                <Label color="blue">{catalogItemTypeBadgeLabel(item, t)}</Label>
-              </FlexItem>
               <FlexItem>
                 {item.published ? (
                   <Label color="green">{t('Live')}</Label>
@@ -69,7 +66,7 @@ const CatalogItemCard = ({ item, selection, resourceLookups }: CatalogItemCardPr
               </FlexItem>
               {!isWizardMode ? (
                 <FlexItem>
-                  <CatalogItemActionsMenu item={item} role={role} />
+                  <CatalogItemActionsMenu item={item} role={role} tenantId={tenantId} />
                 </FlexItem>
               ) : null}
             </Flex>

@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { type ReactNode, useRef } from 'react';
 import {
   FormGroup,
   NumberInput,
@@ -26,6 +26,7 @@ interface InputFieldProps {
   type?: 'text' | 'number' | 'password';
   helperText?: string;
   placeholder?: string;
+  labelInfo?: ReactNode;
   onBlur?: () => void;
   inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'];
   min?: number;
@@ -46,6 +47,7 @@ export const InputField = ({
   type = 'text',
   helperText,
   placeholder,
+  labelInfo,
   onBlur,
   inputMode,
   min,
@@ -115,6 +117,7 @@ export const InputField = ({
           placeholder={placeholder}
           rows={rows}
           resizeOrientation={resizeOrientation}
+          aria-label={label}
           onChange={(_event, value) => {
             void field.onChange({ target: { name, value } });
           }}
@@ -182,7 +185,7 @@ export const InputField = ({
   );
 
   return asFormGroup ? (
-    <FormGroup label={label} fieldId={fieldId} isRequired={isRequired}>
+    <FormGroup label={label} fieldId={fieldId} isRequired={isRequired} labelInfo={labelInfo}>
       {textComponent}
     </FormGroup>
   ) : (

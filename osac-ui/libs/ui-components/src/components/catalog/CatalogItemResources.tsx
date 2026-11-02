@@ -5,7 +5,7 @@ import { CatalogItem } from '@osac/ui-components/components/catalog/catalogItemD
 import BareMetalCatalogItemResources from './BareMetalCatalogItemResources';
 import type { CatalogItemResourceLookups } from './catalogItemResourceLookups';
 import ClusterCatalogItemResources from './ClusterCatalogItemResources';
-import ComputeCatalogItemResources from './ComputeCatalogItemResources';
+import VMCatalogItemResources from './VMCatalogItemResources';
 
 interface CatalogItemResourcesProps {
   catalogItem: CatalogItem;
@@ -14,9 +14,7 @@ interface CatalogItemResourcesProps {
 
 const CatalogItemResources: FC<CatalogItemResourcesProps> = ({ catalogItem, resourceLookups }) => {
   if (catalogItem.$typeName === 'osac.public.v1.ComputeInstanceCatalogItem') {
-    return (
-      <ComputeCatalogItemResources catalogItem={catalogItem} resourceLookups={resourceLookups} />
-    );
+    return <VMCatalogItemResources catalogItem={catalogItem} resourceLookups={resourceLookups} />;
   }
 
   if (catalogItem.$typeName === 'osac.public.v1.BareMetalInstanceCatalogItem') {

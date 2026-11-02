@@ -17,14 +17,13 @@ import { formatReviewScalar } from '../../ProvisioningWizard/reviewFormatters';
 export const BareMetalReviewStep = () => {
   const { t } = useTranslation();
   const { values } = useFormikContext<BareMetalInstanceWizardValues>();
-  const isSecretSource = values.spec.userDataSource.value === 'secret';
-  const selectedUserData = isSecretSource
-    ? values.spec.userDataSecret.value
-    : values.spec.userData.value;
+  const userData = values.spec.userData.value;
+  const isSecretSource = userData.source === 'secret';
+  const selectedUserData = isSecretSource ? userData.secret : userData.inline;
   const hasAuthentication = hasBareMetalAuthentication(
     values.spec.sshKey.value,
-    isSecretSource ? undefined : values.spec.userData.value,
-    isSecretSource ? values.spec.userDataSecret.value : undefined,
+    isSecretSource ? undefined : userData.inline,
+    isSecretSource ? userData.secret : undefined,
   );
 
   const networkAttachment = values.spec.networkAttachment.value;
@@ -77,7 +76,7 @@ export const BareMetalReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Disk image')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {values.spec.diskImage.value.name || values.spec.diskImage.value.id || '—'}
+              {values.spec.diskImage.value.name || ''}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
@@ -89,7 +88,7 @@ export const BareMetalReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Cloud-init')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(selectedUserData, !isSecretSource)}
+              {formatReviewScalar(selectedUserData)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

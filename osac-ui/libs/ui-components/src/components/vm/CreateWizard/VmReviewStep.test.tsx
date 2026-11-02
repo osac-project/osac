@@ -76,11 +76,26 @@ describe('VmReviewStep — disk image', () => {
 });
 
 describe('VmReviewStep — user data source', () => {
+  it('shows inline Cloud-init data without masking it', async () => {
+    renderReviewStep({
+      userData: provisioningFieldValue({
+        source: 'inline',
+        inline: '#cloud-config\nusers: []',
+        secret: 'stale secret reference',
+      }),
+    });
+
+    expect(await screen.findByText(/#cloud-config/)).toBeInTheDocument();
+    expect(screen.queryByText('••••••••')).not.toBeInTheDocument();
+  });
+
   it('shows the selected Secret reference instead of inline user data', async () => {
     renderReviewStep({
-      userDataSource: provisioningFieldValue('secret'),
-      userData: provisioningFieldValue('stale inline data'),
-      userDataSecret: provisioningFieldValue('user-data-secret'),
+      userData: provisioningFieldValue({
+        source: 'secret',
+        inline: 'stale inline data',
+        secret: 'user-data-secret',
+      }),
     });
 
     expect(await screen.findByText('user-data-secret')).toBeInTheDocument();

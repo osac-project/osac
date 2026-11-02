@@ -127,9 +127,7 @@ test('creates a catalog item with the osac CLI and lists it in Catalog', async (
         catalogTestData.status,
         catalogTestData.usage,
         {
-          vcpus: catalogTestData.fields.instanceType.vcpus,
-          memoryGib: catalogTestData.fields.instanceType.memoryGib,
-          storageGib: catalogTestData.fields.bootDisk.sizeGib,
+          instanceType: catalogTestData.fields.instanceType.name,
           diskImage: catalogTestData.fields.diskImage.name,
         },
       );

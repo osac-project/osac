@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
 import { Formik, type FormikErrors } from 'formik';
@@ -27,6 +28,7 @@ const renderSelect = ({
   filterItems,
   formatOptionLabel,
   initialValue = emptyResourceSelectValue(),
+  labelHelp,
   tenants = [makeTenant('only-1', 'Only tenant')],
   transportOverrides,
 }: {
@@ -34,6 +36,7 @@ const renderSelect = ({
   filterItems?: (item: { id: string; metadata?: { name?: string } }) => boolean;
   formatOptionLabel?: (item: { id: string; metadata?: { name?: string } }) => string;
   initialValue?: ResourceSelectValue;
+  labelHelp?: ReactElement;
   tenants?: Tenant[];
   transportOverrides?: MockTransportOverrides;
 } = {}) => {
@@ -60,6 +63,7 @@ const renderSelect = ({
             autoSelectSingleOption={autoSelectSingleOption}
             filterItems={filterItems}
             formatOptionLabel={formatOptionLabel}
+            labelHelp={labelHelp}
             placeholder="Select a tenant"
             loadErrorTitle="Failed to fetch tenants"
             emptyTitle="No registered tenants"
@@ -89,6 +93,12 @@ const renderSelect = ({
 };
 
 describe('ResourceSelectField', () => {
+  it('renders label help beside the field label', () => {
+    renderSelect({ labelHelp: <button type="button">Tenant help</button> });
+
+    expect(screen.getByRole('button', { name: 'Tenant help' })).toBeInTheDocument();
+  });
+
   it('shows the placeholder on the toggle when no value is selected', async () => {
     renderSelect({
       autoSelectSingleOption: false,

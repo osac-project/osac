@@ -230,6 +230,26 @@ if grep -Eq "${mutation_commands}" "${LOG}"; then
   fail "remote-identifier: a cluster mutation ran despite invalid identifiers"
 fi
 
+# The identifiers reach the gate's validator through the environment, not
+# through Make expansion into its quoted bash -c string: a quote-bearing
+# value is rejected as an invalid DNS subdomain instead of breaking out of
+# the quoting and running as shell code. The mutation log doubles as the
+# canary: the injected command is an oc create, so execution would show.
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install-osac \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    REMOTE_KUBECONFIG="${LOG}" \
+    REMOTE_KUBECONFIG_SECRET_NAME="a'; oc create namespace pwned; '" \
+    >"${TMP_DIR}/remote-inj.out" 2>"${TMP_DIR}/remote-inj.err"; then
+  fail "remote-injection: install-osac succeeded with a quote-bearing name"
+fi
+grep -q 'REMOTE_KUBECONFIG_SECRET_NAME must be a DNS subdomain' "${TMP_DIR}/remote-inj.err" \
+  || fail "remote-injection: the value did not reach the validator as a literal"
+if grep -Eq "${mutation_commands}" "${LOG}"; then
+  fail "remote-injection: shell code from the secret name was executed"
+fi
+
 # The gate's osac-chart render and install-osac's upgrade share the same
 # remote-cluster kubeconfig argument construction (REMOTE_CLUSTER_HELM_ARGS),
 # so the gate validates the final merged values the install applies.

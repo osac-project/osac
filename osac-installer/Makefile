@@ -49,9 +49,9 @@ REMOTE_KUBECONFIG_SECRET_NAME ?= osac-remote-kubeconfig
 REMOTE_KUBECONFIG_SECRET_KEY ?= kubeconfig
 # Freeze command-line values without expanding Make expressions in them. The
 # gate's validate_remote_kubeconfig_secret check (and install-osac's re-check)
-# validate them before any reaches a command; the DNS-subdomain and Secret-key
-# grammars cannot produce shell metacharacters, so the shared Helm args below
-# expand as a word list.
+# receive them through the environment and validate them before the shared
+# Helm args below are expanded; the DNS-subdomain and Secret-key grammars
+# cannot produce shell metacharacters, so those args expand as a word list.
 override REMOTE_KUBECONFIG_SECRET_NAME := $(value REMOTE_KUBECONFIG_SECRET_NAME)
 override REMOTE_KUBECONFIG_SECRET_KEY := $(value REMOTE_KUBECONFIG_SECRET_KEY)
 export REMOTE_KUBECONFIG_SECRET_NAME REMOTE_KUBECONFIG_SECRET_KEY
@@ -575,10 +575,12 @@ endif
 # Remote-cluster identifiers are static inputs: the gate rejects an invalid
 # REMOTE_KUBECONFIG_SECRET_NAME/KEY before any cluster mutation. install-osac
 # re-checks them, but only after install-infra and namespace creation have
-# already changed the cluster.
+# already changed the cluster. The identifiers reach the validator through
+# the exported environment, never through Make expansion into the quoted
+# bash -c string, so a value cannot break out of the quoting.
 ifneq ($(strip $(REMOTE_KUBECONFIG)),)
 	@bash -c 'source scripts/lib.sh && \
-		validate_remote_kubeconfig_secret "$(REMOTE_KUBECONFIG_SECRET_NAME)" "$(REMOTE_KUBECONFIG_SECRET_KEY)"' \
+		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"' \
 	|| { echo "ERROR: invalid remote-cluster inputs; no cluster changes were made. Fix REMOTE_KUBECONFIG_SECRET_NAME/KEY and retry." >&2; exit 1; }
 endif
 ifeq ($(PLATFORM),kind)

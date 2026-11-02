@@ -17,13 +17,22 @@ with:
 ```sh
 cluster-tool servers
 cluster-tool list --server <server-alias>
-cluster-tool verify mcp --server <server-alias>
 ```
 
 The kubeconfig observed for `mcp` in this session was
 `$HOME/.kube/mcp.kubeconfig`. `cluster-tool boot` prints the kubeconfig path
 for a newly booted cluster; use that path explicitly rather than relying on
 whatever context `oc` currently selects.
+
+### Optional smoke test
+
+`cluster-tool verify` is not a discovery or access command. It creates a
+smoke-test namespace and pod, then later deletes the namespace. Run it only
+when those cluster changes are permitted:
+
+```sh
+cluster-tool verify mcp --server <server-alias>
+```
 
 ```sh
 export KUBECONFIG="$HOME/.kube/mcp.kubeconfig"

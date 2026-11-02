@@ -188,6 +188,30 @@ sed -n '1,/prepare-remote-cluster/p' "${mc_plan}" | join_continuations \
   | grep 'helm template osac-infra' | grep -q 'multicluster-infra.yaml' \
   || fail "install-multicluster: the gate does not render the multicluster overlay"
 
+# Gate/install parity for INFRA_HELM_ARGS: every helm command touching
+# osac-infra or osac-deps in the OpenShift install plan -- the gate's
+# renders, the EVPN deadline render, and the upgrades -- must apply the
+# variable, like the Kind branch already does. Without it, the gate would
+# validate a different value set than the install applies (e.g. an overlay
+# at an invalid value overridden by INFRA_HELM_ARGS would pass the gate and
+# fail the install).
+infra_args_plan="${TMP_DIR}/infra-args.plan"
+MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-infra \
+    PLATFORM=openshift PROFILE=caas-ci NS=osac \
+    INFRA_HELM_ARGS='--set topolvm.enabled=true' \
+    >"${infra_args_plan}" 2>/dev/null || fail "make -n install-infra (openshift) failed"
+infra_arg_cmds=$(join_continuations <"${infra_args_plan}" \
+  | grep -E 'helm (template|upgrade).* osac-(infra|deps) ' || true)
+[ -n "${infra_arg_cmds}" ] \
+  || fail "install-infra (openshift): no osac-infra/osac-deps helm commands in the plan"
+while IFS= read -r infra_cmd; do
+  case "${infra_cmd}" in
+    *topolvm.enabled=true*) ;;
+    *) fail "install-infra (openshift): INFRA_HELM_ARGS missing from: ${infra_cmd}" ;;
+  esac
+done <<<"${infra_arg_cmds}"
+
 # install-devstack rejects a wrong profile at parse time, before the gate's
 # cluster lookups or renders, so the user sees the actual mistake.
 if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \

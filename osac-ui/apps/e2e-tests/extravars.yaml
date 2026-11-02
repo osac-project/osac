@@ -4,6 +4,7 @@
 # OSAC_UI_BASE_URL, OSAC_ADMIN_USERNAME, and OSAC_ADMIN_PASSWORD.
 
 tenant_name: 'tenant1'
+# The first-login replacement password defaults to tenant_name.
 
 catalog:
   name: 'catalog-item-e2e'

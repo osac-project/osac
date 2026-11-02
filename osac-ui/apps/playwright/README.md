@@ -69,7 +69,12 @@ has no specs, Playwright reports that no tests were found.
 
 ### Tenant flow tests
 
-The tenant specs read `tenant_name` from `apps/e2e-tests/extravars.yaml`.
+The tenant specs read `tenant_name` and the replacement first-login password
+from `apps/e2e-tests/extravars.yaml`.
+Set `tenant_password` to the password Keycloak should use after the generated
+temporary password is replaced. The credential file is updated after that
+first login so subsequent VM and delete specs reuse the new password.
+When `tenant_password` is omitted, the tenant name is used.
 Before running, set it to a tenant that does not already exist. The tenant
 create flow requires that the configured tenant does not already exist; the
 delete flow requires that it exists. All VMaaS specs skip before browser

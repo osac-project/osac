@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { tenantNameOrSkip } from './test_data';
+import { tenantNameOrSkip, tenantPassword } from './test_data';
 import { logout, openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openTenantsPage } from '../../../../libs/test-utils/src/main.page';
@@ -12,6 +12,7 @@ import {
   expectTenantToExist,
   openCreateTenantPage,
   readTenantCredentials,
+  updateTenantCredentialsPassword,
 } from '../../../../libs/test-utils/src/tenants.page';
 
 test('creates a tenant from the Administration tenants page', async ({ page }) => {
@@ -76,12 +77,16 @@ test('creates a tenant from the Administration tenants page', async ({ page }) =
 
   await testStep('tenant-create', 'Log in with the generated tenant credentials', async () => {
     await logout(page);
-    await openAndLogin(
+    const passwordUpdated = await openAndLogin(
       page,
       '/',
       tenantCredentials.username,
       tenantCredentials.password,
       'tenant_type',
+      tenantPassword,
     );
+    if (passwordUpdated) {
+      await updateTenantCredentialsPassword(credentialsFile, tenantPassword);
+    }
   });
 });

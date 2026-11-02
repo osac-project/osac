@@ -55,6 +55,19 @@ export const readTenantCredentials = async (
   };
 };
 
+/** Replace a temporary tenant password after the first successful login. */
+export const updateTenantCredentialsPassword = async (
+  credentialsFile: string,
+  password: string,
+): Promise<void> => {
+  const contents = await readFile(credentialsFile, 'utf8');
+  const updatedContents = contents.replace(/^Password: .*$/m, () => `Password: ${password}`);
+  if (updatedContents === contents) {
+    throw new Error(`Tenant credentials file "${credentialsFile}" is missing Password.`);
+  }
+  await writeFile(credentialsFile, updatedContents, { encoding: 'utf8', mode: 0o600 });
+};
+
 /** Remove the saved credentials for a tenant, if present. */
 export const removeTenantCredentials = async (tenantName: string): Promise<void> => {
   await rm(tenantCredentialsFilePath(tenantName), { force: true });

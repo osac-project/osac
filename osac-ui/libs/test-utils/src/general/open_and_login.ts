@@ -86,7 +86,7 @@ export const openAndLogin = async (
   password: string,
   userType: LoginUserType,
   newPassword = '',
-): Promise<void> => {
+): Promise<boolean> => {
   if (!username || !password) {
     throw new Error(
       'OSAC_ADMIN_USERNAME and OSAC_ADMIN_PASSWORD must be set to a valid Keycloak test user.',
@@ -97,7 +97,7 @@ export const openAndLogin = async (
 
   if (await isLoggedIn(page)) {
     await verifyLoggedInUser(page, username, userType);
-    return;
+    return false;
   }
 
   await page.getByLabel(...LoginPage.username).fill(username);
@@ -126,6 +126,7 @@ export const openAndLogin = async (
   const passwordUpdatePage = page.getByRole(...LoginPage.passwordUpdatePageTitle);
   await expect(accountMenu.or(passwordUpdatePage)).toBeVisible();
 
+  let passwordUpdated = false;
   if (await isPasswordUpdateRequired(page)) {
     if (!newPassword) {
       throw new Error(
@@ -136,7 +137,9 @@ export const openAndLogin = async (
     await page.getByLabel(...LoginPage.newPassword).fill(newPassword);
     await page.getByLabel(...LoginPage.confirmPassword).fill(newPassword);
     await page.getByRole(...LoginPage.passwordUpdateSubmit).click();
+    passwordUpdated = true;
   }
 
   await verifyLoggedInUser(page, username, userType);
+  return passwordUpdated;
 };

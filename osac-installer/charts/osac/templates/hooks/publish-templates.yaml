@@ -38,11 +38,9 @@ spec:
               -o jsonpath='{.data.token}' | base64 -d)
             [[ -n "${AAP_TOKEN}" ]] || { echo "ERROR: osac-aap-api-token secret is empty"; exit 1; }
 
-            AAP_URL="{{ if .Values.aap.aap.instance.enabled }}http://{{ .Values.aap.aap.instance.name }}{{ else }}{{ .Values.aap.controllerUrl | required "aap.controllerUrl is required when the AAP instance is disabled" }}{{ end }}"
-
             TEMPLATE_NAME="{{ .Values.operator.aap.templatePrefix | default "osac" }}-publish-templates"
             echo "Looking up ${TEMPLATE_NAME} job template..."
-            JT_RESPONSE=$(curl -sf -H "Authorization: Bearer ${AAP_TOKEN}" \
+            JT_RESPONSE=$(curl -sf{{ if .Values.aap.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} -H "Authorization: Bearer ${AAP_TOKEN}" \
               "${AAP_URL}/api/controller/v2/job_templates/?name=${TEMPLATE_NAME}")
             JT_ID=$(echo "${JT_RESPONSE}" | python3 -c "
             import sys, json
@@ -55,7 +53,7 @@ spec:
             echo "Job template ID: ${JT_ID}"
 
             echo "Launching ${TEMPLATE_NAME}..."
-            LAUNCH_RESPONSE=$(curl -sf -X POST \
+            LAUNCH_RESPONSE=$(curl -sf{{ if .Values.aap.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} -X POST \
               -H "Authorization: Bearer ${AAP_TOKEN}" \
               -H "Content-Type: application/json" \
               "${AAP_URL}/api/controller/v2/job_templates/${JT_ID}/launch/")
@@ -64,7 +62,7 @@ spec:
             echo "Job ${JOB_ID} launched, polling for completion..."
 
             for i in $(seq 1 60); do
-              HTTP_CODE=$(curl -s -o /tmp/poll-response.json -w '%{http_code}' \
+              HTTP_CODE=$(curl -s{{ if .Values.aap.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} -o /tmp/poll-response.json -w '%{http_code}' \
                 --connect-timeout 5 --max-time 15 \
                 -H "Authorization: Bearer ${AAP_TOKEN}" \
                 "${AAP_URL}/api/controller/v2/jobs/${JOB_ID}/")
@@ -84,7 +82,7 @@ spec:
                 failed|error|canceled)
                   echo "ERROR: Publish job ${JOB_ID} finished with status: ${STATUS}"
                   echo "--- Job stdout ---"
-                  curl -s --connect-timeout 5 --max-time 30 \
+                  curl -s{{ if .Values.aap.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} --connect-timeout 5 --max-time 30 \
                     -H "Authorization: Bearer ${AAP_TOKEN}" \
                     "${AAP_URL}/api/controller/v2/jobs/${JOB_ID}/stdout/?format=txt" | tail -30
                   exit 1
@@ -99,9 +97,17 @@ spec:
           value: /tmp
         - name: OSAC_AAP_TEMPLATE_PREFIX
           value: {{ .Values.operator.aap.templatePrefix | default "osac" | quote }}
+        # Passed as an environment variable rather than rendered into the
+        # shell script: an env value is never shell-parsed, so a crafted URL
+        # cannot inject commands.
+        - name: AAP_URL
+          value: {{ if .Values.aap.aap.instance.enabled }}"http://{{ .Values.aap.aap.instance.name }}"{{ else }}{{ .Values.aap.controllerUrl | required "aap.controllerUrl is required when the AAP instance is disabled" | quote }}{{ end }}
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        - name: ca-bundle
+          mountPath: /etc/ca-bundle
+          readOnly: true
         resources:
           requests:
             cpu: 50m

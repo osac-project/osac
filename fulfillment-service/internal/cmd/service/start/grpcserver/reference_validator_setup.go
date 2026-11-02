@@ -36,6 +36,8 @@ import (
 // NATGateway Create ExternalIPs are resolved by the handler, by ID or by name within
 // the NATGateway's tenant and project, after checking that only the system may create
 // a NATGateway for a tenant-default VirtualNetwork.
+// RoleBinding handlers validate service-account references in the request's
+// tenant scope.
 // Other references continue through the interceptor's registered lookups.
 func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, registerer prometheus.Registerer) (*references.ReferenceValidator, error) {
 	validator, err := references.NewReferenceValidator().SetLogger(logger).SetMetricsRegisterer(registerer).
@@ -48,6 +50,7 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(serviceAccountControllerSecretReferenceMethods(),
 			"object.status.client_secret", "object.status.registration_secret").
 		SetExcludedReferencePaths(natGatewayCreationMethods(), "object.spec.external_ip").
+		SetExcludedReferencePaths(roleBindingServiceAccountMethods(), "object.spec.service_accounts").
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reference validator: %w", err)
@@ -73,6 +76,15 @@ func natGatewayCreationMethods() []string {
 	return []string{
 		publicv1.NATGateways_Create_FullMethodName,
 		privatev1.NATGateways_Create_FullMethodName,
+	}
+}
+
+func roleBindingServiceAccountMethods() []string {
+	return []string{
+		publicv1.RoleBindings_Create_FullMethodName,
+		privatev1.RoleBindings_Create_FullMethodName,
+		publicv1.RoleBindings_Update_FullMethodName,
+		privatev1.RoleBindings_Update_FullMethodName,
 	}
 }
 

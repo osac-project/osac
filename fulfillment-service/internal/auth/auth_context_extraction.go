@@ -15,8 +15,10 @@ package auth
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 )
 
 // ExtractAuthContext extracts an AuthContext from the validated JWT token.
@@ -35,6 +37,7 @@ func ExtractAuthContext(token *jwt.Token) (*AuthContext, error) {
 	_, kube := claims["kubernetes.io"]
 
 	authContext := &AuthContext{}
+	authContext.extractManagedServiceAccountClaims(claims)
 
 	if kube {
 		authContext.AuthMethod = "serviceaccount"
@@ -67,6 +70,25 @@ func ExtractAuthContext(token *jwt.Token) (*AuthContext, error) {
 	}
 
 	return authContext, nil
+}
+
+func (authContext *AuthContext) extractManagedServiceAccountClaims(claims jwt.MapClaims) {
+	azpValue, azpPresent := claims["azp"]
+	clientID, azpIsString := azpValue.(string)
+	tenantValue, tenantPresent := claims["osac_tenant"]
+	tenant, tenantIsString := tenantValue.(string)
+
+	authContext.ManagedServiceAccountCandidate = tenantPresent ||
+		(azpIsString && strings.HasPrefix(clientID, serviceaccounts.ManagedClientIDPrefix))
+	if !authContext.ManagedServiceAccountCandidate {
+		return
+	}
+
+	authContext.ManagedServiceAccountClientID = clientID
+	authContext.ManagedServiceAccountTenantClaim = tenant
+	authContext.ManagedServiceAccountClaimsValid = azpPresent && azpIsString &&
+		strings.HasPrefix(clientID, serviceaccounts.ManagedClientIDPrefix) &&
+		tenantPresent && tenantIsString && tenant != ""
 }
 
 // claimAsAnySlice extracts a JWT claim as a slice of any. Returns nil if the claim doesn't exist or isn't a slice.

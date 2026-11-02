@@ -3566,6 +3566,7 @@ jobs:
       env:
         SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.webhook-url }}
         VERSION: ${{ needs.prepare.outputs.version }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
         SKIPPED_TESTS: ${{ needs.notify-release.outputs.skipped-tests }}
         IMAGE_BUILDS: ${{ needs.wait-for-konflux-build.result }}
         IMAGE_RELEASE: ${{ needs.trigger-konflux-staging-release.result }}
@@ -3584,6 +3585,15 @@ jobs:
           HEADER_TEXT=":x: Release ${VERSION} - Konflux staging failed"
         fi
 
+        # Recorded purely for a later osac-promote-to-prod.yaml dispatch --
+        # same naming formula as trigger-konflux-staging-release/
+        # trigger-konflux-chart-staging-release's own resource_name, so a
+        # human promoting this release later doesn't have to recompute it
+        # by hand or go spelunking through this run's own Actions metadata.
+        SLUG="${VERSION//./-}"
+        IMAGE_SNAPSHOT="osac-release-v${SLUG}-attempt${RUN_ATTEMPT}"
+        CHART_SNAPSHOT="osac-charts-release-v${SLUG}-attempt${RUN_ATTEMPT}"
+
         PAYLOAD=$(mktemp)
         trap 'rm -f "$PAYLOAD"' EXIT
         jq -n \
@@ -3592,6 +3602,8 @@ jobs:
           --arg image_release "${IMAGE_RELEASE}" \
           --arg chart_tag "${CHART_TAG_PUSHED:-false}" \
           --arg chart_release "${CHART_RELEASE}" \
+          --arg image_snapshot "${IMAGE_SNAPSHOT}" \
+          --arg chart_snapshot "${CHART_SNAPSHOT}" \
           --arg workflow_url "${WORKFLOW_URL}" \
           '{blocks: [
             {type: "header", text: {type: "plain_text", text: $header}},
@@ -3600,7 +3612,9 @@ jobs:
               "*Konflux image builds:* " + $image_builds + "\n" +
               "*Konflux image staging:* " + $image_release + "\n" +
               "*Konflux chart build tag pushed:* " + $chart_tag + "\n" +
-              "*Konflux chart staging:* " + $chart_release
+              "*Konflux chart staging:* " + $chart_release + "\n" +
+              "*Image Snapshot (for prod promotion):* `" + $image_snapshot + "`\n" +
+              "*Chart Snapshot (for prod promotion):* `" + $chart_snapshot + "`"
             )}},
             {type: "actions", elements: [
               {type: "button", text: {type: "plain_text", text: "View Run"}, url: $workflow_url}

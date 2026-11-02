@@ -32,21 +32,40 @@ The reader name is also its consumer group, which is the name Kafka Exporter
 reports lag under.
 
 Reader names must be unique; a repeated name fails the render. `system` and
-`shared` are rejected because metering never creates their usage topics.
+`shared` are rejected because metering never creates their usage topics. Names
+that start with `osac-` or `osac.` are reserved for OSAC, as are the KafkaUsers
+this chart creates (`osac-metering` and its adapters): a collision would let a
+reader replace an OSAC user's ACLs or join an adapter's consumer group. The
+umbrella chart additionally rejects `fulfillment-service`, the KafkaUser it
+creates for the fulfillment service.
 
-Grant or revoke a reader with a `helm upgrade`. The metering Deployment does
-not depend on these values, so nothing restarts. On revocation Strimzi deletes
-the user, its password Secret, and its ACLs, and the broker refuses the
-reader's next request.
+The list is set through Helm values. The Enclave Wizard's schema-to-control
+mapping covers enums, booleans, strings, and numbers only, so it renders no
+control for this list of objects; that is the deliberate decision, and there is
+no Wizard field for it.
+
+Grant or revoke a reader by applying the values again with the installer. The
+metering Deployment does not depend on these values, so nothing restarts. On
+revocation Strimzi deletes the user, its password Secret, and its ACLs; the
+running reader fails its next fetch rather than waiting to be told. Offboarding
+a tenant means removing its reader entries in the same change that retires the
+tenant; the records stay until the tenant's topics are deleted.
 
 The reader needs the bootstrap address, the shared OSAC CA, and its
 password from the Secret named after it in the Kafka namespace. Hand those
 over out of band. The chart never writes them into the repository.
 
 To see how far behind a reader is, enable `prometheusRule.enabled`: the
-`MeteringReaderLag` alert fires when a reader group is more than 60 records
-behind for 15 minutes. Strimzi's Kafka Exporter, enabled on the installer's
-Kafka resource, supplies `kafka_consumergroup_lag`.
+`MeteringReaderLag` alert fires when a reader group is more than
+`prometheusRule.readerLagThreshold` records behind for 15 minutes (default 15).
+A metered resource sends about one heartbeat per minute, so a single-VM tenant
+grows lag by about one record per minute: the default catches a stalled reader
+in about half an hour. Busy tenants cross it sooner. Raise the threshold if a
+reader may fall further behind, or lower it for a small tenant. A reader that
+has never consumed has no consumer group and no lag series, so this alert
+cannot fire for it; check that the group exists before relying on the alert.
+Strimzi's Kafka Exporter, enabled on the installer's Kafka resource and scraped
+by a PodMonitor, supplies `kafka_consumergroup_lag`.
 
 ## Rule revisions
 

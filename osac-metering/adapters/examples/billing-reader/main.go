@@ -12,6 +12,10 @@ compliance with the License. You may obtain a copy of the License at
 // and prints the totals. It is the worked example from the metering event
 // contract, not a production adapter.
 //
+// It stops with a non-zero exit when it cannot read an event. The unread event
+// stays uncommitted, so the reader sees it again on the next run rather than
+// dropping it.
+//
 // Connection values come from the environment; the repository carries none:
 //
 //	KAFKA_BROKERS              bootstrap address (required)
@@ -37,6 +41,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"sync"
 	"syscall"
 	"time"
 
@@ -64,7 +69,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("creating Kafka client config: %v", err)
 	}
-	// The reader keeps its own place: commit offsets after summing each event.
+	// Marks are set only after a successful sum, so auto-commit never moves
+	// past an event this reader could not read.
 	config.Consumer.Offsets.AutoCommit.Enable = true
 
 	client, err := sarama.NewClient(kafka.SplitAndTrimBrokers(brokers, ","), config)
@@ -107,20 +113,35 @@ func main() {
 		logger: logger,
 	}
 
+	// The consumer group reports fetch and authorization failures here when
+	// Consumer.Return.Errors is set. Stop the run and remember the first one:
+	// a revoked reader fails its next fetch instead of waiting out the idle
+	// timeout.
+	go func() {
+		for err := range consumerGroup.Errors() {
+			handler.recordError(err)
+			cancel()
+		}
+	}()
+
 	logger.Printf("reading %s as group %s; stopping after %s without a message", topic, group, idleTimeout)
 	for runCtx.Err() == nil {
 		if err := consumerGroup.Consume(runCtx, []string{topic}, handler); err != nil {
 			if errors.Is(err, context.Canceled) {
 				break
 			}
-			log.Fatalf("consuming %s: %v", topic, err)
+			handler.recordError(err)
+			break
 		}
 	}
 
 	accepted, repeats := handler.totals.Counts()
-	logger.Printf("summed %d events, dropped %d repeats, failed %d events", accepted, repeats, handler.failed)
+	logger.Printf("summed %d events, dropped %d repeats", accepted, repeats)
 	if err := handler.totals.Print(os.Stdout); err != nil {
 		log.Fatalf("printing totals: %v", err)
+	}
+	if err := handler.firstError(); err != nil {
+		log.Fatalf("reader stopped: %v", err)
 	}
 }
 
@@ -139,43 +160,45 @@ func topicExists(client sarama.Client, topic string) (bool, error) {
 }
 
 // consumer sums each claimed message and stops the run after the topic has
-// been quiet for idle.
+// been quiet for idle. It is called from one goroutine per claim, so the
+// shared totals are safe only because a usage topic has one partition; each
+// claim has its own idle timer, and the first fatal error is mutex-guarded.
 type consumer struct {
 	totals *Totals
 	idle   time.Duration
 	cancel context.CancelFunc
 	logger *log.Logger
-	timer  *time.Timer
-	failed int
+
+	errMu sync.Mutex
+	err   error
 }
 
-func (c *consumer) Setup(sarama.ConsumerGroupSession) error {
-	c.timer = time.AfterFunc(c.idle, c.expire)
-	return nil
-}
+func (c *consumer) Setup(sarama.ConsumerGroupSession) error { return nil }
 
-func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error {
-	if c.timer != nil {
-		c.timer.Stop()
-	}
-	return nil
-}
+func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error { return nil }
 
 func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	idle := time.NewTimer(c.idle)
+	defer idle.Stop()
+
 	for {
 		select {
 		case message, ok := <-claim.Messages():
 			if !ok {
 				return nil
 			}
+			// Mark only after a successful sum. An event this reader cannot
+			// decode or does not know stays uncommitted, so a restart sees it
+			// again instead of losing it, and the run stops with an error.
 			if err := c.sum(message); err != nil {
-				c.failed++
-				c.logger.Printf("%v", err)
+				return err
 			}
 			session.MarkMessage(message, "")
-			if c.timer != nil {
-				c.timer.Reset(c.idle)
-			}
+			idle.Reset(c.idle)
+		case <-idle.C:
+			c.logger.Printf("no message for %s; printing the billable totals", c.idle)
+			c.cancel()
+			return nil
 		case <-session.Context().Done():
 			return nil
 		}
@@ -193,7 +216,17 @@ func (c *consumer) sum(message *sarama.ConsumerMessage) error {
 	return nil
 }
 
-func (c *consumer) expire() {
-	c.logger.Printf("no message for %s; printing the billable totals", c.idle)
-	c.cancel()
+func (c *consumer) recordError(err error) {
+	c.errMu.Lock()
+	defer c.errMu.Unlock()
+	if c.err == nil {
+		c.err = err
+		c.logger.Printf("consumer error: %v", err)
+	}
+}
+
+func (c *consumer) firstError() error {
+	c.errMu.Lock()
+	defer c.errMu.Unlock()
+	return c.err
 }

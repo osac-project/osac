@@ -35,6 +35,10 @@ rules:
   - apiGroups: ["kafka.strimzi.io"]
     resources: ["kafkas", "kafkanodepools"]
     verbs: ["get", "create", "patch", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: ["osac-kafka"]
+    verbs: ["get", "patch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

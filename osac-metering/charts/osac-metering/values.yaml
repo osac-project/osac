@@ -66,7 +66,9 @@ topics:
 # values, so neither action restarts metering. Strimzi deletes the user, its
 # password Secret, and its ACLs on revocation, and the broker refuses the
 # reader's next request. Names must be unique; duplicate names fail the
-# render.
+# render. Names starting with osac- or osac., and the KafkaUser names OSAC
+# creates, are reserved. The list is values-only: it is an array of objects,
+# which the Enclave Wizard does not render as a control.
 readers: []
 #  - name: billing-reader
 #    tenant: acme
@@ -109,3 +111,12 @@ prometheusRule:
   enabled: false
   # Extra labels for Prometheus instances that select rules by label.
   labels: {}
+  # Records a reader may fall behind before MeteringReaderLag fires. Each
+  # metered resource sends about one heartbeat per round, so a small tenant
+  # grows lag by about one record per minute: 15 is about 15 minutes of
+  # growth for a single-VM tenant, and the alert's 15-minute `for` makes a
+  # stalled reader visible in roughly half an hour. Busy tenants cross it
+  # sooner. Raise it if a reader is allowed to fall further behind, lower it
+  # to catch a small tenant sooner. A reader that has never consumed has no
+  # consumer group and no lag series, so this alert cannot fire for it.
+  readerLagThreshold: 15

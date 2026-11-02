@@ -9,10 +9,12 @@ another topic, and no access to the raw event log or the dead-letter topics.
 The group name is the reader name, so the lag Strimzi's Kafka exporter
 reports maps to the reader.
 
-Names are rejected when they repeat, are not lowercase Kafka-safe, or name a
-built-in tenant: metering never creates the system and shared tenants' usage
-topics, so a grant for them would read nothing.
+Names are rejected when they repeat, are not a lowercase DNS name, name a
+built-in tenant, or collide with a KafkaUser OSAC owns. A collision would
+let a reader replace an OSAC user's ACLs or split an adapter's consumer
+group, so the whole osac- and osac. namespaces are reserved.
 */}}
+{{- $reserved := list "osac-metering" "osac-metering-echo-adapter" "osac-metering-m360-adapter" -}}
 {{- $seen := dict -}}
 {{- range .Values.readers }}
 {{- $name := required "readers[].name is required" .name -}}
@@ -21,6 +23,12 @@ topics, so a grant for them would read nothing.
 {{- fail (printf "duplicate metering reader %q: each reader name must be unique" $name) }}
 {{- end }}
 {{- $_ := set $seen $name true }}
+{{- if has $name $reserved }}
+{{- fail (printf "metering reader %q is a KafkaUser OSAC owns; pick another name" $name) }}
+{{- end }}
+{{- if or (hasPrefix "osac-" $name) (hasPrefix "osac." $name) }}
+{{- fail (printf "metering reader %q uses the reserved osac- or osac. name prefix" $name) }}
+{{- end }}
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $name) }}
 {{- fail (printf "metering reader %q must be a lowercase DNS name: letters, digits, dots, and dashes" $name) }}
 {{- end }}

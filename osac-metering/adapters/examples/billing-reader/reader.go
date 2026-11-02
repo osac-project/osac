@@ -16,6 +16,7 @@ compliance with the License. You may obtain a copy of the License at
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
@@ -29,7 +30,9 @@ import (
 )
 
 // UsageKey groups the events the contract bills together: one resource, one
-// meter, one component, and one set of billing dimensions.
+// meter, one component, and one set of billing dimensions. Dimensions holds
+// the canonical encoding of the map, not the readable text, so two different
+// maps cannot form one key.
 type UsageKey struct {
 	ResourceType string
 	ResourceID   string
@@ -40,9 +43,10 @@ type UsageKey struct {
 
 // Row is one billable total: the quantity summed for a UsageKey.
 type Row struct {
-	Key      UsageKey
-	Quantity string
-	Unit     string
+	Key        UsageKey
+	Dimensions string
+	Quantity   string
+	Unit       string
 }
 
 // Totals drops repeated CloudEvent ids and adds every remaining event's
@@ -52,6 +56,7 @@ type Totals struct {
 	seen     map[string]struct{}
 	sums     map[UsageKey]*big.Rat
 	units    map[UsageKey]string
+	displays map[UsageKey]string
 	accepted int
 	repeats  int
 }
@@ -59,9 +64,10 @@ type Totals struct {
 // NewTotals returns an empty set of totals.
 func NewTotals() *Totals {
 	return &Totals{
-		seen:  make(map[string]struct{}),
-		sums:  make(map[UsageKey]*big.Rat),
-		units: make(map[UsageKey]string),
+		seen:     make(map[string]struct{}),
+		sums:     make(map[UsageKey]*big.Rat),
+		units:    make(map[UsageKey]string),
+		displays: make(map[UsageKey]string),
 	}
 }
 
@@ -94,11 +100,12 @@ func (t *Totals) Add(event cloudevents.Event) (bool, error) {
 		ResourceID:   data.ResourceID,
 		Meter:        data.Meter,
 		Component:    data.Component,
-		Dimensions:   dimensionText(data.BillingDimensions),
+		Dimensions:   dimensionKey(data.BillingDimensions),
 	}
 	if t.sums[key] == nil {
 		t.sums[key] = new(big.Rat)
 		t.units[key] = data.Usage.Unit
+		t.displays[key] = dimensionText(data.BillingDimensions)
 	}
 	t.sums[key].Add(t.sums[key], quantity)
 	t.seen[id] = struct{}{}
@@ -116,7 +123,12 @@ func (t *Totals) Counts() (accepted, repeats int) {
 func (t *Totals) Rows() []Row {
 	rows := make([]Row, 0, len(t.sums))
 	for key, sum := range t.sums {
-		rows = append(rows, Row{Key: key, Quantity: sum.FloatString(6), Unit: t.units[key]})
+		rows = append(rows, Row{
+			Key:        key,
+			Dimensions: t.displays[key],
+			Quantity:   sum.FloatString(6),
+			Unit:       t.units[key],
+		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		a, b := rows[i].Key, rows[j].Key
@@ -146,7 +158,7 @@ func (t *Totals) Print(w io.Writer) error {
 		return fmt.Errorf("writing totals header: %w", err)
 	}
 	for _, row := range rows {
-		dimensions := row.Key.Dimensions
+		dimensions := row.Dimensions
 		if dimensions == "" {
 			dimensions = "-"
 		}
@@ -158,8 +170,7 @@ func (t *Totals) Print(w io.Writer) error {
 		if totals[row.Unit] == nil {
 			totals[row.Unit] = new(big.Rat)
 		}
-		sum, _ := new(big.Rat).SetString(row.Quantity)
-		totals[row.Unit].Add(totals[row.Unit], sum)
+		totals[row.Unit].Add(totals[row.Unit], t.sums[row.Key])
 	}
 	if err := writer.Flush(); err != nil {
 		return fmt.Errorf("writing totals: %w", err)
@@ -177,8 +188,20 @@ func (t *Totals) Print(w io.Writer) error {
 	return nil
 }
 
-// dimensionText renders a dimension map as sorted name=value pairs, so two
-// events with the same dimensions always form the same key.
+// dimensionKey renders a dimension map as its canonical grouping key.
+// encoding/json sorts map keys, so equal maps encode identically, and its
+// quoting keeps a value containing a comma or equals sign from merging with a
+// different map.
+func dimensionKey(dimensions map[string]string) string {
+	if len(dimensions) == 0 {
+		return ""
+	}
+	encoded, _ := json.Marshal(dimensions)
+	return string(encoded)
+}
+
+// dimensionText renders a dimension map for display as sorted name=value
+// pairs. Only the display uses this form; grouping uses dimensionKey.
 func dimensionText(dimensions map[string]string) string {
 	if len(dimensions) == 0 {
 		return ""

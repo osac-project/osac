@@ -1750,7 +1750,7 @@
         },
         "readers": {
           "type": "array",
-          "description": "Outside systems that read one tenant's usage events. Each entry renders one Strimzi KafkaUser with a read ACL on osac.metering.heartbeat.<tenant> and on a consumer group named after the reader. Grant and revoke a reader with a helm upgrade; neither restarts metering",
+          "description": "Outside systems that read one tenant's usage events. Each entry renders one Strimzi KafkaUser with a read ACL on osac.metering.heartbeat.<tenant> and on a consumer group named after the reader. Grant and revoke a reader with a helm upgrade; neither restarts metering. This is a list of objects: the Enclave Wizard's schema-to-control mapping covers only enums, booleans, strings, and numbers, so the Wizard renders no control for it and operators set it in values. The decision is to keep the list values-only rather than flatten it into per-reader scalar keys",
           "default": [],
           "items": {
             "type": "object",
@@ -1904,6 +1904,12 @@
               "type": "object",
               "description": "Extra labels for Prometheus instances that select rules by label",
               "additionalProperties": { "type": "string" }
+            },
+            "readerLagThreshold": {
+              "type": "integer",
+              "description": "Records a reader may fall behind before MeteringReaderLag fires. A small tenant grows lag by about one record per minute, so the default catches a stalled single-VM tenant in about 30 minutes including the alert's 15-minute for",
+              "minimum": 1,
+              "default": 15
             }
           },
           "additionalProperties": false

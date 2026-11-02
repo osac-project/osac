@@ -1,0 +1,22 @@
+suite: kafka exporter on the Kafka resource
+templates:
+  - templates/kafka.yaml
+tests:
+  - it: enables Strimzi's Kafka exporter
+    set:
+      kafka.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+      - matchRegex:
+          path: data["kafka-cluster.yaml"]
+          pattern: 'kafkaExporter: \{\}'
+
+  - it: renders no Kafka resource when Kafka is disabled
+    set:
+      kafka.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

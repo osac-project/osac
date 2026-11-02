@@ -28,11 +28,16 @@ metering:
       tenant: acme
 ```
 
-Apply the change:
+Apply the change with the installer's supported path, which builds the chart
+dependencies and applies all three layers:
 
 ```sh
-helm upgrade --install osac osac-installer/charts/osac -n osac -f values.yaml
+make -C osac-installer install-osac PLATFORM=openshift PROFILE=full-ci NS=osac
 ```
+
+Use the platform and profile of the deployment. A direct `helm upgrade
+osac-installer/charts/osac` also works, but only after `make -C osac-installer
+helm-deps` has built the umbrella chart's dependencies.
 
 Strimzi issues the password into the Secret named after the reader in the
 Kafka namespace. Hand the password, the shared OSAC CA, and the bootstrap
@@ -43,8 +48,19 @@ address to the reader's owner out of band. The repository holds none of them.
 The connection values come from the environment. Run the example in the
 cluster, so the bootstrap address resolves and TLS verifies against the shared
 CA. Build the binary into an image first (`go build -o bin/billing-reader
-./examples/billing-reader`), then run a Job that mounts the reader's Secret and
-the CA ConfigMap:
+./examples/billing-reader`).
+
+Strimzi creates the password Secret in `osac-kafka`, and the shared `ca-bundle`
+ConfigMap exists in the release namespace (`osac`). Copy the password into the
+release namespace so one Job can mount both:
+
+```sh
+oc get secret billing-reader -n osac-kafka -o jsonpath='{.data.password}' \
+  | base64 -d \
+  | oc create secret generic billing-reader --from-file=password=/dev/stdin -n osac
+```
+
+Then run a Job in `osac` that mounts that Secret and the CA ConfigMap:
 
 ```yaml
 apiVersion: batch/v1
@@ -88,6 +104,7 @@ spec:
 
 ```sh
 kubectl logs job/billing-reader-example -n osac
+oc delete secret billing-reader -n osac
 ```
 
 From a host that can reach the broker, export the same variables and run:
@@ -107,10 +124,13 @@ BILLABLE TOTAL: 110.000000 second
 ```
 
 It stops after `READER_IDLE_TIMEOUT` (default 30 seconds) without a message,
-or on Ctrl-C.
+or on Ctrl-C. If it meets an event it cannot decode or does not know, it logs
+the error and exits non-zero without marking that event, so the next run reads
+it again.
 
 ## Revoke the reader
 
-Remove the entry and run `helm upgrade` again. Strimzi deletes the `KafkaUser`,
-its password Secret, and its ACLs. The running example fails on its next fetch
-and exits; nothing in OSAC restarts.
+Remove the entry and run the installer again. Strimzi deletes the `KafkaUser`,
+its password Secret, and its ACLs. The running example logs the authorization
+error from its next fetch, prints the totals it has, and exits non-zero instead
+of waiting for the idle timeout. Nothing in OSAC restarts.

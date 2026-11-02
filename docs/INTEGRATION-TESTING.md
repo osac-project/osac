@@ -531,6 +531,12 @@ Coverage gaps:
   works anywhere; on Helm 4 the failing render's JSON line is the portable
   channel.
 
+The `helm unittest charts/osac-infra` suites, run in the same `helm-unit` leg,
+render the Kafka resource with Strimzi's Kafka Exporter and the PodMonitor that
+scrapes it in `osac-kafka`; they also assert that neither renders when Kafka is
+disabled or the monitoring CRD is absent. They do not check the namespace
+label the `configure-kafka` hook applies or a live exporter's metrics.
+
 The `make helm-networking-test` Helm contract includes GATE-CONFIG-01,
 owned by [DEV] OSAC-5993. It checks each networking consumer Deployment's
 startup environment separately (Fulfillment API/controller, OSAC Operator,
@@ -983,7 +989,7 @@ Touched-area requirements: [component guide](../osac-metering/AGENTS.md#integrat
 | Contract | `adapters/m360/contract_test.go`; runs when `M360_TEST_API_URL`, `M360_TEST_API_KEY`, and `M360_TEST_TENANT` are set, skips otherwise | A real M360 tenant: submits positive and negative quantities, duplicate IDs, dated heartbeats, invalid heartbeats, and invoiced-period corrections, and asserts synchronous acceptance or rejection | Reading the tenant's usage totals back is a gap: the adapter has no query path, so rate and deduplication arithmetic is not verified end to end. Deploying the M360 tenant is out of scope for this repository. |
 | E2E | Cross-component OSAC metering/E2E deployment | The deployed metering pipeline and its configured Kafka/provider dependencies | Depends on the installer environment and enabled metering path. |
 | Helm render and lint | `make -C osac-metering helm-lint` | Chart templates, rule revision 0001, and the admission policy that protects it | Deployed behavior. |
-| Helm unit (reader grants) | `make -C osac-metering helm-test` (helm-unittest plugin; CI pins v1.2.1 and runs the suite in the `helm-unit` leg) | One `KafkaUser` per reader with a read ACL on `osac.metering.heartbeat.<tenant>` and on a consumer group named after the reader, duplicate names rejected, and a lag alert that names only the configured reader groups | Does not prove the broker denies a write, that revocation takes effect within 60 seconds, or that Kafka Exporter reports a live reader's lag. |
+| Helm unit (reader grants) | `make -C osac-metering helm-test` (helm-unittest plugin; CI pins v1.2.1 and runs the suite in the `helm-unit` leg) | One `KafkaUser` per reader with a read ACL on `osac.metering.heartbeat.<tenant>` and on a consumer group named after the reader; duplicate, non-DNS, built-in-tenant, reserved OSAC, and `fulfillment-service` names rejected; a lag alert keyed by the configured reader groups with a value-controlled threshold. CI also runs `helm unittest charts/osac-infra` for the exporter and its PodMonitor | Does not prove the broker denies a write, that revocation takes effect within 60 seconds, that the namespace label is applied on a live cluster, or that Kafka Exporter reports a live reader's lag. |
 | Helm render | `make -C osac-installer metering-auth-render-test` | Metering Deployment, rules ConfigMap, admission policy and binding, and absence of fulfillment credentials in the vmaas-ci, bmaas-ci, caas-ci, and full-ci profiles | Does not verify a deployed metering pipeline. |
 
 ### Coverage notes

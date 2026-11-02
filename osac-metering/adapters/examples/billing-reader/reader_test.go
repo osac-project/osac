@@ -24,6 +24,8 @@ import (
 // worked example in the design has tenant acme and VM vm-7 of instance type
 // small in project web.
 func heartbeat(id, quantity string, dimensions map[string]string) cloudevents.Event {
+	GinkgoHelper()
+
 	event := cloudevents.NewEvent()
 	event.SetID(id)
 	event.SetType(schema.HeartbeatType)
@@ -83,8 +85,9 @@ var _ = Describe("Totals", func() {
 			ResourceID:   "vm-7",
 			Meter:        "compute",
 			Component:    "compute",
-			Dimensions:   "boot_disk_size_gib=30,deployment=example/deployment,image=rhel-9,instance_type=small,project=web,tenant=acme",
+			Dimensions:   `{"boot_disk_size_gib":"30","deployment":"example/deployment","image":"rhel-9","instance_type":"small","project":"web","tenant":"acme"}`,
 		}))
+		Expect(rows[0].Dimensions).To(Equal("boot_disk_size_gib=30,deployment=example/deployment,image=rhel-9,instance_type=small,project=web,tenant=acme"))
 	})
 
 	It("drops a repeat with the same CloudEvent id", func() {
@@ -125,8 +128,27 @@ var _ = Describe("Totals", func() {
 
 		rows := totals.Rows()
 		Expect(rows).To(HaveLen(2))
-		Expect(rows[0].Key.Dimensions).To(ContainSubstring("instance_type=large"))
-		Expect(rows[1].Key.Dimensions).To(ContainSubstring("instance_type=small"))
+		Expect(rows[0].Dimensions).To(ContainSubstring("instance_type=large"))
+		Expect(rows[1].Dimensions).To(ContainSubstring("instance_type=small"))
+	})
+
+	It("keeps dimension maps with colliding display text apart", func() {
+		totals := NewTotals()
+		for _, event := range []cloudevents.Event{
+			heartbeat("event-1", "60.000000", map[string]string{"a": "b,c=d"}),
+			heartbeat("event-2", "60.000000", map[string]string{"a": "b", "c": "d"}),
+		} {
+			added, err := totals.Add(event)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(added).To(BeTrue())
+		}
+
+		// Both maps render as "a=b,c=d"; only the encoded key tells them apart.
+		rows := totals.Rows()
+		Expect(rows).To(HaveLen(2))
+		Expect(rows[0].Dimensions).To(Equal("a=b,c=d"))
+		Expect(rows[1].Dimensions).To(Equal("a=b,c=d"))
+		Expect(rows[0].Key).NotTo(Equal(rows[1].Key))
 	})
 
 	It("rejects an event it cannot read", func() {

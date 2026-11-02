@@ -111,6 +111,69 @@ tests:
       - failedTemplate:
           errorPattern: 'metering reader "Billing_Reader" must be a lowercase DNS name'
 
+  - it: rejects a reader name that collides with an OSAC KafkaUser
+    set:
+      readers:
+        - name: osac-metering
+          tenant: acme
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "osac-metering" is a KafkaUser OSAC owns'
+
+  - it: rejects the echo adapter KafkaUser name
+    set:
+      readers:
+        - name: osac-metering-echo-adapter
+          tenant: acme
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "osac-metering-echo-adapter" is a KafkaUser OSAC owns'
+
+  - it: rejects the m360 adapter KafkaUser name
+    set:
+      readers:
+        - name: osac-metering-m360-adapter
+          tenant: acme
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "osac-metering-m360-adapter" is a KafkaUser OSAC owns'
+
+  - it: rejects any reader name in the reserved osac- prefix
+    set:
+      readers:
+        - name: osac-billing-reader
+          tenant: acme
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "osac-billing-reader" uses the reserved osac- or osac. name prefix'
+
+  - it: rejects any reader name in the reserved osac. prefix
+    set:
+      readers:
+        - name: osac.billing-reader
+          tenant: acme
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "osac.billing-reader" uses the reserved osac- or osac. name prefix'
+
+  - it: rejects a tenant name that is not a lowercase DNS name
+    set:
+      readers:
+        - name: billing-reader
+          tenant: Acme
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "billing-reader" has tenant "Acme", which is not a lowercase DNS name'
+
+  - it: rejects the shared tenant, which has no usage topic
+    set:
+      readers:
+        - name: billing-reader
+          tenant: shared
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "billing-reader" names built-in tenant "shared", which has no usage topic'
+
   - it: rejects a built-in tenant that has no usage topic
     set:
       readers:

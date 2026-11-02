@@ -59,12 +59,9 @@ data:
       entityOperator:
         topicOperator: {}
         userOperator: {}
-      kafkaExporter:
-        # Reports consumer-group lag and offsets per group and topic. Metering
-        # readers consume under their own group names, so
-        # kafka_consumergroup_lag keyed by consumergroup shows how far behind
-        # each reader is; the metering chart alerts on it. The exporter ships
-        # with Strimzi and needs no separate deployment.
-        groupRegex: ".*"
-        topicRegex: ".*"
+      # Strimzi's Kafka Exporter reports consumer-group lag per group and
+      # topic; the metering chart alerts on kafka_consumergroup_lag for reader
+      # groups. The empty object enables it with Strimzi's defaults (every
+      # group and topic, and the operator's own resources).
+      kafkaExporter: {}
 {{- end }}

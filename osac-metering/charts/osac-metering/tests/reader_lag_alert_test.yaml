@@ -14,16 +14,37 @@ tests:
       - hasDocuments:
           count: 1
       - equal:
-          path: spec.groups[0].rules[5].alert
-          value: MeteringReaderLag
-      # The alert covers exactly the reader groups the chart grants, keyed by
-      # the consumer group Kafka Exporter reports.
+          path: spec.groups[0].rules[?(@.alert == "MeteringReaderLag")].expr
+          value: 'kafka_consumergroup_lag{consumergroup=~"billing-reader|audit-reader"} > 15'
       - matchRegex:
-          path: spec.groups[0].rules[5].expr
-          pattern: '^kafka_consumergroup_lag\{consumergroup=~"billing-reader\|audit-reader"\} > 60$'
-      - matchRegex:
-          path: spec.groups[0].rules[5].annotations.summary
+          path: spec.groups[0].rules[?(@.alert == "MeteringReaderLag")].annotations.summary
           pattern: '\$labels\.consumergroup'
+      - equal:
+          path: spec.groups[0].rules[?(@.alert == "MeteringReaderLag")].for
+          value: 15m
+
+  - it: quotes a dotted reader name in the group regex
+    set:
+      prometheusRule.enabled: true
+      readers:
+        - name: billing.reader
+          tenant: acme
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[?(@.alert == "MeteringReaderLag")].expr
+          value: 'kafka_consumergroup_lag{consumergroup=~"billing\.reader"} > 15'
+
+  - it: uses the configured lag threshold
+    set:
+      prometheusRule.enabled: true
+      prometheusRule.readerLagThreshold: 5
+      readers:
+        - name: billing-reader
+          tenant: acme
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[?(@.alert == "MeteringReaderLag")].expr
+          value: 'kafka_consumergroup_lag{consumergroup=~"billing-reader"} > 5'
 
   - it: renders no reader alert when no readers are configured
     set:

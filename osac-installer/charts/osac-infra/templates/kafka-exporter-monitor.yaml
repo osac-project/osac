@@ -1,0 +1,28 @@
+{{- if and .Values.kafka.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+{{- /*
+Scrape Strimzi's Kafka Exporter, which the Kafka resource above enables. The
+exporter reports consumer-group lag, and every metering reader consumes under
+a group named after itself, so the metering chart's MeteringReaderLag alert can
+see a stalled reader. User workload monitoring only picks up PodMonitors in a
+namespace labeled openshift.io/user-monitoring=true; the configure-kafka hook
+sets that label on osac-kafka.
+
+The PodMonitor is rendered only where the monitoring CRD exists, so a Kind
+install without a Prometheus operator still applies the chart.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: osac-kafka-exporter
+  namespace: osac-kafka
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      strimzi.io/name: osac-kafka-kafka-exporter
+  podMetricsEndpoints:
+    - port: tcp-prometheus
+      path: /metrics
+      interval: 60s
+{{- end }}

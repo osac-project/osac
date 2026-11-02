@@ -391,6 +391,8 @@ metering:
   # credentials. Each entry names one reader and one tenant; the reader name is
   # also its Kafka consumer group, where lag is reported. Add or remove an
   # entry and run helm upgrade to grant or revoke; no OSAC service restarts.
+  # This is a list of objects, so the Enclave Wizard renders no control for it;
+  # operators set it in values.
   readers: []
   database:
     connection:

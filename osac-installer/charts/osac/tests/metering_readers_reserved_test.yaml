@@ -1,0 +1,32 @@
+suite: metering reader names reserved by the umbrella chart
+templates:
+  - templates/validate-metering-readers.yaml
+values:
+  - ../ci/default-values.yaml
+tests:
+  - it: accepts a reader name OSAC does not own
+    set:
+      metering.readers:
+        - name: billing-reader
+          tenant: acme
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: rejects the KafkaUser name the fulfillment service uses
+    set:
+      metering.readers:
+        - name: fulfillment-service
+          tenant: acme
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "fulfillment-service" is a KafkaUser OSAC owns'
+
+  - it: rejects the reserved osac prefix
+    set:
+      metering.readers:
+        - name: osac-billing-reader
+          tenant: acme
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "osac-billing-reader" uses the reserved osac- or osac. name prefix'

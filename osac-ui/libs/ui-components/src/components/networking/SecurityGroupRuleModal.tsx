@@ -100,13 +100,16 @@ export const SecurityGroupRuleModal = ({
 
   const handleSubmit = async (values: RuleFormValues) => {
     try {
+      const showPortRange = values.protocol === Protocol.TCP || values.protocol === Protocol.UDP;
       const rule = {
         protocol: values.protocol,
-        ...(values.portFrom &&
+        ...(showPortRange &&
+          values.portFrom &&
           String(values.portFrom).trim() !== '' && {
             portFrom: parseInt(String(values.portFrom), 10),
           }),
-        ...(values.portTo &&
+        ...(showPortRange &&
+          values.portTo &&
           String(values.portTo).trim() !== '' && {
             portTo: parseInt(String(values.portTo), 10),
           }),

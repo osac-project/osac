@@ -28,8 +28,8 @@ import { formatClusterNodeSetReview } from './clusterNodeSetReview';
 import { ClusterWizardValues } from './fields';
 import { findVersionByName, versionDisplayName } from './versionUtils';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { displayValue } from '../../../utils/detailFormatters';
 import { NetworkAttachmentReviewFields } from '../../ProvisioningWizard/NetworkAttachmentReviewFields';
-import { formatReviewScalar } from '../../ProvisioningWizard/reviewFormatters';
 
 const formatNodeSetsForReview = (
   nodeSetRows: ClusterWizardValues['spec']['nodeSetRows'],
@@ -104,27 +104,25 @@ export const ClusterReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Name')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.metadata.name)}
+              {displayValue(values.metadata.name)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('SSH public key')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.spec.sshPublicKey.value)}
+              {displayValue(values.spec.sshPublicKey.value)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Pull secret')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.spec.pullSecretSecret.value)}
+              {displayValue(values.spec.pullSecretSecret.value)}
             </DescriptionListDescription>
           </DescriptionListGroup>
 
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Version')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {formatReviewScalar(versionDisplay)}
-            </DescriptionListDescription>
+            <DescriptionListDescription>{displayValue(versionDisplay)}</DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Node sets')}</DescriptionListTerm>
@@ -172,14 +170,14 @@ export const ClusterReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Pod CIDR')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.spec.network.podCidr.value)}
+              {displayValue(values.spec.network.podCidr.value)}
             </DescriptionListDescription>
           </DescriptionListGroup>
 
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Service CIDR')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.spec.network.serviceCidr.value)}
+              {displayValue(values.spec.network.serviceCidr.value)}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>

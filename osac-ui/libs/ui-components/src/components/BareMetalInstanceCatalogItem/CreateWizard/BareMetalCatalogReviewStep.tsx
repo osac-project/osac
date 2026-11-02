@@ -15,7 +15,7 @@ import { useFormikContext } from 'formik';
 import type { BareMetalCatalogItemValues } from './values';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
-import { formatReviewScalar } from '../../ProvisioningWizard/reviewFormatters';
+import { displayValue } from '../../../utils/detailFormatters';
 
 const BareMetalCatalogReviewStep = () => {
   const { t } = useTranslation();
@@ -24,7 +24,7 @@ const BareMetalCatalogReviewStep = () => {
   const userDataReview =
     values.userData.value.trim() || values.userDataSecret.value.trim()
       ? t('Configured')
-      : formatReviewScalar('');
+      : displayValue();
 
   return (
     <Stack hasGutter>
@@ -46,7 +46,7 @@ const BareMetalCatalogReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Name')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.metadata.name)}
+              {displayValue(values.metadata.name)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           {role === 'admin' ? (
@@ -55,21 +55,21 @@ const BareMetalCatalogReviewStep = () => {
               <DescriptionListDescription>
                 {values.scope === 'global'
                   ? t('Global')
-                  : formatReviewScalar(values.metadata.tenant.name || '')}
+                  : displayValue(values.metadata.tenant.name || '')}
               </DescriptionListDescription>
             </DescriptionListGroup>
           ) : values.metadata.project.trim() ? (
             <DescriptionListGroup>
               <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
               <DescriptionListDescription>
-                {formatReviewScalar(values.metadata.project)}
+                {displayValue(values.metadata.project)}
               </DescriptionListDescription>
             </DescriptionListGroup>
           ) : null}
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Provisioning template')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.template.name || '')}
+              {displayValue(values.template.name || '')}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>
@@ -82,13 +82,13 @@ const BareMetalCatalogReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Instance type')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.instanceType.value.name)}
+              {displayValue(values.instanceType.value.name)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Disk image')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.diskImage.value.name || '')}
+              {displayValue(values.diskImage.value.name || '')}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

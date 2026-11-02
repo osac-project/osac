@@ -76,7 +76,7 @@ describe('VmReviewStep — disk image', () => {
 });
 
 describe('VmReviewStep — user data source', () => {
-  it('shows inline Cloud-init data without masking it', async () => {
+  it('shows Configured for inline Cloud-init data', async () => {
     renderReviewStep({
       userData: provisioningFieldValue({
         source: 'inline',
@@ -85,11 +85,11 @@ describe('VmReviewStep — user data source', () => {
       }),
     });
 
-    expect(await screen.findByText(/#cloud-config/)).toBeInTheDocument();
-    expect(screen.queryByText('••••••••')).not.toBeInTheDocument();
+    expect(await screen.findByText('Configured')).toBeInTheDocument();
+    expect(screen.queryByText(/#cloud-config/)).not.toBeInTheDocument();
   });
 
-  it('shows the selected Secret reference instead of inline user data', async () => {
+  it('shows Configured for a selected Secret reference', async () => {
     renderReviewStep({
       userData: provisioningFieldValue({
         source: 'secret',
@@ -98,7 +98,8 @@ describe('VmReviewStep — user data source', () => {
       }),
     });
 
-    expect(await screen.findByText('user-data-secret')).toBeInTheDocument();
+    expect(await screen.findByText('Configured')).toBeInTheDocument();
+    expect(screen.queryByText('user-data-secret')).not.toBeInTheDocument();
     expect(screen.queryByText('stale inline data')).not.toBeInTheDocument();
   });
 });

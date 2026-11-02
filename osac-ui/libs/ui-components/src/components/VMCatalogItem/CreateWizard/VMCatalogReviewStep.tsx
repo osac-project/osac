@@ -22,9 +22,9 @@ import type { ComputeInstanceCatalogItem } from '@osac/types';
 import type { ComputeCatalogItemValues } from './values';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { displayValue } from '../../../utils/detailFormatters';
 import CatalogFieldEditabilityLabel from '../../catalog/CatalogFieldEditabilityLabel';
 import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
-import { formatReviewScalar } from '../../ProvisioningWizard/reviewFormatters';
 
 interface VMCatalogReviewStepProps {
   item?: ComputeInstanceCatalogItem;
@@ -332,14 +332,14 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
             value={
               values.scope === 'global'
                 ? t('Global')
-                : formatReviewScalar(values.metadata.tenant.name || '')
+                : displayValue(values.metadata.tenant.name || '')
             }
           />
         )}
-        <ReviewRow label={t('Name')} value={formatReviewScalar(values.metadata.name)} />
+        <ReviewRow label={t('Name')} value={displayValue(values.metadata.name)} />
         <ReviewRow
           label={t('Provisioning template')}
-          value={formatReviewScalar(values.template.name || '')}
+          value={displayValue(values.template.name || '')}
         />
         <ReviewRow label={t('Status')} value={t('Unpublished')} />
       </ReviewSection>

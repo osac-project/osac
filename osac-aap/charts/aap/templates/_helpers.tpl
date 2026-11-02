@@ -150,7 +150,7 @@ READINESS_DEADLINE=$(( $(date +%s) + 1500 ))
 i=0
 while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
   i=$((i + 1))
-  curl -sf --connect-timeout 5 --max-time 15 \
+  curl -sf --connect-timeout 5 --max-time 15{{ if .Values.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} \
     "{{ if .Values.aap.instance.enabled }}http://${AAP_CONTROLLER_GATEWAY_HOSTNAME}/api/v2/ping/{{ else }}${AAP_URL}/api/controller/v2/ping/{{ end }}" \
     | grep -q 'version'
   controller_ping="${?}"
@@ -163,7 +163,7 @@ while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
     continue
   fi
 
-  curl -sf --connect-timeout 5 --max-time 15 \
+  curl -sf --connect-timeout 5 --max-time 15{{ if .Values.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} \
     "{{ if .Values.aap.instance.enabled }}http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/ping/{{ else }}${AAP_URL}/api/gateway/v1/ping/{{ end }}" \
     | grep -q 'good'
   gateway_ping="${?}"
@@ -176,7 +176,7 @@ while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
     continue
   fi
 
-  response=$(curl -s --connect-timeout 5 --max-time 15 -w '\n%{http_code}' -X POST \
+  response=$(curl -s --connect-timeout 5 --max-time 15 -w '\n%{http_code}' -X POST{{ if .Values.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} \
     --netrc-file /tmp/.netrc \
     "{{ if .Values.aap.instance.enabled }}http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/{{ else }}${AAP_URL}/api/gateway/v1/tokens/{{ end }}" \
     -H "Content-Type: application/json" -d '{"description": "readiness-check", "scope": "read"}')
@@ -193,7 +193,7 @@ while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
       # Not logging auth_body: it may contain the live token value.
       echo "WARNING: readiness-check token created but its ID could not be parsed from the response"
     else
-      delete_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 \
+      delete_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15{{ if .Values.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} \
         -X DELETE --netrc-file /tmp/.netrc \
         "{{ if .Values.aap.instance.enabled }}http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/${token_id}/{{ else }}${AAP_URL}/api/gateway/v1/tokens/${token_id}/{{ end }}")
       case "${delete_code}" in
@@ -285,6 +285,11 @@ env:
 volumeMounts:
 - name: tmp
   mountPath: /tmp
+{{- if not .Values.aap.instance.enabled }}
+- name: ca-bundle
+  mountPath: /etc/ca-bundle
+  readOnly: true
+{{- end }}
 resources:
   requests:
     cpu: 50m

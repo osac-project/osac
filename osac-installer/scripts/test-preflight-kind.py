@@ -32,6 +32,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import traceback
 import uuid
 
 import jsonschema
@@ -73,18 +74,17 @@ class Cluster:
         deadline = time.monotonic() + 60
         while True:
             remaining = deadline - time.monotonic()
-            request_timeout_ns = int(remaining * 1_000_000_000)
-            if request_timeout_ns <= 0:
-                raise AssertionError(f"timed out waiting for crd/{name} to become Established (60s)")
-            proc = self.kubectl("get", "crd", name, "-o", "json",
-                                f"--request-timeout={request_timeout_ns}ns", timeout=remaining)
+            if remaining <= 0:
+                break
+            proc = self.kubectl("get", "crd", name, "-o", "json", timeout=remaining)
             conditions = (json.loads(proc.stdout).get("status") or {}).get("conditions") or []
             if time.monotonic() >= deadline:
-                raise AssertionError(f"timed out waiting for crd/{name} to become Established (60s)")
+                break
             if any(condition.get("type") == "Established" and condition.get("status") == "True"
                    for condition in conditions):
                 return
             time.sleep(min(1, max(0, deadline - time.monotonic())))
+        raise AssertionError(f"timed out waiting for crd/{name} to become Established (60s)")
 
     def apply(self, manifest: str) -> None:
         self.kubectl("apply", "-f", "-", stdin=manifest)
@@ -323,40 +323,32 @@ def case_fresh_install_lists_every_fault_once(c: Cluster) -> None:
     c.kubectl("cordon", node)
     c.kubectl("delete", "secret", "fulfillment-controller-credentials", "-n", c.ns)
     c.kubectl("delete", "crd", CERT_MANAGER_CRD)
-    case_error = None
     proc = None
     try:
-        started = time.monotonic()
-        proc = c.install("--wait")
-        elapsed = time.monotonic() - started
-        report = failure_report(proc)
-        assert elapsed < FAST_FAIL_SECONDS, f"the preflight took {elapsed:.0f}s"
-        assert blocking_ids(report) == {"default-storageclass", "nodes-schedulable", "controller-credentials", "cert-manager-crds"}, blocking_ids(report)
-        issuer = result(report, "cert-issuer-ready")
-        assert issuer["status"] == "unknown" and issuer["dependsOn"] == ["cert-manager-crds"], issuer
-        assert "Nothing was changed" in proc.stderr
-        for fix in ("oc patch storageclass", "Uncordon a node", "Install the cert-manager Operator", "Create the controller credential Secret"):
-            assert fix in proc.stderr, f"missing fix text: {fix}"
-        assert c.releases() == [], "a failed render must not leave a release behind"
-        assert c.report_configmap() is None, "a failed render must not create the report"
-    except Exception as exc:
-        case_error = exc
-        if proc is not None:
-            exc.add_note(f"Helm stdout:\n{proc.stdout}\nHelm stderr:\n{proc.stderr}")
-        raise
-    finally:
         try:
+            started = time.monotonic()
+            proc = c.install("--wait")
+            elapsed = time.monotonic() - started
+            report = failure_report(proc)
+            assert elapsed < FAST_FAIL_SECONDS, f"the preflight took {elapsed:.0f}s"
+            assert blocking_ids(report) == {"default-storageclass", "nodes-schedulable", "controller-credentials", "cert-manager-crds"}, blocking_ids(report)
+            issuer = result(report, "cert-issuer-ready")
+            assert issuer["status"] == "unknown" and issuer["dependsOn"] == ["cert-manager-crds"], issuer
+            assert "Nothing was changed" in proc.stderr
+            for fix in ("oc patch storageclass", "Uncordon a node", "Install the cert-manager Operator", "Create the controller credential Secret"):
+                assert fix in proc.stderr, f"missing fix text: {fix}"
+            assert c.releases() == [], "a failed render must not leave a release behind"
+            assert c.report_configmap() is None, "a failed render must not create the report"
+        finally:
             c.kubectl("uncordon", node)
             set_default_storageclass(c, sc, "true")
             create_namespace_prerequisites(c)
             c.apply(CRD.format(**STUB_CRDS[0]))
             c.wait_for_crd(CERT_MANAGER_CRD)
-        except Exception as cleanup_error:
-            if case_error is None:
-                if proc is not None:
-                    cleanup_error.add_note(f"Helm stdout:\n{proc.stdout}\nHelm stderr:\n{proc.stderr}")
-                raise
-            case_error.add_note(f"Fixture restoration also failed: {cleanup_error}")
+    except Exception as exc:
+        if proc is not None:
+            exc.add_note(f"Helm stdout:\n{proc.stdout}\nHelm stderr:\n{proc.stderr}")
+        raise
 
 
 def hook_report(stdout: str) -> dict:
@@ -695,9 +687,8 @@ def main() -> int:
                 print(f"PASS {case.__name__} ({time.monotonic() - started:.0f}s)")
             except Exception as exc:  # noqa: BLE001 - report every case, then fail
                 failures += 1
-                print(f"FAIL {case.__name__}: {exc}")
-                for note in getattr(exc, "__notes__", []):
-                    print(note)
+                print(f"FAIL {case.__name__}:")
+                traceback.print_exception(exc, file=sys.stdout)
     finally:
         cleanup(c)
     print(f"{len(selected) - failures}/{len(selected)} cases passed")

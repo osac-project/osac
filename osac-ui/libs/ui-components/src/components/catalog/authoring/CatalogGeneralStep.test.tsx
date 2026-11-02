@@ -6,6 +6,7 @@ import { type ComputeInstanceTemplate, ComputeInstanceTemplates, ServiceTier } f
 import type { Tenant } from '@osac/types/private';
 
 import CatalogGeneralStep, {
+  catalogGeneralItemPayload,
   catalogGeneralValues,
   catalogGeneralValuesFromItem,
 } from './CatalogGeneralStep';
@@ -66,6 +67,13 @@ const renderStep = (
 describe('CatalogGeneralStep', () => {
   beforeEach(() => {
     vi.mocked(useSession).mockReturnValue(makeSession('tenant-admin'));
+  });
+
+  it('preserves the selected tenant id when serializing general metadata', () => {
+    const values = catalogGeneralValues();
+    values.metadata.tenant = { id: ' tenant-1 ', name: 'Tenant One' };
+
+    expect(catalogGeneralItemPayload(values)).toMatchObject({ tenant: ' tenant-1 ' });
   });
 
   it('does not show a catalog item description field', () => {

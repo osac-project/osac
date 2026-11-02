@@ -11,7 +11,7 @@ describe('buildBareMetalCatalogStepSchema', () => {
 
     await expect(
       schema?.validate({
-        instanceType: { locked: false, value: '' },
+        instanceType: { locked: false, value: { id: '', name: '' } },
         diskImage: { locked: false, value: { id: '', name: '' } },
         userData: { locked: true, value: '  ' },
       }),
@@ -26,7 +26,7 @@ describe('buildBareMetalCatalogStepSchema', () => {
 
     await expect(
       schema?.validate({
-        instanceType: { locked: false, value: '' },
+        instanceType: { locked: false, value: { id: '', name: '' } },
         diskImage: { locked: false, value: { id: '', name: '' } },
         userData: { locked: true, value: '' },
         userDataSecret: { value: 'cloud-init' },

@@ -9,6 +9,11 @@ import {
   createEmptyNodeSetRow,
 } from '../../../Cluster/CreateWizard/fields';
 import {
+  type ResourceSelectValue,
+  emptyResourceSelectValue,
+  resourceSelectValueFromReference,
+} from '../../../Form/resourceSelectValue';
+import {
   type ProvisioningFieldValue,
   getFieldFromCatalogItemPolicy,
   provisioningFieldValue,
@@ -19,16 +24,13 @@ import {
   catalogGeneralValuesFromItem,
 } from '../CatalogGeneralStep';
 export interface ClusterCatalogItemValues extends CatalogGeneralValues {
-  version: ProvisioningFieldValue<string>;
+  version: ProvisioningFieldValue<ResourceSelectValue>;
   nodeSets: ProvisioningFieldValue<ClusterNodeSetRow[]>;
   podCidr: ProvisioningFieldValue<string>;
   serviceCidr: ProvisioningFieldValue<string>;
 }
 
 const readStringValue = (value: string | undefined): string => value ?? '';
-
-const readVersionValue = (value: ClusterVersionReference | undefined): string =>
-  value?.name?.trim() || value?.id?.trim() || '';
 
 const readNodeSetRows = (policy: ClusterNodeSetMapPolicy | undefined) => {
   const behavior = policy?.behavior;
@@ -49,7 +51,7 @@ const readNodeSetRows = (policy: ClusterNodeSetMapPolicy | undefined) => {
 
 export const emptyClusterCatalogItemValues = (): ClusterCatalogItemValues => ({
   ...catalogGeneralValues(),
-  version: provisioningFieldValue(''),
+  version: provisioningFieldValue(emptyResourceSelectValue()),
   nodeSets: provisioningFieldValue([]),
   podCidr: provisioningFieldValue(''),
   serviceCidr: provisioningFieldValue(''),
@@ -79,7 +81,10 @@ export const getClusterCatalogItemInitialValues = (
 
   return {
     ...catalogGeneralValuesFromItem(item),
-    version: provisioningFieldValue(readVersionValue(version.value), version.locked),
+    version: provisioningFieldValue(
+      resourceSelectValueFromReference(version.value),
+      version.locked,
+    ),
     nodeSets: {
       value: readNodeSetRows(nodeSetPolicy),
       locked: nodeSetPolicy?.behavior.case === 'locked',

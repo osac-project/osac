@@ -17,10 +17,9 @@ type BootDiskFieldsInit = NonNullable<CatalogItemFieldsInit['bootDisk']>;
 type FieldPolicyInit<K extends keyof CatalogItemFieldsInit> = NonNullable<CatalogItemFieldsInit[K]>;
 
 const isEmptyString = (value: string) => !value.trim();
-const isEmptyResource = (value: ResourceSelectValue) => !value.id.trim();
+const isEmptyResource = (value: ResourceSelectValue) => !value.id;
 const isEmptyDiskList = (value: ComputeInstanceDiskValues[]) => !value.length;
 
-const toResourceRef = (value: ResourceSelectValue) => ({ id: value.id.trim() });
 const toTrimmedString = (value: string) => value.trim();
 
 const toDiskListRef = (value: ComputeInstanceDiskValues[]) => ({
@@ -28,7 +27,7 @@ const toDiskListRef = (value: ComputeInstanceDiskValues[]) => ({
     .filter((disk) => disk.sizeGib.trim())
     .map((disk) => ({
       sizeGib: Number(disk.sizeGib.trim()),
-      ...(disk.storageTier.id.trim() ? { storageTier: { id: disk.storageTier.id.trim() } } : {}),
+      ...(disk.storageTier.id ? { storageTier: disk.storageTier } : {}),
     })),
 });
 
@@ -37,20 +36,12 @@ const buildComputeCatalogItemFieldsPayload = (
 ): CatalogItemFieldsInit => {
   const fields: CatalogItemFieldsInit = {};
 
-  const diskImage = catalogFieldPolicyFromValue<
-    ResourceSelectValue,
-    ReturnType<typeof toResourceRef>,
-    FieldPolicyInit<'diskImage'>
-  >(values.diskImage, isEmptyResource, toResourceRef);
+  const diskImage = catalogFieldPolicyFromValue(values.diskImage, isEmptyResource);
   if (diskImage) {
     fields.diskImage = diskImage;
   }
 
-  const instanceType = catalogFieldPolicyFromValue<
-    ResourceSelectValue,
-    ReturnType<typeof toResourceRef>,
-    FieldPolicyInit<'instanceType'>
-  >(values.instanceType, isEmptyResource, toResourceRef);
+  const instanceType = catalogFieldPolicyFromValue(values.instanceType, isEmptyResource);
   if (instanceType) {
     fields.instanceType = instanceType;
   }
@@ -65,11 +56,10 @@ const buildComputeCatalogItemFieldsPayload = (
     number,
     NonNullable<BootDiskFieldsInit['sizeGib']>
   >(values.bootDiskSizeGib, isEmptyString, (value) => Number(toTrimmedString(value)));
-  const bootDiskStorageTier = catalogFieldPolicyFromValue<
-    ResourceSelectValue,
-    ReturnType<typeof toResourceRef>,
-    NonNullable<BootDiskFieldsInit['storageTier']>
-  >(values.bootDiskStorageTier, isEmptyResource, toResourceRef);
+  const bootDiskStorageTier = catalogFieldPolicyFromValue(
+    values.bootDiskStorageTier,
+    isEmptyResource,
+  );
   if (bootDiskSizeGib || bootDiskStorageTier) {
     fields.bootDisk = {
       ...(bootDiskSizeGib ? { sizeGib: bootDiskSizeGib } : {}),
@@ -93,7 +83,7 @@ export const buildComputeCatalogItemCreatePayload = (
   values: ComputeCatalogItemValues,
 ): MessageInitShape<typeof ComputeInstanceCatalogItemSchema> => ({
   metadata: catalogGeneralItemPayload(values),
-  template: { id: values.template.id.trim() },
+  template: values.template,
   published: false,
   fields: buildComputeCatalogItemFieldsPayload(values),
 });

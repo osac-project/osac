@@ -82,7 +82,7 @@ const BareMetalCatalogReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Instance type')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.instanceType.value)}
+              {formatReviewScalar(values.instanceType.value.name)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

@@ -270,7 +270,12 @@ describe('ClusterCatalogItemWizard', () => {
       template: { id: 'template-1' },
       published: true,
       fields: {
-        version: { behavior: { case: 'locked', value: { name: '4-17-0' } } },
+        version: {
+          behavior: {
+            case: 'locked',
+            value: { id: 'version-1', name: '4-17-0', shared: true },
+          },
+        },
       },
     });
     const onUpdate = vi.fn((req: { object?: unknown }) => ({
@@ -280,6 +285,9 @@ describe('ClusterCatalogItemWizard', () => {
 
     expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('existing-item');
     await user.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('Select a version')).toHaveValue('4.17.0'),
+    );
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Edit' }));
@@ -290,6 +298,16 @@ describe('ClusterCatalogItemWizard', () => {
       updateMask?: { paths?: string[] };
     };
     expect(request.object?.id).toBe('catalog-item-1');
+    expect(request.object).toMatchObject({
+      fields: {
+        version: {
+          behavior: {
+            case: 'locked',
+            value: { id: 'version-1', name: '4-17-0', shared: true },
+          },
+        },
+      },
+    });
     expect(request.updateMask?.paths).not.toContain('template');
     expect(request.updateMask?.paths).not.toContain('metadata.name');
     expect(request.updateMask?.paths).not.toContain('metadata.tenant');

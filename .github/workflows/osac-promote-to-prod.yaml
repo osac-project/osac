@@ -179,7 +179,14 @@ jobs:
               echo "::warning::${label} Snapshot '${name}' not found -- it may have been pruned, or this name was never actually produced by a real osac-release.yaml dispatch. Double-check it against that release's Slack message; re-run osac-release.yaml fresh instead of promoting if it genuinely never shipped. This workflow will skip ${label} promotion." >&2
               echo "false"
             else
-              echo "::error::${label} Snapshot lookup for '${name}' failed with an error other than NotFound (auth/network issue?): ${get_output}" >&2
+              # The raw oc output is logged as a plain, un-annotated line
+              # (not through ::error::) -- GitHub surfaces ::error::/
+              # ::warning:: annotations prominently in the PR checks UI,
+              # so API error text that could echo back auth/hostname
+              # details only goes to the step's own raw log, which
+              # requires deliberately opening it.
+              echo "${label} Snapshot lookup for '${name}' failed: ${get_output}" >&2
+              echo "::error::${label} Snapshot lookup for '${name}' failed with an error other than NotFound (auth/network issue?) -- see the plain-text line just above in this step's raw log for details, deliberately not repeated in this annotation." >&2
               echo "error"
             fi
             return
@@ -195,7 +202,8 @@ jobs:
 
           local released_ok releases_json
           if ! releases_json=$(oc get release -n "${NAMESPACE}" -o json 2>&1); then
-            echo "::error::${label} Release list failed (auth/network issue?): ${releases_json}" >&2
+            echo "${label} Release list failed: ${releases_json}" >&2
+            echo "::error::${label} Release list failed (auth/network issue?) -- see the plain-text line just above in this step's raw log for details, deliberately not repeated in this annotation." >&2
             echo "error"
             return
           fi
@@ -224,7 +232,8 @@ jobs:
               echo "::warning::${label} prod ReleasePlan '${name}' not found -- OSAC-1090 has not landed yet (or landed under a different name than expected). ${label} promotion will be skipped." >&2
               echo "false"
             else
-              echo "::error::${label} ReleasePlan lookup for '${name}' failed with an error other than NotFound (auth/network issue?): ${get_output}" >&2
+              echo "${label} ReleasePlan lookup for '${name}' failed: ${get_output}" >&2
+              echo "::error::${label} ReleasePlan lookup for '${name}' failed with an error other than NotFound (auth/network issue?) -- see the plain-text line just above in this step's raw log for details, deliberately not repeated in this annotation." >&2
               echo "error"
             fi
           fi

@@ -37,9 +37,9 @@ osac_render=$(helm template osac charts/osac --namespace osac \
   --values values/dev/kind-instance.yaml \
   --values values/dev/kind-instance-devfull.yaml \
   --set-string global.osacDeploymentId=osac/osac)
-if ! awk '/name: OSAC_ENABLE_NETWORKING_PROVISIONING/ { getline; if ($0 ~ /value: "false"/) found = 1 } END { exit !found }' \
+if ! awk '/name: OSAC_ENABLE_NETWORKING_PROVISIONING/ { getline; if ($0 ~ /value: "true"/) found = 1 } END { exit !found }' \
   <<<"$osac_render"; then
-  echo "Kind dev-full must keep provider networking disabled so seeded resources need no AAP manager jobs" >&2
+  echo "Kind dev-full must enable provider networking so AAP creates each tenant's target namespace" >&2
   exit 1
 fi
 if awk 'BEGIN { RS = "---" } /kind: Deployment/ && /name: osac-ui/ { found = 1 } END { exit found ? 0 : 1 }' \

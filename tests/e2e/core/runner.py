@@ -246,6 +246,11 @@ def _wait_span(
     observes (e.g. "BareMetalInstance" / its name), so a wait can be linked
     to that resource in Grafana.
 
+    The span carries ``pytest.span_type="wait"`` from creation, following
+    pytest-opentelemetry's own span typing ("test", "fixture", "run"), so
+    dashboards can tell wait spans from service calls (which leave the
+    attribute unset).
+
     Exception recording is disabled: an escaping CalledProcessError carries
     the command and its output, which may contain secrets -- poll_until's
     own TimeoutError messages suppress them for the same reason. A generic
@@ -257,6 +262,7 @@ def _wait_span(
     with _otel_trace.get_tracer(__name__).start_as_current_span(
         description, kind=_otel_trace.SpanKind.INTERNAL, record_exception=False, set_status_on_exception=False
     ) as span:
+        span.set_attribute("pytest.span_type", "wait")
         span.set_attribute("poll.delay", delay)
         span.set_attribute("poll.retries", retries)
         span.set_attribute("osac.wait.resource_kind", str(resource_kind))

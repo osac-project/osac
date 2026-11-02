@@ -132,6 +132,9 @@ var _ = Describe("Networking with operator", Label(networkingOperatorLabel), fun
 
 	It("TC-OP-02 makes VirtualNetwork, Subnet and SecurityGroup READY without a job and deletes them",
 		func(ctx context.Context) {
+			By("waiting for the operator to make the NetworkClass READY: VirtualNetwork creates need it")
+			waitForNetworkClassReady(ctx, c.networkClasses, ndSingletonNetworkClass(ctx, c).GetId())
+
 			cidr := ndVirtualNetworkCIDR()
 			base := netip.MustParsePrefix(cidr).Addr()
 
@@ -322,6 +325,9 @@ var _ = Describe("Networking with operator", Label(networkingOperatorLabel), fun
 
 	It("TC-OP-03 makes an ExternalIPPool READY without a job, rejects ExternalIP creates and deletes the pool",
 		func(ctx context.Context) {
+			By("waiting for the operator to make the NetworkClass READY: ExternalIPPool creates need it")
+			waitForNetworkClassReady(ctx, c.networkClasses, ndSingletonNetworkClass(ctx, c).GetId())
+
 			pool := ndCreatePool(ctx, c, ndPoolBase()+"/28")
 			poolID := pool.GetId()
 

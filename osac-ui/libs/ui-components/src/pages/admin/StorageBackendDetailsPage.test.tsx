@@ -97,12 +97,28 @@ describe('StorageBackendDetailsPage', () => {
 
     expect(screen.getByRole('heading', { name: 'vast-prod' })).toBeInTheDocument();
     expect(screen.getByText('vast')).toBeInTheDocument();
+    expect(screen.getByText('Ownership mode')).toBeInTheDocument();
+    expect(screen.getByText('OSAC-managed')).toBeInTheDocument();
     expect(screen.getByText('vast.example.com:443')).toBeInTheDocument();
     expect(screen.getByText('Primary VAST cluster')).toBeInTheDocument();
     expect(screen.getByText('Ready')).toBeInTheDocument();
     expect(screen.getByText('Reachable')).toBeInTheDocument();
     expect(screen.queryByText('test-admin')).not.toBeInTheDocument();
     expect(screen.queryByText('test-secret')).not.toBeInTheDocument();
+  });
+
+  it('identifies a NetApp backend as CSP-managed', () => {
+    mockUsePrivateStorageBackend({
+      data: {
+        ...mockBackend,
+        spec: { ...mockBackend.spec, provider: 'netapp', cspManaged: true, endpoint: '' },
+      } as StorageBackend,
+    });
+
+    renderPage();
+
+    expect(screen.getByText('netapp')).toBeInTheDocument();
+    expect(screen.getByText('CSP-managed')).toBeInTheDocument();
   });
 
   it('navigates to the edit route when Edit is clicked', async () => {

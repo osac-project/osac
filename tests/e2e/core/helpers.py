@@ -13,9 +13,11 @@ from uuid import uuid4
 
 import pytest
 
+from tests.e2e.caas.readiness_diagnostics import snapshot_cluster_readiness
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.runner import poll_until, run_unchecked
+from tests.e2e.core.runner import StuckState, poll_until, run_unchecked
+from tests.e2e.core.sanitize import sanitize_text
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
 logger = logging.getLogger(__name__)
@@ -80,7 +82,7 @@ def bmi_instance_type_for_tests(grpc: GRPCClient, *, template_name: str, configu
         return
 
     name = unique_name("e2e-bmi-type")
-    type_id = grpc.create_baremetal_instance_type(name=name, host_type_label="default", fabric_port="data-0")
+    type_id = grpc.create_baremetal_instance_type(name=name, fabric_port="data-0")
     try:
         yield name
     finally:
@@ -666,16 +668,26 @@ def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
             raise AssertionError(f"{name} entered Failed phase before becoming Ready")
         return phase
 
-    poll_until(
-        fn=_check,
-        until=lambda v: v == "Ready",
-        retries=480,
-        delay=15,
-        description=f"{name} ClusterOrder Ready",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=name,
-    )
+    try:
+        poll_until(
+            fn=_check,
+            until=lambda v: v == "Ready",
+            retries=480,
+            delay=15,
+            description=f"{name} ClusterOrder Ready",
+            retry_on_error=True,
+            resource_kind=WaitResourceKind.CLUSTER_ORDER,
+            resource_id=name,
+        )
+    except StuckState:
+        try:
+            for line in snapshot_cluster_readiness(k8s, name):
+                logger.error("CaaS readiness timeout: %s", sanitize_text(line))
+        except Exception:
+            # Diagnostics must not replace the original timeout or expose a raw
+            # kubectl/API exception in the CI log.
+            logger.warning("CaaS readiness diagnostics unavailable")
+        raise
 
 
 def wait_for_hosted_cluster_kubeconfig(

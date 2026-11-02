@@ -22,11 +22,19 @@ spec:
       labels:
         {{- include "osac-aap.labels" . | nindent 8 }}
     spec:
+      {{- if .Values.aap.instance.enabled }}
       # osac-sa's cluster-admin binding resolves to the anyuid SCC (no auto-assigned
       # non-root UID like bootstrap-job.yaml's SA gets), so the init containers'
       # runAsNonRoot: true needs an explicit UID here or admission fails outright.
       securityContext:
         runAsUser: 1000
+      {{- else }}
+      # In a vcluster the host namespace's restricted-v2 SCC assigns the UID
+      # from its own range; a fixed one is rejected when the syncer creates
+      # the pod in the host namespace.
+      securityContext:
+        runAsNonRoot: true
+      {{- end }}
       initContainers:
       - name: wait-for-admin-secret
         image: {{ .Values.bootstrap.cliImage }}

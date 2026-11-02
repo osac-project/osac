@@ -130,6 +130,33 @@ func LoadInput(obj v1alpha1.NetworkInputObject) (map[string]any, error) {
 	return input, nil
 }
 
+// ResourceGeneration returns metadata.generation from a stored task input's
+// resource snapshot. Cleanup tasks use the original create snapshot, so its
+// generation is the value a manager must return even if the live object has
+// since changed.
+func ResourceGeneration(input map[string]any) (int64, error) {
+	resource, ok := input["resource"]
+	if !ok {
+		return 0, fmt.Errorf("stored task input has no resource snapshot")
+	}
+	data, err := json.Marshal(resource)
+	if err != nil {
+		return 0, fmt.Errorf("reading stored resource generation: %w", err)
+	}
+	var snapshot struct {
+		Metadata struct {
+			Generation *int64 `json:"generation"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return 0, fmt.Errorf("reading stored resource generation: %w", err)
+	}
+	if snapshot.Metadata.Generation == nil || *snapshot.Metadata.Generation < 0 {
+		return 0, fmt.Errorf("stored resource snapshot has no valid metadata.generation")
+	}
+	return *snapshot.Metadata.Generation, nil
+}
+
 // WithLaunchKeys returns a copy of input with keys added at launch (for
 // example network_type and network_segment, which are never stored).
 func WithLaunchKeys(input map[string]any, keys map[string]any) map[string]any {

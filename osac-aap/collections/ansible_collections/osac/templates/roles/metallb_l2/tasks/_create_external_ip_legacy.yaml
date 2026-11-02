@@ -7,20 +7,21 @@
 - name: Validate ExternalIP fields and annotations
   ansible.builtin.assert:
     that:
-      - external_ip.metadata is defined
-      - external_ip.metadata.name is defined
-      - external_ip.metadata.name | length > 0
-      - external_ip.metadata.annotations is defined
-      - "'osac.openshift.io/externalippool-name' in external_ip.metadata.annotations"
+      - metallb_external_ip.metadata is defined
+      - metallb_external_ip.metadata.name is defined
+      - metallb_external_ip.metadata.name | length > 0
+      - metallb_external_ip_pool.metadata.name is defined or
+        (metallb_external_ip.metadata.annotations | default({})).get('osac.openshift.io/externalippool-name', '') | length > 0
     fail_msg: >-
-      ExternalIP metadata.name and
-      metadata.annotations['osac.openshift.io/externalippool-name'] are required
+      ExternalIP metadata.name and its ExternalIPPool name are required
 
 - name: Extract ExternalIP configuration
   ansible.builtin.set_fact:
-    ip_name: "{{ external_ip.metadata.name }}"
+    ip_name: "{{ metallb_external_ip.metadata.name }}"
     ip_pool_name: >-
-      {{ external_ip.metadata.annotations['osac.openshift.io/externalippool-name'] }}
+      {{ metallb_external_ip_pool.metadata.name
+         | default((metallb_external_ip.metadata.annotations | default({})).get(
+             'osac.openshift.io/externalippool-name', ''), true) }}
 
 - name: Display ExternalIP information
   ansible.builtin.debug:

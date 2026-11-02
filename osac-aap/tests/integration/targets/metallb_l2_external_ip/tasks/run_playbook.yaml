@@ -1,20 +1,74 @@
 ---
-- name: Invoke an ExternalIP playbook through the top-level dispatcher
+- name: Build the production-shaped ExternalIP task input
+  ansible.builtin.set_fact:
+    metallb_eip_network_job_vars: >-
+      {{
+        {
+          'manager': {
+            'name': 'k8s_only',
+            'type': 'kubernetes',
+            'ansible_role': 'osac.templates.k8s_only'
+          },
+          'task': metallb_eip_playbook,
+          'tenant': (metallb_eip_job_vars.resource.metadata.annotations | default({})).get(
+            'osac.openshift.io/tenant', tenant_id),
+          'resource': {
+            'apiVersion': metallb_eip_job_vars.resource.apiVersion,
+            'kind': 'ExternalIP',
+            'id': (metallb_eip_job_vars.resource.metadata.labels | default({})).get(
+              'osac.openshift.io/externalip-uuid', ''),
+            'metadata': {
+              'name': metallb_eip_job_vars.resource.metadata.name,
+              'namespace': metallb_eip_job_vars.resource.metadata.namespace,
+              'uid': metallb_eip_job_vars.resource.metadata.uid,
+              'generation': metallb_eip_job_vars.resource.metadata.generation,
+              'annotations': (
+                {'osac.openshift.io/externalip-contract-version': 'v1'}
+                if (metallb_eip_job_vars.resource.metadata.annotations | default({})).get(
+                  'osac.openshift.io/externalip-contract-version', '') == 'v1'
+                else {}
+              )
+            },
+            'spec': {'pool': metallb_eip_job_vars.resource.spec.pool}
+          },
+          'external_ip_pool': metallb_eip_pool_contract_snapshot
+        }
+        | combine(
+            {'existing_address': metallb_eip_job_vars.resource.status.address}
+            if (metallb_eip_job_vars.resource.status | default({})).get('address', '') | length > 0
+            else {}
+          )
+      }}
+  when: metallb_eip_playbook in ['create_external_ip', 'delete_external_ip']
+
+- name: Select the production dispatcher for ExternalIP lifecycle tasks
+  ansible.builtin.set_fact:
+    metallb_eip_playbook_path: "{{ playbook_dir }}/../../../../../playbook_osac_network_task.yml"
+    metallb_eip_dispatch_vars: "{{ {'osac_job_vars': metallb_eip_network_job_vars} }}"
+  when: metallb_eip_playbook in ['create_external_ip', 'delete_external_ip']
+
+- name: Select the attachment playbook wrapper
+  ansible.builtin.set_fact:
+    metallb_eip_playbook_path: >-
+      {{ playbook_dir }}/../../../../../playbook_osac_{{ metallb_eip_playbook }}.yml
+    metallb_eip_dispatch_vars: "{{ {'osac_job_vars': metallb_eip_job_vars} }}"
+  when: metallb_eip_playbook not in ['create_external_ip', 'delete_external_ip']
+
+- name: Invoke the production task path in a child Ansible process
   ansible.builtin.command:
     argv:
       - uv
       - run
       - ansible-playbook
+      - "{{ metallb_eip_playbook_path }}"
       - -e
-      - "ansible_python_interpreter={{ ansible_playbook_python }}"
-      - "{{ playbook_dir }}/../../../../../playbook_osac_{{ metallb_eip_playbook }}.yml"
-      - -e
-      - "{{ {'osac_job_vars': metallb_eip_job_vars} | to_json }}"
+      - "{{ metallb_eip_dispatch_vars | to_json }}"
   args:
     chdir: "{{ playbook_dir }}/../../../../../"
   environment:
     ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
     ANSIBLE_SHOW_CUSTOM_STATS: "true"
+    ANSIBLE_PYTHON_INTERPRETER: "{{ ansible_playbook_python }}"
   register: metallb_eip_playbook_result
   changed_when: false
   failed_when: false
@@ -23,6 +77,10 @@
   ansible.builtin.assert:
     that:
       - (metallb_eip_playbook_result.rc == 0) == (metallb_eip_should_succeed | bool)
+    fail_msg: >-
+      Expected success={{ metallb_eip_should_succeed | bool }}, got rc={{ metallb_eip_playbook_result.rc }}.
+      stderr={{ metallb_eip_playbook_result.stderr | default('') }}
+      stdout={{ metallb_eip_playbook_result.stdout | default('') }}
 
 - name: Read the ExternalIP v1 result artifact
   ansible.builtin.set_fact:

@@ -7,14 +7,14 @@
 - name: Validate ExternalIP fields
   ansible.builtin.assert:
     that:
-      - external_ip.metadata is defined
-      - external_ip.metadata.name is defined
-      - external_ip.metadata.name | length > 0
+      - metallb_external_ip.metadata is defined
+      - metallb_external_ip.metadata.name is defined
+      - metallb_external_ip.metadata.name | length > 0
     fail_msg: "ExternalIP metadata.name is required"
 
 - name: Extract ExternalIP configuration
   ansible.builtin.set_fact:
-    ip_name: "{{ external_ip.metadata.name }}"
+    ip_name: "{{ metallb_external_ip.metadata.name }}"
 
 - name: Display deletion information
   ansible.builtin.debug:

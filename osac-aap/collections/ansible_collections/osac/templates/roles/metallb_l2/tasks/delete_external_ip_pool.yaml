@@ -4,6 +4,13 @@
 # 2. Deletes IPAddressPool
 # Handles "not found" errors gracefully for both resources
 
+- name: Normalize the ExternalIPPool manager input
+  ansible.builtin.set_fact:
+    metallb_external_ip_pool: >-
+      {{ osac_job_vars.resource
+         if osac_job_vars.resource is defined
+         else external_ip_pool | default({}, true) }}
+
 - name: Include get remote cluster kubeconfig
   ansible.builtin.include_role:
     name: osac.service.common
@@ -11,7 +18,7 @@
 
 - name: Extract ExternalIPPool configuration
   ansible.builtin.set_fact:
-    pool_name: "{{ external_ip_pool.metadata.name }}"
+    pool_name: "{{ metallb_external_ip_pool.metadata.name }}"
 
 - name: Display deletion information
   ansible.builtin.debug:

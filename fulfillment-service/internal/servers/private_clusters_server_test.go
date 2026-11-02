@@ -5514,6 +5514,32 @@ var _ = Describe("Private clusters server", func() {
 			updateNextNodeSetVersion := func(id, name string) *privatev1.Cluster {
 				return updateSharedNodeSetVersion(id, name, "4-18-0", "cluster-version-next")
 			}
+			captureReplacementLog := func(update func()) map[string]any {
+				var logs bytes.Buffer
+				originalLogger := server.logger
+				server.logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{
+					Level: slog.LevelInfo,
+				}))
+				DeferCleanup(func() {
+					server.logger = originalLogger
+				})
+				update()
+
+				var replacement map[string]any
+				for _, line := range strings.Split(logs.String(), "\n") {
+					if line == "" {
+						continue
+					}
+					var record map[string]any
+					Expect(json.Unmarshal([]byte(line), &record)).To(Succeed())
+					if record["msg"] == "Replaced ClusterVersion reference with the same semantic version; no upgrade attempt created" {
+						replacement = record
+						break
+					}
+				}
+				Expect(replacement).NotTo(BeNil())
+				return replacement
+			}
 			historyEntries := func(count int) []*privatev1.ClusterUpgradeHistoryEntry {
 				states := []privatev1.ClusterUpgradeState{
 					privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
@@ -5603,16 +5629,10 @@ var _ = Describe("Private clusters server", func() {
 				Expect(updated.GetStatus().GetVersionTransitionTime()).ToNot(BeNil())
 				seedSharedNextVersion()
 
-				var logs bytes.Buffer
-				originalLogger := server.logger
-				server.logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{
-					Level: slog.LevelInfo,
-				}))
-				DeferCleanup(func() {
-					server.logger = originalLogger
+				var again *privatev1.Cluster
+				replacement := captureReplacementLog(func() {
+					again = updateSharedVersion(object.GetId(), "4-18-0-shared", "cluster-version-shared-next")
 				})
-
-				again := updateSharedVersion(object.GetId(), "4-18-0-shared", "cluster-version-shared-next")
 
 				Expect(again.GetSpec().GetVersion().GetId()).To(Equal("cv-next-shared"))
 				Expect(again.GetSpec().GetVersion().GetShared()).To(BeTrue())
@@ -5620,24 +5640,13 @@ var _ = Describe("Private clusters server", func() {
 				Expect(again.GetSpec().GetControlPlaneAttemptId()).To(Equal(updated.GetSpec().GetControlPlaneAttemptId()))
 				Expect(again.GetStatus().GetVersionTransitionTime().AsTime()).To(Equal(updated.GetStatus().GetVersionTransitionTime().AsTime()))
 
-				var replacement map[string]any
-				for _, line := range strings.Split(logs.String(), "\n") {
-					if line == "" {
-						continue
-					}
-					var record map[string]any
-					Expect(json.Unmarshal([]byte(line), &record)).To(Succeed())
-					if record["msg"] == "Replaced ClusterVersion reference with the same semantic version; no upgrade attempt created" {
-						replacement = record
-						break
-					}
-				}
-				Expect(replacement).NotTo(BeNil())
 				Expect(replacement).To(HaveKeyWithValue("cluster_id", object.GetId()))
 				Expect(replacement).NotTo(HaveKey("release_image"))
 				Expect(replacement).To(HaveKeyWithValue("component", "control_plane"))
 				Expect(replacement).To(HaveKeyWithValue("previous_cluster_version_id", "cv-next"))
 				Expect(replacement).To(HaveKeyWithValue("new_cluster_version_id", "cv-next-shared"))
+				Expect(replacement).NotTo(HaveKey("previous_cluster_version_name"))
+				Expect(replacement).NotTo(HaveKey("new_cluster_version_name"))
 			})
 
 			It("creates an attempt when the semantic version differs even if the image matches", func() {
@@ -5661,8 +5670,14 @@ var _ = Describe("Private clusters server", func() {
 				Expect(updated.GetSpec().GetNodeSetAttemptIds()["compute"]).ToNot(BeEmpty())
 				seedSharedNextVersion()
 
-				again := updateSharedNodeSetVersion(object.GetId(), "compute", "4-18-0-shared", "cluster-version-shared-next")
+				var again *privatev1.Cluster
+				replacement := captureReplacementLog(func() {
+					again = updateSharedNodeSetVersion(object.GetId(), "compute", "4-18-0-shared", "cluster-version-shared-next")
+				})
 
+				Expect(replacement).To(HaveKeyWithValue("component", "node_set"))
+				Expect(replacement).NotTo(HaveKey("previous_cluster_version_name"))
+				Expect(replacement).NotTo(HaveKey("new_cluster_version_name"))
 				Expect(again.GetSpec().GetNodeSets()["compute"].GetVersion().GetId()).To(Equal("cv-next-shared"))
 				Expect(again.GetSpec().GetNodeSets()["compute"].GetVersion().GetShared()).To(BeTrue())
 				Expect(again.GetSpec().GetNodeSets()["gpu"].GetVersion().GetId()).To(Equal("cv-default"))

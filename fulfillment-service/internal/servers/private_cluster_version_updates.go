@@ -54,18 +54,16 @@ func (s *PrivateClustersServer) prepareClusterVersionChange(ctx context.Context,
 	// versions rather than image strings also handles tag and digest forms of the
 	// same release.
 	if source.GetSpec().GetVersion() == resolvedTarget.GetSpec().GetVersion() {
-		component := "control_plane"
-		if change.component.GetControlPlane() == nil {
-			component = "node_set:" + change.component.GetNodeSetId()
+		component := "node_set"
+		if change.component.GetControlPlane() != nil {
+			component = "control_plane"
 		}
 		s.logger.InfoContext(ctx,
 			"Replaced ClusterVersion reference with the same semantic version; no upgrade attempt created",
 			slog.String("cluster_id", current.GetId()),
 			slog.String("component", component),
 			slog.String("previous_cluster_version_id", source.GetId()),
-			slog.String("previous_cluster_version_name", source.GetMetadata().GetName()),
 			slog.String("new_cluster_version_id", resolvedTarget.GetId()),
-			slog.String("new_cluster_version_name", resolvedTarget.GetMetadata().GetName()),
 		)
 		return nil
 	}

@@ -8,8 +8,10 @@ import type {
   ComputeInstanceCatalogItem,
 } from '@osac/types';
 
-import CatalogItemDeleteModal from './CatalogItemDeleteModal';
 import { renderWithProviders } from '../../test-utils/TestProviders';
+import BareMetalInstanceCatalogItemDeleteModal from '../BareMetalInstanceCatalogItem/Details/BareMetalInstanceCatalogItemDeleteModal';
+import ClusterCatalogItemDeleteModal from '../ClusterCatalogItem/Details/ClusterCatalogItemDeleteModal';
+import VMCatalogItemDeleteModal from '../VMCatalogItem/Details/VMCatalogItemDeleteModal';
 
 const vmItem: ComputeInstanceCatalogItem = {
   $typeName: 'osac.public.v1.ComputeInstanceCatalogItem',
@@ -29,10 +31,10 @@ const bmItem: BareMetalInstanceCatalogItem = {
   metadata: { name: 'bm-catalog' },
 } as unknown as BareMetalInstanceCatalogItem;
 
-describe('CatalogItemDeleteModal', () => {
+describe('Catalog item delete modals', () => {
   it('warns that existing provisioned resources are unaffected', () => {
     renderWithProviders(
-      <CatalogItemDeleteModal item={vmItem} onClose={vi.fn()} onSuccess={vi.fn()} />,
+      <VMCatalogItemDeleteModal item={vmItem} onClose={vi.fn()} onSuccess={vi.fn()} />,
     );
 
     expect(
@@ -43,7 +45,7 @@ describe('CatalogItemDeleteModal', () => {
   it('deletes a compute instance catalog item and calls onSuccess', async () => {
     const onSuccess = vi.fn();
     const { user } = renderWithProviders(
-      <CatalogItemDeleteModal item={vmItem} onClose={vi.fn()} onSuccess={onSuccess} />,
+      <VMCatalogItemDeleteModal item={vmItem} onClose={vi.fn()} onSuccess={onSuccess} />,
     );
 
     await user.click(screen.getByRole('button', { name: /^Delete$/i }));
@@ -54,7 +56,7 @@ describe('CatalogItemDeleteModal', () => {
   it('deletes a cluster catalog item and calls onSuccess', async () => {
     const onSuccess = vi.fn();
     const { user } = renderWithProviders(
-      <CatalogItemDeleteModal item={clusterItem} onClose={vi.fn()} onSuccess={onSuccess} />,
+      <ClusterCatalogItemDeleteModal item={clusterItem} onClose={vi.fn()} onSuccess={onSuccess} />,
     );
 
     await user.click(screen.getByRole('button', { name: /^Delete$/i }));
@@ -65,7 +67,11 @@ describe('CatalogItemDeleteModal', () => {
   it('deletes a bare metal catalog item and calls onSuccess', async () => {
     const onSuccess = vi.fn();
     const { user } = renderWithProviders(
-      <CatalogItemDeleteModal item={bmItem} onClose={vi.fn()} onSuccess={onSuccess} />,
+      <BareMetalInstanceCatalogItemDeleteModal
+        item={bmItem}
+        onClose={vi.fn()}
+        onSuccess={onSuccess}
+      />,
     );
 
     await user.click(screen.getByRole('button', { name: /^Delete$/i }));
@@ -76,7 +82,7 @@ describe('CatalogItemDeleteModal', () => {
   it('shows an error and does not call onSuccess when delete fails', async () => {
     const onSuccess = vi.fn();
     const { user } = renderWithProviders(
-      <CatalogItemDeleteModal item={vmItem} onClose={vi.fn()} onSuccess={onSuccess} />,
+      <VMCatalogItemDeleteModal item={vmItem} onClose={vi.fn()} onSuccess={onSuccess} />,
       {
         transportOverrides: {
           onComputeInstanceCatalogItemDelete: () => {
@@ -97,7 +103,7 @@ describe('CatalogItemDeleteModal', () => {
   it('closes without deleting on Cancel', async () => {
     const onClose = vi.fn();
     const { user } = renderWithProviders(
-      <CatalogItemDeleteModal item={vmItem} onClose={onClose} onSuccess={vi.fn()} />,
+      <VMCatalogItemDeleteModal item={vmItem} onClose={onClose} onSuccess={vi.fn()} />,
     );
 
     await user.click(screen.getByRole('button', { name: /Cancel/i }));

@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
 
 import { useTranslation } from '../../hooks/useTranslation';
-import { CATALOG_PROVISION_MULTILINE_TEXTAREA } from '../Form/constants';
 import { InputField } from '../Form/InputField';
 
 interface CatalogUserDataInputProps {
@@ -26,8 +25,6 @@ const CatalogUserDataInput = ({
       label={t('User data')}
       fieldId="catalog-user-data"
       multiline
-      rows={CATALOG_PROVISION_MULTILINE_TEXTAREA.rows}
-      resizeOrientation={CATALOG_PROVISION_MULTILINE_TEXTAREA.resizeOrientation}
       helperText={t('Optional cloud-init user data (max 64 KB).')}
       isDisabled={isDisabled}
       isRequired={isRequired}

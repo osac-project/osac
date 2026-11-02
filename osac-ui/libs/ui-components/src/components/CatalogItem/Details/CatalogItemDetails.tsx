@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Button,
@@ -12,6 +11,7 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
+import { type ServiceWithMethod, usePermissions } from '../../../hooks/use-permissions';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
 import {
@@ -21,13 +21,13 @@ import {
 } from '../../catalog/catalogItemDisplay';
 import DeleteResourceButton from '../../Resource/DeleteResourceButton';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
-import { canManageCatalogItem } from '../canManageCatalogItem';
-import CatalogItemDeleteModal from '../CatalogItemDeleteModal';
 import { useSetCatalogItemPublished } from '../useSetCatalogItemPublished';
 
 interface CatalogItemDetailsProps {
   item: CatalogItem;
   children: ReactNode;
+  service: ServiceWithMethod<'update' | 'delete'>;
+  onDelete: VoidFunction;
   showStatus?: boolean;
   titleAddon?: ReactNode;
   titlePrefix?: ReactNode;
@@ -36,28 +36,24 @@ interface CatalogItemDetailsProps {
 const CatalogItemDetails = ({
   item,
   children,
+  service,
+  onDelete,
   showStatus = true,
   titleAddon,
   titlePrefix,
 }: CatalogItemDetailsProps) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { role, tenantId } = useSession();
-  const [deleteOpen, setDeleteOpen] = useState(false);
+  const { role } = useSession();
   const { isPending, setPublished } = useSetCatalogItemPublished(item);
-  const canManage = canManageCatalogItem(role, tenantId, item);
+  const { allowed: canUpdate } = usePermissions(service, 'update');
+  const { allowed: canDelete } = usePermissions(service, 'delete');
+  const canManage = canUpdate && canDelete;
   const canLaunch = (role === 'tenant-admin' || role === 'tenant-user') && item.published;
   const resourceName = item.metadata?.name || '';
 
   return (
     <>
-      {deleteOpen ? (
-        <CatalogItemDeleteModal
-          item={item}
-          onClose={() => setDeleteOpen(false)}
-          onSuccess={() => navigate('/catalog')}
-        />
-      ) : null}
       <PageSection hasBodyWrapper={false}>
         <Stack hasGutter>
           <StackItem>
@@ -113,7 +109,7 @@ const CatalogItemDetails = ({
                   ) : null}
                   {canManage ? (
                     <FlexItem>
-                      <DeleteResourceButton onClick={() => setDeleteOpen(true)} />
+                      <DeleteResourceButton onClick={onDelete} />
                     </FlexItem>
                   ) : null}
                   {role === 'tenant-admin' || role === 'tenant-user' ? (

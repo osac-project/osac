@@ -10,45 +10,20 @@ export type CatalogFieldPolicyLike<TPolicyValue> =
     }
   | undefined;
 
-/**
- * Encodes a `{ value, locked }` field back into a generated `*FieldPolicy` message.
- * `locked: true` always writes the locked arm, even for an empty value, so step
- * validation (not this function) is responsible for rejecting an empty locked field.
- * `locked: false` omits the policy entirely when the value is empty, which is how an
- * editable field with no default is distinguished from one with a default.
- */
-export const policyFromCatalogValue = <TValue, TPolicy>(
+/** Encodes a catalog field's value in its locked or editable policy arm. */
+export const catalogFieldPolicyFromValue = <TValue, TPolicyValue = TValue>(
   field: ProvisioningFieldValue<TValue>,
   isEmpty: (value: TValue) => boolean,
-  toLocked: (value: TValue) => TPolicy,
-  toEditable: (value: TValue) => TPolicy,
-): TPolicy | undefined => {
+  toValue: (value: TValue) => TPolicyValue = (value) => value as unknown as TPolicyValue,
+): CatalogFieldPolicyLike<TPolicyValue> => {
   if (field.locked) {
-    return toLocked(field.value);
+    return { behavior: { case: 'locked', value: toValue(field.value) } };
   }
   if (isEmpty(field.value)) {
     return undefined;
   }
-  return toEditable(field.value);
+  return { behavior: { case: 'editable', value: { defaultValue: toValue(field.value) } } };
 };
-
-/** Encodes the common locked/editable shape used by catalog field policies. */
-export const catalogFieldPolicyFromValue = <
-  TValue,
-  TPolicyValue = TValue,
-  TPolicy = CatalogFieldPolicyLike<TPolicyValue>,
->(
-  field: ProvisioningFieldValue<TValue>,
-  isEmpty: (value: TValue) => boolean,
-  toValue: (value: TValue) => TPolicyValue = (value) => value as unknown as TPolicyValue,
-): TPolicy | undefined =>
-  policyFromCatalogValue<TValue, TPolicy>(
-    field,
-    isEmpty,
-    (value) => ({ behavior: { case: 'locked', value: toValue(value) } }) as TPolicy,
-    (value) =>
-      ({ behavior: { case: 'editable', value: { defaultValue: toValue(value) } } }) as TPolicy,
-  );
 
 /** Returns the update-mask path needed to clear an existing catalog policy. */
 export const catalogFieldPolicyClearPath = <TPolicyValue, TValue>(

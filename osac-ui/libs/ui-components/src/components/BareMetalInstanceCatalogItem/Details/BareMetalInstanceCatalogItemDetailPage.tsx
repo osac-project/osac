@@ -1,8 +1,10 @@
-import { useParams } from 'react-router-dom';
+import { useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 
 import { BareMetalInstanceCatalogItems } from '@osac/types';
 
 import BareMetalInstanceCatalogItemConfiguration from './BareMetalInstanceCatalogItemConfiguration';
+import BareMetalInstanceCatalogItemDeleteModal from './BareMetalInstanceCatalogItemDeleteModal';
 import { useGetResource } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { CatalogItemIcon } from '../../../icons';
@@ -12,7 +14,9 @@ import ResourceDetailsPage from '../../Resource/ResourceDetailsPage';
 
 export const BareMetalInstanceCatalogItemDetailPage = () => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { id = '' } = useParams() as { id: string };
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const { data, isLoading, isError, error, refetch } = useGetResource(
     BareMetalInstanceCatalogItems,
     { id },
@@ -31,12 +35,26 @@ export const BareMetalInstanceCatalogItemDetailPage = () => {
       cardCount={2}
     >
       {item ? (
-        <CatalogItemDetails item={item} titlePrefix={<CatalogItemIcon kind="bm" isActive />}>
-          <CatalogItemDetailContent
+        <>
+          {deleteOpen ? (
+            <BareMetalInstanceCatalogItemDeleteModal
+              item={item}
+              onClose={() => setDeleteOpen(false)}
+              onSuccess={() => navigate('/catalog')}
+            />
+          ) : null}
+          <CatalogItemDetails
             item={item}
-            configuration={<BareMetalInstanceCatalogItemConfiguration item={item} />}
-          />
-        </CatalogItemDetails>
+            service={BareMetalInstanceCatalogItems}
+            onDelete={() => setDeleteOpen(true)}
+            titlePrefix={<CatalogItemIcon kind="bm" isActive />}
+          >
+            <CatalogItemDetailContent
+              item={item}
+              configuration={<BareMetalInstanceCatalogItemConfiguration item={item} />}
+            />
+          </CatalogItemDetails>
+        </>
       ) : null}
     </ResourceDetailsPage>
   );

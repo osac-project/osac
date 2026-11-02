@@ -22,12 +22,6 @@ interface CatalogUserDataSourceInit {
   source: { case: 'inline'; value: string } | { case: 'secret'; value: { name: string } };
 }
 
-interface CatalogUserDataPolicyInit {
-  behavior:
-    | { case: 'locked'; value: CatalogUserDataSourceInit }
-    | { case: 'editable'; value: { defaultValue: CatalogUserDataSourceInit } };
-}
-
 const emptyCatalogUserDataValue: CatalogUserDataValue = {
   source: 'inline',
   value: '',
@@ -53,7 +47,7 @@ const readCatalogUserDataValue = (value: UserDataSource | undefined): CatalogUse
   return emptyCatalogUserDataValue;
 };
 
-const catalogUserDataFieldFromPolicy = (
+export const catalogUserDataFieldFromPolicy = (
   policy: CatalogFieldPolicyLike<UserDataSource>,
 ): ProvisioningFieldValue<CatalogUserDataValue> => {
   const field = getFieldFromCatalogItemPolicy<UserDataSource | undefined>(policy, undefined);
@@ -72,21 +66,10 @@ export const catalogUserDataValuesFromPolicy = (
   };
 };
 
-export const catalogUserDataValueFromPolicy = (
-  policy: CatalogFieldPolicyLike<UserDataSource>,
-): CatalogUserDataValue => catalogUserDataFieldFromPolicy(policy).value;
-
-export const catalogUserDataDisplayValue = (
-  policy: CatalogFieldPolicyLike<UserDataSource>,
-): string | undefined => {
-  const value = catalogUserDataValueFromPolicy(policy).value.trim();
-  return value || undefined;
-};
-
 /** OSAC-6054: catalog user data is one governed source, not a scalar field. */
 export const catalogUserDataPolicyFromValues = (
   values: CatalogUserDataFormValues,
-): CatalogUserDataPolicyInit | undefined => {
+): CatalogFieldPolicyLike<CatalogUserDataSourceInit> => {
   const inlineValue = values.userData.value.trim();
   const secretValue = values.userDataSecret.value;
   const userDataSource: CatalogUserDataSourceInit = inlineValue

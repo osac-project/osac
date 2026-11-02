@@ -37,7 +37,7 @@ interface CatalogItemCardProps {
 
 const CatalogItemCard = ({ item, selection, resourceLookups }: CatalogItemCardProps) => {
   const { t } = useTranslation();
-  const { role, tenantId } = useSession();
+  const { role } = useSession();
   const isWizardMode = Boolean(selection);
   const cardId = `catalog-item-card-${item.id}`;
   const titleId = `${cardId}-title`;
@@ -66,7 +66,7 @@ const CatalogItemCard = ({ item, selection, resourceLookups }: CatalogItemCardPr
               </FlexItem>
               {!isWizardMode ? (
                 <FlexItem>
-                  <CatalogItemActionsMenu item={item} role={role} tenantId={tenantId} />
+                  <CatalogItemActionsMenu item={item} role={role} />
                 </FlexItem>
               ) : null}
             </Flex>

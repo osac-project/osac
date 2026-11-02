@@ -20,6 +20,7 @@ const TenantSelectField = ({ isDisabled = false }: TenantSelectFieldProps) => {
       isDisabled={isDisabled}
       placeholder={t('Search and select a tenant')}
       loadErrorTitle={t('Failed to fetch tenants')}
+      filterItems={(tenant) => tenant.id !== 'system' && tenant.id !== 'shared'}
     />
   );
 };

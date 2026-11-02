@@ -15,7 +15,6 @@ import { type ResourceSelectValue } from '../../Form/resourceSelectValue';
 type CatalogItemFieldsInit = NonNullable<
   MessageInitShape<typeof BareMetalInstanceCatalogItemSchema>['fields']
 >;
-type FieldPolicyInit<K extends keyof CatalogItemFieldsInit> = NonNullable<CatalogItemFieldsInit[K]>;
 
 const isEmptyResource = (value: ResourceSelectValue) => !value.id;
 
@@ -29,11 +28,11 @@ const buildBareMetalCatalogItemFieldsPayload = (
 ): CatalogItemFieldsInit => {
   const fields: CatalogItemFieldsInit = {};
 
-  const instanceType = catalogFieldPolicyFromValue<
-    ResourceSelectValue,
-    ReturnType<typeof toInstanceTypeReference>,
-    FieldPolicyInit<'instanceType'>
-  >(values.instanceType, isEmptyResource, toInstanceTypeReference);
+  const instanceType = catalogFieldPolicyFromValue(
+    values.instanceType,
+    isEmptyResource,
+    toInstanceTypeReference,
+  );
   if (instanceType) {
     fields.instanceType = instanceType;
   }

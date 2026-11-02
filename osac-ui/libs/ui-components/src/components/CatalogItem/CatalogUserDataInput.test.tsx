@@ -39,7 +39,11 @@ describe('CatalogUserDataInput', () => {
     const initialValues = catalogUserDataValuesFromPolicy({
       behavior: {
         case: 'editable',
-        value: { defaultValue: { source: { case: 'secret', value: { name: 'my-secret' } } } },
+        value: {
+          defaultValue: {
+            source: { case: 'secret', value: { id: 'secret-id', name: 'my-secret' } },
+          },
+        },
       },
     } as never);
     let submittedPolicy: ReturnType<typeof catalogUserDataPolicyFromValues>;

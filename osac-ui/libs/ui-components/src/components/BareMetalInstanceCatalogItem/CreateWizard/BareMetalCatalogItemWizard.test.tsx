@@ -269,7 +269,7 @@ describe('BareMetalCatalogItemWizard', () => {
       onBareMetalInstanceCatalogItemUpdate: onUpdate,
     });
 
-    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('existing-item');
+    expect(await screen.findByRole('textbox', { name: 'Name' })).toHaveValue('existing-item');
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() =>
       expect(screen.getByPlaceholderText('Select an instance type')).toHaveValue('acme-1tb'),

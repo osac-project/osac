@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { WizardStep } from '@patternfly/react-core';
+import { Spinner, WizardStep } from '@patternfly/react-core';
 
 import type { ComputeInstanceCatalogItem } from '@osac/types';
 import { ComputeInstanceCatalogItems, ComputeInstanceTemplates } from '@osac/types';
@@ -14,13 +14,18 @@ import {
   buildComputeCatalogStepSchema,
   computeCatalogStepHasErrors,
 } from './validation';
-import { type ComputeCatalogItemValues, getComputeCatalogItemInitialValues } from './values';
+import {
+  type ComputeCatalogItemValues,
+  getComputeCatalogItemDiskImageId,
+  getComputeCatalogItemInitialValues,
+} from './values';
 import VMCatalogAccessStep from './VMCatalogAccessStep';
 import VMCatalogConfigurationStep from './VMCatalogConfigurationStep';
 import VMCatalogReviewStep from './VMCatalogReviewStep';
 import VMCatalogStorageStep from './VMCatalogStorageStep';
 import VMCatalogWizardFooter from './VMCatalogWizardFooter';
 import { useCreateResource, useUpdateResource } from '../../../api/use-resource';
+import { useDiskImage } from '../../../api/v1/disk-image';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
 import CatalogGeneralStep from '../../CatalogItem/CatalogGeneralStep';
@@ -52,11 +57,12 @@ const VMCatalogItemWizard = ({ item }: VMCatalogItemWizardProps) => {
     resetUpdate();
   }, [resetCreate, resetUpdate]);
 
+  const diskImageId = getComputeCatalogItemDiskImageId(item);
+  const { data: diskImage, isLoading: isDiskImageLoading } = useDiskImage(diskImageId);
+
   const initialValues = useMemo(
-    () => getComputeCatalogItemInitialValues(item),
-    // only on initial render
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    () => getComputeCatalogItemInitialValues(item, diskImage),
+    [diskImage, item],
   );
 
   const validationSchema = useMemo(
@@ -77,6 +83,10 @@ const VMCatalogItemWizard = ({ item }: VMCatalogItemWizardProps) => {
       // nothing to do, tanstack handles the error
     }
   };
+
+  if (diskImageId && isDiskImageLoading) {
+    return <Spinner aria-label={t('Loading disk image')} />;
+  }
 
   return (
     <ResourceWizardShell<ComputeCatalogItemValues, ComputeCatalogWizardStepId>

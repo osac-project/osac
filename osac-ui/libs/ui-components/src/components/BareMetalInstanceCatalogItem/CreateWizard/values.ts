@@ -1,6 +1,7 @@
 import {
   type BareMetalInstanceCatalogItem,
   type BareMetalInstanceTypeReference,
+  type DiskImage,
   type DiskImageReference,
   GuestOSFamily,
 } from '@osac/types';
@@ -39,8 +40,19 @@ export const emptyBareMetalCatalogItemValues = (): BareMetalCatalogItemValues =>
   userDataSecret: provisioningFieldValue(''),
 });
 
+export const getBareMetalCatalogItemDiskImageId = (
+  item?: BareMetalInstanceCatalogItem,
+): string | undefined => {
+  const diskImage = getFieldFromCatalogItemPolicy<DiskImageReference | undefined>(
+    item?.fields?.diskImage,
+    undefined,
+  );
+  return diskImage.value?.id || undefined;
+};
+
 export const getBareMetalCatalogItemInitialValues = (
   item?: BareMetalInstanceCatalogItem,
+  diskImageResource?: DiskImage,
 ): BareMetalCatalogItemValues => {
   if (!item) {
     return emptyBareMetalCatalogItemValues();
@@ -58,7 +70,9 @@ export const getBareMetalCatalogItemInitialValues = (
 
   return {
     ...catalogGeneralValuesFromItem(item),
-    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+    guestOsFamily: diskImage.value?.id
+      ? (diskImageResource?.spec?.guestOsFamily ?? GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED)
+      : GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     instanceType: provisioningFieldValue(
       resourceSelectValueFromReference(instanceType.value),
       instanceType.locked,

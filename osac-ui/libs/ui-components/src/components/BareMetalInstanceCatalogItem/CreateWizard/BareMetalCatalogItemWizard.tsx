@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { WizardStep } from '@patternfly/react-core';
+import { Spinner, WizardStep } from '@patternfly/react-core';
 
 import type { BareMetalInstanceCatalogItem } from '@osac/types';
 import { BareMetalInstanceCatalogItems, BareMetalInstanceTemplates } from '@osac/types';
@@ -16,8 +16,13 @@ import {
   bareMetalCatalogStepHasErrors,
   buildBareMetalCatalogStepSchema,
 } from './validation';
-import { type BareMetalCatalogItemValues, getBareMetalCatalogItemInitialValues } from './values';
+import {
+  type BareMetalCatalogItemValues,
+  getBareMetalCatalogItemDiskImageId,
+  getBareMetalCatalogItemInitialValues,
+} from './values';
 import { useCreateResource, useUpdateResource } from '../../../api/use-resource';
+import { useDiskImage } from '../../../api/v1/disk-image';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
 import CatalogGeneralStep from '../../CatalogItem/CatalogGeneralStep';
@@ -50,11 +55,12 @@ const BareMetalCatalogItemWizard = ({ item }: BareMetalCatalogItemWizardProps) =
     resetUpdate();
   }, [resetCreate, resetUpdate]);
 
+  const diskImageId = getBareMetalCatalogItemDiskImageId(item);
+  const { data: diskImage, isLoading: isDiskImageLoading } = useDiskImage(diskImageId);
+
   const initialValues = useMemo(
-    () => getBareMetalCatalogItemInitialValues(item),
-    // only on initial render
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    () => getBareMetalCatalogItemInitialValues(item, diskImage),
+    [diskImage, item],
   );
 
   const validationSchema = useMemo(
@@ -77,6 +83,10 @@ const BareMetalCatalogItemWizard = ({ item }: BareMetalCatalogItemWizardProps) =
       // nothing to do, tanstack handles the error
     }
   };
+
+  if (diskImageId && isDiskImageLoading) {
+    return <Spinner aria-label={t('Loading disk image')} />;
+  }
 
   return (
     <ResourceWizardShell<BareMetalCatalogItemValues, BareMetalCatalogWizardStepId>

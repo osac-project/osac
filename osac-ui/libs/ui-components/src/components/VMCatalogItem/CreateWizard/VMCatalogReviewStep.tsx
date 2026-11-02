@@ -91,7 +91,8 @@ const ReviewSection = ({ children, title }: ReviewSectionProps) => {
 const resourceValueKey = (value: { id?: string; name?: string }) =>
   `${value.id?.trim() ?? ''}|${value.name?.trim() ?? ''}`;
 
-const resourceValueLabel = (value: { id?: string; name?: string }): string => value.name || '';
+const resourceValueLabel = (t: TFunction, value: { id?: string; name?: string }): string =>
+  value.name || t('Not set');
 
 const guestOsFamilyLabel = (t: TFunction, value: GuestOSFamily): string => {
   switch (value) {
@@ -124,7 +125,7 @@ const additionalDisksLabel = (
     ? values
         .map((disk, index) => {
           const size = disk.sizeGib.trim() ? `${disk.sizeGib.trim()} GiB` : t('Not set');
-          const tier = resourceValueLabel(disk.storageTier);
+          const tier = resourceValueLabel(t, disk.storageTier);
           return `${t('Disk set {{number}}', { number: index + 1 })}: ${size} · ${tier}`;
         })
         .join('; ')
@@ -165,8 +166,8 @@ const catalogEditChanges = (
     },
     {
       label: t('Disk image'),
-      before: resourceValueLabel(initialValues.diskImage.value),
-      after: resourceValueLabel(values.diskImage.value),
+      before: resourceValueLabel(t, initialValues.diskImage.value),
+      after: resourceValueLabel(t, values.diskImage.value),
       beforeKey: resourceValueKey(initialValues.diskImage.value),
       afterKey: resourceValueKey(values.diskImage.value),
     },
@@ -179,8 +180,8 @@ const catalogEditChanges = (
     },
     {
       label: t('Instance type'),
-      before: resourceValueLabel(initialValues.instanceType.value),
-      after: resourceValueLabel(values.instanceType.value),
+      before: resourceValueLabel(t, initialValues.instanceType.value),
+      after: resourceValueLabel(t, values.instanceType.value),
       beforeKey: resourceValueKey(initialValues.instanceType.value),
       afterKey: resourceValueKey(values.instanceType.value),
     },
@@ -207,8 +208,8 @@ const catalogEditChanges = (
     },
     {
       label: t('Boot storage tier'),
-      before: resourceValueLabel(initialValues.bootDiskStorageTier.value),
-      after: resourceValueLabel(values.bootDiskStorageTier.value),
+      before: resourceValueLabel(t, initialValues.bootDiskStorageTier.value),
+      after: resourceValueLabel(t, values.bootDiskStorageTier.value),
       beforeKey: resourceValueKey(initialValues.bootDiskStorageTier.value),
       afterKey: resourceValueKey(values.bootDiskStorageTier.value),
     },
@@ -261,8 +262,8 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
   const isEdit = Boolean(item);
   const editChanges = isEdit ? catalogEditChanges(t, initialValues, values) : [];
   const notSet = t('Not set');
-  const diskImage = resourceValueLabel(values.diskImage.value);
-  const instanceTypeLabel = resourceValueLabel(values.instanceType.value);
+  const diskImage = resourceValueLabel(t, values.diskImage.value);
+  const instanceTypeLabel = resourceValueLabel(t, values.instanceType.value);
   const userDataReview = userDataLabel(t, values);
 
   if (isEdit) {
@@ -373,7 +374,7 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
           value={
             <GovernedReviewValue
               field={values.bootDiskStorageTier}
-              value={resourceValueLabel(values.bootDiskStorageTier.value)}
+              value={resourceValueLabel(t, values.bootDiskStorageTier.value)}
             />
           }
         />
@@ -389,7 +390,7 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
                       <StackItem key={`${disk.sizeGib}-${index}`}>
                         {`${t('Disk set {{number}}', { number: index + 1 })}: ${
                           disk.sizeGib.trim() ? `${disk.sizeGib.trim()} GiB` : notSet
-                        } · ${resourceValueLabel(disk.storageTier)}`}
+                        } · ${resourceValueLabel(t, disk.storageTier)}`}
                       </StackItem>
                     ))}
                   </Stack>

@@ -234,7 +234,7 @@ describe('VMCatalogItemWizard', () => {
       expect(screen.getByText('Additional disks')).toBeInTheDocument();
       expect(screen.getByText('Cloud-init')).toBeInTheDocument();
       expect(screen.getByText('Linux')).toBeInTheDocument();
-      expect(screen.getAllByText('Not set').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Not set')).toHaveLength(6);
       expect(screen.getByText('Unpublished')).toBeInTheDocument();
       expect(screen.getAllByText('Editable')).toHaveLength(5);
       expect(screen.getByRole('button', { name: 'Create catalog item' })).toBeInTheDocument();

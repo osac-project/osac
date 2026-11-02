@@ -97,3 +97,5 @@ repos:
     language: system
     files: ^osac-metering/adapters/(.*\.go|\.golangci\.yml|Makefile|go\.(mod|sum))$
     entry: make -C osac-metering/adapters lint
+
+# Rebase approval test: a comment only, do not merge.

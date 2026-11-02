@@ -107,3 +107,5 @@ def test_existing_same_version_without_disk_image_is_upgraded() -> None:
     )
     assert resolved == {"id": "existing-id", "name": "4-22-0-e2e-references"}
     private.update_cluster_version.assert_called_once_with(version_id="existing-id", disk_image={"id": "disk-id"})
+
+# Rebase approval test: a comment only, do not merge.

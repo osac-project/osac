@@ -4,13 +4,25 @@
 Usage:
     check-deleted-template-refs.py BASE_REF
 
-Lists the templates removed between BASE_REF and HEAD under osac-installer/charts
-and looks for each file's stem in the installer scripts and the repository tests.
-A deleted template whose name still appears in a test usually means the test
-still asserts the resource that template rendered: PR #1845 removed
+Lists the templates removed on this branch under osac-installer/charts and looks
+for the identifiers that template contributed to the rendered output:
+
+* its chart-relative path (``operator/templates/deployment.yaml``), which is how
+  a render test selects a document from a ``# Source:`` comment or passes
+  ``--show-only``;
+* the literal parts of the resource names it declared (``pre-install-validate``
+  from ``name: {{ include "osac.fullname" . }}-pre-install-validate``), which is
+  how a render test asserts a document it produced.
+
+A deleted template whose identifiers still appear in a test usually means the
+test still asserts the resource that template rendered: PR #1845 removed
 hooks/pre-install-validate.yaml while scripts/test-bmf-netbox-render.py still
 asserted Job/osac-pre-install-validate, and that test failed on main until the
 reference was removed.
+
+Matching whole names keeps a generic word from failing the build: deleting
+``templates/deployment.yaml`` no longer trips over tests that mention a
+``metering/templates/deployment.yaml`` that still exists.
 
 Documentation is not searched: install guides deliberately mention retired
 objects so operators know they are gone.
@@ -31,9 +43,28 @@ SEARCHED_ROOTS = (
     REPO_ROOT / "osac-installer/scripts",
     REPO_ROOT / "tests",
 )
+TEMPLATE_SUFFIXES = {".yaml", ".yml"}
+# Resource names live next to metadata (indented two to four spaces); deeper
+# ``name:`` keys are container, port and env-entry names, which are not what a
+# render test selects on.
+NAME_LINE = re.compile(r"^[ \t]{0,4}name:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+TEMPLATED = re.compile(r"\{\{.*?\}\}")
+
+
+def merge_base(base_ref: str) -> str:
+    """The commit where this branch diverged from *base_ref*."""
+    result = subprocess.run(
+        ["git", "merge-base", base_ref, "HEAD"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
 
 
 def deleted_templates(base_ref: str) -> list[str]:
+    """Chart templates removed between *base_ref* and HEAD."""
     command = [
         "git",
         "diff",
@@ -44,13 +75,47 @@ def deleted_templates(base_ref: str) -> list[str]:
         "osac-installer/charts",
     ]
     result = subprocess.run(command, cwd=REPO_ROOT, check=True, capture_output=True, text=True)
-    return [line for line in result.stdout.splitlines() if line.strip()]
+    return [
+        line
+        for line in result.stdout.splitlines()
+        if "/templates/" in line and Path(line).suffix in TEMPLATE_SUFFIXES
+    ]
 
 
-def references(stem: str) -> list[str]:
-    # Resource names are often prefixed (osac-pre-install-validate), so a
-    # hyphen may precede the stem; only a word character may not.
-    pattern = re.compile(rf"(?<!\w){re.escape(stem)}(?!\w)")
+def path_fragment(template: str) -> str:
+    """The template path as rendered ``# Source:`` lines spell it."""
+    parts = Path(template).parts
+    index = parts.index("templates")
+    return "/".join(parts[index - 1 :])
+
+
+def name_fragments(base_ref: str, template: str) -> set[str]:
+    """Literal parts of the resource names the deleted template declared."""
+    result = subprocess.run(
+        ["git", "show", f"{base_ref}:{template}"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    fragments: set[str] = set()
+    for match in NAME_LINE.finditer(result.stdout):
+        for piece in TEMPLATED.split(match.group(1)):
+            piece = piece.strip().strip("'\"-")
+            # A single word ("ui", "report") is too generic to attribute to one
+            # chart; the path fragment still covers the file itself.
+            if "-" in piece and len(piece) >= 6:
+                fragments.add(piece)
+    return fragments
+
+
+def references(identifiers: set[str]) -> list[str]:
+    """Lines in the searched trees that name any of *identifiers*."""
+    # A name is often prefixed (osac-pre-install-validate), so a hyphen may
+    # precede it; only a word character may not.
+    patterns = [
+        re.compile(rf"(?<!\w){re.escape(identifier)}(?!\w)") for identifier in sorted(identifiers)
+    ]
     hits: list[str] = []
     me = Path(__file__).resolve()
     for root in SEARCHED_ROOTS:
@@ -69,25 +134,28 @@ def references(stem: str) -> list[str]:
             for number, line in enumerate(text.splitlines(), start=1):
                 if ALLOW_MARKER in line:
                     continue
-                if pattern.search(line):
+                if any(pattern.search(line) for pattern in patterns):
                     hits.append(f"{path.relative_to(REPO_ROOT)}:{number}: {line.strip()}")
     return hits
 
 
 def main(arguments: list[str]) -> int:
+    """Check every deleted template for references; non-zero when any remain."""
     if len(arguments) != 1:
         print(__doc__)
         return 2
-    base_ref = arguments[0]
-    templates = deleted_templates(base_ref)
+    base = merge_base(arguments[0])
+    templates = deleted_templates(base)
     failing = 0
     for template in templates:
-        stem = Path(template).stem
-        hits = references(stem)
+        identifiers = {path_fragment(template)} | name_fragments(base, template)
+        hits = references(identifiers)
         if not hits:
             continue
         failing += 1
-        print(f"{template} was deleted but {stem!r} is still referenced:")
+        print(f"{template} was deleted but its identifiers are still referenced:")
+        for identifier in sorted(identifiers):
+            print(f"  identifier: {identifier}")
         for hit in hits:
             print(f"  {hit}")
     if failing:

@@ -24,6 +24,7 @@ def retired_hook_jobs(docs: list[dict[str, Any]]) -> list[str]:
 
 
 def assert_no_retired_hook_jobs(docs: list[dict[str, Any]]) -> None:
+    """Fail when a render produced a retired hook Job again."""
     rendered = retired_hook_jobs(docs)
     assert not rendered, (
         f"retired hook Job(s) rendered again: {', '.join(sorted(rendered))}. "

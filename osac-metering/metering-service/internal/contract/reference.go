@@ -239,6 +239,17 @@ func writeSchemaVersions(out *strings.Builder, sources Sources) {
 			"version and the date it takes effect. The old file stays, so its records stay "+
 			"readable.\n\n")
 	fmt.Fprintf(out,
+		"Versions are add-only: a new field is added, and no field is removed or given a "+
+			"new type. Replay decodes every retained record with the current payload shape, "+
+			"so the current shape must stay a superset of every published version; that is "+
+			"what lets one reader read records written under older versions.\n\n")
+	fmt.Fprintf(out,
+		"A version's effective date is the earliest date its events may carry it, and it "+
+			"must be no later than the release that ships the version. Metering writes its "+
+			"current version unconditionally and never selects a version by date, so a "+
+			"future date would let events carry a version whose effective date has not "+
+			"arrived.\n\n")
+	fmt.Fprintf(out,
 		"A published version stays readable for as long as its records are retained. "+
 			"Retention is indefinite by default, so no version has been retired.\n\n")
 	fmt.Fprintf(out, "| Version | CloudEvent type | Effective from | Source file | SHA-256 |\n")

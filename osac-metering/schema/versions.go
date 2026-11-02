@@ -89,7 +89,9 @@ type Version struct {
 	// Version is the version name, for example v1.
 	Version string
 
-	// EffectiveAt is when records began to carry this version.
+	// EffectiveAt is the earliest date a record may carry this version. It is advisory: the
+	// producer writes SchemaVersion unconditionally and never selects a version by date, so
+	// it must not be in the future when the release that ships the version goes out.
 	EffectiveAt time.Time
 
 	// CloudEventType is the event type of the version, for example

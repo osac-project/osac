@@ -164,6 +164,9 @@ type CatalogTransportOptions = {
   vmError?: Error;
   clusterError?: Error;
   bmError?: Error;
+  vmTotalError?: Error;
+  clusterTotalError?: Error;
+  bmTotalError?: Error;
   vmDelayMs?: number;
   clusterDelayMs?: number;
   bmDelayMs?: number;
@@ -212,6 +215,9 @@ const createCatalogPageTransport = ({
   vmError,
   clusterError,
   bmError,
+  vmTotalError,
+  clusterTotalError,
+  bmTotalError,
   vmDelayMs = 0,
   clusterDelayMs = 0,
   bmDelayMs = 0,
@@ -246,8 +252,9 @@ const createCatalogPageTransport = ({
           if (vmDelayMs) {
             await delay(vmDelayMs);
           }
-          if (vmError) {
-            throw toConnectError(vmError);
+          const error = req.limit === 0 ? (vmTotalError ?? vmError) : vmError;
+          if (error) {
+            throw toConnectError(error);
           }
           return toCatalogListResponse(vmItems, req);
         },
@@ -264,8 +271,9 @@ const createCatalogPageTransport = ({
           if (clusterDelayMs) {
             await delay(clusterDelayMs);
           }
-          if (clusterError) {
-            throw toConnectError(clusterError);
+          const error = req.limit === 0 ? (clusterTotalError ?? clusterError) : clusterError;
+          if (error) {
+            throw toConnectError(error);
           }
           return toCatalogListResponse(clusterItems, req);
         },
@@ -282,8 +290,9 @@ const createCatalogPageTransport = ({
           if (bmDelayMs) {
             await delay(bmDelayMs);
           }
-          if (bmError) {
-            throw toConnectError(bmError);
+          const error = req.limit === 0 ? (bmTotalError ?? bmError) : bmError;
+          if (error) {
+            throw toConnectError(error);
           }
           return toCatalogListResponse(bmItems, req);
         },
@@ -771,6 +780,25 @@ describe('CatalogPage', () => {
     // must not replace the selected catalog with an error state.
     expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
     expect(screen.queryByText(clusterCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Virtual Machines/ })).toHaveTextContent('1');
+    expect(screen.getByRole('button', { name: /Clusters/ })).not.toHaveTextContent('1');
+  });
+
+  it('hides the selected catalog count when its total query fails', async () => {
+    renderCatalogPage(
+      createCatalogPageTransport({
+        vmTotalError: Object.assign(new Error(), { name: 'UnauthorizedError' }),
+      }),
+      allCatalogServiceTiers,
+      ['/catalog?types=vm'],
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('1 catalog item')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Virtual Machines/ })).not.toHaveTextContent('1');
   });
 
   it('shows a generic section error for non-401 failures', async () => {

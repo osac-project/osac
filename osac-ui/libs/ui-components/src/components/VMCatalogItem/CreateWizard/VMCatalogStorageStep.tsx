@@ -29,22 +29,23 @@ const VMCatalogStorageStep = () => {
       <StackItem>
         <OsacForm>
           <CatalogField name="bootDiskSizeGib">
-            {({ valueName, isDisabled, labelInfo }) => (
+            {({ valueName, isDisabled, isRequired, labelInfo }) => (
               <BootDiskSizeField
                 name={valueName}
                 fieldId="compute-catalog-boot-disk-size"
                 isDisabled={isDisabled}
-                isRequired={false}
+                isRequired={isRequired}
                 labelInfo={labelInfo}
               />
             )}
           </CatalogField>
           <Divider />
           <CatalogField name="bootDiskStorageTier">
-            {({ valueName, isDisabled, labelInfo }) => (
+            {({ valueName, isDisabled, isRequired, labelInfo }) => (
               <BootStorageTierField
                 name={valueName}
                 isDisabled={isDisabled}
+                isRequired={isRequired}
                 labelInfo={labelInfo}
                 autoSelectSingleOption={false}
               />

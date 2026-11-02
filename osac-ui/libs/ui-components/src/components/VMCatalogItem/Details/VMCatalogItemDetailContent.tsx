@@ -119,12 +119,8 @@ const VMCatalogItemDetailContent = ({ item }: VMCatalogItemDetailContentProps) =
   const templateName = catalogReferenceLabel(item.template);
   const project = item.metadata?.project?.trim();
   const tenant = item.metadata?.tenant?.trim();
-  const scopeLabel = project ? t('Project') : t('Visibility');
-  const scopeValue = project
-    ? project
-    : tenant === GLOBAL_TENANT_VALUE
-      ? t('Global public')
-      : tenant || t('Not set');
+  const visibilityValue =
+    tenant === GLOBAL_TENANT_VALUE ? t('Global public') : tenant || t('Not set');
   const diskImageValue = displayReference(diskImageReference, t);
   const instanceTypeValue = displayReference(instanceTypeReference, t);
   const bootDiskSizeValue = bootDiskSize === undefined ? t('Not set') : `${bootDiskSize} GiB`;
@@ -148,7 +144,8 @@ const VMCatalogItemDetailContent = ({ item }: VMCatalogItemDetailContentProps) =
             </Label>
           </DetailRow>
           <DetailRow label={t('Provisioning template')}>{templateName ?? t('Not set')}</DetailRow>
-          <DetailRow label={scopeLabel}>{scopeValue}</DetailRow>
+          <DetailRow label={t('Visibility')}>{visibilityValue}</DetailRow>
+          {project ? <DetailRow label={t('Project')}>{project}</DetailRow> : null}
           <DetailRow label={t('Created')}>
             <Timestamp value={item.metadata?.creationTimestamp} fallback={t('Not set')} />
           </DetailRow>

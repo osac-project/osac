@@ -176,7 +176,9 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.getByText('Virtual machines')).toBeInTheDocument();
     expect(screen.getByText('VM template')).toBeInTheDocument();
     expect(screen.queryByText('template-1')).not.toBeInTheDocument();
-    expect(screen.getByText('foo')).toBeInTheDocument();
+    expect(screen.getByText('Visibility')).toBeInTheDocument();
+    expect(screen.getByText('Project')).toBeInTheDocument();
+    expect(screen.getAllByText('foo')).toHaveLength(2);
     expect(screen.getByText('Live')).toBeInTheDocument();
 
     expect(screen.getByText('Instance type')).toBeInTheDocument();
@@ -294,6 +296,8 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
     expect(screen.queryByRole('grid', { name: 'Additional disks' })).not.toBeInTheDocument();
     expect(screen.getByText('Additional disks')).toBeInTheDocument();
+    expect(screen.getByText('Visibility')).toBeInTheDocument();
+    expect(screen.queryByText('Project')).not.toBeInTheDocument();
     expect(screen.getAllByText('Not set').length).toBeGreaterThan(0);
     expect(screen.queryByText(/cloud-config|script|userdata/i)).not.toBeInTheDocument();
   });

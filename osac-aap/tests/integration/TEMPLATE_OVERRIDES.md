@@ -43,32 +43,34 @@ Tasks performed:
 
 ### Install Flow (tasks/install.yaml)
 
-**6 overrideable steps**.
+**7 overrideable steps**.
 
 | Step Name | Default Role | Override Variable | Description |
 |-----------|-------------|-------------------|-------------|
-| Pre-install Hook | osac.workflows.workflow_helpers (noop.yml) | `install_step_pre_install_hook_override` | Hook before cluster creation (noop by default) |
+| Pre-install Hook | osac.templates.ocp_small (noop.yaml) | `install_step_pre_install_hook_override` | Hook before cluster creation (noop by default) |
 | **Create Hosted Cluster** | osac.service.hosted_cluster | `install_step_hosted_cluster_override` | **Creates HostedCluster and NodePool CRDs** ⚠️ |
-| **Create Cluster Infra** | osac.service.cluster_infra | `install_step_cluster_infra_override` | **Creates Agent infrastructure and bare metal hosts via OpenStack/ESI** ⚠️ |
-| **Configure Port Forwarding** | osac.service.external_access | `install_step_external_access_override` | **Allocates floating IPs and configures port forwarding via OpenStack/ESI** ⚠️ |
+| **Configure External Access** | osac.service.external_access (`caas_create.yaml`) | `install_step_external_access_override` | Creates CaaS DNS records and publishes API/ingress endpoints from operator-owned Agent inventory |
 | Retrieve Kubeconfig | osac.service.retrieve_kubeconfig | `install_step_retrieve_kubeconfig_override` | Retrieves admin kubeconfig from cluster |
-| Post-install Hook | osac.workflows.workflow_helpers (noop.yml) | `install_step_post_install_hook_override` | Hook after cluster creation (noop by default) |
+| Wait for Nodes | osac.service.wait_for | `install_step_wait_for_nodes_override` | Waits for the requested worker nodes |
+| Wait for Cluster Operators | osac.service.wait_for | `install_step_wait_for_cluster_operators_override` | Waits for cluster operators to become available |
+| Post-install Hook | osac.templates.ocp_small (noop.yaml) | `install_step_post_install_hook_override` | Hook after cluster creation (noop by default) |
 
-**Critical for Testing**: Override infrastructure steps (hosted_cluster, cluster_infra, external_access) to skip actual resource creation.
+**Critical for Testing**: Override hosted-cluster and external-access steps to
+avoid creating resources or DNS records.
 
 ### Delete Flow (tasks/delete.yaml)
 
-**5 overrideable steps**.
+**4 overrideable steps**.
 
 | Step Name | Default Role | Override Variable | Description |
 |-----------|-------------|-------------------|-------------|
-| Pre-delete Hook | osac.workflows.workflow_helpers (noop.yml) | `delete_step_pre_delete_hook_override` | Hook before cluster deletion (noop by default) |
+| Pre-delete Hook | osac.templates.ocp_small (noop.yaml) | `delete_step_pre_delete_hook_override` | Hook before cluster deletion (noop by default) |
 | **Destroy Hosted Cluster** | osac.service.hosted_cluster | `delete_step_hosted_cluster_override` | **Deletes HostedCluster and NodePool CRDs** ⚠️ |
-| **Remove Port Forwarding** | osac.service.external_access | `delete_step_external_access_override` | **Removes floating IPs and port forwarding via OpenStack/ESI** ⚠️ |
-| **Destroy Cluster Infra** | osac.service.cluster_infra | `delete_step_cluster_infra_override` | **Destroys Agent infrastructure and bare metal hosts** ⚠️ |
-| Post-delete Hook | osac.workflows.workflow_helpers (noop.yml) | `delete_step_post_delete_hook_override` | Hook after cluster deletion (noop by default) |
+| **Remove External Access** | osac.service.external_access (`caas_delete.yaml`) | `delete_step_external_access_override` | Removes CaaS DNS records and clears API/ingress endpoint annotations |
+| Post-delete Hook | osac.templates.ocp_small (noop.yaml) | `delete_step_post_delete_hook_override` | Hook after cluster deletion (noop by default) |
 
-**Critical for Testing**: Override infrastructure steps (hosted_cluster, external_access, cluster_infra) to skip actual resource deletion.
+**Critical for Testing**: Override hosted-cluster and external-access steps to
+avoid deleting resources or DNS records.
 
 ### Post-Install Flow (tasks/post_install.yaml)
 
@@ -206,9 +208,10 @@ template_id_override: osac.test_overrides.test_template
 
 The following tasks **cannot be tested without real infrastructure**:
 
-### OpenStack/ESI Resources
-- `osac.service.cluster_infra` - Creates bare metal hosts via OpenStack Ironic
-- Requires OpenStack auth_url and credentials
+### CaaS Networking
+- Networking resources and Agent lifecycle are managed through the OSAC
+  Networking API and operator.
+- CaaS external access creates DNS records and publishes endpoint annotations.
 
 ### AAP Resources
 - Not currently used by any workflows in the collection

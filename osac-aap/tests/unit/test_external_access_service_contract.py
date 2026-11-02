@@ -43,16 +43,14 @@ def test_publish_and_clear_are_annotation_only_entry_points() -> None:
     assert "include_role" not in clear[0]
 
 
-def test_generic_create_and_delete_dispatch_to_network_collection() -> None:
+def test_create_and_delete_use_caas_entry_points() -> None:
     create = task_text(EXTERNAL_ACCESS / "tasks" / "create.yaml")
     delete = task_text(EXTERNAL_ACCESS / "tasks" / "delete.yaml")
 
-    assert "{{ network_steps_collection }}.external_access" in create
-    assert "tasks_from: create.yaml" in create
-    assert "include_tasks: publish.yaml" in create
-    assert "{{ network_steps_collection }}.external_access" in delete
-    assert "tasks_from: delete.yaml" in delete
-    assert "include_tasks: clear.yaml" in delete
+    assert "include_tasks: caas_create.yaml" in create
+    assert "network_steps_collection" not in create
+    assert "include_tasks: caas_delete.yaml" in delete
+    assert "network_steps_collection" not in delete
 
 
 def test_shared_main_dispatches_by_external_access_state() -> None:
@@ -123,16 +121,20 @@ def test_caas_template_uses_service_entry_points() -> None:
 
 
 def test_caas_templates_do_not_use_provider_step_collection_dispatch() -> None:
-    for path in (OCP_CI_SMALL / "tasks" / "install.yaml", OCP_CI_SMALL / "tasks" / "delete.yaml"):
-        assert "network_steps_collection" not in path.read_text()
+    for template in (OCP_CI_SMALL, OCP_SMALL):
+        paths = (template / "tasks" / "install.yaml", template / "tasks" / "delete.yaml")
+        for path in paths:
+            assert "network_steps_collection" not in path.read_text()
+    configuration = AAP_ROOT / "group_vars" / "all" / "configuration.yaml"
+    assert "NETWORK_STEPS_COLLECTION" not in configuration.read_text()
 
 
-def test_external_access_argument_spec_covers_generic_and_caas_inputs() -> None:
+def test_external_access_argument_spec_covers_caas_inputs() -> None:
     spec = yaml.safe_load((EXTERNAL_ACCESS / "meta" / "argument_specs.yaml").read_text())
     options = spec["argument_specs"]["main"]["options"]
+    assert "network_steps_collection" not in options
 
     for name in (
-        "network_steps_collection",
         "external_access_agent_namespace",
         "external_access_resource_wait_retries",
         "external_access_resource_wait_delay",
@@ -146,11 +148,49 @@ def test_external_access_argument_spec_covers_generic_and_caas_inputs() -> None:
         assert options[name]["required"] is False
 
 
-def test_ocp_small_uses_generic_external_access_dispatch() -> None:
+def test_ocp_small_uses_caas_external_access_and_nico_is_static() -> None:
     install = load_tasks(OCP_SMALL / "tasks" / "install.yaml")
     delete = load_tasks(OCP_SMALL / "tasks" / "delete.yaml")
-    install_default = install[0]["ansible.builtin.set_fact"]["install_step_external_access_default"]
-    delete_default = delete[0]["ansible.builtin.set_fact"]["delete_step_external_access_default"]
+    install_default = install[0]["ansible.builtin.set_fact"][
+        "install_step_external_access_default"
+    ]
+    delete_default = delete[0]["ansible.builtin.set_fact"][
+        "delete_step_external_access_default"
+    ]
 
-    assert install_default == {"name": "osac.service.external_access", "tasks_from": "main.yaml"}
-    assert delete_default == {"name": "osac.service.external_access", "tasks_from": "main.yaml"}
+    assert install_default == {
+        "name": "osac.service.external_access",
+        "tasks_from": "caas_create.yaml",
+    }
+    assert delete_default == {
+        "name": "osac.service.external_access",
+        "tasks_from": "caas_delete.yaml",
+    }
+
+    install_access = next(
+        task for task in install if task.get("name") == "Step - Configure external access"
+    )
+    delete_access = next(
+        task for task in delete if task.get("name") == "Step - Remove external access"
+    )
+    assert install_access["vars"]["external_access_agent_namespace"] == "{{ cluster_order.metadata.namespace }}"
+    assert delete_access["vars"]["external_access_agent_namespace"] == "{{ cluster_order.metadata.namespace }}"
+    assert "external_access_ingress_internal_network" not in install_access["vars"]
+
+    nico_template = COLLECTIONS / "osac" / "templates" / "roles" / "ocp_4_20_small_nico"
+    nico_install = load_tasks(nico_template / "tasks" / "install.yaml")
+    nico_delete = load_tasks(nico_template / "tasks" / "delete.yaml")
+    assert nico_install[0]["vars"]["install_step_external_access_override"] == {
+        "name": "osac.templates.ocp_4_20_small_nico",
+        "tasks_from": "nico_external_access_create.yaml",
+    }
+    assert nico_delete[0]["vars"]["delete_step_external_access_override"] == {
+        "name": "osac.templates.ocp_4_20_small_nico",
+        "tasks_from": "nico_external_access_delete.yaml",
+    }
+    nico_create = load_tasks(nico_template / "tasks" / "nico_external_access_create.yaml")
+    nico_remove = load_tasks(nico_template / "tasks" / "nico_external_access_delete.yaml")
+    assert nico_create[0]["ansible.builtin.include_role"]["name"] == "nico.steps.external_access"
+    assert nico_create[1]["ansible.builtin.include_role"]["tasks_from"] == "publish.yaml"
+    assert nico_remove[0]["ansible.builtin.include_role"]["name"] == "nico.steps.external_access"
+    assert nico_remove[1]["ansible.builtin.include_role"]["tasks_from"] == "clear.yaml"

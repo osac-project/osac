@@ -1,0 +1,10 @@
+---
+- name: Configure NICo external access
+  ansible.builtin.include_role:
+    name: nico.steps.external_access
+    tasks_from: create.yaml
+
+- name: Publish NICo endpoint addresses
+  ansible.builtin.include_role:
+    name: osac.service.external_access
+    tasks_from: publish.yaml

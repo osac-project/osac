@@ -1,0 +1,10 @@
+---
+- name: Delete NICo external access
+  ansible.builtin.include_role:
+    name: nico.steps.external_access
+    tasks_from: delete.yaml
+
+- name: Clear NICo endpoint annotations
+  ansible.builtin.include_role:
+    name: osac.service.external_access
+    tasks_from: clear.yaml

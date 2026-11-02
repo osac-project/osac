@@ -94,9 +94,10 @@ require manager registrations for networking resources to become READY.
 
 ## CaaS on Netris
 
-CaaS can run the Netris CaaS steps (`NETWORK_CLASS=netris`) in the
-`cluster-fulfillment` jobs. These jobs are not networking jobs: they read the
-`cluster-fulfillment-ig` ConfigMap and Secret, not `network-fulfillment-ig`.
+CaaS networking uses the OSAC Networking API with the registered Netris Fabric
+Manager. `NETWORK_CLASS=netris` continues to select Netris-specific CaaS
+settings in the `cluster-fulfillment` job environment; it does not select an
+Ansible step collection.
 The installation-owned Netris connection settings are given once, with the
 Netris settings in `aap.instanceGroups.networkFulfillment.config`, and the
 installer passes them to AAP config-as-code. Config-as-code sets them as fixed
@@ -126,7 +127,6 @@ aap:
       enabled: true
       config:
         NETWORK_CLASS: netris
-        NETWORK_STEPS_COLLECTION: netris.steps
         NETRIS_USERNAME: netris
         NETRIS_SITE_ID: "5"
         NETRIS_TENANT_ID: "1"
@@ -148,8 +148,8 @@ Instead of `clusterFulfillment.secret.NETRIS_PASSWORD`, the password can be
 kept in a Secret named `netris-credentials` (key `NETRIS_PASSWORD`) that is
 managed outside Helm in the AAP namespace; cluster-fulfillment jobs load it
 when it exists. Cluster-fulfillment jobs also mount the optional
-`agentless-net-inventory` ConfigMap at `/var/config/agentless-net` for the
-AgentlessNet CaaS steps.
+`agentless-net-inventory` ConfigMap at `/var/config/agentless-net` for
+AgentlessNet-specific workflows.
 
 ## Checks during a rollout
 

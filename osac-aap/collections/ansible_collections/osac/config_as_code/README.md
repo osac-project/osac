@@ -37,7 +37,7 @@ where applicable):
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` | Name of the secret holding the kubeconfig for the remote cluster (compute instance and storage operations; not supported with provider networking enabled) | — |
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY` | Key within that secret for the kubeconfig file | `kubeconfig` |
 | `OSAC_PUBLISH_TEMPLATES_ENABLED` | Whether the periodic **publish-templates** schedule is enabled in Controller (`true`/`false`) | Helm sets this from `instanceGroups.publishTemplates.enabled`; if unset for a manually managed deployment, `true` |
-| `NETRIS_CONTROLLER_URL` | Netris controller URL of the CaaS Netris steps, set on the cluster-fulfillment container group | — |
+| `NETRIS_CONTROLLER_URL` | Netris controller URL used by Netris-backed CaaS workflows, set on the cluster-fulfillment container group | — |
 | `NETRIS_VALIDATE_CERTS` | Whether Netris TLS certificates are validated by CaaS Netris jobs | `true` |
 | `NETRIS_CA_CONFIGMAP` | Optional customer-created ConfigMap name containing `bundle.pem` in the AAP namespace | — |
 
@@ -45,7 +45,7 @@ These variables must be defined in a secret named `config-as-code-ig` in the
 namespace where AAP is deployed.
 
 The three `NETRIS_*` variables are the installation-owned connection settings
-of the CaaS Netris steps (`NETWORK_CLASS=netris`). Config-as-code sets them as
+of Netris-backed CaaS workflows (`NETWORK_CLASS=netris`). Config-as-code sets them as
 fixed environment variables of the cluster-fulfillment container group, with
 the `netris.controller.protected_linear` strategy that rejects launch-time
 overrides. When `NETRIS_CA_CONFIGMAP` is configured, it adds a required,

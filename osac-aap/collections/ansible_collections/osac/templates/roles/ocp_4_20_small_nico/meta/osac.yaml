@@ -4,7 +4,6 @@ title: OpenShift 4.20 Cluster on NICo Bare Metal
 description: >
   This template will build a minimally configured OpenShift 4.20 cluster
   on bare metal infrastructure managed by NVIDIA NICo (Bare Metal Manager).
-  Requires NETWORK_STEPS_COLLECTION=nico.steps in the AAP environment.
 
 template_type: cluster
 

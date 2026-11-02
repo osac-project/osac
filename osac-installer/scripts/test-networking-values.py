@@ -578,7 +578,6 @@ class AapSettingsTest(unittest.TestCase):
                             "enabled": True,
                             "config": {
                                 "NETWORK_CLASS": "netris",
-                                "NETWORK_STEPS_COLLECTION": "netris.steps",
                                 "NETRIS_USERNAME": "netris",
                                 "NETRIS_SITE_ID": "5",
                                 "NETRIS_TENANT_ID": "1",
@@ -603,14 +602,19 @@ class AapSettingsTest(unittest.TestCase):
         self.assertEqual(config_as_code["NETRIS_CA_CONFIGMAP"], "customer.netris-ca")
         cluster = find(docs, "ConfigMap", "cluster-fulfillment-ig")["data"]
         self.assertEqual(cluster["NETWORK_CLASS"], "netris")
-        self.assertEqual(cluster["NETWORK_STEPS_COLLECTION"], "netris.steps")
+        self.assertNotIn("NETWORK_STEPS_COLLECTION", cluster)
         self.assertEqual(cluster["NETRIS_USERNAME"], "netris")
         self.assertNotIn("NETRIS_CONTROLLER_URL", cluster)
         secret = find(docs, "Secret", "cluster-fulfillment-ig")
         self.assertEqual(set(secret.get("data") or secret.get("stringData")), {"NETRIS_PASSWORD"})
 
     def test_cluster_fulfillment_rejects_installation_owned_netris_settings(self):
-        for key in ("NETRIS_CONTROLLER_URL", "NETRIS_VALIDATE_CERTS", "NETRIS_CA_PATH"):
+        for key in (
+            "NETRIS_CONTROLLER_URL",
+            "NETRIS_VALIDATE_CERTS",
+            "NETRIS_CA_PATH",
+            "NETWORK_STEPS_COLLECTION",
+        ):
             with self.subTest(key=key):
                 result = helm(
                     {"aap": {"instanceGroups": {"clusterFulfillment": {"enabled": True, "config": {key: "x"}}}}}

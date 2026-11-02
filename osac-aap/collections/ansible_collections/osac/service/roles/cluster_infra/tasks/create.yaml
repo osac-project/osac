@@ -1,5 +1,0 @@
----
-- name: Include network-class-specific create tasks
-  ansible.builtin.include_role:
-    name: "{{ network_steps_collection }}.cluster_infra"
-    tasks_from: create.yaml

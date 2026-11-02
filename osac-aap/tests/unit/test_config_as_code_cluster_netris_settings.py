@@ -3,7 +3,7 @@
 The installer writes NETRIS_CONTROLLER_URL, NETRIS_VALIDATE_CERTS and
 NETRIS_CA_CONFIGMAP into the config-as-code Secret. Config-as-code resolves them
 in playbooks/vars/config.yml and renders them into the cluster-fulfillment
-container group, which runs the CaaS Netris steps (NETWORK_CLASS=netris).
+container group, which runs Netris-backed CaaS jobs (NETWORK_CLASS=netris).
 """
 
 from pathlib import Path

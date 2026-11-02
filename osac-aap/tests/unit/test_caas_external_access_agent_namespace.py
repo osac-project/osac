@@ -10,8 +10,6 @@ AAP_ROOT = Path(__file__).resolve().parents[2]
 COLLECTIONS = AAP_ROOT / "collections/ansible_collections/osac"
 CI_INSTALL = COLLECTIONS / "templates/roles/ocp_ci_small/tasks/install.yaml"
 CI_DELETE = COLLECTIONS / "templates/roles/ocp_ci_small/tasks/delete.yaml"
-INFRA_CREATE = COLLECTIONS / "service/roles/cluster_infra/tasks/create.yaml"
-INFRA_DELETE = COLLECTIONS / "service/roles/cluster_infra/tasks/delete.yaml"
 CAAS_DNS = COLLECTIONS / "service/roles/external_access/tasks/caas_dns_create.yaml"
 
 
@@ -45,7 +43,7 @@ def test_caas_dns_uses_cluster_order_agent_namespace() -> None:
     assert "install_step_wait_for_agents_default" not in install_defaults
     assert "Step - Wait for operator-attached Agents" not in CI_INSTALL.read_text()
     assert "delete_step_cluster_infra_default" not in CI_DELETE.read_text()
-    assert "Delete remaining agents" not in INFRA_DELETE.read_text()
+    assert "cluster_infra" not in CI_DELETE.read_text()
 
     dns_tasks = {task["name"]: task for task in _load(CAAS_DNS)}
     agent_lookup = dns_tasks["Get agents assigned to this cluster"]["kubernetes.core.k8s_info"]
@@ -69,13 +67,3 @@ def test_caas_dns_waits_for_inventory_ip_without_agent_mutation() -> None:
     assert "spec.approved" not in str(tasks)
     assert "state: absent" not in str(tasks)
     assert agent_lookup["no_log"] is True
-
-
-def test_cluster_infra_remains_a_provider_dispatcher() -> None:
-    create = _load(INFRA_CREATE)
-    delete = _load(INFRA_DELETE)
-
-    assert create[0]["ansible.builtin.include_role"]["name"] == "{{ network_steps_collection }}.cluster_infra"
-    assert create[0]["ansible.builtin.include_role"]["tasks_from"] == "create.yaml"
-    assert delete[0]["ansible.builtin.include_role"]["name"] == "{{ network_steps_collection }}.cluster_infra"
-    assert delete[0]["ansible.builtin.include_role"]["tasks_from"] == "delete.yaml"

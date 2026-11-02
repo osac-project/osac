@@ -16,10 +16,6 @@ argument_specs:
       external_access_name:
         type: str
         required: true
-      network_steps_collection:
-        type: str
-        required: false
-        description: "Ansible collection providing generic network-specific steps"
       external_access_agent_namespace:
         type: str
         required: false

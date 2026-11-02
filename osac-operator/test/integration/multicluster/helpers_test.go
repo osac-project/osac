@@ -26,7 +26,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	"k8s.io/client-go/tools/clientcmd"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -1264,21 +1266,8 @@ func TestHelperSourceGrepNoLogsNoInlineSecret(t *testing.T) {
 // ---------------------------------------------------------------
 // Kubeconfig export: CombinedOutput stderr contamination
 // regression test.
-//
-// kind get kubeconfig writes valid YAML to stdout, but may also
-// emit warnings to stderr (e.g. "enabling experimental podman
-// provider").  When CombinedOutput merges both streams, the
-// resulting bytes are no longer valid kubeconfig YAML and
-// client-go rejects them with:
-//   yaml: line N: mapping values are not allowed in this context
-//
-// exportKindKubeconfig captures stdout and stderr separately,
-// returning only stdout.  This test proves the difference using
-// a subprocess that simulates kind's output behaviour.
 // ---------------------------------------------------------------
 
-// validKubeconfig is a minimal kubeconfig used by the regression
-// tests below.  It contains no real credentials.
 const validKubeconfig = `apiVersion: v1
 clusters:
 - cluster:
@@ -1300,16 +1289,32 @@ users:
     client-key-data: dGVzdA==
 `
 
-// TestHelperKubeconfigHelperProcess is a subprocess entry
-// point used by the kubeconfig stderr tests below.  It is
-// never run directly.
+func writeFakeKind(t *testing.T, dir string) {
+	t.Helper()
+	script := `#!/bin/sh
+if [ "$1" != "get" ] || [ "$2" != "kubeconfig" ]; then
+  echo "unexpected args: $*" >&2; exit 99
+fi
+if [ "${FAKE_KIND_HANG:-}" = "1" ]; then exec sleep 120; fi
+if [ -n "${FAKE_KIND_STDERR:-}" ]; then
+  printf '%s' "${FAKE_KIND_STDERR}" >&2
+fi
+if [ -n "${FAKE_KIND_STDOUT:-}" ]; then
+  printf '%s' "${FAKE_KIND_STDOUT}"
+fi
+exit "${FAKE_KIND_EXIT:-0}"
+`
+	p := filepath.Join(dir, "kind")
+	if err := os.WriteFile(p, []byte(script), 0755); err != nil {
+		t.Fatalf("write fake kind: %v", err)
+	}
+}
+
 func TestHelperKubeconfigHelperProcess(t *testing.T) {
 	if os.Getenv("GO_TEST_HELPER_PROCESS") != "1" {
 		return
 	}
-	// Write the valid kubeconfig to stdout.
 	fmt.Fprint(os.Stdout, validKubeconfig)
-	// Write a warning to stderr when requested.
 	if os.Getenv("EMIT_STDERR_WARNING") == "1" {
 		fmt.Fprintln(os.Stderr,
 			"enabling experimental podman provider")
@@ -1317,103 +1322,462 @@ func TestHelperKubeconfigHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-// helperCmd builds an exec.Cmd that re-invokes this test binary
-// as a subprocess, running only the helper-process test.
-func helperCmd(emitStderr bool) *exec.Cmd {
+func TestHelperCombinedOutputCorruptsKubeconfig(t *testing.T) {
 	cmd := exec.Command(os.Args[0],
 		"-test.run=^TestHelperKubeconfigHelperProcess$")
-	cmd.Env = []string{"GO_TEST_HELPER_PROCESS=1"}
-	if emitStderr {
-		cmd.Env = append(cmd.Env,
-			"EMIT_STDERR_WARNING=1")
+	cmd.Env = []string{
+		"GO_TEST_HELPER_PROCESS=1",
+		"EMIT_STDERR_WARNING=1",
 	}
-	return cmd
-}
-
-func TestHelperCombinedOutputCorruptsKubeconfig(t *testing.T) {
-	// Prove that CombinedOutput merges the stderr warning into
-	// the kubeconfig bytes, making them unparseable.
-	cmd := helperCmd(true)
 	combined, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("helper subprocess failed: %v", err)
 	}
-
-	// The combined output must contain the warning.
 	if !bytes.Contains(combined,
 		[]byte("enabling experimental podman provider")) {
 		t.Fatal("expected stderr warning in combined output")
 	}
-
-	// client-go must reject the contaminated bytes.
 	_, parseErr := clientcmd.Load(combined)
 	if parseErr == nil {
 		t.Fatal("expected client-go to reject " +
-			"stderr-contaminated kubeconfig, but it parsed")
+			"stderr-contaminated kubeconfig")
 	}
-	t.Logf("client-go correctly rejected contaminated "+
-		"kubeconfig: %v", parseErr)
+	t.Logf("CombinedOutput demonstration: correctly "+
+		"rejected: %v", parseErr)
 }
 
-func TestHelperSeparateStdoutPreservesKubeconfig(t *testing.T) {
-	// Prove that capturing stdout separately produces a valid
-	// kubeconfig even when stderr contains warnings.
-	cmd := helperCmd(true)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("helper subprocess failed: %v", err)
-	}
+func TestHelperExportWithPodmanStderrWarning(t *testing.T) {
+	fakeDir := t.TempDir()
+	writeFakeKind(t, fakeDir)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	t.Setenv("FAKE_KIND_STDOUT", validKubeconfig)
+	t.Setenv("FAKE_KIND_STDERR",
+		"enabling experimental podman provider\n")
+	t.Setenv("FAKE_KIND_EXIT", "0")
 
-	// stderr must contain the warning.
-	if !strings.Contains(stderr.String(),
-		"enabling experimental podman provider") {
-		t.Fatal("expected warning on stderr")
-	}
-
-	// stdout alone must be a valid kubeconfig.
-	cfg, err := clientcmd.Load(stdout.Bytes())
+	out, err := exportKindKubeconfig("test-cluster")
 	if err != nil {
-		t.Fatalf("client-go rejected clean stdout "+
-			"kubeconfig: %v", err)
+		t.Fatalf("exportKindKubeconfig failed: %v", err)
 	}
-	if cfg.CurrentContext != "kind-osac-workload" {
-		t.Errorf("current-context: want %q, got %q",
-			"kind-osac-workload", cfg.CurrentContext)
-	}
-	cluster, ok := cfg.Clusters["kind-osac-workload"]
-	if !ok {
-		t.Fatal("cluster kind-osac-workload not found")
-	}
-	if cluster.Server != "https://127.0.0.1:12345" {
-		t.Errorf("server: want %q, got %q",
-			"https://127.0.0.1:12345", cluster.Server)
-	}
-}
-
-func TestHelperCleanExportWorksWithoutStderr(t *testing.T) {
-	// Verify that the separate-capture path also works when
-	// there is no stderr output at all (the common Docker case).
-	cmd := helperCmd(false)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("helper subprocess failed: %v", err)
-	}
-
-	if stderr.Len() != 0 {
-		t.Errorf("expected empty stderr, got: %q",
-			stderr.String())
-	}
-
-	cfg, err := clientcmd.Load(stdout.Bytes())
+	cfg, err := clientcmd.Load(out)
 	if err != nil {
 		t.Fatalf("client-go rejected kubeconfig: %v", err)
 	}
 	if cfg.CurrentContext != "kind-osac-workload" {
 		t.Errorf("current-context: want %q, got %q",
 			"kind-osac-workload", cfg.CurrentContext)
+	}
+}
+
+func TestHelperExportCleanDockerNoStderr(t *testing.T) {
+	fakeDir := t.TempDir()
+	writeFakeKind(t, fakeDir)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	t.Setenv("FAKE_KIND_STDOUT", validKubeconfig)
+	t.Setenv("FAKE_KIND_STDERR", "")
+	t.Setenv("FAKE_KIND_EXIT", "0")
+
+	out, err := exportKindKubeconfig("test-cluster")
+	if err != nil {
+		t.Fatalf("exportKindKubeconfig failed: %v", err)
+	}
+	if _, err := clientcmd.Load(out); err != nil {
+		t.Fatalf("client-go rejected kubeconfig: %v", err)
+	}
+}
+
+func TestHelperExportNonzeroExitNoOutput(t *testing.T) {
+	fakeDir := t.TempDir()
+	writeFakeKind(t, fakeDir)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	t.Setenv("FAKE_KIND_STDOUT", "apiVersion: v1\n")
+	t.Setenv("FAKE_KIND_STDERR", "Error: cluster not found\n")
+	t.Setenv("FAKE_KIND_EXIT", "1")
+
+	out, err := exportKindKubeconfig("test-cluster")
+	if err == nil {
+		t.Fatal("expected error for non-zero exit")
+	}
+	if out != nil {
+		t.Errorf("expected nil output on error, "+
+			"got %d bytes", len(out))
+	}
+}
+
+func TestHelperExportContainerRuntimeDetection(t *testing.T) {
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "")
+	t.Setenv("CONTAINER_TOOL", "")
+	rt := detectContainerRuntime()
+	if rt != "docker" && rt != "podman" {
+		t.Errorf("unexpected runtime: %q", rt)
+	}
+
+	fakeDir := t.TempDir()
+	fakeP := filepath.Join(fakeDir, "podman")
+	_ = os.WriteFile(fakeP, []byte("#!/bin/sh\n"), 0755)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "podman")
+	rt = detectContainerRuntime()
+	if rt != "podman" {
+		t.Errorf("want podman via provider env, got %q", rt)
+	}
+}
+
+func TestHelperPodmanPIDLimitsNoopForDocker(t *testing.T) {
+	saved := containerRuntime
+	containerRuntime = "docker"
+	defer func() { containerRuntime = saved }()
+
+	err := ensureWorkloadPodmanPIDLimits("nonexistent")
+	if err != nil {
+		t.Fatalf("expected no-op for docker, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Defect A: detectContainerRuntime fail-closed tests.
+// ---------------------------------------------------------------------------
+
+func TestHelperDetectRuntimeExplicitProviderMissing(
+	t *testing.T,
+) {
+	fakeDir := t.TempDir()
+	fakeDocker := filepath.Join(fakeDir, "docker")
+	_ = os.WriteFile(fakeDocker,
+		[]byte("#!/bin/sh\nexit 0\n"), 0755)
+	t.Setenv("PATH", fakeDir)
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "podman")
+	t.Setenv("CONTAINER_TOOL", "")
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for missing podman")
+		}
+		t.Logf("correctly failed closed (panic: %T)", r)
+	}()
+	_ = detectContainerRuntime()
+	t.Fatal("should not reach here")
+}
+
+func TestHelperDetectRuntimeExplicitProviderUnsupported(
+	t *testing.T,
+) {
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "nerdctl")
+	t.Setenv("CONTAINER_TOOL", "")
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for unsupported")
+		}
+		t.Logf("correctly failed closed (panic: %T)", r)
+	}()
+	_ = detectContainerRuntime()
+	t.Fatal("should not reach here")
+}
+
+func TestHelperDetectRuntimeExplicitToolMissing(
+	t *testing.T,
+) {
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "")
+	t.Setenv("CONTAINER_TOOL", "/nonexistent/podman")
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for missing tool")
+		}
+		t.Logf("correctly failed closed (panic: %T)", r)
+	}()
+	_ = detectContainerRuntime()
+	t.Fatal("should not reach here")
+}
+
+func TestHelperDetectRuntimeExplicitDockerExists(
+	t *testing.T,
+) {
+	fakeDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(fakeDir, "docker"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0755)
+	t.Setenv("PATH", fakeDir)
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "docker")
+	t.Setenv("CONTAINER_TOOL", "")
+	if rt := detectContainerRuntime(); rt != "docker" {
+		t.Errorf("want docker, got %q", rt)
+	}
+}
+
+func TestHelperDetectRuntimeExplicitPodmanExists(
+	t *testing.T,
+) {
+	fakeDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(fakeDir, "podman"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0755)
+	t.Setenv("PATH", fakeDir)
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "podman")
+	t.Setenv("CONTAINER_TOOL", "")
+	if rt := detectContainerRuntime(); rt != "podman" {
+		t.Errorf("want podman, got %q", rt)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Defect B: PID limits wrapper invokes lib.sh.
+// ---------------------------------------------------------------------------
+
+func writeFakePodmanPID(
+	t *testing.T, dir, initialLimit string,
+) {
+	t.Helper()
+	stateFile := filepath.Join(dir, "podman-state")
+	kindScript := `#!/bin/sh
+if [ "$1" = "get" ] && [ "$2" = "nodes" ]; then
+  echo "test-node-control-plane"
+  echo "WARNING: enabling experimental podman provider" >&2
+  exit 0
+fi
+echo "unexpected kind args: $*" >&2; exit 1
+`
+	_ = os.WriteFile(filepath.Join(dir, "kind"),
+		[]byte(kindScript), 0755)
+
+	podmanScript := fmt.Sprintf(`#!/bin/sh
+STATE_FILE="%s"
+INITIAL="%s"
+case "$1" in
+  inspect) if [ -f "$STATE_FILE" ]; then echo "65536"
+           else echo "$INITIAL"; fi ;;
+  update)  touch "$STATE_FILE" ;;
+  *)       echo "unexpected: $*" >&2; exit 1 ;;
+esac
+exit 0
+`, stateFile, initialLimit)
+	_ = os.WriteFile(filepath.Join(dir, "podman"),
+		[]byte(podmanScript), 0755)
+}
+
+func TestHelperPIDLimitsWrapperInvokesLibSh(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	fakeDir := t.TempDir()
+	writeFakePodmanPID(t, fakeDir, "4096")
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	saved := containerRuntime
+	containerRuntime = "podman"
+	defer func() { containerRuntime = saved }()
+
+	if err := ensureWorkloadPodmanPIDLimits(
+		"test-cluster"); err != nil {
+		t.Fatalf("wrapper failed: %v", err)
+	}
+	stateFile := filepath.Join(fakeDir, "podman-state")
+	if _, err := os.Stat(stateFile); os.IsNotExist(err) {
+		t.Error("podman update was not called")
+	}
+}
+
+func TestHelperPIDLimitsWrapperUnlimitedSkips(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	fakeDir := t.TempDir()
+	writeFakePodmanPID(t, fakeDir, "-1")
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	saved := containerRuntime
+	containerRuntime = "podman"
+	defer func() { containerRuntime = saved }()
+
+	if err := ensureWorkloadPodmanPIDLimits(
+		"test-cluster"); err != nil {
+		t.Fatalf("wrapper failed: %v", err)
+	}
+	stateFile := filepath.Join(fakeDir, "podman-state")
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Error("update should not be called for -1")
+	}
+}
+
+func TestHelperPIDLimitsWrapperFailurePropagates(
+	t *testing.T,
+) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	fakeDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(fakeDir, "kind"),
+		[]byte("#!/bin/sh\nexit 1\n"), 0755)
+	_ = os.WriteFile(filepath.Join(fakeDir, "podman"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0755)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	saved := containerRuntime
+	containerRuntime = "podman"
+	defer func() { containerRuntime = saved }()
+
+	if err := ensureWorkloadPodmanPIDLimits(
+		"test-cluster"); err == nil {
+		t.Fatal("expected error for failing kind")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Defect C: kubeconfig export timeout and oversize.
+// ---------------------------------------------------------------------------
+
+func TestHelperExportKubeconfigTimeout(t *testing.T) {
+	fakeDir := t.TempDir()
+	hangScript := `#!/bin/sh
+if [ "$1" != "get" ] || [ "$2" != "kubeconfig" ]; then
+  echo "unexpected: $*" >&2; exit 99
+fi
+exec sleep 120
+`
+	_ = os.WriteFile(filepath.Join(fakeDir, "kind"),
+		[]byte(hangScript), 0755)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+
+	start := time.Now()
+	_, err := exportKindKubeconfig("test-cluster")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected error for hanging command")
+	}
+	if elapsed > 45*time.Second {
+		t.Errorf("timeout took %s; expected ~30s", elapsed)
+	}
+	t.Logf("correctly timed out: %s: %v",
+		elapsed.Round(time.Second), err)
+}
+
+func TestHelperExportKubeconfigOversizeRejects(t *testing.T) {
+	fakeDir := t.TempDir()
+	oversizeScript := fmt.Sprintf(`#!/bin/sh
+if [ "$1" != "get" ] || [ "$2" != "kubeconfig" ]; then
+  echo "unexpected: $*" >&2; exit 99
+fi
+head -c %d /dev/zero | tr '\0' 'x'
+exit 0
+`, maxKubeconfigBytes+100)
+	_ = os.WriteFile(filepath.Join(fakeDir, "kind"),
+		[]byte(oversizeScript), 0755)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+
+	out, err := exportKindKubeconfig("test-cluster")
+	if err == nil {
+		t.Fatal("expected error for oversize stdout")
+	}
+	if out != nil {
+		t.Errorf("expected nil on oversize, got %d bytes",
+			len(out))
+	}
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("error should mention truncation: %v",
+			err)
+	}
+}
+
+// Fix A: CONTAINER_TOOL as full path returns the resolved
+// executable, not just the basename.  PID noop still works
+// because ensureWorkloadPodmanPIDLimits uses filepath.Base.
+func TestHelperDetectRuntimeFullPathTool(t *testing.T) {
+	// Place a fake podman OUTSIDE the normal PATH.
+	isolatedDir := t.TempDir()
+	fakePodman := filepath.Join(isolatedDir, "podman")
+	_ = os.WriteFile(fakePodman,
+		[]byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	// Set PATH to something that does NOT contain podman.
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir)
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "")
+	t.Setenv("CONTAINER_TOOL", fakePodman)
+
+	rt := detectContainerRuntime()
+	// Must return the resolved full path, not just "podman".
+	if rt != fakePodman {
+		t.Errorf("want resolved path %q, got %q",
+			fakePodman, rt)
+	}
+	// PID noop must still recognise it as podman via basename.
+	saved := containerRuntime
+	containerRuntime = rt
+	defer func() { containerRuntime = saved }()
+	// Docker noop path should NOT trigger for a podman path.
+	if filepath.Base(rt) == "docker" {
+		t.Error("basename should be podman, not docker")
+	}
+}
+
+// Fix B: GinkgoWriter stderr redaction — capture what the
+// REAL exportKindKubeconfig writes to GinkgoWriter via TeeTo,
+// then assert sentinel secrets are absent from the logged
+// output (not just from the returned kubeconfig bytes).
+func TestHelperExportStderrSanitisedBeforeLog(t *testing.T) {
+	fakeDir := t.TempDir()
+	writeFakeKind(t, fakeDir)
+
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	t.Setenv("FAKE_KIND_STDOUT", validKubeconfig)
+	// PEM markers split across concatenation so the test
+	// fixture itself doesn't trigger detect-private-key.
+	pemBegin := "-----BEGIN RSA PRIVATE" + " KEY-----"
+	pemEnd := "-----END RSA PRIVATE" + " KEY-----"
+	sentinel := "SENTINEL_SECRET_XYZ_42"
+	t.Setenv("FAKE_KIND_STDERR",
+		"warning: something benign\n"+
+			pemBegin+"\n"+
+			"MIIBogIBAAJBALRiMLAHx\n"+
+			pemEnd+"\n"+
+			"authorization: Bearer "+sentinel+"\n")
+	t.Setenv("FAKE_KIND_EXIT", "0")
+
+	// Tee GinkgoWriter to a buffer so we capture what the
+	// real production code logs, then clean up.
+	var logBuf bytes.Buffer
+	GinkgoWriter.TeeTo(&logBuf)
+	t.Cleanup(func() { GinkgoWriter.ClearTeeWriters() })
+
+	// Call the REAL production function — it writes
+	// sanitized stderr to GinkgoWriter internally.
+	out, err := exportKindKubeconfig("test-cluster")
+	if err != nil {
+		t.Fatalf("export failed: %v", err)
+	}
+
+	logged := logBuf.String()
+
+	// The benign warning MUST appear (proves logging works).
+	if !strings.Contains(logged, "something benign") {
+		t.Error("GinkgoWriter log missing benign warning")
+	}
+	// Sentinel bearer token MUST be redacted.
+	if strings.Contains(logged, sentinel) {
+		t.Errorf("GinkgoWriter log contains sentinel "+
+			"%q — not redacted", sentinel)
+	}
+	// PEM body MUST be redacted.
+	if strings.Contains(logged, "MIIBogIBAAJBALRiMLAHx") {
+		t.Error("GinkgoWriter log contains PEM body")
+	}
+	// REDACTED marker MUST be present.
+	if !strings.Contains(logged, "REDACTED") {
+		t.Error("GinkgoWriter log missing REDACTED marker")
+	}
+
+	// Stdout (kubeconfig) must be clean and parseable.
+	if strings.Contains(string(out), sentinel) {
+		t.Error("sentinel leaked into kubeconfig output")
+	}
+	if _, parseErr := clientcmd.Load(out); parseErr != nil {
+		t.Fatalf("kubeconfig parse failed: %v", parseErr)
 	}
 }

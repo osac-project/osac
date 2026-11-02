@@ -17,7 +17,6 @@ limitations under the License.
 package multicluster
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -140,6 +139,12 @@ var testRunID = generateRunID()
 // the test host (127.0.0.1:<nodePort>) to reach the workload cluster.
 var workloadHostKubeconfig string
 
+// containerRuntime is the container CLI ("docker" or "podman") used to
+// interact with Kind node containers.  Set once in BeforeSuite from
+// KIND_EXPERIMENTAL_PROVIDER → CONTAINER_TOOL → PATH probing, matching
+// the precedence the installer Makefile and kind-runtime.sh use.
+var containerRuntime string
+
 // workloadClusterCreated tracks whether "kind create cluster" succeeded
 // for the workload cluster.  Used by AfterSuite cleanup and diagnostic
 // capture to avoid operating on a cluster that was never created.
@@ -198,6 +203,11 @@ var operatorDeploymentChanged bool
 var fulfillmentIssuerURL string
 
 var _ = BeforeSuite(func() {
+	By("detecting container runtime")
+	containerRuntime = detectContainerRuntime()
+	_, _ = fmt.Fprintf(GinkgoWriter,
+		"container runtime: %s\n", containerRuntime)
+
 	By("resolving diagnostic artifact directory")
 	diagnosticArtifactPath = resolveDiagnosticArtifactDir()
 
@@ -246,6 +256,10 @@ var _ = BeforeSuite(func() {
 	Expect(createErr).NotTo(HaveOccurred(),
 		"create workload cluster: %s", output)
 	workloadClusterCreated = true
+
+	By("ensuring workload Kind node PID limits (Podman only)")
+	Expect(ensureWorkloadPodmanPIDLimits(
+		workloadClusterName)).To(Succeed())
 
 	// Restore the hub context so runKubectlHub (which uses the default
 	// context) continues to target the hub, not the workload cluster.
@@ -398,33 +412,219 @@ func runShell(name string, args ...string) ([]byte, error) {
 	return out, nil
 }
 
+// maxKubeconfigBytes caps stdout from kind get kubeconfig so a
+// runaway child cannot exhaust memory.  A typical kubeconfig is
+// ~3 KB; 1 MiB is generous.
+const maxKubeconfigBytes = 1 << 20
+
+// maxKubeconfigStderr caps captured stderr for diagnostics.
+const maxKubeconfigStderr = 64 * 1024
+
+// kubeconfigExportTimeout bounds the kind get kubeconfig command.
+const kubeconfigExportTimeout = 30 * time.Second
+
 // exportKindKubeconfig runs "kind get kubeconfig" and returns
-// only stdout.  Stderr is logged to GinkgoWriter but kept out of
-// the returned bytes.  CombinedOutput would merge stderr warnings
-// (e.g. "enabling experimental podman provider") into the YAML
-// kubeconfig, causing "yaml: line N: mapping values are not
-// allowed in this context" when kubectl or client-go parses the
-// file.
+// only stdout.  Stderr is captured separately, sanitized, and
+// logged to GinkgoWriter — it is never mixed into the returned
+// kubeconfig bytes.
+//
+// CombinedOutput would merge stderr warnings (e.g. "enabling
+// experimental podman provider") into the YAML, causing:
+//
+//	yaml: line N: mapping values are not allowed in this context
+//
+// Guards:
+//   - Context deadline prevents hangs.
+//   - Bounded writers cap memory on both streams.
+//   - Truncated stdout is rejected (partial YAML is worse than
+//     an error).
+//   - Stderr is sanitized through sanitizeOutput before logging
+//     or inclusion in error messages.
+//   - On failure, no kubeconfig bytes are returned.
 func exportKindKubeconfig(clusterName string) ([]byte, error) {
-	cmd := exec.Command(
+	ctx, cancel := context.WithTimeout(
+		context.Background(), kubeconfigExportTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx,
 		"kind", "get", "kubeconfig",
 		"--name", clusterName,
 	)
 	cmd.Dir, _ = utils.GetProjectDir()
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+
+	stdoutBW := newBoundedWriter(maxKubeconfigBytes)
+	stderrBW := newBoundedWriter(maxKubeconfigStderr)
+	cmd.Stdout = stdoutBW
+	cmd.Stderr = stderrBW
+
 	err := cmd.Run()
-	if s := stderr.String(); s != "" {
+
+	// Sanitize stderr before any logging or error inclusion.
+	rawStderr := string(stderrBW.Bytes())
+	safeStderr := sanitizeOutput(rawStderr)
+	if safeStderr != "" {
 		_, _ = fmt.Fprintf(GinkgoWriter,
-			"kind get kubeconfig stderr: %s\n", s)
+			"kind get kubeconfig stderr: %s\n",
+			safeStderr)
 	}
+
 	if err != nil {
 		return nil, fmt.Errorf(
-			"kind get kubeconfig --name %s: %w\nstderr: %s",
-			clusterName, err, stderr.String())
+			"kind get kubeconfig --name %s: %s",
+			clusterName, sanitizeErrorMessage(err))
 	}
-	return stdout.Bytes(), nil
+
+	// Reject truncated stdout — writing partial YAML to the
+	// kubeconfig file is worse than failing.
+	if stdoutBW.Truncated() {
+		return nil, fmt.Errorf(
+			"kind get kubeconfig --name %s: "+
+				"stdout exceeded %d bytes (truncated)",
+			clusterName, maxKubeconfigBytes)
+	}
+
+	return stdoutBW.Bytes(), nil
+}
+
+// detectContainerRuntime returns the container CLI that Kind is
+// using.  The precedence mirrors the installer Makefile and
+// kind-runtime.sh:
+//  1. KIND_EXPERIMENTAL_PROVIDER (set by the Makefile export)
+//  2. CONTAINER_TOOL
+//  3. PATH probe: docker if present, else podman
+//
+// Explicit selection (env set) FAILS CLOSED: if the named
+// binary is missing or unsupported, the test suite aborts
+// rather than silently falling through to a different daemon.
+// Inherited connection variables (CONTAINER_HOST,
+// CONTAINER_CONNECTION) are preserved unchanged.
+//
+// Returns a non-empty string or panics.
+func detectContainerRuntime() string {
+	// 1. KIND_EXPERIMENTAL_PROVIDER — explicit Makefile/user
+	//    selection.  Must be a supported provider with a
+	//    reachable binary; fail closed otherwise.
+	if v := os.Getenv("KIND_EXPERIMENTAL_PROVIDER"); v != "" {
+		if v != "docker" && v != "podman" {
+			Fail(fmt.Sprintf(
+				"KIND_EXPERIMENTAL_PROVIDER=%q is not "+
+					"a supported provider "+
+					"(docker, podman)", v))
+		}
+		if _, err := exec.LookPath(v); err != nil {
+			Fail(fmt.Sprintf(
+				"KIND_EXPERIMENTAL_PROVIDER=%q but "+
+					"%q binary not found in PATH",
+				v, v))
+		}
+		return v
+	}
+	// 2. CONTAINER_TOOL — explicit tool selection.  May be a
+	//    full path; basename is checked for provider policy
+	//    (e.g. PID noop for docker), but the resolved
+	//    executable path is returned so runContainer invokes
+	//    the exact binary the user specified.
+	if v := os.Getenv("CONTAINER_TOOL"); v != "" {
+		base := filepath.Base(v)
+		if base != "docker" && base != "podman" {
+			Fail(fmt.Sprintf(
+				"CONTAINER_TOOL=%q (base %q) is not "+
+					"a supported container tool "+
+					"(docker, podman)", v, base))
+		}
+		resolved, err := exec.LookPath(v)
+		if err != nil {
+			Fail(fmt.Sprintf(
+				"CONTAINER_TOOL=%q but binary not "+
+					"found: %s", v,
+				sanitizeErrorMessage(err)))
+		}
+		return resolved
+	}
+	// 3. PATH probe — no explicit selection; auto-detect.
+	if _, err := exec.LookPath("docker"); err == nil {
+		return "docker"
+	}
+	if _, err := exec.LookPath("podman"); err == nil {
+		return "podman"
+	}
+	Fail("no container runtime (docker/podman) found in PATH")
+	return "" // unreachable
+}
+
+// runContainer executes a container-tool command using the
+// detected containerRuntime.  It mirrors runShell but routes
+// through the selected provider.
+func runContainer(args ...string) ([]byte, error) {
+	return runShell(containerRuntime, args...)
+}
+
+// ensureWorkloadPodmanPIDLimits invokes the shared
+// ensure_podman_pid_limits function from
+// osac-installer/scripts/lib.sh.  No-op when
+// containerRuntime != "podman".
+//
+// The shared helper captures stdout only from "kind get nodes",
+// performs strict numeric checks on inspect output, updates
+// containers below 65536, re-inspects to verify the raise, and
+// fails if the limit was not actually raised.  This Go wrapper
+// delegates to that function rather than duplicating its policy.
+//
+// Arguments are passed as separate quoted shell words matching
+// the Makefile invocation pattern:
+//
+//	ensure_podman_pid_limits "$cluster" "kind" "$container_tool"
+//
+// The child process inherits the current environment, including
+// KIND_EXPERIMENTAL_PROVIDER, CONTAINER_HOST, and
+// CONTAINER_CONNECTION — it does not need them re-exported.
+func ensureWorkloadPodmanPIDLimits(
+	clusterName string,
+) error {
+	if filepath.Base(containerRuntime) != "podman" {
+		return nil
+	}
+	projectDir, _ := utils.GetProjectDir()
+	// GetProjectDir returns osac-operator/ (nearest go.mod);
+	// lib.sh lives one level up in the mono-repo root.
+	repoRoot := filepath.Dir(projectDir)
+	libSh := filepath.Join(repoRoot,
+		"osac-installer", "scripts", "lib.sh")
+
+	// Source lib.sh and call the shared helper with safe
+	// single-quoted arguments.  "kind" is the bare binary
+	// name (matching Makefile line 386); containerRuntime
+	// is "podman" (validated by detectContainerRuntime).
+	script := fmt.Sprintf(
+		"source %s && ensure_podman_pid_limits %s %s %s",
+		shellQuote(libSh),
+		shellQuote(clusterName),
+		shellQuote("kind"),
+		shellQuote(containerRuntime),
+	)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-c", script)
+	cmd.Dir = projectDir
+
+	bw := newBoundedWriter(maxCapturedBytes)
+	cmd.Stdout = bw
+	cmd.Stderr = bw
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf(
+			"ensure_podman_pid_limits: %w\n%s",
+			err,
+			sanitizeOutput(string(bw.Bytes())))
+	}
+	return nil
+}
+
+// shellQuote wraps s in single quotes for safe shell
+// interpolation, escaping embedded single quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // runKubectlHub runs kubectl against the hub cluster (default context).
@@ -474,7 +674,7 @@ func findTestdataDir() string {
 // is on the same L2 segment — direct routing, no NAT.
 func buildInternalKubeconfig() ([]byte, error) {
 	containerName := workloadClusterName + "-control-plane"
-	ipOut, err := runShell("docker", "inspect", "-f",
+	ipOut, err := runContainer("inspect", "-f",
 		"{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
 		containerName)
 	if err != nil {
@@ -549,18 +749,18 @@ func verifyKubeconfigReachesWorkload(
 	_ = tmpKC.Close()
 
 	remotePath := "/tmp/preflight-kubeconfig"
-	_, err = runShell("docker", "cp",
+	_, err = runContainer("cp",
 		tmpKC.Name(), hubNodeContainer+":"+remotePath)
 	Expect(err).NotTo(HaveOccurred(),
 		"copy kubeconfig into hub node container")
 	defer func() {
-		_, _ = runShell("docker", "exec",
+		_, _ = runContainer("exec",
 			hubNodeContainer, "rm", "-f", remotePath)
 	}()
 
 	// From the hub node (hostNetwork context), query the target
 	// cluster's kube-system UID via the kubeconfig.
-	targetUIDOut, err := runShell("docker", "exec",
+	targetUIDOut, err := runContainer("exec",
 		hubNodeContainer,
 		"kubectl", "--kubeconfig", remotePath,
 		"get", "namespace", "kube-system",
@@ -2480,7 +2680,7 @@ func runDiagnosticCommand(
 	defer cancel()
 
 	args := buildDockerExecArgs(containerName, cmdArgs)
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd := exec.CommandContext(ctx, containerRuntime, args...)
 
 	// Use a boundedWriter for stdout+stderr so memory is
 	// capped while the command runs, not post-hoc.
@@ -2493,7 +2693,8 @@ func runDiagnosticCommand(
 	out := bw.Bytes()
 	truncated := bw.Truncated()
 
-	writef(f, "# command: docker exec %s %s\n",
+	writef(f, "# command: %s exec %s %s\n",
+		containerRuntime,
 		containerName, strings.Join(cmdArgs, " "))
 	writef(f, "# elapsed: %s\n",
 		elapsed.Round(time.Millisecond))
@@ -2705,7 +2906,7 @@ func inspectContainerReal(name string) containerInspectResult {
 	ctx, cancel := context.WithTimeout(
 		context.Background(), diagnosticTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "inspect",
+	cmd := exec.CommandContext(ctx, containerRuntime, "inspect",
 		"--format", inspectFormat,
 		name)
 	out, err := cmd.CombinedOutput()
@@ -2858,7 +3059,7 @@ func cleanupRetainedWorkloadCluster() {
 	ctx, cancel := context.WithTimeout(
 		context.Background(), diagnosticTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "rm", "-f",
+	cmd := exec.CommandContext(ctx, containerRuntime, "rm", "-f",
 		ownedContainerID)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		_, _ = fmt.Fprintf(GinkgoWriter,

@@ -330,8 +330,20 @@ func TestDiagOwnershipReplacedIDBeforeCleanup(t *testing.T) {
 }
 
 func TestDiagInspectContainerRealAbsent(t *testing.T) {
-	// Real docker inspect of a nonexistent container should
-	// return confirmed absent (ok=true, id="").
+	// Deterministic fake CLI that emits Docker's "No such
+	// container" message for any inspect, so the absence
+	// classification path is exercised without a live daemon.
+	fakeDir := t.TempDir()
+	fakeScript := filepath.Join(fakeDir, "docker")
+	_ = os.WriteFile(fakeScript, []byte(
+		"#!/bin/sh\n"+
+			"echo \"Error response from daemon: "+
+			"No such container: $3\" >&2\nexit 1\n"),
+		0755)
+	saved := containerRuntime
+	containerRuntime = filepath.Join(fakeDir, "docker")
+	t.Cleanup(func() { containerRuntime = saved })
+
 	r := inspectContainerReal(
 		"nonexistent-container-" + testRunID)
 	if !r.ok {
@@ -451,6 +463,7 @@ exit 0
 func TestDiagCaptureExecutesDockerExecByOwnedID(t *testing.T) {
 	// Verifies that captureBootstrapDiagnostics runs
 	// "docker exec <ownedContainerID> ..." not container name.
+	savedRT := containerRuntime
 	saved := ownedContainerID
 	defer func() { ownedContainerID = saved }()
 
@@ -459,6 +472,8 @@ func TestDiagCaptureExecutesDockerExecByOwnedID(t *testing.T) {
 
 	logFile := filepath.Join(t.TempDir(), "docker.log")
 	fakeDir := writeFakeDocker(t, logFile, testID)
+	containerRuntime = filepath.Join(fakeDir, "docker")
+	t.Cleanup(func() { containerRuntime = savedRT })
 	origPath := os.Getenv("PATH")
 	t.Setenv("PATH", fakeDir+":"+origPath)
 
@@ -489,6 +504,18 @@ func TestDiagCaptureExecutesDockerExecByOwnedID(t *testing.T) {
 		}
 	}
 
+	// Verify actual exec commands were issued (not zero calls).
+	execCount := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "exec ") {
+			execCount++
+		}
+	}
+	if execCount == 0 {
+		t.Error("expected at least one docker exec call " +
+			"in capture, got zero")
+	}
+
 	// Verify the artifact file was created.
 	entries, _ := os.ReadDir(dir)
 	if len(entries) == 0 {
@@ -499,6 +526,7 @@ func TestDiagCaptureExecutesDockerExecByOwnedID(t *testing.T) {
 func TestDiagCleanupIssuesDockerRmByOwnedID(t *testing.T) {
 	// Verifies that cleanup runs "docker rm -f <ownedContainerID>"
 	// not "kind delete cluster --name".
+	savedRT := containerRuntime
 	saved := ownedContainerID
 	defer func() { ownedContainerID = saved }()
 
@@ -507,6 +535,8 @@ func TestDiagCleanupIssuesDockerRmByOwnedID(t *testing.T) {
 
 	logFile := filepath.Join(t.TempDir(), "docker.log")
 	fakeDir := writeFakeDocker(t, logFile, testID)
+	containerRuntime = filepath.Join(fakeDir, "docker")
+	t.Cleanup(func() { containerRuntime = savedRT })
 	origPath := os.Getenv("PATH")
 	t.Setenv("PATH", fakeDir+":"+origPath)
 
@@ -1669,6 +1699,7 @@ exit 0
 }
 
 func TestDiagCaptureIncludesHostAndKubelet(t *testing.T) {
+	savedRT := containerRuntime
 	saved := ownedContainerID
 	savedSnap := preClusterHostSnapshot
 	defer func() {
@@ -1686,6 +1717,8 @@ func TestDiagCaptureIncludesHostAndKubelet(t *testing.T) {
 
 	logFile := filepath.Join(t.TempDir(), "docker.log")
 	fakeDir := writeFakeDiagDocker(t, logFile, testID)
+	containerRuntime = filepath.Join(fakeDir, "docker")
+	t.Cleanup(func() { containerRuntime = savedRT })
 	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
 
 	dir := t.TempDir()
@@ -1731,6 +1764,7 @@ func TestDiagCaptureIncludesHostAndKubelet(t *testing.T) {
 }
 
 func TestDiagCaptureKubeletUnavailable(t *testing.T) {
+	savedRT := containerRuntime
 	saved := ownedContainerID
 	savedSnap := preClusterHostSnapshot
 	defer func() {
@@ -1760,6 +1794,8 @@ exit 127
 	); err != nil {
 		t.Fatal(err)
 	}
+	containerRuntime = filepath.Join(fakeDir, "docker")
+	t.Cleanup(func() { containerRuntime = savedRT })
 	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
 
 	captureBootstrapDiagnostics(dir)

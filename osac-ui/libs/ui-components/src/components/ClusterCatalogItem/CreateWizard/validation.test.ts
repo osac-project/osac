@@ -41,4 +41,24 @@ describe('buildClusterCatalogStepSchema', () => {
       }),
     ).rejects.toMatchObject({ message: 'Service CIDR must not overlap the pod CIDR.' });
   });
+
+  it('rejects duplicate node-set names', async () => {
+    const schema = buildClusterCatalogStepSchema('configuration', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        version: { locked: false, value: { id: '', name: '' } },
+        nodeSets: {
+          locked: false,
+          value: [
+            { rowId: 'first', name: 'workers', hostType: 'standard', size: '3' },
+            { rowId: 'second', name: ' workers ', hostType: 'standard', size: '3' },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject({
+      path: 'nodeSets.value[1].name',
+      message: 'Node set names must be unique',
+    });
+  });
 });

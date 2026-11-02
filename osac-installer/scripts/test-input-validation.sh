@@ -266,6 +266,14 @@ join_continuations <"${remote_plan}" | grep 'helm upgrade --install osac ' \
   | grep -q 'operator.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
   || fail "install-osac: the upgrade omits the remote-cluster args"
 
+# The gate's NetBox placeholder must be passed with --set, not --set-string:
+# on Helm 3.18 a --set-string placeholder beats a caller's --set of the same
+# path regardless of command line order, masking the caller's value from the
+# gate while the install applies it.
+join_continuations <"${remote_plan}" | grep 'helm template osac ' \
+  | grep -q -- '--set bmf.netbox.tokenValue=offline-validation-placeholder' \
+  || fail "validate-inputs: the gate render must pass the NetBox placeholder with --set"
+
 # install-devstack rejects a wrong profile at parse time, before the gate's
 # cluster lookups or renders, so the user sees the actual mistake.
 if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
@@ -431,6 +439,19 @@ render_failure_matching \
 render_success \
   netbox-profile-gate-placeholder \
   "${NETBOX_PROFILE_ARGS[@]}" \
-  --set-string bmf.netbox.tokenValue=offline-validation-placeholder
+  --set bmf.netbox.tokenValue=offline-validation-placeholder
+
+# A caller-supplied token must reach the gate's render, not be masked by the
+# placeholder: the placeholder is passed with --set, so the caller's later
+# --set of the same path wins the merge (on Helm 3.18 a --set-string
+# placeholder would beat the caller's --set regardless of order and mask
+# it). The numeric token fails the schema in the gate, before any cluster
+# change, exactly as it would fail the install.
+render_failure_matching \
+  netbox-caller-numeric-token \
+  '(bmf\.netbox\.tokenValue|/bmf/netbox/tokenValue).*Invalid type' \
+  "${NETBOX_PROFILE_ARGS[@]}" \
+  --set bmf.netbox.tokenValue=offline-validation-placeholder \
+  --set bmf.netbox.tokenValue=123
 
 echo "input validation passed"

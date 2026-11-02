@@ -552,8 +552,13 @@ endif
 # netbox-token-seed hook to create that Secret during a real install. Offline
 # rendering cannot see cluster Secrets (helm template's lookup returns nil),
 # so the gate's render-only placeholder bridges that branch. It is never
-# passed to an installation, and a caller-supplied --set tokenValue (via
-# EXTRA_HELM_ARGS, which follows it) still takes precedence.
+# passed to an installation. The placeholder is passed with --set, not
+# --set-string: Helm merges --set-string after --set regardless of command
+# line order (verified on 3.18.0), so a --set-string placeholder would mask
+# a caller-supplied --set tokenValue and the gate would validate the
+# placeholder instead of the caller's value. With --set, a later --set or
+# any --set-string from INSTANCE_HELM_ARGS/EXTRA_HELM_ARGS overrides the
+# placeholder, so the gate rejects an invalid merged value itself.
 NETBOX_OFFLINE_TOKEN := offline-validation-placeholder
 
 .PHONY: validate-inputs
@@ -594,7 +599,7 @@ ifeq ($(PLATFORM),kind)
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
-		--set-string bmf.netbox.tokenValue=$(NETBOX_OFFLINE_TOKEN) \
+		--set bmf.netbox.tokenValue=$(NETBOX_OFFLINE_TOKEN) \
 		$(REMOTE_CLUSTER_HELM_ARGS) \
 		$(INSTANCE_HELM_ARGS) \
 		$(EXTRA_HELM_ARGS) >/dev/null \
@@ -635,7 +640,7 @@ else
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
-		--set-string bmf.netbox.tokenValue=$(NETBOX_OFFLINE_TOKEN) \
+		--set bmf.netbox.tokenValue=$(NETBOX_OFFLINE_TOKEN) \
 		$(REMOTE_CLUSTER_HELM_ARGS) \
 		--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) \
 		--set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) \

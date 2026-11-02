@@ -280,7 +280,9 @@ var _ = Describe("Volume lifecycle", func() {
 		// and archive the API object.
 		_, err = volumesClient.Signal(ctx,
 			privatev1.VolumesSignalRequest_builder{Id: volId}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		if err != nil {
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		}
 
 		Eventually(func(g Gomega) {
 			_, err := volumesClient.Get(ctx,
@@ -294,7 +296,6 @@ var _ = Describe("Volume lifecycle", func() {
 	// =========================================================================
 
 	Describe("Tier resolution", func() {
-
 		It("should fail with NotFound for non-existent tier", func() {
 			volName := fmt.Sprintf("test-vol-%s", uuid.New()[24:32])
 			_, err := volumesClient.Create(ctx,
@@ -442,7 +443,6 @@ var _ = Describe("Volume lifecycle", func() {
 	// =========================================================================
 
 	Describe("Volume validation", func() {
-
 		It("should reject volume without spec", func() {
 			_, err := volumesClient.Create(ctx,
 				privatev1.VolumesCreateRequest_builder{

@@ -5,13 +5,17 @@
 #
 #   http://www.apache.org/licenses/LICENSE-2.0
 
-.PHONY: all clean helm-lint test lint rules-render-test rules-unchanged-test \
+.PHONY: all clean helm-lint helm-test test lint rules-render-test rules-unchanged-test \
 	contract contract-check schemas-unchanged-test
 
 all: test lint
 
 helm-lint:
 	helm lint charts/osac-metering/
+
+# Chart render tests. Requires the helm-unittest plugin (CI pins v1.2.1).
+helm-test:
+	helm unittest charts/osac-metering
 
 test:
 	$(MAKE) -C schema test

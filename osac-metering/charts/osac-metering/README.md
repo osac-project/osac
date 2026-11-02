@@ -9,8 +9,44 @@ protects it.
 See `values.yaml`. The notable groups:
 
 - `heartbeat.interval` — the round interval, default `60s`.
+- `readers` — outside systems allowed to read one tenant's usage events.
 - `echoAdapter.enabled`, `m360Adapter.enabled` — the provider adapters.
 - `database.connection` — the projected secret holding the database URL.
+
+## Reader grants
+
+A reader is an outside billing system that reads one tenant's usage events
+with its own credentials. Add one entry per reader to `readers`:
+
+```yaml
+readers:
+  - name: billing-reader
+    tenant: acme
+```
+
+The chart renders one Strimzi `KafkaUser` per entry. The user gets a read ACL
+on `osac.metering.heartbeat.<tenant>` and a read ACL on a consumer group named
+after the reader. It gets nothing else: it cannot write, cannot read the raw
+event log or the dead-letter topic, and cannot read another tenant's topic.
+The reader name is also its consumer group, which is the name Kafka Exporter
+reports lag under.
+
+Reader names must be unique; a repeated name fails the render. `system` and
+`shared` are rejected because metering never creates their usage topics.
+
+Grant or revoke a reader with a `helm upgrade`. The metering Deployment does
+not depend on these values, so nothing restarts. On revocation Strimzi deletes
+the user, its password Secret, and its ACLs, and the broker refuses the
+reader's next request.
+
+The reader needs the bootstrap address, the shared OSAC CA, and its
+password from the Secret named after it in the Kafka namespace. Hand those
+over out of band. The chart never writes them into the repository.
+
+To see how far behind a reader is, enable `prometheusRule.enabled`: the
+`MeteringReaderLag` alert fires when a reader group is more than 60 records
+behind for 15 minutes. Strimzi's Kafka Exporter, enabled on the installer's
+Kafka resource, supplies `kafka_consumergroup_lag`.
 
 ## Rule revisions
 

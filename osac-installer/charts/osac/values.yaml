@@ -387,6 +387,11 @@ metering:
     repository: ghcr.io/osac-project/metering-service
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
     pullPolicy: Always
+  # Outside systems that read one tenant's usage events with their own
+  # credentials. Each entry names one reader and one tenant; the reader name is
+  # also its Kafka consumer group, where lag is reported. Add or remove an
+  # entry and run helm upgrade to grant or revoke; no OSAC service restarts.
+  readers: []
   database:
     connection:
     - secret:

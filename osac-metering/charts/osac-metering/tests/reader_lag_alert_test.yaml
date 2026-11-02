@@ -1,0 +1,36 @@
+suite: metering reader lag alert
+templates:
+  - templates/prometheusrule.yaml
+tests:
+  - it: reports lag for each configured reader group
+    set:
+      prometheusRule.enabled: true
+      readers:
+        - name: billing-reader
+          tenant: acme
+        - name: audit-reader
+          tenant: globex
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.groups[0].rules[5].alert
+          value: MeteringReaderLag
+      # The alert covers exactly the reader groups the chart grants, keyed by
+      # the consumer group Kafka Exporter reports.
+      - matchRegex:
+          path: spec.groups[0].rules[5].expr
+          pattern: '^kafka_consumergroup_lag\{consumergroup=~"billing-reader\|audit-reader"\} > 60$'
+      - matchRegex:
+          path: spec.groups[0].rules[5].annotations.summary
+          pattern: '\$labels\.consumergroup'
+
+  - it: renders no reader alert when no readers are configured
+    set:
+      prometheusRule.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 5

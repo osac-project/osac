@@ -1748,6 +1748,31 @@
           },
           "additionalProperties": false
         },
+        "readers": {
+          "type": "array",
+          "description": "Outside systems that read one tenant's usage events. Each entry renders one Strimzi KafkaUser with a read ACL on osac.metering.heartbeat.<tenant> and on a consumer group named after the reader. Grant and revoke a reader with a helm upgrade; neither restarts metering",
+          "default": [],
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Reader name, also its KafkaUser name and consumer group name; must be unique",
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+              },
+              "tenant": {
+                "type": "string",
+                "description": "Tenant whose usage topic the reader may read",
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+              }
+            },
+            "required": [
+              "name",
+              "tenant"
+            ],
+            "additionalProperties": false
+          }
+        },
         "echoAdapter": {
           "type": "object",
           "description": "Echo adapter for metering (test/development only)",
@@ -1868,7 +1893,7 @@
         },
         "prometheusRule": {
           "type": "object",
-          "description": "PrometheusRule with alert rules over the metering metrics: stalled rounds, round failures, outbox backlog, skipped events, dead-letter depth",
+          "description": "PrometheusRule with alert rules over the metering metrics: stalled rounds, round failures, outbox backlog, skipped events, dead-letter depth, and reader lag",
           "properties": {
             "enabled": {
               "type": "boolean",

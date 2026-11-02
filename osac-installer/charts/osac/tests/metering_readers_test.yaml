@@ -1,0 +1,38 @@
+suite: metering reader grants through umbrella values
+templates:
+  - charts/metering/templates/readers.yaml
+values:
+  - ../ci/default-values.yaml
+tests:
+  - it: passes metering.readers to the metering subchart
+    set:
+      metering.readers:
+        - name: billing-reader
+          tenant: acme
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: KafkaUser
+      - equal:
+          path: metadata.name
+          value: billing-reader
+      - equal:
+          path: spec.authorization.acls[0].resource.name
+          value: osac.metering.heartbeat.acme
+      - equal:
+          path: spec.authorization.acls[0].operations
+          value:
+            - Read
+            - Describe
+      - equal:
+          path: spec.authorization.acls[1].resource.name
+          value: billing-reader
+
+  - it: rejects a reader entry without a tenant
+    set:
+      metering.readers:
+        - name: billing-reader
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/metering/readers/0': missing property 'tenant'"

@@ -1,0 +1,121 @@
+suite: metering reader grants
+templates:
+  - templates/readers.yaml
+tests:
+  - it: renders nothing when no readers are configured
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders one read-only KafkaUser for one reader
+    set:
+      readers:
+        - name: billing-reader
+          tenant: acme
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: KafkaUser
+      - equal:
+          path: metadata.name
+          value: billing-reader
+      - equal:
+          path: metadata.namespace
+          value: osac-kafka
+      - equal:
+          path: metadata.labels["strimzi.io/cluster"]
+          value: osac-kafka
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: metering-reader
+      - equal:
+          path: spec.authentication.type
+          value: scram-sha-512
+      - equal:
+          path: spec.authorization.type
+          value: simple
+      # Exactly two ACLs: a read on the tenant's usage topic and a read on the
+      # reader's consumer group. No write, no other topic, no other group.
+      - equal:
+          path: spec.authorization.acls
+          value:
+            - resource:
+                type: topic
+                name: osac.metering.heartbeat.acme
+                patternType: literal
+              operations:
+                - Read
+                - Describe
+              host: "*"
+            - resource:
+                type: group
+                name: billing-reader
+                patternType: literal
+              operations:
+                - Read
+              host: "*"
+
+  - it: renders one KafkaUser per reader with its own topic and group
+    set:
+      readers:
+        - name: billing-reader
+          tenant: acme
+        - name: audit-reader
+          tenant: globex
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: billing-reader
+        documentIndex: 0
+      - equal:
+          path: spec.authorization.acls[0].resource.name
+          value: osac.metering.heartbeat.acme
+        documentIndex: 0
+      - equal:
+          path: spec.authorization.acls[1].resource.name
+          value: billing-reader
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: audit-reader
+        documentIndex: 1
+      - equal:
+          path: spec.authorization.acls[0].resource.name
+          value: osac.metering.heartbeat.globex
+        documentIndex: 1
+      - equal:
+          path: spec.authorization.acls[1].resource.name
+          value: audit-reader
+        documentIndex: 1
+
+  - it: rejects two readers with the same name
+    set:
+      readers:
+        - name: billing-reader
+          tenant: acme
+        - name: billing-reader
+          tenant: globex
+    asserts:
+      - failedTemplate:
+          errorPattern: 'duplicate metering reader "billing-reader": each reader name must be unique'
+
+  - it: rejects a reader name that is not a lowercase DNS name
+    set:
+      readers:
+        - name: Billing_Reader
+          tenant: acme
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "Billing_Reader" must be a lowercase DNS name'
+
+  - it: rejects a built-in tenant that has no usage topic
+    set:
+      readers:
+        - name: billing-reader
+          tenant: system
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "billing-reader" names built-in tenant "system", which has no usage topic'

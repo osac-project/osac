@@ -1,0 +1,192 @@
+/*
+Copyright (c) 2026 Red Hat, Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in
+compliance with the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+*/
+
+// Package main is the worked example from the metering event contract: a
+// small reader that consumes one tenant's usage topic and prints the
+// billable quantity.
+//
+// It proves the reading rule and is not a production adapter. It keeps its
+// deduplication state in memory, so a restart forgets the ids it has seen.
+package main
+
+import (
+	"fmt"
+	"io"
+	"math/big"
+	"sort"
+	"strings"
+	"text/tabwriter"
+
+	cloudevents "github.com/cloudevents/sdk-go/v2"
+
+	"github.com/osac-project/osac-metering/schema"
+)
+
+// UsageKey groups the events the contract bills together: one resource, one
+// meter, one component, and one set of billing dimensions.
+type UsageKey struct {
+	ResourceType string
+	ResourceID   string
+	Meter        string
+	Component    string
+	Dimensions   string
+}
+
+// Row is one billable total: the quantity summed for a UsageKey.
+type Row struct {
+	Key      UsageKey
+	Quantity string
+	Unit     string
+}
+
+// Totals drops repeated CloudEvent ids and adds every remaining event's
+// quantity per UsageKey. A correction is a negative quantity, so adding it
+// subtracts the usage it reverses.
+type Totals struct {
+	seen     map[string]struct{}
+	sums     map[UsageKey]*big.Rat
+	units    map[UsageKey]string
+	accepted int
+	repeats  int
+}
+
+// NewTotals returns an empty set of totals.
+func NewTotals() *Totals {
+	return &Totals{
+		seen:  make(map[string]struct{}),
+		sums:  make(map[UsageKey]*big.Rat),
+		units: make(map[UsageKey]string),
+	}
+}
+
+// Add sums one usage event. It returns false when the event repeats an id it
+// has already seen, so the caller can count the repeat without billing it.
+func (t *Totals) Add(event cloudevents.Event) (bool, error) {
+	id := event.ID()
+	if id == "" {
+		return false, fmt.Errorf("usage event has no CloudEvent id")
+	}
+	if _, repeated := t.seen[id]; repeated {
+		t.repeats++
+		return false, nil
+	}
+	if event.Type() != schema.HeartbeatType {
+		return false, fmt.Errorf("event %s has type %q, not %q: keep it and add support for the version", id, event.Type(), schema.HeartbeatType)
+	}
+
+	var data schema.HeartbeatData
+	if err := event.DataAs(&data); err != nil {
+		return false, fmt.Errorf("decoding event %s: %w", id, err)
+	}
+	quantity, ok := new(big.Rat).SetString(data.Usage.Quantity)
+	if !ok {
+		return false, fmt.Errorf("event %s has quantity %q, which is not a decimal number", id, data.Usage.Quantity)
+	}
+
+	key := UsageKey{
+		ResourceType: data.ResourceType,
+		ResourceID:   data.ResourceID,
+		Meter:        data.Meter,
+		Component:    data.Component,
+		Dimensions:   dimensionText(data.BillingDimensions),
+	}
+	if t.sums[key] == nil {
+		t.sums[key] = new(big.Rat)
+		t.units[key] = data.Usage.Unit
+	}
+	t.sums[key].Add(t.sums[key], quantity)
+	t.seen[id] = struct{}{}
+	t.accepted++
+	return true, nil
+}
+
+// Counts returns how many events were summed and how many repeats were
+// dropped.
+func (t *Totals) Counts() (accepted, repeats int) {
+	return t.accepted, t.repeats
+}
+
+// Rows returns the billable totals in a stable order.
+func (t *Totals) Rows() []Row {
+	rows := make([]Row, 0, len(t.sums))
+	for key, sum := range t.sums {
+		rows = append(rows, Row{Key: key, Quantity: sum.FloatString(6), Unit: t.units[key]})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := rows[i].Key, rows[j].Key
+		if a.ResourceType != b.ResourceType {
+			return a.ResourceType < b.ResourceType
+		}
+		if a.ResourceID != b.ResourceID {
+			return a.ResourceID < b.ResourceID
+		}
+		if a.Meter != b.Meter {
+			return a.Meter < b.Meter
+		}
+		if a.Component != b.Component {
+			return a.Component < b.Component
+		}
+		return a.Dimensions < b.Dimensions
+	})
+	return rows
+}
+
+// Print writes one line per billable total and one total per unit.
+func (t *Totals) Print(w io.Writer) error {
+	totals := make(map[string]*big.Rat)
+	rows := t.Rows()
+	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(writer, "RESOURCE TYPE\tRESOURCE\tMETER\tCOMPONENT\tDIMENSIONS\tQUANTITY\tUNIT"); err != nil {
+		return fmt.Errorf("writing totals header: %w", err)
+	}
+	for _, row := range rows {
+		dimensions := row.Key.Dimensions
+		if dimensions == "" {
+			dimensions = "-"
+		}
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			row.Key.ResourceType, row.Key.ResourceID, row.Key.Meter, row.Key.Component,
+			dimensions, row.Quantity, row.Unit); err != nil {
+			return fmt.Errorf("writing totals row: %w", err)
+		}
+		if totals[row.Unit] == nil {
+			totals[row.Unit] = new(big.Rat)
+		}
+		sum, _ := new(big.Rat).SetString(row.Quantity)
+		totals[row.Unit].Add(totals[row.Unit], sum)
+	}
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("writing totals: %w", err)
+	}
+	units := make([]string, 0, len(totals))
+	for unit := range totals {
+		units = append(units, unit)
+	}
+	sort.Strings(units)
+	for _, unit := range units {
+		if _, err := fmt.Fprintf(w, "BILLABLE TOTAL: %s %s\n", totals[unit].FloatString(6), unit); err != nil {
+			return fmt.Errorf("writing billable total: %w", err)
+		}
+	}
+	return nil
+}
+
+// dimensionText renders a dimension map as sorted name=value pairs, so two
+// events with the same dimensions always form the same key.
+func dimensionText(dimensions map[string]string) string {
+	if len(dimensions) == 0 {
+		return ""
+	}
+	pairs := make([]string, 0, len(dimensions))
+	for name, value := range dimensions {
+		pairs = append(pairs, name+"="+value)
+	}
+	sort.Strings(pairs)
+	return strings.Join(pairs, ",")
+}

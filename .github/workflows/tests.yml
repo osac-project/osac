@@ -579,6 +579,9 @@ jobs:
           mkdir -p "${plugin_dir}"
           tar -xzf "${archive}" -C "${plugin_dir}"
           helm unittest charts/osac
+          # The metering chart's reader grants are values an admin sets on the
+          # umbrella chart, so its render tests run here too.
+          helm unittest ../osac-metering/charts/osac-metering
       - name: Test preflight rendering
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer

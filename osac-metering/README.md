@@ -43,7 +43,7 @@ to it — records Kafka deleted cannot be replayed after a restore.
 |-----------|-------------|
 | `schema/` | Shared heartbeat schema — usage and heartbeat data types, resource type constants |
 | `metering-service/` | Fold, heartbeat rounds, relay, rule revisions, and usage evaluation |
-| `adapters/` | Provider adapter framework (`Runner`, Kafka consumer, dedup, retry, DLQ routing) and concrete adapters (`echo-adapter`, `m360-adapter`) |
+| `adapters/` | Provider adapter framework (`Runner`, Kafka consumer, dedup, retry, DLQ routing), concrete adapters (`echo-adapter`, `m360-adapter`), and the worked `billing-reader` example |
 | `charts/osac-metering/` | Helm chart for the metering subsystem, including rule revision 0001 and the policy that protects it |
 | `docs/contract/` | Generated contract for outside readers: the reference and a checkable JSON Schema |
 
@@ -66,6 +66,10 @@ cd ..
 cd adapters
 make test     # Run unit tests (ginkgo, recursive)
 make lint     # Run golangci-lint
+cd ..
+
+# chart render tests (need the helm-unittest plugin; CI pins v1.2.1)
+make helm-test
 ```
 
 Integration tests run against real PostgreSQL and Kafka in containers; they

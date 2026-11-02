@@ -983,6 +983,7 @@ Touched-area requirements: [component guide](../osac-metering/AGENTS.md#integrat
 | Contract | `adapters/m360/contract_test.go`; runs when `M360_TEST_API_URL`, `M360_TEST_API_KEY`, and `M360_TEST_TENANT` are set, skips otherwise | A real M360 tenant: submits positive and negative quantities, duplicate IDs, dated heartbeats, invalid heartbeats, and invoiced-period corrections, and asserts synchronous acceptance or rejection | Reading the tenant's usage totals back is a gap: the adapter has no query path, so rate and deduplication arithmetic is not verified end to end. Deploying the M360 tenant is out of scope for this repository. |
 | E2E | Cross-component OSAC metering/E2E deployment | The deployed metering pipeline and its configured Kafka/provider dependencies | Depends on the installer environment and enabled metering path. |
 | Helm render and lint | `make -C osac-metering helm-lint` | Chart templates, rule revision 0001, and the admission policy that protects it | Deployed behavior. |
+| Helm unit (reader grants) | `make -C osac-metering helm-test` (helm-unittest plugin; CI pins v1.2.1 and runs the suite in the `helm-unit` leg) | One `KafkaUser` per reader with a read ACL on `osac.metering.heartbeat.<tenant>` and on a consumer group named after the reader, duplicate names rejected, and a lag alert that names only the configured reader groups | Does not prove the broker denies a write, that revocation takes effect within 60 seconds, or that Kafka Exporter reports a live reader's lag. |
 | Helm render | `make -C osac-installer metering-auth-render-test` | Metering Deployment, rules ConfigMap, admission policy and binding, and absence of fulfillment credentials in the vmaas-ci, bmaas-ci, caas-ci, and full-ci profiles | Does not verify a deployed metering pipeline. |
 
 ### Coverage notes
@@ -996,6 +997,8 @@ Touched-area requirements: [component guide](../osac-metering/AGENTS.md#integrat
 ### Coverage gaps
 
 - Deployed cross-component journeys (tenant onboarding creating the three topics) belong to the `[QE]` E2E work; the event-to-heartbeat path on a hub is covered by the metering sanity tier in `tests/e2e/vmaas/sanity/test_metering_billing.py`.
+- Reader grant, read, revoke, and lag visibility against a deployed Kafka are unresolved: `tests/e2e/` has no Kafka client dependency and no helper that upgrades installer values to add or remove a reader. The chart renders the grant, and the lag alert reads Kafka Exporter, but no automated test proves the broker refuses a revoked reader within 60 seconds or that a live reader's lag reaches Prometheus. No follow-up ticket exists yet.
+- The worked example's reading rule is unit-tested; running it against a real Kafka topic is unresolved for the same missing Kafka client dependency in `tests/e2e/`. The example README documents the manual run.
 - The M360 contract test needs a real tenant configured per environment; it is skipped when the variables are absent. It verifies submission and synchronous acceptance or rejection; verifying the billed totals needs a usage query path the adapter does not have yet.
 
 ## tests/e2e

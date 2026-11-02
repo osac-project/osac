@@ -1,0 +1,64 @@
+{{- /*
+One KafkaUser per entry in .Values.readers. A reader is an outside system
+that reads one tenant's usage events with its own credentials, granted and
+revoked as chart values.
+
+The user reads one literal topic, osac.metering.heartbeat.<tenant>, and one
+consumer group named after the reader. It gets no write ACL, no Describe on
+another topic, and no access to the raw event log or the dead-letter topics.
+The group name is the reader name, so the lag Strimzi's Kafka exporter
+reports maps to the reader.
+
+Names are rejected when they repeat, are not lowercase Kafka-safe, or name a
+built-in tenant: metering never creates the system and shared tenants' usage
+topics, so a grant for them would read nothing.
+*/}}
+{{- $seen := dict -}}
+{{- range .Values.readers }}
+{{- $name := required "readers[].name is required" .name -}}
+{{- $tenant := required (printf "readers[%q].tenant is required" $name) .tenant -}}
+{{- if hasKey $seen $name }}
+{{- fail (printf "duplicate metering reader %q: each reader name must be unique" $name) }}
+{{- end }}
+{{- $_ := set $seen $name true }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $name) }}
+{{- fail (printf "metering reader %q must be a lowercase DNS name: letters, digits, dots, and dashes" $name) }}
+{{- end }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $tenant) }}
+{{- fail (printf "metering reader %q has tenant %q, which is not a lowercase DNS name" $name $tenant) }}
+{{- end }}
+{{- if or (eq $tenant "system") (eq $tenant "shared") }}
+{{- fail (printf "metering reader %q names built-in tenant %q, which has no usage topic" $name $tenant) }}
+{{- end }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: {{ $name }}
+  namespace: {{ include "osac-metering.kafkaClusterNamespace" $ }}
+  labels:
+    {{- include "osac-metering.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: metering-reader
+    strimzi.io/cluster: {{ include "osac-metering.kafkaClusterName" $ }}
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: osac.metering.heartbeat.{{ $tenant }}
+          patternType: literal
+        operations:
+          - Read
+          - Describe
+        host: "*"
+      - resource:
+          type: group
+          name: {{ $name }}
+          patternType: literal
+        operations:
+          - Read
+        host: "*"
+{{- end }}

@@ -54,6 +54,23 @@ kafka:
 topics:
   retentionMs: "-1"
 
+# Readers: outside systems that read one tenant's usage events with their own
+# credentials. Each entry names one reader and one tenant, and the chart
+# renders one KafkaUser with a read ACL on osac.metering.heartbeat.<tenant>
+# and a read ACL on a consumer group named after the reader. The reader name
+# is therefore also its consumer group, which is where Kafka Exporter reports
+# its lag.
+#
+# Grant a reader by adding an entry and running `helm upgrade`; revoke it by
+# removing the entry. The metering Deployment carries no checksum of these
+# values, so neither action restarts metering. Strimzi deletes the user, its
+# password Secret, and its ACLs on revocation, and the broker refuses the
+# reader's next request. Names must be unique; duplicate names fail the
+# render.
+readers: []
+#  - name: billing-reader
+#    tenant: acme
+
 ## Echo adapter — test/development tool only, not for production use.
 ## Enable and configure via environment-specific values (e.g., values/vmaas-ci/values.yaml).
 echoAdapter:

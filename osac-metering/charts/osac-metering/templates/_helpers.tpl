@@ -118,6 +118,20 @@ Args: list of [context, saslSecretName]
 {{- end -}}
 
 {{/*
+Regex matching the consumer group of every configured reader. Read from the
+readers list, so the lag alert covers exactly the groups the chart grants and
+nothing OSAC owns.
+Args: the chart context
+*/}}
+{{- define "osac-metering.readerGroupRegex" -}}
+{{- $groups := list -}}
+{{- range .Values.readers }}
+{{- $groups = append $groups (regexQuoteMeta .name) }}
+{{- end -}}
+{{- join "|" $groups }}
+{{- end -}}
+
+{{/*
 ACLs shared by the adapter KafkaUsers: the adapter reads every tenant's
 heartbeat topic and the shared inference topic, writes every tenant's
 dead-letter topic plus the inference dead-letter topic, and reads its own

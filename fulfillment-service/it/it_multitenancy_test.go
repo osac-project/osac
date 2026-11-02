@@ -155,16 +155,6 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					ensureTenantDefaultNetworkingFixture(ctx, tenant, "")
 				}
 
-				// Cluster creates resolve omitted attachments to the tenant's
-				// default Subnet and SecurityGroup; seed one per tenant.
-				uniqueTenants := make(map[string]bool)
-				for _, tenant := range ServiceAccountTenants {
-					uniqueTenants[tenant] = true
-				}
-				for tenant := range uniqueTenants {
-					ensureTenantDefaultNetworkingFixture(ctx, tenant, "")
-				}
-
 				// Create cluster template for testing
 				templateId := newTemplateID("sa_isolation_template")
 				templatesClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
@@ -403,12 +393,6 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					}
 					Expect(err).ToNot(HaveOccurred())
 					// Cluster creates use the tenant's default networking.
-					ensureTenantDefaultNetworkingFixture(ctx, tenant, "")
-				}
-
-				// Cluster creates resolve omitted attachments to the tenant's
-				// default Subnet and SecurityGroup; seed one per tenant.
-				for tenant := range uniqueTenants {
 					ensureTenantDefaultNetworkingFixture(ctx, tenant, "")
 				}
 

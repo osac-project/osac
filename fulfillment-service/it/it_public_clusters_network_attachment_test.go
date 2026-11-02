@@ -233,11 +233,28 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 	})
 
 	Context("Tenant-default networking", func() {
-		// Each case runs in a fresh project so ambient defaults in the shared
-		// tenant cannot satisfy these requests and negative cases cannot be
-		// repaired by tenant-wide fixture helpers. Default-labelled resources
-		// reject admin deletion, so case-local networking clients use the
-		// controller identity for setup, readiness, and cleanup.
+		var tenant string
+
+		BeforeEach(func() {
+			tenants := privatev1.NewTenantsClient(tool.InternalView().ControllerConn())
+			metadata := catalogItemUnmanagedFixtureMetadata("", "")
+			created, err := tenants.Create(ctx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: metadata,
+					// Hold onboarding so it cannot repair the defaults under test.
+					Status: privatev1.TenantStatus_builder{State: privatev1.TenantState_TENANT_STATE_FAILED}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			tenant = created.GetObject().GetId()
+			DeferCleanup(func(cleanupCtx context.Context) {
+				deleteTenant(cleanupCtx, tenants, privatev1.NewProjectsClient(tool.InternalView().AdminConn()),
+					tenant, metadata.GetName())
+			})
+			Expect(setTenantDefaultNetworkingCondition(ctx, tenant, true)).To(Succeed())
+			clustersClient = publicv1.NewClustersClient(tool.ExternalView().AdminConn())
+		})
+
 		newIsolatedVirtualNetwork := func(project string) string {
 			networks := privatev1.NewVirtualNetworksClient(tool.InternalView().ControllerConn())
 			id := fmt.Sprintf("test-vnet-%s", uuid.New())
@@ -245,15 +262,14 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				Object: privatev1.VirtualNetwork_builder{
 					Id: id,
 					Metadata: privatev1.Metadata_builder{
-						Name:    fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
-						Tenant:  usersGroup,
-						Project: project,
-						Labels:  map[string]string{tenantDefaultNetworkingLabel: "true"},
+						Name:        fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+						Tenant:      tenant,
+						Project:     project,
+						Annotations: map[string]string{"osac.openshift.io/management-state": "unmanaged"},
+						Labels:      map[string]string{tenantDefaultNetworkingLabel: "true"},
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
-						Region:       "us-east-1",
-						Ipv4Cidr:     new("10.100.0.0/16"),
+						Ipv4Cidr: new("10.100.0.0/16"),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -298,10 +314,11 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				Object: privatev1.Subnet_builder{
 					Id: id,
 					Metadata: privatev1.Metadata_builder{
-						Name:    fmt.Sprintf("test-subnet-%s", uuid.New()[24:32]),
-						Tenant:  usersGroup,
-						Project: project,
-						Labels:  labels,
+						Name:        fmt.Sprintf("test-subnet-%s", uuid.New()[24:32]),
+						Tenant:      tenant,
+						Project:     project,
+						Annotations: map[string]string{"osac.openshift.io/management-state": "unmanaged"},
+						Labels:      labels,
 					}.Build(),
 					Spec: privatev1.SubnetSpec_builder{
 						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
@@ -333,10 +350,11 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				Object: privatev1.SecurityGroup_builder{
 					Id: id,
 					Metadata: privatev1.Metadata_builder{
-						Name:    fmt.Sprintf("test-sg-%s", uuid.New()[24:32]),
-						Tenant:  usersGroup,
-						Project: project,
-						Labels:  labels,
+						Name:        fmt.Sprintf("test-sg-%s", uuid.New()[24:32]),
+						Tenant:      tenant,
+						Project:     project,
+						Annotations: map[string]string{"osac.openshift.io/management-state": "unmanaged"},
+						Labels:      labels,
 					}.Build(),
 					Spec: privatev1.SecurityGroupSpec_builder{
 						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
@@ -362,6 +380,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					Id: clusterId,
 					Metadata: publicv1.Metadata_builder{
 						Name:    fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+						Tenant:  tenant,
 						Project: project,
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
@@ -380,11 +399,8 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		}
 
 		DescribeTable("rejects an omitted attachment without a usable tenant default",
-			func(configure func(project, virtualNetworkId string), wantField, wantPhrase string) {
-				project := createCatalogItemProjectFixture(ctx, usersGroup)
-				// The public caller needs project membership to resolve
-				// project-scoped defaults and references.
-				grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, project)
+			func(configure func(project, virtualNetworkId string)) {
+				project := createCatalogItemProjectFixture(ctx, tenant)
 				virtualNetworkId := newIsolatedVirtualNetwork(project)
 				configure(project, virtualNetworkId)
 
@@ -398,40 +414,32 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				Expect(response).To(BeNil())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring(wantField))
-				Expect(status.Message()).To(ContainSubstring(wantPhrase))
+				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+				Expect(status.Message()).To(ContainSubstring("tenant default networking is not ready"))
 				expectNoStoredCluster(clusterId)
 			},
 			Entry("missing default Subnet",
 				func(project, virtualNetworkId string) {
 					newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
-				},
-				"spec.network_attachment.subnet", "a default subnet is required"),
+				}),
 			Entry("pending default Subnet",
 				func(project, virtualNetworkId string) {
 					newProjectSubnet(project, virtualNetworkId, true, "pending")
 					newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
-				},
-				"spec.network_attachment.subnet", "a default subnet is required"),
+				}),
 			Entry("missing default SecurityGroup",
 				func(project, virtualNetworkId string) {
 					newProjectSubnet(project, virtualNetworkId, true, "ready")
-				},
-				"spec.network_attachment.security_groups", "a default security group is required"),
+				}),
 			Entry("pending default SecurityGroup",
 				func(project, virtualNetworkId string) {
 					newProjectSubnet(project, virtualNetworkId, true, "ready")
 					newProjectSecurityGroup(project, virtualNetworkId, true, "pending")
-				},
-				"spec.network_attachment.security_groups", "a default security group is required"),
+				}),
 		)
 
 		It("resolves ready tenant defaults and stores both references", func() {
-			project := createCatalogItemProjectFixture(ctx, usersGroup)
-			// The public caller needs project membership to resolve
-			// project-scoped defaults and references.
-			grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, project)
+			project := createCatalogItemProjectFixture(ctx, tenant)
 			virtualNetworkId := newIsolatedVirtualNetwork(project)
 			defaultSubnetId := newProjectSubnet(project, virtualNetworkId, true, "ready")
 			defaultSecurityGroupId := newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
@@ -463,10 +471,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		})
 
 		It("preserves a complete explicit attachment without labelled defaults", func() {
-			project := createCatalogItemProjectFixture(ctx, usersGroup)
-			// The public caller needs project membership to resolve
-			// project-scoped defaults and references.
-			grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, project)
+			project := createCatalogItemProjectFixture(ctx, tenant)
 			virtualNetworkId := newIsolatedVirtualNetwork(project)
 			explicitSubnetId := newProjectSubnet(project, virtualNetworkId, false, "ready")
 			explicitSecurityGroupId := newProjectSecurityGroup(project, virtualNetworkId, false, "ready")

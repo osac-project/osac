@@ -70,7 +70,9 @@ must be an http(s) URL without a path, because callers append
 */}}
 {{- define "osac-aap.controllerUrl" -}}
 {{- if and (not .Values.aap.instance.enabled) .Values.controllerUrl }}
-{{- if not (regexMatch "^https?://[^/\\s]+$" .Values.controllerUrl) }}
+{{- /* No path, query, fragment or IPv6 literal: callers append their own path,
+     and the netrc hostname derivation handles bare hostnames only. */}}
+{{- if not (regexMatch "^https?://[^/?#\\[\\s]+$" .Values.controllerUrl) }}
 {{- fail (printf "controllerUrl must be an http(s) AAP base URL without a path, for example https://aap.example.com (got %q)" .Values.controllerUrl) }}
 {{- end -}}
 {{- end -}}

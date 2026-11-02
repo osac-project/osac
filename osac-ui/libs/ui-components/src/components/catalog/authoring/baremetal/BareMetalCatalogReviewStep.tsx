@@ -21,11 +21,10 @@ const BareMetalCatalogReviewStep = () => {
   const { t } = useTranslation();
   const { role } = useSession();
   const { values } = useFormikContext<BareMetalCatalogItemValues>();
-  const userDataReview = values.userData.value.trim()
-    ? formatReviewScalar(values.userData.value)
-    : values.userDataSecret.value.trim()
+  const userDataReview =
+    values.userData.value.trim() || values.userDataSecret.value.trim()
       ? t('Configured')
-      : formatReviewScalar(values.userData.value);
+      : formatReviewScalar('');
 
   return (
     <Stack hasGutter>

@@ -159,6 +159,29 @@ describe('BareMetalCatalogItemWizard', () => {
     ).toBeInTheDocument();
   });
 
+  it('masks inline user data on Review', async () => {
+    const item = create(BareMetalInstanceCatalogItemSchema, {
+      id: 'catalog-item-1',
+      metadata: { name: 'existing-item', tenant: 'test-tenant' },
+      template: { id: 'template-1' },
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'locked',
+            value: { source: { case: 'inline', value: 'password: secret-value' } },
+          },
+        },
+      },
+    });
+    const { user } = renderWizard(item);
+
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(await screen.findByText('Configured')).toBeInTheDocument();
+    expect(screen.queryByText('password: secret-value')).not.toBeInTheDocument();
+  });
+
   it('shows the cloud provider admin unpublished alert body', async () => {
     vi.mocked(useSession).mockReturnValue(makeSession('admin'));
     const { user } = renderWithProviders(<BareMetalCatalogItemWizard />, {

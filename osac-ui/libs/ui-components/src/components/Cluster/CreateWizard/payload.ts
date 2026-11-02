@@ -36,7 +36,7 @@ export const buildClusterCreatePayload = (
     >;
     for (const row of values.spec.nodeSetRows.value) {
       const nodeSetId = row.name.trim();
-      const hostTypeId = row.hostType;
+      const hostTypeId = row.hostType.id;
       const size = Number(row.size);
       if (!nodeSetId || !hostTypeId || !Number.isFinite(size) || size <= 0) {
         continue;

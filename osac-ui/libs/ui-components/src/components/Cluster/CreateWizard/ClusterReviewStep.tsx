@@ -38,7 +38,7 @@ const formatNodeSetsForReview = (
     return '—';
   }
   return nodeSetRows.value
-    .map((row) => formatClusterNodeSetReview(row.hostType, row.size))
+    .map((row) => formatClusterNodeSetReview(row.hostType.name, row.size))
     .join(', ');
 };
 

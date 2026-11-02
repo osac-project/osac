@@ -30,17 +30,27 @@ const toVersionReference = (value: ResourceSelectValue) => ({
 const toNodeSetMap = (value: ClusterNodeSetRow[]) => {
   const items = Object.create(null) as Record<
     string,
-    { size: number; baremetalInstanceType: { name: string; shared: boolean } }
+    {
+      size: number;
+      baremetalInstanceType: { id: string; name?: string; shared: boolean };
+    }
   >;
 
   for (const row of value) {
     const name = row.name.trim();
-    const hostType = row.hostType.trim();
+    const hostType = row.hostType;
     const size = Number(row.size.trim());
-    if (!name || !hostType || !Number.isFinite(size) || size <= 0) {
+    if (!name || !hostType.id || !Number.isFinite(size) || size <= 0) {
       continue;
     }
-    items[name] = { size, baremetalInstanceType: { name: hostType, shared: true } };
+    items[name] = {
+      size,
+      baremetalInstanceType: {
+        id: hostType.id,
+        ...(hostType.name ? { name: hostType.name } : {}),
+        shared: true,
+      },
+    };
   }
 
   return { items };

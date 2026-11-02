@@ -68,7 +68,6 @@ const ClusterCatalogConfigurationStep = () => {
                   isRequired={isRequired}
                   allowEmpty
                   autoSelectSingleOption={false}
-                  hostTypeReference="name"
                 />
               </ProvisioningFieldGroup>
             )}

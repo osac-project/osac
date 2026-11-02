@@ -76,7 +76,12 @@ describe('ClusterReviewStep', () => {
   it('uses the simple host type and size display for a node set', async () => {
     const values = createEmptyClusterValues();
     values.spec.nodeSetRows.value = [
-      { rowId: 'workers-row', name: 'workers', hostType: 'worker', size: '1' },
+      {
+        rowId: 'workers-row',
+        name: 'workers',
+        hostType: { id: 'bmit-worker', name: 'worker' },
+        size: '1',
+      },
     ];
     renderWithProviders(
       <Formik initialValues={values} onSubmit={() => undefined}>

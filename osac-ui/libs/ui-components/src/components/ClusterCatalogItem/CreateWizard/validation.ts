@@ -4,36 +4,25 @@ import * as yup from 'yup';
 
 import type { ClusterCatalogItemValues } from './values';
 import { buildCidrSchema } from '../../../validation/cidr-validation';
-import { resourceNameSchema } from '../../../validation/resource-name';
 import {
   catalogGeneralStepSchema,
   catalogLockedResourceField,
   catalogLockedStringField,
 } from '../../CatalogItem/catalogValidation';
-import { clusterNetworkDoNotOverlapTest, uniqueNodeSetNamesTest } from '../../Cluster/validation';
+import {
+  clusterNetworkDoNotOverlapTest,
+  clusterNodeSetRowSchema,
+  uniqueNodeSetNamesTest,
+} from '../../Cluster/validation';
 
 export type ClusterCatalogWizardStepId = 'general' | 'configuration' | 'networking' | 'review';
-
-const nodeSetRowSchema = (t: TFunction) =>
-  yup.object({
-    rowId: yup.string().required(),
-    name: resourceNameSchema(t),
-    hostType: yup.string().required(t('Host type is required')),
-    size: yup
-      .string()
-      .required(t('Pool size is required'))
-      .test('pool-size-positive', t('Pool size must be greater than zero'), (value) => {
-        const parsed = Number(value?.trim());
-        return Number.isFinite(parsed) && parsed > 0;
-      }),
-  });
 
 const nodeSetField = (t: TFunction) =>
   yup.object({
     locked: yup.boolean(),
     value: yup
       .array()
-      .of(nodeSetRowSchema(t))
+      .of(clusterNodeSetRowSchema(t))
       .test('unique-node-set-names', uniqueNodeSetNamesTest(t))
       .when('locked', {
         is: true,

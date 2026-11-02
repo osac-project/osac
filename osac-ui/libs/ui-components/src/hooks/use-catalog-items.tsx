@@ -42,6 +42,9 @@ export const useCatalogItems = (
   const shouldFetchKind = (kind: ServiceTier) =>
     enabledServices.includes(kind) && (fetchAllTypes || typeFilter.includes(kind));
 
+  const shouldFetchTotal = (kind: ServiceTier) =>
+    enabledServices.includes(kind) && !shouldFetchKind(kind);
+
   const vmsQuery = useListResource(ComputeInstanceCatalogItems, listParams, {
     enabled: shouldFetchKind(ServiceTier.VMAAS),
   });
@@ -53,13 +56,13 @@ export const useCatalogItems = (
   });
 
   const vmsTotalQuery = useListResource(ComputeInstanceCatalogItems, totalListParams, {
-    enabled: enabledServices.includes(ServiceTier.VMAAS),
+    enabled: shouldFetchTotal(ServiceTier.VMAAS),
   });
   const clustersTotalQuery = useListResource(ClusterCatalogItems, totalListParams, {
-    enabled: enabledServices.includes(ServiceTier.CAAS),
+    enabled: shouldFetchTotal(ServiceTier.CAAS),
   });
   const bmsTotalQuery = useListResource(BareMetalInstanceCatalogItems, totalListParams, {
-    enabled: enabledServices.includes(ServiceTier.BMAAS),
+    enabled: shouldFetchTotal(ServiceTier.BMAAS),
   });
 
   const isLoading =
@@ -85,16 +88,16 @@ export const useCatalogItems = (
     fetchedQueries.length === 0 ||
     fetchedQueries.some(({ query }) => !query.isLoading && !query.error);
 
-  const totalVmsCount = vmsTotalQuery.data?.total ?? 0;
-  const totalBmsCount = bmsTotalQuery.data?.total ?? 0;
-  const totalClustersCount = clustersTotalQuery.data?.total ?? 0;
+  const totalVmsCount = vmsTotalQuery.data?.total ?? vmsQuery.data?.total ?? 0;
+  const totalBmsCount = bmsTotalQuery.data?.total ?? bmsQuery.data?.total ?? 0;
+  const totalClustersCount = clustersTotalQuery.data?.total ?? clustersQuery.data?.total ?? 0;
 
   return {
     error,
     totalsError: {
-      [ServiceTier.VMAAS]: vmsTotalQuery.error,
-      [ServiceTier.CAAS]: clustersTotalQuery.error,
-      [ServiceTier.BMAAS]: bmsTotalQuery.error,
+      [ServiceTier.VMAAS]: vmsTotalQuery.error ?? vmsQuery.error,
+      [ServiceTier.CAAS]: clustersTotalQuery.error ?? clustersQuery.error,
+      [ServiceTier.BMAAS]: bmsTotalQuery.error ?? bmsQuery.error,
     },
     isLoading,
     hasSuccessfulQuery,

@@ -784,7 +784,7 @@ describe('CatalogPage', () => {
     expect(screen.getByRole('button', { name: /Clusters/ })).not.toHaveTextContent('1');
   });
 
-  it('hides the selected catalog count when its total query fails', async () => {
+  it('uses the selected catalog total from its list response', async () => {
     renderCatalogPage(
       createCatalogPageTransport({
         vmTotalError: Object.assign(new Error(), { name: 'UnauthorizedError' }),
@@ -797,8 +797,8 @@ describe('CatalogPage', () => {
       expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
     });
 
-    expect(screen.queryByText('1 catalog item')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Virtual Machines/ })).not.toHaveTextContent('1');
+    expect(screen.getByText('1 catalog item')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Virtual Machines/ })).toHaveTextContent('1');
   });
 
   it('shows a generic section error for non-401 failures', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BareMetalInstanceCatalogItem } from '@osac/types';
+import { type BareMetalInstanceCatalogItem, type DiskImage, GuestOSFamily } from '@osac/types';
 
 import {
   buildBareMetalCatalogItemCreatePayload,
@@ -104,6 +104,24 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
 });
 
 describe('bare metal catalog item initial values and updates', () => {
+  it('leaves the disk image family unrestricted when loading an edit item', () => {
+    const values = getBareMetalCatalogItemInitialValues(
+      {
+        fields: {
+          diskImage: {
+            behavior: { case: 'locked', value: { id: 'image-1', name: 'windows-image' } },
+          },
+        },
+      } as BareMetalInstanceCatalogItem,
+      {
+        spec: { guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_WINDOWS },
+      } as DiskImage,
+    );
+
+    expect(values.guestOsFamily).toBe(GuestOSFamily.GUEST_OS_FAMILY_WINDOWS);
+    expect(values.diskImage.value).toEqual({ id: 'image-1', name: 'windows-image' });
+  });
+
   it('loads locked and editable policy values into the shared form shape', () => {
     const item = {
       id: 'catalog-item-1',

@@ -40,7 +40,7 @@ const readCatalogUserDataValue = (value: UserDataSource | undefined): CatalogUse
   if (source.case === 'secret') {
     return {
       source: 'secret',
-      value: source.value?.name || source.value?.id || '',
+      value: source.value?.name || '',
     };
   }
 

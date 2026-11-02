@@ -1,6 +1,7 @@
 import {
   type ComputeInstanceCatalogItem,
   type ComputeInstanceDiskList,
+  type DiskImage,
   type DiskImageReference,
   GuestOSFamily,
   type InstanceTypeReference,
@@ -59,8 +60,19 @@ export const emptyComputeCatalogItemValues = (): ComputeCatalogItemValues => ({
   additionalDisks: provisioningFieldValue([]),
 });
 
+export const getComputeCatalogItemDiskImageId = (
+  item?: ComputeInstanceCatalogItem,
+): string | undefined => {
+  const diskImage = getFieldFromCatalogItemPolicy<DiskImageReference | undefined>(
+    item?.fields?.diskImage,
+    undefined,
+  );
+  return diskImage.value?.id || undefined;
+};
+
 export const getComputeCatalogItemInitialValues = (
   item?: ComputeInstanceCatalogItem,
+  diskImageResource?: DiskImage,
 ): ComputeCatalogItemValues => {
   if (!item) {
     return emptyComputeCatalogItemValues();
@@ -90,7 +102,9 @@ export const getComputeCatalogItemInitialValues = (
 
   return {
     ...catalogGeneralValuesFromItem(item),
-    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+    guestOsFamily: diskImage.value?.id
+      ? (diskImageResource?.spec?.guestOsFamily ?? GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED)
+      : GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     diskImage: provisioningFieldValue(
       resourceSelectValueFromReference(diskImage.value),
       diskImage.locked,

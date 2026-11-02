@@ -170,12 +170,38 @@ var _ = Describe("VolumeFeedbackController", func() {
 		It("should sync Phase=Failed to state=FAILED", func() {
 			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_CREATING))
 
+			conditionMessage := "rpc error: code = ResourceExhausted desc = no enough space left on VG: free=53435432960, requested=858993459200"
 			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseFailed, nil)
 			cr.Status.Conditions = []metav1.Condition{{
 				Type:    string(v1alpha1.VolumeConditionVendorProvisioned),
 				Status:  metav1.ConditionFalse,
 				Reason:  "ProvisioningFailed",
-				Message: "insufficient vg1 capacity",
+				Message: conditionMessage,
+			}}
+			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: volName, Namespace: volNamespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
+			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal(conditionMessage))
+			Expect(mockServer.updateMasks).To(HaveLen(1))
+			Expect(mockServer.updateMasks[0]).To(ContainElement("status.message"))
+			Expect(mockServer.signals).To(BeEmpty())
+		})
+
+		It("should fall back to the generic message when no VendorProvisioned condition exists", func() {
+			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_CREATING))
+
+			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseFailed, nil)
+			cr.Status.Conditions = []metav1.Condition{{
+				Type:    "UnrelatedCondition",
+				Status:  metav1.ConditionFalse,
+				Reason:  "Unrelated",
+				Message: "unrelated failed condition",
 			}}
 			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
 
@@ -187,9 +213,49 @@ var _ = Describe("VolumeFeedbackController", func() {
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
 			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal("volume provisioning failed"))
-			Expect(mockServer.updateMasks).To(HaveLen(1))
-			Expect(mockServer.updateMasks[0]).To(ContainElement("status.message"))
-			Expect(mockServer.signals).To(BeEmpty())
+		})
+
+		It("should fall back to the generic message when the VendorProvisioned condition is not False", func() {
+			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_CREATING))
+
+			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseFailed, nil)
+			cr.Status.Conditions = []metav1.Condition{{
+				Type:    string(v1alpha1.VolumeConditionVendorProvisioned),
+				Status:  metav1.ConditionTrue,
+				Reason:  "Provisioned",
+				Message: "Volume provisioned on vendor storage array",
+			}}
+			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: volName, Namespace: volNamespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
+			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal("volume provisioning failed"))
+		})
+
+		It("should fall back to the generic message when the VendorProvisioned condition message is empty", func() {
+			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_CREATING))
+
+			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseFailed, nil)
+			cr.Status.Conditions = []metav1.Condition{{
+				Type:   string(v1alpha1.VolumeConditionVendorProvisioned),
+				Status: metav1.ConditionFalse,
+				Reason: "ProvisioningFailed",
+			}}
+			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: volName, Namespace: volNamespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
+			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal("volume provisioning failed"))
 		})
 
 		It("should sync Phase=Deleted to state=DELETED", func() {
@@ -337,6 +403,31 @@ var _ = Describe("VolumeFeedbackController", func() {
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
 			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal("volume provisioning failed"))
+		})
+
+		It("should copy the VendorProvisioned condition message during deletion", func() {
+			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
+
+			conditionMessage := "rpc error: code = ResourceExhausted desc = no enough space left on VG: free=53435432960, requested=858993459200"
+			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseFailed,
+				[]string{osacVolumeFeedbackFinalizer, osacVolumeFinalizer})
+			cr.Status.Conditions = []metav1.Condition{{
+				Type:    string(v1alpha1.VolumeConditionVendorProvisioned),
+				Status:  metav1.ConditionFalse,
+				Reason:  "ProvisioningFailed",
+				Message: conditionMessage,
+			}}
+			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
+			Expect(fakeK8s.Delete(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: volName, Namespace: volNamespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
+			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal(conditionMessage))
 		})
 
 		It("should report DELETING dated at the deletion timestamp for a volume deleted before any status write", func() {

@@ -94,7 +94,6 @@ const NetworkAttachmentFields = ({
               name={`${name}.virtualNetwork`}
               subnetName={`${name}.subnet`}
               securityGroupsName={`${name}.securityGroups`}
-              showDescription
               onCreate={canCreateVirtualNetwork ? () => setIsCreateModalOpen(true) : undefined}
               isRequired
               isDisabled={isDisabled}
@@ -103,7 +102,6 @@ const NetworkAttachmentFields = ({
               name={`${name}.subnet`}
               virtualNetworkName={`${name}.virtualNetwork`}
               isRequired
-              showCidr
               isDisabled={isDisabled}
             />
             {showSecurityGroups && (

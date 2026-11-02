@@ -7,6 +7,7 @@ import * as yup from 'yup';
 import { type Tenant, TenantState, Tenants } from '@osac/types/private';
 
 import {
+  type ResourceListItem,
   ResourceSelectField,
   type ResourceSelectValue,
   emptyResourceSelectValue,
@@ -26,14 +27,16 @@ const renderSelect = ({
   autoSelectSingleOption = false,
   filterItems,
   formatOptionLabel,
+  getOptionDescription,
   initialValue = emptyResourceSelectValue(),
   tenants = [makeTenant('only-1', 'Only tenant')],
   transportOverrides,
   createOption,
 }: {
   autoSelectSingleOption?: boolean;
-  filterItems?: (item: { id: string; metadata?: { name?: string } }) => boolean;
-  formatOptionLabel?: (item: { id: string; metadata?: { name?: string } }) => string;
+  filterItems?: (item: ResourceListItem) => boolean;
+  formatOptionLabel?: (item: ResourceListItem) => string;
+  getOptionDescription?: (item: ResourceListItem) => string | undefined;
   initialValue?: ResourceSelectValue;
   tenants?: Tenant[];
   transportOverrides?: MockTransportOverrides;
@@ -62,6 +65,7 @@ const renderSelect = ({
             autoSelectSingleOption={autoSelectSingleOption}
             filterItems={filterItems}
             formatOptionLabel={formatOptionLabel}
+            getOptionDescription={getOptionDescription}
             createOption={createOption}
             placeholder="Select a tenant"
             loadErrorTitle="Failed to fetch tenants"
@@ -252,6 +256,19 @@ describe('ResourceSelectField', () => {
       );
     });
     expect(screen.getByRole('combobox')).toHaveValue('globex (custom)');
+  });
+
+  it('renders option details provided by the caller', async () => {
+    const { user } = renderSelect({
+      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      getOptionDescription: (item) => `ID: ${item.id}`,
+    });
+
+    await waitFor(() => expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled());
+    await user.click(screen.getByLabelText(/^Tenant/));
+    await user.click(screen.getByRole('option', { name: 'globex · ID: t-2' }));
+
+    expect(screen.getByRole('combobox')).toHaveValue('globex · ID: t-2');
   });
 
   it('keeps distinct ids for the typeahead select and toggle', async () => {

@@ -12,7 +12,6 @@ interface VirtualNetworkFieldProps extends ProvisioningFieldControlProps {
   subnetName: string;
   securityGroupsName: string;
   isRequired?: boolean;
-  showDescription?: boolean;
   onCreate?: () => void;
 }
 
@@ -21,7 +20,6 @@ const VirtualNetworkField = ({
   subnetName,
   securityGroupsName,
   isRequired = false,
-  showDescription = false,
   onCreate,
   isDisabled = false,
 }: VirtualNetworkFieldProps) => {
@@ -37,7 +35,6 @@ const VirtualNetworkField = ({
       request={{ filter: VIRTUAL_NETWORK_READY_LIST_FILTER }}
       autoSelectSingleOption
       isRequired={isRequired}
-      showDescription={showDescription}
       createOption={
         onCreate ? { label: t('Create virtual network'), onSelect: onCreate } : undefined
       }

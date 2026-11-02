@@ -20,8 +20,7 @@ export { emptyResourceSelectValue } from './resourceSelectValue';
 
 export interface ResourceListItem {
   id: string;
-  metadata?: { name?: string; description?: string };
-  spec?: { ipv4Cidr?: string };
+  metadata?: { name?: string };
 }
 
 export interface ResourceSelectFieldProps {
@@ -39,8 +38,6 @@ export interface ResourceSelectFieldProps {
   loadErrorTitle?: string;
   emptyTitle?: string;
   emptyDescription?: string;
-  showDescription?: boolean;
-  showIpv4Cidr?: boolean;
   createOption?: { label: string; onSelect: () => void };
   /** Called after a new resource is selected. Use to trigger cascade resets. */
   onSelectResource?: (value: ResourceSelectValue) => void;
@@ -48,6 +45,7 @@ export interface ResourceSelectFieldProps {
   filterItems?: (item: ResourceListItem) => boolean;
   /** Label for options and the closed toggle. Defaults to metadata.name. */
   formatOptionLabel?: (item: ResourceListItem) => string;
+  getOptionDescription?: (item: ResourceListItem) => string | undefined;
 }
 
 const resourceFromItem = (item: ResourceListItem): ResourceSelectValue => ({
@@ -72,12 +70,11 @@ export const ResourceSelectField = ({
   loadErrorTitle,
   emptyTitle,
   emptyDescription,
-  showDescription = false,
-  showIpv4Cidr = false,
   createOption,
   onSelectResource,
   filterItems,
   formatOptionLabel = defaultOptionLabel,
+  getOptionDescription,
 }: ResourceSelectFieldProps) => {
   const [field, meta, helpers] = useField<ResourceSelectValue>(name);
   const [typeaheadKey, setTypeaheadKey] = useState(0);
@@ -102,11 +99,7 @@ export const ResourceSelectField = ({
   const typeaheadOptions = useMemo<TypeaheadSelectOption[]>(() => {
     const options: TypeaheadSelectOption[] = items.map((item) => {
       const baseLabel = formatOptionLabel(item);
-      const detail = showDescription
-        ? item.metadata?.description?.trim()
-        : showIpv4Cidr
-          ? item.spec?.ipv4Cidr?.trim()
-          : '';
+      const detail = getOptionDescription?.(item);
       return {
         value: item.id,
         content: detail ? `${baseLabel} · ${detail}` : baseLabel,
@@ -117,7 +110,7 @@ export const ResourceSelectField = ({
       options.push({ value: -1, content: createLabel, icon: <PlusIcon /> });
     }
     return options;
-  }, [createLabel, formatOptionLabel, items, selectedId, showDescription, showIpv4Cidr]);
+  }, [createLabel, formatOptionLabel, getOptionDescription, items, selectedId]);
 
   useEffect(() => {
     if (

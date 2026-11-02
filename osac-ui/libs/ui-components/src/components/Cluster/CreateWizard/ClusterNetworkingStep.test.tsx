@@ -97,7 +97,7 @@ describe('ClusterNetworkingStep', () => {
     expect(screen.getByRole('radio', { name: /Tenant default/ })).toBeChecked();
     expect(screen.getByRole('radio', { name: /Custom network/ })).not.toBeChecked();
     expect(await screen.findByText('tenant-workload')).toBeInTheDocument();
-    expect(screen.getByText('Primary tenant compute network')).toBeInTheDocument();
+    expect(screen.queryByText('Primary tenant compute network')).not.toBeInTheDocument();
     expect(screen.getByText('default-ipv4')).toBeInTheDocument();
     expect(screen.getByText('10.42.0.0/24')).toBeInTheDocument();
     expect(screen.queryByText('allow-ssh-https')).not.toBeInTheDocument();
@@ -203,7 +203,7 @@ describe('ClusterNetworkingStep', () => {
     expect(screen.queryByText('old-group')).not.toBeInTheDocument();
   });
 
-  it('shows cascading custom-network pickers with descriptions', async () => {
+  it('shows cascading custom-network pickers with subnet CIDRs', async () => {
     const { user } = renderStep();
 
     await user.click(screen.getByRole('radio', { name: /Custom network/ }));
@@ -213,9 +213,7 @@ describe('ClusterNetworkingStep', () => {
 
     const virtualNetwork = screen.getByLabelText(/^Virtual network/);
     await user.click(virtualNetwork);
-    await user.click(
-      await screen.findByRole('option', { name: 'isolated · Private team network' }),
-    );
+    await user.click(await screen.findByRole('option', { name: 'isolated' }));
 
     const subnet = screen.getByLabelText(/^Subnet/);
     await waitFor(() => expect(subnet).not.toBeDisabled());
@@ -233,9 +231,7 @@ describe('ClusterNetworkingStep', () => {
 
     await user.click(screen.getByRole('radio', { name: /Custom network/ }));
     await user.click(screen.getByLabelText(/^Virtual network/));
-    await user.click(
-      await screen.findByRole('option', { name: 'isolated · Private team network' }),
-    );
+    await user.click(await screen.findByRole('option', { name: 'isolated' }));
     await waitFor(() => expect(screen.getByLabelText(/^Subnet/)).not.toBeDisabled());
     await user.click(screen.getByLabelText(/^Subnet/));
     await user.click(await screen.findByRole('option', { name: 'team-subnet · 10.43.0.0/24' }));

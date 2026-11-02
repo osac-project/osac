@@ -143,9 +143,6 @@ const DefaultNetworkSummary = ({
             <DescriptionListTerm>{t('Virtual network')}</DescriptionListTerm>
             <DescriptionListDescription>
               <strong>{virtualNetworkName}</strong>
-              {virtualNetwork?.metadata?.description && (
-                <Content component="p">{virtualNetwork.metadata.description}</Content>
-              )}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
@@ -160,9 +157,6 @@ const DefaultNetworkSummary = ({
               <DescriptionListTerm>{t('Security group')}</DescriptionListTerm>
               <DescriptionListDescription>
                 <strong>{securityGroup?.metadata?.name || securityGroup?.id || '—'}</strong>
-                {securityGroup?.metadata?.description && (
-                  <Content component="p">{securityGroup.metadata.description}</Content>
-                )}
               </DescriptionListDescription>
             </DescriptionListGroup>
           )}

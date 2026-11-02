@@ -8,14 +8,12 @@ import { useTranslation } from '../../hooks/useTranslation';
 
 interface CatalogServiceTierFilterProps {
   selected: ServiceTier | undefined;
-  totalsError: Partial<Record<ServiceTier, unknown>>;
-  typeCounts: Record<ServiceTier, number>;
+  typeCounts: Partial<Record<ServiceTier, number>>;
   onSelect: (value: ServiceTier) => void;
 }
 
 const CatalogServiceTierFilter = ({
   selected,
-  totalsError,
   typeCounts,
   onSelect,
 }: CatalogServiceTierFilterProps) => {
@@ -40,7 +38,7 @@ const CatalogServiceTierFilter = ({
   return (
     <ToggleGroup aria-label={t('Filter catalog by resource type')}>
       {catalogTypeFilters.map((option) => {
-        const count = totalsError[option.value] ? undefined : typeCounts[option.value];
+        const count = typeCounts[option.value];
 
         return (
           <ToggleGroupItem

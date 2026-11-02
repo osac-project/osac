@@ -246,10 +246,20 @@ const CatalogPage = () => {
     [selectedServiceTier],
   );
 
-  const { vms, bms, clusters, isLoading, error, hasSuccessfulQuery, typeCounts, totalsError } =
-    useCatalogItems(filterCriteria, serviceTierFilter, false);
+  const { vms, bms, clusters, isLoading, error, hasSuccessfulQuery, typeCounts } = useCatalogItems(
+    filterCriteria,
+    serviceTierFilter,
+    true,
+  );
 
-  const data = [...vms, ...clusters, ...bms];
+  const data =
+    selectedServiceTier === ServiceTier.VMAAS
+      ? vms
+      : selectedServiceTier === ServiceTier.CAAS
+        ? clusters
+        : selectedServiceTier === ServiceTier.BMAAS
+          ? bms
+          : [];
   const selectedTotalItems =
     selectedServiceTier === undefined ? 0 : typeCounts[selectedServiceTier];
 
@@ -318,7 +328,6 @@ const CatalogPage = () => {
                 <ToolbarItem>
                   <CatalogServiceTierFilter
                     selected={selectedServiceTier}
-                    totalsError={totalsError}
                     typeCounts={typeCounts}
                     onSelect={(tier) => {
                       const kind = catalogKindForServiceTier(tier);

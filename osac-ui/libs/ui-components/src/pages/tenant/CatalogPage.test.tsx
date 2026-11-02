@@ -164,9 +164,6 @@ type CatalogTransportOptions = {
   vmError?: Error;
   clusterError?: Error;
   bmError?: Error;
-  vmTotalError?: Error;
-  clusterTotalError?: Error;
-  bmTotalError?: Error;
   vmDelayMs?: number;
   clusterDelayMs?: number;
   bmDelayMs?: number;
@@ -215,9 +212,6 @@ const createCatalogPageTransport = ({
   vmError,
   clusterError,
   bmError,
-  vmTotalError,
-  clusterTotalError,
-  bmTotalError,
   vmDelayMs = 0,
   clusterDelayMs = 0,
   bmDelayMs = 0,
@@ -252,9 +246,8 @@ const createCatalogPageTransport = ({
           if (vmDelayMs) {
             await delay(vmDelayMs);
           }
-          const error = req.limit === 0 ? (vmTotalError ?? vmError) : vmError;
-          if (error) {
-            throw toConnectError(error);
+          if (vmError) {
+            throw toConnectError(vmError);
           }
           return toCatalogListResponse(vmItems, req);
         },
@@ -271,9 +264,8 @@ const createCatalogPageTransport = ({
           if (clusterDelayMs) {
             await delay(clusterDelayMs);
           }
-          const error = req.limit === 0 ? (clusterTotalError ?? clusterError) : clusterError;
-          if (error) {
-            throw toConnectError(error);
+          if (clusterError) {
+            throw toConnectError(clusterError);
           }
           return toCatalogListResponse(clusterItems, req);
         },
@@ -290,9 +282,8 @@ const createCatalogPageTransport = ({
           if (bmDelayMs) {
             await delay(bmDelayMs);
           }
-          const error = req.limit === 0 ? (bmTotalError ?? bmError) : bmError;
-          if (error) {
-            throw toConnectError(error);
+          if (bmError) {
+            throw toConnectError(bmError);
           }
           return toCatalogListResponse(bmItems, req);
         },
@@ -764,7 +755,7 @@ describe('CatalogPage', () => {
     expect(screen.queryByText(unpublishedVmItem.metadata?.name ?? '')).not.toBeInTheDocument();
   });
 
-  it('keeps the selected catalog visible when an unrelated total query fails', async () => {
+  it('keeps the selected catalog visible when an unrelated catalog query fails', async () => {
     renderCatalogPage(
       createCatalogPageTransport({
         clusterError: Object.assign(new Error(), { name: 'UnauthorizedError' }),
@@ -776,7 +767,7 @@ describe('CatalogPage', () => {
     await waitFor(() => {
       expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
     });
-    // The selected VM query succeeds, and the unrelated cluster total failure
+    // The selected VM query succeeds, and the unrelated cluster query failure
     // must not replace the selected catalog with an error state.
     expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
     expect(screen.queryByText(clusterCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
@@ -784,10 +775,11 @@ describe('CatalogPage', () => {
     expect(screen.getByRole('button', { name: /Clusters/ })).not.toHaveTextContent('1');
   });
 
-  it('uses the selected catalog total from its list response', async () => {
+  it('uses the selected catalog total from its list response without a count query', async () => {
+    const requestCounts = createRequestCounts();
     renderCatalogPage(
       createCatalogPageTransport({
-        vmTotalError: Object.assign(new Error(), { name: 'UnauthorizedError' }),
+        requestCounts,
       }),
       allCatalogServiceTiers,
       ['/catalog?types=vm'],
@@ -799,6 +791,9 @@ describe('CatalogPage', () => {
 
     expect(screen.getByText('1 catalog item')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Virtual Machines/ })).toHaveTextContent('1');
+    expect(requestCounts.vm).toBe(1);
+    expect(requestCounts.cluster).toBe(1);
+    expect(requestCounts.bm).toBe(1);
   });
 
   it('shows a generic section error for non-401 failures', async () => {

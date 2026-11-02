@@ -20,13 +20,12 @@ export const useCatalogItems = (
   fetchAllTypes: boolean,
 ): {
   error: unknown;
-  totalsError: Partial<Record<ServiceTier, unknown>>;
   isLoading: boolean;
   hasSuccessfulQuery: boolean;
   vms: ComputeInstanceCatalogItem[];
   clusters: ClusterCatalogItem[];
   bms: BareMetalInstanceCatalogItem[];
-  typeCounts: Record<ServiceTier, number>;
+  typeCounts: Partial<Record<ServiceTier, number>>;
 } => {
   const { enabledServices, role } = useSession();
   const visibilityCriteria: CatalogListFilterCriteria =
@@ -35,15 +34,10 @@ export const useCatalogItems = (
     ...filterCriteria,
     ...visibilityCriteria,
   });
-  const visibilityFilter = buildCatalogListFilter(visibilityCriteria);
   const listParams = listFilter ? { filter: listFilter } : {};
-  const totalListParams = visibilityFilter ? { limit: 0, filter: visibilityFilter } : { limit: 0 };
 
   const shouldFetchKind = (kind: ServiceTier) =>
     enabledServices.includes(kind) && (fetchAllTypes || typeFilter.includes(kind));
-
-  const shouldFetchTotal = (kind: ServiceTier) =>
-    enabledServices.includes(kind) && !shouldFetchKind(kind);
 
   const vmsQuery = useListResource(ComputeInstanceCatalogItems, listParams, {
     enabled: shouldFetchKind(ServiceTier.VMAAS),
@@ -55,50 +49,31 @@ export const useCatalogItems = (
     enabled: shouldFetchKind(ServiceTier.BMAAS),
   });
 
-  const vmsTotalQuery = useListResource(ComputeInstanceCatalogItems, totalListParams, {
-    enabled: shouldFetchTotal(ServiceTier.VMAAS),
-  });
-  const clustersTotalQuery = useListResource(ClusterCatalogItems, totalListParams, {
-    enabled: shouldFetchTotal(ServiceTier.CAAS),
-  });
-  const bmsTotalQuery = useListResource(BareMetalInstanceCatalogItems, totalListParams, {
-    enabled: shouldFetchTotal(ServiceTier.BMAAS),
-  });
-
-  const isLoading =
-    vmsQuery.isLoading ||
-    clustersQuery.isLoading ||
-    bmsQuery.isLoading ||
-    vmsTotalQuery.isLoading ||
-    clustersTotalQuery.isLoading ||
-    bmsTotalQuery.isLoading;
-
-  const error = vmsQuery.error || clustersQuery.error || bmsQuery.error;
+  const isLoading = vmsQuery.isLoading || clustersQuery.isLoading || bmsQuery.isLoading;
 
   const fetchedQueries = [
-    { enabled: shouldFetchKind(ServiceTier.VMAAS), query: vmsQuery },
-    { enabled: shouldFetchKind(ServiceTier.CAAS), query: clustersQuery },
-    { enabled: shouldFetchKind(ServiceTier.BMAAS), query: bmsQuery },
+    { kind: ServiceTier.VMAAS, enabled: shouldFetchKind(ServiceTier.VMAAS), query: vmsQuery },
+    { kind: ServiceTier.CAAS, enabled: shouldFetchKind(ServiceTier.CAAS), query: clustersQuery },
+    { kind: ServiceTier.BMAAS, enabled: shouldFetchKind(ServiceTier.BMAAS), query: bmsQuery },
   ].filter((entry) => entry.enabled);
+
+  const selectedQueries = fetchedQueries.filter((entry) => typeFilter.includes(entry.kind));
+  const statusQueries = selectedQueries.length > 0 ? selectedQueries : fetchedQueries;
+  const error = statusQueries.find(({ query }) => query.error)?.query.error;
 
   // A kind that was never fetched (not enabled, or not in typeFilter) reports
   // isLoading: false and error: null, which would otherwise count as a vacuous
   // success below and enable search before the fetched kind actually resolves.
   const hasSuccessfulQuery =
-    fetchedQueries.length === 0 ||
-    fetchedQueries.some(({ query }) => !query.isLoading && !query.error);
+    statusQueries.length === 0 ||
+    statusQueries.some(({ query }) => !query.isLoading && !query.error);
 
-  const totalVmsCount = vmsTotalQuery.data?.total ?? vmsQuery.data?.total ?? 0;
-  const totalBmsCount = bmsTotalQuery.data?.total ?? bmsQuery.data?.total ?? 0;
-  const totalClustersCount = clustersTotalQuery.data?.total ?? clustersQuery.data?.total ?? 0;
+  const totalVmsCount = vmsQuery.error ? undefined : vmsQuery.data?.total;
+  const totalBmsCount = bmsQuery.error ? undefined : bmsQuery.data?.total;
+  const totalClustersCount = clustersQuery.error ? undefined : clustersQuery.data?.total;
 
   return {
     error,
-    totalsError: {
-      [ServiceTier.VMAAS]: vmsTotalQuery.error ?? vmsQuery.error,
-      [ServiceTier.CAAS]: clustersTotalQuery.error ?? clustersQuery.error,
-      [ServiceTier.BMAAS]: bmsTotalQuery.error ?? bmsQuery.error,
-    },
     isLoading,
     hasSuccessfulQuery,
     vms: shouldFetchKind(ServiceTier.VMAAS) ? (vmsQuery.data?.items ?? []) : [],

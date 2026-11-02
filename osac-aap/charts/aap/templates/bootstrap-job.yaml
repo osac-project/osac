@@ -82,7 +82,9 @@ spec:
         image: {{ .Values.bootstrap.image }}
         args:
         - ansible-playbook
+        {{- if .Values.aap.instance.enabled }}
         - osac.config_as_code.subscription
+        {{- end }}
         - osac.config_as_code.configure
         envFrom:
         - secretRef:
@@ -93,9 +95,11 @@ spec:
         # the controller collection appends /api/controller/v2 itself.
         - name: AAP_HOSTNAME
           value: {{ include "osac-aap.controllerUrl" . | quote }}
-        # The external AAP's certificate comes from the shared CI CA; the
-        # Ansible controller modules reach it through Python requests, which
-        # honors this variable.
+        # The external AAP's certificate comes from the shared CI CA. The
+        # Ansible controller modules reach it through Python urllib, the
+        # config-as-code client through requests; one variable covers each.
+        - name: SSL_CERT_FILE
+          value: /etc/ca-bundle/bundle.pem
         - name: REQUESTS_CA_BUNDLE
           value: /etc/ca-bundle/bundle.pem
         {{- end }}

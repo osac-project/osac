@@ -17,6 +17,7 @@ import (
 
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/heartbeat"
+	"github.com/osac-project/osac-metering/schema"
 )
 
 var mergeBase = time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
@@ -101,11 +102,14 @@ func TestMergeIntoLedgerChecksOverlap(t *testing.T) {
 	}
 }
 
-// TestDecodeHeartbeatSelectsTheSchemaInEffectAtWriteTime replays a record with the schema in
-// effect when it was written (TC-AC-09). A record naming an unpublished version, or one
-// written before any published version took effect, stops the rebuild instead of being read
-// with the wrong shape.
-func TestDecodeHeartbeatSelectsTheSchemaInEffectAtWriteTime(t *testing.T) {
+// TestDecodeHeartbeatReplaysARecordWithItsNamedVersion replays a record with the version its
+// CloudEvent names (TC-AC-09). An unknown version stops the rebuild, and so does a record
+// written before its own version took effect.
+func TestDecodeHeartbeatReplaysARecordWithItsNamedVersion(t *testing.T) {
+	versions, err := schema.PublishedVersions()
+	if err != nil {
+		t.Fatalf("loading the published schema versions: %v", err)
+	}
 	key := mergeKey()
 	written := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
 	event, err := heartbeat.New(
@@ -119,7 +123,7 @@ func TestDecodeHeartbeatSelectsTheSchemaInEffectAtWriteTime(t *testing.T) {
 		t.Fatalf("marshaling the heartbeat: %v", err)
 	}
 
-	caught, err := decodeHeartbeat(payload)
+	caught, err := decodeHeartbeat(payload, versions)
 	if err != nil {
 		t.Fatalf("decoding a v1 record written after v1 took effect: %v", err)
 	}
@@ -144,24 +148,60 @@ func TestDecodeHeartbeatSelectsTheSchemaInEffectAtWriteTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshaling the heartbeat: %v", err)
 	}
-	if _, err := decodeHeartbeat(payload); err == nil ||
+	if _, err := decodeHeartbeat(payload, versions); err == nil ||
 		!strings.Contains(err.Error(), "osac.resource.heartbeat.v99") {
 		t.Fatalf("an unpublished version must stop the rebuild, got %v", err)
 	}
 
-	before := time.Date(1969, 12, 31, 23, 59, 0, 0, time.UTC)
-	early, err := heartbeat.New(
-		"acme", key, before.Add(-time.Minute), before, 60_000_000, "second", before, 7, "0001",
+	// A record may not carry a version that was not published when it was written.
+	futureV2 := versions[len(versions)-1]
+	futureV2.Version = "v2"
+	futureV2.CloudEventType = "osac.resource.heartbeat.v2"
+	futureV2.EffectiveAt = written.Add(time.Hour)
+	future, err := heartbeat.New(
+		"acme", key, written.Add(-time.Minute), written, 60_000_000, "second", written, 7, "0001",
 	)
 	if err != nil {
 		t.Fatalf("building the heartbeat: %v", err)
 	}
-	payload, err = early.MarshalJSON()
+	future.SetType(futureV2.CloudEventType)
+	payload, err = future.MarshalJSON()
 	if err != nil {
 		t.Fatalf("marshaling the heartbeat: %v", err)
 	}
-	if _, err := decodeHeartbeat(payload); err == nil ||
-		!strings.Contains(err.Error(), "no schema version is in effect") {
-		t.Fatalf("a record written before every version must be refused, got %v", err)
+	if _, err := decodeHeartbeat(payload, append(append([]schema.Version{}, versions...),
+		futureV2)); err == nil ||
+		!strings.Contains(err.Error(), "before that version took effect") {
+		t.Fatalf("a record written before its version took effect must be refused, got %v", err)
+	}
+}
+
+// TestDecodeHeartbeatAcceptsAV1RecordInsideAV2Window pins the rolling-deploy case: once v2 is
+// published, older pods keep writing v1 records, and a rebuild must still accept them.
+func TestDecodeHeartbeatAcceptsAV1RecordInsideAV2Window(t *testing.T) {
+	versions, err := schema.PublishedVersions()
+	if err != nil {
+		t.Fatalf("loading the published schema versions: %v", err)
+	}
+	written := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	v2 := versions[len(versions)-1]
+	v2.Version = "v2"
+	v2.CloudEventType = "osac.resource.heartbeat.v2"
+	v2.EffectiveAt = written.Add(-time.Hour)
+	withV2 := append(append([]schema.Version{}, versions...), v2)
+
+	event, err := heartbeat.New(
+		"acme", mergeKey(), written.Add(-time.Minute), written, 60_000_000, "second",
+		written, 7, "0001",
+	)
+	if err != nil {
+		t.Fatalf("building the heartbeat: %v", err)
+	}
+	payload, err := event.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshaling the heartbeat: %v", err)
+	}
+	if _, err := decodeHeartbeat(payload, withV2); err != nil {
+		t.Fatalf("a v1 record written inside v2's window must be accepted: %v", err)
 	}
 }

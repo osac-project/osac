@@ -229,6 +229,33 @@ var _ = Describe("The generated contract", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(compiled.Validate(instance)).To(Succeed())
 
+		// The event's envelope and the published envelope must name the same attributes. A
+		// new extension on the producer side that the schema file does not carry would
+		// otherwise make every real event fail the checkable schema.
+		var published struct {
+			Definitions map[string]struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"$defs"`
+		}
+		Expect(json.Unmarshal([]byte(checkable), &published)).To(Succeed())
+		definition := published.Definitions[schema.SchemaVersion]
+		Expect(definition.Properties).NotTo(BeEmpty())
+		schemaAttributes := make([]string, 0, len(definition.Properties))
+		for name := range definition.Properties {
+			if name != "data" {
+				schemaAttributes = append(schemaAttributes, name)
+			}
+		}
+		var envelope map[string]json.RawMessage
+		Expect(json.Unmarshal(payload, &envelope)).To(Succeed())
+		eventAttributes := make([]string, 0, len(envelope))
+		for name := range envelope {
+			if name != "data" {
+				eventAttributes = append(eventAttributes, name)
+			}
+		}
+		Expect(eventAttributes).To(ConsistOf(schemaAttributes))
+
 		event.SetType("osac.resource.heartbeat.v99")
 		payload, err = event.MarshalJSON()
 		Expect(err).NotTo(HaveOccurred())

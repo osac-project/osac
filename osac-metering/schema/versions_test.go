@@ -24,7 +24,7 @@ var _ = Describe("Published schema versions", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(versions).NotTo(BeEmpty())
 
-		current, err := schema.VersionForType(schema.HeartbeatType)
+		current, err := schema.VersionForType(versions, schema.HeartbeatType)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(current.CloudEventType).To(Equal(schema.HeartbeatType))
 		Expect(current.Version).To(Equal(schema.SchemaVersion))
@@ -43,7 +43,9 @@ var _ = Describe("Published schema versions", func() {
 	})
 
 	It("lists the payload fields the events carry", func() {
-		version, err := schema.VersionForType(schema.HeartbeatType)
+		versions, err := schema.PublishedVersions()
+		Expect(err).NotTo(HaveOccurred())
+		version, err := schema.VersionForType(versions, schema.HeartbeatType)
 		Expect(err).NotTo(HaveOccurred())
 
 		names := map[string]schema.Field{}
@@ -97,7 +99,9 @@ var _ = Describe("Published schema versions", func() {
 	})
 
 	It("reports an event type it has not published", func() {
-		_, err := schema.VersionForType("osac.resource.heartbeat.v99")
+		versions, err := schema.PublishedVersions()
+		Expect(err).NotTo(HaveOccurred())
+		_, err = schema.VersionForType(versions, "osac.resource.heartbeat.v99")
 		Expect(err).To(MatchError(ContainSubstring("treat it as a version you have not adopted")))
 	})
 })

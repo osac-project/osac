@@ -361,7 +361,9 @@ func writeResource(out *strings.Builder, view resourceView) {
 		dimension := dimensions[name]
 		value := fmt.Sprintf("`%s`", dimension.Path)
 		if dimension.Computed {
-			value += ", derived by metering from the tracked value"
+			if note := rules.ComputedDescription(name); note != "" {
+				value += ", " + note
+			}
 		}
 		fmt.Fprintf(out, "| `%s` | %s |\n", name, value)
 	}

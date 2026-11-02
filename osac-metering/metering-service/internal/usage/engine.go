@@ -702,9 +702,9 @@ func (c *Calculator) piece(
 	pending bool,
 ) (Piece, error) {
 	dimensions := map[string]string{
-		"deployment": c.deploymentID,
-		"tenant":     tenant,
-		"meter_type": meter.Unit,
+		rules.IdentityDeployment: c.deploymentID,
+		rules.IdentityTenant:     tenant,
+		rules.IdentityMeterType:  meter.Unit,
 	}
 	for _, identity := range rules.IdentityDimensions {
 		if identity.Field == "" {

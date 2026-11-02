@@ -212,6 +212,13 @@ func (r *Round) readHeartbeats(
 	}
 	defer func() { _ = partition.Close() }()
 
+	// The published versions are read once per batch: decoding one record must not
+	// re-read, parse, and hash the embedded files for every message.
+	versions, err := schema.PublishedVersions()
+	if err != nil {
+		return nil, false, fmt.Errorf("reading the published schema versions: %w", err)
+	}
+
 	caught := make([]caughtHeartbeat, 0, r.catchUpBatch+1)
 	readCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -228,7 +235,7 @@ read:
 			if !ok {
 				break read
 			}
-			heartbeat, err := decodeHeartbeat(message.Value)
+			heartbeat, err := decodeHeartbeat(message.Value, versions)
 			if err != nil {
 				return nil, false, fmt.Errorf(
 					"decoding heartbeat at %s/%d: %w", topic, message.Offset, err,
@@ -389,15 +396,17 @@ func pieceRate(piece database.LedgerPiece) *big.Rat {
 }
 
 // decodeHeartbeat reads a heartbeat record from the topic. The record names its schema version
-// in its CloudEvent type, so a rebuild reads it with the version in effect when it was written
-// instead of the current shape. An unknown version stops the rebuild: decoding it as another
-// version would bill the usage wrong.
-func decodeHeartbeat(value []byte) (caughtHeartbeat, error) {
+// in its CloudEvent type, so a rebuild reads it with the version it was written under instead
+// of the current shape. An unknown version stops the rebuild, and so does a record written
+// before its own version took effect: decoding either as another version would bill the usage
+// wrong. A record written after a newer version took effect is fine, because a rolling deploy
+// leaves older pods writing the older version for a while.
+func decodeHeartbeat(value []byte, versions []schema.Version) (caughtHeartbeat, error) {
 	event := cloudevents.Event{}
 	if err := event.UnmarshalJSON(value); err != nil {
 		return caughtHeartbeat{}, fmt.Errorf("unmarshaling CloudEvent: %w", err)
 	}
-	published, err := schema.VersionForType(event.Type())
+	published, err := schema.VersionForType(versions, event.Type())
 	if err != nil {
 		return caughtHeartbeat{}, err
 	}
@@ -409,17 +418,12 @@ func decodeHeartbeat(value []byte) (caughtHeartbeat, error) {
 	if err != nil {
 		return caughtHeartbeat{}, err
 	}
-	inEffect, err := schema.VersionInEffect(roundTime)
-	if err != nil {
-		return caughtHeartbeat{}, err
-	}
-	if inEffect.Version != published.Version {
+	if published.EffectiveAt.After(roundTime) {
 		return caughtHeartbeat{}, fmt.Errorf(
-			"record names schema version %s, but version %s was in effect at its write time "+
-				"%s: the record and its timestamp disagree, and rebuilding it with either "+
-				"version could bill it wrong",
-			published.Version, inEffect.Version,
-			roundTime.Format(time.RFC3339),
+			"record names schema version %s but was written at %s, before that version took "+
+				"effect at %s: a record cannot carry a version that was not published yet",
+			published.Version, roundTime.Format(time.RFC3339),
+			published.EffectiveAt.Format(time.RFC3339),
 		)
 	}
 	from, to, err := heartbeat.Interval(data)

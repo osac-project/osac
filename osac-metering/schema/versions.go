@@ -120,8 +120,9 @@ func PublishedVersions() ([]Version, error) {
 }
 
 // VersionInEffect returns the version in effect at a record's writing time: the latest
-// version whose effective date is at or before it. A rebuild uses it to read each record with
-// the schema that was current when the record was written.
+// version whose effective date is at or before it. A reader uses it to check that the version
+// a record names had been published by then; a rebuild decodes the record with the version its
+// CloudEvent names.
 func VersionInEffect(at time.Time) (Version, error) {
 	if at.IsZero() {
 		return Version{}, errors.New("no schema version is in effect at the zero time")
@@ -158,13 +159,9 @@ func selectVersion(versions []Version, at time.Time) (Version, error) {
 	return selected, nil
 }
 
-// VersionForType returns the version a CloudEvent type names. A reader that meets an unknown
-// type treats it as a version it has not adopted.
-func VersionForType(cloudEventType string) (Version, error) {
-	versions, err := PublishedVersions()
-	if err != nil {
-		return Version{}, err
-	}
+// VersionForType returns the version a CloudEvent type names among the given published
+// versions. A reader that meets an unknown type treats it as a version it has not adopted.
+func VersionForType(versions []Version, cloudEventType string) (Version, error) {
 	for _, version := range versions {
 		if version.CloudEventType == cloudEventType {
 			return version, nil

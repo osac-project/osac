@@ -198,7 +198,7 @@ Dimensions:
 | Dimension | Value from |
 |---|---|
 | `attached` | `status.attached` |
-| `ip_family` | `status.address`, derived by metering from the tracked value |
+| `ip_family` | `status.address`, derived by metering from the tracked value: `ipv4` or `ipv6` |
 | `pool` | `spec.pool` |
 
 Tracked fields:

@@ -1852,11 +1852,7 @@ jobs:
       with:
         persist-credentials: false
 
-    # uv run downloads the selected portable Python build on CentOS.
-    - name: Set up Python for notification
-      uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
-      with:
-        python-version: '3.14'
+    - uses: ./.github/actions/setup-python
 
     - name: Download chart manifest
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0

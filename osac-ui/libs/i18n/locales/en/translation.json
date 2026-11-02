@@ -385,6 +385,7 @@
   "Disk images": "Disk images",
   "Disk set {{number}}": "Disk set {{number}}",
   "Disk size (GiB)": "Disk size (GiB)",
+  "Disk size is required": "Disk size is required",
   "Disk size must be a number": "Disk size must be a number",
   "Disks": "Disks",
   "Domain {{number}}": "Domain {{number}}",

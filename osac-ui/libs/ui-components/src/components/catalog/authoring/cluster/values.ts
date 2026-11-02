@@ -42,7 +42,7 @@ const readNodeSetRows = (policy: ClusterNodeSetMapPolicy | undefined) => {
   return Object.entries(items ?? {}).map(([name, nodeSet]) => ({
     ...createEmptyNodeSetRow(),
     name,
-    hostType: nodeSet.baremetalInstanceType?.id || nodeSet.baremetalInstanceType?.name || '',
+    hostType: nodeSet.baremetalInstanceType?.name || nodeSet.baremetalInstanceType?.id || '',
     size: nodeSet.size ? String(nodeSet.size) : '',
   }));
 };

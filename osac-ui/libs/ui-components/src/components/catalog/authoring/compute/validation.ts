@@ -34,7 +34,7 @@ const diskSizeNumberTest = (t: TFunction) =>
 
 const diskRowSchema = (t: TFunction) =>
   yup.object({
-    sizeGib: yup.string().test(diskSizeNumberTest(t)),
+    sizeGib: yup.string().trim().required(t('Disk size is required')).test(diskSizeNumberTest(t)),
     storageTier: catalogRequiredResourceSelectValue(t('Storage tier is required')),
   });
 

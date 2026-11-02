@@ -55,4 +55,23 @@ describe('buildComputeCatalogStepSchema', () => {
       message: 'Cloud-init must not exceed 64 KB.',
     });
   });
+
+  it.each(['', '   '])(
+    'requires a non-blank size for every additional disk row',
+    async (sizeGib) => {
+      const schema = buildComputeCatalogStepSchema('storage', t, 'tenant-admin');
+
+      await expect(
+        schema?.validate({
+          additionalDisks: {
+            locked: false,
+            value: [{ sizeGib, storageTier: { id: 'tier-1', name: 'fast' } }],
+          },
+        }),
+      ).rejects.toMatchObject({
+        path: 'additionalDisks.value[0].sizeGib',
+        message: 'Disk size is required',
+      });
+    },
+  );
 });

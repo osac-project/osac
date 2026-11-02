@@ -114,7 +114,7 @@ const ClusterCatalogItemWizard = ({ item }: ClusterCatalogItemWizardProps) => {
         {currentStep === 'networking' && <ClusterCatalogNetworkingStep />}
       </WizardStep>
       <WizardStep id="review" name={t('Review')}>
-        {currentStep === 'review' && <ClusterCatalogReviewStep />}
+        {currentStep === 'review' && <ClusterCatalogReviewStep item={item} />}
       </WizardStep>
     </ResourceWizardShell>
   );

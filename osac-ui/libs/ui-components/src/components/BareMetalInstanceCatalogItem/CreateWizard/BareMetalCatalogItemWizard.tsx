@@ -122,7 +122,7 @@ const BareMetalCatalogItemWizard = ({ item }: BareMetalCatalogItemWizardProps) =
         {currentStep === 'configuration' && <BareMetalCatalogConfigurationStep />}
       </WizardStep>
       <WizardStep id="review" name={t('Review')}>
-        {currentStep === 'review' && <BareMetalCatalogReviewStep />}
+        {currentStep === 'review' && <BareMetalCatalogReviewStep item={item} />}
       </WizardStep>
     </ResourceWizardShell>
   );

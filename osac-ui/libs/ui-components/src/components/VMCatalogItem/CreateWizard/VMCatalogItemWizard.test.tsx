@@ -237,7 +237,7 @@ describe('VMCatalogItemWizard', () => {
       expect(screen.getAllByText('Not set')).toHaveLength(6);
       expect(screen.getByText('Unpublished')).toBeInTheDocument();
       expect(screen.getAllByText('Editable')).toHaveLength(5);
-      expect(screen.getByRole('button', { name: 'Create catalog item' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
       expect(screen.queryByText('Project')).not.toBeInTheDocument();
     });
 
@@ -376,7 +376,7 @@ describe('VMCatalogItemWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
-    await user.click(screen.getByRole('button', { name: 'Create catalog item' }));
+    await user.click(screen.getByRole('button', { name: 'Create' }));
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     const request = onCreate.mock.calls[0][0] as {
@@ -403,7 +403,7 @@ describe('VMCatalogItemWizard', () => {
     await user.type(screen.getByRole('textbox', { name: 'User data' }), 'echo hi');
 
     await user.click(screen.getByRole('button', { name: 'Next' }));
-    await user.click(screen.getByRole('button', { name: 'Create catalog item' }));
+    await user.click(screen.getByRole('button', { name: 'Create' }));
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
     const request = onCreate.mock.calls[0][0] as {
@@ -428,7 +428,7 @@ describe('VMCatalogItemWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
-    await user.click(screen.getByRole('button', { name: 'Create catalog item' }));
+    await user.click(screen.getByRole('button', { name: 'Create' }));
 
     expect(await screen.findByText('Failed to create resource')).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Review and create' })).toBeInTheDocument();
@@ -445,7 +445,7 @@ describe('VMCatalogItemWizard', () => {
       fields: {},
     });
 
-    it('shows no changes and disables Save changes when the edit is pristine', async () => {
+    it('shows no changes and uses the default Edit label when the edit is pristine', async () => {
       const { user } = renderWizard(existingItem);
 
       await user.click(screen.getByRole('button', { name: 'Next' }));
@@ -459,7 +459,7 @@ describe('VMCatalogItemWizard', () => {
       expect(
         screen.getByText('No changes yet. Update a step to see a before-and-after summary here.'),
       ).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled();
     });
 
     it('prefills from the item and submits changed fields without the template', async () => {
@@ -476,7 +476,7 @@ describe('VMCatalogItemWizard', () => {
 
       expect(screen.getByText('Configured')).toBeInTheDocument();
       expect(screen.queryByText('updated cloud-init')).not.toBeInTheDocument();
-      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+      await user.click(screen.getByRole('button', { name: 'Edit' }));
 
       await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
       const request = onUpdate.mock.calls[0][0] as {
@@ -504,7 +504,7 @@ describe('VMCatalogItemWizard', () => {
       await user.click(screen.getByRole('button', { name: 'Next' }));
       await user.type(screen.getByRole('textbox', { name: 'User data' }), 'updated cloud-init');
       await user.click(screen.getByRole('button', { name: 'Next' }));
-      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+      await user.click(screen.getByRole('button', { name: 'Edit' }));
 
       expect(await screen.findByText('Failed to edit resource')).toBeInTheDocument();
       expect(

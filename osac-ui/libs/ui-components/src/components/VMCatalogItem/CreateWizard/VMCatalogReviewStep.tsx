@@ -1,18 +1,4 @@
-import type { ReactNode } from 'react';
-import {
-  Alert,
-  Content,
-  DescriptionList,
-  DescriptionListDescription,
-  DescriptionListGroup,
-  DescriptionListTerm,
-  Flex,
-  FlexItem,
-  Stack,
-  StackItem,
-  Title,
-} from '@patternfly/react-core';
-import InfoCircleIcon from '@patternfly/react-icons/dist/esm/icons/info-circle-icon';
+import { Stack, StackItem } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 import type { TFunction } from 'i18next';
 
@@ -23,76 +9,22 @@ import type { ComputeCatalogItemValues } from './values';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
-import CatalogFieldEditabilityLabel from '../../catalog/CatalogFieldEditabilityLabel';
-import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
+import CatalogReview, {
+  type CatalogReviewField,
+  CatalogReviewRow,
+  CatalogReviewSection,
+  CatalogReviewValue,
+  catalogReviewChanges,
+  catalogReviewPolicyLabel,
+  catalogReviewResourceLabel,
+} from '../../CatalogItem/CatalogReview';
 
 interface VMCatalogReviewStepProps {
   item?: ComputeInstanceCatalogItem;
 }
 
-interface ReviewSectionProps {
-  children: ReactNode;
-  title: string;
-}
-
-interface ReviewRowProps {
-  label: string;
-  value: ReactNode;
-}
-
-interface GovernedReviewValueProps {
-  field: ProvisioningFieldValue<unknown>;
-  value: ReactNode;
-}
-
-interface EditChange {
-  after: string;
-  before: string;
-  label: string;
-}
-
-const ReviewRow = ({ label, value }: ReviewRowProps) => (
-  <DescriptionListGroup>
-    <DescriptionListTerm>{label}</DescriptionListTerm>
-    <DescriptionListDescription>{value}</DescriptionListDescription>
-  </DescriptionListGroup>
-);
-
-const GovernedReviewValue = ({ field, value }: GovernedReviewValueProps) => (
-  <Flex
-    alignItems={{ default: 'alignItemsCenter' }}
-    flexWrap={{ default: 'wrap' }}
-    gap={{ default: 'gapSm' }}
-  >
-    <FlexItem>{value}</FlexItem>
-    <FlexItem>
-      <CatalogFieldEditabilityLabel behavior={field.locked ? 'locked' : 'editable'} />
-    </FlexItem>
-  </Flex>
-);
-
-const ReviewSection = ({ children, title }: ReviewSectionProps) => {
-  return (
-    <StackItem>
-      <Stack hasGutter>
-        <StackItem>
-          <Title headingLevel="h3">{title}</Title>
-        </StackItem>
-        <StackItem>
-          <DescriptionList isCompact aria-label={title}>
-            {children}
-          </DescriptionList>
-        </StackItem>
-      </Stack>
-    </StackItem>
-  );
-};
-
 const resourceValueKey = (value: { id?: string; name?: string }) =>
   `${value.id?.trim() ?? ''}|${value.name?.trim() ?? ''}`;
-
-const resourceValueLabel = (t: TFunction, value: { id?: string; name?: string }): string =>
-  value.name || t('Not set');
 
 const guestOsFamilyLabel = (t: TFunction, value: GuestOSFamily): string => {
   switch (value) {
@@ -125,7 +57,7 @@ const additionalDisksLabel = (
     ? values
         .map((disk, index) => {
           const size = disk.sizeGib.trim() ? `${disk.sizeGib.trim()} GiB` : t('Not set');
-          const tier = resourceValueLabel(t, disk.storageTier);
+          const tier = catalogReviewResourceLabel(t, disk.storageTier);
           return `${t('Disk set {{number}}', { number: index + 1 })}: ${size} · ${tier}`;
         })
         .join('; ')
@@ -148,15 +80,12 @@ const userDataLabel = (t: TFunction, values: ComputeCatalogItemValues): string =
     : t('Not set');
 };
 
-const policyLabel = (t: TFunction, field: ProvisioningFieldValue<unknown>): string =>
-  field.locked ? t('Locked') : t('Editable');
-
 const catalogEditChanges = (
   t: TFunction,
   initialValues: ComputeCatalogItemValues,
   values: ComputeCatalogItemValues,
-): EditChange[] => {
-  const fields = [
+): ReturnType<typeof catalogReviewChanges> => {
+  const fields: CatalogReviewField[] = [
     {
       label: t('Guest operating system'),
       before: guestOsFamilyLabel(t, initialValues.guestOsFamily),
@@ -166,29 +95,29 @@ const catalogEditChanges = (
     },
     {
       label: t('Disk image'),
-      before: resourceValueLabel(t, initialValues.diskImage.value),
-      after: resourceValueLabel(t, values.diskImage.value),
+      before: catalogReviewResourceLabel(t, initialValues.diskImage.value),
+      after: catalogReviewResourceLabel(t, values.diskImage.value),
       beforeKey: resourceValueKey(initialValues.diskImage.value),
       afterKey: resourceValueKey(values.diskImage.value),
     },
     {
       label: t('Disk image access'),
-      before: policyLabel(t, initialValues.diskImage),
-      after: policyLabel(t, values.diskImage),
+      before: catalogReviewPolicyLabel(t, initialValues.diskImage),
+      after: catalogReviewPolicyLabel(t, values.diskImage),
       beforeKey: initialValues.diskImage.locked,
       afterKey: values.diskImage.locked,
     },
     {
       label: t('Instance type'),
-      before: resourceValueLabel(t, initialValues.instanceType.value),
-      after: resourceValueLabel(t, values.instanceType.value),
+      before: catalogReviewResourceLabel(t, initialValues.instanceType.value),
+      after: catalogReviewResourceLabel(t, values.instanceType.value),
       beforeKey: resourceValueKey(initialValues.instanceType.value),
       afterKey: resourceValueKey(values.instanceType.value),
     },
     {
       label: t('Instance type access'),
-      before: policyLabel(t, initialValues.instanceType),
-      after: policyLabel(t, values.instanceType),
+      before: catalogReviewPolicyLabel(t, initialValues.instanceType),
+      after: catalogReviewPolicyLabel(t, values.instanceType),
       beforeKey: initialValues.instanceType.locked,
       afterKey: values.instanceType.locked,
     },
@@ -201,22 +130,22 @@ const catalogEditChanges = (
     },
     {
       label: t('Boot disk size access'),
-      before: policyLabel(t, initialValues.bootDiskSizeGib),
-      after: policyLabel(t, values.bootDiskSizeGib),
+      before: catalogReviewPolicyLabel(t, initialValues.bootDiskSizeGib),
+      after: catalogReviewPolicyLabel(t, values.bootDiskSizeGib),
       beforeKey: initialValues.bootDiskSizeGib.locked,
       afterKey: values.bootDiskSizeGib.locked,
     },
     {
       label: t('Boot storage tier'),
-      before: resourceValueLabel(t, initialValues.bootDiskStorageTier.value),
-      after: resourceValueLabel(t, values.bootDiskStorageTier.value),
+      before: catalogReviewResourceLabel(t, initialValues.bootDiskStorageTier.value),
+      after: catalogReviewResourceLabel(t, values.bootDiskStorageTier.value),
       beforeKey: resourceValueKey(initialValues.bootDiskStorageTier.value),
       afterKey: resourceValueKey(values.bootDiskStorageTier.value),
     },
     {
       label: t('Boot storage tier access'),
-      before: policyLabel(t, initialValues.bootDiskStorageTier),
-      after: policyLabel(t, values.bootDiskStorageTier),
+      before: catalogReviewPolicyLabel(t, initialValues.bootDiskStorageTier),
+      after: catalogReviewPolicyLabel(t, values.bootDiskStorageTier),
       beforeKey: initialValues.bootDiskStorageTier.locked,
       afterKey: values.bootDiskStorageTier.locked,
     },
@@ -229,8 +158,8 @@ const catalogEditChanges = (
     },
     {
       label: t('Additional disks access'),
-      before: policyLabel(t, initialValues.additionalDisks),
-      after: policyLabel(t, values.additionalDisks),
+      before: catalogReviewPolicyLabel(t, initialValues.additionalDisks),
+      after: catalogReviewPolicyLabel(t, values.additionalDisks),
       beforeKey: initialValues.additionalDisks.locked,
       afterKey: values.additionalDisks.locked,
     },
@@ -243,16 +172,14 @@ const catalogEditChanges = (
     },
     {
       label: t('Cloud-init access'),
-      before: policyLabel(t, initialValues.userData),
-      after: policyLabel(t, values.userData),
+      before: catalogReviewPolicyLabel(t, initialValues.userData),
+      after: catalogReviewPolicyLabel(t, values.userData),
       beforeKey: initialValues.userData.locked,
       afterKey: values.userData.locked,
     },
   ];
 
-  return fields
-    .filter(({ beforeKey, afterKey }) => beforeKey !== afterKey)
-    .map(({ label, before, after }) => ({ label, before, after }));
+  return catalogReviewChanges(fields);
 };
 
 const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
@@ -262,72 +189,15 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
   const isEdit = Boolean(item);
   const editChanges = isEdit ? catalogEditChanges(t, initialValues, values) : [];
   const notSet = t('Not set');
-  const diskImage = resourceValueLabel(t, values.diskImage.value);
-  const instanceTypeLabel = resourceValueLabel(t, values.instanceType.value);
+  const diskImage = catalogReviewResourceLabel(t, values.diskImage.value);
+  const instanceTypeLabel = catalogReviewResourceLabel(t, values.instanceType.value);
   const userDataReview = userDataLabel(t, values);
 
-  if (isEdit) {
-    return (
-      <Stack hasGutter>
-        <StackItem>
-          <Title headingLevel="h2" size="lg">
-            {t('Review your changes before saving')}
-          </Title>
-        </StackItem>
-        <StackItem>
-          {editChanges.length ? (
-            <Stack hasGutter aria-label={t('Changed fields')}>
-              {editChanges.map((change) => (
-                <StackItem key={change.label}>
-                  <Title headingLevel="h4" size="md">
-                    {change.label}
-                  </Title>
-                  <Flex gap={{ default: 'gapSm' }} flexWrap={{ default: 'wrap' }}>
-                    <FlexItem>{change.before}</FlexItem>
-                    <FlexItem aria-hidden="true">→</FlexItem>
-                    <FlexItem>{change.after}</FlexItem>
-                  </Flex>
-                </StackItem>
-              ))}
-            </Stack>
-          ) : (
-            <Content component="p">
-              {t('No changes yet. Update a step to see a before-and-after summary here.')}
-            </Content>
-          )}
-        </StackItem>
-        <StackItem>
-          <Alert
-            variant="info"
-            customIcon={<InfoCircleIcon />}
-            isInline
-            title={t('Changes apply immediately')}
-          >
-            {t('Saving updates this catalog item right away.')}
-          </Alert>
-        </StackItem>
-      </Stack>
-    );
-  }
-
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <Title headingLevel="h2" size="lg">
-          {t('Review and create')}
-        </Title>
-      </StackItem>
-      <StackItem>
-        <Content component="p">
-          {t(
-            'Confirm your settings before creating the catalog item. It will be saved as unpublished until you publish it.',
-          )}
-        </Content>
-      </StackItem>
-
-      <ReviewSection title={t('Details')}>
+    <CatalogReview isEdit={isEdit} editChanges={editChanges}>
+      <CatalogReviewSection title={t('Details')}>
         {role === 'admin' && (
-          <ReviewRow
+          <CatalogReviewRow
             label={t('Scope')}
             value={
               values.scope === 'global'
@@ -336,53 +206,53 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
             }
           />
         )}
-        <ReviewRow label={t('Name')} value={displayValue(values.metadata.name)} />
-        <ReviewRow
+        <CatalogReviewRow label={t('Name')} value={displayValue(values.metadata.name)} />
+        <CatalogReviewRow
           label={t('Provisioning template')}
           value={displayValue(values.template.name || '')}
         />
-        <ReviewRow label={t('Status')} value={t('Unpublished')} />
-      </ReviewSection>
+        <CatalogReviewRow label={t('Status')} value={t('Unpublished')} />
+      </CatalogReviewSection>
 
-      <ReviewSection title={t('Compute configuration')}>
-        <ReviewRow
+      <CatalogReviewSection title={t('Compute configuration')}>
+        <CatalogReviewRow
           label={t('Guest operating system')}
           value={guestOsFamilyLabel(t, values.guestOsFamily)}
         />
-        <ReviewRow
+        <CatalogReviewRow
           label={t('Disk image')}
-          value={<GovernedReviewValue field={values.diskImage} value={diskImage} />}
+          value={<CatalogReviewValue field={values.diskImage} value={diskImage} />}
         />
-        <ReviewRow
+        <CatalogReviewRow
           label={t('Instance type')}
-          value={<GovernedReviewValue field={values.instanceType} value={instanceTypeLabel} />}
+          value={<CatalogReviewValue field={values.instanceType} value={instanceTypeLabel} />}
         />
-      </ReviewSection>
+      </CatalogReviewSection>
 
-      <ReviewSection title={t('Storage')}>
-        <ReviewRow
+      <CatalogReviewSection title={t('Storage')}>
+        <CatalogReviewRow
           label={t('Boot disk size')}
           value={
-            <GovernedReviewValue
+            <CatalogReviewValue
               field={values.bootDiskSizeGib}
               value={bootDiskSizeLabel(t, values.bootDiskSizeGib.value)}
             />
           }
         />
-        <ReviewRow
+        <CatalogReviewRow
           label={t('Boot storage tier')}
           value={
-            <GovernedReviewValue
+            <CatalogReviewValue
               field={values.bootDiskStorageTier}
-              value={resourceValueLabel(t, values.bootDiskStorageTier.value)}
+              value={catalogReviewResourceLabel(t, values.bootDiskStorageTier.value)}
             />
           }
         />
-        <ReviewRow
+        <CatalogReviewRow
           label={t('Additional disks')}
           value={
             values.additionalDisks.value.length ? (
-              <GovernedReviewValue
+              <CatalogReviewValue
                 field={values.additionalDisks}
                 value={
                   <Stack hasGutter={false}>
@@ -390,7 +260,7 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
                       <StackItem key={`${disk.sizeGib}-${index}`}>
                         {`${t('Disk set {{number}}', { number: index + 1 })}: ${
                           disk.sizeGib.trim() ? `${disk.sizeGib.trim()} GiB` : notSet
-                        } · ${resourceValueLabel(t, disk.storageTier)}`}
+                        } · ${catalogReviewResourceLabel(t, disk.storageTier)}`}
                       </StackItem>
                     ))}
                   </Stack>
@@ -401,15 +271,15 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
             )
           }
         />
-      </ReviewSection>
+      </CatalogReviewSection>
 
-      <ReviewSection title={t('Access & Initial run')}>
-        <ReviewRow
+      <CatalogReviewSection title={t('Access & Initial run')}>
+        <CatalogReviewRow
           label={t('Cloud-init')}
-          value={<GovernedReviewValue field={values.userData} value={userDataReview} />}
+          value={<CatalogReviewValue field={values.userData} value={userDataReview} />}
         />
-      </ReviewSection>
-    </Stack>
+      </CatalogReviewSection>
+    </CatalogReview>
   );
 };
 

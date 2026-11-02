@@ -174,38 +174,29 @@ describe('ClusterCatalogItemWizard', () => {
 
     await goToReview(user);
 
-    expect(await screen.findByText('Starts as unpublished')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Review and create' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Details' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Compute configuration' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Networking' })).toBeInTheDocument();
+    expect(screen.getAllByText('Not set')).toHaveLength(4);
+    expect(screen.getByText('Unpublished')).toBeInTheDocument();
     expect(
       screen.getByText(
-        'New catalog items are saved as unpublished. Publish from the catalog when you are ready for users in your tenant to use this offering.',
+        'Confirm your settings before creating the catalog item. It will be saved as unpublished until you publish it.',
       ),
     ).toBeInTheDocument();
   });
 
   it('uses the simple host type and size display for a catalog node set', async () => {
-    const item = create(ClusterCatalogItemSchema, {
-      id: 'catalog-item-1',
-      metadata: { name: 'existing-item', tenant: 'test-tenant' },
-      template: { id: TEMPLATE.id },
-      fields: {
-        nodeSets: {
-          behavior: {
-            case: 'locked',
-            value: {
-              items: {
-                workers: {
-                  size: 1,
-                  baremetalInstanceType: { name: HOST_TYPE.metadata?.name, shared: true },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-    const { user } = renderWizard(item);
+    const { user } = renderWizard();
 
+    await fillGeneralStep(user, 'my-item');
     await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click((await screen.findAllByRole('switch'))[1]);
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'workers');
+    await user.click(screen.getByRole('button', { name: 'Host type' }));
+    await user.click(await screen.findByRole('option', { name: 'worker' }));
+    await user.type(screen.getByRole('spinbutton', { name: 'Nodes' }), '1');
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
 
@@ -288,8 +279,31 @@ describe('ClusterCatalogItemWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Create' }));
 
     expect(await screen.findByText('Failed to create resource')).toBeInTheDocument();
-    expect(screen.getByText('Starts as unpublished')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Review and create' })).toBeInTheDocument();
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('uses the same edit review summary as VM catalog items', async () => {
+    const existingItem = create(ClusterCatalogItemSchema, {
+      id: 'catalog-item-1',
+      metadata: { name: 'existing-item', tenant: 'test-tenant' },
+      template: { id: 'template-1' },
+      published: true,
+      fields: {},
+    });
+    const { user } = renderWizard(existingItem);
+
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Review your changes before saving' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('No changes yet. Update a step to see a before-and-after summary here.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled();
   });
 
   it('prefills edit mode and submits an update without the template', async () => {
@@ -306,6 +320,14 @@ describe('ClusterCatalogItemWizard', () => {
             value: { id: 'version-1', name: '4-17-0', shared: true },
           },
         },
+        network: {
+          podCidr: {
+            behavior: {
+              case: 'editable',
+              value: { defaultValue: '10.0.0.0/16' },
+            },
+          },
+        },
       },
     });
     const onUpdate = vi.fn((req: { object?: unknown }) => ({
@@ -319,6 +341,8 @@ describe('ClusterCatalogItemWizard', () => {
       expect(screen.getByPlaceholderText('Select a version')).toHaveValue('4.17.0'),
     );
     await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.clear(screen.getByRole('textbox', { name: 'Pod CIDR' }));
+    await user.type(screen.getByRole('textbox', { name: 'Pod CIDR' }), '10.1.0.0/16');
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Edit' }));
 

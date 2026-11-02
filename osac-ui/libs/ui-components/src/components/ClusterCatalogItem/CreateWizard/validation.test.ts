@@ -51,14 +51,48 @@ describe('buildClusterCatalogStepSchema', () => {
         nodeSets: {
           locked: false,
           value: [
-            { rowId: 'first', name: 'workers', hostType: 'standard', size: '3' },
-            { rowId: 'second', name: ' workers ', hostType: 'standard', size: '3' },
+            {
+              rowId: 'first',
+              name: 'workers',
+              hostType: { id: 'standard', name: 'standard' },
+              size: '3',
+            },
+            {
+              rowId: 'second',
+              name: ' workers ',
+              hostType: { id: 'standard', name: 'standard' },
+              size: '3',
+            },
           ],
         },
       }),
     ).rejects.toMatchObject({
       path: 'nodeSets.value[1].name',
       message: 'Node set names must be unique',
+    });
+  });
+
+  it('requires node-set sizes to be positive integers', async () => {
+    const schema = buildClusterCatalogStepSchema('configuration', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        version: { locked: false, value: { id: '', name: '' } },
+        nodeSets: {
+          locked: false,
+          value: [
+            {
+              rowId: 'workers',
+              name: 'workers',
+              hostType: { id: 'standard', name: 'standard' },
+              size: '1.5',
+            },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject({
+      path: 'nodeSets.value[0].size',
+      message: 'Pool size must be greater than zero',
     });
   });
 });

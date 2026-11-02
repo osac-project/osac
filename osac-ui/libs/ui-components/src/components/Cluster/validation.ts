@@ -2,6 +2,7 @@ import type { TFunction } from 'i18next';
 import * as Yup from 'yup';
 
 import { cidrsOverlap } from '../../validation/cidr-validation';
+import { resourceNameSchema } from '../../validation/resource-name';
 import type { ProvisioningFieldValue } from '../ProvisioningWizard/fields/provisioningFieldValue';
 
 interface CidrNetworkValues {
@@ -12,6 +13,22 @@ interface CidrNetworkValues {
 interface NodeSetWithName {
   name?: string | null;
 }
+
+export const clusterNodeSetRowSchema = (t: TFunction) =>
+  Yup.object({
+    rowId: Yup.string().required(),
+    name: resourceNameSchema(t),
+    hostType: Yup.object({
+      id: Yup.string().required(t('Host type is required')),
+      name: Yup.string(),
+    }),
+    size: Yup.string()
+      .required(t('Pool size is required'))
+      .test('pool-size-positive', t('Pool size must be greater than zero'), (value) => {
+        const parsed = Number(value?.trim());
+        return Number.isInteger(parsed) && parsed > 0;
+      }),
+  });
 
 export const clusterNetworkDoNotOverlapTest = (
   t: TFunction,

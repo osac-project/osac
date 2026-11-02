@@ -7,7 +7,11 @@ import { resourceNameSchema } from '@osac/ui-components/validation/resource-name
 import type { ClusterNodeSetRow } from './fields';
 import { buildCidrSchema } from '../../../validation/cidr-validation';
 import { isValidSshPublicKey } from '../../ProvisioningWizard/credentialValidation';
-import { clusterNetworkDoNotOverlapTest, uniqueNodeSetNamesTest } from '../validation';
+import {
+  clusterNetworkDoNotOverlapTest,
+  clusterNodeSetRowSchema,
+  uniqueNodeSetNamesTest,
+} from '../validation';
 
 export type ClusterWizardStepId = 'catalog' | 'general' | 'configuration' | 'networking' | 'review';
 
@@ -17,23 +21,7 @@ const lockedField = (valueSchema: yup.AnySchema) =>
     locked: yup.boolean(),
   });
 
-const nodeSetRowSchema = (t: TFunction) =>
-  yup.object({
-    rowId: yup.string().required(),
-    name: resourceNameSchema(t),
-    hostType: yup.string().required(t('Host type is required')),
-    size: yup
-      .string()
-      .required(t('Pool size is required'))
-      .test('pool-size-positive', t('Pool size must be greater than zero'), (value) => {
-        const parsed = Number(value?.trim());
-        return Number.isFinite(parsed) && parsed > 0;
-      }),
-  });
-
 const buildClusterFieldDefinitions = (t: TFunction) => {
-  const rowSchema = nodeSetRowSchema(t);
-
   return {
     catalogItemReference: yup.object({
       name: yup.string().required(t('Select a catalog item')),
@@ -55,7 +43,7 @@ const buildClusterFieldDefinitions = (t: TFunction) => {
     specNodeSetRows: lockedField(
       yup
         .array()
-        .of(rowSchema)
+        .of(clusterNodeSetRowSchema(t))
         .min(1, t('At least one node set is required'))
         .test('unique-node-set-names', uniqueNodeSetNamesTest(t)),
     ),

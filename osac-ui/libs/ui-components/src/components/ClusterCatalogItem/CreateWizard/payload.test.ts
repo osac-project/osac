@@ -65,8 +65,24 @@ describe('buildClusterCatalogItemCreatePayload', () => {
     values.nodeSets = {
       locked: true,
       value: [
-        { rowId: 'workers-row', name: 'workers', hostType: 'worker', size: '3' },
-        { rowId: 'infra-row', name: 'infra', hostType: 'infra', size: '1' },
+        {
+          rowId: 'workers-row',
+          name: 'workers',
+          hostType: { id: 'bmit-worker', name: 'worker' },
+          size: '3',
+        },
+        {
+          rowId: 'infra-row',
+          name: 'infra',
+          hostType: { id: 'bmit-infra', name: 'infra' },
+          size: '1',
+        },
+        {
+          rowId: 'legacy-row',
+          name: 'legacy',
+          hostType: { id: 'bmit-legacy', name: '' },
+          size: '1',
+        },
       ],
     };
 
@@ -75,8 +91,18 @@ describe('buildClusterCatalogItemCreatePayload', () => {
         case: 'locked',
         value: {
           items: {
-            workers: { size: 3, baremetalInstanceType: { name: 'worker', shared: true } },
-            infra: { size: 1, baremetalInstanceType: { name: 'infra', shared: true } },
+            workers: {
+              size: 3,
+              baremetalInstanceType: { id: 'bmit-worker', name: 'worker', shared: true },
+            },
+            infra: {
+              size: 1,
+              baremetalInstanceType: { id: 'bmit-infra', name: 'infra', shared: true },
+            },
+            legacy: {
+              size: 1,
+              baremetalInstanceType: { id: 'bmit-legacy', shared: true },
+            },
           },
         },
       },

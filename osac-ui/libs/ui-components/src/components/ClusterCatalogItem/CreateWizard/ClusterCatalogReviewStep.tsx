@@ -27,7 +27,7 @@ interface ClusterCatalogReviewStepProps {
 const nodeSetsKey = (values: ClusterCatalogItemValues['nodeSets']['value']) =>
   JSON.stringify(
     values.map((nodeSet) => ({
-      hostType: nodeSet.hostType.trim(),
+      hostType: nodeSet.hostType.name,
       name: nodeSet.name.trim(),
       size: nodeSet.size.trim(),
     })),
@@ -40,7 +40,7 @@ const nodeSetsLabel = (
   values.length
     ? values
         .map((nodeSet) => {
-          const hostType = catalogReviewValue(t, nodeSet.hostType);
+          const hostType = catalogReviewValue(t, nodeSet.hostType.name);
           const size = catalogReviewValue(t, nodeSet.size);
           return `${catalogReviewValue(t, nodeSet.name)}: ${formatClusterNodeSetReview(hostType, size)}`;
         })
@@ -163,7 +163,7 @@ const ClusterCatalogReviewStep = ({ item }: ClusterCatalogReviewStepProps) => {
                     {values.nodeSets.value.map((nodeSet) => (
                       <StackItem key={nodeSet.rowId}>
                         {formatClusterNodeSetReview(
-                          catalogReviewValue(t, nodeSet.hostType),
+                          catalogReviewValue(t, nodeSet.hostType.name),
                           catalogReviewValue(t, nodeSet.size),
                         )}
                       </StackItem>

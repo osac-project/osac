@@ -5,9 +5,6 @@ import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v
 
 import { UserRole } from '@osac/ui-components/shellTypes';
 
-import { canManageCatalogItem } from './authoring/canManageCatalogItem';
-import CatalogItemDeleteModal from './authoring/CatalogItemDeleteModal';
-import { useSetCatalogItemPublished } from './authoring/useSetCatalogItemPublished';
 import {
   type CatalogItem,
   catalogItemDetailsPath,
@@ -15,6 +12,9 @@ import {
   getCatalogCreateActionPath,
 } from './catalogItemDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
+import { canManageCatalogItem } from '../CatalogItem/canManageCatalogItem';
+import CatalogItemDeleteModal from '../CatalogItem/CatalogItemDeleteModal';
+import { useSetCatalogItemPublished } from '../CatalogItem/useSetCatalogItemPublished';
 import DeleteResourceButton from '../Resource/DeleteResourceButton';
 
 interface CatalogItemActionsMenuProps {

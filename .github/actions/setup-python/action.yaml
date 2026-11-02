@@ -25,11 +25,21 @@ runs:
     # label, even though the binaries are compatible, and fails outright
     # ("version not found"). uv's own Python builds are portable
     # (python-build-standalone), so they install identically regardless
-    # of the runner's distro label. --default is required for a bare
-    # `python`/`python3` to resolve afterward (without it, only a
-    # version-qualified `python3.14` shim is created).
+    # of the runner's distro label.
+    #
+    # A bare `uv python install` isn't enough on its own: uv marks its
+    # managed interpreters PEP 668 "externally managed", so a caller that
+    # does a plain `pip install <tool>` internally (e.g. pre-commit/
+    # action's own `python -m pip install pre-commit` step) fails outright
+    # with "externally-managed-environment" -- confirmed live, this broke
+    # the pre-commit CI job the first time this fix landed. A real venv
+    # (never externally managed) with pip seeded via --seed fixes that for
+    # every caller uniformly, while still giving a bare `python`/`python3`
+    # on PATH the same as actions/setup-python did.
     run: |
-      uv python install 3.14 --default
+      uv python install 3.14
+      uv venv --python 3.14 --seed "$HOME/.setup-python-venv"
+      echo "$HOME/.setup-python-venv/bin" >> "$GITHUB_PATH"
       echo "$HOME/.local/bin" >> "$GITHUB_PATH"
   - shell: bash
     run: uv tool install ruff==0.15.16

@@ -106,6 +106,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     k8s.get_cluster_order_namespace.return_value = "osac"
     k8s.get_baremetal_instance_name.side_effect = lambda *, uuid, checked: f"{uuid}-cr"
     k8s.get_cluster_order_infra_env_name.return_value = "order-a-infraenv"
+    monkeypatch.delenv(regression.upgrade.UPGRADE_ENV_VAR, raising=False)
     k8s.is_absent.side_effect = [False, True, False, True]
     k8s.is_present.return_value = False
     monkeypatch.setattr(scenario, "wait_for_cluster_order_cr", Mock(return_value="order-a"))
@@ -118,9 +119,20 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         return refs
 
     monkeypatch.setattr(regression.upgrade, "_cluster_references", Mock(side_effect=references_after_install))
+    events: list[str] = []
+
+    def monitor_after_install(**_kwargs: object) -> float:
+        events.append("monitor")
+        return 600.0
+
+    def upgrade_control_plane(**_kwargs: object) -> dict[str, Any]:
+        events.append("upgrade")
+        return {}
+
+    monkeypatch.setattr(regression.upgrade, "_monitor_post_install_health", Mock(side_effect=monitor_after_install))
     monkeypatch.setattr(regression.upgrade, "_ready_baseline", Mock(return_value=baseline))
     monkeypatch.setattr(regression.upgrade, "_catalog_version", Mock(return_value=(target, True)))
-    monkeypatch.setattr(regression.upgrade, "_upgrade_control_plane", Mock(return_value={}))
+    monkeypatch.setattr(regression.upgrade, "_upgrade_control_plane", Mock(side_effect=upgrade_control_plane))
     monkeypatch.setattr(regression.upgrade, "_upgrade_node_pool", Mock())
     for name in (
         "wait_for_cluster_progressing",
@@ -138,13 +150,38 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         "wait_for_cluster_deletion",
         Mock(side_effect=AssertionError("Two-node-set teardown must not use forced cleanup")),
     )
+    clients["events"] = events
     return clients
 
 
 def _run_scenario(clients: dict[str, Mock]) -> None:
-    regression.test_cluster_create_with_two_node_sets(
-        **clients, cluster_template="template", pull_secret_name="pull-secret", ssh_public_key_path="/tmp/key.pub"
-    )
+    events = clients.pop("events", None)
+    try:
+        regression.test_cluster_create_with_two_node_sets(
+            **clients, cluster_template="template", pull_secret_name="pull-secret", ssh_public_key_path="/tmp/key.pub"
+        )
+    finally:
+        if events is not None:
+            clients["events"] = events
+
+
+def test_two_node_set_scenario_can_disable_upgrade(
+    monkeypatch: pytest.MonkeyPatch, two_node_set_clients: dict[str, Mock]
+) -> None:
+    """Installation and stability monitoring can run without an upgrade request."""
+    monkeypatch.setenv(regression.upgrade.UPGRADE_ENV_VAR, "false")
+
+    _run_scenario(two_node_set_clients)
+
+    regression.upgrade._cluster_references.assert_called_once()
+    regression.upgrade._monitor_post_install_health.assert_called_once()
+    regression.upgrade._ready_baseline.assert_not_called()
+    regression.upgrade._catalog_version.assert_not_called()
+    regression.upgrade._upgrade_control_plane.assert_not_called()
+    regression.upgrade._upgrade_node_pool.assert_not_called()
+    two_node_set_clients["request"].getfixturevalue.assert_not_called()
+    two_node_set_clients["private_grpc"].delete_cluster_version.assert_not_called()
+    two_node_set_clients["cli"].delete_cluster.assert_called_once_with(uuid="cluster-id")
 
 
 def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
@@ -175,8 +212,14 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
     scenario.wait_for_cluster_grpc_removal.assert_called_once_with(grpc=two_node_set_clients["grpc"], uuid="cluster-id")
     two_node_set_clients["request"].getfixturevalue.assert_called_once_with("jwt_grpc_tenant1")
     regression.upgrade._cluster_references.assert_called_once()
+    regression.upgrade._monitor_post_install_health.assert_called_once()
+    monitor_call = regression.upgrade._monitor_post_install_health.call_args
+    assert monitor_call.kwargs["k8s"] is two_node_set_clients["k8s_hub_client"]
+    assert monitor_call.kwargs["grpc"] is two_node_set_clients["grpc"]
+    assert monitor_call.kwargs["refs"] is regression.upgrade._upgrade_control_plane.call_args.kwargs["refs"]
     regression.upgrade._upgrade_control_plane.assert_called_once()
-    regression.upgrade._upgrade_node_pool.assert_called_once()
+    regression.upgrade._upgrade_node_pool.assert_not_called()
+    assert two_node_set_clients["events"] == ["monitor", "upgrade"]
     two_node_set_clients["private_grpc"].delete_cluster_version.assert_called_once_with(version_id="target-id")
     two_node_set_clients["cli"].delete_cluster.assert_called_once_with(uuid="cluster-id")
     for name in ("patch", "apply", "delete"):

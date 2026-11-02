@@ -226,6 +226,35 @@ def test_cluster_references_retry_transient_lookup_errors(monkeypatch: pytest.Mo
     assert all(call["retry_on_error"] is True for call in poll_calls)
 
 
+def test_cluster_references_satisfy_poll_until_contract() -> None:
+    """Reference resolution uses the real poll_until keyword contract."""
+    k8s = Mock()
+    k8s.get_cluster_order_namespace.return_value = "clusters"
+    k8s.get_cluster_order_hosted_cluster_name.return_value = "hosted"
+    k8s.list_json.return_value = {
+        "items": [
+            {
+                "metadata": {
+                    "name": "compute-pool",
+                    "labels": {"osac.openshift.io/clusterorder": "order-name", "osac.openshift.io/node-set": "compute"},
+                }
+            }
+        ]
+    }
+
+    refs = scenario._cluster_references(
+        k8s=k8s, uuid="cluster-id", co_name="order-name", expected_node_sets={"compute"}
+    )
+
+    assert refs == scenario._ClusterRefs(
+        uuid="cluster-id",
+        co_name="order-name",
+        namespace="clusters",
+        hc_name="hosted",
+        pool_names={"compute": "compute-pool"},
+    )
+
+
 def test_node_pool_start_accepts_fresh_update_before_version_completes() -> None:
     """NodePool start does not wait for status.version to reach the target."""
     pool = {
@@ -401,6 +430,9 @@ def test_upgrade_observers_reject_failed_cluster(stage: str, monkeypatch: pytest
     snapshot = Mock(return_value=failed)
     monkeypatch.setattr(scenario, "_snapshot", snapshot)
     monkeypatch.setattr(scenario, "_wait_elapsed", lambda *, observe, **_kwargs: observe())
+    monkeypatch.setattr(scenario, "wait_for_hosted_cluster_kubeconfig", Mock(return_value=b"kubeconfig"))
+    workload_client = Mock()
+    monkeypatch.setattr(scenario, "K8sClient", Mock(return_value=workload_client))
     refs = scenario._ClusterRefs("cluster-id", "order", "namespace", "hosted", {"compute": "a", "gpu": "b"})
     source_pool = {"spec": {"release": {"image": "source-image"}}, "status": {"version": "4.22.0"}}
     common = {
@@ -440,6 +472,8 @@ def test_upgrade_observers_reject_failed_cluster(stage: str, monkeypatch: pytest
             )
 
     assert snapshot.call_count == 1
+    if stage == "control_plane":
+        assert snapshot.call_args.kwargs["workload_k8s"] is workload_client
 
 
 def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -15,6 +15,11 @@ import pytest
 from tests.e2e.caas.regression import cluster_upgrade as scenario
 
 
+def test_pre_upgrade_monitor_waits_ten_minutes() -> None:
+    """The control-plane upgrade begins after a ten-minute stability window."""
+    assert scenario.PRE_UPGRADE_MONITOR_SECONDS == 10 * 60
+
+
 def test_upgrade_diagnostics_reports_each_start_gate() -> None:
     """Diagnostics expose the exact readiness booleans without raw payloads."""
     snapshot: dict[str, Any] = {
@@ -47,6 +52,19 @@ def test_upgrade_diagnostics_reports_each_start_gate() -> None:
                 },
             }
         },
+        "cluster_operators": [
+            {
+                "metadata": {"name": "authentication"},
+                "status": {
+                    "conditions": [
+                        {"type": "Available", "status": "True", "reason": "AsExpected"},
+                        {"type": "Progressing", "status": "False", "reason": "AsExpected"},
+                        {"type": "Degraded", "status": "False", "reason": "AsExpected"},
+                    ],
+                    "versions": [{"name": "operator", "version": "4.22.0"}],
+                },
+            }
+        ],
     }
     job = {"jobID": "job-id", "type": "provision", "state": "Running", "message": "secret-message"}
 
@@ -72,6 +90,19 @@ def test_upgrade_diagnostics_reports_each_start_gate() -> None:
         {"type": "AllMachinesReady", "status": "False", "reason": "WorkersJoining"},
     ]
 
+    # Upgrade diagnostics intentionally include the post-install health envelope.
+    assert diagnostics["hosted_conditions"] == [
+        {"type": "Available", "status": "True", "reason": "AsExpected"},
+        {"type": "Degraded", "status": "False", "reason": "AsExpected"},
+    ]
+    assert diagnostics["cluster_operator_count"] == 1
+    assert diagnostics["cluster_operators"]["authentication"]["conditions"] == [
+        {"type": "Available", "status": "True", "reason": "AsExpected"},
+        {"type": "Progressing", "status": "False", "reason": "AsExpected"},
+        {"type": "Degraded", "status": "False", "reason": "AsExpected"},
+    ]
+    assert diagnostics["cluster_operators"]["authentication"]["versions"] == [{"name": "operator", "version": "4.22.0"}]
+
     assert "secret-message" not in json.dumps(diagnostics)
     for key in (
         "order_release_image",
@@ -82,9 +113,165 @@ def test_upgrade_diagnostics_reports_each_start_gate() -> None:
         "hosted_observed_generation",
         "hosted_observed_generation_matches",
         "hosted_progressing_observed_generation",
-        "hosted_conditions",
     ):
         assert key not in diagnostics
+
+
+def _post_install_snapshot() -> dict[str, Any]:
+    """Build a healthy snapshot carrying deliberately sensitive raw fields."""
+    return {
+        "cluster": {"status": {"state": "CLUSTER_STATE_READY"}},
+        "order": {"status": {"phase": "Ready"}},
+        "hosted": {
+            "metadata": {"annotations": {"osac.openshift.io/tenant": "secret-tenant"}},
+            "status": {
+                "version": {
+                    "desired": {"version": "4.22.0", "image": "secret-release-image"},
+                    "history": [{"version": "4.22.0", "state": "Completed", "image": "secret-release-image"}],
+                },
+                "conditions": [
+                    {"type": "Available", "status": "True", "reason": "AsExpected", "message": "secret-message"},
+                    {"type": "Degraded", "status": "False", "reason": "AsExpected", "message": "secret-message"},
+                    {"type": "ClusterVersionProgressing", "status": "False", "reason": "AsExpected"},
+                ],
+            },
+        },
+        "pools": {
+            "compute": {
+                "metadata": {"annotations": {"secret": "value"}},
+                "status": {
+                    "version": "4.22.0",
+                    "conditions": [
+                        {"type": "Ready", "status": "True", "reason": "AsExpected", "message": "secret-message"},
+                        {"type": "AllMachinesReady", "status": "True", "reason": "AsExpected"},
+                        {"type": "UpdatingVersion", "status": "False", "reason": "AsExpected"},
+                    ],
+                },
+            }
+        },
+        "cluster_operators": [
+            {
+                "metadata": {"name": "authentication", "annotations": {"secret": "value"}},
+                "status": {
+                    "conditions": [
+                        {"type": "Available", "status": "True", "reason": "AsExpected", "message": "secret-message"},
+                        {"type": "Progressing", "status": "False", "reason": "AsExpected"},
+                        {"type": "Degraded", "status": "False", "reason": "AsExpected"},
+                    ],
+                    "versions": [{"name": "operator", "version": "4.22.0"}],
+                    "relatedObjects": [{"name": "secret-related-object"}],
+                },
+            }
+        ],
+    }
+
+
+def test_post_install_diagnostics_reports_hosted_cluster_and_operators_safely() -> None:
+    """Post-install diagnostics include health identity but no raw payloads."""
+    diagnostics = scenario._post_install_diagnostics(_post_install_snapshot())
+
+    assert diagnostics["cluster_state"] == "CLUSTER_STATE_READY"
+    assert diagnostics["order_phase"] == "Ready"
+    assert diagnostics["hosted_available"] is True
+    assert diagnostics["hosted_degraded"] is False
+    assert diagnostics["hosted_progressing"] is False
+    assert diagnostics["hosted_desired_version"] == "4.22.0"
+    assert diagnostics["hosted_history_version"] == "4.22.0"
+    assert diagnostics["hosted_history_state"] == "Completed"
+    assert diagnostics["node_pools"]["compute"]["version"] == "4.22.0"
+    assert diagnostics["node_pools"]["compute"]["ready"] is True
+    assert diagnostics["node_pools"]["compute"]["all_machines_ready"] is True
+    assert diagnostics["node_pools"]["compute"]["updating_version"] is False
+    assert diagnostics["cluster_operator_count"] == 1
+    assert diagnostics["cluster_operators"]["authentication"]["versions"] == [{"name": "operator", "version": "4.22.0"}]
+    assert diagnostics["cluster_operators"]["authentication"]["conditions"] == [
+        {"type": "Available", "status": "True", "reason": "AsExpected"},
+        {"type": "Progressing", "status": "False", "reason": "AsExpected"},
+        {"type": "Degraded", "status": "False", "reason": "AsExpected"},
+    ]
+
+    serialized = json.dumps(diagnostics)
+    for secret in (
+        "secret-message",
+        "secret-tenant",
+        "secret-release-image",
+        "secret-related-object",
+        "relatedObjects",
+    ):
+        assert secret not in serialized
+
+
+def test_post_install_health_gate_rejects_degraded_operator() -> None:
+    """A degraded guest operator fails the post-install monitoring gate."""
+    snapshot = _post_install_snapshot()
+    conditions = snapshot["cluster_operators"][0]["status"]["conditions"]
+    degraded = next(condition for condition in conditions if condition["type"] == "Degraded")
+    degraded["status"] = "True"
+
+    scenario._assert_post_install_healthy(_post_install_snapshot())
+    with pytest.raises(AssertionError, match="authentication ClusterOperator became degraded"):
+        scenario._assert_post_install_healthy(snapshot)
+
+
+def test_monitor_post_install_health_logs_safe_samples(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The zero-length monitoring window still emits sanitized sample diagnostics."""
+    snapshot = _post_install_snapshot()
+    monkeypatch.setattr(scenario, "PRE_UPGRADE_MONITOR_SECONDS", 0)
+    monkeypatch.setattr(scenario.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(scenario, "wait_for_hosted_cluster_kubeconfig", Mock(return_value=b"kubeconfig"))
+    monkeypatch.setattr(scenario, "K8sClient", Mock(return_value=Mock()))
+    monkeypatch.setattr(scenario, "_post_install_snapshot", Mock(return_value=snapshot))
+    monkeypatch.setattr(scenario, "_assert_post_install_healthy", Mock())
+    refs = Mock()
+    refs.namespace = "clusters"
+    refs.hc_name = "hosted"
+
+    with caplog.at_level(logging.INFO, logger=scenario.diagnostics_logger.name):
+        elapsed = scenario._monitor_post_install_health(k8s=Mock(), grpc=Mock(), refs=refs)
+
+    assert elapsed == 0.0
+    messages = [record.getMessage() for record in caplog.records if record.name == scenario.diagnostics_logger.name]
+    assert len(messages) == 2
+    sample = json.loads(messages[0].removeprefix("CaaS upgrade diagnostics: "))
+    final = json.loads(messages[1].removeprefix("CaaS upgrade diagnostics: "))
+    assert sample["component"] == "post-install health"
+    assert "final" not in sample
+    assert final["component"] == "post-install health"
+    assert final["final"] is True
+    assert final["cluster_operator_count"] == 1
+    assert "secret-message" not in "".join(messages)
+
+
+def test_monitor_post_install_health_fails_when_final_lookup_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Persistent guest access loss cannot be masked by an earlier healthy sample."""
+    snapshot = _post_install_snapshot()
+    times = iter([0.0, 0.0, 0.0, 1.0, 1.0])
+    monkeypatch.setattr(scenario, "PRE_UPGRADE_MONITOR_SECONDS", 1)
+    monkeypatch.setattr(scenario.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(scenario.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(scenario, "wait_for_hosted_cluster_kubeconfig", Mock(return_value=b"kubeconfig"))
+    monkeypatch.setattr(scenario, "K8sClient", Mock(return_value=Mock()))
+    monkeypatch.setattr(
+        scenario, "_post_install_snapshot", Mock(side_effect=[snapshot, RuntimeError("secret-dns-error")])
+    )
+    monkeypatch.setattr(scenario, "_assert_post_install_healthy", Mock())
+    refs = Mock()
+    refs.namespace = "clusters"
+    refs.hc_name = "hosted"
+
+    with (
+        caplog.at_level(logging.INFO, logger=scenario.diagnostics_logger.name),
+        pytest.raises(AssertionError, match="unavailable at the window end"),
+    ):
+        scenario._monitor_post_install_health(k8s=Mock(), grpc=Mock(), refs=refs)
+
+    messages = [record.getMessage() for record in caplog.records if record.name == scenario.diagnostics_logger.name]
+    assert any('"diagnostics_error": "lookup_failed"' in message for message in messages)
+    assert "secret-dns-error" not in "".join(messages)
 
 
 def test_wait_elapsed_logs_initial_and_final_diagnostics(

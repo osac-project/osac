@@ -7,6 +7,7 @@ import logging
 import math
 import queue
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -14,12 +15,19 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import wait_for_cluster_deletion_without_cleanup, wait_for_cluster_grpc_removal
+from tests.e2e.core.helpers import (
+    wait_for_cluster_deletion_without_cleanup,
+    wait_for_cluster_grpc_removal,
+    wait_for_hosted_cluster_kubeconfig,
+)
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 TARGET_VERSION = env("OSAC_TEST_UPGRADE_RELEASE_VERSION", "4.22.1")
+UPGRADE_ENV_VAR = "OSAC_TEST_UPGRADE_ENABLED"
+PRE_UPGRADE_MONITOR_SECONDS = 10 * 60
 TARGET_IMAGE = env(
     "OSAC_TEST_UPGRADE_RELEASE_IMAGE", f"quay.io/openshift-release-dev/ocp-release:{TARGET_VERSION}-multi"
 )
@@ -32,6 +40,7 @@ _TERMINAL_JOB_FAILURES = {"Failed", "Canceled"}
 _PHASES = (
     "preparing",
     "install-completed",
+    "post-install-monitored",
     "control-plane-requested",
     "control-plane-started",
     "control-plane-completed",
@@ -42,6 +51,11 @@ _PHASES = (
 _T = TypeVar("_T")
 logger = logging.getLogger(__name__)
 diagnostics_logger = logging.getLogger(f"{__name__}.diagnostics")
+
+
+def _upgrade_enabled() -> bool:
+    """Run the control-plane upgrade unless CI explicitly opts out."""
+    return env(UPGRADE_ENV_VAR, "true").strip().lower() in {"1", "true", "yes"}
 
 
 @dataclass(frozen=True)
@@ -154,38 +168,29 @@ def _safe_job(job: dict[str, Any]) -> dict[str, str]:
 
 
 def _upgrade_diagnostics(*, snapshot: dict[str, Any], target_image: str, job: dict[str, Any]) -> dict[str, Any]:
-    """Summarize every upgrade start gate without logging resource payloads."""
-    hosted = snapshot.get("hosted", {})
-    version = hosted.get("status", {}).get("version", {})
-    history = version.get("history", [])
-    newest = history[0] if history else {}
-    pools: dict[str, dict[str, Any]] = {}
-    for node_set, pool in snapshot.get("pools", {}).items():
-        pools[node_set] = {
-            "image_matches": pool.get("spec", {}).get("release", {}).get("image") == target_image,
-            "version": pool.get("status", {}).get("version", ""),
-            "ready": _condition(pool, "Ready").get("status") == "True",
-            "all_machines_ready": _condition(pool, "AllMachinesReady").get("status") == "True",
-            "conditions": _condition_summary(pool),
+    """Summarize upgrade gates and the same health data as post-install monitoring."""
+    diagnostics = _post_install_diagnostics(snapshot)
+    for node_set, pool in _mapping(snapshot.get("pools", {})).items():
+        diagnostics["node_pools"][node_set]["image_matches"] = (
+            _mapping(pool.get("spec", {})).get("release", {}).get("image") == target_image
+        )
+    hosted = _mapping(snapshot.get("hosted", {}))
+    version = _mapping(_mapping(hosted.get("status", {})).get("version", {}))
+    history = _sequence(version.get("history", []))
+    newest = _mapping(history[0]) if history else {}
+    diagnostics.update(
+        {
+            "order_release_image_matches": _mapping(snapshot.get("order", {})).get("spec", {}).get("releaseImage")
+            == target_image,
+            "new_provision_job": bool(job.get("jobID")),
+            "job": _safe_job(job),
+            "hosted_spec_image_matches": _mapping(hosted.get("spec", {})).get("release", {}).get("image")
+            == target_image,
+            "hosted_desired_version_matches": _mapping(version.get("desired", {})).get("version") == TARGET_VERSION,
+            "hosted_history_version_matches": newest.get("version") == TARGET_VERSION,
         }
-    progressing = _condition(hosted, "ClusterVersionProgressing")
-    return {
-        "cluster_state": snapshot.get("cluster", {}).get("status", {}).get("state", ""),
-        "order_phase": snapshot.get("order", {}).get("status", {}).get("phase", ""),
-        "order_release_image_matches": snapshot.get("order", {}).get("spec", {}).get("releaseImage") == target_image,
-        "new_provision_job": bool(job.get("jobID")),
-        "job": _safe_job(job),
-        "hosted_spec_image_matches": hosted.get("spec", {}).get("release", {}).get("image") == target_image,
-        "hosted_desired_version": version.get("desired", {}).get("version", ""),
-        "hosted_desired_version_matches": version.get("desired", {}).get("version") == TARGET_VERSION,
-        "hosted_history_version": newest.get("version", ""),
-        "hosted_history_version_matches": newest.get("version") == TARGET_VERSION,
-        "hosted_history_state": newest.get("state", ""),
-        "hosted_progressing": progressing.get("status") == "True",
-        "hosted_available": _condition(hosted, "Available").get("status") == "True",
-        "hosted_degraded": _condition(hosted, "Degraded").get("status") == "True",
-        "node_pools": pools,
-    }
+    )
+    return diagnostics
 
 
 def _log_diagnostics(
@@ -199,6 +204,144 @@ def _log_diagnostics(
         payload["final"] = True
     payload.update(data)
     diagnostics_logger.info("CaaS upgrade diagnostics: %s", json.dumps(payload, sort_keys=True))
+
+
+def _safe_operator_versions(operator: dict[str, Any]) -> list[dict[str, str]]:
+    """Return only operator version names and numbers, never related objects."""
+    return [
+        {"name": version.get("name", ""), "version": version.get("version", "")}
+        for version in _sequence(_mapping(operator.get("status", {})).get("versions", []))
+    ]
+
+
+def _post_install_diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Summarize HyperShift and guest operator health without raw payloads."""
+    hosted = _mapping(snapshot.get("hosted", {}))
+    version = _mapping(_mapping(hosted.get("status", {})).get("version", {}))
+    history = _sequence(version.get("history", []))
+    newest = _mapping(history[0]) if history else {}
+    pools: dict[str, dict[str, Any]] = {}
+    for node_set, pool in _mapping(snapshot.get("pools", {})).items():
+        pools[node_set] = {
+            "version": _mapping(pool.get("status", {})).get("version", ""),
+            "ready": _condition(pool, "Ready").get("status") == "True",
+            "all_machines_ready": _condition(pool, "AllMachinesReady").get("status") == "True",
+            "updating_version": _condition(pool, "UpdatingVersion").get("status") == "True",
+            "conditions": _condition_summary(pool),
+        }
+    operators: dict[str, dict[str, Any]] = {}
+    for operator in _sequence(snapshot.get("cluster_operators", [])):
+        name = _mapping(_mapping(operator).get("metadata", {})).get("name", "")
+        operators[name] = {
+            "conditions": _condition_summary(operator),
+            "versions": _safe_operator_versions(_mapping(operator)),
+        }
+    return {
+        "cluster_state": _mapping(snapshot.get("cluster", {})).get("status", {}).get("state", ""),
+        "order_phase": _mapping(snapshot.get("order", {})).get("status", {}).get("phase", ""),
+        "hosted_available": _condition(hosted, "Available").get("status") == "True",
+        "hosted_degraded": _condition(hosted, "Degraded").get("status") == "True",
+        "hosted_progressing": _condition(hosted, "ClusterVersionProgressing").get("status") == "True",
+        "hosted_conditions": _condition_summary(hosted),
+        "hosted_desired_version": _mapping(version.get("desired", {})).get("version", ""),
+        "hosted_history_version": newest.get("version", ""),
+        "hosted_history_state": newest.get("state", ""),
+        "node_pools": pools,
+        "cluster_operator_count": len(operators),
+        "cluster_operators": operators,
+    }
+
+
+def _post_install_snapshot(
+    *, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs, workload_k8s: K8sClient
+) -> dict[str, Any]:
+    """Read the health resources needed for post-install monitoring."""
+    return _snapshot(k8s=k8s, grpc=grpc, refs=refs, workload_k8s=workload_k8s)
+
+
+def _assert_post_install_healthy(snapshot: dict[str, Any]) -> None:
+    """Require the installed HyperShift cluster and guest operators to stay healthy."""
+    cluster_state = _mapping(snapshot.get("cluster", {})).get("status", {}).get("state", "")
+    order_phase = _mapping(snapshot.get("order", {})).get("status", {}).get("phase", "")
+    hosted = _mapping(snapshot.get("hosted", {}))
+    assert cluster_state == "CLUSTER_STATE_READY", "OSAC Cluster became unhealthy after installation"
+    assert order_phase == "Ready", "ClusterOrder became unhealthy after installation"
+    assert _hosted_ready(hosted), "HostedCluster became unhealthy after installation"
+    assert _condition(hosted, "ClusterVersionProgressing").get("status") != "True", (
+        "HostedCluster kept progressing after installation"
+    )
+
+    for node_set, pool in _mapping(snapshot.get("pools", {})).items():
+        assert _mapping(pool).get("status", {}).get("version", "") != "", f"{node_set} NodePool lost its version"
+        assert _condition(pool, "Ready").get("status") == "True", f"{node_set} NodePool became unhealthy"
+        assert _condition(pool, "AllMachinesReady").get("status") == "True", (
+            f"{node_set} NodePool machines became unhealthy"
+        )
+        assert _condition(pool, "UpdatingVersion").get("status") != "True", f"{node_set} NodePool kept updating"
+
+    operators = _sequence(snapshot.get("cluster_operators", []))
+    assert operators, "Guest ClusterOperator diagnostics became unavailable"
+    for operator in operators:
+        name = _mapping(_mapping(operator).get("metadata", {})).get("name", "")
+        assert _condition(operator, "Available").get("status") == "True", f"{name} ClusterOperator became unavailable"
+        assert _condition(operator, "Progressing").get("status") == "False", f"{name} ClusterOperator kept progressing"
+        assert _condition(operator, "Degraded").get("status") == "False", f"{name} ClusterOperator became degraded"
+
+
+def _monitor_post_install_health(*, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs) -> float:
+    """Monitor the installed cluster for the configured stability window."""
+    started = time.monotonic()
+    workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
+        k8s=k8s, hosted_cluster_namespace=refs.namespace, hosted_cluster_name=refs.hc_name
+    )
+    with tempfile.NamedTemporaryFile(prefix="osac-post-install-", suffix=".kubeconfig") as kubeconfig_file:
+        kubeconfig_file.write(workload_kubeconfig)
+        kubeconfig_file.flush()
+        workload_k8s = K8sClient(namespace=refs.namespace, kubeconfig=kubeconfig_file.name, as_system_admin=False)
+        successful = False
+        last_attempt_successful = False
+        final_data: dict[str, Any] | None = None
+        while True:
+            try:
+                snapshot = _post_install_snapshot(k8s=k8s, grpc=grpc, refs=refs, workload_k8s=workload_k8s)
+                final_data = _post_install_diagnostics(snapshot)
+                successful = True
+                last_attempt_successful = True
+                _log_diagnostics(
+                    component="post-install health", data=final_data, elapsed_seconds=time.monotonic() - started
+                )
+                _assert_post_install_healthy(snapshot)
+            except AssertionError:
+                if final_data is not None:
+                    _log_diagnostics(
+                        component="post-install health",
+                        data=final_data,
+                        elapsed_seconds=time.monotonic() - started,
+                        final=True,
+                    )
+                raise
+            except Exception:
+                last_attempt_successful = False
+                _log_diagnostics(
+                    component="post-install health",
+                    data={"diagnostics_error": "lookup_failed"},
+                    elapsed_seconds=time.monotonic() - started,
+                )
+            remaining = started + PRE_UPGRADE_MONITOR_SECONDS - time.monotonic()
+            if remaining <= 0:
+                if not successful:
+                    raise AssertionError("Post-install health diagnostics could not be collected")
+                if not last_attempt_successful:
+                    raise AssertionError("Post-install health diagnostics were unavailable at the window end")
+                if final_data is not None:
+                    _log_diagnostics(
+                        component="post-install health",
+                        data=final_data,
+                        elapsed_seconds=time.monotonic() - started,
+                        final=True,
+                    )
+                return time.monotonic() - started
+            time.sleep(min(_DIAGNOSTIC_INTERVAL_SECONDS, remaining))
 
 
 def _deletion_diagnostics(*, k8s: K8sClient, grpc: GRPCClient, uuid: str | None, co_name: str | None) -> dict[str, Any]:
@@ -334,10 +477,17 @@ def _pool_identity(k8s: K8sClient, namespace: str, co_name: str, expected_node_s
     return names
 
 
-def _snapshot(*, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs) -> dict[str, Any]:
-    """Read test-owned API and HyperShift resources for one observation."""
+def _snapshot(
+    *, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs, workload_k8s: K8sClient | None = None
+) -> dict[str, Any]:
+    """Read test-owned API, HyperShift, and optional guest health resources."""
     hosted = k8s.list_json(resource="hostedclusters.hypershift.openshift.io", namespace=refs.namespace).get("items", [])
     pools = k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=refs.namespace).get("items", [])
+    cluster_operators: list[Any] = []
+    if workload_k8s is not None:
+        cluster_operators = _sequence(
+            _mapping(workload_k8s.list_json(resource="clusteroperators.config.openshift.io")).get("items", [])
+        )
     return {
         "order": k8s.get_json(resource="clusterorder", name=refs.co_name),
         "cluster": grpc.get_cluster(cluster_id=refs.uuid)["object"],
@@ -346,6 +496,7 @@ def _snapshot(*, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs) -> dict[s
             node_set: next((item for item in pools if item.get("metadata", {}).get("name") == name), {})
             for node_set, name in refs.pool_names.items()
         },
+        "cluster_operators": cluster_operators,
     }
 
 
@@ -479,6 +630,8 @@ def _cluster_references(*, k8s: K8sClient, uuid: str, co_name: str, expected_nod
         delay=10,
         description="test-owned HostedCluster reference",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
     pool_names = poll_until(
         fn=lambda: _pool_identity(k8s, namespace, co_name, expected_node_sets),
@@ -487,6 +640,8 @@ def _cluster_references(*, k8s: K8sClient, uuid: str, co_name: str, expected_nod
         delay=10,
         description="test-owned NodePool identities",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
     )
     return _ClusterRefs(uuid=uuid, co_name=co_name, namespace=namespace, hc_name=hc_name, pool_names=pool_names)
 
@@ -559,58 +714,64 @@ def _upgrade_control_plane(
     prior_job_ids = {job["jobID"] for job in baseline["order"].get("status", {}).get("provisioningJobs", [])}
     target_image = target["image"]
     _assert_upgrade_target(baseline=baseline, target=target)
-
-    jwt_grpc_tenant1.call(
-        service="osac.public.v1.Clusters/Update",
-        data={
-            "object": {"id": refs.uuid, "spec": {"version": {"name": target["name"]}}},
-            "updateMask": {"paths": ["spec.version"]},
-        },
+    workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
+        k8s=k8s, hosted_cluster_namespace=refs.namespace, hosted_cluster_name=refs.hc_name
     )
-    accepted = time.monotonic()
-    evidence["phase"] = "control-plane-requested"
-    reported: set[tuple[str | None, bool]] = set()
+    with tempfile.NamedTemporaryFile(prefix="osac-upgrade-", suffix=".kubeconfig") as kubeconfig_file:
+        kubeconfig_file.write(workload_kubeconfig)
+        kubeconfig_file.flush()
+        workload_k8s = K8sClient(namespace=refs.namespace, kubeconfig=kubeconfig_file.name, as_system_admin=False)
+        jwt_grpc_tenant1.call(
+            service="osac.public.v1.Clusters/Update",
+            data={
+                "object": {"id": refs.uuid, "spec": {"version": {"name": target["name"]}}},
+                "updateMask": {"paths": ["spec.version"]},
+            },
+        )
+        accepted = time.monotonic()
+        evidence["phase"] = "control-plane-requested"
+        reported: set[tuple[str | None, bool]] = set()
 
-    def observe() -> tuple[dict[str, Any], dict[str, Any]]:
-        """Read control-plane progress while rejecting unrelated changes."""
-        current = _snapshot(k8s=k8s, grpc=grpc, refs=refs)
-        _warn_readiness_mismatch(current, reported)
-        _check_cluster_failure(current)
-        _assert_unchanged(current, baseline_pools=baseline["pools"])
-        assert current["cluster"]["spec"]["version"]["name"] == target["name"]
-        _check_hypershift_failure(current["hosted"], "control plane")
-        job = _new_provision_job(current, prior_job_ids)
-        _check_job(job, "control plane")
-        return current, job
+        def observe() -> tuple[dict[str, Any], dict[str, Any]]:
+            """Read control-plane progress while rejecting unrelated changes."""
+            current = _snapshot(k8s=k8s, grpc=grpc, refs=refs, workload_k8s=workload_k8s)
+            _warn_readiness_mismatch(current, reported)
+            _check_cluster_failure(current)
+            _assert_unchanged(current, baseline_pools=baseline["pools"])
+            assert current["cluster"]["spec"]["version"]["name"] == target["name"]
+            _check_hypershift_failure(current["hosted"], "control plane")
+            job = _new_provision_job(current, prior_job_ids)
+            _check_job(job, "control plane")
+            return current, job
 
-    def diagnose(pair: tuple[dict[str, Any], dict[str, Any]]) -> dict[str, Any]:
-        current, job = pair
-        return _upgrade_diagnostics(snapshot=current, target_image=target_image, job=job)
+        def diagnose(pair: tuple[dict[str, Any], dict[str, Any]]) -> dict[str, Any]:
+            current, job = pair
+            return _upgrade_diagnostics(snapshot=current, target_image=target_image, job=job)
 
-    _wait_elapsed(
-        component="control plane start",
-        accepted_at=accepted,
-        limit_seconds=START_LIMIT_SECONDS,
-        observe=observe,
-        ready=lambda pair: (
-            pair[0]["order"]["spec"].get("releaseImage") == target_image
-            and bool(pair[1].get("jobID"))
-            and _cp_started(pair[0]["hosted"], target_image)
-        ),
-        diagnose=diagnose,
-    )
-    evidence["phase"] = "control-plane-started"
-    completed = _wait_elapsed(
-        component="control plane completion",
-        accepted_at=accepted,
-        limit_seconds=CP_LIMIT_SECONDS,
-        observe=observe,
-        ready=lambda pair: _cp_completed(pair[0]["hosted"], target_image),
-        diagnose=diagnose,
-    )
-    evidence["phase"] = "control-plane-completed"
-    evidence["cp_elapsed_seconds"] = round(time.monotonic() - accepted, 1)
-    return completed[0]
+        _wait_elapsed(
+            component="control plane start",
+            accepted_at=accepted,
+            limit_seconds=START_LIMIT_SECONDS,
+            observe=observe,
+            ready=lambda pair: (
+                pair[0]["order"]["spec"].get("releaseImage") == target_image
+                and bool(pair[1].get("jobID"))
+                and _cp_started(pair[0]["hosted"], target_image)
+            ),
+            diagnose=diagnose,
+        )
+        evidence["phase"] = "control-plane-started"
+        completed = _wait_elapsed(
+            component="control plane completion",
+            accepted_at=accepted,
+            limit_seconds=CP_LIMIT_SECONDS,
+            observe=observe,
+            ready=lambda pair: _cp_completed(pair[0]["hosted"], target_image),
+            diagnose=diagnose,
+        )
+        evidence["phase"] = "control-plane-completed"
+        evidence["cp_elapsed_seconds"] = round(time.monotonic() - accepted, 1)
+        return completed[0]
 
 
 def _upgrade_node_pool(
@@ -705,7 +866,7 @@ def _safe_evidence(evidence: dict[str, Any], *, source_version: str) -> dict[str
         "source_release_version": source_version,
         "target_release_version": TARGET_VERSION,
     }
-    for field in ("cp_elapsed_seconds", "np_elapsed_seconds"):
+    for field in ("monitor_elapsed_seconds", "cp_elapsed_seconds", "np_elapsed_seconds"):
         elapsed = evidence.get(field)
         if isinstance(elapsed, float) and math.isfinite(elapsed) and 0 <= elapsed <= 24 * 60 * 60:
             safe[field] = elapsed

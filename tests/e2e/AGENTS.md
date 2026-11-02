@@ -48,10 +48,12 @@ creates its cluster directly with two node sets and verifies ready worker aggreg
 installed Agents, and per-NodeSet NodePool isolation before deleting; it uses the same
 source-pinned environment prerequisites as the focused lifecycle. Run it with
 `uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets`.
-That regression upgrades a ready HostedCluster's control plane and one named
-NodePool while leaving the sibling unchanged. Run `test_cluster_create`
-for installation and teardown without an upgrade. Set
-`OSAC_TEST_UPGRADE_RELEASE_VERSION` and `OSAC_TEST_UPGRADE_RELEASE_IMAGE` for a compatible target (defaults 4.22.1 and its multi-arch image).
+That regression installs the ready HostedCluster, monitors HyperShift and
+guest ClusterOperator health for 10 minutes, and then upgrades only the
+control plane. The upgrade is enabled by default; set
+`OSAC_TEST_UPGRADE_ENABLED=false` to skip it. Set
+`OSAC_TEST_UPGRADE_RELEASE_VERSION` and `OSAC_TEST_UPGRADE_RELEASE_IMAGE` for
+a compatible target (defaults 4.22.1 and its multi-arch image).
 CaaS sanity contains the single-nodepool lifecycle and the fast deletion
 feedback test; the lifecycle verifies deployed version resolution through the
 ClusterOrder and HostedCluster release image. Two-node-set isolation belongs in

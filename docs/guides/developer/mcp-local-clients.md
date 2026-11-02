@@ -2,11 +2,11 @@
 
 This guide covers the opt-in MCP endpoint in a local OSAC development
 deployment. It offers `check_connection`, `list_resources`, `get_resource`,
-`create_compute_instance`, and `delete_compute_instance`. Call the read-only
-`check_connection` diagnostic before provisioning to verify the signed-in
-identity and permission summary. The write tools are experimental; use a
-development deployment and an account authorized for the intended tenant. The
-endpoint is disabled by default.
+`create_compute_instance`, `update_compute_instance`, and
+`delete_compute_instance`. Call the read-only `check_connection` diagnostic
+before provisioning to verify the signed-in identity and permission summary.
+The write tools are experimental; use a development deployment and an account
+authorized for the intended tenant. The endpoint is disabled by default.
 
 The examples use development settings and a shared Keycloak client fixture.
 For another deployment, obtain its connection values and public OAuth client
@@ -254,12 +254,12 @@ Set `default_tools_approval_mode = "writes"` in the existing
 `[mcp_servers.osac]` table if you used `codex mcp add`; it is included in the
 Kind example above. This makes Codex ask before invoking tools that are not
 marked read-only.
-Restart Codex, use `/mcp` to confirm the connection and five available tools,
+Restart Codex, use `/mcp` to confirm the connection and six available tools,
 call `check_connection` before provisioning, and try a read request first. For
-a VM create or delete, inspect the target and check that Codex presents a
-separate approval prompt for the write call. A conversation request alone is
-not the host approval step. OSAC still authorizes each call as the signed-in
-user through the public Fulfillment API.
+a VM create, update, or delete, inspect the target and check that Codex
+presents a separate approval prompt for the write call. A conversation request
+alone is not the host approval step. OSAC still authorizes each call as the
+signed-in user through the public Fulfillment API.
 
 ## Explore with MCP Inspector
 
@@ -291,7 +291,7 @@ MCP_STORAGE_DIR="$INSPECTOR_DIR/storage" \
 In the Inspector web UI, connect to `osac`, leave **OAuth Client Metadata
 Document** empty, and complete Keycloak login. Its browser callback is
 `http://localhost:6274/oauth/callback`, which the development client allows.
-The Tools tab should list the five available tools after login.
+The Tools tab should list the six available tools after login.
 The browser must trust the Kind CA separately; `NODE_EXTRA_CA_CERTS` applies
 to the Node process. `PROFILE=dev-full` uses `keycloak.osac.localhost` as its
 issuer, while `PROFILE=dev` uses `keycloak.keycloak.svc.cluster.local`.

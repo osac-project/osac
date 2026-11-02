@@ -1,0 +1,79 @@
+name: Verify Python on CentOS
+
+# A push can run this branch-only workflow before it exists on main.
+on:
+  push:
+    branches:
+      - test/uv-python-centos
+    paths:
+      - .github/actions/setup-python/**
+      - .github/workflows/verify-python-centos.yml
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: verify-python-centos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-python:
+    # The osac-ci runners are available to the upstream repository.
+    if: github.repository == 'osac-project/osac'
+    runs-on: osac-ci
+    timeout-minutes: 10
+    permissions:
+      contents: read  # Checkout the composite action being verified.
+    steps:
+      - name: Checkout verification commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+        with:
+          persist-credentials: false
+
+      - name: Prepare fresh Python installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_dir="$(mktemp -d "${RUNNER_TEMP}/osac-python-verify.XXXXXX")"
+          {
+            printf 'UV_PYTHON_INSTALL_DIR=%s/python\n' "$verify_dir"
+            printf 'UV_CACHE_DIR=%s/cache\n' "$verify_dir"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Python through uv
+        uses: ./.github/actions/setup-python
+
+      - name: Verify CentOS and Python executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat /etc/os-release
+          for executable in python python3; do
+            command -v "$executable"
+            "$executable" - <<'PY'
+          import platform
+          import sys
+
+          release = platform.freedesktop_os_release()
+          print(sys.executable)
+          print(sys.version)
+          assert release["ID"] == "centos", release
+          assert release["VERSION_ID"] == "10", release
+          assert platform.machine() == "x86_64", platform.machine()
+          assert sys.version_info[:2] == (3, 14), sys.version
+          PY
+          done
+
+      - name: Verify Ruff and release summary dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruff_version="$(ruff --version)"
+          printf '%s\n' "$ruff_version"
+          test "$ruff_version" = 'ruff 0.15.16'
+          uv run --no-project --with pyyaml==6.0.3 python - <<'PY'
+          import yaml
+
+          assert yaml.__version__ == "6.0.3", yaml.__version__
+          print("PASS: release summary dependencies are available")
+          PY

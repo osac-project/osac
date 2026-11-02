@@ -2543,8 +2543,10 @@ oc delete clusterrolebinding,clusterrole osac-validate-<namespace> --ignore-not-
 **Skipping a check.** Set `preflight.skip.<check_id>` to the reason, for
 example `--set preflight.skip.cert-issuer-ready="created by GitOps after this
 install"`. The report records the reason. Automation without reasons can list
-ids in `preflight.skipChecks` instead; an unknown id there stops the install,
-while an unknown `preflight.skip` id is only reported as a warning.
+ids in `preflight.skipChecks` instead; an unknown id there is a blocking
+failure, while an unknown `preflight.skip` id is only reported as a warning.
+`preflight.mode=report` treats it like every other failure: reported, not
+blocking.
 `validation.enabled=false` skips every check, with one exception: a
 `preflight.skipChecks` entry naming a check id that does not exist still stops
 the install, because the skip list itself is broken.

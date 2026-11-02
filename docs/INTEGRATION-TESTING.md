@@ -460,6 +460,22 @@ Coverage gaps:
   works anywhere; on Helm 4 the failing render's JSON line is the portable
   channel.
 
+The Kind `dev-full` smoke workflow (`../.github/workflows/kind-dev-full-smoke.yml`)
+installs the full profile, waits for the fulfillment ingress/API deployments,
+operator, AWX web/task, Keycloak, and UI deployments, verifies the UI Gateway
+route, then authenticates with the `osac-admin` Keycloak service client and calls
+`osac.public.v1.Tenants/List` over the public Fulfillment gRPC endpoint. It uses real Kind, Podman,
+KubeVirt/AWX/Keycloak deployments, the profile's published Fulfillment Service
+image, and the profile's TLS bundle; it does not fake service
+responses. The smoke runs nightly and, after the workflow is on the default
+branch, can be requested on a PR by a repository collaborator with
+`/test-kind-dev-full`. The smoke script passed against a running dev-full
+cluster. A fresh local install was attempted but did not complete because the
+local Kind API server and etcd restarted during AWX startup; scheduled workflow
+runs provide the fresh-install coverage. The smoke covers deployment
+availability, UI routing, and authenticated tenant listing only, not VM
+provisioning or other resource lifecycles.
+
 ### OSAC-5343 deployed enablement coverage
 
 The release E2E path adds these assertions to existing user journeys. The

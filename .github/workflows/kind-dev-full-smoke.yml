@@ -1,0 +1,110 @@
+name: Kind dev-full smoke
+
+on:
+  schedule:
+    # Staggered to avoid the top-of-hour schedule queue.
+    - cron: "17 4 * * *"
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+concurrency:
+  # Unrecognized issue comments get unique groups, so they cannot cancel an
+  # authorized smoke run for the same PR before the job-level gate evaluates.
+  group: kind-dev-full-smoke-${{ (github.event_name == 'issue_comment' && github.event.comment.body == '/test-kind-dev-full' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && github.event.issue.number) || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  dev-full-smoke:
+    # Issue comments run only for an exact command from a repository
+    # collaborator. The schedule runs on the default branch. No repository
+    # secrets are required by this job.
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       github.event.comment.body == '/test-kind-dev-full' &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      CONTAINER_TOOL: podman
+      KIND_EXPERIMENTAL_PROVIDER: podman
+    permissions:
+      contents: read # checkout the scheduled source or PR head
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || github.sha }}
+          persist-credentials: false
+
+      - name: Set temporary kubeconfig path
+        run: printf 'KUBECONFIG=%s/osac-dev-full.kubeconfig\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Ensure Podman and KVM are available
+        run: |
+          if ! command -v podman >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y podman
+          fi
+          sudo podman info --format 'Rootless: {{.Host.Security.Rootless}}'
+          if [[ ! -e /dev/kvm ]]; then
+            echo "The dev-full profile requires /dev/kvm." >&2
+            exit 1
+          fi
+
+      - name: Install Kind
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
+        with:
+          install_only: true
+
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.0.0
+        with:
+          go-version: 1.27.1
+          cache: false
+
+      - name: Install grpcurl
+        env:
+          GOBIN: ${{ runner.temp }}/grpcurl-bin
+          GODEBUG: http2client=0
+        run: |
+          mkdir -p "${GOBIN}"
+          go install github.com/fullstorydev/grpcurl/cmd/grpcurl@v1.9.3
+          echo "${GOBIN}" >> "$GITHUB_PATH"
+
+      - name: Install kind dev-full profile
+        run: make -C osac-installer install PLATFORM=kind PROFILE=dev-full NS=osac
+
+      - name: Check deployments and list tenants through the authenticated API
+        run: bash .github/scripts/test-kind-dev-full.sh
+
+      - name: Collect cluster status on failure
+        if: failure()
+        run: |
+          if [[ ! -s "${KUBECONFIG}" ]]; then
+            echo "No Kind kubeconfig was created."
+            exit 0
+          fi
+          kubectl get deployments,pods --all-namespaces -o wide || true
+          kubectl get events --all-namespaces --sort-by='.lastTimestamp' | tail -n 100 || true
+
+      - name: Delete Kind cluster
+        if: always()
+        run: |
+          if ! command -v kind >/dev/null 2>&1; then
+            echo "Kind is not installed; skipping cluster cleanup."
+            exit 0
+          fi
+          if [[ -s "${KUBECONFIG}" ]]; then
+            osac-installer/scripts/dev-full/kind-runtime.sh delete-cluster osac-dev
+          else
+            echo "Kind cluster osac-dev was not created."
+          fi

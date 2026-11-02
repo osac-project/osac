@@ -1,4 +1,4 @@
-{{- if .Values.ui.enabled }}
+{{- if .Values.devFullUi.enabled }}
 {{/* The UI Deployment and Service come from the osac-ui subchart. This
 HTTPRoute is the dev-full-specific Kind ingress to that shared Service. */}}
 apiVersion: gateway.networking.k8s.io/v1

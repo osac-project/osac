@@ -5,14 +5,11 @@ global:
   fulfillmentTrust:
     enabled: false
     tenantNamespace: osac-csi
-
 image:
   repository: ghcr.io/osac-project/osac-operator
-  tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+  tag: sha-ed4fa6a # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   pullPolicy: Always
-
 replicaCount: 1
-
 resources:
   limits:
     cpu: 500m
@@ -20,7 +17,6 @@ resources:
   requests:
     cpu: 10m
     memory: 128Mi
-
 aap:
   url: ""
   token: ""
@@ -28,23 +24,19 @@ aap:
   statusPollInterval: "30s"
   templatePrefix: "osac"
   organization: "osac"
-
 stall:
   preparingInfrastructureThreshold: "15m"
   controlPlaneStartingThreshold: "30m"
   workersJoiningThreshold: "20m"
   workersJoiningByInstanceType: {}
-
 upgradeTimeouts:
   pending: "10m"
   controlPlane: "40m"
   nodePoolPerNode: "20m"
-
 # On OpenShift, trust the platform-managed ingress CA when fetching Assisted
 # Service discovery ignition through its HTTPS Route.
 ignition:
   trustIngressCA: false
-
 fulfillment:
   serverAddress: ""
   credentials:
@@ -58,7 +50,6 @@ fulfillment:
   configMap:
     name: ""
     optional: true
-
 controllers:
   tenant: true
   networking: true
@@ -68,7 +59,6 @@ controllers:
   # is empty the controller starts with provisioning disabled (Volumes stay in
   # Progressing) and never fails operator startup.
   volume: true
-
 # vendorControllers maps provider identifiers to their vendor CSI controller
 # gRPC endpoints, rendered into OSAC_VENDOR_CONTROLLERS for the Volume
 # controller. Optional: leave empty on setups with no vendor storage backend.
@@ -79,15 +69,12 @@ controllers:
 #   vendorControllers:
 #     vast: vast-csi-controller.osac-csi-backends.svc:50051
 vendorControllers: {}
-
 configSecret:
   name: "osac-config"
   optional: true
-
 serviceAccount:
   create: true
   name: ""
-
 consoleProxy:
   disabled: false
   vmClusterMode: auto
@@ -98,23 +85,18 @@ consoleProxy:
     requests:
       cpu: 10m
       memory: 64Mi
-
 certs:
   issuerRef:
     kind: ClusterIssuer
     name: default-ca
-
 # Path and Secret used to connect controllers to a remote VMaaS cluster.
 # Set both values to enable remote-cluster mode; leave both empty for local mode.
 remoteClusterKubeconfig: ""
 remoteClusterKubeconfigSecretName: ""
 remoteClusterKubeconfigSecretKey: kubeconfig
-
 hubAccess:
   enabled: false
-
 tenants: []
-
 # Admin-managed FabricDomain inventory: exact Netris hostname -> private API
 # BareMetalInstanceType ID. Rendered as osac-fabric-domain-inventory in the
 # release/networking namespace only when nonempty. Contains no credentials.
@@ -123,7 +105,6 @@ tenants: []
 #   gpu-01.example.com: "gpu-bmit-id"
 #   gpu-02.example.com: "gpu-bmit-id"
 fabricDomainInventory: {}
-
 # --- Network Manager Registration ---
 # ConfigMaps that register networking managers for the two-manager model.
 # The operator discovers managers by selecting ConfigMaps with labels
@@ -142,31 +123,21 @@ networkManagers:
     cudn_net:
       enabled: true
       description: >-
-        CUDN-based isolated networking (ClusterUserDefinedNetwork). Leaf overlay
-        role for VirtualNetwork/Subnet — not a physical fabric manager. VMaaS
-        without a fabric uses k8sManagers.k8s_only as the NetworkClass manager,
-        which delegates overlay work here. Capabilities: ipv4 only.
+        CUDN-based isolated networking (ClusterUserDefinedNetwork). Leaf overlay role for VirtualNetwork/Subnet — not a physical fabric manager. VMaaS without a fabric uses k8sManagers.k8s_only as the NetworkClass manager, which delegates overlay work here. Capabilities: ipv4 only.
       capabilities:
-      - ipv4
+        - ipv4
     agentless_net:
       enabled: false
       externalIPContractVersion: v1
       externalIPAttachmentContractVersion: v1
       description: >-
-        AgentlessNet VirtualNetwork and Subnet baseline. Implements UID-keyed
-        namespaces, /31 transit links, Cumulus trunk VLANs, Subnet gateways,
-        per-VirtualNetwork DHCP, and UID-owned IPv4 ExternalIP allocation and
-        release. Supports BMaaS ExternalIPAttachment DNAT and NATGateway SNAT
-        with explicit external source addresses. SecurityGroups remain unsupported.
+        AgentlessNet VirtualNetwork and Subnet baseline. Implements UID-keyed namespaces, /31 transit links, Cumulus trunk VLANs, Subnet gateways, per-VirtualNetwork DHCP, and UID-owned IPv4 ExternalIP allocation and release. Supports BMaaS ExternalIPAttachment DNAT and NATGateway SNAT with explicit external source addresses. SecurityGroups remain unsupported.
       capabilities:
-      - ipv4
+        - ipv4
   k8sManagers:
     k8s_only:
       enabled: false
       description: >-
-        Composite k8s-native networking (CUDN, Kubernetes NetworkPolicy, MetalLB
-        L2) with no separate physical fabric. Delegates each resource type to an
-        existing k8s-native implementation — see osac-aap's osac.templates.k8s_only
-        role. Capabilities: ipv4 only.
+        Composite k8s-native networking (CUDN, Kubernetes NetworkPolicy, MetalLB L2) with no separate physical fabric. Delegates each resource type to an existing k8s-native implementation — see osac-aap's osac.templates.k8s_only role. Capabilities: ipv4 only.
       capabilities:
-      - ipv4
+        - ipv4

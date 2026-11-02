@@ -148,41 +148,33 @@ describe('BareMetalCatalogItemWizard', () => {
 
     await goToReview(user);
 
-    expect(
-      await screen.findByText('Review the configured defaults before creating this catalog item.'),
-    ).toBeInTheDocument();
-    expect(screen.getByText('Starts as unpublished')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Review and create' })).toBeInTheDocument();
     expect(
       screen.getByText(
-        'New catalog items are saved as unpublished. Publish from the catalog when you are ready for users in your tenant to use this offering.',
+        'Confirm your settings before creating the catalog item. It will be saved as unpublished until you publish it.',
       ),
     ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Details' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Compute configuration' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
+    expect(screen.getByText('Cloud-init')).toBeInTheDocument();
+    expect(screen.getAllByText('Not set')).toHaveLength(3);
+    expect(screen.getByText('Unpublished')).toBeInTheDocument();
   });
 
   it('masks inline user data on Review', async () => {
-    const item = create(BareMetalInstanceCatalogItemSchema, {
-      id: 'catalog-item-1',
-      metadata: { name: 'existing-item', tenant: 'test-tenant' },
-      template: { id: 'template-1' },
-      fields: {
-        userDataSource: {
-          behavior: {
-            case: 'locked',
-            value: { source: { case: 'inline', value: 'password: secret-value' } },
-          },
-        },
-      },
-    });
-    const { user } = renderWizard(item);
+    const { user } = renderWizard();
 
+    await fillGeneralStep(user, 'my-item');
     await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.type(screen.getByRole('textbox', { name: 'User data' }), 'password: secret-value');
     await user.click(screen.getByRole('button', { name: 'Next' }));
 
     expect(await screen.findByText('Configured')).toBeInTheDocument();
     expect(screen.queryByText('password: secret-value')).not.toBeInTheDocument();
   });
 
-  it('shows the cloud provider admin unpublished alert body', async () => {
+  it('shows the cloud provider admin scope in the shared review details', async () => {
     vi.mocked(useSession).mockReturnValue(makeSession('admin'));
     const { user } = renderWithProviders(<BareMetalCatalogItemWizard />, {
       apiFixtures: {
@@ -194,11 +186,9 @@ describe('BareMetalCatalogItemWizard', () => {
     await user.click(screen.getByText('Global'));
     await goToReview(user);
 
-    expect(
-      await screen.findByText(
-        'New catalog items are saved as unpublished. Publish from the catalog when you are ready for tenants to use this offering.',
-      ),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Review and create' })).toBeInTheDocument();
+    expect(screen.getByText('Scope')).toBeInTheDocument();
+    expect(screen.getByText('Global')).toBeInTheDocument();
   });
 
   it('creates an unpublished item and omits empty editable fields', async () => {
@@ -231,8 +221,30 @@ describe('BareMetalCatalogItemWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Create' }));
 
     expect(await screen.findByText('Failed to create resource')).toBeInTheDocument();
-    expect(screen.getByText('Starts as unpublished')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Review and create' })).toBeInTheDocument();
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('uses the same edit review summary as VM catalog items', async () => {
+    const existingItem = create(BareMetalInstanceCatalogItemSchema, {
+      id: 'catalog-item-1',
+      metadata: { name: 'existing-item', tenant: 'test-tenant' },
+      template: { id: 'template-1' },
+      published: true,
+      fields: {},
+    });
+    const { user } = renderWizard(existingItem);
+
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Review your changes before saving' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('No changes yet. Update a step to see a before-and-after summary here.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled();
   });
 
   it('prefills edit mode and submits an update without the template', async () => {
@@ -256,8 +268,8 @@ describe('BareMetalCatalogItemWizard', () => {
         },
         userDataSource: {
           behavior: {
-            case: 'locked',
-            value: { source: { case: 'inline', value: 'echo hi' } },
+            case: 'editable',
+            value: { defaultValue: { source: { case: 'inline', value: 'echo hi' } } },
           },
         },
       },
@@ -274,6 +286,8 @@ describe('BareMetalCatalogItemWizard', () => {
     await waitFor(() =>
       expect(screen.getByPlaceholderText('Select an instance type')).toHaveValue('acme-1tb'),
     );
+    await user.clear(screen.getByRole('textbox', { name: 'User data' }));
+    await user.type(screen.getByRole('textbox', { name: 'User data' }), 'updated user data');
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Edit' }));
 

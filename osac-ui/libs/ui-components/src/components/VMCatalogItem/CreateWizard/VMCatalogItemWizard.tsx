@@ -23,13 +23,13 @@ import VMCatalogAccessStep from './VMCatalogAccessStep';
 import VMCatalogConfigurationStep from './VMCatalogConfigurationStep';
 import VMCatalogReviewStep from './VMCatalogReviewStep';
 import VMCatalogStorageStep from './VMCatalogStorageStep';
-import VMCatalogWizardFooter from './VMCatalogWizardFooter';
 import { useCreateResource, useUpdateResource } from '../../../api/use-resource';
 import { useDiskImage } from '../../../api/v1/disk-image';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
 import CatalogGeneralStep from '../../CatalogItem/CatalogGeneralStep';
 import ResourceWizardShell from '../../Resource/ResourceWizardShell';
+import { OSACWizardFooter } from '../../Wizard/OSACWizardFooter';
 
 interface VMCatalogItemWizardProps {
   item?: ComputeInstanceCatalogItem;
@@ -100,8 +100,7 @@ const VMCatalogItemWizard = ({ item }: VMCatalogItemWizardProps) => {
       navAriaLabel={t('Create compute catalog item steps')}
       onStepChange={setCurrentStep}
       footer={
-        <VMCatalogWizardFooter
-          currentStep={currentStep}
+        <OSACWizardFooter
           onCancel={() => navigate('/catalog')}
           stepHasErrors={computeCatalogStepHasErrors}
           isEdit={!!item}

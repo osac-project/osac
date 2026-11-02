@@ -1,140 +1,204 @@
-import {
-  Alert,
-  Content,
-  DescriptionList,
-  DescriptionListDescription,
-  DescriptionListGroup,
-  DescriptionListTerm,
-  Stack,
-  StackItem,
-  Title,
-} from '@patternfly/react-core';
-import InfoCircleIcon from '@patternfly/react-icons/dist/esm/icons/info-circle-icon';
+import { Stack, StackItem } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
+import type { TFunction } from 'i18next';
+
+import type { ClusterCatalogItem } from '@osac/types';
 
 import type { ClusterCatalogItemValues } from './values';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
+import CatalogReview, {
+  type CatalogReviewField,
+  CatalogReviewRow,
+  CatalogReviewSection,
+  CatalogReviewValue,
+  catalogReviewChanges,
+  catalogReviewPolicyLabel,
+  catalogReviewResourceLabel,
+  catalogReviewValue,
+} from '../../CatalogItem/CatalogReview';
 import { formatClusterNodeSetReview } from '../../Cluster/CreateWizard/clusterNodeSetReview';
 
-const ClusterCatalogReviewStep = () => {
+interface ClusterCatalogReviewStepProps {
+  item?: ClusterCatalogItem;
+}
+
+const nodeSetsKey = (values: ClusterCatalogItemValues['nodeSets']['value']) =>
+  JSON.stringify(
+    values.map((nodeSet) => ({
+      hostType: nodeSet.hostType.trim(),
+      name: nodeSet.name.trim(),
+      size: nodeSet.size.trim(),
+    })),
+  );
+
+const nodeSetsLabel = (
+  t: TFunction,
+  values: ClusterCatalogItemValues['nodeSets']['value'],
+): string =>
+  values.length
+    ? values
+        .map((nodeSet) => {
+          const hostType = catalogReviewValue(t, nodeSet.hostType);
+          const size = catalogReviewValue(t, nodeSet.size);
+          return `${catalogReviewValue(t, nodeSet.name)}: ${formatClusterNodeSetReview(hostType, size)}`;
+        })
+        .join('; ')
+    : t('Not set');
+
+const catalogEditChanges = (
+  t: TFunction,
+  initialValues: ClusterCatalogItemValues,
+  values: ClusterCatalogItemValues,
+): ReturnType<typeof catalogReviewChanges> => {
+  const fields: CatalogReviewField[] = [
+    {
+      label: t('Version'),
+      before: catalogReviewResourceLabel(t, initialValues.version.value),
+      after: catalogReviewResourceLabel(t, values.version.value),
+      beforeKey: `${initialValues.version.value.id?.trim() ?? ''}|${initialValues.version.value.name?.trim() ?? ''}`,
+      afterKey: `${values.version.value.id?.trim() ?? ''}|${values.version.value.name?.trim() ?? ''}`,
+    },
+    {
+      label: t('Version access'),
+      before: catalogReviewPolicyLabel(t, initialValues.version),
+      after: catalogReviewPolicyLabel(t, values.version),
+      beforeKey: initialValues.version.locked,
+      afterKey: values.version.locked,
+    },
+    {
+      label: t('Node sets'),
+      before: nodeSetsLabel(t, initialValues.nodeSets.value),
+      after: nodeSetsLabel(t, values.nodeSets.value),
+      beforeKey: nodeSetsKey(initialValues.nodeSets.value),
+      afterKey: nodeSetsKey(values.nodeSets.value),
+    },
+    {
+      label: t('Node sets access'),
+      before: catalogReviewPolicyLabel(t, initialValues.nodeSets),
+      after: catalogReviewPolicyLabel(t, values.nodeSets),
+      beforeKey: initialValues.nodeSets.locked,
+      afterKey: values.nodeSets.locked,
+    },
+    {
+      label: t('Pod CIDR'),
+      before: catalogReviewValue(t, initialValues.podCidr.value),
+      after: catalogReviewValue(t, values.podCidr.value),
+      beforeKey: initialValues.podCidr.value.trim(),
+      afterKey: values.podCidr.value.trim(),
+    },
+    {
+      label: t('Pod CIDR access'),
+      before: catalogReviewPolicyLabel(t, initialValues.podCidr),
+      after: catalogReviewPolicyLabel(t, values.podCidr),
+      beforeKey: initialValues.podCidr.locked,
+      afterKey: values.podCidr.locked,
+    },
+    {
+      label: t('Service CIDR'),
+      before: catalogReviewValue(t, initialValues.serviceCidr.value),
+      after: catalogReviewValue(t, values.serviceCidr.value),
+      beforeKey: initialValues.serviceCidr.value.trim(),
+      afterKey: values.serviceCidr.value.trim(),
+    },
+    {
+      label: t('Service CIDR access'),
+      before: catalogReviewPolicyLabel(t, initialValues.serviceCidr),
+      after: catalogReviewPolicyLabel(t, values.serviceCidr),
+      beforeKey: initialValues.serviceCidr.locked,
+      afterKey: values.serviceCidr.locked,
+    },
+  ];
+
+  return catalogReviewChanges(fields);
+};
+
+const ClusterCatalogReviewStep = ({ item }: ClusterCatalogReviewStepProps) => {
   const { t } = useTranslation();
   const { role } = useSession();
-  const { values } = useFormikContext<ClusterCatalogItemValues>();
+  const { initialValues, values } = useFormikContext<ClusterCatalogItemValues>();
+  const isEdit = Boolean(item);
+  const editChanges = isEdit ? catalogEditChanges(t, initialValues, values) : [];
 
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <Title headingLevel="h2" size="lg">
-          {t('Review')}
-        </Title>
-      </StackItem>
-      <StackItem>
-        <Content component="p">
-          {t('Review the configured defaults before creating this catalog item.')}
-        </Content>
-      </StackItem>
-      <StackItem>
-        <Title headingLevel="h3">{t('General')}</Title>
-      </StackItem>
-      <StackItem>
-        <DescriptionList isHorizontal isCompact aria-label={t('General')}>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Name')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {displayValue(values.metadata.name)}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-          {role === 'admin' ? (
-            <DescriptionListGroup>
-              <DescriptionListTerm>{t('Scope')}</DescriptionListTerm>
-              <DescriptionListDescription>
-                {values.scope === 'global'
-                  ? t('Global')
-                  : displayValue(values.metadata.tenant.name || '')}
-              </DescriptionListDescription>
-            </DescriptionListGroup>
-          ) : values.metadata.project.trim() ? (
-            <DescriptionListGroup>
-              <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
-              <DescriptionListDescription>
-                {displayValue(values.metadata.project)}
-              </DescriptionListDescription>
-            </DescriptionListGroup>
-          ) : null}
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Provisioning template')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {displayValue(values.template.name || '')}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-        </DescriptionList>
-      </StackItem>
-      <StackItem>
-        <Title headingLevel="h3">{t('Configuration')}</Title>
-      </StackItem>
-      <StackItem>
-        <DescriptionList isHorizontal isCompact aria-label={t('Configuration')}>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Version')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {displayValue(values.version.value.name)}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-        </DescriptionList>
-      </StackItem>
-      <StackItem>
-        <Title headingLevel="h3">{t('Node sets')}</Title>
-      </StackItem>
-      <StackItem>
-        <DescriptionList isHorizontal isCompact aria-label={t('Node sets')}>
-          {values.nodeSets.value.map((nodeSet) => (
-            <DescriptionListGroup key={nodeSet.rowId}>
-              <DescriptionListTerm>{displayValue(nodeSet.name)}</DescriptionListTerm>
-              <DescriptionListDescription>
-                {formatClusterNodeSetReview(nodeSet.hostType, nodeSet.size)}
-              </DescriptionListDescription>
-            </DescriptionListGroup>
-          ))}
-        </DescriptionList>
-      </StackItem>
-      <StackItem>
-        <Title headingLevel="h3">{t('Networking')}</Title>
-      </StackItem>
-      <StackItem>
-        <DescriptionList isHorizontal isCompact aria-label={t('Networking')}>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Pod CIDR')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {displayValue(values.podCidr.value)}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Service CIDR')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {displayValue(values.serviceCidr.value)}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-        </DescriptionList>
-      </StackItem>
-      <StackItem>
-        <Alert
-          variant="custom"
-          customIcon={<InfoCircleIcon />}
-          isInline
-          title={t('Starts as unpublished')}
-        >
-          {role === 'admin'
-            ? t(
-                'New catalog items are saved as unpublished. Publish from the catalog when you are ready for tenants to use this offering.',
-              )
-            : t(
-                'New catalog items are saved as unpublished. Publish from the catalog when you are ready for users in your tenant to use this offering.',
-              )}
-        </Alert>
-      </StackItem>
-    </Stack>
+    <CatalogReview isEdit={isEdit} editChanges={editChanges}>
+      <CatalogReviewSection title={t('Details')}>
+        {role === 'admin' && (
+          <CatalogReviewRow
+            label={t('Scope')}
+            value={
+              values.scope === 'global'
+                ? t('Global')
+                : displayValue(values.metadata.tenant.name || '')
+            }
+          />
+        )}
+        <CatalogReviewRow label={t('Name')} value={displayValue(values.metadata.name)} />
+        <CatalogReviewRow
+          label={t('Provisioning template')}
+          value={displayValue(values.template.name || '')}
+        />
+        <CatalogReviewRow label={t('Status')} value={t('Unpublished')} />
+      </CatalogReviewSection>
+
+      <CatalogReviewSection title={t('Compute configuration')}>
+        <CatalogReviewRow
+          label={t('Version')}
+          value={
+            <CatalogReviewValue
+              field={values.version}
+              value={catalogReviewResourceLabel(t, values.version.value)}
+            />
+          }
+        />
+        <CatalogReviewRow
+          label={t('Node sets')}
+          value={
+            <CatalogReviewValue
+              field={values.nodeSets}
+              value={
+                values.nodeSets.value.length ? (
+                  <Stack hasGutter={false}>
+                    {values.nodeSets.value.map((nodeSet) => (
+                      <StackItem key={nodeSet.rowId}>
+                        {formatClusterNodeSetReview(
+                          catalogReviewValue(t, nodeSet.hostType),
+                          catalogReviewValue(t, nodeSet.size),
+                        )}
+                      </StackItem>
+                    ))}
+                  </Stack>
+                ) : (
+                  t('Not set')
+                )
+              }
+            />
+          }
+        />
+      </CatalogReviewSection>
+
+      <CatalogReviewSection title={t('Networking')}>
+        <CatalogReviewRow
+          label={t('Pod CIDR')}
+          value={
+            <CatalogReviewValue
+              field={values.podCidr}
+              value={catalogReviewValue(t, values.podCidr.value)}
+            />
+          }
+        />
+        <CatalogReviewRow
+          label={t('Service CIDR')}
+          value={
+            <CatalogReviewValue
+              field={values.serviceCidr}
+              value={catalogReviewValue(t, values.serviceCidr.value)}
+            />
+          }
+        />
+      </CatalogReviewSection>
+    </CatalogReview>
   );
 };
 

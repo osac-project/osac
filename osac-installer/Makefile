@@ -114,14 +114,19 @@ ifneq ($(filter install-multicluster,$(MAKECMDGOALS)),)
 ifneq ($(PLATFORM),openshift)
 $(error install-multicluster requires PLATFORM=openshift)
 endif
-ifeq ($(filter $(PROFILE),vmaas-ci vcluster-ci),)
-$(error install-multicluster requires PROFILE=vmaas-ci or PROFILE=vcluster-ci)
+ifneq ($(PROFILE),vmaas-ci)
+$(error install-multicluster requires PROFILE=vmaas-ci; a vcluster run prepares its outer cluster with the run setup and calls install-osac directly)
 endif
 ifndef REMOTE_KUBECONFIG
 $(error REMOTE_KUBECONFIG is required (workload cluster kubeconfig))
 endif
 endif
 ifneq ($(filter install-osac,$(MAKECMDGOALS)),)
+ifeq ($(PROFILE),vcluster-ci)
+ifndef REMOTE_KUBECONFIG
+$(error PROFILE=vcluster-ci runs in remote mode; REMOTE_KUBECONFIG (the outer cluster) is required)
+endif
+endif
 ifneq ($(strip $(REMOTE_KUBECONFIG)$(REMOTE_API_ADDRESS)),)
 ifneq ($(PLATFORM),openshift)
 $(error remote-cluster installation requires PLATFORM=openshift)
@@ -132,6 +137,11 @@ endif
 ifeq ($(strip $(REMOTE_KUBECONFIG)),)
 $(error REMOTE_KUBECONFIG is required when REMOTE_API_ADDRESS is set)
 endif
+endif
+endif
+ifneq ($(filter install uninstall,$(MAKECMDGOALS)),)
+ifeq ($(PROFILE),vcluster-ci)
+$(error PROFILE=vcluster-ci installs no infrastructure, so the composite install does not apply; run install-osac directly)
 endif
 endif
 ifneq ($(filter install,$(MAKECMDGOALS)),)

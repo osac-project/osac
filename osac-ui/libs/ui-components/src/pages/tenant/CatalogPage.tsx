@@ -250,13 +250,8 @@ const CatalogPage = () => {
     useCatalogItems(filterCriteria, serviceTierFilter, false);
 
   const data = [...vms, ...clusters, ...bms];
-  const selectedTotalError = selectedServiceTier ? totalsError[selectedServiceTier] : undefined;
   const selectedTotalItems =
-    selectedServiceTier === undefined
-      ? 0
-      : selectedTotalError
-        ? undefined
-        : typeCounts[selectedServiceTier];
+    selectedServiceTier === undefined ? 0 : typeCounts[selectedServiceTier];
 
   const shouldLoadResourceLookups =
     data.length > 0 && !isLoading && !error && (viewType === 'cards' || selectedKind !== 'vm');
@@ -371,7 +366,7 @@ const CatalogPage = () => {
         <StackItem>
           <ListPageBody isLoading={isLoading} error={error}>
             {!data.length ? (
-              selectedTotalItems === 0 ? (
+              selectedTotalItems === 0 && !isFiltered ? (
                 <EmptyState titleText={t('No catalog items found')} headingLevel="h2">
                   {enabledServices.length === 0 ? (
                     <EmptyStateBody>{t('No catalog services are enabled.')}</EmptyStateBody>

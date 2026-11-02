@@ -83,6 +83,7 @@ TypeMapping: dict[AnsibleArgumentType | type, ProtobufType] = {
     list: ProtobufType.ANY,
     dict: ProtobufType.ANY,
     "bool": ProtobufType.BOOL,
+    "boolean": ProtobufType.BOOL,
     bool: ProtobufType.BOOL,
     "int": ProtobufType.INT,
     int: ProtobufType.INT,

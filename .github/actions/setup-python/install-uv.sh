@@ -26,7 +26,8 @@ target=uv-x86_64-unknown-linux-gnu
 scratch=$(mktemp -d "$RUNNER_TEMP/osac-uv-download.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
 for attempt in 1 2; do
-  if curl --fail --silent --show-error --location --max-redirs 1 --max-time 15 \
+  if curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    --max-redirs 1 --max-time 15 \
     --output "$scratch/uv.tar.gz" \
     "https://github.com/astral-sh/uv/releases/download/$version/$target.tar.gz"; then
     break

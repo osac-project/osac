@@ -129,7 +129,13 @@ class SetupUvTests(unittest.TestCase):
     def test_transfer_limits_and_no_nested_retry(self):
         self.assertEqual(self.run_installer().returncode, 0)
         arguments = self.calls("curl")[0]
-        for option, value in (("--max-time", "15"), ("--max-redirs", "1")):
+        self.assertEqual(arguments[0], "--disable")
+        for option, value in (
+            ("--max-time", "15"),
+            ("--max-redirs", "1"),
+            ("--proto", "=https"),
+            ("--proto-redir", "=https"),
+        ):
             self.assertEqual(arguments[arguments.index(option) + 1], value)
         for option in ("--fail", "--location", "--show-error"):
             self.assertIn(option, arguments)

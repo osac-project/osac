@@ -12,21 +12,15 @@ import type { ClusterNodeSetMapPolicy } from '@osac/types';
 import { useTranslation } from '../../../hooks/useTranslation';
 import CatalogFieldEditabilityLabel from '../CatalogFieldEditabilityLabel';
 import { type FieldPolicyLike, catalogFieldPolicyBehavior } from '../catalogFieldPolicyDisplay';
-import type { CatalogItemResourceLookups } from '../catalogItemResourceLookups';
-import {
-  clusterNodeSetItemsFromPolicy,
-  findHostTypeForReference,
-  formatClusterCatalogHostTypeLabel,
-} from '../clusterCatalogItemResourceDisplay';
+import { clusterNodeSetItemsFromPolicy } from '../clusterCatalogItemResourceDisplay';
 
 import './CatalogNodeSets.css';
 
 interface CatalogNodeSetsProps {
   policy: ClusterNodeSetMapPolicy | undefined;
-  resourceLookups: CatalogItemResourceLookups;
 }
 
-const CatalogNodeSets = ({ policy, resourceLookups }: CatalogNodeSetsProps) => {
+const CatalogNodeSets = ({ policy }: CatalogNodeSetsProps) => {
   const { t } = useTranslation();
   const behavior = catalogFieldPolicyBehavior(policy as FieldPolicyLike);
   const nodeSets = clusterNodeSetItemsFromPolicy(policy);
@@ -51,14 +45,7 @@ const CatalogNodeSets = ({ policy, resourceLookups }: CatalogNodeSetsProps) => {
                 className="catalog-node-sets__list"
               >
                 {Object.entries(nodeSets).map(([name, nodeSet]) => {
-                  const hostType = findHostTypeForReference(
-                    resourceLookups.bareMetalInstanceTypes,
-                    nodeSet.baremetalInstanceType,
-                  );
-                  const hostTypeLabel = formatClusterCatalogHostTypeLabel(
-                    hostType,
-                    nodeSet.baremetalInstanceType,
-                  );
+                  const hostTypeLabel = nodeSet.baremetalInstanceType?.name;
 
                   return (
                     <DescriptionListGroup key={name}>

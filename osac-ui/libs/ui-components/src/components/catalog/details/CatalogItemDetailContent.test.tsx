@@ -1,6 +1,6 @@
 import { create } from '@bufbuild/protobuf';
 import { screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   BareMetalInstanceCatalogItemSchema,
@@ -9,45 +9,31 @@ import {
   ClusterVersionReferenceSchema,
   ComputeInstanceCatalogItemSchema,
   ComputeInstanceTemplateReferenceSchema,
-  DiskImageSchema,
-  GpuSpecSchema,
-  GuestOSFamily,
-  InstanceTypeSchema,
-  InstanceTypeState,
 } from '@osac/types';
-import { BareMetalInstanceTypeSchema } from '@osac/types/private';
 
 import { CatalogItemDetailContent } from './CatalogItemDetailContent';
 import VMCatalogItemDetailContent from './VMCatalogItemDetailContent';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
-const INSTANCE_TYPE_ID = 'it-4-8';
+const createResourceListFetches = () => ({
+  instanceTypes: vi.fn(() => ({ items: [] })),
+  diskImages: vi.fn(() => ({ items: [], size: 0, total: 0 })),
+  clusterVersions: vi.fn(() => ({ items: [] })),
+  bareMetalInstanceTypes: vi.fn(() => ({ items: [], size: 0, total: 0 })),
+});
 
-const catalogApiFixtures = {
-  instanceTypes: [
-    create(InstanceTypeSchema, {
-      id: INSTANCE_TYPE_ID,
-      metadata: { name: 'standard-4-8' },
-      spec: {
-        vcpus: 4,
-        memoryGib: 8,
-        state: InstanceTypeState.ACTIVE,
-        gpu: create(GpuSpecSchema, { count: 2, resourceName: 'nvidia.com/A100' }),
-      },
-    }),
-  ],
-  diskImages: [
-    create(DiskImageSchema, {
-      id: 'di-rhel-10',
-      metadata: { name: 'RHEL 10' },
-      spec: { guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX },
-    }),
-  ],
-  privateBaremetalInstanceTypes: [
-    create(BareMetalInstanceTypeSchema, {
-      metadata: { name: 'bm.large' },
-    }),
-  ],
+const noResourceListFetches = (fetches: ReturnType<typeof createResourceListFetches>) => ({
+  onPublicInstanceTypeList: fetches.instanceTypes,
+  onDiskImageList: fetches.diskImages,
+  onClusterVersionList: fetches.clusterVersions,
+  onBaremetalInstanceTypeList: fetches.bareMetalInstanceTypes,
+});
+
+const expectNoResourceListFetches = (fetches: ReturnType<typeof createResourceListFetches>) => {
+  expect(fetches.instanceTypes).not.toHaveBeenCalled();
+  expect(fetches.diskImages).not.toHaveBeenCalled();
+  expect(fetches.clusterVersions).not.toHaveBeenCalled();
+  expect(fetches.bareMetalInstanceTypes).not.toHaveBeenCalled();
 };
 
 const vmItem = create(ComputeInstanceCatalogItemSchema, {
@@ -66,7 +52,7 @@ const vmItem = create(ComputeInstanceCatalogItemSchema, {
   published: true,
   fields: {
     instanceType: {
-      behavior: { case: 'locked', value: { id: INSTANCE_TYPE_ID, name: 'standard-4-8' } },
+      behavior: { case: 'locked', value: { id: 'it-4-8', name: 'standard-4-8' } },
     },
     diskImage: {
       behavior: {
@@ -173,9 +159,10 @@ const bareMetalItem = create(BareMetalInstanceCatalogItemSchema, {
 });
 
 describe('CatalogItemDetailContent', () => {
-  it('shows VM detail columns with lookups, governance, and safe access summaries', async () => {
+  it('shows VM detail columns from resource references without list lookups', async () => {
+    const fetches = createResourceListFetches();
     const { container, user } = renderWithProviders(<VMCatalogItemDetailContent item={vmItem} />, {
-      apiFixtures: catalogApiFixtures,
+      transportOverrides: noResourceListFetches(fetches),
     });
 
     expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
@@ -191,9 +178,8 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.getByText('Live')).toBeInTheDocument();
 
     expect(screen.getByText('Instance type')).toBeInTheDocument();
-    expect(await screen.findByText('standard-4-8')).toBeInTheDocument();
+    expect(screen.getByText('standard-4-8')).toBeInTheDocument();
     expect(screen.getByText('RHEL 10')).toBeInTheDocument();
-    expect(await screen.findByText('Linux')).toBeInTheDocument();
     expect(screen.getByText('Disk image')).toBeInTheDocument();
     expect(screen.getByText('Cloud-init')).toBeInTheDocument();
     expect(screen.getByText('Configured')).toBeInTheDocument();
@@ -220,21 +206,24 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.getByText('64 GiB')).toBeInTheDocument();
     expect(within(storageTable).getByText('100 GiB')).toBeInTheDocument();
     expect(screen.getAllByText('fast')).toHaveLength(2);
-    expect(screen.getByText('GPU count')).toBeInTheDocument();
-    expect(await screen.findByText('2')).toBeInTheDocument();
-    expect(screen.getByText('Resource name')).toBeInTheDocument();
-    expect(await screen.findByText('nvidia.com/A100')).toBeInTheDocument();
+    expect(screen.queryByText('Guest OS family')).not.toBeInTheDocument();
+    expect(screen.queryByText('vCPUs')).not.toBeInTheDocument();
+    expect(screen.queryByText('Memory')).not.toBeInTheDocument();
+    expect(screen.queryByText('GPU count')).not.toBeInTheDocument();
+    expect(screen.queryByText('Resource name')).not.toBeInTheDocument();
     expect(screen.getAllByText('Locked').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Editable').length).toBeGreaterThan(0);
     expect(screen.queryByText('Run strategy')).not.toBeInTheDocument();
     expect(screen.queryByText('SSH key')).not.toBeInTheDocument();
     expect(screen.queryByText('Network attachments')).not.toBeInTheDocument();
     expect(screen.queryByText('Auto external IP')).not.toBeInTheDocument();
+    expectNoResourceListFetches(fetches);
   });
 
   it('shows configured cluster fields and excludes unsupported policies', () => {
+    const fetches = createResourceListFetches();
     const { container } = renderWithProviders(<CatalogItemDetailContent item={clusterItem} />, {
-      apiFixtures: catalogApiFixtures,
+      transportOverrides: noResourceListFetches(fetches),
     });
 
     expect(screen.queryByText('Details', { exact: true })).not.toBeInTheDocument();
@@ -260,12 +249,11 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.queryByText('Pull secret')).not.toBeInTheDocument();
     expect(screen.queryByText('Network attachment')).not.toBeInTheDocument();
     expect(screen.queryByText('Automatic external IP')).not.toBeInTheDocument();
+    expectNoResourceListFetches(fetches);
   });
 
   it('shows configured bare metal fields and excludes run strategy', async () => {
-    const { user } = renderWithProviders(<CatalogItemDetailContent item={bareMetalItem} />, {
-      apiFixtures: catalogApiFixtures,
-    });
+    const { user } = renderWithProviders(<CatalogItemDetailContent item={bareMetalItem} />);
 
     expect(screen.queryByText('Details', { exact: true })).not.toBeInTheDocument();
     expect(screen.getByText('Instance type')).toBeInTheDocument();
@@ -286,7 +274,7 @@ describe('CatalogItemDetailContent', () => {
     });
 
     renderWithProviders(<VMCatalogItemDetailContent item={item} />, {
-      apiFixtures: catalogApiFixtures,
+      transportOverrides: noResourceListFetches(createResourceListFetches()),
     });
 
     expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();

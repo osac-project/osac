@@ -21,7 +21,6 @@ import {
   GLOBAL_TENANT_VALUE,
   catalogItemTypeBadgeLabel,
 } from '../catalogItemDisplay.ts';
-import { useCatalogItemResourceLookups } from '../catalogItemResourceLookups.ts';
 import CatalogItemConfiguration from './CatalogItemConfiguration';
 
 interface CatalogItemDetailContentProps {
@@ -30,7 +29,6 @@ interface CatalogItemDetailContentProps {
 
 export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps) => {
   const { t } = useTranslation();
-  const resourceLookups = useCatalogItemResourceLookups();
 
   const tenant = item.metadata?.tenant?.trim();
   const configurationTitleId = 'catalog-item-configuration-card-title';
@@ -108,7 +106,7 @@ export const CatalogItemDetailContent = ({ item }: CatalogItemDetailContentProps
         >
           <CardTitle id={configurationTitleId}>{t('Configuration')}</CardTitle>
           <CardBody>
-            <CatalogItemConfiguration item={item} resourceLookups={resourceLookups} />
+            <CatalogItemConfiguration item={item} />
           </CardBody>
         </Card>
       </GridItem>

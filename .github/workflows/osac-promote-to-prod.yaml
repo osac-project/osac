@@ -87,6 +87,7 @@ jobs:
       image-ready: ${{ steps.verify.outputs.image-ready }}
       chart-ready: ${{ steps.verify.outputs.chart-ready }}
     env:
+      RELEASE_VERSION: ${{ github.event.inputs.release_version }}
       IMAGE_SNAPSHOT_INPUT: ${{ github.event.inputs.image_snapshot }}
       CHART_SNAPSHOT_INPUT: ${{ github.event.inputs.chart_snapshot }}
 
@@ -95,15 +96,32 @@ jobs:
       id: validate
       run: |
         set -euo pipefail
+        if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::release_version '${RELEASE_VERSION}' is not a plain X.Y.Z semver" >&2
+          exit 1
+        fi
+        SLUG="${RELEASE_VERSION//./-}"
+
+        # Each Snapshot name must encode release_version (only the
+        # attempt number may differ between the two, per the "Re-run
+        # failed jobs only re-runs failed jobs" reasoning above) --
+        # otherwise an operator could accidentally pair a staged image
+        # Snapshot from one release with a staged chart Snapshot from a
+        # completely different one, and this workflow would promote and
+        # report them as a single, coherent release.
         validate_name() {
-          local name="$1" label="$2"
+          local name="$1" label="$2" expected_prefix="$3"
           if [[ ! "${name}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
             echo "::error::${label}_snapshot '${name}' is not a valid Kubernetes resource name" >&2
             exit 1
           fi
+          if [[ ! "${name}" =~ ^${expected_prefix}-v${SLUG}-attempt[0-9]+$ ]]; then
+            echo "::error::${label}_snapshot '${name}' does not match release_version '${RELEASE_VERSION}' -- expected a name like '${expected_prefix}-v${SLUG}-attempt<N>', got '${name}'. The image and chart Snapshots must both belong to the SAME release; only their attempt numbers may differ." >&2
+            exit 1
+          fi
         }
-        validate_name "${IMAGE_SNAPSHOT_INPUT}" "image"
-        validate_name "${CHART_SNAPSHOT_INPUT}" "chart"
+        validate_name "${IMAGE_SNAPSHOT_INPUT}" "image" "osac-release"
+        validate_name "${CHART_SNAPSHOT_INPUT}" "chart" "osac-charts-release"
         echo "image-snapshot=${IMAGE_SNAPSHOT_INPUT}" >> "$GITHUB_OUTPUT"
         echo "chart-snapshot=${CHART_SNAPSHOT_INPUT}" >> "$GITHUB_OUTPUT"
 
@@ -141,16 +159,29 @@ jobs:
         #     snapshot's own name), but by searching every Release in the
         #     namespace for one whose spec actually references this
         #     Snapshot.
+        # These functions print one of three words, not a plain boolean:
+        # "true" (confirmed ready), "false" (a completed lookup that
+        # affirmatively shows the Snapshot/ReleasePlan is not eligible --
+        # e.g. a clean NotFound, or tests/release never succeeded), or
+        # "error" (the lookup itself failed -- auth/network/etc). "error"
+        # must never be silently folded into "false": doing so would let
+        # a transient infra failure on, say, the image lookup read back
+        # as "image isn't ready", which promote-chart's own gating
+        # condition (image-ready != 'true' allows chart through) would
+        # then treat as "image promotion was never attempted" rather than
+        # "we don't actually know" -- letting chart promote while image's
+        # real status is unknown instead of stopping outright.
         check_snapshot() {
           local name="$1" label="$2" stage_plan="$3"
           local get_output
           if ! get_output=$(oc get snapshot "${name}" -n "${NAMESPACE}" -o json 2>&1); then
             if [[ "${get_output}" == *"NotFound"* ]]; then
               echo "::warning::${label} Snapshot '${name}' not found -- it may have been pruned, or this name was never actually produced by a real osac-release.yaml dispatch. Double-check it against that release's Slack message; re-run osac-release.yaml fresh instead of promoting if it genuinely never shipped. This workflow will skip ${label} promotion." >&2
+              echo "false"
             else
               echo "::error::${label} Snapshot lookup for '${name}' failed with an error other than NotFound (auth/network issue?): ${get_output}" >&2
+              echo "error"
             fi
-            echo "false"
             return
           fi
 
@@ -165,7 +196,7 @@ jobs:
           local released_ok releases_json
           if ! releases_json=$(oc get release -n "${NAMESPACE}" -o json 2>&1); then
             echo "::error::${label} Release list failed (auth/network issue?): ${releases_json}" >&2
-            echo "false"
+            echo "error"
             return
           fi
           released_ok=$(jq -r --arg snap "${name}" --arg plan "${stage_plan}" '
@@ -191,10 +222,11 @@ jobs:
           else
             if [[ "${get_output}" == *"NotFound"* ]]; then
               echo "::warning::${label} prod ReleasePlan '${name}' not found -- OSAC-1090 has not landed yet (or landed under a different name than expected). ${label} promotion will be skipped." >&2
+              echo "false"
             else
               echo "::error::${label} ReleasePlan lookup for '${name}' failed with an error other than NotFound (auth/network issue?): ${get_output}" >&2
+              echo "error"
             fi
-            echo "false"
           fi
         }
 
@@ -202,6 +234,17 @@ jobs:
         chart_snapshot_ok=$(check_snapshot "${CHART_SNAPSHOT}" "chart" "osac-charts-stage")
         image_plan_ok=$(check_releaseplan "cloud-extensions-prod" "image")
         chart_plan_ok=$(check_releaseplan "osac-charts-prod" "chart")
+
+        # A lookup that genuinely failed (not a clean "doesn't exist")
+        # must stop this job outright, not be silently treated as
+        # "unready" -- see the check_snapshot header comment above for
+        # why that distinction matters for promote-chart's own gating.
+        for result in "${image_snapshot_ok}" "${chart_snapshot_ok}" "${image_plan_ok}" "${chart_plan_ok}"; do
+          if [[ "${result}" == "error" ]]; then
+            echo "::error::A lookup failed with a genuine error (not a clean not-found) -- stopping rather than silently treating this release as unpromotable. See the ::error:: messages above for which lookup failed and why." >&2
+            exit 1
+          fi
+        done
 
         image_ready=false
         [[ "${image_snapshot_ok}" == "true" && "${image_plan_ok}" == "true" ]] && image_ready=true

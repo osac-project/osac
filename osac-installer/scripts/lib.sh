@@ -28,6 +28,37 @@ validate_remote_kubeconfig_secret() {
     return 0
 }
 
+# Render the osac chart offline for the input-validation gate, bridging the
+# NetBox lookup branch. helm template cannot see cluster Secrets (lookup
+# returns nil offline), so a profile relying on the install-time
+# netbox-token-seed hook to create the token Secret fails the render with a
+# specific "tokenValue is required" error. Only that failure is retried with
+# a render-only placeholder token (never passed to an installation). Every
+# other failure -- including a caller-supplied token that violates the
+# schema, however it was supplied (--set, --set-string, or a values file) --
+# aborts with Helm's own error, so the gate always validates the caller's
+# actual merged value, never a placeholder masking it.
+#
+# Usage: render_osac_chart_offline PLACEHOLDER_TOKEN RELEASE CHART [HELM_ARGS...]
+render_osac_chart_offline() {
+    local placeholder_token="$1"
+    shift
+    local err
+    if err=$(helm template "$@" 2>&1 >/dev/null); then
+        return 0
+    fi
+    case "${err}" in
+        *"netbox.tokenValue is required when Secret"*)
+            helm template "$@" --set "bmf.netbox.tokenValue=${placeholder_token}" >/dev/null
+            return
+            ;;
+        *)
+            printf '%s\n' "${err}" >&2
+            return 1
+            ;;
+    esac
+}
+
 # Retry a condition until it succeeds or times out, optionally running a command each iteration
 # Usage: retry_until <timeout_seconds> <interval_seconds> <condition_command> [loop_command]
 # Returns: 0 on success, 1 on timeout

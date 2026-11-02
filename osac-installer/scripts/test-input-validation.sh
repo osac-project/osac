@@ -259,20 +259,20 @@ MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
   make -C "${SANDBOX}" --no-print-directory -n install-osac \
     PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
     >"${remote_plan}" 2>/dev/null || fail "make -n install-osac (remote) failed"
-join_continuations <"${remote_plan}" | grep 'helm template osac ' \
+join_continuations <"${remote_plan}" | grep 'render_osac_chart_offline' \
   | grep -q 'operator.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
   || fail "validate-inputs: the gate render omits the remote-cluster args"
 join_continuations <"${remote_plan}" | grep 'helm upgrade --install osac ' \
   | grep -q 'operator.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
   || fail "install-osac: the upgrade omits the remote-cluster args"
 
-# The gate's NetBox placeholder must be passed with --set, not --set-string:
-# on Helm 3.18 a --set-string placeholder beats a caller's --set of the same
-# path regardless of command line order, masking the caller's value from the
-# gate while the install applies it.
-join_continuations <"${remote_plan}" | grep 'helm template osac ' \
-  | grep -q -- '--set bmf.netbox.tokenValue=offline-validation-placeholder' \
-  || fail "validate-inputs: the gate render must pass the NetBox placeholder with --set"
+# The gate's osac-chart render goes through render_osac_chart_offline with
+# the render-only placeholder token: the function applies the placeholder
+# only when the merged render has no NetBox token at all, never over a
+# caller-supplied value from --set, --set-string, or a values file.
+join_continuations <"${remote_plan}" | grep 'render_osac_chart_offline' \
+  | grep -q 'offline-validation-placeholder' \
+  || fail "validate-inputs: the gate render must bridge the NetBox token via render_osac_chart_offline"
 
 # install-devstack rejects a wrong profile at parse time, before the gate's
 # cluster lookups or renders, so the user sees the actual mistake.
@@ -417,12 +417,13 @@ render_failure_matching \
 # the infra chart's netbox-token-seed hook to create the NetBox token Secret
 # during a real install, and offline rendering cannot see cluster Secrets
 # (helm template's lookup returns nil), so the raw render fails the
-# lookup-dependent branch. The gate bridges it with a render-only
-# placeholder token (NETBOX_OFFLINE_TOKEN in the Makefile; it must match the
-# value asserted here) that is never passed to an installation. The
-# hostname --sets mirror the OpenShift gate branch -- the profile's
-# supported platform; on Kind the install itself rejects the profile's empty
-# hostnames, gate and install alike.
+# lookup-dependent branch. The gate bridges exactly that failure through
+# render_osac_chart_offline (scripts/lib.sh) with a render-only placeholder
+# (NETBOX_OFFLINE_TOKEN in the Makefile; it must match the value asserted
+# below) that is never passed to an installation. The hostname --sets
+# mirror the OpenShift gate branch -- the profile's supported platform; on
+# Kind the install itself rejects the profile's empty hostnames, gate and
+# install alike.
 NETBOX_PROFILE_ARGS=(
   -f "${INSTALLER_DIR}/values/bmaas-ci/instance.yaml"
   -f "${INSTALLER_DIR}/values/bmaas-netbox-ci/instance.yaml"
@@ -436,22 +437,57 @@ render_failure_matching \
   'netbox\.tokenValue is required when Secret' \
   "${NETBOX_PROFILE_ARGS[@]}"
 
-render_success \
-  netbox-profile-gate-placeholder \
-  "${NETBOX_PROFILE_ARGS[@]}" \
-  --set bmf.netbox.tokenValue=offline-validation-placeholder
+# The gate's osac-chart render goes through render_osac_chart_offline, so
+# the tests below exercise the same code path the gate uses.
+source "${SCRIPT_DIR}/lib.sh"
 
-# A caller-supplied token must reach the gate's render, not be masked by the
-# placeholder: the placeholder is passed with --set, so the caller's later
-# --set of the same path wins the merge (on Helm 3.18 a --set-string
-# placeholder would beat the caller's --set regardless of order and mask
-# it). The numeric token fails the schema in the gate, before any cluster
-# change, exactly as it would fail the install.
-render_failure_matching \
-  netbox-caller-numeric-token \
-  '(bmf\.netbox\.tokenValue|/bmf/netbox/tokenValue).*Invalid type' \
+# The bridge: only the specific lookup failure above is retried with the
+# placeholder, so the profile renders like the gate does.
+echo "checking netbox-profile-gate-placeholder (bridged render)"
+render_osac_chart_offline offline-validation-placeholder \
+  osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
   "${NETBOX_PROFILE_ARGS[@]}" \
-  --set bmf.netbox.tokenValue=offline-validation-placeholder \
-  --set bmf.netbox.tokenValue=123
+  || fail "netbox-profile-gate-placeholder: the bridged render failed"
+
+# A caller-supplied token must reach the gate's render, never be masked by
+# the placeholder: the placeholder applies only when the merged render has
+# no token at all, so a token from --set, --set-string, or a values file is
+# validated itself. A numeric token fails the schema in the gate, before
+# any cluster change, exactly as it would fail the install.
+echo "checking netbox-caller-numeric-token (expected failure naming the token type)"
+netbox_gate_err="${TMP_DIR}/netbox-gate.err"
+if render_osac_chart_offline offline-validation-placeholder \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    "${NETBOX_PROFILE_ARGS[@]}" \
+    --set bmf.netbox.tokenValue=123 \
+    >"${TMP_DIR}/netbox-set-numeric.out" 2>"${netbox_gate_err}"; then
+  fail "netbox-caller-numeric-token: the gate accepted a numeric --set token"
+fi
+grep -Eiq '(bmf\.netbox\.tokenValue|/bmf/netbox/tokenValue).*Invalid type' "${netbox_gate_err}" \
+  || fail "netbox-caller-numeric-token: the failure did not name the token type"
+
+# The same through a values file: a --set placeholder would mask a
+# file-supplied token (Helm applies --set after values files), so the
+# bridge must render the file's value itself.
+printf 'bmf:\n  netbox:\n    tokenValue: 123\n' >"${TMP_DIR}/netbox-numeric.yaml"
+echo "checking netbox-file-numeric-token (expected failure naming the token type)"
+if render_osac_chart_offline offline-validation-placeholder \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    "${NETBOX_PROFILE_ARGS[@]}" \
+    -f "${TMP_DIR}/netbox-numeric.yaml" \
+    >"${TMP_DIR}/netbox-file-numeric.out" 2>"${netbox_gate_err}"; then
+  fail "netbox-file-numeric-token: the gate accepted a numeric file token"
+fi
+grep -Eiq '(bmf\.netbox\.tokenValue|/bmf/netbox/tokenValue).*Invalid type' "${netbox_gate_err}" \
+  || fail "netbox-file-numeric-token: the failure did not name the token type"
+
+# A valid file-supplied token renders unmasked (the bridge is not taken).
+printf 'bmf:\n  netbox:\n    tokenValue: file-supplied-token\n' >"${TMP_DIR}/netbox-token.yaml"
+echo "checking netbox-file-string-token (expected success)"
+render_osac_chart_offline offline-validation-placeholder \
+  osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+  "${NETBOX_PROFILE_ARGS[@]}" \
+  -f "${TMP_DIR}/netbox-token.yaml" \
+  || fail "netbox-file-string-token: a valid file-supplied token must render"
 
 echo "input validation passed"

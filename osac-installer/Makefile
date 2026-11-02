@@ -551,14 +551,12 @@ endif
 # absent; profiles like bmaas-netbox-ci rely on the infra chart's
 # netbox-token-seed hook to create that Secret during a real install. Offline
 # rendering cannot see cluster Secrets (helm template's lookup returns nil),
-# so the gate's render-only placeholder bridges that branch. It is never
-# passed to an installation. The placeholder is passed with --set, not
-# --set-string: Helm merges --set-string after --set regardless of command
-# line order (verified on 3.18.0), so a --set-string placeholder would mask
-# a caller-supplied --set tokenValue and the gate would validate the
-# placeholder instead of the caller's value. With --set, a later --set or
-# any --set-string from INSTANCE_HELM_ARGS/EXTRA_HELM_ARGS overrides the
-# placeholder, so the gate rejects an invalid merged value itself.
+# so the gate's osac-chart renders go through render_osac_chart_offline
+# (scripts/lib.sh): only the specific "tokenValue is required" lookup failure
+# is retried with this render-only placeholder, which is never passed to an
+# installation. A token supplied by the caller through any channel (--set,
+# --set-string, or a values file) renders without the placeholder, so the
+# gate validates the caller's actual value.
 NETBOX_OFFLINE_TOKEN := offline-validation-placeholder
 
 .PHONY: validate-inputs
@@ -595,14 +593,14 @@ ifeq ($(PLATFORM),kind)
 		--set osacNamespace=$(NS) \
 		$(INFRA_HELM_ARGS) >/dev/null \
 	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
-	@helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+	@source scripts/lib.sh && render_osac_chart_offline "$(NETBOX_OFFLINE_TOKEN)" \
+		osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
-		--set bmf.netbox.tokenValue=$(NETBOX_OFFLINE_TOKEN) \
 		$(REMOTE_CLUSTER_HELM_ARGS) \
 		$(INSTANCE_HELM_ARGS) \
-		$(EXTRA_HELM_ARGS) >/dev/null \
+		$(EXTRA_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
 ifeq ($(PROFILE),dev-full)
 	@helm template osac-devstack $(CHARTS)/osac-devstack \
@@ -636,11 +634,11 @@ else
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
 		$(INFRA_HELM_ARGS) >/dev/null \
 	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
-	@helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+	@source scripts/lib.sh && render_osac_chart_offline "$(NETBOX_OFFLINE_TOKEN)" \
+		osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
-		--set bmf.netbox.tokenValue=$(NETBOX_OFFLINE_TOKEN) \
 		$(REMOTE_CLUSTER_HELM_ARGS) \
 		--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) \
 		--set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) \
@@ -648,7 +646,7 @@ else
 		--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac \
 		--set ui.externalHostname=$(UI_HOSTNAME) \
 		$(INSTANCE_HELM_ARGS) \
-		$(EXTRA_HELM_ARGS) >/dev/null \
+		$(EXTRA_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
 endif
 	@echo "Installer input validation passed."

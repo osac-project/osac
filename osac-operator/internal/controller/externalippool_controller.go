@@ -30,8 +30,7 @@ import (
 )
 
 // ExternalIPPoolReconciler runs the Fabric create_external_ip_pool and
-// delete_external_ip_pool tasks (contract §4.10). A pool records only the
-// Fabric Manager of the NetworkClass.
+// delete_external_ip_pool tasks, with the explicit k8s_only manager exception.
 type ExternalIPPoolReconciler struct {
 	Client              client.Client
 	Engine              *networktask.Engine
@@ -60,7 +59,9 @@ func (r *ExternalIPPoolReconciler) create(ctx context.Context, pool *v1alpha1.Ex
 			networktask.SetProgressing(pool, msgWaitingForNetworkClass)
 			return waitResult(), nil
 		}
-		copyManagers(pool, nc.Status.NetworkManagers, true)
+		if err := copyExternalIPManager(pool, nc.Status.NetworkManagers); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	input, store, err := inputOf(pool, func() (map[string]any, error) {
 		resource, err := networktask.Snapshot(pool, kindExternalIPPool, pool.Spec, "cidrs")
@@ -76,7 +77,11 @@ func (r *ExternalIPPoolReconciler) create(ctx context.Context, pool *v1alpha1.Ex
 		networktask.SetProvisioningDisabled(pool, networktask.CreateExternalIPPool)
 		return ctrl.Result{}, store()
 	}
-	req := taskRequest(pool, kindExternalIPPool, networktask.CreateExternalIPPool, v1alpha1.NetworkJobManagerFabric, input)
+	manager, _, err := externalIPManager(pool.Status.NetworkManagers)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	req := taskRequest(pool, kindExternalIPPool, networktask.CreateExternalIPPool, manager, input)
 	req.BeforeLaunch = store
 	out, err := r.Engine.Run(ctx, pool, req)
 	if err != nil {
@@ -100,10 +105,18 @@ func (r *ExternalIPPoolReconciler) remove(ctx context.Context, pool *v1alpha1.Ex
 		}
 	}
 	input := cleanupInput(pool)
+	manager, _, err := externalIPManager(pool.Status.NetworkManagers)
+	if err != nil {
+		if !networktask.Started(pool, networktask.CreateExternalIPPool, v1alpha1.NetworkJobManagerFabric) &&
+			!networktask.Started(pool, networktask.CreateExternalIPPool, v1alpha1.NetworkJobManagerKubernetes) {
+			return true, ctrl.Result{}, nil
+		}
+		return false, ctrl.Result{}, err
+	}
 	return runCleanup(ctx, r.Engine, pool, kindExternalIPPool,
-		cleanupTask{create: networktask.CreateExternalIPPool, manager: v1alpha1.NetworkJobManagerFabric,
+		cleanupTask{create: networktask.CreateExternalIPPool, manager: manager,
 			request: func() networktask.Request {
-				return taskRequest(pool, kindExternalIPPool, networktask.DeleteExternalIPPool, v1alpha1.NetworkJobManagerFabric, input)
+				return taskRequest(pool, kindExternalIPPool, networktask.DeleteExternalIPPool, manager, input)
 			}},
 	)
 }

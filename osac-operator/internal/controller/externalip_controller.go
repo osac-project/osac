@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -29,10 +30,10 @@ import (
 	"github.com/osac-project/osac/osac-operator/internal/networktask"
 )
 
-// ExternalIPReconciler runs the Fabric create_external_ip and
-// delete_external_ip tasks (contract §4.10). It writes status.address only
-// from an accepted result; the API state is ALLOCATED exactly when the
-// address is set and the ExternalIP is not being deleted.
+// ExternalIPReconciler runs the Fabric ExternalIP tasks, with the explicit
+// k8s_only v1 result-contract exception. It writes status.address only from an
+// accepted result; the API state is ALLOCATED exactly when the address is set
+// and the ExternalIP is not being deleted.
 type ExternalIPReconciler struct {
 	Client              client.Client
 	Engine              *networktask.Engine
@@ -69,7 +70,15 @@ func (r *ExternalIPReconciler) create(ctx context.Context, eip *v1alpha1.Externa
 			networktask.SetProgressing(eip, msgWaitingForParent(kindExternalIPPool, eip.Spec.Pool))
 			return waitResult(), nil
 		}
-		copyManagers(eip, pool.Status.NetworkManagers, true)
+		copyManagers(eip, pool.Status.NetworkManagers, false)
+	}
+	manager, managerRef, err := externalIPManager(eip.Status.NetworkManagers)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	contractVersion, err := externalIPContractVersion(eip, managerRef)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 	input, store, err := inputOf(eip, func() (map[string]any, error) {
 		resource, err := networktask.Snapshot(eip, kindExternalIP, eip.Spec, "pool")
@@ -87,16 +96,22 @@ func (r *ExternalIPReconciler) create(ctx context.Context, eip *v1alpha1.Externa
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	req := taskRequest(eip, kindExternalIP, networktask.CreateExternalIP, v1alpha1.NetworkJobManagerFabric, input)
-	req.BeforeLaunch = store
+	req := taskRequest(eip, kindExternalIP, networktask.CreateExternalIP, manager, input)
 	req.Accept = func(_ context.Context, result networktask.Result) error {
-		address, err := networktask.ParseExternalIP(result, poolCIDR(input))
+		var address string
+		var err error
+		if contractVersion == "v1" {
+			address, err = networktask.ParseExternalIPV1Allocation(result, string(eip.UID), eip.Generation, poolCIDR(input))
+		} else {
+			address, err = networktask.ParseExternalIP(result, poolCIDR(input))
+		}
 		if err != nil {
 			return err
 		}
 		eip.Status.Address = address
 		return nil
 	}
+	req.BeforeLaunch = store
 	out, err := r.Engine.Run(ctx, eip, req)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -136,13 +151,57 @@ func (r *ExternalIPReconciler) remove(ctx context.Context, eip *v1alpha1.Externa
 			return false, waitResult(), err
 		}
 	}
+	manager, managerRef, err := externalIPManager(eip.Status.NetworkManagers)
+	if err != nil {
+		if !networktask.Started(eip, networktask.CreateExternalIP, v1alpha1.NetworkJobManagerFabric) &&
+			!networktask.Started(eip, networktask.CreateExternalIP, v1alpha1.NetworkJobManagerKubernetes) {
+			return true, ctrl.Result{}, nil
+		}
+		return false, ctrl.Result{}, err
+	}
+	contractVersion, err := externalIPContractVersion(eip, managerRef)
+	if err != nil {
+		return false, ctrl.Result{}, err
+	}
 	input := cleanupInput(eip)
 	return runCleanup(ctx, r.Engine, eip, kindExternalIP,
-		cleanupTask{create: networktask.CreateExternalIP, manager: v1alpha1.NetworkJobManagerFabric,
+		cleanupTask{create: networktask.CreateExternalIP, manager: manager,
 			request: func() networktask.Request {
-				return taskRequest(eip, kindExternalIP, networktask.DeleteExternalIP, v1alpha1.NetworkJobManagerFabric, input)
+				req := taskRequest(eip, kindExternalIP, networktask.DeleteExternalIP, manager, input)
+				if contractVersion == "v1" {
+					req.Accept = func(_ context.Context, result networktask.Result) error {
+						return networktask.ParseExternalIPV1Release(result, string(eip.UID), eip.Generation)
+					}
+				}
+				return req
 			}},
 	)
+}
+
+func externalIPContractVersion(eip *v1alpha1.ExternalIP, manager *v1alpha1.NetworkManagerRef) (string, error) {
+	version := ""
+	if manager != nil {
+		version = manager.ExternalIPContractVersion
+	}
+	annotations := eip.GetAnnotations()
+	annotatedVersion := annotations[networktask.ExternalIPContractVersionAnnotation]
+	if annotatedVersion != "" && version != "" && annotatedVersion != version {
+		return "", fmt.Errorf("ExternalIP contract annotation %q does not match manager registration %q", annotatedVersion, version)
+	}
+	if version == "" {
+		version = annotatedVersion
+	}
+	if version != "" && version != "v1" {
+		return "", fmt.Errorf("unsupported ExternalIP contract version %q", version)
+	}
+	if version != "" && annotatedVersion == "" {
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		annotations[networktask.ExternalIPContractVersionAnnotation] = version
+		eip.SetAnnotations(annotations)
+	}
+	return version, nil
 }
 
 // SetupWithManager registers the controller. Pool events re-queue its

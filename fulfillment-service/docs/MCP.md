@@ -1,4 +1,4 @@
-# MCP resource discovery
+# MCP tools
 
 The Fulfillment MCP server exposes bounded, typed resource discovery. It does
 not provide a generic RPC proxy, method-name dispatch, reflection, or direct
@@ -30,6 +30,22 @@ underlying Secret object.
 List requests use the explicit `filter` field and bounded pagination. The
 default page size is 50, the maximum is 100, and negative offsets or invalid
 page sizes are rejected before a public API call.
+
+## Supported network writes
+
+`create_network_resource` creates exactly one `virtual_network`, `subnet`, or
+`security_group` through the existing public Create API as the MCP caller. It
+accepts only the typed fields for the selected resource, requires canonical
+IPv4 CIDRs, and rejects edit-shaped input containing an existing resource ID
+with `unsupported_in_place` before any public mutation. Subnet and
+SecurityGroup creation checks the named parent VirtualNetwork first; a missing
+or inaccessible parent returns a named prerequisite error and creates no
+dependent resource. NetworkClass remains provider-managed and is never exposed
+as a tenant write.
+
+`delete_network_resource` deletes exactly one explicitly named eligible
+resource. It does not cascade: a parent with active dependents returns a
+conflict, and callers must delete dependents first.
 
 ## Registry extension contract
 

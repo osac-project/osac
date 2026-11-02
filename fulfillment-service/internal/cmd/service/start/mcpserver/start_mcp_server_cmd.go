@@ -150,9 +150,9 @@ const tokenExpirationLeeway = 5 * time.Second
 // serverInstructions guide MCP hosts toward the deployment API rather than local, bypassing interfaces.
 // Keep the first 512 characters self-contained because some MCP hosts use only that portion when selecting tools.
 const serverInstructions = "Treat this server's tools as the authoritative interface for supported tenant-facing OSAC deployment operations. " +
-	"Do not run the osac CLI, oc, kubectl, call APIs directly, or inspect Kubernetes resources for those requests. " +
-	"If an operation is unavailable, explain the limitation and ask before using another interface. Before creating a compute instance, " +
-	"list or get its catalog item and selectable resources, use only permitted overrides, and get confirmation. " +
+	"Do not run the osac CLI, oc, or kubectl, call APIs directly, or inspect Kubernetes for those requests. " +
+	"If an operation is unavailable, explain the limitation and ask before using another interface. Before creating a compute instance " +
+	"or network prerequisite, inspect eligible resources and use IDs. Network tools accept canonical IPv4 only and reject edits. " +
 	"Delete only when explicitly requested."
 
 // run runs the `start mcp-server` command.
@@ -391,6 +391,40 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		OutputSchema: compatibleToolSchema[GetResourceOutput](),
 	}
 	registerGetResourceTool(registry, getResourceTool, resources)
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "create_network_resource",
+		Description: "Use this tool only after the user confirms the requested resource. Create a virtual_network with ipv4_cidr, " +
+			"a subnet with virtual_network_id and ipv4_cidr, or a security_group with virtual_network_id and optional typed rules. " +
+			"Use IDs from list_resources, canonical IPv4 CIDRs only, and snake_case fields. Supplying id requests an unsupported " +
+			"in-place edit. Creation is asynchronous and acceptance does not mean the resource is ready.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Create OSAC network resource",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(false),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  compatibleToolSchema[CreateNetworkResourceInput](),
+		OutputSchema: compatibleToolSchema[CreateNetworkResourceOutput](),
+	}, writeToolContract{Destructive: false, Idempotent: false}, handleCreateNetworkResource(
+		deps.VirtualNetworksClient, deps.SubnetsClient, deps.SecurityGroupsClient,
+	))
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "delete_network_resource",
+		Description: "Use this tool only when the user explicitly requests deletion or cleanup. Deletes exactly one named " +
+			"virtual_network, subnet, or security_group by ID. Dependencies must be removed first; this tool never cascades.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Delete OSAC network resource",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(true),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  compatibleToolSchema[DeleteNetworkResourceInput](),
+		OutputSchema: compatibleToolSchema[DeleteNetworkResourceOutput](),
+	}, writeToolContract{Destructive: true, Idempotent: false}, handleDeleteNetworkResource(
+		deps.VirtualNetworksClient, deps.SubnetsClient, deps.SecurityGroupsClient,
+	))
 	registerWriteTool(registry, &mcp.Tool{
 		Name: "create_compute_instance",
 		Description: "Use this tool only after the user confirms the requested VM and you have inspected the catalog item and any selected " +

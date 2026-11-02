@@ -2,12 +2,13 @@ import type { ReactElement } from 'react';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
 import { Formik, type FormikErrors } from 'formik';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as yup from 'yup';
 
 import { type Tenant, TenantState, Tenants } from '@osac/types/private';
 
 import {
+  type ResourceListItem,
   ResourceSelectField,
   type ResourceSelectValue,
   emptyResourceSelectValue,
@@ -27,18 +28,22 @@ const renderSelect = ({
   autoSelectSingleOption = false,
   filterItems,
   formatOptionLabel,
+  getOptionDescription,
   initialValue = emptyResourceSelectValue(),
   labelHelp,
   tenants = [makeTenant('only-1', 'Only tenant')],
   transportOverrides,
+  createOption,
 }: {
   autoSelectSingleOption?: boolean;
-  filterItems?: (item: { id: string; metadata?: { name?: string } }) => boolean;
-  formatOptionLabel?: (item: { id: string; metadata?: { name?: string } }) => string;
+  filterItems?: (item: ResourceListItem) => boolean;
+  formatOptionLabel?: (item: ResourceListItem) => string;
+  getOptionDescription?: (item: ResourceListItem) => string | undefined;
   initialValue?: ResourceSelectValue;
   labelHelp?: ReactElement;
   tenants?: Tenant[];
   transportOverrides?: MockTransportOverrides;
+  createOption?: { label: string; onSelect: () => void };
 } = {}) => {
   let latestErrors: FormikErrors<{ tenant: ResourceSelectValue }> = {};
 
@@ -63,6 +68,8 @@ const renderSelect = ({
             autoSelectSingleOption={autoSelectSingleOption}
             filterItems={filterItems}
             formatOptionLabel={formatOptionLabel}
+            getOptionDescription={getOptionDescription}
+            createOption={createOption}
             labelHelp={labelHelp}
             placeholder="Select a tenant"
             loadErrorTitle="Failed to fetch tenants"
@@ -195,6 +202,22 @@ describe('ResourceSelectField', () => {
     expect(document.getElementById('tenant')).toHaveClass('pf-m-disabled');
   });
 
+  it('offers resource creation when the list is empty', async () => {
+    const onCreate = vi.fn();
+    const { user } = renderSelect({
+      tenants: [],
+      createOption: { label: 'Create tenant', onSelect: onCreate },
+    });
+
+    await waitFor(() => expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled());
+    await user.click(screen.getByLabelText(/^Tenant/));
+    await user.click(screen.getByRole('option', { name: 'Create tenant' }));
+
+    expect(onCreate).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText('formik-value')).toHaveTextContent('{"id":"","name":""}');
+    expect(screen.getByRole('combobox')).toHaveValue('');
+  });
+
   it('shows a load error above a disabled select when listing fails', async () => {
     renderSelect({
       transportOverrides: {
@@ -243,6 +266,19 @@ describe('ResourceSelectField', () => {
       );
     });
     expect(screen.getByRole('combobox')).toHaveValue('globex (custom)');
+  });
+
+  it('renders option details provided by the caller', async () => {
+    const { user } = renderSelect({
+      tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
+      getOptionDescription: (item) => `ID: ${item.id}`,
+    });
+
+    await waitFor(() => expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled());
+    await user.click(screen.getByLabelText(/^Tenant/));
+    await user.click(screen.getByRole('option', { name: 'globex · ID: t-2' }));
+
+    expect(screen.getByRole('combobox')).toHaveValue('globex · ID: t-2');
   });
 
   it('keeps distinct ids for the typeahead select and toggle', async () => {

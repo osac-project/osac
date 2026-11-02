@@ -35,7 +35,7 @@ const vm = {
     diskImage: { id: 'disk-image-rhel', name: 'RHEL 9.4' },
     sshKey: create(SecretLocalReferenceSchema, { id: 'secret-1', name: 'tenant-ssh-key' }),
     instanceType: create(InstanceTypeReferenceSchema, { id: 'standard-4-8' }),
-    userData: '#cloud-config',
+    userDataSource: { source: { case: 'inline', value: '#cloud-config' } },
     template: create(ComputeInstanceTemplateReferenceSchema, { id: '' }),
   },
   status: { state: ComputeInstanceState.RUNNING },

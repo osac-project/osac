@@ -22,18 +22,18 @@ import PencilAltIcon from '@patternfly/react-icons/dist/esm/icons/pencil-alt-ico
 import type { TFunction } from 'i18next';
 
 import {
-  ComputeInstanceState,
-  GuestOSFamily,
   type ComputeInstance,
+  ComputeInstanceState,
   type DiskImage,
+  GuestOSFamily,
   type InstanceType,
 } from '@osac/types';
 
 import EditInstanceTypeModal from './EditInstanceTypeModal';
-import { guestOsFamilyLabels } from '../../DiskImage/DiskImageTable';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { VmStatusLabel } from '../../../VmStatusLabel';
+import { guestOsFamilyLabels } from '../../DiskImage/DiskImageTable';
 import { Timestamp } from '../../Primitives/Timestamp';
 import { formatInstanceTypeDisplayName } from '../utils';
 
@@ -100,7 +100,13 @@ const VmDetailsCard = ({
   const memoryGib = instanceType?.spec?.memoryGib;
   const gpu = instanceType?.spec?.gpu;
   const hasWindowsGuest = guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_WINDOWS;
-  const userDataConfigured = Boolean(vm.spec?.userDataSecret?.id || vm.spec?.userData?.trim());
+  const userDataSource = vm.spec?.userDataSource?.source;
+  const userDataConfigured =
+    userDataSource?.case === 'inline'
+      ? Boolean(userDataSource.value.trim())
+      : userDataSource?.case === 'secret'
+        ? Boolean(userDataSource.value.id || userDataSource.value.name)
+        : false;
   const canEdit = canEditInstanceType(vm);
   const editButton = (
     <Button

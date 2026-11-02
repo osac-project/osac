@@ -11,10 +11,10 @@ import {
 
 import type { ComputeInstance } from '@osac/types';
 
+import { useTranslation } from '../../../hooks/useTranslation';
 import CatalogStorageTable, {
   type CatalogStorageTableRow,
 } from '../../catalog/details/CatalogStorageTable';
-import { useTranslation } from '../../../hooks/useTranslation';
 import { formatBootDiskSizeForReview } from '../../ProvisioningWizard/reviewFormatters';
 
 interface VmStorageSectionProps {

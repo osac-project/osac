@@ -22,34 +22,44 @@ const VmDetailsSections = ({
   isInstanceTypeLoading,
   diskImage,
   isDiskImageLoading,
-}: VmDetailsSectionsProps) => (
-  <PageSection hasBodyWrapper={false}>
-    <Stack hasGutter>
-      <StackItem>
-        <VmDetailsCard
-          vm={vm}
-          instanceType={instanceType}
-          isInstanceTypeLoading={isInstanceTypeLoading}
-          diskImage={diskImage}
-          isDiskImageLoading={isDiskImageLoading}
-        />
-      </StackItem>
-      <StackItem>
-        <VmExternalIpSection vm={vm} />
-      </StackItem>
-      <StackItem>
-        <VmNetworkingSection vm={vm} />
-      </StackItem>
-      <StackItem>
-        <VmStorageSection vm={vm} />
-      </StackItem>
-      {vm.spec?.userData?.trim() ? (
+}: VmDetailsSectionsProps) => {
+  const userDataSource = vm.spec?.userDataSource?.source;
+  const hasUserData =
+    userDataSource?.case === 'inline'
+      ? Boolean(userDataSource.value.trim())
+      : userDataSource?.case === 'secret'
+        ? Boolean(userDataSource.value.id || userDataSource.value.name)
+        : false;
+
+  return (
+    <PageSection hasBodyWrapper={false}>
+      <Stack hasGutter>
         <StackItem>
-          <VmUserDataCard vm={vm} />
+          <VmDetailsCard
+            vm={vm}
+            instanceType={instanceType}
+            isInstanceTypeLoading={isInstanceTypeLoading}
+            diskImage={diskImage}
+            isDiskImageLoading={isDiskImageLoading}
+          />
         </StackItem>
-      ) : null}
-    </Stack>
-  </PageSection>
-);
+        <StackItem>
+          <VmExternalIpSection vm={vm} />
+        </StackItem>
+        <StackItem>
+          <VmNetworkingSection vm={vm} />
+        </StackItem>
+        <StackItem>
+          <VmStorageSection vm={vm} />
+        </StackItem>
+        {hasUserData ? (
+          <StackItem>
+            <VmUserDataCard vm={vm} />
+          </StackItem>
+        ) : null}
+      </Stack>
+    </PageSection>
+  );
+};
 
 export default VmDetailsSections;

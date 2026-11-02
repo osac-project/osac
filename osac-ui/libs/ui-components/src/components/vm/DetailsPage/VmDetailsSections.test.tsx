@@ -26,7 +26,10 @@ vi.mock('./VmUserDataCard', () => ({
   default: () => <section aria-label="User data">User data section</section>,
 }));
 
-const vm = { id: 'vm-1', spec: { userData: '#cloud-config' } } as ComputeInstance;
+const vm = {
+  id: 'vm-1',
+  spec: { userDataSource: { source: { case: 'inline', value: '#cloud-config' } } },
+} as unknown as ComputeInstance;
 
 describe('VmDetailsSections', () => {
   it('renders the VM details sections as one continuous body', () => {

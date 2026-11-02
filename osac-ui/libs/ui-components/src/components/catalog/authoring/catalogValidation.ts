@@ -14,7 +14,7 @@ export const catalogLockedStringField = (valueSchema: yup.StringSchema, required
     locked: yup.boolean(),
     value: valueSchema.when('locked', {
       is: true,
-      then: (schema) => schema.required(requiredMessage),
+      then: (schema) => schema.trim().required(requiredMessage),
     }),
   });
 

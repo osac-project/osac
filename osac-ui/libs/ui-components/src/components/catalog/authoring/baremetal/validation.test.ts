@@ -6,6 +6,21 @@ import { buildBareMetalCatalogStepSchema } from './validation';
 const t = ((key: string) => key) as TFunction;
 
 describe('buildBareMetalCatalogStepSchema', () => {
+  it('rejects whitespace-only user data when locked', async () => {
+    const schema = buildBareMetalCatalogStepSchema('configuration', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        instanceType: { locked: false, value: '' },
+        diskImage: { locked: false, value: { id: '', name: '' } },
+        userData: { locked: true, value: '  ' },
+      }),
+    ).rejects.toMatchObject({
+      path: 'userData.value',
+      message: 'User data is required when locked',
+    });
+  });
+
   it('rejects user data larger than 64 KB', async () => {
     const schema = buildBareMetalCatalogStepSchema('configuration', t, 'tenant-admin');
 

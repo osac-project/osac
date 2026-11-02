@@ -751,7 +751,7 @@ describe('CatalogPage', () => {
     expect(screen.queryByText(unpublishedVmItem.metadata?.name ?? '')).not.toBeInTheDocument();
   });
 
-  it('shows an error from a failed catalog total query', async () => {
+  it('keeps the selected catalog visible when an unrelated total query fails', async () => {
     renderCatalogPage(
       createCatalogPageTransport({
         clusterError: Object.assign(new Error(), { name: 'UnauthorizedError' }),
@@ -761,17 +761,17 @@ describe('CatalogPage', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Unauthorized')).toBeInTheDocument();
+      expect(screen.getByText(vmCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
     });
-    // The selected VM query succeeds, but the shared cluster total query fails;
-    // the page renders the error state instead of the catalog items.
-    expect(screen.queryByText(vmCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
+    // The selected VM query succeeds, and the unrelated cluster total failure
+    // must not replace the selected catalog with an error state.
+    expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
     expect(screen.queryByText(clusterCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
   });
 
   it('shows a generic section error for non-401 failures', async () => {
     renderCatalogPage(
-      createCatalogPageTransport({ vmError: new Error('Catalog service unavailable') }),
+      createCatalogPageTransport({ clusterError: new Error('Catalog service unavailable') }),
       allCatalogServiceTiers,
       ['/catalog?types=cluster'],
     );
@@ -781,9 +781,7 @@ describe('CatalogPage', () => {
     });
 
     expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
-    // Clusters are the selected type and loaded successfully, so search stays
-    // enabled despite the VM totals-query error.
-    expect(screen.getByRole('textbox', { name: 'Filter catalog by keyword' })).toBeEnabled();
+    expect(screen.getByRole('textbox', { name: 'Filter catalog by keyword' })).toBeDisabled();
   });
 
   it('shows an empty state when no catalog items are returned', async () => {

@@ -1,8 +1,19 @@
 ---
+- name: Normalize the ExternalIP manager input
+  ansible.builtin.set_fact:
+    metallb_external_ip: >-
+      {{ osac_job_vars.resource
+         if osac_job_vars.resource is defined
+         else external_ip | default({}, true) }}
+    metallb_external_ip_pool: >-
+      {{ osac_job_vars.external_ip_pool
+         if osac_job_vars.external_ip_pool is defined
+         else external_ip_pool | default({}, true) }}
+
 - name: Read the ExternalIP contract version
   ansible.builtin.set_fact:
     metallb_external_ip_contract_version: >-
-      {{ (external_ip.metadata.annotations | default({})).get(
+      {{ (metallb_external_ip.metadata.annotations | default({})).get(
            'osac.openshift.io/externalip-contract-version', '') }}
 
 - name: Validate the ExternalIP contract version

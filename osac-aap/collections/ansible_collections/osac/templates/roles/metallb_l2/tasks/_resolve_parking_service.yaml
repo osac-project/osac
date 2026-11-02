@@ -55,6 +55,27 @@
     metallb_parking_external_ip_tenant: >-
       {{ (metallb_parking_external_ip_lookup.resources[0].metadata.annotations | default({})).get(
            'osac.openshift.io/tenant', '') }}
+    metallb_parking_external_ip_pool_name: >-
+      {{ (metallb_parking_external_ip_lookup.resources[0].metadata.annotations | default({})).get(
+           'osac.openshift.io/externalippool-name', '') }}
+    metallb_parking_external_ip_contract_version: >-
+      {{ (metallb_parking_external_ip_lookup.resources[0].metadata.annotations | default({})).get(
+           'osac.openshift.io/externalip-contract-version', '') }}
+
+- name: Validate the ExternalIP contract version used for parking Service resolution
+  ansible.builtin.assert:
+    that:
+      - metallb_parking_external_ip_contract_version in ['', 'v1']
+      - metallb_parking_external_ip_pool_name | length > 0
+      - >-
+        metallb_parking_external_ip_contract_version != 'v1'
+        or metallb_parking_external_ip_id | length > 0
+      - >-
+        metallb_parking_external_ip_contract_version != 'v1'
+        or metallb_parking_external_ip_tenant | length > 0
+    fail_msg: >-
+      ExternalIP '{{ external_ip_name }}' has an unsupported contract version
+      or is missing the ownership metadata required to resolve its parking Service.
 
 - name: Set parking Service name candidates
   ansible.builtin.set_fact:
@@ -116,58 +137,6 @@
     parking_service_info: "{{ metallb_parking_uid_service_read }}"
   when: metallb_parking_uid_service_read.resources | default([]) | length > 0
 
-- name: Verify ownership of the name-based parking Service
-  ansible.builtin.assert:
-    that:
-      - >-
-        (metallb_parking_legacy_service_read.resources[0].metadata.labels | default({})).get(
-          'osac.openshift.io/externalip', '') == external_ip_name
-      - >-
-        (metallb_parking_legacy_service_read.resources[0].metadata.labels | default({})).get(
-          'osac.openshift.io/managed-by', '') == 'osac-fulfillment'
-      - >-
-        (metallb_parking_legacy_service_read.resources[0].metadata.labels | default({})).get(
-          'osac.openshift.io/externalip-uuid', '')
-        == metallb_parking_external_ip_id
-      - metallb_parking_external_ip_id | length > 0
-      - >-
-        (
-          (metallb_parking_legacy_service_read.resources[0].metadata.labels | default({})).get(
-            'osac.openshift.io/owner-kind', '') == ''
-          and (metallb_parking_legacy_service_read.resources[0].metadata.labels | default({})).get(
-            'osac.openshift.io/owner-id', '') == ''
-          and (metallb_parking_legacy_service_read.resources[0].metadata.annotations | default({})).get(
-            'osac.openshift.io/externalip-contract-version', '') == ''
-          and (metallb_parking_legacy_service_read.resources[0].metadata.annotations | default({})).get(
-            'osac.openshift.io/externalip-kubernetes-uid', '') == ''
-        )
-        or
-        (
-          (metallb_parking_legacy_service_read.resources[0].metadata.labels | default({})).get(
-            'osac.openshift.io/owner-kind', '') == 'externalip'
-          and (metallb_parking_legacy_service_read.resources[0].metadata.labels | default({})).get(
-            'osac.openshift.io/owner-id', '') == metallb_parking_external_ip_id
-          and (metallb_parking_legacy_service_read.resources[0].metadata.annotations | default({})).get(
-            'osac.openshift.io/externalip-contract-version', '') == 'v1'
-          and (metallb_parking_legacy_service_read.resources[0].metadata.annotations | default({})).get(
-            'osac.openshift.io/externalip-kubernetes-uid', '') == metallb_parking_external_ip_uid
-        )
-      - >-
-        (metallb_parking_legacy_service_read.resources[0].metadata.annotations | default({})).get(
-          'osac.openshift.io/tenant', metallb_parking_external_ip_tenant)
-        == metallb_parking_external_ip_tenant
-      - >-
-        (metallb_parking_legacy_service_read.resources[0].metadata.annotations | default({})).get(
-          'osac.openshift.io/owner-reference', 'ExternalIP/' ~ external_ip_name)
-        == ('ExternalIP/' ~ external_ip_name)
-    fail_msg: >-
-      Name-based parking Service '{{ metallb_parking_legacy_service_name }}' does
-      not have matching ownership metadata for ExternalIP '{{ external_ip_name }}';
-      refusing to attach or detach it.
-  when:
-    - metallb_parking_uid_service_read.resources | default([]) | length == 0
-    - metallb_parking_legacy_service_read.resources | default([]) | length > 0
-
 - name: Select the name-based parking Service when it is the only candidate
   ansible.builtin.set_fact:
     metallb_parking_service_name: "{{ metallb_parking_legacy_service_name }}"
@@ -180,10 +149,75 @@
   ansible.builtin.set_fact:
     metallb_parking_service_name: >-
       {{ metallb_parking_uid_service_name
-         if (metallb_parking_uid_service_name | length > 0)
+         if metallb_parking_external_ip_contract_version == 'v1'
+            and metallb_parking_uid_service_name | length > 0
          else metallb_parking_legacy_service_name }}
     parking_service_info:
       resources: []
   when:
     - metallb_parking_uid_service_read.resources | default([]) | length == 0
     - metallb_parking_legacy_service_read.resources | default([]) | length == 0
+
+- name: Verify ownership of the selected parking Service
+  ansible.builtin.assert:
+    that:
+      - parking_service_info.resources[0].metadata.name == metallb_parking_service_name
+      - >-
+        (parking_service_info.resources[0].metadata.labels | default({})).get(
+          'osac.openshift.io/externalip', '') == external_ip_name
+      - >-
+        (parking_service_info.resources[0].metadata.labels | default({})).get(
+          'osac.openshift.io/managed-by', '') == 'osac-fulfillment'
+      - parking_service_info.resources[0].spec.type == 'LoadBalancer'
+      - parking_service_info.resources[0].spec.selector | default({}) == {}
+      - >-
+        (parking_service_info.resources[0].metadata.annotations | default({})).get(
+          'metallb.universe.tf/address-pool', '') == metallb_parking_external_ip_pool_name
+      - >-
+        (parking_service_info.resources[0].metadata.annotations | default({})).get(
+          'osac.openshift.io/externalippool-name', metallb_parking_external_ip_pool_name)
+        == metallb_parking_external_ip_pool_name
+      - >-
+        (
+          metallb_parking_service_name == metallb_parking_legacy_service_name
+          and (parking_service_info.resources[0].metadata.labels | default({})).get(
+            'osac.openshift.io/externalip-uuid', '') == ''
+          and (parking_service_info.resources[0].metadata.labels | default({})).get(
+            'osac.openshift.io/owner-kind', '') == ''
+          and (parking_service_info.resources[0].metadata.labels | default({})).get(
+            'osac.openshift.io/owner-id', '') == ''
+          and (parking_service_info.resources[0].metadata.annotations | default({})).get(
+            'osac.openshift.io/externalip-contract-version', '') == ''
+          and (parking_service_info.resources[0].metadata.annotations | default({})).get(
+            'osac.openshift.io/externalip-kubernetes-uid', '') == ''
+          and (parking_service_info.resources[0].metadata.annotations | default({})).get(
+            'osac.openshift.io/tenant', metallb_parking_external_ip_tenant)
+            == metallb_parking_external_ip_tenant
+          and (parking_service_info.resources[0].metadata.annotations | default({})).get(
+            'osac.openshift.io/owner-reference', 'ExternalIP/' ~ external_ip_name)
+            == ('ExternalIP/' ~ external_ip_name)
+        )
+        or
+        (
+          metallb_parking_external_ip_contract_version == 'v1'
+          and (parking_service_info.resources[0].metadata.labels | default({})).get(
+            'osac.openshift.io/externalip-uuid', '') == metallb_parking_external_ip_id
+          and (parking_service_info.resources[0].metadata.labels | default({})).get(
+            'osac.openshift.io/owner-kind', '') == 'externalip'
+          and (parking_service_info.resources[0].metadata.labels | default({})).get(
+            'osac.openshift.io/owner-id', '') == metallb_parking_external_ip_id
+          and (parking_service_info.resources[0].metadata.annotations | default({})).get(
+            'osac.openshift.io/externalip-contract-version', '') == 'v1'
+          and (parking_service_info.resources[0].metadata.annotations | default({})).get(
+            'osac.openshift.io/externalip-kubernetes-uid', '') == metallb_parking_external_ip_uid
+          and (parking_service_info.resources[0].metadata.annotations | default({})).get(
+            'osac.openshift.io/tenant', '') == metallb_parking_external_ip_tenant
+          and (parking_service_info.resources[0].metadata.annotations | default({})).get(
+            'osac.openshift.io/owner-reference', '') == ('ExternalIP/' ~ external_ip_name)
+        )
+    fail_msg: >-
+      Parking Service '{{ metallb_parking_service_name }}' does not have
+      matching legacy or v1 ownership metadata for ExternalIP
+      '{{ external_ip_name }}'; refusing to attach or detach it.
+  when:
+    - parking_service_info.resources | default([]) | length > 0

@@ -82,14 +82,18 @@
   ansible.builtin.assert:
     that:
       - metallb_external_ip_service_labels.get('osac.openshift.io/externalip', '') == metallb_external_ip_name
+      - metallb_external_ip_service_labels.get('osac.openshift.io/managed-by', '') == 'osac-fulfillment'
+      - metallb_external_ip_service.metadata.name == metallb_external_ip_service_name
       - metallb_external_ip_service.spec.type == 'LoadBalancer'
+      - metallb_external_ip_service.spec.selector | default({}) == {}
       - metallb_external_ip_service_annotations.get('metallb.universe.tf/address-pool', '') == metallb_external_ip_pool_name
       - metallb_external_ip_service_annotations.get('osac.openshift.io/externalippool-name', metallb_external_ip_pool_name) == metallb_external_ip_pool_name
-      - metallb_external_ip_service_labels.get('osac.openshift.io/externalip-uuid', metallb_external_ip_id) == metallb_external_ip_id
       - metallb_external_ip_service_annotations.get('osac.openshift.io/tenant', metallb_external_ip_tenant) == metallb_external_ip_tenant
       - metallb_external_ip_service_annotations.get('osac.openshift.io/owner-reference', 'ExternalIP/' ~ metallb_external_ip_name) == ('ExternalIP/' ~ metallb_external_ip_name)
       - >-
         (
+          metallb_external_ip_service_labels.get('osac.openshift.io/externalip-uuid', '') == ''
+          and
           metallb_external_ip_service_labels.get('osac.openshift.io/owner-kind', '') == ''
           and metallb_external_ip_service_labels.get('osac.openshift.io/owner-id', '') == ''
           and metallb_external_ip_service_annotations.get('osac.openshift.io/externalip-kubernetes-uid', '') == ''
@@ -97,10 +101,15 @@
         )
         or
         (
+          metallb_external_ip_service_labels.get('osac.openshift.io/externalip-uuid', '') == metallb_external_ip_id
+          and
           metallb_external_ip_service_labels.get('osac.openshift.io/owner-kind', '') == 'externalip'
           and metallb_external_ip_service_labels.get('osac.openshift.io/owner-id', '') == metallb_external_ip_id
           and metallb_external_ip_service_annotations.get('osac.openshift.io/externalip-kubernetes-uid', '') == metallb_external_ip_uid
           and metallb_external_ip_service_annotations.get('osac.openshift.io/externalip-contract-version', '') == 'v1'
+          and metallb_external_ip_service_annotations.get('osac.openshift.io/tenant', '') == metallb_external_ip_tenant
+          and metallb_external_ip_service_annotations.get('osac.openshift.io/owner-reference', '') == ('ExternalIP/' ~ metallb_external_ip_name)
+          and metallb_external_ip_service_annotations.get('osac.openshift.io/externalippool-name', '') == metallb_external_ip_pool_name
         )
     fail_msg: >-
       Existing MetalLB Service '{{ metallb_external_ip_service_name }}' does
@@ -110,9 +119,9 @@
 - name: Validate the address on a legacy MetalLB reservation before adoption
   ansible.builtin.assert:
     that:
-      - (external_ip.status | default({})).get('address', '') | length > 0
-      - (external_ip.status | default({})).get('address', '') != '0.0.0.0'
-      - metallb_external_ip_service_ip == (external_ip.status | default({})).get('address', '')
+      - metallb_external_ip_existing_address | length > 0
+      - metallb_external_ip_existing_address != '0.0.0.0'
+      - metallb_external_ip_service_ip == metallb_external_ip_existing_address
     fail_msg: >-
       Existing legacy MetalLB Service '{{ metallb_external_ip_service_name }}'
       cannot be matched to the ExternalIP status address; refusing to adopt or delete it.

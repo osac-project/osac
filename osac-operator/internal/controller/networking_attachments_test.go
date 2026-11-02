@@ -159,8 +159,11 @@ var _ = Describe("ExternalIPPool and ExternalIP controllers", func() {
 		eip := &v1alpha1.ExternalIP{ObjectMeta: eipMeta,
 			Spec: v1alpha1.ExternalIPSpec{Pool: "pool-k8s-only"}}
 		Expect(k8sClient.Create(ctx, eip)).To(Succeed())
+		eip.Status.Address = "198.51.100.18"
+		Expect(k8sClient.Status().Update(ctx, eip)).To(Succeed())
 		reconcileNet(eips, eip)
 		allocation := h.aap.latest(networktask.CreateExternalIP, netK8s)
+		Expect(allocation.vars["existing_address"]).To(Equal("198.51.100.18"))
 		resource := allocation.vars["resource"].(map[string]any)
 		metadata := resource["metadata"].(map[string]any)
 		annotations := metadata["annotations"].(map[string]any)
@@ -177,13 +180,25 @@ var _ = Describe("ExternalIPPool and ExternalIP controllers", func() {
 		Expect(eip.Status.Address).To(Equal("198.51.100.19"))
 		expectReady(eip, metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
 
+		createGeneration := eip.Generation
+		// Simulate a persisted create snapshot whose generation differs from
+		// the live object. Cleanup must validate against the stored request.
+		input := taskInput(eip)
+		resource = input["resource"].(map[string]any)
+		metadata = resource["metadata"].(map[string]any)
+		releaseGeneration := createGeneration + 1
+		metadata["generation"] = releaseGeneration
+		Expect(networktask.StoreInput(eip, input)).To(Succeed())
+		Expect(k8sClient.Status().Update(ctx, eip)).To(Succeed())
+
 		deleteNet(eip)
 		reconcileNet(eips, eip)
 		release := h.aap.latest(networktask.DeleteExternalIP, netK8s)
 		Expect(path(release.vars, "resource", "metadata", "annotations", networktask.ExternalIPContractVersionAnnotation)).To(Equal("v1"))
+		Expect(path(release.vars, "resource", "metadata", "generation")).To(BeNumerically("==", releaseGeneration))
 		releaseResult := fmt.Sprintf(
 			`{"osac_result":{"schemaVersion":"v1","operation":"external_ip.release","resourceUID":%q,"observedGeneration":%d,"data":{}}}`,
-			string(eip.UID), eip.Generation,
+			string(eip.UID), releaseGeneration,
 		)
 		h.aap.finish(networktask.DeleteExternalIP, netK8s, "successful", releaseResult)
 		_, exists := reconcileNet(eips, eip)

@@ -136,7 +136,7 @@
   register: metallb_detach_external_ip_lookup
   when:
     - not detach_already_done
-    - metallb_parking_external_ip_uid | default('') | length > 0
+    - metallb_parking_external_ip_contract_version == 'v1'
 
 - name: Require ExternalIP ownership metadata for v1 parking restore
   ansible.builtin.assert:
@@ -154,7 +154,7 @@
       ExternalIP CR.
   when:
     - not detach_already_done
-    - metallb_parking_external_ip_uid | default('') | length > 0
+    - metallb_parking_external_ip_contract_version == 'v1'
 
 - name: Set v1 parking restore ownership from the ExternalIP CR
   ansible.builtin.set_fact:
@@ -166,7 +166,7 @@
       {{ metallb_detach_external_ip_lookup.resources[0].metadata.generation | int }}
   when:
     - not detach_already_done
-    - metallb_parking_external_ip_uid | default('') | length > 0
+    - metallb_parking_external_ip_contract_version == 'v1'
 
 # Delete the LB Service, clear the annotation, and restore the placeholder atomically.
 # The rescue restores the LB Service if placeholder re-creation fails so the IP
@@ -221,7 +221,7 @@
                       'osac.openshift.io/owner-kind': 'externalip',
                       'osac.openshift.io/owner-id': metallb_parking_external_ip_id
                     }
-                    if (metallb_parking_external_ip_uid | default('') | length > 0)
+                    if metallb_parking_external_ip_contract_version == 'v1'
                     else {}
                   )
               }}
@@ -243,7 +243,7 @@
                       'osac.openshift.io/owner-reference':
                         'ExternalIP/' ~ external_ip_name
                     }
-                    if (metallb_parking_external_ip_uid | default('') | length > 0)
+                    if metallb_parking_external_ip_contract_version == 'v1'
                     else {}
                   )
               }}

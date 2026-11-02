@@ -91,6 +91,11 @@ func (r *ExternalIPReconciler) create(ctx context.Context, eip *v1alpha1.Externa
 		}
 		input := networktask.NewInput(eip, kindExternalIP, resource)
 		input["external_ip_pool"] = poolSnapshot
+		if eip.Status.Address != "" {
+			// The status address lets the manager verify an existing legacy
+			// name-based reservation before adopting it during a v1 retry.
+			input["existing_address"] = eip.Status.Address
+		}
 		return input, nil
 	}, nil)
 	if err != nil {
@@ -170,7 +175,11 @@ func (r *ExternalIPReconciler) remove(ctx context.Context, eip *v1alpha1.Externa
 				req := taskRequest(eip, kindExternalIP, networktask.DeleteExternalIP, manager, input)
 				if contractVersion == "v1" {
 					req.Accept = func(_ context.Context, result networktask.Result) error {
-						return networktask.ParseExternalIPV1Release(result, string(eip.UID), eip.Generation)
+						generation, err := networktask.ResourceGeneration(input)
+						if err != nil {
+							return err
+						}
+						return networktask.ParseExternalIPV1Release(result, string(eip.UID), generation)
 					}
 				}
 				return req

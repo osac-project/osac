@@ -225,7 +225,7 @@ func (o Outcome) Failed() bool { return o.Entry.State == v1alpha1.NetworkJobStat
 // Succeeded or Failed. A conflict on a status write is returned as an error:
 // the in-memory object is then stale and must not be written; requeue.
 func (e *Engine) Run(ctx context.Context, obj v1alpha1.NetworkTaskObject, req Request) (Outcome, error) {
-	if err := ValidateTask(req.Task, req.Manager); err != nil {
+	if err := ValidateTaskForManager(req.Task, req.Manager, req.ManagerRef); err != nil {
 		return Outcome{}, err
 	}
 	if req.Manager != v1alpha1.NetworkJobManagerNone && req.ManagerRef == nil {

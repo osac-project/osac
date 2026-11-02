@@ -112,10 +112,12 @@ func (r *NetworkClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		} else {
 			managers := &v1alpha1.NetworkManagers{Fabric: &v1alpha1.NetworkManagerRef{
 				Name: resolution.Fabric.Name, AnsibleRole: resolution.Fabric.AnsibleRole,
+				ExternalIPContractVersion: resolution.Fabric.ExternalIPContractVersion,
 			}}
 			if resolution.Kubernetes != nil {
 				managers.Kubernetes = &v1alpha1.NetworkManagerRef{
 					Name: resolution.Kubernetes.Name, AnsibleRole: resolution.Kubernetes.AnsibleRole,
+					ExternalIPContractVersion: resolution.Kubernetes.ExternalIPContractVersion,
 				}
 			}
 			nc.Status.NetworkManagers = managers

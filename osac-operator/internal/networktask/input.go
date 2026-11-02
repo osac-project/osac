@@ -30,6 +30,8 @@ import (
 const (
 	// TenantAnnotation carries the tenant API ID of a CR; osac_job_vars.tenant comes from it.
 	TenantAnnotation = "osac.openshift.io/tenant"
+	// ExternalIPContractVersionAnnotation selects the ExternalIP result contract.
+	ExternalIPContractVersionAnnotation = "osac.openshift.io/externalip-contract-version"
 	// apiVersion of every snapshot.
 	snapshotAPIVersion = "osac.openshift.io/v1alpha1"
 )
@@ -70,21 +72,28 @@ func Snapshot(obj client.Object, kind string, spec any, fields ...string) (map[s
 			}
 		}
 	}
+	metadata := map[string]any{
+		"name":       obj.GetName(),
+		"namespace":  obj.GetNamespace(),
+		"uid":        string(obj.GetUID()),
+		"generation": obj.GetGeneration(),
+	}
+	if version := obj.GetAnnotations()[ExternalIPContractVersionAnnotation]; version != "" {
+		// Only pass the contract selector to AAP; other Kubernetes annotations
+		// are not part of the manager input and may contain private data.
+		metadata["annotations"] = map[string]string{ExternalIPContractVersionAnnotation: version}
+	}
 	return map[string]any{
 		"apiVersion": snapshotAPIVersion,
 		"kind":       kind,
 		"id":         APIID(obj, kind),
-		"metadata": map[string]any{
-			"name":       obj.GetName(),
-			"namespace":  obj.GetNamespace(),
-			"uid":        string(obj.GetUID()),
-			"generation": obj.GetGeneration(),
-		},
-		"spec": picked,
+		"metadata":   metadata,
+		"spec":       picked,
 	}, nil
 }
 
-// NewInput starts a stored task input: {resource: <snapshot>, tenant}. tenant
+// NewInput starts a stored task input: {resource: <snapshot>, tenant}. The
+// snapshot retains the selected ExternalIP contract annotation. tenant
 // comes from the osac.openshift.io/tenant annotation and is left out when the
 // annotation is absent or for an ExternalIPPool. Add the task's other keys
 // (virtual_network, subnet, ipam, target, ...) to the returned map.

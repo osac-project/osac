@@ -430,6 +430,7 @@
                   metallb.universe.tf/address-pool: "{{ pool_name }}"
                 labels:
                   osac.openshift.io/externalip: "{{ legacy_external_ip_name }}"
+                  osac.openshift.io/externalip-uuid: "{{ legacy_external_ip_id }}"
                   osac.openshift.io/managed-by: osac-fulfillment
               spec:
                 type: LoadBalancer
@@ -469,6 +470,7 @@
             metallb_eip_job_vars:
               resource: "{{ metallb_eip_legacy_read.resources[0] }}"
               external_ip_pool: "{{ metallb_eip_pool_context }}"
+            metallb_eip_playbook: create_external_ip
             metallb_eip_should_succeed: true
 
         - name: Run allocation against the matching legacy Service
@@ -524,6 +526,8 @@
                   metallb.universe.tf/address-pool: foreign-pool
                 labels:
                   osac.openshift.io/externalip: "{{ foreign_external_ip_name }}"
+                  osac.openshift.io/externalip-uuid: "{{ foreign_external_ip_id }}-other"
+                  osac.openshift.io/managed-by: osac-fulfillment
               spec:
                 type: LoadBalancer
                 selector: {}
@@ -565,6 +569,7 @@
             metallb_eip_job_vars:
               resource: "{{ metallb_eip_foreign_read.resources[0] }}"
               external_ip_pool: "{{ metallb_eip_pool_context }}"
+            metallb_eip_playbook: create_external_ip
             metallb_eip_should_succeed: false
 
         - name: Run the conflicting allocation request
@@ -583,6 +588,54 @@
             that:
               - metallb_eip_foreign_service.resources[0].metadata.annotations['metallb.universe.tf/address-pool'] == 'foreign-pool'
               - metallb_eip_foreign_service.resources[0].metadata.labels.get('osac.openshift.io/owner-id', '') == ''
+
+        - name: Build an attachment request for the foreign parking Service
+          ansible.builtin.set_fact:
+            metallb_eip_foreign_attachment_resource:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIPAttachment
+              metadata:
+                name: "{{ attachment_name }}-foreign"
+                namespace: "{{ fixture_namespace }}"
+                annotations:
+                  osac.openshift.io/implementation-strategy: k8s_only
+                  osac.openshift.io/externalippool-name: "{{ pool_name }}"
+                  osac.openshift.io/externalip-target-namespace: "{{ fixture_namespace }}"
+                  osac.openshift.io/externalip-name: "{{ foreign_external_ip_name }}"
+              spec:
+                computeInstance: "{{ compute_instance_id }}"
+        - name: Set the foreign attachment job input
+          ansible.builtin.set_fact:
+            metallb_eip_job_vars:
+              resource: "{{ metallb_eip_foreign_attachment_resource }}"
+              external_ip_attachment_context:
+                external_ip:
+                  kubernetes_uid: "{{ metallb_eip_foreign_read.resources[0].metadata.uid }}"
+            metallb_eip_playbook: attach_external_ip
+            metallb_eip_should_succeed: false
+
+        - name: Refuse to attach to a name-based Service owned by another ExternalIP
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Confirm the foreign parking Service survived the rejected attachment
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            name: "osac-eip-{{ foreign_external_ip_name }}"
+            namespace: metallb-system
+          register: metallb_eip_foreign_service_after_attach
+
+        - name: Assert attachment left the foreign parking Service unchanged
+          ansible.builtin.assert:
+            that:
+              - metallb_eip_foreign_service_after_attach.resources | length == 1
+              - metallb_eip_foreign_service_after_attach.resources[0].metadata.annotations['metallb.universe.tf/address-pool'] == 'foreign-pool'
+              - >-
+                metallb_eip_foreign_service_after_attach.resources[0].metadata.labels[
+                  'osac.openshift.io/externalip'] == foreign_external_ip_name
+              - >-
+                metallb_eip_foreign_service_after_attach.resources[0].metadata.labels[
+                  'osac.openshift.io/externalip-uuid'] == (foreign_external_ip_id ~ '-other')
 
         - name: Create an ExternalIP fixture for ambiguous dual-Service rejection
           kubernetes.core.k8s:

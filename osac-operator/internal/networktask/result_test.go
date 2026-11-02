@@ -249,6 +249,39 @@ func TestParseExternalIP(t *testing.T) {
 	expectReject(t, err, `external_ip.address "198.51.100.19/32" is not a canonical IPv4 address`)
 }
 
+func TestParseExternalIPV1Artifacts(t *testing.T) {
+	allocation := result(t, `{"schemaVersion":"v1","operation":"external_ip.allocate","resourceUID":"uid-eip","observedGeneration":3,"data":{"address":"198.51.100.19"}}`)
+	if address, err := ParseExternalIPV1Allocation(allocation, "uid-eip", 3, "198.51.100.16/29"); err != nil || address != "198.51.100.19" {
+		t.Fatal(address, err)
+	}
+	for _, raw := range []string{
+		`{"schemaVersion":"v2","operation":"external_ip.allocate","resourceUID":"uid-eip","observedGeneration":3,"data":{"address":"198.51.100.19"}}`,
+		`{"schemaVersion":"v1","operation":"external_ip.release","resourceUID":"uid-eip","observedGeneration":3,"data":{"address":"198.51.100.19"}}`,
+		`{"schemaVersion":"v1","operation":"external_ip.allocate","resourceUID":"other","observedGeneration":3,"data":{"address":"198.51.100.19"}}`,
+		`{"schemaVersion":"v1","operation":"external_ip.allocate","resourceUID":"uid-eip","observedGeneration":4,"data":{"address":"198.51.100.19"}}`,
+		`{"schemaVersion":"v1","operation":"external_ip.allocate","resourceUID":"uid-eip","observedGeneration":3,"data":{"address":"198.51.100.19","extra":true}}`,
+	} {
+		if _, err := ParseExternalIPV1Allocation(result(t, raw), "uid-eip", 3, "198.51.100.16/29"); err == nil {
+			t.Fatalf("accepted invalid allocation artifact %s", raw)
+		}
+	}
+
+	release := result(t, `{"schemaVersion":"v1","operation":"external_ip.release","resourceUID":"uid-eip","observedGeneration":3,"data":{}}`)
+	if err := ParseExternalIPV1Release(release, "uid-eip", 3); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{
+		`{"schemaVersion":"v1","operation":"external_ip.allocate","resourceUID":"uid-eip","observedGeneration":3,"data":{}}`,
+		`{"schemaVersion":"v1","operation":"external_ip.release","resourceUID":"other","observedGeneration":3,"data":{}}`,
+		`{"schemaVersion":"v1","operation":"external_ip.release","resourceUID":"uid-eip","observedGeneration":4,"data":{}}`,
+		`{"schemaVersion":"v1","operation":"external_ip.release","resourceUID":"uid-eip","observedGeneration":3,"data":{"address":"198.51.100.19"}}`,
+	} {
+		if err := ParseExternalIPV1Release(result(t, raw), "uid-eip", 3); err == nil {
+			t.Fatalf("accepted invalid release artifact %s", raw)
+		}
+	}
+}
+
 func TestParseClusterIngress(t *testing.T) {
 	ipam := &v1alpha1.SubnetIPAM{GatewayIPv4: "10.0.1.1", LBVIPIPv4CIDRs: []string{"10.0.1.192/26"}}
 	if a, err := ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.193"}}`), "10.0.1.0/24", ipam, ""); err != nil || a != "10.0.1.193" {
@@ -326,6 +359,25 @@ func TestSnapshotAndInput(t *testing.T) {
 	pool := &v1alpha1.ExternalIPPool{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{TenantAnnotation: "x"}}}
 	if _, ok := NewInput(pool, "ExternalIPPool", nil)["tenant"]; ok {
 		t.Fatal("pool input has tenant")
+	}
+	eip := &v1alpha1.ExternalIP{ObjectMeta: metav1.ObjectMeta{
+		Name: "eip", Namespace: "ns", UID: "uid-eip", Generation: 2,
+		Labels: map[string]string{"osac.openshift.io/externalip-uuid": "eip-id"},
+		Annotations: map[string]string{
+			TenantAnnotation:                    "tenant-a",
+			ExternalIPContractVersionAnnotation: "v1",
+			"private.example/extra":             "do-not-copy",
+		},
+	}}
+	eipSnapshot, err := Snapshot(eip, "ExternalIP", eip.Spec, "pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eipInput := NewInput(eip, "ExternalIP", eipSnapshot)
+	metadata := eipInput["resource"].(map[string]any)["metadata"].(map[string]any)
+	annotations := metadata["annotations"].(map[string]string)
+	if annotations[ExternalIPContractVersionAnnotation] != "v1" || len(annotations) != 1 {
+		t.Fatalf("unexpected ExternalIP task annotations: %#v", annotations)
 	}
 	na := &v1alpha1.NetworkAttachment{Spec: v1alpha1.NetworkAttachmentSpec{Target: v1alpha1.NetworkAttachmentTarget{Kind: "ComputeInstance", ID: "ci-1"}}}
 	if APIID(na, "NetworkAttachment") != "ci-1" {

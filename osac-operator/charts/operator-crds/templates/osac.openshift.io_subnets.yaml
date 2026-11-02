@@ -273,6 +273,13 @@ spec:
                           of the manager.
                         minLength: 1
                         type: string
+                      externalIPContractVersion:
+                        description: |-
+                          ExternalIPContractVersion is the registered ExternalIP result contract.
+                          Empty keeps the manager's existing unversioned handoff.
+                        enum:
+                        - v1
+                        type: string
                       name:
                         description: Name is the registration name of the manager.
                         minLength: 1
@@ -289,6 +296,13 @@ spec:
                         description: AnsibleRole is the fully qualified Ansible role
                           of the manager.
                         minLength: 1
+                        type: string
+                      externalIPContractVersion:
+                        description: |-
+                          ExternalIPContractVersion is the registered ExternalIP result contract.
+                          Empty keeps the manager's existing unversioned handoff.
+                        enum:
+                        - v1
                         type: string
                       name:
                         description: Name is the registration name of the manager.

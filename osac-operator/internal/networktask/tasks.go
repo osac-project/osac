@@ -91,6 +91,20 @@ func ValidateTask(task string, manager v1alpha1.NetworkJobManager) error {
 	return fmt.Errorf("task %q is not in the fixed task set of the %s manager", task, manager)
 }
 
+// ValidateTaskForManager applies the fixed task sets and the scoped
+// Kubernetes-only ExternalIP exception. Only the explicitly registered
+// k8s_only manager may provision ExternalIP pools and addresses.
+func ValidateTaskForManager(task string, manager v1alpha1.NetworkJobManager, ref *v1alpha1.NetworkManagerRef) error {
+	if manager == v1alpha1.NetworkJobManagerKubernetes && ref != nil &&
+		ref.Name == "k8s_only" && ref.ExternalIPContractVersion == "v1" {
+		switch task {
+		case CreateExternalIPPool, DeleteExternalIPPool, CreateExternalIP, DeleteExternalIP:
+			return nil
+		}
+	}
+	return ValidateTask(task, manager)
+}
+
 // IsCleanupTask reports whether a task is a delete, detach, release or
 // removal. Cleanup tasks are retried after every failure, whatever osac_error
 // says, and may run while the resource is being deleted.

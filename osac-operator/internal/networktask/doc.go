@@ -29,7 +29,9 @@ Engine, created in cmd/main.go with New, is shared by every controller.
     the job template <prefix>-<task with dashes> with
     {osac_job_vars: Vars + {task, manager: {name, type, ansible_role}}} and
     writes the jobID. A task outside the manager type's fixed set (FabricTasks,
-    KubernetesTasks) is rejected before any launch.
+    KubernetesTasks) is rejected before any launch. The explicitly registered
+    k8s_only Kubernetes Manager also owns ExternalIPPool and ExternalIP
+    create/delete tasks under the v1 ExternalIP contract.
   - Tracking: Run reads the job and maps its end (contract §4.6, §4.7):
     successful runs the Request's AcceptFunc and marks the entry Succeeded in
     the same status write as the accepted outputs, or Failed with

@@ -387,6 +387,66 @@ func ParseExternalIP(result Result, poolCIDR string) (string, error) {
 	return address, nil
 }
 
+// ParseExternalIPV1Allocation validates the v1 allocation artifact against
+// the ExternalIP job snapshot and then applies the same pool address checks
+// as the legacy result parser.
+func ParseExternalIPV1Allocation(result Result, uid string, generation int64, poolCIDR string) (string, error) {
+	data, err := externalIPV1Data(result, "external_ip.allocate", uid, generation)
+	if err != nil {
+		return "", err
+	}
+	return ParseExternalIP(Result{"external_ip": data}, poolCIDR)
+}
+
+// ParseExternalIPV1Release validates the v1 release artifact against the
+// deleting ExternalIP snapshot. A successful release must return empty data.
+func ParseExternalIPV1Release(result Result, uid string, generation int64) error {
+	data, err := externalIPV1Data(result, "external_ip.release", uid, generation)
+	if err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil || fields == nil || len(fields) != 0 {
+		return Reject("external_ip.release data must be an empty object")
+	}
+	return nil
+}
+
+func externalIPV1Data(result Result, operation, uid string, generation int64) (json.RawMessage, error) {
+	const (
+		schemaVersionKey      = "schemaVersion"
+		operationKey          = "operation"
+		resourceUIDKey        = "resourceUID"
+		observedGenerationKey = "observedGeneration"
+		dataKey               = "data"
+	)
+	if err := result.checkKeys(
+		[]string{schemaVersionKey, operationKey, resourceUIDKey, observedGenerationKey, dataKey},
+		schemaVersionKey, operationKey, resourceUIDKey, observedGenerationKey, dataKey,
+	); err != nil {
+		return nil, err
+	}
+	for _, field := range []struct{ key, want string }{
+		{schemaVersionKey, "v1"}, {operationKey, operation}, {resourceUIDKey, uid},
+	} {
+		got, err := stringField(result[field.key], field.key)
+		if err != nil {
+			return nil, err
+		}
+		if got != field.want {
+			return nil, Reject("%s does not match the ExternalIP job snapshot", field.key)
+		}
+	}
+	var gotGeneration int64
+	if err := strictUnmarshal(result[observedGenerationKey], &gotGeneration); err != nil {
+		return nil, Reject("observedGeneration must be an integer")
+	}
+	if gotGeneration != generation {
+		return nil, Reject("observedGeneration does not match the ExternalIP job snapshot")
+	}
+	return result[dataKey], nil
+}
+
 // ParseClusterIngress reads the cluster_ingress of reserve_cluster_ingress_ip:
 // a canonical address in lb_vip_ipv4_cidrs, not the Subnet network, broadcast
 // or gateway address, equal to accepted when an address was already accepted.

@@ -24,6 +24,7 @@ import {
 } from '@osac/ui-components/components/Project/utils';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
+import { formatClusterNodeSetReview } from './clusterNodeSetReview';
 import { ClusterWizardValues } from './fields';
 import { findVersionByName, versionDisplayName } from './versionUtils';
 import { useTranslation } from '../../../hooks/useTranslation';
@@ -37,9 +38,7 @@ const formatNodeSetsForReview = (
     return '—';
   }
   return nodeSetRows.value
-    .map((row) => {
-      return `${row.hostType}: ${row.size}`;
-    })
+    .map((row) => formatClusterNodeSetReview(row.hostType, row.size))
     .join(', ');
 };
 

@@ -15,6 +15,7 @@ import { useFormikContext } from 'formik';
 import type { ClusterCatalogItemValues } from './values';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { formatClusterNodeSetReview } from '../../Cluster/CreateWizard/clusterNodeSetReview';
 import { formatReviewScalar } from '../../ProvisioningWizard/reviewFormatters';
 
 const ClusterCatalogReviewStep = () => {
@@ -92,10 +93,7 @@ const ClusterCatalogReviewStep = () => {
             <DescriptionListGroup key={nodeSet.rowId}>
               <DescriptionListTerm>{formatReviewScalar(nodeSet.name)}</DescriptionListTerm>
               <DescriptionListDescription>
-                {t('{{hostType}}, {{size}} nodes', {
-                  hostType: nodeSet.hostType,
-                  size: nodeSet.size,
-                })}
+                {formatClusterNodeSetReview(nodeSet.hostType, nodeSet.size)}
               </DescriptionListDescription>
             </DescriptionListGroup>
           ))}

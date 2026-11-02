@@ -17,7 +17,6 @@
   "{{count}} volume_other": "{{count}} volumes",
   "{{hostType}} · {{size}} node": "{{hostType}} · {{size}} node",
   "{{hostType}} · {{size}} nodes": "{{hostType}} · {{size}} nodes",
-  "{{hostType}}, {{size}} nodes": "{{hostType}}, {{size}} nodes",
   "{{label}} key {{number}}": "{{label}} key {{number}}",
   "{{label}} value {{number}}": "{{label}} value {{number}}",
   "{{memoryGb}} GB": "{{memoryGb}} GB",

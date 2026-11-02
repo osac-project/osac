@@ -10,11 +10,7 @@ import {
 } from '@patternfly/react-core';
 import type { TFunction } from 'i18next';
 
-import type {
-  BareMetalInstanceCatalogItem,
-  ClusterCatalogItem,
-  ComputeInstanceCatalogItem,
-} from '@osac/types';
+import type { BareMetalInstanceCatalogItem, ClusterCatalogItem } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
 import { formatReviewScalar } from '../../ProvisioningWizard/reviewFormatters';
@@ -22,7 +18,6 @@ import {
   bareMetalCatalogItemFields,
   bareMetalDiskImageReferenceFromPolicy,
   bareMetalInstanceTypeReferenceFromPolicy,
-  findDiskImageForReference,
   formatBareMetalCatalogDiskImage,
 } from '../bareMetalCatalogItemResourceDisplay';
 import CatalogFieldEditabilityLabel from '../CatalogFieldEditabilityLabel';
@@ -31,28 +26,20 @@ import {
   catalogFieldPolicyBehavior,
   catalogFieldPolicyIsConfigured,
   catalogFieldPolicyValue,
-  catalogReferenceLabel,
 } from '../catalogFieldPolicyDisplay';
 import type { CatalogItem } from '../catalogItemDisplay';
-import type { CatalogItemResourceLookups } from '../catalogItemResourceLookups';
 import {
   clusterCatalogItemFields,
   clusterNodeSetMapPolicy,
   clusterVersionReference,
-  findClusterVersionForReference,
   formatClusterCatalogVersionLabel,
 } from '../clusterCatalogItemResourceDisplay';
-import {
-  computeDiskImageReferenceFromPolicy,
-  computeInstanceTypeReferenceFromPolicy,
-  formatComputeCatalogDiskImage,
-} from '../computeCatalogItemResourceDisplay';
 import CatalogNodeSets from './CatalogNodeSets';
 import CatalogUserDataDetailValue from './CatalogUserDataDetailValue';
 
 interface CatalogConfigurationRowProps {
   label: string;
-  value?: unknown;
+  value?: string;
   policy: unknown;
   valueContent?: ReactNode;
 }
@@ -61,13 +48,6 @@ interface CatalogConfiguration {
   rows: ReactNode;
   hasConfiguredField: boolean;
 }
-
-const policyDisplayValue = (value: unknown): string => {
-  if (value && typeof value === 'object' && 'name' in value) {
-    return catalogReferenceLabel(value) ?? '—';
-  }
-  return formatReviewScalar(value);
-};
 
 const CatalogConfigurationRow = ({
   label,
@@ -87,9 +67,7 @@ const CatalogConfigurationRow = ({
       <DescriptionListTerm>{label}</DescriptionListTerm>
       <DescriptionListDescription>
         <Flex flexWrap={{ default: 'nowrap' }} gap={{ default: 'gapXs' }}>
-          <FlexItem>
-            {valueContent ?? (value === undefined ? t('Not set') : policyDisplayValue(value))}
-          </FlexItem>
+          <FlexItem>{valueContent ?? value ?? t('Not set')}</FlexItem>
           <FlexItem>
             <CatalogFieldEditabilityLabel behavior={behavior} />
           </FlexItem>
@@ -102,99 +80,10 @@ const CatalogConfigurationRow = ({
 const hasConfiguredPolicy = (...policies: unknown[]): boolean =>
   policies.some((policy) => catalogFieldPolicyIsConfigured(policy as FieldPolicyLike));
 
-const formatDiskList = (value: unknown): string | undefined => {
-  if (!value || typeof value !== 'object') {
-    return undefined;
-  }
-  const items = (
-    value as {
-      items?: Array<{ sizeGib?: number; storageTier?: { id?: string; name?: string } }>;
-    }
-  ).items;
-  if (!items?.length) {
-    return undefined;
-  }
-  return items
-    .map((item) => {
-      const size = item.sizeGib === undefined ? '—' : `${item.sizeGib} GiB`;
-      const tier = catalogReferenceLabel(item.storageTier);
-      return tier ? `${size} (${tier})` : size;
-    })
-    .join(', ');
-};
-
-const computeConfiguration = (
-  item: ComputeInstanceCatalogItem,
-  resourceLookups: CatalogItemResourceLookups,
-  t: TFunction,
-): CatalogConfiguration => {
-  const fields = item.fields;
-  const instanceTypeReference = computeInstanceTypeReferenceFromPolicy(fields?.instanceType);
-  const diskImageReference = computeDiskImageReferenceFromPolicy(fields?.diskImage);
-  const diskImage = findDiskImageForReference(resourceLookups.diskImages, diskImageReference);
-  const bootDisk = fields?.bootDisk;
-  const bootDiskSize = catalogFieldPolicyValue(bootDisk?.sizeGib);
-  const storageTier = catalogFieldPolicyValue(bootDisk?.storageTier);
-  const additionalDisks = catalogFieldPolicyValue(fields?.additionalDisks);
-
-  return {
-    rows: (
-      <>
-        <CatalogConfigurationRow
-          label={t('Instance type')}
-          value={instanceTypeReference?.name || undefined}
-          policy={fields?.instanceType}
-        />
-        <CatalogConfigurationRow
-          label={t('Disk image')}
-          value={formatComputeCatalogDiskImage(fields, diskImage, diskImageReference)}
-          policy={fields?.diskImage}
-        />
-        <CatalogConfigurationRow
-          label={t('User data')}
-          valueContent={<CatalogUserDataDetailValue policy={fields?.userDataSource} />}
-          policy={fields?.userDataSource}
-        />
-        <CatalogConfigurationRow
-          label={t('Boot disk size')}
-          value={typeof bootDiskSize === 'number' ? `${bootDiskSize} GiB` : undefined}
-          policy={bootDisk?.sizeGib}
-        />
-        <CatalogConfigurationRow
-          label={t('Boot disk storage tier')}
-          value={storageTier}
-          policy={bootDisk?.storageTier}
-        />
-        <CatalogConfigurationRow
-          label={t('Additional disks')}
-          value={formatDiskList(additionalDisks)}
-          policy={fields?.additionalDisks}
-        />
-      </>
-    ),
-    hasConfiguredField: hasConfiguredPolicy(
-      fields?.instanceType,
-      fields?.diskImage,
-      fields?.userDataSource,
-      bootDisk?.sizeGib,
-      bootDisk?.storageTier,
-      fields?.additionalDisks,
-    ),
-  };
-};
-
-const clusterConfiguration = (
-  item: ClusterCatalogItem,
-  resourceLookups: CatalogItemResourceLookups,
-  t: TFunction,
-): CatalogConfiguration => {
+const clusterConfiguration = (item: ClusterCatalogItem, t: TFunction): CatalogConfiguration => {
   const fields = clusterCatalogItemFields(item);
   const versionPolicy = fields?.version;
   const versionReference = clusterVersionReference(fields);
-  const clusterVersion = findClusterVersionForReference(
-    resourceLookups.clusterVersions,
-    versionReference,
-  );
   const nodeSetsPolicy = clusterNodeSetMapPolicy(fields);
   const network = fields?.network;
 
@@ -204,21 +93,21 @@ const clusterConfiguration = (
         <CatalogConfigurationRow
           label={t('Cluster version')}
           value={
-            versionReference || clusterVersion
-              ? formatClusterCatalogVersionLabel(clusterVersion, versionReference)
+            versionReference
+              ? formatReviewScalar(formatClusterCatalogVersionLabel(undefined, versionReference))
               : undefined
           }
           policy={versionPolicy}
         />
-        <CatalogNodeSets policy={nodeSetsPolicy} resourceLookups={resourceLookups} />
+        <CatalogNodeSets policy={nodeSetsPolicy} />
         <CatalogConfigurationRow
           label={t('Pod CIDR')}
-          value={catalogFieldPolicyValue(network?.podCidr)}
+          value={formatReviewScalar(catalogFieldPolicyValue(network?.podCidr))}
           policy={network?.podCidr}
         />
         <CatalogConfigurationRow
           label={t('Service CIDR')}
-          value={catalogFieldPolicyValue(network?.serviceCidr)}
+          value={formatReviewScalar(catalogFieldPolicyValue(network?.serviceCidr))}
           policy={network?.serviceCidr}
         />
       </>
@@ -234,13 +123,11 @@ const clusterConfiguration = (
 
 const bareMetalConfiguration = (
   item: BareMetalInstanceCatalogItem,
-  resourceLookups: CatalogItemResourceLookups,
   t: TFunction,
 ): CatalogConfiguration => {
   const fields = bareMetalCatalogItemFields(item);
   const instanceTypeReference = bareMetalInstanceTypeReferenceFromPolicy(fields?.instanceType);
   const diskImageReference = bareMetalDiskImageReferenceFromPolicy(fields?.diskImage);
-  const diskImage = findDiskImageForReference(resourceLookups.diskImages, diskImageReference);
 
   return {
     rows: (
@@ -252,7 +139,7 @@ const bareMetalConfiguration = (
         />
         <CatalogConfigurationRow
           label={t('Disk image')}
-          value={formatBareMetalCatalogDiskImage(fields, diskImage, diskImageReference)}
+          value={formatBareMetalCatalogDiskImage(fields, undefined, diskImageReference)}
           policy={fields?.diskImage}
         />
         <CatalogConfigurationRow
@@ -270,25 +157,16 @@ const bareMetalConfiguration = (
   };
 };
 
-const CatalogItemConfiguration = ({
-  item,
-  resourceLookups,
-}: {
-  item: CatalogItem;
-  resourceLookups: CatalogItemResourceLookups;
-}) => {
+const CatalogItemConfiguration = ({ item }: { item: CatalogItem }) => {
   const { t } = useTranslation();
   let configuration: CatalogConfiguration | undefined;
 
   switch (item.$typeName) {
-    case 'osac.public.v1.ComputeInstanceCatalogItem':
-      configuration = computeConfiguration(item, resourceLookups, t);
-      break;
     case 'osac.public.v1.ClusterCatalogItem':
-      configuration = clusterConfiguration(item, resourceLookups, t);
+      configuration = clusterConfiguration(item, t);
       break;
     case 'osac.public.v1.BareMetalInstanceCatalogItem':
-      configuration = bareMetalConfiguration(item, resourceLookups, t);
+      configuration = bareMetalConfiguration(item, t);
       break;
     default:
       configuration = undefined;

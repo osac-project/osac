@@ -18,8 +18,36 @@ argument_specs:
         required: true
       network_steps_collection:
         type: str
-        required: true
-        description: "Ansible collection providing network-class-specific steps (e.g. 'netris.steps', 'osac.steps')"
+        required: false
+        description: "Ansible collection providing generic network-specific steps"
+      external_access_agent_namespace:
+        type: str
+        required: false
+      external_access_resource_wait_retries:
+        type: int
+        required: false
+      external_access_resource_wait_delay:
+        type: int
+        required: false
+      external_access_dns_ttl:
+        type: int
+        required: false
+      external_access_supported_base_domains:
+        type: list
+        elements: str
+        required: false
+      cluster_order_label:
+        type: str
+        required: false
+      dns_class:
+        type: str
+        required: false
+      dns_server:
+        type: str
+        required: false
+      external_access_dns_wait_use_authoritative:
+        type: bool
+        required: false
       cluster_working_namespace:
         type: str
         required: true

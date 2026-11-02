@@ -146,10 +146,6 @@ jobs:
       test-repository: ${{ inputs.repo || github.repository }}
       test-ref: ${{ inputs.sha || github.sha }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}
-      # CaaS-specific inputs (cluster-template, caas-domain, flavor-image,
-      # flavor-name, namespace, etc.) are left at the reusable workflow's own
-      # defaults -- none are required and this caller has no need to override
-      # them today.
       # Only a run on main (schedule, or a manual run against main): that is where the workload identity trusts this
       # workflow. A run for a pull request or a queue entry passes inputs.sha and never gets it.
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' && inputs.sha == '' }}

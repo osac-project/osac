@@ -29,9 +29,22 @@ WAIT_FOR_DEFAULTS = WAIT_FOR_ROLE / "defaults" / "main.yaml"
 # Every network-class caller that runs the external_access DNS wait.
 CALLER_CREATE_FILES = {
     "osac": COLLECTIONS / "osac" / "steps" / "roles" / "external_access" / "tasks" / "create.yaml",
-    "ci": COLLECTIONS / "ci" / "steps" / "roles" / "external_access" / "tasks" / "create.yaml",
+    "ci": COLLECTIONS
+    / "osac"
+    / "service"
+    / "roles"
+    / "external_access"
+    / "tasks"
+    / "caas_dns_create.yaml",
     "netris": COLLECTIONS / "netris" / "steps" / "roles" / "external_access" / "tasks" / "create.yaml",
     "nico": COLLECTIONS / "nico" / "steps" / "roles" / "external_access" / "tasks" / "create.yaml",
+    "ocp_ci_small": COLLECTIONS
+    / "osac"
+    / "service"
+    / "roles"
+    / "external_access"
+    / "tasks"
+    / "caas_dns_create.yaml",
     "agentless_net": COLLECTIONS
     / "agentless_net"
     / "steps"

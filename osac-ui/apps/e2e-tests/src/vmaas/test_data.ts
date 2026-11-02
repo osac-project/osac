@@ -332,7 +332,7 @@ const storageTierTestName = rawStorageTier.name
   : undefined;
 
 export const tenantName: string | undefined = rawTenantName;
-export const tenantPassword: string = rawTenantPassword ?? rawTenantName ?? '';
+export const tenantPassword: string | undefined = rawTenantPassword;
 
 export const tenantNameOrSkip = (): string | undefined => {
   if (tenantName !== undefined) {

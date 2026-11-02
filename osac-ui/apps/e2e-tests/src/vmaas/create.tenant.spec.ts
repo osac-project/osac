@@ -77,16 +77,23 @@ test('creates a tenant from the Administration tenants page', async ({ page }) =
 
   await testStep('tenant-create', 'Log in with the generated tenant credentials', async () => {
     await logout(page);
+    const replacementPassword = tenantPassword || configuredTenantName;
+    logProgress(
+      'tenant-create',
+      tenantPassword
+        ? 'Using the configured replacement password for the tenant login.'
+        : `Using tenant "${configuredTenantName}" as the replacement password.`,
+    );
     const passwordUpdated = await openAndLogin(
       page,
       '/',
       tenantCredentials.username,
       tenantCredentials.password,
       'tenant_type',
-      tenantPassword,
+      replacementPassword,
     );
     if (passwordUpdated) {
-      await updateTenantCredentialsPassword(credentialsFile, tenantPassword);
+      await updateTenantCredentialsPassword(credentialsFile, replacementPassword);
     }
   });
 });

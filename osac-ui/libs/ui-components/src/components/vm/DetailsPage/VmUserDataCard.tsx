@@ -19,9 +19,9 @@ const VmUserDataCard = ({ vm }: VmUserDataCardProps) => {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
   const source = vm.spec?.userDataSource?.source;
-  const userData = source?.case === 'inline' ? source.value.trim() : '';
+  const userData = source?.case === 'inline' ? source.value : '';
 
-  if (!userData) {
+  if (!userData.trim()) {
     return null;
   }
 

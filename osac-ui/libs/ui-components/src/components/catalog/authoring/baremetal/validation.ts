@@ -2,6 +2,8 @@ import type { FormikErrors } from 'formik';
 import type { TFunction } from 'i18next';
 import * as yup from 'yup';
 
+import { userDataSchema } from '@osac/ui-components/validation/user-data';
+
 import {
   catalogGeneralStepSchema,
   catalogLockedResourceField,
@@ -26,7 +28,10 @@ export const buildBareMetalCatalogStepSchema = (
           t('Instance type is required when locked'),
         ),
         diskImage: catalogLockedResourceField(t('Disk image is required when locked')),
-        userData: catalogLockedStringField(yup.string(), t('User data is required when locked')),
+        userData: catalogLockedStringField(
+          userDataSchema(t),
+          t('User data is required when locked'),
+        ),
       });
     case 'review':
       return undefined;

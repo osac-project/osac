@@ -46,4 +46,19 @@ describe('VmUserDataCard', () => {
       'true',
     );
   });
+
+  it('preserves whitespace in inline user data when displayed', async () => {
+    const userData = '  #cloud-config\nusers: []\n';
+    const { user } = renderCard({
+      id: 'vm-1',
+      spec: {
+        catalogItem: { id: 'catalog-rhel-9' },
+        userDataSource: { source: { case: 'inline', value: userData } },
+      },
+    } as ComputeInstance);
+
+    await user.click(screen.getByRole('button', { name: /Expand user data/ }));
+
+    expect(document.querySelector('#vm-user-data-card pre')?.textContent).toBe(userData);
+  });
 });

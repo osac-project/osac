@@ -11,7 +11,6 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import { type ServiceWithMethod, usePermissions } from '../../../hooks/use-permissions';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
 import {
@@ -21,12 +20,12 @@ import {
 } from '../../catalog/catalogItemDisplay';
 import DeleteResourceButton from '../../Resource/DeleteResourceButton';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
+import { canManageCatalogItem } from '../canManageCatalogItem';
 import { useSetCatalogItemPublished } from '../useSetCatalogItemPublished';
 
 interface CatalogItemDetailsProps {
   item: CatalogItem;
   children: ReactNode;
-  service: ServiceWithMethod<'update' | 'delete'>;
   onDelete: VoidFunction;
   showStatus?: boolean;
   titleAddon?: ReactNode;
@@ -36,7 +35,6 @@ interface CatalogItemDetailsProps {
 const CatalogItemDetails = ({
   item,
   children,
-  service,
   onDelete,
   showStatus = true,
   titleAddon,
@@ -44,11 +42,9 @@ const CatalogItemDetails = ({
 }: CatalogItemDetailsProps) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { role } = useSession();
+  const { role, tenantId } = useSession();
   const { isPending, setPublished } = useSetCatalogItemPublished(item);
-  const { allowed: canUpdate } = usePermissions(service, 'update');
-  const { allowed: canDelete } = usePermissions(service, 'delete');
-  const canManage = canUpdate && canDelete;
+  const canManage = canManageCatalogItem(role, tenantId, item);
   const canLaunch = (role === 'tenant-admin' || role === 'tenant-user') && item.published;
   const resourceName = item.metadata?.name || '';
 

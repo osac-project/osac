@@ -85,11 +85,15 @@ const clusterCatalogItem: ClusterCatalogItem = {
 const renderMenu = (
   item: ComputeInstanceCatalogItem | ClusterCatalogItem,
   role: UserRole,
+  tenantId = 'foo',
   transportOverrides?: MockTransportOverrides,
 ) =>
   renderWithProviders(
     <Routes>
-      <Route path="/" element={<CatalogItemActionsMenu item={item} role={role} />} />
+      <Route
+        path="/"
+        element={<CatalogItemActionsMenu item={item} role={role} tenantId={tenantId} />}
+      />
       <Route path="/catalog/:kind/:id" element={<div>Catalog item details page</div>} />
       <Route path="/catalog/:kind/:id/edit" element={<div>Edit catalog item page</div>} />
       <Route path="/clusters/create/:catalogItemId" element={<div>Create cluster page</div>} />
@@ -187,9 +191,7 @@ describe('CatalogItemActionsMenu', () => {
   });
 
   it('hides lifecycle actions for a tenant-admin outside the item tenant', async () => {
-    const { user } = renderMenu(vmCatalogItem, 'tenant-admin', {
-      onSelfSubjectAccessReview: () => ({ object: { status: { allowed: false } } }),
-    });
+    const { user } = renderMenu(vmCatalogItem, 'tenant-admin', 'other-tenant');
 
     await openMenu(user, VM_NAME);
 
@@ -199,9 +201,7 @@ describe('CatalogItemActionsMenu', () => {
   });
 
   it('hides lifecycle actions for a tenant-user', async () => {
-    const { user } = renderMenu(vmCatalogItem, 'tenant-user', {
-      onSelfSubjectAccessReview: () => ({ object: { status: { allowed: false } } }),
-    });
+    const { user } = renderMenu(vmCatalogItem, 'tenant-user', 'foo');
 
     await openMenu(user, VM_NAME);
 
@@ -223,7 +223,7 @@ describe('CatalogItemActionsMenu', () => {
 
   it('sends only id and published when unpublishing a published item', async () => {
     let sentObject: unknown;
-    const { user } = renderMenu(vmCatalogItem, 'admin', {
+    const { user } = renderMenu(vmCatalogItem, 'admin', 'foo', {
       onComputeInstanceCatalogItemUpdate: (req) => {
         sentObject = req.object;
         return { object: { ...vmCatalogItem, published: false } };
@@ -239,7 +239,7 @@ describe('CatalogItemActionsMenu', () => {
   });
 
   it('shows an error toast and keeps the item unchanged when publish fails', async () => {
-    const { user } = renderMenu(unpublishedVmCatalogItem, 'admin', {
+    const { user } = renderMenu(unpublishedVmCatalogItem, 'admin', 'foo', {
       onComputeInstanceCatalogItemUpdate: () => {
         throw new ConnectError('permission denied', Code.PermissionDenied);
       },
@@ -268,7 +268,7 @@ describe('CatalogItemActionsMenu', () => {
   });
 
   it('shows an error and keeps the modal open when delete fails', async () => {
-    const { user } = renderMenu(vmCatalogItem, 'admin', {
+    const { user } = renderMenu(vmCatalogItem, 'admin', 'foo', {
       onComputeInstanceCatalogItemDelete: () => {
         throw new ConnectError('permission denied', Code.PermissionDenied);
       },

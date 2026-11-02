@@ -111,7 +111,6 @@ export const SecurityGroupRuleModal = ({
             portTo: parseInt(String(values.portTo), 10),
           }),
         ...(values.ipv4Cidr.trim() !== '' && { ipv4Cidr: values.ipv4Cidr }),
-        ...(initialValues?.ipv6Cidr && { ipv6Cidr: initialValues.ipv6Cidr }),
       } as SecurityRule;
 
       const newIngress = (securityGroup.spec?.ingress ?? []).map(toPlainRule);

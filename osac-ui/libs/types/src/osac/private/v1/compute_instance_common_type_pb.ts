@@ -39,7 +39,8 @@ export const file_osac_private_v1_compute_instance_common_type: GenFile = /*@__P
  */
 export type ComputeNetworkAttachment = Message<"osac.private.v1.ComputeNetworkAttachment"> & {
   /**
-   * Reference to the Subnet for this NIC; must be in READY state (same tenant and region rules as ComputeInstance).
+   * Reference to the Subnet for this NIC; must be in READY state and in the same tenant and project as the
+   * ComputeInstance.
    *
    * @generated from field: osac.private.v1.SubnetLocalReference subnet = 1;
    */

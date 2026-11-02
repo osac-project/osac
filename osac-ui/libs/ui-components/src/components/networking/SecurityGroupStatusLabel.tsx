@@ -13,7 +13,6 @@ const SECURITY_GROUP_STATUS_MAP: Record<SecurityGroupState, { status: StatusKind
     [SecurityGroupState.READY]: { status: 'ready', text: 'Ready' },
     [SecurityGroupState.FAILED]: { status: 'failed', text: 'Failed' },
     [SecurityGroupState.DELETING]: { status: 'progressing', text: 'Deleting' },
-    [SecurityGroupState.DELETE_FAILED]: { status: 'failed', text: 'Delete Failed' },
   };
 
 const resolveSecurityGroupStatus = (

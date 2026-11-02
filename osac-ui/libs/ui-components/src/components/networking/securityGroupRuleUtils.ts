@@ -6,5 +6,4 @@ export const toPlainRule = (rule: SecurityRule) => ({
   ...(rule.portFrom !== undefined && { portFrom: rule.portFrom }),
   ...(rule.portTo !== undefined && { portTo: rule.portTo }),
   ...(rule.ipv4Cidr && { ipv4Cidr: rule.ipv4Cidr }),
-  ...(rule.ipv6Cidr && { ipv6Cidr: rule.ipv6Cidr }),
 });

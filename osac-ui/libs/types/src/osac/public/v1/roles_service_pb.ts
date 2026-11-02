@@ -313,7 +313,7 @@ export const RolesDeleteResponseSchema: GenMessage<RolesDeleteResponse> = /*@__P
  * Service for managing roles.
  *
  * Roles represent named permission sets that can be assigned to groups. The system comes with a set of predefined
- * roles such as `cloud-provider-admin`, `cloud-provider-reader`, `tenant-admin`, `tenant-reader`, and `tenant-user`.
+ * bindable roles `cloud-provider-admin`, `cloud-provider-reader`, `tenant-idp-manager`, `tenant-admin`, and `tenant-reader`. Regular tenant user permissions are implicit.
  * Only administrators can create, update, or delete roles. Regular users can only list and get roles.
  *
  * @generated from service osac.public.v1.Roles

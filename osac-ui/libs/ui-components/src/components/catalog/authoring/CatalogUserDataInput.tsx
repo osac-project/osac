@@ -19,8 +19,7 @@ const CatalogUserDataInput = ({
 }: CatalogUserDataInputProps) => {
   const { t } = useTranslation();
 
-  // Catalog items created through the CLI may reference a secret, but the authoring UI only
-  // supports text input. Secret-backed values are intentionally ignored when editing.
+  // Secret-backed values remain hidden while the authoring UI offers an optional inline override.
   return (
     <InputField
       name={valueName}

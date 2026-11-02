@@ -27,6 +27,7 @@ export interface BareMetalCatalogItemValues extends CatalogGeneralValues {
   instanceType: ProvisioningFieldValue<string>;
   diskImage: ProvisioningFieldValue<ResourceSelectValue>;
   userData: ProvisioningFieldValue<string>;
+  userDataSecret: ProvisioningFieldValue<string>;
 }
 
 const readInstanceTypeValue = (value: BareMetalInstanceTypeReference | undefined): string =>
@@ -38,6 +39,7 @@ export const emptyBareMetalCatalogItemValues = (): BareMetalCatalogItemValues =>
   instanceType: provisioningFieldValue(''),
   diskImage: provisioningFieldValue(emptyResourceSelectValue()),
   userData: provisioningFieldValue(''),
+  userDataSecret: provisioningFieldValue(''),
 });
 
 export const getBareMetalCatalogItemInitialValues = (

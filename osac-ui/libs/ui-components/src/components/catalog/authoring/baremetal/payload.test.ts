@@ -122,7 +122,7 @@ describe('bare metal catalog item initial values and updates', () => {
     expect(values.userData).toEqual({ value: '', locked: false });
   });
 
-  it('ignores a Secret user-data source when loading edit values', () => {
+  it('preserves a Secret user-data source when loading edit values', () => {
     const values = getBareMetalCatalogItemInitialValues({
       fields: {
         userDataSource: {
@@ -135,6 +135,30 @@ describe('bare metal catalog item initial values and updates', () => {
     } as BareMetalInstanceCatalogItem);
 
     expect(values.userData).toEqual({ value: '', locked: false });
+    expect(values.userDataSecret).toEqual({ value: 'cloud-init', locked: false });
+  });
+
+  it('preserves a Secret source when editing without inline user data', () => {
+    const item = {
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: { defaultValue: { source: { case: 'secret', value: { name: 'cloud-init' } } } },
+          },
+        },
+      },
+    } as BareMetalInstanceCatalogItem;
+
+    const values = getBareMetalCatalogItemInitialValues(item);
+    const payload = buildBareMetalCatalogItemUpdatePayload(item, values);
+
+    expect(payload.fields?.userDataSource).toEqual({
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { source: { case: 'secret', value: { name: 'cloud-init' } } } },
+      },
+    });
   });
 
   it('omits immutable general fields and the template from updates', () => {

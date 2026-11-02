@@ -21,6 +21,11 @@ const BareMetalCatalogReviewStep = () => {
   const { t } = useTranslation();
   const { role } = useSession();
   const { values } = useFormikContext<BareMetalCatalogItemValues>();
+  const userDataReview = values.userData.value.trim()
+    ? formatReviewScalar(values.userData.value)
+    : values.userDataSecret.value.trim()
+      ? t('Configured')
+      : formatReviewScalar(values.userData.value);
 
   return (
     <Stack hasGutter>
@@ -89,9 +94,7 @@ const BareMetalCatalogReviewStep = () => {
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('User data')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {formatReviewScalar(values.userData.value)}
-            </DescriptionListDescription>
+            <DescriptionListDescription>{userDataReview}</DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>
       </StackItem>

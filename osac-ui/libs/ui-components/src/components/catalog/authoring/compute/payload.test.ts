@@ -15,14 +15,14 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     const values = emptyComputeCatalogItemValues();
     values.metadata.name = 'my-item';
     values.metadata.project = 'team-a';
-    values.template = { id: 'template-1', name: '' };
+    values.template = { id: 'template-1', name: 'compute-template' };
 
     const payload = buildComputeCatalogItemCreatePayload(values);
 
     expect(payload.fields).toEqual({});
     expect(payload.published).toBe(false);
     expect(payload.metadata).toEqual({ name: 'my-item', project: 'team-a' });
-    expect(payload.template).toEqual({ id: 'template-1' });
+    expect(payload.template).toEqual({ id: 'template-1', name: 'compute-template' });
   });
 
   it('encodes an admin global-scope item with the shared tenant sentinel', () => {
@@ -53,7 +53,7 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     const payload = buildComputeCatalogItemCreatePayload(values);
 
     expect(payload.fields?.diskImage).toEqual({
-      behavior: { case: 'locked', value: { id: 'img-1' } },
+      behavior: { case: 'locked', value: { id: 'img-1', name: 'rhel-9' } },
     });
   });
 
@@ -64,7 +64,10 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     const payload = buildComputeCatalogItemCreatePayload(values);
 
     expect(payload.fields?.instanceType).toEqual({
-      behavior: { case: 'editable', value: { defaultValue: { id: 'it-1' } } },
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { id: 'it-1', name: 'standard-4-8' } },
+      },
     });
   });
 
@@ -179,7 +182,7 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     expect(buildComputeCatalogItemCreatePayload(lockedValues).fields?.additionalDisks).toEqual({
       behavior: {
         case: 'locked',
-        value: { items: [{ sizeGib: 20, storageTier: { id: 'tier-1' } }] },
+        value: { items: [{ sizeGib: 20, storageTier: { id: 'tier-1', name: 'fast' } }] },
       },
     });
 
@@ -192,6 +195,28 @@ describe('buildComputeCatalogItemCreatePayload', () => {
 
 describe('buildComputeCatalogItemUpdatePayload', () => {
   const item = { id: 'catalog-item-1' } as ComputeInstanceCatalogItem;
+
+  it('updates a resource reference name together with its id', () => {
+    const item = {
+      id: 'catalog-item-1',
+      fields: {
+        diskImage: {
+          behavior: { case: 'locked', value: { id: 'img-1', name: 'old-image' } },
+        },
+      },
+    } as ComputeInstanceCatalogItem;
+    const values = emptyComputeCatalogItemValues();
+    values.diskImage = { value: { id: 'img-2', name: 'new-image' }, locked: true };
+
+    const request = buildComputeCatalogItemUpdateRequest(item, values);
+
+    expect(request.object.fields?.diskImage).toEqual({
+      behavior: { case: 'locked', value: { id: 'img-2', name: 'new-image' } },
+    });
+    expect(request.updateMask.paths).toEqual(
+      expect.arrayContaining(['fields.disk_image.locked.id', 'fields.disk_image.locked.name']),
+    );
+  });
 
   it('omits name, tenant, project, and template, and includes the governed fields', () => {
     const values = emptyComputeCatalogItemValues();

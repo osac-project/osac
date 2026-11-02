@@ -15,7 +15,7 @@ describe('buildClusterCatalogItemCreatePayload', () => {
     const values = emptyClusterCatalogItemValues();
     values.metadata.name = 'my-cluster-item';
     values.metadata.project = 'team-a';
-    values.template = { id: 'template-1', name: '' };
+    values.template = { id: 'template-1', name: 'cluster-template' };
 
     const payload = buildClusterCatalogItemCreatePayload(values);
 
@@ -23,20 +23,23 @@ describe('buildClusterCatalogItemCreatePayload', () => {
       name: 'my-cluster-item',
       project: 'team-a',
     });
-    expect(payload.template).toEqual({ id: 'template-1' });
+    expect(payload.template).toEqual({ id: 'template-1', name: 'cluster-template' });
     expect(payload.published).toBe(false);
     expect(payload.fields).toEqual({});
   });
 
   it('encodes a locked version and an editable network default', () => {
     const values = emptyClusterCatalogItemValues();
-    values.version = { value: '4-17-0', locked: true };
+    values.version = { value: { id: 'version-1', name: '4-17-0' }, locked: true };
     values.podCidr = { value: '10.128.0.0/14', locked: false };
 
     const payload = buildClusterCatalogItemCreatePayload(values);
 
     expect(payload.fields?.version).toEqual({
-      behavior: { case: 'locked', value: { name: '4-17-0', shared: true } },
+      behavior: {
+        case: 'locked',
+        value: { id: 'version-1', name: '4-17-0', shared: true },
+      },
     });
     expect(payload.fields?.network).toEqual({
       podCidr: { behavior: { case: 'editable', value: { defaultValue: '10.128.0.0/14' } } },
@@ -45,14 +48,14 @@ describe('buildClusterCatalogItemCreatePayload', () => {
 
   it('marks an editable cluster version default as shared', () => {
     const values = emptyClusterCatalogItemValues();
-    values.version = { value: '4-20-0', locked: false };
+    values.version = { value: { id: 'version-2', name: '4-20-0' }, locked: false };
 
     const payload = buildClusterCatalogItemCreatePayload(values);
 
     expect(payload.fields?.version).toEqual({
       behavior: {
         case: 'editable',
-        value: { defaultValue: { name: '4-20-0', shared: true } },
+        value: { defaultValue: { id: 'version-2', name: '4-20-0', shared: true } },
       },
     });
   });

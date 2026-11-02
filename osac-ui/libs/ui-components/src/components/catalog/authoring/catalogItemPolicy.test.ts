@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { policyFromCatalogValue } from './catalogItemPolicy';
+import { catalogFieldPolicyFromValue, policyFromCatalogValue } from './catalogItemPolicy';
 
 type StringFieldPolicy<TValue> =
   | { behavior: { case: 'locked'; value: TValue } }
@@ -45,5 +45,14 @@ describe('policyFromCatalogValue', () => {
     expect(policy).toEqual({
       behavior: { case: 'editable', value: { defaultValue: 'cloud-init' } },
     });
+  });
+});
+
+describe('catalogFieldPolicyFromValue', () => {
+  it('uses the field value directly when no conversion is needed', () => {
+    const value = { id: 'image-1', name: 'rhel-9' };
+    const policy = catalogFieldPolicyFromValue({ value, locked: true }, (resource) => !resource.id);
+
+    expect(policy).toEqual({ behavior: { case: 'locked', value } });
   });
 });

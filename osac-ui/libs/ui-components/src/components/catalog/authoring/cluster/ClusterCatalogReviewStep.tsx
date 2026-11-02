@@ -78,7 +78,7 @@ const ClusterCatalogReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Version')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.version.value)}
+              {formatReviewScalar(values.version.value.name)}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>

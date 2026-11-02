@@ -24,19 +24,16 @@ import { catalogUserDataValuesFromPolicy } from '../catalogUserData';
 
 export interface BareMetalCatalogItemValues extends CatalogGeneralValues {
   guestOsFamily: GuestOSFamily;
-  instanceType: ProvisioningFieldValue<string>;
+  instanceType: ProvisioningFieldValue<ResourceSelectValue>;
   diskImage: ProvisioningFieldValue<ResourceSelectValue>;
   userData: ProvisioningFieldValue<string>;
   userDataSecret: ProvisioningFieldValue<string>;
 }
 
-const readInstanceTypeValue = (value: BareMetalInstanceTypeReference | undefined): string =>
-  value?.name || value?.id || '';
-
 export const emptyBareMetalCatalogItemValues = (): BareMetalCatalogItemValues => ({
   ...catalogGeneralValues(),
   guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
-  instanceType: provisioningFieldValue(''),
+  instanceType: provisioningFieldValue(emptyResourceSelectValue()),
   diskImage: provisioningFieldValue(emptyResourceSelectValue()),
   userData: provisioningFieldValue(''),
   userDataSecret: provisioningFieldValue(''),
@@ -63,7 +60,7 @@ export const getBareMetalCatalogItemInitialValues = (
     ...catalogGeneralValuesFromItem(item),
     guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     instanceType: provisioningFieldValue(
-      readInstanceTypeValue(instanceType.value),
+      resourceSelectValueFromReference(instanceType.value),
       instanceType.locked,
     ),
     diskImage: provisioningFieldValue(

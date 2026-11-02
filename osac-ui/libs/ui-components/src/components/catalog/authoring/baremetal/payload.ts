@@ -14,35 +14,28 @@ type CatalogItemFieldsInit = NonNullable<
 >;
 type FieldPolicyInit<K extends keyof CatalogItemFieldsInit> = NonNullable<CatalogItemFieldsInit[K]>;
 
-const isEmptyString = (value: string) => !value.trim();
-const isEmptyResource = (value: ResourceSelectValue) => !value.id.trim();
+const isEmptyResource = (value: ResourceSelectValue) => !value.id;
 
-const toTrimmedString = (value: string) => value.trim();
-const toInstanceTypeReference = (value: string) => ({
-  name: toTrimmedString(value),
+const toInstanceTypeReference = (value: ResourceSelectValue) => ({
+  id: value.id,
+  name: value.name,
   shared: true,
 });
-const toDiskImageReference = (value: ResourceSelectValue) => ({ id: value.id.trim() });
-
 const buildBareMetalCatalogItemFieldsPayload = (
   values: BareMetalCatalogItemValues,
 ): CatalogItemFieldsInit => {
   const fields: CatalogItemFieldsInit = {};
 
   const instanceType = catalogFieldPolicyFromValue<
-    string,
+    ResourceSelectValue,
     ReturnType<typeof toInstanceTypeReference>,
     FieldPolicyInit<'instanceType'>
-  >(values.instanceType, isEmptyString, toInstanceTypeReference);
+  >(values.instanceType, isEmptyResource, toInstanceTypeReference);
   if (instanceType) {
     fields.instanceType = instanceType;
   }
 
-  const diskImage = catalogFieldPolicyFromValue<
-    ResourceSelectValue,
-    ReturnType<typeof toDiskImageReference>,
-    FieldPolicyInit<'diskImage'>
-  >(values.diskImage, isEmptyResource, toDiskImageReference);
+  const diskImage = catalogFieldPolicyFromValue(values.diskImage, isEmptyResource);
   if (diskImage) {
     fields.diskImage = diskImage;
   }
@@ -59,7 +52,7 @@ export const buildBareMetalCatalogItemCreatePayload = (
   values: BareMetalCatalogItemValues,
 ): MessageInitShape<typeof BareMetalInstanceCatalogItemSchema> => ({
   metadata: catalogGeneralItemPayload(values),
-  template: { id: values.template.id.trim() },
+  template: values.template,
   published: false,
   fields: buildBareMetalCatalogItemFieldsPayload(values),
 });

@@ -81,7 +81,7 @@ export const catalogGeneralValuesFromItem = (
 export const catalogGeneralItemPayload = (
   values: CatalogGeneralValues,
 ): { name: string; tenant?: string; project?: string } => {
-  const tenant = values.scope === 'global' ? GLOBAL_TENANT_VALUE : values.metadata.tenant.id.trim();
+  const tenant = values.scope === 'global' ? GLOBAL_TENANT_VALUE : values.metadata.tenant.id;
   const project = values.metadata.project.trim();
   return {
     name: values.metadata.name.trim(),

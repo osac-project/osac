@@ -4,11 +4,7 @@ import * as yup from 'yup';
 
 import { userDataSchema } from '@osac/ui-components/validation/user-data';
 
-import {
-  catalogGeneralStepSchema,
-  catalogLockedResourceField,
-  catalogLockedStringField,
-} from '../catalogValidation';
+import { catalogGeneralStepSchema, catalogLockedResourceField } from '../catalogValidation';
 import type { BareMetalCatalogItemValues } from './values';
 
 export type BareMetalCatalogWizardStepId = 'general' | 'configuration' | 'review';
@@ -24,10 +20,7 @@ export const buildBareMetalCatalogStepSchema = (
     case 'configuration':
       return yup
         .object({
-          instanceType: catalogLockedStringField(
-            yup.string().trim(),
-            t('Instance type is required when locked'),
-          ),
+          instanceType: catalogLockedResourceField(t('Instance type is required when locked')),
           diskImage: catalogLockedResourceField(t('Disk image is required when locked')),
           userData: yup.object({ locked: yup.boolean(), value: userDataSchema(t) }),
           userDataSecret: yup.object({ value: yup.string() }),

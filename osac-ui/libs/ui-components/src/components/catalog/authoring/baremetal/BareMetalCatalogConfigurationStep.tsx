@@ -1,8 +1,10 @@
 import { Stack, StackItem, Title } from '@patternfly/react-core';
 
+import { BareMetalInstanceTypes } from '@osac/types';
+
 import { useTranslation } from '../../../../hooks/useTranslation';
-import BareMetalInstanceTypeField from '../../../BareMetalInstance/CreateWizard/fields/BareMetalInstanceTypeField';
 import OsacForm from '../../../Form/OsacForm';
+import { ResourceSelectField } from '../../../Form/ResourceSelectField';
 import DiskImageField from '../../../ProvisioningWizard/fields/DiskImageField';
 import CatalogField from '../CatalogField';
 import CatalogFieldPolicyDescription from '../CatalogFieldPolicyDescription';
@@ -29,13 +31,17 @@ const BareMetalCatalogConfigurationStep = () => {
         <OsacForm>
           <CatalogField name="instanceType">
             {({ valueName, isDisabled, isRequired, labelInfo }) => (
-              <BareMetalInstanceTypeField
+              <ResourceSelectField
                 name={valueName}
+                label={t('Instance type')}
                 fieldId="bare-metal-catalog-instance-type"
+                service={BareMetalInstanceTypes}
                 isDisabled={isDisabled}
                 isRequired={isRequired}
                 labelInfo={labelInfo}
                 autoSelectSingleOption={false}
+                placeholder={t('Select an instance type')}
+                loadErrorTitle={t('Could not load instance types')}
               />
             )}
           </CatalogField>

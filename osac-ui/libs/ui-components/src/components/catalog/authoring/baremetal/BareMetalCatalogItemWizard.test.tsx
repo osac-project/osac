@@ -242,7 +242,12 @@ describe('BareMetalCatalogItemWizard', () => {
       template: { id: 'template-1' },
       published: true,
       fields: {
-        instanceType: { behavior: { case: 'locked', value: { name: 'acme-1tb' } } },
+        instanceType: {
+          behavior: {
+            case: 'locked',
+            value: { id: 'instance-type-1', name: 'acme-1tb', shared: true },
+          },
+        },
         diskImage: {
           behavior: {
             case: 'editable',
@@ -267,7 +272,7 @@ describe('BareMetalCatalogItemWizard', () => {
     expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('existing-item');
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Instance type' })).toHaveTextContent('acme-1tb'),
+      expect(screen.getByPlaceholderText('Select an instance type')).toHaveValue('acme-1tb'),
     );
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Edit' }));
@@ -278,6 +283,16 @@ describe('BareMetalCatalogItemWizard', () => {
       updateMask?: { paths?: string[] };
     };
     expect(request.object?.id).toBe('catalog-item-1');
+    expect(request.object).toMatchObject({
+      fields: {
+        instanceType: {
+          behavior: {
+            case: 'locked',
+            value: { id: 'instance-type-1', name: 'acme-1tb', shared: true },
+          },
+        },
+      },
+    });
     expect(request.updateMask?.paths).not.toContain('template');
     expect(request.updateMask?.paths).not.toContain('metadata.name');
     expect(request.updateMask?.paths).not.toContain('metadata.tenant');

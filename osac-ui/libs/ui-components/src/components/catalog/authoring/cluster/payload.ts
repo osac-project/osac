@@ -5,6 +5,7 @@ import { type ClusterCatalogItem, ClusterCatalogItemSchema } from '@osac/types';
 import type { ClusterCatalogItemValues } from './values';
 import { buildUpdateMaskPaths } from '../../../../api/v1/update-mask';
 import type { ClusterNodeSetRow } from '../../../Cluster/CreateWizard/fields';
+import { type ResourceSelectValue } from '../../../Form/resourceSelectValue';
 import { catalogGeneralItemPayload } from '../CatalogGeneralStep';
 import { catalogFieldPolicyClearPath, catalogFieldPolicyFromValue } from '../catalogItemPolicy';
 
@@ -15,11 +16,13 @@ type NetworkFieldsInit = NonNullable<CatalogItemFieldsInit['network']>;
 type FieldPolicyInit<K extends keyof CatalogItemFieldsInit> = NonNullable<CatalogItemFieldsInit[K]>;
 
 const isEmptyString = (value: string) => !value.trim();
+const isEmptyResource = (value: ResourceSelectValue) => !value.id;
 const isEmptyNodeSetList = (value: ClusterNodeSetRow[]) => !value.length;
 
 const toTrimmedString = (value: string) => value.trim();
-const toVersionReference = (value: string) => ({
-  name: toTrimmedString(value),
+const toVersionReference = (value: ResourceSelectValue) => ({
+  id: value.id,
+  name: value.name,
   shared: true,
 });
 
@@ -48,10 +51,10 @@ const buildClusterCatalogItemFieldsPayload = (
   const fields: CatalogItemFieldsInit = {};
 
   const version = catalogFieldPolicyFromValue<
-    string,
+    ResourceSelectValue,
     ReturnType<typeof toVersionReference>,
     FieldPolicyInit<'version'>
-  >(values.version, isEmptyString, toVersionReference);
+  >(values.version, isEmptyResource, toVersionReference);
   if (version) {
     fields.version = version;
   }
@@ -89,7 +92,7 @@ export const buildClusterCatalogItemCreatePayload = (
   values: ClusterCatalogItemValues,
 ): MessageInitShape<typeof ClusterCatalogItemSchema> => ({
   metadata: catalogGeneralItemPayload(values),
-  template: { id: values.template.id.trim() },
+  template: values.template,
   published: false,
   fields: buildClusterCatalogItemFieldsPayload(values),
 });

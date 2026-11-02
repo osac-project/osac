@@ -7,7 +7,7 @@ import { resourceNameSchema } from '../../../validation/resource-name';
 export const catalogRequiredResourceSelectValue = (message: string) =>
   yup
     .object({ id: yup.string(), name: yup.string() })
-    .test('resource-select-required', message, (value) => Boolean(value?.id?.trim()));
+    .test('resource-select-required', message, (value) => Boolean(value?.id));
 
 export const catalogLockedStringField = (valueSchema: yup.StringSchema, requiredMessage: string) =>
   yup.object({
@@ -29,7 +29,7 @@ export const catalogLockedResourceField = (requiredMessage: string) =>
       requiredMessage,
       function requiredWhenLocked(field) {
         const id = field?.value?.id;
-        if (!field?.locked || (typeof id === 'string' && id.trim())) {
+        if (!field?.locked || id) {
           return true;
         }
         return this.createError({ path: `${this.path}.value.id`, message: requiredMessage });
@@ -52,7 +52,7 @@ export const catalogGeneralStepSchema = (t: TFunction, role: UserRole) => {
           return true;
         }
         const scope = (this.parent as { scope?: string } | undefined)?.scope;
-        if (scope !== 'tenant' || value?.tenant?.id?.trim()) {
+        if (scope !== 'tenant' || value?.tenant?.id) {
           return true;
         }
         return this.createError({

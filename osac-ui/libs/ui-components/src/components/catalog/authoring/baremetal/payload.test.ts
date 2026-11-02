@@ -15,7 +15,7 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
     const values = emptyBareMetalCatalogItemValues();
     values.metadata.name = 'my-bare-metal-item';
     values.metadata.project = 'team-a';
-    values.template = { id: 'template-1', name: '' };
+    values.template = { id: 'template-1', name: 'baremetal-template' };
 
     const payload = buildBareMetalCatalogItemCreatePayload(values);
 
@@ -23,24 +23,30 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
       name: 'my-bare-metal-item',
       project: 'team-a',
     });
-    expect(payload.template).toEqual({ id: 'template-1' });
+    expect(payload.template).toEqual({ id: 'template-1', name: 'baremetal-template' });
     expect(payload.published).toBe(false);
     expect(payload.fields).toEqual({});
   });
 
   it('encodes locked instance type, disk image, and user data values', () => {
     const values = emptyBareMetalCatalogItemValues();
-    values.instanceType = { value: 'acme-1tb', locked: true };
+    values.instanceType = {
+      value: { id: 'instance-type-1', name: 'acme-1tb' },
+      locked: true,
+    };
     values.diskImage = { value: { id: 'image-1', name: 'rhel-9' }, locked: true };
     values.userData = { value: '  #cloud-config\nusers: []  ', locked: true };
 
     const payload = buildBareMetalCatalogItemCreatePayload(values);
 
     expect(payload.fields?.instanceType).toEqual({
-      behavior: { case: 'locked', value: { name: 'acme-1tb', shared: true } },
+      behavior: {
+        case: 'locked',
+        value: { id: 'instance-type-1', name: 'acme-1tb', shared: true },
+      },
     });
     expect(payload.fields?.diskImage).toEqual({
-      behavior: { case: 'locked', value: { id: 'image-1' } },
+      behavior: { case: 'locked', value: { id: 'image-1', name: 'rhel-9' } },
     });
     expect(payload.fields?.userDataSource).toEqual({
       behavior: {
@@ -52,7 +58,10 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
 
   it('encodes editable defaults and omits an empty resource selector', () => {
     const values = emptyBareMetalCatalogItemValues();
-    values.instanceType = { value: 'acme-1tb', locked: false };
+    values.instanceType = {
+      value: { id: 'instance-type-1', name: 'acme-1tb' },
+      locked: false,
+    };
     values.diskImage = { value: emptyResourceSelectValue(), locked: false };
     values.userData = { value: 'echo hi', locked: false };
 
@@ -61,7 +70,9 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
     expect(payload.fields?.instanceType).toEqual({
       behavior: {
         case: 'editable',
-        value: { defaultValue: { name: 'acme-1tb', shared: true } },
+        value: {
+          defaultValue: { id: 'instance-type-1', name: 'acme-1tb', shared: true },
+        },
       },
     });
     expect(payload.fields?.diskImage).toBeUndefined();
@@ -99,7 +110,12 @@ describe('bare metal catalog item initial values and updates', () => {
       metadata: { name: 'existing-item', tenant: 'tenant-1' },
       template: { id: 'template-1' },
       fields: {
-        instanceType: { behavior: { case: 'locked', value: { name: 'acme-1tb' } } },
+        instanceType: {
+          behavior: {
+            case: 'locked',
+            value: { id: 'instance-type-1', name: 'acme-1tb', shared: true },
+          },
+        },
         diskImage: {
           behavior: {
             case: 'editable',
@@ -117,7 +133,10 @@ describe('bare metal catalog item initial values and updates', () => {
 
     const values = getBareMetalCatalogItemInitialValues(item);
 
-    expect(values.instanceType).toEqual({ value: 'acme-1tb', locked: true });
+    expect(values.instanceType).toEqual({
+      value: { id: 'instance-type-1', name: 'acme-1tb' },
+      locked: true,
+    });
     expect(values.diskImage).toEqual({ value: { id: 'image-1', name: 'rhel-9' }, locked: false });
     expect(values.userData).toEqual({ value: '', locked: false });
   });

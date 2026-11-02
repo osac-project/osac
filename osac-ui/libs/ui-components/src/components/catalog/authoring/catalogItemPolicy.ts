@@ -33,10 +33,14 @@ export const policyFromCatalogValue = <TValue, TPolicy>(
 };
 
 /** Encodes the common locked/editable shape used by catalog field policies. */
-export const catalogFieldPolicyFromValue = <TValue, TPolicyValue, TPolicy>(
+export const catalogFieldPolicyFromValue = <
+  TValue,
+  TPolicyValue = TValue,
+  TPolicy = CatalogFieldPolicyLike<TPolicyValue>,
+>(
   field: ProvisioningFieldValue<TValue>,
   isEmpty: (value: TValue) => boolean,
-  toValue: (value: TValue) => TPolicyValue,
+  toValue: (value: TValue) => TPolicyValue = (value) => value as unknown as TPolicyValue,
 ): TPolicy | undefined =>
   policyFromCatalogValue<TValue, TPolicy>(
     field,

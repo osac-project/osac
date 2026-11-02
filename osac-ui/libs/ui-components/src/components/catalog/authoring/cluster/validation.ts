@@ -4,7 +4,11 @@ import * as yup from 'yup';
 
 import { buildCidrSchema, cidrsOverlap, isValidCidr } from '../../../../validation/cidr-validation';
 import { resourceNameSchema } from '../../../../validation/resource-name';
-import { catalogGeneralStepSchema, catalogLockedStringField } from '../catalogValidation';
+import {
+  catalogGeneralStepSchema,
+  catalogLockedResourceField,
+  catalogLockedStringField,
+} from '../catalogValidation';
 import type { ClusterCatalogItemValues } from './values';
 
 export type ClusterCatalogWizardStepId = 'general' | 'configuration' | 'networking' | 'review';
@@ -49,10 +53,7 @@ export const buildClusterCatalogStepSchema = (
       return catalogGeneralStepSchema(t, role);
     case 'configuration':
       return yup.object({
-        version: catalogLockedStringField(
-          yup.string().trim(),
-          t('Version is required when locked'),
-        ),
+        version: catalogLockedResourceField(t('Version is required when locked')),
         nodeSets: nodeSetField(t),
       });
     case 'networking':

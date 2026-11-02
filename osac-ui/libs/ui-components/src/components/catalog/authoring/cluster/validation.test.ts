@@ -11,14 +11,14 @@ describe('buildClusterCatalogStepSchema', () => {
 
     await expect(
       schema?.validate({
-        version: { locked: true, value: '' },
+        version: { locked: true, value: { id: '', name: '' } },
         nodeSets: { locked: false, value: [] },
       }) as Promise<unknown>,
     ).rejects.toThrow('Version is required');
 
     await expect(
       schema?.validate({
-        version: { locked: false, value: '' },
+        version: { locked: false, value: { id: '', name: '' } },
         nodeSets: { locked: true, value: [] },
       }) as Promise<unknown>,
     ).rejects.toThrow('At least one node set');
@@ -28,7 +28,7 @@ describe('buildClusterCatalogStepSchema', () => {
     const configurationSchema = buildClusterCatalogStepSchema('configuration', t, 'tenant-admin');
     await expect(
       configurationSchema?.validate({
-        version: { locked: false, value: '' },
+        version: { locked: false, value: { id: '', name: '' } },
         nodeSets: { locked: false, value: [] },
       }),
     ).resolves.toBeDefined();

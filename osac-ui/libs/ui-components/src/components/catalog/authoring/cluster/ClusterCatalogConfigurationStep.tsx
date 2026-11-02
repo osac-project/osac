@@ -1,9 +1,16 @@
 import { Stack, StackItem, Title } from '@patternfly/react-core';
 
+import { type ClusterVersion, ClusterVersions } from '@osac/types';
+
+import { CLUSTER_VERSION_ACTIVE_LIST_FILTER } from '../../../../api/v1/cluster-versions';
 import { useTranslation } from '../../../../hooks/useTranslation';
 import ClusterNodeSetsArrayField from '../../../Cluster/CreateWizard/ClusterNodeSetsArrayField';
-import ClusterVersionField from '../../../Cluster/CreateWizard/fields/ClusterVersionField';
+import {
+  isDeprecatedVersion,
+  versionDisplayName,
+} from '../../../Cluster/CreateWizard/versionUtils';
 import OsacForm from '../../../Form/OsacForm';
+import { ResourceSelectField } from '../../../Form/ResourceSelectField';
 import ProvisioningFieldGroup from '../../../ProvisioningWizard/fields/ProvisioningFieldGroup';
 import CatalogField from '../CatalogField';
 import CatalogFieldPolicyDescription from '../CatalogFieldPolicyDescription';
@@ -29,13 +36,25 @@ const ClusterCatalogConfigurationStep = () => {
         <OsacForm>
           <CatalogField name="version">
             {({ valueName, isDisabled, isRequired, labelInfo }) => (
-              <ClusterVersionField
+              <ResourceSelectField<ClusterVersion>
                 name={valueName}
+                label={t('Version')}
                 fieldId="cluster-catalog-version"
+                service={ClusterVersions}
+                request={{ filter: CLUSTER_VERSION_ACTIVE_LIST_FILTER }}
                 isDisabled={isDisabled}
                 isRequired={isRequired}
                 labelInfo={labelInfo}
                 autoSelectSingleOption={false}
+                placeholder={t('Select a version')}
+                loadErrorTitle={t('Could not load cluster versions')}
+                formatOptionLabel={(version) => {
+                  const versionName = version.metadata?.name ?? '';
+                  const label = versionDisplayName(version, versionName);
+                  return isDeprecatedVersion(version)
+                    ? t('{{version}} (deprecated)', { version: label })
+                    : label;
+                }}
               />
             )}
           </CatalogField>

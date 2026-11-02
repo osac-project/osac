@@ -26,7 +26,6 @@ export const ClusterNetworkingStep = () => {
       <NetworkFields
         networkAttachmentName="spec.networkAttachment"
         externalIpAttachmentName="spec.autoExternalIpAttachment"
-        showSecurityGroups={false}
       />
 
       <Divider />

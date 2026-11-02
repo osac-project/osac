@@ -84,7 +84,14 @@ const securityGroups = [
 const renderStep = (values = createEmptyClusterValues()) =>
   renderWithProviders(
     <Formik initialValues={values} onSubmit={() => undefined}>
-      <ClusterNetworkingStep />
+      {({ values: formValues }) => (
+        <>
+          <ClusterNetworkingStep />
+          <output aria-label="selected security groups">
+            {JSON.stringify(formValues.spec.networkAttachment.value.securityGroups)}
+          </output>
+        </>
+      )}
     </Formik>,
     { apiFixtures: { virtualNetworks, subnets, securityGroups } },
   );
@@ -100,9 +107,9 @@ describe('ClusterNetworkingStep', () => {
     expect(screen.queryByText('Primary tenant compute network')).not.toBeInTheDocument();
     expect(screen.getByText('default-ipv4')).toBeInTheDocument();
     expect(screen.getByText('10.42.0.0/24')).toBeInTheDocument();
-    expect(screen.queryByText('allow-ssh-https')).not.toBeInTheDocument();
+    expect(await screen.findByText('allow-ssh-https')).toBeInTheDocument();
     expect(screen.queryByText('SSH + HTTPS ingress')).not.toBeInTheDocument();
-    expect(screen.queryByText('Security group')).not.toBeInTheDocument();
+    expect(screen.getByText('Security group')).toBeInTheDocument();
     expect(screen.queryByLabelText(/^Select virtual network/)).not.toBeInTheDocument();
   });
 
@@ -155,7 +162,7 @@ describe('ClusterNetworkingStep', () => {
     );
 
     expect(await screen.findByText('project-a-default')).toBeInTheDocument();
-    expect(screen.queryByText('project-a-group')).not.toBeInTheDocument();
+    expect(await screen.findByText('project-a-group')).toBeInTheDocument();
     expect(screen.queryByText('project-b-default')).not.toBeInTheDocument();
   });
 
@@ -198,7 +205,7 @@ describe('ClusterNetworkingStep', () => {
     );
 
     expect(await screen.findByText('new-subnet')).toBeInTheDocument();
-    expect(screen.queryByText('new-group')).not.toBeInTheDocument();
+    expect(await screen.findByText('new-group')).toBeInTheDocument();
     expect(screen.queryByText('old-subnet')).not.toBeInTheDocument();
     expect(screen.queryByText('old-group')).not.toBeInTheDocument();
   });
@@ -209,7 +216,9 @@ describe('ClusterNetworkingStep', () => {
     await user.click(screen.getByRole('radio', { name: /Custom network/ }));
     expect(screen.getByRole('radio', { name: /Custom network/ })).toBeChecked();
     expect(screen.queryByText('default-ipv4')).not.toBeInTheDocument();
-    expect(screen.getByText('Choose a virtual network and subnet.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Choose a virtual network, subnet, and security groups.'),
+    ).toBeInTheDocument();
 
     const virtualNetwork = screen.getByLabelText(/^Virtual network/);
     await user.click(virtualNetwork);
@@ -223,7 +232,15 @@ describe('ClusterNetworkingStep', () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /default-ipv4/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole('option', { name: 'team-subnet · 10.43.0.0/24' }));
-    expect(screen.queryByLabelText(/^Security group/)).not.toBeInTheDocument();
+    await user.click(screen.getByLabelText(/^Security groups/));
+    expect(await screen.findByRole('option', { name: 'isolated-group' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'isolated-strict' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'allow-ssh-https' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('option', { name: 'isolated-group' }));
+    await user.click(screen.getByRole('option', { name: 'isolated-strict' }));
+    expect(screen.getByLabelText('selected security groups')).toHaveTextContent(
+      '[{"id":"sg-isolated","name":"isolated-group"},{"id":"sg-isolated-strict","name":"isolated-strict"}]',
+    );
   });
 
   it('clears custom selections when returning to tenant defaults', async () => {
@@ -235,12 +252,15 @@ describe('ClusterNetworkingStep', () => {
     await waitFor(() => expect(screen.getByLabelText(/^Subnet/)).not.toBeDisabled());
     await user.click(screen.getByLabelText(/^Subnet/));
     await user.click(await screen.findByRole('option', { name: 'team-subnet · 10.43.0.0/24' }));
+    await user.click(screen.getByLabelText(/^Security groups/));
+    await user.click(await screen.findByRole('option', { name: 'isolated-group' }));
 
     await user.click(screen.getByRole('radio', { name: /Tenant default/ }));
     await user.click(screen.getByRole('radio', { name: /Custom network/ }));
 
     expect(getResourceSelectCombobox(/^Virtual network/)).toHaveValue('');
     expectResourceSelectDisabled(/^Subnet/);
+    expect(screen.getByLabelText('selected security groups')).toHaveTextContent('[]');
   });
 
   it('keeps automatic external IP attachment off until selected', async () => {

@@ -150,7 +150,6 @@ export const ClusterReviewStep = () => {
               virtualNetwork={values.spec.networkAttachment.value.virtualNetwork}
               subnet={values.spec.networkAttachment.value.subnet}
               securityGroups={values.spec.networkAttachment.value.securityGroups}
-              showSecurityGroups={false}
             />
           )}
 

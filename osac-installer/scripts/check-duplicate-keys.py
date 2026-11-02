@@ -10,8 +10,9 @@ parse silently used #1311's block.
 Usage:
     check-duplicate-keys.py [PATH ...]
 
-Without arguments it scans the chart values, schemas and preflight JSON files,
-the installer profile values, and the GitHub workflow and filter definitions.
+Without arguments it scans the chart values and CI value fixtures, schemas and
+preflight JSON files, the installer profile values, and the GitHub workflow and
+filter definitions.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_GLOBS = (
     "*/charts/**/values*.yaml",
+    "*/charts/**/*-values.yaml",
     "*/charts/**/values*.json",
     "*/charts/**/files/**/*.json",
     "*/values/**/*.yaml",
@@ -77,9 +79,21 @@ def _yaml_key(key_node: yaml.Node, resolve: Callable[[yaml.Node], object]) -> tu
 
 
 def _walk_yaml(
-    node: yaml.Node, path: str, problems: list[str], resolve: Callable[[yaml.Node], object]
+    node: yaml.Node,
+    path: str,
+    problems: list[str],
+    resolve: Callable[[yaml.Node], object],
+    visited: set[int],
 ) -> None:
-    """Collect duplicate keys in a composed YAML node, recursing into values."""
+    """Collect duplicate keys in a composed YAML node, recursing into values.
+
+    The composer returns the same node object for every alias, so a node can be
+    reached more than once, and a self-referencing alias makes the graph cyclic.
+    Walk each node once to keep both cases finite.
+    """
+    if id(node) in visited:
+        return
+    visited.add(id(node))
     if isinstance(node, yaml.MappingNode):
         seen = set()
         for key_node, value_node in node.value:
@@ -89,10 +103,10 @@ def _walk_yaml(
                     f"{path or '<root>'}: duplicate key {text!r} at line {key_node.start_mark.line + 1}"
                 )
             seen.add(key)
-            _walk_yaml(value_node, f"{path}.{text}", problems, resolve)
+            _walk_yaml(value_node, f"{path}.{text}", problems, resolve, visited)
     elif isinstance(node, yaml.SequenceNode):
         for index, value in enumerate(node.value):
-            _walk_yaml(value, f"{path}[{index}]", problems, resolve)
+            _walk_yaml(value, f"{path}[{index}]", problems, resolve, visited)
 
 
 def problems_in(path: Path) -> list[str]:
@@ -108,7 +122,7 @@ def problems_in(path: Path) -> list[str]:
         try:
             for document in yaml.compose_all(text, Loader=yaml.SafeLoader):
                 if document is not None:
-                    _walk_yaml(document, "", problems, resolver.construct_object)
+                    _walk_yaml(document, "", problems, resolver.construct_object, set())
         finally:
             resolver.dispose()
     return problems
@@ -129,7 +143,9 @@ def selected_paths(arguments: list[str]) -> list[Path]:
     found: set[Path] = set()
     for pattern in DEFAULT_GLOBS:
         found.update(REPO_ROOT.glob(pattern))
-    return sorted(path for path in found if path.is_file())
+    # A chart template that happens to be named like a values file is Go
+    # template source, not YAML, so it is never part of the scan.
+    return sorted(path for path in found if path.is_file() and "/templates/" not in path.as_posix())
 
 
 def main(arguments: list[str]) -> int:

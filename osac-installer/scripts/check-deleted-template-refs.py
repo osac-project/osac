@@ -68,6 +68,7 @@ def deleted_templates(base_ref: str) -> list[str]:
     command = [
         "git",
         "diff",
+        "--no-renames",
         "--diff-filter=D",
         "--name-only",
         f"{base_ref}...HEAD",

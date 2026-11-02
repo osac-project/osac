@@ -859,14 +859,27 @@ jobs:
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: main
       test-ref: ${{ needs.prepare.outputs.temp-branch }}
-      # This pipeline only runs via schedule/workflow_dispatch against
-      # main, same safe WIF context as the regular e2e-*-full-install.yml
-      # callers' own enable-ai-diagnostic gating -- see that input's
-      # description in osac-test-infra for the full reasoning. Without
-      # this, a failed e2e run only gets a generic failure Slack ping (see
-      # notify-failure below) with no diagnosis; workflow_run-based Phase 2
-      # doesn't cover this pipeline either, since it tracks a top-level
-      # caller workflow's own name, not this reusable workflow.
+      # This pipeline itself can run from any ref: nightly-build.yaml's
+      # schedule trigger always targets main, but osac-release.yaml can
+      # be dispatched against any selected branch or tag. Only
+      # enable-ai-diagnostic's own condition below is deliberately
+      # restricted to main -- the same safe WIF context as the regular
+      # e2e-*-full-install.yml callers' own enable-ai-diagnostic gating,
+      # see that input's description in osac-test-infra for the full
+      # reasoning. Without this, a failed e2e run only gets a generic
+      # failure Slack ping (see notify-failure below) with no diagnosis;
+      # workflow_run-based Phase 2 doesn't cover this pipeline either,
+      # since it tracks a top-level caller workflow's own name, not this
+      # reusable workflow.
+      #
+      # Deliberately still main-only, NOT extended to release-* branches:
+      # osac-test-infra's vertex-ai-auth action's WIF trust policy is
+      # itself scoped to main only (confirmed directly against that
+      # action's own module comment) -- enabling this for a release
+      # branch would attempt an OIDC token exchange the GCP trust policy
+      # rejects, failing the diagnosis step instead of just skipping it.
+      # Extend WIF trust to release-* refs first if this is ever needed
+      # for release-branch E2E failures.
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
 
   e2e-caas-test:

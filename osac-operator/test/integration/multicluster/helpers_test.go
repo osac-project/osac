@@ -17,6 +17,7 @@ limitations under the License.
 package multicluster
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -25,6 +26,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"k8s.io/client-go/tools/clientcmd"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -1255,5 +1258,162 @@ func TestHelperSourceGrepNoLogsNoInlineSecret(t *testing.T) {
 	if strings.Contains(body, "client_secret=") {
 		t.Error("acquireFulfillmentToken has " +
 			"client_secret= interpolation")
+	}
+}
+
+// ---------------------------------------------------------------
+// Kubeconfig export: CombinedOutput stderr contamination
+// regression test.
+//
+// kind get kubeconfig writes valid YAML to stdout, but may also
+// emit warnings to stderr (e.g. "enabling experimental podman
+// provider").  When CombinedOutput merges both streams, the
+// resulting bytes are no longer valid kubeconfig YAML and
+// client-go rejects them with:
+//   yaml: line N: mapping values are not allowed in this context
+//
+// exportKindKubeconfig captures stdout and stderr separately,
+// returning only stdout.  This test proves the difference using
+// a subprocess that simulates kind's output behaviour.
+// ---------------------------------------------------------------
+
+// validKubeconfig is a minimal kubeconfig used by the regression
+// tests below.  It contains no real credentials.
+const validKubeconfig = `apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: dGVzdA==
+    server: https://127.0.0.1:12345
+  name: kind-osac-workload
+contexts:
+- context:
+    cluster: kind-osac-workload
+    user: kind-osac-workload
+  name: kind-osac-workload
+current-context: kind-osac-workload
+kind: Config
+preferences: {}
+users:
+- name: kind-osac-workload
+  user:
+    client-certificate-data: dGVzdA==
+    client-key-data: dGVzdA==
+`
+
+// TestHelperKubeconfigHelperProcess is a subprocess entry
+// point used by the kubeconfig stderr tests below.  It is
+// never run directly.
+func TestHelperKubeconfigHelperProcess(t *testing.T) {
+	if os.Getenv("GO_TEST_HELPER_PROCESS") != "1" {
+		return
+	}
+	// Write the valid kubeconfig to stdout.
+	fmt.Fprint(os.Stdout, validKubeconfig)
+	// Write a warning to stderr when requested.
+	if os.Getenv("EMIT_STDERR_WARNING") == "1" {
+		fmt.Fprintln(os.Stderr,
+			"enabling experimental podman provider")
+	}
+	os.Exit(0)
+}
+
+// helperCmd builds an exec.Cmd that re-invokes this test binary
+// as a subprocess, running only the helper-process test.
+func helperCmd(emitStderr bool) *exec.Cmd {
+	cmd := exec.Command(os.Args[0],
+		"-test.run=^TestHelperKubeconfigHelperProcess$")
+	cmd.Env = []string{"GO_TEST_HELPER_PROCESS=1"}
+	if emitStderr {
+		cmd.Env = append(cmd.Env,
+			"EMIT_STDERR_WARNING=1")
+	}
+	return cmd
+}
+
+func TestHelperCombinedOutputCorruptsKubeconfig(t *testing.T) {
+	// Prove that CombinedOutput merges the stderr warning into
+	// the kubeconfig bytes, making them unparseable.
+	cmd := helperCmd(true)
+	combined, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("helper subprocess failed: %v", err)
+	}
+
+	// The combined output must contain the warning.
+	if !bytes.Contains(combined,
+		[]byte("enabling experimental podman provider")) {
+		t.Fatal("expected stderr warning in combined output")
+	}
+
+	// client-go must reject the contaminated bytes.
+	_, parseErr := clientcmd.Load(combined)
+	if parseErr == nil {
+		t.Fatal("expected client-go to reject " +
+			"stderr-contaminated kubeconfig, but it parsed")
+	}
+	t.Logf("client-go correctly rejected contaminated "+
+		"kubeconfig: %v", parseErr)
+}
+
+func TestHelperSeparateStdoutPreservesKubeconfig(t *testing.T) {
+	// Prove that capturing stdout separately produces a valid
+	// kubeconfig even when stderr contains warnings.
+	cmd := helperCmd(true)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("helper subprocess failed: %v", err)
+	}
+
+	// stderr must contain the warning.
+	if !strings.Contains(stderr.String(),
+		"enabling experimental podman provider") {
+		t.Fatal("expected warning on stderr")
+	}
+
+	// stdout alone must be a valid kubeconfig.
+	cfg, err := clientcmd.Load(stdout.Bytes())
+	if err != nil {
+		t.Fatalf("client-go rejected clean stdout "+
+			"kubeconfig: %v", err)
+	}
+	if cfg.CurrentContext != "kind-osac-workload" {
+		t.Errorf("current-context: want %q, got %q",
+			"kind-osac-workload", cfg.CurrentContext)
+	}
+	cluster, ok := cfg.Clusters["kind-osac-workload"]
+	if !ok {
+		t.Fatal("cluster kind-osac-workload not found")
+	}
+	if cluster.Server != "https://127.0.0.1:12345" {
+		t.Errorf("server: want %q, got %q",
+			"https://127.0.0.1:12345", cluster.Server)
+	}
+}
+
+func TestHelperCleanExportWorksWithoutStderr(t *testing.T) {
+	// Verify that the separate-capture path also works when
+	// there is no stderr output at all (the common Docker case).
+	cmd := helperCmd(false)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("helper subprocess failed: %v", err)
+	}
+
+	if stderr.Len() != 0 {
+		t.Errorf("expected empty stderr, got: %q",
+			stderr.String())
+	}
+
+	cfg, err := clientcmd.Load(stdout.Bytes())
+	if err != nil {
+		t.Fatalf("client-go rejected kubeconfig: %v", err)
+	}
+	if cfg.CurrentContext != "kind-osac-workload" {
+		t.Errorf("current-context: want %q, got %q",
+			"kind-osac-workload", cfg.CurrentContext)
 	}
 }

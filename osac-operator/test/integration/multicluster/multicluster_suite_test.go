@@ -17,6 +17,7 @@ limitations under the License.
 package multicluster
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -257,8 +258,8 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	workloadHostKubeconfig = tmp.Name()
 	_ = tmp.Close()
-	output, err = runShell("kind", "get", "kubeconfig", "--name", workloadClusterName)
-	Expect(err).NotTo(HaveOccurred(), "get workload kubeconfig: %s", output)
+	output, err = exportKindKubeconfig(workloadClusterName)
+	Expect(err).NotTo(HaveOccurred(), "get workload kubeconfig")
 	Expect(os.WriteFile(workloadHostKubeconfig, output, 0600)).To(Succeed())
 
 	By("installing fake KubeVirt CRDs on the workload cluster")
@@ -395,6 +396,35 @@ func runShell(name string, args ...string) ([]byte, error) {
 		return out, fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, out)
 	}
 	return out, nil
+}
+
+// exportKindKubeconfig runs "kind get kubeconfig" and returns
+// only stdout.  Stderr is logged to GinkgoWriter but kept out of
+// the returned bytes.  CombinedOutput would merge stderr warnings
+// (e.g. "enabling experimental podman provider") into the YAML
+// kubeconfig, causing "yaml: line N: mapping values are not
+// allowed in this context" when kubectl or client-go parses the
+// file.
+func exportKindKubeconfig(clusterName string) ([]byte, error) {
+	cmd := exec.Command(
+		"kind", "get", "kubeconfig",
+		"--name", clusterName,
+	)
+	cmd.Dir, _ = utils.GetProjectDir()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if s := stderr.String(); s != "" {
+		_, _ = fmt.Fprintf(GinkgoWriter,
+			"kind get kubeconfig stderr: %s\n", s)
+	}
+	if err != nil {
+		return nil, fmt.Errorf(
+			"kind get kubeconfig --name %s: %w\nstderr: %s",
+			clusterName, err, stderr.String())
+	}
+	return stdout.Bytes(), nil
 }
 
 // runKubectlHub runs kubectl against the hub cluster (default context).

@@ -30,7 +30,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/external_ip_pool_type.proto.
  */
 export const file_osac_private_v1_external_ip_pool_type: GenFile = /*@__PURE__*/
-  fileDesc("Citvc2FjL3ByaXZhdGUvdjEvZXh0ZXJuYWxfaXBfcG9vbF90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEiuQEKDkV4dGVybmFsSVBQb29sEgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEjEKBHNwZWMYAyABKAsyIy5vc2FjLnByaXZhdGUudjEuRXh0ZXJuYWxJUFBvb2xTcGVjEjsKBnN0YXR1cxgEIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5FeHRlcm5hbElQUG9vbFN0YXR1c0IE4kEBAyKAAgoSRXh0ZXJuYWxJUFBvb2xTcGVjEnsKBWNpZHJzGAIgAygJQmziQQICBbpIXpIBWwgBEAEiVboBTgoTY2Fub25pY2FsX2lwdjRfY2lkchIdbXVzdCBiZSBhIGNhbm9uaWNhbCBJUHY0IENJRFIaGHRoaXMuaXNJcFByZWZpeCg0LCB0cnVlKXICEAGKtRgCCAESPwoJaXBfZmFtaWx5GAMgASgOMhkub3NhYy5wcml2YXRlLnYxLklQRmFtaWx5QhHiQQICBbpICYIBBhABIAAgAhIsChdpbXBsZW1lbnRhdGlvbl9zdHJhdGVneRgEIAEoCUIL4kECAwWKtRgCCAEi8QEKFEV4dGVybmFsSVBQb29sU3RhdHVzEj8KBXN0YXRlGAEgASgOMiQub3NhYy5wcml2YXRlLnYxLkV4dGVybmFsSVBQb29sU3RhdGVCCuJBAQOKtRgCCAESIAoHbWVzc2FnZRgCIAEoCUIK4kEBA4q1GAIIAUgAiAEBEhcKA2h1YhgDIAEoCUIK4kEBA4q1GAIIARIZCgV0b3RhbBgEIAEoA0IK4kEBA4q1GAIIARIdCglhbGxvY2F0ZWQYBSABKANCCuJBAQOKtRgCCAESFwoJYXZhaWxhYmxlGAYgASgDQgTiQQEDQgoKCF9tZXNzYWdlIlQKF0V4dGVybmFsSVBQb29sUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZzaGFyZWQYBCABKAgq/QEKE0V4dGVybmFsSVBQb29sU3RhdGUSJgoiRVhURVJOQUxfSVBfUE9PTF9TVEFURV9VTlNQRUNJRklFRBAAEiIKHkVYVEVSTkFMX0lQX1BPT0xfU1RBVEVfUEVORElORxABEiAKHEVYVEVSTkFMX0lQX1BPT0xfU1RBVEVfUkVBRFkQAhIhCh1FWFRFUk5BTF9JUF9QT09MX1NUQVRFX0ZBSUxFRBADEiMKH0VYVEVSTkFMX0lQX1BPT0xfU1RBVEVfREVMRVRJTkcQBBIoCiRFWFRFUk5BTF9JUF9QT09MX1NUQVRFX0RFTEVURV9GQUlMRUQQBRoGirUYAggBQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_cleanapi_cleanapi, file_buf_validate_validate, file_google_api_field_behavior, file_osac_private_v1_ip_family_type, file_osac_private_v1_metadata_type]);
+  fileDesc("Citvc2FjL3ByaXZhdGUvdjEvZXh0ZXJuYWxfaXBfcG9vbF90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEiuQEKDkV4dGVybmFsSVBQb29sEgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEjEKBHNwZWMYAyABKAsyIy5vc2FjLnByaXZhdGUudjEuRXh0ZXJuYWxJUFBvb2xTcGVjEjsKBnN0YXR1cxgEIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5FeHRlcm5hbElQUG9vbFN0YXR1c0IE4kEBAyLxAQoSRXh0ZXJuYWxJUFBvb2xTcGVjEnsKBWNpZHJzGAIgAygJQmziQQICBbpIXpIBWwgBEAEiVboBTgoTY2Fub25pY2FsX2lwdjRfY2lkchIdbXVzdCBiZSBhIGNhbm9uaWNhbCBJUHY0IENJRFIaGHRoaXMuaXNJcFByZWZpeCg0LCB0cnVlKXICEAGKtRgCCAESPwoJaXBfZmFtaWx5GAMgASgOMhkub3NhYy5wcml2YXRlLnYxLklQRmFtaWx5QhHiQQICBbpICYIBBhABIAAgAkoECAQQBVIXaW1wbGVtZW50YXRpb25fc3RyYXRlZ3ki8QEKFEV4dGVybmFsSVBQb29sU3RhdHVzEj8KBXN0YXRlGAEgASgOMiQub3NhYy5wcml2YXRlLnYxLkV4dGVybmFsSVBQb29sU3RhdGVCCuJBAQOKtRgCCAESIAoHbWVzc2FnZRgCIAEoCUIK4kEBA4q1GAIIAUgAiAEBEhcKA2h1YhgDIAEoCUIK4kEBA4q1GAIIARIZCgV0b3RhbBgEIAEoA0IK4kEBA4q1GAIIARIdCglhbGxvY2F0ZWQYBSABKANCCuJBAQOKtRgCCAESFwoJYXZhaWxhYmxlGAYgASgDQgTiQQEDQgoKCF9tZXNzYWdlIlQKF0V4dGVybmFsSVBQb29sUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZzaGFyZWQYBCABKAgq/wEKE0V4dGVybmFsSVBQb29sU3RhdGUSJgoiRVhURVJOQUxfSVBfUE9PTF9TVEFURV9VTlNQRUNJRklFRBAAEiIKHkVYVEVSTkFMX0lQX1BPT0xfU1RBVEVfUEVORElORxABEiAKHEVYVEVSTkFMX0lQX1BPT0xfU1RBVEVfUkVBRFkQAhIhCh1FWFRFUk5BTF9JUF9QT09MX1NUQVRFX0ZBSUxFRBADEiMKH0VYVEVSTkFMX0lQX1BPT0xfU1RBVEVfREVMRVRJTkcQBBoGirUYAggBIgQIBRAFKiRFWFRFUk5BTF9JUF9QT09MX1NUQVRFX0RFTEVURV9GQUlMRURCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_cleanapi_cleanapi, file_buf_validate_validate, file_google_api_field_behavior, file_osac_private_v1_ip_family_type, file_osac_private_v1_metadata_type]);
 
 /**
  * Represents a pool of external IP addresses available for allocation.
@@ -41,9 +41,6 @@ export const file_osac_private_v1_external_ip_pool_type: GenFile = /*@__PURE__*/
  *
  * "External" means external to the VirtualNetwork. The addresses may be internet-routable or
  * data-center-routable depending on the deployment topology (e.g., air-gapped environments).
- *
- * The implementation_strategy field determines how IPs from this pool are advertised on the target
- * cluster (e.g., MetalLB L2 mode). This field is set by the system and is not user-configurable.
  *
  * Capacity tracking fields in the status (total, allocated, available) reflect the current utilization
  * of the pool across all its CIDR ranges.
@@ -116,16 +113,6 @@ export type ExternalIPPoolSpec = Message<"osac.private.v1.ExternalIPPoolSpec"> &
    * @generated from field: osac.private.v1.IPFamily ip_family = 3;
    */
   ipFamily: IPFamily;
-
-  /**
-   * Backend strategy used to advertise IPs from this pool on the target cluster.
-   *
-   * Set by the system based on cluster configuration. Not user-configurable. Currently the
-   * only supported strategy is "metallb-l2" (MetalLB Layer 2 advertisement mode).
-   *
-   * @generated from field: string implementation_strategy = 4;
-   */
-  implementationStrategy: string;
 };
 
 /**
@@ -301,17 +288,6 @@ export enum ExternalIPPoolState {
    * @generated from enum value: EXTERNAL_IP_POOL_STATE_DELETING = 4;
    */
   EXTERNAL_IP_POOL_STATE_DELETING = 4,
-
-  /**
-   * The pool deletion has failed.
-   *
-   * The deprovision operation encountered an error and could not complete. The status.message
-   * field contains error details. Manual intervention may be required before retrying deletion.
-   * No CRD phase equivalent (follows the Subnet pattern for proto-level tracking).
-   *
-   * @generated from enum value: EXTERNAL_IP_POOL_STATE_DELETE_FAILED = 5;
-   */
-  EXTERNAL_IP_POOL_STATE_DELETE_FAILED = 5,
 }
 
 /**

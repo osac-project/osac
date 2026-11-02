@@ -261,12 +261,10 @@ export enum TenantConditionType {
   UNSPECIFIED = 0,
 
   /**
-   * Indicates whether all default networking resources (VirtualNetwork, Subnets, SecurityGroup, NATGateway)
-   * have reached READY state.
+   * Indicates whether the tenant's default VirtualNetwork, Subnet and SecurityGroup are READY, and, when provider
+   * networking is enabled, also its default NATGateway.
    *
-   * Status meanings:
-   * - True: All default networking resources are ready, or no default networking is configured
-   * - False: One or more default networking resources are pending or failed
+   * Reasons: AllResourcesReady, ReservedTenant, ProvisioningDisabled, ResourcesPending, ResourceFailed, Deleting.
    *
    * @generated from enum value: TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY = 1;
    */

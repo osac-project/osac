@@ -32,7 +32,7 @@ const makePool = (
   create(ExternalIPPoolSchema, {
     id,
     metadata: { name },
-    spec: { cidrs, ipFamily, implementationStrategy: 'metallb-l2' },
+    spec: { cidrs, ipFamily },
     status:
       state !== undefined
         ? {

@@ -28,14 +28,38 @@ not install the pilot chart into the hub cluster.
 
 ## Hardware and NICo preflight
 
+An earlier provisioning recording appears to show zero-DPU GB300 trays on a
+Flat VPC and a site `HostInband` network. Treat this as a hypothesis for the
+current hub: the recording does not establish the present Machine state,
+Tenant, allocations, VPC binding, or permitted test pool. BMC addresses shown
+there are not NICo Machine IDs. The host IP prefix and VLAN do not establish
+that an OSAC tenant Subnet exists or that tenant traffic is isolated.
+
 Ask the site owner for an approved test Machine or isolated pool, the NICo Site,
 tenant account and IdP organization, and a `Registered` compute allocation for
-the chosen Instance Type. Also obtain a `Registered` IP Block allocation and
-the tenant VPC plus Subnet ID (Ethernet virtualizer) or VPC Prefix ID (FNN).
-Confirm the network CIDR and choose a matching OSAC Subnet; the seeded
-`tenant1` OSAC Subnet is `10.200.0.0/20` and may not match the NICo network.
+the chosen Instance Type. Confirm the VPC's network virtualization type.
+For an Ethernet virtualizer or FNN VPC, obtain its `Registered` IP Block
+allocation and tenant Subnet or VPC Prefix ID; choose a matching OSAC Subnet.
+For a Flat VPC, confirm that each intended Machine is zero-DPU and its
+`HostInband` segment is bound to that VPC. NICo does not use a tenant Subnet or
+VPC Prefix in the Flat Instance request. OSAC still requires a Subnet
+attachment, so the pilot must define an explicit OSAC-to-Flat network mapping
+and label its networking limitation before enabling create. The seeded
+`tenant1` OSAC Subnet is `10.200.0.0/20`; do not assume it represents the
+recorded site network.
+
 Confirm the boot method: a NICo Operating System ID or a real iPXE script with
 reachable artifacts. An iPXE script that exits proves only NICo allocation.
+
+**Flat-network code gap:** `nico.steps.bare_metal_instance` currently requires
+exactly one NICo `subnet_id` or `vpc_prefix_id`, sends a physical `interfaces`
+entry, and reads the assigned IP from that entry. NICo requires
+`autoNetwork: true` and no request interfaces for a zero-DPU Flat Instance;
+its resolved IP appears in `status.network.interfaces`. Extend and test this
+mode, including an unambiguous mapping back to the single OSAC attachment,
+before creating an OSAC BMI on these trays. See NVIDIA's
+[Flat VPC guide](https://docs.nvidia.com/infra-controller/documentation/operations-day-2/managing-vp-cs/flat-vp-cs-and-zero-dpu-hosts)
+and [Instance create API](https://docs.nvidia.com/infra-controller/rest-api-reference/api-reference/instance/create-instance).
 
 The current NICo module requests an Instance Type; it does not request a
 Machine ID. NICo chooses an eligible Machine and the module records its ID
@@ -55,6 +79,13 @@ to run NICo's full cleanup workflow and identify whom to contact if the
 Machine does not return to unassigned `Ready`. Do not remove the BMI finalizer
 to work around unfinished NICo cleanup. NVIDIA documents the asynchronous
 [release-to-Ready cleanup](https://docs.nvidia.com/infra-controller/documentation/operations-day-2/tenant-lifecycle-cleanup).
+
+The recording's mTLS/gRPC access to NICo Core does not supply OSAC with NICo
+REST authorization. The BMI role calls REST with JWT bearer tokens; confirm
+the REST issuer, tenant and provider roles, and a secure credential handoff.
+The InfraEnv iPXE script shown for HostedCluster workers is a CaaS boot path.
+For a standalone BMaaS pilot, agree on the OS or iPXE artifact and on what
+installed-OS signal will count as success.
 
 ## Replay the OSAC control plane
 
@@ -141,13 +172,14 @@ make install-osac PLATFORM=kind PROFILE=dev-full NS=osac \
 kubectl -n osac get deployments
 ```
 
-Before creating a BMI, verify the OSAC and NICo Subnet CIDRs, the AWX credential
-IDs in the binding, NICo allocations, Machine state, and boot artifact. Create
-one BMI under the bound tenant. Save its OSAC UID, NICo Instance ID, and
-original NICo Machine ID. During deletion, OSAC must retain the BMI until NICo
-reports the Instance absent and that same Machine unassigned `Ready` with no
-blocking health report. Verify both sides independently. Treat a stuck
-finalizer as an investigation point; preserve the saved IDs for recovery.
+Before creating a BMI, verify the OSAC attachment's intended network mapping,
+the AWX credential IDs in the binding, NICo allocations, Machine state, and
+boot artifact. Create one BMI under the bound tenant. Save its OSAC UID, NICo
+Instance ID, and original NICo Machine ID. During deletion, OSAC must retain
+the BMI until NICo reports the Instance absent and that same Machine
+unassigned `Ready`, with no blocking health report. Verify both sides
+independently. Investigate a stuck finalizer and preserve the saved IDs for
+recovery.
 
 ## What still needs automation
 
@@ -159,4 +191,5 @@ secret-safe AWX credential and ConfigMap provisioning procedure for each
 OSAC-to-NICo tenant/Subnet binding. Numeric AWX credential IDs must be
 rediscovered if AWX is recreated. The live NVIDIA hardware flow remains
 untested until the site owner designates a safe pool and supplies tenant and
-boot inputs.
+boot inputs. If the hub uses Flat VPCs, the NICo module and OSAC network
+binding also need the Flat-mode work described above before a BMI create.

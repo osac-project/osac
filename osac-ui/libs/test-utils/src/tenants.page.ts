@@ -187,7 +187,13 @@ export const createTenant = async (
 
   // Save the generated credentials in a tenant-specific temporary file.
   const credentialsFile = tenantCredentialsFilePath(tenantName);
-  await mkdir(tenantCredentialsDirectoryPath(tenantName), { mode: 0o700 });
+  const credentialsDirectory = tenantCredentialsDirectoryPath(tenantName);
+  logProgress(
+    'tenant-credentials',
+    `Resetting the temporary credentials directory for tenant "${tenantName}".`,
+  );
+  await rm(credentialsDirectory, { force: true, recursive: true });
+  await mkdir(credentialsDirectory, { mode: 0o700 });
   try {
     await writeFile(
       credentialsFile,
@@ -200,7 +206,7 @@ export const createTenant = async (
       { encoding: 'utf8', flag: 'wx', mode: 0o600 },
     );
   } catch (error) {
-    await rmdir(tenantCredentialsDirectoryPath(tenantName)).catch(() => undefined);
+    await rm(credentialsDirectory, { force: true, recursive: true });
     throw error;
   }
 

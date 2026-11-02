@@ -92,6 +92,13 @@ def k8s_operations(state):
     return [operation for operation in state["operations"] if operation["module"] == "k8s"]
 
 
+def json_patch_operations(state):
+    return [
+        operation for operation in state["operations"]
+        if operation["module"] == "k8s_json_patch"
+    ]
+
+
 def secret_operations(state, name=None, operation_state=None):
     operations = [op for op in k8s_operations(state) if op["kind"] == "Secret"]
     if name is not None:
@@ -215,6 +222,37 @@ def test_delete_skips_deprovisioning_when_baremetalhost_has_no_image(tmp_path):
 
     assert result.returncode == 0, result.stdout
     assert all(operation["kind"] == "Secret" for operation in k8s_operations(state))
+    assert json_patch_operations(state) == []
+
+
+def test_delete_clears_generated_root_device_hint(tmp_path):
+    bmh = bmh_resource(state="provisioned", image_url=IMAGE_URL)
+    bmh["metadata"]["annotations"] = {
+        "osac.openshift.io/fallback-root-device": "/dev/vda"
+    }
+    bmh["spec"]["rootDeviceHints"] = {"deviceName": "/dev/vda"}
+
+    result, state = run_role(
+        tmp_path,
+        "unit_delete.yml",
+        {BMH_KEY: bmh},
+    )
+
+    assert result.returncode == 0, result.stdout
+    patches = json_patch_operations(state)
+    assert len(patches) == 1
+    assert patches[0]["kind"] == "BareMetalHost"
+    assert patches[0]["name"] == "test-bmh"
+    remove_paths = [
+        op["path"] for op in patches[0]["patch"] if op["op"] == "remove"
+    ]
+    assert remove_paths == [
+        "/spec/rootDeviceHints",
+        "/metadata/annotations/osac.openshift.io~1fallback-root-device",
+    ]
+    patched = state["resources"][BMH_KEY]
+    assert "rootDeviceHints" not in patched["spec"]
+    assert "osac.openshift.io/fallback-root-device" not in patched["metadata"]["annotations"]
 
 
 def test_delete_tolerates_already_absent_generated_secrets(tmp_path):

@@ -409,14 +409,14 @@ var _ = Describe("MCP server", func() {
 		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-client", userUsername)
 		listedTools, err := session.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(listedTools.Tools).To(HaveLen(8))
+		Expect(listedTools.Tools).To(HaveLen(9))
 		toolNames := make([]string, len(listedTools.Tools))
 		for index, tool := range listedTools.Tools {
 			toolNames[index] = tool.Name
 		}
 		Expect(toolNames).To(ConsistOf(
 			"check_connection", "list_resources", "get_resource", "create_network_resource",
-			"delete_network_resource", "create_compute_instance", "delete_compute_instance",
+			"expose_network_resource", "delete_network_resource", "create_compute_instance", "delete_compute_instance",
 			"update_compute_instance",
 		))
 

@@ -323,4 +323,152 @@ var _ = Describe("MCP network resources", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(securityGroupList.GetItems()).To(BeEmpty())
 	})
+
+	It("creates and deletes public exposure resources through the public API", func() {
+		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-exposure-client", userUsername)
+		networking := newNDClients()
+
+		virtualNetworkCIDR := ndVirtualNetworkCIDR()
+		createdVirtualNetwork, err := callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ResourceType: mcpserver.NetworkResourceTypeVirtualNetwork,
+				Name:         ndUniqueName("mcp-exposure-vn"),
+				IPv4Cidr:     virtualNetworkCIDR,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		virtualNetworkID = createdVirtualNetwork.ID
+		setComputeInstanceFixtureVirtualNetworkReady(ctx, virtualNetworks, virtualNetworkID)
+
+		pool := ndCreatePool(ctx, networking, ndPoolBase()+"/28")
+		ndSetPoolState(ctx, networking, pool.GetId(), privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY)
+
+		externalIPName := ndUniqueName("mcp-eip")
+		createdExternalIP, err := callMCPTool[mcpserver.ExposeNetworkResourceOutput](
+			ctx, session, "expose_network_resource", mcpserver.ExposeNetworkResourceInput{
+				ResourceType:     mcpserver.NetworkResourceTypeExternalIP,
+				Name:             externalIPName,
+				ExternalIPPoolID: pool.GetId(),
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(createdExternalIP.ResourceType).To(Equal(mcpserver.NetworkResourceTypeExternalIP))
+		Expect(createdExternalIP.ID).ToNot(BeEmpty())
+		Expect(createdExternalIP.Version).To(BeNumerically(">=", 0))
+		Expect(createdExternalIP.State).To(Equal("EXTERNAL_IP_STATE_PENDING"))
+		externalIPID := createdExternalIP.ID
+
+		externalIPResponse, err := networking.publicExternalIPs.Get(ctx, publicv1.ExternalIPsGetRequest_builder{
+			Id: externalIPID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		externalIP := externalIPResponse.GetObject()
+		Expect(externalIP.GetMetadata().GetName()).To(Equal(externalIPName))
+		Expect(externalIP.GetMetadata().GetTenant()).To(Equal(usersGroup))
+		Expect(externalIP.GetSpec().GetPool().GetId()).To(Equal(pool.GetId()))
+
+		externalIPList, err := callMCPTool[mcpserver.ListResourcesOutput](
+			ctx, session, "list_resources", mcpserver.ListResourcesInput{
+				ResourceType: mcpserver.ResourceTypeExternalIP,
+				Filter:       fmt.Sprintf("this.id == %q", externalIPID),
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(externalIPList.Items).To(ConsistOf(HaveField("ID", externalIPID)))
+		externalIPResource, err := callMCPTool[mcpserver.GetResourceOutput](
+			ctx, session, "get_resource", mcpserver.GetResourceInput{
+				ResourceType: mcpserver.ResourceTypeExternalIP,
+				ID:           externalIPID,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(externalIPResource.Resource).To(HaveKeyWithValue("id", externalIPID))
+
+		Expect(setExternalIPFixtureState(
+			ctx, networking.externalIPs, externalIPID, privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+		)).To(Succeed())
+
+		natGatewayName := ndUniqueName("mcp-nat")
+		createdNATGateway, err := callMCPTool[mcpserver.ExposeNetworkResourceOutput](
+			ctx, session, "expose_network_resource", mcpserver.ExposeNetworkResourceInput{
+				ResourceType:     mcpserver.NetworkResourceTypeNATGateway,
+				Name:             natGatewayName,
+				VirtualNetworkID: virtualNetworkID,
+				ExternalIPID:     externalIPID,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(createdNATGateway.ResourceType).To(Equal(mcpserver.NetworkResourceTypeNATGateway))
+		Expect(createdNATGateway.State).To(Equal("NAT_GATEWAY_STATE_PENDING"))
+		natGatewayID := createdNATGateway.ID
+
+		natGatewayResponse, err := networking.publicNATGateways.Get(ctx, publicv1.NATGatewaysGetRequest_builder{
+			Id: natGatewayID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		natGateway := natGatewayResponse.GetObject()
+		Expect(natGateway.GetMetadata().GetName()).To(Equal(natGatewayName))
+		Expect(natGateway.GetMetadata().GetTenant()).To(Equal(usersGroup))
+		Expect(natGateway.GetSpec().GetVirtualNetwork().GetId()).To(Equal(virtualNetworkID))
+		Expect(natGateway.GetSpec().GetExternalIp().GetId()).To(Equal(externalIPID))
+
+		natGatewayList, err := callMCPTool[mcpserver.ListResourcesOutput](
+			ctx, session, "list_resources", mcpserver.ListResourcesInput{
+				ResourceType: mcpserver.ResourceTypeNATGateway,
+				Filter:       fmt.Sprintf("this.id == %q", natGatewayID),
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(natGatewayList.Items).To(ConsistOf(HaveField("ID", natGatewayID)))
+		natGatewayResource, err := callMCPTool[mcpserver.GetResourceOutput](
+			ctx, session, "get_resource", mcpserver.GetResourceInput{
+				ResourceType: mcpserver.ResourceTypeNATGateway,
+				ID:           natGatewayID,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(natGatewayResource.Resource).To(HaveKeyWithValue("id", natGatewayID))
+
+		attachmentName := ndUniqueName("mcp-missing-eipa")
+		_, err = callMCPTool[mcpserver.ExposeNetworkResourceOutput](
+			ctx, session, "expose_network_resource", mcpserver.ExposeNetworkResourceInput{
+				ResourceType:    mcpserver.NetworkResourceTypeExternalIPAttachment,
+				Name:            attachmentName,
+				ExternalIPID:    "mcp-missing-eip",
+				ClusterID:       "mcp-missing-cluster",
+				ClusterEndpoint: mcpserver.NetworkClusterEndpointAPI,
+			},
+		)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`"category":"not_found"`))
+		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"NotFound"`))
+		Expect(err.Error()).To(ContainSubstring("is missing"))
+		attachments, err := networking.attachments.List(ctx, privatev1.ExternalIPAttachmentsListRequest_builder{
+			Filter: proto.String(fmt.Sprintf("this.metadata.name == %q", attachmentName)),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(attachments.GetItems()).To(BeEmpty())
+
+		deletedNATGateway, err := callMCPTool[mcpserver.DeleteNetworkResourceOutput](
+			ctx, session, "delete_network_resource", mcpserver.DeleteNetworkResourceInput{
+				ResourceType: mcpserver.NetworkResourceTypeNATGateway,
+				ID:           natGatewayID,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(deletedNATGateway.ID).To(Equal(natGatewayID))
+		Expect(cleanupNATGatewayFixture(
+			ctx, networking.publicNATGateways, networking.natGateways, natGatewayID,
+		)).To(Succeed())
+
+		deletedExternalIP, err := callMCPTool[mcpserver.DeleteNetworkResourceOutput](
+			ctx, session, "delete_network_resource", mcpserver.DeleteNetworkResourceInput{
+				ResourceType: mcpserver.NetworkResourceTypeExternalIP,
+				ID:           externalIPID,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(deletedExternalIP.ID).To(Equal(externalIPID))
+		Expect(cleanupExternalIPFixture(ctx, networking.externalIPs, externalIPID)).To(Succeed())
+	})
 })

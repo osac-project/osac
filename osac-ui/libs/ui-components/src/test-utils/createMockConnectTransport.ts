@@ -1,6 +1,7 @@
 import type { MessageInitShape } from '@bufbuild/protobuf';
 import { Code, ConnectError, type Transport, createRouterTransport } from '@connectrpc/connect';
 
+import type { SelfSubjectAccessReviewsCreateRequest } from '@osac/types';
 import {
   BareMetalInstanceCatalogItem,
   BareMetalInstanceCatalogItemsCreateRequest,
@@ -71,6 +72,7 @@ import {
   Secret,
   SecurityGroup,
   SelfSubjectAccessReviews,
+  SelfSubjectAccessReviewsCreateResponseSchema,
   ServiceTier,
   Subnet,
   SubnetsGetRequest,
@@ -198,7 +200,7 @@ import {
   StorageTiersListResponseSchema,
 } from '@osac/types/private';
 
-import { catalogItemMatchesListFilter } from '../api/v1/catalog-item-list-filter';
+import { catalogItemMatchesListFilter } from './catalog-item-list-filter';
 import { UnauthorizedError } from '../utils/unauthorizedError';
 
 export type MockApiFixtures = {
@@ -406,6 +408,11 @@ const matchesStorageTierActiveFilter = (
 };
 
 export type MockTransportOverrides = {
+  onSelfSubjectAccessReview?: (
+    req: SelfSubjectAccessReviewsCreateRequest,
+  ) =>
+    | MessageInitShape<typeof SelfSubjectAccessReviewsCreateResponseSchema>
+    | Promise<MessageInitShape<typeof SelfSubjectAccessReviewsCreateResponseSchema>>;
   onComputeInstanceCatalogItemCreate?: (
     req: ComputeInstanceCatalogItemsCreateRequest,
   ) =>
@@ -622,7 +629,8 @@ export const createMockConnectTransport = (
       });
 
       router.service(SelfSubjectAccessReviews, {
-        create: () => ({ object: { status: { allowed: true } } }),
+        create: (req) =>
+          overrides.onSelfSubjectAccessReview?.(req) ?? { object: { status: { allowed: true } } },
       });
 
       router.service(ComputeInstanceCatalogItems, {

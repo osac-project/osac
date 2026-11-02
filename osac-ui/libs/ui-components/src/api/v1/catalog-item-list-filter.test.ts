@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import { buildCatalogListFilter } from './catalog-item-list-filter';
 import {
   type CatalogListFilterableItem,
-  buildCatalogListFilter,
   catalogItemMatchesListFilter,
-} from './catalog-item-list-filter';
+} from '../../test-utils/catalog-item-list-filter';
 
 describe('buildCatalogListFilter', () => {
   it.each([

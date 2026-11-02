@@ -15,8 +15,6 @@ import { type ResourceSelectValue } from '../../Form/resourceSelectValue';
 type CatalogItemFieldsInit = NonNullable<
   MessageInitShape<typeof ClusterCatalogItemSchema>['fields']
 >;
-type NetworkFieldsInit = NonNullable<CatalogItemFieldsInit['network']>;
-type FieldPolicyInit<K extends keyof CatalogItemFieldsInit> = NonNullable<CatalogItemFieldsInit[K]>;
 
 const isEmptyString = (value: string) => !value.trim();
 const isEmptyResource = (value: ResourceSelectValue) => !value.id;
@@ -53,34 +51,22 @@ const buildClusterCatalogItemFieldsPayload = (
 ): CatalogItemFieldsInit => {
   const fields: CatalogItemFieldsInit = {};
 
-  const version = catalogFieldPolicyFromValue<
-    ResourceSelectValue,
-    ReturnType<typeof toVersionReference>,
-    FieldPolicyInit<'version'>
-  >(values.version, isEmptyResource, toVersionReference);
+  const version = catalogFieldPolicyFromValue(values.version, isEmptyResource, toVersionReference);
   if (version) {
     fields.version = version;
   }
 
-  const nodeSets = catalogFieldPolicyFromValue<
-    ClusterNodeSetRow[],
-    ReturnType<typeof toNodeSetMap>,
-    FieldPolicyInit<'nodeSets'>
-  >(values.nodeSets, isEmptyNodeSetList, toNodeSetMap);
+  const nodeSets = catalogFieldPolicyFromValue(values.nodeSets, isEmptyNodeSetList, toNodeSetMap);
   if (nodeSets) {
     fields.nodeSets = nodeSets;
   }
 
-  const podCidr = catalogFieldPolicyFromValue<
-    string,
-    ReturnType<typeof toTrimmedString>,
-    NonNullable<NetworkFieldsInit['podCidr']>
-  >(values.podCidr, isEmptyString, toTrimmedString);
-  const serviceCidr = catalogFieldPolicyFromValue<
-    string,
-    ReturnType<typeof toTrimmedString>,
-    NonNullable<NetworkFieldsInit['serviceCidr']>
-  >(values.serviceCidr, isEmptyString, toTrimmedString);
+  const podCidr = catalogFieldPolicyFromValue(values.podCidr, isEmptyString, toTrimmedString);
+  const serviceCidr = catalogFieldPolicyFromValue(
+    values.serviceCidr,
+    isEmptyString,
+    toTrimmedString,
+  );
   if (podCidr || serviceCidr) {
     fields.network = {
       ...(podCidr ? { podCidr } : {}),

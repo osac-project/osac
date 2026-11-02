@@ -109,10 +109,10 @@ describe('CatalogGeneralStep', () => {
   });
 
   describe('for a tenant-admin session', () => {
-    it('does not show a project field or scope cards when creating', () => {
+    it('shows a project field without scope cards when creating', () => {
       renderStep(false);
 
-      expect(screen.queryByRole('button', { name: 'Project' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Project' })).toBeInTheDocument();
       expect(screen.queryByRole('radiogroup', { name: 'Scope' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Tenant' })).not.toBeInTheDocument();
     });
@@ -173,6 +173,20 @@ describe('CatalogGeneralStep', () => {
       await user.click(screen.getByText('Tenant scoped'));
 
       expect(screen.getByRole('button', { name: 'Tenant' })).toBeInTheDocument();
+    });
+
+    it('does not show reserved system or shared tenants', async () => {
+      const { user } = renderStep(false, [
+        makeTenant('tenant-1', 'Tenant One'),
+        makeTenant('system', 'System'),
+        makeTenant('shared', 'Shared'),
+      ]);
+
+      await user.click(screen.getByRole('button', { name: 'Tenant' }));
+
+      expect(screen.getByRole('option', { name: 'Tenant One' })).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: 'System' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: 'Shared' })).not.toBeInTheDocument();
     });
 
     it('does not show the project field', () => {

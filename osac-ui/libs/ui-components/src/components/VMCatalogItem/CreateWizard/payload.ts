@@ -16,8 +16,6 @@ import type { ComputeInstanceDiskValues } from '../../vm/CreateWizard/fields';
 type CatalogItemFieldsInit = NonNullable<
   MessageInitShape<typeof ComputeInstanceCatalogItemSchema>['fields']
 >;
-type BootDiskFieldsInit = NonNullable<CatalogItemFieldsInit['bootDisk']>;
-type FieldPolicyInit<K extends keyof CatalogItemFieldsInit> = NonNullable<CatalogItemFieldsInit[K]>;
 
 const isEmptyString = (value: string) => !value.trim();
 const isEmptyResource = (value: ResourceSelectValue) => !value.id;
@@ -54,11 +52,11 @@ const buildComputeCatalogItemFieldsPayload = (
     fields.userDataSource = userDataSource;
   }
 
-  const bootDiskSizeGib = catalogFieldPolicyFromValue<
-    string,
-    number,
-    NonNullable<BootDiskFieldsInit['sizeGib']>
-  >(values.bootDiskSizeGib, isEmptyString, (value) => Number(toTrimmedString(value)));
+  const bootDiskSizeGib = catalogFieldPolicyFromValue(
+    values.bootDiskSizeGib,
+    isEmptyString,
+    (value) => Number(toTrimmedString(value)),
+  );
   const bootDiskStorageTier = catalogFieldPolicyFromValue(
     values.bootDiskStorageTier,
     isEmptyResource,
@@ -70,11 +68,11 @@ const buildComputeCatalogItemFieldsPayload = (
     };
   }
 
-  const additionalDisks = catalogFieldPolicyFromValue<
-    ComputeInstanceDiskValues[],
-    ReturnType<typeof toDiskListRef>,
-    FieldPolicyInit<'additionalDisks'>
-  >(values.additionalDisks, isEmptyDiskList, toDiskListRef);
+  const additionalDisks = catalogFieldPolicyFromValue(
+    values.additionalDisks,
+    isEmptyDiskList,
+    toDiskListRef,
+  );
   if (additionalDisks) {
     fields.additionalDisks = additionalDisks;
   }

@@ -27,14 +27,14 @@ import {
 import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
 
 import CatalogPage, { CATALOG_ITEMS_VIEW_KEY } from './CatalogPage';
-import {
-  type CatalogListFilterableItem,
-  catalogItemMatchesListFilter,
-} from '../../api/v1/catalog-item-list-filter';
 import BareMetalInstanceCatalogItemDetailPage from '../../components/BareMetalInstanceCatalogItem/Details/BareMetalInstanceCatalogItemDetailPage';
 import ClusterCatalogItemDetailPage from '../../components/ClusterCatalogItem/Details/ClusterCatalogItemDetailPage';
 import VMCatalogItemDetailPage from '../../components/VMCatalogItem/Details/VMCatalogItemDetailPage';
 import type { UserRole } from '../../shellTypes';
+import {
+  type CatalogListFilterableItem,
+  catalogItemMatchesListFilter,
+} from '../../test-utils/catalog-item-list-filter';
 import { wrapWithAuthInterceptor } from '../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 

@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import {
   Content,
   FormGroupLabelHelp,
@@ -13,7 +12,7 @@ import CatalogScopeField from './CatalogScopeField';
 import { useSession } from '../../hooks/use-session';
 import { useTranslation } from '../../hooks/useTranslation';
 import { GLOBAL_TENANT_VALUE } from '../catalog/catalogItemDisplay';
-import { InputField } from '../Form/InputField';
+import NameField from '../Form/NameField';
 import OsacForm from '../Form/OsacForm';
 import ProjectField from '../Form/ProjectField';
 import {
@@ -104,15 +103,7 @@ const CatalogGeneralStep = ({
   const { t } = useTranslation();
   const { role } = useSession();
   const isAdmin = role === 'admin';
-  const { values, setFieldValue } = useFormikContext<CatalogGeneralValues>();
-
-  // Global catalog items have no tenant: drop a stale selection the moment the
-  // author switches away from "Tenant scoped".
-  useEffect(() => {
-    if (values.scope === 'global' && values.metadata.tenant.id !== '') {
-      void setFieldValue('metadata.tenant', emptyResourceSelectValue());
-    }
-  }, [values.scope, values.metadata.tenant, setFieldValue]);
+  const { values } = useFormikContext<CatalogGeneralValues>();
 
   return (
     <Stack hasGutter>
@@ -138,17 +129,10 @@ const CatalogGeneralStep = ({
               </Content>
               {values.scope === 'tenant' && <TenantSelectField isDisabled={isEdit} />}
             </>
-          ) : isEdit ? (
+          ) : (
             <ProjectField isDisabled={isEdit} />
-          ) : null}
-          <InputField
-            name="metadata.name"
-            label={t('Name')}
-            fieldId="catalog-item-name"
-            isRequired
-            isDisabled={isEdit}
-            helperText={t('Name must be a valid DNS label (RFC 1035).')}
-          />
+          )}
+          <NameField isDisabled={isEdit} />
           <ResourceSelectField
             name="template"
             label={t('Provisioning template')}

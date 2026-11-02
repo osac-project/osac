@@ -5,7 +5,7 @@ import type { UserDataSource } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
 import type { CatalogFieldPolicyLike } from '../catalogItemPolicy';
-import { catalogUserDataValueFromPolicy } from '../catalogUserData';
+import { catalogUserDataFieldFromPolicy } from '../catalogUserData';
 
 interface CatalogUserDataDetailValueProps {
   policy: CatalogFieldPolicyLike<UserDataSource>;
@@ -14,7 +14,7 @@ interface CatalogUserDataDetailValueProps {
 const CatalogUserDataDetailValue = ({ policy }: CatalogUserDataDetailValueProps) => {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
-  const userData = catalogUserDataValueFromPolicy(policy);
+  const userData = catalogUserDataFieldFromPolicy(policy).value;
   const hasValue = userData.value.trim().length > 0;
 
   if (!hasValue) {

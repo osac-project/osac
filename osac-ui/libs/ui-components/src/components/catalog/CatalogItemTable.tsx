@@ -32,7 +32,7 @@ const displayReferenceName = (name: string | undefined): string => name || '-';
 
 const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups }) => {
   const { t } = useTranslation();
-  const { role, tenantId } = useSession();
+  const { role } = useSession();
   const nameLabel = t('Name');
   const statusLabel = t('Status');
   const configurationLabel = t('Configuration');
@@ -117,7 +117,7 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
               {role === 'tenant-user' ? (
                 <CatalogItemLaunchButton isDisabled={!item.published} catalogItem={item} />
               ) : (
-                <CatalogItemActionsMenu item={item} role={role} tenantId={tenantId} />
+                <CatalogItemActionsMenu item={item} role={role} />
               )}
             </Td>
           </Tr>

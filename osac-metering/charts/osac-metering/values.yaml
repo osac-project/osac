@@ -45,6 +45,17 @@ kafka:
   brokers: ""          # default: osac-kafka-kafka-bootstrap.osac-kafka.svc.cluster.local:9093
   clusterName: ""      # default: osac-kafka
   clusterNamespace: "" # default: osac-kafka
+  # Create the Strimzi KafkaUser and KafkaTopic objects for the in-cluster
+  # Kafka named above. Set false when the Kafka cluster is external (the
+  # umbrella chart's kafka.enabled=false): the users and topics must exist
+  # already, created outside the chart, because this cluster has no Strimzi
+  # to serve them.
+  strimziResources: true
+
+# Deployment variant, like the fulfillment-service chart's service.variant.
+# The echo adapter's OpenShift Route renders only with "openshift"; "kind" and
+# "vcluster" render none and leave ingress to the platform or the run setup.
+variant: openshift
 
 # The per-tenant heartbeat and dead-letter topics. Metering creates them when
 # it first serves a tenant, on the broker's default replication factor; this

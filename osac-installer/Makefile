@@ -5,15 +5,15 @@
 #
 # Usage:
 # Every deployment target requires PLATFORM, PROFILE, and NS. No exceptions.
-#   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
+#   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac
 #   make install-multicluster PLATFORM=openshift PROFILE=vmaas-ci NS=osac KUBECONFIG=... REMOTE_KUBECONFIG=...
 #   make prepare-remote-cluster NS=osac REMOTE_KUBECONFIG=...
-#   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|operator|bmf
+#   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac
+#   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac
+#   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac
+#   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac
+#   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac
+#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci  NS=osac  SUITE=all|fulfillment|operator|bmf
 #
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
 # control plane, then layers on the full local dev stack (KubeVirt/CDI/Multus, AWX,
@@ -73,10 +73,10 @@ ifeq ($(filter $(PLATFORM),kind openshift),)
 $(error PLATFORM=$(PLATFORM) is invalid; must be kind or openshift)
 endif
 ifndef PROFILE
-$(error PROFILE is required (dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci))
+$(error PROFILE is required (dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci|vcluster-ci))
 endif
-ifeq ($(filter $(PROFILE),dev dev-full vmaas-ci bmaas-ci bmaas-netbox-ci caas-ci full-ci),)
-$(error PROFILE=$(PROFILE) is invalid; must be dev, dev-full, vmaas-ci, bmaas-ci, bmaas-netbox-ci, caas-ci, or full-ci)
+ifeq ($(filter $(PROFILE),dev dev-full vmaas-ci bmaas-ci bmaas-netbox-ci caas-ci full-ci vcluster-ci),)
+$(error PROFILE=$(PROFILE) is invalid; must be dev, dev-full, vmaas-ci, bmaas-ci, bmaas-netbox-ci, caas-ci, full-ci, or vcluster-ci)
 endif
 ifndef NS
 $(error NS is required (namespace for OSAC instance, e.g. NS=osac))
@@ -84,6 +84,11 @@ endif
 ifeq ($(PLATFORM),kind)
 ifeq ($(filter $(PROFILE),dev dev-full),)
 $(error PLATFORM=kind only supports PROFILE=dev or PROFILE=dev-full)
+endif
+endif
+ifneq ($(filter install-infra uninstall-infra,$(MAKECMDGOALS)),)
+ifeq ($(PROFILE),vcluster-ci)
+$(error PROFILE=vcluster-ci installs no infrastructure: the outer cluster owns it. Install the infrastructure there with a vmaas-ci-like profile, and install-osac into the vcluster)
 endif
 endif
 ifneq ($(filter install,$(MAKECMDGOALS)),)
@@ -110,23 +115,33 @@ ifneq ($(PLATFORM),openshift)
 $(error install-multicluster requires PLATFORM=openshift)
 endif
 ifneq ($(PROFILE),vmaas-ci)
-$(error install-multicluster requires PROFILE=vmaas-ci)
+$(error install-multicluster requires PROFILE=vmaas-ci; a vcluster run prepares its outer cluster with the run setup and calls install-osac directly)
 endif
 ifndef REMOTE_KUBECONFIG
 $(error REMOTE_KUBECONFIG is required (workload cluster kubeconfig))
 endif
 endif
 ifneq ($(filter install-osac,$(MAKECMDGOALS)),)
+ifeq ($(PROFILE),vcluster-ci)
+ifndef REMOTE_KUBECONFIG
+$(error PROFILE=vcluster-ci runs in remote mode; REMOTE_KUBECONFIG (the outer cluster) is required)
+endif
+endif
 ifneq ($(strip $(REMOTE_KUBECONFIG)$(REMOTE_API_ADDRESS)),)
 ifneq ($(PLATFORM),openshift)
 $(error remote-cluster installation requires PLATFORM=openshift)
 endif
-ifneq ($(PROFILE),vmaas-ci)
-$(error remote-cluster installation requires PROFILE=vmaas-ci)
+ifeq ($(filter $(PROFILE),vmaas-ci vcluster-ci),)
+$(error remote-cluster installation requires PROFILE=vmaas-ci or PROFILE=vcluster-ci)
 endif
 ifeq ($(strip $(REMOTE_KUBECONFIG)),)
 $(error REMOTE_KUBECONFIG is required when REMOTE_API_ADDRESS is set)
 endif
+endif
+endif
+ifneq ($(filter install uninstall,$(MAKECMDGOALS)),)
+ifeq ($(PROFILE),vcluster-ci)
+$(error PROFILE=vcluster-ci installs no infrastructure, so the composite install does not apply; run install-osac directly)
 endif
 endif
 ifneq ($(filter install,$(MAKECMDGOALS)),)
@@ -536,7 +551,14 @@ ifneq ($(PLATFORM),kind)
 		osac.openshift.io/project=osac-aap \
 		-n $(NS) --overwrite
 	@bash -c 'source scripts/lib.sh && check_postgres_prerequisites "$(NS)" "$(INFRA_VALUES)"'
+	# CLUSTER_DOMAIN overrides the cluster read: a vcluster has no
+	# ingresses.config.openshift.io API to ask, so a run against one must
+	# carry the outer cluster's domain explicitly.
+ifneq ($(strip $(CLUSTER_DOMAIN)),)
+	$(eval DOMAIN := $(CLUSTER_DOMAIN))
+else
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
+endif
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }
 endif
 	@remote_cluster_helm_args=(); \

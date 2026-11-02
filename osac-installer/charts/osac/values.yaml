@@ -82,7 +82,12 @@ dbInit:
   host: "postgres.osac-infra.svc.cluster.local"
 
 # Kafka cluster coordinates for per-instance topic/user creation. Set enabled
-# to false when service.kafka.connection targets an external Kafka cluster.
+# to false when service.kafka.connection targets an external Kafka cluster:
+# the chart then renders no fulfillment KafkaUser, no KafkaTopics and no
+# kafka secret-copy hook, and service.kafka.connection must name a Secret that
+# already exists. The metering subchart needs the same switch,
+# metering.kafka.strimziResources=false, for its own KafkaUsers and
+# KafkaTopics.
 kafka:
   enabled: true
   clusterName: osac-kafka
@@ -158,6 +163,9 @@ operator:
 # --- Fulfillment Service ---
 service:
   enabled: true
+  # Deployment variant: "openshift" renders OpenShift Routes, "kind" renders
+  # Gateway API TLSRoutes, "vcluster" renders neither -- the CI run setup
+  # publishes the run's routes in the outer cluster around the vcluster.
   variant: openshift
   controller:
     # Enable full synchronization in fulfillment controllers.
@@ -369,6 +377,11 @@ ui:
 # revenue. The database wiring points at the secrets this chart's
 # workload-db-secrets template creates for the configured DB host.
 metering:
+  # Deployment variant, like service.variant above: the echo adapter's
+  # OpenShift Route renders only with "openshift". "kind" and "vcluster"
+  # render none and leave the echo adapter's ingress to the platform or the
+  # CI run setup.
+  variant: openshift
   image:
     repository: ghcr.io/osac-project/metering-service
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
@@ -469,6 +482,8 @@ bmf:
 # prerequisite is missing. The report is the ConfigMap <release>-preflight-report
 # and, on a failed render, the OSAC-PREFLIGHT-JSON line on stderr.
 # validation.enabled=false skips every check; the report still lists them.
+# One thing still stops the install in that mode: preflight.skipChecks naming
+# a check id that does not exist, because the skip list itself is broken.
 validation:
   enabled: true
 
@@ -483,6 +498,14 @@ preflight:
   #   skip:
   #     cert-issuer-ready: "the issuer is created by GitOps after this install"
   skip: {}
+  # Skip checks by id without reasons: a plain list for automation. Each
+  # skipped check is reported as skipped with "skipped by preflight.skipChecks"
+  # as its reason; prefer skip above when a human-readable reason is useful.
+  # An id that matches no check fails the install, so a typo cannot silently
+  # disable a check.
+  # Example:
+  #   skipChecks: [db-init-host-endpoints, default-storageclass]
+  skipChecks: []
 
 hubAccess:
   enabled: false

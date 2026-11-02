@@ -2,6 +2,8 @@ import type { FormikErrors } from 'formik';
 import type { TFunction } from 'i18next';
 import * as yup from 'yup';
 
+import { userDataSchema } from '@osac/ui-components/validation/user-data';
+
 import {
   catalogGeneralStepSchema,
   catalogLockedResourceField,
@@ -68,7 +70,7 @@ export const buildComputeCatalogStepSchema = (
     case 'access-init':
       return yup
         .object({
-          userData: yup.object({ locked: yup.boolean(), value: yup.string() }),
+          userData: yup.object({ locked: yup.boolean(), value: userDataSchema(t) }),
         })
         .test(
           'user-data-required-when-locked',

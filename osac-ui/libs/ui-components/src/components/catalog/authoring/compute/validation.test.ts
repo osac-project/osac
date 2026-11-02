@@ -42,4 +42,17 @@ describe('buildComputeCatalogStepSchema', () => {
       message: 'User data is required when locked',
     });
   });
+
+  it('rejects user data larger than 64 KB', async () => {
+    const schema = buildComputeCatalogStepSchema('access-init', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        userData: { locked: false, value: 'x'.repeat(65537) },
+      }),
+    ).rejects.toMatchObject({
+      path: 'userData.value',
+      message: 'Cloud-init must not exceed 64 KB.',
+    });
+  });
 });

@@ -212,6 +212,40 @@ while IFS= read -r infra_cmd; do
   esac
 done <<<"${infra_arg_cmds}"
 
+# Remote-cluster inputs: the gate must reject invalid static identifiers
+# before any cluster mutation -- install-osac's own re-check runs only after
+# install-infra and namespace creation have already changed the cluster.
+remote_bad_out="${TMP_DIR}/remote-bad.out" remote_bad_err="${TMP_DIR}/remote-bad.err"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install-osac \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    REMOTE_KUBECONFIG="${LOG}" REMOTE_KUBECONFIG_SECRET_NAME='Bad_Name' \
+    >"${remote_bad_out}" 2>"${remote_bad_err}"; then
+  fail "remote-identifier: install-osac succeeded with an invalid secret name"
+fi
+grep -q 'REMOTE_KUBECONFIG_SECRET_NAME must be a DNS subdomain' "${remote_bad_err}" \
+  || fail "remote-identifier: the failure did not name the identifier rule"
+if grep -Eq "${mutation_commands}" "${LOG}"; then
+  fail "remote-identifier: a cluster mutation ran despite invalid identifiers"
+fi
+
+# The gate's osac-chart render and install-osac's upgrade share the same
+# remote-cluster kubeconfig argument construction (REMOTE_CLUSTER_HELM_ARGS),
+# so the gate validates the final merged values the install applies.
+remote_plan="${TMP_DIR}/remote-args.plan"
+MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-osac \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    >"${remote_plan}" 2>/dev/null || fail "make -n install-osac (remote) failed"
+join_continuations <"${remote_plan}" | grep 'helm template osac ' \
+  | grep -q 'operator.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
+  || fail "validate-inputs: the gate render omits the remote-cluster args"
+join_continuations <"${remote_plan}" | grep 'helm upgrade --install osac ' \
+  | grep -q 'operator.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
+  || fail "install-osac: the upgrade omits the remote-cluster args"
+
 # install-devstack rejects a wrong profile at parse time, before the gate's
 # cluster lookups or renders, so the user sees the actual mistake.
 if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \

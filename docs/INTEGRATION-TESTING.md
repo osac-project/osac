@@ -416,7 +416,11 @@ and read-only OpenShift lookups for the cluster domain and version). Invalid
 inputs abort the install before any cluster mutation or readiness wait. The
 gate validates static values only; prerequisites that must already exist are
 the render-time preflight's concern, and resources the installer creates are
-allowed to become ready. `scripts/test-input-validation.sh`
+allowed to become ready. With `REMOTE_KUBECONFIG` set, the gate also checks
+the static `REMOTE_KUBECONFIG_SECRET_NAME`/`REMOTE_KUBECONFIG_SECRET_KEY`
+identifiers before any cluster mutation, and the osac-chart render carries
+the same remote kubeconfig `--set-string` arguments the installation
+applies. `scripts/test-input-validation.sh`
 (`make input-validation-test`, part of `make helm-validate`) proves the
 wiring with stubbed `helm`/`oc`/`kubectl`/`kind` and the schema rejections
 with a real Helm render; CI runs it as a step of the `Lint Helm charts
@@ -424,8 +428,8 @@ with a real Helm render; CI runs it as a step of the `Lint Helm charts
 
 | Tier | Command | Real | Faked or not covered |
 |---|---|---|---|
-| Unit with command stubs, [DEV] OSAC-7050 | `make input-validation-test` from `osac-installer/` | The Makefile's target graph and recipe expansion for every installation entry point, serial and `make -j`, against a throwaway copy of the installer | The cluster and Helm itself: `helm`, `oc`, `kubectl` and `kind` are stubs, so schema evaluation, chart rendering and the deployed install are not covered here. |
-| Helm contract, [DEV] OSAC-7050 | `./scripts/test-input-validation.sh` section B (same target) | Offline `helm template` of the umbrella and infra charts with CI values; the exact schema-rejection messages (field and constraint) for the non-negative bounds and closed objects; valid boundary and default renders | No cluster; the gate's OpenShift values assembly (domain/version lookups) runs only in the stubbed section. |
+| Unit with command stubs, [DEV] OSAC-7050 | `make input-validation-test` from `osac-installer/` | The Makefile's target graph and recipe expansion for every installation entry point, serial and `make -j`, against a throwaway copy of the installer; `INFRA_HELM_ARGS` parity across the OpenShift install's renders and upgrades; invalid remote-cluster identifiers aborting before any mutation; the shared remote kubeconfig argument construction in the gate render and the upgrade | The cluster and Helm itself: `helm`, `oc`, `kubectl` and `kind` are stubs, so schema evaluation, chart rendering and the deployed install are not covered here. |
+| Helm contract, [DEV] OSAC-7050 | `./scripts/test-input-validation.sh` section B (same target) | Offline `helm template` of the umbrella and infra charts with CI values; the exact schema-rejection messages (field and constraint) for the non-negative bounds and closed objects; valid boundary and default renders; the `bmaas-netbox-ci` profile's raw lookup failure and its gate-shaped render with the offline token placeholder | No cluster; the gate's OpenShift values assembly (domain/version lookups) runs only in the stubbed section. |
 
 ### Install preflight (OSAC-6561)
 

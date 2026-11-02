@@ -733,6 +733,13 @@ during `helm upgrade`, and resources the installer itself creates are allowed
 to become ready afterwards. `make validate-inputs` runs the same validation
 standalone without installing.
 
+Remote-cluster inputs are part of the gate: with `REMOTE_KUBECONFIG` set,
+`REMOTE_KUBECONFIG_SECRET_NAME` and `REMOTE_KUBECONFIG_SECRET_KEY` are
+checked against the Kubernetes Secret name/key grammars before any cluster
+mutation, and the osac-chart render carries the same remote kubeconfig
+`--set-string` arguments the installation applies. The kubeconfig file
+itself is only read (and staged into its Secret) at install time.
+
 ### Monitor Progress
 
 ```bash

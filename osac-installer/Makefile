@@ -48,11 +48,27 @@ REMOTE_STORAGE_CLASS ?= lvms-vg1
 REMOTE_KUBECONFIG_SECRET_NAME ?= osac-remote-kubeconfig
 REMOTE_KUBECONFIG_SECRET_KEY ?= kubeconfig
 # Freeze command-line values without expanding Make expressions in them. The
-# shell scripts validate them before using them, and the Helm args below are
-# built as a quoted Bash array.
+# gate's validate_remote_kubeconfig_secret check (and install-osac's re-check)
+# validate them before any reaches a command; the DNS-subdomain and Secret-key
+# grammars cannot produce shell metacharacters, so the shared Helm args below
+# expand as a word list.
 override REMOTE_KUBECONFIG_SECRET_NAME := $(value REMOTE_KUBECONFIG_SECRET_NAME)
 override REMOTE_KUBECONFIG_SECRET_KEY := $(value REMOTE_KUBECONFIG_SECRET_KEY)
 export REMOTE_KUBECONFIG_SECRET_NAME REMOTE_KUBECONFIG_SECRET_KEY
+
+# Remote-cluster kubeconfig Helm flags, shared by the input-validation gate's
+# osac-chart render and install-osac's upgrade so both see the same merged
+# values. They only name Secret metadata; the kubeconfig file itself is
+# staged by scripts/stage-remote-cluster-secret.sh at install time.
+REMOTE_CLUSTER_HELM_ARGS :=
+ifneq ($(strip $(REMOTE_KUBECONFIG)),)
+REMOTE_CLUSTER_HELM_ARGS := \
+	--set-string operator.remoteClusterKubeconfig=/var/run/secrets/remote/$(REMOTE_KUBECONFIG_SECRET_KEY) \
+	--set-string operator.remoteClusterKubeconfigSecretName=$(REMOTE_KUBECONFIG_SECRET_NAME) \
+	--set-string operator.remoteClusterKubeconfigSecretKey=$(REMOTE_KUBECONFIG_SECRET_KEY) \
+	--set-string aap.configAsCode.remoteClusterKubeconfigSecretName=$(REMOTE_KUBECONFIG_SECRET_NAME) \
+	--set-string aap.configAsCode.remoteClusterKubeconfigSecretKey=$(REMOTE_KUBECONFIG_SECRET_KEY)
+endif
 
 # Work around HTTP/2 stream resets from proxy.golang.org during container
 # builds (see osac-test-infra#543).  Override with `make test GODEBUG=` to
@@ -556,6 +572,15 @@ ifeq ($(PROFILE),dev-full)
 validate-inputs: helm-devstack-deps
 endif
 endif
+# Remote-cluster identifiers are static inputs: the gate rejects an invalid
+# REMOTE_KUBECONFIG_SECRET_NAME/KEY before any cluster mutation. install-osac
+# re-checks them, but only after install-infra and namespace creation have
+# already changed the cluster.
+ifneq ($(strip $(REMOTE_KUBECONFIG)),)
+	@bash -c 'source scripts/lib.sh && \
+		validate_remote_kubeconfig_secret "$(REMOTE_KUBECONFIG_SECRET_NAME)" "$(REMOTE_KUBECONFIG_SECRET_KEY)"' \
+	|| { echo "ERROR: invalid remote-cluster inputs; no cluster changes were made. Fix REMOTE_KUBECONFIG_SECRET_NAME/KEY and retry." >&2; exit 1; }
+endif
 ifeq ($(PLATFORM),kind)
 	@helm template osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
@@ -568,6 +593,7 @@ ifeq ($(PLATFORM),kind)
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		--set-string bmf.netbox.tokenValue=$(NETBOX_OFFLINE_TOKEN) \
+		$(REMOTE_CLUSTER_HELM_ARGS) \
 		$(INSTANCE_HELM_ARGS) \
 		$(EXTRA_HELM_ARGS) >/dev/null \
 	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
@@ -608,6 +634,7 @@ else
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		--set-string bmf.netbox.tokenValue=$(NETBOX_OFFLINE_TOKEN) \
+		$(REMOTE_CLUSTER_HELM_ARGS) \
 		--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) \
 		--set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) \
 		--set global.clusterDomain=$(DOMAIN) \
@@ -648,17 +675,9 @@ ifneq ($(PLATFORM),kind)
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }
 endif
-	@remote_cluster_helm_args=(); \
-	if [[ -n "$${REMOTE_KUBECONFIG:-}" ]]; then \
+	@if [[ -n "$${REMOTE_KUBECONFIG:-}" ]]; then \
 		source scripts/lib.sh; \
 		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"; \
-		remote_cluster_helm_args=( \
-			--set-string "operator.remoteClusterKubeconfig=/var/run/secrets/remote/$${REMOTE_KUBECONFIG_SECRET_KEY}" \
-			--set-string "operator.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME}" \
-			--set-string "operator.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY}" \
-			--set-string "aap.configAsCode.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME}" \
-			--set-string "aap.configAsCode.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY}" \
-		); \
 	fi; \
 	helm upgrade --install osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
@@ -666,7 +685,7 @@ endif
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac --set ui.externalHostname=$(UI_HOSTNAME)) \
 		$(INSTANCE_HELM_ARGS) \
-		$(EXTRA_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) "$${remote_cluster_helm_args[@]}" \
+		$(EXTRA_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) $(REMOTE_CLUSTER_HELM_ARGS) \
 		--wait --timeout 40m
 .PHONY: uninstall-osac
 uninstall-osac: ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= required)

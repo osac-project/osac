@@ -246,14 +246,17 @@ const CatalogPage = () => {
     [selectedServiceTier],
   );
 
-  const { vms, bms, clusters, isLoading, error, hasSuccessfulQuery, typeCounts } = useCatalogItems(
-    filterCriteria,
-    serviceTierFilter,
-    false,
-  );
+  const { vms, bms, clusters, isLoading, error, hasSuccessfulQuery, typeCounts, totalsError } =
+    useCatalogItems(filterCriteria, serviceTierFilter, false);
 
   const data = [...vms, ...clusters, ...bms];
-  const selectedTotalItems = selectedServiceTier ? typeCounts[selectedServiceTier] : 0;
+  const selectedTotalError = selectedServiceTier ? totalsError[selectedServiceTier] : undefined;
+  const selectedTotalItems =
+    selectedServiceTier === undefined
+      ? 0
+      : selectedTotalError
+        ? undefined
+        : typeCounts[selectedServiceTier];
 
   const shouldLoadResourceLookups =
     data.length > 0 && !isLoading && !error && (viewType === 'cards' || selectedKind !== 'vm');
@@ -286,12 +289,14 @@ const CatalogPage = () => {
   };
 
   const filteredText =
-    data.length === selectedTotalItems
-      ? t('{{count}} catalog item', { count: selectedTotalItems })
-      : t('{{shown}} of {{count}} catalog item', {
-          shown: data.length,
-          count: selectedTotalItems,
-        });
+    selectedTotalItems === undefined
+      ? undefined
+      : data.length === selectedTotalItems
+        ? t('{{count}} catalog item', { count: selectedTotalItems })
+        : t('{{shown}} of {{count}} catalog item', {
+            shown: data.length,
+            count: selectedTotalItems,
+          });
 
   return (
     <ListPage
@@ -318,6 +323,7 @@ const CatalogPage = () => {
                 <ToolbarItem>
                   <CatalogServiceTierFilter
                     selected={selectedServiceTier}
+                    totalsError={totalsError}
                     typeCounts={typeCounts}
                     onSelect={(tier) => {
                       const kind = catalogKindForServiceTier(tier);

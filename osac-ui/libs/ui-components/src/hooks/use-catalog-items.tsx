@@ -20,6 +20,7 @@ export const useCatalogItems = (
   fetchAllTypes: boolean,
 ): {
   error: unknown;
+  totalsError: Partial<Record<ServiceTier, unknown>>;
   isLoading: boolean;
   hasSuccessfulQuery: boolean;
   vms: ComputeInstanceCatalogItem[];
@@ -90,6 +91,11 @@ export const useCatalogItems = (
 
   return {
     error,
+    totalsError: {
+      [ServiceTier.VMAAS]: vmsTotalQuery.error,
+      [ServiceTier.CAAS]: clustersTotalQuery.error,
+      [ServiceTier.BMAAS]: bmsTotalQuery.error,
+    },
     isLoading,
     hasSuccessfulQuery,
     vms: shouldFetchKind(ServiceTier.VMAAS) ? (vmsQuery.data?.items ?? []) : [],

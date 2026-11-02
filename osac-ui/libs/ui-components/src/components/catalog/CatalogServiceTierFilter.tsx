@@ -8,12 +8,14 @@ import { useTranslation } from '../../hooks/useTranslation';
 
 interface CatalogServiceTierFilterProps {
   selected: ServiceTier | undefined;
+  totalsError: Partial<Record<ServiceTier, unknown>>;
   typeCounts: Record<ServiceTier, number>;
   onSelect: (value: ServiceTier) => void;
 }
 
 const CatalogServiceTierFilter = ({
   selected,
+  totalsError,
   typeCounts,
   onSelect,
 }: CatalogServiceTierFilterProps) => {
@@ -38,7 +40,7 @@ const CatalogServiceTierFilter = ({
   return (
     <ToggleGroup aria-label={t('Filter catalog by resource type')}>
       {catalogTypeFilters.map((option) => {
-        const count = typeCounts[option.value];
+        const count = totalsError[option.value] ? undefined : typeCounts[option.value];
 
         return (
           <ToggleGroupItem
@@ -46,9 +48,11 @@ const CatalogServiceTierFilter = ({
             text={
               <Flex spaceItems={{ default: 'spaceItemsSm' }} flexWrap={{ default: 'nowrap' }}>
                 <FlexItem>{option.label}</FlexItem>
-                <FlexItem>
-                  <Label isCompact>{count}</Label>
-                </FlexItem>
+                {count !== undefined ? (
+                  <FlexItem>
+                    <Label isCompact>{count}</Label>
+                  </FlexItem>
+                ) : null}
               </Flex>
             }
             buttonId={`catalog-type-filter-${option.value}`}

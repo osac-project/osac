@@ -181,6 +181,20 @@ describe('VMCatalogItemWizard', () => {
     expect(screen.getAllByRole('separator')).toHaveLength(2);
   });
 
+  it('marks locked boot disk fields as required', async () => {
+    const { user } = renderWizard();
+
+    await fillGeneralStep(user, 'my-item');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    const switches = await screen.findAllByRole('switch');
+    await user.click(switches[0]);
+    await user.click(switches[1]);
+
+    expect(screen.getAllByText('*')).toHaveLength(2);
+  });
+
   it('shows the Access & Initial run step with text-only user data', async () => {
     const { user } = renderWizard();
 

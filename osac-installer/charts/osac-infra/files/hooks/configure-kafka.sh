@@ -4,12 +4,6 @@ set -euo pipefail
 KAFKA_NS=osac-kafka
 LISTENER_TLS_SECRET=osac-kafka-listener-tls
 
-# Metering readers' lag comes from the Kafka Exporter PodMonitor in this
-# namespace. OpenShift user workload monitoring only scrapes a namespace
-# carrying this label; the label is inert on a cluster without it.
-echo "Labeling ${KAFKA_NS} for user workload monitoring..."
-oc label namespace "${KAFKA_NS}" openshift.io/user-monitoring=true --overwrite
-
 wait_for_listener_tls() {
   echo "Waiting for Kafka listener TLS secret ${LISTENER_TLS_SECRET}..."
   local deadline=$((SECONDS + 600))

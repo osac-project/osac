@@ -63,7 +63,7 @@ respective areas.
 | NetworkClass step (`files/network-class-step.py`) | Unit with a fake fulfillment API | `make network-class-step-test` |
 | OpenBao security context, podSecurityContext, or Kind/OpenShift UID handling | Helm contract | `make openbao-security-context-test` |
 | `evpn` values, EVPN ConfigMap, or configure-evpn hook | Helm contract | `make evpn-render-test` |
-| Kafka exporter, its PodMonitor, or the `osac-kafka` monitoring label | Unit (mocked cluster) | `helm unittest charts/osac-infra` (helm-unittest plugin; CI pins v1.2.1 and runs the suite in the `helm-unit` leg) renders `spec.kafkaExporter` and the PodMonitor, and asserts both are absent without Kafka or the monitoring CRD; the hook's namespace label and a live exporter are not checked |
+| Kafka exporter or its PodMonitor | Unit (mocked cluster) | `make helm-infra-deps && helm unittest charts/osac-infra` (helm-unittest plugin; CI pins v1.2.1 and runs the suite in the `helm-unit` leg) renders `spec.kafkaExporter` and the PodMonitor, and asserts both are absent without Kafka or the monitoring CRD; a live exporter is not checked |
 | Install preflight engine, catalog, report schema, or `preflight.*` values | Unit (mocked cluster) | `helm unittest charts/osac` (helm-unittest plugin; CI pins v1.2.1) |
 | `metering.readers` values, schema, umbrella passthrough, or reserved names | Unit (mocked cluster) | `helm unittest -f 'tests/metering_readers*_test.yaml' charts/osac` (the suites also run in the full `helm unittest charts/osac`) |
 | Install preflight rendering contract, hook log policy, or CSI hook deadlines | Helm contract | `uv run --script scripts/test-preflight-render.py` |
@@ -87,6 +87,7 @@ pre-commit run --all-files
 make mce-render-test
 make fulfillment-trust-render-test
 helm unittest charts/osac
+make helm-infra-deps   # the infra chart suites need its vendored dependencies
 helm unittest charts/osac-infra
 helm unittest ../osac-metering/charts/osac-metering
 uv run --script scripts/test-preflight-render.py

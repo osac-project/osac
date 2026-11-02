@@ -29,7 +29,7 @@ metering:
 ```
 
 Apply the change with the installer's supported path, which builds the chart
-dependencies and applies all three layers:
+dependencies and installs the platform layer:
 
 ```sh
 make -C osac-installer install-osac PLATFORM=openshift PROFILE=full-ci NS=osac
@@ -131,6 +131,7 @@ it again.
 ## Revoke the reader
 
 Remove the entry and run the installer again. Strimzi deletes the `KafkaUser`,
-its password Secret, and its ACLs. The running example logs the authorization
-error from its next fetch, prints the totals it has, and exits non-zero instead
-of waiting for the idle timeout. Nothing in OSAC restarts.
+its password Secret, and its ACLs. Any consumer-group error stops the example:
+it logs the error, prints the totals it has, and exits non-zero. That includes
+the authorization error a revoked reader gets on its next fetch. Nothing in
+OSAC restarts.

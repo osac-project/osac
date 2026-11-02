@@ -860,14 +860,15 @@ jobs:
       test-infra-ref: main
       test-ref: ${{ needs.prepare.outputs.temp-branch }}
       # This pipeline only runs via schedule/workflow_dispatch against
-      # main, same safe WIF context as the regular e2e-*-full-install.yml
-      # callers' own enable-ai-diagnostic gating -- see that input's
-      # description in osac-test-infra for the full reasoning. Without
-      # this, a failed e2e run only gets a generic failure Slack ping (see
-      # notify-failure below) with no diagnosis; workflow_run-based Phase 2
-      # doesn't cover this pipeline either, since it tracks a top-level
-      # caller workflow's own name, not this reusable workflow.
-      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
+      # main or a release-* branch, same safe WIF context as the regular
+      # e2e-*-full-install.yml callers' own enable-ai-diagnostic gating --
+      # see that input's description in osac-test-infra for the full
+      # reasoning. Without this, a failed e2e run only gets a generic
+      # failure Slack ping (see notify-failure below) with no diagnosis;
+      # workflow_run-based Phase 2 doesn't cover this pipeline either,
+      # since it tracks a top-level caller workflow's own name, not this
+      # reusable workflow.
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
   e2e-caas-test:
     name: E2E validation (caas)
@@ -886,7 +887,7 @@ jobs:
       test-infra-ref: main
       test-ref: ${{ needs.prepare.outputs.temp-branch }}
       # See e2e-vmaas-test's identical input above for why this is set.
-      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
   e2e-bmaas-test:
     name: E2E validation (bmaas)
@@ -906,7 +907,7 @@ jobs:
       test-infra-ref: main
       test-ref: ${{ needs.prepare.outputs.temp-branch }}
       # See e2e-vmaas-test's identical input above for why this is set.
-      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
   # -------------------------------------------------------------------
   # Promote and publish (per component) — for each of the 7 mono-repo

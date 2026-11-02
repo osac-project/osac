@@ -22,7 +22,7 @@ name: CI
 
 on:  # yamllint disable-line rule:truthy
   pull_request:
-    branches: [main]
+    branches: [main, 'release-*']
   merge_group:
 
 # A new push to a pull request cancels the run of the previous commit. Merge

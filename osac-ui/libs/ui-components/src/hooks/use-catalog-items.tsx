@@ -69,13 +69,7 @@ export const useCatalogItems = (
     clustersTotalQuery.isLoading ||
     bmsTotalQuery.isLoading;
 
-  const error =
-    vmsQuery.error ||
-    clustersQuery.error ||
-    bmsQuery.error ||
-    vmsTotalQuery.error ||
-    clustersTotalQuery.error ||
-    bmsTotalQuery.error;
+  const error = vmsQuery.error || clustersQuery.error || bmsQuery.error;
 
   const fetchedQueries = [
     { enabled: shouldFetchKind(ServiceTier.VMAAS), query: vmsQuery },

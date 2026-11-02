@@ -30,6 +30,17 @@ name: OSAC Promote to Production
 # itself is read-only and ungated: there's no reason to make a human
 # approve before even checking whether promotion is possible.
 #
+# That manual setup MUST happen before this workflow is ever dispatched,
+# not just "at some point": GitHub auto-creates an environment the first
+# time a workflow run references one by name, with NO protection rules
+# (no required reviewers) unless one already exists under that name. A
+# premature first dispatch would silently create an unprotected
+# "production" environment and sail straight through promote-image/
+# promote-chart with no approval at all -- the opposite of the gate this
+# workflow exists to provide. Confirm the environment already has
+# required reviewers configured (Settings -> Environments -> production)
+# before the first-ever dispatch, not after.
+#
 # cloud-extensions-prod/osac-charts-prod do not exist in Konflux yet
 # (tracked under OSAC-1090, a GitLab MR outside this repo) -- this
 # workflow cannot succeed until that lands. resolve-and-verify's

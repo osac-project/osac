@@ -252,6 +252,14 @@ endif
 # keeps its existing direct Kind/container-tool behavior.
 KIND_RUNTIME_REQUIRED := $(if $(filter true,$(HOST_IS_MAC_ARM)),true,$(if $(filter dev-full,$(PROFILE)),true,false))
 
+ifeq ($(PLATFORM)/$(PROFILE)/$(KIND_RUNTIME_REQUIRED),kind/dev/false)
+ifeq ($(strip $(KIND_EXPERIMENTAL_PROVIDER)),)
+ifneq ($(shell command -v podman 2>/dev/null),)
+override export KIND_EXPERIMENTAL_PROVIDER := podman
+endif
+endif
+endif
+
 # Helm 4 moved post-renderers into plugins; Helm 3 still accepts an executable path.
 HELM_MAJOR := $(shell version=$$(helm version --short 2>/dev/null) || exit; printf '%s\n' "$$version" | sed -nE 's/^v([0-9]+).*/\1/p')
 # Only meaningful to compare when HELM_MAJOR is 3 -- Helm 4 always postdates
@@ -371,10 +379,7 @@ else ifeq ($(PROFILE),dev-full)
 	@$(KIND_RUNTIME_CMD) check
 	@$(KIND_RUNTIME_CMD) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
 else
-	@if [[ -z "$${KIND_EXPERIMENTAL_PROVIDER:-}" ]] && command -v podman >/dev/null 2>&1; then \
-		export KIND_EXPERIMENTAL_PROVIDER=podman; \
-	fi; \
-	if kind get nodes --name $(KIND_CLUSTER_NAME) | grep -q .; then \
+	@if kind get nodes --name $(KIND_CLUSTER_NAME) | grep -q .; then \
 		echo "Kind cluster '$(KIND_CLUSTER_NAME)' already exists"; \
 	else \
 		echo "Creating Kind cluster '$(KIND_CLUSTER_NAME)'..."; \

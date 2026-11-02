@@ -132,6 +132,21 @@ fi
         self.write_command("kind", """
 printf 'kind %s %s\n' "${MOCK_AS_ROOT:-0}" "$*" >> "$MOCK_LOG"
 printf 'kind context provider=%s host=%s connection=%s\n' "${KIND_EXPERIMENTAL_PROVIDER:-unset}" "${CONTAINER_HOST:-unset}" "${CONTAINER_CONNECTION:-unset}" >> "$MOCK_LOG"
+if [[ "${MOCK_PROVIDER_STATE:-0}" == 1 ]]; then
+  provider="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
+  state="$MOCK_PID_DIR/cluster-$provider"
+  printf 'provider=%s %s\\n' "$provider" "$*" >> "$MOCK_LOG"
+  case "$1 $2" in
+    'create cluster') touch "$state" ;;
+    'get nodes') if [[ -f "$state" ]]; then echo osac-dev-control-plane; fi ;;
+    'load docker-image')
+      docker image inspect "$3"
+      [[ -f "$state" ]] || { echo 'ERROR: no nodes found for cluster' >&2; exit 1; }
+      docker save "$3" >/dev/null ;;
+    'delete cluster') rm -f "$state" ;;
+  esac
+  exit 0
+fi
 if [[ "$*" == 'get nodes --name osac-dev' ]]; then
   if [[ "$MOCK_KIND_NODES_FAILURE" == 1 ]]; then
     printf '%s\n' "$MOCK_KIND_NODES"
@@ -496,6 +511,53 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
         self.assert_success(self.run_direct_infra())
         self.assertIn("kind context provider=podman host=unix:///test-podman.sock connection=unset", self.commands())
         self.assertIn("podman socket update --pids-limit 65536 osac-dev-control-plane", self.commands())
+
+    def test_direct_provider_survives_separate_load_and_delete_invocations(self):
+        self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
+        self.env["MOCK_PROVIDER_STATE"] = "1"
+        self.env["CONTAINER_TOOL"] = "docker"
+        self.write_command("ginkgo", 'echo "application test stub" >> "$MOCK_LOG"')
+        self.assert_success(self.run_direct_infra())
+        cluster = self.directory / "cluster-podman"
+        self.assertTrue(cluster.exists())
+        args = ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER),
+                f"OSAC_CHART={self.directory / 'chart'}", "PLATFORM=kind", "PROFILE=dev", "NS=osac"]
+        result = subprocess.run(args + ["test", "SUITE=operator"], env=self.env,
+                                text=True, capture_output=True, timeout=15)
+        self.assert_success(result)
+        self.assertIn("provider=podman load docker-image localhost/osac-operator:it --name osac-dev",
+                      self.commands())
+        self.assertIn("docker image inspect localhost/osac-operator:it", self.commands())
+        self.assertIn("docker save localhost/osac-operator:it", self.commands())
+        self.assertEqual(self.commands().count("application test stub"), 2)
+        result = subprocess.run(args + ["uninstall-infra"], env=self.env,
+                                text=True, capture_output=True, timeout=15)
+        self.assert_success(result)
+        self.assertFalse(cluster.exists())
+        self.assertFalse(any(cmd.startswith("provider=docker ") for cmd in self.commands()))
+
+    def test_direct_provider_export_reaches_recursive_make_and_honors_overrides(self):
+        self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
+        probe = self.directory / "provider.mk"
+        probe.write_text("parent:\n\t$(MAKE) -f Makefile -f " + str(probe)
+                         + " child\nchild:\n\t@echo provider=$${KIND_EXPERIMENTAL_PROVIDER-unset}\n")
+        for selection, expected in ((None, "podman"), ("", "podman"),
+                                    ("docker", "docker"), ("nerdctl", "nerdctl")):
+            with self.subTest(selection=selection):
+                args = ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER),
+                        "-f", "Makefile", "-f", str(probe), "parent", "PLATFORM=kind",
+                        "PROFILE=dev", "NS=osac"]
+                if selection is not None:
+                    args.append(f"KIND_EXPERIMENTAL_PROVIDER={selection}")
+                result = subprocess.run(args, env=self.env, text=True, capture_output=True, timeout=15)
+                self.assert_success(result)
+                self.assertIn(f"provider={expected}\n", result.stdout)
+
+    def test_reusable_ci_pins_provider_for_make_and_raw_kind_steps(self):
+        workflow = (REPO / ".github/workflows/tests.yml").read_text()
+        job = workflow.split("jobs:\n  run:\n", 1)[1].split("    steps:", 1)[0]
+        self.assertRegex(job, r"(?m)^    env:\n      KIND_EXPERIMENTAL_PROVIDER: docker$")
+        self.assertIn("kind load docker-image localhost/fulfillment-service:it --name osac-dev", workflow)
 
     def test_direct_non_podman_selection_has_no_pid_operations(self):
         for provider in ("docker", "nerdctl", "unset"):

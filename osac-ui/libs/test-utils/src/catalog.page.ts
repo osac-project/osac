@@ -44,9 +44,11 @@ export const expectCatalogItemListed = async (
       .filter({ hasText: label });
 
     await expect(resourceGroup).toHaveCount(1);
-    await expect(resourceGroup.locator(...CatalogMainPage.catalogItemResourceValue)).toHaveText(
-      value,
-    );
+    await expect(
+      resourceGroup
+        .locator(...CatalogMainPage.catalogItemResourceValue)
+        .getByText(value, { exact: true }),
+    ).toHaveText(value);
   }
 
   await expect(catalogItemCard.getByText('Storage', { exact: true })).toHaveCount(0);

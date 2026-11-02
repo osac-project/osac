@@ -24,6 +24,18 @@
 #   _remote_kubeconfig_insecure          — remains the LVMS CaaS-install signal used by its
 #                                          direct OLM and LVMCluster operations
 
+- name: "Reset per-provider output facts before dispatch"
+  # These are host facts, so they outlive the loop iteration that set them. A
+  # provider role that fails to write its output would otherwise inherit the
+  # previous provider's value — accumulating another provider's tenant config
+  # under its own key, or re-appending StorageClass names it never produced.
+  # tenant_config is nulled rather than emptied so "provider produced nothing"
+  # stays distinguishable from "provider produced an empty mapping": the
+  # accumulator below skips null, letting setup.yaml's validation fail the run.
+  ansible.builtin.set_fact:
+    storage_provider_tenant_config: null
+    storage_provider_storage_class_names: []
+
 - name: "Compute filtered tiers for current provider"
   ansible.builtin.set_fact:
     _computed_provider_tiers: >-

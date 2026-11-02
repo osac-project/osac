@@ -1,0 +1,24 @@
+---
+# Placeholder. Real FlashBlade provisioning lands with OSAC-5017.
+#
+# Refuses loudly rather than returning an empty tenant config. The dispatcher
+# has no provider allowlist — it resolves a provider purely by whether
+# osac.templates.{provider}_storage exists (see storage_provider/tasks/main.yaml)
+# — so registering this role is what makes `provider: pure` dispatchable at all.
+# An empty mapping here would satisfy storage_provider/tasks/setup.yaml's "did
+# not set the required output fact" validation and record a tenant as
+# provisioned with no FlashBlade resources behind it. Until OSAC-5017 lands,
+# failing is the correct outcome, and it preserves the pre-registration
+# behaviour of aborting on a pure tier.
+#
+# Receives from the dispatcher:
+#   _provider_tiers                — tiers with provider: pure
+#   _provider_backend_connections  — connection details for those tiers' backend_ids
+
+- name: Fail because pure_storage setup is not yet implemented
+  ansible.builtin.fail:
+    msg: >-
+      pure_storage setup is not yet implemented, see OSAC-5017 (Realm checkout
+      and FlashBlade provisioning) and OSAC-5018 (CSI credential and
+      StorageClass creation).
+      Tiers: {{ _provider_tiers | default([]) | map(attribute='name') | list }}

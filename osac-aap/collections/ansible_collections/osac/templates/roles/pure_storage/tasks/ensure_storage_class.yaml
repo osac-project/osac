@@ -1,0 +1,21 @@
+---
+# Placeholder. Real CSI credential and StorageClass creation lands with OSAC-5018.
+#
+# Refuses loudly rather than returning an empty StorageClass list. The
+# dispatcher already resets storage_provider_storage_class_names to [] before
+# each dispatch, so a successful no-op here is indistinguishable from a provider
+# that genuinely produced nothing: the run would publish an empty result and
+# report cluster storage as ready with no StorageClass behind it. Until
+# OSAC-5018 lands, failing is the correct outcome.
+#
+# Receives from the dispatcher:
+#   _provider_tiers                — tiers with provider: pure
+#   _provider_backend_connections  — connection details for those tiers' backend_ids
+
+- name: Fail because pure_storage ensure_storage_class is not yet implemented
+  ansible.builtin.fail:
+    msg: >-
+      pure_storage ensure_storage_class is not yet implemented, see OSAC-5018
+      (CSI credential and StorageClass creation); Realm checkout and FlashBlade
+      provisioning land with OSAC-5017.
+      Tiers: {{ _provider_tiers | default([]) | map(attribute='name') | list }}

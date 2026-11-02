@@ -4,6 +4,7 @@ import {
   CATALOG_RESOURCE_EMPTY_DISPLAY,
   catalogFieldPolicyBehavior,
   catalogFieldPolicyIsConfigured,
+  catalogReferenceLabel,
   catalogResourceHasDisplayValue,
 } from './catalogFieldPolicyDisplay';
 
@@ -19,5 +20,10 @@ describe('catalogFieldPolicyDisplay', () => {
   it('treats only non-empty resource labels as displayable', () => {
     expect(catalogResourceHasDisplayValue('RHEL 10')).toBe(true);
     expect(catalogResourceHasDisplayValue(CATALOG_RESOURCE_EMPTY_DISPLAY)).toBe(false);
+  });
+
+  it('returns undefined when a resource reference has no name', () => {
+    expect(catalogReferenceLabel({ id: 'resource-1' })).toBeUndefined();
+    expect(catalogReferenceLabel({ id: 'resource-1', name: 'RHEL 10' })).toBe('RHEL 10');
   });
 });

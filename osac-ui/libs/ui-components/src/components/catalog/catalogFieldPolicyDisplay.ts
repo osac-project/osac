@@ -47,7 +47,7 @@ export const catalogReferenceLabel = (
   if (!reference) {
     return undefined;
   }
-  return reference.name || '';
+  return reference.name || undefined;
 };
 
 export const CATALOG_RESOURCE_EMPTY_DISPLAY = '—';

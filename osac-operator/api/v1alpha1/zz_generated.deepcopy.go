@@ -410,6 +410,13 @@ func (in *ComputeInstanceSpec) DeepCopyInto(out *ComputeInstanceSpec) {
 		*out = make([]DiskSpec, len(*in))
 		copy(*out, *in)
 	}
+	if in.DiskVolumeIDs != nil {
+		in, out := &in.DiskVolumeIDs, &out.DiskVolumeIDs
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.Gpu != nil {
 		in, out := &in.Gpu, &out.Gpu
 		*out = new(GpuSpec)

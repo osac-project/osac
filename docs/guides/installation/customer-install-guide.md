@@ -11,6 +11,8 @@ Container Platform cluster by using the OpenShift CLI (`oc`) and Helm. This
 guide covers the VMaaS, CaaS, and BMaaS services and assumes that your
 platform administrators have prepared the prerequisite Operators and external
 services listed in [Section 2](#2-prerequisites).
+For prerequisite setup instructions, see the
+[Helm Deployment Guide](helm-deployment-guide.md) before continuing.
 
 ## Contents
 

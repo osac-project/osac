@@ -1,0 +1,36 @@
+---
+# Post-install hook: called by ocp_small after cluster is provisioned.
+# Orchestrates deploy only: operators → cluster → MaaS → external models.
+# Verification is DECOUPLED — run playbook_osac_verify_maas_deployment.yml
+# separately (deploy never triggers testing).
+# Uses admin_kubeconfig from the parent pipeline (retrieved at step 5).
+
+- name: Verify admin_kubeconfig is available
+  ansible.builtin.assert:
+    that:
+      - admin_kubeconfig is defined
+      - admin_kubeconfig | length > 0
+    fail_msg: >-
+      admin_kubeconfig is not set. In production, this is provided by the
+      ocp_small pipeline. For local testing, set KUBECONFIG env var
+      or pass admin_kubeconfig as a playbook variable.
+
+- name: Validate role inputs (CR-grounded, run-once; earliest point on the AAP path)
+  ansible.builtin.include_tasks: validate_inputs.yaml
+  when: not (_maas_inputs_validated | default(false))
+
+- name: Install platform operators (BOM)
+  ansible.builtin.include_tasks: install_operators.yaml
+
+- name: Configure cluster (domain, observability, hardware profiles)
+  ansible.builtin.include_tasks: configure_cluster.yaml
+
+- name: Configure MaaS platform (0..n tenants)
+  ansible.builtin.include_tasks: configure_maas.yaml
+  when: ocp_4_20_ai_maas_enable_maas | default(true) | bool
+
+- name: Configure external models
+  ansible.builtin.include_tasks: configure_external_models.yaml
+  when:
+    - ocp_4_20_ai_maas_enable_maas | default(true) | bool
+    - ocp_4_20_ai_maas_external_models | default([]) | length > 0

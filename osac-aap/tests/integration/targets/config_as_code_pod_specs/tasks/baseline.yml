@@ -52,6 +52,12 @@
           - "_pod_spec is search('storage-operations-ig')"
         fail_msg: Expected storage-operations-ig references in pod spec
 
+    - name: Assert compute-instance pod spec uses the default service account
+      ansible.builtin.assert:
+        that:
+          - _pod.spec.serviceAccountName == 'osac-sa'
+        fail_msg: Compute-instance pod spec must use osac-sa by default
+
 - name: Compute-instance pod spec with remote kubeconfig
   hosts: localhost
   gather_facts: false
@@ -110,6 +116,12 @@
         fail_msg: >-
           Storage operations must keep their isolated optional credentials and
           omit the remote kubeconfig mount when no secret is configured.
+
+    - name: Assert storage-operations pod spec uses the default service account
+      ansible.builtin.assert:
+        that:
+          - _storage_pod.spec.serviceAccountName == 'osac-sa'
+        fail_msg: Storage-operations pod spec must use osac-sa by default
 
 - name: Storage operations pod spec with remote kubeconfig
   hosts: localhost

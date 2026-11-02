@@ -38,7 +38,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import env, poll_until, run, run_unchecked
+from tests.e2e.core.runner import CommandFailed, env, poll_until, run, run_unchecked
 
 pytestmark = [
     pytest.mark.regression,
@@ -279,7 +279,29 @@ def _wait_for_bundle_in_job_pod(k8s: K8sClient, pod_name: str, expected_bundle: 
     assert actual_hash == expected_hash, f"{pod_name} mounted the wrong Netris CA bundle"
 
 
-def _cleanup_cluster(cli: OsacCLI, grpc: GRPCClient, k8s: K8sClient, uuid: str, name: str) -> None:
+def _cluster_id_by_name(grpc: GRPCClient, name: str) -> str:
+    """Find the probe ClusterOrder by its unique name after a failed create.
+
+    A create call can time out after the server persisted the object and still
+    return no ID; the name is the only handle left for cleanup.
+    """
+    for cluster_id in grpc.list_cluster_ids():
+        try:
+            cluster = grpc.get_cluster(cluster_id=cluster_id)
+        except subprocess.CalledProcessError:
+            continue
+        if cluster.get("object", {}).get("metadata", {}).get("name") == name:
+            return cluster_id
+    return ""
+
+
+def _cleanup_cluster(
+    cli: OsacCLI, grpc: GRPCClient, k8s: K8sClient, uuid: str, name: str, requested_name: str
+) -> None:
+    if not uuid:
+        uuid = _cluster_id_by_name(grpc, requested_name)
+    if not uuid:
+        return
     cli.delete_cluster(uuid=uuid)
     if not name:
         name = k8s.get_cluster_order_name(uuid=uuid, checked=False)
@@ -306,12 +328,12 @@ def _exercise_cluster_fulfillment_ca(
     """
     name = unique_name("netris-ca-probe")
     pull_secret = unique_name("netris-ca-probe-pull")
-    cli.create_secret(
-        name=pull_secret, from_files={".dockerconfigjson": caas["pull_secret_path"]}, secret_type="pull-secret"
-    )
     uuid = ""
     cluster_order = ""
     try:
+        cli.create_secret(
+            name=pull_secret, from_files={".dockerconfigjson": caas["pull_secret_path"]}, secret_type="pull-secret"
+        )
         uuid = cli.create_cluster(
             template=caas["template"],
             name=name,
@@ -326,10 +348,17 @@ def _exercise_cluster_fulfillment_ca(
         _wait_for_bundle_in_job_pod(k8s, pod["metadata"]["name"], expected_bundle)
     finally:
         try:
-            if uuid:
-                _cleanup_cluster(cli, grpc, k8s, uuid, cluster_order)
+            _cleanup_cluster(cli, grpc, k8s, uuid, cluster_order, name)
         finally:
-            cli.delete_secret(name=pull_secret)
+            try:
+                cli.delete_secret(name=pull_secret)
+            except CommandFailed as exc:
+                # The Secret is already gone when create_secret failed before
+                # the API server stored it; do not mask the original error.
+                message = str(exc).lower()
+                missing = ("not found", "doesn't exist", "no objects of type")
+                if not any(marker in message for marker in missing):
+                    raise
 
 
 def test_netris_ca_lifecycle(

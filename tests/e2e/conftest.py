@@ -26,6 +26,7 @@ from tests.e2e.core.keycloak_admin import (
 from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, poll_until, run, run_unchecked
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
 @pytest.fixture(scope="session")
@@ -255,7 +256,7 @@ def ensure_tenants(private_grpc: GRPCClient) -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def _wait_for_default_subnets_ready(
-    ensure_jwt_users: None, setup_organization_memberships: None, grpc: GRPCClient
+    ensure_jwt_users: None, setup_organization_memberships: None, grpc: GRPCClient, jwt_tenant: str
 ) -> None:
     """Wait for tenant-default subnets to reach READY in the fulfillment database.
 
@@ -286,6 +287,8 @@ def _wait_for_default_subnets_ready(
         delay=2,
         description="at least one subnet to appear in gRPC",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.TENANT,
+        resource_id=jwt_tenant,
     )
     for subnet_id in subnet_ids:
         wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)

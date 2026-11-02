@@ -16,6 +16,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.regression
 
@@ -106,6 +107,8 @@ def test_gpu_compute_instance(
             retries=30,
             delay=2,
             description=f"{ci_name} Starting",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=ci_name,
         )
 
         # Wait for VM namespace to be assigned
@@ -115,6 +118,8 @@ def test_gpu_compute_instance(
             retries=30,
             delay=2,
             description=f"{ci_name} VM namespace",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=ci_name,
         )
 
         # Wait for AAP to create the VM with GPU hostDevices on the virt cluster
@@ -124,6 +129,8 @@ def test_gpu_compute_instance(
             retries=60,
             delay=5,
             description=f"{ci_name} VM hostDevices",
+            resource_kind=WaitResourceKind.VIRTUAL_MACHINE,
+            resource_id=ci_name,
         )
         assert any(d.get("deviceName") == GPU_SPEC["resource_name"] for d in host_devices), (
             f"VM hostDevices should contain {GPU_SPEC['resource_name']}: {host_devices}"

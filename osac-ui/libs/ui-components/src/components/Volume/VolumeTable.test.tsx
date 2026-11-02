@@ -48,10 +48,12 @@ describe('VolumeTable', () => {
     expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
       'Name',
       'State',
+      'Project',
       'Storage Tier',
       'Size',
       'Access Mode',
       'Created',
+      '',
     ]);
   });
 
@@ -84,12 +86,6 @@ describe('VolumeTable', () => {
     renderTable([makeVolume({ id: 'v-1', storageTier: 'premium-ssd' })]);
 
     expect(screen.getByText('premium-ssd')).toBeInTheDocument();
-  });
-
-  it('shows the empty state when no volumes are provided', () => {
-    renderTable([]);
-
-    expect(screen.getByText('No volumes found')).toBeInTheDocument();
   });
 
   it('navigates to the detail route when the name link is clicked', async () => {

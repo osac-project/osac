@@ -695,3 +695,93 @@ def test_client_fails_closed_on_unknown_record_shape(monkeypatch, raw):
 
     with pytest.raises(netris_eip.NetrisExternalIPError):
         client.list_subnets()
+
+
+# ---------------------------------------------------------------------------
+# Provider answers and reservations no other case reaches
+# ---------------------------------------------------------------------------
+
+
+def test_select_address_skips_reservations_below_and_above_the_hosts():
+    assert netris_eip.select_address("10.20.0.0/30", ["10.20.0.0/32"]) == "10.20.0.1"
+    assert netris_eip.select_address("10.20.0.0/30", ["10.20.0.8/32"]) == "10.20.0.1"
+
+
+GOOD_RECORD = {
+    "id": 5, "name": "reservation", "prefix": "10.20.0.1/32", "purpose": "nat",
+    "sites": [{"id": 1}], "tenant": {"id": 7},
+}
+
+
+@pytest.mark.parametrize(
+    ("record", "message"),
+    [
+        ("not-a-record", "malformed subnet record"),
+        ({**GOOD_RECORD, "id": True}, "numeric id"),
+        ({**GOOD_RECORD, "name": ""}, "omits its name"),
+        ({**GOOD_RECORD, "prefix": None}, "omits its prefix"),
+        ({**GOOD_RECORD, "purpose": 3}, "omits its purpose"),
+        ({**GOOD_RECORD, "sites": []}, "omits its sites"),
+        ({**GOOD_RECORD, "sites": ["x"]}, "omits its sites"),
+        ({**GOOD_RECORD, "sites": [{"id": "1"}]}, "omits its site id"),
+        ({**GOOD_RECORD, "tenant": 7}, "omits its tenant"),
+        ({**GOOD_RECORD, "tenant": {"id": True}}, "omits its tenant id"),
+        ({**GOOD_RECORD, "prefix": "10.20.0.1/24"}, "malformed prefix"),
+        ({**GOOD_RECORD, "prefix": "fd00::1/128"}, "must be an IPv4 prefix"),
+    ],
+)
+def test_a_malformed_provider_record_is_refused(record, message):
+    with pytest.raises(netris_eip.NetrisExternalIPError, match=message) as caught:
+        netris_eip._normalize_subnet_record(record)
+    assert caught.value.category == "malformed_response"
+
+
+def test_a_good_provider_record_is_normalized():
+    assert netris_eip._normalize_subnet_record(GOOD_RECORD) == {
+        "id": 5, "name": "reservation", "prefix": "10.20.0.1/32", "purpose": "nat", "site_id": 1, "tenant_id": 7,
+    }
+
+
+def test_a_list_response_without_data_is_malformed():
+    client = netris_eip.NetrisSubnetClient(None, "https://netris.example", "cookie")
+    client._request = lambda *_args, **_kwargs: {"data": {"not": "a list"}}
+    with pytest.raises(netris_eip.NetrisExternalIPError, match="omits its data list") as caught:
+        client.list_subnets()
+    assert caught.value.category == "malformed_response"
+
+
+@pytest.mark.parametrize(
+    ("record", "message"),
+    [
+        ("not-a-record", "must be a dictionary"),
+        ({"name": ""}, "omits its name"),
+        ({"name": RESERVATION_NAME, "prefix": 5}, "prefix must be a string"),
+        ({"name": RESERVATION_NAME, "prefix": "10.20.0.0/31"}, "canonical /32"),
+    ],
+)
+def test_an_unusable_reservation_is_refused(record, message):
+    request = netris_eip.validate_request(make_resource(), make_pool(), "external_ip.allocate", RESERVATION_NAME)
+    with pytest.raises(ValueError, match=message):
+        netris_eip.owned_address(request, [record], NETRIS_SITE_ID, NETRIS_TENANT_ID)
+
+
+class NeverObserved:
+    """A provider that accepts every create but never lists the reservation."""
+
+    def __init__(self):
+        self.created = []
+
+    def list_subnets(self):
+        return []
+
+    def create_subnet(self, name, prefix, site_id, tenant_id):
+        self.created.append(prefix)
+
+
+def test_an_allocation_that_never_shows_up_does_not_converge():
+    request = netris_eip.validate_request(make_resource(), make_pool(), "external_ip.allocate", RESERVATION_NAME)
+    client = NeverObserved()
+    with pytest.raises(netris_eip.NetrisExternalIPError) as caught:
+        netris_eip.reconcile(request, client, NETRIS_SITE_ID, NETRIS_TENANT_ID, delay_seconds=0)
+    assert caught.value.category == "exhausted_attempts"
+    assert len(client.created) == netris_eip.MAX_ALLOCATE_ATTEMPTS

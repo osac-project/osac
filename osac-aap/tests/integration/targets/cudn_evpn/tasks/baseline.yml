@@ -22,7 +22,12 @@
 #     VM by its ID, return the VM namespace; an attachment on a Subnet that does
 #     not own the hub network is final;
 #   - deletes run in order, remove only objects with their owner labels, and
-#     succeed when the object is absent or was never created.
+#     succeed when the object is absent or was never created;
+#   - cases_hub_states.yaml: every state the hub can show (a VTEP or a network
+#     that never gets ready, objects held in deletion by a finalizer, objects of
+#     someone else, drift), which this play sets as OVN-Kubernetes would;
+#   - cases_api_faults.yaml: API errors and dropped connections, injected by
+#     fixtures/kube/fault_proxy.py between kubernetes.core and Kind.
 # No AAP, operator or OVN-Kubernetes is involved.
 - name: The cudn_evpn Kubernetes Manager
   hosts: localhost
@@ -114,6 +119,40 @@
     ce_crds:
       - {kind: ClusterUserDefinedNetwork, plural: clusteruserdefinednetworks}
       - {kind: VTEP, plural: vteps}
+    ce_ns_policies: /apis/networking.k8s.io/v1/namespaces/*/networkpolicies
+    ce_cudns: /apis/k8s.ovn.org/v1/clusteruserdefinednetworks
+    # cases_api_faults.yaml: the job, the request that fails and the error.
+    # kubernetes.core.k8s and k8s_info report no HTTP status, so their errors
+    # only name the step; k8s_json_patch reports it.
+    ce_fault_cases:
+      - {label: fault-vn-read-503, task: create_virtual_network, key: "GET /api/v1/namespaces/osac-vn-*",
+         search: 'step "Read the VirtualNetwork namespace" failed;'}
+      - {label: fault-vn-read-dropped, task: create_virtual_network, key: "GET /api/v1/namespaces/osac-vn-*", mode: drop,
+         search: 'step "Read the VirtualNetwork namespace" failed;'}
+      - {label: fault-vn-create-conflict, task: create_virtual_network, vn: vn_n, key: "PATCH /api/v1/namespaces/osac-vn-*",
+         status: 409, reason: Conflict, search: 'step "Create the VirtualNetwork namespace" failed;'}
+      - {label: fault-vn-baseline-503, task: create_virtual_network,
+         key: "PUT {{ ce_ns_policies }}/osac-baseline-deny",
+         search: 'step "Create or restore the baseline deny policy" failed;'}
+      - {label: fault-vn-delete-500, task: delete_virtual_network, key: "DELETE /api/v1/namespaces/osac-vn-*",
+         status: 500, reason: InternalError, search: 'step "Delete the hub object" failed;'}
+      - {label: fault-subnet-claim-conflict, task: create_subnet, vn: vn_n, subnet: s_n,
+         key: "PATCH {{ ce_cudns }}/osac-vn-*", status: 409, reason: Conflict,
+         search: 'step "Claim the hub network for this Subnet" failed;'}
+      - {label: fault-subnet-delete-503, task: delete_subnet, key: "DELETE {{ ce_cudns }}/osac-vn-*",
+         search: 'step "Delete the hub object" failed;'}
+      - {label: fault-sg-rules-conflict, task: create_security_group, key: "PATCH {{ ce_ns_policies }}/osac-sg-*",
+         status: 422, reason: Invalid,
+         search: 'a concurrent change to a hub object conflicted with step "Patch the SecurityGroup policy" \(HTTP 422'}
+      - {label: fault-sg-delete-503, task: delete_security_group, key: "DELETE {{ ce_ns_policies }}/osac-sg-*",
+         search: 'step "Delete the hub object" failed;'}
+      - {label: fault-attach-conflict, task: apply_network_attachment, key: "PATCH {{ ce_ns_policies }}/osac-sg-*",
+         status: 409, reason: Conflict,
+         search: 'a concurrent change to a hub object conflicted with step "Patch the SecurityGroup policy" \(HTTP 409'}
+      - {label: fault-attach-503, task: apply_network_attachment, key: "PATCH {{ ce_ns_policies }}/osac-sg-*",
+         search: 'step "Patch the SecurityGroup policy" failed \(Kubernetes API: HTTP 503'}
+      - {label: fault-detach-list-503, task: delete_network_attachment, key: "GET {{ ce_ns_policies }}",
+         search: 'step "List the SecurityGroup policies of the VirtualNetwork" failed;'}
   tasks:
     - name: Look for existing OVN-Kubernetes CRDs
       kubernetes.core.k8s_info:
@@ -157,10 +196,36 @@
           {{ dict(ce_names | zip(ce_names | map('regex_replace', '^', sft.run ~ '-') | map('to_uuid'))) }}
         ce_hub: "osac-vn-{{ ('vn1' | regex_replace('^', sft.run ~ '-')) | to_uuid }}"
       vars:
-        ce_names: [vn1, vn2, vn3, vn_never, s1, s2, s3, s_never, sg1, sg_never, vm1, vm2]
+        ce_names: [vn1, vn2, vn3, vn_h, vn_p, vn_t, vn_n, vn_never, s1, s2, s3, s_h, s_t, s_n, s_never,
+                   sg1, sg_h, sg_f, sg_never, vm1, vm2, vm_h]
+
+    - name: Name the hub network of the hub state cases
+      ansible.builtin.set_fact:
+        ce_hub_h: "osac-vn-{{ ce_id.vn_h }}"
 
     - name: Run the cases
       block:
+        # ---------------------------------------- before OVN-Kubernetes is there
+        # kubernetes.core caches API discovery in TMPDIR, per server: a directory
+        # of its own makes the job see this hub as it is now, also on a rerun.
+        - name: Give the job an empty discovery cache
+          ansible.builtin.file:
+            path: "{{ sft.root }}/discovery"
+            state: directory
+            mode: "0700"
+
+        - name: Fail create_subnet on a hub without the VTEP API as retryable
+          ansible.builtin.include_tasks: run_task.yaml
+          vars:
+            sft_label: subnet-create-no-vtep-api
+            sft_env: {TMPDIR: "{{ sft.root }}/discovery"}
+            sft_expect: retryable
+            sft_message_search: "the VTEP API \\(k8s.ovn.org/v1 VTEP\\) is not installed on the hub"
+            ce_task: create_subnet
+            ce_vn_id: "{{ ce_id.vn_n }}"
+            ce_subnet_id: "{{ ce_id.s_n }}"
+            sft_job: "{{ ce_subnet_job }}"
+
         # ------------------------------------------------- fake hub CRDs
         - name: Install the fake OVN-Kubernetes CRDs
           kubernetes.core.k8s:
@@ -849,7 +914,43 @@
         - name: Assert the VirtualNetwork namespace and its policies are gone
           ansible.builtin.assert: {that: ce_obj | length == 0, quiet: true}
 
+        - name: Drive every state of a hub object
+          ansible.builtin.include_tasks: cases_hub_states.yaml
+
+        - name: Change the SecurityGroup policy so that a rerun must patch it
+          ansible.builtin.include_tasks: hub.yaml
+          vars:
+            ce_hub_steps:
+              - json:
+                  api: networking.k8s.io/v1
+                  kind: NetworkPolicy
+                  name: "osac-sg-{{ ce_id.sg_h }}"
+                  ns: "{{ ce_hub_h }}"
+                  patch: [{op: replace, path: /spec/ingress, value: []}]
+
+        - name: Inject API failures
+          ansible.builtin.include_tasks: cases_api_faults.yaml
+
       always:
+        - name: Stop the fault proxy
+          ansible.builtin.command:
+            argv: [pkill, -f, "fault_proxy.py --kubeconfig .* --port-file {{ sft.root }}/proxy-port"]
+          failed_when: false
+          changed_when: false
+
+        - name: Let go of objects a failed case held in deletion
+          kubernetes.core.k8s:
+            state: patched
+            merge_type: merge
+            definition:
+              apiVersion: "{{ item.api }}"
+              kind: "{{ item.kind }}"
+              metadata: {name: "{{ item.name }}", finalizers: []}
+          loop:
+            - {api: v1, kind: Namespace, name: "osac-vn-{{ ce_id.vn_t }}"}
+            - {api: k8s.ovn.org/v1, kind: ClusterUserDefinedNetwork, name: "{{ ce_hub_h }}"}
+          failed_when: false
+
         - name: Remove the test namespaces
           kubernetes.core.k8s:
             state: absent
@@ -857,7 +958,7 @@
             kind: Namespace
             name: "osac-vn-{{ ce_id[item] }}"
             wait: true
-          loop: [vn1, vn2, vn3]
+          loop: [vn1, vn2, vn3, vn_h, vn_p, vn_t, vn_n]
           failed_when: false
 
         - name: Remove the fake CRDs, which removes their objects

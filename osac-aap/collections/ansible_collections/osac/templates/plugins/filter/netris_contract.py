@@ -194,7 +194,7 @@ def netris_contract_names(ids: Any) -> dict:
 
     A name whose source ID is unknown is "". The object kinds and their IDs:
     vpc and vn_ipam from the VirtualNetwork, vnet and subnet_ipam from the
-    Subnet, pool_ipam from the ExternalIPPool,
+    Subnet, pool_ipam and pool_common_ipam from the ExternalIPPool,
     natgw_snat / eipa_dnat / server_cluster / eip_reservation from the task's
     resource.
     """
@@ -210,7 +210,9 @@ def netris_contract_names(ids: Any) -> dict:
         "server_cluster": ids.get("resource_id"),
         "eip_reservation": ids.get("resource_id"),
     }
-    return {key: (NAME_PREFIXES[key] + value if _api_id(value) else "") for key, value in source.items()}
+    names = {key: (NAME_PREFIXES[key] + value if _api_id(value) else "") for key, value in source.items()}
+    names["pool_common_ipam"] = f"{names['pool_ipam']}-common" if names["pool_ipam"] else ""
+    return names
 
 
 def netris_contract_result(raw: Any) -> dict:

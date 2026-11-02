@@ -12,15 +12,18 @@ class FakeGRPCClient:
     def __init__(self, responses: dict[str, dict[str, Any]]) -> None:
         self.responses = responses
         self.calls: list[tuple[str, dict[str, Any] | None]] = []
-        self.created: list[tuple[str, str, str]] = []
+        self.created: list[tuple[str, dict[str, str], str]] = []
         self.deleted: list[str] = []
 
     def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         self.calls.append((service, data))
         return self.responses[service]
 
-    def create_baremetal_instance_type(self, *, name: str, host_type_label: str, fabric_port: str) -> str:
-        self.created.append((name, host_type_label, fabric_port))
+    def create_baremetal_instance_type(
+        self, *, name: str, fabric_port: str, host_label_selector: dict[str, str] | None = None
+    ) -> str:
+        selector = host_label_selector or {"osac.openshift.io/host-type": "default"}
+        self.created.append((name, selector, fabric_port))
         return "bmit-123"
 
     def delete_baremetal_instance_type(self, *, type_id: str) -> None:
@@ -96,7 +99,7 @@ def test_creates_type_matching_virtual_hosts_and_cleans_it_up() -> None:
     fixture = bmi_instance_type_for_tests(grpc, template_name="bm-host-provisioning", configured="")
     name = next(fixture)
     assert name.startswith("e2e-bmi-type-")
-    assert grpc.created == [(name, "default", "data-0")]
+    assert grpc.created == [(name, {"osac.openshift.io/host-type": "default"}, "data-0")]
     assert grpc.deleted == []
     with pytest.raises(StopIteration):
         next(fixture)

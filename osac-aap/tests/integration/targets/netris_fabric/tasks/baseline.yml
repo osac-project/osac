@@ -20,7 +20,9 @@
 #   - 5xx is retryable, 4xx is final, error messages carry no response body
 #     and no cookie;
 #   - tenant isolation, drift, fail-closed owner proof, lost-response and
-#     partial-create recovery.
+#     partial-create recovery;
+#   - cases_paths.yaml: one row per remaining path, and every stop of the role
+#     with its classification and message.
 # Not covered: a real Netris controller (the lab E2E, OSAC-4843 for the
 # ExternalIP path), AAP and the operator.
 - name: The Netris Fabric Manager
@@ -377,6 +379,10 @@
         - name: Case 10 - partial creates and lost responses
           ansible.builtin.import_tasks: cases_recovery.yaml
           tags: [recovery]
+
+        - name: Case 11 - every other path of the role
+          ansible.builtin.import_tasks: cases_paths.yaml
+          tags: [paths]
 
       always:
         - name: Stop the fake Netris

@@ -1,0 +1,443 @@
+---
+# Every state of a hub object that OVN-Kubernetes, the installer, an
+# administrator or a racing job can leave behind. The fake CRDs have no
+# controller, so these tasks write the status and the metadata themselves.
+- name: Hub states - start with the VirtualNetwork namespace and its first Subnet
+  ansible.builtin.include_tasks: run_task.yaml
+  loop:
+    - {label: h-vn-create, task: create_virtual_network, job: ce_vn_job}
+    - {label: h-subnet-create, task: create_subnet, job: ce_subnet_job, ready: "{{ ce_hub_h }}"}
+  loop_control: {loop_var: ce_step}
+  vars:
+    sft_label: "{{ ce_step.label }}"
+    sft_expect: success
+    sft_ready_cudn: "{{ ce_step.ready | default('') }}"
+    ce_task: "{{ ce_step.task }}"
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    ce_sg_id: "{{ ce_id.sg_h }}"
+    ce_vm_id: "{{ ce_id.vm_h }}"
+    sft_job: "{{ lookup('ansible.builtin.vars', ce_step.job) }}"
+
+# ------------------------------------------------------------- the namespace
+- name: Hub states - lose the namespace annotations
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - json:
+          api: v1
+          kind: Namespace
+          name: "{{ ce_hub_h }}"
+          patch:
+            - {op: remove, path: /metadata/annotations/osac.openshift.io~1owner-reference}
+
+- name: Hub states - a rerun restores the annotations
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-ns-restore-annotations
+    sft_expect: success
+    ce_task: create_virtual_network
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    sft_job: "{{ ce_vn_job }}"
+- name: Hub states - read the namespace
+  ansible.builtin.include_tasks: read.yaml
+  vars: {ce_api: v1, ce_kind: Namespace, ce_name: "{{ ce_hub_h }}"}
+- name: Hub states - the annotation is back
+  ansible.builtin.assert:
+    that: ce_obj.metadata.annotations['osac.openshift.io/owner-reference'] == 'VirtualNetwork/vn-' ~ ce_id.vn_h[:8]
+    quiet: true
+
+- name: Hub states - a namespace with the owner labels but without the primary-network label
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - def:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "osac-vn-{{ ce_id.vn_p }}"
+            labels:
+              osac.openshift.io/tenant: "{{ sft_tenant }}"
+              osac.openshift.io/owner-kind: virtualnetwork
+              osac.openshift.io/owner-id: "{{ ce_id.vn_p }}"
+- name: Hub states - that namespace cannot host the VirtualNetwork, as final
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-ns-no-primary-label
+    sft_expect: final
+    sft_message_search: "without this VirtualNetwork's owner labels or the primary-network label"
+    ce_task: create_virtual_network
+    ce_vn_id: "{{ ce_id.vn_p }}"
+    sft_job: "{{ ce_vn_job }}"
+
+- name: Hub states - a namespace of someone else is not usable for a group or an attachment
+  ansible.builtin.include_tasks: run_task.yaml
+  loop:
+    - {label: h-sg-foreign-ns, task: create_security_group, job: ce_sg_job}
+    - {label: h-attach-foreign-ns, task: apply_network_attachment, job: ce_attach_job}
+  loop_control: {loop_var: ce_step}
+  vars:
+    sft_label: "{{ ce_step.label }}"
+    sft_expect: retryable
+    sft_message_search: "cudn_evpn {{ ce_step.task }}: the VirtualNetwork namespace .* does not exist or is being deleted"
+    ce_task: "{{ ce_step.task }}"
+    ce_vn_id: "{{ ce_id.vn3 }}"
+    ce_subnet_id: "{{ ce_id.s3 }}"
+    ce_sg_id: "{{ ce_id.sg_h }}"
+    ce_vm_id: "{{ ce_id.vm_h }}"
+    sft_job: "{{ lookup('ansible.builtin.vars', ce_step.job) }}"
+
+- name: Hub states - a VirtualNetwork namespace held in deletion by a finalizer
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-term-vn-create
+    sft_expect: success
+    ce_task: create_virtual_network
+    ce_vn_id: "{{ ce_id.vn_t }}"
+    sft_job: "{{ ce_vn_job }}"
+- name: Hub states - hold the namespace and delete it
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - {state: patched, def: {apiVersion: v1, kind: Namespace, metadata: {name: "osac-vn-{{ ce_id.vn_t }}", finalizers: [osac.test/hold]}}}
+      - {state: absent, def: {apiVersion: v1, kind: Namespace, metadata: {name: "osac-vn-{{ ce_id.vn_t }}"}}}
+
+- name: Hub states - every task that needs the namespace retries while it terminates
+  ansible.builtin.include_tasks: run_task.yaml
+  loop:
+    - {label: h-term-ns-create, task: create_virtual_network, job: ce_vn_job, search: "is still being deleted"}
+    - {label: h-term-ns-sg, task: create_security_group, job: ce_sg_job, search: "does not exist or is being deleted"}
+    - {label: h-term-ns-attach, task: apply_network_attachment, job: ce_attach_job, search: "does not exist or is being deleted"}
+  loop_control: {loop_var: ce_step}
+  vars:
+    sft_label: "{{ ce_step.label }}"
+    sft_expect: retryable
+    sft_message_search: "{{ ce_step.search }}"
+    ce_task: "{{ ce_step.task }}"
+    ce_vn_id: "{{ ce_id.vn_t }}"
+    ce_subnet_id: "{{ ce_id.s_t }}"
+    ce_sg_id: "{{ ce_id.sg_h }}"
+    ce_vm_id: "{{ ce_id.vm_h }}"
+    sft_job: "{{ lookup('ansible.builtin.vars', ce_step.job) }}"
+
+- name: Hub states - delete_virtual_network does not delete a terminating namespace twice and times out
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-term-ns-delete
+    sft_expect: retryable
+    sft_short_waits: true
+    sft_message_search: "cudn_evpn delete_virtual_network: Namespace .* is not gone after 2 seconds"
+    ce_task: delete_virtual_network
+    ce_vn_id: "{{ ce_id.vn_t }}"
+    sft_job: "{{ ce_vn_job }}"
+
+- name: Hub states - let the namespace go
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - finalize: {api: v1, kind: Namespace, name: "osac-vn-{{ ce_id.vn_t }}"}
+
+# --------------------------------------------------------------------- the VTEP
+- name: Hub states - a VTEP that is not Accepted, and one without a condition
+  ansible.builtin.include_tasks: vtep_case.yaml
+  loop:
+    - {label: h-vtep-rejected, conditions: [{type: Accepted, status: "False", reason: InsufficientAddresses}],
+       search: "VTEP tenant-vtep is not Accepted \\(InsufficientAddresses\\)"}
+    - {label: h-vtep-no-condition, conditions: [], search: "VTEP tenant-vtep is not Accepted \\(no Accepted condition yet\\)"}
+  loop_control: {loop_var: ce_vtep}
+
+- name: Hub states - accept the VTEP again
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - state: patched
+        def:
+          apiVersion: k8s.ovn.org/v1
+          kind: VTEP
+          metadata: {name: tenant-vtep}
+          status: {conditions: [{type: Accepted, status: "True", reason: Allocated}]}
+
+# ---------------------------------------------------------------- the hub network
+- name: Hub states - change a field that VMs may depend on
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - json:
+          api: k8s.ovn.org/v1
+          kind: ClusterUserDefinedNetwork
+          name: "{{ ce_hub_h }}"
+          patch: [{op: replace, path: /spec/network/layer2/mtu, value: 9000}]
+- name: Hub states - drift of the network is final and is not repaired
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-cudn-drift
+    sft_expect: final
+    sft_message_search: "differs from this Subnet's address layout or network segment \\(spec.network.layer2.mtu\\)"
+    ce_task: create_subnet
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    sft_job: "{{ ce_subnet_job }}"
+- name: Hub states - read the hub network
+  ansible.builtin.include_tasks: read.yaml
+  vars: {ce_api: k8s.ovn.org/v1, ce_kind: ClusterUserDefinedNetwork, ce_name: "{{ ce_hub_h }}"}
+- name: Hub states - the MTU was left alone
+  ansible.builtin.assert: {that: ce_obj.spec.network.layer2.mtu == 9000, quiet: true}
+
+- name: Hub states - put the MTU back, and lose the selector, a label and an annotation
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - json:
+          api: k8s.ovn.org/v1
+          kind: ClusterUserDefinedNetwork
+          name: "{{ ce_hub_h }}"
+          patch:
+            - {op: replace, path: /spec/network/layer2/mtu, value: 1500}
+            - {op: replace, path: /spec/namespaceSelector, value: {matchLabels: {changed: by-hand}}}
+            - {op: remove, path: /metadata/labels/evpn}
+            - {op: remove, path: /metadata/annotations/osac.openshift.io~1owner-reference}
+- name: Hub states - a rerun restores the selector and the metadata
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-cudn-restore
+    sft_expect: success
+    ce_task: create_subnet
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    sft_job: "{{ ce_subnet_job }}"
+- name: Hub states - read the restored hub network
+  ansible.builtin.include_tasks: read.yaml
+  vars: {ce_api: k8s.ovn.org/v1, ce_kind: ClusterUserDefinedNetwork, ce_name: "{{ ce_hub_h }}"}
+- name: Hub states - the selector, label and annotation are back and the owner stayed
+  ansible.builtin.assert:
+    that:
+      - "ce_obj.spec.namespaceSelector.matchLabels == {'osac.openshift.io/virtualnetwork-id': ce_id.vn_h, 'osac.openshift.io/tenant': sft_tenant}"
+      - ce_obj.metadata.labels.evpn == 'true'
+      - ce_obj.metadata.annotations['osac.openshift.io/owner-reference'] == 'Subnet/subnet-' ~ ce_id.s_h[:8]
+      - ce_obj.metadata.annotations['osac.openshift.io/owner-subnet'] == ce_id.s_h
+    quiet: true
+- name: Hub states - keep the hub network to compare the rerun
+  ansible.builtin.set_fact:
+    ce_h_before: "{{ ce_obj }}"
+- name: Hub states - a second rerun writes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-cudn-restore-rerun
+    sft_expect: success
+    ce_task: create_subnet
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    sft_job: "{{ ce_subnet_job }}"
+- name: Hub states - read the hub network again
+  ansible.builtin.include_tasks: read.yaml
+  vars: {ce_api: k8s.ovn.org/v1, ce_kind: ClusterUserDefinedNetwork, ce_name: "{{ ce_hub_h }}"}
+- name: Hub states - nothing changed
+  ansible.builtin.assert:
+    that: ce_obj.metadata.resourceVersion == ce_h_before.metadata.resourceVersion
+    quiet: true
+
+- name: Hub states - a network that never reaches each OVN-Kubernetes condition times out as retryable
+  ansible.builtin.include_tasks: ready_case.yaml
+  loop:
+    - {label: h-ready-transport, reason: EVPNNotConfigured, type: TransportAccepted}
+    - {label: h-ready-created, reason: NetworkAttachmentDefinitionSyncError, type: NetworkCreated}
+    - {label: h-ready-allocation, reason: AllocationFailed, type: NetworkAllocationSucceeded}
+  loop_control: {loop_var: ce_ready}
+
+- name: Hub states - a network with no status at all
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - json:
+          api: k8s.ovn.org/v1
+          kind: ClusterUserDefinedNetwork
+          name: "{{ ce_hub_h }}"
+          patch: [{op: remove, path: /status}]
+- name: Hub states - no status reports every condition as pending
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-ready-no-status
+    sft_expect: retryable
+    sft_short_waits: true
+    sft_message_search: "not ready after 2 seconds \\(TransportAccepted=pending, NetworkCreated=pending, NetworkAllocationSucceeded=pending\\)"
+    ce_task: create_subnet
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    sft_job: "{{ ce_subnet_job }}"
+
+- name: Hub states - create a SecurityGroup for the attachment cases
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-sg-create
+    sft_expect: success
+    ce_task: create_security_group
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_sg_id: "{{ ce_id.sg_h }}"
+    sft_job: "{{ ce_sg_job }}"
+- name: Hub states - an attachment waits for a network that is not ready
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-attach-not-ready
+    sft_expect: retryable
+    sft_message_search: "is not ready \\(TransportAccepted=pending, NetworkCreated=pending, NetworkAllocationSucceeded=pending\\)"
+    ce_task: apply_network_attachment
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    ce_sg_id: "{{ ce_id.sg_h }}"
+    ce_vm_id: "{{ ce_id.vm_h }}"
+    sft_job: "{{ ce_attach_job }}"
+
+# ---------------------------------------------- the hub network held in deletion
+- name: Hub states - hold the hub network and delete it
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - state: patched
+        def: {apiVersion: k8s.ovn.org/v1, kind: ClusterUserDefinedNetwork, metadata: {name: "{{ ce_hub_h }}", finalizers: [osac.test/hold]}}
+      - state: absent
+        def: {apiVersion: k8s.ovn.org/v1, kind: ClusterUserDefinedNetwork, metadata: {name: "{{ ce_hub_h }}"}}
+
+- name: Hub states - a terminating hub network is retried
+  ansible.builtin.include_tasks: run_task.yaml
+  loop:
+    - {label: h-term-cudn-create, task: create_subnet, job: ce_subnet_job, search: "hub network is still being deleted"}
+    - {label: h-term-cudn-attach, task: apply_network_attachment, job: ce_attach_job, search: "is being deleted; OSAC retries"}
+  loop_control: {loop_var: ce_step}
+  vars:
+    sft_label: "{{ ce_step.label }}"
+    sft_expect: retryable
+    sft_message_search: "{{ ce_step.search }}"
+    ce_task: "{{ ce_step.task }}"
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    ce_sg_id: "{{ ce_id.sg_h }}"
+    ce_vm_id: "{{ ce_id.vm_h }}"
+    sft_job: "{{ lookup('ansible.builtin.vars', ce_step.job) }}"
+
+- name: Hub states - delete_subnet waits for a hub network it cannot remove, without a second delete
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-term-cudn-delete
+    sft_expect: retryable
+    sft_short_waits: true
+    sft_message_search: "cudn_evpn delete_subnet: ClusterUserDefinedNetwork .* is not gone after 2 seconds"
+    ce_task: delete_subnet
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    sft_job: "{{ ce_subnet_job }}"
+
+- name: Hub states - let the hub network go
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - finalize: {api: k8s.ovn.org/v1, kind: ClusterUserDefinedNetwork, name: "{{ ce_hub_h }}"}
+
+- name: Hub states - with the hub network gone the attachment is refused as final
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-attach-hub-gone
+    sft_expect: final
+    sft_message_search: "implementation limit: VMs can attach only to the Subnet that owns"
+    ce_task: apply_network_attachment
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    ce_sg_id: "{{ ce_id.sg_h }}"
+    ce_vm_id: "{{ ce_id.vm_h }}"
+    sft_job: "{{ ce_attach_job }}"
+
+# ---------------------------------------------------- objects of someone else
+- name: Hub states - a hub network with the VirtualNetwork label of another tenant
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - def:
+          apiVersion: k8s.ovn.org/v1
+          kind: ClusterUserDefinedNetwork
+          metadata:
+            name: "{{ ce_hub_h }}"
+            labels:
+              osac.openshift.io/virtualnetwork-id: "{{ ce_id.vn_h }}"
+              osac.openshift.io/tenant: another-tenant
+            annotations:
+              osac.openshift.io/owner-subnet: "{{ ce_id.s_h }}"
+          spec: {namespaceSelector: {}, network: {topology: Layer2}}
+- name: Hub states - delete_subnet leaves the network of another tenant
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-delete-other-tenant
+    sft_expect: success
+    ce_task: delete_subnet
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    sft_job: "{{ ce_subnet_job }}"
+- name: Hub states - read the network of the other tenant
+  ansible.builtin.include_tasks: read.yaml
+  vars: {ce_api: k8s.ovn.org/v1, ce_kind: ClusterUserDefinedNetwork, ce_name: "{{ ce_hub_h }}"}
+- name: Hub states - it is still there
+  ansible.builtin.assert:
+    that: ce_obj | length > 0 and ce_obj.metadata.deletionTimestamp is not defined
+    quiet: true
+- name: Hub states - remove the network of the other tenant
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - state: absent
+        def: {apiVersion: k8s.ovn.org/v1, kind: ClusterUserDefinedNetwork, metadata: {name: "{{ ce_hub_h }}"}}
+
+- name: Hub states - build a ready hub network again for the policy cases
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-subnet-again
+    sft_expect: success
+    sft_ready_cudn: "{{ ce_hub_h }}"
+    ce_task: create_subnet
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    sft_job: "{{ ce_subnet_job }}"
+
+- name: Hub states - a NetworkPolicy of someone else under the SecurityGroup's name
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - def:
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata: {name: "osac-sg-{{ ce_id.sg_f }}", namespace: "{{ ce_hub_h }}", labels: {admin: made-by-hand}}
+          spec: {podSelector: {}, policyTypes: [Ingress]}
+
+- name: Hub states - a foreign policy is refused as final by the group and the attachment
+  ansible.builtin.include_tasks: run_task.yaml
+  loop:
+    - {label: h-sg-foreign-policy, task: create_security_group, job: ce_sg_job, search: "exists without this SecurityGroup's owner labels"}
+    - {label: h-attach-foreign-policy, task: apply_network_attachment, job: ce_attach_job, search: "exists without\\s+SecurityGroup .*'s owner labels"}
+  loop_control: {loop_var: ce_step}
+  vars:
+    sft_label: "{{ ce_step.label }}"
+    sft_expect: final
+    sft_message_search: "{{ ce_step.search }}"
+    ce_task: "{{ ce_step.task }}"
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_subnet_id: "{{ ce_id.s_h }}"
+    ce_sg_id: "{{ ce_id.sg_f }}"
+    ce_vm_id: "{{ ce_id.vm_h }}"
+    sft_job: "{{ lookup('ansible.builtin.vars', ce_step.job) }}"
+
+- name: Hub states - delete_security_group leaves the foreign policy
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: h-sg-delete-foreign-policy
+    sft_expect: success
+    ce_task: delete_security_group
+    ce_vn_id: "{{ ce_id.vn_h }}"
+    ce_sg_id: "{{ ce_id.sg_f }}"
+    sft_job: "{{ ce_sg_job }}"
+- name: Hub states - read the foreign policy
+  ansible.builtin.include_tasks: read.yaml
+  vars: {ce_api: networking.k8s.io/v1, ce_kind: NetworkPolicy, ce_name: "osac-sg-{{ ce_id.sg_f }}", ce_ns: "{{ ce_hub_h }}"}
+- name: Hub states - the foreign policy is untouched
+  ansible.builtin.assert:
+    that:
+      - ce_obj | length > 0
+      - "ce_obj.metadata.labels == {'admin': 'made-by-hand'}"
+      - ce_obj.spec.podSelector == {}
+    quiet: true

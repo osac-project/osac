@@ -25,6 +25,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,8 @@ def _poll_nat_gateway_gone_via_grpc(grpc: GRPCClient, nat_id: str) -> None:
         retries=120,
         delay=5,
         description=f"NATGateway {nat_id} gRPC deletion",
+        resource_kind=WaitResourceKind.NAT_GATEWAY,
+        resource_id=nat_id,
     )
 
 

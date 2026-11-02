@@ -42,6 +42,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.cidrs import TENANT_SECOND_OCTETS, tenant_vn_cidr
 from tests.e2e.networking.teardown import teardown_sg, teardown_subnets, teardown_vnet, wait_owned_gone
 from tests.e2e.networking.vmaas import guest_ssh
@@ -153,6 +154,8 @@ def poll_or_fail(
     fn: Callable[[], T],
     until: Callable[[T], bool],
     description: str,
+    resource_kind: WaitResourceKind,
+    resource_id: str,
     retries: int = 60,
     delay: int = 5,
     kind: Kind | None = None,
@@ -165,7 +168,15 @@ def poll_or_fail(
     a kind the failure is a plain `pytest.fail`, which still classifies as stuck-state.
     """
     try:
-        return poll_until(fn=fn, until=until, retries=retries, delay=delay, description=description)
+        return poll_until(
+            fn=fn,
+            until=until,
+            retries=retries,
+            delay=delay,
+            description=description,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+        )
     except TimeoutError as exc:
         message = f"{description} timed out. {hint}\n{exc}"
         if kind is None:
@@ -336,6 +347,8 @@ def wait_for_vm(
         retries=60,
         delay=5,
         description=f"VMI namespace for {instance['name']} to be set",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=instance["cr"],
     )
     guest_ssh.note_namespace(instance["vnet_id"], instance["vm_namespace"])
     instance["ip"] = wait_for_vmi_ip(
@@ -359,6 +372,8 @@ def delete_vm(*, client: GRPCClient, k8s_hub_client: K8sClient, instance: dict[s
         delete=lambda: client.delete_compute_instance(ci_id=instance["id"]),
         retries=120,
         delay=5,
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=instance["id"],
     )
 
 
@@ -463,6 +478,8 @@ def external_ip_address(client: GRPCClient, eip_id: str) -> str:
         retries=30,
         delay=5,
         description=f"ExternalIP {eip_id} address to be allocated",
+        resource_kind=WaitResourceKind.EXTERNAL_IP,
+        resource_id=eip_id,
     )
 
 
@@ -478,6 +495,8 @@ def wait_for_attribution(*, private_grpc: GRPCClient, eip_id: str, ci_id: str) -
         retries=30,
         delay=5,
         description=f"ExternalIP {eip_id} attribution to ComputeInstance {ci_id}",
+        resource_kind=WaitResourceKind.EXTERNAL_IP,
+        resource_id=eip_id,
     )
 
 
@@ -509,4 +528,6 @@ def wait_for_grpc_external_ip_allocated(client: GRPCClient, eip_id: str) -> str:
         retries=30,
         delay=5,
         description=f"ExternalIP {eip_id} API state ALLOCATED",
+        resource_kind=WaitResourceKind.EXTERNAL_IP,
+        resource_id=eip_id,
     )

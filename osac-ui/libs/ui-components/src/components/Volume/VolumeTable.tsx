@@ -1,85 +1,74 @@
-import { Bullseye, EmptyState, EmptyStateBody, EmptyStateVariant } from '@patternfly/react-core';
-import SearchIcon from '@patternfly/react-icons/dist/esm/icons/search-icon';
+import { useMemo } from 'react';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import type { Volume } from '@osac/types';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
 
+import { formatSizeGib } from './utils';
 import { VolumeAccessModeLabel } from './VolumeAccessModeLabel';
+import VolumeActionsMenu from './VolumeActionsMenu';
 import { VolumeStatusLabel } from './VolumeStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
 import { Timestamp } from '../Primitives/Timestamp';
-
-const EMPTY_STATE_COLUMN_SPAN = 6;
 
 interface VolumeTableProps {
   volumes: Volume[];
 }
 
-const formatSizeGib = (sizeGib: bigint | undefined): string => {
-  if (sizeGib === undefined) {
-    return '—';
-  }
-  return `${Number(sizeGib)} GiB`;
-};
-
 export const VolumeTable = ({ volumes }: VolumeTableProps) => {
   const { t } = useTranslation();
+
+  const columnLabels = useMemo(
+    () => ({
+      name: t('Name'),
+      state: t('State'),
+      project: t('Project'),
+      storageTier: t('Storage Tier'),
+      size: t('Size'),
+      accessMode: t('Access Mode'),
+      created: t('Created'),
+      actions: t('Actions'),
+    }),
+    [t],
+  );
 
   return (
     <Table aria-label={t('Volumes')} variant="compact">
       <Thead>
         <Tr>
-          <Th>{t('Name')}</Th>
-          <Th>{t('State')}</Th>
-          <Th>{t('Storage Tier')}</Th>
-          <Th>{t('Size')}</Th>
-          <Th>{t('Access Mode')}</Th>
-          <Th>{t('Created')}</Th>
-          {/* TODO: re-enable when volume actions are supported after developer preview */}
-          {/* <Th aria-label={t('Actions')} /> */}
+          <Th>{columnLabels.name}</Th>
+          <Th>{columnLabels.state}</Th>
+          <Th>{columnLabels.project}</Th>
+          <Th>{columnLabels.storageTier}</Th>
+          <Th>{columnLabels.size}</Th>
+          <Th>{columnLabels.accessMode}</Th>
+          <Th>{columnLabels.created}</Th>
+          <Th aria-label={columnLabels.actions} />
         </Tr>
       </Thead>
       <Tbody>
-        {volumes.length === 0 ? (
-          <Tr>
-            <Td colSpan={EMPTY_STATE_COLUMN_SPAN}>
-              <Bullseye>
-                <EmptyState
-                  headingLevel="h2"
-                  titleText={t('No volumes found')}
-                  icon={SearchIcon}
-                  variant={EmptyStateVariant.sm}
-                >
-                  <EmptyStateBody>{t('Adjust your filters to find volumes.')}</EmptyStateBody>
-                </EmptyState>
-              </Bullseye>
+        {volumes.map((volume) => (
+          <Tr key={volume.id}>
+            <Td dataLabel={columnLabels.name}>
+              <ResourceNameField resource={volume} detailsUrl={`/storage/volumes/${volume.id}`} />
+            </Td>
+            <Td dataLabel={columnLabels.state}>
+              <VolumeStatusLabel state={volume.status?.state} />
+            </Td>
+            <Td dataLabel={columnLabels.project}>{volume.metadata?.project || t('Default')}</Td>
+            <Td dataLabel={columnLabels.storageTier}>{volume.spec?.storageTier ?? '—'}</Td>
+            <Td dataLabel={columnLabels.size}>{formatSizeGib(volume.spec?.sizeGib)}</Td>
+            <Td dataLabel={columnLabels.accessMode}>
+              <VolumeAccessModeLabel accessMode={volume.spec?.accessMode} />
+            </Td>
+            <Td dataLabel={columnLabels.created}>
+              <Timestamp value={volume.metadata?.creationTimestamp} />
+            </Td>
+            <Td dataLabel={columnLabels.actions} isActionCell>
+              <VolumeActionsMenu volume={volume} />
             </Td>
           </Tr>
-        ) : (
-          volumes.map((volume) => (
-            <Tr key={volume.id}>
-              <Td dataLabel={t('Name')}>
-                <ResourceNameField resource={volume} detailsUrl={`/storage/volumes/${volume.id}`} />
-              </Td>
-              <Td dataLabel={t('State')}>
-                <VolumeStatusLabel state={volume.status?.state} />
-              </Td>
-              <Td dataLabel={t('Storage Tier')}>{volume.spec?.storageTier ?? '—'}</Td>
-              <Td dataLabel={t('Size')}>{formatSizeGib(volume.spec?.sizeGib)}</Td>
-              <Td dataLabel={t('Access Mode')}>
-                <VolumeAccessModeLabel accessMode={volume.spec?.accessMode} />
-              </Td>
-              <Td dataLabel={t('Created')}>
-                <Timestamp value={volume.metadata?.creationTimestamp} />
-              </Td>
-              {/* TODO: re-enable when volume actions are supported after developer preview */}
-              {/* <Td dataLabel={t('Actions')} isActionCell>
-                <VolumeActionsMenu volume={volume} />
-              </Td> */}
-            </Tr>
-          ))
-        )}
+        ))}
       </Tbody>
     </Table>
   );

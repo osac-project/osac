@@ -44,6 +44,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import StuckState, poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking import cidrs
 from tests.e2e.networking.teardown import nat_gateway_ids, teardown_nat, teardown_nat_eip, wait_owned_gone
 from tests.e2e.networking.vmaas import guest_ssh, stack
@@ -493,6 +494,8 @@ def _teardown_ingress_record(record: dict[str, Any], k8s_hub_client: K8sClient) 
             api_gone=lambda: attachment_id not in client.list_external_ip_attachment_ids(),
             cr_gone=lambda: k8s_hub_client.get_external_ip_attachment_name(uuid=attachment_id, checked=False) == "",
             delete=lambda: client.delete_external_ip_attachment(attachment_id=attachment_id),
+            resource_kind=WaitResourceKind.EXTERNAL_IP_ATTACHMENT,
+            resource_id=attachment_id,
         )
         record["attachment_id"] = ""
     if record.get("eip_id"):
@@ -502,6 +505,8 @@ def _teardown_ingress_record(record: dict[str, Any], k8s_hub_client: K8sClient) 
             api_gone=lambda: eip_id not in client.list_external_ip_ids(),
             cr_gone=lambda: k8s_hub_client.get_external_ip_name(uuid=eip_id, checked=False) == "",
             delete=lambda: client.delete_external_ip(external_ip_id=eip_id),
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=eip_id,
         )
         record["eip_id"] = ""
 
@@ -513,6 +518,8 @@ def _teardown_pool(pool: dict[str, Any], private_grpc: GRPCClient, k8s_hub_clien
         api_gone=lambda: pool_id not in private_grpc.list_external_ip_pool_ids(),
         cr_gone=lambda: k8s_hub_client.get_external_ip_pool_name(uuid=pool_id, checked=False) == "",
         delete=lambda: private_grpc.delete_external_ip_pool(pool_id=pool_id),
+        resource_kind=WaitResourceKind.EXTERNAL_IP_POOL,
+        resource_id=pool_id,
     )
 
 
@@ -704,6 +711,8 @@ def _wait_tcp(
             retries=retries,
             delay=delay,
             description=f"TCP {host}:{port} from {source['ip']} {'open' if want_open else 'not open'}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=source["id"],
         )
     except StuckState as exc:
         ids = {"ci_id": source["id"], "address": host}
@@ -748,6 +757,8 @@ def _assert_cluster_dns(state: dict[str, Any], vm: dict[str, str], dns_ip: str, 
         retries=6,
         delay=10,
         description=f"cluster DNS {dns_ip} in the DHCP nameservers of {vm['name']}",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=vm["id"],
     )
     stack.poll_or_fail(
         hint=f"{vm['name']} could not resolve kubernetes.default.svc.cluster.local at {dns_ip}. {fail}",
@@ -758,6 +769,8 @@ def _assert_cluster_dns(state: dict[str, Any], vm: dict[str, str], dns_ip: str, 
         retries=6,
         delay=10,
         description=f"cluster DNS answer from {vm['name']}",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=vm["id"],
     )
 
 
@@ -795,6 +808,8 @@ def _create_nat(
         retries=30,
         delay=5,
         description=f"NATGateway CR for {network['vnet_name']} to appear",
+        resource_kind=WaitResourceKind.NAT_GATEWAY,
+        resource_id=nat_id,
     )
     with _diagnose(f"NATGateway {nat_cr} readiness"):
         wait_for_nat_gateway_ready(k8s=k8s_hub_client, name=nat_cr)
@@ -810,6 +825,8 @@ def _create_nat(
         retries=30,
         delay=5,
         description=f"NATGateway {nat_id} API state READY",
+        resource_kind=WaitResourceKind.NAT_GATEWAY,
+        resource_id=nat_id,
     )
 
 
@@ -834,6 +851,8 @@ def _assert_nat_egress(state: dict[str, Any], vm: dict[str, str], who: str) -> N
         kind=Kind.TRAFFIC_BLOCKED,
         ids={"ci_id": vm["id"], "address": vm["ip"]},
         refine_kind=stack.traffic_kind_for_guest(vm["vm_namespace"], vm["cr"], _identity(state)),
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=vm["id"],
     )
 
 
@@ -889,7 +908,15 @@ def _assert_external_ip_ssh(*, state: dict[str, Any], vm: dict[str, str], extern
             return ""
 
     try:
-        poll_until(fn=try_ssh, until=bool, retries=12, delay=20, description=description)
+        poll_until(
+            fn=try_ssh,
+            until=bool,
+            retries=12,
+            delay=20,
+            description=description,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=vm["id"],
+        )
     except TimeoutError as exc:
         # The guest answered through the helper Pod above, so a timeout or refusal here is the path under test.
         detail, kind = last_error[0] if last_error else ("none", Kind.TRAFFIC_BLOCKED)
@@ -903,8 +930,24 @@ def _assert_external_ip_ssh(*, state: dict[str, Any], vm: dict[str, str], extern
         ) from exc
 
 
-def _wait_gone(description: str, check: Callable[[], bool], retries: int = 30, delay: int = 5) -> None:
-    poll_until(fn=check, until=bool, retries=retries, delay=delay, description=description)
+def _wait_gone(
+    description: str,
+    check: Callable[[], bool],
+    *,
+    resource_kind: WaitResourceKind,
+    resource_id: str,
+    retries: int = 30,
+    delay: int = 5,
+) -> None:
+    poll_until(
+        fn=check,
+        until=bool,
+        retries=retries,
+        delay=delay,
+        description=description,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+    )
 
 
 def _assert_auto_external_ip_lifecycle(
@@ -953,6 +996,8 @@ def _assert_auto_external_ip_lifecycle(
             retries=60,
             delay=5,
             description=f"auto-created ExternalIPAttachment for {vm_name}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=vm["id"],
         )
         attachment_id = attachment["id"]
         eip_id = attachment.get("spec", {}).get("externalIp", {}).get("id", "")
@@ -982,9 +1027,16 @@ def _assert_auto_external_ip_lifecycle(
         _wait_gone(
             f"auto ExternalIPAttachment {attachment_id} garbage collection",
             lambda: attachment_id not in client.list_external_ip_attachment_ids(),
+            resource_kind=WaitResourceKind.EXTERNAL_IP_ATTACHMENT,
+            resource_id=attachment_id,
         )
         wait_for_external_ip_deletion(k8s=k8s_hub_client, name=eip_cr)
-        _wait_gone(f"auto ExternalIP {eip_id} garbage collection", lambda: eip_id not in client.list_external_ip_ids())
+        _wait_gone(
+            f"auto ExternalIP {eip_id} garbage collection",
+            lambda: eip_id not in client.list_external_ip_ids(),
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=eip_id,
+        )
         external["ingress"].remove(record)
     finally:
         # create_vm records the instance before it waits, so find it even when create_vm raised.
@@ -1037,6 +1089,8 @@ def _assert_pool_accounting(pool: dict[str, Any], private_grpc: GRPCClient) -> N
         description=f"ExternalIPPool {pool['id']} allocated equals its live ExternalIPs",
         kind=Kind.ASSERTION,
         ids={"pool_id": pool["id"]},
+        resource_kind=WaitResourceKind.EXTERNAL_IP_POOL,
+        resource_id=pool["id"],
     )
 
 
@@ -1115,6 +1169,8 @@ def _teardown_leaves_nothing(
             retries=60,
             delay=5,
             description=f"VM namespace {namespace} removed with {network['vnet_name']}",
+            resource_kind=WaitResourceKind.NAMESPACE,
+            resource_id=namespace,
         )
 
     _delete_networks(
@@ -1162,6 +1218,8 @@ class TestVmaasNetworking:
                 retries=5,
                 delay=10,
                 description=f"same-Subnet VMaaS ARP {source['ip']} to {target['ip']}",
+                resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                resource_id=source["id"],
             )
 
     def test_01_l3_ping_same_subnet(self, netris_vm_network: dict[str, Any]) -> None:
@@ -1175,6 +1233,8 @@ class TestVmaasNetworking:
                 retries=5,
                 delay=10,
                 description=f"same-Subnet VMaaS ICMP {source['ip']} to {target['ip']}",
+                resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                resource_id=source["id"],
             )
 
     def test_02_l2_arping_cross_virtual_network_fails(self, netris_vm_network: dict[str, Any]) -> None:
@@ -1208,6 +1268,8 @@ class TestVmaasNetworking:
             retries=6,
             delay=10,
             description=f"system resolver of {vm['name']} resolving quay.io",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=vm["id"],
         )
 
     def test_05_security_group_tcp_ingress_allow_and_deny(self, netris_tcp_listeners: dict[str, Any]) -> None:
@@ -1228,6 +1290,8 @@ class TestVmaasNetworking:
             retries=5,
             delay=10,
             description=f"positive ICMP control from {a1['ip']} to {a2['ip']}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=a1["id"],
         )
 
     def test_06_security_group_rule_update_swaps_ingress(
@@ -1295,6 +1359,8 @@ class TestVmaasNetworking:
             retries=6,
             delay=10,
             description=f"positive DNS control from tenant2 VM {t2a['ip']}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=t2a["id"],
         )
         assert poll_until(
             fn=lambda: _ping(netris_vm_network, a1, a2["ip"]),
@@ -1302,6 +1368,8 @@ class TestVmaasNetworking:
             retries=5,
             delay=10,
             description=f"positive ICMP control inside tenant1 from {a1['ip']} to {a2['ip']}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=a1["id"],
         )
 
         for source_state, source, target, direction in (
@@ -1393,6 +1461,8 @@ class TestVmaasNetworking:
         _wait_gone(
             f"ExternalIPAttachment {attachment_id} API deletion",
             lambda: attachment_id not in grpc.list_external_ip_attachment_ids(),
+            resource_kind=WaitResourceKind.EXTERNAL_IP_ATTACHMENT,
+            resource_id=attachment_id,
         )
         record["attachment_id"] = ""
 
@@ -1418,12 +1488,19 @@ class TestVmaasNetworking:
                 "eip_id": record["eip_id"],
                 "address": record["address"],
             },
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=vm["id"],
         )
 
         eip_id = record["eip_id"]
         grpc.delete_external_ip(external_ip_id=eip_id)
         wait_for_external_ip_deletion(k8s=k8s_hub_client, name=record["eip_cr"])
-        _wait_gone(f"ExternalIP {eip_id} API deletion", lambda: eip_id not in grpc.list_external_ip_ids())
+        _wait_gone(
+            f"ExternalIP {eip_id} API deletion",
+            lambda: eip_id not in grpc.list_external_ip_ids(),
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=eip_id,
+        )
         record["eip_id"] = ""
         netris_external_path["ingress"].remove(record)
 

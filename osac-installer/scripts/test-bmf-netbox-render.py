@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
-import os
+import json
 import pathlib
 import subprocess
 import tempfile
@@ -67,25 +67,6 @@ bmf:
     enabled: false
 """
 
-MOCK_KUBECTL = """#!/usr/bin/env bash
-set -euo pipefail
-
-if [[ "$1" == get && "$2" == crd ]]; then
-  exit 0
-fi
-if [[ "$1" == get && "$2" == sc ]]; then
-  echo default
-  exit 0
-fi
-if [[ "$1" == get && "$2" == provisioning ]]; then
-  printf '%s' "$MOCK_WATCH_ALL_NAMESPACES"
-  exit 0
-fi
-echo "Unexpected kubectl call: $*" >&2
-exit 1
-"""
-
-
 def helm_result(release: str, chart: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
     command = ["helm", "template", release, str(chart), *args]
     return subprocess.run(command, check=False, capture_output=True, text=True, cwd=INSTALLER_DIR)
@@ -139,12 +120,6 @@ def container(resource_doc: dict[str, Any], name: str) -> dict[str, Any]:
 
 def environment(container_doc: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {item["name"]: item for item in container_doc.get("env", [])}
-
-
-def command_script(resource_doc: dict[str, Any], container_name: str) -> str:
-    command = container(resource_doc, container_name).get("command", [])
-    assert len(command) >= 3 and command[0:2] == ["/bin/sh", "-c"], f"expected {container_name} to run a /bin/sh script"
-    return command[2]
 
 
 def bmf_render(*args: str) -> list[dict[str, Any]]:
@@ -529,7 +504,16 @@ def check_bmf_netbox_secret_lookup(netbox_values: pathlib.Path) -> None:
         )
 
 
-def check_osac_wiring(temp_dir: pathlib.Path) -> tuple[list[dict[str, Any]], pathlib.Path]:
+def preflight_report(docs: list[dict[str, Any]]) -> dict[str, Any]:
+    """The render-time preflight report ConfigMap, parsed."""
+    for doc in docs:
+        name = doc.get("metadata", {}).get("name", "")
+        if doc.get("kind") == "ConfigMap" and name.endswith("-preflight-report"):
+            return json.loads(doc["data"]["render.json"])
+    raise AssertionError("no preflight report ConfigMap rendered")
+
+
+def check_osac_wiring(temp_dir: pathlib.Path) -> None:
     values_path = temp_dir / "osac-netbox-values.yaml"
     values_path.write_text(OSAC_NETBOX_VALUES, encoding="utf-8")
     default_values = OSAC_CHART / "ci/default-values.yaml"
@@ -556,32 +540,23 @@ def check_osac_wiring(temp_dir: pathlib.Path) -> tuple[list[dict[str, Any]], pat
     assert management["type"] == "metal3"
     assert management["options"]["metal3"]["namespace"] == "host-inventory"
 
-    validation_job = resource(docs, "Job", "osac-pre-install-validate")
-    validation_script = command_script(validation_job, "validate")
-    assert "Checking for Metal3 BareMetalHost CRD..." in validation_script
-    assert "kubectl get provisioning" in validation_script
-
-    provisioning_rules = [
-        rule
+    # The shell pre-install validation hook was retired in #1845 (OSAC-6561).
+    # Its Metal3 prerequisites moved into the render-time preflight engine, so
+    # assert the Job stays gone AND that the checks still run here. Without
+    # this, dropping the hook a second time would silently lose coverage.
+    assert not [
+        doc
         for doc in docs
-        if doc.get("kind") == "ClusterRole"
-        for rule in doc.get("rules", [])
-        if rule.get("resources") == ["provisionings"]
-    ]
-    assert len(provisioning_rules) == 1
-    assert provisioning_rules[0]["verbs"] == ["list"]
+        if doc.get("kind") == "Job"
+        and doc.get("metadata", {}).get("name") == "osac-pre-install-validate"
+    ], "the retired pre-install validation Job is rendered again"
 
-    validation_disabled = render(
-        "osac",
-        OSAC_CHART,
-        "--values",
-        str(default_values),
-        "--values",
-        str(values_path),
-        "--set",
-        "validation.enabled=false",
-    )
-    assert not any(doc.get("metadata", {}).get("name") == "osac-pre-install-validate" for doc in validation_disabled)
+    check_ids = {result["id"] for result in preflight_report(docs)["results"]}
+    assert {"metal3-bmh-crd", "metal3-watch-all-namespaces"} <= check_ids, sorted(check_ids)
+
+    # The Provisioning grant left this chart in #1845 (OSAC-6561) and now
+    # renders from osac-infra/templates/hooks/configure-metal3.yaml, which
+    # check_infra_metal3_rbac asserts below.
 
     assert_helm_failure(
         "bmf.secretAPI.issuerUrl must match service.auth.issuerUrl when bmf.netbox.enabled is true",
@@ -594,32 +569,28 @@ def check_osac_wiring(temp_dir: pathlib.Path) -> tuple[list[dict[str, Any]], pat
         "--set-string",
         "bmf.secretAPI.issuerUrl=https://wrong-issuer.example.test/realms/osac",
     )
-    return docs, values_path
 
 
-def run_script(script: str, script_path: pathlib.Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    script_path.write_text(script, encoding="utf-8")
-    return subprocess.run(
-        ["/bin/sh", str(script_path)], check=False, capture_output=True, text=True, cwd=INSTALLER_DIR, env=env
+def check_infra_metal3_rbac() -> None:
+    """The Metal3 Provisioning grant renders from the osac-infra hook."""
+    docs = render(
+        "osac-infra",
+        INFRA_CHART,
+        "--namespace",
+        "osac-infra",
+        "--set",
+        "osacNamespace=osac",
+        "--values",
+        "values/bmaas-ci/infra.yaml",
+        "--values",
+        "values/bmaas-netbox-ci/infra.yaml",
+        "--set",
+        "metal3.enabled=true",
     )
-
-
-def check_validation_scripts(osac_docs: list[dict[str, Any]], temp_dir: pathlib.Path) -> None:
-    mock_bin = temp_dir / "mock-bin"
-    mock_bin.mkdir()
-    kubectl = mock_bin / "kubectl"
-    kubectl.write_text(MOCK_KUBECTL, encoding="utf-8")
-    kubectl.chmod(0o755)
-    env = os.environ.copy()
-    env["PATH"] = f"{mock_bin}:{env['PATH']}"
-
-    osac_job = resource(osac_docs, "Job", "osac-pre-install-validate")
-    osac_script = command_script(osac_job, "validate")
-    osac_env = env | {"MOCK_WATCH_ALL_NAMESPACES": "true"}
-    osac_success = run_script(osac_script, temp_dir / "pre-install-validate.sh", osac_env)
-    assert osac_success.returncode == 0, (
-        f"OSAC pre-install validation rejected valid prerequisites:\n{osac_success.stdout}{osac_success.stderr}"
-    )
+    role = resource(docs, "ClusterRole", "osac-infra-configure-metal3")
+    provisioning_rules = [rule for rule in role["rules"] if rule.get("resources") == ["provisionings"]]
+    assert len(provisioning_rules) == 1
+    assert set(provisioning_rules[0]["verbs"]) == {"get", "list", "create", "patch"}
 
 
 def main() -> None:
@@ -649,9 +620,9 @@ def main() -> None:
         check_bmf_bcm()
         check_bmf_invalid_values(netbox_values)
         check_infra_netbox_shared_postgres()
+        check_infra_metal3_rbac()
         check_infra_netbox_disabled()
-        osac_docs, _ = check_osac_wiring(temp_dir)
-        check_validation_scripts(osac_docs, temp_dir)
+        check_osac_wiring(temp_dir)
 
     print("BMF NetBox Helm render checks passed.")
 

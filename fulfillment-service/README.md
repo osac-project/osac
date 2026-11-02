@@ -353,3 +353,4 @@ the `ca-bundle` ConfigMap created by _trust-manager_:
 kubectl get configmap ca-bundle -n osac -o json | jq -r '.data["bundle.pem"]' > ca.crt
 ```
 
+

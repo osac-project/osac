@@ -117,6 +117,16 @@ describe('AppShell', () => {
   });
 
   it.each([
+    { path: '/catalog/vm/item-1', title: 'VM catalog item not found' },
+    { path: '/catalog/cluster/item-1', title: 'Cluster catalog item not found' },
+    { path: '/catalog/bm/item-1', title: 'Bare metal catalog item not found' },
+  ])('routes $path to its resource-specific catalog detail page', async ({ path, title }) => {
+    renderAppShell(path);
+
+    expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument();
+  });
+
+  it.each([
     {
       path: '/vms/vm-1',
       service: ServiceTier.VMAAS,

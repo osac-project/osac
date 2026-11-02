@@ -7,8 +7,8 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      == "main" && ( "osac-csi-driver/charts/csi-driver/***".pathChanged() || ".tekton/osac-csi-driver-chart/push.yaml".pathChanged()
+    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && (target_branch
+      == "main" || target_branch.startsWith("release-")) && ( "osac-csi-driver/charts/csi-driver/***".pathChanged() || ".tekton/osac-csi-driver-chart/push.yaml".pathChanged()
       )
   labels:
     appstudio.openshift.io/application: osac

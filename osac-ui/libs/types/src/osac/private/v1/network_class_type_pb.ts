@@ -30,21 +30,13 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/network_class_type.proto.
  */
 export const file_osac_private_v1_network_class_type: GenFile = /*@__PURE__*/
-  fileDesc("Cihvc2FjL3ByaXZhdGUvdjEvbmV0d29ya19jbGFzc190eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEi4gMKDE5ldHdvcmtDbGFzcxIKCgJpZBgBIAEoCRIrCghtZXRhZGF0YRgCIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRINCgV0aXRsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRI9Cgtjb25zdHJhaW50cxgGIAEoCzIoLm9zYWMucHJpdmF0ZS52MS5OZXR3b3JrQ2xhc3NDb25zdHJhaW50cxI/CgxjYXBhYmlsaXRpZXMYByABKAsyKS5vc2FjLnByaXZhdGUudjEuTmV0d29ya0NsYXNzQ2FwYWJpbGl0aWVzEjkKBnN0YXR1cxgIIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5OZXR3b3JrQ2xhc3NTdGF0dXNCBOJBAQMSGwoOZmFicmljX21hbmFnZXIYCiABKAlIAIgBARIYCgtrOHNfbWFuYWdlchgLIAEoCUgBiAEBEi8KBHNwZWMYDCABKAsyIS5vc2FjLnByaXZhdGUudjEuTmV0d29ya0NsYXNzU3BlY0IRCg9fZmFicmljX21hbmFnZXJCDgoMX2s4c19tYW5hZ2VySgQIBRAGSgQICRAKUhdpbXBsZW1lbnRhdGlvbl9zdHJhdGVneVIKaXNfZGVmYXVsdCKMAgoQTmV0d29ya0NsYXNzU3BlYxIyCghkZWZhdWx0cxgBIAEoCzIgLm9zYWMucHJpdmF0ZS52MS5OZXR3b3JrRGVmYXVsdHMSRwoUZGlzYWJsZV9jYXBhYmlsaXRpZXMYAiABKAsyKS5vc2FjLnByaXZhdGUudjEuTmV0d29ya0NsYXNzQ2FwYWJpbGl0aWVzEioKEXZpcF9wcmVmaXhfbGVuZ3RoGAMgASgFQgq6SAcaBRiAASgBSACIAQESOQoQZWFzdF93ZXN0X2NvbmZpZxgEIAEoCzIfLm9zYWMucHJpdmF0ZS52MS5FYXN0V2VzdENvbmZpZ0IUChJfdmlwX3ByZWZpeF9sZW5ndGgi5wgKD05ldHdvcmtEZWZhdWx0cxKaAQoZdmlydHVhbF9uZXR3b3JrX2lwdjRfY2lkchgBIAEoCUJ3ukh0ugFxCg92YWxpZF9pcHY0X2NpZHISNm11c3QgYmUgdmFsaWQgSVB2NCBDSURSIG5vdGF0aW9uIChlLmcuLCAnMTAuMC4wLjAvMTYnKRomdGhpcyA9PSAnJyB8fCB0aGlzLmlzSXBQcmVmaXgoNCwgdHJ1ZSkSmAEKGXZpcnR1YWxfbmV0d29ya19pcHY2X2NpZHIYBSABKAlCdbpIcroBbwoPdmFsaWRfaXB2Nl9jaWRyEjRtdXN0IGJlIHZhbGlkIElQdjYgQ0lEUiBub3RhdGlvbiAoZS5nLiwgJ2ZkMDA6Oi80OCcpGiZ0aGlzID09ICcnIHx8IHRoaXMuaXNJcFByZWZpeCg2LCB0cnVlKRKRAQoQc3VibmV0X2lwdjRfY2lkchgCIAEoCUJ3ukh0ugFxCg92YWxpZF9pcHY0X2NpZHISNm11c3QgYmUgdmFsaWQgSVB2NCBDSURSIG5vdGF0aW9uIChlLmcuLCAnMTAuMC4xLjAvMjQnKRomdGhpcyA9PSAnJyB8fCB0aGlzLmlzSXBQcmVmaXgoNCwgdHJ1ZSkSlQEKEHN1Ym5ldF9pcHY2X2NpZHIYBiABKAlCe7pIeLoBdQoPdmFsaWRfaXB2Nl9jaWRyEjptdXN0IGJlIHZhbGlkIElQdjYgQ0lEUiBub3RhdGlvbiAoZS5nLiwgJ2ZkMDA6MDowOjE6Oi82NCcpGiZ0aGlzID09ICcnIHx8IHRoaXMuaXNJcFByZWZpeCg2LCB0cnVlKRI0Cg1pbmdyZXNzX3J1bGVzGAMgAygLMh0ub3NhYy5wcml2YXRlLnYxLlNlY3VyaXR5UnVsZRIzCgxlZ3Jlc3NfcnVsZXMYBCADKAsyHS5vc2FjLnByaXZhdGUudjEuU2VjdXJpdHlSdWxlEhoKEmVuYWJsZV9uYXRfZ2F0ZXdheRgHIAEoCDroArpI5AIarwEKKXN1Ym5ldF9pcHY0X3JlcXVpcmVzX3ZpcnR1YWxfbmV0d29ya19pcHY0Ej1zdWJuZXRfaXB2NF9jaWRyIHJlcXVpcmVzIHZpcnR1YWxfbmV0d29ya19pcHY0X2NpZHIgdG8gYmUgc2V0GkN0aGlzLnN1Ym5ldF9pcHY0X2NpZHIgPT0gJycgfHwgdGhpcy52aXJ0dWFsX25ldHdvcmtfaXB2NF9jaWRyICE9ICcnGq8BCilzdWJuZXRfaXB2Nl9yZXF1aXJlc192aXJ0dWFsX25ldHdvcmtfaXB2NhI9c3VibmV0X2lwdjZfY2lkciByZXF1aXJlcyB2aXJ0dWFsX25ldHdvcmtfaXB2Nl9jaWRyIHRvIGJlIHNldBpDdGhpcy5zdWJuZXRfaXB2Nl9jaWRyID09ICcnIHx8IHRoaXMudmlydHVhbF9uZXR3b3JrX2lwdjZfY2lkciAhPSAnJyIZChdOZXR3b3JrQ2xhc3NDb25zdHJhaW50cyLfAQoYTmV0d29ya0NsYXNzQ2FwYWJpbGl0aWVzEhUKDXN1cHBvcnRzX2lwdjQYASABKAgSFQoNc3VwcG9ydHNfaXB2NhgCIAEoCBIbChNzdXBwb3J0c19kdWFsX3N0YWNrGAMgASgIEhMKC2RwdV9zdXBwb3J0GAQgASgIEiMKG3N1cHBvcnRzX2Vhc3Rfd2VzdF9ldGhlcm5ldBgFIAEoCBIlCh1zdXBwb3J0c19lYXN0X3dlc3RfaW5maW5pYmFuZBgGIAEoCBIXCg9zdXBwb3J0c19udmxpbmsYByABKAgixwEKDkVhc3RXZXN0Q29uZmlnEjwKC2V0aGVybmV0X2V3GAEgASgLMicub3NhYy5wcml2YXRlLnYxLkV0aGVybmV0RWFzdFdlc3RDb25maWcSQAoNaW5maW5pYmFuZF9ldxgCIAEoCzIpLm9zYWMucHJpdmF0ZS52MS5JbmZpbmlCYW5kRWFzdFdlc3RDb25maWcSNQoGbnZsaW5rGAMgASgLMiUub3NhYy5wcml2YXRlLnYxLk5WTGlua0Vhc3RXZXN0Q29uZmlnIisKFkV0aGVybmV0RWFzdFdlc3RDb25maWdKBAgBEAJSC3RlbXBsYXRlX2lkIj0KGEluZmluaUJhbmRFYXN0V2VzdENvbmZpZxIMCgRtb2RlGAEgASgJEhMKC3BrZXlfcG9saWN5GAIgASgJIjkKFE5WTGlua0Vhc3RXZXN0Q29uZmlnEg8KB2JhY2tlbmQYASABKAkSEAoIZW5kcG9pbnQYAiABKAki4wEKEk5ldHdvcmtDbGFzc1N0YXR1cxIxCgVzdGF0ZRgBIAEoDjIiLm9zYWMucHJpdmF0ZS52MS5OZXR3b3JrQ2xhc3NTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQESCwoDaHViGAMgASgJEjkKDW1hbmFnZXJfc3RhdGUYBCABKA4yIi5vc2FjLnByaXZhdGUudjEuTmV0d29ya0NsYXNzU3RhdGUSHAoPbWFuYWdlcl9tZXNzYWdlGAUgASgJSAGIAQFCCgoIX21lc3NhZ2VCEgoQX21hbmFnZXJfbWVzc2FnZSJSChVOZXR3b3JrQ2xhc3NSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIPCgdwcm9qZWN0GAMgASgJEg4KBnNoYXJlZBgEIAEoCCqYAQoRTmV0d29ya0NsYXNzU3RhdGUSIwofTkVUV09SS19DTEFTU19TVEFURV9VTlNQRUNJRklFRBAAEh8KG05FVFdPUktfQ0xBU1NfU1RBVEVfUEVORElORxABEh0KGU5FVFdPUktfQ0xBU1NfU1RBVEVfUkVBRFkQAhIeChpORVRXT1JLX0NMQVNTX1NUQVRFX0ZBSUxFRBADQgaKtRgCCAFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_security_rule_type]);
+  fileDesc("Cihvc2FjL3ByaXZhdGUvdjEvbmV0d29ya19jbGFzc190eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEi+gIKDE5ldHdvcmtDbGFzcxIKCgJpZBgBIAEoCRIrCghtZXRhZGF0YRgCIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRINCgV0aXRsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRI5CgZzdGF0dXMYCCABKAsyIy5vc2FjLnByaXZhdGUudjEuTmV0d29ya0NsYXNzU3RhdHVzQgTiQQEDEh8KDmZhYnJpY19tYW5hZ2VyGAogASgJQge6SARyAhABEhgKC2s4c19tYW5hZ2VyGAsgASgJSACIAQESLwoEc3BlYxgMIAEoCzIhLm9zYWMucHJpdmF0ZS52MS5OZXR3b3JrQ2xhc3NTcGVjQg4KDF9rOHNfbWFuYWdlckoECAUQBkoECAYQB0oECAcQCEoECAkQClIXaW1wbGVtZW50YXRpb25fc3RyYXRlZ3lSC2NvbnN0cmFpbnRzUgxjYXBhYmlsaXRpZXNSCmlzX2RlZmF1bHQiogIKEE5ldHdvcmtDbGFzc1NwZWMSOgoIZGVmYXVsdHMYASABKAsyIC5vc2FjLnByaXZhdGUudjEuTmV0d29ya0RlZmF1bHRzQga6SAPIAQESUQoWZWFzdF93ZXN0X2NhcGFiaWxpdGllcxgFIAEoCzIxLm9zYWMucHJpdmF0ZS52MS5OZXR3b3JrQ2xhc3NFYXN0V2VzdENhcGFiaWxpdGllcxIyCgxhZGRyZXNzX3BsYW4YBiABKAsyHC5vc2FjLnByaXZhdGUudjEuQWRkcmVzc1BsYW5KBAgCEANKBAgDEARKBAgEEAVSFGRpc2FibGVfY2FwYWJpbGl0aWVzUhF2aXBfcHJlZml4X2xlbmd0aFIQZWFzdF93ZXN0X2NvbmZpZyKFAgoLQWRkcmVzc1BsYW4SKAoHb3ZlcmxheRgBIAEoAUIXukgUEhIZAAAAAAAA8D8pAAAAAAAAAAASJwoGZmFicmljGAIgASgBQhe6SBQSEhkAAAAAAADwPykAAAAAAAAAABInCgZsYl92aXAYAyABKAFCF7pIFBISGQAAAAAAAPA/KQAAAAAAAAAAOnq6SHcadQoQYWRkcmVzc19wbGFuX3N1bRIwb3ZlcmxheSwgZmFicmljIGFuZCBsYl92aXAgbXVzdCBzdW0gdG8gZXhhY3RseSAxGi90aGlzLm92ZXJsYXkgKyB0aGlzLmZhYnJpYyArIHRoaXMubGJfdmlwID09IDEuMCJHCiBOZXR3b3JrQ2xhc3NFYXN0V2VzdENhcGFiaWxpdGllcxIjChtzdXBwb3J0c19lYXN0X3dlc3RfZXRoZXJuZXQYASABKAgi5AMKD05ldHdvcmtEZWZhdWx0cxKMAQoZdmlydHVhbF9uZXR3b3JrX2lwdjRfY2lkchgBIAEoCUJpukhmugFjCg92YWxpZF9pcHY0X2NpZHISNm11c3QgYmUgdmFsaWQgSVB2NCBDSURSIG5vdGF0aW9uIChlLmcuLCAnMTAuMC4wLjAvMTYnKRoYdGhpcy5pc0lwUHJlZml4KDQsIHRydWUpEoMBChBzdWJuZXRfaXB2NF9jaWRyGAIgASgJQmm6SGa6AWMKD3ZhbGlkX2lwdjRfY2lkchI2bXVzdCBiZSB2YWxpZCBJUHY0IENJRFIgbm90YXRpb24gKGUuZy4sICcxMC4wLjEuMC8yNCcpGhh0aGlzLmlzSXBQcmVmaXgoNCwgdHJ1ZSkSNAoNaW5ncmVzc19ydWxlcxgDIAMoCzIdLm9zYWMucHJpdmF0ZS52MS5TZWN1cml0eVJ1bGUSMwoMZWdyZXNzX3J1bGVzGAQgAygLMh0ub3NhYy5wcml2YXRlLnYxLlNlY3VyaXR5UnVsZUoECAUQBkoECAYQB0oECAcQCFIZdmlydHVhbF9uZXR3b3JrX2lwdjZfY2lkclIQc3VibmV0X2lwdjZfY2lkclISZW5hYmxlX25hdF9nYXRld2F5Iq4CChJOZXR3b3JrQ2xhc3NTdGF0dXMSMQoFc3RhdGUYASABKA4yIi5vc2FjLnByaXZhdGUudjEuTmV0d29ya0NsYXNzU3RhdGUSFAoHbWVzc2FnZRgCIAEoCUgAiAEBEgsKA2h1YhgDIAEoCRI6ChBuZXR3b3JrX21hbmFnZXJzGAYgASgLMiAub3NhYy5wcml2YXRlLnYxLk5ldHdvcmtNYW5hZ2VycxIUCgxuZXR3b3JrX3R5cGUYByABKAkSIAoTc2VjdXJpdHlfZ3JvdXBfaWNtcBgIIAEoCEgBiAEBQgoKCF9tZXNzYWdlQhYKFF9zZWN1cml0eV9ncm91cF9pY21wSgQIBBAFSgQIBRAGUg1tYW5hZ2VyX3N0YXRlUg9tYW5hZ2VyX21lc3NhZ2UiiwEKD05ldHdvcmtNYW5hZ2VycxIvCgZmYWJyaWMYASABKAsyHy5vc2FjLnByaXZhdGUudjEuTmV0d29ya01hbmFnZXISOAoKa3ViZXJuZXRlcxgCIAEoCzIfLm9zYWMucHJpdmF0ZS52MS5OZXR3b3JrTWFuYWdlckgAiAEBQg0KC19rdWJlcm5ldGVzIjQKDk5ldHdvcmtNYW5hZ2VyEgwKBG5hbWUYASABKAkSFAoMYW5zaWJsZV9yb2xlGAIgASgJKpgBChFOZXR3b3JrQ2xhc3NTdGF0ZRIjCh9ORVRXT1JLX0NMQVNTX1NUQVRFX1VOU1BFQ0lGSUVEEAASHwobTkVUV09SS19DTEFTU19TVEFURV9QRU5ESU5HEAESHQoZTkVUV09SS19DTEFTU19TVEFURV9SRUFEWRACEh4KGk5FVFdPUktfQ0xBU1NfU1RBVEVfRkFJTEVEEANCBoq1GAIIAWIGcHJvdG8z", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_security_rule_type]);
 
 /**
- * Describes a network implementation strategy available for creating virtual networks.
+ * The deployment's NetworkClass: which managers implement networking and the defaults new tenants get.
  *
- * NetworkClass represents a specific network backend implementation that VirtualNetworks can use. For example,
- * there could be a network class `udn-net` to describe networks implemented using User-Defined Networks in
- * Kubernetes, and another `phys-net` for networks backed by physical network infrastructure.
- *
- * This is similar to the _storage class_ concept used by Kubernetes for persistent volumes, or the _instance type_
- * concept used by cloud providers for compute resources.
- *
- * A deployment has exactly one active NetworkClass. The `fabric_manager` and `k8s_manager` fields are the routing keys
- * that determine which managers handle provisioning for networking resources in the deployment. Tenants do not select
- * a NetworkClass.
+ * A deployment has exactly one NetworkClass. The installer creates it from the Helm values, and its spec,
+ * `spec.address_plan` included, never changes afterwards; only OSAC writes its status. Tenants do not select a NetworkClass.
  *
  * buf:lint:ignore OSAC_OBJECT_SHAPE
  *
@@ -67,36 +59,18 @@ export type NetworkClass = Message<"osac.private.v1.NetworkClass"> & {
 
   /**
    * Human friendly short description of the network class, only a few words, suitable for displaying in one single
-   * line on a UI or CLI. For example: "UDN Network" or "Physical Network".
+   * line on a UI or CLI.
    *
    * @generated from field: string title = 3;
    */
   title: string;
 
   /**
-   * Human friendly long description of the network class, using Markdown format. This should explain the
-   * characteristics of networks created using this class, including performance characteristics, isolation
-   * guarantees, and any limitations or requirements.
+   * Human friendly long description of the network class, using Markdown format.
    *
    * @generated from field: string description = 4;
    */
   description: string;
-
-  /**
-   * Class-specific configuration constraints and options. These define implementation-specific parameters that
-   * networks using this class must or may configure.
-   *
-   * @generated from field: osac.private.v1.NetworkClassConstraints constraints = 6;
-   */
-  constraints?: NetworkClassConstraints | undefined;
-
-  /**
-   * Capabilities that this network class supports. These describe what features are available when using this
-   * network implementation strategy.
-   *
-   * @generated from field: osac.private.v1.NetworkClassCapabilities capabilities = 7;
-   */
-  capabilities?: NetworkClassCapabilities | undefined;
 
   /**
    * Current operational status of the network class.
@@ -106,20 +80,15 @@ export type NetworkClass = Message<"osac.private.v1.NetworkClass"> & {
   status?: NetworkClassStatus | undefined;
 
   /**
-   * Identifier of the fabric manager that handles physical network operations for this class. The fabric manager
-   * controls all fabric-level operations: virtual network segments, security groups, external IPs, and NAT gateways.
-   * For example: "netris", "neutron". Not needed for k8s-only deployments — if unset, k8s_manager must be set
-   * instead, and k8s-only operations (VirtualNetwork, Subnet, SecurityGroup, ExternalIP) are routed to it.
+   * Name of the registered Fabric Manager that handles every networking resource. Required.
    *
-   * @generated from field: optional string fabric_manager = 10;
+   * @generated from field: string fabric_manager = 10;
    */
-  fabricManager?: string | undefined;
+  fabricManager: string;
 
   /**
-   * Identifier of the K8s manager that bridges the Kubernetes overlay to the physical fabric. Only needed for regions
-   * that host VMs — the K8s manager creates the overlay network on hosting clusters and bridges it to the fabric
-   * segment. For example: "cudn_localnet". If not set, the region does not support VM workloads. At least one of
-   * fabric_manager or k8s_manager must be set.
+   * Name of the OSAC Kubernetes Manager (for example "cudn_evpn"). Required to run VMs; unset when VMaaS is
+   * disabled.
    *
    * @generated from field: optional string k8s_manager = 11;
    */
@@ -147,40 +116,26 @@ export const NetworkClassSchema: GenMessage<NetworkClass> = /*@__PURE__*/
  */
 export type NetworkClassSpec = Message<"osac.private.v1.NetworkClassSpec"> & {
   /**
-   * Default networking configuration for tenant onboarding. When a tenant is created, the system uses these
-   * defaults to auto-create a VirtualNetwork, Subnet, and SecurityGroup for the tenant.
+   * Default networking configuration for tenant onboarding. Required.
    *
    * @generated from field: osac.private.v1.NetworkDefaults defaults = 1;
    */
   defaults?: NetworkDefaults | undefined;
 
   /**
-   * Capabilities to disable for this NetworkClass. Each field set to true here is removed from
-   * the class's supported capabilities. The operator uses this during capabilities intersection
-   * to remove capabilities that the provider has explicitly disabled for this region.
+   * East-west capabilities the deployment offers.
    *
-   * @generated from field: osac.private.v1.NetworkClassCapabilities disable_capabilities = 2;
+   * @generated from field: osac.private.v1.NetworkClassEastWestCapabilities east_west_capabilities = 5;
    */
-  disableCapabilities?: NetworkClassCapabilities | undefined;
+  eastWestCapabilities?: NetworkClassEastWestCapabilities | undefined;
 
   /**
-   * Prefix length that reserves the last /N of each subnet CIDR for VIP allocation (e.g., cluster
-   * API server and ingress endpoints). This is a deployment-wide parameter. At subnet creation, the
-   * fabric manager excludes this range from its DHCP pool, and the k8s manager creates an IPAddressPool
-   * covering only this range.
-   * Example: with a 10.0.1.0/24 subnet and vip_prefix_length=28, the last /28 (10.0.1.240-10.0.1.255)
-   * is reserved for VIPs; DHCP serves 10.0.1.1-10.0.1.239.
+   * How each Subnet's addresses are split between the overlay, fabric and load balancer VIP ranges. Set by the
+   * installer; required on create; immutable.
    *
-   * @generated from field: optional int32 vip_prefix_length = 3;
+   * @generated from field: osac.private.v1.AddressPlan address_plan = 6;
    */
-  vipPrefixLength?: number | undefined;
-
-  /**
-   * Backend configuration for east-west fabric domains.
-   *
-   * @generated from field: osac.private.v1.EastWestConfig east_west_config = 4;
-   */
-  eastWestConfig?: EastWestConfig | undefined;
+  addressPlan?: AddressPlan | undefined;
 };
 
 /**
@@ -191,69 +146,97 @@ export const NetworkClassSpecSchema: GenMessage<NetworkClassSpec> = /*@__PURE__*
   messageDesc(file_osac_private_v1_network_class_type, 1);
 
 /**
+ * Shares of each Subnet's address space. Each share is a multiple of 1/16 from 0 to 1, and the shares sum to 1.
+ *
+ * @generated from message osac.private.v1.AddressPlan
+ */
+export type AddressPlan = Message<"osac.private.v1.AddressPlan"> & {
+  /**
+   * Share of the overlay range (VM addresses on the Kubernetes overlay).
+   *
+   * @generated from field: double overlay = 1;
+   */
+  overlay: number;
+
+  /**
+   * Share of the fabric range (physical servers' DHCP addresses).
+   *
+   * @generated from field: double fabric = 2;
+   */
+  fabric: number;
+
+  /**
+   * Share of the load balancer VIP range (Cluster endpoints).
+   *
+   * @generated from field: double lb_vip = 3;
+   */
+  lbVip: number;
+};
+
+/**
+ * Describes the message osac.private.v1.AddressPlan.
+ * Use `create(AddressPlanSchema)` to create a new message.
+ */
+export const AddressPlanSchema: GenMessage<AddressPlan> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_network_class_type, 2);
+
+/**
+ * East-west capabilities of a deployment.
+ *
+ * @generated from message osac.private.v1.NetworkClassEastWestCapabilities
+ */
+export type NetworkClassEastWestCapabilities = Message<"osac.private.v1.NetworkClassEastWestCapabilities"> & {
+  /**
+   * Whether FabricDomains of type Ethernet east-west can be created.
+   *
+   * @generated from field: bool supports_east_west_ethernet = 1;
+   */
+  supportsEastWestEthernet: boolean;
+};
+
+/**
+ * Describes the message osac.private.v1.NetworkClassEastWestCapabilities.
+ * Use `create(NetworkClassEastWestCapabilitiesSchema)` to create a new message.
+ */
+export const NetworkClassEastWestCapabilitiesSchema: GenMessage<NetworkClassEastWestCapabilities> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_network_class_type, 3);
+
+/**
  * Default networking configuration used during tenant onboarding.
  *
- * When a tenant is reconciled, the tenant controller reads these defaults from the NetworkClass and asynchronously creates
- * a default VirtualNetwork, IPv4 Subnet, IPv6 Subnet, SecurityGroup, and optionally a NATGateway
- * for the tenant. All fields are optional — defaults can be partially populated.
+ * The default networking manager creates each tenant's default VirtualNetwork, Subnet and SecurityGroup from these
+ * values.
  *
  * @generated from message osac.private.v1.NetworkDefaults
  */
 export type NetworkDefaults = Message<"osac.private.v1.NetworkDefaults"> & {
   /**
-   * Default IPv4 CIDR for auto-created tenant VirtualNetwork.
-   * Example: "10.0.0.0/16"
+   * IPv4 CIDR of each tenant's default VirtualNetwork. Required. Example: "10.200.0.0/16"
    *
    * @generated from field: string virtual_network_ipv4_cidr = 1;
    */
   virtualNetworkIpv4Cidr: string;
 
   /**
-   * Default IPv6 CIDR for auto-created tenant VirtualNetwork.
-   * Example: "fd00::/48"
-   *
-   * @generated from field: string virtual_network_ipv6_cidr = 5;
-   */
-  virtualNetworkIpv6Cidr: string;
-
-  /**
-   * Default IPv4 CIDR for auto-created tenant Subnet. Must fall within the virtual_network_ipv4_cidr range.
-   * Example: "10.0.1.0/24"
+   * IPv4 CIDR of each tenant's default Subnet, inside virtual_network_ipv4_cidr. Required. Example: "10.200.0.0/20"
    *
    * @generated from field: string subnet_ipv4_cidr = 2;
    */
   subnetIpv4Cidr: string;
 
   /**
-   * Default IPv6 CIDR for auto-created tenant Subnet. Must fall within the virtual_network_ipv6_cidr range.
-   * Example: "fd00:0:0:1::/64"
-   *
-   * @generated from field: string subnet_ipv6_cidr = 6;
-   */
-  subnetIpv6Cidr: string;
-
-  /**
-   * Default ingress rules for auto-created tenant SecurityGroup.
+   * Ingress rules of each tenant's default SecurityGroup.
    *
    * @generated from field: repeated osac.private.v1.SecurityRule ingress_rules = 3;
    */
   ingressRules: SecurityRule[];
 
   /**
-   * Default egress rules for auto-created tenant SecurityGroup.
+   * Egress rules of each tenant's default SecurityGroup.
    *
    * @generated from field: repeated osac.private.v1.SecurityRule egress_rules = 4;
    */
   egressRules: SecurityRule[];
-
-  /**
-   * Whether to create a default NATGateway on the tenant's default VirtualNetwork.
-   * When true, tenant onboarding auto-allocates an ExternalIP and creates a NATGateway
-   * to provide SNAT for outbound connectivity.
-   *
-   * @generated from field: bool enable_nat_gateway = 7;
-   */
-  enableNatGateway: boolean;
 };
 
 /**
@@ -261,179 +244,7 @@ export type NetworkDefaults = Message<"osac.private.v1.NetworkDefaults"> & {
  * Use `create(NetworkDefaultsSchema)` to create a new message.
  */
 export const NetworkDefaultsSchema: GenMessage<NetworkDefaults> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_network_class_type, 2);
-
-/**
- * Defines configuration constraints for a specific NetworkClass implementation.
- *
- * This message contains implementation-specific parameters that may be required or optional when creating
- * VirtualNetworks using this class. Currently minimal to allow for future extension.
- *
- * Reserved for future implementation-specific constraint fields.
- * Examples might include: required VLAN ranges, MTU constraints, required subnet sizes, etc.
- *
- * @generated from message osac.private.v1.NetworkClassConstraints
- */
-export type NetworkClassConstraints = Message<"osac.private.v1.NetworkClassConstraints"> & {
-};
-
-/**
- * Describes the message osac.private.v1.NetworkClassConstraints.
- * Use `create(NetworkClassConstraintsSchema)` to create a new message.
- */
-export const NetworkClassConstraintsSchema: GenMessage<NetworkClassConstraints> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_network_class_type, 3);
-
-/**
- * Describes the capabilities supported by a NetworkClass.
- *
- * These fields indicate what network features are available when using this class for VirtualNetwork creation.
- *
- * @generated from message osac.private.v1.NetworkClassCapabilities
- */
-export type NetworkClassCapabilities = Message<"osac.private.v1.NetworkClassCapabilities"> & {
-  /**
-   * Whether this network class supports IPv4 addressing.
-   *
-   * @generated from field: bool supports_ipv4 = 1;
-   */
-  supportsIpv4: boolean;
-
-  /**
-   * Whether this network class supports IPv6 addressing.
-   *
-   * @generated from field: bool supports_ipv6 = 2;
-   */
-  supportsIpv6: boolean;
-
-  /**
-   * Whether this network class supports dual-stack (IPv4 + IPv6) configuration.
-   *
-   * @generated from field: bool supports_dual_stack = 3;
-   */
-  supportsDualStack: boolean;
-
-  /**
-   * Whether this network class supports DPU (Data Processing Unit) offloading.
-   *
-   * @generated from field: bool dpu_support = 4;
-   */
-  dpuSupport: boolean;
-
-  /**
-   * Whether this network class supports Ethernet east-west fabric domains.
-   *
-   * @generated from field: bool supports_east_west_ethernet = 5;
-   */
-  supportsEastWestEthernet: boolean;
-
-  /**
-   * Whether this network class supports InfiniBand east-west fabric domains.
-   *
-   * @generated from field: bool supports_east_west_infiniband = 6;
-   */
-  supportsEastWestInfiniband: boolean;
-
-  /**
-   * Whether this network class supports NVLink fabric domains.
-   *
-   * @generated from field: bool supports_nvlink = 7;
-   */
-  supportsNvlink: boolean;
-};
-
-/**
- * Describes the message osac.private.v1.NetworkClassCapabilities.
- * Use `create(NetworkClassCapabilitiesSchema)` to create a new message.
- */
-export const NetworkClassCapabilitiesSchema: GenMessage<NetworkClassCapabilities> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_network_class_type, 4);
-
-/**
- * @generated from message osac.private.v1.EastWestConfig
- */
-export type EastWestConfig = Message<"osac.private.v1.EastWestConfig"> & {
-  /**
-   * @generated from field: osac.private.v1.EthernetEastWestConfig ethernet_ew = 1;
-   */
-  ethernetEw?: EthernetEastWestConfig | undefined;
-
-  /**
-   * @generated from field: osac.private.v1.InfiniBandEastWestConfig infiniband_ew = 2;
-   */
-  infinibandEw?: InfiniBandEastWestConfig | undefined;
-
-  /**
-   * @generated from field: osac.private.v1.NVLinkEastWestConfig nvlink = 3;
-   */
-  nvlink?: NVLinkEastWestConfig | undefined;
-};
-
-/**
- * Describes the message osac.private.v1.EastWestConfig.
- * Use `create(EastWestConfigSchema)` to create a new message.
- */
-export const EastWestConfigSchema: GenMessage<EastWestConfig> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_network_class_type, 5);
-
-/**
- * Reserved for future Ethernet east-west policy. Templates are bound to bare metal instance types.
- *
- * @generated from message osac.private.v1.EthernetEastWestConfig
- */
-export type EthernetEastWestConfig = Message<"osac.private.v1.EthernetEastWestConfig"> & {
-};
-
-/**
- * Describes the message osac.private.v1.EthernetEastWestConfig.
- * Use `create(EthernetEastWestConfigSchema)` to create a new message.
- */
-export const EthernetEastWestConfigSchema: GenMessage<EthernetEastWestConfig> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_network_class_type, 6);
-
-/**
- * @generated from message osac.private.v1.InfiniBandEastWestConfig
- */
-export type InfiniBandEastWestConfig = Message<"osac.private.v1.InfiniBandEastWestConfig"> & {
-  /**
-   * @generated from field: string mode = 1;
-   */
-  mode: string;
-
-  /**
-   * @generated from field: string pkey_policy = 2;
-   */
-  pkeyPolicy: string;
-};
-
-/**
- * Describes the message osac.private.v1.InfiniBandEastWestConfig.
- * Use `create(InfiniBandEastWestConfigSchema)` to create a new message.
- */
-export const InfiniBandEastWestConfigSchema: GenMessage<InfiniBandEastWestConfig> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_network_class_type, 7);
-
-/**
- * @generated from message osac.private.v1.NVLinkEastWestConfig
- */
-export type NVLinkEastWestConfig = Message<"osac.private.v1.NVLinkEastWestConfig"> & {
-  /**
-   * @generated from field: string backend = 1;
-   */
-  backend: string;
-
-  /**
-   * @generated from field: string endpoint = 2;
-   */
-  endpoint: string;
-};
-
-/**
- * Describes the message osac.private.v1.NVLinkEastWestConfig.
- * Use `create(NVLinkEastWestConfigSchema)` to create a new message.
- */
-export const NVLinkEastWestConfigSchema: GenMessage<NVLinkEastWestConfig> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_network_class_type, 8);
 
 /**
  * Represents the current operational state of a NetworkClass.
@@ -442,15 +253,14 @@ export const NVLinkEastWestConfigSchema: GenMessage<NVLinkEastWestConfig> = /*@_
  */
 export type NetworkClassStatus = Message<"osac.private.v1.NetworkClassStatus"> & {
   /**
-   * Overall lifecycle state, aggregated from manager availability and Hub readiness.
+   * READY once the operator found the registrations of the configured managers.
    *
    * @generated from field: osac.private.v1.NetworkClassState state = 1;
    */
   state: NetworkClassState;
 
   /**
-   * Human-readable message providing additional details about the current state. For example, if the state is
-   * FAILED, this message might explain what went wrong.
+   * Human-readable details, for example which registration is missing.
    *
    * @generated from field: optional string message = 2;
    */
@@ -458,25 +268,33 @@ export type NetworkClassStatus = Message<"osac.private.v1.NetworkClassStatus"> &
 
   /**
    * Identifier of the hub that was selected for this network class.
-   * This is system-managed and used by the controller to track which hub cluster manages this class's resources.
    *
    * @generated from field: string hub = 3;
    */
   hub: string;
 
   /**
-   * Availability of the configured fabric and Kubernetes managers. The operator owns this field.
+   * The registered managers the operator resolved. Written by the operator.
    *
-   * @generated from field: osac.private.v1.NetworkClassState manager_state = 4;
+   * @generated from field: osac.private.v1.NetworkManagers network_managers = 6;
    */
-  managerState: NetworkClassState;
+  networkManagers?: NetworkManagers | undefined;
 
   /**
-   * Human-readable details when manager_state is not READY.
+   * The network type the managers share (for example "evpn"); empty without a Kubernetes Manager.
    *
-   * @generated from field: optional string manager_message = 5;
+   * @generated from field: string network_type = 7;
    */
-  managerMessage?: string | undefined;
+  networkType: string;
+
+  /**
+   * Whether every resolved manager declares the security_group_icmp capability, so SecurityGroup rules can use
+   * protocol icmp. Written by the operator with network_managers. Unset while the managers are not resolved, for
+   * example with provider networking disabled.
+   *
+   * @generated from field: optional bool security_group_icmp = 8;
+   */
+  securityGroupIcmp?: boolean | undefined;
 };
 
 /**
@@ -484,41 +302,63 @@ export type NetworkClassStatus = Message<"osac.private.v1.NetworkClassStatus"> &
  * Use `create(NetworkClassStatusSchema)` to create a new message.
  */
 export const NetworkClassStatusSchema: GenMessage<NetworkClassStatus> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_network_class_type, 9);
+  messageDesc(file_osac_private_v1_network_class_type, 5);
 
 /**
- * Reference to a NetworkClass resource.
+ * The managers of a NetworkClass as the operator resolved them from their registrations.
  *
- * @generated from message osac.private.v1.NetworkClassReference
+ * @generated from message osac.private.v1.NetworkManagers
  */
-export type NetworkClassReference = Message<"osac.private.v1.NetworkClassReference"> & {
+export type NetworkManagers = Message<"osac.private.v1.NetworkManagers"> & {
   /**
-   * @generated from field: string id = 1;
+   * The Fabric Manager.
+   *
+   * @generated from field: osac.private.v1.NetworkManager fabric = 1;
    */
-  id: string;
+  fabric?: NetworkManager | undefined;
 
   /**
-   * @generated from field: string name = 2;
+   * The Kubernetes Manager, when the NetworkClass names one.
+   *
+   * @generated from field: optional osac.private.v1.NetworkManager kubernetes = 2;
+   */
+  kubernetes?: NetworkManager | undefined;
+};
+
+/**
+ * Describes the message osac.private.v1.NetworkManagers.
+ * Use `create(NetworkManagersSchema)` to create a new message.
+ */
+export const NetworkManagersSchema: GenMessage<NetworkManagers> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_network_class_type, 6);
+
+/**
+ * A registered network manager.
+ *
+ * @generated from message osac.private.v1.NetworkManager
+ */
+export type NetworkManager = Message<"osac.private.v1.NetworkManager"> & {
+  /**
+   * Registration name.
+   *
+   * @generated from field: string name = 1;
    */
   name: string;
 
   /**
-   * @generated from field: string project = 3;
+   * Ansible role that implements the manager's tasks.
+   *
+   * @generated from field: string ansible_role = 2;
    */
-  project: string;
-
-  /**
-   * @generated from field: bool shared = 4;
-   */
-  shared: boolean;
+  ansibleRole: string;
 };
 
 /**
- * Describes the message osac.private.v1.NetworkClassReference.
- * Use `create(NetworkClassReferenceSchema)` to create a new message.
+ * Describes the message osac.private.v1.NetworkManager.
+ * Use `create(NetworkManagerSchema)` to create a new message.
  */
-export const NetworkClassReferenceSchema: GenMessage<NetworkClassReference> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_network_class_type, 10);
+export const NetworkManagerSchema: GenMessage<NetworkManager> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_network_class_type, 7);
 
 /**
  * Lifecycle states for NetworkClass resources.
@@ -541,14 +381,14 @@ export enum NetworkClassState {
   PENDING = 1,
 
   /**
-   * The network class is fully operational and available for creating VirtualNetworks.
+   * The network class is fully operational.
    *
    * @generated from enum value: NETWORK_CLASS_STATE_READY = 2;
    */
   READY = 2,
 
   /**
-   * The network class has encountered an error and cannot be used for creating VirtualNetworks.
+   * The network class has encountered an error, for example a missing registration.
    *
    * @generated from enum value: NETWORK_CLASS_STATE_FAILED = 3;
    */

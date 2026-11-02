@@ -27,7 +27,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/capabilities_service.proto.
  */
 export const file_osac_private_v1_capabilities_service: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvY2FwYWJpbGl0aWVzX3NlcnZpY2UucHJvdG8SD29zYWMucHJpdmF0ZS52MSIYChZDYXBhYmlsaXRpZXNHZXRSZXF1ZXN0IoQBChdDYXBhYmlsaXRpZXNHZXRSZXNwb25zZRIxCgVhdXRobhgBIAEoCzIiLm9zYWMucHJpdmF0ZS52MS5BdXRobkNhcGFiaWxpdGllcxI2ChBlbmFibGVkX3NlcnZpY2VzGAIgAygOMhwub3NhYy5wcml2YXRlLnYxLlNlcnZpY2VUaWVyKokBCgtTZXJ2aWNlVGllchIcChhTRVJWSUNFX1RJRVJfVU5TUEVDSUZJRUQQABIVChFTRVJWSUNFX1RJRVJfQ0FBUxABEhYKElNFUlZJQ0VfVElFUl9WTUFBUxACEhYKElNFUlZJQ0VfVElFUl9CTUFBUxADEhUKEVNFUlZJQ0VfVElFUl9NQUFTEAQyjgEKDENhcGFiaWxpdGllcxJ+CgNHZXQSJy5vc2FjLnByaXZhdGUudjEuQ2FwYWJpbGl0aWVzR2V0UmVxdWVzdBooLm9zYWMucHJpdmF0ZS52MS5DYXBhYmlsaXRpZXNHZXRSZXNwb25zZSIkgtPkkwIeEhwvYXBpL3ByaXZhdGUvdjEvY2FwYWJpbGl0aWVzQimKtRglEg5vc2FjLnB1YmxpYy52MSITcHJpdmF0ZTpmdWxmaWxsbWVudGIGcHJvdG8z", [file_cleanapi_cleanapi, file_google_api_annotations, file_osac_private_v1_authn_capabilities_type]);
+  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvY2FwYWJpbGl0aWVzX3NlcnZpY2UucHJvdG8SD29zYWMucHJpdmF0ZS52MSIYChZDYXBhYmlsaXRpZXNHZXRSZXF1ZXN0IrUBChdDYXBhYmlsaXRpZXNHZXRSZXNwb25zZRIxCgVhdXRobhgBIAEoCzIiLm9zYWMucHJpdmF0ZS52MS5BdXRobkNhcGFiaWxpdGllcxI2ChBlbmFibGVkX3NlcnZpY2VzGAIgAygOMhwub3NhYy5wcml2YXRlLnYxLlNlcnZpY2VUaWVyEi8KH25ldHdvcmtpbmdfcHJvdmlzaW9uaW5nX2VuYWJsZWQYAyABKAhCBoq1GAIIASqJAQoLU2VydmljZVRpZXISHAoYU0VSVklDRV9USUVSX1VOU1BFQ0lGSUVEEAASFQoRU0VSVklDRV9USUVSX0NBQVMQARIWChJTRVJWSUNFX1RJRVJfVk1BQVMQAhIWChJTRVJWSUNFX1RJRVJfQk1BQVMQAxIVChFTRVJWSUNFX1RJRVJfTUFBUxAEMo4BCgxDYXBhYmlsaXRpZXMSfgoDR2V0Eicub3NhYy5wcml2YXRlLnYxLkNhcGFiaWxpdGllc0dldFJlcXVlc3QaKC5vc2FjLnByaXZhdGUudjEuQ2FwYWJpbGl0aWVzR2V0UmVzcG9uc2UiJILT5JMCHhIcL2FwaS9wcml2YXRlL3YxL2NhcGFiaWxpdGllc0IpirUYJRIOb3NhYy5wdWJsaWMudjEiE3ByaXZhdGU6ZnVsZmlsbG1lbnRiBnByb3RvMw", [file_cleanapi_cleanapi, file_google_api_annotations, file_osac_private_v1_authn_capabilities_type]);
 
 /**
  * Request message for the `Get` method of the `Capabilities` service.
@@ -63,6 +63,14 @@ export type CapabilitiesGetResponse = Message<"osac.private.v1.CapabilitiesGetRe
    * @generated from field: repeated osac.private.v1.ServiceTier enabled_services = 2;
    */
   enabledServices: ServiceTier[];
+
+  /**
+   * Whether provider networking is enabled, as stored at the first start of the fulfillment service. The operator
+   * and the bare metal fulfillment operator read it.
+   *
+   * @generated from field: bool networking_provisioning_enabled = 3;
+   */
+  networkingProvisioningEnabled: boolean;
 };
 
 /**

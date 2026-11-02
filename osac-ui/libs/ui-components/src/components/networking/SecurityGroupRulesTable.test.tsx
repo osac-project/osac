@@ -20,7 +20,6 @@ describe('SecurityGroupRulesTable', () => {
       protocol: Protocol.UDP,
       portFrom: 53,
       portTo: 53,
-      ipv6Cidr: '::/0',
     },
     {
       $typeName: 'osac.public.v1.SecurityRule',

@@ -266,13 +266,37 @@ join_continuations <"${remote_plan}" | grep 'helm upgrade --install osac ' \
   | grep -q 'operator.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
   || fail "install-osac: the upgrade omits the remote-cluster args"
 
+# The remote-cluster flags must also resolve in the same order everywhere:
+# the gate's render applies them after EXTRA_HELM_ARGS like install-osac's
+# upgrade does, so a caller overriding a remote-cluster flag through
+# EXTRA_HELM_ARGS sees the gate validate exactly what the install applies
+# (Helm's last --set-string for a key wins).
+remote_order_plan="${TMP_DIR}/remote-order.plan"
+MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-osac \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    EXTRA_HELM_ARGS='--set-string operator.remoteClusterKubeconfigSecretName=caller-override' \
+    >"${remote_order_plan}" 2>/dev/null || fail "make -n install-osac (remote order) failed"
+for remote_cmd in 'render_osac_chart_offline' 'helm upgrade --install osac '; do
+  join_continuations <"${remote_order_plan}" | grep "${remote_cmd}" \
+    | grep -q 'caller-override.*operator.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
+    || fail "remote-flag order: ${remote_cmd} does not apply EXTRA_HELM_ARGS before the remote-cluster flags"
+done
+
 # The gate's osac-chart render goes through render_osac_chart_offline with
 # the render-only placeholder token: the function applies the placeholder
 # only when the merged render has no NetBox token at all, never over a
-# caller-supplied value from --set, --set-string, or a values file.
+# caller-supplied value from --set, --set-string, or a values file. The
+# bridge is legitimate only when this install's infra values deploy the
+# netbox-token-seed hook, so the gate runs netbox_seed_check first, in the
+# same recipe line (make recipe lines are separate shells).
 join_continuations <"${remote_plan}" | grep 'render_osac_chart_offline' \
   | grep -q 'offline-validation-placeholder' \
   || fail "validate-inputs: the gate render must bridge the NetBox token via render_osac_chart_offline"
+join_continuations <"${remote_plan}" | grep 'netbox_seed_check osac-infra' \
+  | grep -q 'render_osac_chart_offline' \
+  || fail "validate-inputs: the gate must run netbox_seed_check before the bridged render"
 
 # install-devstack rejects a wrong profile at parse time, before the gate's
 # cluster lookups or renders, so the user sees the actual mistake.
@@ -420,10 +444,11 @@ render_failure_matching \
 # lookup-dependent branch. The gate bridges exactly that failure through
 # render_osac_chart_offline (scripts/lib.sh) with a render-only placeholder
 # (NETBOX_OFFLINE_TOKEN in the Makefile; it must match the value asserted
-# below) that is never passed to an installation. The hostname --sets
-# mirror the OpenShift gate branch -- the profile's supported platform; on
-# Kind the install itself rejects the profile's empty hostnames, gate and
-# install alike.
+# below) that is never passed to an installation -- and only when
+# netbox_seed_check first saw this install's infra values deploy the seed
+# hook. The hostname --sets mirror the OpenShift gate branch -- the
+# profile's supported platform; on Kind the install itself rejects the
+# profile's empty hostnames, gate and install alike.
 NETBOX_PROFILE_ARGS=(
   -f "${INSTALLER_DIR}/values/bmaas-ci/instance.yaml"
   -f "${INSTALLER_DIR}/values/bmaas-netbox-ci/instance.yaml"
@@ -440,22 +465,63 @@ render_failure_matching \
 # The gate's osac-chart render goes through render_osac_chart_offline, so
 # the tests below exercise the same code path the gate uses.
 source "${SCRIPT_DIR}/lib.sh"
+netbox_gate_err="${TMP_DIR}/netbox-gate.err"
+
+# netbox_seed_check decides whether the bridge is legitimate at all: the
+# netbox profile's infra values deploy the seed hook, bmaas-ci's do not.
+echo "checking netbox-seed-hook-present (the netbox profile's infra deploys it)"
+netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
+  --values "${INSTALLER_DIR}/values/bmaas-ci/infra.yaml" \
+  --values "${INSTALLER_DIR}/values/bmaas-netbox-ci/infra.yaml" \
+  --set osacNamespace=osac
+[ "${NETBOX_TOKEN_SEEDED}" = "1" ] \
+  || fail "netbox-seed-hook-present: the netbox profile's infra render deploys no netbox-token-seed"
+
+echo "checking netbox-seed-hook-absent (bmaas-ci infra deploys none)"
+netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
+  --values "${INSTALLER_DIR}/values/bmaas-ci/infra.yaml" \
+  --set osacNamespace=osac
+[ "${NETBOX_TOKEN_SEEDED}" = "0" ] \
+  || fail "netbox-seed-hook-absent: bmaas-ci infra unexpectedly seeds the token"
 
 # The bridge: only the specific lookup failure above is retried with the
-# placeholder, so the profile renders like the gate does.
+# placeholder, and only for a seeded install, so the profile renders like
+# the gate does.
 echo "checking netbox-profile-gate-placeholder (bridged render)"
+netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
+  --values "${INSTALLER_DIR}/values/bmaas-ci/infra.yaml" \
+  --values "${INSTALLER_DIR}/values/bmaas-netbox-ci/infra.yaml" \
+  --set osacNamespace=osac
 render_osac_chart_offline offline-validation-placeholder \
   osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
   "${NETBOX_PROFILE_ARGS[@]}" \
   || fail "netbox-profile-gate-placeholder: the bridged render failed"
 
+# Without the seed hook nothing creates the token Secret, so the same
+# lookup failure is a real input error: the bridge must not paper over it,
+# or the gate would pass an install that fails only after install-infra
+# changed the cluster.
+echo "checking netbox-unseeded-bridge (no seed hook: the token error is real)"
+NETBOX_TOKEN_SEEDED=0
+if render_osac_chart_offline offline-validation-placeholder \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    "${NETBOX_PROFILE_ARGS[@]}" \
+    2>"${netbox_gate_err}"; then
+  fail "netbox-unseeded-bridge: the gate bridged a missing token with no seed hook"
+fi
+grep -Eiq 'netbox\.tokenValue is required when Secret' "${netbox_gate_err}" \
+  || fail "netbox-unseeded-bridge: the failure did not name the missing token"
+
 # A caller-supplied token must reach the gate's render, never be masked by
 # the placeholder: the placeholder applies only when the merged render has
 # no token at all, so a token from --set, --set-string, or a values file is
 # validated itself. A numeric token fails the schema in the gate, before
-# any cluster change, exactly as it would fail the install.
+# any cluster change, exactly as it would fail the install. Type-error
+# wording differs across Helm versions like the minimum constraints above:
+# 3.18 prints "Invalid type. Expected: string, given: integer" while 3.22
+# (what CI installs) prints "got number, want string".
+numeric_token_pattern='(bmf\.netbox\.tokenValue|/bmf/netbox/tokenValue).*(Invalid type|got number, want string)'
 echo "checking netbox-caller-numeric-token (expected failure naming the token type)"
-netbox_gate_err="${TMP_DIR}/netbox-gate.err"
 if render_osac_chart_offline offline-validation-placeholder \
     osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
     "${NETBOX_PROFILE_ARGS[@]}" \
@@ -463,7 +529,7 @@ if render_osac_chart_offline offline-validation-placeholder \
     >"${TMP_DIR}/netbox-set-numeric.out" 2>"${netbox_gate_err}"; then
   fail "netbox-caller-numeric-token: the gate accepted a numeric --set token"
 fi
-grep -Eiq '(bmf\.netbox\.tokenValue|/bmf/netbox/tokenValue).*Invalid type' "${netbox_gate_err}" \
+grep -Eiq "${numeric_token_pattern}" "${netbox_gate_err}" \
   || fail "netbox-caller-numeric-token: the failure did not name the token type"
 
 # The same through a values file: a --set placeholder would mask a
@@ -478,7 +544,7 @@ if render_osac_chart_offline offline-validation-placeholder \
     >"${TMP_DIR}/netbox-file-numeric.out" 2>"${netbox_gate_err}"; then
   fail "netbox-file-numeric-token: the gate accepted a numeric file token"
 fi
-grep -Eiq '(bmf\.netbox\.tokenValue|/bmf/netbox/tokenValue).*Invalid type' "${netbox_gate_err}" \
+grep -Eiq "${numeric_token_pattern}" "${netbox_gate_err}" \
   || fail "netbox-file-numeric-token: the failure did not name the token type"
 
 # A valid file-supplied token renders unmasked (the bridge is not taken).

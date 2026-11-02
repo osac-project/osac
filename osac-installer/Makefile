@@ -554,9 +554,12 @@ endif
 # so the gate's osac-chart renders go through render_osac_chart_offline
 # (scripts/lib.sh): only the specific "tokenValue is required" lookup failure
 # is retried with this render-only placeholder, which is never passed to an
-# installation. A token supplied by the caller through any channel (--set,
-# --set-string, or a values file) renders without the placeholder, so the
-# gate validates the caller's actual value.
+# installation -- and only when netbox_seed_check (run in the same recipe
+# line, right before the render) saw this install's infra values deploy the
+# seed hook; without it nothing creates the Secret, so a missing token is a
+# real input error. A token supplied by the caller through any channel
+# (--set, --set-string, or a values file) renders without the placeholder,
+# so the gate validates the caller's actual value.
 NETBOX_OFFLINE_TOKEN := offline-validation-placeholder
 
 .PHONY: validate-inputs
@@ -593,14 +596,19 @@ ifeq ($(PLATFORM),kind)
 		--set osacNamespace=$(NS) \
 		$(INFRA_HELM_ARGS) >/dev/null \
 	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
-	@source scripts/lib.sh && render_osac_chart_offline "$(NETBOX_OFFLINE_TOKEN)" \
+	@source scripts/lib.sh && netbox_seed_check osac-infra $(INFRA_CHART) \
+		--namespace osac-infra \
+		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
+		--set osacNamespace=$(NS) \
+		$(INFRA_HELM_ARGS) && \
+	render_osac_chart_offline "$(NETBOX_OFFLINE_TOKEN)" \
 		osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
-		$(REMOTE_CLUSTER_HELM_ARGS) \
 		$(INSTANCE_HELM_ARGS) \
 		$(EXTRA_HELM_ARGS) \
+		$(REMOTE_CLUSTER_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
 ifeq ($(PROFILE),dev-full)
 	@helm template osac-devstack $(CHARTS)/osac-devstack \
@@ -634,12 +642,16 @@ else
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
 		$(INFRA_HELM_ARGS) >/dev/null \
 	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
-	@source scripts/lib.sh && render_osac_chart_offline "$(NETBOX_OFFLINE_TOKEN)" \
+	@source scripts/lib.sh && netbox_seed_check osac-infra $(INFRA_CHART) \
+		--namespace osac-infra \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
+		--set osacNamespace=$(NS) \
+		$(INFRA_HELM_ARGS) && \
+	render_osac_chart_offline "$(NETBOX_OFFLINE_TOKEN)" \
 		osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
-		$(REMOTE_CLUSTER_HELM_ARGS) \
 		--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) \
 		--set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) \
 		--set global.clusterDomain=$(DOMAIN) \
@@ -647,6 +659,7 @@ else
 		--set ui.externalHostname=$(UI_HOSTNAME) \
 		$(INSTANCE_HELM_ARGS) \
 		$(EXTRA_HELM_ARGS) \
+		$(REMOTE_CLUSTER_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
 endif
 	@echo "Installer input validation passed."

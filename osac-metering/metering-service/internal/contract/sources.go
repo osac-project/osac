@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/osac-project/osac/proto/metering"
@@ -36,14 +37,13 @@ const (
 	// SchemaName is the JSON Schema a tool checks an event against.
 	SchemaName = "schema.json"
 
-	// revisionNumber is the default rule revision the chart ships. A change ships as the
-	// next revision, so this generator names the revision it renders.
-	revisionNumber = "0001"
-
 	rulesDirectory  = "osac-metering/charts/osac-metering/rules"
 	rulesTemplate   = "osac-metering/charts/osac-metering/templates/rules.yaml"
 	schemaDirectory = "osac-metering/schema"
 )
+
+// rulesFilePattern matches a shipped rule revision file, for example 0002-meters.yaml.
+var rulesFilePattern = regexp.MustCompile(`^([0-9]{4})-meters\.yaml$`)
 
 // Sources are the three inputs the contract is generated from.
 type Sources struct {
@@ -66,16 +66,19 @@ func LoadSources(repoRoot string) (Sources, error) {
 		return Sources{}, fmt.Errorf("reading the metering field registry: %w", err)
 	}
 
-	metersPath := filepath.Join(repoRoot, rulesDirectory, revisionNumber+"-meters.yaml")
+	number, metersPath, err := latestRevision(filepath.Join(repoRoot, rulesDirectory))
+	if err != nil {
+		return Sources{}, err
+	}
 	metersYAML, err := os.ReadFile(metersPath)
 	if err != nil {
 		return Sources{}, fmt.Errorf("reading the default rule revision: %w", err)
 	}
-	effectiveAt, err := revisionEffectiveAt(repoRoot, revisionNumber)
+	effectiveAt, err := revisionEffectiveAt(repoRoot, number)
 	if err != nil {
 		return Sources{}, err
 	}
-	revision, err := rules.Parse(rules.NamePrefix+revisionNumber, effectiveAt, string(metersYAML))
+	revision, err := rules.Parse(rules.NamePrefix+number, effectiveAt, string(metersYAML))
 	if err != nil {
 		return Sources{}, fmt.Errorf("reading the default rule revision: %w", err)
 	}
@@ -85,6 +88,33 @@ func LoadSources(repoRoot string) (Sources, error) {
 		return Sources{}, fmt.Errorf("reading the published schema files: %w", err)
 	}
 	return Sources{Resources: resources, Revision: revision, Versions: versions}, nil
+}
+
+// latestRevision returns the highest-numbered rule revision the chart ships and the path of
+// its meters file. A change ships as the next revision file, so the newest number is the
+// default the reference documents.
+func latestRevision(directory string) (number, metersPath string, err error) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return "", "", fmt.Errorf("reading the shipped rule revisions in %s: %w", rulesDirectory, err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		match := rulesFilePattern.FindStringSubmatch(entry.Name())
+		if match == nil {
+			continue
+		}
+		// The names are four-digit zero-padded, so string order is numeric order.
+		if match[1] > number {
+			number = match[1]
+		}
+	}
+	if number == "" {
+		return "", "", fmt.Errorf("no <NNNN>-meters.yaml rule revision in %s", rulesDirectory)
+	}
+	return number, filepath.Join(directory, number+"-meters.yaml"), nil
 }
 
 // revisionEffectiveAt reads a rule revision's effective time from the chart template that

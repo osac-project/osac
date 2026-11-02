@@ -10,6 +10,7 @@ in compliance with the License. You may obtain a copy of the License at
 package contract_test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,13 +19,17 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/osac-project/osac/proto/metering"
 
 	"github.com/osac-project/osac-metering/internal/contract"
+	"github.com/osac-project/osac-metering/internal/database"
+	"github.com/osac-project/osac-metering/internal/heartbeat"
 	"github.com/osac-project/osac-metering/schema"
 )
 
@@ -197,6 +202,39 @@ var _ = Describe("The generated contract", func() {
 			Expect(definition.SourceSHA256).To(Equal(version.SourceSHA256))
 			Expect(definition.Properties["type"].Const).To(Equal(version.CloudEventType))
 		}
+	})
+
+	It("accepts a real heartbeat and refuses a version it has not published", func() {
+		_, checkable := generated(sources)
+		schemaDoc, err := jsonschema.UnmarshalJSON(strings.NewReader(checkable))
+		Expect(err).NotTo(HaveOccurred())
+		compiler := jsonschema.NewCompiler()
+		Expect(compiler.AddResource("usage-event.schema.json", schemaDoc)).To(Succeed())
+		compiled, err := compiler.Compile("usage-event.schema.json")
+		Expect(err).NotTo(HaveOccurred())
+
+		written := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+		key := database.LedgerKey{
+			ResourceType: "Cluster", ResourceID: "cluster-1", Meter: "control_plane",
+			Component: "control_plane", Dimensions: `{"tenant":"acme","deployment":"test"}`,
+		}
+		event, err := heartbeat.New(
+			"acme", key, written.Add(-time.Minute), written, 60_000_000, "second",
+			written, 7, sources.Revision.Number,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		payload, err := event.MarshalJSON()
+		Expect(err).NotTo(HaveOccurred())
+		instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(payload))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(compiled.Validate(instance)).To(Succeed())
+
+		event.SetType("osac.resource.heartbeat.v99")
+		payload, err = event.MarshalJSON()
+		Expect(err).NotTo(HaveOccurred())
+		instance, err = jsonschema.UnmarshalJSON(bytes.NewReader(payload))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(compiled.Validate(instance)).NotTo(Succeed())
 	})
 
 	It("records the hash of the published file a reader holds", func() {

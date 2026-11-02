@@ -11,6 +11,7 @@ package schema
 
 import (
 	"io/fs"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -146,8 +147,68 @@ func TestLoadVersionsRequiresThePayloadShapeToMatchTheCode(t *testing.T) {
 	)
 	files := fstest.MapFS{versionDirectory + "/v1.json": {Data: []byte(content)}}
 	_, err := loadVersions(files)
-	if err == nil || !strings.Contains(err.Error(), `missing payload field "tenant_id"`) {
+	if err == nil || !strings.Contains(err.Error(), `missing field "tenant_id"`) {
 		t.Fatalf("want a payload drift error, got %v", err)
+	}
+}
+
+func TestLoadVersionsRequiresTheEnvelopeToMatchTheEvent(t *testing.T) {
+	content := strings.Replace(
+		publishedFile(t, "v1.json"), `"name": "osactenant"`, `"name": "osactenantx"`, 1,
+	)
+	files := fstest.MapFS{versionDirectory + "/v1.json": {Data: []byte(content)}}
+	_, err := loadVersions(files)
+	if err == nil || !strings.Contains(err.Error(), `missing field "osactenant"`) {
+		t.Fatalf("want an envelope drift error, got %v", err)
+	}
+}
+
+func TestPayloadShapeHonoursOmitempty(t *testing.T) {
+	type payload struct {
+		Always string `json:"always"`
+		Maybe  string `json:"maybe,omitempty"`
+	}
+	fields, err := payloadShape(reflect.TypeOf(payload{}))
+	if err != nil {
+		t.Fatalf("deriving the payload shape: %v", err)
+	}
+	if len(fields) != 2 {
+		t.Fatalf("want two fields, got %v", fields)
+	}
+	if !fields[0].Required {
+		t.Fatalf("a field without omitempty is required, got %v", fields[0])
+	}
+	if fields[1].Required {
+		t.Fatalf("a field with omitempty is optional, got %v", fields[1])
+	}
+}
+
+func TestCompareShapeAcceptsAPublishedOptionalField(t *testing.T) {
+	expected := []Field{{Name: "maybe", Type: FieldTypeString, Required: false}}
+	published := []Field{{Name: "maybe", Type: FieldTypeString, Required: false}}
+	if err := compareShape("v2", "payload", expected, published); err != nil {
+		t.Fatalf("an optional field may be published as optional, got %v", err)
+	}
+	if err := compareShape("v2", "payload", expected,
+		[]Field{{Name: "maybe", Type: FieldTypeString, Required: true}}); err == nil {
+		t.Fatal("publishing an omitted-when-empty field as required must fail")
+	}
+}
+
+func TestSelectVersionRefusesAnEmptySet(t *testing.T) {
+	_, err := selectVersion(nil, time.Unix(0, 0))
+	if err == nil || !strings.Contains(err.Error(), "no schema version is in effect") {
+		t.Fatalf("want an empty-set error, got %v", err)
+	}
+}
+
+func TestLoadVersionsRejectsAnUnpaddedVersion(t *testing.T) {
+	content := strings.ReplaceAll(publishedFile(t, "v1.json"), `"v1"`, `"v01"`)
+	content = strings.ReplaceAll(content, "heartbeat.v1", "heartbeat.v01")
+	files := fstest.MapFS{versionDirectory + "/v01.json": {Data: []byte(content)}}
+	_, err := loadVersions(files)
+	if err == nil || !strings.Contains(err.Error(), "want v<number>") {
+		t.Fatalf("want a version-format error, got %v", err)
 	}
 }
 

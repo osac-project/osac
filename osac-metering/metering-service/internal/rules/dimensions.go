@@ -63,10 +63,42 @@ func DimensionPath(resource, name string) (string, bool) {
 	return path, known
 }
 
-// IdentityFields are the identity facts the fold records for every resource. Every meter sends
-// them as dimensions.
-var IdentityFields = []string{
-	"metadata.project",
-	"spec.catalog_item",
-	"spec.template",
+// IdentityDimension is a billing dimension every usage event carries, and the tracked field
+// its value comes from. An empty Field means metering fills the value itself.
+type IdentityDimension struct {
+	// Name is the dimension name the event carries.
+	Name string
+
+	// Field is the tracked field the value comes from. Empty when metering supplies the
+	// value.
+	Field string
+
+	// Description is how the published reference explains the value.
+	Description string
+}
+
+// IdentityDimensions are the dimensions every usage event carries besides its meter's own.
+// The order is the order the published reference lists them in.
+var IdentityDimensions = []IdentityDimension{
+	{Name: "deployment", Description: "Id of the installation that wrote the event"},
+	{Name: "tenant", Description: "Tenant the usage belongs to"},
+	{Name: "meter_type", Description: "The meter's unit"},
+	{
+		Name: "project", Field: "metadata.project",
+		Description: "Value of the resource's `metadata.project`",
+	},
+	{
+		Name: "catalog", Field: "spec.catalog_item",
+		Description: "Value of the resource's `spec.catalog_item`",
+	},
+	{
+		Name: "template", Field: "spec.template",
+		Description: "Value of the resource's `spec.template`",
+	},
+}
+
+// Computed reports whether the calculator derives a dimension's value from another tracked
+// field instead of reading its stored value. Conditions and the reference both need to know.
+func Computed(dimension string) bool {
+	return computedDimensions[dimension]
 }

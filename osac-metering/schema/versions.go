@@ -21,6 +21,7 @@ import (
 	pathpkg "path"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -135,6 +136,9 @@ func VersionInEffect(at time.Time) (Version, error) {
 // selectVersion returns the latest version whose effective date is at or before the record
 // time.
 func selectVersion(versions []Version, at time.Time) (Version, error) {
+	if len(versions) == 0 {
+		return Version{}, fmt.Errorf("no schema version is in effect at %s", at.Format(time.RFC3339))
+	}
 	var selected Version
 	found := false
 	for _, version := range versions {
@@ -391,8 +395,9 @@ func parseFields(files []fieldFile, where string) ([]Field, error) {
 }
 
 // checkCurrentPayload requires the published version named by HeartbeatType to describe
-// exactly the payload this package sends. A field added to the payload without a new version
-// would change a published schema's meaning while its records still say v1, so it fails here.
+// exactly the event this package sends: the CloudEvent attributes and the payload. A field
+// added without a new version would change a published schema's meaning while its records
+// still name the old version, so it fails here.
 func checkCurrentPayload(versions []Version) error {
 	var current *Version
 	for i := range versions {
@@ -407,6 +412,10 @@ func checkCurrentPayload(versions []Version) error {
 			HeartbeatType, versionDirectory, SchemaVersion,
 		)
 	}
+	envelope := currentEnvelope()
+	if err := compareShape(current.Version, "the CloudEvent envelope", envelope, current.Envelope); err != nil {
+		return err
+	}
 	expected, err := payloadShape(reflect.TypeOf(HeartbeatData{}))
 	if err != nil {
 		return err
@@ -417,13 +426,30 @@ func checkCurrentPayload(versions []Version) error {
 	return nil
 }
 
-// payloadShape derives the published fields of a Go payload type from its JSON tags. Every
-// exported field of the payload is always marshalled, so every field is required.
+// currentEnvelope returns the CloudEvent attributes every heartbeat carries. The core
+// attributes are the ones the CloudEvents SDK writes for an event with JSON data; the
+// extensions are the ones heartbeat.New sets from the schema constants.
+func currentEnvelope() []Field {
+	names := []string{
+		"specversion", "id", "type", "source", "datacontenttype", "time",
+		ExtResourceID, ExtResourceType, ExtTenant,
+	}
+	fields := make([]Field, 0, len(names))
+	for _, name := range names {
+		fields = append(fields, Field{Name: name, Type: FieldTypeString, Required: true})
+	}
+	return fields
+}
+
+// payloadShape derives the published fields of a Go payload type from its JSON tags. A field
+// without omitempty is always marshalled, so it is required; a field with omitempty is absent
+// when it is empty and may be published as optional.
 func payloadShape(typ reflect.Type) ([]Field, error) {
 	fields := make([]Field, 0, typ.NumField())
 	for i := range typ.NumField() {
 		structField := typ.Field(i)
-		name := strings.Split(structField.Tag.Get("json"), ",")[0]
+		tag := structField.Tag.Get("json")
+		name, options, _ := strings.Cut(tag, ",")
 		if name == "" || name == "-" {
 			continue
 		}
@@ -432,7 +458,7 @@ func payloadShape(typ reflect.Type) ([]Field, error) {
 			return nil, fmt.Errorf("payload field %q: %w", name, err)
 		}
 		field.Name = name
-		field.Required = true
+		field.Required = !slices.Contains(strings.Split(options, ","), "omitempty")
 		fields = append(fields, field)
 	}
 	return fields, nil
@@ -468,8 +494,8 @@ func shapeOf(typ reflect.Type) (Field, error) {
 	}
 }
 
-// compareShape reports how a published field list differs from the payload this package
-// sends. The fix is a new version file, never an edit of a published one.
+// compareShape reports how a published field list differs from the event this package sends.
+// The fix is a new version file, never an edit of a published one.
 func compareShape(version, typeName string, expected, published []Field) error {
 	publishedByName := map[string]Field{}
 	for _, field := range published {
@@ -479,7 +505,7 @@ func compareShape(version, typeName string, expected, published []Field) error {
 		got, found := publishedByName[want.Name]
 		if !found {
 			return fmt.Errorf(
-				"schema version %s is missing payload field %q of %s; "+
+				"schema version %s is missing field %q of %s; "+
 					"add the next version file instead of editing %s",
 				version, want.Name, typeName, version,
 			)
@@ -487,13 +513,13 @@ func compareShape(version, typeName string, expected, published []Field) error {
 		delete(publishedByName, want.Name)
 		if got.Type != want.Type {
 			return fmt.Errorf(
-				"schema version %s declares payload field %q of %s as %s, want %s",
+				"schema version %s declares field %q of %s as %s, want %s",
 				version, want.Name, typeName, got.Type, want.Type,
 			)
 		}
 		if got.Values != want.Values {
 			return fmt.Errorf(
-				"schema version %s declares payload field %q of %s with value type %q, want %q",
+				"schema version %s declares field %q of %s with value type %q, want %q",
 				version, want.Name, typeName, got.Values, want.Values,
 			)
 		}
@@ -502,10 +528,10 @@ func compareShape(version, typeName string, expected, published []Field) error {
 				return err
 			}
 		}
-		if !got.Required {
+		if got.Required != want.Required {
 			return fmt.Errorf(
-				"schema version %s marks payload field %q of %s optional, but every event sends it",
-				version, want.Name, typeName,
+				"schema version %s marks field %q of %s %s, want %s",
+				version, want.Name, typeName, requiredWord(got.Required), requiredWord(want.Required),
 			)
 		}
 	}
@@ -516,11 +542,19 @@ func compareShape(version, typeName string, expected, published []Field) error {
 	sort.Strings(extra)
 	if len(extra) > 0 {
 		return fmt.Errorf(
-			"schema version %s declares payload fields %s of %s that metering does not send",
+			"schema version %s declares fields %s of %s that metering does not send",
 			version, strings.Join(extra, ", "), typeName,
 		)
 	}
 	return nil
+}
+
+// requiredWord renders a required marker for an error message.
+func requiredWord(required bool) string {
+	if required {
+		return "required"
+	}
+	return "optional"
 }
 
 // versionNumber returns the numeric part of a version name that already matched
@@ -534,6 +568,6 @@ func versionNumber(version string) int {
 }
 
 var (
-	versionPattern   = regexp.MustCompile(`^v[0-9]+$`)
+	versionPattern   = regexp.MustCompile(`^v[1-9][0-9]*$`)
 	fieldNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 )

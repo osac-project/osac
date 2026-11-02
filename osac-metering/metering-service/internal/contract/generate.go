@@ -81,7 +81,38 @@ func Check(repoRoot string) error {
 		}
 		committed[path] = content
 	}
-	return compareFiles(committed, files)
+	if err := compareFiles(committed, files); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(filepath.Join(repoRoot, DocsDirectory))
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", DocsDirectory, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if stray := strayFiles(files, names); len(stray) > 0 {
+		return fmt.Errorf(
+			"%s holds files the generator does not write: %s; remove them or generate "+
+				"them from a source input",
+			DocsDirectory, strings.Join(stray, ", "),
+		)
+	}
+	return nil
+}
+
+// strayFiles returns the entries in the generated directory that the generator does not
+// write, so a hand-added file under docs/contract cannot sit outside the diff.
+func strayFiles(generated map[string][]byte, names []string) []string {
+	stray := make([]string, 0, len(names))
+	for _, name := range names {
+		if _, written := generated[DocsDirectory+"/"+name]; !written {
+			stray = append(stray, name)
+		}
+	}
+	sort.Strings(stray)
+	return stray
 }
 
 // compareFiles reports every generated file that is missing or differs from the committed

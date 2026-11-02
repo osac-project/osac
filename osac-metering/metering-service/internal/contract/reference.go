@@ -23,9 +23,9 @@ import (
 
 // dimensionView is one billing dimension and the tracked field its value comes from.
 type dimensionView struct {
-	Name string
-	Path string
-	Note string
+	Name     string
+	Path     string
+	Computed bool
 }
 
 // meterView is one meter, ready to render.
@@ -122,7 +122,7 @@ func newMeterView(meter rules.Meter) (meterView, error) {
 			)
 		}
 		view.Dimensions = append(view.Dimensions, dimensionView{
-			Name: name, Path: path, Note: derivedDimensions[name],
+			Name: name, Path: path, Computed: rules.Computed(name),
 		})
 	}
 	conditions := make([]string, 0, len(meter.Billable.Fields))
@@ -221,7 +221,8 @@ func writeDeduplication(out *strings.Builder) {
 		"The CloudEvent `id` is the deduplication key. It is a lower-case hex SHA-256 of the "+
 			"tenant, resource type, resource id, meter, component, billing dimensions, "+
 			"interval start, interval end, and heartbeat time. It leaves out the quantity and "+
-			"the external billing account id, so a resend carries the same id.\n\n",
+			"the billing account id (see Billing account id), so a resend carries the same "+
+			"id.\n\n",
 	)
 	fmt.Fprintf(out,
 		"A reader drops an event whose id it has already seen and never recomputes the id.\n\n",
@@ -251,8 +252,8 @@ func writeSchemaVersions(out *strings.Builder, sources Sources) {
 	fmt.Fprintf(out, "\n")
 	fmt.Fprintf(out,
 		"A reader that meets a type it has not adopted alerts, keeps the event, and adds "+
-			"support before that version's effective date. OSAC's own adapters dead-letter "+
-			"such an event and increment a failure counter.\n\n")
+			"support before that version's effective date. OSAC's adapters forward the "+
+			"CloudEvent type unchanged; they never relabel an event as another version.\n\n")
 
 	for _, version := range sources.Versions {
 		fmt.Fprintf(out, "### Event fields of version `%s`\n\n", version.Version)
@@ -297,8 +298,9 @@ func writeResources(out *strings.Builder, sources Sources, views []resourceView)
 		"The values below are the ones events carry in `resource_type`. A cluster appears "+
 			"as `%s`.\n\n", schema.ResourceTypeClusterOrder)
 	fmt.Fprintf(out,
-		"The default rule revision is revision `%s`, effective from %s. It is immutable: a "+
-			"rule change ships as the next revision.\n\n",
+		"The default rule revision is revision `%s`, effective from %s. It is the newest "+
+			"revision the chart ships, and it is immutable: a rule change ships as the next "+
+			"revision.\n\n",
 		sources.Revision.Number, sources.Revision.EffectiveAt.Format("2006-01-02T15:04:05Z"))
 	writeIdentityDimensions(out)
 	for _, view := range views {
@@ -311,12 +313,12 @@ func writeIdentityDimensions(out *strings.Builder) {
 		"Every usage event also carries these identity dimensions in `billing_dimensions`, "+
 			"besides the meter's own dimensions:\n\n")
 	fmt.Fprintf(out, "| Dimension | Value |\n|---|---|\n")
-	fmt.Fprintf(out, "| `deployment` | Id of the installation that wrote the event |\n")
-	fmt.Fprintf(out, "| `tenant` | Tenant the usage belongs to |\n")
-	fmt.Fprintf(out, "| `project` | Value of the resource's `metadata.project` |\n")
-	fmt.Fprintf(out, "| `catalog` | Value of the resource's `spec.catalog_item` |\n")
-	fmt.Fprintf(out, "| `template` | Value of the resource's `spec.template` |\n")
-	fmt.Fprintf(out, "| `meter_type` | The meter's unit |\n\n")
+	for _, identity := range rules.IdentityDimensions {
+		fmt.Fprintf(out, "| `%s` | %s |\n", identity.Name, identity.Description)
+	}
+	fmt.Fprintf(out,
+		"\nA dimension with no value for the interval is omitted from `billing_dimensions`; "+
+			"do not read a missing dimension as an empty string.\n\n")
 }
 
 func writeResource(out *strings.Builder, view resourceView) {
@@ -358,8 +360,8 @@ func writeResource(out *strings.Builder, view resourceView) {
 	for _, name := range names {
 		dimension := dimensions[name]
 		value := fmt.Sprintf("`%s`", dimension.Path)
-		if dimension.Note != "" {
-			value = fmt.Sprintf("%s, %s", value, dimension.Note)
+		if dimension.Computed {
+			value += ", derived by metering from the tracked value"
 		}
 		fmt.Fprintf(out, "| `%s` | %s |\n", name, value)
 	}
@@ -440,12 +442,6 @@ func displayName(resourceType string) string {
 var displayNameOverrides = map[string]string{
 	schema.ResourceTypeExternalIP: "External IP",
 	schema.ResourceTypeNATGateway: "NAT gateway",
-}
-
-// derivedDimensions explains a dimension whose value the calculator derives from another
-// tracked field instead of copying it. It mirrors the computed dimensions in internal/rules.
-var derivedDimensions = map[string]string{
-	"ip_family": "derived from the address as `ipv4` or `ipv6`",
 }
 
 // joinOrNone renders a list for a table cell.

@@ -35,7 +35,7 @@ To rebuild a billable quantity from retained records, read each record with the 
 
 ## Deduplication
 
-The CloudEvent `id` is the deduplication key. It is a lower-case hex SHA-256 of the tenant, resource type, resource id, meter, component, billing dimensions, interval start, interval end, and heartbeat time. It leaves out the quantity and the external billing account id, so a resend carries the same id.
+The CloudEvent `id` is the deduplication key. It is a lower-case hex SHA-256 of the tenant, resource type, resource id, meter, component, billing dimensions, interval start, interval end, and heartbeat time. It leaves out the quantity and the billing account id (see Billing account id), so a resend carries the same id.
 
 A reader drops an event whose id it has already seen and never recomputes the id.
 
@@ -51,7 +51,7 @@ A published version stays readable for as long as its records are retained. Rete
 |---|---|---|---|---|
 | `v1` | `osac.resource.heartbeat.v1` | 1970-01-01T00:00:00Z | `osac-metering/schema/versions/v1.json` | `1fdba0fac83947f54262f8df95692612c423cb6b66f08ac5e9d4aba5f2532527` |
 
-A reader that meets a type it has not adopted alerts, keeps the event, and adds support before that version's effective date. OSAC's own adapters dead-letter such an event and increment a failure counter.
+A reader that meets a type it has not adopted alerts, keeps the event, and adds support before that version's effective date. OSAC's adapters forward the CloudEvent type unchanged; they never relabel an event as another version.
 
 ### Event fields of version `v1`
 
@@ -94,7 +94,7 @@ A reader that meets a type it has not adopted alerts, keeps the event, and adds 
 
 The values below are the ones events carry in `resource_type`. A cluster appears as `cluster_order`.
 
-The default rule revision is revision `0001`, effective from 1970-01-01T00:00:00Z. It is immutable: a rule change ships as the next revision.
+The default rule revision is revision `0001`, effective from 1970-01-01T00:00:00Z. It is the newest revision the chart ships, and it is immutable: a rule change ships as the next revision.
 
 Every usage event also carries these identity dimensions in `billing_dimensions`, besides the meter's own dimensions:
 
@@ -102,10 +102,12 @@ Every usage event also carries these identity dimensions in `billing_dimensions`
 |---|---|
 | `deployment` | Id of the installation that wrote the event |
 | `tenant` | Tenant the usage belongs to |
+| `meter_type` | The meter's unit |
 | `project` | Value of the resource's `metadata.project` |
 | `catalog` | Value of the resource's `spec.catalog_item` |
 | `template` | Value of the resource's `spec.template` |
-| `meter_type` | The meter's unit |
+
+A dimension with no value for the interval is omitted from `billing_dimensions`; do not read a missing dimension as an empty string.
 
 ### Bare metal instance (`bare_metal_instance`)
 
@@ -196,7 +198,7 @@ Dimensions:
 | Dimension | Value from |
 |---|---|
 | `attached` | `status.attached` |
-| `ip_family` | `status.address`, derived from the address as `ipv4` or `ipv6` |
+| `ip_family` | `status.address`, derived by metering from the tracked value |
 | `pool` | `spec.pool` |
 
 Tracked fields:

@@ -388,21 +388,41 @@ func pieceRate(piece database.LedgerPiece) *big.Rat {
 	return new(big.Rat).SetFrac(big.NewInt(piece.QuantityMicro), big.NewInt(duration))
 }
 
-// decodeHeartbeat reads a heartbeat record from the topic.
+// decodeHeartbeat reads a heartbeat record from the topic. The record names its schema version
+// in its CloudEvent type, so a rebuild reads it with the version in effect when it was written
+// instead of the current shape. An unknown version stops the rebuild: decoding it as another
+// version would bill the usage wrong.
 func decodeHeartbeat(value []byte) (caughtHeartbeat, error) {
 	event := cloudevents.Event{}
 	if err := event.UnmarshalJSON(value); err != nil {
 		return caughtHeartbeat{}, fmt.Errorf("unmarshaling CloudEvent: %w", err)
 	}
+	published, err := schema.VersionForType(event.Type())
+	if err != nil {
+		return caughtHeartbeat{}, err
+	}
 	data, err := heartbeat.Data(event)
 	if err != nil {
 		return caughtHeartbeat{}, err
 	}
-	from, to, err := heartbeat.Interval(data)
+	roundTime, err := heartbeat.HeartbeatTime(data)
 	if err != nil {
 		return caughtHeartbeat{}, err
 	}
-	roundTime, err := heartbeat.HeartbeatTime(data)
+	inEffect, err := schema.VersionInEffect(roundTime)
+	if err != nil {
+		return caughtHeartbeat{}, err
+	}
+	if inEffect.Version != published.Version {
+		return caughtHeartbeat{}, fmt.Errorf(
+			"record names schema version %s, but version %s was in effect at its write time "+
+				"%s: the record and its timestamp disagree, and rebuilding it with either "+
+				"version could bill it wrong",
+			published.Version, inEffect.Version,
+			roundTime.Format(time.RFC3339),
+		)
+	}
+	from, to, err := heartbeat.Interval(data)
 	if err != nil {
 		return caughtHeartbeat{}, err
 	}

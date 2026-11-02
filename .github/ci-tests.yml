@@ -35,6 +35,14 @@
   dir: osac-metering/schema
   cmd: ginkgo run -r .
   filters: [code, unit-tests-osac-metering-schema]
+# The generated contract reference and checkable schema file, plus the release gate that a
+# published schema file never changes. Not gated on `code`: a hand-edited file under
+# docs/contract/ is Markdown and must still fail.
+- id: Contract checks (osac-metering)
+  group: unit
+  kind: metering-contract
+  timeout: 20
+  filters: [metering-contract]
 - id: Unit tests (osac-ui)
   group: unit
   kind: ui-unit

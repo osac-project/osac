@@ -11,10 +11,12 @@ package round
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/osac-project/osac-metering/internal/database"
+	"github.com/osac-project/osac-metering/internal/heartbeat"
 )
 
 var mergeBase = time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
@@ -96,5 +98,70 @@ func TestMergeIntoLedgerChecksOverlap(t *testing.T) {
 	if fmt.Sprint(renderPieces(merged)) != fmt.Sprint(want) {
 		t.Fatalf("adjacent same-rate stretches must rejoin:\ngot:\n%s\nwant:\n%s",
 			renderPieces(merged), want)
+	}
+}
+
+// TestDecodeHeartbeatSelectsTheSchemaInEffectAtWriteTime replays a record with the schema in
+// effect when it was written (TC-AC-09). A record naming an unpublished version, or one
+// written before any published version took effect, stops the rebuild instead of being read
+// with the wrong shape.
+func TestDecodeHeartbeatSelectsTheSchemaInEffectAtWriteTime(t *testing.T) {
+	key := mergeKey()
+	written := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	event, err := heartbeat.New(
+		"acme", key, written.Add(-time.Minute), written, 60_000_000, "second", written, 7, "0001",
+	)
+	if err != nil {
+		t.Fatalf("building the heartbeat: %v", err)
+	}
+	payload, err := event.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshaling the heartbeat: %v", err)
+	}
+
+	caught, err := decodeHeartbeat(payload)
+	if err != nil {
+		t.Fatalf("decoding a v1 record written after v1 took effect: %v", err)
+	}
+	if caught.quantityMicro != 60_000_000 {
+		t.Fatalf("quantity is %d, want 60000000", caught.quantityMicro)
+	}
+	if !caught.roundTime.Equal(written) {
+		t.Fatalf("round time is %s, want %s", caught.roundTime, written)
+	}
+	if caught.key != key {
+		t.Fatalf("key is %+v, want %+v", caught.key, key)
+	}
+
+	unknown, err := heartbeat.New(
+		"acme", key, written.Add(-time.Minute), written, 60_000_000, "second", written, 7, "0001",
+	)
+	if err != nil {
+		t.Fatalf("building the heartbeat: %v", err)
+	}
+	unknown.SetType("osac.resource.heartbeat.v99")
+	payload, err = unknown.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshaling the heartbeat: %v", err)
+	}
+	if _, err := decodeHeartbeat(payload); err == nil ||
+		!strings.Contains(err.Error(), "osac.resource.heartbeat.v99") {
+		t.Fatalf("an unpublished version must stop the rebuild, got %v", err)
+	}
+
+	before := time.Date(1969, 12, 31, 23, 59, 0, 0, time.UTC)
+	early, err := heartbeat.New(
+		"acme", key, before.Add(-time.Minute), before, 60_000_000, "second", before, 7, "0001",
+	)
+	if err != nil {
+		t.Fatalf("building the heartbeat: %v", err)
+	}
+	payload, err = early.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshaling the heartbeat: %v", err)
+	}
+	if _, err := decodeHeartbeat(payload); err == nil ||
+		!strings.Contains(err.Error(), "no schema version is in effect") {
+		t.Fatalf("a record written before every version must be refused, got %v", err)
 	}
 }

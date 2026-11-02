@@ -50,6 +50,7 @@ import (
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/networktask"
+	"github.com/osac-project/osac/osac-operator/pkg/networkattachment"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -1268,28 +1269,11 @@ func (r *ComputeInstanceReconciler) deleteNetworkAttachment(ctx context.Context,
 	if id == "" {
 		return true, nil
 	}
-	na := &v1alpha1.NetworkAttachment{}
-	key := client.ObjectKey{Namespace: r.NetworkingNamespace, Name: v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetComputeInstance, id)}
-	if err := r.APIReader.Get(ctx, key, na); err != nil {
-		if apierrors.IsNotFound(err) {
-			return true, nil
-		}
-		return false, err
+	key := client.ObjectKey{
+		Namespace: r.NetworkingNamespace,
+		Name:      v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetComputeInstance, id),
 	}
-	if na.DeletionTimestamp.IsZero() {
-		if err := r.Delete(ctx, na); err != nil && !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("delete NetworkAttachment %s: %w", key.Name, err)
-		}
-		return false, nil
-	}
-	if len(na.Finalizers) == 1 && na.Finalizers[0] == osacComputeInstanceFinalizer {
-		base := na.DeepCopy()
-		controllerutil.RemoveFinalizer(na, osacComputeInstanceFinalizer)
-		if err := r.Patch(ctx, na, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsNotFound(err) {
-			return false, err
-		}
-	}
-	return false, nil
+	return networkattachment.DeleteOwned(ctx, r.APIReader, r.Client, key, osacComputeInstanceFinalizer)
 }
 
 // initializeStatusConditions initializes the conditions that haven't already been initialized.

@@ -64,6 +64,8 @@ const (
 	messageStepNetworkSetupAttachment  = "Network attachment is in progress."
 	messageStepNetworkSetupHandoff     = "Network handoff is in progress."
 	messageStepNetworkSetupIPDiscovery = "IP address discovery is in progress."
+	messageNetworkReady                = "Network setup is complete."
+	messageNetworkProgressing          = "Network setup is in progress."
 	messageStepReadyPowerSync          = "Power synchronization is in progress."
 
 	// Curated failure messages — exact strings, one per FailureClassification.
@@ -611,6 +613,7 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
 			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
 	}
+	t.syncNetworkReadyCondition(object)
 
 	protoStatuses := make([]*privatev1.BareMetalNetworkAttachmentStatus, 0, len(object.Status.NetworkAttachmentStatuses))
 	for _, nas := range object.Status.NetworkAttachmentStatuses {
@@ -687,6 +690,60 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 			}
 		}
 	}
+}
+
+func (t *task) syncNetworkReadyCondition(object *bmfov1alpha1.BareMetalInstance) {
+	type networkCondition struct {
+		typeName bmfov1alpha1.BareMetalInstanceConditionType
+		failure  bmfov1alpha1.FailureClassification
+	}
+	conditions := []networkCondition{
+		{typeName: bmfov1alpha1.HostConditionNetworkAttachmentsReady, failure: bmfov1alpha1.FailureNetworkAttachment},
+		{typeName: bmfov1alpha1.HostConditionNetworkHandoffComplete, failure: bmfov1alpha1.FailureNetworkHandoff},
+		{typeName: bmfov1alpha1.HostConditionIPDiscoveryComplete, failure: bmfov1alpha1.FailureIPDiscovery},
+	}
+	networkReadyType := privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY
+	if object.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseDeleting {
+		t.updateCondition(networkReadyType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "Deleting", "Network cleanup is in progress.")
+		return
+	}
+	if len(object.Spec.NetworkAttachments) == 0 {
+		t.updateCondition(networkReadyType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			"Skipped", "No network attachments configured")
+		return
+	}
+
+	allReady := true
+	for _, item := range conditions {
+		condition := object.GetStatusCondition(item.typeName)
+		if condition != nil && condition.Status == metav1.ConditionFalse &&
+			condition.Reason != bmfov1alpha1.HostConditionReasonProgressing &&
+			condition.Reason != bmfov1alpha1.HostConditionReasonLeasePending &&
+			condition.Reason != bmfov1alpha1.HostConditionReasonPoweringOff &&
+			condition.Reason != bmfov1alpha1.HostConditionReasonPoweringOn && condition.Reason != "" {
+			reason := string(item.failure)
+			switch item.failure {
+			case bmfov1alpha1.FailureNetworkAttachment:
+				reason = bmfov1alpha1.HostConditionReasonNetworkAttachmentFailed
+			case bmfov1alpha1.FailureNetworkHandoff:
+				reason = bmfov1alpha1.HostConditionReasonNetworkHandoffFailed
+			case bmfov1alpha1.FailureIPDiscovery:
+				reason = bmfov1alpha1.HostConditionReasonIPDiscoveryFailed
+			}
+			message := failureMessage(item.failure)
+			t.updateCondition(networkReadyType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+				reason, message)
+			return
+		}
+		if condition == nil || condition.Status != metav1.ConditionTrue {
+			allReady = false
+		}
+	}
+	if allReady {
+		t.updateCondition(networkReadyType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE, "NetworkReady", messageNetworkReady)
+		return
+	}
+	t.updateCondition(networkReadyType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "Progressing", messageNetworkProgressing)
 }
 
 func (t *task) syncState(object *bmfov1alpha1.BareMetalInstance, powerSynced *metav1.Condition) {

@@ -21,17 +21,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/test/testhelpers"
 )
 
 const (
 	osacNetworkCleanupFinalizer = "osac.openshift.io/baremetalinstance-cleanup"
+	bmfNetworkProviderFinalizer = "test.osac.openshift.io/provider-cleanup"
 	bmfCleanupMetadataKey       = "metadata"
 	bmfCleanupFinalizersKey     = "finalizers"
 )
@@ -43,23 +46,63 @@ var _ = Describe("BMF networking cleanup ownership", func() {
 		name := fmt.Sprintf("net-clean-bmf-%d", time.Now().UnixNano())
 		hostName := name + "-host"
 		ipName, attachmentName := name+"-ip", name+"-attachment"
+		networkAttachmentName := opv1alpha1.NetworkAttachmentName(
+			opv1alpha1.NetworkAttachmentTargetBareMetalInstance, name,
+		)
 		DeferCleanup(func() { cleanupBMFDelete("BareMetalHost", hostName) })
+		DeferCleanup(func() { cleanupBMFDelete("NetworkAttachment", networkAttachmentName) })
 		createAvailableBareMetalHost(hostName, namespace, name)
+		bmfCleanupAnnotateInterfaceMAC(hostName, "data-0", "52:54:00:12:34:56")
 		cmd := exec.Command("kubectl", "create", "-f", "-")
-		cmd.Stdin = createBareMetalInstanceYAML(name, namespace, name, "Always")
+		cmd.Stdin = createNetworkedBareMetalInstanceYAML(name, namespace, name, "Always")
 		output, err := cmd.CombinedOutput()
 		Expect(err).NotTo(HaveOccurred(), string(output))
 		DeferCleanup(func() { cleanupBMFDelete("BareMetalInstance", name) })
 		Eventually(func() (string, error) {
 			return kubectlJSONPath("baremetalinstance", name, namespace, "{.spec.externalHostID}")
 		}, 2*time.Minute, 2*time.Second).Should(Equal(namespace + "/" + hostName))
+		By("observing BMF create the hub NetworkAttachment")
+		Eventually(func() error {
+			_, getErr := bmfCleanupGet("NetworkAttachment", networkAttachmentName)
+			return getErr
+		}, time.Minute, time.Second).Should(Succeed())
+		status, err := json.Marshal(map[string]any{"status": map[string]any{
+			"conditions": []map[string]any{{
+				"type": "Ready", "status": "True", "reason": "Succeeded",
+				"message":            "test attachment ready",
+				"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
+			}},
+			"dhcpLease": map[string]string{
+				"ipAddress": "192.0.2.45", "macAddress": "52:54:00:12:34:56",
+			},
+		}})
+		Expect(err).NotTo(HaveOccurred())
+		patchBMFNetworkAttachmentStatus(networkAttachmentName, namespace, string(status))
+		By("waiting for BMF to request the first power-on after handoff")
 		Eventually(func() (string, error) {
 			return kubectlJSONPath("baremetalhost", hostName, namespace, "{.spec.online}")
 		}, time.Minute, time.Second).Should(Equal("true"))
+		By("letting BMF clear the handoff annotation before Metal3 powers on the host")
+		Eventually(func() (bool, error) {
+			host, getErr := bmfCleanupGet("BareMetalHost", hostName)
+			if getErr != nil {
+				return false, getErr
+			}
+			_, found := host.GetAnnotations()["reboot.metal3.io/osac-handoff"]
+			if found {
+				patchBareMetalHostStatus(hostName, namespace, `{"status":{"poweredOn":false}}`)
+			}
+			return !found, nil
+		}, time.Minute, time.Second).Should(BeTrue())
 		patchBareMetalHostStatus(hostName, namespace, `{"status":{"poweredOn":true}}`)
 		Eventually(func() (string, error) {
 			return kubectlJSONPath("baremetalinstance", name, namespace, "{.status.phase}")
 		}, 2*time.Minute, time.Second).Should(Equal("Ready"))
+		By("holding the NetworkAttachment after BMF requests deletion")
+		networkAttachment, err := bmfCleanupGet("NetworkAttachment", networkAttachmentName)
+		Expect(err).NotTo(HaveOccurred())
+		networkAttachmentFinalizers := append(networkAttachment.GetFinalizers(), bmfNetworkProviderFinalizer)
+		bmfCleanupPatchFinalizers("NetworkAttachment", networkAttachmentName, networkAttachmentFinalizers)
 
 		By("recording that BMF owns both inventory and management teardown")
 		parent, err := bmfCleanupGet("BareMetalInstance", name)
@@ -161,8 +204,40 @@ var _ = Describe("BMF networking cleanup ownership", func() {
 			g.Expect(attachment.Object).To(Equal(attachmentBefore.Object))
 		}, 35*time.Second, 2*time.Second).Should(Succeed())
 
-		By("simulating OSAC finishing network cleanup, then waiting for BMF host teardown")
+		By("releasing OSAC cleanup and confirming BMF powers off before deleting the NetworkAttachment")
 		bmfCleanupReleaseOSACFinalizer(name)
+		Eventually(func() (string, error) {
+			return kubectlJSONPath("baremetalhost", hostName, namespace, "{.spec.online}")
+		}, time.Minute, time.Second).Should(Equal("false"))
+		patchBareMetalHostStatus(hostName, namespace, `{"status":{"poweredOn":false}}`)
+		Eventually(func(g Gomega) {
+			current, getErr := bmfCleanupGet("BareMetalInstance", name)
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(current.GetFinalizers()).To(ContainElements(
+				"osac.openshift.io/inventory", "osac.openshift.io/baremetalinstance",
+				"osac.openshift.io/baremetalinstance-networking"))
+			na, getErr := bmfCleanupGet("NetworkAttachment", networkAttachmentName)
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(na.GetDeletionTimestamp()).NotTo(BeNil())
+			g.Expect(na.GetFinalizers()).To(ContainElement(bmfNetworkProviderFinalizer))
+			host, getErr := bmfCleanupGet("BareMetalHost", hostName)
+			g.Expect(getErr).NotTo(HaveOccurred())
+			ref, found, getErr := unstructured.NestedMap(host.Object, "spec", "consumerRef")
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(found).To(BeTrue())
+			g.Expect(ref["name"]).To(Equal(string(parent.GetUID())))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		By("releasing the provider finalizer and waiting for BMF host teardown")
+		networkAttachment, err = bmfCleanupGet("NetworkAttachment", networkAttachmentName)
+		Expect(err).NotTo(HaveOccurred())
+		remainingFinalizers := make([]string, 0, len(networkAttachment.GetFinalizers()))
+		for _, finalizer := range networkAttachment.GetFinalizers() {
+			if finalizer != bmfNetworkProviderFinalizer {
+				remainingFinalizers = append(remainingFinalizers, finalizer)
+			}
+		}
+		bmfCleanupPatchFinalizers("NetworkAttachment", networkAttachmentName, remainingFinalizers)
 		Eventually(func(g Gomega) {
 			// BMF may finish teardown and Kubernetes may delete the BMI before this
 			// poll observes the finalizer list. The host is the durable signal that
@@ -195,4 +270,58 @@ func bmfCleanupGet(kind, name string) (*unstructured.Unstructured, error) {
 
 func cleanupBMFDelete(kind, name string) {
 	testhelpers.DeleteAndWaitForCleanup(namespace, kind, name)
+}
+
+func createNetworkedBareMetalInstanceYAML(name, ns, hostType, runStrategy string) *strings.Reader {
+	yaml := fmt.Sprintf(`apiVersion: osac.openshift.io/v1alpha1
+kind: BareMetalInstance
+metadata:
+  name: %s
+  namespace: %s
+  labels:
+    osac.openshift.io/baremetalinstance-uuid: %s
+  annotations:
+    osac.openshift.io/tenant: %s
+    osac.openshift.io/owner-reference: %s
+spec:
+  selector:
+    hostSelector:
+      hostType: %s
+  externalHostID: ""
+  templateID: noop
+  runStrategy: %s
+  networkAttachments:
+    - subnetRef: test-subnet
+      interface: data-0
+      primary: true
+      securityGroupRefs:
+        - sg-test
+`, name, ns, name, name, name, hostType, runStrategy)
+	return strings.NewReader(yaml)
+}
+
+func bmfCleanupAnnotateInterfaceMAC(host, interfaceName, mac string) {
+	value := fmt.Sprintf(`{"%s":"%s"}`, interfaceName, mac)
+	cmd := exec.Command("kubectl", "annotate", "baremetalhost", host, "-n", namespace,
+		"osac.openshift.io/interface-macs="+value, "--overwrite")
+	output, err := cmd.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), string(output))
+}
+
+func patchBMFNetworkAttachmentStatus(name, ns, statusJSON string) {
+	cmd := exec.Command("kubectl", "patch", "networkattachment", name, "-n", ns,
+		"--type=merge", "--subresource=status", "-p", statusJSON)
+	output, err := cmd.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), string(output))
+}
+
+func bmfCleanupPatchFinalizers(kind, name string, finalizers []string) {
+	patch, err := json.Marshal(map[string]any{bmfCleanupMetadataKey: map[string]any{
+		bmfCleanupFinalizersKey: finalizers,
+	}})
+	Expect(err).NotTo(HaveOccurred())
+	cmd := exec.Command("kubectl", "patch", kind, name, "-n", namespace,
+		"--type=merge", "-p", string(patch))
+	output, err := cmd.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), string(output))
 }

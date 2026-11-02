@@ -279,6 +279,9 @@ enum BareMetalInstanceConditionType {
 
   // Configuration changes require a restart to take effect.
   BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_REQUIRED      = 6;
+
+  // Bare-metal networking is ready, including the post-attachment handoff and IP discovery.
+  BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY         = 7;
 }
 
 // Local reference to a BareMetalInstance resource.

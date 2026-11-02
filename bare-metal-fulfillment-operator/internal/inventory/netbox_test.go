@@ -298,27 +298,28 @@ var _ = Describe("NetBox inventory client", func() {
 })
 
 type selectorQueryTestAPI struct {
-	deviceQueries    int
-	deviceQuery      netboxclient.DeviceQuery
-	devices          []netboxclient.Device
-	deviceErr        error
-	deviceVisits     int
-	customFieldReads int
-	deviceSnapshot   netboxclient.DeviceSnapshot
-	deviceSnapshots  []netboxclient.DeviceSnapshot
-	deviceReadCalls  int
-	deviceReadIDs    []string
-	deviceGetError   error
-	patchCalls       int
-	patchDeviceID    string
-	patch            netboxclient.DevicePatch
-	patchETag        string
-	patchSnapshot    netboxclient.DeviceSnapshot
-	patchErr         error
-	interfaces       []netboxclient.DeviceInterface
-	interfaceErr     error
-	interfaceDevice  string
-	deviceReadErr    error
+	deviceQueries     int
+	deviceQuery       netboxclient.DeviceQuery
+	devices           []netboxclient.Device
+	deviceErr         error
+	deviceVisits      int
+	customFieldReads  int
+	deviceSnapshot    netboxclient.DeviceSnapshot
+	deviceSnapshots   []netboxclient.DeviceSnapshot
+	deviceReadCalls   int
+	deviceReadIDs     []string
+	deviceGetError    error
+	patchCalls        int
+	patchDeviceID     string
+	patch             netboxclient.DevicePatch
+	patchETag         string
+	patchSnapshot     netboxclient.DeviceSnapshot
+	patchErr          error
+	interfaces        []netboxclient.DeviceInterface
+	interfaceByDevice map[string][]netboxclient.DeviceInterface
+	interfaceErr      error
+	interfaceDevice   string
+	deviceReadErr     error
 }
 
 func (a *selectorQueryTestAPI) ForEachDevice(
@@ -354,6 +355,9 @@ func (a *selectorQueryTestAPI) ForEachDeviceCustomField(
 
 func (a *selectorQueryTestAPI) ListDeviceInterfaces(_ context.Context, deviceID string) ([]netboxclient.DeviceInterface, error) {
 	a.interfaceDevice = deviceID
+	if interfaces, ok := a.interfaceByDevice[deviceID]; ok {
+		return interfaces, a.interfaceErr
+	}
 	return a.interfaces, a.interfaceErr
 }
 
@@ -519,6 +523,51 @@ var _ = Describe("NetBox selector query", func() {
 			Expect(errors.Is(err, apiError)).To(BeTrue())
 			Expect(api.customFieldReads).To(BeZero())
 			Expect(api.deviceQueries).To(Equal(1))
+		})
+
+		It("skips a host missing the selected network port MAC", func() {
+			api := &selectorQueryTestAPI{
+				devices: []netboxclient.Device{{ID: "46"}, {ID: "47"}},
+				deviceSnapshots: []netboxclient.DeviceSnapshot{
+					{Device: netboxclient.Device{ID: "46"}},
+					{Device: netboxclient.Device{ID: "47"}},
+				},
+				interfaceByDevice: map[string][]netboxclient.DeviceInterface{
+					"46": {},
+					"47": {{Name: "data-0", PrimaryMAC: "AA:BB:CC:DD:EE:FF"}},
+				},
+			}
+			client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), testNetBoxHostClass, nil)
+
+			host, err := client.FindFreeHostWithNetworkPort(context.Background(), nil, "data-0")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(host.Name).To(Equal("netbox-47"))
+			Expect(api.interfaceDevice).To(Equal("47"))
+		})
+
+		It("skips a repair-marked host when selecting a network port", func() {
+			api := &selectorQueryTestAPI{
+				devices: []netboxclient.Device{
+					{ID: "46", CustomFields: map[string]interface{}{NetBoxNetworkRepairRequiredKey: true}},
+					{ID: "47"},
+				},
+				deviceSnapshots: []netboxclient.DeviceSnapshot{
+					{Device: netboxclient.Device{ID: "47"}},
+				},
+				interfaceByDevice: map[string][]netboxclient.DeviceInterface{
+					"47": {{Name: "data-0", PrimaryMAC: "AA:BB:CC:DD:EE:FF"}},
+				},
+			}
+			client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), testNetBoxHostClass, nil)
+
+			host, err := client.FindFreeHostWithNetworkPort(context.Background(), nil, "data-0")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(host.Name).To(Equal("netbox-47"))
+			Expect(api.interfaceDevice).To(Equal("47"))
 		})
 	})
 
@@ -862,6 +911,33 @@ func testNetBoxAssignmentSnapshot(status, instanceID string) netboxclient.Device
 		ETag: `W/"device-revision-1"`,
 	}
 }
+
+var _ = Describe("NetBox MarkNetworkRepairRequired", func() {
+	It("writes the repair mark and details with the device ETag", func() {
+		initial := netboxclient.DeviceSnapshot{
+			Device: netboxclient.Device{ID: "46", CustomFields: map[string]interface{}{}},
+			ETag:   `W/"repair-revision-1"`,
+		}
+		marked := netboxclient.DeviceSnapshot{
+			Device: netboxclient.Device{ID: "46", CustomFields: map[string]interface{}{NetBoxNetworkRepairRequiredKey: true}},
+		}
+		api := &selectorQueryTestAPI{
+			deviceSnapshots: []netboxclient.DeviceSnapshot{initial},
+			patchSnapshot:   marked,
+		}
+		client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), testNetBoxHostClass, nil)
+		details := `{"fabricDomains":["fd-1"]}`
+
+		Expect(client.MarkNetworkRepairRequired(context.Background(), "metal3-system/netbox-46", details)).To(Succeed())
+		Expect(api.patchCalls).To(Equal(1))
+		Expect(api.patchDeviceID).To(Equal("46"))
+		Expect(api.patchETag).To(Equal(initial.ETag))
+		Expect(api.patch.CustomFields).To(Equal(map[string]interface{}{
+			NetBoxNetworkRepairRequiredKey: true,
+			NetBoxNetworkRepairDetailsKey:  details,
+		}))
+	})
+})
 
 func expectedTestNetBoxAssignedHost(instanceID string) *Host {
 	return &Host{

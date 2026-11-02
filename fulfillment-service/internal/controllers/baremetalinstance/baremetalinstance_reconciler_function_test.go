@@ -2308,6 +2308,57 @@ var _ = Describe("syncStatus", func() {
 		}
 		t.syncStatus(object)
 		Expect(t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()).To(BeEmpty())
+		condition := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
+		Expect(condition).ToNot(BeNil())
+		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(condition.GetReason()).To(Equal("Skipped"))
+	})
+
+	It("projects NetworkReady when attachment, handoff, and IP discovery are complete", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{NetworkAttachments: []bmfov1alpha1.BareMetalNetworkAttachment{
+				{SubnetRef: "subnet-test", Interface: "data-0", Primary: true},
+			}},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue},
+					{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue},
+					{Type: string(bmfov1alpha1.HostConditionIPDiscoveryComplete), Status: metav1.ConditionTrue},
+				},
+			},
+		}
+		t.syncStatus(object)
+		condition := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
+		Expect(condition).ToNot(BeNil())
+		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(condition.GetReason()).To(Equal("NetworkReady"))
+	})
+
+	It("projects a sanitized NetworkReady failure when DHCP discovery fails", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{NetworkAttachments: []bmfov1alpha1.BareMetalNetworkAttachment{
+				{SubnetRef: "subnet-test", Interface: "data-0", Primary: true},
+			}},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue},
+					{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue},
+					{Type: string(bmfov1alpha1.HostConditionIPDiscoveryComplete), Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonIPDiscoveryFailed, Message: "provider details"},
+				},
+			},
+		}
+		t.syncStatus(object)
+		condition := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
+		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(condition.GetReason()).To(Equal(bmfov1alpha1.HostConditionReasonIPDiscoveryFailed))
+		Expect(condition.GetMessage()).To(Equal(messageFailureIPDiscovery))
+		Expect(condition.GetMessage()).ToNot(ContainSubstring("provider details"))
 	})
 
 	It("should clear previously synced network attachment statuses when K8s CR has none", func() {

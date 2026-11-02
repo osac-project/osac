@@ -176,10 +176,18 @@ func (c *NetBoxClient) Close() error {
 }
 
 func (c *NetBoxClient) FindFreeHost(ctx context.Context, selector map[string]string) (*Host, error) {
-	return c.findFreeHost(ctx, buildFreeHostQuery(selector))
+	return c.findFreeHost(ctx, buildFreeHostQuery(selector), "")
 }
 
-func (c *NetBoxClient) findFreeHost(ctx context.Context, query netboxclient.DeviceQuery) (*Host, error) {
+func (c *NetBoxClient) FindFreeHostWithNetworkPort(
+	ctx context.Context, selector map[string]string, interfaceName string,
+) (*Host, error) {
+	return c.findFreeHost(ctx, buildFreeHostQuery(selector), interfaceName)
+}
+
+func (c *NetBoxClient) findFreeHost(
+	ctx context.Context, query netboxclient.DeviceQuery, interfaceName string,
+) (*Host, error) {
 	namespace, err := c.metal3Namespace()
 	if err != nil {
 		return nil, err
@@ -187,7 +195,25 @@ func (c *NetBoxClient) findFreeHost(ctx context.Context, query netboxclient.Devi
 
 	var foundHost *Host
 	err = c.api.ForEachDevice(ctx, query, func(device netboxclient.Device) (bool, error) {
+		if netBoxNetworkRepairRequired(device.CustomFields[NetBoxNetworkRepairRequiredKey]) {
+			return true, nil
+		}
 		foundHost = c.netBoxHostFromDevice(namespace, device)
+		if interfaceName != "" {
+			if foundHost.Name == "" {
+				foundHost = nil
+				return true, nil
+			}
+			macs, macErr := c.GetHostLogicalPortMACs(ctx, foundHost.InventoryHostID)
+			if errors.Is(macErr, ErrMalformedLogicalPortMACs) ||
+				(macErr == nil && !HasValidNetworkPortMAC(macs, interfaceName)) {
+				foundHost = nil
+				return true, nil
+			}
+			if macErr != nil {
+				return false, macErr
+			}
+		}
 		return false, nil
 	})
 	if err != nil {
@@ -585,6 +611,51 @@ func (c *NetBoxClient) stageNetBoxDevice(ctx context.Context, deviceID, etag str
 	return err
 }
 
+// MarkNetworkRepairRequired persists the repair mark and details in NetBox.
+func (c *NetBoxClient) MarkNetworkRepairRequired(
+	ctx context.Context, inventoryHostID, detailsJSON string,
+) error {
+	_, deviceID, err := c.parseNetBoxHostID(inventoryHostID)
+	if err != nil {
+		return err
+	}
+	snapshot, err := c.readNetBoxDevice(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	if netBoxNetworkRepairRequired(snapshot.Device.CustomFields[NetBoxNetworkRepairRequiredKey]) {
+		return nil
+	}
+	updated, err := c.api.PatchDevice(ctx, deviceID, netboxclient.DevicePatch{
+		CustomFields: map[string]interface{}{
+			NetBoxNetworkRepairRequiredKey: true,
+			NetBoxNetworkRepairDetailsKey:  detailsJSON,
+		},
+	}, snapshot.ETag)
+	if err != nil {
+		latest, readErr := c.readNetBoxDevice(ctx, deviceID)
+		if readErr == nil && netBoxNetworkRepairRequired(latest.Device.CustomFields[NetBoxNetworkRepairRequiredKey]) {
+			return nil
+		}
+		return fmt.Errorf("failed to persist NetBox network repair mark: %w", err)
+	}
+	if !netBoxNetworkRepairRequired(updated.Device.CustomFields[NetBoxNetworkRepairRequiredKey]) {
+		return fmt.Errorf("NetBox network repair mark was not persisted")
+	}
+	return nil
+}
+
+func netBoxNetworkRepairRequired(value any) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(v, "true") || v == "1"
+	default:
+		return false
+	}
+}
+
 // GetHostNICs reads inspected NICs from the allocated BareMetalHost.
 func (c *NetBoxClient) GetHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error) {
 	_, deviceID, err := c.parseNetBoxHostID(inventoryHostID)
@@ -665,15 +736,7 @@ func (c *NetBoxClient) customFieldLogicalPortMACs(ctx context.Context, deviceID 
 	if value == nil {
 		return nil, nil
 	}
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	macs := map[string]string{}
-	if err := json.Unmarshal(raw, &macs); err != nil {
-		return nil, err
-	}
-	return macs, nil
+	return LogicalPortMACsFromValue(value)
 }
 
 const (

@@ -730,6 +730,31 @@ class SubchartPlumbingTest(unittest.TestCase):
                 self.assertIn(f"--networking-provisioning-enabled={value}", args)
                 self.assertIn("--networking-excluded-ipv4-cidrs=192.0.2.0/24,198.51.100.0/24", args)
 
+    def test_bmf_networking_role_is_namespaced_and_least_privilege(self):
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                docs = render(networking(provisioningEnabled=enabled))
+                roles = [
+                    doc
+                    for doc in docs
+                    if doc.get("kind") == "Role"
+                    and {resource for rule in doc.get("rules", []) for resource in rule.get("resources", [])}
+                    >= {"networkattachments", "fabricdomains"}
+                ]
+                if not enabled:
+                    self.assertEqual(roles, [])
+                    continue
+
+                self.assertEqual(len(roles), 1)
+                verbs_by_resource = {}
+                for rule in roles[0]["rules"]:
+                    for resource in rule.get("resources", []):
+                        verbs_by_resource[resource] = set(rule["verbs"])
+                self.assertEqual(verbs_by_resource, {
+                    "networkattachments": {"create", "delete", "get", "patch"},
+                    "fabricdomains": {"get", "list"},
+                })
+
 
 LAB_OVERRIDES = {
     "global": {

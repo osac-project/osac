@@ -53,3 +53,6 @@ export const formatIsoDate = (iso?: string): string => {
 };
 
 export const displayValue = (value?: string): string => value?.trim() || '—';
+
+export const formatSizeGib = (sizeGib: bigint | undefined): string =>
+  sizeGib === undefined ? '—' : `${sizeGib} GiB`;

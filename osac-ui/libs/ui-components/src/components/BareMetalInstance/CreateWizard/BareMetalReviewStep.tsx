@@ -11,8 +11,8 @@ import { useFormikContext } from 'formik';
 
 import { type BareMetalInstanceWizardValues, hasBareMetalAuthentication } from './fields';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { displayValue } from '../../../utils/detailFormatters';
 import { NetworkAttachmentReviewFields } from '../../ProvisioningWizard/NetworkAttachmentReviewFields';
-import { formatReviewScalar } from '../../ProvisioningWizard/reviewFormatters';
 
 export const BareMetalReviewStep = () => {
   const { t } = useTranslation();
@@ -20,6 +20,7 @@ export const BareMetalReviewStep = () => {
   const userData = values.spec.userData.value;
   const isSecretSource = userData.source === 'secret';
   const selectedUserData = isSecretSource ? userData.secret : userData.inline;
+  const userDataReview = selectedUserData.trim() ? t('Configured') : displayValue();
   const hasAuthentication = hasBareMetalAuthentication(
     values.spec.sshKey.value,
     isSecretSource ? undefined : userData.inline,
@@ -64,13 +65,13 @@ export const BareMetalReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Name')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.metadata.name)}
+              {displayValue(values.metadata.name)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('SSH public key')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.spec.sshKey.value)}
+              {displayValue(values.spec.sshKey.value)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
@@ -87,9 +88,7 @@ export const BareMetalReviewStep = () => {
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Cloud-init')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {formatReviewScalar(selectedUserData)}
-            </DescriptionListDescription>
+            <DescriptionListDescription>{userDataReview}</DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Network')}</DescriptionListTerm>

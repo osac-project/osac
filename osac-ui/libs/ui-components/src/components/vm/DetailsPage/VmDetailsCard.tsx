@@ -21,7 +21,6 @@ import EditInstanceTypeModal from './EditInstanceTypeModal';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { Timestamp } from '../../Primitives/Timestamp';
-import { formatBootDiskSizeForReview } from '../../ProvisioningWizard/reviewFormatters';
 
 interface Props {
   vm: ComputeInstance;
@@ -110,7 +109,7 @@ const VmDetailsCard = ({ vm }: Props) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Boot disk')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatBootDiskSizeForReview(vm.spec?.bootDisk?.sizeGib)},{' '}
+              {vm.spec?.bootDisk?.sizeGib ? `${vm.spec.bootDisk.sizeGib} GiB` : displayValue()},{' '}
               {displayValue(
                 vm.spec?.bootDisk?.storageTier?.name || vm.spec?.bootDisk?.storageTier?.id,
               )}
@@ -122,7 +121,7 @@ const VmDetailsCard = ({ vm }: Props) => {
                 {t('Additional disk {{number}}', { number: index + 1 })}
               </DescriptionListTerm>
               <DescriptionListDescription>
-                {formatBootDiskSizeForReview(disk.sizeGib)},{' '}
+                {disk.sizeGib ? `${disk.sizeGib} GiB` : displayValue()},{' '}
                 {displayValue(disk.storageTier?.name || disk.storageTier?.id)}
               </DescriptionListDescription>
             </DescriptionListGroup>

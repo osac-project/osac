@@ -15,8 +15,8 @@ import { useFormikContext } from 'formik';
 import type { ClusterCatalogItemValues } from './values';
 import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { displayValue } from '../../../utils/detailFormatters';
 import { formatClusterNodeSetReview } from '../../Cluster/CreateWizard/clusterNodeSetReview';
-import { formatReviewScalar } from '../../ProvisioningWizard/reviewFormatters';
 
 const ClusterCatalogReviewStep = () => {
   const { t } = useTranslation();
@@ -43,7 +43,7 @@ const ClusterCatalogReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Name')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.metadata.name)}
+              {displayValue(values.metadata.name)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           {role === 'admin' ? (
@@ -52,21 +52,21 @@ const ClusterCatalogReviewStep = () => {
               <DescriptionListDescription>
                 {values.scope === 'global'
                   ? t('Global')
-                  : formatReviewScalar(values.metadata.tenant.name || '')}
+                  : displayValue(values.metadata.tenant.name || '')}
               </DescriptionListDescription>
             </DescriptionListGroup>
           ) : values.metadata.project.trim() ? (
             <DescriptionListGroup>
               <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
               <DescriptionListDescription>
-                {formatReviewScalar(values.metadata.project)}
+                {displayValue(values.metadata.project)}
               </DescriptionListDescription>
             </DescriptionListGroup>
           ) : null}
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Provisioning template')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.template.name || '')}
+              {displayValue(values.template.name || '')}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>
@@ -79,7 +79,7 @@ const ClusterCatalogReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Version')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.version.value.name)}
+              {displayValue(values.version.value.name)}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>
@@ -91,7 +91,7 @@ const ClusterCatalogReviewStep = () => {
         <DescriptionList isHorizontal isCompact aria-label={t('Node sets')}>
           {values.nodeSets.value.map((nodeSet) => (
             <DescriptionListGroup key={nodeSet.rowId}>
-              <DescriptionListTerm>{formatReviewScalar(nodeSet.name)}</DescriptionListTerm>
+              <DescriptionListTerm>{displayValue(nodeSet.name)}</DescriptionListTerm>
               <DescriptionListDescription>
                 {formatClusterNodeSetReview(nodeSet.hostType, nodeSet.size)}
               </DescriptionListDescription>
@@ -107,13 +107,13 @@ const ClusterCatalogReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Pod CIDR')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.podCidr.value)}
+              {displayValue(values.podCidr.value)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Service CIDR')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.serviceCidr.value)}
+              {displayValue(values.serviceCidr.value)}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>

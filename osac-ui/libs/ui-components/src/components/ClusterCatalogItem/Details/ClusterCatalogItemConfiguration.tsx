@@ -3,6 +3,7 @@ import { Content, DescriptionList } from '@patternfly/react-core';
 import type { ClusterCatalogItem } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
+import { displayValue } from '../../../utils/detailFormatters';
 import { catalogFieldPolicyValue } from '../../catalog/catalogFieldPolicyDisplay';
 import {
   clusterCatalogItemFields,
@@ -15,7 +16,6 @@ import {
   hasConfiguredPolicy,
 } from '../../CatalogItem/Details/CatalogConfigurationRow';
 import CatalogNodeSets from '../../CatalogItem/Details/CatalogNodeSets';
-import { formatReviewScalar } from '../../ProvisioningWizard/reviewFormatters';
 
 interface ClusterCatalogItemConfigurationProps {
   item: ClusterCatalogItem;
@@ -45,7 +45,7 @@ const ClusterCatalogItemConfiguration = ({ item }: ClusterCatalogItemConfigurati
         label={t('Cluster version')}
         value={
           versionReference
-            ? formatReviewScalar(formatClusterCatalogVersionLabel(undefined, versionReference))
+            ? displayValue(formatClusterCatalogVersionLabel(undefined, versionReference))
             : undefined
         }
         policy={versionPolicy}
@@ -53,12 +53,12 @@ const ClusterCatalogItemConfiguration = ({ item }: ClusterCatalogItemConfigurati
       <CatalogNodeSets policy={nodeSetsPolicy} />
       <CatalogConfigurationRow
         label={t('Pod CIDR')}
-        value={formatReviewScalar(catalogFieldPolicyValue(network?.podCidr))}
+        value={displayValue(catalogFieldPolicyValue(network?.podCidr))}
         policy={network?.podCidr}
       />
       <CatalogConfigurationRow
         label={t('Service CIDR')}
-        value={formatReviewScalar(catalogFieldPolicyValue(network?.serviceCidr))}
+        value={displayValue(catalogFieldPolicyValue(network?.serviceCidr))}
         policy={network?.serviceCidr}
       />
     </DescriptionList>

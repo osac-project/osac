@@ -18,6 +18,7 @@ package servers
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -51,9 +52,25 @@ var _ = Describe("ExternalIPAttachment target lock ordering", func() {
 		Expect(suiteTx.End(ctx)).To(Succeed())
 		suiteTx = nil
 
-		setupTx, err := tm.Begin(context.Background())
+		// Every database call is bounded, and every transaction is rolled back if the
+		// spec fails before ending it. An open transaction would block pool.Close.
+		raceCtx, cancelRace := context.WithTimeout(context.Background(), time.Minute)
+		DeferCleanup(cancelRace)
+		rollbackOnCleanup := func(tx database.Tx) {
+			DeferCleanup(func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				abortErr := errors.New("spec finished without ending the transaction")
+				tx.ReportError(&abortErr)
+				// Ending an already ended transaction only returns an error.
+				_ = tx.End(cleanupCtx)
+			})
+		}
+
+		setupTx, err := tm.Begin(raceCtx)
 		Expect(err).ToNot(HaveOccurred())
-		setupCtx := database.TxIntoContext(context.Background(), setupTx)
+		rollbackOnCleanup(setupTx)
+		setupCtx := database.TxIntoContext(raceCtx, setupTx)
 		computeDAO, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
 			SetLogger(logger).
 			SetTenancyLogic(tenancy).
@@ -184,15 +201,17 @@ var _ = Describe("ExternalIPAttachment target lock ordering", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		parentTx, err := tm.Begin(context.Background())
+		parentTx, err := tm.Begin(raceCtx)
 		Expect(err).ToNot(HaveOccurred())
-		parentCtx := database.TxIntoContext(context.Background(), parentTx)
+		rollbackOnCleanup(parentTx)
+		parentCtx := database.TxIntoContext(raceCtx, parentTx)
 		_, err = computeDAO.Get().SetId(ciID).SetLock(true).Do(parentCtx)
 		Expect(err).ToNot(HaveOccurred())
 
-		attachmentTx, err := tm.Begin(context.Background())
+		attachmentTx, err := tm.Begin(raceCtx)
 		Expect(err).ToNot(HaveOccurred())
-		attachmentCtx := database.TxIntoContext(context.Background(), attachmentTx)
+		rollbackOnCleanup(attachmentTx)
+		attachmentCtx := database.TxIntoContext(raceCtx, attachmentTx)
 		var attachmentPID int
 		Expect(attachmentTx.QueryRow(attachmentCtx, "select pg_backend_pid()").Scan(&attachmentPID)).To(Succeed())
 
@@ -201,7 +220,15 @@ var _ = Describe("ExternalIPAttachment target lock ordering", func() {
 			transactionErr error
 		}
 		operationResults := make(chan attachmentOperationResult, 1)
+		workerDone := make(chan struct{})
+		// Runs before the rollbacks above: cancelling the context frees the worker
+		// from the parent lock, so it is joined before its transaction is touched.
+		DeferCleanup(func() {
+			cancelRace()
+			Eventually(workerDone, 10*time.Second).Should(BeClosed())
+		})
 		go func() {
+			defer close(workerDone)
 			var operationErr error
 			if deleteAttachment {
 				// Automatic attachments are deleted by the controller with their workload.
@@ -228,12 +255,11 @@ var _ = Describe("ExternalIPAttachment target lock ordering", func() {
 
 		// Wait until the attachment transaction is blocked acquiring its target row.
 		// This confirms it has completed the preceding locks before parent cleanup runs.
-		monitorTx, err := tm.Begin(context.Background())
-		Expect(err).ToNot(HaveOccurred())
-		monitorCtx := database.TxIntoContext(context.Background(), monitorTx)
+		// Poll outside a transaction: PostgreSQL keeps one pg_stat_activity snapshot for
+		// the life of a transaction, so a long-lived reader never sees the worker move.
 		Eventually(func() string {
 			var waitEvent, query string
-			queryErr := monitorTx.QueryRow(monitorCtx,
+			queryErr := testPool.QueryRow(raceCtx,
 				"select coalesce(wait_event_type, ''), coalesce(query, '') from pg_stat_activity where pid = $1",
 				attachmentPID,
 			).Scan(&waitEvent, &query)
@@ -242,11 +268,21 @@ var _ = Describe("ExternalIPAttachment target lock ordering", func() {
 			}
 			return strings.ToLower(waitEvent + " " + query)
 		}, 10*time.Second, 10*time.Millisecond).Should(SatisfyAll(
-			ContainSubstring("lock"),
+			HavePrefix("lock "),
 			ContainSubstring("compute_instances"),
 			ContainSubstring("for update"),
 		))
-		Expect(monitorTx.End(monitorCtx)).To(Succeed())
+
+		// The target is locked first, so while the worker waits for it the rows locked
+		// after it must be free. Parent Delete takes neither row, so nothing else in
+		// this test would notice a reversed order.
+		for _, lockedLater := range []struct{ query, id string }{
+			{"select 1 from external_ips where id = $1 for update nowait", externalIPID},
+			{"select 1 from external_ip_attachments where id = $1 for update nowait", attachmentID},
+		} {
+			_, err = testPool.Exec(raceCtx, lockedLater.query, lockedLater.id)
+			Expect(err).ToNot(HaveOccurred(), lockedLater.query)
+		}
 
 		// Run the real parent Delete method with the target lock already held by
 		// this transaction. Network cleanup is left to the parent reconciler.
@@ -257,7 +293,8 @@ var _ = Describe("ExternalIPAttachment target lock ordering", func() {
 		Expect(parentErr).ToNot(HaveOccurred())
 		Expect(parentEndErr).ToNot(HaveOccurred())
 
-		result := <-operationResults
+		var result attachmentOperationResult
+		Eventually(operationResults, 10*time.Second).Should(Receive(&result))
 		if deleteAttachment {
 			Expect(result.operationErr).ToNot(HaveOccurred())
 		} else {

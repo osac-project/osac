@@ -8,6 +8,7 @@ import {
   expectRowNotToExist,
   getTableRowByCellText,
 } from './general/row_assertions';
+import { logProgress } from './general/test_progress';
 import {
   TenantsCreatePage,
   TenantsCredentialsPage,
@@ -48,6 +49,7 @@ const credentialFromFile = (contents: string, label: string, credentialsFile: st
 export const readTenantCredentials = async (
   credentialsFile: string,
 ): Promise<TenantCredentials> => {
+  logProgress('tenant-credentials', `Reading credentials from ${credentialsFile}.`);
   const contents = await readFile(credentialsFile, 'utf8');
   return {
     username: credentialFromFile(contents, 'Username', credentialsFile),
@@ -58,10 +60,22 @@ export const readTenantCredentials = async (
 /** Replace a temporary tenant password after the first successful login. */
 export const updateTenantCredentialsPassword = async (
   credentialsFile: string,
-  password: string,
+  password?: string,
 ): Promise<void> => {
+  logProgress('tenant-credentials', `Updating credentials in ${credentialsFile}.`);
   const contents = await readFile(credentialsFile, 'utf8');
-  const updatedContents = contents.replace(/^Password: .*$/m, () => `Password: ${password}`);
+  const tenantName = credentialFromFile(contents, 'Tenant', credentialsFile);
+  const replacementPassword = password?.trim() || tenantName;
+  logProgress(
+    'tenant-credentials',
+    password?.trim()
+      ? 'Using the configured replacement password.'
+      : 'Using the tenant name as the replacement password.',
+  );
+  const updatedContents = contents.replace(
+    /^Password: .*$/m,
+    () => `Password: ${replacementPassword}`,
+  );
   if (updatedContents === contents) {
     throw new Error(`Tenant credentials file "${credentialsFile}" is missing Password.`);
   }
@@ -70,6 +84,7 @@ export const updateTenantCredentialsPassword = async (
 
 /** Remove the saved credentials for a tenant, if present. */
 export const removeTenantCredentials = async (tenantName: string): Promise<void> => {
+  logProgress('tenant-credentials', `Removing credentials for tenant "${tenantName}".`);
   await rm(tenantCredentialsFilePath(tenantName), { force: true });
   try {
     await rmdir(tenantCredentialsDirectoryPath(tenantName));

@@ -5395,12 +5395,29 @@ var _ = Describe("Private clusters server", func() {
 				return response.GetObject()
 			}
 
+			seedSharedProject := func(name string) {
+				projectsDao, err := dao.NewGenericDAO[*privatev1.Project]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = projectsDao.Create().SetObject(privatev1.Project_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   name,
+						Tenant: auth.SharedTenant,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+
 			seedNextVersion := func() {
+				seedSharedProject("cluster-version-next")
 				seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
 					Id: "cv-next",
 					Metadata: privatev1.Metadata_builder{
-						Name:   "4-18-0",
-						Tenant: testTenant,
+						Name:    "4-18-0",
+						Tenant:  auth.SharedTenant,
+						Project: "cluster-version-next",
 					}.Build(),
 					Spec: privatev1.ClusterVersionSpec_builder{
 						Image:   "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",
@@ -5412,11 +5429,13 @@ var _ = Describe("Private clusters server", func() {
 			// seedSharedNextVersion creates a shared catalog entry for the same
 			// semantic version, referenced by digest rather than by tag.
 			seedSharedNextVersion := func() {
+				seedSharedProject("cluster-version-shared-next")
 				seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
 					Id: "cv-next-shared",
 					Metadata: privatev1.Metadata_builder{
-						Name:   "4-18-0-shared",
-						Tenant: auth.SharedTenant,
+						Name:    "4-18-0-shared",
+						Tenant:  auth.SharedTenant,
+						Project: "cluster-version-shared-next",
 					}.Build(),
 					Spec: privatev1.ClusterVersionSpec_builder{
 						Image:   "quay.io/openshift-release-dev/ocp-release@sha256:2d4f2f7e5d4ce3e9525a4610e04bb2c8ea80ff8f4cc21e9781cbbde2ba1c9dc",
@@ -5426,13 +5445,15 @@ var _ = Describe("Private clusters server", func() {
 				}.Build())
 			}
 			// seedSharedDifferentSemverSameImage creates a shared entry whose image
-			// string matches the tenant entry but whose semantic version differs.
+			// string matches the next entry but whose semantic version differs.
 			seedSharedDifferentSemverSameImage := func() {
+				seedSharedProject("cluster-version-shared-different")
 				seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
 					Id: "cv-next-shared-different-semver",
 					Metadata: privatev1.Metadata_builder{
-						Name:   "4-19-0-shared",
-						Tenant: auth.SharedTenant,
+						Name:    "4-19-0-shared",
+						Tenant:  auth.SharedTenant,
+						Project: "cluster-version-shared-different",
 					}.Build(),
 					Spec: privatev1.ClusterVersionSpec_builder{
 						Image:   "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",
@@ -5457,12 +5478,14 @@ var _ = Describe("Private clusters server", func() {
 			}
 			// updateSharedVersion replaces the control-plane reference with a
 			// shared ClusterVersion entry.
-			updateSharedVersion := func(id, name string) *privatev1.Cluster {
+			updateSharedVersion := func(id, name, project string) *privatev1.Cluster {
 				response, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Id: id,
 						Spec: privatev1.ClusterSpec_builder{
-							Version: privatev1.ClusterVersionReference_builder{Name: name, Shared: true}.Build(),
+							Version: privatev1.ClusterVersionReference_builder{
+								Name: name, Shared: true, Project: project,
+							}.Build(),
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.version"}},
@@ -5470,32 +5493,26 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				return response.GetObject()
 			}
-			// updateNodeSetVersion replaces one existing node set's version.
-			updateNodeSetVersion := func(id, name, version string) *privatev1.Cluster {
-				response, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
-					Object: privatev1.Cluster_builder{Id: id,
-						Spec: privatev1.ClusterSpec_builder{NodeSets: map[string]*privatev1.ClusterNodeSet{
-							name: privatev1.ClusterNodeSet_builder{Version: privatev1.ClusterVersionReference_builder{Name: version}.Build()}.Build(),
-						}}.Build()}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.node_sets." + name + ".version"}},
-				}.Build())
-				Expect(err).NotTo(HaveOccurred())
-				return response.GetObject()
-			}
 			// updateSharedNodeSetVersion replaces one node set's version with a
 			// shared ClusterVersion entry.
-			updateSharedNodeSetVersion := func(id, name, version string) *privatev1.Cluster {
+			updateSharedNodeSetVersion := func(id, name, version, project string) *privatev1.Cluster {
 				response, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 					Object: privatev1.Cluster_builder{Id: id,
 						Spec: privatev1.ClusterSpec_builder{NodeSets: map[string]*privatev1.ClusterNodeSet{
 							name: privatev1.ClusterNodeSet_builder{Version: privatev1.ClusterVersionReference_builder{
-								Name: version, Shared: true,
+								Name: version, Shared: true, Project: project,
 							}.Build()}.Build(),
 						}}.Build()}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.node_sets." + name + ".version"}},
 				}.Build())
 				Expect(err).NotTo(HaveOccurred())
 				return response.GetObject()
+			}
+			updateNextVersion := func(id string) *privatev1.Cluster {
+				return updateSharedVersion(id, "4-18-0", "cluster-version-next")
+			}
+			updateNextNodeSetVersion := func(id, name string) *privatev1.Cluster {
+				return updateSharedNodeSetVersion(id, name, "4-18-0", "cluster-version-next")
 			}
 			historyEntries := func(count int) []*privatev1.ClusterUpgradeHistoryEntry {
 				states := []privatev1.ClusterUpgradeState{
@@ -5548,7 +5565,7 @@ var _ = Describe("Private clusters server", func() {
 				object := createCluster()
 				seedNextVersion()
 
-				updated := updateVersion(object.GetId(), "4-18-0")
+				updated := updateNextVersion(object.GetId())
 
 				Expect(updated.GetSpec().GetVersion().GetName()).To(Equal("4-18-0"))
 				Expect(updated.GetStatus().GetVersionTransitionTime()).ToNot(BeNil())
@@ -5567,11 +5584,11 @@ var _ = Describe("Private clusters server", func() {
 				object := createCluster()
 				seedNextVersion()
 
-				updated := updateVersion(object.GetId(), "4-18-0")
+				updated := updateNextVersion(object.GetId())
 				stamp := updated.GetStatus().GetVersionTransitionTime()
 				Expect(stamp).ToNot(BeNil())
 
-				again := updateVersion(updated.GetId(), "4-18-0")
+				again := updateNextVersion(updated.GetId())
 
 				Expect(again.GetStatus().GetVersionTransitionTime().AsTime()).To(Equal(stamp.AsTime()))
 				Expect(again.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
@@ -5581,7 +5598,7 @@ var _ = Describe("Private clusters server", func() {
 			It("stores a same-semver control-plane reference without creating another attempt", func() {
 				object := createCluster()
 				seedNextVersion()
-				updated := updateVersion(object.GetId(), "4-18-0")
+				updated := updateNextVersion(object.GetId())
 				Expect(updated.GetSpec().GetControlPlaneAttemptId()).ToNot(BeEmpty())
 				Expect(updated.GetStatus().GetVersionTransitionTime()).ToNot(BeNil())
 				seedSharedNextVersion()
@@ -5595,7 +5612,7 @@ var _ = Describe("Private clusters server", func() {
 					server.logger = originalLogger
 				})
 
-				again := updateSharedVersion(object.GetId(), "4-18-0-shared")
+				again := updateSharedVersion(object.GetId(), "4-18-0-shared", "cluster-version-shared-next")
 
 				Expect(again.GetSpec().GetVersion().GetId()).To(Equal("cv-next-shared"))
 				Expect(again.GetSpec().GetVersion().GetShared()).To(BeTrue())
@@ -5626,10 +5643,10 @@ var _ = Describe("Private clusters server", func() {
 			It("creates an attempt when the semantic version differs even if the image matches", func() {
 				object := createCluster()
 				seedNextVersion()
-				updated := updateVersion(object.GetId(), "4-18-0")
+				updated := updateNextVersion(object.GetId())
 				seedSharedDifferentSemverSameImage()
 
-				again := updateSharedVersion(object.GetId(), "4-19-0-shared")
+				again := updateSharedVersion(object.GetId(), "4-19-0-shared", "cluster-version-shared-different")
 
 				Expect(again.GetSpec().GetVersion().GetId()).To(Equal("cv-next-shared-different-semver"))
 				Expect(again.GetStatus().GetUpgradeHistory()).To(HaveLen(2))
@@ -5640,11 +5657,11 @@ var _ = Describe("Private clusters server", func() {
 			It("stores a same-semver node-set reference without creating another attempt", func() {
 				object := createCluster()
 				seedNextVersion()
-				updated := updateNodeSetVersion(object.GetId(), "compute", "4-18-0")
+				updated := updateNextNodeSetVersion(object.GetId(), "compute")
 				Expect(updated.GetSpec().GetNodeSetAttemptIds()["compute"]).ToNot(BeEmpty())
 				seedSharedNextVersion()
 
-				again := updateSharedNodeSetVersion(object.GetId(), "compute", "4-18-0-shared")
+				again := updateSharedNodeSetVersion(object.GetId(), "compute", "4-18-0-shared", "cluster-version-shared-next")
 
 				Expect(again.GetSpec().GetNodeSets()["compute"].GetVersion().GetId()).To(Equal("cv-next-shared"))
 				Expect(again.GetSpec().GetNodeSets()["compute"].GetVersion().GetShared()).To(BeTrue())
@@ -5658,7 +5675,7 @@ var _ = Describe("Private clusters server", func() {
 				seedNextVersion()
 				seedHistory(cluster, historyEntries(100))
 
-				updated := updateVersion(cluster.GetId(), "4-18-0")
+				updated := updateNextVersion(cluster.GetId())
 				history := updated.GetStatus().GetUpgradeHistory()
 
 				Expect(history).To(HaveLen(100))
@@ -5684,7 +5701,7 @@ var _ = Describe("Private clusters server", func() {
 				})
 				seedHistory(cluster, historyEntries(102))
 
-				updated := updateNodeSetVersion(cluster.GetId(), "compute", "4-18-0")
+				updated := updateNextNodeSetVersion(cluster.GetId(), "compute")
 				history := updated.GetStatus().GetUpgradeHistory()
 
 				Expect(history).To(HaveLen(100))
@@ -5699,11 +5716,11 @@ var _ = Describe("Private clusters server", func() {
 			It("keeps independent component IDs and newest-first history", func() {
 				cluster := createCluster()
 				seedNextVersion()
-				controlPlane := updateVersion(cluster.GetId(), "4-18-0")
+				controlPlane := updateNextVersion(cluster.GetId())
 				cpID := controlPlane.GetSpec().GetControlPlaneAttemptId()
-				compute := updateNodeSetVersion(cluster.GetId(), "compute", "4-18-0")
+				compute := updateNextNodeSetVersion(cluster.GetId(), "compute")
 				computeID := compute.GetSpec().GetNodeSetAttemptIds()["compute"]
-				gpu := updateNodeSetVersion(cluster.GetId(), "gpu", "4-18-0")
+				gpu := updateNextNodeSetVersion(cluster.GetId(), "gpu")
 				gpuID := gpu.GetSpec().GetNodeSetAttemptIds()["gpu"]
 				Expect(gpuID).NotTo(Equal(computeID))
 				Expect(gpu.GetSpec().GetNodeSetAttemptIds()["compute"]).To(Equal(computeID))
@@ -5718,9 +5735,9 @@ var _ = Describe("Private clusters server", func() {
 			It("updates an earlier component's history entry without reordering it", func() {
 				cluster := createCluster()
 				seedNextVersion()
-				controlPlane := updateVersion(cluster.GetId(), "4-18-0")
+				controlPlane := updateNextVersion(cluster.GetId())
 				cpID := controlPlane.GetSpec().GetControlPlaneAttemptId()
-				compute := updateNodeSetVersion(cluster.GetId(), "compute", "4-18-0")
+				compute := updateNextNodeSetVersion(cluster.GetId(), "compute")
 				history := compute.GetStatus().GetUpgradeHistory()
 				Expect(history).To(HaveLen(2))
 				cpTransition := &privatev1.ClusterUpgradeHistoryEntry{}
@@ -5747,8 +5764,8 @@ var _ = Describe("Private clusters server", func() {
 			It("merges each component independently when attempt IDs are shared", func() {
 				cluster := createCluster()
 				seedNextVersion()
-				updateVersion(cluster.GetId(), "4-18-0")
-				withNodeSet := updateNodeSetVersion(cluster.GetId(), "compute", "4-18-0")
+				updateNextVersion(cluster.GetId())
+				withNodeSet := updateNextNodeSetVersion(cluster.GetId(), "compute")
 				stored := withNodeSet.GetStatus().GetUpgradeHistory()
 				Expect(stored).To(HaveLen(2))
 				Expect(stored[0].GetComponent().GetNodeSetId()).To(Equal("compute"))
@@ -5790,7 +5807,7 @@ var _ = Describe("Private clusters server", func() {
 			It("freezes the node count at acceptance", func() {
 				cluster := createCluster()
 				seedNextVersion()
-				updated := updateNodeSetVersion(cluster.GetId(), "compute", "4-18-0")
+				updated := updateNextNodeSetVersion(cluster.GetId(), "compute")
 				entry := updated.GetStatus().GetUpgradeHistory()[0]
 				acceptedCount := max(int32(1), updated.GetSpec().GetNodeSets()["compute"].GetSize())
 				Expect(entry.GetTimeoutNodeCount()).To(Equal(acceptedCount))
@@ -5820,7 +5837,7 @@ var _ = Describe("Private clusters server", func() {
 			It("preserves server-owned attempt IDs on full-object and parent-spec edits", func() {
 				cluster := createCluster()
 				seedNextVersion()
-				updated := updateVersion(cluster.GetId(), "4-18-0")
+				updated := updateNextVersion(cluster.GetId())
 				id := updated.GetSpec().GetControlPlaneAttemptId()
 				full := proto.Clone(updated).(*privatev1.Cluster)
 				full.GetSpec().SetControlPlaneAttemptId("caller-value")
@@ -5877,7 +5894,7 @@ var _ = Describe("Private clusters server", func() {
 				Expect(enriched.GetStatus().GetVersionTransitionTime()).To(BeNil())
 
 				seedNextVersion()
-				changed := updateVersion(enriched.GetId(), "4-18-0")
+				changed := updateNextVersion(enriched.GetId())
 
 				Expect(changed.GetSpec().GetVersion().GetName()).To(Equal("4-18-0"))
 				Expect(changed.GetSpec().GetVersion().GetId()).To(Equal("cv-next"))
@@ -5888,7 +5905,7 @@ var _ = Describe("Private clusters server", func() {
 				object := createCluster()
 				seedNextVersion()
 
-				updated := updateVersion(object.GetId(), "4-18-0")
+				updated := updateNextVersion(object.GetId())
 				stamp := updated.GetStatus().GetVersionTransitionTime()
 				Expect(stamp).ToNot(BeNil())
 
@@ -5896,7 +5913,7 @@ var _ = Describe("Private clusters server", func() {
 					Object: privatev1.Cluster_builder{
 						Id: updated.GetId(),
 						Spec: privatev1.ClusterSpec_builder{
-							Version: privatev1.ClusterVersionReference_builder{Name: "4-18-0"}.Build(),
+							Version: privatev1.ClusterVersionReference_builder{Name: "4-18-0", Shared: true, Project: "cluster-version-next"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
 									Size:                  proto.Int32(3),

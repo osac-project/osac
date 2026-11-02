@@ -43,57 +43,36 @@ func (s *PrivateClustersServer) prepareClusterVersionChange(ctx context.Context,
 	if change == nil || refKey(change.targetRef) == "" {
 		return nil
 	}
-	source, target, err := s.resolveClusterVersionChange(ctx, current, change, resolvedTarget)
+	source, err := getClusterVersionByID(ctx, s.clusterVersionsDao, change.sourceRef.GetId())
 	if err != nil {
 		return err
+	}
+	if resolvedTarget == nil {
+		return grpcstatus.Error(grpccodes.Internal, "resolved target ClusterVersion is missing")
 	}
 	// A semantic-version match is a reference replacement, not an upgrade. Comparing
 	// versions rather than image strings also handles tag and digest forms of the
 	// same release.
-	if sameClusterVersionSemver(source, target) {
-		s.logSameSemverClusterVersionReplacement(ctx, current.GetId(), change, source, target)
+	if source.GetSpec().GetVersion() == resolvedTarget.GetSpec().GetVersion() {
+		component := "control_plane"
+		if change.component.GetControlPlane() == nil {
+			component = "node_set:" + change.component.GetNodeSetId()
+		}
+		s.logger.InfoContext(ctx,
+			"Replaced ClusterVersion reference with the same semantic version; no upgrade attempt created",
+			slog.String("cluster_id", current.GetId()),
+			slog.String("component", component),
+			slog.String("previous_cluster_version_id", source.GetId()),
+			slog.String("previous_cluster_version_name", source.GetMetadata().GetName()),
+			slog.String("new_cluster_version_id", resolvedTarget.GetId()),
+			slog.String("new_cluster_version_name", resolvedTarget.GetMetadata().GetName()),
+		)
 		return nil
 	}
 	appendClusterUpgradeAttempt(candidate, change,
-		clusterVersionSourceVersion(current, change.component), target.GetSpec().GetVersion(),
+		clusterVersionSourceVersion(current, change.component), resolvedTarget.GetSpec().GetVersion(),
 		controllers.NowTruncated())
 	return nil
-}
-
-// resolveClusterVersionChange resolves the source and target ClusterVersion
-// objects for an accepted catalog-reference change.
-func (s *PrivateClustersServer) resolveClusterVersionChange(ctx context.Context,
-	current *privatev1.Cluster, change *clusterVersionChange,
-	resolvedTarget *privatev1.ClusterVersion) (*privatev1.ClusterVersion, *privatev1.ClusterVersion, error) {
-	var source *privatev1.ClusterVersion
-	if refKey(change.sourceRef) != "" {
-		var err error
-		source, err = resolveAndCanonicalizeReference(ctx, s.clusterVersionsDao, current.GetMetadata(),
-			cloneMessage(change.sourceRef), "version", grpccodes.InvalidArgument)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	target := resolvedTarget
-	if resolvedClusterVersionMatches(change.targetRef, target) {
-		return source, target, nil
-	}
-	target, err := resolveAndCanonicalizeReference(ctx, s.clusterVersionsDao, current.GetMetadata(),
-		cloneMessage(change.targetRef), "version", grpccodes.InvalidArgument)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := validateResolvedClusterVersion(target, refKey(change.targetRef), ""); err != nil {
-		return nil, nil, err
-	}
-	return source, target, nil
-}
-
-// sameClusterVersionSemver reports whether both references resolve to the same
-// validated semantic version. ClusterVersion validation makes the version string
-// canonical enough for direct comparison.
-func sameClusterVersionSemver(source, target *privatev1.ClusterVersion) bool {
-	return source != nil && source.GetSpec().GetVersion() == target.GetSpec().GetVersion()
 }
 
 // clusterVersionSourceVersion returns the observed semver for the component
@@ -187,54 +166,6 @@ func appendClusterUpgradeAttempt(candidate *privatev1.Cluster, change *clusterVe
 	} else {
 		candidate.GetSpec().GetNodeSetAttemptIds()[change.component.GetNodeSetId()] = entry.GetAttemptId()
 	}
-}
-
-// clusterVersionSemver resolves an owner-scoped ClusterVersion reference and
-// returns its semantic version.
-func (s *PrivateClustersServer) clusterVersionSemver(ctx context.Context,
-	owner *privatev1.Metadata, ref *privatev1.ClusterVersionReference) (string, error) {
-	if refKey(ref) == "" {
-		return "", nil
-	}
-	version, err := resolveAndCanonicalizeReference(ctx, s.clusterVersionsDao, owner,
-		cloneMessage(ref), "version", grpccodes.InvalidArgument)
-	if err != nil {
-		return "", err
-	}
-	return version.GetSpec().GetVersion(), nil
-}
-
-// resolvedClusterVersionMatches reports whether the resolved version is the
-// same catalog entry selected by the reference.
-func resolvedClusterVersionMatches(ref *privatev1.ClusterVersionReference,
-	version *privatev1.ClusterVersion) bool {
-	if ref == nil || version == nil {
-		return false
-	}
-	if ref.GetId() != "" {
-		return ref.GetId() == version.GetId()
-	}
-	return ref.GetName() == version.GetMetadata().GetName()
-}
-
-// logSameSemverClusterVersionReplacement records that a reference replacement
-// was accepted without creating an upgrade attempt. It deliberately omits the
-// raw private release image from the structured log.
-func (s *PrivateClustersServer) logSameSemverClusterVersionReplacement(ctx context.Context, clusterID string,
-	change *clusterVersionChange, source, target *privatev1.ClusterVersion) {
-	component := "control_plane"
-	if change.component.GetControlPlane() == nil {
-		component = "node_set:" + change.component.GetNodeSetId()
-	}
-	s.logger.InfoContext(ctx,
-		"Replaced ClusterVersion reference with the same semantic version; no upgrade attempt created",
-		slog.String("cluster_id", clusterID),
-		slog.String("component", component),
-		slog.String("previous_cluster_version_id", source.GetId()),
-		slog.String("previous_cluster_version_name", source.GetMetadata().GetName()),
-		slog.String("new_cluster_version_id", target.GetId()),
-		slog.String("new_cluster_version_name", target.GetMetadata().GetName()),
-	)
 }
 
 // mergeClusterUpgradeHistory accepts private status transitions by attempt and

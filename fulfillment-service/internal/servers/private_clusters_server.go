@@ -526,10 +526,11 @@ func (s *PrivateClustersServer) initializeAddedNodeSetVersions(ctx context.Conte
 		if current.GetSpec().GetNodeSets()[name] != nil || nodeSet == nil {
 			continue
 		}
-		version, err := s.clusterVersionSemver(ctx, current.GetMetadata(), nodeSet.GetVersion())
+		clusterVersion, err := getClusterVersionByID(ctx, s.clusterVersionsDao, nodeSet.GetVersion().GetId())
 		if err != nil {
 			return err
 		}
+		version := clusterVersion.GetSpec().GetVersion()
 		statuses := candidate.GetStatus().GetNodeSets()
 		if statuses == nil {
 			statuses = map[string]*privatev1.ClusterNodeSet{}

@@ -23,49 +23,35 @@ def _item(path: Path, name: str) -> SimpleNamespace:
     return SimpleNamespace(path=path, name=name, add_marker=markers.append, markers=markers)
 
 
-def _collect(monkeypatch: pytest.MonkeyPatch, *, enabled: bool) -> list[Any]:
-    monkeypatch.setenv(vmaas_conftest.EXTERNAL_PATH_FLAG, "true" if enabled else "false")
+def _collect() -> list[Any]:
     items = [
-        _item(SUITE / "external_ip" / "test_pool.py", "pool"),
+        _item(SUITE / "test_nat_gateway_billing.py", "nat"),
         _item(Path("/elsewhere/tests/e2e/vmaas/test_other.py"), "other-before"),
-        _item(SUITE / "references" / "test_refs.py", "refs"),
+        _item(SUITE / "test_external_ip_billing.py", "billing"),
         _item(SUITE / "test_vmaas_networking.py", "main-0"),
         _item(Path("/elsewhere/tests/e2e/vmaas/test_later.py"), "other-after"),
+        _item(SUITE / "test_external_ip_reattach_billing.py", "reattach"),
         _item(SUITE / "test_vmaas_networking.py", "main-1"),
     ]
     vmaas_conftest.pytest_collection_modifyitems(config=SimpleNamespace(), items=items)
     return items
 
 
-def test_main_suite_runs_before_the_external_directories(monkeypatch: pytest.MonkeyPatch) -> None:
-    items = _collect(monkeypatch, enabled=True)
+def test_main_suite_runs_before_the_billing_tests() -> None:
+    inside = [item.name for item in _collect() if item.path.is_relative_to(SUITE)]
 
-    inside = [item.name for item in items if item.path.is_relative_to(SUITE)]
-    assert inside == ["main-0", "main-1", "pool", "refs"]
+    assert inside == ["main-0", "main-1", "nat", "billing", "reattach"]
 
 
-def test_items_outside_the_suite_keep_their_positions(monkeypatch: pytest.MonkeyPatch) -> None:
-    items = _collect(monkeypatch, enabled=True)
-
-    assert [(i, item.name) for i, item in enumerate(items) if not item.path.is_relative_to(SUITE)] == [
+def test_items_outside_the_suite_keep_their_positions() -> None:
+    assert [(i, item.name) for i, item in enumerate(_collect()) if not item.path.is_relative_to(SUITE)] == [
         (1, "other-before"),
         (4, "other-after"),
     ]
 
 
-def test_external_directories_are_skipped_only_when_the_flag_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    off = _collect(monkeypatch, enabled=False)
-    on = _collect(monkeypatch, enabled=True)
-
-    assert {item.name: bool(item.markers) for item in off} == {
-        "main-0": False,
-        "main-1": False,
-        "pool": True,
-        "refs": True,
-        "other-before": False,
-        "other-after": False,
-    }
-    assert not any(item.markers for item in on)
+def test_every_billing_file_named_for_the_order_exists() -> None:
+    assert all(path.is_file() for path in vmaas_conftest._AFTER_MAIN_SUITE)
 
 
 @pytest.mark.parametrize(

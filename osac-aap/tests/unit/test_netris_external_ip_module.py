@@ -2,6 +2,7 @@ import hmac
 import importlib.util
 import io
 import json
+import runpy
 import sys
 from email.message import Message
 from http.cookiejar import CookieJar, DefaultCookiePolicy
@@ -489,3 +490,47 @@ def test_request_fails_closed_on_invalid_and_non_object_json(monkeypatch):
         client, _ = _client_with_response(monkeypatch, 200, payload)
         with pytest.raises(netris_eip.NetrisExternalIPError):
             client.list_subnets()
+
+
+class ReturningModule:
+    """exit_json and fail_json of a real module never return; these do."""
+
+    def __init__(self, args, check_mode):
+        self.params = {"timeout": 30, "validate_certs": True, "ca_path": None, **args}
+        self.check_mode = check_mode
+        self.exits = []
+        self.failures = []
+
+    def exit_json(self, **kwargs):
+        self.exits.append(kwargs)
+
+    def fail_json(self, **kwargs):
+        self.failures.append(kwargs)
+
+
+def test_no_provider_call_follows_a_check_mode_exit_or_a_failure_exit(monkeypatch):
+    loaded = load_module()
+    forbidden = pytest.fail
+    monkeypatch.setattr(netris_eip, "NetrisSubnetClient", lambda *a, **k: forbidden("no client in check mode"))
+    checking = ReturningModule(module_args(), check_mode=True)
+    monkeypatch.setattr(loaded, "AnsibleModule", lambda **_: checking)
+    loaded.main()
+    assert [e["address"] for e in checking.exits] == [""]
+
+    failing = ReturningModule(module_args(resource={}), check_mode=False)
+    monkeypatch.setattr(loaded, "AnsibleModule", lambda **_: failing)
+    loaded.main()
+    assert failing.exits == []
+    assert failing.failures[0]["msg"] == "Netris ExternalIP external_ip.allocate failed (invalid_request)"
+
+
+def test_the_module_runs_as_a_script(monkeypatch, capsys):
+    monkeypatch.setattr(
+        ansible_basic,
+        "_ANSIBLE_ARGS",
+        json.dumps({"ANSIBLE_MODULE_ARGS": {**module_args(), "_ansible_check_mode": True}}).encode(),
+    )
+    with pytest.raises(SystemExit) as caught:
+        runpy.run_path(str(MODULE_PATH), run_name="__main__")
+    assert caught.value.code == 0
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["address"] == ""

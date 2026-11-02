@@ -2446,7 +2446,7 @@
       "properties": {
         "provisioningEnabled": {
           "type": "boolean",
-          "description": "Run networking jobs through the network managers. Set at installation; the fulfillment service refuses to start when it changes later. With false, networking resources become READY without provider work.",
+          "description": "Run networking jobs through the network managers. Set at installation; the fulfillment service refuses to start when it changes later. With false, VirtualNetworks, Subnets, SecurityGroups, ExternalIPPools and FabricDomains become READY without provider work, and ExternalIPs, ExternalIPAttachments and NATGateways are not offered.",
           "default": true
         },
         "excludedIpv4Cidrs": {

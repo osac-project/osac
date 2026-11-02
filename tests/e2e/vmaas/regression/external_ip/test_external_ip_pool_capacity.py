@@ -12,7 +12,8 @@ class TestPoolCapacity:
     """ExternalIPPool capacity that the Fulfillment Service derives from the pool CIDRs.
 
     Allocation, exhaustion and release need ExternalIPs, which only provider networking
-    offers; they live in tests/e2e/networking/vmaas/external_ip/.
+    offers; the Public external IPs server specs in fulfillment-service/internal/servers
+    cover them.
     """
 
     def test_capacity_initialized_from_cidr(self, small_pool: tuple[str, str], private_grpc: GRPCClient) -> None:

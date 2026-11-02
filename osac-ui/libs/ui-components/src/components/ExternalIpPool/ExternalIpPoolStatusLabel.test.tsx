@@ -11,7 +11,6 @@ describe('ExternalIpPoolStatusLabel', () => {
     [ExternalIPPoolState.EXTERNAL_IP_POOL_STATE_PENDING, 'Provisioning'],
     [ExternalIPPoolState.EXTERNAL_IP_POOL_STATE_FAILED, 'Failed'],
     [ExternalIPPoolState.EXTERNAL_IP_POOL_STATE_DELETING, 'Deleting'],
-    [ExternalIPPoolState.EXTERNAL_IP_POOL_STATE_DELETE_FAILED, 'Delete failed'],
     [ExternalIPPoolState.EXTERNAL_IP_POOL_STATE_UNSPECIFIED, 'Unknown'],
   ])('renders the label text for state %s', (state, expected) => {
     render(<ExternalIpPoolStatusLabel state={state} />);

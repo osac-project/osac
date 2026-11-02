@@ -1,8 +1,11 @@
 ---
 # ExternalIPPool -> Netris IPAM allocation osac-pool-<pool id> for the one CIDR
-# of spec.cidrs, owned by NETRIS_TENANT_ID. Get-or-create by name; an
-# allocation of the same name with another prefix or tenant is a final error.
+# of spec.cidrs, plus a common subnet osac-pool-<pool id>-common over the same
+# CIDR, owned by NETRIS_TENANT_ID. Get-or-create by name; an object of the same
+# name with another prefix or tenant is a final error.
 # The ExternalIPs are /32 nat reservations inside it (create_external_ip.yaml).
+# Without the common subnet Netris blackholes the return traffic of a /32 nat
+# address, so the pool is not usable until both objects exist.
 - name: Register the ExternalIPPool on Netris
   block:
     - name: Check the settings
@@ -28,7 +31,7 @@
       when: _netris_pool.error | length > 0
       ansible.builtin.include_tasks: _fail.yaml
 
-    - name: Create the IPAM allocation of the pool
+    - name: Create the IPAM objects of the pool
       block:
         - name: Create the allocation
           ansible.builtin.include_role:
@@ -37,6 +40,17 @@
           vars:
             ipam_name: "{{ netris_names.pool_ipam }}"
             ipam_cidr: "{{ _netris_pool.cidr }}"
+            ipam_tenant_id: "{{ netris_tenant_id | int }}"
+
+        - name: Create the common subnet that wraps the nat reservations
+          ansible.builtin.include_role:
+            name: netris.controller.ipam
+            tasks_from: create_subnet
+          vars:
+            ipam_name: "{{ netris_names.pool_common_ipam }}"
+            ipam_cidr: "{{ _netris_pool.cidr }}"
+            ipam_purpose: common
+            ipam_site_id: "{{ netris_site_id | int }}"
             ipam_tenant_id: "{{ netris_tenant_id | int }}"
       rescue:
         # Netris refuses an overlapping or malformed prefix with a 4xx: the
@@ -53,7 +67,7 @@
 
         - name: Pass on any other failure
           ansible.builtin.fail:
-            msg: "{{ ansible_failed_result.msg | default('IPAM allocation failed') }}"
+            msg: "{{ ansible_failed_result.msg | default('IPAM create failed') }}"
   rescue:
     - name: Report the error
       ansible.builtin.include_tasks: _rescue.yaml

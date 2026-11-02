@@ -1,0 +1,45 @@
+---
+# One case of cases_paths.yaml: start from an empty fake with _nf_case.steps,
+# run the task, check its outcome, the writes it sent and the error text.
+# _nf_case: label, task, job (name of a job variable), evpn, merge (keys to
+#   change in the job), iface, env, playbook, steps, expect, search, result,
+#   writes (the exact nf_write_kinds of the run, when given), vnets_left (the
+#   IDs of the V-Nets the fake must still hold).
+- name: "Prepare the fake Netris - {{ _nf_case.label }}"
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps: "{{ nf_reset + _nf_case.steps | default([]) }}"
+
+- name: "Run the task - {{ _nf_case.label }}"
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: "{{ _nf_case.task }}"
+    nf_iface: "{{ _nf_case.iface | default(nf_physical) }}"
+    nf_env: "{{ _nf_case.env | default({}) }}"
+    nf_playbook: "{{ _nf_case.playbook | default('playbook_osac_network_task.yml') }}"
+    sft_label: "{{ _nf_case.label }}"
+    sft_expect: "{{ _nf_case.expect | default('success') }}"
+    sft_message_search: "{{ _nf_case.search | default('') }}"
+    nf_result: "{{ _nf_case.result | default(none) }}"
+    nf_job: >-
+      {{ lookup('ansible.builtin.vars', _nf_case.job)
+         | combine(nf_evpn if _nf_case.evpn | default(false) else {})
+         | combine(_nf_case.merge | default({})) }}
+
+- name: "Check the writes - {{ _nf_case.label }}"
+  when: _nf_case.writes is defined
+  ansible.builtin.assert:
+    that: nf_write_kinds == _nf_case.writes
+    fail_msg: "{{ _nf_case.label }}: the task wrote {{ nf_write_kinds }}"
+    quiet: true
+
+- name: "Check the V-Nets left - {{ _nf_case.label }}"
+  when: _nf_case.vnets_left is defined
+  ansible.builtin.assert:
+    that: nf_state.vnets | map(attribute='id') | list == _nf_case.vnets_left
+    fail_msg: "{{ _nf_case.label }}: the fake holds {{ nf_state.vnets }}"
+    quiet: true
+
+- name: "Check the error carries no response body or secret - {{ _nf_case.label }}"
+  when: (_nf_case.expect | default('success')) != 'success'
+  ansible.builtin.include_tasks: assert_clean_error.yaml

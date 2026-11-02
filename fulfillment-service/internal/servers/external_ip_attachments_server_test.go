@@ -14,17 +14,21 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -347,6 +351,93 @@ var _ = Describe("External IP attachments server", func() {
 					Id: created.GetId(),
 				}.Build())
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		Describe("Create through the reference interceptor", func() {
+			var create func(externalIP *publicv1.ExternalIPLocalReference,
+				computeInstance *publicv1.ComputeInstanceLocalReference) error
+
+			BeforeEach(func() {
+				validator, err := references.NewReferenceValidator().SetLogger(logger).Build()
+				Expect(err).ToNot(HaveOccurred())
+				references.RegisterDAOLookup(validator, "osac.public.v1.ExternalIPLocalReference", externalIPDao)
+				references.RegisterDAOLookup(validator, "osac.public.v1.ComputeInstanceLocalReference", computeInstanceDao)
+				create = func(externalIP *publicv1.ExternalIPLocalReference,
+					computeInstance *publicv1.ComputeInstanceLocalReference) error {
+					request := publicv1.ExternalIPAttachmentsCreateRequest_builder{
+						Object: publicv1.ExternalIPAttachment_builder{
+							Metadata: publicv1.Metadata_builder{
+								Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+							}.Build(),
+							Spec: publicv1.ExternalIPAttachmentSpec_builder{
+								ExternalIp:      externalIP,
+								ComputeInstance: computeInstance,
+							}.Build(),
+						}.Build(),
+					}.Build()
+					_, callErr := validator.UnaryServer(ctx, request,
+						&grpc.UnaryServerInfo{FullMethod: publicv1.ExternalIPAttachments_Create_FullMethodName},
+						func(callCtx context.Context, message any) (any, error) {
+							return externalIPAttachmentsServer.Create(callCtx,
+								message.(*publicv1.ExternalIPAttachmentsCreateRequest))
+						})
+					return callErr
+				}
+			})
+
+			createReferences := func() (*privatev1.ExternalIP, *privatev1.ComputeInstance) {
+				return createExternalIPInState(ctx, externalIPDao, sharedPoolID,
+						privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false),
+					createComputeInstanceInState(ctx, computeInstanceDao,
+						privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+			}
+
+			It("names the field of an unknown ComputeInstance given by name", func() {
+				eip, _ := createReferences()
+
+				err := create(publicv1.ExternalIPLocalReference_builder{Name: eip.GetMetadata().GetName()}.Build(),
+					publicv1.ComputeInstanceLocalReference_builder{Name: "nonexistent-ci"}.Build())
+
+				status := grpcstatus.Convert(err)
+				Expect(status.Code()).To(Equal(codes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("reference validation failed"))
+				Expect(status.Details()).To(HaveLen(1))
+				badRequest, ok := status.Details()[0].(*errdetails.BadRequest)
+				Expect(ok).To(BeTrue())
+				Expect(badRequest.GetFieldViolations()).To(HaveLen(1))
+				violation := badRequest.GetFieldViolations()[0]
+				Expect(violation.GetField()).To(Equal("object.spec.compute_instance"))
+				Expect(violation.GetDescription()).To(ContainSubstring("nonexistent-ci"))
+			})
+
+			It("rejects an unknown ComputeInstance ID", func() {
+				eip, _ := createReferences()
+
+				err := create(publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					publicv1.ComputeInstanceLocalReference_builder{Id: uuid.NewString()}.Build())
+
+				Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
+			})
+
+			It("rejects an unknown ExternalIP ID", func() {
+				_, ci := createReferences()
+
+				err := create(publicv1.ExternalIPLocalReference_builder{Id: uuid.NewString()}.Build(),
+					publicv1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build())
+
+				Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
+			})
+
+			It("rejects a second attachment of the same ExternalIP to the same ComputeInstance", func() {
+				eip, ci := createReferences()
+				externalIP := publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build()
+				computeInstance := publicv1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build()
+
+				Expect(create(externalIP, computeInstance)).To(Succeed())
+
+				err := create(externalIP, computeInstance)
+				Expect(grpcstatus.Code(err)).To(Equal(codes.FailedPrecondition))
+			})
 		})
 	})
 })

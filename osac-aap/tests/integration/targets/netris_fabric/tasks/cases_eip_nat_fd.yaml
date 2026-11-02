@@ -22,16 +22,20 @@
     nf_job: "{{ nf_pool_job }}"
     nf_result: {}
 
-- name: EIP - the pool is an IPAM allocation named by the API ID, with no common subnet
+- name: EIP - the pool is an IPAM allocation named by the API ID, wrapped in a common subnet
   vars:
     _pool: "{{ nf_state.allocations | selectattr('name', 'equalto', 'osac-pool-' ~ nf_ids.pool) | list }}"
+    _common: "{{ nf_state.ipam_subnets | selectattr('name', 'equalto', 'osac-pool-' ~ nf_ids.pool ~ '-common') | list }}"
   ansible.builtin.assert:
     that:
       - _pool | length == 1
       - _pool[0].prefix == nf_pool_cidr
       - _pool[0].tenant.id == 2
-      - nf_state.ipam_subnets | selectattr('name', 'search', '-common$') | list == []
-      - nf_state.ipam_subnets == []
+      - _common | length == 1
+      - _common[0].prefix == nf_pool_cidr
+      - _common[0].purpose == 'common'
+      - _common[0].tenant.id == 2
+      - nf_state.ipam_subnets | length == 1
     quiet: true
 
 - name: EIP - the pool rerun writes nothing
@@ -69,7 +73,7 @@
       - _eip[0].prefix == '203.0.113.1/32'
       - _eip[0].purpose == 'nat'
       - _eip[0].tenant.id == 2
-      - nf_state.ipam_subnets | length == 1
+      - nf_state.ipam_subnets | length == 2
     quiet: true
 
 - name: EIP - a rerun returns the same address and writes nothing

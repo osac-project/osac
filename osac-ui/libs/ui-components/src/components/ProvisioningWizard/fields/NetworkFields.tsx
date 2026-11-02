@@ -10,7 +10,6 @@ interface NetworkFieldsProps {
   externalIpAttachmentName: string;
   isDisabled?: boolean;
   autoExternalIpHelperText?: string;
-  showSecurityGroups?: boolean;
 }
 
 const NetworkFields = ({
@@ -18,7 +17,6 @@ const NetworkFields = ({
   externalIpAttachmentName,
   isDisabled = false,
   autoExternalIpHelperText,
-  showSecurityGroups = true,
 }: NetworkFieldsProps) => {
   const { t } = useTranslation();
 
@@ -29,11 +27,7 @@ const NetworkFields = ({
       </Content>
       <ProvisioningField name={networkAttachmentName}>
         {({ valueName, isDisabled: fieldIsDisabled }) => (
-          <NetworkAttachmentFields
-            name={valueName}
-            isDisabled={isDisabled || fieldIsDisabled}
-            showSecurityGroups={showSecurityGroups}
-          />
+          <NetworkAttachmentFields name={valueName} isDisabled={isDisabled || fieldIsDisabled} />
         )}
       </ProvisioningField>
       <Divider />

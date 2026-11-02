@@ -18,14 +18,12 @@ import {
   defaultSubnetListFilter,
   useSecurityGroups,
   useSubnets,
-  useVirtualNetwork,
 } from '../../../api/v1/networking';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 
 interface DefaultNetworkSummaryProps {
   project: string;
-  showSecurityGroups?: boolean;
 }
 
 const newestFirst = (
@@ -40,10 +38,7 @@ const newestFirst = (
   return (bTime?.nanos ?? 0) - (aTime?.nanos ?? 0);
 };
 
-const DefaultNetworkSummary = ({
-  project,
-  showSecurityGroups = true,
-}: DefaultNetworkSummaryProps) => {
+const DefaultNetworkSummary = ({ project }: DefaultNetworkSummaryProps) => {
   const { t } = useTranslation();
   const subnetsQuery = useSubnets({ filter: defaultSubnetListFilter(project) });
   const subnet = subnetsQuery.data
@@ -57,10 +52,9 @@ const DefaultNetworkSummary = ({
     )
     .sort(newestFirst)[0];
   const virtualNetworkId = subnet?.spec?.virtualNetwork?.id ?? '';
-  const virtualNetworkQuery = useVirtualNetwork(virtualNetworkId);
   const securityGroupsQuery = useSecurityGroups(
     { filter: defaultSecurityGroupListFilter(project, virtualNetworkId) },
-    { enabled: showSecurityGroups && Boolean(virtualNetworkId) },
+    { enabled: Boolean(virtualNetworkId) },
   );
   const securityGroup = securityGroupsQuery.data
     ?.filter(
@@ -73,18 +67,11 @@ const DefaultNetworkSummary = ({
     )
     .sort(newestFirst)[0];
 
-  if (
-    subnetsQuery.isLoading ||
-    virtualNetworkQuery.isLoading ||
-    (showSecurityGroups && securityGroupsQuery.isLoading)
-  ) {
+  if (subnetsQuery.isLoading || securityGroupsQuery.isLoading) {
     return <Spinner size="md" aria-label={t('Loading tenant default network')} />;
   }
 
-  const error =
-    subnetsQuery.error ??
-    virtualNetworkQuery.error ??
-    (showSecurityGroups ? securityGroupsQuery.error : null);
+  const error = subnetsQuery.error ?? securityGroupsQuery.error;
   if (error) {
     return (
       <Alert variant="danger" isInline title={t('Could not load tenant default network')}>
@@ -95,8 +82,6 @@ const DefaultNetworkSummary = ({
           onClick={() => {
             if (subnetsQuery.error) {
               void subnetsQuery.refetch();
-            } else if (virtualNetworkQuery.error) {
-              void virtualNetworkQuery.refetch();
             } else {
               void securityGroupsQuery.refetch();
             }
@@ -116,17 +101,13 @@ const DefaultNetworkSummary = ({
     );
   }
 
-  const virtualNetwork = virtualNetworkQuery.data;
   const virtualNetworkName =
-    virtualNetwork?.metadata?.name ||
-    subnet.spec?.virtualNetwork?.name ||
-    subnet.spec?.virtualNetwork?.id ||
-    '—';
+    subnet.spec?.virtualNetwork?.name || subnet.spec?.virtualNetwork?.id || '—';
   const subnetName = subnet.metadata?.name || subnet.id;
 
   return (
     <Stack hasGutter>
-      {showSecurityGroups && !securityGroup && (
+      {!securityGroup && (
         <StackItem>
           <Alert
             variant="warning"
@@ -152,14 +133,12 @@ const DefaultNetworkSummary = ({
               {subnet.spec?.ipv4Cidr && <Content component="p">{subnet.spec.ipv4Cidr}</Content>}
             </DescriptionListDescription>
           </DescriptionListGroup>
-          {showSecurityGroups && (
-            <DescriptionListGroup>
-              <DescriptionListTerm>{t('Security group')}</DescriptionListTerm>
-              <DescriptionListDescription>
-                <strong>{securityGroup?.metadata?.name || securityGroup?.id || '—'}</strong>
-              </DescriptionListDescription>
-            </DescriptionListGroup>
-          )}
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Security group')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              <strong>{securityGroup?.metadata?.name || securityGroup?.id || '—'}</strong>
+            </DescriptionListDescription>
+          </DescriptionListGroup>
         </DescriptionList>
       </StackItem>
     </Stack>

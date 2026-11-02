@@ -26,14 +26,9 @@ interface NetworkWizardValues {
 interface NetworkAttachmentFieldsProps {
   name: string;
   isDisabled?: boolean;
-  showSecurityGroups?: boolean;
 }
 
-const NetworkAttachmentFields = ({
-  name,
-  isDisabled = false,
-  showSecurityGroups = true,
-}: NetworkAttachmentFieldsProps) => {
+const NetworkAttachmentFields = ({ name, isDisabled = false }: NetworkAttachmentFieldsProps) => {
   const { t } = useTranslation();
   const { values } = useFormikContext<NetworkWizardValues>();
   const [field, , helpers] = useField<NetworkAttachmentFormFields>(name);
@@ -61,15 +56,11 @@ const NetworkAttachmentFields = ({
         fieldName={name}
         useDefaultNetwork={useDefaultNetwork}
         isDisabled={isDisabled}
-        showSecurityGroups={showSecurityGroups}
         onSelect={selectNetwork}
       />
       <div className="network-attachment-fields__details">
         {useDefaultNetwork ? (
-          <DefaultNetworkSummary
-            project={values.metadata.project}
-            showSecurityGroups={showSecurityGroups}
-          />
+          <DefaultNetworkSummary project={values.metadata.project} />
         ) : (
           <>
             {createdNetworkName && (
@@ -104,13 +95,11 @@ const NetworkAttachmentFields = ({
               isRequired
               isDisabled={isDisabled}
             />
-            {showSecurityGroups && (
-              <SecurityGroupsMultiSelectField
-                name={`${name}.securityGroups`}
-                virtualNetworkName={`${name}.virtualNetwork`}
-                isDisabled={isDisabled}
-              />
-            )}
+            <SecurityGroupsMultiSelectField
+              name={`${name}.securityGroups`}
+              virtualNetworkName={`${name}.virtualNetwork`}
+              isDisabled={isDisabled}
+            />
           </>
         )}
       </div>

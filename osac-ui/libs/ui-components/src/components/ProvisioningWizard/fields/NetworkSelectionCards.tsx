@@ -16,7 +16,6 @@ interface NetworkSelectionCardsProps {
   fieldName: string;
   useDefaultNetwork: boolean;
   isDisabled: boolean;
-  showSecurityGroups: boolean;
   onSelect: (useDefault: boolean) => void;
 }
 
@@ -24,7 +23,6 @@ const NetworkSelectionCards = ({
   fieldName,
   useDefaultNetwork,
   isDisabled,
-  showSecurityGroups,
   onSelect,
 }: NetworkSelectionCardsProps) => {
   const { t } = useTranslation();
@@ -88,11 +86,7 @@ const NetworkSelectionCards = ({
                 )}
               </Split>
             </CardHeader>
-            <CardBody>
-              {showSecurityGroups
-                ? t('Choose a virtual network, subnet, and security groups.')
-                : t('Choose a virtual network and subnet.')}
-            </CardBody>
+            <CardBody>{t('Choose a virtual network, subnet, and security groups.')}</CardBody>
           </Card>
         </GridItem>
       </Grid>

@@ -179,7 +179,6 @@
   "Changes apply after the virtual machine is restarted.": "Changes apply after the virtual machine is restarted.",
   "Choose a custom network or try again when tenant networking is ready.": "Choose a custom network or try again when tenant networking is ready.",
   "Choose a network and whether to auto-attach an external IP.": "Choose a network and whether to auto-attach an external IP.",
-  "Choose a virtual network and subnet.": "Choose a virtual network and subnet.",
   "Choose a virtual network, subnet, and security groups.": "Choose a virtual network, subnet, and security groups.",
   "Choose file": "Choose file",
   "Choose how this application looks for you. Changes apply immediately.": "Choose how this application looks for you. Changes apply immediately.",

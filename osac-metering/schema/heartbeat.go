@@ -9,8 +9,9 @@ compliance with the License. You may obtain a copy of the License at
 
 package schema
 
-// HeartbeatType is the CloudEvent type of a metering heartbeat.
-const HeartbeatType = "osac.resource.heartbeat.v1"
+// HeartbeatType is the CloudEvent type of a metering heartbeat. Its suffix is the published
+// schema version the event carries.
+const HeartbeatType = heartbeatTypePrefix + SchemaVersion
 
 // HeartbeatData is the payload of a metering heartbeat CloudEvent. It is the difference the
 // round sends: a quantity over an interval, positive or negative. Consumers add heartbeats up;

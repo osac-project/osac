@@ -43,7 +43,6 @@ export const VMCatalogItemDetailPage = () => {
           ) : null}
           <CatalogItemDetails
             item={item}
-            service={ComputeInstanceCatalogItems}
             onDelete={() => setDeleteOpen(true)}
             showStatus={false}
             titlePrefix={<CatalogItemIcon kind="vm" isActive />}

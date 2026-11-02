@@ -42,7 +42,6 @@ export const ClusterCatalogItemDetailPage = () => {
           ) : null}
           <CatalogItemDetails
             item={item}
-            service={ClusterCatalogItems}
             onDelete={() => setDeleteOpen(true)}
             titlePrefix={<CatalogItemIcon kind="cluster" isActive />}
           >

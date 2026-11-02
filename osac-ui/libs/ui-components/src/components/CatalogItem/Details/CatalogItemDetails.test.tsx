@@ -8,7 +8,6 @@ import {
   type ComputeInstanceCatalogItem,
   ComputeInstanceCatalogItemSchema,
   ComputeInstanceCatalogItems,
-  SelfSubjectAccessReviews,
 } from '@osac/types';
 
 import CatalogItemDetails from './CatalogItemDetails';
@@ -55,7 +54,6 @@ const renderDetails = (
         element={
           <CatalogItemDetails
             item={item}
-            service={ComputeInstanceCatalogItems}
             onDelete={vi.fn()}
             showStatus={false}
             titlePrefix={<CatalogItemIcon kind="vm" isActive />}
@@ -75,7 +73,7 @@ const QueriedCatalogItemDetails = () => {
   const item = response?.object;
 
   return item ? (
-    <CatalogItemDetails item={item} service={ComputeInstanceCatalogItems} onDelete={vi.fn()}>
+    <CatalogItemDetails item={item} onDelete={vi.fn()}>
       <VMCatalogItemDetailContent item={item} />
     </CatalogItemDetails>
   ) : null;
@@ -87,7 +85,7 @@ describe('CatalogItemDetails', () => {
     session.tenantId = 'tenant-1';
   });
 
-  it('shows lifecycle state, overview metadata, and admin header actions', async () => {
+  it('shows lifecycle state, overview metadata, and admin header actions', () => {
     renderDetails(makeItem(false));
 
     expect(screen.getAllByText('Unpublished').length).toBeGreaterThan(0);
@@ -95,29 +93,27 @@ describe('CatalogItemDetails', () => {
     expect(screen.getByText('Created')).toBeInTheDocument();
     expect(screen.getByText('Visibility')).toBeInTheDocument();
     expect(screen.getByText('tenant-1')).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Publish' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Launch instance' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('separator')).toHaveLength(2);
   });
 
-  it('shows launch and management actions for a tenant admin in the item tenant', async () => {
+  it('shows launch and management actions for a tenant admin in the item tenant', () => {
     session.role = 'tenant-admin';
     renderDetails(makeItem(true));
 
     expect(screen.getAllByText('Live').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Launch instance' })).toBeEnabled();
-    expect(await screen.findByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Unpublish' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
   });
 
   it('keeps launch for tenant users but hides management actions', () => {
     session.role = 'tenant-user';
-    renderDetails(makeItem(true), {
-      onSelfSubjectAccessReview: () => ({ object: { status: { allowed: false } } }),
-    });
+    renderDetails(makeItem(true));
 
     expect(screen.getByRole('button', { name: 'Launch instance' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
@@ -128,7 +124,7 @@ describe('CatalogItemDetails', () => {
   it('navigates to edit from the header action', async () => {
     const { user } = renderDetails(makeItem(true));
 
-    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
 
     expect(await screen.findByText('Edit catalog item page')).toBeInTheDocument();
   });
@@ -142,7 +138,7 @@ describe('CatalogItemDetails', () => {
       },
     });
 
-    await user.click(await screen.findByRole('button', { name: 'Publish' }));
+    await user.click(screen.getByRole('button', { name: 'Publish' }));
 
     await waitFor(() => {
       expect(sentObject).toMatchObject({ id: 'catalog-vm', published: true });
@@ -157,9 +153,6 @@ describe('CatalogItemDetails', () => {
     });
     let published = item.published;
     const transport = createRouterTransport((router) => {
-      router.service(SelfSubjectAccessReviews, {
-        create: () => ({ object: { status: { allowed: true } } }),
-      });
       router.service(ComputeInstanceCatalogItems, {
         get: () => ({ object: { ...item, published } }),
         update: (request) => {

@@ -45,7 +45,6 @@ export const BareMetalInstanceCatalogItemDetailPage = () => {
           ) : null}
           <CatalogItemDetails
             item={item}
-            service={BareMetalInstanceCatalogItems}
             onDelete={() => setDeleteOpen(true)}
             titlePrefix={<CatalogItemIcon kind="bm" isActive />}
           >

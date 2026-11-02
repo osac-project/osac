@@ -114,28 +114,78 @@ jobs:
         set -euo pipefail
         NAMESPACE=osac-tenant
 
+        # A Snapshot exists as soon as the staging job applies it -- that
+        # happens BEFORE its integration tests run and BEFORE the staging
+        # Release even gets created, let alone succeeds. Existence alone
+        # is not evidence the content was ever actually validated or
+        # shipped to staging, so check three things, not one:
+        #  1. The Snapshot exists (distinguishing a genuine NotFound from
+        #     an auth/network error, which must not be silently treated
+        #     the same as "never shipped").
+        #  2. Its integration tests actually passed
+        #     (AppStudioTestSucceeded=True -- the real Konflux Integration
+        #     Service condition for this, not a project-specific one).
+        #  3. A real Release against the STAGING ReleasePlan for this
+        #     exact Snapshot reached Released=True -- not by assuming a
+        #     specific Release name (a retried staging release's
+        #     successful Release is named "<snapshot>-retryN", not the
+        #     snapshot's own name), but by searching every Release in the
+        #     namespace for one whose spec actually references this
+        #     Snapshot.
         check_snapshot() {
-          local name="$1" label="$2"
-          if oc get snapshot "${name}" -n "${NAMESPACE}" >/dev/null 2>&1; then
-            echo "true"
-          else
-            echo "::warning::${label} Snapshot '${name}' not found -- it may have been pruned, or release_version=${RELEASE_VERSION} attempt=${ORIGINAL_RUN_ATTEMPT} never shipped. Re-run osac-release.yaml fresh instead of promoting; this workflow will skip ${label} promotion." >&2
+          local name="$1" label="$2" stage_plan="$3"
+          local get_output
+          if ! get_output=$(oc get snapshot "${name}" -n "${NAMESPACE}" -o json 2>&1); then
+            if [[ "${get_output}" == *"NotFound"* ]]; then
+              echo "::warning::${label} Snapshot '${name}' not found -- it may have been pruned, or release_version=${RELEASE_VERSION} attempt=${ORIGINAL_RUN_ATTEMPT} never shipped. Re-run osac-release.yaml fresh instead of promoting; this workflow will skip ${label} promotion." >&2
+            else
+              echo "::error::${label} Snapshot lookup for '${name}' failed with an error other than NotFound (auth/network issue?): ${get_output}" >&2
+            fi
             echo "false"
+            return
           fi
+
+          local tests_ok
+          tests_ok=$(jq -r '[.status.conditions[]? | select(.type == "AppStudioTestSucceeded" and .status == "True")] | length > 0' <<<"${get_output}")
+          if [[ "${tests_ok}" != "true" ]]; then
+            echo "::warning::${label} Snapshot '${name}' exists but never reached AppStudioTestSucceeded=True -- its integration tests never passed, refusing to treat it as promotable." >&2
+            echo "false"
+            return
+          fi
+
+          local released_ok
+          released_ok=$(oc get release -n "${NAMESPACE}" -o json 2>/dev/null | jq -r --arg snap "${name}" --arg plan "${stage_plan}" '
+            [.items[]?
+              | select(.spec.snapshot == $snap and .spec.releasePlan == $plan)
+              | select([.status.conditions[]? | select(.type == "Released" and .status == "True")] | length > 0)
+            ] | length > 0
+          ')
+          if [[ "${released_ok}" != "true" ]]; then
+            echo "::warning::${label} Snapshot '${name}' passed its tests, but no Release against '${stage_plan}' for it ever reached Released=True -- the staging release itself never succeeded, refusing to treat it as promotable." >&2
+            echo "false"
+            return
+          fi
+
+          echo "true"
         }
 
         check_releaseplan() {
           local name="$1" label="$2"
-          if oc get releaseplan "${name}" -n "${NAMESPACE}" >/dev/null 2>&1; then
+          local get_output
+          if get_output=$(oc get releaseplan "${name}" -n "${NAMESPACE}" 2>&1); then
             echo "true"
           else
-            echo "::warning::${label} prod ReleasePlan '${name}' not found -- OSAC-1090 has not landed yet (or landed under a different name than expected). ${label} promotion will be skipped." >&2
+            if [[ "${get_output}" == *"NotFound"* ]]; then
+              echo "::warning::${label} prod ReleasePlan '${name}' not found -- OSAC-1090 has not landed yet (or landed under a different name than expected). ${label} promotion will be skipped." >&2
+            else
+              echo "::error::${label} ReleasePlan lookup for '${name}' failed with an error other than NotFound (auth/network issue?): ${get_output}" >&2
+            fi
             echo "false"
           fi
         }
 
-        image_snapshot_ok=$(check_snapshot "${IMAGE_SNAPSHOT}" "image")
-        chart_snapshot_ok=$(check_snapshot "${CHART_SNAPSHOT}" "chart")
+        image_snapshot_ok=$(check_snapshot "${IMAGE_SNAPSHOT}" "image" "cloud-extensions-stage")
+        chart_snapshot_ok=$(check_snapshot "${CHART_SNAPSHOT}" "chart" "osac-charts-stage")
         image_plan_ok=$(check_releaseplan "cloud-extensions-prod" "image")
         chart_plan_ok=$(check_releaseplan "osac-charts-prod" "chart")
 
@@ -260,9 +310,34 @@ jobs:
         # here for the prod Release would make `oc apply` 3-way-merge
         # against the live, already-Released staging Release object
         # instead of creating a new one.
+        #
+        # A name derived from SNAPSHOT alone (with no per-dispatch
+        # component) is also not safe across SEPARATE workflow dispatches:
+        # if all MAX_RELEASE_ATTEMPTS fail and someone re-dispatches this
+        # workflow (or re-runs the failed job) for the same release, `oc
+        # apply` would find the same already-Failed Release objects still
+        # sitting in the cluster and poll_release would immediately read
+        # back their old Failed condition -- a failed promotion would be
+        # unrecoverable. RUN_TAG makes every dispatch's names unique.
+        RUN_TAG = f"r{os.environ['GITHUB_RUN_ID']}a{os.environ['GITHUB_RUN_ATTEMPT']}"
+
+        # Don't create a redundant prod Release if a prior dispatch
+        # already promoted this exact Snapshot to this exact ReleasePlan
+        # successfully.
+        existing = subprocess.run(
+            ["oc", "get", "release", "-n", NAMESPACE, "-o", "json"],
+            capture_output=True, text=True, check=True,
+        )
+        for item in json.loads(existing.stdout).get("items", []):
+            spec = item.get("spec", {})
+            if spec.get("snapshot") == SNAPSHOT and spec.get("releasePlan") == RELEASE_PLAN:
+                if condition_true(item.get("status", {}).get("conditions", []), "Released"):
+                    print(f"::notice::{SNAPSHOT} was already promoted to {RELEASE_PLAN} by {item['metadata']['name']} -- nothing to do")
+                    sys.exit(0)
+
         released = False
         for attempt_num in range(1, MAX_RELEASE_ATTEMPTS + 1):
-            release_name = f"{SNAPSHOT}-prod" if attempt_num == 1 else f"{SNAPSHOT}-prod-retry{attempt_num - 1}"
+            release_name = f"{SNAPSHOT}-prod-{RUN_TAG}" if attempt_num == 1 else f"{SNAPSHOT}-prod-{RUN_TAG}-retry{attempt_num - 1}"
             release = {
                 "apiVersion": "appstudio.redhat.com/v1alpha1",
                 "kind": "Release",
@@ -290,8 +365,22 @@ jobs:
 
   promote-chart:
     name: Promote chart Snapshot to production
-    needs: resolve-and-verify
-    if: needs.resolve-and-verify.outputs.chart-ready == 'true'
+    # Gated on promote-image's own result too (not just resolve-and-
+    # verify's chart-ready), mirroring the staging pipeline's own
+    # chart-depends-on-image-release ordering: the chart references
+    # specific image tags, so it should never ship after an attempted
+    # image promotion has failed. Still runs when image promotion was
+    # never attempted at all (image-ready == 'false'), since that's an
+    # independent, orthogonal reason to skip -- only an attempted-and-
+    # failed image promotion blocks chart promotion.
+    needs: [resolve-and-verify, promote-image]
+    if: |
+      always() &&
+      needs.resolve-and-verify.outputs.chart-ready == 'true' &&
+      (
+        needs.resolve-and-verify.outputs.image-ready != 'true' ||
+        needs.promote-image.result == 'success'
+      )
     environment: production
     runs-on: osac-ci
     timeout-minutes: 100
@@ -393,11 +482,25 @@ jobs:
             print(f"::warning::Timed out waiting for {release_name}")
             return "timeout"
 
-        # See promote-image's identical comment on why the "-prod" suffix
-        # matters -- same reasoning, applied to the chart Snapshot/Release.
+        # See promote-image's identical comments on why the "-prod" suffix
+        # and the RUN_TAG/duplicate-check both matter -- same reasoning,
+        # applied to the chart Snapshot/Release.
+        RUN_TAG = f"r{os.environ['GITHUB_RUN_ID']}a{os.environ['GITHUB_RUN_ATTEMPT']}"
+
+        existing = subprocess.run(
+            ["oc", "get", "release", "-n", NAMESPACE, "-o", "json"],
+            capture_output=True, text=True, check=True,
+        )
+        for item in json.loads(existing.stdout).get("items", []):
+            spec = item.get("spec", {})
+            if spec.get("snapshot") == SNAPSHOT and spec.get("releasePlan") == RELEASE_PLAN:
+                if condition_true(item.get("status", {}).get("conditions", []), "Released"):
+                    print(f"::notice::{SNAPSHOT} was already promoted to {RELEASE_PLAN} by {item['metadata']['name']} -- nothing to do")
+                    sys.exit(0)
+
         released = False
         for attempt_num in range(1, MAX_RELEASE_ATTEMPTS + 1):
-            release_name = f"{SNAPSHOT}-prod" if attempt_num == 1 else f"{SNAPSHOT}-prod-retry{attempt_num - 1}"
+            release_name = f"{SNAPSHOT}-prod-{RUN_TAG}" if attempt_num == 1 else f"{SNAPSHOT}-prod-{RUN_TAG}-retry{attempt_num - 1}"
             release = {
                 "apiVersion": "appstudio.redhat.com/v1alpha1",
                 "kind": "Release",

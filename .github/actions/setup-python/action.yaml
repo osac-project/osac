@@ -17,9 +17,15 @@ description: Install Python, uv, and ruff
 runs:
   using: composite
   steps:
-  - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
-    with:
-      python-version: '3.14'
   - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+  - name: Install Python
+    shell: bash
+    env:
+      UV_PYTHON_BIN_DIR: ${{ runner.temp }}/osac-python-bin
+    # uv provides portable builds for self-hosted CentOS runners too.
+    run: |
+      uv python install --default 3.14
+      python_bin_dir="$(uv python dir --bin)"
+      printf '%s\n' "$python_bin_dir" >> "$GITHUB_PATH"
   - shell: bash
     run: uv tool install ruff==0.15.16

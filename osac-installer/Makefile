@@ -371,13 +371,20 @@ else ifeq ($(PROFILE),dev-full)
 	@$(KIND_RUNTIME_CMD) check
 	@$(KIND_RUNTIME_CMD) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
 else
-	@if kind get nodes --name $(KIND_CLUSTER_NAME) | grep -q .; then \
+	@if [[ -z "$${KIND_EXPERIMENTAL_PROVIDER:-}" ]] && command -v podman >/dev/null 2>&1; then \
+		export KIND_EXPERIMENTAL_PROVIDER=podman; \
+	fi; \
+	if kind get nodes --name $(KIND_CLUSTER_NAME) | grep -q .; then \
 		echo "Kind cluster '$(KIND_CLUSTER_NAME)' already exists"; \
 	else \
 		echo "Creating Kind cluster '$(KIND_CLUSTER_NAME)'..."; \
 		kind create cluster --name $(KIND_CLUSTER_NAME) --config $(KIND_CONFIG) --wait 60s; \
-	fi
-	@kind export kubeconfig --name $(KIND_CLUSTER_NAME) --kubeconfig $(KIND_KUBECONFIG)
+	fi; \
+	if [[ "$${KIND_EXPERIMENTAL_PROVIDER:-}" == podman ]]; then \
+		source scripts/lib.sh; \
+		ensure_podman_pid_limits "$(KIND_CLUSTER_NAME)" kind podman; \
+	fi; \
+	kind export kubeconfig --name $(KIND_CLUSTER_NAME) --kubeconfig $(KIND_KUBECONFIG)
 endif
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_ENV) $(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)

@@ -529,6 +529,15 @@ else
 	@[ -z "$(OSAC_CHART_OCI_VERSION)" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION is set without OSAC_CHART_OCI_REF -- this would silently install the local checkout's chart, ignoring the version" >&2; exit 1; }
 endif
 
+# The BMF subchart requires netbox.tokenValue when the named token Secret is
+# absent; profiles like bmaas-netbox-ci rely on the infra chart's
+# netbox-token-seed hook to create that Secret during a real install. Offline
+# rendering cannot see cluster Secrets (helm template's lookup returns nil),
+# so the gate's render-only placeholder bridges that branch. It is never
+# passed to an installation, and a caller-supplied --set tokenValue (via
+# EXTRA_HELM_ARGS, which follows it) still takes precedence.
+NETBOX_OFFLINE_TOKEN := offline-validation-placeholder
+
 .PHONY: validate-inputs
 # An OCI-ref install renders the pulled chart, so the local osac chart's
 # dependencies are not built for it (mirrors the install-osac guard below).
@@ -556,6 +565,7 @@ ifeq ($(PLATFORM),kind)
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
+		--set-string bmf.netbox.tokenValue=$(NETBOX_OFFLINE_TOKEN) \
 		$(INSTANCE_HELM_ARGS) \
 		$(EXTRA_HELM_ARGS) >/dev/null \
 	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
@@ -595,6 +605,7 @@ else
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
+		--set-string bmf.netbox.tokenValue=$(NETBOX_OFFLINE_TOKEN) \
 		--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) \
 		--set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) \
 		--set global.clusterDomain=$(DOMAIN) \

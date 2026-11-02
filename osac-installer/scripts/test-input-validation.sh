@@ -327,4 +327,32 @@ render_failure_matching \
   '(global\.fulfillmentTrust|/global/fulfillmentTrust).*additional propert(y|ies).*unknownKey.*(is )?not allowed' \
   --set global.fulfillmentTrust.unknownKey=1
 
+# bmaas-netbox-ci is a valid profile the gate must not block: it relies on
+# the infra chart's netbox-token-seed hook to create the NetBox token Secret
+# during a real install, and offline rendering cannot see cluster Secrets
+# (helm template's lookup returns nil), so the raw render fails the
+# lookup-dependent branch. The gate bridges it with a render-only
+# placeholder token (NETBOX_OFFLINE_TOKEN in the Makefile; it must match the
+# value asserted here) that is never passed to an installation. The
+# hostname --sets mirror the OpenShift gate branch -- the profile's
+# supported platform; on Kind the install itself rejects the profile's empty
+# hostnames, gate and install alike.
+NETBOX_PROFILE_ARGS=(
+  -f "${INSTALLER_DIR}/values/bmaas-ci/instance.yaml"
+  -f "${INSTALLER_DIR}/values/bmaas-netbox-ci/instance.yaml"
+  --set service.externalHostname=fulfillment-api-osac.example.com
+  --set service.internalHostname=fulfillment-internal-api-osac.example.com
+  --set global.clusterDomain=example.com
+)
+
+render_failure_matching \
+  netbox-profile-raw-render \
+  'netbox\.tokenValue is required when Secret' \
+  "${NETBOX_PROFILE_ARGS[@]}"
+
+render_success \
+  netbox-profile-gate-placeholder \
+  "${NETBOX_PROFILE_ARGS[@]}" \
+  --set-string bmf.netbox.tokenValue=offline-validation-placeholder
+
 echo "input validation passed"

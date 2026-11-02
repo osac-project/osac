@@ -182,6 +182,36 @@ describe('ClusterCatalogItemWizard', () => {
     ).toBeInTheDocument();
   });
 
+  it('uses the simple host type and size display for a catalog node set', async () => {
+    const item = create(ClusterCatalogItemSchema, {
+      id: 'catalog-item-1',
+      metadata: { name: 'existing-item', tenant: 'test-tenant' },
+      template: { id: TEMPLATE.id },
+      fields: {
+        nodeSets: {
+          behavior: {
+            case: 'locked',
+            value: {
+              items: {
+                workers: {
+                  size: 1,
+                  baremetalInstanceType: { name: HOST_TYPE.metadata?.name, shared: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const { user } = renderWizard(item);
+
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(await screen.findByText('worker: 1')).toBeInTheDocument();
+  });
+
   it('adds a required node set and prevents removing the last locked node set', async () => {
     const { user } = renderWizard();
 

@@ -264,7 +264,7 @@
 /osac-installer/charts/osac/files/netris-protected-inputs.json @osac-project/wg-connectivity
 /osac-installer/charts/osac/files/network-class-step.py @osac-project/wg-connectivity
 /osac-installer/scripts/*network*.py @osac-project/wg-connectivity
-/osac-installer/scripts/*fabric_domain*.py @osac-project/wg-connectivity
+/osac-installer/scripts/*fabric-domain*.py @osac-project/wg-connectivity
 /osac-installer/values/agentless-net-stub.yaml @osac-project/wg-connectivity
 /osac-installer/values/bmaas-ci/netris.yaml @osac-project/wg-connectivity
 /osac-installer/values/full-ci/netris.yaml @osac-project/wg-connectivity

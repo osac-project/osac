@@ -32,17 +32,21 @@ import (
 	"github.com/osac-project/osac/osac-operator/test/utils"
 )
 
-const netrisManagerConfigMap = "osac-network-fabric-manager-netris"
+const (
+	netrisManagerConfigMap  = "osac-network-fabric-manager-netris"
+	k8sOnlyManagerConfigMap = "osac-network-k8s-manager-k8s-only"
+)
 
-type netrisManagerConfigMapData struct {
-	Name         string `yaml:"name"`
-	AnsibleRole  string `yaml:"ansible_role"`
-	Capabilities string `yaml:"capabilities"`
+type networkManagerConfigMapData struct {
+	Name                      string `yaml:"name"`
+	AnsibleRole               string `yaml:"ansible_role"`
+	Capabilities              string `yaml:"capabilities"`
+	ExternalIPContractVersion string `yaml:"externalIPContractVersion"`
 }
 
-func netrisRenderedConfigMapsAllowingFailure(
-	chartsDir string, extraArgs ...string,
-) (map[string]netrisManagerConfigMapData, error) {
+func networkManagerRenderedConfigMapsAllowingFailure(
+	chartsDir, managerName string, extraArgs ...string,
+) (map[string]networkManagerConfigMapData, error) {
 	args := append([]string{
 		"template", "netris-registration", chartsDir,
 		"--namespace", operatorNamespace,
@@ -51,11 +55,13 @@ func netrisRenderedConfigMapsAllowingFailure(
 	if err != nil {
 		return nil, err
 	}
-	return parseNetrisConfigMaps(string(output)), nil
+	return parseNetworkManagerConfigMaps(string(output), managerName), nil
 }
 
-func parseNetrisConfigMaps(rendered string) map[string]netrisManagerConfigMapData {
-	configMaps := map[string]netrisManagerConfigMapData{}
+func parseNetworkManagerConfigMaps(
+	rendered, managerName string,
+) map[string]networkManagerConfigMapData {
+	configMaps := map[string]networkManagerConfigMapData{}
 	decoder := yaml.NewDecoder(strings.NewReader(rendered))
 	for {
 		var manifest struct {
@@ -73,26 +79,29 @@ func parseNetrisConfigMaps(rendered string) map[string]netrisManagerConfigMapDat
 				"skipping malformed rendered document: %v\n", err)
 			continue
 		}
-		if manifest.Kind != "ConfigMap" || manifest.Metadata.Name != netrisManagerConfigMap {
+		if manifest.Kind != "ConfigMap" || manifest.Data["name"] != managerName {
 			continue
 		}
-		configMaps[manifest.Metadata.Name] = netrisManagerConfigMapData{
-			Name:         manifest.Data["name"],
-			AnsibleRole:  manifest.Data["ansible_role"],
-			Capabilities: manifest.Data["capabilities"],
+		configMaps[manifest.Metadata.Name] = networkManagerConfigMapData{
+			Name:                      manifest.Data["name"],
+			AnsibleRole:               manifest.Data["ansible_role"],
+			Capabilities:              manifest.Data["capabilities"],
+			ExternalIPContractVersion: manifest.Data["externalIPContractVersion"],
 		}
 	}
 	return configMaps
 }
 
-func netrisRenderedConfigMaps(chartsDir string, extraArgs ...string) map[string]netrisManagerConfigMapData {
+func networkManagerRenderedConfigMaps(
+	chartsDir, managerName string, extraArgs ...string,
+) map[string]networkManagerConfigMapData {
 	args := append([]string{
 		"template", "netris-registration", chartsDir,
 		"--namespace", operatorNamespace,
 	}, extraArgs...)
 	output, err := utils.Run(exec.Command("helm", args...))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "helm template failed")
-	return parseNetrisConfigMaps(string(output))
+	return parseNetworkManagerConfigMaps(string(output), managerName)
 }
 
 func netrisUmbrellaOverrides() []string {
@@ -113,9 +122,7 @@ func netrisUmbrellaOverrides() []string {
 }
 
 // TestNetrisRegistrationRendering asserts the rendered registration manifests
-// without a cluster: the installer chart owns the Netris Fabric Manager
-// registration; the operator chart alone renders none. The deployed assertion
-// lives in the Ginkgo suite so it runs against the deployed Kind environment.
+// without assuming a particular manager is deployed by the active Kind profile.
 func TestNetrisRegistrationRendering(t *testing.T) {
 	RegisterTestingT(t)
 
@@ -123,11 +130,24 @@ func TestNetrisRegistrationRendering(t *testing.T) {
 
 	t.Run("the operator chart renders no netris registration", func(t *testing.T) {
 		RegisterTestingT(t)
-		configMaps := netrisRenderedConfigMaps(
+		configMaps := networkManagerRenderedConfigMaps(
 			chartDir,
+			"netris",
 			"--set", "global.networking.fabricManager=netris",
 		)
 		Expect(configMaps).NotTo(HaveKey(netrisManagerConfigMap))
+	})
+
+	t.Run("the operator chart renders k8s_only with the v1 contract", func(t *testing.T) {
+		RegisterTestingT(t)
+		configMaps := networkManagerRenderedConfigMaps(
+			chartDir,
+			"k8s_only",
+			"--set", "global.networking.k8sManager=k8s_only",
+		)
+		Expect(configMaps).To(HaveKey(k8sOnlyManagerConfigMap))
+		Expect(configMaps[k8sOnlyManagerConfigMap].Name).To(Equal("k8s_only"))
+		Expect(configMaps[k8sOnlyManagerConfigMap].ExternalIPContractVersion).To(Equal("v1"))
 	})
 
 	t.Run("the installer chart renders the netris registration", func(t *testing.T) {
@@ -142,7 +162,9 @@ func TestNetrisRegistrationRendering(t *testing.T) {
 		if err != nil {
 			t.Skipf("umbrella-chart rendering gap: dependency build failed: %v: %s", err, string(build))
 		}
-		configMaps, renderErr := netrisRenderedConfigMapsAllowingFailure(umbrellaDir, netrisUmbrellaOverrides()...)
+		configMaps, renderErr := networkManagerRenderedConfigMapsAllowingFailure(
+			umbrellaDir, "netris", netrisUmbrellaOverrides()...,
+		)
 		if renderErr != nil {
 			// The umbrella chart requires secret-backed controller
 			// credentials that are injected at install time, so a
@@ -196,38 +218,5 @@ var _ = Describe("Netris registration", func() {
 				By("the environment does not register the netris fabric manager")
 			}
 		})
-	})
-})
-
-var _ = Describe("Kubernetes-only ExternalIP registration", func() {
-	It("registers k8s_only with the v1 contract when deployed", func() {
-		cmd := exec.Command("kubectl", "get", "configmaps",
-			"-l", "osac.openshift.io/network-k8s-manager=true",
-			"-n", operatorNamespace, "-o", "json")
-		output, err := utils.Run(cmd)
-		if err != nil {
-			Fail(fmt.Sprintf("kubectl get k8s manager configmaps failed: %v", err))
-		}
-
-		var configMapList struct {
-			Items []struct {
-				Metadata struct {
-					Name string `json:"name"`
-				} `json:"metadata"`
-				Data map[string]string `json:"data"`
-			} `json:"items"`
-		}
-		ExpectWithOffset(1, json.Unmarshal(output, &configMapList)).To(Succeed())
-
-		deployed := false
-		for _, cm := range configMapList.Items {
-			if cm.Data["name"] != "k8s_only" {
-				continue
-			}
-			deployed = true
-			ExpectWithOffset(1, cm.Metadata.Name).To(Equal("osac-network-k8s-manager-k8s-only"))
-			ExpectWithOffset(1, cm.Data["externalIPContractVersion"]).To(Equal("v1"))
-		}
-		Expect(deployed).To(BeTrue(), "the Kind dev profile should register k8s_only")
 	})
 })

@@ -2,8 +2,8 @@
 # The CaaS suite of a pull request, as a run of its own. The decision of e2e-pr.yml (osac-ci) starts it with
 # workflow_dispatch for the commit that was approved, because the policy names this file for the suite
 # (`workflow: e2e-pr-caas.yml` in .github/e2e-policy.yml). It is a run of its own so that a failed CaaS suite can be run
-# again at once (GitHub's "Re-run" of this run, or `/test caas`) without waiting for the other suites. It does
-# what the `caas` job of e2e-pr.yml did: it calls e2e-caas-full-install.yml with the same arguments; nothing else runs here.
+# again at once (GitHub's "Re-run" of this run, or `/test caas`) without waiting for the other suites. It
+# calls e2e-caas-full-install.yml, selecting the full tier when CaaS regression tests changed.
 #
 # The inputs are given by the decision and checked by `verify` (osac-ci) against the pull request: anyone with write
 # access can start this workflow with any inputs, and the fork author and association, which decide whether a fork's code
@@ -32,7 +32,7 @@ on:
       tier:
         description: >-
           "full" when the box "CaaS Full Install · sanity + regression" (a variant of this suite in the policy) started
-          it, empty for the sanity tests. Sent by the decision only for a suite asked for through a variant.
+          it. Otherwise defaults to sanity, unless a current or previous changed path is under tests/e2e/caas/regression/.
         required: false
         type: string
         default: ""
@@ -62,15 +62,57 @@ jobs:
       sha: ${{ inputs.sha }}
       pr-number: ${{ inputs.pr-number }}
 
+  # Resolve the suite tier only after the dispatch inputs have been verified.
+  labels:
+    needs: verify
+    permissions:
+      pull-requests: read
+    runs-on: ubuntu-latest
+    outputs:
+      tier: ${{ steps.tier.outputs.tier }}
+    steps:
+      - name: Resolve the CaaS tier from verified PR files
+        id: tier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          PR_SHA: ${{ inputs.sha }}
+          REQUESTED_TIER: ${{ inputs.tier }}
+        run: |
+          set -euo pipefail
+          pull_json="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}")"
+          file_count="$(jq -er --arg sha "$PR_SHA" '
+            select(.head.sha == $sha) | .changed_files |
+            select(type == "number" and . >= 0 and . == floor)
+          ' <<<"$pull_json")"
+          pages="$(gh api --paginate --slurp "repos/${GH_REPO}/pulls/${PR_NUMBER}/files?per_page=100")"
+          jq -e --argjson count "$file_count" '
+            type == "array" and length > 0 and all(.[]; type == "array") and
+            ([.[][]] | length == $count and
+              all(.[]; (.filename | type == "string" and length > 0) and
+                (.previous_filename == null or (.previous_filename | type == "string" and length > 0)))) and
+            ([.[][].filename] | unique | length == $count)
+          ' <<<"$pages" > /dev/null
+          pull_json="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}")"
+          jq -e --arg sha "$PR_SHA" --argjson count "$file_count" '
+            .head.sha == $sha and .changed_files == $count
+          ' <<<"$pull_json" > /dev/null
+          tier="$(jq -r --arg requested "$REQUESTED_TIER" '
+            if $requested == "full" or any(.[][];
+              any(.filename, (.previous_filename // ""); startswith("tests/e2e/caas/regression/")))
+            then "full" else "" end
+          ' <<<"$pages")"
+          printf 'tier=%s\n' "$tier" >> "$GITHUB_OUTPUT"
   # Named after the suite id of .github/e2e-policy.yml: the line of the suite follows the deepest job of this run.
   caas:
-    needs: [verify]
+    needs: [verify, labels]
     permissions:
       contents: read
       id-token: write
     uses: ./.github/workflows/e2e-caas-full-install.yml
     with:
-      tier: ${{ inputs.tier }}
+      tier: ${{ needs.labels.outputs.tier }}
       repo: ${{ inputs.repo }}
       sha: ${{ inputs.sha }}
       pr-number: ${{ inputs.pr-number }}

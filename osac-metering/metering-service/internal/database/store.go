@@ -356,7 +356,7 @@ func LatestFactValue(
 		`SELECT value
 		 FROM history
 		 WHERE tenant = $1 AND resource_type = $2 AND resource_id = $3 AND field = $4
-		 ORDER BY event_offset DESC NULLS LAST, since DESC
+		 ORDER BY event_offset DESC, since DESC
 		 LIMIT 1`,
 		tenant, resourceType, resourceID, field,
 	).Scan(&value)

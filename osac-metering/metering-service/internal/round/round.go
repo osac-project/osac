@@ -535,6 +535,11 @@ func (r *Round) scanResources(
 			return nil, nil, err
 		}
 		for _, entry := range owned {
+			// The same guard as the fact queue: a tenant billing row shares this
+			// table and is not a resource the round bills.
+			if !metered(entry) {
+				continue
+			}
 			if !seen[resource{entry.ResourceType, entry.ResourceID}] {
 				queue = append(queue, resource{entry.ResourceType, entry.ResourceID})
 			}

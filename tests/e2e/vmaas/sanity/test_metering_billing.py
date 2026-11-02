@@ -664,8 +664,8 @@ def test_metering_delete_ends_billing(
 
 
 def _spec_billing_id(spec: dict[str, Any]) -> str | None:
-    """Read TenantSpec.external_billing_id from either proto JSON name."""
-    value = spec.get("external_billing_id", spec.get("externalBillingId"))
+    """Read the billing id under the camelCase name grpcurl returns."""
+    value = spec.get("externalBillingId")
     if value is None or value == "":
         return None
     return str(value)
@@ -729,6 +729,8 @@ def _wait_for_billing_account(
         retries=timeout // 10,
         delay=10,
         description=f"heartbeat of {resource_id} with external_billing_account_id={account!r}",
+        resource_kind=WaitResourceKind.HEARTBEAT,
+        resource_id=resource_id,
     )
 
 

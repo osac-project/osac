@@ -768,20 +768,47 @@ func (p *EventPublisher) drain(ctx context.Context) (more bool, err error) {
 		return false, fmt.Errorf("failed to scan change rows: %w", err)
 	}
 
+	// Convert each change once. Publishing uses this same event, so a change that
+	// cannot be converted fails here and is not converted a second time.
+	type preparedChange struct {
+		change *eventPublisherChange
+		event  *privatev1.Event
+		err    error
+	}
+	prepared := make([]preparedChange, len(changes))
+	seenTenants := make(map[string]struct{}, len(changes))
+	tenants := make([]string, 0, len(changes))
+	for i := range changes {
+		event, convErr := p.convertChange(&changes[i])
+		prepared[i] = preparedChange{change: &changes[i], event: event, err: convErr}
+		if convErr != nil {
+			continue
+		}
+		tenant, _, idErr := p.payloadIdentity(event)
+		if idErr != nil || tenant == "" {
+			continue
+		}
+		if _, ok := seenTenants[tenant]; ok {
+			continue
+		}
+		seenTenants[tenant] = struct{}{}
+		tenants = append(tenants, tenant)
+	}
+
 	// One lookup for the batch. Every event for a tenant is stamped with the
 	// billing id stored on that tenant at publish time.
-	billingIDs, err := p.billingIDsByTenant(ctx, tx, p.tenantsInBatch(changes))
+	billingIDs, err := p.billingIDsByTenant(ctx, tx, tenants)
 	if err != nil {
 		return false, err
 	}
 
 	// Process the changes:
-	for _, change := range changes {
+	for _, item := range prepared {
 		if err = ctx.Err(); err != nil {
 			err = fmt.Errorf("publish aborted: %w", err)
 			return
 		}
-		err = p.processChange(ctx, tx, &change, billingIDs)
+		err = p.processChange(ctx, tx, item.change, item.event, item.err, billingIDs)
 		if err != nil {
 			return
 		}
@@ -791,7 +818,7 @@ func (p *EventPublisher) drain(ctx context.Context) (more bool, err error) {
 	return
 }
 
-// processChange converts a change into an event and writes it to Kafka.
+// processChange publishes an already converted change to Kafka.
 //
 // Changes that cannot be converted are reated as permanently unpublishable. Returning an error here would abort the
 // drain and leave that row at the head of the table, so later changes would never be published. Instead the failure is
@@ -803,18 +830,23 @@ func (p *EventPublisher) drain(ctx context.Context) (more bool, err error) {
 //
 //	increase(event_publish_errors_total[5m]) > 0
 func (p *EventPublisher) processChange(
-	ctx context.Context, tx pgx.Tx, change *eventPublisherChange, billingIDs map[string]string,
+	ctx context.Context,
+	tx pgx.Tx,
+	change *eventPublisherChange,
+	event *privatev1.Event,
+	convErr error,
+	billingIDs map[string]string,
 ) error {
-	// Convert the change to an event:
-	event, err := p.convertChange(change)
-	if err != nil {
+	// The drain converted this change once. A failure here is permanent: the row is
+	// logged, counted, and deleted so it cannot block the changes behind it.
+	if convErr != nil {
 		p.logger.ErrorContext(
 			ctx,
 			"Failed to convert change",
 			slog.String("id", change.id),
 			slog.String("table", change.table),
 			slog.String("op", change.op),
-			slog.String("error", err.Error()),
+			slog.String("error", convErr.Error()),
 		)
 		p.metrics.publishErrors.With(nil).Inc()
 		return p.deleteChange(ctx, tx, change.id)
@@ -1247,31 +1279,10 @@ func (p *EventPublisher) payloadIdentity(event *privatev1.Event) (objectTenant, 
 	return
 }
 
-// tenantsInBatch returns the distinct payload tenants of changes that can be converted.
-// Changes that cannot be converted are omitted here and handled by processChange.
-func (p *EventPublisher) tenantsInBatch(changes []eventPublisherChange) []string {
-	seen := make(map[string]struct{}, len(changes))
-	tenants := make([]string, 0, len(changes))
-	for i := range changes {
-		event, err := p.convertChange(&changes[i])
-		if err != nil {
-			continue
-		}
-		tenant, _, err := p.payloadIdentity(event)
-		if err != nil || tenant == "" {
-			continue
-		}
-		if _, ok := seen[tenant]; ok {
-			continue
-		}
-		seen[tenant] = struct{}{}
-		tenants = append(tenants, tenant)
-	}
-	return tenants
-}
-
 // billingIDsByTenant returns the stored spec.external_billing_id for each tenant name.
-// Tenants with no row or no id are absent from the map.
+// A live row wins. When that row is already gone, the latest archived row supplies the
+// id, so a tenant delete event still carries the account the tenant had when it was
+// removed. Tenants with no row or no id are absent from the map.
 func (p *EventPublisher) billingIDsByTenant(
 	ctx context.Context, tx pgx.Tx, tenants []string,
 ) (map[string]string, error) {
@@ -1283,6 +1294,20 @@ func (p *EventPublisher) billingIDsByTenant(
 		select name, data #>> '{spec,external_billing_id}'
 		from tenants
 		where name = any($1)
+		union all
+		select name, billing_id
+		from (
+			select distinct on (name)
+				name,
+				data #>> '{spec,external_billing_id}' as billing_id
+			from archived_tenants
+			where name = any($1)
+			  and not exists (
+				  select 1 from tenants
+				  where tenants.name = archived_tenants.name
+			  )
+			order by name, deletion_timestamp desc, archival_timestamp desc
+		) archived
 	`, tenants)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read tenant billing ids: %w", err)

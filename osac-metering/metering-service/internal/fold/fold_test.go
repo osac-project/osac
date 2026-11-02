@@ -27,6 +27,7 @@ import (
 
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/fold"
+	"github.com/osac-project/osac-metering/internal/metrics"
 	"github.com/osac-project/osac-metering/internal/metrics/metertest"
 	"github.com/osac-project/osac-metering/internal/testenv"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -850,6 +851,19 @@ func TestFoldRecordsExternalBillingIDWhenItChanges(t *testing.T) {
 		t.Fatalf("replay changed billing history:\ngot:\n%s\nwant:\n%s", stringsJoin(got), stringsJoin(want))
 	}
 
+	// The replay above starts again from offset zero. A fold that is killed and
+	// resumed at arbitrary points in the same log must write the same billing rows.
+	restartTenant := tenant + "-restarts"
+	restartTotal := produce(t, restartTenant, events)
+	foldAll(t, store, restartTenant, restartTotal, true)
+	var restartWant []string
+	for _, line := range want {
+		restartWant = append(restartWant, strings.Replace(line, tenant, restartTenant, 1))
+	}
+	if got := billingLines(t, store, restartTenant); stringsJoin(got) != stringsJoin(restartWant) {
+		t.Fatalf("restarted fold billing history:\ngot:\n%s\nwant:\n%s", stringsJoin(got), stringsJoin(restartWant))
+	}
+
 	vmTenant := "billing-fold-vm"
 	vm := testenv.VMEvent("vm-e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 		base, base, "web", "RUNNING", base, "small", base)
@@ -867,6 +881,26 @@ func TestFoldRecordsExternalBillingIDWhenItChanges(t *testing.T) {
 
 // TestFoldRecordsBillingIDWhenPayloadIsUnknown checks that an event this build cannot
 // bill still records the envelope billing id for the topic tenant.
+// TestFoldSkipsUndatedBillingChange checks that a billing-id change with no event
+// time is skipped and counted, and that a later dated event still records the id.
+func TestFoldSkipsUndatedBillingChange(t *testing.T) {
+	tenant := "billing-undated"
+	undated := billingEnvelope("b1", base, "acct-1")
+	undated.Timestamp = nil
+	dated := billingEnvelope("b2", base.Add(time.Minute), "acct-1")
+	store := testenv.Database(t)
+	before := skippedEvents(t, tenant, metrics.SkipMissingEventTime)
+	total := produce(t, tenant, []*privatev1.Event{undated, dated})
+	foldAll(t, store, tenant, total, false)
+	if got := skippedEvents(t, tenant, metrics.SkipMissingEventTime); got != before+1 {
+		t.Fatalf("undated billing skip counter is %v, want %v", got, before+1)
+	}
+	want := []string{billingLine(tenant, base.Add(time.Minute), "acct-1")}
+	if got := billingLines(t, store, tenant); stringsJoin(got) != stringsJoin(want) {
+		t.Fatalf("undated billing history:\ngot:\n%s\nwant:\n%s", stringsJoin(got), stringsJoin(want))
+	}
+}
+
 func TestFoldRecordsBillingIDWhenPayloadIsUnknown(t *testing.T) {
 	tenant := "billing-unknown-payload"
 	bare := &privatev1.Event{

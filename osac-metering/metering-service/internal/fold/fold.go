@@ -185,7 +185,16 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 			}
 			continue
 		}
-		billing, billingChanged := changedBillingFact(event, tenant, latestBillingID, hasBillingID)
+		billing, billingChanged, billingErr := changedBillingFact(event, tenant, latestBillingID, hasBillingID)
+		if billingErr != nil {
+			// A billing change with no event time cannot be dated. Skip the record
+			// loudly, as the fold does for every other undatable event, instead of
+			// writing the resource facts and dropping the account.
+			if err := f.skipEvent(ctx, tx, tenant, metrics.SkipMissingEventTime, billingErr, message); err != nil {
+				return err
+			}
+			continue
+		}
 		facts, err := f.extractor.Facts(tenant, event)
 		if err != nil {
 			reason, skip := skipReason(err)
@@ -228,18 +237,26 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 }
 
 // changedBillingFact reports the history fact to write when the envelope's billing id
-// differs from the latest stored value. An event without a timestamp cannot be dated, so
-// it does not change the history. The value is the envelope field, empty when unset.
+// differs from the latest stored value. The value is the envelope field, empty when
+// unset. A change that has no event timestamp returns an error: the fold skips that
+// record loudly. An empty id with no stored id is not a change.
 func changedBillingFact(
 	event *privatev1.Event, tenant, latest string, hasLatest bool,
-) (database.Fact, bool) {
-	timestamp := event.GetTimestamp()
-	if timestamp == nil || !timestamp.IsValid() || timestamp.AsTime().IsZero() {
-		return database.Fact{}, false
-	}
+) (database.Fact, bool, error) {
 	value := event.GetExternalBillingId()
 	if hasLatest && latest == value {
-		return database.Fact{}, false
+		return database.Fact{}, false, nil
+	}
+	timestamp := event.GetTimestamp()
+	if timestamp == nil || !timestamp.IsValid() || timestamp.AsTime().IsZero() {
+		// The first empty envelope is recorded only when it has a time. An undated
+		// event that carries no id, and has no stored id, is not a billing change.
+		if !hasLatest && value == "" {
+			return database.Fact{}, false, nil
+		}
+		return database.Fact{}, false, fmt.Errorf(
+			"event %s changes the billing id but has no timestamp", event.GetId(),
+		)
 	}
 	return database.Fact{
 		ResourceType: database.BillingResourceType,
@@ -247,7 +264,7 @@ func changedBillingFact(
 		Field:        database.BillingField,
 		Since:        timestamp.AsTime().UTC().Truncate(time.Second),
 		Value:        value,
-	}, true
+	}, true, nil
 }
 
 // skipReason maps an extraction error the fold must skip loudly, not fail on, to its metric

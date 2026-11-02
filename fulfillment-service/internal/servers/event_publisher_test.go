@@ -687,6 +687,47 @@ var _ = Describe("Event publisher", Ordered, func() {
 			}
 		})
 
+		It("Stamps a deleted tenant from its latest archived row", func() {
+			deleted := "archived-" + uuid.New()
+			live := "live-" + uuid.New()
+			cleared := "cleared-" + uuid.New()
+			_, err := pool.Exec(encodeCtx, `
+				insert into tenants (id, name, tenant, creator, data)
+				values
+					($1, $1, $1, 'system', '{"spec":{"external_billing_id":"acct-live"}}'),
+					($2, $2, $2, 'system', '{}')
+			`, live, cleared)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = pool.Exec(encodeCtx, `
+				insert into archived_tenants (
+					id, name, tenant, creator, data, creation_timestamp, deletion_timestamp
+				)
+				values
+					($1 || '-old', $1, $1, 'system', '{"spec":{"external_billing_id":"acct-old"}}',
+						now() - interval '2 hours', now() - interval '2 hours'),
+					($1 || '-new', $1, $1, 'system', '{"spec":{"external_billing_id":"acct-1"}}',
+						now() - interval '1 hour', now() - interval '1 hour'),
+					($2 || '-old', $2, $2, 'system', '{"spec":{"external_billing_id":"acct-old"}}',
+						now(), now()),
+					($3 || '-old', $3, $3, 'system', '{"spec":{"external_billing_id":"acct-old"}}',
+						now(), now())
+			`, deleted, live, cleared)
+			Expect(err).NotTo(HaveOccurred())
+			insertChange("projects", deleted, "p-deleted", "")
+			insertChange("projects", live, "p-live", "")
+			insertChange("projects", cleared, "p-cleared", "")
+
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+
+			deletedEvents := collectKafkaEvents(client, DefaultEventTopicPrefix+deleted, 1)
+			Expect(deletedEvents[0].event.GetExternalBillingId()).To(Equal("acct-1"))
+			liveEvents := collectKafkaEvents(client, DefaultEventTopicPrefix+live, 1)
+			Expect(liveEvents[0].event.GetExternalBillingId()).To(Equal("acct-live"))
+			clearedEvents := collectKafkaEvents(client, DefaultEventTopicPrefix+cleared, 1)
+			Expect(clearedEvents[0].event.HasExternalBillingId()).To(BeFalse())
+		})
+
 		It("Keeps the billing id when tenant break-glass credentials are redacted", func() {
 			tenant := "billing-secret-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant

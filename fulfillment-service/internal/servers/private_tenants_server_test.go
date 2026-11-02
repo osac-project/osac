@@ -618,6 +618,25 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			Expect(got.GetObject().GetSpec().GetExternalBillingId()).To(Equal("acct-1"))
 		})
 
+		It("Keeps the id when an update mask does not name it", func() {
+			created := createTenant("billing-tenant", "acct-1")
+			updated := proto.Clone(created).(*privatev1.Tenant)
+			updated.GetSpec().ClearExternalBillingId()
+			_, err := tenantsServer.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+				Object: updated,
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"metadata.finalizers"},
+				},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+
+			got, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{
+				Id: created.GetId(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.GetObject().GetSpec().GetExternalBillingId()).To(Equal("acct-1"))
+		})
+
 		It("Clears the id when an update omits it", func() {
 			created := createTenant("billing-tenant", "acct-1")
 			updated := proto.Clone(created).(*privatev1.Tenant)

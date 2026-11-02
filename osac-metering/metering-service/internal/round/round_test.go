@@ -1888,3 +1888,62 @@ func TestRoundOmitsExternalBillingAccountIDWhenTheTenantHasNone(t *testing.T) {
 		}
 	}
 }
+
+// TestRoundKeepsBillingAccountOnDeletionReversal bills a VM, then deletes it and
+// the tenant. The tenant delete event still carries the account, which is what the
+// publisher stamps from the archived tenant row. The reversal that takes back the
+// minutes billed after the VM was deleted must name that same account.
+func TestRoundKeepsBillingAccountOnDeletionReversal(t *testing.T) {
+	const tenant = "billing-round-reversal"
+	const account = "acct-1"
+	p := pipelinetest.NewPipeline(t, tenant)
+
+	created := testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+		base, base, "web", "RUNNING", base, "small", base)
+	created.SetExternalBillingId(account)
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{created})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(time.Minute))
+
+	deletedAt := base.Add(30 * time.Second)
+	vmDeleted := testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_DELETED,
+		deletedAt, base, "web", "STOPPED", deletedAt, "small", base)
+	vmDeleted.SetExternalBillingId(account)
+	tenantDeleted := &privatev1.Event{
+		Id:        "e3",
+		Type:      privatev1.EventType_EVENT_TYPE_OBJECT_DELETED,
+		Timestamp: timestamppb.New(deletedAt.Add(10 * time.Second)),
+		Payload: &privatev1.Event_Tenant{
+			Tenant: &privatev1.Tenant{
+				Id: tenant,
+				Metadata: &privatev1.Metadata{
+					CreationTimestamp: timestamppb.New(base),
+				},
+			},
+		},
+	}
+	tenantDeleted.SetExternalBillingId(account)
+	total += testenv.ProduceEvents(t, tenant, []*privatev1.Event{vmDeleted, tenantDeleted})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(2*time.Minute))
+
+	var reversals int
+	for _, row := range pendingHeartbeats(t, p.Store, tenant) {
+		data := heartbeatDataOf(t, row)
+		quantity, err := heartbeat.ParseMicro(data.Usage.Quantity)
+		if err != nil {
+			t.Fatalf("parsing quantity of heartbeat %s: %v", row.ID, err)
+		}
+		if quantity >= 0 {
+			continue
+		}
+		reversals++
+		if data.ExternalBillingAccountID == nil || *data.ExternalBillingAccountID != account {
+			t.Fatalf("reversal heartbeat %s billing id = %v, want %s",
+				row.ID, data.ExternalBillingAccountID, account)
+		}
+	}
+	if reversals == 0 {
+		t.Fatal("deleting the billed VM produced no reversal heartbeat")
+	}
+}

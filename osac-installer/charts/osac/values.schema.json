@@ -1067,6 +1067,11 @@
           "description": "Base URL of the AAP controller API without a path suffix; callers append their own API paths (for example /api/controller/v2/...). Required when the AAP instance is disabled.",
           "default": ""
         },
+        "caBundleConfigMap": {
+          "type": "string",
+          "description": "ConfigMap holding the CA bundle that trusts the external AAP's HTTPS certificate, read when the AAP instance is disabled",
+          "default": "ca-bundle"
+        },
         "aap": {
           "type": "object",
           "properties": {

@@ -93,6 +93,11 @@ spec:
         # the controller collection appends /api/controller/v2 itself.
         - name: AAP_HOSTNAME
           value: {{ include "osac-aap.controllerUrl" . | quote }}
+        # The external AAP's certificate comes from the shared CI CA; the
+        # Ansible controller modules reach it through Python requests, which
+        # honors this variable.
+        - name: REQUESTS_CA_BUNDLE
+          value: /etc/ca-bundle/bundle.pem
         {{- end }}
         - name: AAP_PASSWORD
           valueFrom:
@@ -107,10 +112,20 @@ spec:
         - name: config-as-code-manifest-volume
           mountPath: /var/secrets/config-as-code-manifest
           readOnly: true
+        {{- if not .Values.aap.instance.enabled }}
+        - name: ca-bundle
+          mountPath: /etc/ca-bundle
+          readOnly: true
+        {{- end }}
       volumes:
       - name: config-as-code-manifest-volume
         secret:
           secretName: {{ .Values.configAsCode.manifestSecret }}
+      {{- if not .Values.aap.instance.enabled }}
+      - name: ca-bundle
+        configMap:
+          name: {{ .Values.caBundleConfigMap }}
+      {{- end }}
       - name: tmp
         emptyDir: {}
       restartPolicy: Never

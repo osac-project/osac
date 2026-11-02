@@ -55,9 +55,15 @@ spec:
             AAP_PASSWORD=$(cat /var/run/secrets/aap-admin/password)
             # netrc avoids leaking the password via curl -u's process args.
             trap 'rm -f /tmp/.netrc' EXIT
-            ( umask 077; printf 'machine %s\nlogin admin\npassword %s\n' "{{ if .Values.aap.instance.enabled }}${AAP_GATEWAY_HOSTNAME}{{ else }}${AAP_URL#*://}{{ end }}" "${AAP_PASSWORD}" > /tmp/.netrc )
+            {{- if .Values.aap.instance.enabled }}
+            ( umask 077; printf 'machine %s\nlogin admin\npassword %s\n' "${AAP_GATEWAY_HOSTNAME}" "${AAP_PASSWORD}" > /tmp/.netrc )
+            {{- else }}
+            # curl matches netrc entries by hostname only, so drop any port.
+            AAP_NETRC_HOST="${AAP_URL#*://}"
+            ( umask 077; printf 'machine %s\nlogin admin\npassword %s\n' "${AAP_NETRC_HOST%%:*}" "${AAP_PASSWORD}" > /tmp/.netrc )
+            {{- end }}
             echo "Creating AAP API token..."
-            TOKEN=$(curl -s --connect-timeout 5 --max-time 30 -X POST \
+            TOKEN=$(curl -s --connect-timeout 5 --max-time 30 -X POST{{ if .Values.aap.instance.enabled }}{{ else }} --cacert /etc/ca-bundle/bundle.pem{{ end }} \
               --netrc-file /tmp/.netrc \
               -H "Content-Type: application/json" \
               -d '{"description": "osac-operator", "scope": "write"}' \
@@ -102,6 +108,11 @@ spec:
           readOnly: true
         - name: tmp
           mountPath: /tmp
+        {{- if not .Values.aap.instance.enabled }}
+        - name: ca-bundle
+          mountPath: /etc/ca-bundle
+          readOnly: true
+        {{- end }}
         resources:
           requests:
             cpu: 50m
@@ -124,6 +135,11 @@ spec:
           - key: {{ include "osac-aap.adminPasswordSecretKey" . }}
             path: password
           {{- end }}
+      {{- if not .Values.aap.instance.enabled }}
+      - name: ca-bundle
+        configMap:
+          name: {{ .Values.caBundleConfigMap }}
+      {{- end }}
       - name: tmp
         emptyDir: {}
       serviceAccountName: {{ .Values.serviceAccounts.osacSa }}

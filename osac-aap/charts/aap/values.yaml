@@ -5,6 +5,12 @@
 # it by its service name and this value is not read.
 controllerUrl: ""
 
+# ConfigMap holding the CA bundle that trusts the external AAP's HTTPS
+# certificate. Read only when the AAP instance is disabled: the external AAP
+# is reached over TLS, and its certificate comes from the shared CI CA the
+# bundle carries. Same name the fulfillment chart's certs mount uses.
+caBundleConfigMap: "ca-bundle"
+
 aap:
   instance:
     enabled: true

@@ -41,23 +41,32 @@ on:
     inputs:
       release_version:
         description: >-
-          The exact umbrella chart version already shipped to staging
-          (e.g. 0.4.0, no leading 'v') -- must match a version
-          osac-release.yaml already published as osac/v<version>.
+          The umbrella chart version being promoted (e.g. 0.4.0) --
+          informational only (run name, Slack message); not used to
+          compute anything, since the two inputs below already name the
+          exact Snapshots directly.
         type: string
         required: true
-      original_run_attempt:
+      image_snapshot:
         description: >-
-          The github.run_attempt of the ORIGINAL osac-release.yaml
-          dispatch that shipped this version to staging -- visible in
-          that run's own Actions UI as "Attempt N" (only increments via
-          "Re-run failed jobs", never a free-form choice). Almost always
-          1. If unsure, open that release's Actions run and check the
-          attempt shown there, or read it from that release's Slack
-          success message.
+          The exact image Snapshot name to promote (e.g.
+          osac-release-v0-4-0-attempt1) -- copy this verbatim from the
+          "Image Snapshot (for prod promotion)" line in the Slack message
+          osac-release.yaml posted for this release.
         type: string
-        required: false
-        default: "1"
+        required: true
+      chart_snapshot:
+        description: >-
+          The exact chart Snapshot name to promote (e.g.
+          osac-charts-release-v0-4-0-attempt1) -- copy this verbatim from
+          the same Slack message's "Chart Snapshot" line. Deliberately a
+          separate input from image_snapshot rather than one shared
+          "attempt" number: a "Re-run failed jobs" attempt that only
+          re-ran one of the two staging jobs (image or chart) leaves the
+          other on its original attempt, so the two Snapshots can
+          legitimately have different attempt numbers.
+        type: string
+        required: true
 
 concurrency:
   group: osac-promote-to-prod-${{ github.event.inputs.release_version }}
@@ -73,30 +82,30 @@ jobs:
     permissions:
       contents: read
     outputs:
-      image-snapshot: ${{ steps.compute.outputs.image-snapshot }}
-      chart-snapshot: ${{ steps.compute.outputs.chart-snapshot }}
+      image-snapshot: ${{ steps.validate.outputs.image-snapshot }}
+      chart-snapshot: ${{ steps.validate.outputs.chart-snapshot }}
       image-ready: ${{ steps.verify.outputs.image-ready }}
       chart-ready: ${{ steps.verify.outputs.chart-ready }}
     env:
-      RELEASE_VERSION: ${{ github.event.inputs.release_version }}
-      ORIGINAL_RUN_ATTEMPT: ${{ github.event.inputs.original_run_attempt }}
+      IMAGE_SNAPSHOT_INPUT: ${{ github.event.inputs.image_snapshot }}
+      CHART_SNAPSHOT_INPUT: ${{ github.event.inputs.chart_snapshot }}
 
     steps:
-    - name: Compute Snapshot names
-      id: compute
+    - name: Validate Snapshot name inputs
+      id: validate
       run: |
         set -euo pipefail
-        if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          echo "::error::release_version '${RELEASE_VERSION}' is not a plain X.Y.Z semver" >&2
-          exit 1
-        fi
-        if [[ ! "${ORIGINAL_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
-          echo "::error::original_run_attempt '${ORIGINAL_RUN_ATTEMPT}' is not a positive integer" >&2
-          exit 1
-        fi
-        slug="${RELEASE_VERSION//./-}"
-        echo "image-snapshot=osac-release-v${slug}-attempt${ORIGINAL_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-        echo "chart-snapshot=osac-charts-release-v${slug}-attempt${ORIGINAL_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+        validate_name() {
+          local name="$1" label="$2"
+          if [[ ! "${name}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+            echo "::error::${label}_snapshot '${name}' is not a valid Kubernetes resource name" >&2
+            exit 1
+          fi
+        }
+        validate_name "${IMAGE_SNAPSHOT_INPUT}" "image"
+        validate_name "${CHART_SNAPSHOT_INPUT}" "chart"
+        echo "image-snapshot=${IMAGE_SNAPSHOT_INPUT}" >> "$GITHUB_OUTPUT"
+        echo "chart-snapshot=${CHART_SNAPSHOT_INPUT}" >> "$GITHUB_OUTPUT"
 
     - name: Log in to Konflux cluster
       uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
@@ -108,8 +117,8 @@ jobs:
     - name: Verify Snapshots and prod ReleasePlans exist
       id: verify
       env:
-        IMAGE_SNAPSHOT: ${{ steps.compute.outputs.image-snapshot }}
-        CHART_SNAPSHOT: ${{ steps.compute.outputs.chart-snapshot }}
+        IMAGE_SNAPSHOT: ${{ steps.validate.outputs.image-snapshot }}
+        CHART_SNAPSHOT: ${{ steps.validate.outputs.chart-snapshot }}
       run: |
         set -euo pipefail
         NAMESPACE=osac-tenant
@@ -137,7 +146,7 @@ jobs:
           local get_output
           if ! get_output=$(oc get snapshot "${name}" -n "${NAMESPACE}" -o json 2>&1); then
             if [[ "${get_output}" == *"NotFound"* ]]; then
-              echo "::warning::${label} Snapshot '${name}' not found -- it may have been pruned, or release_version=${RELEASE_VERSION} attempt=${ORIGINAL_RUN_ATTEMPT} never shipped. Re-run osac-release.yaml fresh instead of promoting; this workflow will skip ${label} promotion." >&2
+              echo "::warning::${label} Snapshot '${name}' not found -- it may have been pruned, or this name was never actually produced by a real osac-release.yaml dispatch. Double-check it against that release's Slack message; re-run osac-release.yaml fresh instead of promoting if it genuinely never shipped. This workflow will skip ${label} promotion." >&2
             else
               echo "::error::${label} Snapshot lookup for '${name}' failed with an error other than NotFound (auth/network issue?): ${get_output}" >&2
             fi
@@ -153,13 +162,18 @@ jobs:
             return
           fi
 
-          local released_ok
-          released_ok=$(oc get release -n "${NAMESPACE}" -o json 2>/dev/null | jq -r --arg snap "${name}" --arg plan "${stage_plan}" '
+          local released_ok releases_json
+          if ! releases_json=$(oc get release -n "${NAMESPACE}" -o json 2>&1); then
+            echo "::error::${label} Release list failed (auth/network issue?): ${releases_json}" >&2
+            echo "false"
+            return
+          fi
+          released_ok=$(jq -r --arg snap "${name}" --arg plan "${stage_plan}" '
             [.items[]?
               | select(.spec.snapshot == $snap and .spec.releasePlan == $plan)
               | select([.status.conditions[]? | select(.type == "Released" and .status == "True")] | length > 0)
             ] | length > 0
-          ')
+          ' <<<"${releases_json}")
           if [[ "${released_ok}" != "true" ]]; then
             echo "::warning::${label} Snapshot '${name}' passed its tests, but no Release against '${stage_plan}' for it ever reached Released=True -- the staging release itself never succeeded, refusing to treat it as promotable." >&2
             echo "false"
@@ -198,7 +212,7 @@ jobs:
         echo "chart-ready=${chart_ready}" >> "$GITHUB_OUTPUT"
 
         if [[ "${image_ready}" != "true" && "${chart_ready}" != "true" ]]; then
-          echo "::error::Neither image nor chart promotion is possible for release_version=${RELEASE_VERSION} attempt=${ORIGINAL_RUN_ATTEMPT} -- see warnings above" >&2
+          echo "::error::Neither image (${IMAGE_SNAPSHOT}) nor chart (${CHART_SNAPSHOT}) promotion is possible -- see warnings above" >&2
           exit 1
         fi
 
@@ -331,9 +345,25 @@ jobs:
         for item in json.loads(existing.stdout).get("items", []):
             spec = item.get("spec", {})
             if spec.get("snapshot") == SNAPSHOT and spec.get("releasePlan") == RELEASE_PLAN:
-                if condition_true(item.get("status", {}).get("conditions", []), "Released"):
+                conditions = item.get("status", {}).get("conditions", [])
+                if condition_true(conditions, "Released"):
                     print(f"::notice::{SNAPSHOT} was already promoted to {RELEASE_PLAN} by {item['metadata']['name']} -- nothing to do")
                     sys.exit(0)
+                # Release names include RUN_TAG, so each dispatch creates
+                # a distinct object -- a Release that's merely still
+                # in-flight (not yet Released=True, and not terminally
+                # Failed either) would NOT be caught by the check above,
+                # letting a second dispatch race ahead and create another
+                # Release for the same Snapshot while the first is still
+                # running. Only a confirmed terminal Failed is safe to
+                # proceed past; anything else must block.
+                is_terminal_failure = any(
+                    c.get("type") == "Released" and c.get("status") == "False" and c.get("reason") == "Failed"
+                    for c in conditions
+                )
+                if not is_terminal_failure:
+                    print(f"::error::Release {item['metadata']['name']} for {SNAPSHOT} against {RELEASE_PLAN} is still in flight -- not creating a second one. Wait for it to finish or delete it, then re-dispatch.")
+                    sys.exit(1)
 
         released = False
         for attempt_num in range(1, MAX_RELEASE_ATTEMPTS + 1):
@@ -494,9 +524,25 @@ jobs:
         for item in json.loads(existing.stdout).get("items", []):
             spec = item.get("spec", {})
             if spec.get("snapshot") == SNAPSHOT and spec.get("releasePlan") == RELEASE_PLAN:
-                if condition_true(item.get("status", {}).get("conditions", []), "Released"):
+                conditions = item.get("status", {}).get("conditions", [])
+                if condition_true(conditions, "Released"):
                     print(f"::notice::{SNAPSHOT} was already promoted to {RELEASE_PLAN} by {item['metadata']['name']} -- nothing to do")
                     sys.exit(0)
+                # Release names include RUN_TAG, so each dispatch creates
+                # a distinct object -- a Release that's merely still
+                # in-flight (not yet Released=True, and not terminally
+                # Failed either) would NOT be caught by the check above,
+                # letting a second dispatch race ahead and create another
+                # Release for the same Snapshot while the first is still
+                # running. Only a confirmed terminal Failed is safe to
+                # proceed past; anything else must block.
+                is_terminal_failure = any(
+                    c.get("type") == "Released" and c.get("status") == "False" and c.get("reason") == "Failed"
+                    for c in conditions
+                )
+                if not is_terminal_failure:
+                    print(f"::error::Release {item['metadata']['name']} for {SNAPSHOT} against {RELEASE_PLAN} is still in flight -- not creating a second one. Wait for it to finish or delete it, then re-dispatch.")
+                    sys.exit(1)
 
         released = False
         for attempt_num in range(1, MAX_RELEASE_ATTEMPTS + 1):

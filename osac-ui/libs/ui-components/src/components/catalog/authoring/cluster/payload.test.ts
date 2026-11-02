@@ -62,8 +62,8 @@ describe('buildClusterCatalogItemCreatePayload', () => {
     values.nodeSets = {
       locked: true,
       value: [
-        { rowId: 'workers-row', name: 'workers', hostType: 'bmit-1', size: '3' },
-        { rowId: 'infra-row', name: 'infra', hostType: 'bmit-2', size: '1' },
+        { rowId: 'workers-row', name: 'workers', hostType: 'worker', size: '3' },
+        { rowId: 'infra-row', name: 'infra', hostType: 'infra', size: '1' },
       ],
     };
 
@@ -72,8 +72,8 @@ describe('buildClusterCatalogItemCreatePayload', () => {
         case: 'locked',
         value: {
           items: {
-            workers: { size: 3, baremetalInstanceType: { id: 'bmit-1' } },
-            infra: { size: 1, baremetalInstanceType: { id: 'bmit-2' } },
+            workers: { size: 3, baremetalInstanceType: { name: 'worker', shared: true } },
+            infra: { size: 1, baremetalInstanceType: { name: 'infra', shared: true } },
           },
         },
       },

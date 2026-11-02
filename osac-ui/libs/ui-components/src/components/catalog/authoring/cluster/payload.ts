@@ -26,7 +26,7 @@ const toVersionReference = (value: string) => ({
 const toNodeSetMap = (value: ClusterNodeSetRow[]) => {
   const items = Object.create(null) as Record<
     string,
-    { size: number; baremetalInstanceType: { id: string } }
+    { size: number; baremetalInstanceType: { name: string; shared: boolean } }
   >;
 
   for (const row of value) {
@@ -36,7 +36,7 @@ const toNodeSetMap = (value: ClusterNodeSetRow[]) => {
     if (!name || !hostType || !Number.isFinite(size) || size <= 0) {
       continue;
     }
-    items[name] = { size, baremetalInstanceType: { id: hostType } };
+    items[name] = { size, baremetalInstanceType: { name: hostType, shared: true } };
   }
 
   return { items };

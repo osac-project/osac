@@ -23,6 +23,7 @@ interface ClusterNodeSetsArrayFieldProps extends ProvisioningFieldControlProps {
   /** OSAC-6054: catalog policies may omit node sets; provisioning requires one row. */
   allowEmpty?: boolean;
   autoSelectSingleOption?: boolean;
+  hostTypeReference?: 'id' | 'name';
 }
 
 const ClusterNodeSetsArrayField = ({
@@ -31,6 +32,7 @@ const ClusterNodeSetsArrayField = ({
   isRequired = false,
   allowEmpty = false,
   autoSelectSingleOption = true,
+  hostTypeReference = 'id',
 }: ClusterNodeSetsArrayFieldProps) => {
   const { t } = useTranslation();
   const { setFieldValue } = useFormikContext();
@@ -47,7 +49,7 @@ const ClusterNodeSetsArrayField = ({
 
   const hostTypeItems = useMemo(() => hostTypes?.items ?? [], [hostTypes?.items]);
   const hostTypeOptions = hostTypeItems.map((hostType) => ({
-    value: hostType.id,
+    value: hostTypeReference === 'name' ? hostType.metadata?.name || hostType.id : hostType.id,
     label: hostType.metadata?.name || '',
   }));
 
@@ -62,22 +64,40 @@ const ClusterNodeSetsArrayField = ({
     let changed = false;
     const nextRows = rows.map((row) => {
       const currentValue = row.hostType.trim();
-      if (!currentValue || hostTypeItems.some((hostType) => hostType.id === currentValue)) {
+      if (
+        !currentValue ||
+        hostTypeItems.some((hostType) =>
+          hostTypeReference === 'name'
+            ? (hostType.metadata?.name || hostType.id) === currentValue
+            : hostType.id === currentValue,
+        )
+      ) {
         return row;
       }
       const resolved = hostTypeItems.find(
         (hostType) => hostType.id === currentValue || hostType.metadata?.name === currentValue,
       );
-      if (resolved?.id && resolved.id !== currentValue) {
+      const resolvedValue =
+        hostTypeReference === 'name' ? resolved?.metadata?.name || resolved?.id : resolved?.id;
+      if (resolvedValue && resolvedValue !== currentValue) {
         changed = true;
-        return { ...row, hostType: resolved.id };
+        return { ...row, hostType: resolvedValue };
       }
       return row;
     });
     if (changed) {
       void setFieldValue(name, nextRows, false);
     }
-  }, [helpers, hostTypeItems, hostTypesLoading, isRequired, name, rows, setFieldValue]);
+  }, [
+    helpers,
+    hostTypeItems,
+    hostTypeReference,
+    hostTypesLoading,
+    isRequired,
+    name,
+    rows,
+    setFieldValue,
+  ]);
 
   const addRow = () => {
     void helpers.setValue([...rows, createEmptyNodeSetRow()]);

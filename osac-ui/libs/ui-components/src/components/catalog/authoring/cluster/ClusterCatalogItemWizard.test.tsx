@@ -194,6 +194,40 @@ describe('ClusterCatalogItemWizard', () => {
     expect(screen.getByRole('button', { name: 'Remove node set' })).toBeDisabled();
   });
 
+  it('sends the shared host type reference by name', async () => {
+    const onCreate = vi.fn((req: { object?: unknown }) => ({
+      object: { ...(req.object as object), id: 'catalog-item-1' },
+    }));
+    const { user } = renderWizard(undefined, { onClusterCatalogItemCreate: onCreate });
+
+    await fillGeneralStep(user, 'my-item');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    const switches = await screen.findAllByRole('switch');
+    await user.click(switches[1]);
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'workers');
+    await user.click(screen.getByRole('button', { name: 'Host type' }));
+    await user.click(await screen.findByRole('option', { name: 'worker' }));
+    await user.type(screen.getByRole('spinbutton', { name: 'Nodes' }), '3');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    const request = onCreate.mock.calls[0][0] as {
+      object?: { fields?: { nodeSets?: unknown } };
+    };
+    expect(request.object?.fields?.nodeSets).toMatchObject({
+      behavior: {
+        case: 'locked',
+        value: {
+          items: {
+            workers: { size: 3, baremetalInstanceType: { name: 'worker', shared: true } },
+          },
+        },
+      },
+    });
+  });
+
   it('creates an unpublished item and omits empty editable fields', async () => {
     const onCreate = vi.fn((req: { object?: unknown }) => ({
       object: { ...(req.object as object), id: 'catalog-item-1' },

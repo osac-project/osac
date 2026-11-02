@@ -104,7 +104,7 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     });
   });
 
-  it('deserializes inline user data and ignores Secret user-data sources', () => {
+  it('deserializes inline user data and preserves Secret user-data sources', () => {
     const values = getComputeCatalogItemInitialValues({
       fields: {
         userDataSource: {
@@ -130,6 +130,7 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     } as ComputeInstanceCatalogItem);
 
     expect(secretValues.userData).toEqual({ value: '', locked: false });
+    expect(secretValues.userDataSecret).toEqual({ value: 'cloud-init', locked: false });
 
     const lockedSecretValues = getComputeCatalogItemInitialValues({
       fields: {
@@ -143,6 +144,30 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     } as ComputeInstanceCatalogItem);
 
     expect(lockedSecretValues.userData).toEqual({ value: '', locked: true });
+    expect(lockedSecretValues.userDataSecret).toEqual({ value: 'cloud-init', locked: true });
+  });
+
+  it('preserves a Secret source when editing without inline user data', () => {
+    const item = {
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: { defaultValue: { source: { case: 'secret', value: { name: 'cloud-init' } } } },
+          },
+        },
+      },
+    } as ComputeInstanceCatalogItem;
+
+    const values = getComputeCatalogItemInitialValues(item);
+    const payload = buildComputeCatalogItemUpdatePayload(item, values);
+
+    expect(payload.fields?.userDataSource).toEqual({
+      behavior: {
+        case: 'editable',
+        value: { defaultValue: { source: { case: 'secret', value: { name: 'cloud-init' } } } },
+      },
+    });
   });
 
   it('writes a locked additional-disks list and omits an empty editable one', () => {

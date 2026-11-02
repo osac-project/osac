@@ -43,6 +43,17 @@ describe('buildComputeCatalogStepSchema', () => {
     });
   });
 
+  it('allows a locked Secret user-data source without inline text', async () => {
+    const schema = buildComputeCatalogStepSchema('access-init', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        userData: { locked: true, value: '' },
+        userDataSecret: { value: 'cloud-init' },
+      }),
+    ).resolves.toBeDefined();
+  });
+
   it('rejects user data larger than 64 KB', async () => {
     const schema = buildComputeCatalogStepSchema('access-init', t, 'tenant-admin');
 

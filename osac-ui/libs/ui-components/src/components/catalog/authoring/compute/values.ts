@@ -30,6 +30,7 @@ export interface ComputeCatalogItemValues extends CatalogGeneralValues {
   diskImage: ProvisioningFieldValue<ResourceSelectValue>;
   instanceType: ProvisioningFieldValue<ResourceSelectValue>;
   userData: ProvisioningFieldValue<string>;
+  userDataSecret: ProvisioningFieldValue<string>;
   bootDiskSizeGib: ProvisioningFieldValue<string>;
   bootDiskStorageTier: ProvisioningFieldValue<ResourceSelectValue>;
   additionalDisks: ProvisioningFieldValue<ComputeInstanceDiskValues[]>;
@@ -52,6 +53,7 @@ export const emptyComputeCatalogItemValues = (): ComputeCatalogItemValues => ({
   diskImage: provisioningFieldValue(emptyResourceSelectValue()),
   instanceType: provisioningFieldValue(emptyResourceSelectValue()),
   userData: provisioningFieldValue(''),
+  userDataSecret: provisioningFieldValue(''),
   bootDiskSizeGib: provisioningFieldValue(''),
   bootDiskStorageTier: provisioningFieldValue(emptyResourceSelectValue()),
   additionalDisks: provisioningFieldValue([]),

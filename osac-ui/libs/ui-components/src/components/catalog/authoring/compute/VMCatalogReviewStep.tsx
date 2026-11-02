@@ -134,10 +134,17 @@ const userDataKey = (values: ComputeCatalogItemValues) =>
   JSON.stringify({
     locked: values.userData.locked,
     value: values.userData.value,
+    source: values.userData.value.trim()
+      ? 'inline'
+      : values.userDataSecret.value.trim()
+        ? 'secret'
+        : 'none',
   });
 
 const userDataLabel = (t: TFunction, values: ComputeCatalogItemValues): string => {
-  return values.userData.value.trim() ? t('Configured') : t('Not set');
+  return values.userData.value.trim() || values.userDataSecret.value.trim()
+    ? t('Configured')
+    : t('Not set');
 };
 
 const policyLabel = (t: TFunction, field: ProvisioningFieldValue<unknown>): string =>

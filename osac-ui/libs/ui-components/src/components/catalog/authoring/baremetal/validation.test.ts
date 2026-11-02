@@ -21,6 +21,19 @@ describe('buildBareMetalCatalogStepSchema', () => {
     });
   });
 
+  it('allows a locked Secret user-data source without inline text', async () => {
+    const schema = buildBareMetalCatalogStepSchema('configuration', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        instanceType: { locked: false, value: '' },
+        diskImage: { locked: false, value: { id: '', name: '' } },
+        userData: { locked: true, value: '' },
+        userDataSecret: { value: 'cloud-init' },
+      }),
+    ).resolves.toBeDefined();
+  });
+
   it('rejects user data larger than 64 KB', async () => {
     const schema = buildBareMetalCatalogStepSchema('configuration', t, 'tenant-admin');
 

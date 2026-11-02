@@ -22,17 +22,37 @@ export const buildBareMetalCatalogStepSchema = (
     case 'general':
       return catalogGeneralStepSchema(t, role);
     case 'configuration':
-      return yup.object({
-        instanceType: catalogLockedStringField(
-          yup.string().trim(),
-          t('Instance type is required when locked'),
-        ),
-        diskImage: catalogLockedResourceField(t('Disk image is required when locked')),
-        userData: catalogLockedStringField(
-          userDataSchema(t),
+      return yup
+        .object({
+          instanceType: catalogLockedStringField(
+            yup.string().trim(),
+            t('Instance type is required when locked'),
+          ),
+          diskImage: catalogLockedResourceField(t('Disk image is required when locked')),
+          userData: yup.object({ locked: yup.boolean(), value: userDataSchema(t) }),
+          userDataSecret: yup.object({ value: yup.string() }),
+        })
+        .test(
+          'user-data-required-when-locked',
           t('User data is required when locked'),
-        ),
-      });
+          function userDataRequiredWhenLocked(values) {
+            if (!values?.userData?.locked) {
+              return true;
+            }
+            const inlineValue = values.userData?.value;
+            const secretValue = values.userDataSecret?.value;
+            if (
+              (typeof inlineValue === 'string' && inlineValue.trim()) ||
+              (typeof secretValue === 'string' && secretValue)
+            ) {
+              return true;
+            }
+            return this.createError({
+              path: 'userData.value',
+              message: t('User data is required when locked'),
+            });
+          },
+        );
     case 'review':
       return undefined;
     default:
@@ -48,7 +68,9 @@ export const bareMetalCatalogStepHasErrors = (
     case 'general':
       return Boolean(errors.scope || errors.metadata || errors.template);
     case 'configuration':
-      return Boolean(errors.instanceType || errors.diskImage || errors.userData);
+      return Boolean(
+        errors.instanceType || errors.diskImage || errors.userData || errors.userDataSecret,
+      );
     default:
       return false;
   }

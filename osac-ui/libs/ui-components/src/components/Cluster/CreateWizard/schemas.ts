@@ -5,8 +5,9 @@ import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/ne
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 
 import type { ClusterNodeSetRow } from './fields';
-import { buildCidrSchema, cidrsOverlap, isValidCidr } from '../../../validation/cidr-validation';
+import { buildCidrSchema } from '../../../validation/cidr-validation';
 import { isValidSshPublicKey } from '../../ProvisioningWizard/credentialValidation';
+import { clusterNetworkDoNotOverlapTest, uniqueNodeSetNamesTest } from '../validation';
 
 export type ClusterWizardStepId = 'catalog' | 'general' | 'configuration' | 'networking' | 'review';
 
@@ -56,53 +57,14 @@ const buildClusterFieldDefinitions = (t: TFunction) => {
         .array()
         .of(rowSchema)
         .min(1, t('At least one node set is required'))
-        .test('unique-node-set-names', function (rows) {
-          const seenNames = new Set<string>();
-          for (const [rowIndex, row] of (rows ?? []).entries()) {
-            const name = row?.name?.trim() ?? '';
-            if (!name) {
-              continue;
-            }
-            if (seenNames.has(name)) {
-              return this.createError({
-                path: `${this.path}[${rowIndex}].name`,
-                message: t('Node set names must be unique'),
-              });
-            }
-            seenNames.add(name);
-          }
-          return true;
-        }),
+        .test('unique-node-set-names', uniqueNodeSetNamesTest(t)),
     ),
     specNetwork: yup
       .object({
         podCidr: lockedField(buildCidrSchema(t, 'ipv4')),
         serviceCidr: lockedField(buildCidrSchema(t, 'ipv4')),
       })
-      .test(
-        'service-cidr-no-overlap',
-        t('Service CIDR must not overlap the pod CIDR.'),
-        function (network) {
-          const cidrs = network as
-            | { podCidr?: { value?: string }; serviceCidr?: { value?: string } }
-            | undefined;
-          const podCidr = cidrs?.podCidr?.value ?? '';
-          const serviceCidr = cidrs?.serviceCidr?.value ?? '';
-          if (!serviceCidr.trim() || !podCidr.trim()) {
-            return true;
-          }
-          if (!isValidCidr(serviceCidr, 'ipv4') || !isValidCidr(podCidr, 'ipv4')) {
-            return true;
-          }
-          if (!cidrsOverlap(podCidr, serviceCidr, 'ipv4')) {
-            return true;
-          }
-          return this.createError({
-            path: `${this.path}.serviceCidr.value`,
-            message: t('Service CIDR must not overlap the pod CIDR.'),
-          });
-        },
-      ),
+      .test('service-cidr-no-overlap', clusterNetworkDoNotOverlapTest(t)),
     specAutoExternalIpAttachment: yup.boolean(),
   };
 };

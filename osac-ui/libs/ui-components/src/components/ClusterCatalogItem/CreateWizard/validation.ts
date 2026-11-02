@@ -3,13 +3,14 @@ import type { TFunction } from 'i18next';
 import * as yup from 'yup';
 
 import type { ClusterCatalogItemValues } from './values';
-import { buildCidrSchema, cidrsOverlap, isValidCidr } from '../../../validation/cidr-validation';
+import { buildCidrSchema } from '../../../validation/cidr-validation';
 import { resourceNameSchema } from '../../../validation/resource-name';
 import {
   catalogGeneralStepSchema,
   catalogLockedResourceField,
   catalogLockedStringField,
 } from '../../CatalogItem/catalogValidation';
+import { clusterNetworkDoNotOverlapTest, uniqueNodeSetNamesTest } from '../../Cluster/validation';
 
 export type ClusterCatalogWizardStepId = 'general' | 'configuration' | 'networking' | 'review';
 
@@ -33,6 +34,7 @@ const nodeSetField = (t: TFunction) =>
     value: yup
       .array()
       .of(nodeSetRowSchema(t))
+      .test('unique-node-set-names', uniqueNodeSetNamesTest(t))
       .when('locked', {
         is: true,
         then: (schema) =>
@@ -62,27 +64,7 @@ export const buildClusterCatalogStepSchema = (
           podCidr: cidrField(t, 'Pod CIDR'),
           serviceCidr: cidrField(t, 'Service CIDR'),
         })
-        .test(
-          'service-cidr-no-overlap',
-          t('Service CIDR must not overlap the pod CIDR.'),
-          function networkCidrsDoNotOverlap(network) {
-            const podCidr = network?.podCidr?.value ?? '';
-            const serviceCidr = network?.serviceCidr?.value ?? '';
-            if (!podCidr.trim() || !serviceCidr.trim()) {
-              return true;
-            }
-            if (!isValidCidr(podCidr, 'ipv4') || !isValidCidr(serviceCidr, 'ipv4')) {
-              return true;
-            }
-            if (!cidrsOverlap(podCidr, serviceCidr, 'ipv4')) {
-              return true;
-            }
-            return this.createError({
-              path: 'serviceCidr.value',
-              message: t('Service CIDR must not overlap the pod CIDR.'),
-            });
-          },
-        );
+        .test('service-cidr-no-overlap', clusterNetworkDoNotOverlapTest(t));
     case 'review':
       return undefined;
     default:

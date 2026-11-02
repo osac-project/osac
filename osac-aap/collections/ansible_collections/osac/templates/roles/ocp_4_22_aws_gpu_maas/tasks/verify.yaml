@@ -1,0 +1,144 @@
+---
+# Verification orchestrator (RHOAI 3.5 GA, 0..n tenants). Re-derives the tenant
+# set from role vars + live cluster so it runs standalone. Read-mostly: creates
+# only ephemeral API keys + SA tokens; never deploys models/policies/subscriptions.
+#
+# Layers:
+#   L1  control-plane readiness (per in-scope tenant, cheap k8s_info)
+#   L1b tenant-admin RBAC       (per tenant WITH an admin group: bindings/Role exist
+#                                + effective `oc auth can-i` for the group)
+#   L2  dataplane smoke         (per in-scope tenant: 401 -> 201 -> 200)
+#   L3  dataplane deep          (representative tenant: free-tier -> 429)
+#   L4  cross-tenant isolation  (one pair, >= 2 real tenants): dataplane key rejection
+#                                + control-plane RBAC (a tenant's admin group cannot
+#                                act in another tenant's namespace)
+#
+# Depth (ocp_4_20_ai_maas_verify_depth): smoke = L1+L2 all; standard = + L3 on
+# representative + L4; full = L3 for every tenant + L4.
+
+- name: Verify | Validate role inputs (CR-grounded, run-once; standalone verify path)
+  ansible.builtin.include_tasks: validate_inputs.yaml
+  when: not (_maas_inputs_validated | default(false))
+
+- name: Verify | Skip when MaaS is disabled
+  ansible.builtin.debug:
+    msg: "enable_maas=false — nothing to verify at the MaaS dataplane."
+  when: not (ocp_4_20_ai_maas_enable_maas | bool)
+
+- name: Verify | Run
+  when: ocp_4_20_ai_maas_enable_maas | bool
+  block:
+    - name: Verify | Get cluster ingress domain (if not already set)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: config.openshift.io/v1
+        kind: Ingress
+        name: cluster
+      register: _verify_ingress
+      when: _cluster_domain is not defined
+
+    - name: Verify | Set cluster domain
+      ansible.builtin.set_fact:
+        _cluster_domain: "{{ _verify_ingress.resources[0].spec.domain }}"
+      when: _cluster_domain is not defined
+
+    # Normalise verify_tenants to a real list. `-e key='["a","b"]'` passes a STRING (only
+    # `-e '{json}'` yields a list), so accept both: a JSON string is decoded, a real list is
+    # used as-is, anything empty/undefined becomes []. Without this, a string is silently
+    # char-iterated (tenant "[", '"', ...) or substring-matched.
+    - name: Verify | Normalise verify_tenants (accept a JSON string OR a real list)
+      ansible.builtin.set_fact:
+        _verify_tenants: >-
+          {{ (ocp_4_20_ai_maas_verify_tenants | default([]))
+             if ((ocp_4_20_ai_maas_verify_tenants | default([])) is not string)
+             else ((ocp_4_20_ai_maas_verify_tenants | from_json)
+                   if ((ocp_4_20_ai_maas_verify_tenants | trim | length) > 0) else []) }}
+
+    # Let `verify_tenants` DEFINE the tenant set (not just filter it) when neither
+    # ocp_4_20_ai_maas_tenants nor ocp_4_20_ai_maas_tenant_name was passed — otherwise the
+    # set would fall back to the default tenant only and the verify_tenants filter would
+    # yield nothing ("No in-scope tenants"). resolve_descriptors then derives gateway/
+    # host/govns/model/tiers from these names.
+    - name: Verify | Seed tenant set from verify_tenants when no deploy tenant vars given
+      ansible.builtin.set_fact:
+        ocp_4_20_ai_maas_tenants: >-
+          {{ _verify_tenants | map('community.general.dict_kv', 'name') | list }}
+      when:
+        - _verify_tenants | length > 0
+        - (ocp_4_20_ai_maas_tenants | default([]) | length == 0)
+        - (ocp_4_20_ai_maas_tenant_name | default('') | length == 0)
+
+    - name: Verify | Resolve tenant descriptors
+      ansible.builtin.include_tasks: resolve_descriptors.yaml
+
+    - name: Verify | Select in-scope tenants
+      ansible.builtin.set_fact:
+        _inscope_descriptors: >-
+          {{ _tenant_descriptors
+             if (_verify_tenants | length == 0)
+             else (_tenant_descriptors
+                   | selectattr('name', 'in', _verify_tenants) | list) }}
+
+    - name: Verify | Determine representative tenant + init result context
+      ansible.builtin.set_fact:
+        _representative: >-
+          {{ ocp_4_20_ai_maas_verify_representative
+             if (ocp_4_20_ai_maas_verify_representative | default('', true) | length > 0)
+             else (_inscope_descriptors[0].name if (_inscope_descriptors | length > 0) else '') }}
+        _verify_ctx: {}
+
+    - name: Verify | Report scope
+      ansible.builtin.debug:
+        msg:
+          - "Depth: {{ ocp_4_20_ai_maas_verify_depth }}"
+          - "In-scope tenants: {{ _inscope_descriptors | map(attribute='name') | join(', ') }}"
+          - "Representative (deep/L3): {{ _representative }}"
+
+    - name: Verify | Fail if no tenants are in scope
+      ansible.builtin.fail:
+        msg: >-
+          No in-scope tenants to verify. Check ocp_4_20_ai_maas_verify_tenants
+          against the configured tenant set.
+      when: _inscope_descriptors | length == 0
+
+    # EE containers may have an empty /etc/resolv.conf — populate with CoreDNS +
+    # public fallbacks so the gateway hostnames resolve.
+    - name: Verify | Fix DNS resolution for EE containers
+      environment:
+        GW_HOSTNAME: "{{ _inscope_descriptors[0].host }}"
+      ansible.builtin.shell: |
+        python3 -c "import os,socket; socket.getaddrinfo(os.environ['GW_HOSTNAME'], 443)" 2>/dev/null && exit 0
+        if [ ! -s /etc/resolv.conf ] || ! grep -q nameserver /etc/resolv.conf 2>/dev/null; then
+          {
+            echo "nameserver 172.30.0.10"
+            echo "nameserver 8.8.8.8"
+            echo "nameserver 1.1.1.1"
+          } > /etc/resolv.conf 2>/dev/null || true
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      ignore_errors: true
+
+    # --- Layers 1-3 per in-scope tenant ---
+    - name: Verify | Run per-tenant layers
+      ansible.builtin.include_tasks: verify_tenant.yaml
+      loop: "{{ _inscope_descriptors }}"
+      loop_control:
+        loop_var: _t
+        label: "{{ _t.name }}"
+
+    # --- Layer 4: cross-tenant isolation (>= 2 real tenants, depth != smoke) ---
+    - name: Verify | Cross-tenant isolation
+      ansible.builtin.include_tasks: verify_isolation.yaml
+      when:
+        - not (ocp_4_20_ai_maas_verify_skip_isolation | bool)
+        - ocp_4_20_ai_maas_verify_depth != 'smoke'
+        - (_inscope_descriptors | rejectattr('is_default') | list | length) >= 2
+
+    - name: Verify | Report complete
+      ansible.builtin.debug:
+        msg: >-
+          Verification complete — {{ _inscope_descriptors | length }} tenant(s),
+          depth={{ ocp_4_20_ai_maas_verify_depth }}, keys minted for:
+          {{ _verify_ctx.keys() | list | join(', ') }}

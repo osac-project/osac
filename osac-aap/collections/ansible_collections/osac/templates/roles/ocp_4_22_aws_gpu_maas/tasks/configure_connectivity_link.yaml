@@ -1,0 +1,128 @@
+---
+# Connectivity-link (auth) substrate — applied for EVERY use case, MaaS or plain
+# inference. Creates the Kuadrant CR + Authorino instance that turn the auto-created
+# openshift-ai-inference AuthPolicy from Enforced=False (MissingResource) into
+# Enforced=True. The RHCL operator + authpolicies.kuadrant.io CRD are installed
+# earlier by install_operators.yaml. Invoked once from configure_cluster.yaml.
+#
+# The Authorino listener TLS uses an OpenShift service-CA-signed cert
+# (authorino-server-cert) wired in files/kuadrant-instance.yaml — a self-signed
+# cert makes every request return HTTP 500 (kuadrant_wasm_shim). Idempotent: the
+# boot-race remedy is guarded on current Kuadrant readiness.
+
+- name: Apply Kuadrant resources (namespace, service, Kuadrant, Authorino)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.file', role_path + '/files/kuadrant-instance.yaml') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.kind }}/{{ item.metadata.name }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+# The RHCL bundle installs the kuadrant/authorino/limitador operators together. If
+# the kuadrant-operator pod boots before the Authorino operator is ready it caches
+# "Ready=False reason=MissingDependency" and only re-checks the dependency at pod
+# startup — so the wait below would never converge. OLM reverts `rollout restart`,
+# so the reliable remedy is to DELETE the pod (OLM recreates it). Guarded to run
+# only when Kuadrant is not already Ready, keeping re-runs idempotent.
+- name: Check current Kuadrant readiness
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: kuadrant.io/v1beta1
+    kind: Kuadrant
+    name: kuadrant
+    namespace: kuadrant-system
+  register: _kuadrant_pre
+
+- name: Determine whether Kuadrant is already Ready
+  ansible.builtin.set_fact:
+    _kuadrant_ready_pre: >-
+      {{ (_kuadrant_pre.resources | default([]) | length > 0)
+         and (_kuadrant_pre.resources[0].status.conditions | default([])
+              | selectattr('type', 'equalto', 'Ready')
+              | selectattr('status', 'equalto', 'True')
+              | list | length > 0) }}
+
+- name: Ensure Authorino operator is Available before nudging Kuadrant
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: apps/v1
+    kind: Deployment
+    name: authorino-operator
+    namespace: openshift-operators
+  register: _authorino_op
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _authorino_op.resources is defined
+    - _authorino_op.resources | length > 0
+    - (_authorino_op.resources[0].status.availableReplicas | default(0)) > 0
+  when: not (_kuadrant_ready_pre | bool)
+
+# Delete the pod (NOT rollout restart — OLM reverts that on managed operators).
+- name: Restart kuadrant-operator to clear stale MissingDependency
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: v1
+    kind: Pod
+    namespace: openshift-operators
+    label_selectors:
+      - app=kuadrant
+      - control-plane=controller-manager
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: not (_kuadrant_ready_pre | bool)
+
+- name: Wait for kuadrant-operator deployment Available after restart
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: apps/v1
+    kind: Deployment
+    name: kuadrant-operator-controller-manager
+    namespace: openshift-operators
+  register: _kuadrant_op
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _kuadrant_op.resources is defined
+    - _kuadrant_op.resources | length > 0
+    - (_kuadrant_op.resources[0].status.availableReplicas | default(0)) > 0
+  when: not (_kuadrant_ready_pre | bool)
+
+- name: Wait for Kuadrant ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: kuadrant.io/v1beta1
+    kind: Kuadrant
+    name: kuadrant
+    namespace: kuadrant-system
+  register: _kuadrant
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _kuadrant.resources is defined
+    - _kuadrant.resources | length > 0
+    - >-
+      _kuadrant.resources[0].status.conditions | default([])
+      | selectattr('type', 'equalto', 'Ready')
+      | selectattr('status', 'equalto', 'True')
+      | list | length > 0
+
+- name: Fail if Kuadrant never became ready
+  ansible.builtin.fail:
+    msg: "Kuadrant did not become Ready — check RHCL operator + kuadrant-system."
+  when: >-
+    _kuadrant.resources is not defined
+    or _kuadrant.resources | length == 0
+    or (_kuadrant.resources[0].status.conditions | default([])
+        | selectattr('type', 'equalto', 'Ready')
+        | selectattr('status', 'equalto', 'True')
+        | list | length) == 0

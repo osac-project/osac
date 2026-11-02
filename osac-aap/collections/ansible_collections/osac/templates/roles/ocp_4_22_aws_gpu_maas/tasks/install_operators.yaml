@@ -1,0 +1,573 @@
+---
+# BOM: install RHOAI 3.5 GA platform operators on OCP 4.21.x.
+# Order: cert-manager -> RHCL (1.4.x, deps auto) -> LWS -> RHOAI -> [OTel + COO]
+#        -> DSCI -> DSC (v2, aigateway off; MaaS enabled later).
+# Service Mesh is Sail-embedded on OCP 4.21.22 — no OSSM subscription. RHCL 1.4.2
+# resolves CONNLINK-1300, so no v1.3 pinning is required.
+
+# --- Validations (CR-grounded, run-once; see tasks/validate_inputs.yaml) ---
+
+- name: Validate role inputs (types, formats, ranges, cross-field vs CR schemas)
+  ansible.builtin.include_tasks: validate_inputs.yaml
+  when: not (_maas_inputs_validated | default(false))
+
+# --- Step 1: cert-manager (RHCL 1.4.x prerequisite) ---
+
+- name: Check if cert-manager is already installed
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    namespace: cert-manager-operator
+    label_selectors:
+      - "operators.coreos.com/openshift-cert-manager-operator.cert-manager-operator"
+  register: _cert_manager_csv
+  ignore_errors: true
+
+- name: Install cert-manager
+  when: (_cert_manager_csv.resources | default([])) | length == 0
+  block:
+    - name: Create cert-manager namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: cert-manager-operator
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Create cert-manager OperatorGroup
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            name: cert-manager-operator
+            namespace: cert-manager-operator
+          spec: {}
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Create cert-manager Subscription
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: openshift-cert-manager-operator
+            namespace: cert-manager-operator
+          spec:
+            channel: "{{ ocp_4_20_ai_maas_cert_manager_channel }}"
+            installPlanApproval: Automatic
+            name: openshift-cert-manager-operator
+            source: "{{ ocp_4_20_ai_maas_cert_manager_source }}"
+            sourceNamespace: openshift-marketplace
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Wait for cert-manager CSV
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: openshift-cert-manager-operator
+        namespace: cert-manager-operator
+      register: _cert_manager_sub
+      retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+      delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+      until:
+        - _cert_manager_sub.resources | length > 0
+        - _cert_manager_sub.resources[0].status.installedCSV is defined
+
+# --- Step 2: RHCL (Connectivity Link 1.4.x; Authorino/Limitador/DNS auto-deps) ---
+# Installed ALWAYS (not just for MaaS): RHCL provides the authpolicies.kuadrant.io
+# CRD + Kuadrant/Authorino runtime that KServe's openshift-ai-inference router
+# requires as a precondition — without it NO model (MaaS or plain inference) can
+# reach Ready behind that gateway (GatewayPreconditionNotMet). Installed here,
+# BEFORE the DSC (Step 7), so KServe controllers start with the CRD already in API
+# discovery and need no restart. On 4.21.22 Service Mesh is Sail-embedded (no OSSM
+# subscription). The Kuadrant CR + Authorino instance are applied later by
+# configure_connectivity_link.yaml (invoked from configure_cluster.yaml).
+
+- name: Install RHCL (Connectivity Link)
+  block:
+    - name: Create RHCL Subscription
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: rhcl-operator
+            namespace: openshift-operators
+          spec:
+            channel: "{{ ocp_4_20_ai_maas_rhcl_channel }}"
+            installPlanApproval: Automatic
+            name: rhcl-operator
+            source: "{{ ocp_4_20_ai_maas_rhcl_source }}"
+            sourceNamespace: openshift-marketplace
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Wait for RHCL CSV
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: rhcl-operator
+        namespace: openshift-operators
+      register: _rhcl_sub
+      retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+      delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+      until:
+        - _rhcl_sub.resources | length > 0
+        - _rhcl_sub.resources[0].status.installedCSV is defined
+
+    # The authpolicies.kuadrant.io CRD must exist BEFORE the DSC creates the KServe
+    # controllers — they cache API discovery at startup and a later-added CRD is
+    # invisible until they restart. Waiting here guarantees the correct ordering.
+    - name: Wait for authpolicies.kuadrant.io CRD to be established
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: authpolicies.kuadrant.io
+      register: _authpolicy_crd
+      retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+      delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+      until:
+        - _authpolicy_crd.resources is defined
+        - _authpolicy_crd.resources | length > 0
+        - >-
+          _authpolicy_crd.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Established')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+
+# --- Step 3: Leader Worker Set ---
+
+- name: Create LWS namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: openshift-lws-operator
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create LWS OperatorGroup
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: openshift-lws-operator
+        namespace: openshift-lws-operator
+      spec:
+        targetNamespaces:
+          - openshift-lws-operator
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create LWS Subscription
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: leader-worker-set
+        namespace: openshift-lws-operator
+      spec:
+        channel: "{{ ocp_4_20_ai_maas_lws_channel }}"
+        installPlanApproval: Automatic
+        name: leader-worker-set
+        source: "{{ ocp_4_20_ai_maas_lws_source }}"
+        sourceNamespace: openshift-marketplace
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for LWS CSV
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: leader-worker-set
+    namespace: openshift-lws-operator
+  register: _lws_sub
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _lws_sub.resources | length > 0
+    - _lws_sub.resources[0].status.installedCSV is defined
+
+# --- Step 4: RHOAI 3.5 ---
+
+- name: Create RHOAI namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: redhat-ods-operator
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create RHOAI OperatorGroup
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: redhat-ods-operator
+        namespace: redhat-ods-operator
+      spec: {}
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create RHOAI Subscription
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: rhods-operator
+        namespace: redhat-ods-operator
+      spec:
+        channel: "{{ ocp_4_20_ai_maas_rhoai_channel }}"
+        installPlanApproval: Automatic
+        name: rhods-operator
+        source: "{{ ocp_4_20_ai_maas_rhoai_source }}"
+        sourceNamespace: openshift-marketplace
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for RHOAI CSV
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: rhods-operator
+    namespace: redhat-ods-operator
+  register: _rhoai_sub
+  retries: "{{ ocp_4_20_ai_maas_long_retries }}"
+  delay: 10
+  until:
+    - _rhoai_sub.resources | length > 0
+    - _rhoai_sub.resources[0].status.installedCSV is defined
+
+# --- Step 5: OpenTelemetry (isolated ns, before DSC) ---
+
+- name: Install OpenTelemetry operator
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+  block:
+    - name: Create OTel namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: openshift-opentelemetry-operator
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Create OTel OperatorGroup
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            name: opentelemetry-operator
+            namespace: openshift-opentelemetry-operator
+          spec: {}
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Create OTel Subscription
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: "{{ ocp_4_20_ai_maas_otel_package }}"
+            namespace: openshift-opentelemetry-operator
+          spec:
+            channel: "{{ ocp_4_20_ai_maas_otel_channel }}"
+            installPlanApproval: Automatic
+            name: "{{ ocp_4_20_ai_maas_otel_package }}"
+            source: "{{ ocp_4_20_ai_maas_otel_source }}"
+            sourceNamespace: openshift-marketplace
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Wait for OTel CSV
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: "{{ ocp_4_20_ai_maas_otel_package }}"
+        namespace: openshift-opentelemetry-operator
+      register: _otel_sub
+      retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+      delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+      ignore_errors: true
+      until:
+        - _otel_sub.resources is defined
+        - _otel_sub.resources | length > 0
+        - _otel_sub.resources[0].status.installedCSV is defined
+
+# --- Step 6: Cluster Observability Operator ---
+# Installed from the 'stable' channel (Automatic, unpinned). COO 1.5.x is
+# compatible with RHOAI 3.5 observability (validated on GA); the earlier v1.4.0
+# pin was RHOAI-3.4-tied and is no longer required.
+
+- name: Install Cluster Observability Operator
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+  block:
+    - name: Create COO namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: openshift-cluster-observability-operator
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Create COO OperatorGroup
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            name: cluster-observability-operator
+            namespace: openshift-cluster-observability-operator
+          spec: {}
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Create COO Subscription
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: cluster-observability-operator
+            namespace: openshift-cluster-observability-operator
+          spec:
+            channel: "{{ ocp_4_20_ai_maas_coo_channel }}"
+            installPlanApproval: Automatic
+            name: cluster-observability-operator
+            source: "{{ ocp_4_20_ai_maas_coo_source }}"
+            sourceNamespace: openshift-marketplace
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Wait for COO CSV
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: cluster-observability-operator
+        namespace: openshift-cluster-observability-operator
+      register: _coo_sub
+      retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+      delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+      until:
+        - _coo_sub.resources | length > 0
+        - _coo_sub.resources[0].status.installedCSV is defined
+
+# --- Step 7: DSCInitialization + DataScienceCluster (v2) ---
+# NOTE: NFD + NVIDIA GPU operators are NOT installed by this role — MaaS assumes
+# the software-infrastructure operators/operands are pre-installed on the cluster.
+
+- name: Wait for DSCInitialization to be ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: dscinitialization.opendatahub.io/v1
+    kind: DSCInitialization
+    name: default-dsci
+  register: _dsci
+  retries: "{{ ocp_4_20_ai_maas_long_retries }}"
+  delay: 10
+  ignore_errors: true
+  until:
+    - _dsci.resources is defined
+    - _dsci.resources | length > 0
+    - _dsci.resources[0].status.phase | default('') == 'Ready'
+
+- name: Fail if DSCInitialization never became ready
+  ansible.builtin.fail:
+    msg: >-
+      DSCInitialization did not become ready after {{ ocp_4_20_ai_maas_long_retries }} retries.
+  when: >-
+    _dsci.resources is not defined
+    or _dsci.resources | length == 0
+    or _dsci.resources[0].status.phase | default('') != 'Ready'
+
+- name: Patch DSCI with monitoring metrics configuration
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: dscinitialization.opendatahub.io/v1
+      kind: DSCInitialization
+      metadata:
+        name: default-dsci
+      spec:
+        monitoring:
+          metrics:
+            replicas: "{{ ocp_4_20_ai_maas_dsci_metrics_replicas }}"
+            storage:
+              retention: "{{ ocp_4_20_ai_maas_dsci_metrics_retention }}"
+              size: "{{ ocp_4_20_ai_maas_dsci_metrics_storage }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+
+- name: Wait for RHOAI webhook endpoints ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: v1
+    kind: Endpoints
+    name: rhods-operator-service
+    namespace: redhat-ods-operator
+  register: _webhook_ep
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _webhook_ep.resources | length > 0
+    - (_webhook_ep.resources[0].subsets | default([])) | length > 0
+
+- name: Override DSC dashboard component based on enable_dashboard
+  ansible.builtin.set_fact:
+    ocp_4_20_ai_maas_dsc_components: >-
+      {{ ocp_4_20_ai_maas_dsc_components | combine({
+        'dashboard': (ocp_4_20_ai_maas_enable_dashboard | bool) | ternary('Managed', 'Removed')
+      }) }}
+
+- name: Build DSC components spec
+  ansible.builtin.set_fact:
+    _dsc_components: >-
+      {{ dict(ocp_4_20_ai_maas_dsc_components | dict2items
+         | map(attribute='key') | list
+         | zip(ocp_4_20_ai_maas_dsc_components | dict2items
+               | map(attribute='value')
+               | map('community.general.dict_kv', 'managementState')
+               | list)) }}
+
+# DSC is created as v2. aigateway starts Removed here; MaaS is enabled by
+# configure_maas_cluster.yaml after gateways + DB exist.
+- name: Create DataScienceCluster (v2)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: datasciencecluster.opendatahub.io/v2
+      kind: DataScienceCluster
+      metadata:
+        name: default-dsc
+      spec:
+        components: "{{ _dsc_components }}"
+  register: _dsc_create
+  retries: 12
+  delay: 10
+  until: _dsc_create is not failed
+
+- name: Wait for DataScienceCluster Ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: datasciencecluster.opendatahub.io/v2
+    kind: DataScienceCluster
+    name: default-dsc
+  register: _dsc
+  retries: "{{ ocp_4_20_ai_maas_dsc_retries }}"
+  delay: 10
+  ignore_errors: true
+  until:
+    - _dsc.resources is defined
+    - _dsc.resources | length > 0
+    - _dsc.resources[0].status.phase | default('') == 'Ready'
+
+- name: Fail if DataScienceCluster never became ready
+  ansible.builtin.fail:
+    msg: >-
+      DataScienceCluster did not become ready after {{ ocp_4_20_ai_maas_dsc_retries }} retries.
+  when: >-
+    _dsc.resources is not defined
+    or _dsc.resources | length == 0
+    or _dsc.resources[0].status.phase | default('') != 'Ready'
+
+- name: Report operator installation complete
+  ansible.builtin.debug:
+    msg:
+      - "BOM complete — RHOAI {{ ocp_4_20_ai_maas_rhoai_channel }}, RHCL {{ ocp_4_20_ai_maas_rhcl_channel }}"
+      - "Service Mesh: Sail-embedded (no OSSM subscription on OCP 4.21.22)"
+      - "DSC: Ready (aigateway enabled later by configure_maas_cluster.yaml)"

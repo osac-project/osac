@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: maas-postgres-credentials
+  namespace: maas-db
+type: Opaque
+stringData:
+  POSTGRES_USER: "{{ ocp_4_20_ai_maas_db_user }}"
+  POSTGRES_PASSWORD: "{{ ocp_4_20_ai_maas_db_password }}"
+  POSTGRES_DB: "{{ ocp_4_20_ai_maas_db_name }}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: maas-postgres
+  namespace: maas-db
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: maas-postgres
+  template:
+    metadata:
+      labels:
+        app: maas-postgres
+    spec:
+      containers:
+      - name: postgres
+        image: {{ ocp_4_20_ai_maas_db_image }}
+        env:
+        - name: POSTGRESQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: maas-postgres-credentials
+              key: POSTGRES_USER
+        - name: POSTGRESQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: maas-postgres-credentials
+              key: POSTGRES_PASSWORD
+        - name: POSTGRESQL_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: maas-postgres-credentials
+              key: POSTGRES_DB
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/pgsql/data
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: postgres-data
+        persistentVolumeClaim:
+          claimName: maas-postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: maas-postgres
+  namespace: maas-db
+spec:
+  selector:
+    app: maas-postgres
+  ports:
+  - port: 5432
+    targetPort: 5432

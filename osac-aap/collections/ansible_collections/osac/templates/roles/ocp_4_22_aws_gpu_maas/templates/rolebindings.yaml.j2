@@ -1,0 +1,65 @@
+---
+# PERMANENT (Slide-7 tenancy model): the maas-controller creates the Role, the
+# CSP Admin (this role) creates the binding. Keep — not a UI-gap workaround.
+# RoleBinding: tenant-admin in the tenant governance namespace.
+# Binds the tenant admin group to the operator-created Role
+# aitenant-{name}-tenant-admin (CRUD maassubscriptions/maasauthpolicies, update
+# maastenantconfigs, read maasmodelrefs) — the MaaS self-service surface.
+# NOTE: on RHOAI 3.5 GA the operator creates this Role but NOT the binding
+# (spec.rbac.admins is deprecated/no-op), so the role wires it explicitly.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "{{ _t_name }}-admins-binding"
+  namespace: "{{ _t_govns }}"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: "aitenant-{{ _t_name }}-tenant-admin"
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: "{{ _t_admin_group }}"
+---
+# RoleBinding: object-admin in the ai-tenants namespace.
+# Binds the group to the operator-created Role aitenant-{name}-object-admin
+# (get aitenants) so tenant admins can read their own AITenant object.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "{{ _t_name }}-object-admin-binding"
+  namespace: ai-tenants
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: "aitenant-{{ _t_name }}-object-admin"
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: "{{ _t_admin_group }}"
+---
+# ============================================================================
+# ADDITIONAL RBAC — INTERIM WORKAROUND (NOT part of the Slide-7 tenancy model).
+# TO BE REMOVED when the Tenant Admin UI is available with the required RBAC.
+# Why: no Tenant Admin UI yet, so the tenant admin group needs direct K8s RBAC
+# to view/manage its own tenant project (pods, resources) via the CLI/console.
+# The maas-controller only creates the tenant-admin/object-admin Roles (bound
+# above) — this broad `admin` grant is EXTRA and should be retired once the UI
+# provides equivalent scoped RBAC.
+# ============================================================================
+# RoleBinding: namespace admin (project visibility + resource listing + model
+# self-deployment) in the tenant governance namespace, via the built-in
+# ClusterRole "admin". Namespace-scoped, so it does not cross tenant boundaries.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "{{ _t_name }}-namespace-admin-binding"
+  namespace: "{{ _t_govns }}"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: "{{ _t_admin_group }}"

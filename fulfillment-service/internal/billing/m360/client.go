@@ -34,8 +34,6 @@ const (
 	defaultAttemptTime = 10 * time.Second
 
 	maxPageSize = 20 // the largest size M360 honours
-	// maxPages bounds pagination so a provider that never reports a last page cannot loop forever.
-	maxPages = 50
 )
 
 // client issues GET requests only. Response bodies are decoded or discarded, never logged or put in errors.
@@ -192,11 +190,12 @@ func (p pageData[T]) next() string {
 	return strconv.Itoa(p.Number + 1)
 }
 
-// getAllPages reads every page of a pricing collection, adding extra to each request.
+// getAllPages reads every page of a pricing collection, adding extra to each request. The page bound is the
+// shared billing.MaxListPages: every provider-list reader in OSAC stops at the same ceiling.
 func getAllPages[T any](ctx context.Context, c *client, op, path string, extra url.Values) ([]T, error) {
 	var all []T
 	token := ""
-	for range maxPages {
+	for range billing.MaxListPages {
 		query := url.Values{"size": {strconv.Itoa(maxPageSize)}}
 		for k, v := range extra {
 			query[k] = v

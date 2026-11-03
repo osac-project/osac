@@ -92,14 +92,8 @@ func handleCreateNetworkResource(
 		if strings.TrimSpace(input.ID) != "" {
 			return nil, CreateNetworkResourceOutput{}, safeUnsupportedInPlaceNetworkEditError()
 		}
-		if err := validateNetworkSecurityRuleCounts(input); err != nil {
-			return nil, CreateNetworkResourceOutput{}, safeInvalidRequestError(err)
-		}
+		input = normalizeCreateNetworkResourceInput(input)
 		var err error
-		input, err = normalizeCreateNetworkResourceInput(input)
-		if err != nil {
-			return nil, CreateNetworkResourceOutput{}, safeInvalidRequestError(err)
-		}
 		request, err := networkCreateRequestFromInput(input)
 		if err != nil {
 			return nil, CreateNetworkResourceOutput{}, safeInvalidRequestError(err)
@@ -200,21 +194,7 @@ func handleDeleteNetworkResource(
 	}
 }
 
-func validateNetworkSecurityRuleCounts(input CreateNetworkResourceInput) error {
-	resourceType := NetworkResourceType(strings.TrimSpace(string(input.ResourceType)))
-	if resourceType != NetworkResourceTypeSecurityGroup {
-		return nil
-	}
-	if len(input.IngressRules)+len(input.EgressRules) > maxNetworkSecurityRules {
-		return fmt.Errorf(
-			"ingress_rules and egress_rules must not contain more than %d rules in total",
-			maxNetworkSecurityRules,
-		)
-	}
-	return nil
-}
-
-func normalizeCreateNetworkResourceInput(input CreateNetworkResourceInput) (CreateNetworkResourceInput, error) {
+func normalizeCreateNetworkResourceInput(input CreateNetworkResourceInput) CreateNetworkResourceInput {
 	input.ID = strings.TrimSpace(input.ID)
 	input.ResourceType = NetworkResourceType(strings.TrimSpace(string(input.ResourceType)))
 	input.Name = strings.TrimSpace(input.Name)
@@ -222,7 +202,7 @@ func normalizeCreateNetworkResourceInput(input CreateNetworkResourceInput) (Crea
 	input.IPv4Cidr = strings.TrimSpace(input.IPv4Cidr)
 	input.IngressRules = normalizeNetworkSecurityRuleInputs(input.IngressRules)
 	input.EgressRules = normalizeNetworkSecurityRuleInputs(input.EgressRules)
-	return input, nil
+	return input
 }
 
 func normalizeDeleteNetworkResourceInput(input DeleteNetworkResourceInput) (DeleteNetworkResourceInput, error) {
@@ -276,6 +256,12 @@ func networkCreateRequestFromInput(input CreateNetworkResourceInput) (networkCre
 		}
 		if input.IPv4Cidr != "" {
 			return networkCreateRequest{}, fmt.Errorf("ipv4_cidr is not valid for security_group")
+		}
+		if len(input.IngressRules)+len(input.EgressRules) > maxNetworkSecurityRules {
+			return networkCreateRequest{}, fmt.Errorf(
+				"ingress_rules and egress_rules must not contain more than %d rules in total",
+				maxNetworkSecurityRules,
+			)
 		}
 		ingress, err := networkSecurityRulesFromInput(input.IngressRules, "ingress_rules")
 		if err != nil {

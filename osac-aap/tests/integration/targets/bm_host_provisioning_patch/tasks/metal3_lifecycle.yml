@@ -176,6 +176,15 @@
               - >-
                 deprovisioned_bmh.resources[0].spec.image is not defined
                 or deprovisioned_bmh.resources[0].spec.image is none
+              - >-
+                deprovisioned_bmh.resources[0].spec.userData is not defined
+                or deprovisioned_bmh.resources[0].spec.userData is none
+              - >-
+                deprovisioned_bmh.resources[0].spec.metaData is not defined
+                or deprovisioned_bmh.resources[0].spec.metaData is none
+              - >-
+                deprovisioned_bmh.resources[0].spec.networkData is not defined
+                or deprovisioned_bmh.resources[0].spec.networkData is none
               - deprovisioned_bmh.resources[0].status.provisioning.state == 'available'
               - >-
                 remaining_secrets.resources

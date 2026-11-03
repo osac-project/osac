@@ -1,0 +1,72 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+option (cleanapi.file).package = "osac.public.v1";
+
+import "cleanapi/cleanapi.proto";
+
+// How a resource condition's value compares against a configuration. UNSPECIFIED is never reported by the server.
+enum BillingRateMatchOperator {
+  BILLING_RATE_MATCH_OPERATOR_UNSPECIFIED = 0;
+
+  // Matches every value; `value` is empty.
+  BILLING_RATE_MATCH_OPERATOR_ANY = 1;
+
+  // Matches only a configuration whose dimension value equals `value`.
+  BILLING_RATE_MATCH_OPERATOR_EQUALS = 2;
+}
+
+// One match condition on a provider rate-card row.
+message ProviderRateCardItemResourceCondition {
+  // Metered dimension name, using the same names as CatalogPricingInputs (for example `instance_type`).
+  string dimension = 1;
+
+  BillingRateMatchOperator operator = 2;
+
+  // Comparison value for EQUALS; empty for ANY.
+  string value = 3;
+}
+
+// Provider-supplied amount and unit. OSAC preserves both without rounding or unit validation.
+message ProviderRateCardItemRate {
+  // Provider rate as a decimal string; OSAC does not round it.
+  string amount = 1;
+
+  // Provider-advertised rate unit, preserved as reported. OSAC treats every rate as per second and performs no
+  // unit validation or matching (design §2.3); the documented provider convention is `second`.
+  string unit = 2;
+}
+
+// A provider-neutral, currency-specific rate-card row. Never carries a provider rule id, rate-card id, service id,
+// native account id or raw provider payload.
+message ProviderRateCardItem {
+  // OSAC service this provider rule prices, such as `compute_instance`.
+  string service = 1;
+
+  // ISO-4217 currency of rate.amount.
+  string currency_code = 2;
+
+  // Match conditions for this rate; all conditions on a row apply together. Empty means the row matches every
+  // configuration of the service.
+  repeated ProviderRateCardItemResourceCondition resource_conditions = 3;
+
+  ProviderRateCardItemRate rate = 4;
+
+  // OSAC catalog item names whose default configuration this rule can price. Empty means the row is not in the
+  // catalog; that is still a valid row.
+  repeated string catalog_item_matches = 5;
+}

@@ -27,6 +27,7 @@ class KindRuntimeTests(unittest.TestCase):
         self.bin.mkdir()
         self.log = self.directory / "commands.log"
         self.cache = self.directory / "sudo-cache"
+        self.cluster_name = "osac-dev"
         self.env = {
             **os.environ,
             "PATH": f"{self.bin}:/usr/bin:/bin",
@@ -40,7 +41,7 @@ class KindRuntimeTests(unittest.TestCase):
             "MOCK_AUTH_DENIED": "0",
             "MOCK_NOPASSWD": "0",
             "MOCK_FORCE_ROOTLESS": "0",
-            "MOCK_KIND_NODES": "osac-dev-control-plane",
+            "MOCK_KIND_NODES": f"{self.cluster_name}-control-plane",
             "MOCK_KIND_NODES_FAILURE": "0",
             "MOCK_KIND_DELETE_FAILURE": "0",
             "MOCK_KIND_CREATED": str(self.directory / "kind-created"),
@@ -132,13 +133,19 @@ fi
         self.write_command("kind", """
 printf 'kind %s %s\n' "${MOCK_AS_ROOT:-0}" "$*" >> "$MOCK_LOG"
 printf 'kind context provider=%s host=%s connection=%s\n' "${KIND_EXPERIMENTAL_PROVIDER:-unset}" "${CONTAINER_HOST:-unset}" "${CONTAINER_CONNECTION:-unset}" >> "$MOCK_LOG"
+cluster_name=kind
+previous=
+for argument in "$@"; do
+  if [[ "$previous" == --name ]]; then cluster_name="$argument"; fi
+  previous="$argument"
+done
 if [[ "${MOCK_PROVIDER_STATE:-0}" == 1 ]]; then
   provider="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
-  state="$MOCK_PID_DIR/cluster-$provider"
+  state="$MOCK_PID_DIR/cluster-$provider-$cluster_name"
   printf 'provider=%s %s\\n' "$provider" "$*" >> "$MOCK_LOG"
   case "$1 $2" in
     'create cluster') touch "$state" ;;
-    'get nodes') if [[ -f "$state" ]]; then echo osac-dev-control-plane; fi ;;
+    'get nodes') if [[ -f "$state" ]]; then echo "$cluster_name-control-plane"; fi ;;
     'load docker-image')
       docker image inspect "$3"
       [[ -f "$state" ]] || { echo 'ERROR: no nodes found for cluster' >&2; exit 1; }
@@ -147,21 +154,21 @@ if [[ "${MOCK_PROVIDER_STATE:-0}" == 1 ]]; then
   esac
   exit 0
 fi
-if [[ "$*" == 'get nodes --name osac-dev' ]]; then
+if [[ "$1 $2" == 'get nodes' ]]; then
   if [[ "$MOCK_KIND_NODES_FAILURE" == 1 ]]; then
     printf '%s\n' "$MOCK_KIND_NODES"
     exit 1
   fi
   if [[ -f "$MOCK_KIND_CREATED" ]]; then
-    echo osac-dev-control-plane
+    if [[ "$(cat "$MOCK_KIND_CREATED")" == "$cluster_name" ]]; then echo "$cluster_name-control-plane"; fi
   else
     printf '%s\n' "$MOCK_KIND_NODES"
   fi
 elif [[ "${1:-}" == create ]]; then
-  touch "$MOCK_KIND_CREATED"
-elif [[ "$*" == 'get kubeconfig --name osac-dev' ]]; then
+  printf '%s\n' "$cluster_name" > "$MOCK_KIND_CREATED"
+elif [[ "$1 $2" == 'get kubeconfig' ]]; then
   echo 'stub kubeconfig'
-elif [[ "$*" == 'delete cluster --name osac-dev' && "$MOCK_KIND_DELETE_FAILURE" == 1 ]]; then
+elif [[ "$1 $2" == 'delete cluster' && "$MOCK_KIND_DELETE_FAILURE" == 1 ]]; then
   exit 1
 elif [[ "${1:-}" == load ]]; then
   [[ "$(cat "$3")" == 'stub archive' ]]
@@ -469,7 +476,7 @@ check_topolvm_cluster_mounts() {{
 create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
 ''')
 
-    def run_direct_infra(self):
+    def run_direct_infra(self, cluster_name=None):
         self.write_command("helm", '''
 if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >> "$MOCK_LOG"; fi
 ''')
@@ -477,12 +484,16 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
         return subprocess.run(
             ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER), "-o", "helm-infra-deps",
              "install-infra", "PLATFORM=kind", "PROFILE=dev", "NS=osac",
+             f"KIND_CLUSTER_NAME={cluster_name or self.cluster_name}",
              f"KIND_KUBECONFIG={self.directory / 'cluster.kubeconfig'}"],
             env=self.env, text=True, capture_output=True, timeout=15,
         )
 
     def test_direct_podman_create_and_reuse_raise_and_verify_pid_limits(self):
-        for existing in ("", "osac-dev-control-plane\nosac-dev-worker"):
+        self.assert_direct_podman_create_and_reuse()
+
+    def assert_direct_podman_create_and_reuse(self):
+        for existing in ("", f"{self.cluster_name}-control-plane\n{self.cluster_name}-worker"):
             with self.subTest(existing=bool(existing)):
                 self.log.unlink(missing_ok=True)
                 (self.directory / "kind-created").unlink(missing_ok=True)
@@ -493,7 +504,10 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
                 self.env["CONTAINER_CONNECTION"] = "test-connection"
                 self.assert_success(self.run_direct_infra())
                 commands = self.commands()
-                nodes = existing.splitlines() or ["osac-dev-control-plane"]
+                self.assertEqual(any(cmd.startswith("kind 0 create cluster") for cmd in commands), not bool(existing))
+                if not existing:
+                    self.assertTrue(any(cmd.startswith(f"kind 0 create cluster --name {self.cluster_name} ") for cmd in commands))
+                nodes = existing.splitlines() or [f"{self.cluster_name}-control-plane"]
                 for node in nodes:
                     inspect = f"podman user inspect --format {{{{.HostConfig.PidsLimit}}}} {node}"
                     update = f"podman user update --pids-limit 65536 {node}"
@@ -504,28 +518,41 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
                 self.assertFalse(any(cmd.startswith("sudo ") or "podman user info" in cmd for cmd in commands))
                 self.assertTrue(any(cmd.startswith("helm upgrade") for cmd in commands))
 
+    def test_direct_nondefault_cluster_create_and_reuse(self):
+        self.cluster_name = "review-cluster"
+        self.assert_direct_podman_create_and_reuse()
+        self.assertNotIn("create cluster", "\n".join(self.commands()))
+        self.assertIn(f"kind 0 get nodes --name {self.cluster_name}", self.commands())
+        self.assertTrue(any(cmd.startswith(f"kind 0 export kubeconfig --name {self.cluster_name} ")
+                            for cmd in self.commands()))
+        self.assertNotIn("osac-dev", "\n".join(self.commands()))
+
     def test_direct_auto_podman_pins_kind_without_changing_connection(self):
+        self.cluster_name = "socket-cluster"
+        self.env["MOCK_KIND_NODES"] = f"{self.cluster_name}-control-plane"
         self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
         self.env["CONTAINER_HOST"] = "unix:///test-podman.sock"
         self.env["MOCK_PID_LIMIT"] = "2048"
         self.assert_success(self.run_direct_infra())
         self.assertIn("kind context provider=podman host=unix:///test-podman.sock connection=unset", self.commands())
-        self.assertIn("podman socket update --pids-limit 65536 osac-dev-control-plane", self.commands())
+        self.assertIn(f"podman socket update --pids-limit 65536 {self.cluster_name}-control-plane", self.commands())
 
     def test_direct_provider_survives_separate_load_and_delete_invocations(self):
+        self.cluster_name = "provider-cluster"
         self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
         self.env["MOCK_PROVIDER_STATE"] = "1"
         self.env["CONTAINER_TOOL"] = "docker"
         self.write_command("ginkgo", 'echo "application test stub" >> "$MOCK_LOG"')
         self.assert_success(self.run_direct_infra())
-        cluster = self.directory / "cluster-podman"
+        cluster = self.directory / f"cluster-podman-{self.cluster_name}"
         self.assertTrue(cluster.exists())
         args = ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER),
-                f"OSAC_CHART={self.directory / 'chart'}", "PLATFORM=kind", "PROFILE=dev", "NS=osac"]
+                f"OSAC_CHART={self.directory / 'chart'}", "PLATFORM=kind", "PROFILE=dev", "NS=osac",
+                f"KIND_CLUSTER_NAME={self.cluster_name}"]
         result = subprocess.run(args + ["test", "SUITE=operator"], env=self.env,
                                 text=True, capture_output=True, timeout=15)
         self.assert_success(result)
-        self.assertIn("provider=podman load docker-image localhost/osac-operator:it --name osac-dev",
+        self.assertIn(f"provider=podman load docker-image localhost/osac-operator:it --name {self.cluster_name}",
                       self.commands())
         self.assertIn("docker image inspect localhost/osac-operator:it", self.commands())
         self.assertIn("docker save localhost/osac-operator:it", self.commands())

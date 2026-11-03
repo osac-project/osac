@@ -30,6 +30,7 @@ import {
 } from '@osac/types';
 
 import EditInstanceTypeModal from './EditInstanceTypeModal';
+import VmExternalIpSection from './VmExternalIpSection';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { VmStatusLabel } from '../../../VmStatusLabel';
@@ -204,6 +205,7 @@ const VmDetailsCard = ({
               </StackItem>
               <StackItem>
                 <DescriptionList isCompact>
+                  <VmExternalIpSection vm={vm} />
                   {hasWindowsGuest ? (
                     <DetailRow label={t('Sysprep (Unattend.xml)')}>{t('Not set')}</DetailRow>
                   ) : (

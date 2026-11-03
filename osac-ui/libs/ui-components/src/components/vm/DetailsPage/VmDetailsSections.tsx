@@ -3,7 +3,6 @@ import { PageSection, Stack, StackItem } from '@patternfly/react-core';
 import type { ComputeInstance, DiskImage, InstanceType } from '@osac/types';
 
 import VmDetailsCard from './VmDetailsCard';
-import VmExternalIpSection from './VmExternalIpSection';
 import VmNetworkingSection from './VmNetworkingSection';
 import VmStorageSection from './VmStorageSection';
 import VmUserDataCard from './VmUserDataCard';
@@ -42,9 +41,6 @@ const VmDetailsSections = ({
             diskImage={diskImage}
             isDiskImageLoading={isDiskImageLoading}
           />
-        </StackItem>
-        <StackItem>
-          <VmExternalIpSection vm={vm} />
         </StackItem>
         <StackItem>
           <VmNetworkingSection vm={vm} />

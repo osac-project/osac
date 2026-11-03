@@ -73,6 +73,11 @@ describe('VmDetailsCard', () => {
     expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Configuration' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
+    const externalIpTerm = screen.getByText('External IP');
+    const sshTerm = screen.getByText('SSH public key');
+    expect(
+      externalIpTerm.compareDocumentPosition(sshTerm) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(screen.getByText('tenant-project')).toBeInTheDocument();
     expect(screen.getByText('RHEL 9 catalog')).toBeInTheDocument();
     expect(screen.getByText('Linux')).toBeInTheDocument();

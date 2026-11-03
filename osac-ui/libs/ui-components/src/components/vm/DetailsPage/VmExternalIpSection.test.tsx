@@ -29,17 +29,20 @@ const vm = {
 const attachment = (state: ExternalIPAttachmentState, message?: string) =>
   ({ status: { state, message } }) as ExternalIPAttachment;
 
-const setAttachment = (items: ExternalIPAttachment[]) => {
+const setAttachment = (
+  items: ExternalIPAttachment[],
+  queryState: { isLoading?: boolean; isFetching?: boolean } = {},
+) => {
   vi.mocked(resourceModule.useListResource).mockReturnValue({
     data: { items } as ExternalIPAttachmentsListResponse,
-    isLoading: false,
-    isFetching: false,
+    isLoading: queryState.isLoading ?? false,
+    isFetching: queryState.isFetching ?? false,
     error: null,
   } as unknown as ReturnType<typeof resourceModule.useListResource>);
 };
 
 describe('VmExternalIpSection', () => {
-  it('renders the Host value and failed attachment recovery actions', () => {
+  it('renders the External IP value and failed attachment recovery actions', () => {
     setAttachment([
       attachment(
         ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_FAILED,
@@ -49,13 +52,13 @@ describe('VmExternalIpSection', () => {
 
     renderWithProviders(<VmExternalIpSection vm={vm} />);
 
-    expect(screen.getByRole('heading', { name: 'External IP' })).toBeInTheDocument();
-    expect(screen.getByText('Host')).toBeInTheDocument();
+    expect(screen.getByText('External IP')).toBeInTheDocument();
     expect(screen.getByText('203.0.113.1')).toBeInTheDocument();
     expect(screen.getByText('External IP attachment failed')).toBeInTheDocument();
     expect(screen.getByText('external IP binding failed')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Choose another' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Detach' })).not.toBeInTheDocument();
   });
 
   it('renders Attach when the running VM has no external IP', () => {
@@ -76,6 +79,24 @@ describe('VmExternalIpSection', () => {
     expect(screen.getByRole('button', { name: 'Attach external IP' })).toBeEnabled();
   });
 
+  it('keeps Attach visible during a background attachment refresh', () => {
+    setAttachment([], { isFetching: true });
+
+    renderWithProviders(
+      <VmExternalIpSection
+        vm={
+          {
+            ...vm,
+            status: { state: ComputeInstanceState.RUNNING, externalIpAddress: '' },
+          } as unknown as ComputeInstance
+        }
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Attach external IP' })).toBeInTheDocument();
+    expect(screen.queryByText('Attaching external IP...')).not.toBeInTheDocument();
+  });
+
   it('shows pending lifecycle feedback while an attachment is provisioning', () => {
     setAttachment([attachment(ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_PENDING)]);
 
@@ -90,6 +111,16 @@ describe('VmExternalIpSection', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: /Attaching external IP/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Attach external IP' })).not.toBeInTheDocument();
+    expect(screen.getByText('Attaching external IP...')).toBeInTheDocument();
+  });
+
+  it('renders the compact inline Detach action for an attached external IP', () => {
+    setAttachment([attachment(ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_READY)]);
+
+    renderWithProviders(<VmExternalIpSection vm={vm} />);
+
+    const detachButton = screen.getByRole('button', { name: 'Detach' });
+    expect(detachButton).toHaveClass('pf-m-inline');
   });
 });

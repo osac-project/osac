@@ -14,10 +14,6 @@ vi.mock('./VmNetworkingSection', () => ({
   default: () => <section aria-label="Networking">Networking section</section>,
 }));
 
-vi.mock('./VmExternalIpSection', () => ({
-  default: () => <section aria-label="External IP">External IP section</section>,
-}));
-
 vi.mock('./VmStorageSection', () => ({
   default: () => <section aria-label="Storage">Storage section</section>,
 }));
@@ -44,7 +40,6 @@ describe('VmDetailsSections', () => {
     );
 
     expect(screen.getByRole('region', { name: 'Details card' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'External IP' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Networking' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Storage' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'User data' })).toBeInTheDocument();

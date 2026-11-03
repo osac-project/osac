@@ -1750,7 +1750,7 @@
         },
         "readers": {
           "type": "array",
-          "description": "Outside systems that read one tenant's usage events. Each entry renders one Strimzi KafkaUser with a read ACL on osac.metering.heartbeat.<tenant> and on a consumer group named after the reader. Grant and revoke a reader with a helm upgrade; neither restarts metering. This is a list of objects: the Enclave Wizard's schema-to-control mapping covers only enums, booleans, strings, and numbers, so the Wizard renders no control for it and operators set it in values. The decision is to keep the list values-only rather than flatten it into per-reader scalar keys",
+          "description": "Outside systems that read one tenant's usage events. Each entry renders one Strimzi KafkaUser with a read ACL on osac.metering.heartbeat.<tenant> and on a consumer group named after the reader. Grant and revoke a reader with a helm upgrade; neither restarts metering. Set through values; the Enclave Wizard renders no control for this list, so operators add entries in their values file",
           "default": [],
           "items": {
             "type": "object",
@@ -1758,7 +1758,8 @@
               "name": {
                 "type": "string",
                 "description": "Reader name, also its KafkaUser name and consumer group name; must be unique",
-                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                "maxLength": 253
               },
               "tenant": {
                 "type": "string",

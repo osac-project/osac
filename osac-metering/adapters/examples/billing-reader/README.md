@@ -51,23 +51,25 @@ CA. Build the binary into an image first (`go build -o bin/billing-reader
 ./examples/billing-reader`).
 
 Strimzi creates the password Secret in `osac-kafka`, and the shared `ca-bundle`
-ConfigMap exists in the release namespace (`osac`). Copy the password into the
-release namespace so one Job can mount both:
+ConfigMap exists in the release namespace (`osac`). Run the Job in `osac-kafka`
+so it mounts the password Secret where Strimzi created it, and copy only the
+public CA ConfigMap into that namespace; the password never leaves
+`osac-kafka`:
 
 ```sh
-oc get secret billing-reader -n osac-kafka -o jsonpath='{.data.password}' \
-  | base64 -d \
-  | oc create secret generic billing-reader --from-file=password=/dev/stdin -n osac
+oc get configmap ca-bundle -n osac -o jsonpath='{.data.bundle\.pem}' \
+  | oc create configmap ca-bundle --from-file=bundle.pem=/dev/stdin -n osac-kafka
 ```
 
-Then run a Job in `osac` that mounts that Secret and the CA ConfigMap:
+Then run a Job in `osac-kafka` that mounts the reader's Secret and that CA
+ConfigMap:
 
 ```yaml
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: billing-reader-example
-  namespace: osac
+  namespace: osac-kafka
 spec:
   template:
     spec:
@@ -88,6 +90,8 @@ spec:
               value: /etc/reader/password
             - name: KAFKA_TLS_CA_CERT
               value: /etc/ca/bundle.pem
+            - name: READER_START_OFFSET
+              value: oldest
           volumeMounts:
             - name: credentials
               mountPath: /etc/reader
@@ -103,8 +107,8 @@ spec:
 ```
 
 ```sh
-kubectl logs job/billing-reader-example -n osac
-oc delete secret billing-reader -n osac
+kubectl logs job/billing-reader-example -n osac-kafka
+oc delete configmap ca-bundle -n osac-kafka
 ```
 
 From a host that can reach the broker, export the same variables and run:
@@ -125,13 +129,24 @@ BILLABLE TOTAL: 110.000000 second
 
 It stops after `READER_IDLE_TIMEOUT` (default 30 seconds) without a message,
 or on Ctrl-C. If it meets an event it cannot decode or does not know, it logs
-the error and exits non-zero without marking that event, so the next run reads
-it again.
+the error and exits non-zero without marking that event or printing the
+billable totals, so the next run reads it again.
+
+## First run
+
+`READER_START_OFFSET` chooses where a reader with no committed offset starts.
+The default, `oldest`, reads the topic from its first retained record; because
+retention is indefinite by default, the first run prints the billable total for
+the tenant's whole retained history, not just the usage since the grant. Set it
+to `newest` to start at the end of the topic and bill only usage published after
+the reader starts. A committed offset takes precedence over either value on
+later runs.
 
 ## Revoke the reader
 
 Remove the entry and run the installer again. Strimzi deletes the `KafkaUser`,
 its password Secret, and its ACLs. Any consumer-group error stops the example:
-it logs the error, prints the totals it has, and exits non-zero. That includes
-the authorization error a revoked reader gets on its next fetch. Nothing in
-OSAC restarts.
+it logs the error and exits non-zero without printing the billable totals, so a
+failed run is not mistaken for a completed bill. That includes the
+authorization error a revoked reader gets on its next fetch. Nothing in OSAC
+restarts.

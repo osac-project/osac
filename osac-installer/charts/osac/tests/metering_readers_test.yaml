@@ -36,3 +36,12 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "'/metering/readers/0': missing property 'tenant'"
+
+  - it: rejects a reader name longer than a KafkaUser name
+    set:
+      metering.readers:
+        - name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          tenant: acme
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/metering/readers/0/name': maxLength: got 254, want 253"

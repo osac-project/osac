@@ -95,12 +95,17 @@ func (t *Totals) Add(event cloudevents.Event) (bool, error) {
 		return false, fmt.Errorf("event %s has quantity %q, which is not a decimal number", id, data.Usage.Quantity)
 	}
 
+	dimensions, err := dimensionKey(data.BillingDimensions)
+	if err != nil {
+		return false, fmt.Errorf("event %s: %w", id, err)
+	}
+
 	key := UsageKey{
 		ResourceType: data.ResourceType,
 		ResourceID:   data.ResourceID,
 		Meter:        data.Meter,
 		Component:    data.Component,
-		Dimensions:   dimensionKey(data.BillingDimensions),
+		Dimensions:   dimensions,
 	}
 	if t.sums[key] == nil {
 		t.sums[key] = new(big.Rat)
@@ -192,12 +197,15 @@ func (t *Totals) Print(w io.Writer) error {
 // encoding/json sorts map keys, so equal maps encode identically, and its
 // quoting keeps a value containing a comma or equals sign from merging with a
 // different map.
-func dimensionKey(dimensions map[string]string) string {
+func dimensionKey(dimensions map[string]string) (string, error) {
 	if len(dimensions) == 0 {
-		return ""
+		return "", nil
 	}
-	encoded, _ := json.Marshal(dimensions)
-	return string(encoded)
+	encoded, err := json.Marshal(dimensions)
+	if err != nil {
+		return "", fmt.Errorf("encoding billing dimensions: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // dimensionText renders a dimension map for display as sorted name=value

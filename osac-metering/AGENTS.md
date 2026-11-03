@@ -48,7 +48,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-met
 | Generated contract or published schema files | Unit plus the contract check and the release gate | `make -C osac-metering contract-check schemas-unchanged-test` (the CI leg runs with full git history so the release-tag comparison can run) |
 | Kafka producer/consumer, CloudEvents transport, offsets, retries, or DLQ | Component integration | `make test` |
 | Provider adapters | Unit plus component/E2E coverage for the provider boundary | `make test` and the qualifying provider suite |
-| Reader grants, ACLs, and reader lag alert | Chart render unit | `make helm-test` (helm-unittest plugin; CI pins v1.2.1) |
+| Reader grants, ACLs, reader lag alert, and grant/revoke render stability | Chart render unit | `make helm-test` and `make readers-render-test` (helm-unittest plugin for the first; CI pins v1.2.1) |
 | Worked example reader (`adapters/examples/billing-reader`) | Unit; component integration against a real Kafka topic is a gap | `make -C adapters test` |
 | Billing provider contract | Contract test against a real M360 tenant | `M360_TEST_API_URL`/`M360_TEST_API_KEY`/`M360_TEST_TENANT` gate `adapters/m360/contract_test.go` |
 

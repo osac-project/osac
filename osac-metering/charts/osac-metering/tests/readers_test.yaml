@@ -91,6 +91,18 @@ tests:
           value: audit-reader
         documentIndex: 1
 
+  - it: renders only the readers still in the values
+    set:
+      readers:
+        - name: audit-reader
+          tenant: globex
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: audit-reader
+
   - it: rejects two readers with the same name
     set:
       readers:

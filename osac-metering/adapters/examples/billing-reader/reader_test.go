@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/IBM/sarama"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -183,5 +184,24 @@ var _ = Describe("Totals", func() {
 		Expect(output.String()).To(ContainSubstring("vm-7"))
 		Expect(output.String()).To(ContainSubstring("15.000000"))
 		Expect(output.String()).To(ContainSubstring("BILLABLE TOTAL: 15.000000 second"))
+	})
+})
+
+var _ = Describe("initialOffset", func() {
+	It("defaults to the oldest record", func() {
+		offset, err := initialOffset("oldest")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(offset).To(Equal(int64(sarama.OffsetOldest)))
+	})
+
+	It("accepts the newest offset regardless of case", func() {
+		offset, err := initialOffset("Newest")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(offset).To(Equal(int64(sarama.OffsetNewest)))
+	})
+
+	It("rejects anything else", func() {
+		_, err := initialOffset("beginning")
+		Expect(err).To(MatchError(ContainSubstring(`invalid READER_START_OFFSET "beginning"`)))
 	})
 })

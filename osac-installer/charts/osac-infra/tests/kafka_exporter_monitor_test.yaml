@@ -3,7 +3,6 @@ templates:
   - templates/kafka-exporter-monitor.yaml
 capabilities:
   apiVersions:
-    - monitoring.coreos.com/v1
     - monitoring.coreos.com/v1/PodMonitor
 tests:
   - it: scrapes the exporter on its Prometheus port

@@ -42,7 +42,9 @@ creates for the fulfillment service.
 The list is set through Helm values. The Enclave Wizard's schema-to-control
 mapping covers enums, booleans, strings, and numbers only, so it renders no
 control for this list of objects; that is the deliberate decision, and there is
-no Wizard field for it.
+no Wizard field for it. Flattening the list into per-reader scalar keys would
+fit the mapping, but every grant would then need several keys kept in step, and
+a mistake would grant the wrong tenant. The list stays values-only.
 
 Grant or revoke a reader by applying the values again with the installer. The
 metering Deployment does not depend on these values, so nothing restarts. On
@@ -50,6 +52,12 @@ revocation Strimzi deletes the user, its password Secret, and its ACLs; the
 running reader fails its next fetch rather than waiting to be told. Offboarding
 a tenant means removing its reader entries in the same change that retires the
 tenant; the records stay until the tenant's topics are deleted.
+
+Rolling back to a chart version that predates `readers` fails while the value
+is set: the older umbrella schema rejects unknown keys under `metering`
+(`additionalProperties: false`). Remove `metering.readers` from the values,
+roll back, and add it again when the chart supports it. The reader KafkaUsers
+are deleted by that rollback, so also tell the reader's owner that access ends.
 
 The reader needs the bootstrap address, the shared OSAC CA, and its
 password from the Secret named after it in the Kafka namespace. Hand those

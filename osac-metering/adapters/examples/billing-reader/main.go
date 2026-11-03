@@ -25,6 +25,7 @@ compliance with the License. You may obtain a copy of the License at
 //	KAFKA_TLS_CA_CERT          path to the shared OSAC CA file
 //	KAFKA_SASL_USERNAME        the reader name
 //	KAFKA_SASL_PASSWORD_FILE   path to the password Strimzi issued
+//	READER_START_OFFSET        oldest or newest (default: oldest)
 //	READER_IDLE_TIMEOUT        stop after this long without a message
 //	                           (default: 30s)
 //
@@ -41,6 +42,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -69,6 +71,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("creating Kafka client config: %v", err)
 	}
+	// A first run with no committed offset starts where this says. Retention is
+	// indefinite by default, so "oldest" bills the whole retained history.
+	startOffset, err := initialOffset(envutil.EnvOrDefault("READER_START_OFFSET", "oldest"))
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	config.Consumer.Offsets.Initial = startOffset
 	// Marks are set only after a successful sum, so auto-commit never moves
 	// past an event this reader could not read.
 	config.Consumer.Offsets.AutoCommit.Enable = true
@@ -135,13 +144,18 @@ func main() {
 		}
 	}
 
+	// A failed run must not look like a completed bill: print the totals only
+	// after a clean stop. The counts go to the log for diagnosis.
+	if err := handler.firstError(); err != nil {
+		accepted, repeats := handler.totals.Counts()
+		logger.Printf("summed %d events, dropped %d repeats before the error", accepted, repeats)
+		log.Fatalf("reader stopped: %v", err)
+	}
+
 	accepted, repeats := handler.totals.Counts()
 	logger.Printf("summed %d events, dropped %d repeats", accepted, repeats)
 	if err := handler.totals.Print(os.Stdout); err != nil {
 		log.Fatalf("printing totals: %v", err)
-	}
-	if err := handler.firstError(); err != nil {
-		log.Fatalf("reader stopped: %v", err)
 	}
 }
 
@@ -157,6 +171,19 @@ func topicExists(client sarama.Client, topic string) (bool, error) {
 		return false, fmt.Errorf("listing topics: %w", err)
 	}
 	return slices.Contains(topics, topic), nil
+}
+
+// initialOffset maps READER_START_OFFSET to the offset a reader with no
+// committed position starts from.
+func initialOffset(value string) (int64, error) {
+	switch strings.ToLower(value) {
+	case "oldest":
+		return sarama.OffsetOldest, nil
+	case "newest":
+		return sarama.OffsetNewest, nil
+	default:
+		return 0, fmt.Errorf("invalid READER_START_OFFSET %q: use oldest or newest", value)
+	}
 }
 
 // consumer sums each claimed message and stops the run after the topic has

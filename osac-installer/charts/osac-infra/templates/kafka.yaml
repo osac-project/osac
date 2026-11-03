@@ -60,8 +60,11 @@ data:
         topicOperator: {}
         userOperator: {}
       # Strimzi's Kafka Exporter reports consumer-group lag per group and
-      # topic; the metering chart alerts on kafka_consumergroup_lag for reader
-      # groups. The empty object enables it with Strimzi's defaults (every
-      # group and topic, and the operator's own resources).
+      # topic. It stays on whenever Kafka is enabled, even though the metering
+      # reader lag alert is opt-in: the alert needs a Prometheus operator, but
+      # the exporter is a small Strimzi deployment that runs regardless, so the
+      # lag series exist whenever an operator enables the alert. The empty
+      # object enables it with Strimzi's defaults (every group and topic, and
+      # the operator's own resources).
       kafkaExporter: {}
 {{- end }}

@@ -753,6 +753,7 @@ ifeq ($(SUITE),operator)
 		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.provisioningEnabled=true --set global.networking.fabricManager=netris --set global.networking.k8sManager=cudn_evpn $(METERING_IT_IMAGE_ARGS)"
 	cd ../osac-operator && ginkgo run --timeout 15m -v --label-filter 'networkclass' test/integration
 endif
+# Enable networking so the BMF Kind suite verifies NetworkAttachment wiring.
 ifeq ($(SUITE),bmf)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
 	$(call kind-load-image,localhost/bmf-operator:it)
@@ -760,7 +761,7 @@ ifeq ($(SUITE),bmf)
 	$(call kind-load-image,$(METERING_IT_IMAGE))
 	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set global.services.bmaas.enabled=true --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set bmf.secretAPI.url= --set operator.enabled=false --set operator.networkManagers.enabled=true --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
+		EXTRA_HELM_ARGS="--set global.services.bmaas.enabled=true --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set bmf.secretAPI.url= --set operator.enabled=false --set operator.networkManagers.enabled=true --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.networking.provisioningEnabled=true $(METERING_IT_IMAGE_ARGS)"
 	cd ../bare-metal-fulfillment-operator && ginkgo run --timeout 30m -v test/integration
 endif
 

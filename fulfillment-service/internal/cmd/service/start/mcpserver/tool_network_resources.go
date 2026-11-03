@@ -32,6 +32,8 @@ const (
 	NetworkResourceTypeVirtualNetwork NetworkResourceType = "virtual_network"
 	NetworkResourceTypeSubnet         NetworkResourceType = "subnet"
 	NetworkResourceTypeSecurityGroup  NetworkResourceType = "security_group"
+
+	maxNetworkSecurityRules = 100
 )
 
 // CreateNetworkResourceInput creates one tenant network prerequisite. A
@@ -87,13 +89,16 @@ func handleCreateNetworkResource(
 	return func(
 		ctx context.Context, req *mcp.CallToolRequest, input CreateNetworkResourceInput,
 	) (*mcp.CallToolResult, CreateNetworkResourceOutput, error) {
+		if strings.TrimSpace(input.ID) != "" {
+			return nil, CreateNetworkResourceOutput{}, safeUnsupportedInPlaceNetworkEditError()
+		}
+		if err := validateNetworkSecurityRuleCounts(input); err != nil {
+			return nil, CreateNetworkResourceOutput{}, safeInvalidRequestError(err)
+		}
 		var err error
 		input, err = normalizeCreateNetworkResourceInput(input)
 		if err != nil {
 			return nil, CreateNetworkResourceOutput{}, safeInvalidRequestError(err)
-		}
-		if input.ID != "" {
-			return nil, CreateNetworkResourceOutput{}, safeUnsupportedInPlaceNetworkEditError()
 		}
 		request, err := networkCreateRequestFromInput(input)
 		if err != nil {
@@ -193,6 +198,22 @@ func handleDeleteNetworkResource(
 		}
 		return nil, DeleteNetworkResourceOutput(input), nil
 	}
+}
+
+func validateNetworkSecurityRuleCounts(input CreateNetworkResourceInput) error {
+	if len(input.IngressRules) > maxNetworkSecurityRules {
+		return fmt.Errorf("ingress_rules must not contain more than %d rules", maxNetworkSecurityRules)
+	}
+	if len(input.EgressRules) > maxNetworkSecurityRules {
+		return fmt.Errorf("egress_rules must not contain more than %d rules", maxNetworkSecurityRules)
+	}
+	if len(input.IngressRules)+len(input.EgressRules) > maxNetworkSecurityRules {
+		return fmt.Errorf(
+			"ingress_rules and egress_rules must not contain more than %d rules in total",
+			maxNetworkSecurityRules,
+		)
+	}
+	return nil
 }
 
 func normalizeCreateNetworkResourceInput(input CreateNetworkResourceInput) (CreateNetworkResourceInput, error) {

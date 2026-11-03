@@ -404,7 +404,7 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 			IdempotentHint:  false,
 			OpenWorldHint:   toolAnnotationBool(true),
 		},
-		InputSchema:  compatibleToolSchema[CreateNetworkResourceInput](),
+		InputSchema:  networkCreateToolSchema(),
 		OutputSchema: compatibleToolSchema[CreateNetworkResourceOutput](),
 	}, writeToolContract{Destructive: false, Idempotent: false}, handleCreateNetworkResource(
 		deps.VirtualNetworksClient, deps.SubnetsClient, deps.SecurityGroupsClient,
@@ -656,6 +656,30 @@ func computeInstanceUpdateToolSchema() json.RawMessage {
 	encoded, err := json.Marshal(document)
 	if err != nil {
 		panic(fmt.Errorf("encode compute instance update tool schema: %w", err))
+	}
+	return encoded
+}
+
+func networkCreateToolSchema() json.RawMessage {
+	schema := compatibleToolSchema[CreateNetworkResourceInput]()
+	var document map[string]any
+	if err := json.Unmarshal(schema, &document); err != nil {
+		panic(fmt.Errorf("decode network create tool schema: %w", err))
+	}
+	properties, ok := document["properties"].(map[string]any)
+	if !ok {
+		panic("network create tool schema has no properties")
+	}
+	for _, name := range []string{"ingress_rules", "egress_rules"} {
+		property, ok := properties[name].(map[string]any)
+		if !ok {
+			panic(fmt.Sprintf("network create tool schema has no %s property", name))
+		}
+		property["maxItems"] = maxNetworkSecurityRules
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		panic(fmt.Errorf("encode network create tool schema: %w", err))
 	}
 	return encoded
 }

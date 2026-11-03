@@ -150,6 +150,7 @@ var _ = Describe("newServer", func() {
 		expectToolAnnotations(tools["delete_compute_instance"], "Delete OSAC compute instance", false, true, false, true)
 		expectComputeInstanceCreateSchema(tools["create_compute_instance"].InputSchema)
 		expectTypedWriteSchema(tools["create_network_resource"].InputSchema, "resource_type", "name")
+		expectNetworkCreateSchema(tools["create_network_resource"].InputSchema)
 		expectTypedWriteSchema(tools["delete_network_resource"].InputSchema, "resource_type", "id")
 		expectComputeInstanceUpdateSchema(tools["update_compute_instance"].InputSchema)
 		expectTypedWriteSchema(tools["create_compute_instance"].InputSchema, "name", "catalog_item")
@@ -379,6 +380,18 @@ func expectResourcePaginationSchema(schema any) {
 	Expect(ok).To(BeTrue())
 	Expect(pageSize["minimum"]).To(BeNumerically("==", 0))
 	Expect(pageSize["maximum"]).To(BeNumerically("==", maxResourcePageSize))
+}
+
+func expectNetworkCreateSchema(schema any) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	for _, name := range []string{"ingress_rules", "egress_rules"} {
+		property, ok := properties[name].(map[string]any)
+		Expect(ok).To(BeTrue(), name)
+		Expect(property["maxItems"]).To(BeNumerically("==", maxNetworkSecurityRules), name)
+	}
 }
 
 func expectComputeInstanceCreateSchema(schema any) {

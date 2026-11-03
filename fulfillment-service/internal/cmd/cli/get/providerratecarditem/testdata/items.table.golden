@@ -1,0 +1,3 @@
+SERVICE           CURRENCY  CONDITIONS           AMOUNT   UNIT    CATALOG ITEMS
+compute_instance  USD       instance_type=small  0.00125  second  vm-fedora-small
+widget_service    USD       widget_size=ANY      5        second  -

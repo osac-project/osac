@@ -1,0 +1,61 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Last observed normalized state of a billing account. ACTIVE accounts can be linked and used for new priced
+// publish and launch. INACTIVE accounts cannot be newly linked or used for gated publish and launch, but existing
+// resources are not stopped and usage submission continues. UNKNOWN means OSAC could not classify the state from
+// the provider's native values.
+enum BillingAccountState {
+  // Unset. Never reported by the server.
+  BILLING_ACCOUNT_STATE_UNSPECIFIED = 0;
+
+  BILLING_ACCOUNT_STATE_ACTIVE = 1;
+
+  BILLING_ACCOUNT_STATE_INACTIVE = 2;
+
+  BILLING_ACCOUNT_STATE_UNKNOWN = 3;
+}
+
+// An account discovered from the configured billing provider.
+message BillingAccount {
+  // OSAC-generated opaque identifier used by APIs and tenant assignments. It is not the provider's account id.
+  string id = 1;
+
+  // Adapter that discovered the account, such as `m360`.
+  string provider_key = 2;
+
+  // Provider-supplied account label.
+  string display_name = 3;
+
+  // ISO-4217 currency used to interpret this account's prices. Provider-supplied: from the account where the
+  // provider exposes one. Empty when the provider has no currency field (M360) or does not supply one for this
+  // account; a missing currency is never invented or defaulted.
+  string base_currency = 4;
+
+  // Last normalized provider-account state.
+  BillingAccountState state = 5;
+
+  // Time OSAC last read the normalized account state from the provider.
+  google.protobuf.Timestamp status_observed_at = 6;
+
+  // OSAC's provider-agnostic attribution id carried on usage events. When the provider exposes a native
+  // correlation field (`externalId` in M360), assignment validation matches this value against it. It is not the
+  // OSAC tenant id or the provider's native account id. Empty until discovery or assignment establishes one.
+  string correlation_id = 7;
+}

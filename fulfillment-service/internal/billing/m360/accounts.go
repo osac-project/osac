@@ -52,14 +52,53 @@ func (a account) normalize(op string) (billing.Account, error) {
 	if a.ID == "" {
 		return billing.Account{}, &billing.Error{Reason: billing.ReasonMalformed, Op: op}
 	}
+	rawStatus := a.StatusRef.name()
+	approvalStatus := a.ApprovalStatusRef.name()
 	return billing.Account{
 		Ref:            billing.NewAccountRef(a.ID),
 		Name:           a.Name,
 		ExternalID:     a.ExternalID,
-		State:          billing.AccountUnknown, // the mapping in README.md lands with account discovery (OSAC-6883)
-		RawStatus:      a.StatusRef.name(),
-		ApprovalStatus: a.ApprovalStatusRef.name(),
+		State:          mapState(rawStatus, approvalStatus),
+		RawStatus:      rawStatus,
+		ApprovalStatus: approvalStatus,
+		// M360's AccountRecord has no currency field: BaseCurrency stays the empty zero value rather than
+		// being invented.
 	}, nil
+}
+
+// statusSignal and approvalSignal are the only M360 Status__r/ApprovalStatus__r values this adapter recognizes as
+// carrying an active or inactive signal. Any other value - including empty, null, or a value not in this list -
+// is a neutral/unknown signal. Mapping a provider's native shape onto OSAC's normalized state is this adapter's
+// responsibility (not a shared, externally configured table): see design.md §2.3 Assumptions.
+//
+// ASSUMPTION (flagged for review): the exact set of M360 Status/ApprovalStatus string values is not documented
+// anywhere in the OSAC-6883 story, the design doc, or the PRD. The values below reflect only what appears in this
+// adapter's own pre-existing test fixtures ("Active", "Inactive", "Approved"). Verify these literals against the
+// real M360 picklist values before this mapping reaches production.
+var statusSignal = map[string]billing.AccountState{
+	"Active":   billing.AccountActive,
+	"Inactive": billing.AccountInactive,
+}
+
+var approvalSignal = map[string]billing.AccountState{
+	"Approved": billing.AccountActive,
+	"Rejected": billing.AccountInactive,
+}
+
+// mapState normalizes M360's Status and ApprovalStatus to ACTIVE/INACTIVE/UNKNOWN. An account is ACTIVE only
+// when both signals agree it is; either signal reporting INACTIVE wins over the other; every other combination -
+// unmapped, missing, or disagreeing (ambiguous) - is UNKNOWN. ACTIVE is never returned on a partial signal.
+func mapState(rawStatus, approvalStatus string) billing.AccountState {
+	status := statusSignal[rawStatus]
+	approval := approvalSignal[approvalStatus]
+	switch {
+	case status == billing.AccountInactive || approval == billing.AccountInactive:
+		return billing.AccountInactive
+	case status == billing.AccountActive && approval == billing.AccountActive:
+		return billing.AccountActive
+	default:
+		return billing.AccountUnknown
+	}
 }
 
 // ListAccounts implements billing.Adapter.

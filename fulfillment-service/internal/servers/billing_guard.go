@@ -14,6 +14,8 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"fmt"
+
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -57,4 +59,20 @@ func billingFailure(code codes.Code, message, reason string) error {
 		result = detailed
 	}
 	return result.Err()
+}
+
+// mapClassifiedBillingError classifies a *billing.Error from provider I/O for an admin-facing billing surface:
+// provider unavailability or a provider timeout becomes UNAVAILABLE carrying unavailableReason, and any other
+// classified provider failure - a provider that never reports a last page is MALFORMED, not merely down -
+// surfaces the provider's own reason as FAILED_PRECONDITION detail. The caller picks unavailableReason: the
+// discovery surface reports the stable BILLING_PROVIDER_UNAVAILABLE token so pollers can tell a provider that
+// is down from a provider that misbehaves, while the assignment surface reports the provider's own reason
+// (e.g. TIMEOUT) so an admin can see which bound the assign hit.
+func mapClassifiedBillingError(err *billing.Error, unavailableReason string) error {
+	if err.Reason == billing.ReasonUnavailable || err.Reason == billing.ReasonTimeout {
+		return billingFailure(codes.Unavailable,
+			fmt.Sprintf("billing provider is unavailable: %s", err.Reason), unavailableReason)
+	}
+	return billingFailure(codes.FailedPrecondition,
+		fmt.Sprintf("billing provider error: %s", err.Reason), string(err.Reason))
 }

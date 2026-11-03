@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from datetime import datetime
-from typing import Any
+from http.client import RemoteDisconnected
+from typing import Any, NoReturn
+from urllib.request import Request
 
 import pytest
 
+from tests.e2e.core import metering
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector, parse_time
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
@@ -79,6 +84,36 @@ def _serve(collector: MeteringCollector, monkeypatch: pytest.MonkeyPatch, events
         return events
 
     monkeypatch.setattr(collector, "_fetch_events", fetch)
+
+
+def test_fetch_events_logs_every_failed_attempt_without_the_query(
+    collector: MeteringCollector, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failed fetch names the attempt, the endpoint, the time it took and the
+    exception class, so a run log says which poll and which failure without
+    leaking the resource id in the query string."""
+    requested: list[str] = []
+
+    def fail(request: Request, timeout: int) -> NoReturn:
+        requested.append(request.full_url)
+        raise RemoteDisconnected("Remote end closed connection without response")
+
+    monkeypatch.setattr(metering, "urlopen", fail)
+    monkeypatch.setattr(metering.time, "sleep", lambda _delay: None)
+
+    with caplog.at_level(logging.WARNING, logger=metering.logger.name), pytest.raises(RemoteDisconnected):
+        collector._fetch_events(HEARTBEAT_TYPE, "vm-7-sensitive")
+
+    assert len(requested) == 3
+    lines = [record.getMessage() for record in caplog.records if record.name == metering.logger.name]
+    assert len(lines) == 3
+    for attempt, line in enumerate(lines, start=1):
+        assert f"attempt {attempt}/3" in line
+        assert "echo-adapter.example.test/events" in line
+        assert re.search(r"after \d+\.\ds", line)
+        assert "RemoteDisconnected" in line
+        assert "vm-7-sensitive" not in line
+        assert "resource_id=" not in line
 
 
 def test_verify_event_accepts_a_well_formed_heartbeat(collector: MeteringCollector) -> None:

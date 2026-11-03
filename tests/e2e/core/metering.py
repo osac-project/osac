@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from tests.e2e.core.runner import poll_until
@@ -541,8 +541,14 @@ class MeteringCollector:
         # runner-side timestamp because the echo adapter uses pod time.
         params = urlencode({"type": event_type, "resource_id": resource_id})
         url = f"{self._base_url}/events?{params}"
+        target = urlsplit(url)
+        # The query carries the resource id; log the host and path only, and
+        # name the exception class because the failure that matters here is a
+        # closed connection, not an HTTP status.
+        endpoint = f"{target.netloc}{target.path}"
         last_exc: OSError | None = None
         for attempt in range(3):
+            started = time.monotonic()
             try:
                 req = Request(url)
                 with urlopen(req, timeout=10) as resp:
@@ -550,7 +556,13 @@ class MeteringCollector:
                     return _deduplicate_by_id(events)
             except (urllib.error.URLError, OSError) as exc:
                 last_exc = exc
-                logger.warning("Transient HTTP error fetching events (attempt %d/3): %s", attempt + 1, exc)
+                logger.warning(
+                    "Metering events fetch failed (attempt %d/3) GET %s after %.1fs: %s",
+                    attempt + 1,
+                    endpoint,
+                    time.monotonic() - started,
+                    type(exc).__name__,
+                )
                 time.sleep(2)
         raise last_exc  # type: ignore[misc]
 

@@ -37,6 +37,8 @@ import (
 
 const admissionPolicyEnv = "OSAC_IT_ADMISSION_POLICY"
 
+const bmfNetworkingFinalizer = "osac.openshift.io/baremetalinstance-networking"
+
 // networkingKinds are the kinds the policy protects for every write.
 var networkingKinds = []string{
 	"NetworkClass", "ExternalIPPool", "VirtualNetwork", "Subnet", "SecurityGroup",
@@ -80,6 +82,11 @@ func expectDenied(output string, err error, what string) {
 
 func expectAllowed(output string, err error, what string) {
 	Expect(err).NotTo(HaveOccurred(), "the admission policy must allow %s: %s", what, output)
+}
+
+func bmfIdentity() string {
+	// The umbrella chart defaults the BMF ServiceAccount name to bmf-operator.
+	return fmt.Sprintf("system:serviceaccount:%s:bmf-operator", operatorNamespace)
 }
 
 var _ = Describe("Installer ValidatingAdmissionPolicy "+
@@ -273,6 +280,104 @@ subjects:
 			time.Second,
 		).Should(BeTrue(),
 			"the operator must remove its finalizer while the policy is enforced")
+	})
+
+	It("limits BMF NetworkAttachment patches to removing its finalizer after cleanup", func() {
+		bmf := bmfIdentity()
+		bmfRole := "osac-it-bmf-finalizer-" + sfx
+		rbac := fmt.Sprintf(`apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+rules:
+- apiGroups: ["osac.openshift.io"]
+  resources: ["networkattachments"]
+  verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: %[1]s
+subjects:
+- kind: ServiceAccount
+  name: %[3]s
+  namespace: %[2]s
+`, bmfRole, operatorNamespace, "bmf-operator")
+		output, err := kubectl(rbac, "apply", "-f", "-")
+		Expect(err).NotTo(HaveOccurred(), output)
+		DeferCleanup(func() {
+			_, _ = kubectl(rbac, "delete", "-f", "-", "--ignore-not-found")
+		})
+
+		for _, verb := range []string{"get", "patch"} {
+			allowed, reason := subjectAccessReview(bmf, operatorNamespace,
+				"osac.openshift.io", "networkattachments", "", verb)
+			Expect(allowed).To(BeTrue(), "RBAC must allow %s to %s NetworkAttachments: %s", bmf, verb, reason)
+		}
+
+		name := "vap-bmf-finalizer-" + sfx
+		na := newObject("NetworkAttachment", name, sampleSpec("NetworkAttachment"))
+		na.SetAnnotations(map[string]string{"osac.openshift.io/tenant": "networking-it"})
+		na.SetFinalizers([]string{bmfNetworkingFinalizer, networkCleanupTestFinalizer})
+		output, err = createAs(operator, na)
+		expectAllowed(output, err, "the operator creating a NetworkAttachment with the BMF finalizer")
+		DeferCleanup(func() {
+			_, _ = patchAs(operator, "NetworkAttachment", name, "merge",
+				`{"metadata":{"finalizers":[]}}`, "")
+			_, _ = kubectl("", "delete", resourceOf("NetworkAttachment"), name,
+				"-n", operatorNamespace, "--ignore-not-found", "--wait=false", "--as="+operator)
+		})
+		Eventually(func(g Gomega) {
+			current, getErr := getObject("NetworkAttachment", name)
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(current.GetFinalizers()).To(ContainElement(finalizerNetworkAttachment))
+		}, readyTimeout, time.Second).Should(Succeed())
+
+		By("denying BMF metadata changes even though RBAC grants patch")
+		output, err = patchAs(bmf, "NetworkAttachment", name, "merge",
+			`{"metadata":{"annotations":{"osac.openshift.io/tenant":"other-tenant"}}}`, "")
+		Expect(err).To(HaveOccurred())
+		Expect(output).To(ContainSubstring("BMF may only remove its own finalizer"))
+
+		By("starting cleanup as the networking controller")
+		output, err = kubectl("", "delete", resourceOf("NetworkAttachment"), name,
+			"-n", operatorNamespace, "--wait=false", "--as="+operator)
+		expectAllowed(output, err, "the operator's NetworkAttachment delete")
+		Eventually(func(g Gomega) {
+			current, getErr := getObject("NetworkAttachment", name)
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(current.GetDeletionTimestamp()).NotTo(BeNil())
+			g.Expect(current.GetFinalizers()).To(ConsistOf(bmfNetworkingFinalizer, networkCleanupTestFinalizer))
+		}, readyTimeout, time.Second).Should(Succeed())
+
+		By("denying BMF removal of the unrelated remaining finalizer")
+		output, err = patchAs(bmf, "NetworkAttachment", name, "merge",
+			`{"metadata":{"finalizers":[]}}`, "")
+		Expect(err).To(HaveOccurred())
+		Expect(output).To(ContainSubstring("BMF may only remove its own finalizer"))
+
+		By("allowing the operator to remove its cleanup finalizer")
+		output, err = patchAs(operator, "NetworkAttachment", name, "merge",
+			fmt.Sprintf(`{"metadata":{"finalizers":[%q]}}`, bmfNetworkingFinalizer), "")
+		expectAllowed(output, err, "the operator's cleanup finalizer removal")
+
+		By("allowing BMF to remove its own finalizer after cleanup")
+		Eventually(func(g Gomega) {
+			current, getErr := getObject("NetworkAttachment", name)
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(current.GetFinalizers()).To(ConsistOf(bmfNetworkingFinalizer))
+		}, readyTimeout, time.Second).Should(Succeed())
+		output, err = patchAs(bmf, "NetworkAttachment", name, "merge",
+			`{"metadata":{"finalizers":[]}}`, "")
+		expectAllowed(output, err, "BMF removing its own finalizer after cleanup")
+		Eventually(func() (bool, error) { return objectAbsent("NetworkAttachment", name) }, readyTimeout, time.Second).
+			Should(BeTrue(), "the BMF finalizer removal must allow deletion to complete")
 	})
 
 	It("denies workload creates, updates and deletes to non-OSAC identities", func() {

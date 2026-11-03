@@ -621,6 +621,9 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
   ValidatingAdmissionPolicy (rendered by the Makefile into `OSAC_IT_ADMISSION_POLICY`)
   and checks it denies networking writes, OSAC finalizer removal and workload deletes
   to cluster-admin and an RBAC-authorized ServiceAccount, and admits the operator's.
+  It also verifies that BMF's root-resource patch permission can remove only its
+  own NetworkAttachment finalizer after the other finalizers complete; metadata
+  changes and removal of unrelated finalizers are denied.
   `networking_rbac_test.go` asks SubjectAccessReviews for the operator's networking
   permissions (NetworkAttachment, NetworkClass, the BareMetalInstance watch,
   registration ConfigMaps). The enabled path (`status.jobs`, AAP launches, results)

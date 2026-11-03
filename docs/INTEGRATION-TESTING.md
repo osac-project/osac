@@ -585,39 +585,30 @@ Touched-area requirements: [component guide](../bare-metal-fulfillment-operator/
 
 ### Test tiers and commands
 
-| Tier | Location / command | Exercises for real | Faked or omitted |
+| Tier | Location / command | Exercises | Test setup |
 |---|---|---|---|
-| Unit | Co-located `*_test.go`; `make test` | Allocation, lifecycle, client, and provider logic in isolation | Kubernetes and external provider APIs are mocked or intercepted. |
-| Envtest | Controller tests under `internal/controller/*_envtest_test.go`; run by `make test` | Kubernetes API server, etcd, OSAC CRDs, and static Metal3 CRDs | Metal3 controller, Ironic/BMC, hardware, and some provider clients are faked. |
-| Component integration | `test/integration/`; deploy the current operator into a Kind cluster, then run `make integration-tests` | Deployed operator behavior, CRDs, Kubernetes API, pool/instance flows, and status transitions | The suite creates static `BareMetalHost` state and simulates provider transitions; it does not run a real Metal3 operator, Ironic, BMC, or hardware. |
-| Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf` (from repository root) | The thin Kind deployment used by the PR workflow | Same static Metal3/provider boundary as the local suite. |
-| Contract | No dedicated contract suite; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) for qualifying provider-contract coverage | No real external provider boundary is exercised by the current suite | Static Metal3 CRDs, patched status, and simulated provider transitions do not exercise a real Metal3/Ironic/BMC contract. |
-| E2E | Cross-component OSAC E2E suites | Fulfillment-to-operator user journeys where the environment provides them | Real hardware and provider availability remain environment-dependent. |
+| Unit | Co-located `*_test.go`; run `make test` from `bare-metal-fulfillment-operator/`. | Inventory allocation, lifecycle helpers, client behavior, and provider mapping logic. | Provider responses and metadata are supplied by test fixtures. |
+| Envtest | Controller tests under `internal/controller/*_envtest_test.go`; run `make test` from `bare-metal-fulfillment-operator/`. | BMF reconciliation against a Kubernetes API server, etcd, and OSAC CRDs. | AAP jobs and provider power state are fixture-controlled. |
+| Component integration | `test/integration/`; deploy BMF to Kind, then run `make integration-tests` from `bare-metal-fulfillment-operator/`. | Installed operator behavior, CRDs, inventory assignment, instance teardown, and status transitions. | The suite creates BareMetalHost state and controls provider status through fixtures. |
+| Component integration (CI) | From the repository root run `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf`. | Installed BMF integration suite on the CI Kind deployment. | Kind API and operator are deployed; Metal3 power status is fixture-controlled. |
+| E2E | `tests/e2e/bmaas/sanity/test_baremetal_instance_lifecycle.py`; run with the configured OSAC lab. | Fulfillment-to-operator BareMetalInstance lifecycle. | The lab supplies the configured provider and bare-metal host. |
 
 ### Coverage notes
 
-- **Pure inventory, selection, validation, or client logic:** Cover success, no-match, and provider-error paths.
-- **Reconciliation, finalizers, allocation, or status transitions:** Use the public reconciler behavior and the appropriate CRD fixtures.
-- **Controller deployment, CRDs, pool flows, or Kubernetes wiring:** Envtest alone does not prove the deployed controller path.
-- **Metal3, BCM, Ironic, BMC, power, or hardware semantics:** Static CRDs and HTTP test doubles do not satisfy a real-boundary requirement.
-- **Generated CRDs or Helm CRDs:** Keep generated artifacts synchronized.
-- **BMaaS networking:**
-  - **Unit:** `bare-metal-fulfillment-operator/internal/inventory/network_ports_test.go` covers MAC parsing and normalization; run `go test ./internal/inventory` from `bare-metal-fulfillment-operator/`. The base-branch `buildSubnetMACMap` cases in `bare-metal-fulfillment-operator/internal/controller/baremetalinstance_ip_discovery_test.go` cover the legacy helper only. OSAC-6818 PR #2149 uses selected-MAC discovery instead; its inventory and controller tests cover that path.
-  - **Envtest:** `bare-metal-fulfillment-operator/internal/controller/baremetalinstance_networking_test.go`, `bare-metal-fulfillment-operator/internal/controller/baremetalinstance_ip_discovery_test.go`, `bare-metal-fulfillment-operator/internal/controller/baremetalinstance_repair_test.go`, `bare-metal-fulfillment-operator/internal/controller/baremetalinstance_metal3_envtest_test.go`, and `bare-metal-fulfillment-operator/internal/controller/baremetalinstance_bcm_envtest_test.go`; run `make test` from `bare-metal-fulfillment-operator/`. The API server/etcd are real; AAP and provider state use fixtures.
-  - **Fulfillment component tests:** `fulfillment-service/internal/servers/private_baremetal_instances_server_test.go` and `fulfillment-service/internal/controllers/baremetalinstance/baremetalinstance_reconciler_function_test.go`; run `go test ./internal/servers ./internal/controllers/baremetalinstance -timeout 20m` from `fulfillment-service/`. PostgreSQL is real; Kubernetes and provider state are fixtures.
-  - **ExternalIPAttachment unit coverage:** `osac-operator/internal/controller/externalipattachment_contract_test.go` and `fulfillment-service/internal/controllers/autoexternalipattachment/auto_external_ip_attachment_reconciler_function_test.go`. Run `make test` from `osac-operator/` and `ginkgo run -r internal/controllers/autoexternalipattachment` from `fulfillment-service/`. These tests use controller/client doubles and do not prove deployed routing.
-  - **Kind component integration (NET-CLEAN-08):** `bare-metal-fulfillment-operator/test/integration/networking_cleanup_test.go` exercises deployed BMF cleanup wiring. It verifies host selection by mapped fabric-port MAC, NetworkAttachment creation, handoff and DHCP-status progression, retention of host assignment while OSAC cleanup is held, and that BMF powers off the host and deletes the attachment before releasing it after a provider finalizer clears. Fixture-owned ExternalIP resources remain unchanged. From the OSAC monorepo root, run `make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac` to create the Kind environment, then `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf` to deploy BMF and run the integration suite. For a focused rerun on a ready cluster, run `make integration-tests` from `bare-metal-fulfillment-operator/`. The test patches NetworkAttachment readiness, DHCP lease, and Metal3 power status; it does not run AAP or a physical provider and does not prove a real port move, DHCP lease, or hardware cleanup.
-  - **Known gaps:** No current test path proves a real NetworkAttachment provider delete or deployed repair-mark lifecycle. Real provider-pair contract coverage belongs to [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); deployed BMaaS lifecycle evidence belongs to [OSAC-6820](https://redhat.atlassian.net/browse/OSAC-6820). The installer networking-values check is `make helm-networking-test` from `osac-installer/`; proto changes require `make -C proto generate` and `make -C proto lint`. Baseline BMI E2E is `tests/e2e/bmaas/sanity/test_baremetal_instance_lifecycle.py`; it does not cover the full accepted BMaaS networking delta. The full tier/owner matrix is the [OSAC-1437 test plan](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/testplan.md).
+- Inventory, selection, validation, and client logic use unit tests with provider-shaped responses.
+- Reconciliation, finalizers, allocation, and status transitions use Envtest with the public reconciler and OSAC CRDs.
+- Installed-controller behavior uses the Kind component-integration suite.
+- Provider and hardware semantics use a configured provider-backed test environment.
+- Keep generated CRDs and Helm CRDs synchronized with their source definitions.
 
-### Coverage gaps
+### BMaaS networking suites
 
-The current Kind suite deliberately stops at static Metal3 resources and
-simulated provider status. Work that changes the real Metal3/Ironic/BCM/BMC
-boundary must add the qualifying coverage under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) or its contract-test
-follow-up; extending the existing static-fixture suite alone is insufficient.
-Real Fabric Manager + hardware proof of the PR #357 BMaaS networking delta
-(port move, handoff reboot, MAC lease discovery, repair mark) is not provided
-by the BMF Kind suite; track it under [OSAC-6820](https://redhat.atlassian.net/browse/OSAC-6820).
+- **Inventory and controller tests:** `bare-metal-fulfillment-operator/internal/inventory` covers backend logical-port mappings; `bare-metal-fulfillment-operator/internal/controller/baremetalinstance_ip_discovery_test.go` covers subnet-to-MAC mapping and lease status. Run `make test` from `bare-metal-fulfillment-operator/`.
+- **Envtest:** `baremetalinstance_networking_test.go`, `baremetalinstance_ip_discovery_test.go`, `baremetalinstance_metal3_envtest_test.go`, and `baremetalinstance_bcm_envtest_test.go`; run `make test` from `bare-metal-fulfillment-operator/`. The API server, etcd, and OSAC CRDs are real; AAP jobs and provider power state use fixtures.
+- **Fulfillment component tests:** `fulfillment-service/internal/servers/private_baremetal_instances_server_test.go` and `fulfillment-service/internal/controllers/baremetalinstance/baremetalinstance_reconciler_function_test.go`; run `go test ./internal/servers ./internal/controllers/baremetalinstance -timeout 20m` from `fulfillment-service/`.
+- **ExternalIPAttachment tests:** `osac-operator/internal/controller/externalipattachment_contract_test.go` and `fulfillment-service/internal/controllers/autoexternalipattachment/auto_external_ip_attachment_reconciler_function_test.go`; run `make test` from `osac-operator/` and `ginkgo run -r internal/controllers/autoexternalipattachment` from `fulfillment-service/`.
+- **Kind component integration (NET-CLEAN-08):** `bare-metal-fulfillment-operator/test/integration/networking_cleanup_test.go` exercises installed BMF teardown and OSAC cleanup ownership. From the monorepo root run `make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac`, then `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf`. For a focused run on a ready cluster, use `make integration-tests` from `bare-metal-fulfillment-operator/`. The test patches Metal3 power status and releases the OSAC cleanup finalizer through its fixture.
+- **BMI lifecycle E2E:** `tests/e2e/bmaas/sanity/test_baremetal_instance_lifecycle.py` exercises the deployed fulfillment-to-operator flow in a configured BMaaS environment.
 
 ## osac-aap
 

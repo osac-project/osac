@@ -90,70 +90,47 @@ osac create baremetalinstance \
 
 ## Networking
 
-Bare-metal networking follows the accepted
-[BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md).
-Shared networking resources and gates are described in the
-[networking guide](networking-guide.md); this section covers only the
-BareMetalInstance lifecycle. Architecture summary:
-[Bare Metal Server Fulfillment](../../architecture/bm-server-fulfillment.md).
+BareMetalInstance network attachments use the shared Subnet and SecurityGroup
+resources described in the [networking guide](networking-guide.md). This section
+describes the BMF lifecycle. See the [Bare Metal Server Fulfillment
+architecture](../../architecture/bm-server-fulfillment.md) for the component
+flow.
 
-**Implementation status.** The OSAC-6818 implementation in
-[PR #2149](https://github.com/osac-project/osac/pull/2149) requires a valid
-inventory MAC for the selected interface, stores it in BMI status and the
-NetworkAttachment spec, and accepts DHCP leases only for that MAC. It does not
-use host-name lease matching as a fallback.
+**Attachment.** A BareMetalInstance accepts at most one tenant network
+attachment. Omit the attachment to use tenant defaults, or supply a partial
+selection. The resolved choice is fixed after creation. When several
+tenant-facing interfaces exist, select one with `interface`; otherwise the
+platform chooses a consistent default. The attachment provides the primary
+route.
 
-**Ownership.** BMF manages host inventory, OS provisioning and power,
-NetworkAttachment lifecycle, handoff, repair marks, and status mirroring. The
-configured `{{ aap_prefix }}-move-network-attachment` and
-`{{ aap_prefix }}-query-dhcp-lease` AAP job templates run the port-move and
-lease-query playbooks. The osac-operator NetworkAttachment controller starts
-these jobs during reconciliation; the selected Fabric Manager performs
-provider-side port, SecurityGroup, and DHCP operations.
+**Provisioning and address discovery.** BMF provisions the host on the
+provider-managed provisioning network. After provisioning, BMF starts the
+network job for the attachment, and the selected Fabric Manager moves the port
+to the tenant Subnet and applies policy. BMF coordinates the handoff through
+the management backend. If the host is powered on, BMF requests one reboot so
+the OS requests DHCP on the tenant network. If the host is already powered off,
+the next power-on boots it on that network. After handoff, BMF starts lease
+discovery and records the tenant address in network status.
 
-**Attachment.** A BareMetalInstance has at most one tenant network attachment.
-Omit the attachment to use the tenant's default Subnet and SecurityGroup, or
-supply a partial selection; the resolved choice is fixed after creation. When
-several tenant-facing interfaces exist, you may select the physical interface
-(`interface`); otherwise the platform picks a consistent default. System-only
-or unknown interfaces are rejected. The sole attachment is the host's primary
-route; there is no separate primary-network choice.
-
-**Create path (provider networking enabled).** The host is imaged on the
-provider provisioning network. After OS provisioning, BMF creates a
-NetworkAttachment; the configured `{{ aap_prefix }}-move-network-attachment`
-AAP job template runs the apply playbook, and the selected Fabric Manager moves
-the port to the Subnet segment and applies policy. BMF then coordinates the
-handoff through the management backend. Metal3 uses its hard handoff annotation;
-Ironic drives the host through off to on and explicitly powers it on if it is
-already off. BMF waits for confirmation and fails the handoff if it is not
-confirmed within 15 minutes of `NetworkAttachmentsReady=True`. After
-confirmation, the configured `{{ aap_prefix }}-query-dhcp-lease` AAP job
-template runs lease discovery for the selected MAC. After 10 minutes without a
-lease, BMF emits a `LeaseNotFound` warning while query retries continue; status
-carries the latest query result. A terminal query failure fails discovery. A
-provisioning-network address is never shown as the tenant address.
+Inventory can provide a mapping from logical port names to physical MAC
+addresses. BMF passes the resolved mapping to the lease-query job when
+available. The job uses a MAC match when the host is not registered as a named
+fabric server, and can use server-name matching when the mapping is absent or
+partial.
 
 **Automatic external access.** `--external-ip-attachment` (or the equivalent
 API field) requests an ExternalIP and ExternalIPAttachment for the server.
-Inbound access starts only after the tenant endpoint is ready and a real
-address is allocated. Automatic external resources are removed when the
-server is deleted.
+Inbound access starts after the tenant endpoint is ready and an address is
+allocated. Automatic external resources are removed when the server is
+deleted.
 
-**Delete and repair.** BMF returns the host to inventory only after
-tenant-network cleanup completes. The configured
-`{{ aap_prefix }}-move-network-attachment` job template runs the offboard
-playbook to return Fabric ports to the provisioning network. BMF writes a repair
-mark before release only when provider networking is enabled and a FabricDomain
-retains a `status.jobs` entry showing that its `create_fabric_domain` job started
-while `spec.servers` lists the host. If the mark cannot be persisted, BMF does
-not release the host. Selection skips marked hosts until a Cloud Provider Admin
-clears the mark (see the design support procedures).
+**Delete.** BMF waits for OSAC network cleanup before host teardown. It powers
+off the host while the tenant network is attached, runs the network cleanup job
+to return the port to the provisioning network, then deprovisions and releases
+the host to inventory.
 
-**Provider networking disabled.** Host provisioning and deprovisioning stay
-available on the provisioning network. OSAC does not move tenant interfaces,
-discover tenant addresses, or promise tenant routing or ExternalIP access.
-Server readiness then attests OS provisioning only.
+When the networking provider is not configured, BMF marks network provisioning
+and handoff as skipped.
 
 Example create with an explicit attachment and automatic external access:
 

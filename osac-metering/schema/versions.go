@@ -422,6 +422,66 @@ func checkCurrentPayload(versions []Version) error {
 	if err := compareShape(current.Version, "HeartbeatData", expected, current.Data); err != nil {
 		return err
 	}
+	if err := checkOlderVersions(versions, current); err != nil {
+		return err
+	}
+	return nil
+}
+
+// checkOlderVersions requires every field of an earlier version to still exist in the
+// current version with the same type. Versions are add-only: a record written under an
+// earlier version is decoded with the current payload shape, so dropping or retyping a
+// field would change the meaning of retained usage.
+func checkOlderVersions(versions []Version, current *Version) error {
+	for i := range versions {
+		older := &versions[i]
+		if older.Version == current.Version || older.EffectiveAt.After(current.EffectiveAt) {
+			continue
+		}
+		if err := checkSubset(older.Version, current.Version, "the CloudEvent envelope", older.Envelope, current.Envelope); err != nil {
+			return err
+		}
+		if err := checkSubset(older.Version, current.Version, "HeartbeatData", older.Data, current.Data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkSubset reports a field an earlier version published that the current version no
+// longer publishes with the same type. Extra fields in the current version are additions.
+func checkSubset(olderVersion, currentVersion, typeName string, older, current []Field) error {
+	byName := map[string]Field{}
+	for _, field := range current {
+		byName[field.Name] = field
+	}
+	for _, old := range older {
+		got, found := byName[old.Name]
+		if !found {
+			return fmt.Errorf(
+				"schema version %s drops field %q of %s that version %s still carries; "+
+					"versions are add-only, so add the next version file instead",
+				currentVersion, old.Name, typeName, olderVersion,
+			)
+		}
+		if got.Type != old.Type {
+			return fmt.Errorf(
+				"schema version %s changes field %q of %s from %s to %s; versions are add-only",
+				currentVersion, old.Name, typeName, old.Type, got.Type,
+			)
+		}
+		if got.Values != old.Values {
+			return fmt.Errorf(
+				"schema version %s changes field %q of %s from value type %q to %q; versions are add-only",
+				currentVersion, old.Name, typeName, old.Values, got.Values,
+			)
+		}
+		if len(old.Fields) > 0 || len(got.Fields) > 0 {
+			if err := checkSubset(olderVersion, currentVersion, typeName+"."+old.Name, old.Fields, got.Fields); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

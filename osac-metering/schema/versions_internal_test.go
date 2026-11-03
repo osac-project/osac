@@ -263,3 +263,64 @@ func TestVersionInEffectSelectsByRecordTime(t *testing.T) {
 		t.Fatalf("a record written at v2's effective time must select v2, got %s", selected.Version)
 	}
 }
+
+func TestCheckSubsetRejectsADroppedField(t *testing.T) {
+	older := []Field{{Name: "kept", Type: FieldTypeString}, {Name: "dropped", Type: FieldTypeString}}
+	current := []Field{{Name: "kept", Type: FieldTypeString}}
+	err := checkSubset("v1", "v2", "HeartbeatData", older, current)
+	if err == nil {
+		t.Fatal("dropping a field was accepted")
+	}
+	if !strings.Contains(err.Error(), `drops field "dropped"`) {
+		t.Fatalf("error = %v, want a dropped-field error", err)
+	}
+}
+
+func TestCheckSubsetRejectsARetypedField(t *testing.T) {
+	older := []Field{{Name: "quantity", Type: FieldTypeString}}
+	current := []Field{{Name: "quantity", Type: FieldTypeInteger}}
+	err := checkSubset("v1", "v2", "HeartbeatData", older, current)
+	if err == nil {
+		t.Fatal("changing a field type was accepted")
+	}
+	if !strings.Contains(err.Error(), "changes field") {
+		t.Fatalf("error = %v, want a type-change error", err)
+	}
+}
+
+func TestCheckSubsetRejectsADroppedNestedField(t *testing.T) {
+	older := []Field{{Name: "usage", Type: FieldTypeObject, Fields: []Field{
+		{Name: "from", Type: FieldTypeString},
+		{Name: "to", Type: FieldTypeString},
+	}}}
+	current := []Field{{Name: "usage", Type: FieldTypeObject, Fields: []Field{
+		{Name: "from", Type: FieldTypeString},
+	}}}
+	err := checkSubset("v1", "v2", "HeartbeatData", older, current)
+	if err == nil {
+		t.Fatal("dropping a nested field was accepted")
+	}
+	if !strings.Contains(err.Error(), `drops field "to"`) {
+		t.Fatalf("error = %v, want a nested dropped-field error", err)
+	}
+}
+
+func TestCheckSubsetRejectsAMapValueTypeChange(t *testing.T) {
+	older := []Field{{Name: "dimensions", Type: FieldTypeObject, Values: FieldTypeString}}
+	current := []Field{{Name: "dimensions", Type: FieldTypeObject, Values: FieldTypeInteger}}
+	err := checkSubset("v1", "v2", "HeartbeatData", older, current)
+	if err == nil {
+		t.Fatal("changing a map value type was accepted")
+	}
+	if !strings.Contains(err.Error(), "value type") {
+		t.Fatalf("error = %v, want a map value-type error", err)
+	}
+}
+
+func TestCheckSubsetAcceptsAnAddedField(t *testing.T) {
+	older := []Field{{Name: "kept", Type: FieldTypeString}}
+	current := []Field{{Name: "kept", Type: FieldTypeString}, {Name: "added", Type: FieldTypeString}}
+	if err := checkSubset("v1", "v2", "HeartbeatData", older, current); err != nil {
+		t.Fatalf("adding a field was rejected: %v", err)
+	}
+}

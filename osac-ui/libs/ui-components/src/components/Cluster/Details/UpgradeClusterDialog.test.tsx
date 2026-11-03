@@ -14,6 +14,7 @@ import {
 } from '@osac/types';
 
 import UpgradeClusterDialog from './UpgradeClusterDialog';
+import { useGetResource } from '../../../api/use-resource';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 const activeVersion = create(ClusterVersionSchema, {
@@ -63,6 +64,15 @@ const renderDialog = ({
 const selectTarget = async (user: ReturnType<typeof renderDialog>['user'], name: string) => {
   await user.click(screen.getByLabelText(/^Target version/));
   await user.click(screen.getByRole('option', { name }));
+};
+
+const ClusterObservation = () => {
+  const { data } = useGetResource(Clusters, { id: 'cluster-1' });
+  return (
+    <output aria-label="Refetched cluster version">
+      {data?.object?.status?.observedVersion || '—'}
+    </output>
+  );
 };
 
 describe('UpgradeClusterDialog', () => {
@@ -144,6 +154,57 @@ describe('UpgradeClusterDialog', () => {
       spec: { version: { id: 'version-4-18' } },
     });
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  });
+
+  it('refetches an active generic Cluster query after an accepted upgrade', async () => {
+    let getCalls = 0;
+    let updateCalls = 0;
+    let observedVersion = '4.17.0';
+    const onClose = vi.fn();
+    const transport = createRouterTransport((router) => {
+      router.service(Clusters, {
+        get: () => {
+          getCalls += 1;
+          return {
+            object: create(ClusterSchema, {
+              id: 'cluster-1',
+              status: { observedVersion },
+            }),
+          };
+        },
+        update: (request) => {
+          updateCalls += 1;
+          observedVersion = '4.18.0';
+          return { object: request.object };
+        },
+      });
+    });
+    const { user } = renderWithProviders(
+      <>
+        <ClusterObservation />
+        <UpgradeClusterDialog
+          clusterId="cluster-1"
+          currentVersion="4.17.0"
+          eligibleVersions={[activeVersion]}
+          onClose={onClose}
+        />
+      </>,
+      { transport },
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Refetched cluster version')).toHaveTextContent('4.17.0'),
+    );
+    expect(getCalls).toBe(1);
+    await selectTarget(user, '4.18.0');
+    await user.click(screen.getByRole('button', { name: /Upgrade cluster/ }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Refetched cluster version')).toHaveTextContent('4.18.0'),
+    );
+    expect(updateCalls).toBe(1);
+    expect(getCalls).toBe(2);
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('keeps an empty target list disabled', () => {

@@ -557,11 +557,10 @@ tests:
         - kafka.strimzi.io/v1/Kafka
         - metal3.io/v1alpha1/Provisioning
     set:
-      global.networking.fabricManager: cudn_net
       global.networking.k8sManager: ""
     asserts:
       - failedTemplate:
-          errorPattern: 'fabricManager=cudn_net requires expert ci.steps AAP with both instance groups'
+          errorPattern: 'global.networking.k8sManager is required when VMaaS is enabled'
       - failedTemplate:
           errorPattern: 'OSAC preflight'
         not: true

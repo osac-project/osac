@@ -1,0 +1,40 @@
+---
+# Classify a failed osac.templates.netris_external_ip run (registered as
+# _netris_eip). The module reports only a category, never a response body:
+#   exhausted       the pool has no free address: final
+#   foreign_object  the reservation belongs to another tenant, site or pool: final
+#   invalid_request the snapshots are not usable: final
+# Any other failure (transport, provider error, no convergence) is retryable:
+# it fails here and _rescue.yaml publishes it.
+- name: Stop on a full pool
+  vars:
+    netris_fail:
+      message: >-
+        Netris ExternalIPPool {{ netris_in.external_ip_pool_id }} is full: no free
+        address is left for the ExternalIP. OSAC does not retry.
+      retryable: false
+  when: _netris_eip is failed and (_netris_eip.msg | default('')) is search('\(exhausted(, HTTP \d+)?\)')
+  ansible.builtin.include_tasks: _fail.yaml
+
+- name: Stop on a reservation that is not ours
+  vars:
+    netris_fail:
+      message: >-
+        The Netris IPAM subnet of the ExternalIP {{ netris_in.resource_id }} belongs to
+        another tenant, site or pool; refusing to use it. OSAC does not retry.
+      retryable: false
+  when: _netris_eip is failed and (_netris_eip.msg | default('')) is search('\(foreign_object(, HTTP \d+)?\)')
+  ansible.builtin.include_tasks: _fail.yaml
+
+- name: Stop on an unusable ExternalIP or pool
+  vars:
+    netris_fail:
+      message: "Netris invalid task input: the ExternalIP or its pool snapshot is not usable. OSAC does not retry."
+      retryable: false
+  when: _netris_eip is failed and (_netris_eip.msg | default('')) is search('\(invalid_request(, HTTP \d+)?\)')
+  ansible.builtin.include_tasks: _fail.yaml
+
+- name: Stop on any other failure
+  when: _netris_eip is failed
+  ansible.builtin.fail:
+    msg: "{{ _netris_eip.msg | default('the ExternalIP module failed') }}"

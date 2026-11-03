@@ -1,0 +1,214 @@
+---
+# Config-as-code AAP job templates of the networking contract (DECISIONS:
+# "Interfaces fixed by the AAP side"; contract §4.3, TC-INVOKE-01):
+#   - 21 networking templates <prefix>-<task with dashes>, one per Fabric task,
+#     each running playbook_osac_network_task.yml in the networking-operations
+#     instance group, with ask_labels_on_launch and a 3600 s timeout;
+#   - no other template runs the generic playbook and no backend-specific
+#     networking template remains;
+#   - the networking templates run outside every workflow;
+#   - the role's own launch-policy guard accepts the shipped templates and
+#     rejects a networking template that drops ask_labels_on_launch.
+# Renders vars/controller.yml with a test prefix; no AAP controller is involved.
+- name: Config-as-code networking job templates
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_prefix: osac-it
+    aap_organization_name: osac-it-org
+    aap_project_name: osac-it-project
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    aap_ee_image_pull: missing
+    osac_publish_templates_enabled: false
+    cac_role_dir: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap
+    cac_fabric_tasks:
+      - create_virtual_network
+      - delete_virtual_network
+      - create_subnet
+      - delete_subnet
+      - create_security_group
+      - delete_security_group
+      - apply_network_attachment
+      - delete_network_attachment
+      - query_dhcp_lease
+      - create_external_ip_pool
+      - delete_external_ip_pool
+      - create_external_ip
+      - delete_external_ip
+      - attach_external_ip
+      - detach_external_ip
+      - create_nat_gateway
+      - delete_nat_gateway
+      - create_fabric_domain
+      - delete_fabric_domain
+      - reserve_cluster_ingress_ip
+      - release_cluster_ingress_ip
+    cac_generic_playbook: osac-aap/playbook_osac_network_task.yml
+
+  tasks:
+    - name: Load the config-as-code controller definitions
+      ansible.builtin.include_vars:
+        file: "{{ cac_role_dir }}/vars/controller.yml"
+
+    - name: Index the job templates
+      ansible.builtin.set_fact:
+        cac_templates: "{{ controller_templates | map(attribute='name') | unique | list }}"
+        cac_by_name: "{{ dict(controller_templates | map(attribute='name') | zip(controller_templates)) }}"
+        cac_expected_network_names: >-
+          {{ cac_fabric_tasks | map('replace', '_', '-') | map('regex_replace', '^', aap_prefix ~ '-') | list }}
+        cac_generic_templates: >-
+          {{ controller_templates | selectattr('playbook', 'equalto', cac_generic_playbook) | list }}
+
+    - name: Show the networking job templates
+      ansible.builtin.debug:
+        msg: "{{ cac_generic_templates | map(attribute='name') | list }}"
+
+    - name: Check template names are unique
+      ansible.builtin.assert:
+        that: cac_templates | length == controller_templates | length
+        fail_msg: >-
+          controller_templates has duplicate names:
+          {{ controller_templates | map(attribute='name') | list }}
+
+    - name: Check there is one networking template per Fabric task
+      ansible.builtin.assert:
+        that:
+          - cac_generic_templates | length == 21
+          - cac_generic_templates | map(attribute='name') | sort == cac_expected_network_names | sort
+        fail_msg: >-
+          The templates running {{ cac_generic_playbook }} are
+          {{ cac_generic_templates | map(attribute='name') | sort }};
+          missing {{ cac_expected_network_names | difference(cac_generic_templates | map(attribute='name')) }},
+          unexpected {{ cac_generic_templates | map(attribute='name') | difference(cac_expected_network_names) }}
+
+    - name: Check every expected networking template exists and runs the generic playbook
+      ansible.builtin.assert:
+        that:
+          - item in cac_by_name
+          - cac_by_name[item].playbook | default('') == cac_generic_playbook
+        fail_msg: >-
+          Job template {{ item }} must exist and run {{ cac_generic_playbook }};
+          found playbook {{ (cac_by_name[item] | default({})).playbook | default('<no template>') }}
+        quiet: true
+      loop: "{{ cac_expected_network_names }}"
+
+    - name: Check each networking template's launch settings
+      ansible.builtin.assert:
+        that:
+          - item.ask_labels_on_launch | default(false) is true
+          - item.timeout | default(0) | int == 3600
+          - item.ask_variables_on_launch | default(false) is true
+          - item.allow_simultaneous | default(false) is true
+          - item.prevent_instance_group_fallback | default(false) is true
+          - item.instance_groups | default([]) == [aap_prefix ~ '-networking-operations-ig']
+          - item.inventory | default('') == aap_prefix ~ '-networking-operations'
+          - item.execution_environment | default('') == aap_prefix ~ '-ee'
+          - item.project | default('') == aap_prefix
+          - item.job_type | default('') == 'run'
+          - item.extra_vars is not defined
+          - item.survey_enabled | default(false) is false
+        fail_msg: >-
+          Networking template {{ item.name }} must prompt for labels and variables, time out after 3600 s,
+          run in {{ aap_prefix }}-networking-operations-ig without fallback, and carry no extra_vars or survey;
+          got ask_labels_on_launch={{ item.ask_labels_on_launch | default('unset') }}
+          timeout={{ item.timeout | default('unset') }}
+          ask_variables_on_launch={{ item.ask_variables_on_launch | default('unset') }}
+          allow_simultaneous={{ item.allow_simultaneous | default('unset') }}
+          prevent_instance_group_fallback={{ item.prevent_instance_group_fallback | default('unset') }}
+          instance_groups={{ item.instance_groups | default('unset') }}
+          inventory={{ item.inventory | default('unset') }}
+          execution_environment={{ item.execution_environment | default('unset') }}
+          extra_vars={{ item.extra_vars | default('unset') }}
+          survey_enabled={{ item.survey_enabled | default('unset') }}
+        quiet: true
+      loop: "{{ cac_generic_templates }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Check no other template uses the networking instance group
+      ansible.builtin.assert:
+        that: >-
+          item.instance_groups | default([]) | select('search', 'networking-operations-ig') | list | length == 0
+          or item.playbook == cac_generic_playbook
+        fail_msg: >-
+          Job template {{ item.name }} runs {{ item.playbook }} in the networking-operations instance group;
+          only the generic networking templates may
+        quiet: true
+      loop: "{{ controller_templates }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Check no backend-specific networking template or playbook remains
+      ansible.builtin.assert:
+        that:
+          - item.name is not search('netris|agentless|metallb|cudn')
+          - item.playbook is not search('netris|agentless|metallb|cudn|network_(subnet|virtual|security|attachment)')
+        fail_msg: "Job template {{ item.name }} (playbook {{ item.playbook }}) is a backend-specific networking template"
+        quiet: true
+      loop: "{{ controller_templates }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Collect the job templates the workflows run
+      ansible.builtin.set_fact:
+        cac_workflow_nodes: >-
+          {{ controller_workflows | map(attribute='workflow_nodes') | flatten
+             | map(attribute='unified_job_template') | map(attribute='name') | list }}
+
+    - name: Show the workflow nodes
+      ansible.builtin.debug:
+        msg: "{{ controller_workflows | map(attribute='name') | list }} run {{ cac_workflow_nodes }}"
+
+    - name: Check the networking templates run outside every workflow
+      ansible.builtin.assert:
+        that: item not in cac_workflow_nodes
+        fail_msg: >-
+          Job template {{ item }} is a workflow node ({{ cac_workflow_nodes }}); the operator launches it
+          directly with its own job label
+        quiet: true
+      loop: "{{ cac_expected_network_names }}"
+
+    - name: Check every workflow node is a defined job template
+      ansible.builtin.assert:
+        that: item in cac_by_name
+        fail_msg: "Workflow node {{ item }} names no job template in controller_templates"
+        quiet: true
+      loop: "{{ cac_workflow_nodes }}"
+
+    - name: Run the role's launch-policy guard on the shipped templates
+      ansible.builtin.include_tasks: "{{ cac_role_dir }}/tasks/validate_launch_policy.yml"
+
+    - name: Check the launch-policy guard rejects a networking template without launch labels
+      block:
+        - name: Drop ask_labels_on_launch from the create-subnet template
+          ansible.builtin.set_fact:
+            controller_templates: >-
+              {{ controller_templates | rejectattr('name', 'equalto', aap_prefix ~ '-create-subnet') | list
+                 + [cac_by_name[aap_prefix ~ '-create-subnet'] | combine({'ask_labels_on_launch': false})] }}
+
+        - name: Run the launch-policy guard on the broken template
+          ansible.builtin.include_tasks: "{{ cac_role_dir }}/tasks/validate_launch_policy.yml"
+
+        - name: Fail because the guard accepted the broken template
+          ansible.builtin.set_fact:
+            cac_guard_accepted_broken: true
+      rescue:
+        - name: Check the networking-template guard is what failed
+          ansible.builtin.assert:
+            that: ansible_failed_task.name is search('Validate networking job templates')
+            fail_msg: >-
+              Expected validate_launch_policy.yml to reject {{ aap_prefix }}-create-subnet, but
+              '{{ ansible_failed_task.name }}' failed: {{ ansible_failed_result.msg | default(ansible_failed_result) }}
+
+        - name: Record the expected guard failure
+          ansible.builtin.debug:
+            msg: "The launch-policy guard rejected {{ aap_prefix }}-create-subnet without ask_labels_on_launch, as expected"
+
+    - name: Check the guard did not accept the broken template
+      ansible.builtin.assert:
+        that: not (cac_guard_accepted_broken | default(false))
+        fail_msg: >-
+          validate_launch_policy.yml accepted {{ aap_prefix }}-create-subnet with ask_labels_on_launch=false;
+          it must reject networking templates without launch labels

@@ -32,11 +32,28 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+func equalComputeInstanceDiskStatus(actual, expected *privatev1.ComputeInstanceStatus) bool {
+	actualDiskStatus := privatev1.ComputeInstanceStatus_builder{
+		Volumes:            actual.GetVolumes(),
+		VolumeRegistration: actual.GetVolumeRegistration(),
+	}.Build()
+	expectedDiskStatus := privatev1.ComputeInstanceStatus_builder{
+		Volumes:            expected.GetVolumes(),
+		VolumeRegistration: expected.GetVolumeRegistration(),
+	}.Build()
+	return proto.Equal(actualDiskStatus, expectedDiskStatus)
+}
+
 var _ = Describe("Private compute instances server", func() {
+	BeforeEach(func() {
+		seedReadyDefaultNetworking(testTenant, 0)
+	})
+
 	var defaultTestNetworkClass *privatev1.NetworkClass
 
 	BeforeEach(func() {
@@ -46,10 +63,11 @@ var _ = Describe("Private compute instances server", func() {
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
+		_ = networkClassesDao
 		fabricManager := "test-strategy"
 		k8sManager := "test-k8s-manager"
-		class, err := networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
-			FabricManager: &fabricManager,
+		class, err := reuseNetworkClassDAO.Create().SetObject(privatev1.NetworkClass_builder{
+			FabricManager: fabricManager,
 			K8SManager:    &k8sManager,
 			Metadata:      privatev1.Metadata_builder{Name: "test-network-class", Tenant: testTenant}.Build(),
 			Status: privatev1.NetworkClassStatus_builder{
@@ -74,9 +92,7 @@ var _ = Describe("Private compute instances server", func() {
 				Tenant: testTenant,
 				Labels: map[string]string{defaultLabel: "true"},
 			}.Build(),
-			Spec: privatev1.VirtualNetworkSpec_builder{
-				NetworkClass: privatev1.NetworkClassReference_builder{Id: defaultTestNetworkClass.GetId()}.Build(),
-			}.Build(),
+			Spec: privatev1.VirtualNetworkSpec_builder{}.Build(),
 		}.Build()
 
 		_, err = vnDao.Create().SetObject(vn).Do(ctx)
@@ -177,8 +193,7 @@ var _ = Describe("Private compute instances server", func() {
 				Labels: labels,
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
-				Ipv4Cidr:     new("10.0.0.0/16"),
-				NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassID}.Build(),
+				Ipv4Cidr: new("10.0.0.0/16"),
 			}.Build(),
 			Status: privatev1.VirtualNetworkStatus_builder{
 				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
@@ -201,12 +216,14 @@ var _ = Describe("Private compute instances server", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		labels := map[string]string{}
+		name := fmt.Sprintf("test-sn-%d", subnetNameSeq)
 		if len(isDefault) > 0 && isDefault[0] {
 			labels[defaultLabel] = "true"
+			name = defaultSubnetName
 		}
 		subnet := privatev1.Subnet_builder{
 			Metadata: privatev1.Metadata_builder{
-				Name:   fmt.Sprintf("test-sn-%d", subnetNameSeq),
+				Name:   name,
 				Tenant: testTenant,
 				Labels: labels,
 			}.Build(),
@@ -419,6 +436,38 @@ var _ = Describe("Private compute instances server", func() {
 
 			_, err = templatesDao.Create().SetObject(template).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+		}
+
+		createComputeInstanceWithStatus := func(name string, status *privatev1.ComputeInstanceStatus,
+			additionalDisks ...*privatev1.ComputeInstanceDisk) *privatev1.ComputeInstance {
+			templateID := name + "-template"
+			createTemplate(templateID)
+			spec := privatev1.ComputeInstanceSpec_builder{
+				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+				NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+					privatev1.ComputeNetworkAttachment_builder{
+						Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+					}.Build(),
+				},
+			}.Build()
+			if len(additionalDisks) > 0 {
+				spec.SetAdditionalDisks(privatev1.ComputeInstanceDiskList_builder{Items: additionalDisks}.Build())
+			}
+			response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+					Spec:     spec,
+					Status:   status,
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+		additionalDisk := func() *privatev1.ComputeInstanceDisk {
+			return privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     proto.Int32(20),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
+			}.Build()
 		}
 
 		createUserDataSecret := func() *privatev1.Secret {
@@ -739,6 +788,434 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(object.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
 		})
 
+		It("preserves the latest status from the locked row for public-view updates", func() {
+			createTemplate("locked-status-update-template")
+			createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: "locked-status-update"}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "locked-status-update-template"}.Build(),
+						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+							privatev1.ComputeNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+					Status: privatev1.ComputeInstanceStatus_builder{
+						Volumes: []*privatev1.ComputeInstanceVolume{
+							privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-before"}.Build(),
+						},
+						VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+							privatev1.ComputeInstanceVolumeRegistration_builder{
+								DiskKey: "boot",
+								State:   privatev1.ComputeInstanceVolumeRegistration_STATE_NEVER_ATTEMPTED,
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+			_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: id,
+					Metadata: privatev1.Metadata_builder{
+						Version:    createResponse.GetObject().GetMetadata().GetVersion(),
+						Finalizers: []string{finalizers.Controller},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
+				Lock:       true,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			staleResponse, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			staleCandidate := proto.Clone(staleResponse.GetObject()).(*privatev1.ComputeInstance)
+
+			latestStatus := privatev1.ComputeInstanceStatus_builder{
+				Volumes: []*privatev1.ComputeInstanceVolume{
+					privatev1.ComputeInstanceVolume_builder{
+						DiskKey:  "boot",
+						VolumeId: "volume-after-0123456789abcdef-0123456789abcdef0123456789abcdef",
+					}.Build(),
+				},
+				VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+					privatev1.ComputeInstanceVolumeRegistration_builder{
+						DiskKey: "boot",
+						State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+					}.Build(),
+				},
+			}.Build()
+			_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{Id: id, Status: latestStatus}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"status.volumes", "status.volume_registration"},
+				},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			staleCandidate.GetSpec().SetRestartRequestedAt(timestamppb.Now())
+			updateResponse, err := server.Update(withPublicAPIView(ctx), privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: staleCandidate,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetStatus().GetVolumes()[0].GetVolumeId()).To(
+				Equal("volume-after-0123456789abcdef-0123456789abcdef0123456789abcdef"))
+			Expect(updateResponse.GetObject().GetStatus().GetVolumeRegistration()[0].GetState()).To(
+				Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
+
+			restartedServer, err := NewPrivateComputeInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			persisted, err := restartedServer.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persisted.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+			Expect(persisted.GetObject().GetStatus().GetVolumes()[0].GetVolumeId()).To(
+				Equal("volume-after-0123456789abcdef-0123456789abcdef0123456789abcdef"))
+			Expect(persisted.GetObject().GetStatus().GetVolumeRegistration()[0].GetState()).To(
+				Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
+			Expect(persisted.GetObject().GetSpec().GetTemplate().GetId()).To(Equal("locked-status-update-template"))
+		})
+
+		DescribeTable("round-trips empty, partial, and complete disk correlation lists",
+			func(volumes []*privatev1.ComputeInstanceVolume, registrations []*privatev1.ComputeInstanceVolumeRegistration,
+				additionalDiskCount int) {
+				additionalDisks := make([]*privatev1.ComputeInstanceDisk, 0, additionalDiskCount)
+				for range additionalDiskCount {
+					additionalDisks = append(additionalDisks, additionalDisk())
+				}
+				created := createComputeInstanceWithStatus("disk-correlation-roundtrip", privatev1.ComputeInstanceStatus_builder{
+					Volumes:            volumes,
+					VolumeRegistration: registrations,
+				}.Build(), additionalDisks...)
+
+				computeInstancesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				persisted, err := computeInstancesDao.Get().SetId(created.GetId()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(equalComputeInstanceDiskStatus(
+					persisted.GetObject().GetStatus(),
+					privatev1.ComputeInstanceStatus_builder{
+						Volumes:            volumes,
+						VolumeRegistration: registrations,
+					}.Build(),
+				)).To(BeTrue())
+			},
+			Entry("zero pairs", []*privatev1.ComputeInstanceVolume(nil), []*privatev1.ComputeInstanceVolumeRegistration(nil), 0),
+			Entry("partial pairs", []*privatev1.ComputeInstanceVolume{
+				privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-boot"}.Build(),
+			}, []*privatev1.ComputeInstanceVolumeRegistration{
+				privatev1.ComputeInstanceVolumeRegistration_builder{
+					DiskKey: "boot",
+					State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+				}.Build(),
+				privatev1.ComputeInstanceVolumeRegistration_builder{
+					DiskKey: "disk-1",
+					State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+				}.Build(),
+			}, 1),
+			Entry("complete pairs", []*privatev1.ComputeInstanceVolume{
+				privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-boot"}.Build(),
+				privatev1.ComputeInstanceVolume_builder{DiskKey: "disk-1", VolumeId: "volume-disk-1"}.Build(),
+				privatev1.ComputeInstanceVolume_builder{DiskKey: "disk-2", VolumeId: "volume-disk-2"}.Build(),
+			}, []*privatev1.ComputeInstanceVolumeRegistration{
+				privatev1.ComputeInstanceVolumeRegistration_builder{
+					DiskKey: "boot",
+					State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+				}.Build(),
+				privatev1.ComputeInstanceVolumeRegistration_builder{
+					DiskKey: "disk-1",
+					State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+				}.Build(),
+				privatev1.ComputeInstanceVolumeRegistration_builder{
+					DiskKey: "disk-2",
+					State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+				}.Build(),
+			}, 2),
+		)
+
+		DescribeTable("persists each explicit disk registration outcome",
+			func(state privatev1.ComputeInstanceVolumeRegistration_State, hasVolumeID bool) {
+				status := privatev1.ComputeInstanceStatus_builder{
+					VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+						privatev1.ComputeInstanceVolumeRegistration_builder{DiskKey: "boot", State: state}.Build(),
+					},
+				}.Build()
+				if hasVolumeID {
+					status.SetVolumes([]*privatev1.ComputeInstanceVolume{
+						privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-boot"}.Build(),
+					})
+				}
+
+				created := createComputeInstanceWithStatus("disk-registration-outcome", nil)
+				_, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object:     privatev1.ComputeInstance_builder{Id: created.GetId(), Status: status}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.volumes", "status.volume_registration"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				persisted, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(equalComputeInstanceDiskStatus(persisted.GetObject().GetStatus(), status)).To(BeTrue())
+			},
+			Entry("never attempted", privatev1.ComputeInstanceVolumeRegistration_STATE_NEVER_ATTEMPTED, false),
+			Entry("confirmed non-committed failure", privatev1.ComputeInstanceVolumeRegistration_STATE_NON_COMMITTED_FAILURE, false),
+			Entry("unknown", privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN, false),
+			Entry("resolved", privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED, true),
+		)
+
+		It("commits a resolved disk ID and registration outcome in one update", func() {
+			created := createComputeInstanceWithStatus("disk-registration-atomic", nil)
+			updateStatus := privatev1.ComputeInstanceStatus_builder{
+				Volumes: []*privatev1.ComputeInstanceVolume{
+					privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-atomic"}.Build(),
+				},
+				VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+					privatev1.ComputeInstanceVolumeRegistration_builder{
+						DiskKey: "boot",
+						State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+					}.Build(),
+				},
+			}.Build()
+			_, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object:     privatev1.ComputeInstance_builder{Id: created.GetId(), Status: updateStatus}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.volumes", "status.volume_registration"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(suiteTx.End(ctx)).To(Succeed())
+			suiteTx = nil
+			verifyTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			verifyCtx := database.TxIntoContext(context.Background(), verifyTx)
+			DeferCleanup(func() {
+				Expect(verifyTx.End(verifyCtx)).To(Succeed())
+			})
+
+			computeInstancesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			persisted, err := computeInstancesDao.Get().SetId(created.GetId()).Do(verifyCtx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(equalComputeInstanceDiskStatus(persisted.GetObject().GetStatus(), updateStatus)).To(BeTrue())
+		})
+
+		It("allows only one attempted disk claim for a persisted object version", func() {
+			created := createComputeInstanceWithStatus("single-disk-registration-claim", nil)
+			Expect(suiteTx.End(ctx)).To(Succeed())
+			suiteTx = nil
+
+			versionTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			versionCtx := database.TxIntoContext(context.Background(), versionTx)
+			current, err := server.Get(versionCtx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			staleVersion := current.GetObject().GetMetadata().GetVersion()
+			Expect(versionTx.End(context.Background())).To(Succeed())
+
+			staleClaim := privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: created.GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Version: staleVersion,
+					}.Build(),
+					Status: privatev1.ComputeInstanceStatus_builder{
+						VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+							privatev1.ComputeInstanceVolumeRegistration_builder{
+								DiskKey: "boot",
+								State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+							}.Build(),
+						},
+						Conditions: []*privatev1.ComputeInstanceCondition{
+							privatev1.ComputeInstanceCondition_builder{
+								Type:    privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
+								Status:  privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+								Reason:  proto.String("VolumeRegistrationPending"),
+								Message: proto.String("Disk Volume IDs persisted: 0/1; blocked disks: boot; recovery pending."),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.volume_registration", "status.conditions"}},
+				Lock:       true,
+			}.Build()
+
+			firstTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			firstCtx := database.TxIntoContext(context.Background(), firstTx)
+			_, err = server.Update(firstCtx, staleClaim)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(firstTx.End(context.Background())).To(Succeed())
+
+			secondTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			secondCtx := database.TxIntoContext(context.Background(), secondTx)
+			_, err = server.Update(secondCtx, staleClaim)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Aborted))
+			Expect(secondTx.End(context.Background())).To(Succeed())
+
+			verifyTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			verifyCtx := database.TxIntoContext(context.Background(), verifyTx)
+			DeferCleanup(func() {
+				Expect(verifyTx.End(verifyCtx)).To(Succeed())
+			})
+			persisted, err := server.Get(verifyCtx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(equalComputeInstanceDiskStatus(
+				persisted.GetObject().GetStatus(),
+				privatev1.ComputeInstanceStatus_builder{
+					VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+						privatev1.ComputeInstanceVolumeRegistration_builder{
+							DiskKey: "boot",
+							State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+						}.Build(),
+					},
+				}.Build(),
+			)).To(BeTrue())
+			Expect(persisted.GetObject().GetStatus().GetConditions()).To(ContainElement(WithTransform(
+				func(condition *privatev1.ComputeInstanceCondition) string { return condition.GetReason() },
+				Equal("VolumeRegistrationPending"))))
+		})
+
+		It("preserves both disk status lists across concurrent masked status updates", func() {
+			created := createComputeInstanceWithStatus("concurrent-disk-status", nil)
+			Expect(suiteTx.End(ctx)).To(Succeed())
+			suiteTx = nil
+
+			firstTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			firstCtx := database.TxIntoContext(context.Background(), firstTx)
+			var secondTx database.Tx
+			var updateDone chan error
+			DeferCleanup(func() {
+				if firstTx != nil {
+					Expect(firstTx.End(context.Background())).To(Succeed())
+					firstTx = nil
+				}
+				if updateDone != nil {
+					select {
+					case <-updateDone:
+					case <-time.After(10 * time.Second):
+					}
+				}
+				if secondTx != nil {
+					Expect(secondTx.End(context.Background())).To(Succeed())
+					secondTx = nil
+				}
+			})
+
+			latestDiskStatus := privatev1.ComputeInstanceStatus_builder{
+				Volumes: []*privatev1.ComputeInstanceVolume{
+					privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-concurrent"}.Build(),
+				},
+				VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+					privatev1.ComputeInstanceVolumeRegistration_builder{
+						DiskKey: "boot",
+						State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+					}.Build(),
+				},
+			}.Build()
+			_, err = server.Update(firstCtx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object:     privatev1.ComputeInstance_builder{Id: created.GetId(), Status: latestDiskStatus}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.volumes", "status.volume_registration"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			secondTx, err = tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			secondCtx, cancel := context.WithTimeout(database.TxIntoContext(context.Background(), secondTx), 10*time.Second)
+			defer cancel()
+			updateDone = make(chan error, 1)
+			go func() {
+				_, updateErr := server.Update(secondCtx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: created.GetId(),
+						Status: privatev1.ComputeInstanceStatus_builder{
+							State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+							StateTransitionTime: timestamppb.New(time.Now().Add(time.Minute)),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.state_transition_time"}},
+				}.Build())
+				updateDone <- updateErr
+			}()
+
+			Eventually(func() (bool, error) {
+				var waiting bool
+				err := testPool.QueryRow(context.Background(), `
+					select exists (
+						select 1
+						from pg_stat_activity
+						where datname = current_database()
+						  and pid <> pg_backend_pid()
+						  and state = 'active'
+						  and wait_event_type = 'Lock'
+						  and cardinality(pg_blocking_pids(pid)) > 0
+						  and query ilike '%compute_instances%'
+					)
+				`).Scan(&waiting)
+				return waiting, err
+			}, 5*time.Second, 10*time.Millisecond).Should(BeTrue())
+
+			Expect(firstTx.End(context.Background())).To(Succeed())
+			firstTx = nil
+			Expect(<-updateDone).To(Succeed())
+			updateDone = nil
+			Expect(secondTx.End(context.Background())).To(Succeed())
+			secondTx = nil
+
+			verifyTx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			verifyCtx := database.TxIntoContext(context.Background(), verifyTx)
+			DeferCleanup(func() {
+				Expect(verifyTx.End(verifyCtx)).To(Succeed())
+			})
+			persisted, err := server.Get(verifyCtx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persisted.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+			Expect(equalComputeInstanceDiskStatus(persisted.GetObject().GetStatus(), latestDiskStatus)).To(BeTrue())
+		})
+
+		It("reads legacy status JSON without disk registration fields", func() {
+			created := createComputeInstanceWithStatus("legacy-disk-status", privatev1.ComputeInstanceStatus_builder{
+				Volumes: []*privatev1.ComputeInstanceVolume{
+					privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "old-volume"}.Build(),
+				},
+				VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+					privatev1.ComputeInstanceVolumeRegistration_builder{
+						DiskKey: "boot",
+						State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+					}.Build(),
+				},
+			}.Build())
+			tx, err := database.TxFromContext(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tx.Exec(ctx, `
+				update compute_instances
+				set data = jsonb_set(
+					data,
+					'{status}',
+					coalesce(data->'status', '{}'::jsonb) - 'volumes' - 'volume_registration'
+				)
+				where id = $1`, created.GetId())
+			Expect(err).ToNot(HaveOccurred())
+
+			persisted, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persisted.GetObject().GetStatus().GetVolumes()).To(BeEmpty())
+			Expect(persisted.GetObject().GetStatus().GetVolumeRegistration()).To(BeEmpty())
+		})
+
 		It("Deletes object", func() {
 			// Create a template first
 			createTemplate("general.small")
@@ -1044,30 +1521,6 @@ var _ = Describe("Private compute instances server", func() {
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			Expect(response).To(BeNil())
-		})
-
-		It("Rejects materialized catalog networks from a different project", func() {
-			createTemplate("catalog-network-template")
-			projectsDAO, err := dao.NewGenericDAO[*privatev1.Project]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
-			Expect(err).ToNot(HaveOccurred())
-			_, err = projectsDAO.Create().SetObject(privatev1.Project_builder{Metadata: privatev1.Metadata_builder{Name: "destination", Tenant: testTenant}.Build()}.Build()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			catalogs, err := NewPrivateComputeInstanceCatalogItemsServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
-			Expect(err).ToNot(HaveOccurred())
-			item, err := catalogs.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: privatev1.ComputeInstanceCatalogItem_builder{
-				Metadata: privatev1.Metadata_builder{Name: "network-offering"}.Build(), Title: "Network offering", Published: true,
-				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "catalog-network-template"}.Build(),
-				Fields: privatev1.ComputeInstanceCatalogItemFields_builder{NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
-					Locked: privatev1.ComputeNetworkAttachmentList_builder{Items: []*privatev1.ComputeNetworkAttachment{privatev1.ComputeNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build()}.Build()}}.Build(),
-				}.Build()}.Build(),
-			}.Build()}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			_, err = server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{Object: privatev1.ComputeInstance_builder{
-				Metadata: privatev1.Metadata_builder{Name: "different-project-vm", Project: "destination"}.Build(),
-				Spec:     privatev1.ComputeInstanceSpec_builder{CatalogItem: privatev1.ComputeInstanceCatalogItemReference_builder{Id: item.GetObject().GetId()}.Build()}.Build(),
-			}.Build()}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("subnet"))
 		})
 
 		DescribeTable("validates final storage tiers for direct-template creation", func(state string, additional, inherited bool, expected grpccodes.Code) {
@@ -1958,6 +2411,10 @@ var _ = Describe("Private compute instances server", func() {
 	})
 
 	Describe("Network validation", func() {
+		BeforeEach(func() {
+			clearSeededDefaultNetworking(testTenant)
+		})
+
 		var (
 			server         *PrivateComputeInstancesServer
 			template       *privatev1.ComputeInstanceTemplate
@@ -2137,7 +2594,7 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(ContainSubstring("network_attachments"))
-				Expect(status.Message()).To(ContainSubstring("default subnet is required"))
+				Expect(status.Message()).To(ContainSubstring("has no default Subnet"))
 				_, getErr := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: instanceID}.Build())
 				Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
 			})
@@ -2151,7 +2608,7 @@ var _ = Describe("Private compute instances server", func() {
 
 				defaultSubnet := privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name:   "test-default-subnet",
+						Name:   defaultSubnetName,
 						Tenant: testTenant,
 						Labels: map[string]string{
 							"osac.openshift.io/default": "true",
@@ -2235,6 +2692,7 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				attachment := response.GetObject().GetSpec().GetNetworkAttachments()[0]
 				Expect(attachment.GetSubnet().GetId()).To(Equal(defaultSubnet.GetId()))
+				Expect(attachment.GetSubnet().GetName()).To(Equal(defaultSubnet.GetMetadata().GetName()))
 				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
 				Expect(attachment.GetSecurityGroups()[0].GetId()).ToNot(BeEmpty())
 			})
@@ -2287,7 +2745,7 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(err).To(HaveOccurred())
 				Expect(response).To(BeNil())
 				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("default security group"))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("default SecurityGroup"))
 				_, getErr := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: instanceID}.Build())
 				Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
 			})
@@ -2314,7 +2772,7 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(err).To(HaveOccurred())
 				Expect(response).To(BeNil())
 				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("security group is required"))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("at least one SecurityGroup is required"))
 				_, getErr := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: instanceID}.Build())
 				Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
 			})
@@ -2328,7 +2786,7 @@ var _ = Describe("Private compute instances server", func() {
 
 				defaultSubnet := privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name:   "test-default-subnet",
+						Name:   defaultSubnetName,
 						Tenant: testTenant,
 						Labels: map[string]string{
 							"osac.openshift.io/default": "true",
@@ -2363,8 +2821,8 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(response).To(BeNil())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("default subnet is required"))
+				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+				Expect(status.Message()).To(ContainSubstring("READY"))
 			})
 
 			It("Should allow updating VM with empty network_attachments (pod network)", func() {
@@ -2590,9 +3048,79 @@ var _ = Describe("Private compute instances server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("security group"))
+				Expect(status.Message()).To(ContainSubstring("SecurityGroup"))
 				Expect(status.Message()).To(ContainSubstring("does not exist"))
 			})
+
+			// A reference resolves only in the tenant and project of the workload: a Subnet or SecurityGroup in another
+			// project of the same tenant fails like a missing one.
+			DescribeTable("rejects a reference to another project of the tenant like a missing one",
+				func(otherProjectSubnet bool) {
+					subnet := createTestSubnet(ctx, virtualNetwork.GetId(), privatev1.SubnetState_SUBNET_STATE_READY)
+					group := createTestSecurityGroup(ctx, virtualNetwork.GetId(),
+						privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY)
+					// The same kind of record in another project of the same tenant:
+					seedTenantProject(testTenant, "other-project")
+					if otherProjectSubnet {
+						response, err := fixtureDAO[*privatev1.Subnet]().Create().SetObject(privatev1.Subnet_builder{
+							Metadata: privatev1.Metadata_builder{
+								Name:    "other-project-subnet",
+								Tenant:  testTenant,
+								Project: "other-project",
+							}.Build(),
+							Spec: subnet.GetSpec(),
+							Status: privatev1.SubnetStatus_builder{
+								State: privatev1.SubnetState_SUBNET_STATE_READY,
+								Hub:   "network-hub-a",
+							}.Build(),
+						}.Build()).Do(ctx)
+						Expect(err).ToNot(HaveOccurred())
+						subnet = response.GetObject()
+					} else {
+						response, err := fixtureDAO[*privatev1.SecurityGroup]().Create().SetObject(
+							privatev1.SecurityGroup_builder{
+								Metadata: privatev1.Metadata_builder{
+									Name:    "other-project-sg",
+									Tenant:  testTenant,
+									Project: "other-project",
+								}.Build(),
+								Spec: group.GetSpec(),
+								Status: privatev1.SecurityGroupStatus_builder{
+									State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+									Hub:   "network-hub-a",
+								}.Build(),
+							}.Build()).Do(ctx)
+						Expect(err).ToNot(HaveOccurred())
+						group = response.GetObject()
+					}
+
+					_, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+						Object: privatev1.ComputeInstance_builder{
+							Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+							Spec: privatev1.ComputeInstanceSpec_builder{
+								Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+								NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+									privatev1.ComputeNetworkAttachment_builder{
+										Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
+										SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+											privatev1.SecurityGroupLocalReference_builder{Id: group.GetId()}.Build(),
+										},
+									}.Build(),
+								},
+							}.Build(),
+						}.Build(),
+					}.Build())
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(err.Error()).To(ContainSubstring("does not exist"))
+					if otherProjectSubnet {
+						Expect(err.Error()).To(ContainSubstring("Subnet '" + subnet.GetId() + "'"))
+					} else {
+						Expect(err.Error()).To(ContainSubstring("SecurityGroup '" + group.GetId() + "'"))
+					}
+				},
+				Entry("Subnet", true),
+				Entry("SecurityGroup", false),
+			)
 
 			It("Should reject when security group belongs to wrong VirtualNetwork in network_attachments", func() {
 				// Create another virtual network with the same network class
@@ -2624,8 +3152,8 @@ var _ = Describe("Private compute instances server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("security group"))
-				Expect(status.Message()).To(ContainSubstring("belongs to a different virtual network"))
+				Expect(status.Message()).To(ContainSubstring("SecurityGroup"))
+				Expect(status.Message()).To(ContainSubstring("belongs to another VirtualNetwork"))
 			})
 
 			It("Should fill empty security_groups from the default VirtualNetwork", func() {
@@ -2690,94 +3218,6 @@ var _ = Describe("Private compute instances server", func() {
 		})
 
 		Context("Update validation with deletion", func() {
-			It("uses persisted deletion state when validating network updates", func() {
-				// Create with a READY subnet
-				subnet := createTestSubnet(ctx, virtualNetwork.GetId(), privatev1.SubnetState_SUBNET_STATE_READY)
-				sg := createTestSecurityGroup(ctx, virtualNetwork.GetId(), privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY)
-
-				createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
-					Object: privatev1.ComputeInstance_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name: "test-compute-instance",
-						}.Build(),
-						Spec: privatev1.ComputeInstanceSpec_builder{
-							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
-							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
-								privatev1.ComputeNetworkAttachment_builder{
-									Subnet:         privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
-									SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build()},
-								}.Build(),
-							},
-						}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				created := createResponse.GetObject()
-				originalAttachment := proto.Clone(created.GetSpec().GetNetworkAttachments()[0]).(*privatev1.ComputeNetworkAttachment)
-
-				// Update subnet to non-READY state (simulate resource being deleted/modified)
-				subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
-				subnetDAO, err := dao.NewGenericDAO[*privatev1.Subnet]().
-					SetLogger(logger).
-					SetTenancyLogic(tenancy).
-					Build()
-				Expect(err).ToNot(HaveOccurred())
-				_, err = subnetDAO.Update().SetObject(subnet).Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-
-				// Supplying a timestamp must not mark the stored ComputeInstance as deleting.
-				deletionTime := timestamppb.Now()
-				created.GetMetadata().SetDeletionTimestamp(deletionTime)
-
-				// An unchanged attachment still goes through readiness validation while the instance is live.
-				updateRequest := &privatev1.ComputeInstancesUpdateRequest{}
-				updateRequest.SetObject(created)
-				updateRequest.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}})
-
-				// An unmasked timestamp must not bypass validation of an active instance.
-				_, err = server.Update(ctx, updateRequest)
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-				updateRequest.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{
-					"spec.network_attachments", "metadata.deletion_timestamp",
-				}})
-				_, err = server.Update(ctx, updateRequest)
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
-				Expect(err).NotTo(HaveOccurred())
-				Expect(stored.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
-				Expect(stored.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(HaveLen(1))
-
-				// Only Delete may establish the exemption; a finalizer keeps the object available.
-				_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
-					Object:     privatev1.ComputeInstance_builder{Id: created.GetId(), Metadata: privatev1.Metadata_builder{Finalizers: []string{"test"}}.Build()}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
-				}.Build())
-				Expect(err).NotTo(HaveOccurred())
-				_, err = server.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: created.GetId()}.Build())
-				Expect(err).NotTo(HaveOccurred())
-
-				// Deletion permits readiness checks to tolerate the pending subnet, but does not make the attachment mutable.
-				deletingObject := proto.Clone(created).(*privatev1.ComputeInstance)
-				deletingObject.GetSpec().GetNetworkAttachments()[0].SetSecurityGroups(nil)
-				updateRequest.SetObject(deletingObject)
-				updateRequest.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}})
-				_, err = server.Update(ctx, updateRequest)
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-				stored, err = server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
-				Expect(err).NotTo(HaveOccurred())
-				Expect(stored.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
-				Expect(stored.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(HaveLen(1))
-
-				// An unchanged attachment update is still accepted for a deleting instance.
-				deletingObject.GetSpec().SetNetworkAttachments([]*privatev1.ComputeNetworkAttachment{originalAttachment})
-				updateRequest.SetObject(deletingObject)
-				_, err = server.Update(ctx, updateRequest)
-				Expect(err).NotTo(HaveOccurred())
-				stored, err = server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
-				Expect(err).NotTo(HaveOccurred())
-				Expect(proto.Equal(stored.GetObject().GetSpec().GetNetworkAttachments()[0], originalAttachment)).To(BeTrue())
-
-			})
 		})
 
 		Context("NetworkAttachments immutability", func() {
@@ -3034,7 +3474,7 @@ var _ = Describe("Private compute instances server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("cannot change number"))
+				Expect(status.Message()).To(ContainSubstring("at most one network attachment"))
 				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(proto.Equal(stored.GetObject().GetSpec(), createResponse.GetObject().GetSpec())).To(BeTrue())
@@ -3073,7 +3513,7 @@ var _ = Describe("Private compute instances server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("cannot change number"))
+				Expect(status.Message()).To(ContainSubstring("cannot change number of network attachments"))
 				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(stored.GetObject().GetSpec().GetNetworkAttachments()).To(HaveLen(2))
@@ -4232,28 +4672,6 @@ var _ = Describe("Private compute instances server", func() {
 			}.Build()
 		}
 
-		It("rejects VM creation on a NetworkClass without a Kubernetes manager before creating an auto ExternalIP", func() {
-			createPool("pool-1", 5)
-
-			networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-			unsupportedClass := proto.Clone(defaultTestNetworkClass).(*privatev1.NetworkClass)
-			unsupportedClass.ClearK8SManager()
-			_, err = networkClassesDao.Update().SetObject(unsupportedClass).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = server.Create(ctx, createRequest(true))
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("k8s_manager"))
-
-			eips, err := externalIPDao.List().Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(eips.GetItems()).To(BeEmpty())
-		})
-
 		It("creates an auto ExternalIP on ComputeInstance create and defers its attachment", func() {
 			createPool("pool-1", 5)
 
@@ -4273,7 +4691,6 @@ var _ = Describe("Private compute instances server", func() {
 			eip := eipList.GetItems()[0]
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedForLabel]).To(Equal(ciID))
-			Expect(eip.GetMetadata().GetLabels()[autoAttachmentDeferredLabel]).To(Equal("true"))
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("compute_instance"))
 			Expect(eip.GetSpec().GetPool().GetId()).To(Equal("pool-1"))
 			Expect(eip.GetStatus().GetAttached()).To(BeFalse())
@@ -4308,7 +4725,6 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(eipList.GetItems()).To(HaveLen(1))
 			eip := eipList.GetItems()[0]
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
-			Expect(eip.GetMetadata().GetLabels()[autoAttachmentDeferredLabel]).To(Equal("true"))
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("compute_instance"))
 			Expect(eip.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(ciID))
 			Expect(eip.GetMetadata().GetAnnotations()["osac.openshift.io/tenant"]).To(Equal(testTenant))
@@ -4539,22 +4955,29 @@ var _ = Describe("Private compute instances server", func() {
 	})
 })
 
-var _ = Describe("Catalog materialized defaults", func() {
-	It("selects a default subnet only from the destination project", func() {
-		projects, err := dao.NewGenericDAO[*privatev1.Project]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		subnets, err := dao.NewGenericDAO[*privatev1.Subnet]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		for _, name := range []string{"destination", "other"} {
-			_, err := projects.Create().SetObject(privatev1.Project_builder{Id: name, Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build()}.Build()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			_, err = subnets.Create().SetObject(privatev1.Subnet_builder{Id: name, Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant, Project: name, Labels: map[string]string{defaultLabel: "true"}}.Build(), Spec: privatev1.SubnetSpec_builder{Ipv4Cidr: new("10.0.0.0/24")}.Build(), Status: privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build()}.Build()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-		}
-		subnet, err := findDefaultSubnet(ctx, logger, subnets, testTenant, "destination")
-		Expect(err).ToNot(HaveOccurred())
-		Expect(subnet.GetId()).To(Equal("destination"))
+var _ = Describe("Compute instance networking reference scope", func() {
+	It("allows only same-tenant resources in the instance project or tenant defaults", func() {
+		owner := privatev1.Metadata_builder{Tenant: "tenant-a", Project: "project-a"}.Build()
+		Expect(computeInstanceNetworkResourceInScope(owner,
+			privatev1.Metadata_builder{Tenant: "tenant-a", Project: "project-a"}.Build())).To(BeTrue())
+		Expect(computeInstanceNetworkResourceInScope(owner,
+			privatev1.Metadata_builder{Tenant: "tenant-a", Project: "project-b"}.Build())).To(BeFalse())
+		Expect(computeInstanceNetworkResourceInScope(owner,
+			privatev1.Metadata_builder{
+				Tenant: "tenant-a", Project: "project-b", Labels: map[string]string{defaultLabel: "true"},
+			}.Build())).To(BeTrue())
+		Expect(computeInstanceNetworkResourceInScope(owner,
+			privatev1.Metadata_builder{
+				Tenant: "tenant-b", Project: "project-b", Labels: map[string]string{defaultLabel: "true"},
+			}.Build())).To(BeFalse())
 	})
+})
+
+var _ = Describe("Catalog materialized defaults", func() {
+	BeforeEach(func() {
+		seedReadyDefaultNetworking(testTenant, 0)
+	})
+
 	DescribeTable("rechecks catalog disk tiers after authoring", func(additional bool) {
 		server, err := NewPrivateComputeInstancesServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
@@ -4596,8 +5019,8 @@ var _ = Describe("Catalog materialized defaults", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			k8sManager := "test-k8s-manager"
-			networkClass, err := server.networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
-				FabricManager: new("test-strategy"),
+			_, err = reuseNetworkClassDAO.Create().SetObject(privatev1.NetworkClass_builder{
+				FabricManager: "test-strategy",
 				K8SManager:    &k8sManager,
 				Metadata:      privatev1.Metadata_builder{Name: "win-network-class", Tenant: testTenant}.Build(),
 				Status: privatev1.NetworkClassStatus_builder{
@@ -4620,9 +5043,7 @@ var _ = Describe("Catalog materialized defaults", func() {
 					Tenant: testTenant,
 					Labels: map[string]string{defaultLabel: "true"},
 				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClass.GetObject().GetId()}.Build(),
-				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{}.Build(),
 				Status: privatev1.VirtualNetworkStatus_builder{
 					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 					Hub:   "network-hub-a",

@@ -76,13 +76,13 @@ def default_networking(grpc: GRPCClient, k8s_hub_client: K8sClient, test_run_id:
         # Create virtual network with unique name
         vn_name = f"test-vn-{test_run_id}"
         print("\nCreating VirtualNetwork")
-        vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_name, "10.200.0.0/16")
+        vn_id, vn_cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_name, "172.19.0.0/16")
         print("VirtualNetwork is Ready")
 
         # Create subnet with unique name
         print("Creating Subnet")
         subnet_id, subnet_cr_name = create_and_wait_for_subnet(
-            grpc, k8s_hub_client, vn_id, "10.200.100.0/24", name_prefix=f"test-subnet-{test_run_id}"
+            grpc, k8s_hub_client, vn_id, "172.19.100.0/24", name_prefix=f"test-subnet-{test_run_id}"
         )
         wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)
         print("Subnet is Ready")

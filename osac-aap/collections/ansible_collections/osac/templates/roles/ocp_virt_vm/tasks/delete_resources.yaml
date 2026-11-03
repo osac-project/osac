@@ -425,6 +425,35 @@
     - "'not found' not in (delete_sysprep_secret.msg | default(''))"
   when: guest_os_family == 'windows'
 
+- name: Find the DataVolumes and Secrets of the ComputeInstance by its API ID label
+  when: (vm_network_labels | default({})).get('osac.openshift.io/compute-instance-id', '') | length > 0
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: "{{ item.api_version }}"
+    kind: "{{ item.kind }}"
+    namespace: "{{ compute_instance_target_namespace }}"
+    label_selectors:
+      - "osac.openshift.io/compute-instance-id={{ vm_network_labels['osac.openshift.io/compute-instance-id'] }}"
+  loop:
+    - {api_version: cdi.kubevirt.io/v1beta1, kind: DataVolume}
+    - {api_version: v1, kind: Secret}
+  loop_control:
+    label: "{{ item.kind }}"
+  register: vm_labeled_resources
+
+- name: Delete the DataVolumes and Secrets that carry the API ID label
+  when: vm_labeled_resources.results is defined
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: absent
+    api_version: "{{ item.0.item.api_version }}"
+    kind: "{{ item.0.item.kind }}"
+    namespace: "{{ compute_instance_target_namespace }}"
+    name: "{{ item.1.metadata.name }}"
+  loop: "{{ vm_labeled_resources.results | default([]) | selectattr('resources', 'defined') | subelements('resources') }}"
+  loop_control:
+    label: "{{ item.0.item.kind }}/{{ item.1.metadata.name }}"
+
 - name: Display deletion status
   ansible.builtin.debug:
     msg:

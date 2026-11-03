@@ -49,7 +49,7 @@ class TestSelfSubjectAccessReviewPermissions:
         vn_name = f"e2e-ssar-vn-{tag}"
         vn_id = None
         try:
-            vn_id = jwt_grpc_tenant1_admin.create_virtual_network(name=vn_name, ipv4_cidr="10.100.0.0/16")
+            vn_id = jwt_grpc_tenant1_admin.create_virtual_network(name=vn_name, ipv4_cidr="172.20.0.0/16")
             assert vn_id, "VirtualNetwork creation should succeed when permission check returned allowed=true"
         finally:
             # Cleanup
@@ -161,7 +161,6 @@ class TestSelfSubjectAccessReviewPermissions:
         assert "Unauthenticated" in output or "unauthenticated" in output, (
             f"Unauthenticated request should fail with Unauthenticated error. Got: {output}"
         )
-
 
 
 class TestSelfSubjectAccessReviewValidation:
@@ -301,9 +300,7 @@ class TestSelfSubjectAccessReviewAdvisoryNature:
         # Proto3 JSON omits default values - when allowed is false (default), it may be omitted
         status = check_response["object"]["status"]
         allowed = status.get("allowed", False)
-        assert allowed is True, (
-            "Permission check should return allowed=true for tenant admin listing VirtualNetworks"
-        )
+        assert allowed is True, "Permission check should return allowed=true for tenant admin listing VirtualNetworks"
 
         # Step 3: Perform actual operation - authorization is re-evaluated
         # If roles were revoked between check and operation, this would fail
@@ -348,8 +345,7 @@ class TestSelfSubjectAccessReviewInformationDisclosure:
             f"Safe reasons are empty or generic (e.g., 'insufficient permissions')."
         )
         assert "tenant1" not in reason.lower(), (
-            f"Denial reason leaked tenant name 'tenant1': {reason}. "
-            f"Safe reasons should not reveal any tenant names."
+            f"Denial reason leaked tenant name 'tenant1': {reason}. Safe reasons should not reveal any tenant names."
         )
 
     def test_actual_operation_error_does_not_disclose_tenant_names(self, jwt_grpc_tenant1: GRPCClient):
@@ -362,7 +358,7 @@ class TestSelfSubjectAccessReviewInformationDisclosure:
                 data={
                     "object": {
                         "metadata": {"name": f"cross-tenant-{tag}", "tenant": "tenant2"},
-                        "spec": {"ipv4_cidr": "10.200.0.0/16"},
+                        "spec": {"ipv4_cidr": "172.19.0.0/16"},
                     }
                 },
             )
@@ -434,9 +430,7 @@ class TestSelfSubjectAccessReviewInputValidation:
         # Verify: malformed tenant is rejected (allowed=false)
         status = response["object"]["status"]
         allowed = status.get("allowed", False)
-        assert allowed is False, (
-            f"Malformed tenant should be rejected. Expected allowed=false, got: {status}"
-        )
+        assert allowed is False, f"Malformed tenant should be rejected. Expected allowed=false, got: {status}"
 
         # Verify: reason indicates the tenant issue
         reason = status.get("reason", "")

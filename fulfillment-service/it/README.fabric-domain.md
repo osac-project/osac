@@ -5,8 +5,13 @@ platform-admin CRUD, tenant-filtered Get/List, and denial of tenant-user writes
 through the deployed Fulfillment API and PostgreSQL database. It is component
 integration coverage; it does not claim that the operator, AAP, or Netris
 Server Cluster lifecycle works. The Fulfillment integration target deploys the
-operator disabled, and the test skips if it finds networking provisioning
-enabled in the `osac` namespace.
+operator disabled and the installer's NetworkClass of the dev profile doesn't
+enable east-west Ethernet, so every FabricDomain create fails validation:
+TC-FD-01 checks those rejections (type, servers, VirtualNetwork, and the
+`supports_east_west_ethernet` gate) and TC-FD-02 the tenant-user denial. The
+CRUD and tenant-filtering specs skip unless the NetworkClass enables east-west
+Ethernet; they also need servers that are BareMetalInstance hosts of the
+tenant.
 
 The auth unit matrix in
 `fulfillment-service/internal/auth/grpc_authz_interceptor_test.go` covers

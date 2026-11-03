@@ -16,22 +16,17 @@ See also: [inventory / operation matrix](netris-idempotency-inventory.md)
    different immutable field (CIDR, VPC id, SNAT/DNAT bindings, etc.), the
    playbook fails with kind/name/field/expected/actual — it does **not**
    delete and recreate.
-4. **Default protection**: VirtualNetwork, Subnet, and NATGateway delete
-   playbooks refuse resources labeled `osac.openshift.io/default=true`, even
-   when a job extra variable tries to enable deletion.
-5. **Move attachment**: detach/attach is idempotent; an interrupted move
+4. **Move attachment**: detach/attach is idempotent; an interrupted move
    completes on rerun; post-conditions are checked.
 
 ## Deferred
 
 | Topic | Ticket |
 |-------|--------|
-| SecurityGroup ACL stale-rule prune / desired-state reconcile | [OSAC-4888](https://redhat.atlassian.net/browse/OSAC-4888) |
-| ACL fan-out to `status.attachedSubnetCIDRs` | [OSAC-4925](https://redhat.atlassian.net/browse/OSAC-4925) |
 | Fulfillment FieldMask immutability | [OSAC-4936](https://redhat.atlassian.net/browse/OSAC-4936) |
 
-Until OSAC-4888, SecurityGroup create remains **get-or-create by ACL name**.
-Rule content changes that leave orphans are a known gap.
+SecurityGroup tasks are documented no-ops on Netris (D-9): `cudn_evpn` enforces
+SecurityGroups with NetworkPolicy.
 
 ## Mutable vs create-only (AC4)
 
@@ -45,25 +40,30 @@ fields are treated as **create-only**. When the named object already exists:
   endpoint is available; still-missing fields fail as unverifiable rather than
   being treated as a match
 
-Move-network-attachment is the supported mutable operation (port membership).
-SecurityGroup ingress/egress desired-state prune remains deferred.
+Move-network-attachment is a supported mutable operation (port membership).
+The exception to no update-in-place: `create_subnet` and
+`apply_network_attachment` PUT the V-Net gateway and DHCP.
+
 
 Delete operations verify the provider object against the OSAC resource before
 deleting it. Checks include tenant, prefix, site, purpose, VPC, and NAT binding
 fields when those values are available from the resource. A missing provider
 object is a successful no-op. A found object without a stable ID or with
 mismatched/unverifiable ownership fields is left in place and the job fails.
-VirtualNetwork deletion still checks for its IPAM allocation by name if the VPC
-has already disappeared, so a retry can finish cleanup after a partial delete.
+If the VPC is gone, VirtualNetwork deletion succeeds without looking for the
+allocation.
 
 ## Assumptions
 
 - Netris object names are unique within the relevant API list.
-- OSAC CR `metadata.name` maps to Netris VPC / V-Net / IPAM / ACL / NAT names
-  (NAT uses `{name}-snat` or `{name}-dnat`).
+- OSAC API IDs map to Netris VPC / V-Net / IPAM / NAT names
+  (NATGateway uses `osac-natgw-<id>`, ExternalIPAttachment `osac-eipa-<id>`,
+  ExternalIP `osac-eip-<id>`, ExternalIPPool `osac-pool-<id>` and its common
+  subnet `osac-pool-<id>-common`).
 - Auth uses `netris_session_cookie` from `netris.controller.auth`.
-- Operator re-launches the **create** job when desired config version changes;
-  there are no separate Update playbooks for tenant networking.
+- Operator re-runs a create with a new input only for a SecurityGroup rule
+  update; there are no
+  separate Update playbooks for tenant networking.
 
 ## Filter helpers
 
@@ -71,8 +71,6 @@ has already disappeared, so a retry can finish cleanup after a partial delete.
 
 - `netris_immutable_mismatch(existing, expected_fields)` — returns a list of
   `{field, expected, actual}` dicts for differing fields (empty = match).
-- `osac_is_default_networking_resource(resource)` — true when label
-  `osac.openshift.io/default` is `"true"`.
 - `netris_port_on_vnet(vnet_detail, port_id)` — true when port id is in
   V-Net ports (int/string tolerant).
 - `netris_ports_excluding(ports, port_id)` — ports list without the matching
@@ -95,20 +93,18 @@ Refusing delete-and-recreate. Correct Netris state or recreate the OSAC
 resource with a new name after cleanup.
 ```
 
-The top-level Netris AAP playbooks rescue provider failures and report the
-operation, OSAC resource kind/name, failed task, HTTP status when present, and
-a bounded provider error summary. Common cookie, authorization, token,
-password, and secret values are redacted. This is AAP job output only; this
-change does not alter operator status or Fulfillment error propagation.
+Each Netris task file rescues its failures and publishes an `osac_error` with
+the task name, the failed step, the HTTP status when present, and a bounded
+provider error summary. Common cookie, authorization, token,
+password, and secret values are redacted. The operator reads the `osac_error` through the network manager contract.
 
 ## Testing
 
 - Unit: `uv run pytest tests/unit` (idempotency, ownership, diagnostic, and
   pool-membership filters).
-- Component: `tests/integration/targets/netris_idempotency/` runs top-level
-  playbooks against Kind and a stateful local Netris HTTP fixture. It covers
-  create/replay, immutable drift, detail reads, partial create/delete recovery,
-  default-resource refusal, delete ownership, ExternalIP pool membership,
-  move retries, post-conditions, and sanitized AAP diagnostics. It does not
-  prove response shapes against the pinned Netris 2.8.1 lab. Live Netris ACL
-  prune coverage belongs to OSAC-4888 / provider suites.
+- Component: `tests/integration/targets/netris_fabric/` runs every Fabric task
+  through the generic playbook against a stateful local Netris HTTP fake. It
+  covers create/replay, immutable drift, detail reads, partial create/delete
+  recovery, delete ownership, ExternalIP pool membership, port-move retries,
+  lost responses and sanitized error messages. It does not
+  prove response shapes against the pinned Netris 2.8.1 lab.

@@ -16,8 +16,8 @@ package servers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
+	"net/netip"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -25,17 +25,16 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateVirtualNetworksServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
-	filterDesc        protoreflect.MessageDescriptor
+	logger             *slog.Logger
+	attributionLogic   auth.AttributionLogic
+	tenancyLogic       auth.TenancyLogic
+	metricsRegisterer  prometheus.Registerer
+	filterDesc         protoreflect.MessageDescriptor
+	networkingSettings *NetworkingSettings
 }
 
 var _ privatev1.VirtualNetworksServer = (*PrivateVirtualNetworksServer)(nil)
@@ -43,12 +42,10 @@ var _ privatev1.VirtualNetworksServer = (*PrivateVirtualNetworksServer)(nil)
 type PrivateVirtualNetworksServer struct {
 	privatev1.UnimplementedVirtualNetworksServer
 
-	logger           *slog.Logger
-	generic          *GenericServer[*privatev1.VirtualNetwork]
-	networkClassDao  *dao.GenericDAO[*privatev1.NetworkClass]
-	subnetDao        *dao.GenericDAO[*privatev1.Subnet]
-	securityGroupDao *dao.GenericDAO[*privatev1.SecurityGroup]
-	natGatewayDao    *dao.GenericDAO[*privatev1.NATGateway]
+	logger   *slog.Logger
+	generic  *GenericServer[*privatev1.VirtualNetwork]
+	settings NetworkingSettings
+	guards   *networkingGuards
 }
 
 func NewPrivateVirtualNetworksServer() *PrivateVirtualNetworksServerBuilder {
@@ -84,6 +81,13 @@ func (b *PrivateVirtualNetworksServerBuilder) SetFilterDesc(value protoreflect.M
 	return b
 }
 
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *PrivateVirtualNetworksServerBuilder) SetNetworkingSettings(value NetworkingSettings) *PrivateVirtualNetworksServerBuilder {
+	b.networkingSettings = &value
+	return b
+}
+
 func (b *PrivateVirtualNetworksServerBuilder) Build() (result *PrivateVirtualNetworksServer, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -94,37 +98,7 @@ func (b *PrivateVirtualNetworksServerBuilder) Build() (result *PrivateVirtualNet
 		err = errors.New("tenancy logic is mandatory")
 		return
 	}
-
-	// Create the NetworkClass DAO:
-	networkClassDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
-	subnetDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
-	securityGroupDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
-	natGatewayDao, err := dao.NewGenericDAO[*privatev1.NATGateway]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
+	guards, err := newNetworkingGuards(b.logger)
 	if err != nil {
 		return
 	}
@@ -144,12 +118,10 @@ func (b *PrivateVirtualNetworksServerBuilder) Build() (result *PrivateVirtualNet
 
 	// Create and populate the object:
 	result = &PrivateVirtualNetworksServer{
-		logger:           b.logger,
-		generic:          generic,
-		networkClassDao:  networkClassDao,
-		subnetDao:        subnetDao,
-		securityGroupDao: securityGroupDao,
-		natGatewayDao:    natGatewayDao,
+		logger:   b.logger,
+		generic:  generic,
+		settings: resolveNetworkingSettings(b.networkingSettings),
+		guards:   guards,
 	}
 	return
 }
@@ -168,23 +140,42 @@ func (s *PrivateVirtualNetworksServer) Get(ctx context.Context,
 
 func (s *PrivateVirtualNetworksServer) Create(ctx context.Context,
 	request *privatev1.VirtualNetworksCreateRequest) (response *privatev1.VirtualNetworksCreateResponse, err error) {
-	// Validate before creating:
-	err = s.validateVirtualNetwork(ctx, request.GetObject(), nil)
-	if err != nil {
+	if err = rejectOutputStatusOnCreate(request.GetObject().HasStatus()); err != nil {
 		return
 	}
-
-	err = s.generic.Create(ctx, request, &response)
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response,
+		func(ctx context.Context, _, candidate *privatev1.VirtualNetwork) error {
+			if err := lockTenantForCreate(ctx, candidate.GetMetadata().GetTenant()); err != nil {
+				return err
+			}
+			if err := validateReservedCreate(ctx, candidate.GetMetadata(), ""); err != nil {
+				return err
+			}
+			if err := s.validateVirtualNetwork(ctx, candidate); err != nil {
+				return err
+			}
+			candidate.SetStatus(privatev1.VirtualNetworkStatus_builder{
+				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
+			}.Build())
+			return nil
+		})
 	return
 }
 
+// Update writes status only; the spec is immutable.
 func (s *PrivateVirtualNetworksServer) Update(ctx context.Context,
 	request *privatev1.VirtualNetworksUpdateRequest) (response *privatev1.VirtualNetworksUpdateResponse, err error) {
 	if request.GetObject().GetId() == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
-	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateVirtualNetwork)
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response,
+		func(_ context.Context, current, candidate *privatev1.VirtualNetwork) error {
+			if err := validateNetworkingStatusOnlyUpdate("VirtualNetwork", current, candidate); err != nil {
+				return err
+			}
+			return rejectStateChangeWhileDeleting(current, candidate, current.GetMetadata())
+		})
 	return
 }
 
@@ -197,56 +188,39 @@ func (s *PrivateVirtualNetworksServer) Delete(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	if deleteAlreadyAccepted(virtualNetwork.GetMetadata()) {
+		return &privatev1.VirtualNetworksDeleteResponse{}, nil
+	}
 	if err = validateNotDefault(ctx, virtualNetwork.GetMetadata().GetLabels(), "virtual network"); err != nil {
 		return
 	}
-	virtualNetworkID := virtualNetwork.GetId()
-	checks := []func() error{
-		func() error {
-			return rejectDeleteIfReferenced(ctx, s.logger, s.subnetDao, "Subnet", "VirtualNetwork", virtualNetworkID,
-				virtualNetwork.GetMetadata(), func(subnet *privatev1.Subnet) bool {
-					return referenceMatches(subnet.GetSpec().GetVirtualNetwork(), virtualNetworkID, virtualNetwork.GetMetadata())
-				})
-		},
-		func() error {
-			return rejectDeleteIfReferenced(ctx, s.logger, s.securityGroupDao, "SecurityGroup", "VirtualNetwork", virtualNetworkID,
-				virtualNetwork.GetMetadata(), func(group *privatev1.SecurityGroup) bool {
-					return referenceMatches(group.GetSpec().GetVirtualNetwork(), virtualNetworkID, virtualNetwork.GetMetadata())
-				})
-		},
-		func() error {
-			return rejectDeleteIfReferenced(ctx, s.logger, s.natGatewayDao, "NATGateway", "VirtualNetwork", virtualNetworkID,
-				virtualNetwork.GetMetadata(), func(gateway *privatev1.NATGateway) bool {
-					return referenceMatches(gateway.GetSpec().GetVirtualNetwork(), virtualNetworkID, virtualNetwork.GetMetadata())
-				})
-		},
-	}
-	for _, check := range checks {
-		if err = check(); err != nil {
-			return
-		}
-	}
-
-	tx, err := database.TxFromContext(ctx)
-	if err != nil {
+	id := virtualNetwork.GetId()
+	if err = rejectGuardedDelete(ctx, s.guards, s.guards.subnets, "Subnet", "VirtualNetwork", virtualNetwork,
+		func(subnet *privatev1.Subnet) bool {
+			return referenceMatches(subnet.GetSpec().GetVirtualNetwork(), id, virtualNetwork.GetMetadata())
+		}); err != nil {
 		return
 	}
-	defer tx.ReportError(&err)
-	// Check all persisted domains, including domains awaiting finalization and those
-	// outside the caller's project visibility. Only archival releases the dependency.
-	var inUse bool
-	err = tx.QueryRow(ctx, `
-		select exists (
-			select 1 from fabric_domains
-			where data->'spec'->>'virtual_network' = $1
-			   or ($2 <> '' and data->'spec'->>'virtual_network' = $2)
-		)`, virtualNetworkID, virtualNetwork.GetMetadata().GetName()).Scan(&inUse)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to check FabricDomain dependencies", slog.Any("error", err))
-		return nil, grpcstatus.Error(grpccodes.Internal, "failed to check FabricDomain dependencies")
+	if err = rejectGuardedDelete(ctx, s.guards, s.guards.securityGroups, "SecurityGroup", "VirtualNetwork",
+		virtualNetwork, func(group *privatev1.SecurityGroup) bool {
+			return referenceMatches(group.GetSpec().GetVirtualNetwork(), id, virtualNetwork.GetMetadata())
+		}); err != nil {
+		return
 	}
-	if inUse {
-		return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "virtual network is referenced by a FabricDomain")
+	if err = rejectGuardedDelete(ctx, s.guards, s.guards.natGateways, "NATGateway", "VirtualNetwork",
+		virtualNetwork, func(gateway *privatev1.NATGateway) bool {
+			return referenceMatches(gateway.GetSpec().GetVirtualNetwork(), id, virtualNetwork.GetMetadata())
+		}); err != nil {
+		return
+	}
+	if err = rejectGuardedDelete(ctx, s.guards, s.guards.fabricDomains, "FabricDomain", "VirtualNetwork",
+		virtualNetwork, func(domain *privatev1.FabricDomain) bool {
+			return domain.GetSpec().GetVirtualNetwork() == id
+		}); err != nil {
+		return
+	}
+	if err = markDeleting(ctx, s.generic.dao, virtualNetwork); err != nil {
+		return
 	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
@@ -258,229 +232,52 @@ func (s *PrivateVirtualNetworksServer) Signal(ctx context.Context,
 	return
 }
 
-// validateVirtualNetwork validates the VirtualNetwork object.
+// validateVirtualNetwork checks a VirtualNetwork create: the CIDR, the NetworkClass gate (under the shared NetworkClass
+// lock, so a concurrent pool create can't overlap it), the prefix limit, and the excluded and pool ranges.
 func (s *PrivateVirtualNetworksServer) validateVirtualNetwork(ctx context.Context,
-	newVN *privatev1.VirtualNetwork, existingVN *privatev1.VirtualNetwork) (err error) {
-
-	if newVN == nil {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "virtual network is mandatory")
-		return
-	}
-
-	if existingVN != nil {
-		if err = validateDefaultLabelUpdate(
-			existingVN.GetMetadata().GetLabels(),
-			newVN.GetMetadata().GetLabels(),
-			nil,
-			"virtual network",
-		); err != nil {
-			return
-		}
-	}
-
-	spec := newVN.GetSpec()
-	if spec == nil {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "virtual network spec is mandatory")
-		return
-	}
-
-	// VN-VAL-08: Region is required
-	if spec.GetRegion() == "" {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.region' is required")
-		return
-	}
-
-	if spec.GetIpv6Cidr() != "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.ipv6_cidr': IPv6 and dual-stack networking are not supported")
-	}
-
-	// VN-VAL-09, VN-VAL-10, VN-VAL-11, VN-VAL-12: Check immutable fields (only on Update).
-	// Run after rejecting non-empty legacy IPv6 values so every attempted IPv6 or dual-stack
-	// request receives the same clear unsupported-networking error.
-	if err = validateImmutableFields(newVN, existingVN); err != nil {
-		return
-	}
-
-	if spec.GetIpv4Cidr() == "" {
+	vn *privatev1.VirtualNetwork) error {
+	cidr := vn.GetSpec().GetIpv4Cidr()
+	if cidr == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.ipv4_cidr' is required and must be a canonical IPv4 CIDR")
 	}
-	if canonical, validationErr := parseAndValidateCanonicalCIDR(spec.GetIpv4Cidr(), cidrIPv4); validationErr != nil {
-		return validationErr
-	} else {
-		spec.SetIpv4Cidr(canonical)
+	if _, err := parseAndValidateCanonicalCIDR(cidr, cidrIPv4); err != nil {
+		return err
 	}
-
-	// VN-VAL-04, VN-VAL-05, VN-VAL-06: Validate NetworkClass
-	// Only on Create (existingVN == nil) or if network_class differs (VN-VAL-10 above prevents NC
-	// changes on Update, so the second branch is effectively dead but kept for safety).
-	if existingVN == nil || refKey(spec.GetNetworkClass()) != refKey(existingVN.GetSpec().GetNetworkClass()) {
-		err = s.validateNetworkClassReference(ctx, spec)
-		if err != nil {
-			return
-		}
+	prefix := netip.MustParsePrefix(cidr)
+	networkClass, err := requireReadyNetworkClass(ctx, s.guards.networkClasses, false)
+	if err != nil {
+		return err
 	}
-
-	return
-}
-
-// validateImmutableFields validates that immutable fields have not been changed.
-func validateImmutableFields(newVN *privatev1.VirtualNetwork, existingVN *privatev1.VirtualNetwork) error {
-	if existingVN == nil {
-		return nil // Create operation, no immutability checks
+	if err := validatePrefixLimit("spec.ipv4_cidr", prefix, networkClass); err != nil {
+		return err
 	}
-
-	newSpec := newVN.GetSpec()
-	existingSpec := existingVN.GetSpec()
-
-	// Check immutable region field
-	if newSpec.GetRegion() != existingSpec.GetRegion() {
+	if excluded, overlaps := s.settings.firstExcludedOverlap(prefix); overlaps {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.region' is immutable and cannot be changed from '%s' to '%s'",
-			existingSpec.GetRegion(), newSpec.GetRegion())
+			"field 'spec.ipv4_cidr' %s overlaps the excluded range %s", cidr, excluded)
 	}
-
-	// Check immutable network_class field
-	if refKey(newSpec.GetNetworkClass()) != refKey(existingSpec.GetNetworkClass()) {
+	poolID, err := s.guards.firstPoolOverlap(ctx, prefix, "")
+	if err != nil {
+		return err
+	}
+	if poolID != "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.network_class' is immutable and cannot be changed from '%s' to '%s'",
-			refKey(existingSpec.GetNetworkClass()), refKey(newSpec.GetNetworkClass()))
+			"field 'spec.ipv4_cidr' %s overlaps ExternalIPPool '%s'", cidr, poolID)
 	}
-
-	// VN-VAL-11, VN-VAL-12: Preserve and check immutable CIDR fields.
-	// If the request omits a CIDR (Has*Cidr() false), copy the existing value to prevent
-	// erasure — the private API has no Merge() step to preserve absent optional fields.
-	for _, field := range []immutableCIDRField{
-		{
-			fieldName:       "spec.ipv4_cidr",
-			ipVersion:       cidrIPv4,
-			existingHasCIDR: existingSpec.HasIpv4Cidr,
-			existingCIDR:    existingSpec.GetIpv4Cidr,
-			newHasCIDR:      newSpec.HasIpv4Cidr,
-			newCIDR:         newSpec.GetIpv4Cidr,
-			setNewCIDR:      newSpec.SetIpv4Cidr,
-		},
-		{
-			fieldName:       "spec.ipv6_cidr",
-			ipVersion:       cidrIPv6,
-			existingHasCIDR: existingSpec.HasIpv6Cidr,
-			existingCIDR:    existingSpec.GetIpv6Cidr,
-			newHasCIDR:      newSpec.HasIpv6Cidr,
-			newCIDR:         newSpec.GetIpv6Cidr,
-			setNewCIDR:      newSpec.SetIpv6Cidr,
-		},
-	} {
-		if err := field.preserveAndValidate(); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
-// validateNetworkClassReference validates that the referenced NetworkClass exists. Readiness and Hub
-// binding are controller-owned status, so asynchronous reconciliation decides when the network is usable.
-func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context.Context,
-	spec *privatev1.VirtualNetworkSpec) (err error) {
-
-	networkClassRef := spec.GetNetworkClass()
-	var networkClass *privatev1.NetworkClass
-	var networkClassKey string
-	if networkClassRef == nil {
-		networkClass, err = findSingletonNetworkClass(ctx, s.networkClassDao)
-		if err != nil {
-			s.logger.ErrorContext(ctx, "Failed to query singleton NetworkClass",
-				slog.Any("error", err),
-			)
-			return grpcstatus.Errorf(grpccodes.FailedPrecondition, "failed to resolve the deployment NetworkClass: %v", err)
-		}
-		if networkClass == nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"field 'spec.network_class' is required (no NetworkClass is configured)")
-		}
-		resolvedRef := &privatev1.NetworkClassReference{}
-		resolvedRef.SetId(networkClass.GetId())
-		spec.SetNetworkClass(resolvedRef)
-		networkClassKey = networkClass.GetId()
-	} else {
-		networkClassKey = refKey(networkClassRef)
-		id := networkClassRef.GetId()
-		name := networkClassRef.GetName()
-
-		// Look up NetworkClass by ID and/or metadata.name using a single List call.
-		// We avoid Get() here because a NotFound error from Get poisons the shared
-		// database transaction (via ReportError), causing subsequent writes to roll back.
-		//
-		// Filter only on the field(s) the caller actually set, matching the convention in
-		// internal/references/lookups.go. An id == metadata.name OR filter would be
-		// order-dependent when an id happens to collide with a different NetworkClass's
-		// name, silently resolving to the wrong object.
-		//
-		// metadata.name is DNS-label-derived (hyphenated, e.g. "cudn-net"), so a caller
-		// still passing the pre-OSAC-1468 underscore-delimited implementation_strategy
-		// value (e.g. "cudn_net") as network_class will no longer resolve. Tracked as a
-		// follow-up: OSAC-4125.
-		var filter string
-		switch {
-		case id != "" && name != "":
-			filter = fmt.Sprintf("this.id == %q && this.metadata.name == %q", id, name)
-		case id != "":
-			filter = fmt.Sprintf("this.id == %q", id)
-		default:
-			filter = fmt.Sprintf("this.metadata.name == %q", name)
-		}
-
-		listResponse, listErr := s.networkClassDao.List().
-			SetFilter(filter).
-			SetLimit(1).
-			Do(ctx)
-		if listErr != nil {
-			s.logger.ErrorContext(ctx, "Failed to query NetworkClass",
-				slog.String("network_class", networkClassKey),
-				slog.Any("error", listErr))
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network_class")
-		}
-		if len(listResponse.GetItems()) == 0 {
-			if id != "" && name != "" {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"network_class id '%s' and name '%s' do not both resolve to the same NetworkClass", id, name)
-			}
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"network_class '%s' does not exist", networkClassKey)
-		}
-		networkClass = listResponse.GetItems()[0]
+// validatePrefixLimit checks a VirtualNetwork or Subnet prefix against the prefix limit of the NetworkClass address
+// plan.
+func validatePrefixLimit(field string, prefix netip.Prefix, networkClass *privatev1.NetworkClass) error {
+	limit, err := addressPlanPrefixLimit(networkClass.GetSpec().GetAddressPlan())
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "the NetworkClass address plan is invalid: %v",
+			grpcstatus.Convert(err).Message())
 	}
-
-	if networkClass.GetMetadata().HasDeletionTimestamp() {
+	if prefix.Bits() > limit {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"network_class '%s' does not exist", networkClassKey)
+			"%s prefix /%d exceeds the address plan prefix limit /%d", field, prefix.Bits(), limit)
 	}
-	if networkClass.GetStatus().GetState() != privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"NetworkClass '%s' must be READY (current state: %s)",
-			networkClassKey, networkClass.GetStatus().GetState().String())
-	}
-
-	// VN-VAL-05/06: Validate the addressing mode implied by ipv4_cidr/ipv6_cidr against the
-	// NetworkClass's capabilities.
-	ncCaps := networkClass.GetCapabilities()
-	if ncCaps != nil {
-		hasIpv4 := spec.GetIpv4Cidr() != ""
-		hasIpv6 := spec.GetIpv6Cidr() != ""
-		if hasIpv4 && !ncCaps.GetSupportsIpv4() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"network_class '%s' does not support IPv4", networkClassKey)
-		}
-		if hasIpv6 && !ncCaps.GetSupportsIpv6() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"network_class '%s' does not support IPv6", networkClassKey)
-		}
-		if hasIpv4 && hasIpv6 && !ncCaps.GetSupportsDualStack() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"network_class '%s' does not support dual-stack", networkClassKey)
-		}
-	}
-
 	return nil
 }

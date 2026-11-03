@@ -1,0 +1,137 @@
+---
+# FabricDomain -> Netris Server Cluster osac-fd-<id> in the VPC of its
+# VirtualNetwork (osac-vn-<VirtualNetwork id>), at NETRIS_SITE_ID. The servers
+# are the inventory host names of resource.spec.servers; the template is the
+# one server_cluster_template_id of NETRIS_RESOURCE_CLASS_MAP. A rerun finds
+# the cluster by name and sets its membership. A VPC of that name owned by
+# another tenant is a final error. Results go through _publish.yaml only.
+#
+# Known limitation: the Server Cluster template comes from the single distinct
+# server_cluster_template_id in NETRIS_RESOURCE_CLASS_MAP; more than one is a
+# final error. Follow-up: the FabricDomain snapshot should carry the
+# BareMetalInstanceType ethernet_ew netris profile instead.
+- name: Create the FabricDomain on Netris
+  block:
+    - name: Check the settings
+      ansible.builtin.include_tasks: _settings.yaml
+      vars:
+        netris_require: [controller, credentials, site, tenant, resource_class_map]
+
+    - name: Check the task input
+      ansible.builtin.include_tasks: _input.yaml
+      vars:
+        netris_require_parents: [virtual_network]
+
+    - name: Build the object names
+      ansible.builtin.include_tasks: _names.yaml
+
+    - name: Check the servers
+      vars:
+        netris_fail:
+          message: "{{ osac_job_vars | osac.templates.netris_fabric_domain_servers_error }}"
+          retryable: false
+      when: (osac_job_vars | osac.templates.netris_fabric_domain_servers_error) | length > 0
+      ansible.builtin.include_tasks: _fail.yaml
+
+    - name: Choose the Server Cluster template
+      ansible.builtin.set_fact:
+        _netris_template: "{{ netris_resource_class_map | osac.templates.netris_fabric_domain_template }}"
+
+    - name: Stop when no single template is configured
+      vars:
+        netris_fail:
+          message: "Missing or malformed setting in network-fulfillment-ig: {{ _netris_template.error }}."
+          retryable: false
+      when: _netris_template.error | length > 0
+      ansible.builtin.include_tasks: _fail.yaml
+
+    - name: Look up the VPC of the VirtualNetwork
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ netris_names.vpc }}"
+        vpc_tenant_id: "{{ netris_tenant_id | int }}"
+
+    # netris_vpcs is the unfiltered VPC list of the read above: a VPC of this
+    # name that the OSAC tenant does not own is not ours, so no retry helps.
+    - name: Refuse a VPC of another tenant
+      vars:
+        netris_fail:
+          message: >-
+            Netris VPC {{ netris_names.vpc }} belongs to another tenant than the OSAC tenant;
+            the object does not belong to this resource, OSAC does not retry.
+          retryable: false
+      when:
+        - netris_vpc is not mapping
+        - netris_vpcs | default([]) | selectattr('name', 'equalto', netris_names.vpc) | list | length > 0
+      ansible.builtin.include_tasks: _fail.yaml
+
+    - name: Stop until the VPC exists
+      vars:
+        netris_fail:
+          message: >-
+            Netris VPC {{ netris_names.vpc }} of the VirtualNetwork is not in the OSAC tenant yet;
+            OSAC retries the task.
+          retryable: true
+      when: netris_vpc is not mapping
+      ansible.builtin.include_tasks: _fail.yaml
+
+    - name: Read the Server Clusters
+      netris.controller.protected_uri:
+        force: true
+        url: "{{ netris_controller_url }}/api/v2/server-cluster"
+        method: GET
+        headers:
+          Cookie: "connect.sid={{ netris_session_cookie }}"
+          Cache-Control: "no-cache"
+        return_content: true
+        status_code: 200
+        timeout: "{{ netris_timeout | default(30) }}"
+        validate_certs: "{{ netris_validate_certs | default(true) }}"
+        ca_path: "{{ netris_ca_path | default(omit, true) }}"
+      register: _netris_clusters
+      no_log: true
+
+    # The name carries the FabricDomain API ID. A cluster of that name in
+    # another VPC is not ours: no write.
+    - name: Refuse a Server Cluster of another VPC
+      vars:
+        _foreign: >-
+          {{ ((_netris_clusters.json | default({})).data | default([], true))
+             | selectattr('name', 'equalto', netris_names.server_cluster)
+             | rejectattr('vpc.id', 'equalto', netris_vpc.id | int) | list }}
+        netris_fail:
+          message: >-
+            Netris Server Cluster {{ netris_names.server_cluster }} is in another VPC than
+            {{ netris_names.vpc }}; the object does not belong to this resource, OSAC does not retry.
+          retryable: false
+      when: _foreign | length > 0
+      ansible.builtin.include_tasks: _fail.yaml
+
+    - name: Create or update the Server Cluster
+      ansible.builtin.include_role:
+        name: netris.controller.server_cluster
+        tasks_from: create
+      vars:
+        server_cluster_name: "{{ netris_names.server_cluster }}"
+        server_cluster_site_id: "{{ netris_site_id | int }}"
+        server_cluster_servers: "{{ osac_job_vars.resource.spec.servers }}"
+        server_cluster_template_id: "{{ _netris_template.template_id | int }}"
+        server_cluster_vpc_id: "{{ netris_vpc.id | int }}"
+
+    - name: Check the Server Cluster ID
+      ansible.builtin.assert:
+        that:
+          - server_cluster_id is defined
+          - server_cluster_id | string | trim is match('^[1-9][0-9]*$')
+        fail_msg: "Netris did not return a Server Cluster ID for {{ netris_names.server_cluster }}"
+
+    - name: Return the result to OSAC
+      ansible.builtin.include_tasks: _publish.yaml
+      vars:
+        netris_result:
+          backend_id: "{{ server_cluster_id }}"
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

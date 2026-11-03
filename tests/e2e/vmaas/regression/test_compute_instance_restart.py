@@ -20,6 +20,7 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector, parse_time
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.regression
 
@@ -46,7 +47,7 @@ def test_compute_instance_restart(
         # The VM was created without a project, so its heartbeats must carry no
         # project dimension: the engine emits only the facts a resource carries.
         metering.expect_no_project()
-        metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+        metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180, resource_kind=WaitResourceKind.COMPUTE_INSTANCE)
         metering.verify()
 
         vmi_ns: str = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
@@ -78,6 +79,8 @@ def test_compute_instance_restart(
             retries=30,
             delay=10,
             description=f"heartbeat of {uuid} billed after the restart",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
 
         # The restart is the same meter's pause and resume: the heartbeats collapse
@@ -129,6 +132,8 @@ def test_compute_instance_restart(
             retries=45,
             delay=10,
             description=f"the billed span of {uuid} to cross the restart",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
         for start, end, quantity in intervals:
             assert quantity == interval_seconds(start, end), (

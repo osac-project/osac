@@ -46,15 +46,11 @@ var _ = Describe("SecurityGroups server", func() {
 
 		nc := privatev1.NetworkClass_builder{
 			Id:            "default",
-			FabricManager: new("ovn-kubernetes"),
+			FabricManager: "ovn-kubernetes",
 			Metadata: privatev1.Metadata_builder{
 				Tenant: testTenant,
 			}.Build(),
-			Capabilities: privatev1.NetworkClassCapabilities_builder{
-				SupportsIpv4:      true,
-				SupportsIpv6:      true,
-				SupportsDualStack: true,
-			}.Build(),
+			Spec: privatev1.NetworkClassSpec_builder{AddressPlan: fixtureAddressPlan()}.Build(),
 			Status: privatev1.NetworkClassStatus_builder{
 				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
 			}.Build(),
@@ -78,9 +74,7 @@ var _ = Describe("SecurityGroups server", func() {
 				Tenant: testTenant,
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
-				Region:       "us-east-1",
-				NetworkClass: privatev1.NetworkClassReference_builder{Id: "default"}.Build(),
-				Ipv4Cidr:     new("10.0.0.0/16"),
+				Ipv4Cidr: new("10.0.0.0/16"),
 			}.Build(),
 			Status: privatev1.VirtualNetworkStatus_builder{
 				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
@@ -195,6 +189,7 @@ var _ = Describe("SecurityGroups server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			markSecurityGroupReady(created.GetObject().GetId())
 
 			updated, err := server.Update(ctx, publicv1.SecurityGroupsUpdateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
@@ -507,7 +502,7 @@ var _ = Describe("SecurityGroups server", func() {
 		})
 
 		It("blocks deletion of default-labeled SecurityGroup", func() {
-			createResponse, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
+			createResponse, err := server.Create(controllerContext(), publicv1.SecurityGroupsCreateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
 					Metadata: publicv1.Metadata_builder{
 						Name: "default-security-group",
@@ -554,36 +549,30 @@ var _ = Describe("SecurityGroups server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("rejects private rule edits before persistence while allowing status updates", func() {
+		It("rejects private rule edits and allows status updates", func() {
 			created, err := privateServer.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
 				Object: privatev1.SecurityGroup_builder{
 					Metadata: privatev1.Metadata_builder{Name: "immutable-security-group-rules", Tenant: testTenant}.Build(),
 					Spec: privatev1.SecurityGroupSpec_builder{
 						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
-						Ingress:        []*privatev1.SecurityRule{{Protocol: privatev1.Protocol_PROTOCOL_TCP, Ipv4Cidr: new("0.0.0.0/0")}},
+						Ingress:        []*privatev1.SecurityRule{{Protocol: privatev1.Protocol_PROTOCOL_TCP, PortFrom: new(int32(22)), PortTo: new(int32(22)), Ipv4Cidr: new("0.0.0.0/0")}},
 						Egress:         []*privatev1.SecurityRule{{Protocol: privatev1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("0.0.0.0/0")}},
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
-			for _, path := range []string{"spec.ingress", "spec.egress"} {
-				changed := proto.Clone(created.GetObject()).(*privatev1.SecurityGroup)
-				if path == "spec.ingress" {
-					changed.GetSpec().GetIngress()[0].SetIpv4Cidr("10.0.0.0/8")
-				} else {
-					changed.GetSpec().SetEgress(nil)
-				}
-				_, err = privateServer.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
-					Object: changed, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
-				}.Build())
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument), path)
-				Expect(err).To(MatchError(ContainSubstring("spec' is immutable")), path)
-
-				stored, getErr := privateServer.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
-				Expect(getErr).ToNot(HaveOccurred())
-				Expect(proto.Equal(stored.GetObject().GetSpec(), created.GetObject().GetSpec())).To(BeTrue(), path)
-			}
+			// Private updates are reserved for controller status and feedback.
+			changed := proto.Clone(created.GetObject()).(*privatev1.SecurityGroup)
+			changed.GetSpec().GetIngress()[0].SetIpv4Cidr("10.0.0.0/8")
+			_, err = privateServer.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+				Object: changed, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.ingress"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("spec is immutable")))
+			stored, getErr := privateServer.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			Expect(proto.Equal(stored.GetObject().GetSpec(), created.GetObject().GetSpec())).To(BeTrue())
 
 			_, err = privateServer.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
 				Object: privatev1.SecurityGroup_builder{
@@ -625,7 +614,7 @@ var _ = Describe("SecurityGroups server", func() {
 		})
 
 		It("blocks deletion after an update omits the default label", func() {
-			createResp, err := privateServer.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+			createResp, err := privateServer.Create(controllerContext(), privatev1.SecurityGroupsCreateRequest_builder{
 				Object: privatev1.SecurityGroup_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   "default-security-group-update",
@@ -645,7 +634,7 @@ var _ = Describe("SecurityGroups server", func() {
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 
 			_, err = privateServer.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: object.GetId()}.Build())
 			Expect(err).To(HaveOccurred())
@@ -692,20 +681,327 @@ var _ = Describe("SecurityGroups server", func() {
 				Id: created.GetObject().GetId(),
 			}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("compute instance"))
+			Expect(err.Error()).To(ContainSubstring("ComputeInstance"))
 		})
 
-		It("rejects security group with different tenant than parent VirtualNetwork", func() {
-			securityGroup := privatev1.SecurityGroup_builder{
-				Metadata: privatev1.Metadata_builder{Tenant: "different-tenant"}.Build(),
-				Spec: privatev1.SecurityGroupSpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
-				}.Build(),
-			}.Build()
+	})
+	Describe("ICMP rule gate", func() {
+		const ingressMessage = "ingress rule at index 1: protocol icmp is not supported by this deployment's " +
+			"network managers; use protocol all, which includes ICMP"
+		const egressMessage = "egress rule at index 0: protocol icmp is not supported by this deployment's " +
+			"network managers; use protocol all, which includes ICMP"
 
-			err := privateServer.validateSecurityGroup(ctx, securityGroup, nil)
+		var (
+			server  *SecurityGroupsServer
+			private *PrivateSecurityGroupsServer
+		)
+
+		// setCapability records status.security_group_icmp on the deployment NetworkClass; nil clears it.
+		setCapability := func(value *bool) {
+			classes := fixtureDAO[*privatev1.NetworkClass]()
+			response, err := classes.Get().SetId("default").Do(ctx)
+			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+			object := response.GetObject()
+			if value == nil {
+				object.GetStatus().ClearSecurityGroupIcmp()
+			} else {
+				object.GetStatus().SetSecurityGroupIcmp(*value)
+			}
+			_, err = classes.Update().SetObject(object).Do(ctx)
+			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		}
+
+		newPrivate := func(settings NetworkingSettings) *PrivateSecurityGroupsServer {
+			result, err := NewPrivateSecurityGroupsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetNetworkingSettings(settings).
+				Build()
+			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+			return result
+		}
+
+		tcp := func() *publicv1.SecurityRule {
+			return publicv1.SecurityRule_builder{
+				Protocol: publicv1.Protocol_PROTOCOL_TCP, PortFrom: new(int32(80)), PortTo: new(int32(80)),
+				Ipv4Cidr: new("10.0.0.0/8"),
+			}.Build()
+		}
+		icmp := func() *publicv1.SecurityRule {
+			return publicv1.SecurityRule_builder{
+				Protocol: publicv1.Protocol_PROTOCOL_ICMP, Ipv4Cidr: new("10.0.0.0/8"),
+			}.Build()
+		}
+		all := func() *publicv1.SecurityRule {
+			return publicv1.SecurityRule_builder{
+				Protocol: publicv1.Protocol_PROTOCOL_ALL, Ipv4Cidr: new("10.0.0.0/8"),
+			}.Build()
+		}
+		publicCreate := func(srv *SecurityGroupsServer, vn string, ingress, egress []*publicv1.SecurityRule) (
+			*publicv1.SecurityGroupsCreateResponse, error) {
+			return srv.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
+				Object: publicv1.SecurityGroup_builder{
+					Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("icmp-%s", uuid.NewString()[:8])}.Build(),
+					Spec: publicv1.SecurityGroupSpec_builder{
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: vn}.Build(),
+						Ingress:        ingress,
+						Egress:         egress,
+					}.Build(),
+				}.Build(),
+			}.Build())
+		}
+		publicUpdate := func(id string, ingress, egress []*publicv1.SecurityRule) error {
+			_, err := server.Update(ctx, publicv1.SecurityGroupsUpdateRequest_builder{
+				Object: publicv1.SecurityGroup_builder{
+					Id: id,
+					Spec: publicv1.SecurityGroupSpec_builder{
+						Ingress: ingress, Egress: egress,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			return err
+		}
+		stored := func(id string) *privatev1.SecurityGroup {
+			response, err := private.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+		setState := func(id string, state privatev1.SecurityGroupState) {
+			groups := fixtureDAO[*privatev1.SecurityGroup]()
+			response, err := groups.Get().SetId(id).Do(ctx)
+			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+			object := response.GetObject()
+			object.GetStatus().SetState(state)
+			_, err = groups.Update().SetObject(object).Do(ctx)
+			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		}
+
+		BeforeEach(func() {
+			var err error
+			server, err = NewSecurityGroupsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			private = newPrivate(DefaultNetworkingSettings())
+		})
+
+		DescribeTable("acceptsICMPRules",
+			func(status *privatev1.NetworkClassStatus, provisioningEnabled, want bool) {
+				Expect(acceptsICMPRules(status, provisioningEnabled)).To(Equal(want))
+			},
+			Entry("true with provisioning enabled",
+				privatev1.NetworkClassStatus_builder{SecurityGroupIcmp: new(true)}.Build(), true, true),
+			Entry("true with provisioning disabled",
+				privatev1.NetworkClassStatus_builder{SecurityGroupIcmp: new(true)}.Build(), false, true),
+			Entry("false with provisioning enabled",
+				privatev1.NetworkClassStatus_builder{SecurityGroupIcmp: new(false)}.Build(), true, false),
+			Entry("false with provisioning disabled",
+				privatev1.NetworkClassStatus_builder{SecurityGroupIcmp: new(false)}.Build(), false, false),
+			Entry("unset with provisioning disabled", &privatev1.NetworkClassStatus{}, false, true),
+			Entry("unset with provisioning enabled", &privatev1.NetworkClassStatus{}, true, false),
+			Entry("a nil status with provisioning enabled", nil, true, false),
+		)
+
+		It("rejects an ingress icmp rule on create with the rule's index", func() {
+			setCapability(new(false))
+			_, err := publicCreate(server, virtualNetworkID, []*publicv1.SecurityRule{tcp(), icmp()}, nil)
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal(ingressMessage))
+		})
+
+		It("rejects an egress icmp rule on create", func() {
+			setCapability(new(false))
+			_, err := publicCreate(server, virtualNetworkID, []*publicv1.SecurityRule{tcp()},
+				[]*publicv1.SecurityRule{icmp()})
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal(egressMessage))
+		})
+
+		It("rejects through the private Create", func() {
+			setCapability(new(false))
+			_, err := private.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+				Object: privatev1.SecurityGroup_builder{
+					Metadata: privatev1.Metadata_builder{Name: "private-icmp", Tenant: testTenant}.Build(),
+					Spec: privatev1.SecurityGroupSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+						Egress: []*privatev1.SecurityRule{privatev1.SecurityRule_builder{
+							Protocol: privatev1.Protocol_PROTOCOL_ICMP, Ipv4Cidr: new("10.0.0.0/8"),
+						}.Build()},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal(egressMessage))
+		})
+
+		It("creates an icmp rule when the capability is true", func() {
+			setCapability(new(true))
+			response, err := publicCreate(server, virtualNetworkID, []*publicv1.SecurityRule{icmp()}, nil)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored(response.GetObject().GetId()).GetSpec().GetIngress()[0].GetProtocol()).
+				To(Equal(privatev1.Protocol_PROTOCOL_ICMP))
+		})
+
+		It("fails closed on a NetworkClass without the field", func() {
+			setCapability(nil)
+			_, err := publicCreate(server, virtualNetworkID, []*publicv1.SecurityRule{icmp()}, nil)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		})
+
+		It("stores icmp rules with provider networking disabled", func() {
+			setCapability(nil)
+			disabled := NetworkingSettings{ProvisioningEnabled: false}
+			disabledServer, err := NewSecurityGroupsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetNetworkingSettings(disabled).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = publicCreate(disabledServer, virtualNetworkID, []*publicv1.SecurityRule{icmp()}, nil)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("accepts protocol all without the capability", func() {
+			setCapability(new(false))
+			_, err := publicCreate(server, virtualNetworkID, []*publicv1.SecurityRule{all()},
+				[]*publicv1.SecurityRule{all()})
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("keeps the parent VirtualNetwork error first", func() {
+			setCapability(new(false))
+			_, err := publicCreate(server, "missing-network", []*publicv1.SecurityRule{icmp()}, nil)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("does not exist"))
+		})
+
+		It("fails with FailedPrecondition without a NetworkClass", func() {
+			_, err := fixtureDAO[*privatev1.NetworkClass]().Delete().SetId("default").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = publicCreate(server, virtualNetworkID, []*publicv1.SecurityRule{icmp()}, nil)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal("no NetworkClass is configured"))
+		})
+
+		It("rejects a rule update adding icmp and leaves the group unchanged", func() {
+			setCapability(new(false))
+			created, err := publicCreate(server, virtualNetworkID, []*publicv1.SecurityRule{all()}, nil)
+			Expect(err).ToNot(HaveOccurred())
+			id := created.GetObject().GetId()
+			markSecurityGroupReady(id)
+			before := stored(id)
+
+			err = publicUpdate(id, []*publicv1.SecurityRule{all(), icmp()}, nil)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal(ingressMessage))
+
+			after := stored(id)
+			Expect(proto.Equal(after.GetSpec(), before.GetSpec())).To(BeTrue())
+			Expect(after.GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY))
+			Expect(after.GetStatus().GetMessage()).ToNot(Equal(securityGroupUpdatingMessage))
+		})
+
+		It("rejects an update keeping a stored icmp rule", func() {
+			setCapability(new(true))
+			created, err := publicCreate(server, virtualNetworkID, []*publicv1.SecurityRule{icmp()}, nil)
+			Expect(err).ToNot(HaveOccurred())
+			id := created.GetObject().GetId()
+			setState(id, privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED)
+			setCapability(new(false))
+
+			err = publicUpdate(id, []*publicv1.SecurityRule{icmp()}, nil)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(stored(id).GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED))
+		})
+
+		It("accepts an update replacing a stored icmp rule with all", func() {
+			setCapability(new(true))
+			created, err := publicCreate(server, virtualNetworkID, []*publicv1.SecurityRule{icmp()}, nil)
+			Expect(err).ToNot(HaveOccurred())
+			id := created.GetObject().GetId()
+			setState(id, privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED)
+			setCapability(new(false))
+
+			Expect(publicUpdate(id, []*publicv1.SecurityRule{all()}, nil)).To(Succeed())
+			after := stored(id)
+			Expect(after.GetSpec().GetIngress()[0].GetProtocol()).To(Equal(privatev1.Protocol_PROTOCOL_ALL))
+			Expect(after.GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+		})
+
+		It("keeps status updates, get and delete working on a stored icmp group", func() {
+			setCapability(new(true))
+			created, err := publicCreate(server, virtualNetworkID, []*publicv1.SecurityRule{icmp()}, nil)
+			Expect(err).ToNot(HaveOccurred())
+			id := created.GetObject().GetId()
+			setCapability(new(false))
+
+			Expect(stored(id).GetSpec().GetIngress()[0].GetProtocol()).To(Equal(privatev1.Protocol_PROTOCOL_ICMP))
+			_, err = private.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+				Object: privatev1.SecurityGroup_builder{
+					Id: id,
+					Status: privatev1.SecurityGroupStatus_builder{
+						State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.Delete(ctx, publicv1.SecurityGroupsDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("round-trips false and clears the field through NetworkClasses.Update", func() {
+			// The shared fixture class is not valid for a validated private update, so replace it.
+			fixtures := fixtureDAO[*privatev1.NetworkClass]()
+			_, err := fixtures.Delete().SetId("default").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			created, err := fixtures.Create().SetObject(privatev1.NetworkClass_builder{
+				Id:            "round-trip",
+				FabricManager: "netris",
+				Metadata:      privatev1.Metadata_builder{Name: "round-trip", Tenant: testTenant}.Build(),
+				Spec: privatev1.NetworkClassSpec_builder{
+					AddressPlan: fixtureAddressPlan(),
+					Defaults: privatev1.NetworkDefaults_builder{
+						VirtualNetworkIpv4Cidr: "10.0.0.0/16", SubnetIpv4Cidr: "10.0.0.0/24",
+					}.Build(),
+				}.Build(),
+				Status: privatev1.NetworkClassStatus_builder{
+					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			classID := created.GetObject().GetId()
+
+			classes, err := NewPrivateNetworkClassesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			mask := &fieldmaskpb.FieldMask{Paths: []string{"status.security_group_icmp"}}
+			update := func(status *privatev1.NetworkClassStatus) {
+				_, err := classes.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+					Object:     privatev1.NetworkClass_builder{Id: classID, Status: status}.Build(),
+					UpdateMask: mask,
+				}.Build())
+				ExpectWithOffset(1, err).ToNot(HaveOccurred())
+			}
+			read := func() *privatev1.NetworkClassStatus {
+				response, err := classes.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: classID}.Build())
+				ExpectWithOffset(1, err).ToNot(HaveOccurred())
+				return response.GetObject().GetStatus()
+			}
+
+			update(privatev1.NetworkClassStatus_builder{SecurityGroupIcmp: new(false)}.Build())
+			Expect(read().HasSecurityGroupIcmp()).To(BeTrue())
+			Expect(read().GetSecurityGroupIcmp()).To(BeFalse())
+
+			update(&privatev1.NetworkClassStatus{})
+			Expect(read().HasSecurityGroupIcmp()).To(BeFalse())
 		})
 	})
 })

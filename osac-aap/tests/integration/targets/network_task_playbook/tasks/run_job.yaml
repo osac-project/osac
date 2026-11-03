@@ -1,0 +1,130 @@
+---
+# Run playbook_osac_network_task.yml once in a child ansible-playbook process,
+# as AAP runs a networking job (`-e @extravars`), and check the outcome.
+# Input:
+#   ntp_label    a name for the case (printed in every message)
+#   ntp_job      the complete launch extra vars (a mapping)
+#   ntp_expect   success | final | retryable
+#   ntp_message  optional exact osac_error message
+#   ntp_ran      optional manager task expected to run (success only); the Netris
+#                SecurityGroup no-op logs "Netris <task> is a documented no-op"
+# Output: ntp_last {rc, stats, error, output}.
+- name: "Write the launch extra vars - {{ ntp_label }}"
+  ansible.builtin.copy:
+    dest: "{{ ntp.root }}/{{ ntp_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+    mode: "0600"
+    content: "{{ ntp_job | to_json }}"
+
+- name: "Run the generic playbook - {{ ntp_label }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+      - -i
+      - localhost,
+      - playbook_osac_network_task.yml
+      - -e
+      - "@{{ ntp.root }}/{{ ntp_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+    chdir: "{{ ntp.repo }}"
+  environment:
+    ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
+    ANSIBLE_SHOW_CUSTOM_STATS: "true"
+    ANSIBLE_PYTHON_INTERPRETER: "{{ ansible_playbook_python }}"
+    ANSIBLE_LOCALHOST_WARNING: "False"
+    ANSIBLE_INVENTORY_UNPARSED_WARNING: "False"
+  register: _ntp_run
+  changed_when: false
+  failed_when: false
+
+- name: "Parse the job output - {{ ntp_label }}"
+  vars:
+    _doc: "{{ _ntp_run.stdout | from_json if _ntp_run.stdout is match('^\\s*\\{') else {} }}"
+  ansible.builtin.set_fact:
+    ntp_last:
+      rc: "{{ _ntp_run.rc | int }}"
+      parsed: "{{ _doc | length > 0 }}"
+      stats: "{{ _doc.global_custom_stats | default({}) }}"
+      error: "{{ (_doc.global_custom_stats | default({})).osac_error | default(none) }}"
+      output: "{{ _ntp_run.stdout[-3000:] }}{{ _ntp_run.stderr[-1500:] }}"
+      ran: >-
+        {{ _ntp_run.stdout is search('Netris ' ~ (ntp_ran | default('')) ~ ' is a documented no-op')
+           if ntp_ran | default('') | length > 0
+           else _ntp_run.stdout is search('Netris [a-z_]+ is a documented no-op') }}
+
+- name: "Show the outcome - {{ ntp_label }}"
+  ansible.builtin.debug:
+    msg: "{{ ntp_label }}: rc={{ ntp_last.rc }} stats={{ ntp_last.stats }} manager task ran={{ ntp_last.ran }}"
+
+- name: "Check the job printed JSON - {{ ntp_label }}"
+  ansible.builtin.assert:
+    that: ntp_last.parsed | bool
+    fail_msg: "{{ ntp_label }}: the job printed no JSON output (rc={{ ntp_last.rc }}): {{ ntp_last.output }}"
+    quiet: true
+
+- name: "Check the exit status - {{ ntp_label }}"
+  ansible.builtin.assert:
+    that: (ntp_last.rc | int == 0) == (ntp_expect == 'success')
+    fail_msg: >-
+      {{ ntp_label }}: expected {{ ntp_expect }} but the job exited with rc={{ ntp_last.rc }};
+      stats={{ ntp_last.stats }} output={{ ntp_last.output }}
+    quiet: true
+
+- name: "Check the job published only contract artifacts - {{ ntp_label }}"
+  ansible.builtin.assert:
+    that: ntp_last.stats.keys() | difference(['osac_result', 'osac_error']) | length == 0
+    fail_msg: "{{ ntp_label }}: set_stats published keys {{ ntp_last.stats.keys() | list }}, only osac_result/osac_error are allowed"
+    quiet: true
+
+- name: "Check a successful no-op task published no typed output - {{ ntp_label }}"
+  when: ntp_expect == 'success'
+  ansible.builtin.assert:
+    that:
+      - ntp_last.stats == {}
+    fail_msg: "{{ ntp_label }}: a no-op manager task must publish neither osac_result nor osac_error, got {{ ntp_last.stats }}"
+    quiet: true
+
+- name: "Check the manager task ran - {{ ntp_label }}"
+  when: ntp_expect == 'success'
+  ansible.builtin.assert:
+    that: ntp_last.ran | bool
+    fail_msg: >-
+      {{ ntp_label }}: the generic playbook succeeded but did not run the Netris
+      {{ ntp_ran | default('') }}; output={{ ntp_last.output }}
+    quiet: true
+
+- name: "Check the osac_error shape - {{ ntp_label }}"
+  when: ntp_expect != 'success'
+  ansible.builtin.assert:
+    that:
+      - ntp_last.stats.keys() | list == ['osac_error']
+      - ntp_last.error is mapping
+      - ntp_last.error.keys() | sort == ['message', 'retryable']
+      - ntp_last.error.message is string
+      - ntp_last.error.message | length > 0
+      - ntp_last.error.retryable is boolean
+    fail_msg: >-
+      {{ ntp_label }}: a failed job must publish exactly osac_error {message (non-empty string),
+      retryable (boolean)} and no osac_result; got stats={{ ntp_last.stats }}
+    quiet: true
+
+- name: "Check retryability - {{ ntp_label }}"
+  when: ntp_expect != 'success'
+  ansible.builtin.assert:
+    that: ntp_last.error.retryable == (ntp_expect == 'retryable')
+    fail_msg: >-
+      {{ ntp_label }}: osac_error.retryable is {{ ntp_last.error.retryable }},
+      expected {{ ntp_expect == 'retryable' }} ({{ ntp_expect }}); message={{ ntp_last.error.message }}
+    quiet: true
+
+- name: "Check the error message - {{ ntp_label }}"
+  when: ntp_expect != 'success' and ntp_message is defined
+  ansible.builtin.assert:
+    that: ntp_last.error.message == ntp_message
+    fail_msg: "{{ ntp_label }}: osac_error.message is '{{ ntp_last.error.message }}', expected '{{ ntp_message }}'"
+    quiet: true
+
+- name: "Check no manager task ran after a rejected input - {{ ntp_label }}"
+  when: ntp_expect != 'success'
+  ansible.builtin.assert:
+    that: not (ntp_last.ran | bool)
+    fail_msg: "{{ ntp_label }}: the job failed with {{ ntp_last.error }} but a manager task still ran"
+    quiet: true

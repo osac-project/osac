@@ -84,7 +84,7 @@ var _ = Describe("Describe Security Group", func() {
 			Expect(output).To(MatchRegexp(`icmp\s+-\s+-\s+`))
 		})
 
-		It("should show '-' for IPV4-CIDR and IPV6-CIDR when not set", func() {
+		It("should show '-' for IPV4-CIDR when not set", func() {
 			sg := publicv1.SecurityGroup_builder{
 				Id: "sg-004",
 				Spec: publicv1.SecurityGroupSpec_builder{
@@ -98,7 +98,7 @@ var _ = Describe("Describe Security Group", func() {
 			}.Build()
 
 			output := formatSecurityGroup(sg)
-			Expect(output).To(MatchRegexp(`all\s+-\s+-\s+-\s+-`))
+			Expect(output).To(MatchRegexp(`all\s+-\s+-\s+-`))
 		})
 
 		It("should strip PROTOCOL_ prefix and lowercase for protocol display", func() {

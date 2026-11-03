@@ -28,10 +28,11 @@ import (
 )
 
 type ExternalIPAttachmentsServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
+	logger             *slog.Logger
+	attributionLogic   auth.AttributionLogic
+	tenancyLogic       auth.TenancyLogic
+	metricsRegisterer  prometheus.Registerer
+	networkingSettings *NetworkingSettings
 }
 
 var _ publicv1.ExternalIPAttachmentsServer = (*ExternalIPAttachmentsServer)(nil)
@@ -66,6 +67,13 @@ func (b *ExternalIPAttachmentsServerBuilder) SetTenancyLogic(value auth.TenancyL
 
 func (b *ExternalIPAttachmentsServerBuilder) SetMetricsRegisterer(value prometheus.Registerer) *ExternalIPAttachmentsServerBuilder {
 	b.metricsRegisterer = value
+	return b
+}
+
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *ExternalIPAttachmentsServerBuilder) SetNetworkingSettings(value NetworkingSettings) *ExternalIPAttachmentsServerBuilder {
+	b.networkingSettings = &value
 	return b
 }
 
@@ -104,6 +112,7 @@ func (b *ExternalIPAttachmentsServerBuilder) Build() (result *ExternalIPAttachme
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc((*publicv1.ExternalIPAttachment)(nil).ProtoReflect().Descriptor()).
+		SetNetworkingSettings(resolveNetworkingSettings(b.networkingSettings)).
 		Build()
 	if err != nil {
 		return

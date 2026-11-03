@@ -11,6 +11,7 @@ from tests.e2e.core.runner import run, run_unchecked
 
 PUBLIC_API: str = "osac.public.v1"
 PRIVATE_API: str = "osac.private.v1"
+DEFAULT_HOST_LABEL_SELECTOR = {"osac.openshift.io/host-type": "default"}
 
 
 def _metadata(*, name: str, tenant: str | None = None, project: str | None = None) -> dict[str, str]:
@@ -49,8 +50,9 @@ class GRPCClient:
         args.extend([self.address, service])
         return args
 
-    def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
-        return json.loads(run(*self._build_args(service=service, data=data)))
+    def call(self, *, service: str, data: dict[str, Any] | None = None, timeout: int = 300) -> dict[str, Any]:
+        __tracebackhide__ = True  # the frame's data is the request payload
+        return json.loads(run(*self._build_args(service=service, data=data), timeout=timeout))
 
     def create_compute_instance(
         self,
@@ -163,6 +165,7 @@ class GRPCClient:
         self.call(service=f"{PUBLIC_API}.Subnets/Delete", data={"id": subnet_id})
 
     def call_unchecked(self, *, service: str, data: dict[str, Any] | None = None) -> tuple[str, int]:
+        __tracebackhide__ = True
         return run_unchecked(*self._build_args(service=service, data=data))
 
     # Cluster operations
@@ -223,21 +226,12 @@ class GRPCClient:
         return response["object"]["id"]
 
     def update_security_group_rules(
-        self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
+        self, *, sg_id: str, ingress: list[dict[str, Any]], egress: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        spec: dict[str, Any] = {}
-        paths: list[str] = []
-        if ingress is not None:
-            spec["ingress"] = ingress
-            paths.append("spec.ingress")
-        if egress is not None:
-            spec["egress"] = egress
-            paths.append("spec.egress")
-        if not paths:
-            raise ValueError("update_security_group_rules requires ingress and/or egress")
+        """Replace both rule lists; the public API clears a list that is omitted."""
         return self.call(
-            service=f"{PRIVATE_API}.SecurityGroups/Update",
-            data={"object": {"id": sg_id, "spec": spec}, "updateMask": {"paths": paths}},
+            service=f"{PUBLIC_API}.SecurityGroups/Update",
+            data={"object": {"id": sg_id, "spec": {"ingress": ingress, "egress": egress}}},
         )
 
     # Console operations
@@ -262,7 +256,7 @@ class GRPCClient:
         # other error still fails fast. Note the two error shapes are matched
         # differently: a completed RPC prints grpcurl's `Code: <Name>` block
         # (AlreadyExists), while a transport failure prints the Go status string
-        # `code = Unavailable desc = ...` -- see tests/e2e/vmaas/external_ip/conftest.py.
+        # `code = Unavailable desc = ...` -- see tests/e2e/vmaas/regression/external_ip/conftest.py.
         for attempt in range(retries):
             try:
                 self.call(service=f"{PRIVATE_API}.Tenants/Create", data={"object": {"metadata": {"name": name}}})
@@ -297,21 +291,10 @@ class GRPCClient:
 
     # ExternalIPPool operations (private API only)
 
-    def create_external_ip_pool(
-        self, *, name: str, cidrs: list[str], ip_family: str = "IP_FAMILY_IPV4", implementation_strategy: str = ""
-    ) -> str:
+    def create_external_ip_pool(self, *, name: str, cidrs: list[str], ip_family: str = "IP_FAMILY_IPV4") -> str:
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.ExternalIPPools/Create",
-            data={
-                "object": {
-                    "metadata": {"name": name},
-                    "spec": {
-                        "cidrs": cidrs,
-                        "ip_family": ip_family,
-                        "implementation_strategy": implementation_strategy,
-                    },
-                }
-            },
+            data={"object": {"metadata": {"name": name}, "spec": {"cidrs": cidrs, "ip_family": ip_family}}},
         )
         return response["object"]["id"]
 
@@ -344,6 +327,10 @@ class GRPCClient:
 
     def get_private_external_ip(self, *, external_ip_id: str) -> dict[str, Any]:
         return self.call(service=f"{PRIVATE_API}.ExternalIPs/Get", data={"id": external_ip_id})
+
+    def list_private_external_ips(self) -> list[dict[str, Any]]:
+        """Every live ExternalIP of every tenant, with labels and pool, through the private API."""
+        return self.call(service=f"{PRIVATE_API}.ExternalIPs/List").get("items", [])
 
     def list_external_ip_ids(self) -> list[str]:
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ExternalIPs/List")
@@ -607,7 +594,7 @@ class GRPCClient:
         tenant: str = "shared",
     ) -> str:
         """Create a BareMetalInstanceType via the private API."""
-        selector = host_label_selector or {"osac.openshift.io/host-type": "default"}
+        selector = host_label_selector or DEFAULT_HOST_LABEL_SELECTOR
         ports = network_ports or [
             {"name": "ens5", "role": "fabric", "type": "Ethernet", "speed": "10Gbps"},
             {"name": "ens4", "role": "management", "type": "Ethernet", "speed": "10Gbps"},
@@ -749,7 +736,10 @@ class GRPCClient:
     def delete_baremetal_instance(self, *, bmi_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.BareMetalInstances/Delete", data={"id": bmi_id})
 
-    def create_baremetal_instance_type(self, *, name: str, host_type_label: str, fabric_port: str) -> str:
+    def create_baremetal_instance_type(
+        self, *, name: str, fabric_port: str, host_label_selector: dict[str, str] | None = None
+    ) -> str:
+        selector = host_label_selector or DEFAULT_HOST_LABEL_SELECTOR
         response = self.call(
             service=f"{PRIVATE_API}.BareMetalInstanceTypes/Create",
             data={
@@ -763,7 +753,7 @@ class GRPCClient:
                                 {"name": fabric_port, "role": "fabric", "type": "Ethernet", "speed": "10Gbps"}
                             ],
                         },
-                        "host_label_selector": {"match_labels": {"osac.openshift.io/host-type": host_type_label}},
+                        "host_label_selector": {"match_labels": selector},
                     },
                 }
             },
@@ -987,13 +977,6 @@ class GRPCClient:
     def list_network_classes(self) -> list[dict[str, Any]]:
         response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.NetworkClasses/List")
         return response.get("items", [])
-
-    def update_network_class(self, *, network_class_id: str, **fields: Any) -> dict[str, Any]:  # noqa: ANN401
-        if not fields:
-            raise ValueError("update_network_class requires at least one field to update")
-        obj: dict[str, Any] = {"id": network_class_id, **fields}
-        data: dict[str, Any] = {"object": obj, "updateMask": {"paths": list(fields.keys())}}
-        return self.call(service=f"{PRIVATE_API}.NetworkClasses/Update", data=data)
 
     # StorageTier operations (private API)
 

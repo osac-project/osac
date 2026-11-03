@@ -11,7 +11,7 @@
 # recognised again (`E2E suite · <suite id> · #<pull request> · <commit>`, quoted because an unquoted ` #` starts a YAML
 # comment), so it must keep that exact format. The workflow runs from the default branch, while the code under test is the
 # commit. See .github/CI.md.
-name: E2E Stretched Networking Netris PR suite
+name: E2E Stretched Netris PR suite
 run-name: "E2E suite · stretched-netris · #${{ inputs.pr-number }} · ${{ inputs.sha }}"
 
 on:

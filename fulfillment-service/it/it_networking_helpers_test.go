@@ -100,53 +100,70 @@ func cleanupNetworkFixtureResource(
 	}
 }
 
-type networkClassFixtureCleanupSummary struct {
-	SchemaVersion int    `json:"schema_version"`
-	TotalNS       int64  `json:"total_ns"`
-	Outcome       string `json:"outcome"`
+// cleanupNetworkClassFixture does nothing: the NetworkClass is a deployment singleton that the installer creates and
+// every suite shares, so fixtures never delete it.
+func cleanupNetworkClassFixture(context.Context, privatev1.NetworkClassesClient, string) error {
+	return nil
 }
 
-func cleanupNetworkClassFixture(ctx context.Context, client privatev1.NetworkClassesClient, id string) error {
-	summary := networkClassFixtureCleanupSummary{SchemaVersion: 1, Outcome: "interrupted"}
-	totalStarted := time.Now()
-	defer func() {
-		summary.TotalNS = time.Since(totalStarted).Nanoseconds()
-		_, reporterConfig := GinkgoConfiguration()
-		if reporterConfig.JSONReport != "" {
-			AddReportEntry("networkclass-fixture-cleanup", summary, ReportEntryVisibilityNever)
-		}
-	}()
-
-	err := cleanupNetworkFixtureResource(ctx,
-		func(ctx context.Context) error {
-			_, err := client.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: id}.Build())
-			return err
-		},
-		func(ctx context.Context) (*privatev1.Metadata, error) {
-			response, err := client.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: id}.Build())
-			if err != nil {
-				return nil, err
-			}
-			return response.GetObject().GetMetadata(), nil
-		},
-		func(ctx context.Context) error {
-			response, err := client.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: id}.Build())
-			if err != nil {
-				return err
-			}
-			object := response.GetObject()
-			object.GetMetadata().SetFinalizers(nil)
-			_, err = client.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
-				Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
-			}.Build())
-			return err
-		})
+// sharedNetworkClass returns the deployment NetworkClass, as a create response so that fixtures can use it in place of
+// their own NetworkClass. The installer creates it; on a deployment without it the fixture creates it. The integration
+// environment runs without the operator, so the fixture reports it READY through the private API.
+func sharedNetworkClass(ctx context.Context,
+	client privatev1.NetworkClassesClient) (*privatev1.NetworkClassesCreateResponse, error) {
+	list, err := client.List(ctx, privatev1.NetworkClassesListRequest_builder{Limit: new(int32(1))}.Build())
 	if err != nil {
-		summary.Outcome = "error"
-	} else {
-		summary.Outcome = "success"
+		return nil, err
 	}
-	return err
+	var object *privatev1.NetworkClass
+	if len(list.GetItems()) > 0 {
+		object = list.GetItems()[0]
+	} else {
+		response, err := client.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+			Object: privatev1.NetworkClass_builder{
+				Title:         "OSAC NetworkClass",
+				FabricManager: "netris",
+				K8SManager:    new(testVMK8SManagerName),
+				Spec: privatev1.NetworkClassSpec_builder{
+					Defaults: privatev1.NetworkDefaults_builder{
+						VirtualNetworkIpv4Cidr: "10.128.0.0/16",
+						SubnetIpv4Cidr:         "10.128.0.0/24",
+					}.Build(),
+					EastWestCapabilities: privatev1.NetworkClassEastWestCapabilities_builder{
+						SupportsEastWestEthernet: true,
+					}.Build(),
+					AddressPlan: privatev1.AddressPlan_builder{
+						Overlay: 0.75,
+						Fabric:  0.125,
+						LbVip:   0.125,
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		if grpcstatus.Code(err) == grpccodes.AlreadyExists {
+			return sharedNetworkClass(ctx, client)
+		}
+		if err != nil {
+			return nil, err
+		}
+		object = response.GetObject()
+	}
+	if object.GetStatus().GetState() != privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY {
+		if !object.HasStatus() {
+			object.SetStatus(&privatev1.NetworkClassStatus{})
+		}
+		object.GetStatus().SetState(privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+		object.GetStatus().ClearMessage()
+		response, err := client.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+			Object:     object,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.message"}},
+		}.Build())
+		if err != nil {
+			return nil, err
+		}
+		object = response.GetObject()
+	}
+	return privatev1.NetworkClassesCreateResponse_builder{Object: object}.Build(), nil
 }
 
 func cleanupSecurityGroupFixture(ctx context.Context, client privatev1.SecurityGroupsClient, id string) error {
@@ -728,4 +745,13 @@ func updateNetworkClassStatusWithRetry(
 	}
 
 	return fmt.Errorf("update NetworkClass %q status after %d version conflicts: %w", id, maxAttempts, err)
+}
+
+// singletonNetworkClassID returns the ID of the deployment NetworkClass, or an empty string when there is none.
+func singletonNetworkClassID(ctx context.Context, client privatev1.NetworkClassesClient) string {
+	response, err := client.List(ctx, privatev1.NetworkClassesListRequest_builder{Limit: new(int32(1))}.Build())
+	if err != nil || len(response.GetItems()) == 0 {
+		return ""
+	}
+	return response.GetItems()[0].GetId()
 }

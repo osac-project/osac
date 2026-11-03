@@ -17,6 +17,7 @@ from tests.e2e.core.helpers import wait_for_tenant_deletion
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.keycloak_admin import delete_user_by_username, get_admin_token, keycloak_admin_request
 from tests.e2e.core.runner import env, poll_until, run_unchecked
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,14 @@ def _delete_private(grpc: GRPCClient, *, service: str, resource_id: str, label: 
 
 
 def _wait_private_absent(
-    grpc: GRPCClient, *, service: str, resource_id: str, label: str, retries: int = 12, delay: int = 2
+    grpc: GRPCClient,
+    *,
+    service: str,
+    resource_id: str,
+    label: str,
+    resource_kind: WaitResourceKind,
+    retries: int = 12,
+    delay: int = 2,
 ) -> bool:
     """Wait until a private-API Get returns NotFound so tenant delete is not raced.
 
@@ -93,6 +101,8 @@ def _wait_private_absent(
             retries=retries,
             delay=delay,
             description=f"{label} {resource_id} gone",
+            resource_kind=resource_kind,
+            resource_id=resource_id,
         )
     except TimeoutError:
         logger.warning("%s %s still present before tenant delete", label, resource_id)
@@ -173,11 +183,21 @@ def onboarding_resources(
     finally:
         logger.info("teardown tenant %s", tenant_name)
         leftover_private: list[str] = []
-        for service, key, label in (
-            (f"{PRIVATE_API}.ProjectMemberships/Delete", "membership_id", "ProjectMembership"),
-            (f"{PRIVATE_API}.Projects/Delete", "project_id", "Project"),
-            (f"{PRIVATE_API}.RoleBindings/Delete", "role_binding_id", "RoleBinding"),
-            (f"{PRIVATE_API}.IdentityProviders/Delete", "idp_id", "IdentityProvider"),
+        for service, key, label, kind in (
+            (
+                f"{PRIVATE_API}.ProjectMemberships/Delete",
+                "membership_id",
+                "ProjectMembership",
+                WaitResourceKind.PROJECT_MEMBERSHIP,
+            ),
+            (f"{PRIVATE_API}.Projects/Delete", "project_id", "Project", WaitResourceKind.PROJECT),
+            (f"{PRIVATE_API}.RoleBindings/Delete", "role_binding_id", "RoleBinding", WaitResourceKind.ROLE_BINDING),
+            (
+                f"{PRIVATE_API}.IdentityProviders/Delete",
+                "idp_id",
+                "IdentityProvider",
+                WaitResourceKind.IDENTITY_PROVIDER,
+            ),
         ):
             resource_id = resources.get(key, "")
             if not resource_id:
@@ -189,6 +209,7 @@ def onboarding_resources(
                 service=get_service,
                 resource_id=resource_id,
                 label=label,
+                resource_kind=kind,
                 retries=24 if key == "project_id" else 12,
                 delay=5 if key == "project_id" else 2,
             ):
@@ -220,6 +241,8 @@ def onboarding_resources(
                     retries=36,
                     delay=5,
                     description=f"namespace {tenant_name} gone",
+                    resource_kind=WaitResourceKind.NAMESPACE,
+                    resource_id=tenant_name,
                 )
             except TimeoutError:
                 logger.warning("Namespace %s still present after tenant deletion", tenant_name)
@@ -236,6 +259,8 @@ def onboarding_resources(
                     retries=60,
                     delay=5,
                     description=f"Keycloak organization {tenant_name} gone",
+                    resource_kind=WaitResourceKind.KEYCLOAK_ORGANIZATION,
+                    resource_id=tenant_name,
                 )
             except Exception as exc:
                 logger.warning(

@@ -17,33 +17,27 @@
 # =============================================================================
 
 global:
+  # Networking settings; see docs/network-backend.md.
   networking:
-    # Supported facade profiles today:
-    #   - fabricManager: netris, k8sManager: ""     → fabricManager netris
-    #   - fabricManager: "", k8sManager: k8s_only   → k8sManager k8s_only
-    # Reserved fabric managers (cudn_net, vlan) fail during render.
+    # Fixed at installation.
+    provisioningEnabled: true
+    # Provider infrastructure ranges, including the workloads' DNS resolvers.
+    excludedIpv4Cidrs: []
+    # [REQUIRED] Name in the provider's Fabric Manager registration ConfigMap,
+    # which the admin applies to the release namespace.
     fabricManager: ""
-    k8sManager: k8s_only
-    netris:
-      controllerUrl: ""
-      # Verify the Netris HTTPS certificate. Set false only for trusted
-      # non-production endpoints with self-signed certificates.
-      validateCerts: true
-      # Optional customer-created ConfigMap in the AAP namespace. The
-      # ConfigMap must contain the Netris CA chain under bundle.pem.
-      caBundle:
-        configMap: ""
-      credentials:
-        username: ""
-        externalSecret: true
-      siteId: ""
-      tenantId: ""
-      tenantName: ""
-      mgmtVpcId: ""
-      mgmtVpcName: ""
-      resourceClassMap: ""
-    # Empty means Helm generates the manager-specific default NetworkClass.
-    networkClass: {}
+    # cudn_evpn, required with VMaaS.
+    k8sManager: cudn_evpn
+    networkClass:
+      defaults:
+        virtualNetworkIPv4CIDR: 10.200.0.0/16
+        subnetIPv4CIDR: 10.200.0.0/20
+        ingressRules: []
+        egressRules:
+        - protocol: PROTOCOL_ALL
+          ipv4Cidr: 0.0.0.0/0
+      eastWestCapabilities:
+        supportsEastWestEthernet: false
 
 # ---------------------
 # Operator CRDs
@@ -57,16 +51,6 @@ operatorCrds:
 # OSAC Operator
 # ---------------------
 operator:
-  # Admin onboarding inventory for Phase 1 Netris Ethernet east-west domains.
-  # Keys must exactly match Netris hostnames; values are BareMetalInstanceType
-  # IDs from the private API. Empty means no inventory ConfigMap is created.
-  # Configure spec.fabric_bindings.ethernet_ew on each referenced type through
-  # the private API (for example, netris: "42" for a Netris template ID).
-  fabricDomainInventory: {}
-  # fabricDomainInventory:
-  #   gpu-01.example.com: "gpu-bmit-id"
-  #   gpu-02.example.com: "gpu-bmit-id"
-
   image:
     repository: ghcr.io/osac-project/osac-operator
     # Production: pin to a specific SHA or release tag.
@@ -346,19 +330,13 @@ aap:
     remoteClusterKubeconfigSecretName: ""
     remoteClusterKubeconfigSecretKey: kubeconfig
 
-  # AAP instance groups. The global.networking facade supplies the network
-  # fields; use these blocks for enablement and expert-only overrides.
+  # AAP instance groups.
   instanceGroups:
     clusterFulfillment:
       enabled: false
       config:
         DNS_CLASS: "dns.route53.dns"
         DNS_ZONE: ""
-        SERVER_SSH_BASTION_HOST: ""
-        SERVER_SSH_BASTION_USER: ""
-        SERVER_SSH_USER: ""
-        SERVER_MGMT_ROUTE_DESTINATION: ""
-        SERVER_MGMT_ROUTE_GATEWAY: ""
         EXTERNAL_ACCESS_BASE_DOMAIN: ""
         EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: ""
         EXTERNAL_ACCESS_API_INTERNAL_NETWORK: ""
@@ -368,20 +346,17 @@ aap:
       secret:
         AWS_ACCESS_KEY_ID: ""
         AWS_SECRET_ACCESS_KEY: ""
-        SERVER_SSH_KEY: ""
-        SERVER_SSH_BASTION_KEY: ""
+    # Network manager settings (ConfigMap network-fulfillment-ig) and
+    # credentials (Secret network-fulfillment-ig), written verbatim. Keys start
+    # with the manager's registration name in upper case.
     networkFulfillment:
-      enabled: false
-      # Expert overrides only. Normal installations should use
-      # global.networking.netris so shared values cannot drift.
-      config:
-        NETRIS_USERNAME: ""
-        NETRIS_SITE_ID: ""
-        NETRIS_TENANT_ID: ""
-        NETRIS_TENANT_NAME: ""
-      secret:
-        # Prefer global.networking.netris.credentials.externalSecret.
-        NETRIS_PASSWORD: ""
+      enabled: true
+      config: {}
+      # config:
+      #   NETRIS_CONTROLLER_URL: "https://netris.example.com"
+      secret: {}
+      # secret:
+      #   NETRIS_PASSWORD: ""
     publishTemplates:
       enabled: true
       config:
@@ -488,26 +463,6 @@ hubAccess:
   # and ClusterRoleBinding. Required by create-hub Helm hook to
   # generate a kubeconfig for remote cluster management.
   enabled: true
-
-# ---------------------
-# Networking (user-facing facade)
-# ---------------------
-# Preferred API: global.networking (see network-backend.md).
-# Low-level AAP blocks are under aap.instanceGroups and are expert overrides
-# when global.expertOverrides.aap is true.
-#
-# global:
-#   networking:
-#     fabricManager: netris
-#     k8sManager: ""
-#     netris:
-#       controllerUrl: "https://redhat-ctl.netris.io"
-#       credentials:
-#         username: "netris"
-#         externalSecret: true
-#       siteId: "5"
-#       tenantId: "1"
-#       tenantName: "Admin"
 
 # ---------------------
 # Pre-install Validation

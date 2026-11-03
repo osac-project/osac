@@ -6,8 +6,8 @@
 - name: Configure project SCM and merge into controller projects
   ansible.builtin.include_tasks: configure_project_scm.yml
 
-- name: Validate managed Netris launch policy
-  ansible.builtin.include_tasks: validate_netris_policy.yml
+- name: Validate the pinned launch policy
+  ansible.builtin.include_tasks: validate_launch_policy.yml
 
 - name: OSAC AAP
   ansible.builtin.include_role:

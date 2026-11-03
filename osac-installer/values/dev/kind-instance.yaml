@@ -4,6 +4,18 @@
 global:
   fulfillmentTrust:
     enabled: false
+  # Provider networking disabled: networking resources become READY without
+  # provider work. The osac chart renders the Netris Fabric Manager and
+  # cudn_evpn Kubernetes Manager registrations from fabricManager and
+  # k8sManager; no Netris connection settings are needed.
+  networking:
+    provisioningEnabled: false
+    fabricManager: netris
+    k8sManager: cudn_evpn
+    # TEST-NET-1 (RFC 5737): the fulfillment it/ specs assert that VirtualNetwork
+    # and ExternalIPPool creates overlapping it are rejected.
+    excludedIpv4Cidrs:
+      - 192.0.2.0/24
   services:
     caas:
       enabled: true
@@ -138,6 +150,8 @@ aap:
 # --- Bare Metal Fulfillment (no Metal3 in Kind — deploy chart but 0 replicas) ---
 bmf:
   replicaCount: 0
+  secretAPI:
+    issuerUrl: https://keycloak.keycloak.svc.cluster.local:8443/realms/osac
   secrets:
     inventoryConfig: osac-inventory-config-metal3-test
     managementConfig: osac-management-config-metal3-test

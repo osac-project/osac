@@ -49,9 +49,15 @@ on:
   workflow_dispatch:
     inputs:
       test-suite:
-        description: "Test suite (vmaas/sanity, vmaas/regression, vmaas/serial, or vmaas for all)"
+        description: "Suite relative to tests/e2e (vmaas/sanity, vmaas/regression, vmaas/serial, or vmaas for all)"
         required: false
+        type: choice
         default: "vmaas/sanity"
+        options:
+          - "vmaas/sanity"
+          - "vmaas/regression"
+          - "vmaas/serial"
+          - "vmaas"
       test-filter:
         description: "pytest -k filter"
         required: false
@@ -89,11 +95,10 @@ jobs:
           'vmaas/sanity'
         }}
       test-filter: ${{ inputs.test-filter || '' }}
-      # Run the selected VMaaS tier, VMaaS-specific references, and common
-      # networking references. Netris VMaaS runs only in its manual suite.
+      # The generic VMaaS suite selects tests/e2e/vmaas. Netris networking
+      # tests live under tests/e2e/networking/vmaas and use their own workflow.
       test-marker: >-
         (${{ inputs.test-marker || 'sanity or regression or requires_vmaas or reference_common or reference_networking' }})
-        and not requires_netris
       # osac-installer now lives as a subdirectory of this same monorepo checkout
       # (its Chart.yaml deps resolve fulfillment-service/osac-operator/osac-aap/BMF
       # as ../../../<name> siblings within it), so a PR touching those components
@@ -135,3 +140,8 @@ jobs:
       # Only a run on main (schedule, or a manual run against main): that is where the workload identity trusts this
       # workflow. A run for a pull request or a queue entry passes inputs.sha and never gets it.
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' && inputs.sha == '' }}
+    secrets:
+      # The central ci-observe OTLP ingest password, for the live telemetry
+      # push when the ci-observe input is on. The reusable workflow degrades
+      # to running the test without telemetry when it is empty.
+      ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}

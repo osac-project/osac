@@ -1596,18 +1596,12 @@ var _ = Describe("Storage Controller", func() {
 			Expect(conns).NotTo(HaveKey("be-csp-vast-inline"))
 			Expect(conns).NotTo(HaveKey("be-csp-vast-secret"))
 
-			// Verify shared OSAC-managed callers (resolveTierDefinitions and resolveAndInjectTierContext)
+			// Verify shared OSAC-managed callers (resolveTierDefinitions and resolveAndPartitionTierContext)
 			// return and inject only the cspManaged=false tier and connection.
 			callerDefs, callerConns, err := resolveTierDefinitions(ctx, tiersClient, backendsClient, secretsClient)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(callerDefs).To(Equal(osacDefs))
 			Expect(callerConns).To(Equal(conns))
-
-			injectedOnlyCtx, injectedOnlyDefs, err := resolveAndInjectTierContext(ctx, tiersClient, backendsClient, secretsClient, "clusterOrder", "test-co")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(injectedOnlyDefs).To(Equal(osacDefs))
-			Expect(provisioning.StorageTierDefinitionsFromContext(injectedOnlyCtx)).To(Equal(osacDefs))
-			Expect(provisioning.StorageBackendConnectionsFromContext(injectedOnlyCtx)).To(Equal(conns))
 
 			partCtx, partOSAC, partCSP, partSkipped, err := resolveAndPartitionTierContext(ctx, tiersClient, backendsClient, secretsClient, "computeInstance", "test-ci")
 			Expect(err).NotTo(HaveOccurred())
@@ -2145,7 +2139,7 @@ var _ = Describe("Storage Controller", func() {
 				backendProvider, nil, pollInterval,
 				provisioning.DefaultMaxJobHistory,
 			)
-			// TiersClient is set but BackendsClient is nil — resolveAndInjectTierContext
+			// TiersClient is set but BackendsClient is nil — resolveAndPartitionTierContext
 			// requires both to attempt resolution, so it skips and returns nil error.
 			// This covers the partial-client misconfiguration path: no tier resolution
 			// is attempted, no error is raised, and deletion proceeds normally.
@@ -3968,9 +3962,7 @@ var _ = Describe("Storage Controller", func() {
 			}
 			Expect(recordedEvents).To(HaveLen(2))
 			Expect(recordedEvents[0]).To(ContainSubstring(eventReasonDuplicateStorageClass))
-			Expect(recordedEvents[0]).To(ContainSubstring(`tier "csp-combo-dup": multiple csp-managed StorageClasses [`))
-			Expect(recordedEvents[0]).To(ContainSubstring("csp-combo-dup-sc-1"))
-			Expect(recordedEvents[0]).To(ContainSubstring("csp-combo-dup-sc-2"))
+			Expect(recordedEvents[0]).To(ContainSubstring(`tier "csp-combo-dup": multiple csp-managed StorageClasses [csp-combo-dup-sc-1, csp-combo-dup-sc-2]`))
 			Expect(recordedEvents[1]).To(ContainSubstring(eventReasonMissingStorageTier))
 			Expect(recordedEvents[1]).To(ContainSubstring(`tier "csp-combo-missing" has no StorageClass`))
 		})

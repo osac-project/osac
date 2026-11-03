@@ -1,0 +1,43 @@
+---
+# Gaps of the network manager roles that no input can close. Each entry is one
+# gap id printed by tests/coverage/role_coverage.py, with a one-line reason. An
+# entry that no longer matches a gap fails the check, so a dead branch that
+# becomes live, or is removed, is noticed here.
+
+# _attach_port_to_vnet.yaml: both callers exclude a missing port first.
+- gap: "task-never-ran osac/templates/roles/netris/tasks/_attach_port_to_vnet.yaml: Fail if no port to attach"
+  reason: "dead: apply_network_attachment stops on _target_port none before the include, delete_network_attachment guards it with `when`"
+- gap: "when-never-true osac/templates/roles/netris/tasks/_attach_port_to_vnet.yaml: Fail if no port to attach"
+  reason: "dead: same two guards in the callers"
+- gap: "fail-path-never-fired osac/templates/roles/netris/tasks/_attach_port_to_vnet.yaml: Fail if no port to attach"
+  reason: "dead: same two guards in the callers"
+
+# _detach_port_from_vnet.yaml: the block conditions hold for both callers.
+- gap: "when-never-false osac/templates/roles/netris/tasks/_detach_port_from_vnet.yaml: block Detach port from V-Net#0"
+  reason: "dead: apply loops over ports read from Netris, delete guards `_target_port is not none`"
+- gap: "when-never-false osac/templates/roles/netris/tasks/_detach_port_from_vnet.yaml: block Detach port from V-Net#1"
+  reason: "dead: _op_vnet_name is NETRIS_BM_PROVISIONING_VNET, which _settings.yaml requires, or the V-Net name of the Subnet"
+
+# The two ExternalIP tasks log in themselves.
+- gap: "when-never-false osac/templates/roles/netris/tasks/create_external_ip.yaml: Log in to Netris"
+  reason: "dead: no earlier task of the job sets netris_session_cookie and the generic playbook refuses extra vars"
+- gap: "when-never-false osac/templates/roles/netris/tasks/delete_external_ip.yaml: Log in to Netris"
+  reason: "dead: no earlier task of the job sets netris_session_cookie and the generic playbook refuses extra vars"
+
+# release_cluster_ingress_ip.yaml: the block holds one debug task.
+- gap: "task-never-ran osac/templates/roles/netris/tasks/release_cluster_ingress_ip.yaml: Report the error"
+  reason: "dead: _noop.yaml is one debug with defaults on every variable, so the block cannot fail"
+- gap: "rescue-never-entered osac/templates/roles/netris/tasks/release_cluster_ingress_ip.yaml: block Release the cluster ingress address on Netris"
+  reason: "dead: _noop.yaml is one debug with defaults on every variable, so the block cannot fail"
+
+# Python branches no input of the public functions reaches.
+- gap: "python-line plugins/module_utils/netris_external_ip.py:132"
+  reason: "dead: select_address starts with current <= last_host, and the loop raises at end >= last_host, so current stays <= last_host"
+- gap: "python-branch plugins/module_utils/netris_external_ip.py:131->132"
+  reason: "dead: same invariant of select_address"
+- gap: "python-line plugins/filter/netris_contract.py:267"
+  reason: "dead: both callers of _dhcp_range return before it on an empty physical list"
+- gap: "python-branch plugins/filter/netris_contract.py:266->267"
+  reason: "dead: both callers of _dhcp_range return before it on an empty physical list"
+- gap: "python-branch plugins/filter/netris_contract.py:120->99"
+  reason: "dead: line 100 raises on an unknown group, and the elif chain handles all seven known groups"

@@ -1,5 +1,5 @@
 #!/usr/bin/python
-"""Reserve or release a UID-owned Netris IPAM /32 for an ExternalIP."""
+"""Reserve or release the Netris IPAM /32 of an ExternalIP."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ version_added: "1.0.0"
 author:
   - OSAC project
 description:
-  - Allocates a UID-owned canonical IPv4 /32 nat reservation inside the pool CIDR.
-  - Reuses the one valid UID reservation on allocation retry.
-  - Releases the UID reservation and confirms its absence before success.
+  - Allocates a canonical IPv4 /32 nat reservation inside the pool CIDR, named by the ExternalIP API ID.
+  - Reuses the one valid reservation on allocation retry.
+  - Releases the reservation and confirms its absence before success.
 options:
   operation:
     description: ExternalIP operation to perform.
@@ -30,12 +30,16 @@ options:
       - external_ip.allocate
       - external_ip.release
   resource:
-    description: Supplied ExternalIP snapshot.
+    description: ExternalIP snapshot of the task input (its id owns the reservation).
     type: dict
     required: true
   pool:
-    description: Supplied external_ip_pool snapshot.
+    description: external_ip_pool snapshot of the task input (id and spec.cidrs with one CIDR).
     type: dict
+    required: true
+  reservation_name:
+    description: Name of the reservation, built by the role from the ExternalIP API ID.
+    type: str
     required: true
   controller_url:
     description: Netris controller URL.
@@ -71,8 +75,9 @@ EXAMPLES = r"""
 - name: Allocate the ExternalIP reservation
   osac.templates.netris_external_ip:
     operation: external_ip.allocate
-    resource: "{{ external_ip }}"
+    resource: "{{ osac_job_vars.resource }}"
     pool: "{{ osac_job_vars.external_ip_pool }}"
+    reservation_name: "{{ netris_names.eip_reservation }}"
     controller_url: "{{ netris_controller_url }}"
     session_cookie: "{{ netris_session_cookie }}"
     site_id: "{{ netris_site_id }}"
@@ -98,6 +103,7 @@ ARGUMENT_SPEC = {
     },
     "resource": {"type": "dict", "required": True},
     "pool": {"type": "dict", "required": True},
+    "reservation_name": {"type": "str", "required": True},
     "controller_url": {"type": "str", "required": True, "no_log": True},
     "session_cookie": {"type": "str", "required": True, "no_log": True},
     "site_id": {"type": "int", "required": True},
@@ -126,7 +132,7 @@ def _redacted_invocation(params: dict) -> dict:
 
 
 def main() -> None:
-    """Run one ExternalIP v1 provider operation with sanitized failures."""
+    """Run one ExternalIP provider operation with sanitized failures."""
     module = AnsibleModule(
         argument_spec=ARGUMENT_SPEC,
         supports_check_mode=True,
@@ -135,7 +141,7 @@ def main() -> None:
     params = module.params
     try:
         request = core.validate_request(
-            params["resource"], params["pool"], params["operation"]
+            params["resource"], params["pool"], params["operation"], params["reservation_name"]
         )
         if module.check_mode:
             module.exit_json(

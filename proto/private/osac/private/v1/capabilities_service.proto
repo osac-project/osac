@@ -50,6 +50,10 @@ message CapabilitiesGetResponse {
 
   // Service tiers enabled in this deployment.
   repeated ServiceTier enabled_services = 2;
+
+  // Whether provider networking is enabled, as stored at the first start of the fulfillment service. The operator
+  // and the bare metal fulfillment operator read it.
+  bool networking_provisioning_enabled = 3 [(cleanapi.field).private = true];
 }
 
 // Provides information about the capabilities of the server, such as the list of trusted token issuers for

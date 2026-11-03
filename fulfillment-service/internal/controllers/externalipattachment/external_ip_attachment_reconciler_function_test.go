@@ -372,7 +372,8 @@ var _ = Describe("delete", func() {
 		}.Build()
 
 		f := &function{
-			logger: logger,
+			logger:              logger,
+			networkingHubReader: &fakeNetworkingHubReader{err: controllers.ErrNoNetworkingHubs},
 		}
 
 		t := &task{
@@ -651,7 +652,7 @@ var _ = Describe("hub persistence", func() {
 		hubNamespace = "hub-123-ns"
 	)
 
-	It("persists the selected hub before creating the ExternalIPAttachment CR", func() {
+	It("creates the ExternalIPAttachment CR and persists the selected hub in the same reconcile", func() {
 		ctx := context.Background()
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
@@ -695,15 +696,16 @@ var _ = Describe("hub persistence", func() {
 
 		list := &osacv1alpha1.ExternalIPAttachmentList{}
 		Expect(fakeClient.List(ctx, list)).To(Succeed())
-		Expect(list.Items).To(BeEmpty(), "a projected CR must not exist until its Hub assignment is persisted")
+		Expect(list.Items).To(HaveLen(1))
 
+		// The next reconcile adopts the CR instead of creating another one:
 		Expect(f.run(ctx, attachment)).To(Succeed())
 		Expect(fakeClient.List(ctx, list)).To(Succeed())
 		Expect(list.Items).To(HaveLen(1))
 		Expect(list.Items[0].Namespace).To(Equal(hubNamespace))
 	})
 
-	It("does not create an ExternalIPAttachment CR when persisting the selected hub fails", func() {
+	It("finds the CR on delete when persisting the selected hub failed after its creation", func() {
 		ctx := context.Background()
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
@@ -743,12 +745,17 @@ var _ = Describe("hub persistence", func() {
 
 		list := &osacv1alpha1.ExternalIPAttachmentList{}
 		Expect(fakeClient.List(ctx, list)).To(Succeed())
-		Expect(list.Items).To(BeEmpty())
+		Expect(list.Items).To(HaveLen(1))
 
-		// A later delete read from Fulfillment has no persisted hub and may safely remove the finalizer,
-		// because the failed hub update happened before any Kubernetes CR could be created.
+		// A later delete read from Fulfillment has no persisted hub. It looks the CR up in the canonical hub,
+		// deletes it, and keeps the finalizer until the CR is gone:
 		attachment.GetStatus().SetHub("")
 		deleteTask := &task{r: f, externalIPAttachment: attachment}
+		_ = deleteTask.delete(ctx)
+		Expect(hasFinalizer(attachment)).To(BeTrue())
+		Expect(fakeClient.List(ctx, list)).To(Succeed())
+		Expect(list.Items).To(BeEmpty())
+		deleteTask = &task{r: f, externalIPAttachment: attachment}
 		Expect(deleteTask.delete(ctx)).To(Succeed())
 		Expect(hasFinalizer(attachment)).To(BeFalse())
 	})

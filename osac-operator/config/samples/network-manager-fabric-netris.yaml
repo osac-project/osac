@@ -1,11 +1,11 @@
-# Example ConfigMap: Netris fabric manager registration
+# Example ConfigMap: Netris Fabric Manager registration (contract section 4.2)
 #
-# Fabric managers handle all physical networking operations for a NetworkClass:
-# virtual network segments, security groups, external IPs, and NAT gateways.
-#
-# The operator discovers fabric managers by selecting ConfigMaps with the label
+# The installer chart renders this registration when
+# global.networking.fabricManager=netris. The operator discovers Fabric
+# Managers by selecting ConfigMaps with the label
 # osac.openshift.io/network-fabric-manager. The data.name value is referenced
-# by NetworkClass.fabricManager.
+# by NetworkClass.fabricManager. The ConfigMap must be immutable and may only
+# use the data keys below.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -13,16 +13,12 @@ metadata:
   namespace: osac
   labels:
     osac.openshift.io/network-fabric-manager: "true"
+immutable: true
 data:
-  # Unique identifier for this manager. Must match the fabricManager field
-  # on NetworkClass resources that use this backend.
   name: netris
-
-  # Human-readable description of the manager.
   description: >-
-    Netris SDN controller for physical fabric management.
-    Manages VLAN/VxLAN segments, ACLs, public IP allocation, and NAT gateways.
-
-  # Comma-separated list of capabilities this manager supports.
-  # Current release: ipv4 only.
-  capabilities: "ipv4"
+    Netris SDN controller for physical fabric management. Provides EVPN
+    networking and Ethernet east-west connectivity for bare-metal servers.
+  ansible_role: osac.templates.netris
+  network_types: evpn
+  capabilities: eastWestEthernet,security_group_icmp

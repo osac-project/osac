@@ -1,0 +1,51 @@
+---
+# Delete the Netris Server Cluster osac-fd-<id> of a FabricDomain. The cluster
+# is found by that name in the VPC of the stored VirtualNetwork; without the
+# VirtualNetwork in the input the unique name alone finds it. A cluster that is
+# already gone, or whose VPC is gone, is a success.
+- name: Delete the FabricDomain from Netris
+  block:
+    - name: Check the settings
+      ansible.builtin.include_tasks: _settings.yaml
+      vars:
+        netris_require: [controller, credentials, site, tenant]
+
+    - name: Check the task input
+      ansible.builtin.include_tasks: _input.yaml
+
+    - name: Build the object names
+      ansible.builtin.include_tasks: _names.yaml
+
+    - name: Delete the Server Cluster by name
+      when: netris_in.virtual_network_id | length == 0
+      ansible.builtin.include_role:
+        name: netris.controller.server_cluster
+        tasks_from: delete
+      vars:
+        server_cluster_name: "{{ netris_names.server_cluster }}"
+        server_cluster_site_id: "{{ netris_site_id | int }}"
+        server_cluster_allow_name_only_lookup: true
+
+    - name: Delete the Server Cluster in the VPC
+      when: netris_in.virtual_network_id | length > 0
+      block:
+        - name: Look up the VPC of the VirtualNetwork
+          ansible.builtin.include_role:
+            name: netris.controller.vpc
+            tasks_from: read
+          vars:
+            vpc_name: "{{ netris_names.vpc }}"
+            vpc_tenant_id: "{{ netris_tenant_id | int }}"
+
+        - name: Delete the Server Cluster
+          when: netris_vpc is mapping
+          ansible.builtin.include_role:
+            name: netris.controller.server_cluster
+            tasks_from: delete
+          vars:
+            server_cluster_name: "{{ netris_names.server_cluster }}"
+            server_cluster_site_id: "{{ netris_site_id | int }}"
+            server_cluster_vpc_id: "{{ netris_vpc.id | int }}"
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

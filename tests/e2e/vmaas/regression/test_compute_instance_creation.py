@@ -18,6 +18,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.regression
 
@@ -56,7 +57,7 @@ def test_compute_instance_lifecycle(
         # The VM was created without a project, so its heartbeats must carry no
         # project dimension: the engine emits only the facts a resource carries.
         metering.expect_no_project()
-        metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180)
+        metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=180, resource_kind=WaitResourceKind.COMPUTE_INSTANCE)
         metering.verify()
 
         # Verify billing dimensions match the running resource: the heartbeat's
@@ -65,7 +66,10 @@ def test_compute_instance_lifecycle(
         # reversal and the typed replacement arrive, so wait for the heartbeat
         # that carries the type instead of inspecting the cached one.
         heartbeat_event = metering.heartbeat_with_dimensions(
-            uuid, {"instance_type": cli.default_instance_type}, timeout=180
+            uuid,
+            {"instance_type": cli.default_instance_type},
+            timeout=180,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
         )
         bd = heartbeat_event.get("data", {}).get("billing_dimensions", {})
         assert bd.get("instance_type") == cli.default_instance_type, (

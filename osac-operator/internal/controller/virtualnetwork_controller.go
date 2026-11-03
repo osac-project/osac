@@ -1,5 +1,5 @@
 /*
-Copyright 2025.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,422 +18,201 @@ package controller
 
 import (
 	"context"
-	"fmt"
-	"time"
+	"errors"
 
-	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
-	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
-	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
-	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 )
 
-const (
-	osacVirtualNetworkFinalizer = "osac.openshift.io/virtualnetwork-finalizer"
-)
-
-// VirtualNetworkReconciler reconciles a VirtualNetwork object
+// VirtualNetworkReconciler runs the VirtualNetwork tasks (contract §4.10):
+// Fabric create_virtual_network, then Kubernetes create_virtual_network when
+// the NetworkClass selects a Kubernetes Manager; delete in reverse order once
+// every child is gone.
 type VirtualNetworkReconciler struct {
-	client.Client
-	APIReader client.Reader
-	Scheme    *runtime.Scheme
-	// mgr and targetCluster are stored for future multi-cluster target client resolution
-	mgr                  mcmanager.Manager
-	NetworkingNamespace  string
-	ProvisioningProvider provisioning.ProvisioningProvider
-	StatusPollInterval   time.Duration
-	MaxJobHistory        int
-	targetCluster        mc.ClusterName
-	// Resolver resolves a NetworkClass to its registered managers. Nil when the
-	// two-manager model isn't configured (no gRPC connection / networking namespace),
-	// in which case the controller cannot resolve an implementation strategy for any
-	// VirtualNetwork and requeues until Resolver is configured.
-	Resolver *dispatcher.Resolver
-	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
-	// provisioning jobs. When false, resources are set to Ready immediately
-	// without triggering any infrastructure provisioning.
-	NetworkProvisioningEnabled bool
+	Client              client.Client
+	Engine              *networktask.Engine
+	NetworkingNamespace string
 }
 
-// NewVirtualNetworkReconciler creates a new reconciler for VirtualNetwork resources.
-func NewVirtualNetworkReconciler(
-	mgr mcmanager.Manager,
-	networkingNamespace string,
-	provisioningProvider provisioning.ProvisioningProvider,
-	statusPollInterval time.Duration,
-	maxJobHistory int,
-	targetCluster mc.ClusterName,
-	resolver *dispatcher.Resolver,
-) *VirtualNetworkReconciler {
-	if mgr == nil {
-		panic("mgr must not be nil")
-	}
-	if statusPollInterval <= 0 {
-		statusPollInterval = provisioning.DefaultStatusPollInterval
-	}
-	if maxJobHistory <= 0 {
-		maxJobHistory = provisioning.DefaultMaxJobHistory
-	}
-	return &VirtualNetworkReconciler{
-		Client:               mgr.GetLocalManager().GetClient(),
-		APIReader:            mgr.GetLocalManager().GetAPIReader(),
-		Scheme:               mgr.GetLocalManager().GetScheme(),
-		mgr:                  mgr,
-		NetworkingNamespace:  networkingNamespace,
-		ProvisioningProvider: provisioningProvider,
-		StatusPollInterval:   statusPollInterval,
-		MaxJobHistory:        maxJobHistory,
-		targetCluster:        targetCluster,
-		Resolver:             resolver,
-	}
-}
-
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks/finalizers,verbs=update
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=list
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=securitygroups,verbs=list
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=natgateways,verbs=list
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=fabricdomains,verbs=list
-
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-func (r *VirtualNetworkReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	vnet := &v1alpha1.VirtualNetwork{}
-	if err := r.Get(ctx, req.NamespacedName, vnet); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	val, exists := vnet.Annotations[osacManagementStateAnnotation]
-	if vnet.ObjectMeta.DeletionTimestamp.IsZero() && exists && val == ManagementStateUnmanaged {
-		log.Info("ignoring VirtualNetwork due to management-state annotation", "management-state", val)
-		return ctrl.Result{}, nil
-	}
-
-	log.Info("start reconcile")
-
-	oldstatus := vnet.Status.DeepCopy()
-
-	var res ctrl.Result
-	var err error
-	if vnet.ObjectMeta.DeletionTimestamp.IsZero() {
-		res, err = r.handleUpdate(ctx, vnet)
-	} else {
-		res, err = r.handleDelete(ctx, vnet)
-	}
-
-	if !equality.Semantic.DeepEqual(vnet.Status, *oldstatus) {
-		log.Info("status requires update")
-		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(vnet), vnet.Status); err != nil {
-			return res, err
-		}
-	}
-
-	log.Info("end reconcile")
-	return res, err
-}
-
-// handleUpdate processes VirtualNetwork creation and updates
-func (r *VirtualNetworkReconciler) handleUpdate(ctx context.Context, vnet *v1alpha1.VirtualNetwork) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	// Add finalizer if not present
-	if controllerutil.AddFinalizer(vnet, osacVirtualNetworkFinalizer) {
-		if err := r.Update(ctx, vnet); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	// Set phase to Progressing only on first reconcile (empty phase).
-	// Subsequent reconciles preserve the current phase — it gets updated
-	// by OnSuccess/OnFailed callbacks in RunProvisioningLifecycle.
-	if vnet.Status.Phase == "" {
-		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseProgressing
-	}
-
-	if !r.NetworkProvisioningEnabled {
-		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady
-		setReadyConditionTrue(&vnet.Status.Conditions)
-		return ctrl.Result{}, nil
-	}
-
-	// Determine implementation strategy from the dispatcher-resolved manager for this
-	// VirtualNetwork's NetworkClass (fabric_manager, falling back to k8s_manager).
-	implementationStrategy, err := resolveImplementationStrategy(
-		ctx, r.Resolver, "VirtualNetwork", vnet.Spec.NetworkClass)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if implementationStrategy == "" {
-		msg := fmt.Sprintf("NetworkClass '%s' has no fabric_manager or k8s_manager configured", vnet.Spec.NetworkClass)
-		setReadyConditionBlocked(&vnet.Status.Conditions, v1alpha1.ReasonNoManagerConfigured, msg)
-		log.Info("implementation strategy not set", "virtualNetwork", vnet.Name)
-		return ctrl.Result{}, fmt.Errorf("cannot reconcile VirtualNetwork %q: %s", vnet.Name, msg)
-	}
-
-	// Add implementation-strategy annotation if not present or different
-	// This allows AAP playbooks to select the appropriate role without doing lookups
-	if vnet.Annotations == nil {
-		vnet.Annotations = make(map[string]string)
-	}
-	if vnet.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
-		vnet.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
-		log.Info("setting implementation-strategy annotation", "strategy", implementationStrategy)
-		if err := r.Update(ctx, vnet); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
-	}
-
-	// Compute desired config version from spec and inherited implementation strategy
-	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
-		Spec                   v1alpha1.VirtualNetworkSpec
-		ImplementationStrategy string
-	}{vnet.Spec, implementationStrategy})
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to compute desired config version: %w", err)
-	}
-	vnet.Status.DesiredConfigVersion = desiredVersion
-
-	// Set phase to Progressing only on first provision (empty phase) or when spec changed
-	// after a previous success. Don't override Failed during backoff.
-	if vnet.Status.Phase == "" || (vnet.Status.Phase == v1alpha1.VirtualNetworkPhaseReady &&
-		!provisioning.IsConfigApplied(&vnet.Status.ProvisioningJobs, vnet.Status.DesiredConfigVersion)) {
-		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseProgressing
-	}
-
-	// Handle provisioning
-	return r.handleProvisioning(ctx, vnet)
-}
-
-// handleProvisioning manages the provisioning job lifecycle for a VirtualNetwork.
-// Uses shared RunProvisioningLifecycle with config-version-based backoff on failure.
-func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet *v1alpha1.VirtualNetwork) (ctrl.Result, error) {
-	if r.ProvisioningProvider == nil {
-		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping provisioning")
-		return ctrl.Result{}, nil
-	}
-
-	onProvisioningFailure := func(message string) {
-		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed
-		setReadyConditionFailed(&vnet.Status.Conditions, message)
-	}
-
-	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, vnet,
-		&provisioning.State{Jobs: &vnet.Status.ProvisioningJobs, DesiredConfigVersion: vnet.Status.DesiredConfigVersion},
-		r.MaxJobHistory, r.StatusPollInterval,
-		&provisioning.PollCallbacks{
-			OnFailed:      onProvisioningFailure,
-			OnOutputError: onProvisioningFailure,
-			OnSuccess: func(status provisioning.ProvisionStatus) {
-				if vnet.Annotations[osacImplementationStrategyAnnotation] == agentlessNetImplementationStrategy {
-					vnet.Status.BackendNetworkID = string(vnet.UID)
-				} else if backendID := outputString(status.Outputs, "vpc_id", "backend_network_id", "backendNetworkId"); backendID != "" {
-					vnet.Status.BackendNetworkID = backendID
-				} else if vnet.Status.BackendNetworkID == "" && vnet.Annotations[osacImplementationStrategyAnnotation] == netrisFabricManager {
-					message := "AAP job succeeded but returned no vpc_id artifact for the Netris VirtualNetwork"
-					vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed
-					if job := provisioning.FindLatestJobByType(vnet.Status.ProvisioningJobs, v1alpha1.JobTypeProvision); job != nil {
-						job.State = v1alpha1.JobStateFailed
-						job.Message = message
-						job.ConfigVersion = vnet.Status.DesiredConfigVersion
-					}
-					setReadyConditionFailed(&vnet.Status.Conditions, message)
-					return
-				}
-				vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady
-				setReadyConditionTrue(&vnet.Status.Conditions)
-			},
-		},
-		func() bool {
-			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(vnet), &v1alpha1.VirtualNetwork{}, func(obj client.Object) []v1alpha1.JobStatus {
-				return obj.(*v1alpha1.VirtualNetwork).Status.ProvisioningJobs
-			})
-		},
-		func() error {
-			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(vnet), vnet.Status)
-		},
-	)
-}
-
-// handleDelete processes VirtualNetwork deletion
-func (r *VirtualNetworkReconciler) handleDelete(ctx context.Context, vnet *v1alpha1.VirtualNetwork) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-	log.Info("deleting virtual network")
-
-	vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseDeleting
-
-	// Base finalizer has already been removed, cleanup complete
-	if !controllerutil.ContainsFinalizer(vnet, osacVirtualNetworkFinalizer) {
-		return ctrl.Result{}, nil
-	}
-
-	// FabricDomains depend on this VPC. The protection finalizer is the normal
-	// guard; listing references also closes the race where a FabricDomain is
-	// created immediately before this VirtualNetwork starts deletion.
-	vnetUUID := vnet.Labels[osacVirtualNetworkIDLabel]
-	if controllerutil.ContainsFinalizer(vnet, osacFabricDomainProtectionFinalizer) && vnetUUID == "" {
-		log.Info("waiting for VirtualNetwork UUID before checking FabricDomain references", "virtualNetwork", vnet.Name)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
-	if vnetUUID != "" {
-		fabricDomains := &v1alpha1.FabricDomainList{}
-		if err := r.List(ctx, fabricDomains, client.InNamespace(vnet.Namespace)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("listing FabricDomains: %w", err)
-		}
-		for i := range fabricDomains.Items {
-			if fabricDomains.Items[i].Spec.VirtualNetwork == vnetUUID {
-				log.Info("waiting for referencing FabricDomain to be deleted before deprovisioning VirtualNetwork",
-					"fabricDomain", fabricDomains.Items[i].Name)
-				return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-			}
-		}
-		if controllerutil.RemoveFinalizer(vnet, osacFabricDomainProtectionFinalizer) {
-			if err := r.Update(ctx, vnet); err != nil {
-				return ctrl.Result{}, fmt.Errorf("releasing stale FabricDomain protection from VirtualNetwork %q: %w", vnet.Name, err)
-			}
-		}
-	}
-
-	// Gate: wait for all child resources referencing this VNet to be fully removed
-	// before triggering the AAP deprovision job. Without this gate, the infrastructure
-	// backend rejects the VNet deletion because children still exist, causing unnecessary
-	// failed jobs and backoff delays.
-	// Child resources reference the parent VN by its fulfillment-service UUID
-	// (stored in the osac.openshift.io/virtualnetwork-uuid label), not by K8s name.
-	ns := vnet.Namespace
-
-	subnetList := &v1alpha1.SubnetList{}
-	if err := r.List(ctx, subnetList, client.InNamespace(ns)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("listing subnets: %w", err)
-	}
-	for i := range subnetList.Items {
-		if subnetList.Items[i].Spec.VirtualNetwork == vnetUUID {
-			log.Info("waiting for child Subnet to be deleted before deprovisioning VirtualNetwork",
-				"subnet", subnetList.Items[i].Name)
-			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-		}
-	}
-
-	sgList := &v1alpha1.SecurityGroupList{}
-	if err := r.List(ctx, sgList, client.InNamespace(ns)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("listing security groups: %w", err)
-	}
-	for i := range sgList.Items {
-		if sgList.Items[i].Spec.VirtualNetwork == vnetUUID {
-			log.Info("waiting for child SecurityGroup to be deleted before deprovisioning VirtualNetwork",
-				"securityGroup", sgList.Items[i].Name)
-			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-		}
-	}
-
-	natgwList := &v1alpha1.NATGatewayList{}
-	if err := r.List(ctx, natgwList, client.InNamespace(ns)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("listing NAT gateways: %w", err)
-	}
-	for i := range natgwList.Items {
-		if natgwList.Items[i].Spec.VirtualNetwork == vnetUUID {
-			log.Info("waiting for child NATGateway to be deleted before deprovisioning VirtualNetwork",
-				"natGateway", natgwList.Items[i].Name)
-			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-		}
-	}
-
-	// Handle deprovisioning
-	if vnet.Annotations[osacImplementationStrategyAnnotation] == "" {
-		log.Info("skipping deprovisioning — resource was never provisioned")
-	} else {
-		result, err := r.handleDeprovisioning(ctx, vnet)
-		if err != nil {
-			return result, err
-		}
-
-		// If we need to requeue (jobs still running), do so
-		if result.RequeueAfter > 0 {
-			return result, nil
-		}
-	}
-
-	// Deprovisioning complete or skipped, remove base finalizer
-	if controllerutil.RemoveFinalizer(vnet, osacVirtualNetworkFinalizer) {
-		if err := r.Update(ctx, vnet); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	return ctrl.Result{}, nil
-}
-
-// handleDeprovisioning manages the deprovisioning job lifecycle for a VirtualNetwork.
-// It triggers deprovisioning if needed and polls job status until completion.
-func (r *VirtualNetworkReconciler) handleDeprovisioning(ctx context.Context, vnet *v1alpha1.VirtualNetwork) (ctrl.Result, error) {
-	if r.ProvisioningProvider == nil {
-		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
-		return ctrl.Result{}, nil
-	}
-
-	// handleUpdate always stamps osacImplementationStrategyAnnotation before any
-	// provisioning job is ever triggered, so by the time a job exists the annotation
-	// is guaranteed present. A VirtualNetwork deleted before its first successful
-	// handleUpdate reconcile (e.g. immediately after creation, before the dispatcher
-	// resolved a manager) has neither: nothing was ever provisioned, and — unlike
-	// Subnet's playbooks — the VirtualNetwork delete playbook indexes the annotation
-	// directly with no spec-field fallback, so triggering a deprovision job here would
-	// just fail with an undefined implementation_strategy. Skip deprovisioning
-	// entirely in that case; there is nothing to tear down.
-	if vnet.Annotations[osacImplementationStrategyAnnotation] == "" && len(vnet.Status.ProvisioningJobs) == 0 {
-		ctrllog.FromContext(ctx).Info("no implementation-strategy annotation and no job history, skipping deprovisioning")
-		return ctrl.Result{}, nil
-	}
-
-	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, vnet,
-		&vnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
-	if err != nil || !done {
-		return result, err
-	}
-	return ctrl.Result{}, nil
-}
-
-// updateStatusWithRetry updates the virtual network status with retry on conflict.
-func (r *VirtualNetworkReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.VirtualNetworkStatus) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		latest := &v1alpha1.VirtualNetwork{}
-		if err := r.Get(ctx, key, latest); err != nil {
-			return err
-		}
-		latest.Status = newStatus
-		return r.Status().Update(ctx, latest)
+// Reconcile advances the create or delete of a VirtualNetwork.
+func (r *VirtualNetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return reconcileNetworkResource(ctx, r.Client, r.Engine, req.NamespacedName, networkingHandlers[*v1alpha1.VirtualNetwork]{
+		kind:      kindVirtualNetwork,
+		finalizer: osacVirtualNetworkFinalizer,
+		newObject: func() *v1alpha1.VirtualNetwork { return &v1alpha1.VirtualNetwork{} },
+		status:    func(o *v1alpha1.VirtualNetwork) any { return &o.Status },
+		create:    r.create,
+		remove:    r.remove,
 	})
 }
 
-// NetworkingNamespacePredicate filters events by namespace for networking resources.
-func NetworkingNamespacePredicate(namespace string) predicate.Predicate {
-	return predicate.NewPredicateFuncs(
-		func(obj client.Object) bool {
-			return obj.GetNamespace() == namespace
+func (r *VirtualNetworkReconciler) create(ctx context.Context, vn *v1alpha1.VirtualNetwork) (ctrl.Result, error) {
+	if vn.Status.NetworkManagers == nil {
+		nc, err := readyNetworkClass(ctx, r.Client, vn.Namespace, r.Engine.ProvisioningEnabled())
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if nc == nil {
+			networktask.SetProgressing(vn, msgWaitingForNetworkClass)
+			return waitResult(), nil
+		}
+		copyManagers(vn, nc.Status.NetworkManagers, false)
+		vn.Status.NetworkType = nc.Status.NetworkType
+	}
+	input, store, err := inputOf(vn, func() (map[string]any, error) {
+		resource, err := networktask.Snapshot(vn, kindVirtualNetwork, vn.Spec, "ipv4Cidr")
+		if err != nil {
+			return nil, err
+		}
+		return networktask.NewInput(vn, kindVirtualNetwork, resource), nil
+	}, nil)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !r.Engine.ProvisioningEnabled() {
+		networktask.SetProvisioningDisabled(vn, networktask.CreateVirtualNetwork)
+		return ctrl.Result{}, store()
+	}
+	out, done, err := runTasks(ctx, r.Engine, vn,
+		func() (networktask.Request, bool) {
+			req := taskRequest(vn, kindVirtualNetwork, networktask.CreateVirtualNetwork, v1alpha1.NetworkJobManagerFabric, r.fabricVars(vn, input))
+			req.BeforeLaunch = store
+			// The engine writes these fields with the Succeeded entry.
+			req.SerializeVNI = true
+			req.Accept = func(ctx context.Context, result networktask.Result) error {
+				backendID, l3VNI, err := networktask.ParseVirtualNetworkResult(result, r.networkType(vn))
+				if err != nil {
+					return err
+				}
+				if vn.Status.L3VNI != 0 && l3VNI != vn.Status.L3VNI {
+					return networktask.Reject("l3_vni changed from the accepted value")
+				}
+				if l3VNI != 0 && vn.Status.L3VNI == 0 {
+					if err := networktask.CheckVNIUnique(ctx, r.Engine.APIReader(), vn.Namespace, string(vn.UID), l3VNI, networktask.VNIKindL3); err != nil {
+						return err
+					}
+				}
+				if backendID != "" {
+					vn.Status.BackendNetworkID = backendID
+				}
+				if l3VNI != 0 {
+					vn.Status.L3VNI = l3VNI
+				}
+				return nil
+			}
+			return req, true
 		},
+		func() (networktask.Request, bool) {
+			return taskRequest(vn, kindVirtualNetwork, networktask.CreateVirtualNetwork, v1alpha1.NetworkJobManagerKubernetes, input), hasKubernetes(vn)
+		},
+	)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if done {
+		networktask.SetSucceeded(vn)
+		return ctrl.Result{}, nil
+	}
+	reportOutcome(vn, out)
+	return outcomeResult(out), nil
+}
+
+// networkType is the network_type of the Fabric tasks: set only when a
+// Kubernetes Manager is recorded (contract §4.9).
+func (r *VirtualNetworkReconciler) networkType(vn *v1alpha1.VirtualNetwork) string {
+	if !hasKubernetes(vn) {
+		return ""
+	}
+	return string(vn.Status.NetworkType)
+}
+
+// fabricVars adds network_type to the Fabric tasks when a Kubernetes Manager
+// is recorded (contract §4.9).
+func (r *VirtualNetworkReconciler) fabricVars(vn *v1alpha1.VirtualNetwork, input map[string]any) map[string]any {
+	if !hasKubernetes(vn) {
+		return input
+	}
+	return networktask.WithLaunchKeys(input, map[string]any{"network_type": string(vn.Status.NetworkType)})
+}
+
+func (r *VirtualNetworkReconciler) remove(ctx context.Context, vn *v1alpha1.VirtualNetwork) (bool, ctrl.Result, error) {
+	if id := vn.Labels[osacVirtualNetworkIDLabel]; id != "" {
+		children, err := r.hasChildren(ctx, vn.Namespace, id)
+		if err != nil || children {
+			return false, waitResult(), err
+		}
+	}
+	input := cleanupInput(vn)
+	return runCleanup(ctx, r.Engine, vn, kindVirtualNetwork,
+		cleanupTask{create: networktask.CreateVirtualNetwork, manager: v1alpha1.NetworkJobManagerKubernetes,
+			request: func() networktask.Request {
+				return taskRequest(vn, kindVirtualNetwork, networktask.DeleteVirtualNetwork, v1alpha1.NetworkJobManagerKubernetes, input)
+			}},
+		cleanupTask{create: networktask.CreateVirtualNetwork, manager: v1alpha1.NetworkJobManagerFabric,
+			request: func() networktask.Request {
+				return taskRequest(vn, kindVirtualNetwork, networktask.DeleteVirtualNetwork, v1alpha1.NetworkJobManagerFabric, r.fabricVars(vn, input))
+			}},
 	)
 }
 
-// SetupWithManager sets up the controller with the Manager.
+// hasChildren reports whether a Subnet, SecurityGroup, NATGateway or
+// FabricDomain of the VirtualNetwork exists.
+func (r *VirtualNetworkReconciler) hasChildren(ctx context.Context, namespace, id string) (bool, error) {
+	checks := []struct {
+		list  client.ObjectList
+		match func(client.Object) bool
+	}{
+		{&v1alpha1.SubnetList{}, func(o client.Object) bool { return o.(*v1alpha1.Subnet).Spec.VirtualNetwork == id }},
+		{&v1alpha1.SecurityGroupList{}, func(o client.Object) bool { return o.(*v1alpha1.SecurityGroup).Spec.VirtualNetwork == id }},
+		{&v1alpha1.NATGatewayList{}, func(o client.Object) bool { return o.(*v1alpha1.NATGateway).Spec.VirtualNetwork == id }},
+		{&v1alpha1.FabricDomainList{}, func(o client.Object) bool { return o.(*v1alpha1.FabricDomain).Spec.VirtualNetwork == id }},
+	}
+	for _, check := range checks {
+		found, err := anyItem(ctx, r.Client, check.list, namespace, check.match)
+		if err != nil || found {
+			return found, err
+		}
+	}
+	return false, nil
+}
+
+// SetupWithManager registers the controller. NetworkClass events re-queue
+// waiting VirtualNetworks; child events re-queue a VirtualNetwork being deleted.
 func (r *VirtualNetworkReconciler) SetupWithManager(mgr mcmanager.Manager) error {
-	return mcbuilder.ControllerManagedBy(mgr).
-		For(&v1alpha1.VirtualNetwork{},
-			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
-			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(false)).
+	localMgr := mgr.GetLocalManager()
+	if localMgr == nil {
+		return errors.New("local manager is nil")
+	}
+	ns := r.NetworkingNamespace
+	inNamespace := builder.WithPredicates(NetworkingNamespacePredicate(ns))
+	vnList := func() client.ObjectList { return &v1alpha1.VirtualNetworkList{} }
+	parentOf := func(vnID func(client.Object) string) func(obj, trigger client.Object) bool {
+		return func(obj, trigger client.Object) bool {
+			return obj.GetLabels()[osacVirtualNetworkIDLabel] == vnID(trigger)
+		}
+	}
+	return ctrl.NewControllerManagedBy(localMgr).
+		Named("virtualnetwork").
+		For(&v1alpha1.VirtualNetwork{}, inNamespace).
+		Watches(&v1alpha1.NetworkClass{}, enqueueWhere(r.Client, ns, vnList, func(obj, _ client.Object) bool {
+			return obj.(*v1alpha1.VirtualNetwork).Status.NetworkManagers == nil
+		}), inNamespace).
+		Watches(&v1alpha1.Subnet{}, enqueueWhere(r.Client, ns, vnList, parentOf(func(o client.Object) string {
+			return o.(*v1alpha1.Subnet).Spec.VirtualNetwork
+		})), inNamespace).
+		Watches(&v1alpha1.SecurityGroup{}, enqueueWhere(r.Client, ns, vnList, parentOf(func(o client.Object) string {
+			return o.(*v1alpha1.SecurityGroup).Spec.VirtualNetwork
+		})), inNamespace).
+		Watches(&v1alpha1.NATGateway{}, enqueueWhere(r.Client, ns, vnList, parentOf(func(o client.Object) string {
+			return o.(*v1alpha1.NATGateway).Spec.VirtualNetwork
+		})), inNamespace).
+		Watches(&v1alpha1.FabricDomain{}, enqueueWhere(r.Client, ns, vnList, parentOf(func(o client.Object) string {
+			return o.(*v1alpha1.FabricDomain).Spec.VirtualNetwork
+		})), inNamespace).
 		Complete(r)
 }

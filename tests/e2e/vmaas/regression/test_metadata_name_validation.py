@@ -23,7 +23,7 @@ class TestVirtualNetworkNameValidation:
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
             grpc.call(
                 service=f"{PUBLIC_API}.VirtualNetworks/Create",
-                data={"object": {"spec": {"ipv4_cidr": "10.100.0.0/16"}}},
+                data={"object": {"spec": {"ipv4_cidr": "172.20.0.0/16"}}},
             )
         assert_grpc_rejected(exc_info, "InvalidArgument")
         grpc_msg = grpc_error_message(exc_info.value)
@@ -38,13 +38,13 @@ class TestVirtualNetworkNameValidation:
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
             grpc.call(
                 service=f"{PUBLIC_API}.VirtualNetworks/Create",
-                data={"object": {"metadata": {"name": invalid_name}, "spec": {"ipv4_cidr": "10.100.0.0/16"}}},
+                data={"object": {"metadata": {"name": invalid_name}, "spec": {"ipv4_cidr": "172.20.0.0/16"}}},
             )
         assert_grpc_rejected(exc_info, "InvalidArgument")
 
     def test_create_with_valid_dns_name(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
         vn_name = f"test-valid-dns-{uuid.uuid4().hex[:8]}"
-        vn_id, cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_name, "10.110.0.0/16")
+        vn_id, cr_name = create_and_wait_for_virtual_network(grpc, k8s_hub_client, vn_name, "172.23.0.0/16")
         try:
             vn: dict = grpc.get_virtual_network(vn_id=vn_id)
             assert vn["object"]["metadata"]["name"] == vn_name

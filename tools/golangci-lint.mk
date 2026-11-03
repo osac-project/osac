@@ -12,7 +12,10 @@
 # scoped to one.
 GOLANGCI_LINT_BIN ?= $(shell git rev-parse --show-toplevel)/tools/bin
 GOLANGCI_LINT = $(GOLANGCI_LINT_BIN)/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.13.2
+# v2.14.0 is the oldest release whose bundled golang.org/x/tools reads the
+# export data version 5 that Go 1.27.2 and later write; older releases fail
+# every package with typecheck errors.
+GOLANGCI_LINT_VERSION ?= v2.15.0
 
 $(GOLANGCI_LINT_BIN):
 	mkdir -p $(GOLANGCI_LINT_BIN)

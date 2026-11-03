@@ -20,6 +20,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.vmaas.networking_lifecycle_helpers import (
     create_and_wait_for_subnet,
     create_and_wait_for_virtual_network,
@@ -65,7 +66,15 @@ def _set_deletion_test_finalizer(private_grpc: GRPCClient, ci_id: str, *, presen
             raise
         return True
 
-    poll_until(fn=update_finalizers, until=bool, retries=10, delay=1, description="ComputeInstance test finalizer")
+    poll_until(
+        fn=update_finalizers,
+        until=bool,
+        retries=10,
+        delay=1,
+        description="ComputeInstance test finalizer",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=ci_id,
+    )
 
 
 def test_compute_instance_with_disk_image(
@@ -152,10 +161,10 @@ def test_deletion_feedback_with_removed_disk_image_releases_network(
 
     try:
         vn_id, vn_cr = create_and_wait_for_virtual_network(
-            grpc, k8s_hub_client, unique_name("e2e-deleting-vn"), "10.214.0.0/16"
+            grpc, k8s_hub_client, unique_name("e2e-deleting-vn"), "172.29.0.0/16"
         )
         subnet_id, subnet_cr = create_and_wait_for_subnet(
-            grpc, k8s_hub_client, vn_id, "10.214.1.0/24", name_prefix="e2e-deleting-subnet"
+            grpc, k8s_hub_client, vn_id, "172.29.1.0/24", name_prefix="e2e-deleting-subnet"
         )
         sg_id = grpc.create_security_group(name=unique_name("e2e-deleting-sg"), virtual_network=vn_id)
         sg_cr = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)

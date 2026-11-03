@@ -1,0 +1,33 @@
+{
+  "destination": {
+    "address": "10.0.1.17",
+    "routing_domain": {
+      "subnet_id": "8a2b4c6d-1e3f-4a5b-9c7d-2e4f6a8b0c12",
+      "type": "tenant_virtual_network",
+      "virtual_network_id": "3f1c9a2e-7b4d-4e8a-9c6f-0d2e4b6a8c10"
+    }
+  },
+  "external_ip": {
+    "address": "203.0.113.1",
+    "id": "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
+  },
+  "manager": {
+    "ansible_role": "osac.templates.netris",
+    "name": "netris",
+    "type": "fabric"
+  },
+  "resource": {
+    "apiVersion": "osac.openshift.io/v1alpha1",
+    "id": "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+    "kind": "ExternalIPAttachment",
+    "metadata": {
+      "generation": 1,
+      "name": "externalipattachment-9c8b7a6d",
+      "namespace": "osac-networking",
+      "uid": "00000000-0000-4000-8000-000000000005"
+    },
+    "spec": {}
+  },
+  "task": "attach_external_ip",
+  "tenant": "tenant-a"
+}

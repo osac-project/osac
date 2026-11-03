@@ -175,7 +175,7 @@ func parseSecurityRule(ruleArg string) (*publicv1.SecurityRule, error) {
 	var protocol publicv1.Protocol
 	var protocolSet bool
 	var portFrom, portTo *int32
-	var ipv4Cidr, ipv6Cidr *string
+	var ipv4Cidr *string
 
 	for _, pair := range pairs {
 		parts := strings.SplitN(pair, "=", 2)
@@ -219,15 +219,6 @@ func parseSecurityRule(ruleArg string) (*publicv1.SecurityRule, error) {
 				return nil, fmt.Errorf("invalid ipv4-cidr %q: address is not IPv4", value)
 			}
 			ipv4Cidr = &value
-		case "ipv6-cidr":
-			prefix, err := netip.ParsePrefix(value)
-			if err != nil {
-				return nil, fmt.Errorf("invalid ipv6-cidr %q: %w", value, err)
-			}
-			if !prefix.Addr().Is6() {
-				return nil, fmt.Errorf("invalid ipv6-cidr %q: address is not IPv6", value)
-			}
-			ipv6Cidr = &value
 		default:
 			return nil, fmt.Errorf("unknown key %q in rule", key)
 		}
@@ -250,7 +241,6 @@ func parseSecurityRule(ruleArg string) (*publicv1.SecurityRule, error) {
 		PortFrom: portFrom,
 		PortTo:   portTo,
 		Ipv4Cidr: ipv4Cidr,
-		Ipv6Cidr: ipv6Cidr,
 	}.Build(), nil
 }
 
@@ -265,7 +255,7 @@ func parseProtocol(value string) (publicv1.Protocol, error) {
 	case "all":
 		return publicv1.Protocol_PROTOCOL_ALL, nil
 	default:
-		return publicv1.Protocol_PROTOCOL_UNSPECIFIED, fmt.Errorf("invalid protocol %q: must be one of tcp, udp, icmp, all", value)
+		return publicv1.Protocol_PROTOCOL_UNSPECIFIED, fmt.Errorf("invalid protocol %q: must be one of tcp, udp, all", value)
 	}
 }
 
@@ -290,10 +280,14 @@ Rules are specified using {{ bt }}key=value{{ bt }} pairs separated by commas. F
 
 Supported keys:
 
-* {{ bt }}protocol{{ bt }} - Required, one of {{ bt }}tcp{{ bt }}, {{ bt }}udp{{ bt }}, {{ bt }}icmp{{ bt }} or {{ bt }}all{{ bt }}.
-* {{ bt }}port-from{{ bt }} - Optional, port number from which the traffic is allowed.
-* {{ bt }}port-to{{ bt }} - Optional, port number to which the traffic is allowed.
-* {{ bt }}ipv4-cidr{{ bt }} - Optional, IPv4 CIDR block for the traffic.
+* {{ bt }}protocol{{ bt }} - Required, one of {{ bt }}tcp{{ bt }}, {{ bt }}udp{{ bt }} or {{ bt }}all{{ bt }}.
+  {{ bt }}all{{ bt }} matches every protocol, ICMP included.
+* {{ bt }}port-from{{ bt }} - Required for {{ bt }}tcp{{ bt }} and {{ bt }}udp{{ bt }}, not allowed for {{ bt }}all{{ bt }}.
+  Port number from which the traffic is allowed.
+* {{ bt }}port-to{{ bt }} - Required for {{ bt }}tcp{{ bt }} and {{ bt }}udp{{ bt }}, not allowed for {{ bt }}all{{ bt }}.
+  Port number to which the traffic is allowed.
+* {{ bt }}ipv4-cidr{{ bt }} - Required, canonical IPv4 CIDR block of the traffic source (ingress) or
+  destination (egress). Use {{ bt }}0.0.0.0/0{{ bt }} to match all IPv4 addresses.
 
 Examples:
 
@@ -307,8 +301,8 @@ Examples:
 # Create a security group with multiple rules
 {{ binary }} create securitygroup --name app-sg --virtual-network <virtualnetwork-id> \
 --ingress protocol=tcp,port-from=443,port-to=443,ipv4-cidr=0.0.0.0/0 \
---ingress protocol=icmp,ipv4-cidr=10.0.0.0/8 \
---egress protocol=all
+--ingress protocol=all,ipv4-cidr=10.0.0.0/8 \
+--egress protocol=all,ipv4-cidr=0.0.0.0/0
 {{ bt 3 }}
 `
 
@@ -329,5 +323,5 @@ Can be specified multiple times.
 
 const egressFlagHelp = `
 _RULE_ - Egress rule in {{ bt }}key=value,...{{ bt }} format, for example
-{{ bt }}protocol=all{{ bt }}. Can be specified multiple times.
+{{ bt }}protocol=all,ipv4-cidr=0.0.0.0/0{{ bt }}. Can be specified multiple times.
 `

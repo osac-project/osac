@@ -1,0 +1,39 @@
+{
+  "external_ip_pool": {
+    "apiVersion": "osac.openshift.io/v1alpha1",
+    "id": "5d6a0f1e-2b3c-4d5e-8f90-a1b2c3d4e5f6",
+    "kind": "ExternalIPPool",
+    "metadata": {
+      "generation": 1,
+      "name": "externalippool-5d6a0f1e",
+      "namespace": "osac-networking",
+      "uid": "00000000-0000-4000-8000-000000000003"
+    },
+    "spec": {
+      "cidrs": [
+        "203.0.113.0/30"
+      ]
+    }
+  },
+  "manager": {
+    "ansible_role": "osac.templates.netris",
+    "name": "netris",
+    "type": "fabric"
+  },
+  "resource": {
+    "apiVersion": "osac.openshift.io/v1alpha1",
+    "id": "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+    "kind": "ExternalIP",
+    "metadata": {
+      "generation": 1,
+      "name": "externalip-7b6a5c4d",
+      "namespace": "osac-networking",
+      "uid": "00000000-0000-4000-8000-000000000004"
+    },
+    "spec": {
+      "pool": "5d6a0f1e-2b3c-4d5e-8f90-a1b2c3d4e5f6"
+    }
+  },
+  "task": "create_external_ip",
+  "tenant": "tenant-a"
+}

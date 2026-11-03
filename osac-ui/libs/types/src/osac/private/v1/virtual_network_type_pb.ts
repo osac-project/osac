@@ -22,28 +22,21 @@ import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
-import type { NetworkClassReference } from "./network_class_type_pb";
-import { file_osac_private_v1_network_class_type } from "./network_class_type_pb";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file osac/private/v1/virtual_network_type.proto.
  */
 export const file_osac_private_v1_virtual_network_type: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvdmlydHVhbF9uZXR3b3JrX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSK5AQoOVmlydHVhbE5ldHdvcmsSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESMQoEc3BlYxgDIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5WaXJ0dWFsTmV0d29ya1NwZWMSOwoGc3RhdHVzGAQgASgLMiUub3NhYy5wcml2YXRlLnYxLlZpcnR1YWxOZXR3b3JrU3RhdHVzQgTiQQEDIo0DChJWaXJ0dWFsTmV0d29ya1NwZWMSdwoJaXB2NF9jaWRyGAEgASgJQl/iQQEFukhYugFOChNjYW5vbmljYWxfaXB2NF9jaWRyEh1tdXN0IGJlIGEgY2Fub25pY2FsIElQdjQgQ0lEUhoYdGhpcy5pc0lwUHJlZml4KDQsIHRydWUpyAEBcgIQAUgAiAEBEnkKCWlwdjZfY2lkchgCIAEoCUJh4kEBBbpIWroBVwoXaXB2Nl9jaWRyX25vdF9zdXBwb3J0ZWQSMElQdjYgYW5kIGR1YWwtc3RhY2sgbmV0d29ya2luZyBhcmUgbm90IHN1cHBvcnRlZBoKdGhpcyA9PSAnJ0gBiAEBEhsKBnJlZ2lvbhgDIAEoCUIL4kECAgWKtRgCCAESSgoNbmV0d29ya19jbGFzcxgEIAEoCzImLm9zYWMucHJpdmF0ZS52MS5OZXR3b3JrQ2xhc3NSZWZlcmVuY2VCC+JBAgEFirUYAggBQgwKCl9pcHY0X2NpZHJCDAoKX2lwdjZfY2lkciKCAQoUVmlydHVhbE5ldHdvcmtTdGF0dXMSMwoFc3RhdGUYASABKA4yJC5vc2FjLnByaXZhdGUudjEuVmlydHVhbE5ldHdvcmtTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQESEwoDaHViGAMgASgJQgaKtRgCCAFCCgoIX21lc3NhZ2UiOAocVmlydHVhbE5ldHdvcmtMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJKqIBChNWaXJ0dWFsTmV0d29ya1N0YXRlEiUKIVZJUlRVQUxfTkVUV09SS19TVEFURV9VTlNQRUNJRklFRBAAEiEKHVZJUlRVQUxfTkVUV09SS19TVEFURV9QRU5ESU5HEAESHwobVklSVFVBTF9ORVRXT1JLX1NUQVRFX1JFQURZEAISIAocVklSVFVBTF9ORVRXT1JLX1NUQVRFX0ZBSUxFRBADQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_cleanapi_cleanapi, file_buf_validate_validate, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_network_class_type]);
+  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvdmlydHVhbF9uZXR3b3JrX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSK5AQoOVmlydHVhbE5ldHdvcmsSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESMQoEc3BlYxgDIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5WaXJ0dWFsTmV0d29ya1NwZWMSOwoGc3RhdHVzGAQgASgLMiUub3NhYy5wcml2YXRlLnYxLlZpcnR1YWxOZXR3b3JrU3RhdHVzQgTiQQEDIs8BChJWaXJ0dWFsTmV0d29ya1NwZWMSdwoJaXB2NF9jaWRyGAEgASgJQl/iQQEFukhYugFOChNjYW5vbmljYWxfaXB2NF9jaWRyEh1tdXN0IGJlIGEgY2Fub25pY2FsIElQdjQgQ0lEUhoYdGhpcy5pc0lwUHJlZml4KDQsIHRydWUpyAEBcgIQAUgAiAEBQgwKCl9pcHY0X2NpZHJKBAgCEANKBAgDEARKBAgEEAVSCWlwdjZfY2lkclIGcmVnaW9uUg1uZXR3b3JrX2NsYXNzIoIBChRWaXJ0dWFsTmV0d29ya1N0YXR1cxIzCgVzdGF0ZRgBIAEoDjIkLm9zYWMucHJpdmF0ZS52MS5WaXJ0dWFsTmV0d29ya1N0YXRlEhQKB21lc3NhZ2UYAiABKAlIAIgBARITCgNodWIYAyABKAlCBoq1GAIIAUIKCghfbWVzc2FnZSI4ChxWaXJ0dWFsTmV0d29ya0xvY2FsUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkqzAEKE1ZpcnR1YWxOZXR3b3JrU3RhdGUSJQohVklSVFVBTF9ORVRXT1JLX1NUQVRFX1VOU1BFQ0lGSUVEEAASIQodVklSVFVBTF9ORVRXT1JLX1NUQVRFX1BFTkRJTkcQARIfChtWSVJUVUFMX05FVFdPUktfU1RBVEVfUkVBRFkQAhIgChxWSVJUVUFMX05FVFdPUktfU1RBVEVfRkFJTEVEEAMSIgoeVklSVFVBTF9ORVRXT1JLX1NUQVRFX0RFTEVUSU5HEAQiBAgFEAVCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_cleanapi_cleanapi, file_buf_validate_validate, file_google_api_field_behavior, file_osac_private_v1_metadata_type]);
 
 /**
  * Represents a tenant-isolated virtual network.
  *
- * VirtualNetwork provides network isolation for compute instances within a region. Each VirtualNetwork is backed
- * by a specific NetworkClass implementation strategy (e.g., "udn-net" for User-Defined Networks, "phys-net" for
- * physical network infrastructure).
+ * VirtualNetwork provides network isolation for a tenant's workloads. The deployment's NetworkClass decides which
+ * managers implement it. VirtualNetworks support canonical IPv4 addressing only.
  *
- * VirtualNetworks currently support canonical IPv4 addressing only. The legacy ipv6_cidr field remains in the
- * wire contract for compatibility, but non-empty IPv6 and dual-stack requests are rejected.
- *
- * Tenant isolation is enforced via the standard Metadata tenant field. VirtualNetworks are scoped to
- * a single region and cannot span multiple regions.
+ * Tenant isolation is enforced via the standard Metadata tenant field.
  *
  * @generated from message osac.private.v1.VirtualNetwork
  */
@@ -105,38 +98,6 @@ export type VirtualNetworkSpec = Message<"osac.private.v1.VirtualNetworkSpec"> &
    * @generated from field: optional string ipv4_cidr = 1;
    */
   ipv4Cidr?: string | undefined;
-
-  /**
-   * Legacy IPv6 CIDR field. IPv6 and dual-stack networking are not supported; non-empty values are rejected.
-   *
-   *
-   * @generated from field: optional string ipv6_cidr = 2;
-   */
-  ipv6Cidr?: string | undefined;
-
-  /**
-   * Region where the network is created. This is required and immutable after creation.
-   *
-   * VirtualNetworks are region-scoped resources and cannot span multiple regions. Compute instances can only
-   * attach to VirtualNetworks in the same region.
-   *
-   * Example: "us-east-1", "eu-west-2"
-   *
-   * @generated from field: string region = 3;
-   */
-  region: string;
-
-  /**
-   * The NetworkClass for this VirtualNetwork. If omitted on creation, the default NetworkClass is used.
-   * Once set (either explicitly or via default), this field is immutable.
-   *
-   * The selected NetworkClass determines the network backend (via its fabric_manager/k8s_manager) and the
-   * available capabilities. The NetworkClass must support the IP addressing mode implied by whichever of
-   * ipv4_cidr and ipv6_cidr are set below.
-   *
-   * @generated from field: osac.private.v1.NetworkClassReference network_class = 4;
-   */
-  networkClass?: NetworkClassReference | undefined;
 };
 
 /**
@@ -169,7 +130,7 @@ export type VirtualNetworkStatus = Message<"osac.private.v1.VirtualNetworkStatus
    * "Configuring network backend".
    *
    * For FAILED state, this contains error details explaining what went wrong, such as "Invalid CIDR range" or
-   * "NetworkClass does not support dual-stack".
+   * "the Fabric Manager rejected the CIDR".
    *
    * For READY state, this is typically empty or contains confirmation like "Network ready for compute instances".
    *
@@ -267,7 +228,6 @@ export enum VirtualNetworkState {
    * Common failure reasons include:
    * - Invalid CIDR notation
    * - CIDR block conflicts with existing networks
-   * - NetworkClass does not support requested capabilities (e.g., dual-stack not supported)
    * - NetworkClass is not in READY state
    * - Network backend configuration error
    *
@@ -277,6 +237,13 @@ export enum VirtualNetworkState {
    * @generated from enum value: VIRTUAL_NETWORK_STATE_FAILED = 3;
    */
   FAILED = 3,
+
+  /**
+   * Delete was accepted; the network is being removed. A VirtualNetwork in this state never changes state again.
+   *
+   * @generated from enum value: VIRTUAL_NETWORK_STATE_DELETING = 4;
+   */
+  DELETING = 4,
 }
 
 /**

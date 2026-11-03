@@ -60,51 +60,6 @@ AAP controller hostname
 {{- end }}
 
 {{/*
-Return the Netris environment values derived from the shared networking
-facade. Cluster fulfillment additionally selects the Netris AAP backend and
-receives the resource-class configuration; network fulfillment only needs the
-shared controller connection fields.
-*/}}
-{{- define "osac-aap.netrisConfig" -}}
-{{- $netris := .netris | default dict -}}
-{{- $creds := $netris.credentials | default dict -}}
-{{- $validateCerts := true -}}
-{{- if hasKey $netris "validateCerts" -}}
-{{- $validateCerts = $netris.validateCerts -}}
-{{- end -}}
-{{- $derived := dict
-  "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
-  "NETRIS_VALIDATE_CERTS" ($validateCerts | toString)
-  "NETRIS_USERNAME" ($creds.username | default "")
-  "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
-  "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
-  "NETRIS_TENANT_NAME" ($netris.tenantName | default "")
--}}
-{{- if .cluster -}}
-{{- $_ := set $derived "NETWORK_CLASS" "netris" -}}
-{{- $_ := set $derived "NETWORK_STEPS_COLLECTION" "netris.steps" -}}
-{{- $_ := set $derived "NETRIS_MGMT_VPC_ID" ($netris.mgmtVpcId | default "" | toString) -}}
-{{- $_ := set $derived "NETRIS_MGMT_VPC_NAME" ($netris.mgmtVpcName | default "") -}}
-{{- $_ := set $derived "NETRIS_RESOURCE_CLASS_MAP" ($netris.resourceClassMap | default "") -}}
-{{- end -}}
-{{- $derived | toYaml -}}
-{{- end }}
-
-{{/* Return true when a top-level config source attempts to set a protected key. */}}
-{{- define "osac-aap.isProtectedNetrisKey" -}}
-{{- $normalized := .key | lower | replace "_" "" | replace "-" "" | replace "." "" -}}
-{{- $contract := .root.Files.Get "files/netris-protected-inputs.json" | fromJson -}}
-{{- $matched := false -}}
-{{- range $input := $contract.protected_inputs -}}
-  {{- range $alias := $input.aliases -}}
-    {{- if eq $normalized ($alias | lower | replace "_" "" | replace "-" "" | replace "." "") }}{{- $matched = true -}}{{ end -}}
-  {{- end -}}
-  {{- if eq $normalized ($input.canonical_environment | lower | replace "_" "" | replace "-" "" | replace "." "") }}{{- $matched = true -}}{{ end -}}
-{{- end -}}
-{{- if $matched }}true{{ end -}}
-{{- end }}
-
-{{/*
 Shared wait-for-aap readiness script (bootstrap-job.yaml, create-api-token.yaml).
 Wall-clock-bounded (1500s epoch deadline, not iteration count) since each
 iteration can take up to ~65s worst case -- keep activeDeadlineSeconds above this.

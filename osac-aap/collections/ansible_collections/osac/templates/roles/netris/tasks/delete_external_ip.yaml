@@ -1,31 +1,45 @@
 ---
-# ExternalIP delete entry point. Dispatches by the persisted contract
-# version annotation: empty/missing routes to the legacy name-based
-# tasks, explicit v1 routes to the shared v1 tasks, and any other
-# nonempty version fails before any provider I/O.
+# Release the /32 reservation osac-eip-<ExternalIP id> of the ExternalIP. A
+# reservation that is already gone is a success; one of another tenant or site
+# is a final error and is not deleted.
+- name: Release the ExternalIP on Netris
+  block:
+    - name: Check the settings
+      ansible.builtin.include_tasks: _settings.yaml
+      vars:
+        netris_require: [controller, credentials, site, tenant]
 
-- name: Resolve ExternalIP contract version
-  ansible.builtin.set_fact:
-    eip_contract_version: >-
-      {{ external_ip.metadata.annotations
-         ['osac.openshift.io/externalip-contract-version']
-         | default('', true) | trim }}
+    - name: Check the task input
+      ansible.builtin.include_tasks: _input.yaml
+      vars:
+        netris_require_parents: [external_ip_pool]
 
-- name: Route unversioned ExternalIP delete to the legacy tasks
-  ansible.builtin.include_tasks: _delete_external_ip_legacy.yaml
-  when: eip_contract_version | length == 0
+    - name: Build the object names
+      ansible.builtin.include_tasks: _names.yaml
 
-- name: Route v1 ExternalIP delete to the shared v1 tasks
-  ansible.builtin.include_tasks: _external_ip_v1.yaml
-  when: eip_contract_version == 'v1'
-  vars:
-    external_ip_v1_operation: external_ip.release
+    - name: Log in to Netris
+      ansible.builtin.include_role:
+        name: netris.controller.auth
+      when: netris_session_cookie is not defined
 
-- name: Fail on unsupported ExternalIP contract version
-  ansible.builtin.fail:
-    msg: >-
-      Unsupported ExternalIP contract version '{{ eip_contract_version }}'.
-      Expected an empty value (legacy) or 'v1'.
-  when:
-    - eip_contract_version | length > 0
-    - eip_contract_version != 'v1'
+    - name: Release the address
+      osac.templates.netris_external_ip:
+        operation: external_ip.release
+        resource: "{{ osac_job_vars.resource }}"
+        pool: "{{ osac_job_vars.external_ip_pool }}"
+        reservation_name: "{{ netris_names.eip_reservation }}"
+        controller_url: "{{ netris_controller_url }}"
+        session_cookie: "{{ netris_session_cookie }}"
+        site_id: "{{ netris_site_id | int }}"
+        tenant_id: "{{ netris_tenant_id | int }}"
+        timeout: "{{ netris_timeout | default(30) }}"
+        validate_certs: "{{ netris_validate_certs | default(true) }}"
+        ca_path: "{{ netris_ca_path | default(omit, true) }}"
+      register: _netris_eip
+      ignore_errors: true
+
+    - name: Stop when the module cannot continue
+      ansible.builtin.include_tasks: _eip_module_result.yaml
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

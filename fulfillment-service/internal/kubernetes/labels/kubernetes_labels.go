@@ -85,21 +85,15 @@ var Project = fmt.Sprintf("%s/%s", group, "project")
 var SecretType = fmt.Sprintf("%s/%s", group, "secret-type")
 
 const (
-	autoCreatedLabel            = "osac.openshift.io/auto-created"
-	autoCreatedForLabel         = "osac.openshift.io/auto-created-for"
-	autoProvisionedLabel        = "osac.openshift.io/auto-provisioned"
-	autoProvisionedForLabel     = "osac.openshift.io/auto-provisioned-for"
-	autoAttachmentDeferredLabel = "osac.openshift.io/auto-attachment-deferred"
-	autoCreatedKindLabel        = "osac.openshift.io/auto-created-kind"
-	autoCreatedEndpointLabel    = "osac.openshift.io/auto-created-endpoint"
+	autoCreatedLabel         = "osac.openshift.io/auto-created"
+	autoCreatedForLabel      = "osac.openshift.io/auto-created-for"
+	autoCreatedKindLabel     = "osac.openshift.io/auto-created-kind"
+	autoCreatedEndpointLabel = "osac.openshift.io/auto-created-endpoint"
 )
 
 var externalIPLifecycleLabels = []string{
 	autoCreatedLabel,
 	autoCreatedForLabel,
-	autoProvisionedLabel,
-	autoProvisionedForLabel,
-	autoAttachmentDeferredLabel,
 	autoCreatedKindLabel,
 	autoCreatedEndpointLabel,
 }

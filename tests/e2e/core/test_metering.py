@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.vmaas.regression import test_compute_instance_creation as creation
 from tests.e2e.vmaas.sanity import test_metering_billing as billing
 
@@ -193,7 +194,7 @@ def test_verify_accepts_reversed_history_returned_after_its_replacement(monkeypa
     reversal = _heartbeat("reverse-early", START, START + timedelta(seconds=15), "-15.000000", instance_type=None)
     collector = _serve(monkeypatch, [typed, early, reversal])
 
-    collector.expect(HEARTBEAT_TYPE, "vm-7")
+    collector.expect(HEARTBEAT_TYPE, "vm-7", resource_kind=WaitResourceKind.COMPUTE_INSTANCE)
     collector.verify()
 
 

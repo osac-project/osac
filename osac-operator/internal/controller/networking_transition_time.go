@@ -15,6 +15,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,15 +23,6 @@ import (
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 )
-
-func setExternalIPState(status *v1alpha1.ExternalIPStatus, state v1alpha1.ExternalIPStateType) {
-	if status.State == state {
-		return
-	}
-	status.State = state
-	now := metav1.Now()
-	status.StateTransitionTime = &now
-}
 
 // stateTransitionTimeOf returns the time a status change happened. A CR deleted before any
 // controller status write carries no transition time; the deletion started at the deletion
@@ -62,34 +54,22 @@ func laterTransitionTimeOf(a, b *metav1.Time) *timestamppb.Timestamp {
 	return at
 }
 
-func setExternalIPDeleting(status *v1alpha1.ExternalIPStatus) bool {
-	if status.Phase == v1alpha1.ExternalIPPhaseDeleting {
-		return false
+// deletingTransitionTime returns the time of a DELETING report. The CR's recorded
+// time dates the state before the deletion, so the report takes the later of it and
+// the deletion timestamp: dating DELETING at the old state's time would overwrite
+// that state's fact in metering history and erase the billed span. With no time on
+// the CR the deletion timestamp dates the report. The stored time and the error are
+// reached only with neither time set, which the feedback delete path (it runs only
+// for an object being deleted) does not produce; they keep main's shape.
+func deletingTransitionTime(recorded, deleted *metav1.Time, stored *timestamppb.Timestamp,
+	kind, id string) (*timestamppb.Timestamp, error) {
+	if at := laterTransitionTimeOf(recorded, deleted); at != nil {
+		return at, nil
 	}
-	status.Phase = v1alpha1.ExternalIPPhaseDeleting
-	now := metav1.Now()
-	status.StateTransitionTime = &now
-	return true
-}
-
-func setExternalIPAttachmentPhase(status *v1alpha1.ExternalIPAttachmentStatus, phase v1alpha1.ExternalIPAttachmentPhaseType) bool {
-	if status.Phase == phase {
-		return false
+	if stored != nil {
+		return stored, nil
 	}
-	status.Phase = phase
-	now := metav1.Now()
-	status.StateTransitionTime = &now
-	return true
-}
-
-func setNATGatewayPhase(status *v1alpha1.NATGatewayStatus, phase v1alpha1.NATGatewayPhaseType) bool {
-	if status.Phase == phase {
-		return false
-	}
-	status.Phase = phase
-	now := metav1.Now()
-	status.StateTransitionTime = &now
-	return true
+	return nil, fmt.Errorf("%s %s has no state transition time", kind, id)
 }
 
 // backfillAttachmentStateTransitionTime stamps a first-observed time on

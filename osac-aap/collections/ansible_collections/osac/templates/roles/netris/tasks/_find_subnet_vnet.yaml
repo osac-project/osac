@@ -1,0 +1,64 @@
+---
+# Find the V-Net of a Subnet and prove it is ours (this tenant and the VPC of
+# the VirtualNetwork). Needs netris_names (_names.yaml) and the settings.
+# Sets netris_vpc (none when the VPC does not exist), netris_subnet_vnet_id
+# ("" when there is no V-Net of ours) and netris_vnet_detail (its full read).
+# A same-name V-Net of another tenant or VPC, or one whose owner is not
+# reported, is a final error: it is never read for use or changed.
+- name: Look up the VPC of the VirtualNetwork
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+    tasks_from: read
+  vars:
+    vpc_name: "{{ netris_names.vpc }}"
+    vpc_tenant_id: "{{ netris_tenant_id | int }}"
+
+- name: Start without a V-Net
+  ansible.builtin.set_fact:
+    netris_subnet_vnet_id: ""
+    netris_vnet_detail: "{{ none }}"
+
+- name: Find the V-Net of the Subnet
+  when: netris_vpc is mapping
+  block:
+    - name: List the V-Nets with the name of the Subnet
+      ansible.builtin.include_role:
+        name: netris.controller.vnet
+        tasks_from: read
+      vars:
+        vnet_name: "{{ netris_names.vnet }}"
+
+    - name: Pick the V-Net of this tenant and VPC
+      ansible.builtin.set_fact:
+        _netris_vnet_pick: "{{ netris_vnets | osac.templates.netris_owned_pick(netris_names.vnet, netris_vpc.id, netris_tenant_id) }}"
+
+    - name: Stop on a V-Net that is not ours or is ambiguous
+      vars:
+        netris_fail:
+          message: "Netris V-Net {{ netris_names.vnet }}: {{ _netris_vnet_pick.error }}. OSAC does not retry."
+          retryable: false
+      when: _netris_vnet_pick.error | length > 0
+      ansible.builtin.include_tasks: _fail.yaml
+
+    - name: Read the V-Net and prove its owner
+      when: _netris_vnet_pick.id | string | length > 0
+      block:
+        - name: Read the V-Net
+          ansible.builtin.include_role:
+            name: netris.controller.vnet
+            tasks_from: read_by_id
+          vars:
+            vnet_id: "{{ _netris_vnet_pick.id }}"
+
+        - name: Stop when the V-Net read does not prove it is ours
+          vars:
+            _owner_error: "{{ netris_vnet_detail | osac.templates.netris_owner_error(netris_vpc.id, netris_tenant_id) }}"
+            netris_fail:
+              message: "Netris V-Net {{ netris_names.vnet }}: {{ _owner_error }}. OSAC does not retry."
+              retryable: false
+          when: _owner_error | length > 0
+          ansible.builtin.include_tasks: _fail.yaml
+
+        - name: Record the V-Net
+          ansible.builtin.set_fact:
+            netris_subnet_vnet_id: "{{ _netris_vnet_pick.id }}"

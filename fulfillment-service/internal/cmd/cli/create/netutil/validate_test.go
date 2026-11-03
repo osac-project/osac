@@ -19,40 +19,22 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("ValidateCIDRs", func() {
+var _ = Describe("ValidateIPv4CIDR", func() {
 	DescribeTable("valid cases",
-		func(ipv4Cidr, ipv6Cidr string) {
-			err := ValidateCIDRs(ipv4Cidr, ipv6Cidr)
-			Expect(err).NotTo(HaveOccurred())
+		func(cidr string) {
+			Expect(ValidateIPv4CIDR(cidr)).To(Succeed())
 		},
-		Entry("valid IPv4 CIDR only", "10.0.0.0/16", ""),
-		Entry("valid IPv6 CIDR only", "", "fd00::/48"),
-		Entry("valid dual-stack", "10.0.0.0/16", "fd00::/48"),
-		Entry("IPv4 /0 network", "0.0.0.0/0", ""),
-		Entry("IPv6 /0 network", "", "::/0"),
+		Entry("private network", "10.0.0.0/16"),
+		Entry("/0 network", "0.0.0.0/0"),
 	)
 
 	DescribeTable("error cases",
-		func(ipv4Cidr, ipv6Cidr, errSubstring string) {
-			err := ValidateCIDRs(ipv4Cidr, ipv6Cidr)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(errSubstring))
+		func(cidr string) {
+			Expect(ValidateIPv4CIDR(cidr)).NotTo(Succeed())
 		},
-		Entry("missing both CIDRs",
-			"", "", "at least one of --ipv4-cidr or --ipv6-cidr is required",
-		),
-		Entry("invalid IPv4 CIDR",
-			"not-a-cidr", "", "invalid IPv4 CIDR",
-		),
-		Entry("IPv6 address in --ipv4-cidr flag",
-			"fd00::/48", "", "invalid IPv4 CIDR",
-		),
-		Entry("invalid IPv6 CIDR",
-			"", "not-a-cidr", "invalid IPv6 CIDR",
-		),
-		Entry("IPv4 address in --ipv6-cidr flag",
-			"", "10.0.0.0/16", "invalid IPv6 CIDR",
-		),
+		Entry("missing", ""),
+		Entry("not a CIDR", "not-a-cidr"),
+		Entry("IPv6 CIDR", "fd00::/48"),
 	)
 })
 

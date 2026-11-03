@@ -25,6 +25,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until, run_unchecked
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.regression
 
@@ -121,6 +122,8 @@ def _wait_for_configuration_applied(
         retries=120,
         delay=5,
         description=f"{name} ConfigurationApplied with {vcpus} vCPUs and {memory_gib} GiB",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=name,
     )
 
 
@@ -131,7 +134,7 @@ def _instance_type_name(compute_instance: dict[str, Any]) -> str:
 
 def _configuration_snapshot(compute_instance: dict[str, Any]) -> tuple[Any, ...]:
     status = compute_instance.get("status", {})
-    job_ids = tuple(job.get("jobID", "") for job in status.get("provisioningJobs", []))
+    job_ids = tuple(job.get("jobID", "") for job in status.get("jobs", []))
     return (compute_instance.get("metadata", {}).get("generation"), status.get("desiredConfigVersion", ""), job_ids)
 
 
@@ -178,6 +181,8 @@ def _wait_for_vmi_resources(k8s: K8sClient, *, vmi_namespace: str, ci_name: str,
         retries=60,
         delay=5,
         description=f"{ci_name} VMI with {vcpus} sockets and {memory_gib} GiB",
+        resource_kind=WaitResourceKind.VIRTUAL_MACHINE_INSTANCE,
+        resource_id=ci_name,
     )
 
 
@@ -227,6 +232,8 @@ def _resize_and_restart_compute_instance(
         retries=60,
         delay=5,
         description=f"{ci_name} RestartRequired after resize",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=ci_name,
     )
 
     _wait_for_vmi_resources(
@@ -251,6 +258,8 @@ def _resize_and_restart_compute_instance(
         retries=60,
         delay=5,
         description=f"{ci_name} RestartRequired cleared after manual resize restart",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=ci_name,
     )
     _wait_for_vmi_resources(
         k8s_virt, vmi_namespace=vmi_namespace, ci_name=ci_name, vcpus=target_vcpus, memory_gib=target_memory_gib
@@ -558,6 +567,8 @@ def test_compute_instance_resize_via_cli(
         retries=60,
         delay=5,
         description=f"{ci_name} RestartRequired after resize",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=ci_name,
     )
 
 
@@ -619,6 +630,8 @@ def test_compute_instance_resize_to_deprecated_type_warns_via_cli(
         retries=60,
         delay=5,
         description=f"{ci_name} RestartRequired after resize",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=ci_name,
     )
 
 
@@ -715,6 +728,8 @@ def test_compute_instance_resize_while_stopped_applies_on_start(
         retries=60,
         delay=5,
         description=f"{ci_name} stopped before resize",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=ci_name,
     )
     original = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
     original_version = original.get("status", {}).get("desiredConfigVersion", "")
@@ -739,6 +754,8 @@ def test_compute_instance_resize_while_stopped_applies_on_start(
         retries=60,
         delay=5,
         description=f"{ci_name} RestartRequired cleared after starting resized VM",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=ci_name,
     )
 
     vm_namespace = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)

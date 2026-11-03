@@ -167,9 +167,11 @@ The realm includes the following roles used by the authorization policy:
 | `tenant-admin` | Tenant administrator with full user and IdP management permissions |
 | `tenant-idp-manager` | Tenant IdP manager with IdP configuration permissions only (no user management) |
 
-The built-in Role catalog offers `cloud-provider-reader`, `tenant-idp-manager`, `tenant-admin`, and `tenant-reader` for explicit
-RoleBindings. Regular authenticated users receive tenant user permissions by default; no
-RoleBinding is needed for those permissions.
+The tenant-visible shared Role catalog offers `cloud-provider-reader`, `tenant-idp-manager`,
+`tenant-admin`, `tenant-reader`, and `tenant-automation` for explicit RoleBindings. The
+`osac-csi-driver` Role is stored in the system tenant and is visible only to cloud administrators.
+Regular authenticated users receive tenant user permissions by default; no RoleBinding is needed
+for those permissions.
 
 Assign these roles to users by creating a RoleBinding for them.
 

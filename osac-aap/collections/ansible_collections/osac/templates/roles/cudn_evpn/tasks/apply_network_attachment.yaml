@@ -1,0 +1,89 @@
+---
+# Kubernetes apply_network_attachment (overlay, before the VM exists): make
+# sure the VM's namespace is ready, bind the VM's pod to its SecurityGroups,
+# and return the namespace where VMaaS creates the VM.
+#   - The namespace is the VirtualNetwork namespace; its primary network is
+#     the VirtualNetwork's hub network, which only the owner Subnet builds.
+#     An attachment on any other Subnet fails with the implementation limit.
+#   - Binding adds the ComputeInstance API ID to each group policy's
+#     podSelector (the VM pod label osac.openshift.io/compute-instance-id), so
+#     the VM gets the union of its groups' rules and follows rule updates.
+#   - The VM is never read or changed; interface.ipv4_address is ignored.
+- name: Run cudn_evpn apply_network_attachment
+  block:
+    - name: Plan the task
+      ansible.builtin.include_tasks: _plan.yaml
+
+    - name: Read the VirtualNetwork namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ cudn_evpn.namespace }}"
+      register: _cudn_evpn_ns
+
+    - name: Stop while the VirtualNetwork namespace is not usable
+      when: >-
+        _cudn_evpn_ns.resources | length == 0
+        or not (_cudn_evpn_ns.resources[0] | osac.templates.cudn_evpn_owned('virtualnetwork', cudn_evpn.vn_id, cudn_evpn.tenant))
+        or _cudn_evpn_ns.resources[0].metadata.deletionTimestamp is defined
+      ansible.builtin.include_tasks: _stop.yaml
+      vars:
+        cudn_evpn_stop:
+          message: >-
+            cudn_evpn apply_network_attachment: the VirtualNetwork namespace {{ cudn_evpn.namespace }}
+            does not exist or is being deleted; OSAC retries the task.
+          retryable: true
+
+    - name: Read the VirtualNetwork's hub network
+      kubernetes.core.k8s_info:
+        api_version: k8s.ovn.org/v1
+        kind: ClusterUserDefinedNetwork
+        name: "{{ cudn_evpn.cudn_name }}"
+      register: _cudn_evpn_live
+
+    - name: Assess the hub network
+      ansible.builtin.set_fact:
+        _cudn_evpn_assess: >-
+          {{ (_cudn_evpn_live.resources | first | osac.templates.cudn_evpn_cudn_assess(cudn_evpn))
+             if _cudn_evpn_live.resources | length > 0 else {'state': 'absent', 'owner': ''} }}
+
+    - name: Stop when this Subnet does not own the hub network
+      when: _cudn_evpn_assess.state in ['absent', 'other', 'foreign']
+      ansible.builtin.include_tasks: _stop.yaml
+      vars:
+        cudn_evpn_stop:
+          message: >-
+            cudn_evpn implementation limit: VMs can attach only to the Subnet that owns its
+            VirtualNetwork's hub network, and Subnet {{ cudn_evpn.subnet_id }} does not own it
+            {{- (' (the owner is Subnet ' ~ _cudn_evpn_assess.owner ~ ')') if _cudn_evpn_assess.state == 'other' else '' }}.
+            The owner is the VirtualNetwork's first Subnet; create the VM on that Subnet.
+          retryable: false
+
+    - name: Stop while the hub network is being deleted or not ready
+      when: _cudn_evpn_assess.state == 'terminating' or not _ready.ready
+      ansible.builtin.include_tasks: _stop.yaml
+      vars:
+        _ready: "{{ _cudn_evpn_live.resources | first | default({}) | osac.templates.cudn_evpn_cudn_ready }}"
+        cudn_evpn_stop:
+          message: >-
+            cudn_evpn apply_network_attachment: the hub network {{ cudn_evpn.cudn_name }} is
+            {{ 'being deleted' if _cudn_evpn_assess.state == 'terminating' else 'not ready (' ~ (_ready.pending | join(', ')) ~ ')' }};
+            OSAC retries the task.
+          retryable: true
+
+    - name: Bind the VM to its SecurityGroups
+      ansible.builtin.include_tasks: _bind.yaml
+      loop: "{{ cudn_evpn.security_group_ids }}"
+      loop_control:
+        loop_var: cudn_evpn_sg_id
+
+    - name: Return the VM namespace to OSAC
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data:
+          osac_result: "{{ cudn_evpn.result }}"
+
+  rescue:
+    - name: Report the failure to OSAC
+      ansible.builtin.include_tasks: _fail.yaml

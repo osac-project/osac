@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Iterator
 from typing import Any, ClassVar
 
 import pytest
@@ -36,9 +37,10 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
-from tests.e2e.networking.bmaas import bmi_ssh
+from tests.e2e.core.wait_kinds import WaitResourceKind
+from tests.e2e.networking.bmaas import bmi_ssh, guest_ssh
 
-pytestmark = [pytest.mark.regression, pytest.mark.requires_netris, pytest.mark.requires_netris_bmaas]
+pytestmark = pytest.mark.regression
 
 _NETRIS_BMI_RUNNING_RETRIES = 240
 
@@ -47,6 +49,17 @@ def _require(state: dict[str, Any], *keys: str) -> None:
     missing = [k for k in keys if k not in state]
     if missing:
         pytest.skip(f"Prerequisite state missing: {', '.join(missing)}")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _guest_snapshot_source() -> Iterator[None]:
+    """Let a failure snapshot read the network state of the BMIs this class has recorded so far."""
+    guest_ssh.register_guest_snapshot(
+        "guests-bmaas",
+        lambda: [TestBmaasNetworking.state[k] for k in ("bmi1", "bmi2", "bmi3") if k in TestBmaasNetworking.state],
+    )
+    yield
+    guest_ssh.unregister_guest_snapshot("guests-bmaas")
 
 
 class TestBmaasNetworking:
@@ -61,9 +74,7 @@ class TestBmaasNetworking:
         external_ip_pool_name: str,
         external_ip_pool_cidr: str,
     ) -> None:
-        pool_id = private_grpc.create_external_ip_pool(
-            name=external_ip_pool_name, cidrs=[external_ip_pool_cidr], implementation_strategy="netris"
-        )
+        pool_id = private_grpc.create_external_ip_pool(name=external_ip_pool_name, cidrs=[external_ip_pool_cidr])
         pool_cr = wait_for_external_ip_pool_cr(k8s=k8s_hub_client, uuid=pool_id)
         wait_for_external_ip_pool_ready(k8s=k8s_hub_client, name=pool_cr)
         wait_for_external_ip_pool_grpc_ready(private_grpc=private_grpc, pool_id=pool_id)
@@ -75,7 +86,7 @@ class TestBmaasNetworking:
 
     def test_01_create_virtual_network(self, grpc: GRPCClient, k8s_hub_client: K8sClient, net_test_run_id: str) -> None:
         name = f"net-{net_test_run_id}"
-        vnet_id = grpc.create_virtual_network(name=name, ipv4_cidr="10.100.0.0/16")
+        vnet_id = grpc.create_virtual_network(name=name, ipv4_cidr="172.20.0.0/16")
         vnet_cr = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vnet_id)
         wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vnet_cr)
 
@@ -88,7 +99,7 @@ class TestBmaasNetworking:
 
         subnet_a_name = f"sub-a-{net_test_run_id}"
         subnet_a_id = grpc.create_subnet(
-            name=subnet_a_name, virtual_network=self.state["vnet_id"], ipv4_cidr="10.100.1.0/24"
+            name=subnet_a_name, virtual_network=self.state["vnet_id"], ipv4_cidr="172.20.1.0/24"
         )
         subnet_a_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_a_id)
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_a_cr)
@@ -96,7 +107,7 @@ class TestBmaasNetworking:
 
         subnet_b_name = f"sub-b-{net_test_run_id}"
         subnet_b_id = grpc.create_subnet(
-            name=subnet_b_name, virtual_network=self.state["vnet_id"], ipv4_cidr="10.100.2.0/24"
+            name=subnet_b_name, virtual_network=self.state["vnet_id"], ipv4_cidr="172.20.2.0/24"
         )
         subnet_b_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_b_id)
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_b_cr)
@@ -147,6 +158,8 @@ class TestBmaasNetworking:
             retries=30,
             delay=5,
             description=f"NATGateway {nat_name} to become Ready",
+            resource_kind=WaitResourceKind.NAT_GATEWAY,
+            resource_id=nat_id,
         )
         nat_cr_name = poll_until(
             fn=lambda: k8s_hub_client.get_nat_gateway_name(uuid=nat_id, checked=False),
@@ -154,6 +167,8 @@ class TestBmaasNetworking:
             retries=30,
             delay=5,
             description=f"NATGateway CR for {nat_name}",
+            resource_kind=WaitResourceKind.NAT_GATEWAY,
+            resource_id=nat_id,
         )
         assert k8s_hub_client.get_jsonpath(
             resource="natgateway", name=nat_cr_name, jsonpath="{.status.stateTransitionTime}"
@@ -220,6 +235,8 @@ class TestBmaasNetworking:
                 retries=60,
                 delay=10,
                 description=f"BMI {bmi['name']} tenant IP assignment",
+                resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+                resource_id=bmi["cr"],
             )
 
             ext_host = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi["cr"])
@@ -229,9 +246,9 @@ class TestBmaasNetworking:
 
         for bmi in bmis:
             if bmi["subnet"] == "a":
-                assert bmi["ip"].startswith("10.100.1."), f"BMI {bmi['name']} IP {bmi['ip']} not in subnet A"
+                assert bmi["ip"].startswith("172.20.1."), f"BMI {bmi['name']} IP {bmi['ip']} not in subnet A"
             else:
-                assert bmi["ip"].startswith("10.100.2."), f"BMI {bmi['name']} IP {bmi['ip']} not in subnet B"
+                assert bmi["ip"].startswith("172.20.2."), f"BMI {bmi['name']} IP {bmi['ip']} not in subnet B"
 
         self.__class__.state["bmi1"] = bmis[0]
         self.__class__.state["bmi2"] = bmis[1]
@@ -264,6 +281,8 @@ class TestBmaasNetworking:
             retries=60,
             delay=5,
             description="auto-created ExternalIPAttachment for BMI3",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi3["id"],
         )
 
         auto_attach_id = attachment["id"]
@@ -284,6 +303,8 @@ class TestBmaasNetworking:
             retries=30,
             delay=5,
             description="auto-created ExternalIP attribution settlement for BMI3",
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=auto_eip_ref,
         )
 
         self.__class__.state.update(
@@ -304,6 +325,8 @@ class TestBmaasNetworking:
             retries=5,
             delay=10,
             description=f"L2 arping BMI1 ({bmi1['ip']}) → BMI2 ({bmi2['ip']})",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi1["id"],
         )
 
     def test_07_l3_ping_same_subnet(self) -> None:
@@ -317,6 +340,8 @@ class TestBmaasNetworking:
             retries=5,
             delay=10,
             description=f"L3 ping BMI1 ({bmi1['ip']}) → BMI2 ({bmi2['ip']})",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi1["id"],
         )
 
     def test_08_l3_ping_cross_subnet(self) -> None:
@@ -330,6 +355,8 @@ class TestBmaasNetworking:
             retries=5,
             delay=10,
             description=f"L3 ping BMI1 ({bmi1['ip']}) → BMI3 ({bmi3['ip']}) cross-subnet",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi1["id"],
         )
 
     def test_09_l2_arping_cross_subnet_fails(self) -> None:
@@ -363,6 +390,8 @@ class TestBmaasNetworking:
             retries=5,
             delay=15,
             description=f"NAT gateway egress curl quay.io (ssh_host={bmi1['ssh_host']}, tenant_ip={bmi1['ip']})",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi1["id"],
         )
 
     def test_12_external_ip_ingress(
@@ -391,6 +420,8 @@ class TestBmaasNetworking:
             retries=30,
             delay=5,
             description="ingress ExternalIP attribution settlement",
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=eip_id,
         )
 
         eip_data = grpc.get_external_ip(external_ip_id=eip_id)
@@ -404,7 +435,13 @@ class TestBmaasNetworking:
                 return ""
 
         poll_until(
-            fn=_try_ssh_eip, until=lambda h: bool(h), retries=5, delay=15, description=f"SSH via external IP {ext_addr}"
+            fn=_try_ssh_eip,
+            until=lambda h: bool(h),
+            retries=5,
+            delay=15,
+            description=f"SSH via external IP {ext_addr}",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi1["id"],
         )
 
         self.__class__.state.update(
@@ -456,6 +493,8 @@ class TestBmaasNetworking:
             retries=30,
             delay=5,
             description="auto-created ExternalIPAttachment garbage collection",
+            resource_kind=WaitResourceKind.EXTERNAL_IP_ATTACHMENT,
+            resource_id=self.state["auto_attach_id"],
         )
 
         poll_until(
@@ -464,6 +503,8 @@ class TestBmaasNetworking:
             retries=30,
             delay=5,
             description="auto-created ExternalIP garbage collection",
+            resource_kind=WaitResourceKind.EXTERNAL_IP,
+            resource_id=self.state["auto_eip_id"],
         )
         print("Auto EIP and attachment garbage collected after BMI3 deletion")
 
@@ -481,6 +522,8 @@ class TestBmaasNetworking:
             retries=60,
             delay=5,
             description=f"NATGateway {self.state['nat_name']} deletion",
+            resource_kind=WaitResourceKind.NAT_GATEWAY,
+            resource_id=self.state["nat_id"],
         )
 
         grpc.delete_external_ip(external_ip_id=self.state["nat_eip_id"])

@@ -23,7 +23,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -69,8 +68,13 @@ func NewExternalIPPoolFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.Cl
 		Save: func(ctx context.Context, remote *privatev1.ExternalIPPool) error {
 			_, err := poolClient.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
 				Object:     remote,
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{feedbackStatusStatePath}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{feedbackStatusStatePath, feedbackStatusMessagePath}},
 			}.Build())
+			if err != nil {
+				return err
+			}
+			// Signal on change, so the fulfillment service acts on the new state.
+			_, err = poolClient.Signal(ctx, privatev1.ExternalIPPoolsSignalRequest_builder{Id: remote.GetId()}.Build())
 			return err
 		},
 		Signal: func(ctx context.Context, id string) error {
@@ -103,32 +107,23 @@ func (r *ExternalIPPoolFeedbackReconciler) Reconcile(ctx context.Context, reques
 	return r.bridge.Reconcile(ctx, request)
 }
 
-func syncExternalIPPoolUpdate(ctx context.Context, obj *v1alpha1.ExternalIPPool, remote *privatev1.ExternalIPPool) error {
-	syncExternalIPPoolPhase(ctx, obj, remote)
-	return nil
-}
-
-func syncExternalIPPoolDelete(_ context.Context, obj *v1alpha1.ExternalIPPool, remote *privatev1.ExternalIPPool) error {
-	if obj.Status.Phase == v1alpha1.ExternalIPPoolPhaseFailed {
-		remote.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_DELETE_FAILED)
-		return nil
-	}
-	remote.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_DELETING)
-	return nil
-}
-
-func syncExternalIPPoolPhase(ctx context.Context, obj *v1alpha1.ExternalIPPool, remote *privatev1.ExternalIPPool) {
-	switch obj.Status.Phase {
-	case v1alpha1.ExternalIPPoolPhaseProgressing:
-		remote.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
-	case v1alpha1.ExternalIPPoolPhaseFailed:
-		remote.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_FAILED)
-	case v1alpha1.ExternalIPPoolPhaseReady:
-		remote.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY)
-	case v1alpha1.ExternalIPPoolPhaseDeleting:
-		remote.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_DELETING)
+func syncExternalIPPoolUpdate(_ context.Context, obj *v1alpha1.ExternalIPPool, remote *privatev1.ExternalIPPool) error {
+	status := remote.GetStatus()
+	state, message := networkFeedback(obj, obj.Status.Conditions)
+	switch state {
+	case networkFeedbackReady:
+		status.SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY)
+	case networkFeedbackFailed:
+		status.SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_FAILED)
+	case networkFeedbackDeleting:
+		status.SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_DELETING)
 	default:
-		log := ctrllog.FromContext(ctx)
-		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
+		status.SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
 	}
+	feedbackMessage(message, status.SetMessage, status.ClearMessage)
+	return nil
+}
+
+func syncExternalIPPoolDelete(ctx context.Context, obj *v1alpha1.ExternalIPPool, remote *privatev1.ExternalIPPool) error {
+	return syncExternalIPPoolUpdate(ctx, obj, remote)
 }

@@ -509,9 +509,7 @@ var _ = Describe("Private clusters server", func() {
 					Name:   "test-vnet",
 					Tenant: testTenant,
 				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-network-class"}.Build(),
-				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{}.Build(),
 				Status: privatev1.VirtualNetworkStatus_builder{
 					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 					Hub:   "network-hub-a",
@@ -593,6 +591,9 @@ var _ = Describe("Private clusters server", func() {
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+
+			// Cluster creates without an explicit attachment resolve the tenant defaults.
+			seedReadyDefaultNetworking(testTenant, 0)
 
 			// Create numbered templates for list tests:
 			for i := range 10 {
@@ -838,7 +839,7 @@ var _ = Describe("Private clusters server", func() {
 				}.Build(),
 			}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("IP_FAMILY_IPV4"))
+			Expect(err.Error()).To(ContainSubstring("no available capacity in any READY pool for IPv4"))
 		})
 
 		It("rejects a cluster whose subnet and security group are assigned to different Hubs", func() {
@@ -847,9 +848,7 @@ var _ = Describe("Private clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			virtualNetwork, err := virtualNetworksDao.Create().SetObject(privatev1.VirtualNetwork_builder{
 				Metadata: privatev1.Metadata_builder{Name: "hub-compat-vn", Tenant: testTenant}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-network-class"}.Build(),
-				}.Build(),
+				Spec:     privatev1.VirtualNetworkSpec_builder{}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
@@ -942,7 +941,6 @@ var _ = Describe("Private clusters server", func() {
 			endpoints := map[string]bool{}
 			for _, eip := range eipList.GetItems() {
 				Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
-				Expect(eip.GetMetadata().GetLabels()).ToNot(HaveKey(autoAttachmentDeferredLabel))
 				Expect(eip.GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("cluster"))
 				Expect(eip.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(clusterID))
 				endpoints[eip.GetMetadata().GetLabels()[autoCreatedEndpointLabel]] = true
@@ -3009,7 +3007,8 @@ var _ = Describe("Private clusters server", func() {
 				Expect(proto.Equal(stored.GetObject().GetSpec().GetNetworkAttachment(), object.GetSpec().GetNetworkAttachment())).To(BeTrue())
 			})
 
-			It("Rejects adding network_attachment when none existed", func() {
+			It("Rejects replacing the resolved default network_attachment", func() {
+				defaults := seedReadyDefaultNetworking(testTenant, 0)
 				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
@@ -3039,11 +3038,14 @@ var _ = Describe("Private clusters server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(Equal(
-					"cannot change spec.network_attachment.subnet from '' to 'subnet-1': subnet is immutable",
+					fmt.Sprintf(
+						"cannot change spec.network_attachment.subnet from '%s' to 'subnet-1': subnet is immutable",
+						defaults.subnetID,
+					),
 				))
 				stored, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(stored.GetObject().GetSpec().GetNetworkAttachment()).To(BeNil())
+				Expect(proto.Equal(stored.GetObject().GetSpec().GetNetworkAttachment(), object.GetSpec().GetNetworkAttachment())).To(BeTrue())
 			})
 
 			It("Rejects changing security_groups with same subnet", func() {
@@ -6273,7 +6275,6 @@ var _ = Describe("Private clusters server", func() {
 				Expect(getCluster.GetObject().GetSpec().GetNodeSets()["compute"].GetFabricInterface()).
 					To(Equal("data-0"), "stored fabric_interface must not track later BMIT changes")
 			})
-
 			It("Returns FailedPrecondition when BMIT has no fabric port", func() {
 				_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
@@ -6301,10 +6302,25 @@ var _ = Describe("Private clusters server", func() {
 				Expect(st.Message()).To(ContainSubstring("no network port with role 'fabric'"))
 			})
 
-			It("Skips fabric resolution when cluster has no network attachment", func() {
+			It("Rejects an omitted network attachment when tenant defaults are not ready", func() {
+				seedReadyDefaultNetworking(testTenant, 0)
+				tenantDao := fixtureDAO[*privatev1.Tenant]()
+				tenantResponse, err := tenantDao.Get().SetId(testTenant).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				tenant := tenantResponse.GetObject()
+				tenant.GetStatus().SetConditions([]*privatev1.TenantCondition{
+					privatev1.TenantCondition_builder{
+						Type:   privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+						Status: privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+					}.Build(),
+				})
+				_, err = tenantDao.Update().SetObject(tenant).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				const name = "default-network-not-ready"
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
-						Metadata: privatev1.Metadata_builder{Name: "fabric-no-net"}.Build(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
@@ -6317,12 +6333,44 @@ var _ = Describe("Private clusters server", func() {
 						}.Build(),
 					}.Build(),
 				}.Build())
+				Expect(response).To(BeNil())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(grpcstatus.Convert(err).Message()).To(Equal("tenant default networking is not ready"))
+
+				listed, err := server.List(ctx, privatev1.ClustersListRequest_builder{
+					Filter: new(fmt.Sprintf("this.metadata.name == %q", name)),
+				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(response).ToNot(BeNil())
-				nodeSet := response.GetObject().GetSpec().GetNodeSets()["compute"]
-				Expect(nodeSet).ToNot(BeNil())
-				// Without network_attachment, fabric_interface should be empty
-				Expect(nodeSet.GetFabricInterface()).To(BeEmpty())
+				Expect(listed.GetTotal()).To(BeZero(), "a rejected Cluster Create must not persist the Cluster")
+			})
+
+			It("Resolves tenant defaults when provider networking is disabled", func() {
+				server.settings.ProvisioningEnabled = false
+				defaults := seedReadyDefaultNetworking(testTenant, 0)
+
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "networking-disabled"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+										Id: "bmit-fabric-id", Shared: true,
+									}.Build(),
+									Size: proto.Int32(3),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+
+				Expect(err).NotTo(HaveOccurred())
+				networkAttachment := response.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(networkAttachment.GetSubnet().GetId()).To(Equal(defaults.subnetID))
+				Expect(networkAttachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(networkAttachment.GetSecurityGroups()[0].GetId()).To(Equal(defaults.securityGroupID))
+				Expect(response.GetObject().GetSpec().GetNodeSets()["compute"].GetFabricInterface()).To(Equal("data-0"))
 			})
 
 			It("Selects the first fabric port when multiple exist", func() {

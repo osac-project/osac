@@ -189,7 +189,6 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 		projectDir, err := utils.GetProjectDir()
 		Expect(err).NotTo(HaveOccurred())
 		fakeCRDs := []string{
-			filepath.Join(projectDir, "config/crd/fakes/k8s.ovn.org_userdefinednetworks.yaml"),
 			filepath.Join(projectDir, "config/crd/fakes/kubevirt.io_virtualmachines.yaml"),
 			filepath.Join(projectDir, "config/crd/fakes/kubevirt.io_virtualmachineinstances.yaml"),
 		}

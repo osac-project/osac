@@ -61,6 +61,51 @@ type archiveArgs struct {
 	data            []byte
 }
 
+type storedObject struct {
+	id              string
+	name            string
+	creationTs      time.Time
+	deletionTs      time.Time
+	finalizers      []string
+	creator         string
+	tenant          string
+	project         string
+	labelsData      []byte
+	annotationsData []byte
+	version         int32
+	data            []byte
+}
+
+func (r *request[O]) objectFromRow(row storedObject) (O, error) {
+	var zero O
+	object := r.cloneObject(r.newObject())
+	if err := r.unmarshalData(row.data, object); err != nil {
+		return zero, err
+	}
+	labels, err := r.unmarshalMap(row.labelsData)
+	if err != nil {
+		return zero, err
+	}
+	annotations, err := r.unmarshalMap(row.annotationsData)
+	if err != nil {
+		return zero, err
+	}
+	r.setMetadata(object, r.makeMetadata(makeMetadataArgs{
+		creationTs:  row.creationTs,
+		deletionTs:  row.deletionTs,
+		finalizers:  row.finalizers,
+		creator:     row.creator,
+		tenant:      row.tenant,
+		project:     row.project,
+		name:        row.name,
+		labels:      labels,
+		annotations: annotations,
+		version:     row.version,
+	}))
+	object.SetId(row.id)
+	return object, nil
+}
+
 // archive moves a deleted object to the archived table and removes it from the main table.
 func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 	sql := fmt.Sprintf(

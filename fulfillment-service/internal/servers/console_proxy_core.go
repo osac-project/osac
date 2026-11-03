@@ -177,7 +177,9 @@ func (c *ConsoleProxyCore) Relay(ctx context.Context, client, backend io.ReadWri
 	firstErr := <-errCh
 	client.Close()
 	backend.Close()
-	<-errCh
+	if peerErr := <-errCh; peerErr != nil && ctx.Err() == nil {
+		c.logger.DebugContext(ctx, "Console relay peer copy ended after close", slog.Any("error", peerErr))
+	}
 
 	// When the context was cancelled (eviction, timeout, client disconnect),
 	// the error is a forced-close artifact, not a genuine relay failure.

@@ -20,6 +20,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.serial
 
@@ -142,6 +143,8 @@ def test_baremetal_instance_inventory_exhausted(
             retries=120,
             delay=10,
             description="at least one BMH available after release",
+            resource_kind=WaitResourceKind.NAMESPACE,
+            resource_id=bmh_namespace,
         )
 
         wait_for_bmi_running_after_recovery(grpc=grpc, bmi_id=overflow_id)

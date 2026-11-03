@@ -20,6 +20,7 @@ from tests.e2e.core.keycloak_admin import (
 )
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until, run_unchecked
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +176,14 @@ def _is_transient_grpc(exc: subprocess.CalledProcessError) -> bool:
 
 
 def _wait_private_status(
-    grpc: GRPCClient, *, service: str, resource_id: str, field: str, expected: str, description: str
+    grpc: GRPCClient,
+    *,
+    service: str,
+    resource_id: str,
+    resource_kind: WaitResourceKind,
+    field: str,
+    expected: str,
+    description: str,
 ) -> dict[str, Any]:
     """Poll private Get until a status field matches, retrying Unavailable."""
 
@@ -194,6 +202,8 @@ def _wait_private_status(
         retries=24,
         delay=5,
         description=description,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
     )
 
 
@@ -274,6 +284,7 @@ def test_tenant_onboarding_demo1_milestone_02(
         private_grpc,
         service=f"{PRIVATE_API}.Tenants/Get",
         resource_id=tenant_id,
+        resource_kind=WaitResourceKind.TENANT,
         field="state",
         expected="TENANT_STATE_SYNCED",
         description=f"tenant {tenant_name} SYNCED",
@@ -326,6 +337,8 @@ def test_tenant_onboarding_demo1_milestone_02(
         retries=24,
         delay=5,
         description=f"namespace {tenant_name}",
+        resource_kind=WaitResourceKind.NAMESPACE,
+        resource_id=tenant_name,
     )
     ns = _namespace_json(tenant_name)
     labels = ns.get("metadata", {}).get("labels", {}) if isinstance(ns.get("metadata"), dict) else {}
@@ -357,6 +370,7 @@ def test_tenant_onboarding_demo1_milestone_02(
         private_grpc,
         service=f"{PRIVATE_API}.IdentityProviders/Get",
         resource_id=resources["idp_id"],
+        resource_kind=WaitResourceKind.IDENTITY_PROVIDER,
         field="phase",
         expected="IDENTITY_PROVIDER_PHASE_READY",
         description=f"identity provider {resources['idp_name']} READY",
@@ -388,6 +402,8 @@ def test_tenant_onboarding_demo1_milestone_02(
         retries=24,
         delay=5,
         description=f"OSAC user {alice}",
+        resource_kind=WaitResourceKind.USER,
+        resource_id=alice,
     )
 
     _password_login(resources, "bob", bob, resources["bob_password"])
@@ -400,6 +416,8 @@ def test_tenant_onboarding_demo1_milestone_02(
         retries=24,
         delay=5,
         description=f"OSAC user {bob}",
+        resource_kind=WaitResourceKind.USER,
+        resource_id=bob,
     )
 
     # Flow 6: CPA binds tenant-admin to Alice.
@@ -417,6 +435,7 @@ def test_tenant_onboarding_demo1_milestone_02(
         private_grpc,
         service=f"{PRIVATE_API}.RoleBindings/Get",
         resource_id=resources["role_binding_id"],
+        resource_kind=WaitResourceKind.ROLE_BINDING,
         field="state",
         expected="ROLE_BINDING_STATE_READY",
         description=f"role binding {resources['role_binding_name']} READY",
@@ -444,6 +463,7 @@ def test_tenant_onboarding_demo1_milestone_02(
         private_grpc,
         service=f"{PRIVATE_API}.Projects/Get",
         resource_id=resources["project_id"],
+        resource_kind=WaitResourceKind.PROJECT,
         field="state",
         expected="PROJECT_STATE_ACTIVE",
         description=f"project {project_name} ACTIVE",
@@ -474,6 +494,7 @@ def test_tenant_onboarding_demo1_milestone_02(
         private_grpc,
         service=f"{PRIVATE_API}.ProjectMemberships/Get",
         resource_id=resources["membership_id"],
+        resource_kind=WaitResourceKind.PROJECT_MEMBERSHIP,
         field="state",
         expected="PROJECT_MEMBERSHIP_STATE_READY",
         description=f"project membership {resources['membership_name']} READY",
@@ -529,6 +550,8 @@ def test_tenant_onboarding_demo1_milestone_02(
             retries=24,
             delay=5,
             description=f"project {project_name} gone after delete with membership",
+            resource_kind=WaitResourceKind.PROJECT,
+            resource_id=project_id,
         )
     except TimeoutError as exc:
         leftover = private_grpc.call_unchecked(service=f"{PRIVATE_API}.Projects/Get", data={"id": project_id})
@@ -548,6 +571,8 @@ def test_tenant_onboarding_demo1_milestone_02(
                 retries=12,
                 delay=2,
                 description=f"project membership {membership_id} gone after project cascade",
+                resource_kind=WaitResourceKind.PROJECT_MEMBERSHIP,
+                resource_id=membership_id,
             )
         except TimeoutError as exc:
             leftover_m = private_grpc.call_unchecked(

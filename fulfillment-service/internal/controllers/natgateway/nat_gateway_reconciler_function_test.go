@@ -303,7 +303,8 @@ var _ = Describe("delete", func() {
 		}.Build()
 
 		f := &function{
-			logger: logger,
+			logger:              logger,
+			networkingHubReader: &fakeNetworkingHubReader{err: controllers.ErrNoNetworkingHubs},
 		}
 
 		t := &task{

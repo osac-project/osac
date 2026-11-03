@@ -34,20 +34,30 @@ where applicable):
 | `AAP_PROJECT_ARCHIVE_URI` | Optional archive URL instead of git (e.g. tarball) | — |
 | `AAP_EE_IMAGE` | Registry URL of the execution environment image | `ghcr.io/osac/osac-aap:latest` |
 | `LICENSE_MANIFEST_PATH` | Path to the license manifest file to register the AAP instance ([Red Hat account](https://access.redhat.com/management/subscription_allocations)) | `/var/secrets/config-as-code-manifest/license.zip` |
-| `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` | Name of the secret holding the kubeconfig for the remote cluster (compute, networking, and storage operations) | — |
+| `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` | Name of the secret holding the kubeconfig for the remote cluster (compute instance and storage operations; not supported with provider networking enabled) | — |
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY` | Key within that secret for the kubeconfig file | `kubeconfig` |
 | `OSAC_PUBLISH_TEMPLATES_ENABLED` | Whether the periodic **publish-templates** schedule is enabled in Controller (`true`/`false`) | Helm sets this from `instanceGroups.publishTemplates.enabled`; if unset for a manually managed deployment, `true` |
-| `NETRIS_VALIDATE_CERTS` | Whether Netris TLS certificates are validated by managed jobs | `true` |
+| `NETRIS_CONTROLLER_URL` | Netris controller URL of the CaaS Netris steps, set on the cluster-fulfillment container group | — |
+| `NETRIS_VALIDATE_CERTS` | Whether Netris TLS certificates are validated by CaaS Netris jobs | `true` |
 | `NETRIS_CA_CONFIGMAP` | Optional customer-created ConfigMap name containing `bundle.pem` in the AAP namespace | — |
 
 These variables must be defined in a secret named `config-as-code-ig` in the
 namespace where AAP is deployed.
 
-When `NETRIS_CA_CONFIGMAP` is configured, config-as-code adds a required,
-read-only `bundle.pem` mount to the OSAC-managed Netris container groups and
-sets `NETRIS_CA_PATH`. The installer supplies these values from
-`global.networking.netris`; customers create the ConfigMap and the installer
-does not copy certificate contents into the execution-environment image.
+The three `NETRIS_*` variables are the installation-owned connection settings
+of the CaaS Netris steps (`NETWORK_CLASS=netris`). Config-as-code sets them as
+fixed environment variables of the cluster-fulfillment container group, with
+the `netris.controller.protected_linear` strategy that rejects launch-time
+overrides. When `NETRIS_CA_CONFIGMAP` is configured, it adds a required,
+read-only `bundle.pem` mount at `/etc/netris/ca/bundle.pem` and sets
+`NETRIS_CA_PATH`. The CA ConfigMap applies only to cluster-fulfillment (CaaS)
+jobs; the networking-operations container group neither mounts nor reads it.
+The installer reads these values from the Netris settings in
+`aap.instanceGroups.networkFulfillment.config` and fails the render unless the
+URL is `https://` and the validation flag is `true` or `false`; customers
+create the ConfigMap and the installer does not copy certificate contents into the
+execution-environment image. Networking jobs do not use these variables: they
+read the network managers' settings from `network-fulfillment-ig`.
 
 The content of license manifest file must be set in a secret named
 `config-as-code-manifest-ig` as `license.zip` in the namespace where AAP is
@@ -74,6 +84,13 @@ the namespace where AAP is deployed.
 
 The cluster fulfillment needs to access the Kube API of the cluster it runs on,
 so we expect a service account `osac-sa` to exists with enough rights.
+
+### Networking environment variables
+
+Networking jobs read the settings and credentials of the network managers from
+the ConfigMap and Secret named `network-fulfillment-ig` in the AAP namespace.
+Keys are prefixed with the registration name in upper case. Consult the
+selected manager's owner documentation for its settings.
 
 ### Compute instance operations environment variables
 

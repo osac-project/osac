@@ -41,7 +41,7 @@ var _ = Describe("Node set removal", func() {
 		ctx = context.Background()
 		// A persisted tenant-default subnet can be injected into Cluster creates;
 		// keep a ready NetworkClass available for its canonical Hub validation.
-		getOrCreateTenantDefaultNetworkClassFixture(ctx)
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
@@ -112,7 +112,7 @@ var _ = Describe("Node set removal", func() {
 		}, nil)
 
 		// Create a provisioning template; the Cluster supplies its two node sets.
-		templateId = fmt.Sprintf("template_2_nodesets_%s", uuid.New())
+		templateId = newTemplateID("template_2_nodesets")
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id: templateId,

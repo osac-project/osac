@@ -126,75 +126,6 @@ var _ = Describe("buildSpec", func() {
 		Expect(spec.EgressRules).To(BeEmpty())
 	})
 
-	It("Does not project an IPv6-only ingress rule", func() {
-		ipv6 := "2001:db8::/32"
-		t := &task{
-			securityGroup: privatev1.SecurityGroup_builder{
-				Id: "sg-ipv6-only",
-				Spec: privatev1.SecurityGroupSpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-ipv6"}.Build(),
-					Ingress: []*privatev1.SecurityRule{
-						privatev1.SecurityRule_builder{
-							Protocol: privatev1.Protocol_PROTOCOL_TCP,
-							Ipv6Cidr: &ipv6,
-						}.Build(),
-					},
-				}.Build(),
-			}.Build(),
-		}
-
-		spec, err := t.buildSpec()
-		Expect(err).To(MatchError("security group ingress rule 0 must contain an IPv4 CIDR and no IPv6 CIDR"))
-
-		Expect(spec.IngressRules).To(BeEmpty())
-	})
-
-	It("Does not project an IPv6-only egress rule", func() {
-		ipv6 := "2001:db8::/32"
-		t := &task{
-			securityGroup: privatev1.SecurityGroup_builder{
-				Id: "sg-ipv6-egress-only",
-				Spec: privatev1.SecurityGroupSpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-ipv6-egress"}.Build(),
-					Egress: []*privatev1.SecurityRule{
-						privatev1.SecurityRule_builder{
-							Protocol: privatev1.Protocol_PROTOCOL_ALL,
-							Ipv6Cidr: &ipv6,
-						}.Build(),
-					},
-				}.Build(),
-			}.Build(),
-		}
-
-		spec, err := t.buildSpec()
-		Expect(err).To(MatchError("security group egress rule 0 must contain an IPv4 CIDR and no IPv6 CIDR"))
-
-		Expect(spec.EgressRules).To(BeEmpty())
-	})
-
-	It("Rejects a dual-stack ingress rule instead of silently dropping IPv6", func() {
-		ipv4 := "10.0.0.0/8"
-		ipv6 := "2001:db8::/32"
-		t := &task{
-			securityGroup: privatev1.SecurityGroup_builder{
-				Id: "sg-dual-stack",
-				Spec: privatev1.SecurityGroupSpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-dual-stack"}.Build(),
-					Ingress: []*privatev1.SecurityRule{
-						privatev1.SecurityRule_builder{
-							Protocol: privatev1.Protocol_PROTOCOL_TCP,
-							Ipv4Cidr: &ipv4,
-							Ipv6Cidr: &ipv6,
-						}.Build(),
-					},
-				}.Build(),
-			}.Build(),
-		}
-
-		_, err := t.buildSpec()
-		Expect(err).To(MatchError("security group ingress rule 0 must contain an IPv4 CIDR and no IPv6 CIDR"))
-	})
-
 	It("Rejects an ingress rule with an empty IPv4 CIDR", func() {
 		ipv4 := ""
 		t := &task{
@@ -213,7 +144,7 @@ var _ = Describe("buildSpec", func() {
 		}
 
 		_, err := t.buildSpec()
-		Expect(err).To(MatchError("security group ingress rule 0 must contain an IPv4 CIDR and no IPv6 CIDR"))
+		Expect(err).To(MatchError("security group ingress rule 0 must contain an IPv4 CIDR"))
 	})
 })
 
@@ -611,7 +542,7 @@ var _ = Describe("canonical networking Hub resolution", func() {
 		Expect(t.securityGroup.GetStatus().GetHub()).To(Equal("old-hub"))
 	})
 
-	It("persists the Hub assignment before creating the Kubernetes object", func() {
+	It("creates the Kubernetes object and persists the Hub assignment in the same reconcile", func() {
 		ctx := context.Background()
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
@@ -620,14 +551,19 @@ var _ = Describe("canonical networking Hub resolution", func() {
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 		kubeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 		resolver := readyNetworkingHubReader("hub-a", "hub-a-ns", kubeClient)
+		updates := 0
 		securityGroupsClient := NewMockSecurityGroupsClient(ctrl)
 		securityGroupsClient.EXPECT().
 			Update(gomock.Any(), gomock.Any(), gomock.Any()).
 			DoAndReturn(func(_ context.Context, req *privatev1.SecurityGroupsUpdateRequest, _ ...grpc.CallOption) (*privatev1.SecurityGroupsUpdateResponse, error) {
+				updates++
+				if updates > 1 {
+					return &privatev1.SecurityGroupsUpdateResponse{Object: req.GetObject()}, nil
+				}
 				Expect(req.GetObject().GetStatus().GetHub()).To(Equal("hub-a"))
 				Expect(req.GetUpdateMask().GetPaths()).To(ContainElement("status.hub"))
 				return &privatev1.SecurityGroupsUpdateResponse{Object: req.GetObject()}, nil
-			})
+			}).MinTimes(1)
 
 		sg := privatev1.SecurityGroup_builder{
 			Id: "sg-hub-assignment",
@@ -653,17 +589,16 @@ var _ = Describe("canonical networking Hub resolution", func() {
 		Expect(sg.GetStatus().GetHub()).To(Equal("hub-a"))
 		objects := &osacv1alpha1.SecurityGroupList{}
 		Expect(kubeClient.List(ctx, objects, clnt.InNamespace("hub-a-ns"))).To(Succeed())
-		Expect(objects.Items).To(BeEmpty())
+		Expect(objects.Items).To(HaveLen(1))
 	})
 })
 
 var _ = Describe("Kubernetes validation error handling", func() {
-	It("should mark a legacy IPv6-only rule as failed without contacting Kubernetes", func() {
+	It("should mark a rule without an IPv4 CIDR as failed without contacting Kubernetes", func() {
 		ctx := context.Background()
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 
-		ipv6 := "2001:db8::/32"
 		resolver := readyNetworkingHubReader("hub-1", "test-ns", nil)
 
 		sg := privatev1.SecurityGroup_builder{
@@ -675,7 +610,7 @@ var _ = Describe("Kubernetes validation error handling", func() {
 			Spec: privatev1.SecurityGroupSpec_builder{
 				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-1"}.Build(),
 				Ingress: []*privatev1.SecurityRule{
-					privatev1.SecurityRule_builder{Ipv6Cidr: &ipv6}.Build(),
+					privatev1.SecurityRule_builder{}.Build(),
 				},
 			}.Build(),
 			Status: privatev1.SecurityGroupStatus_builder{
@@ -694,7 +629,7 @@ var _ = Describe("Kubernetes validation error handling", func() {
 		err := t.update(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(sg.GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED))
-		Expect(sg.GetStatus().GetMessage()).To(ContainSubstring("IPv4 CIDR and no IPv6 CIDR"))
+		Expect(sg.GetStatus().GetMessage()).To(ContainSubstring("must contain an IPv4 CIDR"))
 	})
 
 	It("should set state to FAILED when K8s Create returns Invalid error", func() {

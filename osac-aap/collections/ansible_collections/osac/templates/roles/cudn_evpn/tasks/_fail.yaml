@@ -1,0 +1,40 @@
+---
+# Rescue of every task: publish osac_error {message, retryable} and fail.
+#
+# A step that knows why it failed sets cudn_evpn_error first (final errors and
+# named retryable ones). Anything else is a Kubernetes API failure and is
+# retryable. The message reads only the failed step's name and the API status
+# and reason, never ansible_failed_result itself or its invocation.
+- name: Build the error for OSAC
+  vars:
+    _task: "{{ osac_job_vars.task | default('task') }}"
+    _step: "{{ ansible_failed_task.name | default('a step') }}"
+    # Only an integer HTTP status and its reason; on other exceptions the
+    # kubernetes.core modules put free text into error/msg, which stays in the log.
+    _status: "{{ ansible_failed_result.status if (ansible_failed_result.status | default('')) is number else 0 }}"
+    _reason: "{{ (ansible_failed_result.reason | default('') | string)[:60] if (_status | int) > 0 else '' }}"
+  ansible.builtin.set_fact:
+    _cudn_evpn_report:
+      message: >-
+        {%- if cudn_evpn_error is defined -%}
+        {{ cudn_evpn_error.message }}
+        {%- elif (_status | string) in ['409', '422'] -%}
+        cudn_evpn {{ _task }}: a concurrent change to a hub object conflicted with step
+        "{{ _step }}" (HTTP {{ _status }}{{ (' ' ~ _reason) if _reason else '' }}); OSAC retries the task.
+        {%- else -%}
+        cudn_evpn {{ _task }}: step "{{ _step }}" failed
+        {{- (' (Kubernetes API: HTTP ' ~ _status ~ ((' ' ~ _reason) if _reason else '') ~ ')') if (_status | string) not in ['0', ''] else '' }};
+        OSAC retries the task. The job log has the details.
+        {%- endif -%}
+      retryable: "{{ (cudn_evpn_error.retryable if cudn_evpn_error is defined else true) | bool }}"
+
+- name: Report the error to OSAC
+  ansible.builtin.set_stats:
+    aggregate: false
+    per_host: false
+    data:
+      osac_error: "{{ _cudn_evpn_report }}"
+
+- name: Fail the play
+  ansible.builtin.fail:
+    msg: "{{ _cudn_evpn_report.message }}"

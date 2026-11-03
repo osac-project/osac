@@ -1,3 +1,37 @@
 ---
 default_vnet_vlan_id: auto
 default_ipam_purpose_public: nat
+
+# Settings from the environment of the job pod (ConfigMap/Secret
+# network-fulfillment-ig). group_vars/all/configuration.yaml defines the same
+# names for the CaaS playbooks and takes precedence there; these defaults let
+# the role run under the generic networking playbook without it. An unset or
+# malformed number is 0, which tasks/_settings.yaml rejects.
+netris_controller_url: "{{ lookup('ansible.builtin.env', 'NETRIS_CONTROLLER_URL', default='') }}"
+netris_username: "{{ lookup('ansible.builtin.env', 'NETRIS_USERNAME', default='') }}"
+netris_password: "{{ lookup('ansible.builtin.env', 'NETRIS_PASSWORD', default='') | trim }}"
+netris_site_id: "{{ lookup('ansible.builtin.env', 'NETRIS_SITE_ID', default='') | int(0) }}"
+netris_tenant_id: "{{ lookup('ansible.builtin.env', 'NETRIS_TENANT_ID', default='') | int(0) }}"
+netris_mgmt_vpc_id: "{{ lookup('ansible.builtin.env', 'NETRIS_MGMT_VPC_ID', default='') | int(0) }}"
+netris_bm_provisioning_vnet: "{{ lookup('ansible.builtin.env', 'NETRIS_BM_PROVISIONING_VNET', default='') }}"
+# TLS, same semantics as group_vars/all/configuration.yaml: verification stays
+# on unless NETRIS_VALIDATE_CERTS is exactly "false".
+netris_validate_certs: >-
+  {{ (lookup('ansible.builtin.env', 'NETRIS_VALIDATE_CERTS')
+      | default('true', true) | lower | trim) != 'false' }}
+netris_ca_path: "{{ lookup('ansible.builtin.env', 'NETRIS_CA_PATH', default='') }}"
+# JSON object: resource class -> {server_cluster_template_id, ...}. Same name
+# and meaning as in group_vars/all/configuration.yaml.
+netris_resource_class_map: >-
+  {{ lookup('ansible.builtin.env', 'NETRIS_RESOURCE_CLASS_MAP') | default('{}', true) | from_json }}
+
+# Gateway of the V-Net of a Subnet with a network type (OSAC-6766, D-1):
+#   gateway_ipv4   gateway_ipv4/prefix from the IPAM result (the lab spike)
+#   none           no Netris gateway
+#   physical_first first address of the first physical block, Subnet prefix
+# DHCP stays off for these Subnets (D-4). A shared anycast mode may follow.
+netris_evpn_vnet_gateway_mode: gateway_ipv4
+
+# Seconds to wait after host ports left a V-Net before they join another one
+# (the fabric needs time to settle). The unit tests set 0.
+netris_port_settle_seconds: "{{ lookup('ansible.builtin.env', 'NETRIS_PORT_SETTLE_SECONDS', default='15') | int(15) }}"

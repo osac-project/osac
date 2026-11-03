@@ -1,0 +1,14 @@
+---
+# Read one hub object. Input: ce_api, ce_kind, ce_name, optional ce_ns.
+# Output: ce_obj (the object, or {} when absent).
+- name: "Read the hub object {{ ce_kind ~ ' ' ~ ce_name }}"
+  kubernetes.core.k8s_info:
+    api_version: "{{ ce_api }}"
+    kind: "{{ ce_kind }}"
+    name: "{{ ce_name }}"
+    namespace: "{{ ce_ns | default(omit) }}"
+  register: _ce_read
+
+- name: "Keep the hub object that was read"
+  ansible.builtin.set_fact:
+    ce_obj: "{{ _ce_read.resources[0] if _ce_read.resources | length > 0 else {} }}"

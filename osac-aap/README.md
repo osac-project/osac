@@ -25,9 +25,14 @@ User ─► fulfillment-service (API) ─► osac-operator (watches K8s CRs) ─
    SecurityGroup, ComputeInstance, ClusterOrder, etc.) and triggers AAP job
    templates to provision them.
 3. **osac-aap (this repo)** — The Ansible automation that actually creates
-   infrastructure. Each playbook receives the full K8s CR as its payload,
-   reads an `implementation_strategy` annotation, and dynamically includes the
-   matching template role to do the provisioning.
+   infrastructure. Networking jobs run the generic playbook
+   `playbook_osac_network_task.yml`, which includes the task file of the
+   manager role the operator names in `osac_job_vars` (network manager
+   contract); other playbooks receive their CR in `osac_job_vars.resource`.
+   No job template runs the per-resource networking playbooks
+   (`playbook_osac_create_subnet.yml` and the like) any more; they stay only
+   as entry points of the AgentlessNet tests until that manager adopts the
+   contract.
 
 ## What it provisions
 
@@ -39,6 +44,7 @@ pluggable backends:
 | Implementation | Role | Backend |
 |----------------|------|---------|
 | `cudn_net` | ClusterUserDefinedNetwork (CUDN) on OpenShift | OVN-Kubernetes |
+| `cudn_evpn` | OSAC Kubernetes Manager for network type `evpn`: VirtualNetwork namespace, EVPN CUDN and SecurityGroup NetworkPolicies ([README](collections/ansible_collections/osac/templates/roles/cudn_evpn/README.md)) | OVN-Kubernetes EVPN |
 | `netris` | Netris Controller API | Netris |
 | `agentless_net` | UID-keyed VirtualNetwork namespace plus Subnet VLAN, gateway, and per-VirtualNetwork DHCP | AgentlessNet |
 | `openstack` | OpenStack Neutron | Neutron |
@@ -63,7 +69,7 @@ removing forwarding, DNAT, and matching conntrack entries. The operator accepts
 the `osac_result` artifact before marking the attachment Ready or releasing its
 finalizers. BMaaS is the first supported consumer; VMaaS and CaaS target wiring
 remain follow-up work. Provider BGP peers are configured outside these jobs.
-For NATGateway contract v1, AAP reads the controller-supplied ExternalIP and
+For NATGateway tasks, AAP reads the controller-supplied ExternalIP and
 VirtualNetwork snapshot and keeps the ExternalIP reservation until cleanup.
 It translates the complete immutable VirtualNetwork CIDR, excluding the saved
 transit `/31`, with a constant two-rule namespace pair. It installs explicit
@@ -190,7 +196,7 @@ Secret. When the Secret key is used, the role writes it to a mode-0600
 temporary file on the worker and removes it after the operation, including
 failures. Missing or invalid inventory fails before provider mutation.
 Configure nonsecret values through the existing
-[AAP instance-group configuration](../osac-installer/docs/network-backend.md#agentlessnet-virtualnetwork-baseline).
+[AAP instance-group configuration](../osac-installer/docs/network-backend.md#caas-on-netris).
 Tenant VirtualNetwork and Subnet create commands and API inputs remain
 unchanged; VLAN bounds and DHCP-manager selection are internal provider details.
 
@@ -285,13 +291,13 @@ osac-aap/
 
 ### Key design pattern
 
-Every template role declares its capabilities in `meta/osac.yaml`. Network
-roles identify themselves via `fabric_manager`/`k8s_manager` (the dispatcher's
-routing keys); other template types still use `implementation_strategy`:
+Every template role declares its capabilities in `meta/osac.yaml`. For network
+roles the file is informational; a registration ConfigMap (`ansible_role`)
+selects the role:
 
 ```yaml
 template_type: network
-fabric_manager: cudn_net
+fabric_manager: <registration-name>
 capabilities:
   supports_ipv4: true
   supports_ipv6: false
@@ -300,7 +306,7 @@ capabilities:
 
 Network roles declare their dispatcher identity for the operator. The installer
 owns NetworkClass creation; `agentless_net` is selected through the installer
-[overlay instructions](../osac-installer/docs/network-backend.md#agentlessnet-virtualnetwork-baseline)
+[overlay instructions](../osac-installer/docs/network-backend.md)
 and is not published as a ComputeClass. The generic
 resource playbooks then include the selected role without changing the API.
 

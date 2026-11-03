@@ -23,29 +23,39 @@ import "buf/validate/validate.proto";
 // destination CIDR blocks. Rules are stateful - return traffic for established connections is automatically
 // allowed.
 //
-// Port ranges apply only to TCP and UDP protocols. For ICMP and ALL protocols, port fields are ignored.
-//
-// Rules currently support canonical IPv4 CIDRs only. The legacy ipv6_cidr field remains in the wire contract for
-// compatibility, but non-empty IPv6 and dual-stack requests are rejected.
+// TCP and UDP rules require a port range; ICMP and ALL rules must not set ports. Rules support canonical IPv4 CIDRs
+// only.
 message SecurityRule {
+  option (buf.validate.message).cel = {
+    id: "protocol_required"
+    message: "protocol is required"
+    expression: "this.protocol != 0"
+  };
+  option (buf.validate.message).cel = {
+    id: "ports_tcp_udp"
+    message: "tcp and udp rules require port_from and port_to from 1 to 65535 with port_from <= port_to; icmp and all rules must not set ports"
+    expression: "(this.protocol == 1 || this.protocol == 2) ? (has(this.port_from) && has(this.port_to) && this.port_from >= 1 && this.port_to <= 65535 && this.port_from <= this.port_to) : (!has(this.port_from) && !has(this.port_to))"
+  };
+
   // Protocol to match for this rule.
   //
   // Use PROTOCOL_ALL to match all protocols (wildcard). Use PROTOCOL_TCP or PROTOCOL_UDP when port ranges
-  // are needed. Use PROTOCOL_ICMP for ping and other ICMP traffic.
+  // are needed. Use PROTOCOL_ICMP for ping and other ICMP traffic where the deployment's network managers
+  // support it; otherwise it is rejected and PROTOCOL_ALL, which includes ICMP, is the alternative.
   Protocol protocol = 1;
 
   // Starting port number for the rule (1-65535).
   //
-  // Required for tcp/udp protocols, ignored for icmp/all. For single port, set port_from = port_to.
-  // Must be <= port_to. Validation enforced at service layer.
+  // Required for tcp/udp protocols and not allowed for icmp/all. For a single port, set port_from = port_to.
+  // Must be <= port_to.
   //
   // Example: 22 (SSH), 80 (HTTP), 443 (HTTPS), 3306 (MySQL)
   optional int32 port_from = 2;
 
   // Ending port number for the rule (1-65535).
   //
-  // Required for tcp/udp protocols, ignored for icmp/all. Must be >= port_from. For single port, set
-  // port_from = port_to. Validation enforced at service layer.
+  // Required for tcp/udp protocols and not allowed for icmp/all. Must be >= port_from. For a single port, set
+  // port_from = port_to.
   //
   // Example: 22 (single port), 8000 (range 8000-9000)
   optional int32 port_to = 3;
@@ -65,18 +75,15 @@ message SecurityRule {
     }
   ];
 
-  // Legacy IPv6 CIDR field. IPv6 and dual-stack networking are not supported; non-empty values are rejected.
-  optional string ipv6_cidr = 5 [(buf.validate.field).cel = {
-    id: "ipv6_cidr_not_supported"
-    message: "IPv6 and dual-stack networking are not supported"
-    expression: "this == ''"
-  }];
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 5;
+  reserved "ipv6_cidr";
 }
 
 // Network protocol types for SecurityRule matching.
 //
 // Determines which layer 4 protocol the rule applies to. Protocol affects whether port range fields are
-// applicable (TCP/UDP) or ignored (ICMP/ALL).
+// required (TCP/UDP) or not allowed (ICMP/ALL).
 enum Protocol {
   // Unknown protocol (invalid). This should never be used in actual rules.
   PROTOCOL_UNSPECIFIED = 0;
@@ -91,12 +98,13 @@ enum Protocol {
   // Used for connectionless protocols like DNS, NTP, DHCP, VoIP, etc.
   PROTOCOL_UDP = 2;
 
-  // ICMP protocol (ping and other control messages). Port ranges are not applicable.
+  // ICMP protocol (ping and other control messages). Port ranges are not allowed.
   //
   // Used for network diagnostics (ping), error reporting, and control messages.
+  // Rejected on deployments whose network managers do not support it; PROTOCOL_ALL includes ICMP.
   PROTOCOL_ICMP = 3;
 
-  // All protocols (wildcard). Port ranges are not applicable.
+  // All protocols (wildcard). Port ranges are not allowed.
   //
   // Matches any protocol. Useful for allowing all traffic from a trusted CIDR block or for egress rules
   // that permit all outbound traffic.

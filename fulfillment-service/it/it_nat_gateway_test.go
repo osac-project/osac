@@ -56,6 +56,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		ndSkipUnlessProviderNetworkingEnabled(ctx, "NATGateway lifecycle")
 		natGatewayIDs = nil
 		networkClassIDs = nil
 		virtualNetworkIDs = nil
@@ -71,14 +72,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 
 		// Create NetworkClass
-		ncName := fmt.Sprintf("cudn-natgw-%s", uuid.New())
-		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata:      privatev1.Metadata_builder{Name: ncName}.Build(),
-				Title:         "Test CUDN Network Class",
-				FabricManager: new("netris"),
-			}.Build(),
-		}.Build())
+		ncResp, err := sharedNetworkClass(ctx, networkClassesClient)
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId = ncResp.GetObject().GetId()
 		networkClassIDs = append(networkClassIDs, networkClassId)
@@ -109,9 +103,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 					Tenant: usersGroup,
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.100.0.0/16"),
+					Ipv4Cidr: new("10.100.0.0/16"),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -133,9 +125,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		vn := vnGetResp.GetObject()
-		vn.SetStatus(privatev1.VirtualNetworkStatus_builder{
-			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-		}.Build())
+		vn.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
 		_, err = virtualNetworksClient.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
 			Object:     vn,
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
@@ -344,10 +334,6 @@ var _ = Describe("NATGateway lifecycle", func() {
 		}
 		for _, id := range networkClassIDs {
 			Expect(cleanupNetworkClassFixture(ctx, networkClassesClient, id)).To(Succeed())
-			waitForNotFound(func() error {
-				_, err := networkClassesClient.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: id}.Build())
-				return err
-			})
 		}
 	})
 
@@ -484,9 +470,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 					Tenant: usersGroup,
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.200.0.0/16"),
+					Ipv4Cidr: new("10.200.0.0/16"),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -502,64 +486,6 @@ var _ = Describe("NATGateway lifecycle", func() {
 				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: vn2Id}.Build(),
-					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).To(HaveOccurred())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-	})
-
-	It("Rejects create when the VirtualNetwork's NetworkClass has no fabric_manager", func() {
-		// Only one NetworkClass may exist per deployment (OSAC-4073), so the fabric-manager
-		// NetworkClass and VirtualNetwork created by the outer BeforeEach must be torn down
-		// before creating the k8s-only NetworkClass this test needs.
-		Expect(cleanupVirtualNetworkFixture(ctx, virtualNetworksClient, virtualNetworkId)).To(Succeed())
-		waitForNotFound(func() error {
-			_, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkId}.Build())
-			return err
-		})
-		Expect(cleanupNetworkClassFixture(ctx, networkClassesClient, networkClassId)).To(Succeed())
-		waitForNotFound(func() error {
-			_, err := networkClassesClient.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassId}.Build())
-			return err
-		})
-
-		// Create a k8s-only NetworkClass (no fabric_manager):
-		k8sOnlyNC, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Title:      "Test k8s-only Network Class",
-				K8SManager: new("cudn_localnet"),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		networkClassIDs = append(networkClassIDs, k8sOnlyNC.GetObject().GetId())
-		waitForNetworkClassReady(ctx, networkClassesClient, k8sOnlyNC.GetObject().GetId())
-
-		k8sOnlyVNId := fmt.Sprintf("test-vnet-%s", uuid.New())
-		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-			Object: privatev1.VirtualNetwork_builder{
-				Id: k8sOnlyVNId,
-				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
-					Tenant: usersGroup,
-				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: k8sOnlyNC.GetObject().GetId()}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.150.0.0/16"),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		virtualNetworkIDs = append(virtualNetworkIDs, k8sOnlyVNId)
-
-		ngId := fmt.Sprintf("test-ng-%s", uuid.New())
-		_, err = natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
-			Object: publicv1.NATGateway_builder{
-				Id: ngId,
-				Spec: publicv1.NATGatewaySpec_builder{
-					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: k8sOnlyVNId}.Build(),
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
 				}.Build(),
 			}.Build(),

@@ -2,7 +2,6 @@
 
 import contextlib
 import hmac
-import importlib.util
 import json
 import os
 import secrets
@@ -10,11 +9,11 @@ import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from .netris_session_fixture import NetrisFixtureServer
 from .test_netris_external_ip_module import (
     COLLECTIONS_PATH,
     MODULE_PATH,
@@ -22,13 +21,6 @@ from .test_netris_external_ip_module import (
     netris_eip,
 )
 
-FIXTURE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "integration/targets/netris_external_ip/files/verify_external_ip.py"
-)
-fixture_spec = importlib.util.spec_from_file_location("netris_fixture", FIXTURE_PATH)
-netris_fixture = importlib.util.module_from_spec(fixture_spec)
-fixture_spec.loader.exec_module(netris_fixture)
 
 
 @contextlib.contextmanager
@@ -47,7 +39,7 @@ def running_server(server):
 @pytest.fixture
 def provider():
     """Expose the shared session-enforcing provider on an ephemeral port."""
-    with running_server(netris_fixture.NetrisFixtureServer()) as server:
+    with running_server(NetrisFixtureServer()) as server:
         yield server
 
 
@@ -137,20 +129,13 @@ def test_real_module_subprocess_uses_fixture_session(
     """Verify child-module authentication and sanitized errors without leaks."""
     if operation == "external_ip.release":
         provider.commit_subnet({
-            "name": (
-                f"{netris_eip.RESERVATION_NAME_PREFIX}"
-                f"{module_args()['resource']['metadata']['uid']}"
-            ),
+            "name": module_args()["reservation_name"],
             "prefix": "10.20.0.1/32", "purpose": "nat", "site_id": 1, "tenant_id": 7,
         })
-    job = SimpleNamespace(server=provider, fixture_url=f"http://127.0.0.1:{provider.server_port}")
-    job_vars = netris_fixture.ExternalIPPlaybookTests._job_vars(
-        job, module_args()["resource"], pool=False
-    )
     args = module_args(
         operation=operation,
-        controller_url=job_vars["netris_controller_url"],
-        session_cookie=job_vars["netris_session_cookie"],
+        controller_url=f"http://127.0.0.1:{provider.server_port}",
+        session_cookie=provider.session_cookie,
     )
     if operation == "external_ip.release":
         args["resource"]["metadata"]["deletionTimestamp"] = "2026-01-01T00:00:00Z"

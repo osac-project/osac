@@ -1,0 +1,11 @@
+---
+# The only place that shapes osac_result.
+# Input: netris_result with any of backend_id, l3_vni, network_segment
+#   {type, l2_vni}, external_ip {address}, dhcp_lease {ip_address, mac_address}.
+#   Integers are published as integers and backend_id as a string.
+- name: Return the result to OSAC
+  ansible.builtin.set_stats:
+    aggregate: false
+    per_host: false
+    data:
+      osac_result: "{{ netris_result | osac.templates.netris_contract_result }}"

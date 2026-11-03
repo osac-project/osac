@@ -23,7 +23,6 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -40,7 +39,7 @@ var _ = Describe("REST gateway", func() {
 
 	It("Should use protobuf field names in JSON representation", func() {
 		// Create a cluster template:
-		templateID := fmt.Sprintf("my_%s", uuid.New())
+		templateID := newTemplateID("my")
 		_, err := templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          templateID,
@@ -80,7 +79,7 @@ var _ = Describe("REST gateway", func() {
 
 	It("Should be possible to fetch cluster templates via private REST API", func() {
 		// Create a cluster template:
-		templateID := fmt.Sprintf("my_%s", uuid.New())
+		templateID := newTemplateID("my")
 		_, err := templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          templateID,

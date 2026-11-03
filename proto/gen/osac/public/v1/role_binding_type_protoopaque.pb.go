@@ -88,11 +88,10 @@ func (x RoleBindingState) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Represents a binding between a role and a set of users.
+// Represents a binding between a role and a set of subjects.
 //
-// A RoleBinding grants the permissions defined by its referenced role to the users listed in its spec. This is
-// the mechanism by which roles are assigned to users, enabling those users to perform the actions permitted by
-// the role.
+// A RoleBinding grants the permissions defined by its referenced role to the users and service accounts listed in its
+// spec.
 type RoleBinding struct {
 	state               protoimpl.MessageState `protogen:"opaque.v1"`
 	xxx_hidden_Id       string                 `protobuf:"bytes,1,opt,name=id,proto3"`
@@ -231,11 +230,12 @@ func (b0 RoleBinding_builder) Build() *RoleBinding {
 
 // Desired state of a role binding.
 type RoleBindingSpec struct {
-	state            protoimpl.MessageState `protogen:"opaque.v1"`
-	xxx_hidden_Role  *RoleReference         `protobuf:"bytes,1,opt,name=role,proto3"`
-	xxx_hidden_Users *[]*UserReference      `protobuf:"bytes,2,rep,name=users,proto3"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state                      protoimpl.MessageState      `protogen:"opaque.v1"`
+	xxx_hidden_Role            *RoleReference              `protobuf:"bytes,1,opt,name=role,proto3"`
+	xxx_hidden_Users           *[]*UserReference           `protobuf:"bytes,2,rep,name=users,proto3"`
+	xxx_hidden_ServiceAccounts *[]*ServiceAccountReference `protobuf:"bytes,3,rep,name=service_accounts,json=serviceAccounts,proto3"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *RoleBindingSpec) Reset() {
@@ -279,12 +279,25 @@ func (x *RoleBindingSpec) GetUsers() []*UserReference {
 	return nil
 }
 
+func (x *RoleBindingSpec) GetServiceAccounts() []*ServiceAccountReference {
+	if x != nil {
+		if x.xxx_hidden_ServiceAccounts != nil {
+			return *x.xxx_hidden_ServiceAccounts
+		}
+	}
+	return nil
+}
+
 func (x *RoleBindingSpec) SetRole(v *RoleReference) {
 	x.xxx_hidden_Role = v
 }
 
 func (x *RoleBindingSpec) SetUsers(v []*UserReference) {
 	x.xxx_hidden_Users = &v
+}
+
+func (x *RoleBindingSpec) SetServiceAccounts(v []*ServiceAccountReference) {
+	x.xxx_hidden_ServiceAccounts = &v
 }
 
 func (x *RoleBindingSpec) HasRole() bool {
@@ -302,7 +315,7 @@ type RoleBindingSpec_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	// Reference to the role that this binding refers to. This determines which permissions are granted to the
-	// users listed below.
+	// subjects listed below.
 	Role *RoleReference
 	// References to the users that are granted the permissions defined by the role.
 	//
@@ -310,6 +323,11 @@ type RoleBindingSpec_builder struct {
 	// To revoke a role from a user, either delete the entire RoleBinding (if the user is the only subject), or
 	// update the RoleBinding to remove the user's reference from this list.
 	Users []*UserReference
+	// References to the service accounts that are granted the permissions defined by the role.
+	//
+	// To grant a role to a service account, create a RoleBinding with the desired role and include the service account's
+	// ID in this list. Service account grants are evaluated by Fulfillment and are not synchronized to Keycloak roles.
+	ServiceAccounts []*ServiceAccountReference
 }
 
 func (b0 RoleBindingSpec_builder) Build() *RoleBindingSpec {
@@ -318,6 +336,66 @@ func (b0 RoleBindingSpec_builder) Build() *RoleBindingSpec {
 	_, _ = b, x
 	x.xxx_hidden_Role = b.Role
 	x.xxx_hidden_Users = &b.Users
+	x.xxx_hidden_ServiceAccounts = &b.ServiceAccounts
+	return m0
+}
+
+// Reference to a tenant-owned service account.
+type ServiceAccountReference struct {
+	state         protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Id string                 `protobuf:"bytes,1,opt,name=id,proto3"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ServiceAccountReference) Reset() {
+	*x = ServiceAccountReference{}
+	mi := &file_osac_public_v1_role_binding_type_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServiceAccountReference) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServiceAccountReference) ProtoMessage() {}
+
+func (x *ServiceAccountReference) ProtoReflect() protoreflect.Message {
+	mi := &file_osac_public_v1_role_binding_type_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *ServiceAccountReference) GetId() string {
+	if x != nil {
+		return x.xxx_hidden_Id
+	}
+	return ""
+}
+
+func (x *ServiceAccountReference) SetId(v string) {
+	x.xxx_hidden_Id = v
+}
+
+type ServiceAccountReference_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	// Unique identifier assigned by the server.
+	Id string
+}
+
+func (b0 ServiceAccountReference_builder) Build() *ServiceAccountReference {
+	m0 := &ServiceAccountReference{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.xxx_hidden_Id = b.Id
 	return m0
 }
 
@@ -334,7 +412,7 @@ type RoleBindingStatus struct {
 
 func (x *RoleBindingStatus) Reset() {
 	*x = RoleBindingStatus{}
-	mi := &file_osac_public_v1_role_binding_type_proto_msgTypes[2]
+	mi := &file_osac_public_v1_role_binding_type_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -346,7 +424,7 @@ func (x *RoleBindingStatus) String() string {
 func (*RoleBindingStatus) ProtoMessage() {}
 
 func (x *RoleBindingStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_osac_public_v1_role_binding_type_proto_msgTypes[2]
+	mi := &file_osac_public_v1_role_binding_type_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -444,15 +522,23 @@ var file_osac_public_v1_role_binding_type_proto_rawDesc = string([]byte{
 	0x75, 0x73, 0x18, 0x04, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x21, 0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e,
 	0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76, 0x31, 0x2e, 0x52, 0x6f, 0x6c, 0x65, 0x42, 0x69,
 	0x6e, 0x64, 0x69, 0x6e, 0x67, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x42, 0x04, 0xe2, 0x41, 0x01,
-	0x03, 0x52, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x22, 0x79, 0x0a, 0x0f, 0x52, 0x6f, 0x6c,
-	0x65, 0x42, 0x69, 0x6e, 0x64, 0x69, 0x6e, 0x67, 0x53, 0x70, 0x65, 0x63, 0x12, 0x31, 0x0a, 0x04,
-	0x72, 0x6f, 0x6c, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1d, 0x2e, 0x6f, 0x73, 0x61,
-	0x63, 0x2e, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76, 0x31, 0x2e, 0x52, 0x6f, 0x6c, 0x65,
-	0x52, 0x65, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x52, 0x04, 0x72, 0x6f, 0x6c, 0x65, 0x12,
-	0x33, 0x0a, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x1d,
-	0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76, 0x31, 0x2e,
-	0x55, 0x73, 0x65, 0x72, 0x52, 0x65, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x52, 0x05, 0x75,
-	0x73, 0x65, 0x72, 0x73, 0x22, 0x76, 0x0a, 0x11, 0x52, 0x6f, 0x6c, 0x65, 0x42, 0x69, 0x6e, 0x64,
+	0x03, 0x52, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x22, 0xcd, 0x01, 0x0a, 0x0f, 0x52, 0x6f,
+	0x6c, 0x65, 0x42, 0x69, 0x6e, 0x64, 0x69, 0x6e, 0x67, 0x53, 0x70, 0x65, 0x63, 0x12, 0x31, 0x0a,
+	0x04, 0x72, 0x6f, 0x6c, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1d, 0x2e, 0x6f, 0x73,
+	0x61, 0x63, 0x2e, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76, 0x31, 0x2e, 0x52, 0x6f, 0x6c,
+	0x65, 0x52, 0x65, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x52, 0x04, 0x72, 0x6f, 0x6c, 0x65,
+	0x12, 0x33, 0x0a, 0x05, 0x75, 0x73, 0x65, 0x72, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x0b, 0x32,
+	0x1d, 0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76, 0x31,
+	0x2e, 0x55, 0x73, 0x65, 0x72, 0x52, 0x65, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x52, 0x05,
+	0x75, 0x73, 0x65, 0x72, 0x73, 0x12, 0x52, 0x0a, 0x10, 0x73, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65,
+	0x5f, 0x61, 0x63, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32,
+	0x27, 0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76, 0x31,
+	0x2e, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x41, 0x63, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x52,
+	0x65, 0x66, 0x65, 0x72, 0x65, 0x6e, 0x63, 0x65, 0x52, 0x0f, 0x73, 0x65, 0x72, 0x76, 0x69, 0x63,
+	0x65, 0x41, 0x63, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x73, 0x22, 0x29, 0x0a, 0x17, 0x53, 0x65, 0x72,
+	0x76, 0x69, 0x63, 0x65, 0x41, 0x63, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x52, 0x65, 0x66, 0x65, 0x72,
+	0x65, 0x6e, 0x63, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x02, 0x69, 0x64, 0x22, 0x76, 0x0a, 0x11, 0x52, 0x6f, 0x6c, 0x65, 0x42, 0x69, 0x6e, 0x64,
 	0x69, 0x6e, 0x67, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x36, 0x0a, 0x05, 0x73, 0x74, 0x61,
 	0x74, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0e, 0x32, 0x20, 0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e,
 	0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76, 0x31, 0x2e, 0x52, 0x6f, 0x6c, 0x65, 0x42, 0x69,
@@ -486,28 +572,30 @@ var file_osac_public_v1_role_binding_type_proto_rawDesc = string([]byte{
 })
 
 var file_osac_public_v1_role_binding_type_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_osac_public_v1_role_binding_type_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_osac_public_v1_role_binding_type_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_osac_public_v1_role_binding_type_proto_goTypes = []any{
-	(RoleBindingState)(0),     // 0: osac.public.v1.RoleBindingState
-	(*RoleBinding)(nil),       // 1: osac.public.v1.RoleBinding
-	(*RoleBindingSpec)(nil),   // 2: osac.public.v1.RoleBindingSpec
-	(*RoleBindingStatus)(nil), // 3: osac.public.v1.RoleBindingStatus
-	(*Metadata)(nil),          // 4: osac.public.v1.Metadata
-	(*RoleReference)(nil),     // 5: osac.public.v1.RoleReference
-	(*UserReference)(nil),     // 6: osac.public.v1.UserReference
+	(RoleBindingState)(0),           // 0: osac.public.v1.RoleBindingState
+	(*RoleBinding)(nil),             // 1: osac.public.v1.RoleBinding
+	(*RoleBindingSpec)(nil),         // 2: osac.public.v1.RoleBindingSpec
+	(*ServiceAccountReference)(nil), // 3: osac.public.v1.ServiceAccountReference
+	(*RoleBindingStatus)(nil),       // 4: osac.public.v1.RoleBindingStatus
+	(*Metadata)(nil),                // 5: osac.public.v1.Metadata
+	(*RoleReference)(nil),           // 6: osac.public.v1.RoleReference
+	(*UserReference)(nil),           // 7: osac.public.v1.UserReference
 }
 var file_osac_public_v1_role_binding_type_proto_depIdxs = []int32{
-	4, // 0: osac.public.v1.RoleBinding.metadata:type_name -> osac.public.v1.Metadata
+	5, // 0: osac.public.v1.RoleBinding.metadata:type_name -> osac.public.v1.Metadata
 	2, // 1: osac.public.v1.RoleBinding.spec:type_name -> osac.public.v1.RoleBindingSpec
-	3, // 2: osac.public.v1.RoleBinding.status:type_name -> osac.public.v1.RoleBindingStatus
-	5, // 3: osac.public.v1.RoleBindingSpec.role:type_name -> osac.public.v1.RoleReference
-	6, // 4: osac.public.v1.RoleBindingSpec.users:type_name -> osac.public.v1.UserReference
-	0, // 5: osac.public.v1.RoleBindingStatus.state:type_name -> osac.public.v1.RoleBindingState
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	4, // 2: osac.public.v1.RoleBinding.status:type_name -> osac.public.v1.RoleBindingStatus
+	6, // 3: osac.public.v1.RoleBindingSpec.role:type_name -> osac.public.v1.RoleReference
+	7, // 4: osac.public.v1.RoleBindingSpec.users:type_name -> osac.public.v1.UserReference
+	3, // 5: osac.public.v1.RoleBindingSpec.service_accounts:type_name -> osac.public.v1.ServiceAccountReference
+	0, // 6: osac.public.v1.RoleBindingStatus.state:type_name -> osac.public.v1.RoleBindingState
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_osac_public_v1_role_binding_type_proto_init() }
@@ -518,14 +606,14 @@ func file_osac_public_v1_role_binding_type_proto_init() {
 	file_osac_public_v1_metadata_type_proto_init()
 	file_osac_public_v1_role_type_proto_init()
 	file_osac_public_v1_user_type_proto_init()
-	file_osac_public_v1_role_binding_type_proto_msgTypes[2].OneofWrappers = []any{}
+	file_osac_public_v1_role_binding_type_proto_msgTypes[3].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_osac_public_v1_role_binding_type_proto_rawDesc), len(file_osac_public_v1_role_binding_type_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

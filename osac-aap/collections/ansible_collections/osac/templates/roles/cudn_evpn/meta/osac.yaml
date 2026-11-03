@@ -1,9 +1,10 @@
 ---
 name: cudn-evpn
-title: CUDN EVPN Network Manager
+title: CUDN EVPN Kubernetes Manager
 description: >
-  Connects a Subnet's namespace to the fabric using an EVPN-backed
-  ClusterUserDefinedNetwork.
+  OSAC's Kubernetes Manager for network type evpn: one namespace and one
+  EVPN ClusterUserDefinedNetwork per VirtualNetwork, and one NetworkPolicy
+  per SecurityGroup, on the hub where VMs run.
 
 template_type: network
 k8s_manager: cudn_evpn

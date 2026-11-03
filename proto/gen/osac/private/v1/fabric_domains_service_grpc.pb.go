@@ -47,6 +47,7 @@ type FabricDomainsClient interface {
 	List(ctx context.Context, in *FabricDomainsListRequest, opts ...grpc.CallOption) (*FabricDomainsListResponse, error)
 	Get(ctx context.Context, in *FabricDomainsGetRequest, opts ...grpc.CallOption) (*FabricDomainsGetResponse, error)
 	Create(ctx context.Context, in *FabricDomainsCreateRequest, opts ...grpc.CallOption) (*FabricDomainsCreateResponse, error)
+	// Status-only update used by the system; FabricDomain servers cannot change in this release.
 	Update(ctx context.Context, in *FabricDomainsUpdateRequest, opts ...grpc.CallOption) (*FabricDomainsUpdateResponse, error)
 	Delete(ctx context.Context, in *FabricDomainsDeleteRequest, opts ...grpc.CallOption) (*FabricDomainsDeleteResponse, error)
 	Signal(ctx context.Context, in *FabricDomainsSignalRequest, opts ...grpc.CallOption) (*FabricDomainsSignalResponse, error)
@@ -127,6 +128,7 @@ type FabricDomainsServer interface {
 	List(context.Context, *FabricDomainsListRequest) (*FabricDomainsListResponse, error)
 	Get(context.Context, *FabricDomainsGetRequest) (*FabricDomainsGetResponse, error)
 	Create(context.Context, *FabricDomainsCreateRequest) (*FabricDomainsCreateResponse, error)
+	// Status-only update used by the system; FabricDomain servers cannot change in this release.
 	Update(context.Context, *FabricDomainsUpdateRequest) (*FabricDomainsUpdateResponse, error)
 	Delete(context.Context, *FabricDomainsDeleteRequest) (*FabricDomainsDeleteResponse, error)
 	Signal(context.Context, *FabricDomainsSignalRequest) (*FabricDomainsSignalResponse, error)

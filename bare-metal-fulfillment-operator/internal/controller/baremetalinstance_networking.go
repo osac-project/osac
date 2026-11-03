@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -182,13 +183,8 @@ func validateBareMetalNetworkAttachment(
 	if na.Spec.Subnet != attachment.SubnetRef || na.Spec.Interface.Name != attachment.Interface {
 		return fmt.Errorf("NetworkAttachment %s does not match the BareMetalInstance network attachment", na.Name)
 	}
-	if len(na.Spec.SecurityGroups) != len(attachment.SecurityGroupRefs) {
+	if !slices.Equal(na.Spec.SecurityGroups, attachment.SecurityGroupRefs) {
 		return fmt.Errorf("NetworkAttachment %s has different security groups", na.Name)
-	}
-	for i := range na.Spec.SecurityGroups {
-		if na.Spec.SecurityGroups[i] != attachment.SecurityGroupRefs[i] {
-			return fmt.Errorf("NetworkAttachment %s has different security groups", na.Name)
-		}
 	}
 	if len(bmi.Status.NetworkAttachmentStatuses) > 0 && bmi.Status.NetworkAttachmentStatuses[0].MACAddress != "" &&
 		na.Spec.Interface.MACAddress != bmi.Status.NetworkAttachmentStatuses[0].MACAddress {
@@ -201,21 +197,9 @@ func (r *BareMetalInstanceReconciler) ensureNetworkAttachmentStatusMAC(
 	ctx context.Context,
 	bmi *v1alpha1.BareMetalInstance,
 ) error {
+	r.initNetworkAttachmentStatuses(bmi)
 	attachment := bmi.Spec.NetworkAttachments[0]
-	if len(bmi.Status.NetworkAttachmentStatuses) == 0 {
-		bmi.Status.NetworkAttachmentStatuses = []v1alpha1.BareMetalNetworkAttachmentStatus{{
-			Interface: attachment.Interface,
-			SubnetRef: attachment.SubnetRef,
-			Primary:   attachment.Primary || len(bmi.Spec.NetworkAttachments) == 1,
-		}}
-	}
 	status := &bmi.Status.NetworkAttachmentStatuses[0]
-	if status.Interface == "" {
-		status.Interface = attachment.Interface
-	}
-	if status.SubnetRef == "" {
-		status.SubnetRef = attachment.SubnetRef
-	}
 	if status.MACAddress != "" {
 		return nil
 	}

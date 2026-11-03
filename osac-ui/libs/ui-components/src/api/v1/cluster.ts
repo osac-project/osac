@@ -1,59 +1,45 @@
 import { useCallback, useEffect, useState } from 'react';
 import { type MessageInitShape } from '@bufbuild/protobuf';
-import { keepPreviousData, useMutation } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 
 import { Cluster, ClusterSchema, Clusters, Secrets } from '@osac/types';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
 
 import { useApiFetch } from '../api-context';
-import { apiQueryKey } from '../types';
-import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
+import { useGetResource, useInvalidateServiceQueries, useListResource } from '../use-resource';
 
 export const useClusters = () => {
-  const client = useApiFetch(Clusters);
   const filter = useProjectFilterQuery<Cluster>();
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/clusters', undefined, filter ? { filter } : undefined),
-    queryFn: () => client.list({ filter }),
-    select: (data) => data.items,
-    placeholderData: keepPreviousData,
-  });
+  return useListResource(Clusters, { filter }, {}, (reply) => reply.items);
 };
 
 export const useCluster = (id: string) => {
-  const client = useApiFetch(Clusters);
   const trimmedId = id?.trim() ?? '';
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/clusters', [trimmedId]),
-    queryFn: () => client.get({ id: trimmedId }),
-    select: (data) => data.object,
-    enabled: Boolean(trimmedId),
-  });
-};
-
-export const invalidateClustersQueries = async (qc: ApiQueryClient) => {
-  await qc.invalidateQueries({ queryKey: apiQueryKey('v1/clusters') });
+  return useGetResource(
+    Clusters,
+    { id: trimmedId },
+    { enabled: Boolean(trimmedId) },
+    (reply) => reply.object,
+  );
 };
 
 export const useDeleteCluster = () => {
   const client = useApiFetch(Clusters);
-  const qc = useApiQueryClient();
+  const invalidateServiceQueries = useInvalidateServiceQueries();
   return useMutation({
     mutationFn: (id: string) => client.delete({ id }),
-    onSuccess: () => invalidateClustersQueries(qc),
+    onSuccess: () => invalidateServiceQueries(Clusters),
     retry: false,
   });
 };
 
 export const useProvisionCluster = () => {
   const client = useApiFetch(Clusters);
-  const qc = useApiQueryClient();
+  const invalidateServiceQueries = useInvalidateServiceQueries();
   return useMutation({
     mutationFn: (cluster: MessageInitShape<typeof ClusterSchema>) =>
       client.create({ object: cluster }).then((r) => r.object),
-    onSuccess: async () => {
-      await invalidateClustersQueries(qc);
-    },
+    onSuccess: () => invalidateServiceQueries(Clusters),
     retry: false,
   });
 };

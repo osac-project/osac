@@ -1,10 +1,17 @@
 import React, { type ReactNode, createElement } from 'react';
 import { create } from '@bufbuild/protobuf';
+import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { type ClusterVersion, ClusterVersionSchema, ClusterVersionState } from '@osac/types';
+import {
+  type ClusterVersion,
+  ClusterVersionReferenceSchema,
+  ClusterVersionSchema,
+  ClusterVersionState,
+  ClusterVersions,
+} from '@osac/types';
 
 import {
   CLUSTER_VERSION_ACTIVE_LIST_FILTER,
@@ -12,6 +19,7 @@ import {
   clusterVersionNamesFilter,
   useClusterVersion,
   useClusterVersions,
+  useConfiguredClusterVersion,
 } from './cluster-versions';
 import { createMockConnectTransport } from '../../test-utils/createMockConnectTransport';
 import { ApiProvider } from '../api-context';
@@ -90,6 +98,41 @@ describe('useClusterVersions', () => {
     expect(result.current.data?.map((item) => item.id)).toEqual(['4-17-0', '4-16-0']);
   });
 
+  it('stays idle when disabled', () => {
+    const transport = createMockConnectTransport({
+      clusterVersions: [makeClusterVersion('4-17-0')],
+    });
+    const { wrapper } = makeWrapper(transport);
+    const { result } = renderHook(() => useClusterVersions({}, { enabled: false }), {
+      wrapper,
+    });
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(result.current.data).toBeUndefined();
+  });
+
+  it('refetches after service-key invalidation', async () => {
+    let calls = 0;
+    const transport = createMockConnectTransport(
+      {},
+      {
+        onClusterVersionList: () => {
+          calls += 1;
+          return { items: [] };
+        },
+      },
+    );
+    const { wrapper, queryClient } = makeWrapper(transport);
+    const { result } = renderHook(() => useClusterVersions(), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(calls).toBe(1);
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: [ClusterVersions.typeName] });
+    });
+    await waitFor(() => expect(calls).toBe(2));
+  });
+
   it('passes the filter through to the list request', async () => {
     let capturedFilter: string | undefined;
     const transport = createMockConnectTransport(
@@ -122,6 +165,7 @@ describe('useClusterVersion', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.id).toBe('4-17-0');
+    expect((await result.current.refetch()).data?.id).toBe('4-17-0');
   });
 
   it('is disabled when the id is falsy', () => {
@@ -133,5 +177,243 @@ describe('useClusterVersion', () => {
 
     expect(result.current.fetchStatus).toBe('idle');
     expect(result.current.data).toBeUndefined();
+  });
+});
+
+describe('useConfiguredClusterVersion', () => {
+  it('resolves a disabled obsolete configured version by ID', async () => {
+    const configured = makeClusterVersion('4-15-0', ClusterVersionState.OBSOLETE, false);
+    const transport = createMockConnectTransport({ clusterVersions: [configured] });
+    const { wrapper } = makeWrapper(transport);
+    const reference = create(ClusterVersionReferenceSchema, {
+      id: configured.id,
+      name: configured.metadata?.name,
+    });
+    const { result } = renderHook(() => useConfiguredClusterVersion(reference), { wrapper });
+
+    await waitFor(() => expect(result.current.data?.id).toBe(configured.id));
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isError).toBe(false);
+  });
+
+  it('uses a name-scoped all-states List for a name-only reference', async () => {
+    const configured = makeClusterVersion('4-15-0', ClusterVersionState.OBSOLETE, false);
+    let capturedFilter: string | undefined;
+    const transport = createMockConnectTransport(
+      {},
+      {
+        onClusterVersionList: (request) => {
+          capturedFilter = request.filter;
+          return { items: [configured] };
+        },
+      },
+    );
+    const { wrapper } = makeWrapper(transport);
+    const reference = create(ClusterVersionReferenceSchema, { name: '4-15-0' });
+    const { result } = renderHook(() => useConfiguredClusterVersion(reference), { wrapper });
+
+    await waitFor(() => expect(result.current.data?.id).toBe(configured.id));
+    expect(capturedFilter).toContain('this.metadata.name in ["4-15-0"]');
+    expect(capturedFilter).toContain('this.spec.state');
+    expect(capturedFilter).toContain('this.spec.enabled');
+    expect(capturedFilter).toContain(String(ClusterVersionState.OBSOLETE));
+  });
+
+  it('returns unresolved for an absent, missing, mismatched or ambiguous reference', async () => {
+    const configured = makeClusterVersion('4-15-0');
+    const duplicate = create(ClusterVersionSchema, {
+      id: 'other-id',
+      metadata: { name: configured.metadata?.name },
+      spec: configured.spec,
+    });
+    const transport = createMockConnectTransport(
+      { clusterVersions: [configured] },
+      { onClusterVersionList: () => ({ items: [configured, duplicate] }) },
+    );
+    const { wrapper } = makeWrapper(transport);
+    const references = {
+      absent: undefined,
+      missing: create(ClusterVersionReferenceSchema, { id: 'missing' }),
+      mismatched: create(ClusterVersionReferenceSchema, {
+        id: configured.id,
+        name: 'different-name',
+      }),
+      ambiguous: create(ClusterVersionReferenceSchema, { name: configured.metadata?.name }),
+    };
+    const { result } = renderHook(
+      () => ({
+        absent: useConfiguredClusterVersion(references.absent),
+        missing: useConfiguredClusterVersion(references.missing),
+        mismatched: useConfiguredClusterVersion(references.mismatched),
+        ambiguous: useConfiguredClusterVersion(references.ambiguous),
+      }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.missing.isLoading).toBe(false));
+    await waitFor(() => expect(result.current.mismatched.isLoading).toBe(false));
+    await waitFor(() => expect(result.current.ambiguous.isLoading).toBe(false));
+    for (const resolution of Object.values(result.current)) {
+      expect(resolution.data).toBeUndefined();
+      expect(resolution.isError).toBe(false);
+    }
+  });
+
+  it('keeps a nonmatching project reference unresolved', async () => {
+    const configured = create(ClusterVersionSchema, {
+      id: 'version-1',
+      metadata: { name: 'version-1', project: 'project-a' },
+      spec: { version: '4.15.0', state: ClusterVersionState.ACTIVE, enabled: true },
+    });
+    const transport = createMockConnectTransport({ clusterVersions: [configured] });
+    const { wrapper } = makeWrapper(transport);
+    const reference = create(ClusterVersionReferenceSchema, {
+      id: configured.id,
+      name: configured.metadata?.name,
+      project: 'project-b',
+    });
+    const { result } = renderHook(() => useConfiguredClusterVersion(reference), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isError).toBe(false);
+  });
+
+  it.each([
+    ['another project', { project: 'project-b' }],
+    ['the shared tenant', { tenant: 'shared' }],
+  ])('does not resolve a name-only reference in %s', async (_scope, metadata) => {
+    const version = create(ClusterVersionSchema, {
+      id: 'version-1',
+      metadata: { name: 'current', ...metadata },
+      spec: { version: '4.15.0', state: ClusterVersionState.ACTIVE, enabled: true },
+    });
+    const transport = createMockConnectTransport(
+      {},
+      { onClusterVersionList: () => ({ items: [version] }) },
+    );
+    const { wrapper } = makeWrapper(transport);
+    const reference = create(ClusterVersionReferenceSchema, { name: 'current' });
+    const { result } = renderHook(() => useConfiguredClusterVersion(reference), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isError).toBe(false);
+  });
+
+  it.each([
+    ['the named project', { project: 'project-b' }, { project: 'project-b' }],
+    ['the shared tenant', { tenant: 'shared' }, { shared: true }],
+  ])('resolves a name-only reference in %s', async (_scope, metadata, referenceScope) => {
+    const version = create(ClusterVersionSchema, {
+      id: 'version-1',
+      metadata: { name: 'current', ...metadata },
+      spec: { version: '4.15.0', state: ClusterVersionState.ACTIVE, enabled: true },
+    });
+    const transport = createMockConnectTransport(
+      {},
+      { onClusterVersionList: () => ({ items: [version] }) },
+    );
+    const { wrapper } = makeWrapper(transport);
+    const reference = create(ClusterVersionReferenceSchema, {
+      name: 'current',
+      ...referenceScope,
+    });
+    const { result } = renderHook(() => useConfiguredClusterVersion(reference), { wrapper });
+
+    await waitFor(() => expect(result.current.data?.id).toBe(version.id));
+    expect(result.current.isError).toBe(false);
+  });
+
+  it('treats a NotFound response as unresolved and other transport errors as errors', async () => {
+    const transport = createRouterTransport((router) => {
+      router.service(ClusterVersions, {
+        get: (request) => {
+          if (request.id === 'missing') {
+            throw new ConnectError('not found', Code.NotFound);
+          }
+          throw new ConnectError('temporarily unavailable', Code.Unavailable);
+        },
+      });
+    });
+    const { wrapper } = makeWrapper(transport);
+    const { result } = renderHook(
+      () => ({
+        missing: useConfiguredClusterVersion(
+          create(ClusterVersionReferenceSchema, { id: 'missing' }),
+        ),
+        unavailable: useConfiguredClusterVersion(
+          create(ClusterVersionReferenceSchema, { id: 'unavailable' }),
+        ),
+      }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.missing.isLoading).toBe(false));
+    await waitFor(() => expect(result.current.unavailable.isLoading).toBe(false));
+    expect(result.current.missing.data).toBeUndefined();
+    expect(result.current.missing.isError).toBe(false);
+    expect(result.current.unavailable.data).toBeUndefined();
+    expect(result.current.unavailable.isError).toBe(true);
+    expect(result.current.unavailable.error).toMatchObject({ code: Code.Unavailable });
+  });
+
+  it('keeps a pending lookup separate from an unresolved reference', async () => {
+    const configured = makeClusterVersion('4-15-0');
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const transport = createRouterTransport((router) => {
+      router.service(ClusterVersions, {
+        get: async () => {
+          await gate;
+          return { object: configured };
+        },
+      });
+    });
+    const { wrapper } = makeWrapper(transport);
+    const reference = create(ClusterVersionReferenceSchema, { id: configured.id });
+    const { result } = renderHook(() => useConfiguredClusterVersion(reference), { wrapper });
+
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.data).toBeUndefined();
+    act(() => release?.());
+    await waitFor(() => expect(result.current.data?.id).toBe(configured.id));
+  });
+
+  it('does not use placeholder data from the previous name when the reference changes', async () => {
+    const first = makeClusterVersion('4-15-0');
+    const second = makeClusterVersion('4-16-0');
+    let releaseSecond: (() => void) | undefined;
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const transport = createRouterTransport((router) => {
+      router.service(ClusterVersions, {
+        list: async (request) => {
+          if (request.filter?.includes('4-16-0')) {
+            await secondGate;
+            return { items: [second] };
+          }
+          return { items: [first] };
+        },
+      });
+    });
+    const { wrapper } = makeWrapper(transport);
+    const firstRef = create(ClusterVersionReferenceSchema, { name: '4-15-0' });
+    const secondRef = create(ClusterVersionReferenceSchema, { name: '4-16-0' });
+    const { result, rerender } = renderHook(
+      ({ reference }) => useConfiguredClusterVersion(reference),
+      { initialProps: { reference: firstRef }, wrapper },
+    );
+
+    await waitFor(() => expect(result.current.data?.id).toBe(first.id));
+    rerender({ reference: secondRef });
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.data).toBeUndefined();
+
+    act(() => releaseSecond?.());
+    await waitFor(() => expect(result.current.data?.id).toBe(second.id));
   });
 });

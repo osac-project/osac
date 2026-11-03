@@ -29,9 +29,14 @@ export const listVmNames = async (page: Page): Promise<string[]> => {
   const table = page.getByRole(...VmsMainPage.vmsTable);
   const emptyState = page.getByText(...VmsMainPage.emptyState);
   const filteredEmptyState = page.getByText(...VmsMainPage.filteredEmptyState);
+  const noMatchingState = page.getByText(...VmsMainPage.noMatchingState);
+  const errorState = page.getByRole(...VmsMainPage.errorState);
   await expect
     .poll(
       async () => {
+        if (await errorState.isVisible().catch(() => false)) {
+          throw new Error('The tenant VM list reported an API error while loading.');
+        }
         if (await table.isVisible().catch(() => false)) {
           return 'table';
         }
@@ -40,6 +45,9 @@ export const listVmNames = async (page: Page): Promise<string[]> => {
         }
         if (await filteredEmptyState.isVisible().catch(() => false)) {
           return 'filtered-empty';
+        }
+        if (await noMatchingState.isVisible().catch(() => false)) {
+          return 'no-matching';
         }
         return '';
       },
@@ -157,9 +165,14 @@ export const waitForVmToBeDeleted = async (
         const table = page.getByRole(...VmsMainPage.vmsTable);
         const emptyState = page.getByText(...VmsMainPage.emptyState);
         const filteredEmptyState = page.getByText(...VmsMainPage.filteredEmptyState);
+        const noMatchingState = page.getByText(...VmsMainPage.noMatchingState);
+        const errorState = page.getByRole(...VmsMainPage.errorState);
         await expect
           .poll(
             async () => {
+              if (await errorState.isVisible().catch(() => false)) {
+                throw new Error('The tenant VM list reported an API error while loading.');
+              }
               if (await table.isVisible().catch(() => false)) {
                 return 'table';
               }
@@ -168,6 +181,9 @@ export const waitForVmToBeDeleted = async (
               }
               if (await filteredEmptyState.isVisible().catch(() => false)) {
                 return 'filtered-empty';
+              }
+              if (await noMatchingState.isVisible().catch(() => false)) {
+                return 'no-matching';
               }
               return '';
             },

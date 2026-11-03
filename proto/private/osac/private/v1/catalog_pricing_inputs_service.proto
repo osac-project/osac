@@ -1,0 +1,69 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "cleanapi/cleanapi.proto";
+import "google/api/annotations.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
+// One row of an item id/name/title/published tuple for a catalog item that uses or offers a pricing input value.
+message CatalogPricingInputCatalogItem {
+  string id = 1;
+  string name = 2;
+  string title = 3;
+  bool published = 4;
+}
+
+// One distinct (service, dimension, value) tuple in the metered catalog inventory.
+message CatalogPricingInput {
+  // Provider-neutral service name, e.g. "compute_instance" or "cluster".
+  string service = 1;
+  // Provider-neutral dimension name. Must equal the rate-card dimension name a provider admin configures.
+  string dimension = 2;
+  // The concrete value, or empty when accepts_any_value is true and no catalog item has a known default for it.
+  string value = 3;
+  // True only when some catalog item permits a value outside the listed defaults for this (service, dimension).
+  bool accepts_any_value = 4;
+  repeated CatalogPricingInputCatalogItem catalog_items = 5;
+}
+
+message CatalogPricingInputsListRequest {
+  // Index of the first result. If not specified the default value will be zero.
+  optional int32 offset = 1;
+  // Maximum number of results to be returned by the server.
+  optional int32 limit = 2;
+  // CEL expression evaluated against each candidate (service, dimension, value) row. See docs/FILTER.md.
+  optional string filter = 3;
+  // Sort order. Defined for parity with other list requests; not yet implemented, same as elsewhere in this API.
+  optional string order = 4;
+}
+
+message CatalogPricingInputsListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated CatalogPricingInput items = 3;
+}
+
+service CatalogPricingInputs {
+  // Lists every distinct metered (service, dimension, value) across draft and published VMaaS and CaaS catalog
+  // items, with the catalog items that use or offer each value. Available when billing is disabled; never calls
+  // the billing provider. Cloud Provider Admin only.
+  rpc List(CatalogPricingInputsListRequest) returns (CatalogPricingInputsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/billing/catalog_pricing_inputs"};
+  }
+}

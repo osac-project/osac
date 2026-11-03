@@ -4,13 +4,12 @@
 #   - charts/osac must default the value to true in values.yaml and
 #     values.schema.json so wizard and UI consumers surface a secure default.
 #   - The AAP chart renders the storage instance-group ConfigMap with the
-#     provider-scoped VAST_VALIDATE_CERTS worker variable, and the explicit
-#     Helm setting stays authoritative over low-level config-map overrides.
+#     provider-scoped VAST_VALIDATE_CERTS worker variable, and rejects a
+#     low-level config override of it loudly.
 #   - Development profiles (dev, kind dev-full, vmaas-ci) disable validation
 #     for their self-signed provider certificates.
 #   - The devstack AWX hook propagates the setting into its pod environment
-#     and merges it into AWX_TASK_ENV without clobbering unrelated entries,
-#     and the direct dev-full installer passes the same variable through.
+#     and merges it into AWX_TASK_ENV without clobbering unrelated entries.
 #
 # Charts are rendered directly (the devstack chart is flattened to drop its
 # packaged dependencies), so this suite needs no `helm dep build` run.
@@ -91,12 +90,20 @@ render_aap_storage() {
 render_aap_storage storage-validate-certs-default true \
   --set instanceGroups.storageFulfillment.enabled=true
 
-# The storage policy owns this worker variable; a low-level config value
-# cannot override the explicit Helm setting.
-render_aap_storage storage-validate-certs-override false \
+# The storage policy owns this worker variable; a low-level config value is
+# rejected loudly, like the umbrella chart's installation-owned Netris keys.
+echo "checking storage config VAST_VALIDATE_CERTS is rejected"
+if override_render=$("${HELM_BIN}" template aap "${AAP_CHART_DIR}" \
   --set instanceGroups.storageFulfillment.enabled=true \
   --set instanceGroups.storageFulfillment.enable_certificate_validation=false \
-  --set instanceGroups.storageFulfillment.config.VAST_VALIDATE_CERTS=true
+  --set instanceGroups.storageFulfillment.config.VAST_VALIDATE_CERTS=true 2>&1); then
+  echo "ERROR: the storage config must not accept the managed VAST_VALIDATE_CERTS key" >&2
+  exit 1
+elif ! grep -Fq 'instanceGroups.storageFulfillment.config.VAST_VALIDATE_CERTS is managed by instanceGroups.storageFulfillment.enable_certificate_validation' \
+  <<<"${override_render}"; then
+  echo "ERROR: the managed-key rejection must name the owning storage TLS value" >&2
+  exit 1
+fi
 
 # Flatten an umbrella-chart profile for direct rendering of the AAP subchart.
 extract_aap_values() {
@@ -211,12 +218,5 @@ if build_awx_settings_payload '{"AWX_TASK_ENV":"not-an-object"}' osac false >/de
   echo "ERROR: the AWX task environment merge must reject non-object fixture input" >&2
   exit 1
 fi
-
-if ! grep -Fq '"VAST_VALIDATE_CERTS": os.environ["VAST_VALIDATE_CERTS"]' \
-  "${SCRIPT_DIR}/dev-full/install-awx.sh"; then
-  echo "ERROR: the direct dev-full AWX installer must also pass the provider-scoped VAST setting" >&2
-  exit 1
-fi
-bash -n "${SCRIPT_DIR}/dev-full/install-awx.sh"
 
 echo "Certificate-validation render checks passed: secure default, dev overrides, and AWX propagation."

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 import yaml
 from ansible.parsing.dataloader import DataLoader
 from ansible.template import Templar
@@ -39,9 +40,16 @@ def test_certificate_validation_defaults_to_enabled(monkeypatch):
     assert resolve_storage_role_validation() is True
 
 
-def test_certificate_validation_uses_runtime_environment(monkeypatch):
+@pytest.mark.parametrize(
+    "value",
+    # Mirrors Ansible's | bool false vocabulary, including the single-letter
+    # n and f forms, so manual exports keep their previous meaning. Mixed-case
+    # entries pin the case-insensitive lookup.
+    ["false", "0", "no", "off", "n", "f", "FALSE", "No"],
+)
+def test_certificate_validation_uses_runtime_environment(monkeypatch, value):
     """Allow VAST's worker environment setting to disable TLS verification."""
-    monkeypatch.setenv("VAST_VALIDATE_CERTS", "false")
+    monkeypatch.setenv("VAST_VALIDATE_CERTS", value)
 
     assert resolve_storage_role_validation() is False
 

@@ -92,27 +92,17 @@ osac create baremetalinstance \
 
 Bare-metal networking follows the accepted
 [BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md).
-That design is the target contract; it does not assert every step is already
-enforced in shipping code. Baseline attachment work is under closed OSAC-1448 /
-OSAC-1510; remaining PR #357 delta implementation and deployed verification are
-[OSAC-6818](https://redhat.atlassian.net/browse/OSAC-6818) and
-[OSAC-6820](https://redhat.atlassian.net/browse/OSAC-6820). Shared networking
-resources and gates are described in the
+Shared networking resources and gates are described in the
 [networking guide](networking-guide.md); this section covers only the
 BareMetalInstance lifecycle. Architecture summary:
 [Bare Metal Server Fulfillment](../../architecture/bm-server-fulfillment.md).
-The implementation is under review in
-[OSAC PR #2149](https://github.com/osac-project/osac/pull/2149); it is not a
-shipping-support claim until merged and backed by the deployed evidence tracked
-in OSAC-6820.
 
-**Ownership.** The deployment's Fabric Manager owns Fabric operations (port
-moves, SecurityGroup binding on the physical port, DHCP, and lease lookup).
-The bare-metal-fulfillment-operator orchestrates host inventory, OS
-provisioning, NetworkAttachment create/delete, the handoff reboot, repair
-marking, and status mirroring. It does **not** call Fabric Managers or switch
-or DHCP APIs directly. The osac-operator networking controller runs every
-Fabric task on the NetworkAttachment.
+**Ownership.** BMF manages host inventory, OS provisioning and power,
+NetworkAttachment lifecycle, handoff, repair marks, and status mirroring. The
+configured `{{ aap_prefix }}-move-network-attachment` and
+`{{ aap_prefix }}-query-dhcp-lease` AAP job templates run the port-move and
+lease-query playbooks; the selected Fabric Manager performs provider-side port,
+SecurityGroup, and DHCP operations.
 
 **Attachment.** A BareMetalInstance has at most one tenant network attachment.
 Omit the attachment to use the tenant's default Subnet and SecurityGroup, or
@@ -123,14 +113,17 @@ or unknown interfaces are rejected. The sole attachment is the host's primary
 route; there is no separate primary-network choice.
 
 **Create path (provider networking enabled).** The host is imaged on the
-provider provisioning network. After OS provisioning, OSAC creates a
-NetworkAttachment; the Fabric Manager moves the selected port to the Subnet
-segment and takes other fabric ports off the provisioning network. BMF then
-requests one handoff reboot. After the handoff, the networking controller runs
-`query_dhcp_lease` for the selected NIC MAC and records the tenant address.
-Readiness with a tenant IP requires that discovery; a provisioning-network
-address is never shown as the tenant address. With no lease after ten minutes,
-OSAC warns and keeps querying.
+provider provisioning network. After OS provisioning, BMF creates a
+NetworkAttachment; the configured `{{ aap_prefix }}-move-network-attachment`
+AAP job template runs the apply playbook, and the selected Fabric Manager moves
+the port to the Subnet segment and applies policy. BMF then coordinates the
+handoff through the management backend. For Ironic, a host already powered off
+proceeds directly to power-on; Metal3 uses its handoff annotation. After the
+handoff is confirmed, the configured `{{ aap_prefix }}-query-dhcp-lease` AAP
+job template runs lease discovery for the selected MAC. BMF records the accepted
+lease. OSAC continues querying until a lease is found or discovery reaches a
+terminal failure, and status carries the latest query result. A
+provisioning-network address is never shown as the tenant address.
 
 **Automatic external access.** `--external-ip-attachment` (or the equivalent
 API field) requests an ExternalIP and ExternalIPAttachment for the server.
@@ -138,13 +131,15 @@ Inbound access starts only after the tenant endpoint is ready and a real
 address is allocated. Automatic external resources are removed when the
 server is deleted.
 
-**Delete and repair.** Deletion returns the host to inventory only after
-tenant-network cleanup completes. Fabric ports return to the provisioning
-network through the manager. With provider networking enabled, BMF writes a
-repair mark before release only when a FabricDomain create job has started and
-its spec lists the host. If the mark is unsupported or cannot be persisted, BMF
-does not release the host. Selection skips marked hosts until a Cloud Provider
-Admin clears the mark (see the design support procedures).
+**Delete and repair.** BMF returns the host to inventory only after
+tenant-network cleanup completes. The configured
+`{{ aap_prefix }}-move-network-attachment` job template runs the offboard
+playbook to return Fabric ports to the provisioning network. BMF writes a repair
+mark before release only when provider networking is enabled and a FabricDomain
+retains a `status.jobs` entry showing that its `create_fabric_domain` job started
+while `spec.servers` lists the host. If the mark cannot be persisted, BMF does
+not release the host. Selection skips marked hosts until a Cloud Provider Admin
+clears the mark (see the design support procedures).
 
 **Provider networking disabled.** Host provisioning and deprovisioning stay
 available on the provisioning network. OSAC does not move tenant interfaces,

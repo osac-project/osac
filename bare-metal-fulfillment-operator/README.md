@@ -48,19 +48,21 @@ networkClass: openstack
 
 ### Networking and logical port MAC mappings
 
-With provider networking enabled, this operator orchestrates the BareMetalInstance
-network lifecycle (host assignment, NetworkAttachment create/delete, handoff
-reboot, repair mark, status mirroring) but **never** calls a Fabric Manager,
-switch, or DHCP API. The osac-operator networking controller runs Fabric tasks
-(`apply_network_attachment`, `delete_network_attachment`, `query_dhcp_lease`)
-on the NetworkAttachment. See the
+With provider networking enabled, BMF coordinates the BareMetalInstance network
+lifecycle: host assignment, NetworkAttachment create/delete, handoff, repair
+marks, and status mirroring. The implementation lives in
+`internal/controller/baremetalinstance_networking.go` and
+`internal/controller/baremetalinstance_ip_discovery.go`; those controllers manage
+the BMI lifecycle and mirror the lease reported on the NetworkAttachment.
+
+NetworkAttachment operations use the configured
+`{{ aap_prefix }}-move-network-attachment` and
+`{{ aap_prefix }}-query-dhcp-lease` AAP job templates. `osac-aap` executes
+`playbook_osac_move_network_attachment.yml` and
+`playbook_osac_query_dhcp_lease.yml`; the selected Fabric Manager performs the
+provider-side port, policy, and DHCP operations. See the
 [BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md)
 ([component responsibilities](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md#component-responsibilities)).
-
-The implementation for the remaining PR #357 delta is under review in
-[OSAC PR #2149](https://github.com/osac-project/osac/pull/2149) for
-[OSAC-6818](https://redhat.atlassian.net/browse/OSAC-6818); this README describes
-the accepted target behavior and does not claim the delta is shipping.
 
 At host assignment the inventory client supplies an administrator mapping from
 OSAC logical port names to physical MAC addresses. Each key must match the

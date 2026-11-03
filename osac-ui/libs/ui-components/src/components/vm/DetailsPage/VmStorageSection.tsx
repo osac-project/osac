@@ -15,7 +15,6 @@ import { useTranslation } from '../../../hooks/useTranslation';
 import CatalogStorageTable, {
   type CatalogStorageTableRow,
 } from '../../catalog/details/CatalogStorageTable';
-import { formatBootDiskSizeForReview } from '../../ProvisioningWizard/reviewFormatters';
 
 interface VmStorageSectionProps {
   vm: ComputeInstance;
@@ -27,7 +26,7 @@ const VmStorageSection = ({ vm }: VmStorageSectionProps) => {
   const additionalDisks = vm.spec?.additionalDisks?.items ?? [];
   const additionalDiskRows: CatalogStorageTableRow[] = additionalDisks.map((disk, index) => ({
     id: `additional-disk-${index}`,
-    size: disk.sizeGib === undefined ? t('Not set') : formatBootDiskSizeForReview(disk.sizeGib),
+    size: disk.sizeGib === undefined ? t('Not set') : `${disk.sizeGib} GB`,
     storageTier: disk.storageTier?.name || disk.storageTier?.id || t('Not set'),
   }));
 
@@ -43,9 +42,7 @@ const VmStorageSection = ({ vm }: VmStorageSectionProps) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Boot disk size')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {bootDisk?.sizeGib === undefined
-                ? t('Not set')
-                : formatBootDiskSizeForReview(bootDisk.sizeGib)}
+              {bootDisk?.sizeGib === undefined ? t('Not set') : `${bootDisk.sizeGib} GB`}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

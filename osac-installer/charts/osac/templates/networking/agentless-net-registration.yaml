@@ -13,4 +13,5 @@ immutable: true
 data:
   name: agentless_net
   ansible_role: osac.templates.agentless_net
+  capabilities: security_group_icmp
 {{- end }}

@@ -157,6 +157,23 @@ describe('resource queries', () => {
     expect(secondSignal?.aborted).toBe(true);
   });
 
+  it('selects an unwrapped Get object for data and refetch results', async () => {
+    const transport = createMockConnectTransport({
+      identityProviders: [makeIdentityProvider('idp-1')],
+    });
+    const { wrapper } = makeWrapper(transport);
+    const { result } = renderHook(
+      () => useGetResource(IdentityProviders, { id: 'idp-1' }, {}, (reply) => reply.object),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.id).toBe('idp-1');
+
+    const refreshed = await result.current.refetch();
+    expect(refreshed.data?.id).toBe('idp-1');
+  });
+
   it('gets a resource with inferred request and response types', async () => {
     const transport = createMockConnectTransport({
       identityProviders: [makeIdentityProvider('idp-1')],

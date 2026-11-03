@@ -1,9 +1,15 @@
-import { type ClusterVersion, ClusterVersionState, ClusterVersions } from '@osac/types';
+import { Code, ConnectError } from '@connectrpc/connect';
 
-import { useApiFetch } from '../api-context';
+import {
+  type ClusterVersion,
+  type ClusterVersionReference,
+  ClusterVersionState,
+  ClusterVersions,
+} from '@osac/types';
+
 import { cel } from '../cel';
-import { type ListParams, apiQueryKey } from '../types';
-import { useApiQuery } from '../use-api-query';
+import { type ListParams } from '../types';
+import { useGetResource, useListResource } from '../use-resource';
 
 type ClusterVersionsQueryOptions = {
   enabled?: boolean;
@@ -57,22 +63,64 @@ export const clusterVersionNamesFilter = (names: string[]) =>
 export const useClusterVersions = (
   params: ListParams = {},
   options: ClusterVersionsQueryOptions = {},
-) => {
-  const client = useApiFetch(ClusterVersions);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/cluster_versions', undefined, params),
-    queryFn: () => client.list(params),
-    select: (data) => data.items,
-    enabled: options.enabled ?? true,
-  });
-};
+) =>
+  useListResource(
+    ClusterVersions,
+    params,
+    { enabled: options.enabled ?? true },
+    (reply) => reply.items,
+  );
 
 export const useClusterVersion = (id: string | undefined) => {
-  const client = useApiFetch(ClusterVersions);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/cluster_versions', id ? [id] : undefined),
-    queryFn: () => client.get({ id: id ?? '' }),
-    select: (data) => data.object,
-    enabled: Boolean(id),
-  });
+  const trimmedId = id?.trim() ?? '';
+  return useGetResource(
+    ClusterVersions,
+    { id: trimmedId },
+    { enabled: Boolean(trimmedId) },
+    (reply) => reply.object,
+  );
+};
+
+const matchesReference = (version: ClusterVersion, reference: ClusterVersionReference): boolean => {
+  if (reference.id && version.id !== reference.id) {
+    return false;
+  }
+  if (reference.name && version.metadata?.name !== reference.name) {
+    return false;
+  }
+  if (!reference.id) {
+    return (
+      version.metadata?.project === reference.project &&
+      (version.metadata?.tenant === 'shared') === reference.shared
+    );
+  }
+  return (
+    (!reference.project || version.metadata?.project === reference.project) &&
+    (!reference.shared || version.metadata?.tenant === 'shared')
+  );
+};
+
+export const useConfiguredClusterVersion = (reference: ClusterVersionReference | undefined) => {
+  const id = reference?.id.trim() || undefined;
+  const name = reference?.name.trim() || undefined;
+  const byId = useClusterVersion(id);
+  const byName = useClusterVersions(
+    { filter: clusterVersionNamesFilter(name ? [name] : []) },
+    { enabled: !id && Boolean(name) },
+  );
+  const query = id ? byId : byName;
+  const isLoading = query.isFetching || query.isPlaceholderData;
+  const notFound = query.error instanceof ConnectError && query.error.code === Code.NotFound;
+  const isError = query.isError && !notFound;
+  const candidates = id ? (byId.data ? [byId.data] : []) : (byName.data ?? []);
+  const matches = reference
+    ? candidates.filter((version) => matchesReference(version, reference))
+    : [];
+
+  return {
+    data: query.isSuccess && !isLoading && matches.length === 1 ? matches[0] : undefined,
+    isLoading,
+    isError,
+    error: isError ? query.error : undefined,
+  };
 };

@@ -1,7 +1,11 @@
 import { deleteResourceModalIds } from '../ui-components/src/components/Resource/deleteResourceModalIds';
 
 type VmsLocator =
-  | readonly [role: 'button' | 'grid' | 'heading' | 'link', options: { name: string; exact: true }]
+  | readonly [
+      role: 'button' | 'checkbox' | 'grid' | 'heading' | 'link' | 'textbox',
+      options: { name: string; exact: true },
+    ]
+  | readonly [label: string]
   | readonly [selector: string];
 
 export const VmsMainPage = {
@@ -20,4 +24,25 @@ export const VmDetailsPage = {
   deleteDialog: [`[role="dialog"][aria-labelledby="${deleteResourceModalIds.title}"]`],
   deleteTitle: [`#${deleteResourceModalIds.title}`],
   deleteWarning: ['This permanently deletes the compute instance. This action cannot be undone.'],
+} as const satisfies Record<string, VmsLocator>;
+
+export const VmCreatePage = {
+  catalogItemCards: ['[id^="catalog-item-card-"]'],
+  catalogItemSelection: ['input[type="radio"]'],
+  project: ['button', { name: 'Project', exact: true }],
+  vmName: ['textbox', { name: 'Name', exact: true }],
+  diskImage: ['button', { name: 'Disk image', exact: true }],
+  instanceType: ['button', { name: 'Instance type', exact: true }],
+  bootDisk: ['Boot disk'],
+  storageTier: ['button', { name: 'Storage tier', exact: true }],
+  addDisk: ['button', { name: 'Add disk', exact: true }],
+  additionalDiskSize: ['Size (GiB)'],
+  useTenantDefaultNetwork: ['checkbox', { name: 'Use tenant default network', exact: true }],
+  autoExternalIp: ['checkbox', { name: 'Auto External IP Attachment', exact: true }],
+  sshPublicKey: ['button', { name: 'SSH public key', exact: true }],
+  cloudInit: ['Cloud-init'],
+  next: ['button', { name: 'Next', exact: true }],
+  create: ['button', { name: 'Create', exact: true }],
+  configurationHeading: ['heading', { name: 'Configuration', exact: true }],
+  storageHeading: ['heading', { name: 'Storage', exact: true }],
 } as const satisfies Record<string, VmsLocator>;

@@ -159,25 +159,30 @@ The full-flow projects run in this order:
 Run only the creation portion with:
 
 ```bash
-pnpm --filter @osac/playwright exec playwright test \
+OSAC_VM_FLOW_MODE=create pnpm --filter @osac/playwright exec playwright test \
   --project=vmaas-full-flow --no-deps
 ```
 
 Run only the deletion portion with:
 
 ```bash
+export OSAC_VM_FLOW_MODE=delete
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow-vm-delete \
+  --project=vmaas-full-flow-vm-delete --no-deps && \
+pnpm --filter @osac/playwright exec playwright test \
   --project=vmaas-full-flow-delete --no-deps
 ```
 
-The deletion-only command expects the VM, generated tenant credentials, and
-the full-flow resources to already exist.
+The creation command stores the non-secret run IDs in
+`/tmp/osac-vmaas-full-flow-state.json`. The deletion-only commands reuse those
+IDs and must run on the same host. They expect the VM, generated tenant
+credentials, and full-flow resources to already exist. If the creation run
+failed, the state file remains available for cleanup.
 
 Run the complete creation and deletion flow with:
 
 ```bash
-pnpm --filter @osac/playwright exec playwright test \
+OSAC_VM_FLOW_MODE=full pnpm --filter @osac/playwright exec playwright test \
   --project=vmaas-full-flow-delete
 ```
 

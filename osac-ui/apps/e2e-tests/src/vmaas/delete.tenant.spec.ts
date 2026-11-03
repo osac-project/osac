@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { access } from 'node:fs/promises';
 
+import { removeVmaasFullFlowRunState } from './run_state';
 import { tenantNameOrSkip } from './test_data';
 import { deleteTenantSshKey } from '../../../../libs/osac-cli/src/secret';
 import { deleteTenantAdmin } from '../../../../libs/osac-cli/src/tenant_admin';
@@ -71,4 +72,7 @@ test('deletes the requested tenant', async ({ page }) => {
   await testStep('tenant-delete', `Verify tenant credential file is removed after deletion`, () =>
     expect(access(credentialsFile)).rejects.toThrow(),
   );
+  await testStep('tenant-delete', 'Remove VMaaS full-flow run state', async () => {
+    await removeVmaasFullFlowRunState();
+  });
 });

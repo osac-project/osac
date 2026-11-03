@@ -44,4 +44,5 @@ echo "$checksum  $scratch/uv.tar.gz" | sha256sum --check --strict -
 tar -xzf "$scratch/uv.tar.gz" -C "$scratch" "$target/uv" "$target/uvx"
 bin_dir=$(mktemp -d "$RUNNER_TEMP/osac-uv-bin.XXXXXX")
 install -m 0755 "$scratch/$target/uv" "$scratch/$target/uvx" "$bin_dir/"
+echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 echo "$bin_dir" >> "$GITHUB_PATH"

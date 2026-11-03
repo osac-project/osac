@@ -4,16 +4,33 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
 INSTALLER = Path(__file__).resolve().parents[1] / "actions/setup-python/install-uv.sh"
 CHECKSUM = "f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645"
+UV_FIXTURE = r'''#!/bin/sh
+case "$1" in
+  python) ;;
+  venv)
+    mkdir -p "$HOME/.setup-python-venv/bin"
+    for tool in python python3 pip; do
+      printf '#!/bin/sh\necho "venv %s"\n' "$tool" > "$HOME/.setup-python-venv/bin/$tool"
+      chmod +x "$HOME/.setup-python-venv/bin/$tool"
+    done ;;
+  tool)
+    printf '#!/bin/sh\necho "ruff fixture"\n' > "$HOME/.local/bin/ruff"
+    chmod +x "$HOME/.local/bin/ruff" ;;
+  *) echo 'uv fixture' ;;
+esac
+'''
 SHIM = r'''
 import json
 import os
@@ -45,6 +62,7 @@ elif command != "sleep":
 
 class SetupUvTests(unittest.TestCase):
     def setUp(self):
+        """Build a local archive and replace only its hash in a test copy."""
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -59,7 +77,7 @@ class SetupUvTests(unittest.TestCase):
         self.archive = self.root / "uv.tar.gz"
         with tarfile.open(self.archive, "w:gz") as archive:
             for name in ("uv", "uvx"):
-                content = f"#!/bin/sh\necho '{name} fixture'\n".encode()
+                content = (UV_FIXTURE if name == "uv" else f"#!/bin/sh\necho '{name} fixture'\n").encode()
                 member = tarfile.TarInfo(f"uv-x86_64-unknown-linux-gnu/{name}")
                 member.size = len(content)
                 member.mode = 0o755
@@ -101,7 +119,7 @@ class SetupUvTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.calls("curl")), 1)
         self.assertEqual(self.calls("sleep"), [])
-        installed = Path(self.github_path.read_text().strip())
+        installed = Path(self.github_path.read_text().splitlines()[-1])
         for name in ("uv", "uvx"):
             result = subprocess.run([str(installed / name)], capture_output=True, text=True, check=True)
             self.assertEqual(result.stdout.strip(), f"{name} fixture")
@@ -113,6 +131,40 @@ class SetupUvTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.calls("curl")), 2)
         self.assertEqual(self.calls("sleep"), [["1"]])
+
+    def test_composite_keeps_verified_uv_ahead_of_existing_local_tools(self):
+        """Run all composite shell steps with the runner's PATH-file ordering."""
+        home = self.root / "home"
+        local_bin = home / ".local/bin"
+        local_bin.mkdir(parents=True)
+        for name in ("uv", "uvx"):
+            stale = local_bin / name
+            stale.write_text(f"#!/bin/sh\necho 'untrusted {name}' >&2\nexit 97\n")
+            stale.chmod(0o755)
+        action = INSTALLER.with_name("action.yaml").read_text()
+        steps = re.findall(r"^    run: (.*(?:\n      .*)*)", action, re.MULTILINE)
+        self.assertEqual(len(steps), 3)
+        env = {**self.env, "HOME": str(home), "ACTION_PATH": str(self.installer.parent)}
+        original_path = env["PATH"]
+        prepend_paths = []
+        for step in steps:
+            script = textwrap.dedent(step[2:]) if step.startswith("|\n") else step
+            result = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for entry in self.github_path.read_text().splitlines():
+                if entry in prepend_paths:
+                    prepend_paths.remove(entry)
+                prepend_paths.append(entry)
+            self.github_path.write_text("")
+            env["PATH"] = os.pathsep.join([*reversed(prepend_paths), original_path])
+        for name, expected in (
+            ("uv", "uv fixture"), ("uvx", "uvx fixture"),
+            ("python", "venv python"), ("python3", "venv python3"),
+            ("pip", "venv pip"), ("ruff", "ruff fixture"),
+        ):
+            result = subprocess.run([name, "--version"], env=env, capture_output=True, text=True, check=True)
+            self.assertEqual(result.stdout.strip(), expected)
+        self.assertFalse(list(self.runner.glob("osac-uv-download.*")))
 
     def test_persistent_failures_stop_after_one_retry(self):
         for status in (22, 28, 35):

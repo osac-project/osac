@@ -46,7 +46,6 @@ describe('BareMetalConfigurationStep', () => {
     const diskImageToggle = await screen.findByRole('button', {
       name: 'Select the image reference',
     });
-    const diskImageSelect = screen.getByRole('combobox');
     await user.click(diskImageToggle);
 
     expect(screen.getByRole('option', { name: /fedora/ })).toBeInTheDocument();
@@ -54,7 +53,7 @@ describe('BareMetalConfigurationStep', () => {
 
     await user.click(screen.getByRole('option', { name: /rhel/ }));
 
-    await waitFor(() => expect(diskImageSelect).toHaveValue('rhel'));
+    await waitFor(() => expect(screen.getByRole('combobox')).toHaveValue('rhel'));
   });
 
   it('shows the catalog item disk image when the wizard opens', async () => {
@@ -85,8 +84,7 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    const diskImageSelect = await screen.findByRole('combobox');
-    await waitFor(() => expect(diskImageSelect).toHaveValue('rhel'));
+    await waitFor(() => expect(screen.getByRole('combobox')).toHaveValue('rhel'));
   });
 
   it('disables instance type selection when the catalog item locks its value', async () => {

@@ -1044,6 +1044,9 @@ func TestFindFreeHostWithNetworkPort(t *testing.T) {
 	if host.Name != "host-with-port-mac" {
 		t.Fatalf("selected host %q, want host-with-port-mac", host.Name)
 	}
+	if host.NetworkPortMAC != "AA:BB:CC:DD:EE:FF" {
+		t.Fatalf("selected network-port MAC %q, want AA:BB:CC:DD:EE:FF", host.NetworkPortMAC)
+	}
 }
 
 func TestMarkNetworkRepairRequired_Metal3(t *testing.T) {

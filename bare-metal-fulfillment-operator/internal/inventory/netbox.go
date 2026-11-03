@@ -204,7 +204,7 @@ func (c *NetBoxClient) findFreeHost(
 				foundHost = nil
 				return true, nil
 			}
-			macs, macErr := c.GetHostLogicalPortMACs(ctx, foundHost.InventoryHostID)
+			macs, macErr := c.customFieldLogicalPortMACs(ctx, device.ID)
 			if errors.Is(macErr, ErrMalformedLogicalPortMACs) ||
 				(macErr == nil && !HasValidNetworkPortMAC(macs, interfaceName)) {
 				foundHost = nil
@@ -213,6 +213,7 @@ func (c *NetBoxClient) findFreeHost(
 			if macErr != nil {
 				return false, macErr
 			}
+			foundHost.NetworkPortMAC = macs[interfaceName]
 		}
 		return false, nil
 	})

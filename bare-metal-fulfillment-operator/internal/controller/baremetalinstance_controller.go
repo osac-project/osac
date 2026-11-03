@@ -320,6 +320,13 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 			)
 			return ctrl.Result{RequeueAfter: r.NoFreeHostsPollIntervalDuration}, nil
 		}
+		selectedNetworkPortMAC := ""
+		if r.providerNetworkingEnabled() && len(bareMetalInstance.Spec.NetworkAttachments) > 0 {
+			selectedNetworkPortMAC, err = normalizeInventoryMACAddress(inventoryHost.NetworkPortMAC)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("inventory selector returned an invalid MAC for host %s: %w", inventoryHost.Name, err)
+			}
+		}
 
 		bareMetalInstance.Spec.ExternalHostID = inventoryHost.InventoryHostID
 		bareMetalInstance.Spec.ExternalHostName = inventoryHost.Name
@@ -332,6 +339,10 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 		if err := r.Update(ctx, bareMetalInstance); err != nil {
 			log.Error(err, "Failed to update BareMetalInstance CR with ExternalHostID", "InventoryHostID", inventoryHost.InventoryHostID)
 			return ctrl.Result{}, err
+		}
+		if selectedNetworkPortMAC != "" {
+			r.initNetworkAttachmentStatuses(bareMetalInstance)
+			bareMetalInstance.Status.NetworkAttachmentStatuses[0].MACAddress = selectedNetworkPortMAC
 		}
 
 		log.Info("Successfully updated BareMetalInstance with inventory host id")
@@ -376,6 +387,9 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 	if inventoryHost == nil {
 		log.Info("Host is acquired by a different BareMetalInstance, unsetting ExternalHostID", "InventoryHostID", hostID)
 		bareMetalInstance.Spec.ExternalHostID = ""
+		if len(bareMetalInstance.Status.NetworkAttachmentStatuses) > 0 {
+			bareMetalInstance.Status.NetworkAttachmentStatuses[0].MACAddress = ""
+		}
 		if err = r.Update(ctx, bareMetalInstance); err != nil {
 			log.Error(err, "Failed to update BareMetalInstance CR")
 			return ctrl.Result{}, err
@@ -599,6 +613,11 @@ func markProvisionRetrying(bareMetalInstance *v1alpha1.BareMetalInstance, backen
 
 func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	if handoffCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete); handoffCond != nil &&
+		handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		return ctrl.Result{}, nil
+	}
 
 	// 1) Provisioning runs FIRST, while the server is still on the provisioning
 	//    network segment (the initial provisioning-network attach done at bootstrap). Networking must

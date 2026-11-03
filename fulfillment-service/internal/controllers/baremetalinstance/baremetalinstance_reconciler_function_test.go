@@ -2379,6 +2379,31 @@ var _ = Describe("syncStatus", func() {
 		Expect(condition.GetMessage()).To(Equal("provider details"))
 	})
 
+	It("projects the LeasePending query message and AAP job ID", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{NetworkAttachments: []bmfov1alpha1.BareMetalNetworkAttachment{
+				{SubnetRef: "subnet-test", Interface: "data-0", Primary: true},
+			}},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue},
+					{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue},
+					{Type: string(bmfov1alpha1.HostConditionIPDiscoveryComplete), Status: metav1.ConditionFalse,
+						Reason:  bmfov1alpha1.HostConditionReasonLeasePending,
+						Message: "latest lease query (AAP job ID: query-456)"},
+				},
+			},
+		}
+		t.syncStatus(object)
+		condition := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(condition.GetReason()).To(Equal(bmfov1alpha1.HostConditionReasonLeasePending))
+		Expect(condition.GetMessage()).To(Equal("latest lease query (AAP job ID: query-456)"))
+	})
+
 	It("projects the current handoff progress reason and message", func() {
 		t := newTask(0)
 		object := &bmfov1alpha1.BareMetalInstance{

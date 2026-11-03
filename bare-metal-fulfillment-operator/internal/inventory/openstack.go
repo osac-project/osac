@@ -201,6 +201,7 @@ func (c *OpenStackClient) findFreeHost(
 			if managedBy != matchManagedBy {
 				continue
 			}
+			networkPortMAC := ""
 			if interfaceName != "" {
 				if node.Name == "" {
 					log.Info("Skipping host without inventory name")
@@ -211,6 +212,7 @@ func (c *OpenStackClient) findFreeHost(
 					log.Info("Skipping host without a valid MAC for its selected network port")
 					continue
 				}
+				networkPortMAC = macs[interfaceName]
 			}
 
 			// Skip nodes without registered Ironic ports
@@ -230,6 +232,7 @@ func (c *OpenStackClient) findFreeHost(
 				BareMetalInstanceID: bareMetalInstanceID,
 				InventoryHostID:     node.UUID,
 				Name:                node.Name,
+				NetworkPortMAC:      networkPortMAC,
 				HostType:            node.ResourceClass,
 				HostClass:           c.hostClass,
 				ProvisionState:      node.ProvisionState,

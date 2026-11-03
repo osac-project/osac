@@ -201,6 +201,34 @@ func TestFindFreeHost_PortFilter(t *testing.T) {
 		}
 	})
 
+	t.Run("returns the selected logical port MAC", func(t *testing.T) {
+		fakeServer := th.SetupHTTP()
+		defer fakeServer.Teardown()
+
+		fakeServer.Mux.HandleFunc("/nodes", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{"nodes": [{"uuid": "node-1", "name": "host-1", "resource_class": "gpu-node", "provision_state": "available", "extra": {"osac_labels": {"hostType": "gpu-node"}, "osac_interface_macs": {"data-0": "AA:BB:CC:DD:EE:FF"}}}]}`)
+		})
+		fakeServer.Mux.HandleFunc("/ports/detail", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{"ports": [{"address": "aa:bb:cc:dd:ee:01"}]}`)
+		})
+
+		c := &OpenStackClient{client: fakeclient.ServiceClient(fakeServer), hostClass: "openstack"}
+		host, err := c.FindFreeHostWithNetworkPort(context.Background(), map[string]string{"hostType": "gpu-node"}, "data-0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if host == nil {
+			t.Fatal("expected a host, got nil")
+		}
+		if host.NetworkPortMAC != "AA:BB:CC:DD:EE:FF" {
+			t.Errorf("selected network-port MAC = %q, want AA:BB:CC:DD:EE:FF", host.NetworkPortMAC)
+		}
+	})
+
 	t.Run("skips node with no registered ports", func(t *testing.T) {
 		fakeServer := th.SetupHTTP()
 		defer fakeServer.Teardown()

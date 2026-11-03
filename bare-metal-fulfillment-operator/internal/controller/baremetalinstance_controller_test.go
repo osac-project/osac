@@ -465,6 +465,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					return &inventory.Host{
 						InventoryHostID: "host-abc-123",
 						Name:            "inventory-host-1",
+						NetworkPortMAC:  "AA-BB-CC-DD-EE-01",
 						HostClass:       hostClass,
 					}, nil
 				}
@@ -481,6 +482,8 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(mockInvClient.networkPortSelectionCalled).To(Equal(1))
 				Expect(mockInvClient.networkPortSelectionName).To(Equal("fabric-0"))
 				Expect(bareMetalInstance.Spec.ExternalHostName).To(Equal("inventory-host-1"))
+				Expect(bareMetalInstance.Status.NetworkAttachmentStatuses).To(HaveLen(1))
+				Expect(bareMetalInstance.Status.NetworkAttachmentStatuses[0].MACAddress).To(Equal("aa:bb:cc:dd:ee:01"))
 			})
 		})
 
@@ -2332,6 +2335,13 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			}}
 			reconciler.NetworkingNamespace = testNetworkingNS
 			reconciler.ProvisionPollIntervalDuration = 5 * time.Second
+			observeCalls := 0
+			mockMgmtClient.observeNetworkHandoffFunc = func(
+				context.Context, string, string, string,
+			) (management.HandoffObservation, error) {
+				observeCalls++
+				return management.HandoffObservation{Confirmed: true, Reason: "Succeeded"}, nil
+			}
 
 			ready := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 			ready.LastTransitionTime = metav1.NewTime(time.Now().Add(-NetworkHandoffDeadline - time.Minute))
@@ -2356,6 +2366,14 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(ctrl.Result{}))
 			Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+			Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)).To(BeNil())
+
+			result, err = reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrl.Result{}))
+			Expect(observeCalls).To(BeZero(), "a final handoff failure must not be observed again")
+			Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete).Reason).
+				To(Equal(v1alpha1.HostConditionReasonNetworkHandoffFailed))
 			Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)).To(BeNil())
 		})
 	})

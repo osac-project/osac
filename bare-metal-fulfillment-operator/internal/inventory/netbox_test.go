@@ -525,7 +525,7 @@ var _ = Describe("NetBox selector query", func() {
 			Expect(api.deviceQueries).To(Equal(1))
 		})
 
-		It("skips a host missing the selected network port MAC", func() {
+		It("does not use native interface MACs for network-port selection", func() {
 			api := &selectorQueryTestAPI{
 				devices: []netboxclient.Device{{ID: "46"}, {ID: "47"}},
 				deviceSnapshots: []netboxclient.DeviceSnapshot{
@@ -542,9 +542,29 @@ var _ = Describe("NetBox selector query", func() {
 			host, err := client.FindFreeHostWithNetworkPort(context.Background(), nil, "data-0")
 
 			Expect(err).NotTo(HaveOccurred())
+			Expect(host).To(BeNil())
+			Expect(api.interfaceDevice).To(BeEmpty())
+		})
+
+		It("returns the selected MAC from the custom field", func() {
+			api := &selectorQueryTestAPI{
+				devices: []netboxclient.Device{{ID: "47"}},
+				deviceSnapshots: []netboxclient.DeviceSnapshot{{Device: netboxclient.Device{
+					ID: "47",
+					CustomFields: map[string]interface{}{
+						"osac_interface_macs": map[string]interface{}{"data-0": "AA:BB:CC:DD:EE:FF"},
+					},
+				}}},
+			}
+			client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), testNetBoxHostClass, nil)
+
+			host, err := client.FindFreeHostWithNetworkPort(context.Background(), nil, "data-0")
+
+			Expect(err).NotTo(HaveOccurred())
 			Expect(host).NotTo(BeNil())
 			Expect(host.Name).To(Equal("netbox-47"))
-			Expect(api.interfaceDevice).To(Equal("47"))
+			Expect(host.NetworkPortMAC).To(Equal("AA:BB:CC:DD:EE:FF"))
+			Expect(api.deviceReadIDs).To(Equal([]string{"47"}))
 		})
 
 		It("skips a repair-marked host when selecting a network port", func() {
@@ -554,7 +574,12 @@ var _ = Describe("NetBox selector query", func() {
 					{ID: "47"},
 				},
 				deviceSnapshots: []netboxclient.DeviceSnapshot{
-					{Device: netboxclient.Device{ID: "47"}},
+					{Device: netboxclient.Device{
+						ID: "47",
+						CustomFields: map[string]interface{}{
+							"osac_interface_macs": map[string]interface{}{"data-0": "AA:BB:CC:DD:EE:FF"},
+						},
+					}},
 				},
 				interfaceByDevice: map[string][]netboxclient.DeviceInterface{
 					"47": {{Name: "data-0", PrimaryMAC: "AA:BB:CC:DD:EE:FF"}},
@@ -567,7 +592,7 @@ var _ = Describe("NetBox selector query", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).NotTo(BeNil())
 			Expect(host.Name).To(Equal("netbox-47"))
-			Expect(api.interfaceDevice).To(Equal("47"))
+			Expect(host.NetworkPortMAC).To(Equal("AA:BB:CC:DD:EE:FF"))
 		})
 	})
 

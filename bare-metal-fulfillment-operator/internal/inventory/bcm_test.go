@@ -920,6 +920,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).NotTo(BeNil())
 			Expect(host.Name).To(Equal("node002"))
+			Expect(host.NetworkPortMAC).To(Equal("AA:BB:CC:DD:EE:FF"))
 		})
 
 		It("should skip PhysicalNode devices", func() {

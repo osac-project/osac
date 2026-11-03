@@ -215,6 +215,7 @@ func (c *BCMClient) findFreeHost(
 	// candidates narrows that pool by the selector labels and managedBy ownership.
 	available := make([]bcmclient.Device, 0, len(devices))
 	candidates := make([]bcmclient.Device, 0, len(devices))
+	networkPortMACs := make(map[string]string, len(devices))
 	for _, d := range devices {
 		if d.ChildType != "LiteNode" || d.ExtraValues == nil {
 			continue
@@ -255,6 +256,7 @@ func (c *BCMClient) findFreeHost(
 				log.Info("Skipping host without a valid MAC for its selected network port")
 				continue
 			}
+			networkPortMACs[d.Hostname] = macs[interfaceName]
 		}
 
 		candidates = append(candidates, d)
@@ -275,10 +277,10 @@ func (c *BCMClient) findFreeHost(
 	// Report the selected device's resource_class as HostType (observability only;
 	// resource_class is also matchable as an ordinary label).
 	resourceClass, _ := selected.ExtraValues[bcmclient.ExtraValueResourceClass].(string)
-
 	return &Host{
 		InventoryHostID: fmt.Sprintf("%s/%s", c.bmhManager.Namespace(), selected.Hostname),
 		Name:            selected.Hostname,
+		NetworkPortMAC:  networkPortMACs[selected.Hostname],
 		HostType:        resourceClass,
 		HostClass:       c.hostClass,
 		ManagedBy:       matchManagedBy,

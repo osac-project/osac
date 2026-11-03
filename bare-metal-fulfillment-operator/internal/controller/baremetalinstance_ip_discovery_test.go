@@ -257,6 +257,47 @@ var _ = Describe("BareMetalInstance IP Discovery (NetworkAttachment lease mirror
 			Expect(bmi.Status.NetworkAttachmentStatuses[0].IPAddress).To(BeEmpty())
 		})
 
+		It("includes the latest query message and AAP job ID in LeasePending", func() {
+			bmi = bmiForLeaseMirror([]v1alpha1.BareMetalNetworkAttachment{
+				{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
+			})
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+			markHandoffComplete(bmi)
+			Expect(k8sClient.Status().Update(ctx, bmi)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
+
+			createNAWithLease("52:54:00:11:22:33", "")
+			na := &opv1alpha1.NetworkAttachment{}
+			naKey := client.ObjectKey{
+				Namespace: testNetworkingNS,
+				Name:      opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID),
+			}
+			Expect(k8sClient.Get(ctx, naKey, na)).To(Succeed())
+			na.Status.Jobs = []opv1alpha1.NetworkJobStatus{
+				{Task: networkAttachmentApplyTask, Manager: opv1alpha1.NetworkJobManagerFabric,
+					State: opv1alpha1.NetworkJobStateSucceeded, Message: "attachment applied", JobID: "apply-123"},
+				{Task: networkAttachmentQueryTask, Manager: opv1alpha1.NetworkJobManagerFabric,
+					State: opv1alpha1.NetworkJobStateRunning, Message: "latest lease query", JobID: "query-456"},
+			}
+			Expect(k8sClient.Status().Update(ctx, na)).To(Succeed())
+
+			reconciler = &BareMetalInstanceReconciler{
+				Client:                        k8sClient,
+				Scheme:                        k8sClient.Scheme(),
+				NetworkingNamespace:           testNetworkingNS,
+				ProvisionPollIntervalDuration: time.Second,
+				Recorder:                      recorder,
+			}
+
+			result, err := reconciler.reconcileIPDiscovery(ctx, bmi)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(time.Second))
+			condition := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonLeasePending))
+			Expect(condition.Message).To(Equal("latest lease query (AAP job ID: query-456)"))
+		})
+
 		It("emits LeaseNotFound after the warning window only once", func() {
 			bmi = bmiForLeaseMirror([]v1alpha1.BareMetalNetworkAttachment{
 				{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},

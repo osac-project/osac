@@ -235,6 +235,7 @@ func (m *Metal3Client) findFreeHost(
 	}
 
 	candidates := make([]metal3api.BareMetalHost, 0, len(bmhList.Items))
+	networkPortMACs := make(map[string]string, len(bmhList.Items))
 	for _, bmh := range bmhList.Items {
 		if bmh.Status.OperationalStatus != metal3api.OperationalStatusOK {
 			continue
@@ -271,6 +272,7 @@ func (m *Metal3Client) findFreeHost(
 		if managedBy != matchManagedBy {
 			continue
 		}
+		networkPortMAC := ""
 		if interfaceName != "" {
 			if bmh.Name == "" {
 				log.Info("Skipping host without inventory name")
@@ -281,9 +283,11 @@ func (m *Metal3Client) findFreeHost(
 				log.Info("Skipping host without a valid MAC for its selected network port")
 				continue
 			}
+			networkPortMAC = macs[interfaceName]
 		}
 
 		candidates = append(candidates, bmh)
+		networkPortMACs[bmh.Name] = networkPortMAC
 	}
 
 	if len(candidates) == 0 {
@@ -295,7 +299,9 @@ func (m *Metal3Client) findFreeHost(
 	})
 
 	bmh := &candidates[0]
-	return bmhToHost(bmh, m.hostClass), nil
+	host := bmhToHost(bmh, m.hostClass)
+	host.NetworkPortMAC = networkPortMACs[bmh.Name]
+	return host, nil
 }
 
 func (m *Metal3Client) AssignHost(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*Host, error) {

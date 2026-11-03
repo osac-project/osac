@@ -185,11 +185,19 @@ func (r *BareMetalInstanceReconciler) maybeEmitLeaseNotFound(
 func latestNetworkAttachmentQueryMessage(na *opv1alpha1.NetworkAttachment) string {
 	for i := len(na.Status.Jobs) - 1; i >= 0; i-- {
 		job := na.Status.Jobs[i]
-		if job.Task == networkAttachmentQueryTask && job.Message != "" {
-			return job.Message
+		if job.Task != networkAttachmentQueryTask {
+			continue
 		}
+		message := job.Message
+		if message == "" {
+			message = "DHCP lease query in progress"
+		}
+		if job.JobID != "" {
+			return fmt.Sprintf("%s (AAP job ID: %s)", message, job.JobID)
+		}
+		return message
 	}
-	return latestNetworkAttachmentJobMessage(na)
+	return ""
 }
 
 func latestNetworkAttachmentQueryJob(na *opv1alpha1.NetworkAttachment) *opv1alpha1.NetworkJobStatus {

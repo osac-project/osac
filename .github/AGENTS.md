@@ -57,8 +57,10 @@ plus a native approval on the head commit, and the merge queue.
 The CaaS PR workflow defaults to `caas/sanity` with `-m sanity`. After verifying
 the PR inputs, it selects `caas` when a current or previous changed filename is
 under `tests/e2e/caas/regression/`, including deletions and renames out of that
-directory, or when full was explicitly requested. It checks paginated file
-metadata against the verified head and fails on incomplete or stale metadata.
+directory, or when full was explicitly requested. The existing `paths-filter`
+action compares the verified head with its merge-base against the PR base SHA using the `caas-regression`
+filter from the trusted workflow checkout. It never checks out PR code;
+Git/API failures stop the suite rather than silently selecting sanity.
 The merge queue remains sanity-only. Periodics run `caas` and applicable
 reference tests with `-m 'sanity or regression or requires_caas or reference_common'`.
 Manual dispatch defaults to sanity and permits suite/filter/marker overrides.
@@ -74,6 +76,8 @@ Set `OSAC_CI_DIR=/path/to/osac-ci` as well to exercise the real parent suite
 decision, approval/draft/fork guards, and regression rename/deletion routing.
 That checkout must match the caller's pinned osac-ci commit; its test uses
 `uv run --project "$OSAC_CI_DIR" --no-dev python` locally, without GitHub access.
+Set `OSAC_PATHS_FILTER_DIR=/path/to/paths-filter` to exercise the actual pinned
+action's Git-based filtering with Node and local addition/deletion/rename fixtures.
 
 ## Component-hooks and sandbox regression smoke tests
 

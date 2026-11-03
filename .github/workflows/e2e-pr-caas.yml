@@ -66,44 +66,49 @@ jobs:
   labels:
     needs: verify
     permissions:
+      contents: read
       pull-requests: read
     runs-on: ubuntu-latest
     outputs:
-      tier: ${{ steps.tier.outputs.tier }}
+      tier: ${{ (inputs.tier == 'full' || steps.filter.outputs.caas-regression == 'true') && 'full' || '' }}
     steps:
-      - name: Resolve the CaaS tier from verified PR files
-        id: tier
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Read the verified PR base
+        id: base
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr-number }}
           PR_SHA: ${{ inputs.sha }}
-          REQUESTED_TIER: ${{ inputs.tier }}
         run: |
           set -euo pipefail
           pull_json="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}")"
-          file_count="$(jq -er --arg sha "$PR_SHA" '
-            select(.head.sha == $sha) | .changed_files |
-            select(type == "number" and . >= 0 and . == floor)
+          base="$(jq -er --arg sha "$PR_SHA" '
+            select(.head.sha == $sha) | .base.sha | select(test("^[0-9a-f]{40}$"))
           ' <<<"$pull_json")"
-          pages="$(gh api --paginate --slurp "repos/${GH_REPO}/pulls/${PR_NUMBER}/files?per_page=100")"
-          jq -e --argjson count "$file_count" '
-            type == "array" and length > 0 and all(.[]; type == "array") and
-            ([.[][]] | length == $count and
-              all(.[]; (.filename | type == "string" and length > 0) and
-                (.previous_filename == null or (.previous_filename | type == "string" and length > 0)))) and
-            ([.[][].filename] | unique | length == $count)
-          ' <<<"$pages" > /dev/null
-          pull_json="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}")"
-          jq -e --arg sha "$PR_SHA" --argjson count "$file_count" '
-            .head.sha == $sha and .changed_files == $count
-          ' <<<"$pull_json" > /dev/null
-          tier="$(jq -r --arg requested "$REQUESTED_TIER" '
-            if $requested == "full" or any(.[][];
-              any(.filename, (.previous_filename // ""); startswith("tests/e2e/caas/regression/")))
-            then "full" else "" end
-          ' <<<"$pages")"
-          printf 'tier=%s\n' "$tier" >> "$GITHUB_OUTPUT"
+          printf 'sha=%s\n' "$base" >> "$GITHUB_OUTPUT"
+      - name: Find the PR comparison base without checking out PR code
+        id: comparison
+        env:
+          PR_BASE: ${{ steps.base.outputs.sha }}
+          PR_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$PR_BASE" "$PR_SHA"
+          base="$(git merge-base "$PR_BASE" "$PR_SHA")"
+          printf 'sha=%s\n' "$base" >> "$GITHUB_OUTPUT"
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
+        id: filter
+        with:
+          base: ${{ steps.comparison.outputs.sha }}
+          ref: ${{ inputs.sha }}
+          filters: .github/filters/ci-filters.yml
+          predicate-quantifier: every
+
   # Named after the suite id of .github/e2e-policy.yml: the line of the suite follows the deepest job of this run.
   caas:
     needs: [verify, labels]

@@ -6,7 +6,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -179,108 +178,137 @@ FILE_CHANGES = [
 ]
 
 
-def _resolve_pr_tier(tmp_path: Path, pages: list | str | None, tier: str = "", **changes: object) -> tuple:
-    workflow = _workflow(ROOT, "e2e-pr-caas.yml")
-    step = next(step for step in workflow["jobs"]["labels"]["steps"] if step.get("id") == "tier")
-    file_count = sum(len(page) for page in pages) if isinstance(pages, list) else 1
-    pull = {"head": {"sha": PR_SHA}, "changed_files": file_count}
-    responses = [changes.get("before", pull), pages, changes.get("after", pull)]
-    (tmp_path / "responses.json").write_text(json.dumps(responses))
-    mock = tmp_path / "gh"
-    mock.write_text(
-        f"#!{sys.executable}\n"
-        "import json, sys\n"
-        "from pathlib import Path\n"
-        "calls_path = Path('calls.json')\n"
-        "calls = json.loads(calls_path.read_text()) if calls_path.exists() else []\n"
-        "response = json.loads(Path('responses.json').read_text())[len(calls)]\n"
-        "calls.append(sys.argv[1:])\n"
-        "calls_path.write_text(json.dumps(calls))\n"
-        "if response is None: sys.exit(1)\n"
-        "print(response if isinstance(response, str) else json.dumps(response))\n"
+@pytest.mark.parametrize("matched", ["true", "false"])
+@pytest.mark.parametrize("requested", ["", "sanity", "full"])
+def test_filtered_tier_reaches_caas(matched: str, requested: str) -> None:
+    expression = _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["labels"]["outputs"]["tier"]
+    expression = expression.replace("steps.filter.outputs.caas-regression", repr(matched))
+    tier = _selection(expression, "workflow_dispatch", tier=requested)
+    full = matched == "true" or requested == "full"
+    assert tier == ("full" if full else "")
+    inputs = _workflow(ROOT, "e2e-caas-full-install.yml")["jobs"]["e2e-caas-full-install"]["with"]
+    assert _selection(inputs["test-suite"], "workflow_dispatch", sha=PR_SHA, tier=tier) == (
+        "caas" if full else "caas/sanity"
     )
+    assert _selection(inputs["test-marker"], "workflow_dispatch", sha=PR_SHA, tier=tier) == (
+        FULL_MARKER if full else "sanity"
+    )
+
+
+@pytest.mark.parametrize("response", ["valid", "stale", "missing", "api-error"])
+def test_pr_base_read_fails_closed(tmp_path: Path, response: str) -> None:
+    step = next(
+        step for step in _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["labels"]["steps"] if step.get("id") == "base"
+    )
+    pull = {"head": {"sha": PR_SHA if response == "valid" else "b" * 40}, "base": {"sha": "c" * 40}}
+    (tmp_path / "response").write_text(json.dumps(pull if response != "missing" else {}))
+    mock = tmp_path / "gh"
+    mock.write_text("#!/bin/sh\n" + ("exit 1\n" if response == "api-error" else 'cat "$RESPONSE"\n'))
     mock.chmod(0o755)
     output = tmp_path / "output"
     result = subprocess.run(
-        ["bash", "-euo", "pipefail", "-c", step["run"]],
-        cwd=tmp_path,
+        ["bash", "-c", step["run"]],
         env={
             **os.environ,
-            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "RESPONSE": str(tmp_path / "response"),
             "GH_REPO": "osac-project/osac",
-            "PR_NUMBER": "123",
+            "PR_NUMBER": "2152",
             "PR_SHA": PR_SHA,
-            "REQUESTED_TIER": tier,
             "GITHUB_OUTPUT": str(output),
         },
         capture_output=True,
         text=True,
         check=False,
     )
-    return result, output.read_text() if output.exists() else "", json.loads((tmp_path / "calls.json").read_text())
-
-
-@pytest.mark.parametrize("changed", FILE_CHANGES)
-@pytest.mark.parametrize("requested", ["", "sanity", "full"])
-def test_regression_changes_select_full(tmp_path: Path, changed: dict, requested: str) -> None:
-    result, output, calls = _resolve_pr_tier(tmp_path, [[changed]], requested)
-    assert result.returncode == 0, result.stderr
-    assert output == "tier=full\n"
-    assert calls[1] == ["api", "--paginate", "--slurp", "repos/osac-project/osac/pulls/123/files?per_page=100"]
-    inputs = _workflow(ROOT, "e2e-caas-full-install.yml")["jobs"]["e2e-caas-full-install"]["with"]
-    assert _selection(inputs["test-suite"], "workflow_dispatch", sha=PR_SHA, tier="full") == "caas"
-    assert _selection(inputs["test-marker"], "workflow_dispatch", sha=PR_SHA, tier="full") == FULL_MARKER
-
-
-@pytest.mark.parametrize("filename", [SANITY, "fulfillment-service/main.go", "tests/e2e/caas/regression-other/test.py"])
-@pytest.mark.parametrize("requested", ["", "sanity", "full", "regression"])
-def test_other_changes_preserve_requested_tier(tmp_path: Path, filename: str, requested: str) -> None:
-    result, output, _ = _resolve_pr_tier(tmp_path, [[{"filename": filename}]], requested)
-    assert result.returncode == 0, result.stderr
-    expected = "full" if requested == "full" else ""
-    assert output == f"tier={expected}\n"
-
-
-def test_tier_selection_reads_all_pages(tmp_path: Path) -> None:
-    first_page = [{"filename": f"docs/{number}.md"} for number in range(100)]
-    result, output, _ = _resolve_pr_tier(tmp_path, [first_page, [{"filename": REGRESSION}]])
-    assert result.returncode == 0, result.stderr
-    assert output == "tier=full\n"
+    assert (result.returncode == 0) == (response == "valid")
+    assert (output.read_text() if output.exists() else "") == (f"sha={'c' * 40}\n" if response == "valid" else "")
 
 
 @pytest.mark.parametrize(
-    ("pages", "changes"),
+    "changed",
     [
-        (None, {}),
-        ("not json", {}),
-        ([], {}),
-        ([[{}]], {}),
-        ([[{"filename": ""}]], {}),
-        ([[{"filename": SANITY}], [{"filename": SANITY}]], {}),
-        ([[{"filename": REGRESSION, "previous_filename": 1}]], {}),
-        ([[{"filename": REGRESSION}]], {"before": None}),
-        ([[{"filename": REGRESSION}]], {"after": None}),
-        ([[{"filename": REGRESSION}]], {"before": {"head": {"sha": "b" * 40}, "changed_files": 1}}),
-        ([[{"filename": REGRESSION}]], {"after": {"head": {"sha": "b" * 40}, "changed_files": 1}}),
-        ([[{"filename": REGRESSION}]], {"before": {"head": {"sha": PR_SHA}, "changed_files": 3001}}),
-        ([[{"filename": REGRESSION}]], {"after": {"head": {"sha": PR_SHA}, "changed_files": 2}}),
+        *FILE_CHANGES,
+        {"filename": SANITY, "status": "added"},
+        {"filename": "tests/e2e/caas/regression-other/test.py", "status": "added"},
+        {"filename": SANITY, "status": "base-only"},
     ],
 )
-@pytest.mark.parametrize("requested", ["", "full"])
-def test_incomplete_or_stale_metadata_fails_closed(
-    tmp_path: Path, pages: list | str | None, changes: dict, requested: str
-) -> None:
-    result, output, _ = _resolve_pr_tier(tmp_path, pages, requested, **changes)
-    assert result.returncode != 0
-    assert output == ""
+def test_pinned_paths_filter_on_pr_changes(tmp_path: Path, changed: dict) -> None:
+    companion = os.environ.get("OSAC_PATHS_FILTER_DIR")
+    if not companion:
+        pytest.skip("Set OSAC_PATHS_FILTER_DIR to run the pinned paths-filter action with Node")
+    action = Path(companion).resolve()
+    steps = _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["labels"]["steps"]
+    filtering = next(step for step in steps if step.get("id") == "filter")
+    assert (
+        subprocess.check_output(["git", "-C", str(action), "rev-parse", "HEAD"], text=True).strip()
+        == (filtering["uses"].rsplit("@", 1)[1])
+    )
 
+    def git(*args: str) -> str:
+        return subprocess.check_output(
+            ["git", "-c", "commit.gpgsign=false", "-c", "user.name=Test", "-c", "user.email=test@example.com", *args],
+            cwd=tmp_path,
+            text=True,
+            stderr=subprocess.PIPE,
+        ).strip()
 
-def test_pr_tier_inputs_and_filenames_are_data(tmp_path: Path) -> None:
-    filename = 'tests/e2e/caas/regression/$(touch injected); "quoted"\nfile.py'
-    result, output, _ = _resolve_pr_tier(tmp_path, [[{"filename": filename}]], "sanity\ninjected=value")
-    assert result.returncode == 0, result.stderr
-    assert output == "tier=full\n"
-    assert not (tmp_path / "injected").exists()
+    git("init", "-q")
+    git("remote", "add", "origin", str(tmp_path))
+    filename = tmp_path / changed["filename"]
+    previous = tmp_path / changed.get("previous_filename", changed["filename"])
+    if changed["status"] in {"modified", "removed", "renamed"}:
+        previous.parent.mkdir(parents=True, exist_ok=True)
+        previous.write_text("before")
+    git("add", ".")
+    git("commit", "-qm", "base", "--allow-empty")
+    base = git("rev-parse", "HEAD")
+    if changed["status"] in {"removed", "renamed"}:
+        previous.unlink()
+    if changed["status"] != "removed":
+        filename.parent.mkdir(parents=True, exist_ok=True)
+        filename.write_text("after")
+    git("add", ".")
+    git("commit", "-qm", "PR change")
+    head = git("rev-parse", "HEAD")
+    git("checkout", "--detach", base)
+    if changed["status"] == "base-only":
+        upstream = tmp_path / REGRESSION
+        upstream.parent.mkdir(parents=True, exist_ok=True)
+        upstream.write_text("upstream only")
+        git("add", ".")
+        git("commit", "-qm", "upstream regression change")
+        base = git("rev-parse", "HEAD")
+    output = tmp_path / "output"
+    env = {**os.environ, "PR_BASE": base, "PR_SHA": head, "GITHUB_OUTPUT": str(output)}
+    comparison = next(step for step in steps if step.get("id") == "comparison")
+    subprocess.run(["bash", "-c", comparison["run"]], cwd=tmp_path, env=env, check=True, capture_output=True)
+    comparison_sha = output.read_text().strip().removeprefix("sha=")
+    output.write_text("")
+    result = subprocess.run(
+        ["node", str(action / "dist/index.js")],
+        cwd=tmp_path,
+        env={
+            **env,
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_REPOSITORY": "osac-project/osac",
+            "INPUT_BASE": comparison_sha,
+            "INPUT_REF": head,
+            "INPUT_FILTERS": str(ROOT / filtering["with"]["filters"]),
+            "INPUT_PREDICATE-QUANTIFIER": "every",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected = any(
+        path.startswith("tests/e2e/caas/regression/")
+        for path in (changed["filename"], changed.get("previous_filename", ""))
+    )
+    assert re.search(rf"^caas-regression<<.*\n{str(expected).lower()}\n", output.read_text(), re.MULTILINE)
+    assert git("rev-parse", "HEAD") == base, "path detection must not check out PR code"
 
 
 def test_pr_tier_resolution_preserves_trust_boundaries() -> None:
@@ -292,9 +320,21 @@ def test_pr_tier_resolution_preserves_trust_boundaries() -> None:
         "osac-project/osac-ci/.github/workflows/suite-inputs.yml@5bfcd1ff220362171967451de7aaabb9e027d855"
     )
     assert jobs["labels"]["needs"] == "verify"
-    assert jobs["labels"]["permissions"] == {"pull-requests": "read"}
+    assert jobs["labels"]["permissions"] == {"contents": "read", "pull-requests": "read"}
     assert "secrets" not in jobs["labels"]
-    assert not any("uses" in step for step in jobs["labels"]["steps"])
+    checkout, base, comparison, filtering, _ = jobs["labels"]["steps"]
+    assert checkout["uses"] == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+    assert checkout["with"] == {"ref": "${{ github.workflow_sha }}", "fetch-depth": 0, "persist-credentials": False}
+    assert base["env"]["PR_SHA"] == "${{ inputs.sha }}"
+    assert comparison["env"] == {"PR_BASE": "${{ steps.base.outputs.sha }}", "PR_SHA": "${{ inputs.sha }}"}
+    assert filtering["uses"] == "dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d"
+    assert filtering["with"] == {
+        "base": "${{ steps.comparison.outputs.sha }}",
+        "ref": "${{ inputs.sha }}",
+        "filters": ".github/filters/ci-filters.yml",
+        "predicate-quantifier": "every",
+    }
+    assert all("if" not in step and not step.get("continue-on-error") for step in (base, comparison, filtering))
     assert "if" not in jobs["labels"]
     assert jobs["verify"]["with"] == {
         "repo": "${{ inputs.repo }}",

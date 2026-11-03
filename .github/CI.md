@@ -44,8 +44,10 @@ dependency review) do not stop an entry. When every suite passed, `result` write
 A pull request that needs CaaS gets the sanity tests (`tests/e2e/caas/sanity`) by default. When any current or previous
 changed filename is under `tests/e2e/caas/regression/`, its CaaS run automatically selects sanity and regression together,
 with the CaaS references. This includes additions, modifications, deletions, and renames into or out of that directory.
-After the existing PR-input verification, `e2e-pr-caas.yml` reads all pages of the pull request's file metadata and
-checks the head commit and file count; an incomplete listing or a changed head fails instead of silently using sanity.
+After the existing PR-input verification, `e2e-pr-caas.yml` reads the PR base SHA and checks the head is still current.
+It uses the existing `paths-filter` action and trusted `caas-regression` filter to compare the verified head with its
+merge-base against the immutable PR base SHA. Only the workflow revision is checked out, never PR code;
+Git/API failures stop the suite instead of using sanity.
 This only selects tests: the existing approval, readiness, and fork authorization requirements still apply.
 
 The full suite also runs every 5 hours on `main`. To request it for another pull request, check

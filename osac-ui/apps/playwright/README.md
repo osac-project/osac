@@ -15,6 +15,18 @@ otherwise do by hand in a browser.
 - A Keycloak user on that deployment's realm to log in as. This package
   doesn't provision one — use an existing test account, or create one on the
   target environment first.
+- For the full VMaaS flow, a tenant-scoped SSH public-key Secret must exist in
+  the tenant's Default project. The VM wizard filters for
+  `SECRET_TYPE_SSH_PUBLIC_KEY` with a `public_key` data entry; without one it
+  shows `No secret available` and the SSH-key step cannot complete. Create one
+  with the private OSAC CLI after selecting a non-sensitive public key file:
+
+  ```bash
+  osac --tenant <tenant-name> create secret \
+    --name <ssh-secret-name> --type ssh-public-key \
+    --from-file=public_key=<path-to-public-key>
+  ```
+
 - Playwright's browser binaries installed once per machine (see Setup below).
 
 ## Setup
@@ -116,13 +128,30 @@ pnpm --filter @osac/playwright exec playwright test \
 
 ### Full VMaaS setup flow
 
-The `vmaas-full-flow-launch` project runs the setup journeys and starts the
-tenant VM flow: instance type, disk image, storage tier (including its
-storage-backend readiness check), catalog item, tenant creation and login,
-published catalog item selection, and `Launch instance`. The setup project
-has a teardown chain that first deletes the VM through the tenant UI and then
-removes the other resources created by the flow after the launch test
-completes. Run it with:
+The `vmaas-full-flow-launch` project runs the complete journey in this order:
+
+1. Create and verify the instance type, disk image, storage tier and its
+   storage-backend readiness, catalog item, and tenant.
+2. Log in with the generated tenant break-glass credentials, set the
+   replacement password from `tenant_password` (or the tenant name), grant
+   the identity `tenant-admin` permissions through a private-API RoleBinding,
+   and log in again as the tenant admin.
+3. Open the published catalog item and exercise the VM wizard: catalog item,
+   project and VM name, disk image, instance type, boot-disk size and storage
+   tier, additional disks, default networking, auto external IP, SSH key,
+   cloud-init/user-data, and the review page.
+4. Submit the wizard and verify navigation to `/vms/<id>`, the
+   `ComputeInstance` reaches `Running`, and the VM appears in both the tenant
+   VM list and its details page.
+
+The `vmaas-full-flow-launch` project has a teardown chain. It first logs in as
+the tenant admin and deletes the VM, then logs in as the admin user to remove
+the catalog item, disk image, instance type, storage tier, tenant-admin
+RoleBinding and OSAC User, tenant, and generated credential file. The
+SSH-key Secret is a prerequisite supplied by the environment and is not
+created by this flow.
+
+Run the flow with:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
@@ -133,7 +162,13 @@ The flow uses the same values from `apps/e2e-tests/extravars.yaml` as the
 individual create projects. The catalog item therefore continues to use the
 configured existing template, instance type, and disk image references. The
 runner stops after the first failure, including a preflight failure because a
-resource already exists, so the remaining flow steps are not started.
+resource already exists, so the remaining flow steps are not started. Use
+`--headed` when a graphical display is available:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-full-flow-launch --headed
+```
 
 ### Storage tier flow tests
 

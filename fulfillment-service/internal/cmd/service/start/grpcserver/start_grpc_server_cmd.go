@@ -746,6 +746,33 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	// billing_account.go), not dao.FilterTranslator/GenericDAO, so this is not a RegisterResourceServers resource
 	privatev1.RegisterBillingAccountsServer(grpcServer, privateBillingAccountsServer)
 
+	// Create the tenant billing assignments servers. Like billing accounts, tenant_billing_assignments is a flat,
+	// history-shaped table (internal/database/tenant_billing_assignment.go), not the generic Metadata/Spec/Status
+	// jsonb object shape, so it uses its own filter/order translator instead of dao.FilterTranslator.
+	c.logger.InfoContext(ctx, "Creating tenant billing assignments servers")
+	privateTenantBillingAssignmentsServer, err := servers.NewPrivateTenantBillingAssignmentsServer().
+		SetLogger(c.logger).
+		SetProvider(billingProvider).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private tenant billing assignments server: %w", err)
+	}
+	tenantBillingAssignmentsServer, err := servers.NewTenantBillingAssignmentsServer().
+		SetLogger(c.logger).
+		SetDelegate(privateTenantBillingAssignmentsServer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create public tenant billing assignments server: %w", err)
+	}
+	// filterable-resource-exempt: filter/order use a bespoke flat-table translator (internal/database/
+	// tenant_billing_assignment.go), not dao.FilterTranslator/GenericDAO, so this is not a RegisterResourceServers
+	// resource
+	publicv1.RegisterTenantBillingAssignmentsServer(grpcServer, tenantBillingAssignmentsServer)
+	// filterable-resource-exempt: filter/order use a bespoke flat-table translator (internal/database/
+	// tenant_billing_assignment.go), not dao.FilterTranslator/GenericDAO, so this is not a RegisterResourceServers
+	// resource
+	privatev1.RegisterTenantBillingAssignmentsServer(grpcServer, privateTenantBillingAssignmentsServer)
+
 	// Create the capabilities servers:
 	c.logger.InfoContext(ctx, "Creating capabilities servers")
 	capabilitiesServer, err := servers.NewCapabilitiesServer().

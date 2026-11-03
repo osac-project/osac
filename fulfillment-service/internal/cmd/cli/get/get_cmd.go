@@ -32,6 +32,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/billingproviderstatus"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/externalippool"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/storagetier"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/tenantbillingassignment"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/token"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -70,6 +71,7 @@ func Cmd() *cobra.Command {
 	result.AddCommand(billingproviderstatus.Cmd())
 	result.AddCommand(externalippool.Cmd())
 	result.AddCommand(storagetier.Cmd())
+	result.AddCommand(tenantbillingassignment.Cmd())
 	result.AddCommand(token.Cmd())
 	flags := result.Flags()
 	flags.StringVarP(

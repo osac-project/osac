@@ -38,9 +38,11 @@ import (
 
 const testToken = "test-netbox-api-token"
 
-const (
-	testNetBoxV1Token = "netbox-v1-test-token"
-	testNetBoxV2Token = "nbt_test-token"
+var (
+	testNetBoxV1Token                       = strings.Repeat("0", netBoxV1TokenLength)
+	testNetBoxV1TokenWithNBTPrefix          = "nbt_" + strings.Repeat("a", netBoxV1TokenLength-len("nbt_"))
+	testNetBoxV1TokenWithNBTPrefixAndPeriod = "nbt_" + strings.Repeat("a", 12) + "." + strings.Repeat("b", 23)
+	testNetBoxV2Token                       = "nbt_" + strings.Repeat("a", 12) + "." + strings.Repeat("b", 40)
 )
 
 var _ = Describe("NetBox client", func() {
@@ -174,6 +176,8 @@ var _ = Describe("NetBox client", func() {
 			Expect(err).NotTo(HaveOccurred())
 		},
 		Entry("legacy v1 token", testNetBoxV1Token, "Token "+testNetBoxV1Token),
+		Entry("legacy v1 token with v2 prefix", testNetBoxV1TokenWithNBTPrefix, "Token "+testNetBoxV1TokenWithNBTPrefix),
+		Entry("legacy v1 token with v2 prefix and period", testNetBoxV1TokenWithNBTPrefixAndPeriod, "Token "+testNetBoxV1TokenWithNBTPrefixAndPeriod),
 		Entry("NetBox v2 token", testNetBoxV2Token, "Bearer "+testNetBoxV2Token),
 	)
 

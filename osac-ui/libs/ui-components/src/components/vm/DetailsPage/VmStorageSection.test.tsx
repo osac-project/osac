@@ -2,6 +2,7 @@ import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import type { ComputeInstance } from '@osac/types';
+import { ComputeInstanceConditionType, ConditionStatus } from '@osac/types';
 
 import VmStorageSection from './VmStorageSection';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
@@ -41,5 +42,44 @@ describe('VmStorageSection', () => {
     );
 
     expect(screen.getByRole('cell', { name: 'Not set' })).toBeInTheDocument();
+  });
+
+  it('renders VM conditions below the storage details', () => {
+    renderWithProviders(
+      <VmStorageSection
+        vm={
+          {
+            status: {
+              conditions: [
+                {
+                  type: ComputeInstanceConditionType.READY,
+                  status: ConditionStatus.TRUE,
+                  reason: 'AsExpected',
+                  message: 'The virtual machine is ready.',
+                },
+              ],
+            },
+          } as ComputeInstance
+        }
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Conditions' })).toBeInTheDocument();
+    expect(screen.getByRole('grid', { name: 'Virtual machine conditions' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'READY' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'True' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'AsExpected' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'The virtual machine is ready.' })).toBeInTheDocument();
+  });
+
+  it('renders the empty conditions state when the VM has no conditions', () => {
+    renderWithProviders(
+      <VmStorageSection vm={{ status: { conditions: [] } } as unknown as ComputeInstance} />,
+    );
+
+    expect(screen.getByText('No conditions reported.')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('grid', { name: 'Virtual machine conditions' }),
+    ).not.toBeInTheDocument();
   });
 });

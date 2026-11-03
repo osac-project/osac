@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
 import {
   Button,
   DescriptionList,
@@ -33,6 +32,7 @@ import { displayValue } from '../../../utils/detailFormatters';
 import { VmStatusLabel } from '../../../VmStatusLabel';
 import { guestOsFamilyLabels } from '../../DiskImage/DiskImageTable';
 import { Timestamp } from '../../Primitives/Timestamp';
+import ResourceLink from '../../Resource/ResourceLink';
 import UserDataDetailValue from '../../UserData/UserDataDetailValue';
 import { formatInstanceTypeDisplayName } from '../utils';
 
@@ -85,7 +85,6 @@ const VmDetailsCard = ({
   const diskImageReference = vm.spec?.diskImage;
   const sshKey = vm.spec?.sshKey;
   const sshKeyLabel = sshKey?.name || sshKey?.id;
-  const sshKeyDetailsUrl = sshKey?.id ? `/secrets/${sshKey.id}` : undefined;
   const guestOsFamily = diskImage?.spec?.guestOsFamily;
   const guestOsFamilyLabel = guestOsFamily
     ? (guestOsFamilyLabels(t)[guestOsFamily] ?? t('Not set'))
@@ -210,8 +209,8 @@ const VmDetailsCard = ({
                 ) : (
                   <>
                     <DetailRow label={t('SSH public key')}>
-                      {sshKeyDetailsUrl && sshKeyLabel ? (
-                        <Link to={sshKeyDetailsUrl}>{sshKeyLabel}</Link>
+                      {sshKey?.id && sshKeyLabel ? (
+                        <ResourceLink basePath="/secrets" id={sshKey.id} name={sshKeyLabel} />
                       ) : (
                         displayValue(sshKeyLabel)
                       )}

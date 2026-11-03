@@ -14,6 +14,7 @@ import { useTranslation } from '../../../hooks/useTranslation';
 import CatalogStorageTable, {
   type CatalogStorageTableRow,
 } from '../../catalog/details/CatalogStorageTable';
+import { ResourceConditionsTable } from '../../Resource/ResourceConditionsTable';
 
 interface VmStorageSectionProps {
   vm: ComputeInstance;
@@ -57,6 +58,18 @@ const VmStorageSection = ({ vm }: VmStorageSectionProps) => {
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>
+      </StackItem>
+      <StackItem>
+        <Title headingLevel="h3" size="md">
+          {t('Conditions')}
+        </Title>
+      </StackItem>
+      <StackItem>
+        <ResourceConditionsTable
+          ariaLabel={t('Virtual machine conditions')}
+          conditions={vm.status?.conditions ?? []}
+          conditionResourceKind="compute_instance"
+        />
       </StackItem>
     </Stack>
   );

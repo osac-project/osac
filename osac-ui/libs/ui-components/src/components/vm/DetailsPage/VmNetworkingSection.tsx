@@ -5,6 +5,7 @@ import type { ComputeInstance } from '@osac/types';
 
 import { useVmNetworkAttachmentRows } from './useVmNetworkAttachmentRows';
 import { useTranslation } from '../../../hooks/useTranslation';
+import ResourceLink from '../../Resource/ResourceLink';
 import { SubtleContent } from '../../SubtleContent/SubtleContent';
 
 import './VmNetworkingSection.css';
@@ -43,9 +44,32 @@ const VmNetworkingSection = ({ vm }: VmNetworkingSectionProps) => {
             <Tbody>
               {rows.map((row, index) => (
                 <Tr key={`network-attachment-${index}`}>
-                  <Td dataLabel={t('Virtual network')}>{row.virtualNetwork}</Td>
+                  <Td dataLabel={t('Virtual network')}>
+                    {row.virtualNetwork ? (
+                      <ResourceLink
+                        basePath="/networking/virtual-networks"
+                        id={row.virtualNetwork.id}
+                        name={row.virtualNetwork.name}
+                      />
+                    ) : (
+                      '—'
+                    )}
+                  </Td>
                   <Td dataLabel={t('Subnet')}>{row.subnet}</Td>
-                  <Td dataLabel={t('Security groups')}>{row.securityGroups}</Td>
+                  <Td dataLabel={t('Security groups')}>
+                    {row.securityGroups.length > 0
+                      ? row.securityGroups.map((securityGroup, securityGroupIndex) => (
+                          <span key={securityGroup.id}>
+                            {securityGroupIndex > 0 ? ', ' : null}
+                            <ResourceLink
+                              basePath="/networking/security-groups"
+                              id={securityGroup.id}
+                              name={securityGroup.name}
+                            />
+                          </span>
+                        ))
+                      : '—'}
+                  </Td>
                   <Td dataLabel={t('Internal IP')}>{row.internalIp}</Td>
                 </Tr>
               ))}

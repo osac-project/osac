@@ -16,9 +16,12 @@ describe('VmNetworkingSection', () => {
   it('renders the read-only networking table including internal IP', () => {
     vi.mocked(useVmNetworkAttachmentRows).mockReturnValue([
       {
-        virtualNetwork: 'prod-vn',
+        virtualNetwork: { id: 'vn-1', name: 'prod-vn' },
         subnet: 'prod-subnet',
-        securityGroups: 'web-sg, default-sg',
+        securityGroups: [
+          { id: 'sg-web', name: 'web-sg' },
+          { id: 'sg-default', name: 'default-sg' },
+        ],
         internalIp: '10.0.0.5',
       },
     ]);
@@ -33,6 +36,18 @@ describe('VmNetworkingSection', () => {
     expect(screen.getByRole('columnheader', { name: 'Security groups' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Internal IP' })).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: '10.0.0.5' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'prod-vn' })).toHaveAttribute(
+      'href',
+      '/networking/virtual-networks/vn-1',
+    );
+    expect(screen.getByRole('link', { name: 'web-sg' })).toHaveAttribute(
+      'href',
+      '/networking/security-groups/sg-web',
+    );
+    expect(screen.getByRole('link', { name: 'default-sg' })).toHaveAttribute(
+      'href',
+      '/networking/security-groups/sg-default',
+    );
     expect(screen.getByRole('grid', { name: 'Networking' })).toHaveClass(
       'osac-vm-networking-table',
     );

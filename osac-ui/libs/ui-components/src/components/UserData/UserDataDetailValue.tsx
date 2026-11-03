@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
 import { CodeBlock, CodeBlockCode, ExpandableSection } from '@patternfly/react-core';
 
 import { useTranslation } from '../../hooks/useTranslation';
+import ResourceLink from '../Resource/ResourceLink';
 
 interface UserDataValue {
   source: 'inline' | 'secret';
@@ -33,7 +33,7 @@ const UserDataDetailValue = ({ userData, emptyValue }: UserDataDetailValueProps)
     const secretLabel = userData.value.trim() || userData.secretId || t('Configured');
 
     return userData.secretId ? (
-      <Link to={`/secrets/${userData.secretId}`}>{secretLabel}</Link>
+      <ResourceLink basePath="/secrets" id={userData.secretId} name={secretLabel} />
     ) : (
       secretLabel
     );

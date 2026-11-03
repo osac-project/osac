@@ -484,24 +484,24 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 
 	ci := func(id, name string) *publicv1.ComputeInstance {
 		return publicv1.ComputeInstance_builder{
-			Metadata: publicv1.Metadata_builder{Id: proto.String(id), Name: name}.Build(),
+			Id:       id,
+			Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 		}.Build()
 	}
 
 	eip := func(id, name string, state publicv1.ExternalIPState) *publicv1.ExternalIP {
 		return publicv1.ExternalIP_builder{
-			Metadata: publicv1.Metadata_builder{Id: proto.String(id), Name: name}.Build(),
+			Id:       id,
+			Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 			Status: publicv1.ExternalIPStatus_builder{
-				State:   state.Enum(),
-				Address: proto.String("203.0.113.5"),
+				State:   state,
+				Address: "203.0.113.5",
 			}.Build(),
 		}.Build()
 	}
 
 	attachment := func(id string) *publicv1.ExternalIPAttachment {
-		return publicv1.ExternalIPAttachment_builder{
-			Metadata: publicv1.Metadata_builder{Id: proto.String(id)}.Build(),
-		}.Build()
+		return publicv1.ExternalIPAttachment_builder{Id: id}.Build()
 	}
 
 	It("should be a no-op when --externalip is not set", func() {
@@ -514,9 +514,10 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
 		runningCI := ci("ci-1", "my-vm")
 		runningCIStatus := publicv1.ComputeInstance_builder{
-			Metadata: publicv1.Metadata_builder{Id: proto.String("ci-1"), Name: "my-vm"}.Build(),
+			Id:       "ci-1",
+			Metadata: publicv1.Metadata_builder{Name: "my-vm"}.Build(),
 			Status: publicv1.ComputeInstanceStatus_builder{
-				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING.Enum(),
+				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
 			}.Build(),
 		}.Build()
 
@@ -573,9 +574,10 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 		runner.args.externalIP = "my-ip"
 		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
 		failedCI := publicv1.ComputeInstance_builder{
-			Metadata: publicv1.Metadata_builder{Id: proto.String("ci-1"), Name: "my-vm"}.Build(),
+			Id:       "ci-1",
+			Metadata: publicv1.Metadata_builder{Name: "my-vm"}.Build(),
 			Status: publicv1.ComputeInstanceStatus_builder{
-				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED.Enum(),
+				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED,
 			}.Build(),
 		}.Build()
 
@@ -593,9 +595,10 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 		runner.args.externalIP = "my-ip"
 		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
 		runningCIStatus := publicv1.ComputeInstance_builder{
-			Metadata: publicv1.Metadata_builder{Id: proto.String("ci-1"), Name: "my-vm"}.Build(),
+			Id:       "ci-1",
+			Metadata: publicv1.Metadata_builder{Name: "my-vm"}.Build(),
 			Status: publicv1.ComputeInstanceStatus_builder{
-				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING.Enum(),
+				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
 			}.Build(),
 		}.Build()
 
@@ -615,9 +618,10 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 		runner.args.timeout = 1 * time.Millisecond
 		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
 		pendingCI := publicv1.ComputeInstance_builder{
-			Metadata: publicv1.Metadata_builder{Id: proto.String("ci-1"), Name: "my-vm"}.Build(),
+			Id:       "ci-1",
+			Metadata: publicv1.Metadata_builder{Name: "my-vm"}.Build(),
 			Status: publicv1.ComputeInstanceStatus_builder{
-				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PROVISIONING.Enum(),
+				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
 			}.Build(),
 		}.Build()
 

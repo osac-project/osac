@@ -1,0 +1,3 @@
+.osac-vm-networking-table > tbody > tr:last-child {
+  border-block-end: 0;
+}

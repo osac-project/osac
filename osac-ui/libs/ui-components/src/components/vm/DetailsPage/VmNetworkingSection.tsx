@@ -7,6 +7,8 @@ import { useVmNetworkAttachmentRows } from './useVmNetworkAttachmentRows';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { SubtleContent } from '../../SubtleContent/SubtleContent';
 
+import './VmNetworkingSection.css';
+
 interface VmNetworkingSectionProps {
   vm: ComputeInstance;
 }
@@ -24,7 +26,12 @@ const VmNetworkingSection = ({ vm }: VmNetworkingSectionProps) => {
       </StackItem>
       <StackItem>
         {rows.length > 0 ? (
-          <Table aria-label={t('Networking')} variant="compact" borders>
+          <Table
+            aria-label={t('Networking')}
+            variant="compact"
+            borders
+            className="osac-vm-networking-table"
+          >
             <Thead>
               <Tr>
                 <Th>{t('Virtual network')}</Th>

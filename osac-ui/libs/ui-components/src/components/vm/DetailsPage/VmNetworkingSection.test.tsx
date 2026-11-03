@@ -33,6 +33,9 @@ describe('VmNetworkingSection', () => {
     expect(screen.getByRole('columnheader', { name: 'Security groups' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Internal IP' })).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: '10.0.0.5' })).toBeInTheDocument();
+    expect(screen.getByRole('grid', { name: 'Networking' })).toHaveClass(
+      'osac-vm-networking-table',
+    );
     expect(screen.queryByRole('button', { name: /add network/i })).not.toBeInTheDocument();
     expect(container.querySelector('.pf-v6-c-card')).toBeNull();
   });

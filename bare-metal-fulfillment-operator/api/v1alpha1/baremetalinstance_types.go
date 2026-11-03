@@ -228,6 +228,24 @@ const (
 
 	// HostConditionReasonInvalidSelector indicates the host selector is missing or empty.
 	HostConditionReasonInvalidSelector = "InvalidSelector"
+
+	// HostConditionReasonProvisioningDisabled indicates provider networking is disabled.
+	HostConditionReasonProvisioningDisabled = "ProvisioningDisabled"
+
+	// HostConditionReasonNetworkAttachmentFailed indicates the hub NetworkAttachment failed.
+	HostConditionReasonNetworkAttachmentFailed = "NetworkAttachmentFailed"
+
+	// HostConditionReasonDetaching indicates the hub NetworkAttachment is being deleted.
+	HostConditionReasonDetaching = "Detaching"
+
+	// HostConditionReasonNetworkHandoffFailed indicates the network handoff reboot failed.
+	HostConditionReasonNetworkHandoffFailed = "NetworkHandoffFailed"
+
+	// HostConditionReasonIPDiscoveryFailed indicates the DHCP lease query failed.
+	HostConditionReasonIPDiscoveryFailed = "IPDiscoveryFailed"
+
+	// HostConditionReasonLeasePending indicates DHCP lease discovery is still running.
+	HostConditionReasonLeasePending = "LeasePending"
 )
 
 // HostSelectorSpec defines host selection constraints.
@@ -261,6 +279,11 @@ type BareMetalNetworkAttachmentStatus struct {
 	// Interface is the physical interface name from the spec's network attachment.
 	// +kubebuilder:validation:Optional
 	Interface string `json:"interface,omitempty"`
+
+	// MACAddress is the selected interface MAC recorded for the hub NetworkAttachment.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{2}(:[0-9a-f]{2}){5}$`
+	MACAddress string `json:"macAddress,omitempty"`
 
 	// SubnetRef is the fulfillment Subnet ID associated with this attachment.
 	// +kubebuilder:validation:Optional

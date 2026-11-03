@@ -780,6 +780,7 @@ Touched-area requirements: [component guide](../bare-metal-fulfillment-operator/
 
 - **Pure inventory, selection, validation, or client logic:** Cover success, no-match, and provider-error paths.
 - **Reconciliation, finalizers, allocation, or status transitions:** Use the public reconciler behavior and the appropriate CRD fixtures.
+- **BMaaS NetworkAttachment handoff and lease mirroring:** `baremetalinstance_networking_test.go` and `baremetalinstance_ip_discovery_test.go`, run by `make test`, exercise BMF reconciliation against the envtest API and the installed OSAC CRDs. They cover selected-MAC persistence, NetworkAttachment create/read/delete and finalizer ordering, handoff gating, DHCP lease mirroring, and rejection of a mismatched lease MAC. Inventory, management, and NetworkAttachment task status are fixtures; this does not run the OSAC networking controller, AAP, Netris, or real hardware. A deployed BMF-to-networking-controller handoff remains an unresolved integration coverage gap; real provider-contract coverage remains tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 - **Controller deployment, CRDs, pool flows, or Kubernetes wiring:** Envtest alone does not prove the deployed controller path.
 - **Metal3, BCM, Ironic, BMC, power, or hardware semantics:** Static CRDs and HTTP test doubles do not satisfy a real-boundary requirement.
 - **Generated CRDs or Helm CRDs:** Keep generated artifacts synchronized.

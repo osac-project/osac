@@ -53,12 +53,19 @@ rules:
   - get
   - patch
   - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: manager-role
+  namespace: osac
+rules:
 - apiGroups:
   - osac.openshift.io
   resources:
-  - networkclasses
-  - subnets
+  - networkattachments
   verbs:
+  - create
+  - delete
   - get
-  - list
-  - watch
+  - patch

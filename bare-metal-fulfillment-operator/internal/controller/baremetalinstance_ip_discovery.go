@@ -18,33 +18,21 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
-
-// DHCPLeaseResult is the structure returned by the query_dhcp_lease AAP job artifacts.
-type DHCPLeaseResult struct {
-	Leases []DHCPLease `json:"leases"`
-}
-
-// DHCPLease represents a single DHCP lease entry from the fabric manager.
-type DHCPLease struct {
-	SubnetRef  string `json:"subnet_ref"`
-	Interface  string `json:"interface"`
-	IPAddress  string `json:"ip_address"`
-	MACAddress string `json:"mac_address"`
-}
 
 func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 	ctx context.Context,
@@ -62,229 +50,168 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 		return ctrl.Result{}, nil
 	}
 
-	// IP discovery must run only after the fabric port has moved to the tenant network
-	// and the host has rebooted there; otherwise we would read/expose a provisioning
-	// -network lease to the tenant.
-	if !bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionNetworkHandoffComplete) {
-		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
-	}
-
-	if r.IPDiscoveryProvider == nil {
-		log.Info("IP discovery provider not configured, skipping")
+	if !r.providerNetworkingEnabled() {
+		log.Info("Provider networking disabled, skipping DHCP lease mirror")
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionIPDiscoveryComplete,
 			metav1.ConditionTrue,
-			"Skipped",
-			"IP discovery provider not configured",
+			v1alpha1.HostConditionReasonProvisioningDisabled,
+			"Provider networking disabled; skipped DHCP lease discovery",
 		)
 		return ctrl.Result{}, nil
 	}
 
-	log.Info("Reconciling IP discovery", "attachments", len(bareMetalInstance.Spec.NetworkAttachments))
-
-	// Resolve each attachment's NIC MAC from the inventory backend and
-	// plumb a subnet-ref → MAC map into the job's extra_vars. The query_dhcp_lease role
-	// matches DHCP leases by MAC when the host is not registered as a named fabric
-	// server; an absent or partial mapping degrades to name-based matching.
-	if r.InventoryClient != nil && bareMetalInstance.Spec.ExternalHostID != "" {
-		ifaceMACs, macErr := r.InventoryClient.GetHostLogicalPortMACs(ctx, bareMetalInstance.Spec.ExternalHostID)
-		if macErr != nil {
-			log.Error(macErr, "Failed to resolve host interface MACs; falling back to name-based lease matching",
-				"host", bareMetalInstance.Spec.ExternalHostID)
-		} else if subnetMACs := buildSubnetMACMap(bareMetalInstance.Spec.NetworkAttachments, ifaceMACs); len(subnetMACs) > 0 {
-			ctx = provisioning.WithNetworkAttachmentMACs(ctx, subnetMACs)
-		}
+	// Lease mirroring runs only after the fabric port moved and the handoff
+	// reboot completed; otherwise we would expose a provisioning-network lease.
+	if !bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionNetworkHandoffComplete) {
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
 
-	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
-		NetworkAttachments []v1alpha1.BareMetalNetworkAttachment
-		ExternalHostID     string
-		HostClass          string
-	}{
-		bareMetalInstance.Spec.NetworkAttachments,
-		bareMetalInstance.Spec.ExternalHostID,
-		bareMetalInstance.Spec.HostClass,
-	})
-	if err != nil {
+	apiID := bareMetalInstance.Labels[BareMetalInstanceUUIDLabel]
+	if apiID == "" {
+		return ctrl.Result{}, fmt.Errorf("BareMetalInstance %s has no %s label",
+			bareMetalInstance.Name, BareMetalInstanceUUIDLabel)
+	}
+
+	na := &opv1alpha1.NetworkAttachment{}
+	key := types.NamespacedName{
+		Namespace: r.NetworkingNamespace,
+		Name:      opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID),
+	}
+	if err := r.apiReaderOrClient().Get(ctx, key, na); err != nil {
+		if apierrors.IsNotFound(err) {
+			r.setLeasePending(bareMetalInstance, "waiting for NetworkAttachment DHCP lease")
+			return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+		}
 		return ctrl.Result{}, err
 	}
 
-	if bareMetalInstance.Status.IPDiscoveryJobs == nil {
-		bareMetalInstance.Status.IPDiscoveryJobs = []opv1alpha1.JobStatus{}
+	r.initNetworkAttachmentStatuses(bareMetalInstance)
+	expectedMAC := ""
+	if len(bareMetalInstance.Status.NetworkAttachmentStatuses) > 0 {
+		expectedMAC = bareMetalInstance.Status.NetworkAttachmentStatuses[0].MACAddress
 	}
 
-	result, err := provisioning.RunProvisioningLifecycle(
-		ctx, r.IPDiscoveryProvider, bareMetalInstance,
-		&provisioning.State{
-			Jobs:                 &bareMetalInstance.Status.IPDiscoveryJobs,
-			DesiredConfigVersion: desiredVersion,
-		},
-		provisioning.DefaultMaxJobHistory, r.ProvisionPollIntervalDuration,
-		&provisioning.PollCallbacks{
-			OnFailed: func(message string) {
-				bareMetalInstance.SetStatusCondition(
-					v1alpha1.HostConditionIPDiscoveryComplete,
-					metav1.ConditionFalse,
-					v1alpha1.HostConditionReasonTemplateFailed,
-					message,
-				)
-			},
-			OnSuccess: func(status provisioning.ProvisionStatus) {
-				if r.AAPClient != nil {
-					if parseErr := r.applyIPDiscoveryResults(ctx, bareMetalInstance, status.JobID); parseErr != nil {
-						log.Error(parseErr, "Failed to parse IP discovery results")
-						bareMetalInstance.SetStatusCondition(
-							v1alpha1.HostConditionIPDiscoveryComplete,
-							metav1.ConditionFalse,
-							v1alpha1.HostConditionReasonTemplateFailed,
-							fmt.Sprintf("Failed to parse IP discovery artifacts: %v", parseErr),
-						)
-						return
-					}
-				}
-				r.initNetworkAttachmentStatuses(bareMetalInstance)
-
-				bareMetalInstance.SetStatusCondition(
-					v1alpha1.HostConditionIPDiscoveryComplete,
-					metav1.ConditionTrue,
-					"Succeeded",
-					"DHCP lease discovery completed",
-				)
-			},
-		},
-		func() bool {
-			return provisioning.CheckAPIServerForNonTerminalProvisionJob(
-				ctx, r.apiReaderOrClient(), client.ObjectKeyFromObject(bareMetalInstance), &v1alpha1.BareMetalInstance{},
-				func(obj client.Object) []opv1alpha1.JobStatus {
-					return obj.(*v1alpha1.BareMetalInstance).Status.IPDiscoveryJobs
-				},
-			)
-		},
-		func() error {
-			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)
-		},
-	)
-	if err != nil {
-		return result, err
-	}
-
-	if result.RequeueAfter > 0 {
-		ipCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-		if ipCond == nil || ipCond.Reason != v1alpha1.HostConditionReasonTemplateFailed {
-			bareMetalInstance.SetStatusCondition(
-				v1alpha1.HostConditionIPDiscoveryComplete,
-				metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonProgressing,
-				"DHCP lease discovery in progress",
-			)
-		}
-	}
-
-	return result, nil
-}
-
-func (r *BareMetalInstanceReconciler) applyIPDiscoveryResults(
-	ctx context.Context,
-	bareMetalInstance *v1alpha1.BareMetalInstance,
-	jobID string,
-) error {
-	log := logf.FromContext(ctx)
-
-	job, err := r.AAPClient.GetJob(ctx, jobID)
-	if err != nil {
-		return fmt.Errorf("failed to get job %s for IP discovery results: %w", jobID, err)
-	}
-
-	if len(job.Artifacts) == 0 || string(job.Artifacts) == "null" || string(job.Artifacts) == "{}" {
-		return fmt.Errorf("IP discovery job %s returned no artifacts; DHCP lease not yet available", jobID)
-	}
-
-	var result DHCPLeaseResult
-	if err := json.Unmarshal(job.Artifacts, &result); err != nil {
-		return fmt.Errorf("failed to parse IP discovery artifacts: %w", err)
-	}
-
-	leaseMap := make(map[string]DHCPLease)
-	for _, lease := range result.Leases {
-		leaseMap[lease.SubnetRef] = lease
-	}
-
-	var missing []string
-	for i, na := range bareMetalInstance.Spec.NetworkAttachments {
-		if i >= len(bareMetalInstance.Status.NetworkAttachmentStatuses) {
-			bareMetalInstance.Status.NetworkAttachmentStatuses = append(
-				bareMetalInstance.Status.NetworkAttachmentStatuses,
-				v1alpha1.BareMetalNetworkAttachmentStatus{},
-			)
-		}
-		status := &bareMetalInstance.Status.NetworkAttachmentStatuses[i]
-		status.SubnetRef = na.SubnetRef
-		status.Interface = na.Interface
-		status.Primary = na.Primary
-
-		if lease, ok := leaseMap[na.SubnetRef]; ok {
-			if net.ParseIP(lease.IPAddress) == nil {
-				log.Info("Skipping invalid IP address from DHCP lease",
-					"interface", na.Interface, "subnet", na.SubnetRef, "ip", lease.IPAddress)
-				missing = append(missing, na.SubnetRef)
-			} else {
-				status.IPAddress = lease.IPAddress
-				log.Info("Discovered IP for attachment",
-					"interface", na.Interface, "subnet", na.SubnetRef, "ip", lease.IPAddress)
-			}
+	if lease := na.Status.DHCPLease; lease != nil {
+		if expectedMAC != "" && !strings.EqualFold(lease.MACAddress, expectedMAC) {
+			log.Info("Ignoring NetworkAttachment DHCP lease with unexpected MAC")
+		} else if net.ParseIP(lease.IPAddress) == nil {
+			log.Info("Ignoring NetworkAttachment DHCP lease with invalid IP")
 		} else {
-			missing = append(missing, na.SubnetRef)
+			status := &bareMetalInstance.Status.NetworkAttachmentStatuses[0]
+			status.IPAddress = lease.IPAddress
+			if status.MACAddress == "" && lease.MACAddress != "" {
+				status.MACAddress = strings.ToLower(lease.MACAddress)
+			}
+			r.setNetworkCondition(
+				bareMetalInstance,
+				v1alpha1.HostConditionIPDiscoveryComplete,
+				metav1.ConditionTrue,
+				"Succeeded",
+				"DHCP lease mirrored from NetworkAttachment",
+				corev1.EventTypeNormal,
+				"IPDiscovered",
+			)
+			log.Info("Mirrored NetworkAttachment DHCP lease")
+			return ctrl.Result{}, nil
 		}
 	}
 
-	if len(missing) > 0 {
-		return fmt.Errorf("DHCP lease not found for %d/%d network attachments (subnets: %v); will retry",
-			len(missing), len(bareMetalInstance.Spec.NetworkAttachments), missing)
+	queryJob := latestNetworkAttachmentQueryJob(na)
+	if queryJob != nil && queryJob.State == opv1alpha1.NetworkJobStateFailed {
+		message := queryJob.Message
+		if message == "" {
+			message = "DHCP lease query failed"
+		}
+		r.setNetworkCondition(
+			bareMetalInstance,
+			v1alpha1.HostConditionIPDiscoveryComplete,
+			metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonIPDiscoveryFailed,
+			message,
+			corev1.EventTypeWarning,
+			v1alpha1.HostConditionReasonIPDiscoveryFailed,
+		)
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		return ctrl.Result{}, nil
 	}
 
-	return nil
+	msg := latestNetworkAttachmentQueryMessage(na)
+	if msg == "" {
+		msg = "waiting for NetworkAttachment DHCP lease"
+	}
+	if warningPrefix := r.maybeEmitLeaseNotFound(ctx, bareMetalInstance); warningPrefix != "" {
+		msg = warningPrefix + "; latest query: " + msg
+	}
+	r.setLeasePending(bareMetalInstance, msg)
+
+	return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 }
 
-// buildSubnetMACMap maps each attachment's SubnetRef to the MAC address of its NIC,
-// resolved from the host's interface-name → MAC mapping. When an attachment has no
-// Interface set and the host exposes exactly one distinct MAC, that MAC is used (the
-// single-NIC case). Attachments whose MAC cannot be resolved are omitted, so the role
-// falls back to name-based matching for them.
-func buildSubnetMACMap(
-	attachments []v1alpha1.BareMetalNetworkAttachment,
-	ifaceMACs map[string]string,
-) map[string]string {
-	subnetMACs := make(map[string]string)
-	onlyMAC := singleInterfaceMAC(ifaceMACs)
-	for _, na := range attachments {
-		mac := ifaceMACs[na.Interface]
-		if mac == "" && na.Interface == "" {
-			mac = onlyMAC
-		}
-		if mac != "" {
-			subnetMACs[na.SubnetRef] = mac
-		}
-	}
-	return subnetMACs
+func (r *BareMetalInstanceReconciler) setLeasePending(bmi *v1alpha1.BareMetalInstance, message string) {
+	bmi.SetStatusCondition(
+		v1alpha1.HostConditionIPDiscoveryComplete,
+		metav1.ConditionFalse,
+		v1alpha1.HostConditionReasonLeasePending,
+		message,
+	)
 }
 
-func singleInterfaceMAC(ifaceMACs map[string]string) string {
-	var onlyMAC string
-	for _, mac := range ifaceMACs {
-		if mac == "" {
+// maybeEmitLeaseNotFound emits Warning LeaseNotFound once after the design 10m
+// window. The condition message remains the newest DHCP-query job message.
+func (r *BareMetalInstanceReconciler) maybeEmitLeaseNotFound(
+	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
+) string {
+	handoff := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+	if handoff == nil || handoff.Status != metav1.ConditionTrue || handoff.LastTransitionTime.IsZero() {
+		return ""
+	}
+	if time.Since(handoff.LastTransitionTime.Time) < LeaseNotFoundWarningAfter {
+		return ""
+	}
+	warningPrefix := fmt.Sprintf("No tenant DHCP lease after %s since network handoff", LeaseNotFoundWarningAfter)
+	pending := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
+	alreadyWarned := pending != nil && strings.HasPrefix(pending.Message, warningPrefix)
+	if !alreadyWarned {
+		logf.FromContext(ctx).Info(warningPrefix)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(bmi, nil, corev1.EventTypeWarning,
+				eventReasonLeaseNotFound, "Reconcile", "%s", warningPrefix)
+		}
+	}
+	return warningPrefix
+}
+
+func latestNetworkAttachmentQueryMessage(na *opv1alpha1.NetworkAttachment) string {
+	for i := len(na.Status.Jobs) - 1; i >= 0; i-- {
+		job := na.Status.Jobs[i]
+		if job.Task != networkAttachmentQueryTask {
 			continue
 		}
-		if onlyMAC != "" && !strings.EqualFold(onlyMAC, mac) {
-			return ""
+		message := job.Message
+		if message == "" {
+			message = "DHCP lease query in progress"
 		}
-		onlyMAC = mac
+		if job.JobID != "" {
+			return fmt.Sprintf("%s (AAP job ID: %s)", message, job.JobID)
+		}
+		return message
 	}
-	return onlyMAC
+	return ""
+}
+
+func latestNetworkAttachmentQueryJob(na *opv1alpha1.NetworkAttachment) *opv1alpha1.NetworkJobStatus {
+	for i := len(na.Status.Jobs) - 1; i >= 0; i-- {
+		if na.Status.Jobs[i].Task == networkAttachmentQueryTask {
+			return &na.Status.Jobs[i]
+		}
+	}
+	return nil
 }
 
 // initNetworkAttachmentStatuses ensures statuses exist for all attachments and syncs
 // SubnetRef, Interface, and Primary from spec to status without overwriting
-// any IP addresses already populated by applyIPDiscoveryResults.
+// IPAddress or MACAddress already recorded.
 func (r *BareMetalInstanceReconciler) initNetworkAttachmentStatuses(
 	bareMetalInstance *v1alpha1.BareMetalInstance,
 ) {
@@ -297,6 +224,7 @@ func (r *BareMetalInstanceReconciler) initNetworkAttachmentStatuses(
 		}
 		bareMetalInstance.Status.NetworkAttachmentStatuses[i].SubnetRef = na.SubnetRef
 		bareMetalInstance.Status.NetworkAttachmentStatuses[i].Interface = na.Interface
-		bareMetalInstance.Status.NetworkAttachmentStatuses[i].Primary = na.Primary
+		bareMetalInstance.Status.NetworkAttachmentStatuses[i].Primary =
+			na.Primary || len(bareMetalInstance.Spec.NetworkAttachments) == 1
 	}
 }

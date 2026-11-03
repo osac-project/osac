@@ -99,7 +99,8 @@ func installComputeStorageRecorder(ctx context.Context) {
 					SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 				},
 				Containers: []corev1.Container{{
-					Name: "recorder", Image: "docker.io/library/python:3.12-alpine",
+					Name:         "recorder",
+					Image:        "registry.access.redhat.com/ubi9/python-312:latest",
 					Command:      []string{"python3", "-B", "/fixture/recorder.py"},
 					Ports:        []corev1.ContainerPort{{ContainerPort: 8080}},
 					VolumeMounts: []corev1.VolumeMount{{Name: "fixture", MountPath: "/fixture", ReadOnly: true}},

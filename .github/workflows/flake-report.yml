@@ -47,18 +47,50 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p flake-input
-          for attempt in 1 2 3 4 5; do
-            if gh api --paginate --slurp \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${CAMPAIGN_ID}/attempts/${ATTEMPT}/jobs?per_page=100" \
-              > flake-input/jobs.json; then
+          pages_dir=$(mktemp -d flake-input/jobs.XXXXXX)
+          trap 'rm -rf "$pages_dir"' EXIT
+
+          # Smaller pages limit API timeouts; per-page retries preserve downloaded jobs.
+          per_page=25
+          page=1
+          pages=()
+
+          while true; do
+            page_file="$pages_dir/page-$page.json"
+
+            for attempt in 1 2 3 4 5; do
+              if gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${CAMPAIGN_ID}/attempts/${ATTEMPT}/jobs?per_page=${per_page}&page=${page}" \
+                > "$page_file"; then
+                break
+              fi
+              if [[ "$attempt" == 5 ]]; then
+                echo "::error::Job retrieval failed for page $page after 5 attempts."
+                exit 1
+              fi
+              echo "::warning::Page $page retrieval failed (attempt $attempt); retrying in 5 seconds."
+              sleep 5
+            done
+
+            pages+=("$page_file")
+            if [[ "$page" == 1 ]]; then
+              total=$(jq -er '.total_count' "$page_file")
+            fi
+            if (( page * per_page >= total )); then
               break
             fi
-            if [[ "$attempt" == 5 ]]; then
-              exit 1
-            fi
-            echo "::warning::Job retrieval failed; retrying in 5 seconds."
-            sleep 5
+            page=$((page + 1))
           done
+
+          jq -se --argjson total "$total" '
+            if ([.[].jobs[].id] |
+                length == $total and (unique | length) == $total)
+            then .
+            else error("Downloaded job count or unique job count does not match total_count")
+            end
+          ' "${pages[@]}" > "$pages_dir/jobs.json"
+
+          mv "$pages_dir/jobs.json" flake-input/jobs.json
       # List saved logs for links. The reporter filters expired files and other attempts.
       # Job results determine success or failure; the report leaves log contents unread.
       - name: Fetch diagnostic artifacts

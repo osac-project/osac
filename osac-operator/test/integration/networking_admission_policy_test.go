@@ -30,8 +30,8 @@ import (
 // templates/networking/admission-policy.yaml; decision 18) on a real API
 // server. The chart renders it only with the fulfillment service, which the
 // operator leg disables, so `make -C osac-installer test SUITE=operator`
-// renders it with the leg's values and passes the file in
-// OSAC_IT_ADMISSION_POLICY. This spec applies it, checks it, and removes it
+// renders it and passes the file in OSAC_IT_ADMISSION_POLICY for the focused
+// admission-policy run. This spec applies it, checks it, and removes it
 // again so the other specs (which write networking CRs as cluster-admin) are
 // unaffected. The specs run serially.
 

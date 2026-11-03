@@ -745,11 +745,14 @@ ifeq ($(SUITE),operator)
 	$(call kind-load-image,$(METERING_IT_IMAGE))
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
+	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration
 	policy_file=$$(mktemp); trap 'rm -f "$$policy_file"' EXIT; \
 	  helm template osac charts/osac/ --namespace "$(NS)" --values charts/osac/ci/default-values.yaml \
 	    --set service.enabled=true --show-only templates/networking/admission-policy.yaml > "$$policy_file"; \
 	  cd ../osac-operator && OSAC_IT_ADMISSION_POLICY="$$policy_file" \
-	    ginkgo run --timeout 30m -v test/integration
+	    ginkgo run --timeout 10m -v \
+	      --focus='limits BMF NetworkAttachment patches to removing its finalizer after cleanup' \
+	      test/integration
 	# Provisioning-enabled phase: the operator resolves NetworkClass manager
 	# registrations (chart-rendered netris and cudn_evpn), which
 	# it skips when provider networking is disabled. No AAP or networking CR is needed.

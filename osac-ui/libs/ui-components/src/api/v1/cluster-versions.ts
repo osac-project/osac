@@ -89,7 +89,7 @@ export const useConfiguredClusterVersion = (reference: ClusterVersionReference |
     { enabled: !id && Boolean(name) },
   );
   const query = id ? byId : byName;
-  const isLoading = query.isFetching || query.isPlaceholderData;
+  const isLoading = query.isLoading || query.isPlaceholderData;
   const notFound = query.error instanceof ConnectError && query.error.code === Code.NotFound;
   const isError = query.isError && !notFound;
   const candidates = id ? (byId.data ? [byId.data] : []) : (byName.data ?? []);

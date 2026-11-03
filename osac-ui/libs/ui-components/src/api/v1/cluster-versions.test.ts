@@ -408,6 +408,59 @@ describe('useConfiguredClusterVersion', () => {
     await waitFor(() => expect(result.current.data?.id).toBe(configured.id));
   });
 
+  it.each([
+    ['ID', true],
+    ['name', false],
+  ] as const)('keeps a resolved version visible during a %s refetch', async (_label, byId) => {
+    const configured = makeClusterVersion('4-15-0');
+    let calls = 0;
+    let releaseRefetch: (() => void) | undefined;
+    const refetchGate = new Promise<void>((resolve) => {
+      releaseRefetch = resolve;
+    });
+    const waitOnRefetch = async () => {
+      calls += 1;
+      if (calls === 2) {
+        await refetchGate;
+      }
+    };
+    const transport = createRouterTransport((router) => {
+      router.service(ClusterVersions, {
+        get: async () => {
+          await waitOnRefetch();
+          return { object: configured };
+        },
+        list: async () => {
+          await waitOnRefetch();
+          return { items: [configured] };
+        },
+      });
+    });
+    const { wrapper, queryClient } = makeWrapper(transport);
+    const reference = create(
+      ClusterVersionReferenceSchema,
+      byId ? { id: configured.id } : { name: configured.metadata?.name },
+    );
+    const { result } = renderHook(() => useConfiguredClusterVersion(reference), { wrapper });
+
+    await waitFor(() => expect(result.current.data?.id).toBe(configured.id));
+    expect(result.current.isLoading).toBe(false);
+    act(() => {
+      void queryClient.invalidateQueries({ queryKey: [ClusterVersions.typeName] });
+    });
+    try {
+      await waitFor(() => expect(calls).toBe(2));
+      expect(queryClient.isFetching({ queryKey: [ClusterVersions.typeName] })).toBe(1);
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.data?.id).toBe(configured.id);
+    } finally {
+      act(() => releaseRefetch?.());
+      await waitFor(() =>
+        expect(queryClient.isFetching({ queryKey: [ClusterVersions.typeName] })).toBe(0),
+      );
+    }
+  });
+
   it('does not use placeholder data from the previous name when the reference changes', async () => {
     const first = makeClusterVersion('4-15-0');
     const second = makeClusterVersion('4-16-0');

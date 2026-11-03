@@ -9,7 +9,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import wait_for_cluster_order_hosted_cluster_reference, wait_for_hosted_cluster_kubeconfig
+from tests.e2e.core.helpers import (
+    node_pools_by_node_set,
+    wait_for_cluster_order_hosted_cluster_reference,
+    wait_for_hosted_cluster_kubeconfig,
+)
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import time
 
@@ -85,25 +89,17 @@ def _snapshot(*, k8s: K8sClient, grpc: GRPCClient, refs: ClusterReferences, work
     hosted = k8s.get_json(
         resource="hostedclusters.hypershift.openshift.io", name=refs.hc_name, namespace=refs.namespace
     )
-    pools = _sequence(
-        _mapping(k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=refs.namespace)).get("items", [])
+    pools = node_pools_by_node_set(
+        k8s=k8s, namespace=refs.namespace, co_name=refs.co_name, expected_node_sets=refs.expected_node_sets
     )
     cluster_operators = _sequence(
         _mapping(workload_k8s.list_json(resource="clusteroperators.config.openshift.io")).get("items", [])
     )
-    owned_pools = {
-        _mapping(_mapping(pool).get("metadata", {})).get("labels", {}).get("osac.openshift.io/node-set", ""): pool
-        for pool in pools
-        if _mapping(_mapping(pool).get("metadata", {})).get("labels", {}).get("osac.openshift.io/clusterorder")
-        == refs.co_name
-        and _mapping(_mapping(pool).get("metadata", {})).get("labels", {}).get("osac.openshift.io/node-set", "")
-        in refs.expected_node_sets
-    }
     return {
         "order": k8s.get_json(resource="clusterorder", name=refs.co_name),
         "cluster": grpc.get_cluster(cluster_id=refs.uuid)["object"],
         "hosted": hosted,
-        "pools": owned_pools,
+        "pools": pools,
         "cluster_operators": cluster_operators,
     }
 
@@ -184,7 +180,7 @@ def _log_diagnostics(
         diagnostics_logger.info("CaaS installation diagnostics: %s", json.dumps(payload, sort_keys=True))
 
 
-def monitor_post_install_health(*, k8s: K8sClient, grpc: GRPCClient, refs: ClusterReferences) -> float:
+def monitor_post_install_health(*, k8s: K8sClient, grpc: GRPCClient, refs: ClusterReferences) -> None:
     """Monitor the installed cluster for the configured stability window."""
     started = time.monotonic()
     workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
@@ -195,14 +191,12 @@ def monitor_post_install_health(*, k8s: K8sClient, grpc: GRPCClient, refs: Clust
         kubeconfig_file.write(workload_kubeconfig)
         kubeconfig_file.flush()
         workload_k8s = K8sClient(namespace=refs.namespace, kubeconfig=kubeconfig_file.name, as_system_admin=False)
-        successful = False
         last_attempt_successful = False
         final_data: dict[str, Any] | None = None
         while True:
             try:
                 snapshot = _snapshot(k8s=k8s, grpc=grpc, refs=refs, workload_k8s=workload_k8s)
                 final_data = _post_install_diagnostics(snapshot)
-                successful = True
                 last_attempt_successful = True
                 _log_diagnostics(
                     component="post-install health", data=final_data, elapsed_seconds=time.monotonic() - started
@@ -226,7 +220,7 @@ def monitor_post_install_health(*, k8s: K8sClient, grpc: GRPCClient, refs: Clust
                 )
             remaining = started + POST_INSTALL_MONITOR_SECONDS - time.monotonic()
             if remaining <= 0:
-                if not successful:
+                if final_data is None:
                     raise AssertionError("Post-install health diagnostics could not be collected")
                 if not last_attempt_successful:
                     raise AssertionError("Post-install health diagnostics were unavailable at the window end")
@@ -237,5 +231,5 @@ def monitor_post_install_health(*, k8s: K8sClient, grpc: GRPCClient, refs: Clust
                         elapsed_seconds=time.monotonic() - started,
                         final=True,
                     )
-                return time.monotonic() - started
+                return
             time.sleep(min(_DIAGNOSTIC_INTERVAL_SECONDS, remaining))

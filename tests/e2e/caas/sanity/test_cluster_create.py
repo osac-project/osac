@@ -20,6 +20,7 @@ from tests.e2e.caas.deletion_diagnostics import snapshot_cluster_deletion
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
+    node_pools_by_node_set,
     unique_name,
     wait_for_cluster_deleting,
     wait_for_cluster_deletion_without_cleanup,
@@ -835,15 +836,9 @@ def _assert_isolated_node_pools(
     old_label = "osac.openshift.io/resource_class"
 
     def _get_node_pools() -> dict[str, dict[str, Any]]:
-        items = k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=hosted_cluster_ns).get(
-            "items", []
+        return node_pools_by_node_set(
+            k8s=k8s, namespace=hosted_cluster_ns, co_name=co_name, expected_node_sets=set(expected_replicas)
         )
-        return {
-            item.get("metadata", {}).get("labels", {}).get(node_set_label, ""): item
-            for item in items
-            if item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/clusterorder") == co_name
-            and item.get("metadata", {}).get("labels", {}).get(node_set_label) in expected_replicas
-        }
 
     node_pools = poll_until(
         fn=_get_node_pools,

@@ -100,6 +100,17 @@ func safeMissingPrerequisiteError(kind, id string) error {
 	return envelope
 }
 
+func safeMissingSecretReferenceError(reference string) error {
+	envelope := newToolError(
+		"not_found",
+		"NotFound",
+		"A required Secret is missing. Create it in the existing OSAC UI at /secrets/create and retry with its reference.",
+		false,
+	)
+	envelope.Details = []string{fmt.Sprintf("Secret reference %s is missing", reference)}
+	return envelope
+}
+
 func safeUnauthorizedPrerequisiteError(kind, id string) error {
 	envelope := newToolError(
 		"authorization",

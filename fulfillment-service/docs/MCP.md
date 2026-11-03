@@ -27,6 +27,12 @@ Secret references are list-only: MCP returns the reference's ID, name, and
 type, and never Secret bytes, credentials, tokens, provider data, or the
 underlying Secret object.
 
+When a required Secret is missing, typed write tools return the shared
+`not_found` safe-error envelope. The result names the missing Secret
+reference and directs the caller to the existing `/secrets/create` wizard.
+MCP never accepts or returns Secret bytes; after the Secret exists, the
+caller resumes with `list_resources` and the resulting reference.
+
 List requests use the explicit `filter` field and bounded pagination. The
 default page size is 50, the maximum is 100, and negative offsets or invalid
 page sizes are rejected before a public API call.

@@ -41,7 +41,9 @@ type BillingAccountsListRequest struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// Index of the first result. If not specified the default value will be zero.
 	Offset *int32 `protobuf:"varint,1,opt,name=offset,proto3,oneof" json:"offset,omitempty"`
-	// Maximum number of results to be returned by the server. When not specified all the results will be returned.
+	// Maximum number of results to be returned by the server. When not specified all the results will be returned. Note
+	// that there may not be enough results to return, and that the server may decide, for performance reasons, to return
+	// less results than requested.
 	Limit *int32 `protobuf:"varint,2,opt,name=limit,proto3,oneof" json:"limit,omitempty"`
 	// Filter criteria.
 	//
@@ -186,7 +188,9 @@ type BillingAccountsListRequest_builder struct {
 
 	// Index of the first result. If not specified the default value will be zero.
 	Offset *int32
-	// Maximum number of results to be returned by the server. When not specified all the results will be returned.
+	// Maximum number of results to be returned by the server. When not specified all the results will be returned. Note
+	// that there may not be enough results to return, and that the server may decide, for performance reasons, to return
+	// less results than requested.
 	Limit *int32
 	// Filter criteria.
 	//

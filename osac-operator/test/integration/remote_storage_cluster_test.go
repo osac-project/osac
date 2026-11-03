@@ -40,6 +40,7 @@ import (
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -263,7 +264,9 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 				if finErr := removeMgmtResourceFinalizers("clusterorder", coName, uid); finErr != nil {
 					cleanupErrs = append(cleanupErrs, finErr)
 				}
-				waitForMgmtObjectDeleted("clusterorder", coName, operatorNamespace)
+				if waitErr := waitForMgmtObjectDeletedErr("clusterorder", coName, operatorNamespace); waitErr != nil {
+					cleanupErrs = append(cleanupErrs, waitErr)
+				}
 			}
 			for tName, uid := range tenantUIDs {
 				if uid == "" {
@@ -280,7 +283,9 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 				if finErr := removeMgmtResourceFinalizers("tenant", tName, uid); finErr != nil {
 					cleanupErrs = append(cleanupErrs, finErr)
 				}
-				waitForMgmtObjectDeleted("tenant", tName, operatorNamespace)
+				if waitErr := waitForMgmtObjectDeletedErr("tenant", tName, operatorNamespace); waitErr != nil {
+					cleanupErrs = append(cleanupErrs, waitErr)
+				}
 			}
 			for secName, uid := range secretUIDs {
 				if uid == "" {
@@ -1288,14 +1293,27 @@ func fetchRemoteStorageClassMeta(remoteKubeconfigPath, scName string) remoteStor
 
 // waitForMgmtObjectDeleted waits until the specified resource is NotFound on the management cluster.
 func waitForMgmtObjectDeleted(resource, name, namespace string) {
-	Eventually(func() bool {
-		args := []string{"get", resource, name, "--ignore-not-found", "-o", "name"}
-		if namespace != "" {
-			args = append(args, "-n", namespace)
-		}
-		out, err := runMgmtKubectl(args...)
-		return err == nil && strings.TrimSpace(string(out)) == ""
-	}, 60*time.Second, time.Second).Should(BeTrue(), "expected %s/%s to be deleted", resource, name)
+	Expect(waitForMgmtObjectDeletedErr(resource, name, namespace)).To(Succeed())
+}
+
+// waitForMgmtObjectDeletedErr lets cleanup record a timeout without interrupting
+// restoration of the operator Deployment and deletion of the infrastructure.
+func waitForMgmtObjectDeletedErr(resource, name, namespace string) error {
+	err := wait.PollUntilContextTimeout(
+		context.Background(), time.Second, 60*time.Second, true,
+		func(context.Context) (bool, error) {
+			args := []string{"get", resource, name, "--ignore-not-found", "-o", "name"}
+			if namespace != "" {
+				args = append(args, "-n", namespace)
+			}
+			out, err := runMgmtKubectl(args...)
+			return err == nil && strings.TrimSpace(string(out)) == "", nil
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("wait for deletion of %s/%s: %w", resource, name, err)
+	}
+	return nil
 }
 
 // generateCSPFixtureTLSBundle generates an ephemeral ECDSA P-256 CA and server
@@ -1421,6 +1439,12 @@ func deployAndStageCSPFixtureServer(svcUIDOutPtr, podUIDOutPtr *string) {
 	fixtureBinPath := filepath.Join(GinkgoT().TempDir(), "cspfixture-linux")
 	buildCtx, buildCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer buildCancel()
+	// testdata packages are omitted by go test ./...; check the fixture's startup
+	// API contract before building the binary used by this deployed suite.
+	testCmd := exec.CommandContext(buildCtx, "go", "test", "./test/integration/testdata/cspfixture")
+	testCmd.Dir = projectDir
+	_, err = utils.Run(testCmd)
+	Expect(err).NotTo(HaveOccurred())
 	buildCmd := exec.CommandContext(
 		buildCtx, "go", "build", "-o", fixtureBinPath, "./test/integration/testdata/cspfixture",
 	)
@@ -1699,20 +1723,20 @@ func deleteMgmtObjectByUID(apiVersion, kind, namespace, name, uid string) error 
 }
 
 // removeMgmtResourceFinalizers marks a resource unmanaged and clears its finalizers
-// in the management cluster using an atomic RFC 6902 JSON Patch UID test, ignoring NotFound.
+// in the management cluster, preserving other annotations. The API rejects a
+// mismatched immutable UID atomically; NotFound is ignored.
 func removeMgmtResourceFinalizers(resource, name, uid string) error {
 	if uid == "" {
 		return nil
 	}
 	patch := fmt.Sprintf(
-		`[{"op":"test","path":"/metadata/uid","value":%q},`+
-			`{"op":"add","path":"/metadata/annotations","value":{"osac.openshift.io/management-state":"unmanaged"}},`+
-			`{"op":"replace","path":"/metadata/finalizers","value":null}]`,
+		`{"metadata":{"uid":%q,`+
+			`"annotations":{"osac.openshift.io/management-state":"unmanaged"},"finalizers":null}}`,
 		uid,
 	)
 	out, err := runMgmtKubectl(
 		"patch", resource, name, "-n", operatorNamespace,
-		"--type=json", "-p", patch,
+		"--type=merge", "-p", patch,
 	)
 	if err != nil && !strings.Contains(string(out), "NotFound") {
 		return err

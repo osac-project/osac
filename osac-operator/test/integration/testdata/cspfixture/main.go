@@ -18,7 +18,8 @@ limitations under the License.
 // component integration tests. It exposes three listeners:
 //   - :8443 TLS OIDC HTTPS discovery and client-credentials token issuance
 //   - :8444 Dedicated TLS gRPC (compatible with experimentalcredentials.NewTLSWithALPNDisabled)
-//     serving StorageTiers, StorageBackends, Secrets, Tenants, NetworkClasses, and Health
+//     serving StorageTiers, StorageBackends, Secrets, Tenants, NetworkClasses,
+//     InstallationSettings, and Health
 //   - :8080 Plaintext HTTP AAP double (/api/controller/*) and admin control
 //     (/healthz, /admin/stats, /admin/state, /admin/reset)
 package main
@@ -304,6 +305,20 @@ func (a *networkClassesAdapter) List(
 	}.Build(), nil
 }
 
+type installationSettingsAdapter struct {
+	privatev1.UnimplementedInstallationSettingsServer
+}
+
+func (a *installationSettingsAdapter) Get(
+	_ context.Context,
+	_ *privatev1.InstallationSettingsGetRequest,
+) (*privatev1.InstallationSettingsGetResponse, error) {
+	// The remote integration deployment uses the default enabled networking mode.
+	return privatev1.InstallationSettingsGetResponse_builder{
+		NetworkingProvisioningEnabled: true,
+	}.Build(), nil
+}
+
 func (s *fixtureServer) unaryAuthInterceptor(
 	ctx context.Context,
 	req any,
@@ -468,6 +483,16 @@ func (s *fixtureServer) adminAndAAPHandler() http.Handler {
 	return mux
 }
 
+func (s *fixtureServer) registerGRPCServices(server *grpc.Server) {
+	privatev1.RegisterStorageTiersServer(server, s)
+	privatev1.RegisterStorageBackendsServer(server, &storageBackendsAdapter{srv: s})
+	privatev1.RegisterSecretsServer(server, &secretsAdapter{srv: s})
+	privatev1.RegisterTenantsServer(server, &tenantsAdapter{})
+	privatev1.RegisterNetworkClassesServer(server, &networkClassesAdapter{})
+	privatev1.RegisterInstallationSettingsServer(server, &installationSettingsAdapter{})
+	healthpb.RegisterHealthServer(server, health.NewServer())
+}
+
 func main() {
 	var (
 		tlsCertPath           string
@@ -531,12 +556,7 @@ func main() {
 		grpc.Creds(credentials.NewTLS(grpcTLSConfig)),
 		grpc.UnaryInterceptor(srv.unaryAuthInterceptor),
 	)
-	privatev1.RegisterStorageTiersServer(grpcServer, srv)
-	privatev1.RegisterStorageBackendsServer(grpcServer, &storageBackendsAdapter{srv: srv})
-	privatev1.RegisterSecretsServer(grpcServer, &secretsAdapter{srv: srv})
-	privatev1.RegisterTenantsServer(grpcServer, &tenantsAdapter{})
-	privatev1.RegisterNetworkClassesServer(grpcServer, &networkClassesAdapter{})
-	healthpb.RegisterHealthServer(grpcServer, health.NewServer())
+	srv.registerGRPCServices(grpcServer)
 
 	oidcTLSConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},

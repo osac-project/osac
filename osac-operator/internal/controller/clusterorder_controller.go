@@ -365,6 +365,7 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 			setClusterOrderPhase(&latest.Status, computed.Phase)
 		}
 		latest.Status.ClusterReference = computed.ClusterReference
+		latest.Status.ObservedVersion = computed.ObservedVersion
 		latest.Status.UpgradeObservation = computed.UpgradeObservation
 		latest.Status.NodeRequests = computed.NodeRequests
 		latest.Status.ProvisioningJobs = computed.ProvisioningJobs
@@ -616,6 +617,7 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	if err := r.handleNodePools(ctx, instance, nodePools); err != nil {
 		return err
 	}
+	recordObservedClusterVersions(instance, hc, nodePools.Items)
 	recordUpgradeObservations(instance, hc, nodePools.Items)
 	// A successful provisioning job only means that the infrastructure request
 	// was accepted. Derive terminal readiness from the live HostedCluster and

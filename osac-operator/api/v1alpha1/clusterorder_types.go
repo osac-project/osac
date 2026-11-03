@@ -152,11 +152,10 @@ type NodeRequest struct {
 	ReleaseImage string `json:"releaseImage,omitempty"`
 }
 
-// NodeRequestStatus records the observed node count for a node set.
-// The count is not updated while the NodePool has zero observed
-// replicas (e.g. during initial provisioning or node drain), so
-// an existing entry retains its last positive value until a new
-// positive observation arrives.
+// NodeRequestStatus records the observed node count and version for a node set.
+// Neither value is refreshed while the NodePool has zero observed replicas
+// (e.g. during initial provisioning or node drain), so an existing entry
+// retains its last positive count and last observed version.
 type NodeRequestStatus struct {
 	// NodeSet identifies the logical group whose observed count is reported.
 	// +kubebuilder:validation:Required
@@ -169,6 +168,10 @@ type NodeRequestStatus struct {
 	BareMetal *BareMetalNodeSpec `json:"bareMetal,omitempty"`
 	// +kubebuilder:validation:Optional
 	FabricInterface string `json:"fabricInterface,omitempty"`
+	// ObservedVersion is the OpenShift version reported by this node set's
+	// selected NodePool, independently of an OSAC upgrade attempt.
+	// +kubebuilder:validation:Optional
+	ObservedVersion string `json:"observedVersion,omitempty"`
 	// UpgradeObservation reports the observed version and state of this node set's
 	// current upgrade attempt.
 	// +kubebuilder:validation:Optional
@@ -300,6 +303,10 @@ type AddOnOperatorJobStatus struct {
 
 // ClusterOrderStatus defines the observed state of ClusterOrder
 type ClusterOrderStatus struct {
+	// ObservedVersion is the latest completed OpenShift version reported by the
+	// selected HostedCluster. It is independent of an OSAC upgrade attempt.
+	// +kubebuilder:validation:Optional
+	ObservedVersion string `json:"observedVersion,omitempty"`
 	// UpgradeObservation reports the observed version and state of the control
 	// plane's current upgrade attempt.
 	// +kubebuilder:validation:Optional

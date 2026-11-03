@@ -23,6 +23,7 @@ import (
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -58,73 +59,149 @@ var _ = Describe("upgrade attempt correlation", func() {
 		pool.Status.Version = "4.17.0"
 		return pool
 	}
-
-	It("observes the control plane and all stamped node sets independently", func() {
-		order := newOrder()
+	newControlPlane := func() *hypershiftv1beta1.HostedCluster {
 		hc := &hypershiftv1beta1.HostedCluster{ObjectMeta: metav1.ObjectMeta{
 			Generation: 3, Annotations: map[string]string{v1alpha1.UpgradeAttemptIDAnnotation: "cp-id"},
 		}}
 		hc.Spec.Release.Image = image
-		hc.Status.Version = &hypershiftv1beta1.ClusterVersionStatus{ObservedGeneration: 3}
-		hc.Status.Version.Desired.Image = image
-		hc.Status.Version.History = []configv1.UpdateHistory{{
-			Image: image, Version: "4.18.0", State: configv1.CompletedUpdate,
-		}}
+		return hc
+	}
+	versionStatus := func(version string, state configv1.UpdateState) *hypershiftv1beta1.ClusterVersionStatus {
+		return &hypershiftv1beta1.ClusterVersionStatus{
+			ObservedGeneration: 1,
+			Desired:            configv1.Release{Version: version, Image: "quay.io/ocp/release@sha256:digest"},
+			History: []configv1.UpdateHistory{{
+				Version: version, Image: "quay.io/ocp/release@sha256:digest", State: state,
+			}},
+		}
+	}
+	controlPlaneVersionStatus := func(version string, state configv1.UpdateState) hypershiftv1beta1.ControlPlaneVersionStatus {
+		return hypershiftv1beta1.ControlPlaneVersionStatus{
+			ObservedGeneration: 1,
+			Desired:            configv1.Release{Version: version, Image: "quay.io/ocp/release@sha256:digest"},
+			History: []hypershiftv1beta1.ControlPlaneUpdateHistory{{
+				Version: version, Image: "quay.io/ocp/release@sha256:digest", State: state,
+			}},
+		}
+	}
+	healthyConditions := func() []metav1.Condition {
+		return []metav1.Condition{
+			{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue, ObservedGeneration: 3},
+			{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, ObservedGeneration: 3},
+			{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue, ObservedGeneration: 3},
+			{Type: string(hypershiftv1beta1.ClusterVersionProgressing), Status: metav1.ConditionFalse, ObservedGeneration: 3},
+		}
+	}
+
+	It("observes the control plane and all stamped node sets independently", func() {
+		order := newOrder()
+		hc := newControlPlane()
+		hc.Status.Version = versionStatus("4.18.0", configv1.CompletedUpdate)
+		hc.Status.ControlPlaneVersion = controlPlaneVersionStatus("4.18.0", configv1.CompletedUpdate)
+		hc.Status.Conditions = healthyConditions()
 		recordUpgradeObservations(order, hc, []hypershiftv1beta1.NodePool{
 			newPool("compute", "compute-id"), newPool("gpu", "gpu-id"),
 		})
 		Expect(order.Status.UpgradeObservation.AttemptID).To(Equal("cp-id"))
+		Expect(order.Status.UpgradeObservation.State).To(Equal(v1alpha1.UpgradeObservationSucceeded))
 		Expect(order.Status.UpgradeObservation.Version).To(Equal("4.18.0"))
 		Expect(order.Status.NodeRequests[0].UpgradeObservation.AttemptID).To(Equal("compute-id"))
 		Expect(order.Status.NodeRequests[1].UpgradeObservation.AttemptID).To(Equal("gpu-id"))
 	})
 
-	It("keeps the control-plane observed version unchanged while HyperShift reports a partial rollout", func() {
+	DescribeTable("reports control-plane progress from either partial history", func(controlPlanePartial bool) {
 		order := newOrder()
-		hc := &hypershiftv1beta1.HostedCluster{ObjectMeta: metav1.ObjectMeta{
-			Generation: 3, Annotations: map[string]string{v1alpha1.UpgradeAttemptIDAnnotation: "cp-id"},
-		}}
-		hc.Spec.Release.Image = image
-		hc.Status.Version = &hypershiftv1beta1.ClusterVersionStatus{ObservedGeneration: 3}
-		hc.Status.Version.Desired.Image = image
-		hc.Status.Version.History = []configv1.UpdateHistory{{
-			Image: image, Version: "4.18.0", State: configv1.PartialUpdate,
-		}}
+		hc := newControlPlane()
+		hc.Status.Version = versionStatus("4.17.0", configv1.CompletedUpdate)
+		hc.Status.ControlPlaneVersion = controlPlaneVersionStatus("4.17.0", configv1.CompletedUpdate)
+		if controlPlanePartial {
+			hc.Status.ControlPlaneVersion = controlPlaneVersionStatus("4.18.0", configv1.PartialUpdate)
+		} else {
+			hc.Status.Version = versionStatus("4.18.0", configv1.PartialUpdate)
+		}
 		recordUpgradeObservations(order, hc, nil)
 		Expect(order.Status.UpgradeObservation.AttemptID).To(Equal("cp-id"))
-		Expect(order.Status.UpgradeObservation.Version).To(BeEmpty())
+		Expect(order.Status.UpgradeObservation.Version).To(Equal("4.18.0"))
 		Expect(order.Status.UpgradeObservation.State).To(Equal(v1alpha1.UpgradeObservationProgressing))
+	},
+		Entry("controlPlaneVersion is partial", true),
+		Entry("version is partial", false),
+	)
+
+	It("holds progress when the two partial histories disagree on version", func() {
+		order := newOrder()
+		hc := newControlPlane()
+		hc.Status.Version = versionStatus("4.18.0", configv1.PartialUpdate)
+		hc.Status.ControlPlaneVersion = controlPlaneVersionStatus("4.19.0", configv1.PartialUpdate)
+		recordUpgradeObservations(order, hc, nil)
+		Expect(order.Status.UpgradeObservation.State).To(BeEmpty())
+		Expect(order.Status.UpgradeObservation.Version).To(BeEmpty())
 	})
 
-	It("requires current-generation target completion and health before control-plane success", func() {
+	It("requires both target histories and all current health conditions for control-plane success", func() {
 		order := newOrder()
-		hc := &hypershiftv1beta1.HostedCluster{ObjectMeta: metav1.ObjectMeta{
-			Generation: 3, Annotations: map[string]string{v1alpha1.UpgradeAttemptIDAnnotation: "cp-id"},
-		}}
-		hc.Spec.Release.Image = image
-		hc.Status.Version = &hypershiftv1beta1.ClusterVersionStatus{ObservedGeneration: 3}
-		hc.Status.Version.Desired.Image = image
-		hc.Status.Version.History = []configv1.UpdateHistory{{Image: image, Version: "4.18.0", State: configv1.CompletedUpdate}}
+		hc := newControlPlane()
+		hc.Status.Version = versionStatus("4.18.0", configv1.CompletedUpdate)
+		hc.Status.ControlPlaneVersion = controlPlaneVersionStatus("4.18.0", configv1.CompletedUpdate)
 		recordUpgradeObservations(order, hc, nil)
-		Expect(order.Status.UpgradeObservation.State).To(Equal(v1alpha1.UpgradeObservationProgressing))
-		hc.Status.Conditions = []metav1.Condition{{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue, ObservedGeneration: 3},
-			{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, ObservedGeneration: 3}}
+		Expect(order.Status.UpgradeObservation.State).NotTo(Equal(v1alpha1.UpgradeObservationSucceeded))
+		hc.Status.Conditions = healthyConditions()
 		recordUpgradeObservations(order, hc, nil)
 		Expect(order.Status.UpgradeObservation.State).To(Equal(v1alpha1.UpgradeObservationSucceeded))
 		Expect(order.Status.UpgradeObservation.Version).To(Equal("4.18.0"))
 	})
 
-	It("treats current-generation release rejection as terminal without a version status", func() {
+	DescribeTable("does not report control-plane success with a missing or mismatched signal",
+		func(change func(*hypershiftv1beta1.HostedCluster)) {
+			order := newOrder()
+			hc := newControlPlane()
+			hc.Status.Version = versionStatus("4.18.0", configv1.CompletedUpdate)
+			hc.Status.Conditions = healthyConditions()
+			hc.Status.ControlPlaneVersion = controlPlaneVersionStatus("4.18.0", configv1.CompletedUpdate)
+			change(hc)
+			recordUpgradeObservations(order, hc, nil)
+			Expect(order.Status.UpgradeObservation.State).NotTo(Equal(v1alpha1.UpgradeObservationSucceeded))
+		},
+		Entry("control-plane desired differs", func(hc *hypershiftv1beta1.HostedCluster) {
+			hc.Status.ControlPlaneVersion.Desired.Version = "4.19.0"
+		}),
+		Entry("control-plane history differs", func(hc *hypershiftv1beta1.HostedCluster) {
+			hc.Status.ControlPlaneVersion.History[0].Version = "4.19.0"
+		}),
+		Entry("control-plane history is partial", func(hc *hypershiftv1beta1.HostedCluster) {
+			hc.Status.ControlPlaneVersion.History[0].State = configv1.PartialUpdate
+		}),
+		Entry("guest desired differs", func(hc *hypershiftv1beta1.HostedCluster) {
+			hc.Status.Version.Desired.Version = "4.19.0"
+		}),
+		Entry("guest history differs", func(hc *hypershiftv1beta1.HostedCluster) {
+			hc.Status.Version.History[0].Version = "4.19.0"
+		}),
+		Entry("guest history is partial", func(hc *hypershiftv1beta1.HostedCluster) {
+			hc.Status.Version.History[0].State = configv1.PartialUpdate
+		}),
+		Entry("available is absent", func(hc *hypershiftv1beta1.HostedCluster) {
+			hc.Status.Conditions = hc.Status.Conditions[1:]
+		}),
+		Entry("degraded is true", func(hc *hypershiftv1beta1.HostedCluster) {
+			hc.Status.Conditions[1].Status = metav1.ConditionTrue
+		}),
+		Entry("succeeding is false", func(hc *hypershiftv1beta1.HostedCluster) {
+			hc.Status.Conditions[2].Status = metav1.ConditionFalse
+		}),
+		Entry("progressing is true", func(hc *hypershiftv1beta1.HostedCluster) {
+			hc.Status.Conditions[3].Status = metav1.ConditionTrue
+		}),
+		Entry("health is stale", func(hc *hypershiftv1beta1.HostedCluster) {
+			hc.Status.Conditions[0].ObservedGeneration = 2
+		}),
+	)
+
+	It("does not report a release-image condition as terminal failure", func() {
 		order := newOrder()
-		hc := &hypershiftv1beta1.HostedCluster{ObjectMeta: metav1.ObjectMeta{
-			Generation: 3, Annotations: map[string]string{v1alpha1.UpgradeAttemptIDAnnotation: "cp-id"},
-		}}
-		hc.Spec.Release.Image = image
+		hc := newControlPlane()
 		hc.Status.Conditions = []metav1.Condition{{Type: string(hypershiftv1beta1.ValidReleaseImage), Status: metav1.ConditionFalse,
 			ObservedGeneration: 3, Reason: "UnsupportedReleaseImage"}}
-		recordUpgradeObservations(order, hc, nil)
-		Expect(order.Status.UpgradeObservation.State).To(Equal(v1alpha1.UpgradeObservationFailed))
-		hc.Status.Conditions[0].ObservedGeneration = 2
 		recordUpgradeObservations(order, hc, nil)
 		Expect(order.Status.UpgradeObservation.State).To(BeEmpty())
 	})
@@ -147,40 +224,75 @@ var _ = Describe("upgrade attempt correlation", func() {
 		Expect(order.Status.NodeRequests[0].UpgradeObservation.State).To(Equal(v1alpha1.UpgradeObservationProgressing))
 	})
 
-	It("requires fresh node-pool readiness and rejects a current invalid release", func() {
+	It("reports node-pool progress when the current UpdatingVersion condition is true", func() {
 		order := newOrder()
 		pool := newPool("compute", "compute-id")
-		replicas := int32(2)
-		pool.Spec.Replicas = &replicas
-		pool.Status.Replicas = 2
+		pool.Status.Conditions = []hypershiftv1beta1.NodePoolCondition{{
+			Type:   hypershiftv1beta1.NodePoolUpdatingVersionConditionType,
+			Status: corev1.ConditionTrue, ObservedGeneration: 2,
+		}}
+		recordUpgradeObservations(order, &hypershiftv1beta1.HostedCluster{}, []hypershiftv1beta1.NodePool{pool})
+		Expect(order.Status.NodeRequests[0].UpgradeObservation.State).To(Equal(v1alpha1.UpgradeObservationProgressing))
+		Expect(order.Status.NodeRequests[0].UpgradeObservation.Version).To(Equal("4.17.0"))
+		pool.Status.Conditions[0].ObservedGeneration = 1
+		recordUpgradeObservations(order, &hypershiftv1beta1.HostedCluster{}, []hypershiftv1beta1.NodePool{pool})
+		Expect(order.Status.NodeRequests[0].UpgradeObservation.State).To(BeEmpty())
+	})
+
+	It("requires the current UpdatingVersion, AllMachinesReady, and Ready conditions for node-pool success", func() {
+		order := newOrder()
+		pool := newPool("compute", "compute-id")
 		pool.Status.Version = "4.18.0"
 		pool.Status.Conditions = []hypershiftv1beta1.NodePoolCondition{
-			{Type: hypershiftv1beta1.NodePoolUpdatingVersionConditionType, Status: "False", ObservedGeneration: 2},
-			{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: "True", ObservedGeneration: 2},
-			{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: "False", ObservedGeneration: 1},
+			{Type: hypershiftv1beta1.NodePoolUpdatingVersionConditionType, Status: corev1.ConditionFalse, ObservedGeneration: 2},
+			{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue, ObservedGeneration: 2},
+			{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue, ObservedGeneration: 2},
 		}
 		recordUpgradeObservations(order, &hypershiftv1beta1.HostedCluster{}, []hypershiftv1beta1.NodePool{pool})
-		Expect(order.Status.NodeRequests[0].UpgradeObservation.State).NotTo(Equal(v1alpha1.UpgradeObservationSucceeded))
-		pool.Status.Conditions[2].Status = "True"
-		recordUpgradeObservations(order, &hypershiftv1beta1.HostedCluster{}, []hypershiftv1beta1.NodePool{pool})
 		Expect(order.Status.NodeRequests[0].UpgradeObservation.State).To(Equal(v1alpha1.UpgradeObservationSucceeded))
-		pool.Status.Conditions[1] = hypershiftv1beta1.NodePoolCondition{Type: hypershiftv1beta1.NodePoolValidReleaseImageConditionType,
-			Status: "False", ObservedGeneration: 2, Reason: "ValidationFailed"}
-		pool.Status.Conditions = append(pool.Status.Conditions, hypershiftv1beta1.NodePoolCondition{
-			Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: "True", ObservedGeneration: 2})
-		pool.Status.Version = "4.17.0"
-		recordUpgradeObservations(order, &hypershiftv1beta1.HostedCluster{}, []hypershiftv1beta1.NodePool{pool})
-		Expect(order.Status.NodeRequests[0].UpgradeObservation.State).To(Equal(v1alpha1.UpgradeObservationFailed))
+		Expect(order.Status.NodeRequests[0].UpgradeObservation.ReadyAtVersion).To(BeTrue())
+	})
+
+	DescribeTable("does not report node-pool success without each current signal", func(change func(*hypershiftv1beta1.NodePool)) {
+		order := newOrder()
+		pool := newPool("compute", "compute-id")
 		pool.Status.Version = "4.18.0"
+		pool.Status.Conditions = []hypershiftv1beta1.NodePoolCondition{
+			{Type: hypershiftv1beta1.NodePoolUpdatingVersionConditionType, Status: corev1.ConditionFalse, ObservedGeneration: 2},
+			{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue, ObservedGeneration: 2},
+			{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue, ObservedGeneration: 2},
+		}
+		change(&pool)
 		recordUpgradeObservations(order, &hypershiftv1beta1.HostedCluster{}, []hypershiftv1beta1.NodePool{pool})
-		Expect(order.Status.NodeRequests[0].UpgradeObservation.ReadyAtVersion).To(BeFalse())
-		entry := &privatev1.ClusterUpgradeHistoryEntry{}
-		entry.SetTargetVersion("4.18.0")
-		entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING)
-		entry.SetStateTransitionTime(timestamppb.New(time.Now().Add(-time.Minute)))
-		syncUpgradeEntry(entry, order.Status.NodeRequests[0].UpgradeObservation, time.Now())
-		Expect(entry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED))
-		Expect(entry.GetMessage()).To(ContainSubstring("ValidationFailed"))
+		Expect(order.Status.NodeRequests[0].UpgradeObservation.State).NotTo(Equal(v1alpha1.UpgradeObservationSucceeded))
+	},
+		Entry("status version is absent", func(pool *hypershiftv1beta1.NodePool) { pool.Status.Version = "" }),
+		Entry("UpdatingVersion is absent", func(pool *hypershiftv1beta1.NodePool) {
+			pool.Status.Conditions = pool.Status.Conditions[1:]
+		}),
+		Entry("UpdatingVersion is true", func(pool *hypershiftv1beta1.NodePool) {
+			pool.Status.Conditions[0].Status = corev1.ConditionTrue
+		}),
+		Entry("AllMachinesReady is false", func(pool *hypershiftv1beta1.NodePool) {
+			pool.Status.Conditions[1].Status = corev1.ConditionFalse
+		}),
+		Entry("Ready is false", func(pool *hypershiftv1beta1.NodePool) {
+			pool.Status.Conditions[2].Status = corev1.ConditionFalse
+		}),
+		Entry("Ready is stale", func(pool *hypershiftv1beta1.NodePool) {
+			pool.Status.Conditions[2].ObservedGeneration = 1
+		}),
+	)
+
+	It("does not report a NodePool release condition as terminal failure", func() {
+		order := newOrder()
+		pool := newPool("compute", "compute-id")
+		pool.Status.Conditions = []hypershiftv1beta1.NodePoolCondition{{
+			Type:   hypershiftv1beta1.NodePoolValidReleaseImageConditionType,
+			Status: corev1.ConditionFalse, ObservedGeneration: 2, Reason: "ValidationFailed",
+		}}
+		recordUpgradeObservations(order, &hypershiftv1beta1.HostedCluster{}, []hypershiftv1beta1.NodePool{pool})
+		Expect(order.Status.NodeRequests[0].UpgradeObservation.State).To(BeEmpty())
 	})
 
 	It("does not promote failed feedback with a stale readiness bit", func() {
@@ -212,7 +324,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 		Expect(order.Status.NodeRequests[1].UpgradeObservation).To(BeNil())
 	})
 
-	It("updates only observed versions with a matching component history entry", func() {
+	It("does not copy attempt observations into independently observed versions", func() {
 		order := newOrder()
 		order.Status.UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "cp-id", Version: "4.18.0"}
 		order.Status.NodeRequests[0].UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "compute-id", Version: "4.17.0"}
@@ -241,9 +353,46 @@ var _ = Describe("upgrade attempt correlation", func() {
 		status.SetUpgradeHistory([]*privatev1.ClusterUpgradeHistoryEntry{compute, cp})
 		remote.SetStatus(status)
 		syncClusterOrderUpgradeObservations(order, remote)
-		Expect(remote.GetStatus().GetObservedVersion()).To(Equal("4.18.0"))
-		Expect(remote.GetStatus().GetNodeSets()["compute"].GetObservedVersion()).To(Equal("4.17.0"))
+		Expect(remote.GetStatus().GetObservedVersion()).To(Equal("4.17.0"))
+		Expect(remote.GetStatus().GetNodeSets()["compute"].GetObservedVersion()).To(BeEmpty())
 		Expect(remote.GetStatus().GetNodeSets()["gpu"].GetObservedVersion()).To(Equal("4.16.0"))
+	})
+
+	It("requires the target version for control-plane progress and success attribution", func() {
+		component := &privatev1.ClusterUpgradeComponent{}
+		component.SetControlPlane(&emptypb.Empty{})
+		entry := privatev1.ClusterUpgradeHistoryEntry_builder{
+			Component: component, TargetVersion: "4.18.0",
+			State: privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
+		}.Build()
+		observation := &v1alpha1.UpgradeObservation{
+			State: v1alpha1.UpgradeObservationProgressing, Version: "4.19.0",
+		}
+		syncUpgradeEntry(entry, observation, time.Now())
+		Expect(entry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+		observation.Version = "4.18.0"
+		syncUpgradeEntry(entry, observation, time.Now())
+		Expect(entry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
+		observation.State = v1alpha1.UpgradeObservationSucceeded
+		observation.Version = "4.19.0"
+		syncUpgradeEntry(entry, observation, time.Now())
+		Expect(entry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
+	})
+
+	It("does not infer node-pool progress from a target status version alone", func() {
+		component := &privatev1.ClusterUpgradeComponent{}
+		component.SetNodeSetId("compute")
+		entry := privatev1.ClusterUpgradeHistoryEntry_builder{
+			Component: component, TargetVersion: "4.18.0",
+			State: privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
+		}.Build()
+		observation := &v1alpha1.UpgradeObservation{Version: "4.18.0"}
+		syncUpgradeEntry(entry, observation, time.Now())
+		Expect(entry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+		observation.State = v1alpha1.UpgradeObservationProgressing
+		observation.Version = "4.17.0"
+		syncUpgradeEntry(entry, observation, time.Now())
+		Expect(entry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
 	})
 
 	It("updates every component independently when attempt IDs are shared", func() {
@@ -298,7 +447,9 @@ var _ = Describe("upgrade attempt correlation", func() {
 		remote.SetSpec(privatev1.ClusterSpec_builder{ControlPlaneAttemptId: "cp-id"}.Build())
 		remote.SetStatus(privatev1.ClusterStatus_builder{ObservedVersion: "4.17.0",
 			UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{cp}}.Build())
-		order.Status.UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "cp-id", State: v1alpha1.UpgradeObservationProgressing}
+		order.Status.UpgradeObservation = &v1alpha1.UpgradeObservation{
+			AttemptID: "cp-id", State: v1alpha1.UpgradeObservationProgressing, Version: "4.18.0",
+		}
 		syncClusterOrderUpgradeObservationsAt(order, remote, now.Add(5*time.Minute))
 		Expect(cp.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
 		Expect(cp.GetStateTransitionTime().AsTime()).To(Equal(now.Add(5 * time.Minute)))
@@ -311,7 +462,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 		order.Status.UpgradeObservation.Version = "4.18.0"
 		syncClusterOrderUpgradeObservationsAt(order, remote, now.Add(46*time.Minute))
 		Expect(cp.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
-		Expect(remote.GetStatus().GetObservedVersion()).To(Equal("4.18.0"))
+		Expect(remote.GetStatus().GetObservedVersion()).To(Equal("4.17.0"))
 	})
 
 	It("times out a pending node pool ten minutes after acceptance", func() {
@@ -417,14 +568,32 @@ var _ = Describe("upgrade attempt correlation", func() {
 		Expect(hasUpgradeAwaitingTimeout(remote)).To(BeFalse())
 	})
 
-	It("observes a removed NodeSet while its stamped NodePool still exists", func() {
+	It("propagates a removed NodeSet's live NodePool progress", func() {
 		order := newOrder()
 		order.Spec.NodeRequests = order.Spec.NodeRequests[:1]
 		order.Annotations[v1alpha1.UpgradeAttemptIDsAnnotation] = `{"nodeSets":{"compute":"compute-id"}}`
 		pool := newPool("gpu", "gpu-id")
+		pool.Status.Conditions = []hypershiftv1beta1.NodePoolCondition{{
+			Type:   hypershiftv1beta1.NodePoolUpdatingVersionConditionType,
+			Status: corev1.ConditionTrue, ObservedGeneration: pool.Generation,
+		}}
 		recordUpgradeObservations(order, &hypershiftv1beta1.HostedCluster{}, []hypershiftv1beta1.NodePool{pool})
-		Expect(order.Status.NodeRequests[1].UpgradeObservation).To(Equal(
-			&v1alpha1.UpgradeObservation{AttemptID: "gpu-id", Version: "4.17.0"}))
+		Expect(order.Status.NodeRequests[1].UpgradeObservation.State).To(Equal(v1alpha1.UpgradeObservationProgressing))
+		Expect(order.Status.NodeRequests[1].UpgradeObservation.Version).To(Equal("4.17.0"))
+		component := &privatev1.ClusterUpgradeComponent{}
+		component.SetNodeSetId("gpu")
+		entry := privatev1.ClusterUpgradeHistoryEntry_builder{
+			AttemptId: "gpu-id", Component: component, TargetVersion: "4.18.0",
+			State: privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
+		}.Build()
+		remote := privatev1.Cluster_builder{
+			Spec: &privatev1.ClusterSpec{},
+			Status: privatev1.ClusterStatus_builder{
+				UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{entry},
+			}.Build(),
+		}.Build()
+		syncClusterOrderUpgradeObservations(order, remote)
+		Expect(entry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
 	})
 
 	DescribeTable("retains a removed NodeSet until its NodePool is absent from a successful list", func(initialState, finalState privatev1.ClusterUpgradeState) {
@@ -468,16 +637,16 @@ var _ = Describe("upgrade attempt correlation", func() {
 			AttemptID: "gpu-id", Version: "4.17.0",
 		}
 		syncClusterOrderUpgradeObservations(order, remote)
-		Expect(remote.GetStatus().GetNodeSets()["gpu"].GetObservedVersion()).To(Equal("4.17.0"))
+		Expect(remote.GetStatus().GetNodeSets()["gpu"].GetObservedVersion()).To(Equal("4.16.0"))
 		order.Status.NodeRequests[1].UpgradeObservation.AttemptID = "stale-id"
 		order.Status.NodeRequests[1].UpgradeObservation.Version = "4.18.0"
 		syncClusterOrderUpgradeObservations(order, remote)
-		Expect(remote.GetStatus().GetNodeSets()["gpu"].GetObservedVersion()).To(Equal("4.17.0"))
+		Expect(remote.GetStatus().GetNodeSets()["gpu"].GetObservedVersion()).To(Equal("4.16.0"))
 
-		Expect(client.Delete(context.Background(), &pool)).To(Succeed())
 		Expect(reconciler.handleNodePools(context.Background(), order, &hypershiftv1beta1.NodePoolList{})).To(Succeed())
 		Expect(order.Status.NodeRequests).To(HaveLen(1))
 		Expect(order.Status.NodeRequests[0].NodeSet).To(Equal("compute"))
+		Expect(client.Delete(context.Background(), &pool)).To(Succeed())
 		Expect(syncRemovedNodeSetUpgrades(context.Background(), client, order, remote)).To(Succeed())
 		Expect(remote.GetStatus().GetNodeSets()).NotTo(HaveKey("gpu"))
 		Expect(entry.GetState()).To(Equal(finalState))

@@ -72,18 +72,16 @@ export const useClusterVersions = (
     (reply) => reply.items,
   );
 
-export const useClusterVersion = (id: string | undefined) => {
-  const trimmedId = id?.trim() ?? '';
-  return useGetResource(
+export const useClusterVersion = (id: string | undefined) =>
+  useGetResource(
     ClusterVersions,
-    { id: trimmedId },
-    { enabled: Boolean(trimmedId) },
+    { id: id ?? '' },
+    { enabled: Boolean(id) },
     (reply) => reply.object,
   );
-};
 
 export const useConfiguredClusterVersion = (reference: ClusterVersionReference | undefined) => {
-  const id = reference?.id.trim() || undefined;
+  const id = reference?.id;
   const name = reference?.name.trim() || undefined;
   const byId = useClusterVersion(id);
   const byName = useClusterVersions(

@@ -8,7 +8,6 @@ import { type Cluster, ClusterSchema, Clusters } from '@osac/types';
 
 import { useCluster, useClusters, useDeleteCluster, useProvisionCluster } from './cluster';
 import { useSession } from '../../hooks/use-session';
-import { createMockConnectTransport } from '../../test-utils/createMockConnectTransport';
 import { TestProviders } from '../../test-utils/TestProviders';
 import { useUpdateResource } from '../use-resource';
 
@@ -84,17 +83,26 @@ describe('Cluster resource hooks', () => {
     await waitFor(() => expect(result.current.clusters.data?.[0]?.id).toBe('cluster-2'));
   });
 
-  it('trims Get IDs and leaves a blank ID idle', async () => {
-    const transport = createMockConnectTransport({ clusters: [makeCluster('cluster-1')] });
+  it('forwards Get IDs unchanged and leaves an empty ID idle', async () => {
+    let requestedId: string | undefined;
+    const transport = createRouterTransport((router) => {
+      router.service(Clusters, {
+        get: (request) => {
+          requestedId = request.id;
+          return { object: makeCluster('cluster-1') };
+        },
+      });
+    });
     const { result } = renderHook(
       () => ({
         found: useCluster('  cluster-1  '),
-        blank: useCluster('   '),
+        blank: useCluster(''),
       }),
       { wrapper: makeWrapper(transport) },
     );
 
     await waitFor(() => expect(result.current.found.isSuccess).toBe(true));
+    expect(requestedId).toBe('  cluster-1  ');
     expect(result.current.found.data?.id).toBe('cluster-1');
     expect(result.current.blank.fetchStatus).toBe('idle');
     expect(result.current.blank.data).toBeUndefined();

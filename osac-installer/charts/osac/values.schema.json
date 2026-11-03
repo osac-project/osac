@@ -1304,7 +1304,7 @@
               "properties": {
                 "hostname": {
                   "type": "string",
-                  "description": "AAP gateway route hostname"
+                  "description": "Unused; the bootstrap job derives the AAP gateway hostname from aap.aap.instance.name"
                 }
               },
               "additionalProperties": false
@@ -1314,7 +1314,7 @@
               "properties": {
                 "hostname": {
                   "type": "string",
-                  "description": "AAP automation controller route hostname"
+                  "description": "Unused; the bootstrap job derives the AAP controller hostname from aap.aap.instance.name"
                 }
               },
               "additionalProperties": false

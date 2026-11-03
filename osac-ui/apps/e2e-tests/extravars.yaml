@@ -32,10 +32,6 @@ instance_type:
   description: 'Instance type created by e2e test'
   vcpus: 4
   memory_gib: 16
-  gpu:
-    count: 1
-    resource_name: 'nvidia.com/A100'
-    pci_device_selector: '10DE:20B0'
 
 disk_image:
   # Playwright appends a per-run suffix so teardown only targets this run's image.

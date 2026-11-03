@@ -126,15 +126,7 @@ func (s *PrivateCatalogPricingInputsServer) List(ctx context.Context,
 	// One sweep of both catalog tables is reused for the cache's TTL, and concurrent Lists collapse into a single
 	// sweep; the aggregated rows are shared read-only with every caller served from the entry.
 	all, err := s.inventoryCache.get(ctx, catalogInventoryKey{}, func(ctx context.Context) ([]*privatev1.CatalogPricingInput, error) {
-		computeItems, err := fetchAllPages(ctx, s.computeInstanceCatalogItemsDao)
-		if err != nil {
-			return nil, err
-		}
-		clusterItems, err := fetchAllPages(ctx, s.clusterCatalogItemsDao)
-		if err != nil {
-			return nil, err
-		}
-		return aggregateCatalogPricingInputs(computeItems, clusterItems), nil
+		return sweepCatalogInventory(ctx, s.computeInstanceCatalogItemsDao, s.clusterCatalogItemsDao)
 	})
 	if err != nil {
 		return nil, err
@@ -145,17 +137,8 @@ func (s *PrivateCatalogPricingInputsServer) List(ctx context.Context,
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %s", err)
 	}
 
-	// Pagination runs in int so a large limit cannot overflow int32 arithmetic: offset 1 with limit
-	// math.MaxInt32 used to wrap start+limit negative and panic the handler with a slice bound error.
 	total := len(all)
-	offset := max(int(request.GetOffset()), 0)
-	limit := int(request.GetLimit())
-	if limit <= 0 {
-		limit = total
-	}
-	start := min(offset, total)
-	end := min(start+limit, total)
-	page := all[start:end]
+	page := paginate(all, request.GetOffset(), request.GetLimit())
 
 	return privatev1.CatalogPricingInputsListResponse_builder{
 		Size:  int32(len(page)), // #nosec G115 -- bounded by catalog size
@@ -180,4 +163,21 @@ func fetchAllPages[O dao.Object](ctx context.Context, d *dao.GenericDAO[O]) ([]O
 		}
 	}
 	return all, nil
+}
+
+// sweepCatalogInventory reads every draft and published catalog item from both catalog tables and aggregates the
+// distinct (service, dimension, value) inventory. Both pricing servers' inventory caches load through it, so the
+// sweep lives in one place.
+func sweepCatalogInventory(ctx context.Context,
+	computeDao *dao.GenericDAO[*privatev1.ComputeInstanceCatalogItem],
+	clusterDao *dao.GenericDAO[*privatev1.ClusterCatalogItem]) ([]*privatev1.CatalogPricingInput, error) {
+	computeItems, err := fetchAllPages(ctx, computeDao)
+	if err != nil {
+		return nil, err
+	}
+	clusterItems, err := fetchAllPages(ctx, clusterDao)
+	if err != nil {
+		return nil, err
+	}
+	return aggregateCatalogPricingInputs(computeItems, clusterItems), nil
 }

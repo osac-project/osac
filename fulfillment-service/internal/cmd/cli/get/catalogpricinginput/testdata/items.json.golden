@@ -1,0 +1,27 @@
+[
+  {
+    "catalog_items": [
+      {
+        "id": "c1",
+        "name": "basic-vm",
+        "published": true,
+        "title": "Basic VM"
+      }
+    ],
+    "dimension": "instance_type",
+    "service": "compute_instance",
+    "value": "m1.small"
+  },
+  {
+    "accepts_any_value": true,
+    "catalog_items": [
+      {
+        "id": "c2",
+        "name": "flex-cluster",
+        "title": "Flex Cluster"
+      }
+    ],
+    "dimension": "node_count",
+    "service": "cluster"
+  }
+]

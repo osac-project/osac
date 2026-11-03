@@ -56,6 +56,11 @@ applicable integration tests separately to validate workflow behavior.
 
 ## Coverage gaps
 
+Stale SecurityGroup ACL pruning remains tracked by
+[OSAC-4888](https://redhat.atlassian.net/browse/OSAC-4888). See the
+[Netris operation inventory](../../osac-aap/docs/netris-idempotency-inventory.md)
+for the current limits; fixture coverage does not close this live-provider gap.
+
 Subnet lifecycle, real DHCP client leases, same-Subnet L2 traffic, service
 restart, retry recovery, `/30` addressing, peer-preserving cleanup, BMI-shaped
 access-port attachment, and AAP DHCP lease discovery require the deployed lab

@@ -9,7 +9,7 @@ import {
 
 import { cel } from '../cel';
 import { type ListParams } from '../types';
-import { useGetResource, useListResource } from '../use-resource';
+import { useGetResource, useListAllResources, useListResource } from '../use-resource';
 import { matchesClusterVersionReference } from './cluster-version-reference';
 
 type ClusterVersionsQueryOptions = {
@@ -80,12 +80,16 @@ export const useClusterVersion = (id: string | undefined) =>
     (reply) => reply.object,
   );
 
-export const useConfiguredClusterVersion = (reference: ClusterVersionReference | undefined) => {
+export const useConfiguredClusterVersion = (
+  reference: ClusterVersionReference | undefined,
+  ownerTenant?: string,
+) => {
   const id = reference?.id;
   const name = reference?.name.trim() || undefined;
   const byId = useClusterVersion(id);
-  const byName = useClusterVersions(
-    { filter: clusterVersionNamesFilter(name ? [name] : []) },
+  const byName = useListAllResources(
+    ClusterVersions,
+    name ? clusterVersionNamesFilter([name]) : undefined,
     { enabled: !id && Boolean(name) },
   );
   const query = id ? byId : byName;
@@ -94,7 +98,13 @@ export const useConfiguredClusterVersion = (reference: ClusterVersionReference |
   const isError = query.isError && !notFound;
   const candidates = id ? (byId.data ? [byId.data] : []) : (byName.data ?? []);
   const matches = reference
-    ? candidates.filter((version) => matchesClusterVersionReference(reference, version))
+    ? candidates.filter(
+        (version) =>
+          matchesClusterVersionReference(reference, version) &&
+          (ownerTenant === undefined ||
+            version.metadata?.tenant === ownerTenant ||
+            version.metadata?.tenant === 'shared'),
+      )
     : [];
 
   return {

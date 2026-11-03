@@ -245,6 +245,69 @@ describe('useConfiguredClusterVersion', () => {
     expect(capturedFilter).toContain(String(ClusterVersionState.OBSOLETE));
   });
 
+  it('finds a name-only reference after earlier pages of other scopes', async () => {
+    const configured = create(ClusterVersionSchema, {
+      id: 'configured',
+      metadata: { name: 'current', project: 'project-a' },
+      spec: { version: '4.17.0', state: ClusterVersionState.ACTIVE, enabled: true },
+    });
+    const otherScopes = Array.from({ length: 100 }, (_, index) =>
+      create(ClusterVersionSchema, {
+        id: `other-${index}`,
+        metadata: { name: 'current', project: `other-project-${index}` },
+        spec: { version: '4.17.0', state: ClusterVersionState.ACTIVE, enabled: true },
+      }),
+    );
+    const versions = [...otherScopes, configured];
+    const offsets: number[] = [];
+    const transport = createRouterTransport((router) => {
+      router.service(ClusterVersions, {
+        list: (request) => {
+          const offset = request.offset ?? 0;
+          offsets.push(offset);
+          const items = versions.slice(offset, offset + (request.limit || 100));
+          return { items, size: items.length, total: versions.length };
+        },
+      });
+    });
+    const { wrapper } = makeWrapper(transport);
+    const reference = create(ClusterVersionReferenceSchema, {
+      name: 'current',
+      project: 'project-a',
+    });
+    const { result } = renderHook(() => useConfiguredClusterVersion(reference), { wrapper });
+
+    await waitFor(() => expect(result.current.data?.id).toBe(configured.id));
+    expect(offsets).toEqual([0, 100]);
+  });
+
+  it('resolves a name-only reference in the owning tenant when names overlap', async () => {
+    const ownVersion = create(ClusterVersionSchema, {
+      id: 'own-version',
+      metadata: { name: 'current', project: 'project-a', tenant: 'tenant-a' },
+      spec: { version: '4.17.0', state: ClusterVersionState.ACTIVE, enabled: true },
+    });
+    const otherVersion = create(ClusterVersionSchema, {
+      id: 'other-version',
+      metadata: { name: 'current', project: 'project-a', tenant: 'tenant-b' },
+      spec: { version: '4.17.0', state: ClusterVersionState.ACTIVE, enabled: true },
+    });
+    const transport = createMockConnectTransport(
+      {},
+      { onClusterVersionList: () => ({ items: [otherVersion, ownVersion] }) },
+    );
+    const { wrapper } = makeWrapper(transport);
+    const reference = create(ClusterVersionReferenceSchema, {
+      name: 'current',
+      project: 'project-a',
+    });
+    const { result } = renderHook(() => useConfiguredClusterVersion(reference, 'tenant-a'), {
+      wrapper,
+    });
+
+    await waitFor(() => expect(result.current.data?.id).toBe(ownVersion.id));
+  });
+
   it('returns unresolved for an absent, missing, mismatched or ambiguous reference', async () => {
     const configured = makeClusterVersion('4-15-0');
     const duplicate = create(ClusterVersionSchema, {

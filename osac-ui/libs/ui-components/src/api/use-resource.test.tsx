@@ -121,6 +121,31 @@ describe('resource queries', () => {
     expect(queryClient.getQueryCache().findAll({ queryKey: [Tenants.typeName] })).toHaveLength(2);
   });
 
+  it('waits to fetch every page until enabled', async () => {
+    const tenant = makeTenant('tenant-1');
+    let calls = 0;
+    const transport = createRouterTransport((router) => {
+      router.service(Tenants, {
+        list: () => {
+          calls += 1;
+          return { items: [tenant], size: 1, total: 1 };
+        },
+      });
+    });
+    const { wrapper } = makeWrapper(transport);
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useListAllResources(Tenants, undefined, { enabled }),
+      { initialProps: { enabled: false }, wrapper },
+    );
+
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(calls).toBe(0);
+
+    rerender({ enabled: true });
+    await waitFor(() => expect(result.current.data?.map(({ id }) => id)).toEqual(['tenant-1']));
+    expect(calls).toBe(1);
+  });
+
   it('cancels an in-flight fetch-all page when its query is unobserved', async () => {
     const tenants = [makeTenant('0'), makeTenant('1')];
     const offsets: number[] = [];

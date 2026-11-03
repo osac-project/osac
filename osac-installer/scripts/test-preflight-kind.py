@@ -45,8 +45,6 @@ JSON_LINE = re.compile(r"(?m)^OSAC-PREFLIGHT-JSON v1: (\{.*\})$")
 RELEASE = "osac"
 MARKER = "OSAC-HOOK-LOG-MARKER"
 FAST_FAIL_SECONDS = 60
-CHECK_IDS = tuple(check["id"] for check in yaml.safe_load((CHART / "files/preflight/catalog.yaml").read_text()))
-CHECK_STATUSES = SCHEMA["$defs"]["result"]["properties"]["status"]["enum"]
 RESTORATION_LABELS = ("uncordon", "StorageClass reset", "prerequisite creation", "CRD apply", "CRD readiness")
 
 
@@ -74,18 +72,29 @@ class Cluster:
         return self.run("kubectl", "--context", self.context, *args, check=check, stdin=stdin, timeout=timeout)
 
     def wait_for_crd(self, name: str) -> None:
-        """Observe Established=True within one deadline, tolerating initially absent conditions."""
+        """Wait within one deadline for an Established condition that is not generation-stale."""
         deadline = time.monotonic() + 60
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             proc = self.kubectl("get", "crd", name, "-o", "json", timeout=remaining)
-            conditions = (json.loads(proc.stdout).get("status") or {}).get("conditions") or []
+            document = json.loads(proc.stdout)
+            status = document.get("status") or {}
+            conditions = status.get("conditions") or []
             if time.monotonic() >= deadline:
                 break
-            if any(condition.get("type") == "Established" and condition.get("status") == "True"
-                   for condition in conditions):
+            generation = (document.get("metadata") or {}).get("generation")
+            for condition in conditions:
+                if condition.get("type") != "Established" or condition.get("status") != "True":
+                    continue
+                observed = condition.get("observedGeneration")
+                if type(observed) is not int or not -(2**63) <= observed < 2**63:
+                    observed = status.get("observedGeneration")
+                if (type(generation) is int and -(2**63) <= generation < 2**63
+                        and type(observed) is int and -(2**63) <= observed < 2**63
+                        and observed < generation):
+                    continue
                 return
             time.sleep(min(1, max(0, deadline - time.monotonic())))
         raise AssertionError(f"timed out waiting for crd/{name} to become Established (60s)")
@@ -162,47 +171,6 @@ def failure_report(proc: subprocess.CompletedProcess[str]) -> dict:
 
 def blocking_ids(report: dict) -> set[str]:
     return {r["id"] for r in report["results"] if r["blocking"]}
-
-
-def helm_diagnostics(proc: subprocess.CompletedProcess[str]) -> str:
-    """Summarize validated check outcomes without exposing arbitrary Helm output."""
-    code = proc.returncode if type(proc.returncode) is int else "unknown"
-    try:
-        report = failure_report(proc)
-        statuses = {entry["id"]: entry["status"] for entry in report["results"]
-                    if entry["id"] in CHECK_IDS and entry["status"] in CHECK_STATUSES}
-        summary = ", ".join(f"{name}={statuses[name]}" for name in CHECK_IDS if name in statuses)
-        return f"Helm exit code: {code}; checks: {summary or 'no known checks'}"
-    except Exception:
-        return f"Helm exit code: {code}; preflight report unavailable"
-
-
-def print_failure(error: Exception, seen: set[int] | None = None) -> None:
-    """Show chains and groups using fixed types, operation labels and harness line numbers only."""
-    if seen is None:
-        seen = set()
-    if id(error) in seen:
-        return
-    seen.add(id(error))
-    context = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
-    if context is not None:
-        print_failure(context, seen)
-    for known_type in (ExceptionGroup, AssertionError, json.JSONDecodeError, jsonschema.ValidationError,
-                       subprocess.TimeoutExpired, OSError, ValueError, Exception):
-        if isinstance(error, known_type):
-            print(known_type.__name__)
-            break
-    frame = error.__traceback__
-    while frame is not None:
-        if frame.tb_frame.f_code.co_filename == __file__:
-            print(f"  test-preflight-kind.py:{frame.tb_lineno}")
-        frame = frame.tb_next
-    if isinstance(error, ExceptionGroup):
-        for label in RESTORATION_LABELS:
-            if error.message == label:
-                print(f"  restoration: {label}")
-        for child in error.exceptions:
-            print_failure(child, seen)
 
 
 # ----------------------------------------------------------------- fixtures
@@ -368,42 +336,45 @@ def case_fresh_install_lists_every_fault_once(c: Cluster) -> None:
     c.kubectl("cordon", node)
     c.kubectl("delete", "secret", "fulfillment-controller-credentials", "-n", c.ns)
     c.kubectl("delete", "crd", CERT_MANAGER_CRD)
-    proc = None
+    case_error = None
     try:
-        try:
-            started = time.monotonic()
-            proc = c.install("--wait")
-            elapsed = time.monotonic() - started
-            report = failure_report(proc)
-            assert elapsed < FAST_FAIL_SECONDS, f"the preflight took {elapsed:.0f}s"
-            assert blocking_ids(report) == {"default-storageclass", "nodes-schedulable", "controller-credentials", "cert-manager-crds"}, blocking_ids(report)
-            issuer = result(report, "cert-issuer-ready")
-            assert issuer["status"] == "unknown" and issuer["dependsOn"] == ["cert-manager-crds"], issuer
-            assert "Nothing was changed" in proc.stderr
-            for fix in ("oc patch storageclass", "Uncordon a node", "Install the cert-manager Operator", "Create the controller credential Secret"):
-                assert fix in proc.stderr, f"missing fix text: {fix}"
-            assert c.releases() == [], "a failed render must not leave a release behind"
-            assert c.report_configmap() is None, "a failed render must not create the report"
-        finally:
-            errors = []
-            actions = (
-                lambda: c.kubectl("uncordon", node),
-                lambda: set_default_storageclass(c, sc, "true"),
-                lambda: create_namespace_prerequisites(c),
-                lambda: c.apply(CRD.format(**STUB_CRDS[0])),
-                lambda: c.wait_for_crd(CERT_MANAGER_CRD),
-            )
-            for label, action in zip(RESTORATION_LABELS, actions, strict=True):
-                try:
-                    action()
-                except Exception as error:
-                    errors.append(ExceptionGroup(label, [error]))
-            if errors:
-                raise ExceptionGroup("fixture restoration failed", errors)
-    except Exception:
-        if proc is not None:
-            print(helm_diagnostics(proc))
+        started = time.monotonic()
+        proc = c.install("--wait")
+        elapsed = time.monotonic() - started
+        report = failure_report(proc)
+        assert elapsed < FAST_FAIL_SECONDS, f"the preflight took {elapsed:.0f}s"
+        assert blocking_ids(report) == {"default-storageclass", "nodes-schedulable", "controller-credentials", "cert-manager-crds"}, blocking_ids(report)
+        issuer = result(report, "cert-issuer-ready")
+        assert issuer["status"] == "unknown" and issuer["dependsOn"] == ["cert-manager-crds"], issuer
+        assert "Nothing was changed" in proc.stderr
+        for fix in ("oc patch storageclass", "Uncordon a node", "Install the cert-manager Operator", "Create the controller credential Secret"):
+            assert fix in proc.stderr, f"missing fix text: {fix}"
+        assert c.releases() == [], "a failed render must not leave a release behind"
+        assert c.report_configmap() is None, "a failed render must not create the report"
+    except Exception as error:
+        case_error = error
         raise
+    finally:
+        errors = []
+        actions = (
+            lambda: c.kubectl("uncordon", node),
+            lambda: set_default_storageclass(c, sc, "true"),
+            lambda: create_namespace_prerequisites(c),
+            lambda: c.apply(CRD.format(**STUB_CRDS[0])),
+            lambda: c.wait_for_crd(CERT_MANAGER_CRD),
+        )
+        for label, action in zip(RESTORATION_LABELS, actions, strict=True):
+            try:
+                action()
+            except Exception as error:
+                errors.append(ExceptionGroup(label, [error]))
+        if errors:
+            labels = ", ".join(error.message for error in errors)
+            cleanup_error = ExceptionGroup(f"fixture restoration failed: {labels}", errors)
+            if case_error is not None:
+                print(f"Fixture restoration also failed: {labels}")
+                raise case_error from cleanup_error
+            raise cleanup_error
 
 
 def hook_report(stdout: str) -> dict:
@@ -716,7 +687,7 @@ CASES = [
 ]
 
 
-def run_cases() -> int:
+def main() -> int:
     """Prepare a disposable Kind fixture, run selected cases and always attempt final cleanup."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--context", help="kubeconfig context of a Kind cluster (default: the current context)")
@@ -726,11 +697,11 @@ def run_cases() -> int:
         ["kubectl", "config", "current-context"], capture_output=True, text=True, check=True
     ).stdout.strip()
     if not context.startswith("kind-"):
-        print("refusing to run: this test changes cluster-scoped state and needs a Kind cluster")
+        print(f"refusing to run on context {context!r}: this test changes cluster-scoped state and needs a Kind cluster")
         return 2
     c = Cluster(context)
-    c.run("helm", "version", "--short")
-    print("preflight kind test")
+    helm_version = c.run("helm", "version", "--short").stdout.strip()
+    print(f"preflight kind test: context={context} namespace={c.ns} helm={helm_version}")
     selected = [k for k in CASES if not args.only or any(o in k.__name__ for o in args.only)]
     failures = 0
     try:
@@ -743,22 +714,11 @@ def run_cases() -> int:
                 print(f"PASS {case.__name__} ({time.monotonic() - started:.0f}s)")
             except Exception as exc:  # noqa: BLE001 - report every case, then fail
                 failures += 1
-                print(f"FAIL {case.__name__}:")
-                print_failure(exc)
+                print(f"FAIL {case.__name__}: {exc}")
     finally:
         cleanup(c)
     print(f"{len(selected) - failures}/{len(selected)} cases passed")
     return 1 if failures else 0
-
-
-def main() -> int:
-    """Keep setup and teardown errors inside the same output-safe failure boundary as cases."""
-    try:
-        return run_cases()
-    except Exception as error:
-        print("FAIL harness setup or teardown:")
-        print_failure(error)
-        return 1
 
 
 if __name__ == "__main__":

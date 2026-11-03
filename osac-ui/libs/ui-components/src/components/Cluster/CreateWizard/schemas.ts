@@ -5,8 +5,14 @@ import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/ne
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 
 import type { ClusterNodeSetRow } from './fields';
-import { buildCidrSchema, cidrsOverlap, isValidCidr } from '../../../validation/cidr-validation';
+import { buildCidrSchema } from '../../../validation/cidr-validation';
 import { isValidSshPublicKey } from '../../ProvisioningWizard/credentialValidation';
+import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
+import {
+  clusterNetworkDoNotOverlapTest,
+  clusterNodeSetRowSchema,
+  uniqueNodeSetNamesTest,
+} from '../validation';
 
 export type ClusterWizardStepId = 'catalog' | 'general' | 'configuration' | 'networking' | 'review';
 
@@ -16,23 +22,7 @@ const lockedField = (valueSchema: yup.AnySchema) =>
     locked: yup.boolean(),
   });
 
-const nodeSetRowSchema = (t: TFunction) =>
-  yup.object({
-    rowId: yup.string().required(),
-    name: resourceNameSchema(t),
-    hostType: yup.string().required(t('Host type is required')),
-    size: yup
-      .string()
-      .required(t('Pool size is required'))
-      .test('pool-size-positive', t('Pool size must be greater than zero'), (value) => {
-        const parsed = Number(value?.trim());
-        return Number.isFinite(parsed) && parsed > 0;
-      }),
-  });
-
 const buildClusterFieldDefinitions = (t: TFunction) => {
-  const rowSchema = nodeSetRowSchema(t);
-
   return {
     catalogItemReference: yup.object({
       name: yup.string().required(t('Select a catalog item')),
@@ -54,55 +44,22 @@ const buildClusterFieldDefinitions = (t: TFunction) => {
     specNodeSetRows: lockedField(
       yup
         .array()
-        .of(rowSchema)
+        .of(clusterNodeSetRowSchema(t))
         .min(1, t('At least one node set is required'))
-        .test('unique-node-set-names', function (rows) {
-          const seenNames = new Set<string>();
-          for (const [rowIndex, row] of (rows ?? []).entries()) {
-            const name = row?.name?.trim() ?? '';
-            if (!name) {
-              continue;
-            }
-            if (seenNames.has(name)) {
-              return this.createError({
-                path: `${this.path}[${rowIndex}].name`,
-                message: t('Node set names must be unique'),
-              });
-            }
-            seenNames.add(name);
-          }
-          return true;
-        }),
+        .test('unique-node-set-names', uniqueNodeSetNamesTest(t)),
     ),
     specNetwork: yup
       .object({
-        podCidr: lockedField(buildCidrSchema(t, 'ipv4')),
-        serviceCidr: lockedField(buildCidrSchema(t, 'ipv4')),
+        podCidr: yup.object<ProvisioningFieldValue<string>>({
+          value: buildCidrSchema(t, 'ipv4'),
+          locked: yup.boolean(),
+        }),
+        serviceCidr: yup.object<ProvisioningFieldValue<string>>({
+          value: buildCidrSchema(t, 'ipv4'),
+          locked: yup.boolean(),
+        }),
       })
-      .test(
-        'service-cidr-no-overlap',
-        t('Service CIDR must not overlap the pod CIDR.'),
-        function (network) {
-          const cidrs = network as
-            | { podCidr?: { value?: string }; serviceCidr?: { value?: string } }
-            | undefined;
-          const podCidr = cidrs?.podCidr?.value ?? '';
-          const serviceCidr = cidrs?.serviceCidr?.value ?? '';
-          if (!serviceCidr.trim() || !podCidr.trim()) {
-            return true;
-          }
-          if (!isValidCidr(serviceCidr, 'ipv4') || !isValidCidr(podCidr, 'ipv4')) {
-            return true;
-          }
-          if (!cidrsOverlap(podCidr, serviceCidr, 'ipv4')) {
-            return true;
-          }
-          return this.createError({
-            path: `${this.path}.serviceCidr.value`,
-            message: t('Service CIDR must not overlap the pod CIDR.'),
-          });
-        },
-      ),
+      .test('service-cidr-no-overlap', clusterNetworkDoNotOverlapTest(t)),
     specAutoExternalIpAttachment: yup.boolean(),
   };
 };

@@ -42,6 +42,20 @@ export const getCatalogItemKind = (kind: CatalogItem): CatalogItemKind | undefin
   }
 };
 
+export const selectCatalogItemValue = <TVm, TBm, TCluster>(
+  item: CatalogItem,
+  values: { vm: TVm; bm: TBm; cluster: TCluster },
+): TVm | TBm | TCluster => {
+  switch (item.$typeName) {
+    case 'osac.public.v1.ComputeInstanceCatalogItem':
+      return values.vm;
+    case 'osac.public.v1.BareMetalInstanceCatalogItem':
+      return values.bm;
+    case 'osac.public.v1.ClusterCatalogItem':
+      return values.cluster;
+  }
+};
+
 export const catalogItemMetadataLabelEntries = (
   item: CatalogItem,
 ): Array<{ key: string; value: string }> => {
@@ -58,11 +72,7 @@ export const catalogItemMetadataLabelEntries = (
 export const searchableCatalogItemText = (item: CatalogItem): string => {
   const labels = item.metadata?.labels ?? {};
 
-  return [
-    item.description,
-    item.metadata?.name,
-    ...Object.entries(labels).map(([key, value]) => `${key} ${value}`),
-  ]
+  return [item.metadata?.name, ...Object.entries(labels).map(([key, value]) => `${key} ${value}`)]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
@@ -107,4 +117,9 @@ export const catalogItemDetailsPath = (item: CatalogItem): string => {
     default:
       return '#';
   }
+};
+
+export const catalogItemEditPath = (item: CatalogItem): string => {
+  const kind = getCatalogItemKind(item);
+  return kind ? `/catalog/${kind}/${item.id}/edit` : '#';
 };

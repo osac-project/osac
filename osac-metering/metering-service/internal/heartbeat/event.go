@@ -74,6 +74,7 @@ func New(
 	heartbeatTime time.Time,
 	lastAppliedOffset int64,
 	rulesRevision string,
+	externalBillingAccountID string,
 ) (cloudevents.Event, error) {
 	dimensions, err := decodeDimensions(key.Dimensions)
 	if err != nil {
@@ -97,6 +98,9 @@ func New(
 		HeartbeatTime:     formatTime(heartbeatTime),
 		LastAppliedOffset: lastAppliedOffset,
 		RulesRevision:     rulesRevision,
+	}
+	if externalBillingAccountID != "" {
+		data.ExternalBillingAccountID = &externalBillingAccountID
 	}
 	id := ID(tenant, key, from, to, heartbeatTime)
 

@@ -45,9 +45,11 @@ var heartbeatDataFields = [...]string{
 	"rules_revision",
 }
 
-// HeartbeatDataFields returns the JSON field names of HeartbeatData in struct field order,
-// excluding usage and billing_dimensions (the adapter flattens those separately). Returns a
-// fresh copy on each call so callers cannot mutate the canonical list.
+// HeartbeatDataFields returns the JSON field names of HeartbeatData in struct field order.
+// It excludes usage and billing_dimensions, which the adapter flattens separately, and
+// external_billing_account_id, which stays on the OSAC heartbeat and is not copied into
+// the provider payload. Returns a fresh copy on each call so callers cannot mutate the
+// canonical list.
 func HeartbeatDataFields() []string {
 	out := make([]string, len(heartbeatDataFields))
 	copy(out, heartbeatDataFields[:])

@@ -2,6 +2,7 @@ import { FC } from 'react';
 import { Label } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
+import type { ComputeInstanceCatalogItem } from '@osac/types';
 import CatalogItemLaunchButton from '@osac/ui-components/components/catalog/CatalogItemLaunchButton';
 import type { CatalogItemResourceLookups } from '@osac/ui-components/components/catalog/catalogItemResourceLookups';
 import CatalogItemResources from '@osac/ui-components/components/catalog/CatalogItemResources';
@@ -10,12 +11,13 @@ import { Timestamp } from '@osac/ui-components/components/Primitives/Timestamp';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField';
 import { useSession } from '@osac/ui-components/hooks/use-session';
 
-import CatalogItemActionsMenu from './CatalogItemActionsMenu';
+import CatalogItemActionsMenu from './CatalogItemActionsMenuForItem';
+import { type CatalogItem, catalogItemDetailsPath } from './catalogItemDisplay';
 import {
-  type CatalogItem,
-  catalogItemDetailsPath,
-  catalogItemTypeBadgeLabel,
-} from './catalogItemDisplay';
+  computeCatalogItemFields,
+  computeDiskImageReferenceFromPolicy,
+  computeInstanceTypeReferenceFromPolicy,
+} from './computeCatalogItemResourceDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface CatalogItemTableProps {
@@ -23,17 +25,21 @@ interface CatalogItemTableProps {
   resourceLookups: CatalogItemResourceLookups;
 }
 
+const isComputeCatalogItem = (item: CatalogItem): item is ComputeInstanceCatalogItem =>
+  item.$typeName === 'osac.public.v1.ComputeInstanceCatalogItem';
+
 const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups }) => {
   const { t } = useTranslation();
-  const { role } = useSession();
+  const { role, tenantId } = useSession();
   const nameLabel = t('Name');
   const statusLabel = t('Status');
   const configurationLabel = t('Configuration');
+  const instanceTypeLabel = t('Instance type');
+  const diskImageLabel = t('Disk image');
   const tenantLabel = t('Visibility');
   const createdLabel = t('Created');
-  const sourceLabel = t('Source');
-  const addedLabel = t('Added');
   const actionsLabel = t('Actions');
+  const isVmTable = items[0] ? isComputeCatalogItem(items[0]) : false;
 
   return (
     <Table aria-label={t('Catalog items')} variant="compact">
@@ -41,18 +47,16 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
         <Tr>
           <Th>{nameLabel}</Th>
           <Th>{statusLabel}</Th>
-          <Th>{configurationLabel}</Th>
-          {role === 'admin' ? (
+          {isVmTable ? (
             <>
-              <Th>{tenantLabel}</Th>
-              <Th>{createdLabel}</Th>
+              <Th>{instanceTypeLabel}</Th>
+              <Th>{diskImageLabel}</Th>
             </>
-          ) : role === 'tenant-admin' ? (
-            <>
-              <Th>{sourceLabel}</Th>
-              <Th>{addedLabel}</Th>
-            </>
-          ) : null}
+          ) : (
+            <Th>{configurationLabel}</Th>
+          )}
+          <Th>{tenantLabel}</Th>
+          <Th>{createdLabel}</Th>
           <Th aria-label={actionsLabel} />
         </Tr>
       </Thead>
@@ -60,11 +64,7 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
         {items.map((item) => (
           <Tr key={item.id}>
             <Td dataLabel={nameLabel}>
-              <ResourceNameField
-                resource={item}
-                detailsUrl={catalogItemDetailsPath(item)}
-                subTitle={catalogItemTypeBadgeLabel(item, t)}
-              />
+              <ResourceNameField resource={item} detailsUrl={catalogItemDetailsPath(item)} />
             </Td>
             <Td dataLabel={statusLabel}>
               {item.published ? (
@@ -75,31 +75,34 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
                 <Label isCompact>{t('Unpublished')}</Label>
               )}
             </Td>
-            <Td dataLabel={configurationLabel}>
-              <CatalogItemResources catalogItem={item} resourceLookups={resourceLookups} />
+            {isComputeCatalogItem(item) ? (
+              <>
+                <Td dataLabel={instanceTypeLabel}>
+                  {computeInstanceTypeReferenceFromPolicy(
+                    computeCatalogItemFields(item)?.instanceType,
+                  )?.name || '-'}
+                </Td>
+                <Td dataLabel={diskImageLabel}>
+                  {computeDiskImageReferenceFromPolicy(computeCatalogItemFields(item)?.diskImage)
+                    ?.name || '-'}
+                </Td>
+              </>
+            ) : (
+              <Td dataLabel={configurationLabel}>
+                <CatalogItemResources catalogItem={item} resourceLookups={resourceLookups} />
+              </Td>
+            )}
+            <Td dataLabel={tenantLabel}>
+              <CatalogItemTenant catalogItem={item} />
             </Td>
-            {role === 'admin' ? (
-              <>
-                <Td dataLabel={tenantLabel}>
-                  <CatalogItemTenant catalogItem={item} />
-                </Td>
-                <Td dataLabel={createdLabel}>
-                  <Timestamp value={item.metadata?.creationTimestamp} format="Time" />
-                </Td>
-              </>
-            ) : role === 'tenant-admin' ? (
-              <>
-                <Td dataLabel={sourceLabel}>{item.metadata?.creator || '-'}</Td>
-                <Td dataLabel={addedLabel}>
-                  <Timestamp value={item.metadata?.creationTimestamp} format="Date" />
-                </Td>
-              </>
-            ) : null}
+            <Td dataLabel={createdLabel}>
+              <Timestamp value={item.metadata?.creationTimestamp} />
+            </Td>
             <Td dataLabel={actionsLabel} isActionCell>
               {role === 'tenant-user' ? (
                 <CatalogItemLaunchButton isDisabled={!item.published} catalogItem={item} />
               ) : (
-                <CatalogItemActionsMenu item={item} role={role} />
+                <CatalogItemActionsMenu item={item} role={role} tenantId={tenantId} />
               )}
             </Td>
           </Tr>

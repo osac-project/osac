@@ -39,11 +39,16 @@ const buildBareMetalInstanceFieldDefinitions = (t: TFunction) => {
           (value) => isValidSshPublicKey(value),
         ),
     ),
-    specUserData: lockedField(yup.string()).when('userDataSource', {
-      is: (source: { value?: string }) => source?.value !== 'secret',
-      then: () => lockedField(userDataSchema(t)),
-      otherwise: () => lockedField(yup.string()),
-    }),
+    specUserData: lockedField(
+      yup.object({
+        source: yup.string().oneOf(['inline', 'secret']).required(),
+        inline: yup.string().when('source', {
+          is: 'inline',
+          then: () => userDataSchema(t),
+        }),
+        secret: yup.string(),
+      }),
+    ),
   };
 };
 
@@ -59,14 +64,14 @@ export const buildBareMetalInstanceStepSchema = (
   stepId: BareMetalWizardStepId,
   t: TFunction,
 ): yup.AnyObjectSchema | undefined => {
+  const fields = buildBareMetalInstanceFieldDefinitions(t);
+
   if (stepId === 'review') {
     return yup
       .object({
         spec: yup.object({
           sshKey: lockedField(yup.string()),
-          userDataSource: lockedField(yup.string()),
-          userData: lockedField(yup.string()),
-          userDataSecret: lockedField(yup.string()),
+          userData: fields.specUserData,
         }),
       })
       .test(
@@ -76,17 +81,18 @@ export const buildBareMetalInstanceStepSchema = (
           const spec = values?.spec as
             | {
                 sshKey?: { value?: string };
-                userDataSource?: { value?: string };
-                userData?: { value?: string };
-                userDataSecret?: { value?: string };
+                userData?: {
+                  value?: { source?: string; inline?: string; secret?: string };
+                };
               }
             | undefined;
-          const isSecretSource = spec?.userDataSource?.value === 'secret';
+          const userData = spec?.userData?.value;
+          const isSecretSource = userData?.source === 'secret';
           if (
             hasBareMetalAuthentication(
               spec?.sshKey?.value,
-              isSecretSource ? undefined : spec?.userData?.value,
-              isSecretSource ? spec?.userDataSecret?.value : undefined,
+              isSecretSource ? undefined : userData?.inline,
+              isSecretSource ? userData?.secret : undefined,
             )
           ) {
             return true;
@@ -95,8 +101,6 @@ export const buildBareMetalInstanceStepSchema = (
         },
       );
   }
-
-  const fields = buildBareMetalInstanceFieldDefinitions(t);
 
   switch (stepId) {
     case 'catalog':
@@ -115,9 +119,7 @@ export const buildBareMetalInstanceStepSchema = (
     case 'configuration':
       return yup.object({
         spec: yup.object({
-          userDataSource: lockedField(yup.string()),
           userData: fields.specUserData,
-          userDataSecret: lockedField(yup.string()),
           instanceType: lockedField(yup.string()),
           diskImage: lockedField(
             yup.object({

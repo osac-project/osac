@@ -577,7 +577,7 @@ func TestRestartKeepsStoppingLoopsInShutdownJoin(t *testing.T) {
 		Dimensions: `{"tenant":"` + tenant + `"}`,
 	}
 	event, err := heartbeat.New(tenant, key, now.Add(-time.Minute), now, 60_000_000,
-		"second", now, 2, "0001")
+		"second", now, 2, "0001", "")
 	if err != nil {
 		t.Fatalf("building the heartbeat: %v", err)
 	}

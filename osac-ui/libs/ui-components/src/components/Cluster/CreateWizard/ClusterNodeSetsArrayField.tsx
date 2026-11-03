@@ -1,65 +1,46 @@
-import { useEffect, useMemo } from 'react';
-import { ActionGroup, Alert, Button, Stack, StackItem } from '@patternfly/react-core';
+import { useEffect } from 'react';
+import { ActionGroup, Button, Stack, StackItem } from '@patternfly/react-core';
 import MinusCircleIcon from '@patternfly/react-icons/dist/esm/icons/minus-circle-icon';
 import PlusCircleIcon from '@patternfly/react-icons/dist/esm/icons/plus-circle-icon';
-import { useField, useFormikContext } from 'formik';
+import { useField } from 'formik';
 
-import { BareMetalInstanceTypes } from '@osac/types';
-import { useListResource } from '@osac/ui-components/api/use-resource';
+import { type BareMetalInstanceType, BareMetalInstanceTypes } from '@osac/types';
 
 import { type ClusterNodeSetRow, createEmptyNodeSetRow } from './fields';
 import { useTranslation } from '../../../hooks/useTranslation';
-import { getErrorMessage } from '../../../utils/error';
 import ClusterPoolSizeField from '../../Form/ClusterPoolSizeField';
+import { getVisibleFieldError } from '../../Form/fieldError';
+import { useShowFieldValidationErrors } from '../../Form/FieldValidationContext';
+import { FormFieldHelper } from '../../Form/FormFieldHelper';
 import NameField from '../../Form/NameField';
-import { SelectField } from '../../Form/SelectField';
+import { ResourceSelectField } from '../../Form/ResourceSelectField';
 import ProvisioningFieldGroup from '../../ProvisioningWizard/fields/ProvisioningFieldGroup';
 import type { ProvisioningFieldControlProps } from '../../ProvisioningWizard/fields/provisioningFieldValue';
+
+interface ClusterNodeSetsArrayFieldProps extends ProvisioningFieldControlProps {
+  /** OSAC-6054: catalog policies may omit node sets; provisioning requires one row. */
+  allowEmpty?: boolean;
+  autoSelectSingleOption?: boolean;
+}
 
 const ClusterNodeSetsArrayField = ({
   name = '',
   isDisabled = false,
-}: ProvisioningFieldControlProps) => {
+  isRequired = false,
+  allowEmpty = false,
+  autoSelectSingleOption = true,
+}: ClusterNodeSetsArrayFieldProps) => {
   const { t } = useTranslation();
-  const { setFieldValue } = useFormikContext();
-  const [field, , helpers] = useField<ClusterNodeSetRow[]>(name);
-  const rows = useMemo(() => field.value ?? [], [field.value]);
-  const {
-    data: hostTypes,
-    isLoading: hostTypesLoading,
-    error: hostTypesError,
-    refetch: refetchHostTypes,
-  } = useListResource(BareMetalInstanceTypes);
-
-  const hostTypeItems = useMemo(() => hostTypes?.items ?? [], [hostTypes?.items]);
-  const hostTypeOptions = hostTypeItems.map((hostType) => ({
-    value: hostType.id,
-    label: hostType.metadata?.name || '',
-  }));
+  const [field, meta, helpers] = useField<ClusterNodeSetRow[]>(name);
+  const showValidationErrors = useShowFieldValidationErrors();
+  const error = getVisibleFieldError(meta, showValidationErrors);
+  const rows = field.value ?? [];
 
   useEffect(() => {
-    if (hostTypesLoading || hostTypeItems.length === 0) {
-      return;
+    if (isRequired && rows.length === 0) {
+      void helpers.setValue([createEmptyNodeSetRow()]);
     }
-    let changed = false;
-    const nextRows = rows.map((row) => {
-      const currentValue = row.hostType.trim();
-      if (!currentValue || hostTypeItems.some((hostType) => hostType.id === currentValue)) {
-        return row;
-      }
-      const resolved = hostTypeItems.find(
-        (hostType) => hostType.id === currentValue || hostType.metadata?.name === currentValue,
-      );
-      if (resolved?.id && resolved.id !== currentValue) {
-        changed = true;
-        return { ...row, hostType: resolved.id };
-      }
-      return row;
-    });
-    if (changed) {
-      void setFieldValue(name, nextRows, false);
-    }
-  }, [hostTypeItems, hostTypesLoading, name, rows, setFieldValue]);
+  }, [helpers, isRequired, rows.length]);
 
   const addRow = () => {
     void helpers.setValue([...rows, createEmptyNodeSetRow()]);
@@ -71,14 +52,9 @@ const ClusterNodeSetsArrayField = ({
 
   return (
     <Stack hasGutter>
-      {hostTypesError ? (
+      {error ? (
         <StackItem>
-          <Alert variant="danger" isInline title={t('Could not load host types')}>
-            {getErrorMessage(hostTypesError)}
-            <Button variant="link" isInline onClick={() => void refetchHostTypes()}>
-              {t('catalogProvision.actions.retry')}
-            </Button>
-          </Alert>
+          <FormFieldHelper error={error} fieldId={`${name}-error`} />
         </StackItem>
       ) : null}
       {rows.length === 0 ? <StackItem>{t('No node sets added yet.')}</StackItem> : null}
@@ -88,11 +64,12 @@ const ClusterNodeSetsArrayField = ({
             title={t('Node set {{number}}', { number: rowIndex + 1 })}
             titleId={`cluster-node-set-group-${row.rowId}`}
             actions={
-              !isDisabled && rowIndex > 0 ? (
+              !isDisabled && (allowEmpty || rowIndex > 0) ? (
                 <Button
                   variant="plain"
                   aria-label={t('Remove node set')}
                   onClick={() => removeRow(rowIndex)}
+                  isDisabled={isRequired && rows.length === 1}
                   icon={<MinusCircleIcon />}
                 />
               ) : undefined
@@ -103,14 +80,15 @@ const ClusterNodeSetsArrayField = ({
               fieldId={`cluster-node-set-name-${row.rowId}`}
               isDisabled={isDisabled}
             />
-            <SelectField
+            <ResourceSelectField<BareMetalInstanceType>
               name={`${name}.${rowIndex}.hostType`}
               label={t('Host type')}
               fieldId={`cluster-host-type-${row.rowId}`}
-              options={hostTypeOptions}
+              service={BareMetalInstanceTypes}
               isRequired
-              isLoading={hostTypesLoading}
+              autoSelectSingleOption={autoSelectSingleOption}
               placeholder={t('Select host type')}
+              loadErrorTitle={t('Could not load host types')}
               isDisabled={isDisabled}
             />
             <ClusterPoolSizeField
@@ -124,12 +102,7 @@ const ClusterNodeSetsArrayField = ({
       ))}
       <StackItem>
         <ActionGroup>
-          <Button
-            variant="link"
-            icon={<PlusCircleIcon />}
-            onClick={addRow}
-            isDisabled={isDisabled || hostTypesLoading}
-          >
+          <Button variant="link" icon={<PlusCircleIcon />} onClick={addRow} isDisabled={isDisabled}>
             {t('Add node set')}
           </Button>
         </ActionGroup>

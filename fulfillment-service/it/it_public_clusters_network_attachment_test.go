@@ -306,15 +306,17 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		newProjectSubnet := func(project, virtualNetworkId string, defaultLabelled bool, state string) string {
 			subnets := privatev1.NewSubnetsClient(tool.InternalView().ControllerConn())
 			id := fmt.Sprintf("test-subnet-%s", uuid.New())
+			name := fmt.Sprintf("test-subnet-%s", uuid.New()[24:32])
 			labels := map[string]string{}
 			if defaultLabelled {
 				labels[tenantDefaultNetworkingLabel] = "true"
+				name = "default-ipv4"
 			}
 			_, err := subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 				Object: privatev1.Subnet_builder{
 					Id: id,
 					Metadata: privatev1.Metadata_builder{
-						Name:        fmt.Sprintf("test-subnet-%s", uuid.New()[24:32]),
+						Name:        name,
 						Tenant:      tenant,
 						Project:     project,
 						Annotations: map[string]string{"osac.openshift.io/management-state": "unmanaged"},
@@ -398,8 +400,8 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 			Expect(grpcstatus.Code(adminGetErr)).To(Equal(grpccodes.NotFound))
 		}
 
-		DescribeTable("rejects an omitted attachment without a usable tenant default",
-			func(configure func(project, virtualNetworkId string)) {
+		DescribeTable("classifies an omitted attachment with an unusable tenant default",
+			func(configure func(project, virtualNetworkId string), code grpccodes.Code, reason string) {
 				project := createCatalogItemProjectFixture(ctx, tenant)
 				virtualNetworkId := newIsolatedVirtualNetwork(project)
 				configure(project, virtualNetworkId)
@@ -414,28 +416,28 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				Expect(response).To(BeNil())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-				Expect(status.Message()).To(ContainSubstring("tenant default networking is not ready"))
+				Expect(status.Code()).To(Equal(code))
+				Expect(status.Message()).To(ContainSubstring(reason))
 				expectNoStoredCluster(clusterId)
 			},
 			Entry("missing default Subnet",
 				func(project, virtualNetworkId string) {
 					newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
-				}),
+				}, grpccodes.InvalidArgument, "default subnet is required"),
 			Entry("pending default Subnet",
 				func(project, virtualNetworkId string) {
 					newProjectSubnet(project, virtualNetworkId, true, "pending")
 					newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
-				}),
+				}, grpccodes.FailedPrecondition, "SUBNET_STATE_PENDING"),
 			Entry("missing default SecurityGroup",
 				func(project, virtualNetworkId string) {
 					newProjectSubnet(project, virtualNetworkId, true, "ready")
-				}),
+				}, grpccodes.InvalidArgument, "default security group is required"),
 			Entry("pending default SecurityGroup",
 				func(project, virtualNetworkId string) {
 					newProjectSubnet(project, virtualNetworkId, true, "ready")
 					newProjectSecurityGroup(project, virtualNetworkId, true, "pending")
-				}),
+				}, grpccodes.FailedPrecondition, "SECURITY_GROUP_STATE_PENDING"),
 		)
 
 		It("resolves ready tenant defaults and stores both references", func() {

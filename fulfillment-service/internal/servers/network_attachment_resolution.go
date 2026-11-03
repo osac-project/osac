@@ -378,7 +378,6 @@ func requireDefaultNetworkingReady(ctx context.Context, tenants *dao.GenericDAO[
 }
 
 // findTenantDefault returns the tenant's one default-labeled record of a kind that the match function accepts, or nil.
-// Records being deleted aren't defaults.
 func findTenantDefault[O lifecycleResource](ctx context.Context, objectDao *dao.GenericDAO[O], tenant string,
 	match func(O) bool) (O, error) {
 	var zero O
@@ -390,7 +389,7 @@ func findTenantDefault[O lifecycleResource](ctx context.Context, objectDao *dao.
 		return zero, grpcstatus.Error(grpccodes.Internal, "failed to find the tenant defaults")
 	}
 	for _, item := range response.GetItems() {
-		if !item.GetMetadata().HasDeletionTimestamp() && match(item) {
+		if match(item) {
 			return item, nil
 		}
 	}

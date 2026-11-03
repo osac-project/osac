@@ -3308,9 +3308,17 @@ var _ = Describe("Private clusters server", func() {
 					subnet.GetMetadata().SetLabels(map[string]string{})
 				case "pending":
 					subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
+				case "failed":
+					subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_FAILED)
+				case "deleting":
+					subnet.GetMetadata().SetFinalizers([]string{"test-finalizer"})
 				}
 				_, err = subnetsDao.Update().SetObject(subnet).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
+				if state == "deleting" {
+					_, err = subnetsDao.Delete().SetId(defaultSubnetID).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
 			}
 
 			setSecurityGroupDefaultState := func(state string) {
@@ -3327,9 +3335,17 @@ var _ = Describe("Private clusters server", func() {
 					securityGroup.GetMetadata().SetLabels(map[string]string{})
 				case "pending":
 					securityGroup.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING)
+				case "failed":
+					securityGroup.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED)
+				case "deleting":
+					securityGroup.GetMetadata().SetFinalizers([]string{"test-finalizer"})
 				}
 				_, err = securityGroupsDao.Update().SetObject(securityGroup).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
+				if state == "deleting" {
+					_, err = securityGroupsDao.Delete().SetId(defaultGroupID).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
 			}
 
 			newOmittedAttachmentRequest := func() *privatev1.ClustersCreateRequest {
@@ -3364,8 +3380,8 @@ var _ = Describe("Private clusters server", func() {
 				Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
 			}
 
-			DescribeTable("rejects an omitted attachment without a usable default",
-				func(configure func()) {
+			DescribeTable("classifies an omitted attachment with an unusable default",
+				func(configure func(), code grpccodes.Code, reason string) {
 					configure()
 					request := newOmittedAttachmentRequest()
 					response, err := server.Create(ctx, request)
@@ -3373,14 +3389,26 @@ var _ = Describe("Private clusters server", func() {
 					Expect(response).To(BeNil())
 					st, ok := grpcstatus.FromError(err)
 					Expect(ok).To(BeTrue())
-					Expect(st.Code()).To(Equal(grpccodes.FailedPrecondition))
-					Expect(st.Message()).To(ContainSubstring("tenant default networking is not ready"))
+					Expect(st.Code()).To(Equal(code))
+					Expect(st.Message()).To(ContainSubstring(reason))
 					expectNoStoredCluster(request)
 				},
-				Entry("missing default Subnet", func() { setSubnetDefaultState("missing") }),
-				Entry("pending default Subnet", func() { setSubnetDefaultState("pending") }),
-				Entry("missing default SecurityGroup", func() { setSecurityGroupDefaultState("missing") }),
-				Entry("pending default SecurityGroup", func() { setSecurityGroupDefaultState("pending") }),
+				Entry("missing default Subnet", func() { setSubnetDefaultState("missing") },
+					grpccodes.InvalidArgument, "default subnet is required"),
+				Entry("pending default Subnet", func() { setSubnetDefaultState("pending") },
+					grpccodes.FailedPrecondition, "SUBNET_STATE_PENDING"),
+				Entry("failed default Subnet", func() { setSubnetDefaultState("failed") },
+					grpccodes.FailedPrecondition, "SUBNET_STATE_FAILED"),
+				Entry("deleting default Subnet", func() { setSubnetDefaultState("deleting") },
+					grpccodes.FailedPrecondition, "is being deleted"),
+				Entry("missing default SecurityGroup", func() { setSecurityGroupDefaultState("missing") },
+					grpccodes.InvalidArgument, "default security group is required"),
+				Entry("pending default SecurityGroup", func() { setSecurityGroupDefaultState("pending") },
+					grpccodes.FailedPrecondition, "SECURITY_GROUP_STATE_PENDING"),
+				Entry("failed default SecurityGroup", func() { setSecurityGroupDefaultState("failed") },
+					grpccodes.FailedPrecondition, "SECURITY_GROUP_STATE_FAILED"),
+				Entry("deleting default SecurityGroup", func() { setSecurityGroupDefaultState("deleting") },
+					grpccodes.FailedPrecondition, "is being deleted"),
 			)
 
 			It("resolves ready defaults and stores both references", func() {

@@ -266,6 +266,12 @@ jobs:
           GODEBUG: http2client=0
         run: go install github.com/onsi/ginkgo/v2/ginkgo@v2.32.0  # keep in sync with go.mod's github.com/onsi/ginkgo/v2 version
 
+      - name: Prepare host inotify limits for Kind clusters
+        if: inputs.kind == 'it-osac-operator-multicluster'
+        run: |
+          source osac-installer/scripts/lib.sh
+          ensure_inotify_instances
+
       - name: Install infrastructure on Kind
         if: inputs.kind == 'it-osac-operator-multicluster'
         env:

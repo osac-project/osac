@@ -782,6 +782,9 @@ ifeq ($(SUITE),operator)
 	cd ../osac-operator && ginkgo run --timeout 15m -v --label-filter 'networkclass' test/integration
 endif
 ifeq ($(SUITE),operator-multicluster)
+	@# Multi-cluster tests create a second Kind cluster; ensure the host
+	@# has enough inotify instances for kubelet and containerd watchers.
+	@source scripts/lib.sh && ensure_inotify_instances
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
 	$(call kind-load-image,localhost/osac-operator:it)
 	$(call kind-container-build,-t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ../ --build-arg GODEBUG=$(GODEBUG))
@@ -984,8 +987,12 @@ dev-full-render-test: helm-deps helm-infra-deps ## Check dev-full TLS and Helm p
 openbao-security-context-test: helm-infra-deps ## Check OpenBao securityContext renders numeric UID on Kind, omits on OpenShift
 	./scripts/test-openbao-security-context.sh
 
+.PHONY: ensure-inotify
+ensure-inotify: ## Ensure inotify max_user_instances >= 512 (multi-Kind-cluster setups)
+	@source scripts/lib.sh && ensure_inotify_instances
+
 .PHONY: kind-runtime-test
-kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster cleanup with command stubs
+kind-runtime-test: ## Check Kind runtime, sudo, image loading, inotify guard, and cluster cleanup with command stubs
 	python3 scripts/test-kind-runtime.py
 
 .PHONY: bmf-netbox-render-test

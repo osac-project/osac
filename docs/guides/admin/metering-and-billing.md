@@ -174,7 +174,8 @@ To run it:
 3. Read the Job log. With the example data, it prints 110 seconds of `compute`
    for `vm-7`.
 
-The example is a starting point. It keeps deduplication state in memory, so a
-restart forgets the ids it has seen. It reads one topic at a time. A production
-reader stores its offsets and seen ids durably and reads every topic under the
-prefix.
+The example is a starting point. It lists the heartbeat topics under the prefix
+and reads them all. A tenant created after it starts is picked up on the next
+restart. It keeps deduplication state in memory, so a restart forgets the ids
+it has seen. A production reader stores its offsets and seen ids durably and
+re-lists or watches for new topics.

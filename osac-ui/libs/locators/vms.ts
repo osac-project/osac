@@ -15,6 +15,7 @@ export const VmsMainPage = {
   vmNameCell: ['td[data-label="Name"]'],
   vmStatusCell: ['td[data-label="Status"]'],
   emptyState: ['No virtual machines yet. Create one to get started.'],
+  filteredEmptyState: ['Choose one or more statuses above to filter your virtual machines.'],
 } as const satisfies Record<string, VmsLocator>;
 
 export const VmDetailsPage = {

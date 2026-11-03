@@ -28,7 +28,8 @@ export const openVmsPage = async (page: Page): Promise<void> => {
 export const listVmNames = async (page: Page): Promise<string[]> => {
   const table = page.getByRole(...VmsMainPage.vmsTable);
   const emptyState = page.getByText(...VmsMainPage.emptyState);
-  await expect(table.or(emptyState)).toBeVisible();
+  const filteredEmptyState = page.getByText(...VmsMainPage.filteredEmptyState);
+  await expect(table.or(emptyState).or(filteredEmptyState)).toBeVisible();
   if ((await table.count()) === 0) {
     return [];
   }

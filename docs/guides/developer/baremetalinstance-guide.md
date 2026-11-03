@@ -123,8 +123,10 @@ provider provisioning network. After OS provisioning, BMF creates a
 NetworkAttachment; the configured `{{ aap_prefix }}-move-network-attachment`
 AAP job template runs the apply playbook, and the selected Fabric Manager moves
 the port to the Subnet segment and applies policy. BMF then coordinates the
-handoff through the management backend. For Ironic, a host already powered off
-proceeds directly to power-on; Metal3 uses its handoff annotation. After the
+handoff through the management backend. When the host is powered on, BMF requests
+one handoff reboot so the OS re-DHCPs on the tenant network. If it is already
+powered off, BMF skips the reboot and marks handoff complete; DHCP discovery
+depends on the next power-on. Metal3 uses its handoff annotation. After the
 handoff is confirmed, the configured `{{ aap_prefix }}-query-dhcp-lease` AAP
 job template runs lease discovery for the selected MAC. BMF records the accepted
 lease. OSAC continues querying until a lease is found or discovery reaches a

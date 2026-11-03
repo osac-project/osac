@@ -22,7 +22,7 @@ def resolve_parent(resource, pointer):
         if isinstance(node, list):
             node = node[int(token)]
         else:
-            node = node.setdefault(token, {})
+            node = node[token]
     return node, tokens[-1] if tokens else None
 
 
@@ -36,7 +36,7 @@ def apply_patch(resource, ops):
                 raise ValueError("test op failed at %s" % op["path"])
         elif op["op"] == "remove":
             if isinstance(parent, dict):
-                parent.pop(key, None)
+                del parent[key]
             else:
                 del parent[int(key)]
         else:

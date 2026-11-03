@@ -255,6 +255,17 @@ def test_delete_clears_generated_root_device_hint(tmp_path):
     assert "osac.openshift.io/fallback-root-device" not in patched["metadata"]["annotations"]
 
 
+def test_json_patch_rejects_remove_on_missing_path(tmp_path):
+    result, _ = run_role(
+        tmp_path,
+        "unit_json_patch.yml",
+        {BMH_KEY: bmh_resource()},
+    )
+
+    assert result.returncode != 0
+    assert "json patch failed" in result.stdout
+
+
 def test_delete_tolerates_already_absent_generated_secrets(tmp_path):
     result, state = run_role(
         tmp_path,

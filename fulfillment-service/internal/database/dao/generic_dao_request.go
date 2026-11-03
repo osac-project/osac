@@ -106,63 +106,99 @@ func (r *request[O]) objectFromRow(row storedObject) (O, error) {
 	return object, nil
 }
 
-// archive moves a deleted object to the archived table and removes it from the main table.
+// archiveDeferredConstraint names a foreign key whose violation during archival must not be reported as an
+// error: the referencing table is designed to outlive its archived parent row. tenant_billing_assignments
+// retains assignment history as a read-only tombstone after its tenant is deleted (OSAC-6886, design.md
+// 3784 Sec 4.2), so the reference is never expected to clear within this milestone. Unlike
+// projects_tenant_fk (a block the caller resolves by deleting the dependents), leaving the parent row
+// live-but-deleted instead of erroring is the final, correct state, not a retry condition.
+const archiveDeferredConstraint = "tenant_billing_assignments_tenant_id_fkey"
+
+// archive moves a deleted object to the archived table and removes it from the main table. Both statements
+// run inside a savepoint so that archiveDeferredConstraint can be rolled back without poisoning the
+// caller's outer transaction: the deletion_timestamp/finalizer update already applied outside this
+// savepoint stays committed, and the row simply stays live-but-deleted instead of being archived.
 func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
-	sql := fmt.Sprintf(
-		`
-		insert into archived_%s (
-			id,
-			name,
-			creation_timestamp,
-			deletion_timestamp,
-			creator,
-			tenant,
-			project,
-			labels,
-			annotations,
-			version,
-			data
-		) values (
-		 	$1,
-			$2,
-			$3,
-			$4,
-			$5,
-			$6,
-			$7,
-			$8,
-			$9,
-			$10,
-			$11
+	deferred := false
+	outerTx := r.tx
+	err := outerTx.Savepoint(ctx, func(spCtx context.Context) error {
+		spTx, err := database.TxFromContext(spCtx)
+		if err != nil {
+			return err
+		}
+		// Run the archive statements against the savepoint, through the same r.exec used elsewhere (so they
+		// keep the usual debug logging and op-duration metrics), then restore the outer transaction.
+		r.tx = spTx
+		defer func() { r.tx = outerTx }()
+
+		insertSQL := fmt.Sprintf(
+			`
+			insert into archived_%s (
+				id,
+				name,
+				creation_timestamp,
+				deletion_timestamp,
+				creator,
+				tenant,
+				project,
+				labels,
+				annotations,
+				version,
+				data
+			) values (
+			 	$1,
+				$2,
+				$3,
+				$4,
+				$5,
+				$6,
+				$7,
+				$8,
+				$9,
+				$10,
+				$11
+			)
+			`,
+			r.dao.table,
 		)
-		`,
-		r.dao.table,
-	)
-	_, err := r.exec(
-		ctx,
-		archiveOpType,
-		sql,
-		args.id,
-		args.name,
-		args.creationTs,
-		args.deletionTs,
-		args.creator,
-		args.tenant,
-		args.project,
-		args.labelsData,
-		args.annotationsData,
-		args.version,
-		args.data,
-	)
-	if err != nil {
-		return r.translateArchiveError(ctx, args.tenant, err)
+		if _, err := r.exec(
+			spCtx,
+			archiveOpType,
+			insertSQL,
+			args.id,
+			args.name,
+			args.creationTs,
+			args.deletionTs,
+			args.creator,
+			args.tenant,
+			args.project,
+			args.labelsData,
+			args.annotationsData,
+			args.version,
+			args.data,
+		); err != nil {
+			deferred = isArchiveDeferred(err)
+			return err
+		}
+		deleteSQL := fmt.Sprintf(`delete from %s where id = $1`, r.dao.table)
+		if _, err := r.exec(spCtx, deleteOpType, deleteSQL, args.id); err != nil {
+			deferred = isArchiveDeferred(err)
+			return err
+		}
+		return nil
+	})
+	if err == nil || deferred {
+		return nil
 	}
-	sql = fmt.Sprintf(`delete from %s where id = $1`, r.dao.table)
-	_, err = r.exec(ctx, deleteOpType, sql, args.id)
-	if err != nil {
-		return r.translateArchiveError(ctx, args.tenant, err)
-	}
-	return nil
+	return r.translateArchiveError(ctx, args.tenant, err)
+}
+
+// isArchiveDeferred reports whether err is archiveDeferredConstraint's violation: a "not yet", not a
+// "never", so archive() can treat it as success instead of an error.
+func isArchiveDeferred(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.ForeignKeyViolation &&
+		pgErr.ConstraintName == archiveDeferredConstraint
 }
 
 // translateArchiveError translates a raw PostgreSQL error from either statement of archive() into

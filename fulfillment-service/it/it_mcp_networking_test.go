@@ -291,12 +291,17 @@ var _ = Describe("MCP network resources", func() {
 	It("rejects an oversized SecurityGroup rule request without mutation", func() {
 		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-network-limit", userUsername)
 		securityGroupName := ndUniqueName("mcp-sg-limit")
-		rules := make([]mcpserver.NetworkSecurityRuleInput, 101)
-		for index := range rules {
-			rules[index] = mcpserver.NetworkSecurityRuleInput{
-				Protocol: "all",
-				IPv4Cidr: "0.0.0.0/0",
-			}
+		rule := mcpserver.NetworkSecurityRuleInput{
+			Protocol: "all",
+			IPv4Cidr: "0.0.0.0/0",
+		}
+		ingressRules := make([]mcpserver.NetworkSecurityRuleInput, 50)
+		egressRules := make([]mcpserver.NetworkSecurityRuleInput, 51)
+		for index := range ingressRules {
+			ingressRules[index] = rule
+		}
+		for index := range egressRules {
+			egressRules[index] = rule
 		}
 
 		_, err := callMCPTool[mcpserver.CreateNetworkResourceOutput](
@@ -304,7 +309,8 @@ var _ = Describe("MCP network resources", func() {
 				ResourceType:     mcpserver.NetworkResourceTypeSecurityGroup,
 				Name:             securityGroupName,
 				VirtualNetworkID: "virtual-network-does-not-exist",
-				IngressRules:     rules,
+				IngressRules:     ingressRules,
+				EgressRules:      egressRules,
 			},
 		)
 		Expect(err).To(HaveOccurred())

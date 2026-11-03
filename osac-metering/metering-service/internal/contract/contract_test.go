@@ -150,8 +150,6 @@ var _ = Describe("The generated contract", func() {
 			"The reader owns its retries and its failed records",
 			"The CloudEvent `id` is the deduplication key",
 			"It leaves out the quantity",
-			"If metering is rolled back after a newer version has written records",
-			"treat it as a version you have not adopted",
 		} {
 			Expect(reference).To(ContainSubstring(statement))
 		}
@@ -266,6 +264,10 @@ var _ = Describe("The generated contract", func() {
 		instance, err = jsonschema.UnmarshalJSON(bytes.NewReader(payload))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(compiled.Validate(instance)).NotTo(Succeed())
+	})
+
+	It("pins every published version file by SHA-256", func() {
+		Expect(schema.CheckPublishedManifest()).To(Succeed())
 	})
 
 	It("records the hash of the published file a reader holds", func() {

@@ -130,7 +130,7 @@ pnpm --filter @osac/playwright exec playwright test \
 
 ### Full VMaaS setup flow
 
-The `vmaas-full-flow-launch` project runs the complete journey in this order:
+The creation and VM portion of the full-flow journey runs in this order:
 
 1. Create and verify the instance type, disk image, storage tier and its
    storage-backend readiness, catalog item, and tenant.
@@ -147,17 +147,38 @@ The `vmaas-full-flow-launch` project runs the complete journey in this order:
    `ComputeInstance` reaches `Running`, and the VM appears in both the tenant
    VM list and its details page.
 
-The `vmaas-full-flow-launch` project has a teardown chain. It first logs in as
-the tenant admin and deletes the VM, then logs in as the admin user to remove
-the catalog item, disk image, instance type, storage tier, tenant-admin
-RoleBinding and OSAC User, SSH public-key Secret, tenant, and generated
-credential file.
+The full-flow projects run in this order:
 
-Run the flow with:
+1. `vmaas-full-flow` creates the infrastructure resources and tenant.
+2. `vmaas-full-flow-launch` creates and verifies the VM.
+3. `vmaas-full-flow-vm-delete` deletes the VM as the tenant admin.
+4. `vmaas-full-flow-delete` removes the catalog item, disk image, instance
+   type, storage tier, tenant-admin RoleBinding and OSAC User, SSH public-key
+   Secret, tenant, and generated credential file as the admin user.
+
+Run only the creation portion with:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow-launch
+  --project=vmaas-full-flow --no-deps
+```
+
+Run only the deletion portion with:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-full-flow-vm-delete \
+  --project=vmaas-full-flow-delete --no-deps
+```
+
+The deletion-only command expects the VM, generated tenant credentials, and
+the full-flow resources to already exist.
+
+Run the complete creation and deletion flow with:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-full-flow-delete
 ```
 
 The flow uses the same values from `apps/e2e-tests/extravars.yaml` as the

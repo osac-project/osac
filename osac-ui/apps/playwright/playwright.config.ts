@@ -127,7 +127,6 @@ export default defineConfig({
       testMatch: /create\.(instance_type|disk_images|storage_tier|catalog|tenant)\.spec\.ts/,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      teardown: 'vmaas-full-flow-vm-delete',
     },
     {
       name: 'vmaas-full-flow-launch',
@@ -142,7 +141,7 @@ export default defineConfig({
       testMatch: /delete\.vm\.spec\.ts/,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      teardown: 'vmaas-full-flow-delete',
+      dependencies: ['vmaas-full-flow-launch'],
     },
     {
       name: 'vmaas-full-flow-delete',
@@ -150,6 +149,7 @@ export default defineConfig({
       testMatch: /delete\.(catalog|disk_images|instance_type|storage_tier|tenant)\.spec\.ts/,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-full-flow-vm-delete'],
     },
     {
       name: 'vmaas-storage-tier',

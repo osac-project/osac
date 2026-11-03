@@ -85,7 +85,7 @@ type ErrTimeout struct {
 
 func (e *ErrTimeout) Error() string {
 	return fmt.Sprintf(
-		"timed out after %s waiting for state transition (current: %s)",
+		"timed out waiting for state transition: exceeded configured timeout of %s (current: %s)",
 		e.After.Round(time.Second), e.Current,
 	)
 }

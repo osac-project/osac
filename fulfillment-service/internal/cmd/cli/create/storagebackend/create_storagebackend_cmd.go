@@ -158,8 +158,9 @@ const shortHelp = `Create a storage backend`
 const longHelp = `
 Create a storage backend.
 
-A storage backend represents a registered storage array (e.g., VAST, Ceph, Pure) with its management
-endpoint and credentials. Storage backends are managed by Cloud Provider Admins via the private API.
+A storage backend represents a registered storage product (e.g., VAST Data, NetApp ONTAP,
+Pure FlashBlade, Pure FlashArray) with its management endpoint and credentials. Storage backends are
+managed by Cloud Provider Admins via the private API.
 Tenants interact with storage indirectly through storage tiers.
 
 Use {{ bt }}--csp-managed{{ bt }} when the Cloud Provider Admin manages the storage resources.
@@ -188,8 +189,9 @@ _NAME_ - Name of the storage backend. Must be a unique, human-readable identifie
 `
 
 const providerFlagHelp = `
-_PROVIDER_ - Storage provider identifier (e.g., {{ bt }}vast{{ bt }}, {{ bt }}ceph{{ bt }},
-{{ bt }}pure{{ bt }}). Immutable after creation.
+_PROVIDER_ - Provider routing key. Use {{ bt }}vast{{ bt }}, {{ bt }}netapp{{ bt }}, or
+{{ bt }}pure{{ bt }} (Pure FlashArray/FlashBlade). The internal {{ bt }}lvms{{ bt }} key is
+reserved for deployment-managed local storage. Immutable after creation.
 `
 
 const endpointFlagHelp = `

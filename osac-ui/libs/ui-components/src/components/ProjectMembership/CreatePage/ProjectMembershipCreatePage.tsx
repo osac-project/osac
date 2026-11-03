@@ -16,9 +16,8 @@ import {
 } from '@patternfly/react-core';
 import { Formik } from 'formik';
 
-import { ProjectMembershipRole, Users } from '@osac/types';
-import { useListResource } from '@osac/ui-components/api/use-resource';
-import { useProject } from '@osac/ui-components/api/v1/project';
+import { ProjectMembershipRole, Projects, Users } from '@osac/types';
+import { useGetResource, useListResource } from '@osac/ui-components/api/use-resource';
 import {
   useCreateProjectMembership,
   useProjectMembership,
@@ -35,7 +34,7 @@ import { MultiSelectField } from '../../Form/MultiSelectField';
 import NameField from '../../Form/NameField';
 import OsacForm from '../../Form/OsacForm';
 import { SelectField } from '../../Form/SelectField';
-import { getFullProjectPath, getProjectName } from '../../Project/utils';
+import { getProjectName } from '../../Project/utils';
 import { getRoleLabel } from '../utils';
 
 const ProjectMembershipCreatePage = () => {
@@ -46,7 +45,11 @@ const ProjectMembershipCreatePage = () => {
   const { mutateAsync: create, error: createErr } = useCreateProjectMembership();
   const { mutateAsync: update, error: updateErr } = useUpdateProjectMembership();
 
-  const { data: project, isLoading: projectLoading, error: projectErr } = useProject(projectId);
+  const {
+    data: project,
+    isLoading: projectLoading,
+    error: projectErr,
+  } = useGetResource(Projects, { id: projectId });
   const { data: users, isLoading: usersLoading, error: usersError } = useListResource(Users);
   const { data: pm, isLoading: pmLoading, error: pmError } = useProjectMembership(pmId);
 
@@ -66,6 +69,10 @@ const ProjectMembershipCreatePage = () => {
         {getErrorMessage(projectErr)}
       </Alert>
     );
+  }
+
+  if (!project?.object) {
+    return <Alert variant="danger" isInline title={t('Failed to load project')} />;
   }
 
   if (pmError) {
@@ -88,7 +95,7 @@ const ProjectMembershipCreatePage = () => {
             </BreadcrumbItem>
             <BreadcrumbItem>
               <Button variant="link" isInline onClick={() => navigate(`/projects/${projectId}`)}>
-                {project && getProjectName(project, t)}
+                {getProjectName(project.object, t)}
               </Button>
             </BreadcrumbItem>
             <BreadcrumbItem isActive>
@@ -110,7 +117,7 @@ const ProjectMembershipCreatePage = () => {
                 await update({ id: pmId, body: getUpdateProjectMembershipPayload(values) });
               } else {
                 await create(
-                  getCreateProjectMembershipPayload(values, getFullProjectPath(project)),
+                  getCreateProjectMembershipPayload(values, project.object?.metadata?.name || ''),
                 );
               }
               navigate(`/projects/${projectId}`);

@@ -304,7 +304,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 		)
 	}
 
-	return
+	return controllers.RequeueAfterKubernetesDeletion("volume")
 }
 
 // selectHub assigns a hub to the volume. Unlike resources that inherit their

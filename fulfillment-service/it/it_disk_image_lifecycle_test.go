@@ -86,7 +86,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 					Name: fmt.Sprintf("test-sb-%s", uuid.New()),
 				}.Build(),
 				Spec: privatev1.StorageBackendSpec_builder{
-					Provider:    "test",
+					Provider:    "vast",
 					Description: "Test storage backend for disk image lifecycle tests",
 					Endpoint:    "https://test-backend.example.com",
 					Credentials: privatev1.StorageBackendCredentials_builder{

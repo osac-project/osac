@@ -73,23 +73,4 @@ spec:
               A metering adapter moved events to the dead-letter topic in the
               last 15 minutes. These are billable events the provider never
               received.
-        {{- if .Values.readers }}
-        - alert: MeteringReaderLag
-          # Strimzi's Kafka Exporter reports one series per reader consumer
-          # group and topic. The group is the reader name, so the alert names
-          # the reader. The threshold is a value because a small tenant grows
-          # lag slowly; see prometheusRule.readerLagThreshold.
-          expr: kafka_consumergroup_lag{consumergroup=~"{{ include "osac-metering.readerGroupRegex" . }}"} > {{ .Values.prometheusRule.readerLagThreshold }}
-          for: 15m
-          labels:
-            severity: warning
-          annotations:
-            summary: Metering reader {{`{{ $labels.consumergroup }}`}} is behind
-            description: >-
-              Reader {{`{{ $labels.consumergroup }}`}} is more than
-              {{ .Values.prometheusRule.readerLagThreshold }} usage events
-              behind on {{`{{ $labels.topic }}`}}. Check that the reader is
-              running and that its credentials are still granted. A reader
-              that has never consumed has no lag series.
-        {{- end }}
 {{- end }}

@@ -1,11 +1,11 @@
-{{- if and .Values.kafka.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+{{- if and .Values.kafka.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PodMonitor") }}
 {{- /*
 Scrape Strimzi's Kafka Exporter, which the Kafka resource above enables. The
 exporter reports consumer-group lag, and every metering reader consumes under
 a group named after itself, so the metering chart's MeteringReaderLag alert can
 see a stalled reader.
 
-The PodMonitor is rendered only where the monitoring CRD exists, so a Kind
+The PodMonitor is rendered only where the PodMonitor CRD exists, so a Kind
 install without a Prometheus operator still applies the chart.
 */}}
 apiVersion: monitoring.coreos.com/v1

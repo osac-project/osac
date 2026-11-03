@@ -1,6 +1,6 @@
 suite: metering reader lag alert
 templates:
-  - templates/prometheusrule.yaml
+  - templates/prometheusrule-readers.yaml
 tests:
   - it: reports lag for each configured reader group
     set:
@@ -14,8 +14,11 @@ tests:
       - hasDocuments:
           count: 1
       - equal:
+          path: metadata.namespace
+          value: osac-kafka
+      - equal:
           path: spec.groups[0].rules[?(@.alert == "MeteringReaderLag")].expr
-          value: 'kafka_consumergroup_lag{consumergroup=~"billing-reader|audit-reader"} > 15'
+          value: 'kafka_consumergroup_lag{consumergroup=~`billing-reader|audit-reader`} > 15'
       - matchRegex:
           path: spec.groups[0].rules[?(@.alert == "MeteringReaderLag")].annotations.summary
           pattern: '\$labels\.consumergroup'
@@ -32,7 +35,7 @@ tests:
     asserts:
       - equal:
           path: spec.groups[0].rules[?(@.alert == "MeteringReaderLag")].expr
-          value: 'kafka_consumergroup_lag{consumergroup=~"billing\.reader"} > 15'
+          value: 'kafka_consumergroup_lag{consumergroup=~`billing\.reader`} > 15'
 
   - it: uses the configured lag threshold
     set:
@@ -44,14 +47,11 @@ tests:
     asserts:
       - equal:
           path: spec.groups[0].rules[?(@.alert == "MeteringReaderLag")].expr
-          value: 'kafka_consumergroup_lag{consumergroup=~"billing-reader"} > 5'
+          value: 'kafka_consumergroup_lag{consumergroup=~`billing-reader`} > 5'
 
   - it: renders no reader alert when no readers are configured
     set:
       prometheusRule.enabled: true
     asserts:
       - hasDocuments:
-          count: 1
-      - lengthEqual:
-          path: spec.groups[0].rules
-          count: 5
+          count: 0

@@ -65,7 +65,9 @@ reader may fall further behind, or lower it for a small tenant. A reader that
 has never consumed has no consumer group and no lag series, so this alert
 cannot fire for it; check that the group exists before relying on the alert.
 Strimzi's Kafka Exporter, enabled on the installer's Kafka resource and scraped
-by a PodMonitor, supplies `kafka_consumergroup_lag`.
+by a PodMonitor, supplies `kafka_consumergroup_lag`. The reader lag rule is
+rendered into the Kafka namespace, where the exporter series live, because user
+workload monitoring evaluates a rule against its own namespace.
 
 ## Rule revisions
 

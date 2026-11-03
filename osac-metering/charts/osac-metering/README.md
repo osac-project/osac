@@ -53,12 +53,6 @@ running reader fails its next fetch rather than waiting to be told. Offboarding
 a tenant means removing its reader entries in the same change that retires the
 tenant; the records stay until the tenant's topics are deleted.
 
-Rolling back to a chart version that predates `readers` fails while the value
-is set: the older umbrella schema rejects unknown keys under `metering`
-(`additionalProperties: false`). Remove `metering.readers` from the values,
-roll back, and add it again when the chart supports it. The reader KafkaUsers
-are deleted by that rollback, so also tell the reader's owner that access ends.
-
 The reader needs the bootstrap address, the shared OSAC CA, and its
 password from the Secret named after it in the Kafka namespace. Hand those
 over out of band. The chart never writes them into the repository.

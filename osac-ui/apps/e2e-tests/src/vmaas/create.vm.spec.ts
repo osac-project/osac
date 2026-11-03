@@ -37,7 +37,7 @@ const selectOption = async (
   optionName: string | RegExp,
   index = 0,
 ): Promise<string> => {
-  const field = page.getByLabel(label, { exact: true }).nth(index);
+  const field = page.getByRole('button', { name: label, exact: true }).nth(index);
   await expect(field).toBeVisible();
   await field.click();
   const option = page.getByRole('option', { name: optionName }).first();

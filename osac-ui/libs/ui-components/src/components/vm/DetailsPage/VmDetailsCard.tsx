@@ -176,7 +176,6 @@ const VmDetailsCard = ({
                     )}
                   </Flex>
                 </DetailRow>
-                <DetailRow label={t('Name')}>{displayValue(vm.metadata?.name)}</DetailRow>
                 <DetailRow label={t('vCPUs')}>
                   {vcpus === undefined ? t('Not set') : vcpus}
                 </DetailRow>

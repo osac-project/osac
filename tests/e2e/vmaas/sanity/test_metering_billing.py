@@ -766,7 +766,10 @@ def test_metering_external_billing_account_on_heartbeats(
         )
         ci_name = _wait_for_running_vm(k8s_hub_client, uuid=uuid)
         omitted = metering.heartbeat_with_dimensions(
-            uuid, {"instance_type": cli.default_instance_type}, timeout=HEARTBEAT_TIMEOUT
+            uuid,
+            {"instance_type": cli.default_instance_type},
+            timeout=HEARTBEAT_TIMEOUT,
+            resource_kind=WaitResourceKind.HEARTBEAT,
         )
         metering.verify_event(omitted, resource_id=uuid)
         assert billing_account_id(omitted) is None, (

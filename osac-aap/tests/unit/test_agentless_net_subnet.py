@@ -568,8 +568,13 @@ def test_dhcp_config_contains_sorted_scopes_gateway_and_vip_exclusions(tmp_path)
         vip_cidr="10.20.2.15/32",
     )
 
+    attachments = [
+        dhcp_attachment("bbbbbbbb", SUBNET_B_UID, "aa:bb:cc:dd:ee:02", "10.20.2.22"),
+        dhcp_attachment("cccccccc", SUBNET_A_UID, "aa:bb:cc:dd:ee:03", "10.20.1.23"),
+        dhcp_attachment("aaaaaaaa", SUBNET_A_UID, "aa:bb:cc:dd:ee:01", "10.20.1.21"),
+    ]
     config = agentless_net_subnet._render_dhcp_config(
-        parent_entry(), [second, first], [], paths
+        parent_entry(), [second, first], attachments, paths
     ).decode()
 
     assert config.index(f"interface={first['vlan_interface']}") < config.index(
@@ -581,6 +586,12 @@ def test_dhcp_config_contains_sorted_scopes_gateway_and_vip_exclusions(tmp_path)
     assert "dhcp-range=set:" + first["vlan_interface"] + ",10.20.1.0,static,255.255.255.0,12h" in config
     assert "dhcp-range=set:" + second["vlan_interface"] + ",10.20.2.0,static,255.255.255.240,12h" in config
     assert "option:router,10.20.2.1" in config
+    host_entries = [line for line in config.splitlines() if line.startswith("dhcp-host=")]
+    assert host_entries == [
+        f"dhcp-host=tag:{first['vlan_interface']},aa:bb:cc:dd:ee:01,id:*,10.20.1.21,12h",
+        f"dhcp-host=tag:{first['vlan_interface']},aa:bb:cc:dd:ee:03,id:*,10.20.1.23,12h",
+        f"dhcp-host=tag:{second['vlan_interface']},aa:bb:cc:dd:ee:02,id:*,10.20.2.22,12h",
+    ]
 
 
 def test_dhcp_restart_preserves_existing_valid_lease_bytes(monkeypatch, tmp_path):

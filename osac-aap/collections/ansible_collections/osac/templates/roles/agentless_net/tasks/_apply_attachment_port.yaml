@@ -12,8 +12,7 @@
       exit 73
     fi
     case "$action" in
-      apply) nv set interface "$port" bridge domain br_default access "$vlan" ;;
-      delete) nv set interface "$port" bridge domain br_default access "$vlan" ;;
+      apply|delete) nv set interface "$port" bridge domain br_default access "$vlan" ;;
       remove) nv unset interface "$port" bridge domain ;;
       *) exit 64 ;;
     esac

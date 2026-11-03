@@ -183,6 +183,83 @@ def _validate_parent(parent: dict[str, Any]) -> tuple[str, str]:
     return uid, namespace
 
 
+def normalize_subnet_ipam(
+    value: Any,
+    subnet: ipaddress.IPv4Network,
+    *,
+    error_type: type[Exception],
+) -> dict[str, Any]:
+    expected = {
+        "gateway_ipv4",
+        "overlay_ipv4_cidrs",
+        "physical_ipv4_cidrs",
+        "lb_vip_ipv4_cidrs",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        raise error_type("Subnet IPAM must contain the gateway and all three IPv4 ranges")
+    try:
+        gateway = ipaddress.IPv4Address(value["gateway_ipv4"])
+    except (TypeError, ValueError) as error:
+        raise error_type("Subnet IPAM gateway must be a canonical IPv4 address") from error
+    if str(gateway) != value["gateway_ipv4"] or gateway != subnet.network_address + 1:
+        raise error_type("Subnet IPAM gateway does not match the Subnet address plan")
+
+    normalized: dict[str, Any] = {"gateway_ipv4": str(gateway)}
+    ranges: list[ipaddress.IPv4Network] = []
+    for key in ("overlay_ipv4_cidrs", "physical_ipv4_cidrs", "lb_vip_ipv4_cidrs"):
+        values = value[key]
+        if not isinstance(values, list):
+            raise error_type(f"Subnet IPAM {key} must be a list")
+        cidrs: list[str] = []
+        for raw in values:
+            try:
+                block = network.parse_canonical_ipv4_network(raw, context=f"Subnet IPAM {key}")
+            except (TypeError, ValueError) as error:
+                raise error_type(f"Subnet IPAM {key} contains an invalid IPv4 CIDR") from error
+            if not block.subnet_of(subnet):
+                raise error_type(f"Subnet IPAM {key} is outside the Subnet")
+            if any(block.overlaps(previous) for previous in ranges):
+                raise error_type("Subnet IPAM ranges overlap")
+            ranges.append(block)
+            cidrs.append(str(block))
+        normalized[key] = cidrs
+    return normalized
+
+
+def validate_physical_attachment_address(
+    subnet: dict[str, Any],
+    value: Any,
+    *,
+    error_type: type[Exception],
+    context: str = "NetworkAttachment",
+) -> ipaddress.IPv4Address:
+    try:
+        address = ipaddress.IPv4Address(value)
+    except (TypeError, ValueError) as error:
+        raise error_type(f"{context} address is invalid") from error
+    if str(address) != value:
+        raise error_type(f"{context} address is invalid")
+
+    network_cidr = ipaddress.ip_network(subnet["ipv4_cidr"], strict=True)
+    physical_ranges = [
+        ipaddress.ip_network(cidr, strict=True)
+        for cidr in subnet["ipam"]["physical_ipv4_cidrs"]
+    ]
+    if not any(address in block for block in physical_ranges):
+        raise error_type(f"{context} address is outside physical IPv4 ranges")
+    if (
+        address in {network_cidr.network_address, network_cidr.broadcast_address}
+        or str(address) == subnet["ipam"]["gateway_ipv4"]
+    ):
+        raise error_type(f"{context} address is reserved by the Subnet")
+    if any(
+        address in {block.network_address, block.broadcast_address}
+        for block in physical_ranges
+    ):
+        raise error_type(f"{context} address is a physical CIDR network or broadcast address")
+    return address
+
+
 def _validate_subnet(entry: dict[str, Any]) -> tuple[str, str, int, str]:
     uid = entry.get("uid")
     interface = entry.get("vlan_interface")
@@ -201,32 +278,18 @@ def _validate_subnet(entry: dict[str, Any]) -> tuple[str, str, int, str]:
         raise SubnetProviderError("saved Subnet VLAN ID is invalid")
     try:
         subnet = ipaddress.ip_network(entry.get("ipv4_cidr"), strict=True)
-        ipam = entry.get("ipam")
-        gateway = ipaddress.IPv4Address(ipam["gateway_ipv4"])
-    except (KeyError, TypeError, ValueError) as error:
+    except (TypeError, ValueError) as error:
         raise SubnetProviderError("saved Subnet address plan is invalid") from error
     if not isinstance(subnet, ipaddress.IPv4Network) or subnet.prefixlen > 28:
         raise SubnetProviderError("saved Subnet CIDR is too small for its address plan")
-    if gateway != subnet.network_address + 1 or str(gateway) != ipam["gateway_ipv4"]:
-        raise SubnetProviderError("saved Subnet gateway does not match its address plan")
-    expected_ranges = {"overlay_ipv4_cidrs", "physical_ipv4_cidrs", "lb_vip_ipv4_cidrs"}
-    if not isinstance(ipam, dict) or set(ipam) != expected_ranges | {"gateway_ipv4"}:
-        raise SubnetProviderError("saved Subnet IPAM has an invalid shape")
-    ranges = []
-    for key in sorted(expected_ranges):
-        values = ipam[key]
-        if not isinstance(values, list):
-            raise SubnetProviderError("saved Subnet IPAM ranges must be lists")
-        for value in values:
-            try:
-                block = ipaddress.ip_network(value, strict=True)
-            except (TypeError, ValueError) as error:
-                raise SubnetProviderError("saved Subnet IPAM CIDR is invalid") from error
-            if not isinstance(block, ipaddress.IPv4Network) or not block.subnet_of(subnet):
-                raise SubnetProviderError("saved Subnet IPAM CIDR is outside its Subnet")
-            if any(block.overlaps(previous) for previous in ranges):
-                raise SubnetProviderError("saved Subnet IPAM ranges overlap")
-            ranges.append(block)
+    try:
+        ipam = normalize_subnet_ipam(
+            entry.get("ipam"), subnet, error_type=SubnetProviderError
+        )
+    except SubnetProviderError as error:
+        raise SubnetProviderError("saved Subnet address plan is invalid") from error
+    if ipam != entry.get("ipam"):
+        raise SubnetProviderError("saved Subnet IPAM is not canonical")
     return uid, interface, vlan_id, trunk
 
 
@@ -691,21 +754,12 @@ def find_active_dhcp_lease(
         raise SubnetProviderError("DHCP lease query time is invalid")
 
     expected_mac = mac_address.lower()
-    ipam = subnet["ipam"]
-    eligible = [
-        ipaddress.ip_network(cidr, strict=True)
-        for cidr in ipam["physical_ipv4_cidrs"]
-    ]
-    reserved = ipaddress.IPv4Address(expected_address)
-    network = ipaddress.ip_network(subnet["ipv4_cidr"], strict=True)
-    if (
-        str(reserved) != expected_address
-        or not any(reserved in block for block in eligible)
-        or reserved in {network.network_address, network.broadcast_address}
-        or str(reserved) == ipam["gateway_ipv4"]
-        or any(reserved in {block.network_address, block.broadcast_address} for block in eligible)
-    ):
-        raise SubnetProviderError("saved NetworkAttachment address is outside physical IPv4 ranges")
+    reserved = validate_physical_attachment_address(
+        subnet,
+        expected_address,
+        error_type=SubnetProviderError,
+        context="saved NetworkAttachment",
+    )
     matches: list[dict[str, str]] = []
     for line in contents.decode("ascii").splitlines():
         expiry_text, lease_mac, address_text, _hostname, _client_id = line.split()
@@ -765,6 +819,11 @@ def _render_dhcp_config(
         f"dhcp-leasefile={paths['leases']}",
         f"pid-file={paths['pid']}",
     ]
+    attachments_by_subnet: dict[str, list[dict[str, Any]]] = {}
+    for attachment in sorted(attachments, key=lambda value: value["uid"]):
+        if attachment["phase"] != "deleting":
+            attachments_by_subnet.setdefault(attachment["subnet_uid"], []).append(attachment)
+
     for entry in sorted(entries, key=lambda value: value["uid"]):
         _validate_subnet(entry)
         subnet = ipaddress.ip_network(entry["ipv4_cidr"])
@@ -777,9 +836,7 @@ def _render_dhcp_config(
             f"dhcp-range=set:{tag},{subnet.network_address},static,{subnet.netmask},12h",
             f"dhcp-option=tag:{tag},option:router,{entry['ipam']['gateway_ipv4']}",
         ])
-        for attachment in sorted(attachments, key=lambda value: value["uid"]):
-            if attachment["subnet_uid"] != entry["uid"] or attachment["phase"] == "deleting":
-                continue
+        for attachment in attachments_by_subnet.get(entry["uid"], []):
             lines.append(
                 f"dhcp-host=tag:{tag},{attachment['mac_address']},id:*,{attachment['address']},12h"
             )

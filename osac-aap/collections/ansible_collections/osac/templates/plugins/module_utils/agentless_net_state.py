@@ -44,10 +44,12 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_subne
     dhcp_lease_path,
     ensure_subnet_data_plane,
     find_active_dhcp_lease,
+    normalize_subnet_ipam,
     preflight_dhcp_supervisor,
     prepare_subnet_delete_data_plane,
     read_lease_file_read_only,
     reconcile_virtual_network_dhcp,
+    validate_physical_attachment_address,
 )
 
 SCHEMA_VERSION = 1
@@ -193,41 +195,12 @@ def _parse_canonical_ipv4_network(value: Any) -> ipaddress.IPv4Network:
 
 
 def _normalize_ipam(value: Any, subnet: ipaddress.IPv4Network) -> dict[str, Any]:
-    expected = {
-        "gateway_ipv4",
-        "overlay_ipv4_cidrs",
-        "physical_ipv4_cidrs",
-        "lb_vip_ipv4_cidrs",
-    }
-    if not isinstance(value, dict) or set(value) != expected:
-        raise StateError("Subnet IPAM must contain the gateway and all three IPv4 ranges")
     try:
-        gateway = ipaddress.IPv4Address(value["gateway_ipv4"])
+        return normalize_subnet_ipam(value, subnet, error_type=StateError)
+    except StateError:
+        raise
     except (TypeError, ValueError) as error:
-        raise StateError("Subnet IPAM gateway must be a canonical IPv4 address") from error
-    if str(gateway) != value["gateway_ipv4"] or gateway != subnet.network_address + 1:
-        raise StateError("Subnet IPAM gateway does not match the Subnet address plan")
-
-    normalized: dict[str, Any] = {"gateway_ipv4": str(gateway)}
-    ranges: list[ipaddress.IPv4Network] = []
-    for key in ("overlay_ipv4_cidrs", "physical_ipv4_cidrs", "lb_vip_ipv4_cidrs"):
-        values = value[key]
-        if not isinstance(values, list):
-            raise StateError(f"Subnet IPAM {key} must be a list")
-        cidrs: list[str] = []
-        for raw in values:
-            try:
-                network = parse_canonical_ipv4_network(raw, context=f"Subnet IPAM {key}")
-            except (TypeError, ValueError) as error:
-                raise StateError(f"Subnet IPAM {key} contains an invalid IPv4 CIDR") from error
-            if not network.subnet_of(subnet):
-                raise StateError(f"Subnet IPAM {key} is outside the Subnet")
-            if any(network.overlaps(previous) for previous in ranges):
-                raise StateError("Subnet IPAM ranges overlap")
-            ranges.append(network)
-            cidrs.append(str(network))
-        normalized[key] = cidrs
-    return normalized
+        raise StateError("Subnet IPAM is invalid") from error
 
 
 def _validate_network_attachment_entry(entry: Any) -> None:
@@ -255,46 +228,19 @@ def _validate_network_attachment_entry(entry: Any) -> None:
         raise StateCorrupt("NetworkAttachment address is invalid") from error
     if not isinstance(entry["phase"], str) or entry["phase"] not in NETWORK_ATTACHMENT_PHASES:
         raise StateCorrupt("NetworkAttachment phase is invalid")
-    ports = entry["ports"]
-    if not isinstance(ports, list) or not ports:
-        raise StateCorrupt("NetworkAttachment must retain its Cumulus port mapping")
-    seen: set[tuple[str, str]] = set()
-    selected = 0
-    for port in ports:
-        if not isinstance(port, dict) or set(port) != {"switch_name", "port_name", "selected", "fabric"}:
-            raise StateCorrupt("NetworkAttachment port mapping is malformed")
-        if not isinstance(port["switch_name"], str) or not port["switch_name"].strip():
-            raise StateCorrupt("NetworkAttachment switch name is invalid")
-        if not isinstance(port["port_name"], str) or not re.fullmatch(r"swp[0-9]+", port["port_name"]):
-            raise StateCorrupt("NetworkAttachment switch port is invalid")
-        if not isinstance(port["selected"], bool) or not isinstance(port["fabric"], bool):
-            raise StateCorrupt("NetworkAttachment port flags are invalid")
-        selected += int(port["selected"])
-        identity = (port["switch_name"], port["port_name"])
-        if identity in seen:
-            raise StateCorrupt("NetworkAttachment contains a duplicate switch port")
-        seen.add(identity)
-    if selected != 1:
-        raise StateCorrupt("NetworkAttachment must retain exactly one selected port")
+    StateStore._normalize_attachment_ports(entry["ports"], error_type=StateCorrupt)
 
 
 def _validate_network_attachment_for_subnet(
     attachment: dict[str, Any], subnet: dict[str, Any]
 ) -> None:
-    address = ipaddress.IPv4Address(attachment["address"])
-    network = ipaddress.ip_network(subnet["ipv4_cidr"], strict=True)
-    ranges = [
-        ipaddress.ip_network(cidr, strict=True)
-        for cidr in subnet["ipam"]["physical_ipv4_cidrs"]
-    ]
     if attachment["subnet_uid"] != subnet["uid"]:
         raise StateError("NetworkAttachment Subnet identity does not match saved state")
-    if not any(address in block for block in ranges):
-        raise StateError("NetworkAttachment address is outside physical_ipv4_cidrs")
-    if address in {network.network_address, network.broadcast_address} or str(address) == subnet["ipam"]["gateway_ipv4"]:
-        raise StateError("NetworkAttachment address is reserved by the Subnet")
-    if any(address in {block.network_address, block.broadcast_address} for block in ranges):
-        raise StateError("NetworkAttachment address is a physical CIDR network or broadcast address")
+    validate_physical_attachment_address(
+        subnet,
+        attachment["address"],
+        error_type=StateError,
+    )
 
 
 def _external_ip_pool_entry(
@@ -1950,9 +1896,13 @@ class StateStore:
             )
 
     @staticmethod
-    def _normalize_attachment_ports(ports: Any) -> list[dict[str, Any]]:
+    def _normalize_attachment_ports(
+        ports: Any,
+        *,
+        error_type: type[Exception] = StateError,
+    ) -> list[dict[str, Any]]:
         if not isinstance(ports, list) or not ports:
-            raise StateError("NetworkAttachment requires a saved switch-port mapping")
+            raise error_type("NetworkAttachment requires a saved switch-port mapping")
         normalized = []
         seen = set()
         selected = 0
@@ -1960,20 +1910,20 @@ class StateStore:
             if not isinstance(port, dict) or set(port) != {
                 "switch_name", "port_name", "selected", "fabric"
             }:
-                raise StateError("NetworkAttachment switch-port mapping is malformed")
+                raise error_type("NetworkAttachment switch-port mapping is malformed")
             switch_name = port["switch_name"]
             port_name = port["port_name"]
             is_selected = port["selected"]
             is_fabric = port["fabric"]
             if not isinstance(switch_name, str) or not switch_name.strip():
-                raise StateError("NetworkAttachment switch name is required")
+                raise error_type("NetworkAttachment switch name is required")
             if not isinstance(port_name, str) or not re.fullmatch(r"swp[0-9]+", port_name):
-                raise StateError("NetworkAttachment switch port is invalid")
+                raise error_type("NetworkAttachment switch port is invalid")
             if not isinstance(is_selected, bool) or not isinstance(is_fabric, bool):
-                raise StateError("NetworkAttachment port flags must be boolean")
+                raise error_type("NetworkAttachment port flags must be boolean")
             identity = (switch_name, port_name)
             if identity in seen:
-                raise StateError("NetworkAttachment contains a duplicate switch port")
+                raise error_type("NetworkAttachment contains a duplicate switch port")
             seen.add(identity)
             selected += int(is_selected)
             normalized.append({
@@ -1983,7 +1933,7 @@ class StateStore:
                 "fabric": is_fabric,
             })
         if selected != 1:
-            raise StateError("NetworkAttachment must select exactly one switch port")
+            raise error_type("NetworkAttachment must select exactly one switch port")
         return sorted(normalized, key=lambda item: (item["switch_name"], item["port_name"]))
 
     @staticmethod

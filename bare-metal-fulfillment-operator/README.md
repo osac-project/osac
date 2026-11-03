@@ -57,6 +57,11 @@ on the NetworkAttachment. See the
 [BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md)
 ([component responsibilities](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md#component-responsibilities)).
 
+The implementation for the remaining PR #357 delta is under review in
+[OSAC PR #2149](https://github.com/osac-project/osac/pull/2149) for
+[OSAC-6818](https://redhat.atlassian.net/browse/OSAC-6818); this README describes
+the accepted target behavior and does not claim the delta is shipping.
+
 At host assignment the inventory client supplies an administrator mapping from
 OSAC logical port names to physical MAC addresses. Each key must match the
 network attachment's `interface` and the catalog port name. The operator records

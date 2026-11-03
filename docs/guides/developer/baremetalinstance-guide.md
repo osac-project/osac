@@ -101,6 +101,10 @@ resources and gates are described in the
 [networking guide](networking-guide.md); this section covers only the
 BareMetalInstance lifecycle. Architecture summary:
 [Bare Metal Server Fulfillment](../../architecture/bm-server-fulfillment.md).
+The implementation is under review in
+[OSAC PR #2149](https://github.com/osac-project/osac/pull/2149); it is not a
+shipping-support claim until merged and backed by the deployed evidence tracked
+in OSAC-6820.
 
 **Ownership.** The deployment's Fabric Manager owns Fabric operations (port
 moves, SecurityGroup binding on the physical port, DHCP, and lease lookup).
@@ -136,9 +140,11 @@ server is deleted.
 
 **Delete and repair.** Deletion returns the host to inventory only after
 tenant-network cleanup completes. Fabric ports return to the provisioning
-network through the manager. If a FabricDomain still lists the host, BMF
-writes a repair mark before release; selection skips marked hosts until a
-Cloud Provider Admin clears the mark (see the design support procedures).
+network through the manager. With provider networking enabled, BMF writes a
+repair mark before release only when a FabricDomain create job has started and
+its spec lists the host. If the mark is unsupported or cannot be persisted, BMF
+does not release the host. Selection skips marked hosts until a Cloud Provider
+Admin clears the mark (see the design support procedures).
 
 **Provider networking disabled.** Host provisioning and deprovisioning stay
 available on the provisioning network. OSAC does not move tenant interfaces,

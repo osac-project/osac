@@ -15,8 +15,9 @@ attachment baseline work is under closed
 BMaaS delta is tracked by
 [OSAC-6818](https://redhat.atlassian.net/browse/OSAC-6818) (implementation) and
 [OSAC-6820](https://redhat.atlassian.net/browse/OSAC-6820) (deployed QE). Do not
-treat remaining-delta behavior as currently supported product behavior until
-those land with evidence.
+treat remaining-delta behavior as currently supported product behavior yet:
+implementation is under review in [OSAC PR #2149](https://github.com/osac-project/osac/pull/2149),
+and deployed evidence is assigned to OSAC-6820.
 
 ## Components
 
@@ -47,8 +48,10 @@ and [networking decisions](../agent-context/networking-decisions.md).
    presented as the tenant IP.
 6. On delete, BMF powers the host off while still on the tenant network (when a
    NetworkAttachment exists), deletes the NetworkAttachment (Fabric restore to
-   provisioning), deprovisions, and may write a **repair mark** when a
-   FabricDomain still lists the host.
+   provisioning), and deprovisions. Before releasing the host, BMF writes a
+   **repair mark** only when provider networking is enabled, a FabricDomain
+   create job has started, and that job's spec lists the host. If the mark
+   cannot be persisted, BMF keeps the host from being released.
 
 With **provider networking disabled**, host provisioning continues on the
 provisioning network; OSAC skips NetworkAttachment, handoff, and lease discovery.

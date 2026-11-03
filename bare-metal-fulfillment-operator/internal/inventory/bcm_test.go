@@ -904,6 +904,25 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			Expect(host.ManagedBy).To(Equal("baremetal"))
 		})
 
+		It("skips a free LiteNode without a valid MAC for the selected port", func() {
+			bcmDevices = func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, err := fmt.Fprint(w, `[
+					{"baseType":"Device","childType":"LiteNode","uuid":"u1","hostname":"node001","mac":"aa:bb:cc:dd:ee:01","extra_values":{"resource_class":"h100","osac_interface_macs":{"other-0":"52:54:00:11:22:33"}}},
+					{"baseType":"Device","childType":"LiteNode","uuid":"u2","hostname":"node002","mac":"aa:bb:cc:dd:ee:02","extra_values":{"resource_class":"h100","osac_interface_macs":{"data-0":"AA:BB:CC:DD:EE:FF"}}}
+				]`)
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			client := newTestClient()
+			host, err := client.FindFreeHostWithNetworkPort(ctx, map[string]string{"resource_class": "h100"}, "data-0")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(host.Name).To(Equal("node002"))
+			Expect(host.NetworkPortMAC).To(Equal("AA:BB:CC:DD:EE:FF"))
+		})
+
 		It("should skip PhysicalNode devices", func() {
 			bcmDevices = func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
@@ -1241,4 +1260,33 @@ func extraValues(raw json.RawMessage) map[string]any {
 	ExpectWithOffset(1, json.Unmarshal(raw, &obj)).To(Succeed())
 	ev, _ := obj["extra_values"].(map[string]any)
 	return ev
+}
+
+func TestBCMMarkNetworkRepairRequiredPersistsMark(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mockAPI := NewMockBCMAPI(ctrl)
+	initial := makeDevice(`{"hostname":"node001","extra_values":{"resource_class":"h100"}}`)
+	verified := makeDevice(`{"hostname":"node001","extra_values":{"resource_class":"h100","osac_network_repair_required":true,"osac_network_repair_details":"{\"fabricDomains\":[\"fd-1\"]}"}}`)
+	details := `{"fabricDomains":["fd-1"]}`
+
+	gomock.InOrder(
+		mockAPI.EXPECT().GetDevice(gomock.Any(), "node001").Return(initial, nil),
+		mockAPI.EXPECT().UpdateDevice(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, raw json.RawMessage) (*bcmclient.UpdateResponse, error) {
+				values := extraValues(raw)
+				if values[BCMNetworkRepairRequiredKey] != true {
+					t.Errorf("repair mark = %#v, want true", values[BCMNetworkRepairRequiredKey])
+				}
+				if values[BCMNetworkRepairDetailsKey] != details {
+					t.Errorf("repair details = %#v, want %q", values[BCMNetworkRepairDetailsKey], details)
+				}
+				return &bcmclient.UpdateResponse{Success: true}, nil
+			}),
+		mockAPI.EXPECT().GetDevice(gomock.Any(), "node001").Return(verified, nil),
+	)
+
+	client := NewBCMClient(mockAPI, nil, "bcm")
+	if err := client.MarkNetworkRepairRequired(context.Background(), "metal3-system/node001", details); err != nil {
+		t.Fatalf("MarkNetworkRepairRequired: %v", err)
+	}
 }

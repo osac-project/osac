@@ -57,6 +57,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/profile"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
+	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	// +kubebuilder:scaffold:imports
@@ -92,6 +93,7 @@ const (
 	envAAPInsecureSkipVerify        = "OSAC_AAP_INSECURE_SKIP_VERIFY"
 	envAAPTemplatePrefix            = "OSAC_AAP_TEMPLATE_PREFIX"
 	envEnableNetworkingProvisioning = "OSAC_ENABLE_NETWORKING_PROVISIONING"
+	envNetworkingNamespace          = "OSAC_NETWORKING_NAMESPACE"
 
 	envSecretAPIURL              = "OSAC_SECRET_API_URL"
 	envSecretAPIIssuerURL        = "OSAC_SECRET_API_ISSUER_URL"
@@ -103,6 +105,7 @@ const (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(osacv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(opv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(metal3api.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -286,10 +289,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create shared provisioning, networking, and IP discovery providers
+	// Create the shared OS provisioning provider.
 	var provisioningProvider provisioning.ProvisioningProvider
-	var networkingProvider provisioning.ProvisioningProvider
-	var ipDiscoveryProvider provisioning.ProvisioningProvider
 	var aapClient *aap.Client
 	aapURL := helpers.GetEnvWithDefault(envAAPURL, "")
 	aapToken := helpers.GetEnvWithDefault(envAAPToken, "")
@@ -309,24 +310,6 @@ func main() {
 			os.Exit(1)
 		}
 
-		if networkingProvisioningEnabled {
-			// Networking provisioning (onboard) and deprovisioning (offboard) are both a
-			// port move; the single move playbook derives the direction from the CR.
-			networkingProvider = provisioning.NewAAPProvider(
-				aapClient,
-				templatePrefix+"-move-network-attachment",
-				templatePrefix+"-move-network-attachment",
-			)
-
-			ipDiscoveryProvider = provisioning.NewAAPProvider(
-				aapClient,
-				templatePrefix+"-query-dhcp-lease",
-				"",
-			)
-		} else {
-			setupLog.Info("BMI networking provisioning disabled, move-network-attachment and query-dhcp-lease will be skipped")
-		}
-
 		setupLog.Info("AAP provisioning provider configured")
 	} else {
 		setupLog.Info("AAP not configured, provisioning workflows disabled")
@@ -337,10 +320,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := setupBareMetalInstanceController(
-		ctx, mgr, provisioningProvider, networkingProvider,
-		ipDiscoveryProvider, aapClient,
-	); err != nil {
+	if err := setupBareMetalInstanceController(ctx, mgr, provisioningProvider, aapClient); err != nil {
 		setupLog.Error(err, "unable to setup controller", "controller", "BareMetalInstance")
 		os.Exit(1)
 	}
@@ -445,8 +425,6 @@ func setupBareMetalInstanceController(
 	ctx context.Context,
 	mgr ctrl.Manager,
 	provisioningProvider provisioning.ProvisioningProvider,
-	networkingProvider provisioning.ProvisioningProvider,
-	ipDiscoveryProvider provisioning.ProvisioningProvider,
 	aapClient *aap.Client,
 ) error {
 	// Read and parse inventory configuration
@@ -518,6 +496,14 @@ func setupBareMetalInstanceController(
 		1,
 		func(v int) bool { return v > 0 },
 	)
+	networkingNamespace := helpers.GetEnvWithDefault(envNetworkingNamespace, "")
+	if loadNetworkingProvisioning() && networkingNamespace == "" {
+		return fmt.Errorf("%s is required when provider networking is enabled", envNetworkingNamespace)
+	}
+	if networkingNamespace != "" {
+		setupLog.Info("BMI hub NetworkAttachment path enabled",
+			"namespace", networkingNamespace)
+	}
 
 	if err := controller.NewBareMetalInstanceReconciler(
 		mgr.GetClient(),
@@ -525,9 +511,8 @@ func setupBareMetalInstanceController(
 		inventoryClient,
 		managementClient,
 		provisioningProvider,
-		networkingProvider,
-		ipDiscoveryProvider,
 		aapClient,
+		networkingNamespace,
 		noFreeHostsPollInterval,
 		tryLockFailPollInterval,
 		managementRecheckInterval,

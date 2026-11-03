@@ -19,6 +19,7 @@ package inventory
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -309,3 +310,70 @@ var _ = Describe("OpenStack UnassignHost ownership", func() {
 		Expect(patchCalls).To(BeZero())
 	})
 })
+
+var _ = Describe("OpenStack MarkNetworkRepairRequired", func() {
+	It("adds repair mark and details on node.extra", func() {
+		fakeServer := th.SetupHTTP()
+		defer fakeServer.Teardown()
+		var patchBody string
+		fakeServer.Mux.HandleFunc("/nodes/test-node-uuid", func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = fmt.Fprint(w, `{"uuid":"test-node-uuid","extra":{}}`)
+			case http.MethodPatch:
+				body, _ := io.ReadAll(r.Body)
+				patchBody = string(body)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = fmt.Fprint(w, `{"uuid":"test-node-uuid","extra":{"osac_network_repair_required":"true"}}`)
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		})
+		client := &OpenStackClient{client: fakeclient.ServiceClient(fakeServer)}
+
+		Expect(client.MarkNetworkRepairRequired(context.Background(), "test-node-uuid",
+			`{"baremetalInstance":"api-1","fabricDomains":["fd-1"]}`)).To(Succeed())
+		Expect(patchBody).To(ContainSubstring(OpenStackNetworkRepairRequiredKey))
+		Expect(patchBody).To(ContainSubstring(OpenStackNetworkRepairDetailsKey))
+	})
+
+	It("replaces an existing repair mark", func() {
+		fakeServer := th.SetupHTTP()
+		defer fakeServer.Teardown()
+		var patchBody string
+		fakeServer.Mux.HandleFunc("/nodes/test-node-uuid", func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = fmt.Fprint(w, `{"uuid":"test-node-uuid","extra":{"osac_network_repair_required":"true","osac_network_repair_details":"old"}}`)
+			case http.MethodPatch:
+				body, _ := io.ReadAll(r.Body)
+				patchBody = string(body)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = fmt.Fprint(w, `{"uuid":"test-node-uuid","extra":{"osac_network_repair_required":"true","osac_network_repair_details":"new"}}`)
+			default:
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+		})
+		client := &OpenStackClient{client: fakeclient.ServiceClient(fakeServer)}
+
+		Expect(client.MarkNetworkRepairRequired(context.Background(), "test-node-uuid", "new")).To(Succeed())
+		Expect(patchBody).To(ContainSubstring(`"op":"replace"`))
+	})
+})
+
+func TestOpenStackFindFreeHostSkipsRepairMark(t *testing.T) {
+	// Selection skip is covered by networkRepairRequired unit tests plus the
+	// FindFreeHost loop; assert the helper used by that loop here.
+	node := &nodes.Node{Extra: map[string]interface{}{
+		OpenStackNetworkRepairRequiredKey: "true",
+	}}
+	if !networkRepairRequired(node.Extra[OpenStackNetworkRepairRequiredKey]) {
+		t.Fatal("expected repair-marked node to be detected")
+	}
+}

@@ -100,6 +100,19 @@ var _ = Describe("Metal3 Management Backend", func() {
 			Expect(status.IsTransitioning).To(BeFalse())
 		})
 
+		It("marks a Metal3 power-management error as current", func() {
+			bmh := newBMHForManagement("host-power-error", false, false)
+			bmh.Status.OperationalStatus = metal3api.OperationalStatusError
+			bmh.Status.ErrorType = metal3api.PowerManagementError
+			bmh.Status.ErrorMessage = "power operation failed"
+			m := newMetal3ManagementClient(bmh)
+
+			status, err := m.GetPowerState(ctx, metal3TestNamespace+"/host-power-error")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.FailureMessage).To(Equal("power operation failed"))
+			Expect(status.FailureMessageIsCurrent).To(BeTrue())
+		})
+
 		It("reports transitioning when spec.online != status.poweredOn (powering on)", func() {
 			bmh := newBMHForManagement("host-booting", true, false)
 			m := newMetal3ManagementClient(bmh)
@@ -293,6 +306,73 @@ var _ = Describe("Metal3 Management Backend", func() {
 
 			_, err := m.IsRestartComplete(ctx, "bad-id")
 			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Describe("Network handoff", func() {
+		It("RequestNetworkHandoff sets osac-handoff hard annotation and online=true", func() {
+			bmh := newBMHWithAnnotations("host-handoff", false, false, nil)
+			m := newMetal3ManagementClient(bmh)
+
+			Expect(m.RequestNetworkHandoff(ctx, metal3TestNamespace+"/host-handoff")).To(Succeed())
+
+			updated := &metal3api.BareMetalHost{}
+			Expect(m.TestClient().Get(ctx, client.ObjectKeyFromObject(bmh), updated)).To(Succeed())
+			Expect(updated.Spec.Online).To(BeTrue())
+			Expect(updated.Annotations).To(HaveKeyWithValue(
+				management.Metal3NetworkHandoffAnnotationKey,
+				management.Metal3NetworkHandoffAnnotationValue,
+			))
+		})
+
+		It("ObserveNetworkHandoff clears annotation when powered off then confirms when on", func() {
+			bmh := newBMHWithAnnotations("host-handoff-obs", true, false, map[string]string{
+				management.Metal3NetworkHandoffAnnotationKey: management.Metal3NetworkHandoffAnnotationValue,
+			})
+			m := newMetal3ManagementClient(bmh)
+
+			obs, err := m.ObserveNetworkHandoff(ctx, metal3TestNamespace+"/host-handoff-obs", "Progressing", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(obs.Confirmed).To(BeFalse())
+
+			updated := &metal3api.BareMetalHost{}
+			Expect(m.TestClient().Get(ctx, client.ObjectKeyFromObject(bmh), updated)).To(Succeed())
+			Expect(updated.Annotations).NotTo(HaveKey(management.Metal3NetworkHandoffAnnotationKey))
+
+			updated.Status.PoweredOn = true
+			Expect(m.TestClient().Status().Update(ctx, updated)).To(Succeed())
+
+			obs, err = m.ObserveNetworkHandoff(ctx, metal3TestNamespace+"/host-handoff-obs", "Progressing", "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(obs.Confirmed).To(BeTrue())
+			Expect(obs.Reason).To(Equal("Succeeded"))
+		})
+
+		It("ClearPendingNetworkHandoff cancels a held-off handoff without booting", func() {
+			bmh := newBMHWithAnnotations("host-handoff-clear", true, false, map[string]string{
+				management.Metal3NetworkHandoffAnnotationKey: management.Metal3NetworkHandoffAnnotationValue,
+			})
+			m := newMetal3ManagementClient(bmh)
+
+			Expect(m.ClearPendingNetworkHandoff(ctx, metal3TestNamespace+"/host-handoff-clear")).To(Succeed())
+
+			updated := &metal3api.BareMetalHost{}
+			Expect(m.TestClient().Get(ctx, client.ObjectKeyFromObject(bmh), updated)).To(Succeed())
+			Expect(updated.Annotations).NotTo(HaveKey(management.Metal3NetworkHandoffAnnotationKey))
+			Expect(updated.Spec.Online).To(BeFalse())
+			Expect(updated.Status.PoweredOn).To(BeFalse())
+		})
+
+		It("keeps a host offline if deletion races handoff annotation removal", func() {
+			bmh := newBMHWithAnnotations("host-handoff-race", true, false, nil)
+			m := newMetal3ManagementClient(bmh)
+
+			Expect(m.ClearPendingNetworkHandoff(ctx, metal3TestNamespace+"/host-handoff-race")).To(Succeed())
+
+			updated := &metal3api.BareMetalHost{}
+			Expect(m.TestClient().Get(ctx, client.ObjectKeyFromObject(bmh), updated)).To(Succeed())
+			Expect(updated.Spec.Online).To(BeFalse())
+			Expect(updated.Status.PoweredOn).To(BeFalse())
 		})
 	})
 

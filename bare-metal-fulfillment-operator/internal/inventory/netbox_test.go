@@ -298,27 +298,28 @@ var _ = Describe("NetBox inventory client", func() {
 })
 
 type selectorQueryTestAPI struct {
-	deviceQueries    int
-	deviceQuery      netboxclient.DeviceQuery
-	devices          []netboxclient.Device
-	deviceErr        error
-	deviceVisits     int
-	customFieldReads int
-	deviceSnapshot   netboxclient.DeviceSnapshot
-	deviceSnapshots  []netboxclient.DeviceSnapshot
-	deviceReadCalls  int
-	deviceReadIDs    []string
-	deviceGetError   error
-	patchCalls       int
-	patchDeviceID    string
-	patch            netboxclient.DevicePatch
-	patchETag        string
-	patchSnapshot    netboxclient.DeviceSnapshot
-	patchErr         error
-	interfaces       []netboxclient.DeviceInterface
-	interfaceErr     error
-	interfaceDevice  string
-	deviceReadErr    error
+	deviceQueries     int
+	deviceQuery       netboxclient.DeviceQuery
+	devices           []netboxclient.Device
+	deviceErr         error
+	deviceVisits      int
+	customFieldReads  int
+	deviceSnapshot    netboxclient.DeviceSnapshot
+	deviceSnapshots   []netboxclient.DeviceSnapshot
+	deviceReadCalls   int
+	deviceReadIDs     []string
+	deviceGetError    error
+	patchCalls        int
+	patchDeviceID     string
+	patch             netboxclient.DevicePatch
+	patchETag         string
+	patchSnapshot     netboxclient.DeviceSnapshot
+	patchErr          error
+	interfaces        []netboxclient.DeviceInterface
+	interfaceByDevice map[string][]netboxclient.DeviceInterface
+	interfaceErr      error
+	interfaceDevice   string
+	deviceReadErr     error
 }
 
 func (a *selectorQueryTestAPI) ForEachDevice(
@@ -354,6 +355,9 @@ func (a *selectorQueryTestAPI) ForEachDeviceCustomField(
 
 func (a *selectorQueryTestAPI) ListDeviceInterfaces(_ context.Context, deviceID string) ([]netboxclient.DeviceInterface, error) {
 	a.interfaceDevice = deviceID
+	if interfaces, ok := a.interfaceByDevice[deviceID]; ok {
+		return interfaces, a.interfaceErr
+	}
 	return a.interfaces, a.interfaceErr
 }
 
@@ -519,6 +523,76 @@ var _ = Describe("NetBox selector query", func() {
 			Expect(errors.Is(err, apiError)).To(BeTrue())
 			Expect(api.customFieldReads).To(BeZero())
 			Expect(api.deviceQueries).To(Equal(1))
+		})
+
+		It("does not use native interface MACs for network-port selection", func() {
+			api := &selectorQueryTestAPI{
+				devices: []netboxclient.Device{{ID: "46"}, {ID: "47"}},
+				deviceSnapshots: []netboxclient.DeviceSnapshot{
+					{Device: netboxclient.Device{ID: "46"}},
+					{Device: netboxclient.Device{ID: "47"}},
+				},
+				interfaceByDevice: map[string][]netboxclient.DeviceInterface{
+					"46": {},
+					"47": {{Name: "data-0", PrimaryMAC: "AA:BB:CC:DD:EE:FF"}},
+				},
+			}
+			client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), testNetBoxHostClass, nil)
+
+			host, err := client.FindFreeHostWithNetworkPort(context.Background(), nil, "data-0")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).To(BeNil())
+			Expect(api.interfaceDevice).To(BeEmpty())
+		})
+
+		It("returns the selected MAC from the custom field", func() {
+			api := &selectorQueryTestAPI{
+				devices: []netboxclient.Device{{ID: "47"}},
+				deviceSnapshots: []netboxclient.DeviceSnapshot{{Device: netboxclient.Device{
+					ID: "47",
+					CustomFields: map[string]interface{}{
+						"osac_interface_macs": map[string]interface{}{"data-0": "AA:BB:CC:DD:EE:FF"},
+					},
+				}}},
+			}
+			client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), testNetBoxHostClass, nil)
+
+			host, err := client.FindFreeHostWithNetworkPort(context.Background(), nil, "data-0")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(host.Name).To(Equal("netbox-47"))
+			Expect(host.NetworkPortMAC).To(Equal("AA:BB:CC:DD:EE:FF"))
+			Expect(api.deviceReadIDs).To(Equal([]string{"47"}))
+		})
+
+		It("skips a repair-marked host when selecting a network port", func() {
+			api := &selectorQueryTestAPI{
+				devices: []netboxclient.Device{
+					{ID: "46", CustomFields: map[string]interface{}{NetBoxNetworkRepairRequiredKey: true}},
+					{ID: "47"},
+				},
+				deviceSnapshots: []netboxclient.DeviceSnapshot{
+					{Device: netboxclient.Device{
+						ID: "47",
+						CustomFields: map[string]interface{}{
+							"osac_interface_macs": map[string]interface{}{"data-0": "AA:BB:CC:DD:EE:FF"},
+						},
+					}},
+				},
+				interfaceByDevice: map[string][]netboxclient.DeviceInterface{
+					"47": {{Name: "data-0", PrimaryMAC: "AA:BB:CC:DD:EE:FF"}},
+				},
+			}
+			client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), testNetBoxHostClass, nil)
+
+			host, err := client.FindFreeHostWithNetworkPort(context.Background(), nil, "data-0")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(host.Name).To(Equal("netbox-47"))
+			Expect(host.NetworkPortMAC).To(Equal("AA:BB:CC:DD:EE:FF"))
 		})
 	})
 
@@ -863,6 +937,33 @@ func testNetBoxAssignmentSnapshot(status, instanceID string) netboxclient.Device
 	}
 }
 
+var _ = Describe("NetBox MarkNetworkRepairRequired", func() {
+	It("writes the repair mark and details with the device ETag", func() {
+		initial := netboxclient.DeviceSnapshot{
+			Device: netboxclient.Device{ID: "46", CustomFields: map[string]interface{}{}},
+			ETag:   `W/"repair-revision-1"`,
+		}
+		marked := netboxclient.DeviceSnapshot{
+			Device: netboxclient.Device{ID: "46", CustomFields: map[string]interface{}{NetBoxNetworkRepairRequiredKey: true}},
+		}
+		api := &selectorQueryTestAPI{
+			deviceSnapshots: []netboxclient.DeviceSnapshot{initial},
+			patchSnapshot:   marked,
+		}
+		client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), testNetBoxHostClass, nil)
+		details := `{"fabricDomains":["fd-1"]}`
+
+		Expect(client.MarkNetworkRepairRequired(context.Background(), "metal3-system/netbox-46", details)).To(Succeed())
+		Expect(api.patchCalls).To(Equal(1))
+		Expect(api.patchDeviceID).To(Equal("46"))
+		Expect(api.patchETag).To(Equal(initial.ETag))
+		Expect(api.patch.CustomFields).To(Equal(map[string]interface{}{
+			NetBoxNetworkRepairRequiredKey: true,
+			NetBoxNetworkRepairDetailsKey:  details,
+		}))
+	})
+})
+
 func expectedTestNetBoxAssignedHost(instanceID string) *Host {
 	return &Host{
 		InventoryHostID:     "metal3-system/netbox-46",
@@ -934,7 +1035,7 @@ var _ = Describe("NetBox GetHostNICs", func() {
 })
 
 var _ = Describe("NetBox GetHostLogicalPortMACs", func() {
-	It("prefers custom values for matching labels and retains aliases", func() {
+	It("returns only the custom-field logical-port mapping", func() {
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
 		api := &selectorQueryTestAPI{
@@ -961,10 +1062,8 @@ var _ = Describe("NetBox GetHostLogicalPortMACs", func() {
 			"data-0": "aa:bb:cc:dd:ee:01",
 			"data-1": "52:54:00:16:04:86",
 			"data-2": "52:54:00:16:04:87",
-			"eno1":   "AA:BB:CC:DD:EE:01",
-			"eno2":   "52:54:00:16:04:85",
 		}))
-		Expect(api.interfaceDevice).To(Equal("42"))
+		Expect(api.interfaceDevice).To(BeEmpty())
 		Expect(api.deviceReadIDs).To(Equal([]string{"42"}))
 	})
 
@@ -982,7 +1081,7 @@ var _ = Describe("NetBox GetHostLogicalPortMACs", func() {
 		Expect(got).To(BeNil())
 	})
 
-	It("uses the custom field when native interfaces have no primary MAC", func() {
+	It("reads the custom field without consulting native interfaces", func() {
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
 		api := &selectorQueryTestAPI{
@@ -1000,10 +1099,11 @@ var _ = Describe("NetBox GetHostLogicalPortMACs", func() {
 			GetHostLogicalPortMACs(context.Background(), "baremetal/netbox-42")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal(map[string]string{"data-0": "52:54:00:16:04:83"}))
+		Expect(api.interfaceDevice).To(BeEmpty())
 		Expect(api.deviceReadIDs).To(Equal([]string{"42"}))
 	})
 
-	It("returns native interface lookup errors without reading the custom field", func() {
+	It("ignores native interface lookup errors and reads the custom field", func() {
 		lookupErr := errors.New("interface lookup failed")
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
@@ -1019,15 +1119,17 @@ var _ = Describe("NetBox GetHostLogicalPortMACs", func() {
 		}
 		got, err := NewNetBoxClient(api, manager, testNetBoxHostClass, nil).
 			GetHostLogicalPortMACs(context.Background(), "baremetal/netbox-42")
-		Expect(errors.Is(err, lookupErr)).To(BeTrue())
-		Expect(got).To(BeNil())
-		Expect(api.deviceReadCalls).To(BeZero())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(map[string]string{"data-0": "52:54:00:16:04:83"}))
+		Expect(api.interfaceDevice).To(BeEmpty())
+		Expect(api.deviceReadIDs).To(Equal([]string{"42"}))
 	})
 
-	It("returns an empty map when neither source provides a mapping", func() {
+	It("returns an empty map without a custom field despite native interfaces", func() {
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
 		api := &selectorQueryTestAPI{
+			interfaces:     []netboxclient.DeviceInterface{{Name: "data-0", PrimaryMAC: "52:54:00:00:00:01"}},
 			deviceSnapshot: netboxclient.DeviceSnapshot{Device: netboxclient.Device{ID: "42"}},
 		}
 
@@ -1037,6 +1139,7 @@ var _ = Describe("NetBox GetHostLogicalPortMACs", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).NotTo(BeNil())
 		Expect(got).To(BeEmpty())
+		Expect(api.interfaceDevice).To(BeEmpty())
 	})
 
 	It("returns malformed custom-field errors", func() {

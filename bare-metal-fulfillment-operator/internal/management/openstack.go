@@ -167,6 +167,10 @@ func nodePowerStatus(node *nodes.Node, hostID string) (*PowerStatus, error) {
 	return &PowerStatus{
 		State:           state,
 		IsTransitioning: node.TargetPowerState != "",
+		FailureMessage:  node.LastError,
+		// Ironic's LastError can predate the current operation. Treat it as
+		// diagnostic only; power-request errors are returned by SetPowerState.
+		FailureMessageIsCurrent: false,
 	}, nil
 }
 
@@ -223,4 +227,86 @@ func (c *OpenStackClient) IsRestartComplete(ctx context.Context, hostID string) 
 
 	// Restart is complete when the node is no longer transitioning
 	return !powerStatus.IsTransitioning, nil
+}
+
+// RequestNetworkHandoff starts the Ironic handoff by requesting power off
+// (design Create step 6). Idempotent when already off or transitioning off.
+func (c *OpenStackClient) RequestNetworkHandoff(ctx context.Context, hostID string) error {
+	status, err := c.GetPowerState(ctx, hostID)
+	if err != nil {
+		return err
+	}
+	if status.State == PowerOff || status.IsTransitioning {
+		return nil
+	}
+	return c.SetPowerState(ctx, hostID, PowerOff)
+}
+
+// ObserveNetworkHandoff drives the Ironic PoweringOff → PoweringOn sequence.
+func (c *OpenStackClient) ObserveNetworkHandoff(
+	ctx context.Context, hostID, currentReason, lastErrorFingerprint string,
+) (HandoffObservation, error) {
+	status, err := c.GetPowerState(ctx, hostID)
+	if err != nil {
+		return HandoffObservation{}, err
+	}
+	if status == nil {
+		return HandoffObservation{}, fmt.Errorf("node %s: nil power status", hostID)
+	}
+	currentFailure := status.FailureMessage != "" && status.FailureMessageIsCurrent
+	if !currentFailure && status.FailureMessage != "" && !status.IsTransitioning && lastErrorFingerprint != "" {
+		currentFailure = FailureMessageFingerprint(status.FailureMessage) != lastErrorFingerprint
+	}
+	if currentFailure {
+		return HandoffObservation{
+			Failed:  true,
+			Reason:  "NetworkHandoffFailed",
+			Message: status.FailureMessage,
+		}, nil
+	}
+
+	switch currentReason {
+	case "PoweringOn":
+		if status.State == PowerOn && !status.IsTransitioning {
+			return HandoffObservation{
+				Confirmed: true,
+				Reason:    "Succeeded",
+				Message:   "Host rebooted onto the tenant network",
+			}, nil
+		}
+		if status.State != PowerOn && !status.IsTransitioning {
+			if err := c.SetPowerState(ctx, hostID, PowerOn); err != nil && !errors.Is(err, ErrTransitioning) {
+				return HandoffObservation{}, err
+			}
+		}
+		return HandoffObservation{
+			Reason:  "PoweringOn",
+			Message: "Powering host on after handoff power-off",
+		}, nil
+	default: // Progressing, PoweringOff, or empty after Request
+		if status.State == PowerOff && !status.IsTransitioning {
+			if err := c.SetPowerState(ctx, hostID, PowerOn); err != nil && !errors.Is(err, ErrTransitioning) {
+				return HandoffObservation{}, err
+			}
+			return HandoffObservation{
+				Reason:  "PoweringOn",
+				Message: "Host powered off; powering on onto the tenant network",
+			}, nil
+		}
+		if status.State == PowerOn && !status.IsTransitioning {
+			// Retry the power-off request until Ironic reports the transition.
+			if err := c.SetPowerState(ctx, hostID, PowerOff); err != nil && !errors.Is(err, ErrTransitioning) {
+				return HandoffObservation{}, err
+			}
+		}
+		return HandoffObservation{
+			Reason:  "PoweringOff",
+			Message: "Powering host off for network handoff",
+		}, nil
+	}
+}
+
+func (c *OpenStackClient) ClearPendingNetworkHandoff(ctx context.Context, hostID string) error {
+	// Ironic has no persistent handoff annotation; offboard power-off is enough.
+	return nil
 }

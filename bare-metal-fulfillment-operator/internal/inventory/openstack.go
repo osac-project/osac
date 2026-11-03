@@ -107,6 +107,18 @@ func NewOpenStackClient(ctx context.Context, cfg *Config) (Client, error) {
 }
 
 func (c *OpenStackClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*Host, error) {
+	return c.findFreeHost(ctx, matchExpressions, "")
+}
+
+func (c *OpenStackClient) FindFreeHostWithNetworkPort(
+	ctx context.Context, matchExpressions map[string]string, interfaceName string,
+) (*Host, error) {
+	return c.findFreeHost(ctx, matchExpressions, interfaceName)
+}
+
+func (c *OpenStackClient) findFreeHost(
+	ctx context.Context, matchExpressions map[string]string, interfaceName string,
+) (*Host, error) {
 	if err := validateMatchExpressions(matchExpressions); err != nil {
 		return nil, err
 	}
@@ -170,6 +182,11 @@ func (c *OpenStackClient) FindFreeHost(ctx context.Context, matchExpressions map
 				continue
 			}
 
+			if networkRepairRequired(node.Extra[OpenStackNetworkRepairRequiredKey]) {
+				log.V(1).Info("Skipping node: network repair required")
+				continue
+			}
+
 			// Apply host selector label filtering against the node's osac_labels.
 			if !nodeMatchesLabels(node, labelMatchExpressions) {
 				continue
@@ -184,15 +201,28 @@ func (c *OpenStackClient) FindFreeHost(ctx context.Context, matchExpressions map
 			if managedBy != matchManagedBy {
 				continue
 			}
+			networkPortMAC := ""
+			if interfaceName != "" {
+				if node.Name == "" {
+					log.Info("Skipping host without inventory name")
+					continue
+				}
+				macs, parseErr := LogicalPortMACsFromValue(node.Extra[OpenStackInterfaceMACsKey])
+				if parseErr != nil || !HasValidNetworkPortMAC(macs, interfaceName) {
+					log.Info("Skipping host without a valid MAC for its selected network port")
+					continue
+				}
+				networkPortMAC = macs[interfaceName]
+			}
 
 			// Skip nodes without registered Ironic ports
 			portList, portErr := c.listNodePorts(ctx, node.UUID)
 			if portErr != nil {
-				log.V(1).Info("Skipping node: port lookup failed", "node", node.UUID, "error", portErr)
+				log.V(1).Info("Skipping node: port lookup failed")
 				continue
 			}
 			if len(portList) == 0 {
-				log.Error(nil, "Skipping node: no registered ports", "node", node.UUID)
+				log.Error(nil, "Skipping node: no registered ports")
 				continue
 			}
 
@@ -202,6 +232,7 @@ func (c *OpenStackClient) FindFreeHost(ctx context.Context, matchExpressions map
 				BareMetalInstanceID: bareMetalInstanceID,
 				InventoryHostID:     node.UUID,
 				Name:                node.Name,
+				NetworkPortMAC:      networkPortMAC,
 				HostType:            node.ResourceClass,
 				HostClass:           c.hostClass,
 				ProvisionState:      node.ProvisionState,
@@ -296,6 +327,46 @@ func (c *OpenStackClient) AssignHost(ctx context.Context, inventoryHostID string
 		ManagedBy:           managedBy,
 		Ready:               true, // Ironic nodes are immediately usable after label assignment
 	}, nil
+}
+
+// MarkNetworkRepairRequired sets Ironic node.extra repair keys. Existing marks
+// are replaced with the latest details; the mark itself is never cleared here.
+func (c *OpenStackClient) MarkNetworkRepairRequired(ctx context.Context, inventoryHostID, detailsJSON string) error {
+	if inventoryHostID == "" {
+		return fmt.Errorf("invalid input: inventoryHostID is empty")
+	}
+
+	node, err := nodes.Get(ctx, c.client, inventoryHostID).Extract()
+	if err != nil {
+		return fmt.Errorf("getting node %s: %w", inventoryHostID, err)
+	}
+
+	requiredOp := nodes.AddOp
+	detailsOp := nodes.AddOp
+	if _, ok := node.Extra[OpenStackNetworkRepairRequiredKey]; ok {
+		requiredOp = nodes.ReplaceOp
+	}
+	if _, ok := node.Extra[OpenStackNetworkRepairDetailsKey]; ok {
+		detailsOp = nodes.ReplaceOp
+	}
+
+	updateOpts := nodes.UpdateOpts{
+		nodes.UpdateOperation{
+			Op:    requiredOp,
+			Path:  "/extra/" + escapeJSONPointerToken(OpenStackNetworkRepairRequiredKey),
+			Value: "true",
+		},
+		nodes.UpdateOperation{
+			Op:    detailsOp,
+			Path:  "/extra/" + escapeJSONPointerToken(OpenStackNetworkRepairDetailsKey),
+			Value: detailsJSON,
+		},
+	}
+
+	if _, err := nodes.Update(ctx, c.client, inventoryHostID, updateOpts).Extract(); err != nil {
+		return fmt.Errorf("marking node %s for network repair: %w", inventoryHostID, err)
+	}
+	return nil
 }
 
 func (c *OpenStackClient) UnassignHost(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error {

@@ -32,18 +32,74 @@ import (
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
+const testNetworkingNS = "osac-networking-test"
+
+type readTrackingClient struct {
+	client.Client
+	getCalls  int
+	listCalls int
+}
+
+func (c *readTrackingClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	c.getCalls++
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+func (c *readTrackingClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	c.listCalls++
+	return c.Client.List(ctx, list, opts...)
+}
+
+type readTrackingReader struct {
+	client.Reader
+	getCalls  int
+	listCalls int
+}
+
+func (r *readTrackingReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	r.getCalls++
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
+func (r *readTrackingReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	r.listCalls++
+	return r.Reader.List(ctx, list, opts...)
+}
+
+func forceDeleteNetworkAttachment(ctx context.Context, namespace, name string) {
+	na := &opv1alpha1.NetworkAttachment{}
+	key := types.NamespacedName{Namespace: namespace, Name: name}
+	if err := k8sClient.Get(ctx, key, na); err != nil {
+		return
+	}
+	na.Finalizers = nil
+	_ = k8sClient.Update(ctx, na)
+	_ = k8sClient.Delete(ctx, na)
+	Eventually(func() bool {
+		return apierrors.IsNotFound(k8sClient.Get(ctx, key, &opv1alpha1.NetworkAttachment{}))
+	}).Should(BeTrue())
+}
+
 var _ = Describe("BareMetalInstance Networking", func() {
 	var (
 		ctx        context.Context
 		reconciler *BareMetalInstanceReconciler
 		bmi        *v1alpha1.BareMetalInstance
+		invClient  *mockInventoryClient
+		apiID      string
 	)
 
-	bmiWithAttachments := func(attachments []v1alpha1.BareMetalNetworkAttachment) *v1alpha1.BareMetalInstance {
+	bmiWithAttachments := func(id string, attachments []v1alpha1.BareMetalNetworkAttachment) *v1alpha1.BareMetalInstance {
 		return &v1alpha1.BareMetalInstance{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "test-bmi-net-",
 				Namespace:    "default",
+				Labels: map[string]string{
+					BareMetalInstanceUUIDLabel: id,
+				},
+				Annotations: map[string]string{
+					BareMetalInstanceTenantAnnotation: "tenant-a",
+				},
 			},
 			Spec: v1alpha1.BareMetalInstanceSpec{
 				ExternalHostID: "host-123",
@@ -59,17 +115,24 @@ var _ = Describe("BareMetalInstance Networking", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		invClient = &mockInventoryClient{
+			getHostLogicalPortMACsFunc: func(_ context.Context, _ string) (map[string]string, error) {
+				return map[string]string{"data-0": "aa:bb:cc:dd:ee:01"}, nil
+			},
+		}
 	})
 
 	Describe("reconcileNetworking", func() {
 		Context("when no network attachments are configured", func() {
 			BeforeEach(func() {
-				bmi = bmiWithAttachments(nil)
+				apiID = "bmi-api-skip"
+				bmi = bmiWithAttachments(apiID, nil)
 				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 				reconciler = &BareMetalInstanceReconciler{
-					Client:             k8sClient,
-					Scheme:             k8sClient.Scheme(),
-					NetworkingProvider: &mockProvisioningProvider{},
+					Client:              k8sClient,
+					Scheme:              k8sClient.Scheme(),
+					InventoryClient:     invClient,
+					NetworkingNamespace: testNetworkingNS,
 				}
 			})
 
@@ -89,16 +152,18 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			})
 		})
 
-		Context("when NetworkingProvider is nil", func() {
+		Context("when NetworkingNamespace is empty", func() {
 			BeforeEach(func() {
-				bmi = bmiWithAttachments([]v1alpha1.BareMetalNetworkAttachment{
-					{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
+				apiID = "bmi-api-disabled"
+				bmi = bmiWithAttachments(apiID, []v1alpha1.BareMetalNetworkAttachment{
+					{SubnetRef: "subnet-1", Interface: "data-0", Primary: true, SecurityGroupRefs: []string{"sg-1"}},
 				})
 				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 				reconciler = &BareMetalInstanceReconciler{
-					Client:             k8sClient,
-					Scheme:             k8sClient.Scheme(),
-					NetworkingProvider: nil,
+					Client:              k8sClient,
+					Scheme:              k8sClient.Scheme(),
+					InventoryClient:     invClient,
+					NetworkingNamespace: "",
 				}
 			})
 
@@ -106,7 +171,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 				Expect(k8sClient.Delete(ctx, bmi)).To(Succeed())
 			})
 
-			It("should skip with condition set to True/Skipped", func() {
+			It("should set ProvisioningDisabled without requiring NetworkingProvider", func() {
 				result, err := reconciler.reconcileNetworking(ctx, bmi)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.RequeueAfter).To(BeZero())
@@ -114,30 +179,41 @@ var _ = Describe("BareMetalInstance Networking", func() {
 				cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 				Expect(cond).NotTo(BeNil())
 				Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-				Expect(cond.Reason).To(Equal("Skipped"))
+				Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProvisioningDisabled))
 			})
 		})
 
-		Context("when network attachments are configured with a provider", func() {
-			var mockProvider *mockProvisioningProvider
-
+		Context("when network attachments are configured with NetworkingNamespace", func() {
 			BeforeEach(func() {
-				bmi = bmiWithAttachments([]v1alpha1.BareMetalNetworkAttachment{
-					{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
+				apiID = "bmi-api-" + metav1.Now().Format("150405.000")
+				bmi = bmiWithAttachments(apiID, []v1alpha1.BareMetalNetworkAttachment{
+					{
+						SubnetRef:         "subnet-1",
+						Interface:         "data-0",
+						Primary:           true,
+						SecurityGroupRefs: []string{"sg-1"},
+					},
 				})
 				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 
-				mockProvider = &mockProvisioningProvider{}
 				reconciler = &BareMetalInstanceReconciler{
 					Client:                        k8sClient,
 					Scheme:                        k8sClient.Scheme(),
-					NetworkingProvider:            mockProvider,
+					InventoryClient:               invClient,
+					NetworkingNamespace:           testNetworkingNS,
 					ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
 				}
 			})
 
 			AfterEach(func() {
-				Expect(k8sClient.Delete(ctx, bmi)).To(Succeed())
+				forceDeleteNetworkAttachment(ctx, testNetworkingNS,
+					opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID))
+				fresh := &v1alpha1.BareMetalInstance{}
+				if k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), fresh) == nil {
+					fresh.Finalizers = nil
+					_ = k8sClient.Update(ctx, fresh)
+					_ = k8sClient.Delete(ctx, fresh)
+				}
 			})
 
 			It("should add the networking finalizer", func() {
@@ -149,124 +225,173 @@ var _ = Describe("BareMetalInstance Networking", func() {
 				Expect(controllerutil.ContainsFinalizer(fresh, BareMetalInstanceNetworkingFinalizer)).To(BeTrue())
 			})
 
-			It("should call the provisioning provider", func() {
-				provisionCalled := false
-				mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-					provisionCalled = true
-					return &provisioning.ProvisionResult{
-						JobID:        "job-1",
-						InitialState: opv1alpha1.JobStatePending,
-						Message:      "triggered",
-					}, nil
-				}
-				mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, _ string) (provisioning.ProvisionStatus, error) {
-					return provisioning.ProvisionStatus{
-						JobID: "job-1",
-						State: opv1alpha1.JobStateSucceeded,
-					}, nil
+			It("should create a hub NetworkAttachment with MAC and mirror Progressing", func() {
+				invClient.getHostLogicalPortMACsFunc = func(_ context.Context, _ string) (map[string]string, error) {
+					return map[string]string{"data-0": "AA-BB-CC-DD-EE-01"}, nil
 				}
 
-				// First call adds finalizer
 				_, err := reconciler.reconcileNetworking(ctx, bmi)
 				Expect(err).NotTo(HaveOccurred())
-
-				// Refetch after finalizer was added
 				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
 
-				// Second call triggers provisioning
+				result, err := reconciler.reconcileNetworking(ctx, bmi)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+				Expect(bmi.Status.NetworkAttachmentStatuses).To(HaveLen(1))
+				Expect(bmi.Status.NetworkAttachmentStatuses[0].MACAddress).To(Equal("aa:bb:cc:dd:ee:01"))
+				Expect(bmi.Status.NetworkAttachmentStatuses[0].Interface).To(Equal("data-0"))
+
+				cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+				Expect(cond).NotTo(BeNil())
+				Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+				Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
+
+				naName := opv1alpha1.NetworkAttachmentName(
+					opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID)
+				na := &opv1alpha1.NetworkAttachment{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{
+					Namespace: testNetworkingNS, Name: naName,
+				}, na)).To(Succeed())
+				Expect(na.Spec.Target.Kind).To(Equal(opv1alpha1.NetworkAttachmentTargetBareMetalInstance))
+				Expect(na.Spec.Target.ID).To(Equal(apiID))
+				Expect(na.Spec.Subnet).To(Equal("subnet-1"))
+				Expect(na.Spec.Interface.Type).To(Equal(opv1alpha1.NetworkInterfacePhysical))
+				Expect(na.Spec.Interface.Name).To(Equal("data-0"))
+				Expect(na.Spec.Interface.MACAddress).To(Equal("aa:bb:cc:dd:ee:01"))
+				Expect(na.Spec.SecurityGroups).To(Equal([]string{"sg-1"}))
+				Expect(na.Annotations[BareMetalInstanceTenantAnnotation]).To(Equal("tenant-a"))
+				Expect(controllerutil.ContainsFinalizer(na, BareMetalInstanceNetworkingFinalizer)).To(BeTrue())
+			})
+
+			It("rejects malformed and non-six-byte inventory MACs", func() {
+				for _, mac := range []string{
+					"aa:bb:cc:dd:ee:gg",
+					"aa:bb:cc:dd:ee:ff:00",
+					"aabb.ccdd.ee01",
+				} {
+					bmi.Status.NetworkAttachmentStatuses = nil
+					invClient.getHostLogicalPortMACsFunc = func(_ context.Context, _ string) (map[string]string, error) {
+						return map[string]string{"data-0": mac}, nil
+					}
+
+					Expect(reconciler.ensureNetworkAttachmentStatusMAC(ctx, bmi)).To(HaveOccurred(), mac)
+					Expect(bmi.Status.NetworkAttachmentStatuses[0].MACAddress).To(BeEmpty(), mac)
+				}
+			})
+
+			It("reads NetworkAttachments through the uncached API reader", func() {
+				cachedClient := &readTrackingClient{Client: k8sClient}
+				apiReader := &readTrackingReader{Reader: k8sClient}
+				reconciler.Client = cachedClient
+				reconciler.APIReader = apiReader
+				controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
+				bmi.Status.NetworkAttachmentStatuses = []v1alpha1.BareMetalNetworkAttachmentStatus{{
+					Interface:  "data-0",
+					SubnetRef:  "subnet-1",
+					MACAddress: "aa:bb:cc:dd:ee:01",
+					Primary:    true,
+				}}
+
+				name := opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID)
+				na, err := reconciler.buildBareMetalNetworkAttachment(bmi, apiID, name)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(k8sClient.Create(ctx, na)).To(Succeed())
+
 				_, err = reconciler.reconcileNetworking(ctx, bmi)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(provisionCalled).To(BeTrue())
+				Expect(apiReader.getCalls).To(Equal(1))
+				Expect(cachedClient.getCalls).To(BeZero())
 			})
 
-			It("should set NetworkAttachmentsReady to True on success", func() {
-				mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-					return &provisioning.ProvisionResult{
-						JobID:        "job-1",
-						InitialState: opv1alpha1.JobStatePending,
-					}, nil
-				}
-				mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, _ string) (provisioning.ProvisionStatus, error) {
-					return provisioning.ProvisionStatus{
-						JobID: "job-1",
-						State: opv1alpha1.JobStateSucceeded,
-					}, nil
-				}
+			It("fails closed when the BMI tenant annotation is missing", func() {
+				delete(bmi.Annotations, BareMetalInstanceTenantAnnotation)
+				Expect(k8sClient.Update(ctx, bmi)).To(Succeed())
 
-				// Reconcile until complete (finalizer add → trigger → poll+callback)
-				// The OnSuccess callback sets the condition in-memory; the outer
-				// Reconcile loop would persist it. We check in-memory after each call.
-				var foundCond *metav1.Condition
-				for range 10 {
-					_, _ = reconciler.reconcileNetworking(ctx, bmi)
-					foundCond = bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-					if foundCond != nil && foundCond.Status == metav1.ConditionTrue {
-						break
-					}
-					// Persist status so the next call sees the jobs
-					_ = k8sClient.Status().Update(ctx, bmi)
-					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
-				}
+				_, err := reconciler.reconcileNetworking(ctx, bmi)
+				Expect(err).NotTo(HaveOccurred()) // first reconcile adds the finalizer
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
 
-				Expect(foundCond).NotTo(BeNil())
-				Expect(foundCond.Status).To(Equal(metav1.ConditionTrue))
-				Expect(foundCond.Reason).To(Equal("Succeeded"))
+				_, err = reconciler.reconcileNetworking(ctx, bmi)
+				Expect(err).NotTo(HaveOccurred())
+				cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+				Expect(cond).NotTo(BeNil())
+				Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+				Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentFailed))
+				Expect(cond.Message).To(ContainSubstring(BareMetalInstanceTenantAnnotation))
+				Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+
+				naName := opv1alpha1.NetworkAttachmentName(
+					opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID)
+				err = k8sClient.Get(ctx, types.NamespacedName{
+					Namespace: testNetworkingNS, Name: naName,
+				}, &opv1alpha1.NetworkAttachment{})
+				Expect(apierrors.IsNotFound(err)).To(BeTrue())
 			})
 
-			It("should set NetworkAttachmentsReady to False on failure", func() {
-				mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-					return &provisioning.ProvisionResult{
-						JobID:        "job-1",
-						InitialState: opv1alpha1.JobStatePending,
-					}, nil
-				}
-				mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, _ string) (provisioning.ProvisionStatus, error) {
-					return provisioning.ProvisionStatus{
-						JobID:   "job-1",
-						State:   opv1alpha1.JobStateFailed,
-						Message: "network configuration failed",
-					}, nil
-				}
+			It("should mirror NetworkAttachment Ready=True to Succeeded", func() {
+				_, err := reconciler.reconcileNetworking(ctx, bmi)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
+				_, err = reconciler.reconcileNetworking(ctx, bmi)
+				Expect(err).NotTo(HaveOccurred())
 
-				var foundCond *metav1.Condition
-				for range 10 {
-					_, _ = reconciler.reconcileNetworking(ctx, bmi)
-					foundCond = bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-					if foundCond != nil && foundCond.Reason == v1alpha1.HostConditionReasonTemplateFailed {
-						break
-					}
-					_ = k8sClient.Status().Update(ctx, bmi)
-					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
-				}
+				naName := opv1alpha1.NetworkAttachmentName(
+					opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID)
+				na := &opv1alpha1.NetworkAttachment{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{
+					Namespace: testNetworkingNS, Name: naName,
+				}, na)).To(Succeed())
+				na.Status.Conditions = []metav1.Condition{{
+					Type:               opv1alpha1.NetworkConditionReady,
+					Status:             metav1.ConditionTrue,
+					Reason:             opv1alpha1.ReasonAsExpected,
+					Message:            "apply accepted",
+					LastTransitionTime: metav1.Now(),
+				}}
+				Expect(k8sClient.Status().Update(ctx, na)).To(Succeed())
 
-				Expect(foundCond).NotTo(BeNil())
-				Expect(foundCond.Status).To(Equal(metav1.ConditionFalse))
-				Expect(foundCond.Reason).To(Equal(v1alpha1.HostConditionReasonTemplateFailed))
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
+				_, err = reconciler.reconcileNetworking(ctx, bmi)
+				Expect(err).NotTo(HaveOccurred())
+
+				cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+				Expect(cond).NotTo(BeNil())
+				Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+				Expect(cond.Reason).To(Equal("Succeeded"))
 			})
 
-			It("should track networking jobs in status", func() {
-				mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-					return &provisioning.ProvisionResult{
-						JobID:        "net-job-1",
-						InitialState: opv1alpha1.JobStatePending,
-					}, nil
-				}
-				mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, _ string) (provisioning.ProvisionStatus, error) {
-					return provisioning.ProvisionStatus{
-						JobID: "net-job-1",
-						State: opv1alpha1.JobStateSucceeded,
-					}, nil
-				}
+			It("should mirror NetworkAttachment Failed to NetworkAttachmentFailed", func() {
+				_, err := reconciler.reconcileNetworking(ctx, bmi)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
+				_, err = reconciler.reconcileNetworking(ctx, bmi)
+				Expect(err).NotTo(HaveOccurred())
 
-				// Reconcile multiple times to trigger and poll
-				for range 5 {
-					_, _ = reconciler.reconcileNetworking(ctx, bmi)
-					_ = k8sClient.Status().Update(ctx, bmi)
-					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
-				}
+				naName := opv1alpha1.NetworkAttachmentName(
+					opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID)
+				na := &opv1alpha1.NetworkAttachment{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{
+					Namespace: testNetworkingNS, Name: naName,
+				}, na)).To(Succeed())
+				na.Status.Conditions = []metav1.Condition{{
+					Type:               opv1alpha1.NetworkConditionReady,
+					Status:             metav1.ConditionFalse,
+					Reason:             opv1alpha1.ReasonFailed,
+					Message:            "fabric apply rejected",
+					LastTransitionTime: metav1.Now(),
+				}}
+				Expect(k8sClient.Status().Update(ctx, na)).To(Succeed())
 
-				Expect(bmi.Status.NetworkingJobs).NotTo(BeEmpty())
-				Expect(bmi.Status.NetworkingJobs[0].JobID).To(Equal("net-job-1"))
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
+				_, err = reconciler.reconcileNetworking(ctx, bmi)
+				Expect(err).NotTo(HaveOccurred())
+
+				cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+				Expect(cond).NotTo(BeNil())
+				Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+				Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentFailed))
+				Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
 			})
 		})
 	})
@@ -274,7 +399,8 @@ var _ = Describe("BareMetalInstance Networking", func() {
 	Describe("reconcileNetworkingDeletion", func() {
 		Context("when networking finalizer is not present", func() {
 			BeforeEach(func() {
-				bmi = bmiWithAttachments(nil)
+				apiID = "bmi-api-del-none"
+				bmi = bmiWithAttachments(apiID, nil)
 				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 				reconciler = &BareMetalInstanceReconciler{
 					Client: k8sClient,
@@ -293,15 +419,16 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			})
 		})
 
-		Context("when networking finalizer is present but provider is nil", func() {
+		Context("when networking finalizer is present but NetworkingNamespace is empty", func() {
 			BeforeEach(func() {
-				bmi = bmiWithAttachments(nil)
+				apiID = "bmi-api-del-disabled"
+				bmi = bmiWithAttachments(apiID, nil)
 				controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
 				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 				reconciler = &BareMetalInstanceReconciler{
-					Client:             k8sClient,
-					Scheme:             k8sClient.Scheme(),
-					NetworkingProvider: nil,
+					Client:              k8sClient,
+					Scheme:              k8sClient.Scheme(),
+					NetworkingNamespace: "",
 				}
 			})
 
@@ -320,58 +447,81 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			})
 		})
 
-		Context("when networking finalizer is present with provider", func() {
-			var mockProvider *mockProvisioningProvider
+		Context("when a NetworkAttachment exists", func() {
+			var na *opv1alpha1.NetworkAttachment
 
 			BeforeEach(func() {
-				bmi = bmiWithAttachments([]v1alpha1.BareMetalNetworkAttachment{
-					{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
+				apiID = "bmi-api-del-" + metav1.Now().Format("150405.000")
+				bmi = bmiWithAttachments(apiID, []v1alpha1.BareMetalNetworkAttachment{
+					{
+						SubnetRef:         "subnet-1",
+						Interface:         "data-0",
+						Primary:           true,
+						SecurityGroupRefs: []string{"sg-1"},
+					},
 				})
 				controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
 				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 
-				mockProvider = &mockProvisioningProvider{}
+				na = &opv1alpha1.NetworkAttachment{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:       opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID),
+						Namespace:  testNetworkingNS,
+						Finalizers: []string{BareMetalInstanceNetworkingFinalizer},
+					},
+					Spec: opv1alpha1.NetworkAttachmentSpec{
+						Target: opv1alpha1.NetworkAttachmentTarget{
+							Kind: opv1alpha1.NetworkAttachmentTargetBareMetalInstance,
+							ID:   apiID,
+						},
+						Subnet: "subnet-1",
+						Interface: opv1alpha1.NetworkAttachmentInterface{
+							Type:       opv1alpha1.NetworkInterfacePhysical,
+							Name:       "data-0",
+							MACAddress: "aa:bb:cc:dd:ee:01",
+						},
+						SecurityGroups: []string{"sg-1"},
+					},
+				}
+				Expect(k8sClient.Create(ctx, na)).To(Succeed())
+
 				reconciler = &BareMetalInstanceReconciler{
 					Client:                        k8sClient,
+					APIReader:                     k8sClient,
 					Scheme:                        k8sClient.Scheme(),
-					NetworkingProvider:            mockProvider,
+					NetworkingNamespace:           testNetworkingNS,
 					ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
 				}
 			})
 
 			AfterEach(func() {
+				forceDeleteNetworkAttachment(ctx, testNetworkingNS,
+					opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID))
 				_ = k8sClient.Delete(ctx, bmi)
 			})
 
-			It("should remove finalizer after deprovisioning completes", func() {
-				mockProvider.triggerDeprovisionFunc = func(_ context.Context, _ client.Object, _ []opv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
-					return &provisioning.DeprovisionResult{
-						Action: provisioning.DeprovisionTriggered,
-						JobID:  "deprov-1",
-					}, nil
-				}
-				mockProvider.getDeprovisionStatusFunc = func(_ context.Context, _ client.Object, _ string) (provisioning.ProvisionStatus, error) {
-					return provisioning.ProvisionStatus{
-						JobID: "deprov-1",
-						State: opv1alpha1.JobStateSucceeded,
-					}, nil
-				}
+			It("should delete the NetworkAttachment, clear its finalizer, and remove the BMI finalizer", func() {
+				_, done, err := reconciler.reconcileNetworkingDeletion(ctx, bmi)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(done).To(BeFalse())
+				Expect(bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady).Reason).
+					To(Equal(v1alpha1.HostConditionReasonDetaching))
 
-				var done bool
-				for range 10 {
-					var err error
-					_, done, err = reconciler.reconcileNetworkingDeletion(ctx, bmi)
-					Expect(err).NotTo(HaveOccurred())
-					if done {
-						break
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
+				Eventually(func(g Gomega) {
+					_, done, err := reconciler.reconcileNetworkingDeletion(ctx, bmi)
+					g.Expect(err).NotTo(HaveOccurred())
+					if !done {
+						_ = k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)
 					}
-					_ = k8sClient.Status().Update(ctx, bmi)
-					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
-				}
-				Expect(done).To(BeTrue())
+					g.Expect(done).To(BeTrue())
+				}).Should(Succeed())
+
+				err = k8sClient.Get(ctx, client.ObjectKeyFromObject(na), &opv1alpha1.NetworkAttachment{})
+				Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
 				fresh := &v1alpha1.BareMetalInstance{}
-				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: bmi.Name, Namespace: bmi.Namespace}, fresh)).To(Succeed())
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), fresh)).To(Succeed())
 				Expect(controllerutil.ContainsFinalizer(fresh, BareMetalInstanceNetworkingFinalizer)).To(BeFalse())
 			})
 		})
@@ -383,7 +533,6 @@ var _ = Describe("BareMetalInstance network/provision ordering", func() {
 		ctx  context.Context
 		bmi  *v1alpha1.BareMetalInstance
 		prov *mockProvisioningProvider
-		net  *mockProvisioningProvider
 	)
 
 	BeforeEach(func() {
@@ -392,6 +541,9 @@ var _ = Describe("BareMetalInstance network/provision ordering", func() {
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "test-bmi-order-",
 				Namespace:    "default",
+				Labels: map[string]string{
+					BareMetalInstanceUUIDLabel: "bmi-order-id",
+				},
 			},
 			Spec: v1alpha1.BareMetalInstanceSpec{
 				ExternalHostID: "host-order-1",
@@ -402,22 +554,26 @@ var _ = Describe("BareMetalInstance network/provision ordering", func() {
 				// Non-noop template so the provisioning branch is active.
 				TemplateID: "bm_provision",
 				NetworkAttachments: []v1alpha1.BareMetalNetworkAttachment{
-					{SubnetRef: "subnet-1", Interface: "eth9", Primary: true},
+					{
+						SubnetRef:         "subnet-1",
+						Interface:         "eth9",
+						Primary:           true,
+						SecurityGroupRefs: []string{"sg-1"},
+					},
 				},
 			},
 		}
 		Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-
-		net = &mockProvisioningProvider{}
 	})
 
 	AfterEach(func() {
+		forceDeleteNetworkAttachment(ctx, testNetworkingNS,
+			opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, "bmi-order-id"))
 		Expect(k8sClient.Delete(ctx, bmi)).To(Succeed())
 	})
 
 	It("triggers provisioning and blocks networking until provision completes", func() {
 		provisionTriggered := false
-		networkingTriggered := false
 		prov = &mockProvisioningProvider{
 			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
 				provisionTriggered = true
@@ -431,29 +587,31 @@ var _ = Describe("BareMetalInstance network/provision ordering", func() {
 				}, nil
 			},
 		}
-		net = &mockProvisioningProvider{
-			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-				networkingTriggered = true
-				return &provisioning.ProvisionResult{JobID: "net-1", InitialState: opv1alpha1.JobStatePending}, nil
-			},
-		}
 		reconciler := &BareMetalInstanceReconciler{
-			Client:                        k8sClient,
-			Scheme:                        k8sClient.Scheme(),
-			NetworkingProvider:            net,
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			InventoryClient: &mockInventoryClient{
+				getHostLogicalPortMACsFunc: func(_ context.Context, _ string) (map[string]string, error) {
+					return map[string]string{"eth9": "11:22:33:44:55:66"}, nil
+				},
+			},
 			ProvisioningProvider:          prov,
+			NetworkingNamespace:           testNetworkingNS,
 			ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
 		}
 
-		// First pass triggers provisioning, NOT networking yet
+		// First pass triggers provisioning, NOT NetworkAttachment create yet.
 		_, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bmi)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(provisionTriggered).To(BeTrue(), "provisioning should be triggered first")
-		Expect(networkingTriggered).To(BeFalse(), "networking should NOT be triggered before provisioning completes")
 
-		// The key behavior is verified: provisioning runs first,
-		// and networking does NOT run before provisioning completes.
-		// This ensures the tenant never sees a half-built host.
+		naName := opv1alpha1.NetworkAttachmentName(
+			opv1alpha1.NetworkAttachmentTargetBareMetalInstance, "bmi-order-id")
+		err = k8sClient.Get(ctx, types.NamespacedName{
+			Namespace: testNetworkingNS, Name: naName,
+		}, &opv1alpha1.NetworkAttachment{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue(),
+			"NetworkAttachment should NOT exist before provisioning completes")
 	})
 })
 

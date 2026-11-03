@@ -1021,6 +1021,130 @@ func TestAssignHost(t *testing.T) {
 	})
 }
 
+// --- MarkNetworkRepairRequired ---
+
+func TestFindFreeHostWithNetworkPort(t *testing.T) {
+	ctx := context.Background()
+	missingMAC := newBMHBuilder("host-no-port-mac").
+		WithAnnotations(map[string]string{HostInterfaceMACsAnnotation: `{"other-0":"52:54:00:11:22:33"}`}).
+		WithNICs(testNIC("AA:BB:CC:DD:EE:01")).BuildObjects()
+	validMAC := newBMHBuilder("host-with-port-mac").
+		WithAnnotations(map[string]string{HostInterfaceMACsAnnotation: `{"data-0":"AA:BB:CC:DD:EE:FF"}`}).
+		WithNICs(testNIC("AA:BB:CC:DD:EE:02")).BuildObjects()
+	objects := append(missingMAC, validMAC...)
+	client := newMetal3ClientForTest(objects...)
+
+	host, err := client.FindFreeHostWithNetworkPort(ctx, map[string]string{"hostType": "gpu-node"}, "data-0")
+	if err != nil {
+		t.Fatalf("FindFreeHostWithNetworkPort: %v", err)
+	}
+	if host == nil {
+		t.Fatal("expected host with selected-port MAC")
+	}
+	if host.Name != "host-with-port-mac" {
+		t.Fatalf("selected host %q, want host-with-port-mac", host.Name)
+	}
+	if host.NetworkPortMAC != "AA:BB:CC:DD:EE:FF" {
+		t.Fatalf("selected network-port MAC %q, want AA:BB:CC:DD:EE:FF", host.NetworkPortMAC)
+	}
+}
+
+func TestMarkNetworkRepairRequired_Metal3(t *testing.T) {
+	ctx := context.Background()
+	details := `{"baremetalInstance":"api-1","subnet":"subnet-1","interface":"eth0","fabricDomains":["fd-1"]}`
+
+	t.Run("sets label and annotation", func(t *testing.T) {
+		bmh := newBMHBuilder("host-repair").
+			WithConsumerRef(&corev1.ObjectReference{Name: "instance-123"}).
+			Build()
+		m := newMetal3ClientForTest(bmh)
+
+		if err := m.MarkNetworkRepairRequired(ctx, testNamespace+"/host-repair", details); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		updated := &metal3api.BareMetalHost{}
+		if err := m.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "host-repair"}, updated); err != nil {
+			t.Fatalf("get BMH: %v", err)
+		}
+		if updated.Labels[NetworkRepairRequiredLabel] != "true" {
+			t.Errorf("repair label = %q, want true", updated.Labels[NetworkRepairRequiredLabel])
+		}
+		if updated.Annotations[NetworkRepairDetailsAnnotation] != details {
+			t.Errorf("repair details = %q, want %q", updated.Annotations[NetworkRepairDetailsAnnotation], details)
+		}
+	})
+
+	t.Run("is idempotent for identical details", func(t *testing.T) {
+		bmh := newBMHBuilder("host-repair-idem").
+			WithLabels(map[string]string{
+				Metal3HostTypeLabel:        "gpu-node",
+				Metal3ManagedByLabel:       "baremetal",
+				NetworkRepairRequiredLabel: "true",
+			}).
+			WithAnnotations(map[string]string{NetworkRepairDetailsAnnotation: details}).
+			Build()
+		m := newMetal3ClientForTest(bmh)
+
+		if err := m.MarkNetworkRepairRequired(ctx, testNamespace+"/host-repair-idem", details); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("survives UnassignHost", func(t *testing.T) {
+		bmh := newBMHBuilder("host-repair-keep").
+			WithLabels(map[string]string{
+				Metal3HostTypeLabel:               "gpu-node",
+				Metal3ManagedByLabel:              "baremetal",
+				NetworkRepairRequiredLabel:        "true",
+				metal3LabelPrefix + "profileName": "myProfile",
+			}).
+			WithAnnotations(map[string]string{NetworkRepairDetailsAnnotation: details}).
+			WithConsumerRef(&corev1.ObjectReference{Name: "instance-123"}).
+			Build()
+		m := newMetal3ClientForTest(bmh)
+
+		if err := m.UnassignHost(ctx, testNamespace+"/host-repair-keep", "instance-123", []string{"profileName"}); err != nil {
+			t.Fatalf("UnassignHost: %v", err)
+		}
+
+		updated := &metal3api.BareMetalHost{}
+		if err := m.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "host-repair-keep"}, updated); err != nil {
+			t.Fatalf("get BMH: %v", err)
+		}
+		if updated.Labels[NetworkRepairRequiredLabel] != "true" {
+			t.Error("repair mark must survive UnassignHost")
+		}
+		if updated.Annotations[NetworkRepairDetailsAnnotation] != details {
+			t.Error("repair details must survive UnassignHost")
+		}
+		if updated.Spec.ConsumerRef != nil {
+			t.Error("consumerRef should have been cleared")
+		}
+	})
+}
+
+func TestFindFreeHost_SkipsNetworkRepairMark(t *testing.T) {
+	ctx := context.Background()
+	objs := newBMHBuilder("host-marked").
+		WithLabels(map[string]string{
+			Metal3HostTypeLabel:        "gpu-node",
+			Metal3ManagedByLabel:       "baremetal",
+			NetworkRepairRequiredLabel: "true",
+		}).
+		WithNICs(testNIC("AA:BB:CC:DD:EE:01")).
+		BuildObjects()
+
+	m := newMetal3ClientForTest(objs...)
+	host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if host != nil {
+		t.Errorf("expected nil (repair marked), got %+v", host)
+	}
+}
+
 // --- UnassignHost ---
 
 func TestUnassignHost(t *testing.T) {

@@ -166,6 +166,18 @@ func validateMetal3MatchExpressions(matchExpressions map[string]string) error {
 }
 
 func (m *Metal3Client) FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*Host, error) {
+	return m.findFreeHost(ctx, matchExpressions, "")
+}
+
+func (m *Metal3Client) FindFreeHostWithNetworkPort(
+	ctx context.Context, matchExpressions map[string]string, interfaceName string,
+) (*Host, error) {
+	return m.findFreeHost(ctx, matchExpressions, interfaceName)
+}
+
+func (m *Metal3Client) findFreeHost(
+	ctx context.Context, matchExpressions map[string]string, interfaceName string,
+) (*Host, error) {
 	if err := validateMetal3MatchExpressions(matchExpressions); err != nil {
 		return nil, err
 	}
@@ -223,6 +235,7 @@ func (m *Metal3Client) FindFreeHost(ctx context.Context, matchExpressions map[st
 	}
 
 	candidates := make([]metal3api.BareMetalHost, 0, len(bmhList.Items))
+	networkPortMACs := make(map[string]string, len(bmhList.Items))
 	for _, bmh := range bmhList.Items {
 		if bmh.Status.OperationalStatus != metal3api.OperationalStatusOK {
 			continue
@@ -236,14 +249,19 @@ func (m *Metal3Client) FindFreeHost(ctx context.Context, matchExpressions map[st
 			continue
 		}
 
+		if bmh.Labels[NetworkRepairRequiredLabel] == "true" {
+			log.V(1).Info("Skipping BareMetalHost: network repair required")
+			continue
+		}
+
 		if bmh.InspectionDisabled() {
-			log.V(1).Info("Skipping BareMetalHost: hardware inspection disabled", "host", bmh.Name)
+			log.V(1).Info("Skipping BareMetalHost: hardware inspection disabled")
 			continue
 		}
 
 		details := baremetalhost.ResolveHardwareDetails(hardwareDataByName[bmh.Name], &bmh)
 		if details == nil || len(details.NIC) == 0 {
-			log.Error(nil, "Skipping BareMetalHost: available but NIC inventory is missing — host may be misconfigured or inspection incomplete", "host", bmh.Name)
+			log.Error(nil, "Skipping BareMetalHost: available but NIC inventory is missing — host may be misconfigured or inspection incomplete")
 			continue
 		}
 
@@ -254,8 +272,22 @@ func (m *Metal3Client) FindFreeHost(ctx context.Context, matchExpressions map[st
 		if managedBy != matchManagedBy {
 			continue
 		}
+		networkPortMAC := ""
+		if interfaceName != "" {
+			if bmh.Name == "" {
+				log.Info("Skipping host without inventory name")
+				continue
+			}
+			macs, err := LogicalPortMACsFromValue(bmh.Annotations[HostInterfaceMACsAnnotation])
+			if err != nil || !HasValidNetworkPortMAC(macs, interfaceName) {
+				log.Info("Skipping host without a valid MAC for its selected network port")
+				continue
+			}
+			networkPortMAC = macs[interfaceName]
+		}
 
 		candidates = append(candidates, bmh)
+		networkPortMACs[bmh.Name] = networkPortMAC
 	}
 
 	if len(candidates) == 0 {
@@ -267,7 +299,9 @@ func (m *Metal3Client) FindFreeHost(ctx context.Context, matchExpressions map[st
 	})
 
 	bmh := &candidates[0]
-	return bmhToHost(bmh, m.hostClass), nil
+	host := bmhToHost(bmh, m.hostClass)
+	host.NetworkPortMAC = networkPortMACs[bmh.Name]
+	return host, nil
 }
 
 func (m *Metal3Client) AssignHost(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*Host, error) {
@@ -400,6 +434,41 @@ func metal3HostNICs(details *metal3api.HardwareDetails) []HostNIC {
 		nics = append(nics, HostNIC{MAC: strings.ToLower(n.MAC)})
 	}
 	return nics
+}
+
+// MarkNetworkRepairRequired sets the Metal3 BMH repair label and details
+// annotation. Existing marks are overwritten with the latest details; the mark
+// itself is never cleared here.
+func (m *Metal3Client) MarkNetworkRepairRequired(ctx context.Context, inventoryHostID, detailsJSON string) error {
+	namespace, name, err := ParseHostID(inventoryHostID)
+	if err != nil {
+		return err
+	}
+
+	bmh := &metal3api.BareMetalHost{}
+	if err := m.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, bmh); err != nil {
+		return fmt.Errorf("failed to get BareMetalHost %s: %w", inventoryHostID, err)
+	}
+
+	if bmh.Labels == nil {
+		bmh.Labels = map[string]string{}
+	}
+	if bmh.Annotations == nil {
+		bmh.Annotations = map[string]string{}
+	}
+
+	if bmh.Labels[NetworkRepairRequiredLabel] == "true" &&
+		bmh.Annotations[NetworkRepairDetailsAnnotation] == detailsJSON {
+		return nil
+	}
+
+	bmh.Labels[NetworkRepairRequiredLabel] = "true"
+	bmh.Annotations[NetworkRepairDetailsAnnotation] = detailsJSON
+
+	if err := m.client.Update(ctx, bmh); err != nil {
+		return fmt.Errorf("failed to mark BareMetalHost %s for network repair: %w", inventoryHostID, err)
+	}
+	return nil
 }
 
 func (m *Metal3Client) UnassignHost(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error {

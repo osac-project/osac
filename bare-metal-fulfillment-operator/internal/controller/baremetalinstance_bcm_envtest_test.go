@@ -210,9 +210,8 @@ func newBCMReconciler(mock *mockBCM) *BareMetalInstanceReconciler {
 		invClient,
 		mgmtClient,
 		nil, // provisioning provider
-		nil, // networking provider
-		nil, // IP discovery provider
 		nil, // AAP client
+		"",  // networking namespace
 		0, 0, 0, 0, 0,
 	)
 }

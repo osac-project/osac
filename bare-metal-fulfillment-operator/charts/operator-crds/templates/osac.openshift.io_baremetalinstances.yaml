@@ -372,6 +372,12 @@ spec:
                     ipAddress:
                       description: IPAddress is the IP discovered after DHCP assignment.
                       type: string
+                    macAddress:
+                      description: |-
+                        MACAddress is the selected interface MAC recorded once at host assignment.
+                        It is CRD-only and is written onto the hub NetworkAttachment interface.
+                      pattern: ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$
+                      type: string
                     primary:
                       description: Primary indicates whether this attachment is the
                         default gateway attachment.
@@ -382,6 +388,18 @@ spec:
                       type: string
                   type: object
                 type: array
+              networkHandoffLastErrorFingerprint:
+                description: |-
+                  NetworkHandoffLastErrorFingerprint records the Ironic LastError value
+                  before the handoff power request, so a changed LastError can be attributed
+                  to the current operation rather than a previous one.
+                type: string
+              networkOffboardLastErrorFingerprint:
+                description: |-
+                  NetworkOffboardLastErrorFingerprint records the Ironic LastError value
+                  before the offboard power request, so a changed LastError can be attributed
+                  to the current operation rather than a previous one.
+                type: string
               networkingJobs:
                 description: NetworkingJobs tracks the history of network attachment
                   provisioning/deprovisioning.

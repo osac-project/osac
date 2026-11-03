@@ -299,6 +299,153 @@ var _ = Describe("OpenStack Management Backend", func() {
 		})
 	})
 
+	Describe("GetPowerState", func() {
+		It("does not classify Ironic LastError as a current power failure", func() {
+			server := mockIronicServer(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal(http.MethodGet))
+				w.WriteHeader(http.StatusOK)
+				_, err := w.Write([]byte(`{"uuid":"` + testNodeID + `","power_state":"power on","target_power_state":null,"last_error":"previous power failure"}`))
+				Expect(err).NotTo(HaveOccurred())
+			})
+			defer server.Close()
+
+			client := newMockOpenStackClient(server)
+			status, err := client.GetPowerState(ctx, testNodeID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.FailureMessage).To(Equal("previous power failure"))
+			Expect(status.FailureMessageIsCurrent).To(BeFalse())
+		})
+	})
+
+	Describe("ObserveNetworkHandoff", func() {
+		for _, currentReason := range []string{"Progressing", "PoweringOff"} {
+			currentReason := currentReason
+			It("retries power-off for a settled powered-on node with reason "+currentReason, func() {
+				powerOffRequested := false
+				server := mockIronicServer(func(w http.ResponseWriter, r *http.Request) {
+					switch {
+					case r.Method == http.MethodGet && r.URL.Path == "/v1/nodes/"+testNodeID:
+						w.WriteHeader(http.StatusOK)
+						_, err := w.Write([]byte(`{"uuid":"` + testNodeID + `","power_state":"power on","target_power_state":null,"last_error":"stale power error"}`))
+						Expect(err).NotTo(HaveOccurred())
+					case r.Method == http.MethodPut && r.URL.Path == "/v1/nodes/"+testNodeID+"/states/power":
+						body, err := io.ReadAll(r.Body)
+						Expect(err).NotTo(HaveOccurred())
+						Expect(string(body)).To(MatchJSON(`{"target":"power off"}`))
+						powerOffRequested = true
+						w.WriteHeader(http.StatusAccepted)
+						_, err = w.Write([]byte(`{"target":"power off"}`))
+						Expect(err).NotTo(HaveOccurred())
+					default:
+						Fail("unexpected Ironic request: " + r.Method + " " + r.URL.Path)
+					}
+				})
+				defer server.Close()
+
+				client := newMockOpenStackClient(server)
+				observation, err := client.ObserveNetworkHandoff(
+					ctx, testNodeID, currentReason, management.FailureMessageFingerprint("stale power error"),
+				)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(powerOffRequested).To(BeTrue())
+				Expect(observation.Confirmed).To(BeFalse())
+				Expect(observation.Reason).To(Equal("PoweringOff"))
+			})
+		}
+
+		It("advances an already-off node despite a stale Ironic LastError", func() {
+			powerOnRequested := false
+			server := mockIronicServer(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/v1/nodes/"+testNodeID:
+					w.WriteHeader(http.StatusOK)
+					_, err := w.Write([]byte(`{"uuid":"` + testNodeID + `","power_state":"power off","target_power_state":null,"last_error":"stale power error"}`))
+					Expect(err).NotTo(HaveOccurred())
+				case r.Method == http.MethodPut && r.URL.Path == "/v1/nodes/"+testNodeID+"/states/power":
+					body, err := io.ReadAll(r.Body)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(string(body)).To(MatchJSON(`{"target":"power on"}`))
+					powerOnRequested = true
+					w.WriteHeader(http.StatusAccepted)
+					_, err = w.Write([]byte(`{"target":"power on"}`))
+					Expect(err).NotTo(HaveOccurred())
+				default:
+					Fail("unexpected Ironic request: " + r.Method + " " + r.URL.Path)
+				}
+			})
+			defer server.Close()
+
+			client := newMockOpenStackClient(server)
+			observation, err := client.ObserveNetworkHandoff(
+				ctx, testNodeID, "Progressing", management.FailureMessageFingerprint("stale power error"),
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(powerOnRequested).To(BeTrue())
+			Expect(observation.Failed).To(BeFalse())
+			Expect(observation.Reason).To(Equal("PoweringOn"))
+		})
+
+		It("does not fail a transitioning node from its stale Ironic LastError", func() {
+			server := mockIronicServer(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal(http.MethodGet))
+				w.WriteHeader(http.StatusOK)
+				_, err := w.Write([]byte(`{"uuid":"` + testNodeID + `","power_state":"power on","target_power_state":"power off","last_error":"stale power error"}`))
+				Expect(err).NotTo(HaveOccurred())
+			})
+			defer server.Close()
+
+			client := newMockOpenStackClient(server)
+			observation, err := client.ObserveNetworkHandoff(
+				ctx, testNodeID, "Progressing", management.FailureMessageFingerprint("stale power error"),
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(observation.Failed).To(BeFalse())
+			Expect(observation.Reason).To(Equal("PoweringOff"))
+		})
+
+		It("reports a changed Ironic LastError after the power transition settles", func() {
+			powerOffRequested := false
+			server := mockIronicServer(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPut {
+					powerOffRequested = true
+					Fail("must report the asynchronous failure before requesting another power change")
+				}
+				w.WriteHeader(http.StatusOK)
+				_, err := w.Write([]byte(`{"uuid":"` + testNodeID + `","power_state":"power on","target_power_state":null,"last_error":"BMC refused the handoff power-off"}`))
+				Expect(err).NotTo(HaveOccurred())
+			})
+			defer server.Close()
+
+			client := newMockOpenStackClient(server)
+			observation, err := client.ObserveNetworkHandoff(
+				ctx, testNodeID, "PoweringOff", management.FailureMessageFingerprint("previous power failure"),
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(powerOffRequested).To(BeFalse())
+			Expect(observation.Failed).To(BeTrue())
+			Expect(observation.Reason).To(Equal("NetworkHandoffFailed"))
+			Expect(observation.Message).To(Equal("BMC refused the handoff power-off"))
+		})
+
+		It("waits for a transitioning node even if Ironic LastError changed", func() {
+			server := mockIronicServer(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal(http.MethodGet))
+				w.WriteHeader(http.StatusOK)
+				_, err := w.Write([]byte(`{"uuid":"` + testNodeID + `","power_state":"power on","target_power_state":"power off","last_error":"new but transitioning error"}`))
+				Expect(err).NotTo(HaveOccurred())
+			})
+			defer server.Close()
+
+			client := newMockOpenStackClient(server)
+			observation, err := client.ObserveNetworkHandoff(
+				ctx, testNodeID, "PoweringOff", management.FailureMessageFingerprint("previous power failure"),
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(observation.Failed).To(BeFalse())
+			Expect(observation.Reason).To(Equal("PoweringOff"))
+		})
+	})
+
 	Describe("Registration", func() {
 		It("openstack backend is registered", func() {
 			client, err := management.NewClient(context.Background(), &management.Config{

@@ -738,6 +738,21 @@ coverage is tracked under
 cleanup coverage is tracked under
 [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 
+NET-CLEAN-08 runs in the installed BMF Kind suite with provider networking
+enabled. It verifies BMF selects a host with a mapped fabric-port MAC, creates
+the hub NetworkAttachment, waits for handoff and DHCP status, and then holds the
+host assignment through deletion while a provider finalizer holds that
+attachment. After the finalizer is released, BMF deletes the attachment before
+returning the host to inventory. Workload-owned ExternalIP resources remain
+unchanged. The fixture supplies NetworkAttachment readiness, DHCP lease, and
+Metal3 power status; it does not run AAP or a physical network provider.
+
+Run the BMF suite in a Kind cluster with:
+
+```bash
+make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf
+```
+
 ### Coverage gaps and ownership
 
 Real private-API fixture validation, fulfillment-generated tenant-owned

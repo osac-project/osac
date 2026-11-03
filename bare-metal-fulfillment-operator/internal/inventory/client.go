@@ -35,10 +35,13 @@ type Host struct {
 	BareMetalInstanceID string
 	InventoryHostID     string
 	Name                string
-	HostType            string
-	HostClass           string
-	ProvisionState      string
-	ManagedBy           string
+	// NetworkPortMAC is the selected logical port's MAC when a network-port
+	// host selector returned this host.
+	NetworkPortMAC string
+	HostType       string
+	HostClass      string
+	ProvisionState string
+	ManagedBy      string
 	// Ready reports whether the underlying host is ready for provisioning.
 	// Backends managing pre-existing resources (Metal3, OpenStack) always set
 	// true; the BCM backend sets false until the on-demand BareMetalHost has
@@ -68,6 +71,12 @@ type Client interface {
 	// A retry must not unassign a host that has since been assigned to another instance.
 	UnassignHost(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error
 
+	// MarkNetworkRepairRequired records that the host needs admin repair before
+	// reselection (FabricDomain membership). detailsJSON is the opaque details
+	// payload from the design. Implementations must not clear an existing mark.
+	// Unsupported backends return ErrNetworkRepairMarkUnsupported.
+	MarkNetworkRepairRequired(ctx context.Context, inventoryHostID, detailsJSON string) error
+
 	// GetHostNICs returns the physical network interfaces for an allocated host.
 	// Returns nil, nil when the backend does not support NIC discovery for this host class.
 	// Returns an error when NIC data is expected but unavailable (backend failure or unexpected missing data on a supported backend).
@@ -78,6 +87,17 @@ type Client interface {
 	// Returns an empty map when no mapping is configured, and an error for
 	// malformed mapping data or backend failures.
 	GetHostLogicalPortMACs(ctx context.Context, inventoryHostID string) (map[string]string, error)
+}
+
+// NetworkPortHostSelector finds free hosts that have a usable inventory name
+// and a valid MAC mapping for the selected fabric interface. It returns that
+// MAC in Host.NetworkPortMAC.
+type NetworkPortHostSelector interface {
+	FindFreeHostWithNetworkPort(
+		ctx context.Context,
+		matchExpressions map[string]string,
+		interfaceName string,
+	) (*Host, error)
 }
 
 // NewClientFunc is a function that creates a new inventory client from config

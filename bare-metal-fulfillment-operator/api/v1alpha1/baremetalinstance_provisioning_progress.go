@@ -222,6 +222,9 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 		if cond.Reason == HostConditionReasonProgressing ||
 			IsProvisionRetrying(cond) ||
 			cond.Reason == HostConditionReasonPowerSyncRequired ||
+			cond.Reason == HostConditionReasonPoweringOff ||
+			cond.Reason == HostConditionReasonPoweringOn ||
+			cond.Reason == HostConditionReasonLeasePending ||
 			cond.Reason == "" {
 			continue
 		}

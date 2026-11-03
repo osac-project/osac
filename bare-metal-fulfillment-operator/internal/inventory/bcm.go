@@ -172,6 +172,18 @@ var reservedExtraValueKeys = map[string]bool{
 // extra_values — the BCM JSON API has no server-side filtering). managedBy is a
 // default-aware ownership guard; provisionState is excluded (no BCM analog).
 func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*Host, error) {
+	return c.findFreeHost(ctx, matchExpressions, "")
+}
+
+func (c *BCMClient) FindFreeHostWithNetworkPort(
+	ctx context.Context, matchExpressions map[string]string, interfaceName string,
+) (*Host, error) {
+	return c.findFreeHost(ctx, matchExpressions, interfaceName)
+}
+
+func (c *BCMClient) findFreeHost(
+	ctx context.Context, matchExpressions map[string]string, interfaceName string,
+) (*Host, error) {
 	if err := validateBCMMatchExpressions(matchExpressions); err != nil {
 		return nil, err
 	}
@@ -203,12 +215,17 @@ func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[strin
 	// candidates narrows that pool by the selector labels and managedBy ownership.
 	available := make([]bcmclient.Device, 0, len(devices))
 	candidates := make([]bcmclient.Device, 0, len(devices))
+	networkPortMACs := make(map[string]string, len(devices))
 	for _, d := range devices {
 		if d.ChildType != "LiteNode" || d.ExtraValues == nil {
 			continue
 		}
 
 		if _, assigned := d.ExtraValues[bcmclient.ExtraValueInstanceID]; assigned {
+			continue
+		}
+		if networkRepairRequired(d.ExtraValues[BCMNetworkRepairRequiredKey]) {
+			log.V(1).Info("Skipping BCM host: network repair required")
 			continue
 		}
 
@@ -229,6 +246,18 @@ func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[strin
 		if deviceManagedBy(d) != matchManagedBy {
 			continue
 		}
+		if interfaceName != "" {
+			if d.Hostname == "" {
+				log.Info("Skipping host without inventory name")
+				continue
+			}
+			macs, parseErr := LogicalPortMACsFromValue(d.ExtraValues[bcmclient.ExtraValueInterfaceMACs])
+			if parseErr != nil || !HasValidNetworkPortMAC(macs, interfaceName) {
+				log.Info("Skipping host without a valid MAC for its selected network port")
+				continue
+			}
+			networkPortMACs[d.Hostname] = macs[interfaceName]
+		}
 
 		candidates = append(candidates, d)
 	}
@@ -248,10 +277,10 @@ func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[strin
 	// Report the selected device's resource_class as HostType (observability only;
 	// resource_class is also matchable as an ordinary label).
 	resourceClass, _ := selected.ExtraValues[bcmclient.ExtraValueResourceClass].(string)
-
 	return &Host{
 		InventoryHostID: fmt.Sprintf("%s/%s", c.bmhManager.Namespace(), selected.Hostname),
 		Name:            selected.Hostname,
+		NetworkPortMAC:  networkPortMACs[selected.Hostname],
 		HostType:        resourceClass,
 		HostClass:       c.hostClass,
 		ManagedBy:       matchManagedBy,
@@ -733,6 +762,46 @@ func (c *BCMClient) clearBCMAssignment(ctx context.Context, hostname, bareMetalI
 
 	_, err = c.client.UpdateDevice(ctx, raw)
 	return false, err
+}
+
+// MarkNetworkRepairRequired stores the repair mark and details in BCM extra_values.
+func (c *BCMClient) MarkNetworkRepairRequired(
+	ctx context.Context, inventoryHostID, detailsJSON string,
+) error {
+	_, hostname, err := ParseHostID(inventoryHostID)
+	if err != nil {
+		return err
+	}
+	device, err := c.client.GetDevice(ctx, hostname)
+	if err != nil {
+		return fmt.Errorf("failed to read BCM device for network repair mark: %w", err)
+	}
+	if device == nil {
+		return fmt.Errorf("BCM device for network repair mark was not found")
+	}
+	if networkRepairRequired(device.ExtraValues[BCMNetworkRepairRequiredKey]) {
+		return nil
+	}
+
+	raw, err := bcmclient.SetExtraValue(device.Raw, BCMNetworkRepairRequiredKey, true)
+	if err != nil {
+		return fmt.Errorf("failed to set BCM network repair mark: %w", err)
+	}
+	raw, err = bcmclient.SetExtraValue(raw, BCMNetworkRepairDetailsKey, detailsJSON)
+	if err != nil {
+		return fmt.Errorf("failed to set BCM network repair details: %w", err)
+	}
+	if _, err := c.client.UpdateDevice(ctx, raw); err != nil {
+		return fmt.Errorf("failed to persist BCM network repair mark: %w", err)
+	}
+	verified, err := c.client.GetDevice(ctx, hostname)
+	if err != nil {
+		return fmt.Errorf("failed to verify BCM network repair mark: %w", err)
+	}
+	if verified == nil || !networkRepairRequired(verified.ExtraValues[BCMNetworkRepairRequiredKey]) {
+		return fmt.Errorf("BCM network repair mark was not persisted")
+	}
+	return nil
 }
 
 // GetHostNICs reads all NIC MAC addresses from the BareMetalHost CR hardware inspection data.

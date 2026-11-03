@@ -44,6 +44,14 @@ const (
 	// DefaultHostReadinessPollIntervalDuration is the default interval to poll a reserved
 	// inventory host's readiness for provisioning (see inventory.Host.Ready).
 	DefaultHostReadinessPollIntervalDuration = 30 * time.Second
+
+	// NetworkHandoffDeadline is the maximum time from NetworkAttachmentsReady=True
+	// until NetworkHandoffComplete must be confirmed (design Create step 6).
+	NetworkHandoffDeadline = 15 * time.Minute
+
+	// LeaseNotFoundWarningAfter is how long after NetworkHandoffComplete=True
+	// BMF waits before emitting Warning LeaseNotFound (design Create step 7 / NFR-2).
+	LeaseNotFoundWarningAfter = 10 * time.Minute
 )
 
 var (
@@ -55,6 +63,13 @@ var (
 
 	// BareMetalInstanceNetworkingFinalizer is the finalizer for network attachment cleanup
 	BareMetalInstanceNetworkingFinalizer string = fmt.Sprintf("%s/baremetalinstance-networking", shared.OsacPrefix)
+
+	// BareMetalInstanceUUIDLabel is the BMI API ID label used to name the hub
+	// NetworkAttachment and to look the BMI up from networking controllers.
+	BareMetalInstanceUUIDLabel string = fmt.Sprintf("%s/baremetalinstance-uuid", shared.OsacPrefix)
+
+	// BareMetalInstanceTenantAnnotation is copied onto the hub NetworkAttachment.
+	BareMetalInstanceTenantAnnotation string = fmt.Sprintf("%s/tenant", shared.OsacPrefix)
 )
 
 // bareMetalInstanceOSACNetworkingFinalizer is owned and removed by osac-operator.

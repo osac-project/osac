@@ -109,9 +109,17 @@ Review the handed-off resource identities and record the adjacent observations s
 
 Retain both generated mirror-set types and the generated signature handoff. For the corresponding dependent steps, require the exact CatalogSource name/namespace/image and its `READY` state, and each generated ClusterCatalog's `Serving=True` condition with reason `Available`, using separate resource checks. OLM Classic PackageManifest visibility does not prove ClusterCatalog readiness or vice versa. These observations do not produce a combined Doc 1 identity/content/policy/lineage certificate.
 
+**Regenerated mirror policies — Doc1 change owner:** regeneration of `idms-oc-mirror.yaml` or `itms-oc-mirror.yaml` is not itself an instruction to change live cluster configuration. Before applying regenerated output, the mirror/change owner compares the intended generated object identities and source-to-mirror rules with the approved live configuration.
+
+- **Application is required before dependent use** when an intended generated object/rule is missing or the approved selected references require a new or changed mapping, destination or policy.
+- **Do not introduce a policy change merely because output was regenerated.** If the intended generated identities and effective rules already match the approved live state for all selected consumers, retain the fresh artifacts and the owner's no-change review.
+- **Unapproved change is not optional success.** If a required update is disruptive or cannot be applied in the current window, stop the dependent installation and return to the change owner.
+
+For OpenShift 4.22, creating an IDMS does not drain or reboot nodes, while creating an ITMS does. Other mirror-policy modifications/deletions can disrupt nodes. Review the actual effective registry change and the product's documented exceptions rather than claiming every regenerated file reboots nodes or every IDMS update is nondisruptive.
+
 Check affected-pool convergence:
 
-For each affected pool, record its current state separately: unpaused, observedGeneration=current generation, Updated=True, updatedMachineCount=machineCount, unavailable/degraded counts zero, and Degraded=False. Creating an IDMS does not drain or reboot nodes; modifying or deleting an IDMS can cause node disruption. ITMS changes can drain nodes. See the [OpenShift 4.22 mirror-set behavior](https://docs.openshift.com/it/documentation/openshift_container_platform/4.22/html/disconnected_environments/updating-a-cluster-in-a-disconnected-environment). Consume the completed rollout; do not reapply policies here.
+For each affected pool, record its current state separately: unpaused, observedGeneration=current generation, Updated=True, updatedMachineCount=machineCount, unavailable/degraded counts zero, and Degraded=False. See the [OpenShift 4.22 mirror-set behavior](https://docs.openshift.com/it/documentation/openshift_container_platform/4.22/html/disconnected_environments/updating-a-cluster-in-a-disconnected-environment). Consume the completed rollout; do not reapply policies here.
 
 | Package visibility | Required channel | Selection |
 | --- | --- | --- |
@@ -123,6 +131,8 @@ For each affected pool, record its current state separately: unpaused, observedG
 Check the selected packages and channels:
 
 Record the source observation for each selected PackageManifest separately. Each must match both `status.catalogSource=redhat-operators` and `status.catalogSourceNamespace=openshift-marketplace`. Operator namespaces, scopes, CSV pins, and Manual approval belong to the single product table in `operators.md`, not a second table here.
+
+Consume the mirror owner's image inventory for the exact selected operator bundles/CSVs and their dependencies. Include **all applicable CSV deployment container images, sidecars and init-container images**, as well as related-image/`RELATED_IMAGE` selectors and the selected operand/helper images. In particular, include the selected CSV's `ose-kube-rbac-proxy-rhel9` sidecar reference when present; a list containing only the AAP operator images is not sufficient.
 
 ## 3. Registry access and bounded configuration
 
@@ -296,7 +306,7 @@ helm template osac ./osac --namespace "$OSAC_NAMESPACE" --values "$VALUES_FILE" 
 
 Expected: protected nonempty render. Do not require global server-side dry-run: operator APIs/webhooks do not yet exist, and Phase 2 installs additional CRDs.
 
-Review the rendered consumers against the selected services and approved values, including unresolved placeholders and embedded credentials, and record those observations separately. Stop the dependent step on an unresolved placeholder, embedded credential or selected-consumer mismatch. Use Doc 1's selected inventory, intended tag/ITMS or digest/IDMS mappings and exact mirror references when reviewing each image. Return an observed missing image, mapping discrepancy or unavailable destination to the mirror owner with the exact reference; a render or registry-prefix observation does not certify exhaustive inventory, policy specificity, availability or provenance. Retain the selected VMaaS `NeverContactSource` requirement; the separate CDI import path remains a later VMaaS acceptance gate. Record each direct-mirror override, including CLI, with its approved original and mirror references in the private inputs. These narrower observations do not waive approved image/source provenance or mirror-only requirements.
+Review the rendered consumers against the selected services and approved values, including unresolved placeholders and embedded credentials, and record those observations separately. Review normal containers, sidecars and init containers; retain the separate selected-bundle/CSV image review in §2, because the OSAC render and a `RELATED_IMAGE` environment-variable listing do not by themselves enumerate every operator deployment image. Stop the dependent step on an unresolved placeholder, embedded credential or selected-consumer mismatch. Use Doc 1's selected inventory, intended tag/ITMS or digest/IDMS mappings and exact mirror references when reviewing each image. Return an observed missing image, mapping discrepancy or unavailable destination to the mirror owner with the exact reference; a render or registry-prefix observation does not certify exhaustive inventory, policy specificity, availability or provenance. Retain the selected VMaaS `NeverContactSource` requirement; the separate CDI import path remains a later VMaaS acceptance gate. Record each direct-mirror override, including CLI, with its approved original and mirror references in the private inputs. These narrower observations do not waive approved image/source provenance or mirror-only requirements.
 
 ## 6. Handoff and worked flow
 

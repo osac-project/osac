@@ -3,12 +3,15 @@
 #   helm show values oci://ghcr.io/osac-project/charts/osac --version 0.0.62
 # Service selection per the disconnected installation guide Section 6.1;
 # disconnected overrides (cliImage, AAP EE, internal Git) per Section 5.
-# Replace site domain placeholders; supply credentials, license and mirrors
-# separately. Do not set global.clusterDomain on the command line for the
-# disconnected install: keep its approved site value in this file.
+# Replace <approved-site-apps-domain> in all four domain-bearing fields below
+# with the same exact owner-approved application domain before use. This is
+# a documentation placeholder, not Helm interpolation; no shell variable or
+# tpl expansion is implied. Supply credentials, license and mirrors separately.
+# Keep global.clusterDomain and the explicit service/issuer hostnames in this
+# protected values file; do not correct only the command-line clusterDomain.
 global:
   osacDeploymentId: demo/osac-sno-01
-  clusterDomain: apps.osac.pool.se-lab.eng.rdu2.dc.redhat.com
+  clusterDomain: <approved-site-apps-domain>
   fulfillmentTrust:
     enabled: false
   services:
@@ -63,8 +66,8 @@ dbInit:
   host: postgres.osac-infra.svc.cluster.local
 service:
   variant: openshift
-  externalHostname: fulfillment-api-osac.apps.osac.pool.se-lab.eng.rdu2.dc.redhat.com
-  internalHostname: fulfillment-internal-api-osac.apps.osac.pool.se-lab.eng.rdu2.dc.redhat.com
+  externalHostname: fulfillment-api-osac.<approved-site-apps-domain>
+  internalHostname: fulfillment-internal-api-osac.<approved-site-apps-domain>
   auth:
     controllerCredentials:
     - secret:
@@ -117,7 +120,7 @@ service:
 ui:
   auth:
     # tpl is not applied for subcharts: set the issuer URL explicitly.
-    oidcIssuerURL: https://keycloak-keycloak.apps.osac.pool.se-lab.eng.rdu2.dc.redhat.com/realms/osac
+    oidcIssuerURL: https://keycloak-keycloak.<approved-site-apps-domain>/realms/osac
     certs:
       caBundle:
         configMap: ca-bundle

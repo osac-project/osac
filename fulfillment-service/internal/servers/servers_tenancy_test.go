@@ -122,6 +122,7 @@ var _ = Describe("Tenancy logic", func() {
 						Name:   "test-template",
 						Tenant: "my-tenant",
 					}.Build(),
+					SpecDefaults: seedClusterPullSecretDefaults(ctx, "my-tenant"),
 				}.Build(),
 			).
 			Do(ctx)
@@ -180,6 +181,7 @@ var _ = Describe("Tenancy logic", func() {
 					Name:   "test-template",
 					Tenant: "my-tenant",
 				}.Build(),
+				SpecDefaults: seedClusterPullSecretDefaults(ctx, "my-tenant"),
 			}.Build(),
 			).
 			Do(ctx)
@@ -262,6 +264,7 @@ var _ = Describe("Tenancy logic", func() {
 						Name:   "test-template",
 						Tenant: "my-tenant",
 					}.Build(),
+					SpecDefaults: seedClusterPullSecretDefaults(ctx, "my-tenant"),
 				}.Build(),
 			).
 			Do(ctx)
@@ -330,6 +333,7 @@ var _ = Describe("Tenancy logic", func() {
 					Name:   "test-template",
 					Tenant: "my-tenant",
 				}.Build(),
+				SpecDefaults: seedClusterPullSecretDefaults(ctx, "my-tenant"),
 			}.Build()).
 			Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
@@ -395,6 +399,7 @@ var _ = Describe("Tenancy logic", func() {
 					Name:   "test-template",
 					Tenant: "my-tenant",
 				}.Build(),
+				SpecDefaults: seedClusterPullSecretDefaults(ctx, "my-tenant"),
 			}.Build()).
 			Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
@@ -469,6 +474,7 @@ var _ = Describe("Tenancy logic", func() {
 					Name:   "test-template",
 					Tenant: "my-tenant",
 				}.Build(),
+				SpecDefaults: seedClusterPullSecretDefaults(ctx, "my-tenant"),
 			}.Build()).
 			Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
@@ -499,6 +505,7 @@ var _ = Describe("Tenancy logic", func() {
 				Id:       object.GetId(),
 				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
+					PullSecretSecret: object.GetSpec().GetPullSecretSecret(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"compute": publicv1.ClusterNodeSet_builder{
 							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "worker-bmit", Shared: true}.Build(),
@@ -612,6 +619,7 @@ var _ = Describe("Tenancy logic", func() {
 						Name:   "test-template",
 						Tenant: auth.SharedTenant,
 					}.Build(),
+					SpecDefaults: seedClusterPullSecretDefaults(ctx, auth.SharedTenant),
 				}.Build(),
 			).
 			Do(ctx)

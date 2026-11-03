@@ -14,17 +14,23 @@ language governing permissions and limitations under the License.
 package it
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
@@ -36,6 +42,61 @@ import (
 
 // dockerConfigJSON is a representative (fake) container registry pull secret payload.
 const dockerConfigJSON = `{"auths":{"registry.example.com":{"auth":"dGVzdDp0ZXN0"}}}`
+
+func clusterPullSecretDefaultsFixture(ctx context.Context) *privatev1.ClusterTemplateSpecDefaults {
+	GinkgoHelper()
+	reference := clusterPullSecretReferenceFixture(ctx, tool.ExternalView().UserConn(), "")
+	return privatev1.ClusterTemplateSpecDefaults_builder{
+		PullSecretSecret: privatev1.SecretLocalReference_builder{Id: reference.GetId()}.Build(),
+	}.Build()
+}
+
+func clusterPullSecretSharedDefaultsFixture(ctx context.Context) *privatev1.ClusterTemplateSpecDefaults {
+	GinkgoHelper()
+	client := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+	response, err := client.Create(ctx, privatev1.SecretsCreateRequest_builder{
+		Object: privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{Name: "fixture-shared-pull-secret-" + uuid.New(), Tenant: "shared"}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+			Data:     map[string][]byte{corev1.DockerConfigJsonKey: []byte(dockerConfigJSON)},
+		}.Build(),
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	secretID := response.GetObject().GetId()
+	DeferCleanup(func(ctx context.Context) {
+		_, err := client.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: secretID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+	})
+	return privatev1.ClusterTemplateSpecDefaults_builder{
+		PullSecretSecret: privatev1.SecretLocalReference_builder{Id: secretID}.Build(),
+	}.Build()
+}
+
+func clusterPullSecretReferenceFixture(ctx context.Context, conn grpc.ClientConnInterface, tenant string) *publicv1.SecretLocalReference {
+	GinkgoHelper()
+	client := publicv1.NewSecretsClient(conn)
+	response, err := client.Create(ctx, publicv1.SecretsCreateRequest_builder{
+		Object: publicv1.Secret_builder{
+			Metadata: publicv1.Metadata_builder{Name: "fixture-pull-secret-" + uuid.New(), Tenant: tenant}.Build(),
+			Type:     publicv1.SecretType_SECRET_TYPE_PULL_SECRET,
+			Data:     map[string][]byte{corev1.DockerConfigJsonKey: []byte(dockerConfigJSON)},
+		}.Build(),
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	secretID := response.GetObject().GetId()
+	DeferCleanup(func(ctx context.Context) {
+		_, err := privatev1.NewSecretsClient(tool.InternalView().AdminConn()).Delete(ctx,
+			privatev1.SecretsDeleteRequest_builder{Id: secretID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+	})
+	return publicv1.SecretLocalReference_builder{Id: secretID}.Build()
+}
+
+func containsPullSecretPayload(encoded []byte, payload string) bool {
+	escaped, err := json.Marshal(payload)
+	return err != nil || bytes.Contains(encoded, []byte(payload)) || bytes.Contains(encoded, escaped) ||
+		bytes.Contains(encoded, []byte(base64.StdEncoding.EncodeToString([]byte(payload))))
+}
 
 var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func() {
 	var (
@@ -129,6 +190,7 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 	// waitForClusterOrder waits for the ClusterOrder Kubernetes object created for the given
 	// cluster and returns it.
 	waitForClusterOrder := func(ctx context.Context, clusterId string) *osacv1alpha1.ClusterOrder {
+		GinkgoHelper()
 		kubeClient := tool.KubeClient()
 		clusterOrderList := &osacv1alpha1.ClusterOrderList{}
 		var kubeObject *osacv1alpha1.ClusterOrder
@@ -140,11 +202,44 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(clusterOrderList.Items).To(HaveLen(1))
 				kubeObject = &clusterOrderList.Items[0]
+				g.Expect(kubeObject.Spec.PullSecretRevision).ToNot(BeEmpty())
 			},
 			time.Minute,
 			time.Second,
 		).Should(Succeed())
 		return kubeObject
+	}
+
+	assertProjectedPullSecret := func(ctx context.Context, clusterId, expectedPayload string) {
+		GinkgoHelper()
+		order := waitForClusterOrder(ctx, clusterId)
+		hasInlineCredentials := order.Spec.PullSecret != ""
+		Expect(hasInlineCredentials).To(BeFalse(), "ClusterOrder must not store inline credentials")
+		Expect(order.Spec.PullSecretRef).ToNot(BeNil())
+		Expect(order.Spec.PullSecretRef.Name).To(Equal("cluster-" + clusterId + "-pull-secret"))
+		Expect(order.Spec.PullSecretRevision).ToNot(BeEmpty())
+		encoded, err := json.Marshal(order)
+		Expect(err).ToNot(HaveOccurred())
+		for _, payload := range []string{dockerConfigJSON, expectedPayload} {
+			Expect(containsPullSecretPayload(encoded, payload)).To(BeFalse(), "ClusterOrder must not contain credential payloads")
+		}
+		projected := &corev1.Secret{}
+		Expect(tool.KubeClient().Get(ctx, crclient.ObjectKey{
+			Namespace: order.Namespace,
+			Name:      order.Spec.PullSecretRef.Name,
+		}, projected)).To(Succeed())
+		Expect(projected.Type).To(Equal(corev1.SecretTypeDockerConfigJson))
+		dataKeys := make([]string, 0, len(projected.Data))
+		for key := range projected.Data {
+			dataKeys = append(dataKeys, key)
+		}
+		Expect(dataKeys).To(ConsistOf(corev1.DockerConfigJsonKey))
+		Expect(bytes.Equal(projected.Data[corev1.DockerConfigJsonKey], []byte(expectedPayload))).To(BeTrue(), "projected synthetic pull-secret content mismatch")
+		Expect(projected.Annotations["osac.openshift.io/pull-secret-revision"]).To(Equal(order.Spec.PullSecretRevision))
+		for _, key := range []string{"osac.openshift.io/tenant", "osac.openshift.io/project"} {
+			Expect(projected.Annotations[key]).To(Equal(order.Annotations[key]))
+		}
+		Expect(metav1.IsControlledBy(projected, order)).To(BeTrue())
 	}
 
 	BeforeEach(func() {
@@ -212,8 +307,7 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 			_, _ = clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: clusterId}.Build())
 		})
 
-		kubeObject := waitForClusterOrder(ctx, clusterId)
-		Expect(kubeObject.Spec.PullSecret).To(Equal(dockerConfigJSON))
+		assertProjectedPullSecret(ctx, clusterId, dockerConfigJSON)
 	})
 
 	It("Resolves pull_secret_secret by name into the ClusterOrder pull secret", func() {
@@ -243,8 +337,7 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 			_, _ = clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: clusterId}.Build())
 		})
 
-		kubeObject := waitForClusterOrder(ctx, clusterId)
-		Expect(kubeObject.Spec.PullSecret).To(Equal(dockerConfigJSON))
+		assertProjectedPullSecret(ctx, clusterId, dockerConfigJSON)
 	})
 
 	It("Rejects a cluster that references a nonexistent secret", func() {
@@ -335,8 +428,7 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 			_, _ = clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: clusterId}.Build())
 		})
 
-		kubeObject := waitForClusterOrder(ctx, clusterId)
-		Expect(kubeObject.Spec.PullSecret).To(Equal(dockerConfigJSON))
+		assertProjectedPullSecret(ctx, clusterId, dockerConfigJSON)
 	})
 
 	It("Lets a user pull_secret_secret override a template default", func() {
@@ -372,7 +464,6 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 			_, _ = clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: clusterId}.Build())
 		})
 
-		kubeObject := waitForClusterOrder(ctx, clusterId)
-		Expect(kubeObject.Spec.PullSecret).To(Equal(overridePullSecret))
+		assertProjectedPullSecret(ctx, clusterId, overridePullSecret)
 	})
 })

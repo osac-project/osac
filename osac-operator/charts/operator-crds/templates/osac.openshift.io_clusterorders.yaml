@@ -159,10 +159,28 @@ spec:
                   type: object
                 type: array
               pullSecret:
-                description: |-
-                  PullSecret contains credentials for authenticating to container image repositories.
-                  If not provided, the provider's default pull secret is used.
-                maxLength: 262144
+                description: PullSecret is retained only to reject unsupported inline
+                  credential inputs.
+                maxLength: 0
+                type: string
+              pullSecretRef:
+                description: PullSecretRef selects an owned dockerconfigjson Secret
+                  in this order's namespace.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              pullSecretRevision:
+                description: PullSecretRevision changes only when projected credentials
+                  change.
                 type: string
               releaseImage:
                 description: |-
@@ -174,7 +192,7 @@ spec:
               sshPublicKey:
                 description: |-
                   SSHPublicKey is an SSH public key installed on cluster worker nodes.
-                  If not provided, the provider's default SSH key is used.
+                  Defaults are resolved through the API's cluster template spec defaults.
                 maxLength: 16384
                 type: string
               templateID:

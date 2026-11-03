@@ -93,7 +93,8 @@ var _ = Describe("Annotations", func() {
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("my-template-%s", uuid.New()[24:32]),
 				}.Build(),
-				Description: "My template.",
+				Description:  "My template.",
+				SpecDefaults: clusterPullSecretDefaultsFixture(ctx),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

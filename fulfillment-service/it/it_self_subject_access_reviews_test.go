@@ -188,8 +188,9 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 							Tenant: tenantName,
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
-							NodeSets: testClusterNodeSets(instanceTypeID, 3),
+							PullSecretSecret: clusterPullSecretReferenceFixture(ctx, tenantAdminConn, tenantName),
+							Template:         publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+							NodeSets:         testClusterNodeSets(instanceTypeID, 3),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -249,8 +250,9 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 								Tenant: tenantName,
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
-								Template: publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
-								NodeSets: testClusterNodeSets(instanceTypeID, 3),
+								PullSecretSecret: clusterPullSecretReferenceFixture(ctx, tenantAdminConn, tenantName),
+								Template:         publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+								NodeSets:         testClusterNodeSets(instanceTypeID, 3),
 							}.Build(),
 						}.Build(),
 					}.Build(),

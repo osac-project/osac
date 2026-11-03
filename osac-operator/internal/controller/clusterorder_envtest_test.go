@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,6 +32,7 @@ import (
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
+	"github.com/osac-project/osac/osac-operator/pkg/pullsecret"
 )
 
 var _ = Describe("ClusterOrder Integration Tests", func() {
@@ -54,6 +56,35 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 	})
 
 	ctx := context.Background()
+
+	createTestClusterOrder := func(instance *osacv1alpha1.ClusterOrder) error {
+		if err := k8sClient.Create(ctx, instance); err != nil {
+			return err
+		}
+		fixturePullSecret := `{"auths":{"fixture.invalid":{}}}`
+		if err := pullsecret.Ensure(ctx, k8sClient, instance, &fixturePullSecret); err != nil {
+			return err
+		}
+		if err := k8sClient.Update(ctx, instance); err != nil {
+			return err
+		}
+		DeferCleanup(func() {
+			Expect(k8sClient.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+				Name: instance.Spec.PullSecretRef.Name, Namespace: instance.Namespace,
+			}})).To(Succeed())
+		})
+		namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: generateNamespaceName(instance), Labels: commonLabelsFromOrder(instance),
+		}}
+		if err := pullsecret.BindNamespace(instance, namespace); err != nil {
+			return err
+		}
+		if err := k8sClient.Create(ctx, namespace); err != nil {
+			return err
+		}
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, namespace)).To(Succeed()) })
+		return nil
+	}
 
 	newTestClusterOrder := func(name string) *osacv1alpha1.ClusterOrder {
 		return &osacv1alpha1.ClusterOrder{
@@ -82,7 +113,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			SubnetRef:         "subnet-a",
 			SecurityGroupRefs: []string{"sg-a"},
 		}
-		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		Expect(createTestClusterOrder(instance)).To(Succeed())
 		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
 
 		instance = getClusterOrder(name)
@@ -131,7 +162,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		const name = "cluster-order-remove-spec"
 		instance := newTestClusterOrder(name)
 		instance.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-a"}
-		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		Expect(createTestClusterOrder(instance)).To(Succeed())
 		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
 
 		instance = getClusterOrder(name)
@@ -144,7 +175,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		const name = "cluster-order-network-attachment-lifecycle-update"
 		instance := newTestClusterOrder(name)
 		instance.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-a"}
-		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		Expect(createTestClusterOrder(instance)).To(Succeed())
 		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
 
 		instance = getClusterOrder(name)
@@ -166,7 +197,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			NumberOfNodes: 1,
 			BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "worker"},
 		}}
-		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		Expect(createTestClusterOrder(instance)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, instance) })
 
 		pool := readyClusterOrderNodePool("worker", 0)
@@ -187,7 +218,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		const name = "cluster-order-add-on-operators"
 		instance := newTestClusterOrder(name)
 		instance.Spec.AddOnOperators = []string{"operator-one", "operator-two"}
-		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		Expect(createTestClusterOrder(instance)).To(Succeed())
 		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
 
 		stored := getClusterOrder(name)
@@ -197,7 +228,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 	It("should omit add-on operators when none are requested", func() {
 		const name = "cluster-order-without-add-on-operators"
 		instance := newTestClusterOrder(name)
-		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		Expect(createTestClusterOrder(instance)).To(Succeed())
 		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
 
 		stored := getClusterOrder(name)
@@ -207,7 +238,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 	It("should reject an empty add-on operator job name", func() {
 		const name = "cluster-order-empty-add-on-operator"
 		instance := newTestClusterOrder(name)
-		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		Expect(createTestClusterOrder(instance)).To(Succeed())
 		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
 
 		instance.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{{
@@ -232,7 +263,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 	It("should round-trip fulfillment trust observed status through the ClusterOrder CRD", func() {
 		const name = "cluster-order-fulfillment-trust-status"
 		instance := newTestClusterOrder(name)
-		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		Expect(createTestClusterOrder(instance)).To(Succeed())
 		DeferCleanup(func() {
 			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 		})
@@ -269,7 +300,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 				SubnetRef:         "subnet-a",
 				SecurityGroupRefs: []string{"sg-a"},
 			}
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(createTestClusterOrder(instance)).To(Succeed())
 			DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
 
 			instance.Status.DesiredConfigVersion = "v1"
@@ -302,7 +333,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		It("should provision through the full lifecycle: trigger, running, succeeded", func() {
 			const name = "cluster-order-provision-success"
 			instance := newTestClusterOrder(name)
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(createTestClusterOrder(instance)).To(Succeed())
 			DeferCleanup(func() {
 				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 			})
@@ -348,7 +379,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		It("should set Failed phase when provision job fails", func() {
 			const name = "cluster-order-provision-failure"
 			instance := newTestClusterOrder(name)
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(createTestClusterOrder(instance)).To(Succeed())
 			DeferCleanup(func() {
 				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 			})
@@ -371,7 +402,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		It("should not trigger duplicate jobs on rapid reconciles (stale cache guard)", func() {
 			const name = "cluster-order-no-duplicate"
 			instance := newTestClusterOrder(name)
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(createTestClusterOrder(instance)).To(Succeed())
 			DeferCleanup(func() {
 				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 			})
@@ -412,7 +443,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		It("should deprovision successfully", func() {
 			const name = "cluster-order-deprovision-success"
 			instance := newTestClusterOrder(name)
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(createTestClusterOrder(instance)).To(Succeed())
 			DeferCleanup(func() {
 				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 			})
@@ -438,7 +469,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		It("should block deletion when deprovision fails with BlockDeletionOnFailure", func() {
 			const name = "cluster-order-deprovision-blocked"
 			instance := newTestClusterOrder(name)
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(createTestClusterOrder(instance)).To(Succeed())
 			DeferCleanup(func() {
 				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 			})
@@ -504,7 +535,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		It("should not create additional provision jobs when previous job failed for same config", func() {
 			const name = "cluster-order-no-infinite-retry"
 			instance := newTestClusterOrder(name)
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(createTestClusterOrder(instance)).To(Succeed())
 			DeferCleanup(func() {
 				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 			})
@@ -534,7 +565,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		It("should retry after backoff elapses and increase backoff on successive failures", func() {
 			const name = "cluster-order-backoff-retry"
 			instance := newTestClusterOrder(name)
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(createTestClusterOrder(instance)).To(Succeed())
 			DeferCleanup(func() {
 				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 			})
@@ -592,7 +623,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		It("stamps the phase transition time once per phase change", func() {
 			const name = "cluster-order-phase-transition-time"
 			instance := newTestClusterOrder(name)
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(createTestClusterOrder(instance)).To(Succeed())
 			DeferCleanup(func() {
 				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 			})
@@ -633,7 +664,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		It("should preserve controller-owned fields when patching status", func() {
 			const name = "cluster-order-patch-preserves-storage"
 			instance := newTestClusterOrder(name)
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(createTestClusterOrder(instance)).To(Succeed())
 			DeferCleanup(func() {
 				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 			})
@@ -680,7 +711,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		It("should reject updates to templateID", func() {
 			const name = "cluster-order-immutable-template"
 			instance := newTestClusterOrder(name)
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			Expect(createTestClusterOrder(instance)).To(Succeed())
 			DeferCleanup(func() {
 				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
 			})

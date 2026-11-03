@@ -23,6 +23,8 @@ import (
 	"math"
 	"time"
 
+	"github.com/osac-project/osac/osac-operator/pkg/pullsecret"
+
 	"github.com/go-logr/logr"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"google.golang.org/grpc/codes"
@@ -158,6 +160,7 @@ func NewClusterOrderReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;create;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedclusters;nodepools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
@@ -505,6 +508,9 @@ func (r *ClusterOrderReconciler) mapObjectToCluster(ctx context.Context, obj cli
 
 func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
+	if err := pullsecret.ValidateOrder(instance); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	r.initializeStatusConditions(instance)
 	if instance.Status.Phase == "" {
@@ -1111,7 +1117,11 @@ func (r *ClusterOrderReconciler) findNamespace(ctx context.Context, instance *v1
 		return nil, nil
 	}
 
-	return &namespaceList.Items[0], nil
+	namespace := &namespaceList.Items[0]
+	if err := pullsecret.ValidateNamespace(instance, namespace); err != nil {
+		return nil, err
+	}
+	return namespace, nil
 }
 
 func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
@@ -1160,7 +1170,7 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 		// to happen before deleting the containing namespace.
 		if hc == nil {
 			log.Info("deleting cluster namespace", "namespace", ns.GetName())
-			if err := r.Client.Delete(ctx, ns); err != nil {
+			if err := r.Client.Delete(ctx, ns, client.Preconditions{UID: &ns.UID}); err != nil {
 				log.Error(err, "failed to delete namespace", "namespace", ns.GetName(), "error", err)
 				return ctrl.Result{}, err
 			}
@@ -1273,6 +1283,18 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 	if exists && val == ManagementStateManual {
 		log.Info("skipping provisioning due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
+	}
+	if r.ProvisioningProvider != nil {
+		namespace, err := r.findNamespace(ctx, instance)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if namespace == nil {
+			return ctrl.Result{}, pullsecret.ErrInvalid
+		}
+		if err := pullsecret.EnsureHosted(ctx, r.Client, instance, namespace); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, instance,

@@ -38,6 +38,7 @@ COPY --chown=1001:1001 proto/ proto/
 COPY --chown=1001:1001 fulfillment-service/ fulfillment-service/
 COPY --chown=1001:1001 bare-metal-fulfillment-operator/ bare-metal-fulfillment-operator/
 COPY --chown=1001:1001 osac-operator/api/ osac-operator/api/
+COPY --chown=1001:1001 osac-operator/pkg/pullsecret/ osac-operator/pkg/pullsecret/
 
 WORKDIR /opt/app-root/src/fulfillment-service
 RUN --mount=type=cache,id=osac-go-pkg,target=/opt/app-root/src/go/pkg,uid=1001,gid=0 \

@@ -9,12 +9,35 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	api "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/controller/baremetalworker"
+	"github.com/osac-project/osac/osac-operator/pkg/pullsecret"
 )
+
+// createWorkerClusterOrderFixture supplies the same owned reference as fulfillment.
+func createWorkerClusterOrderFixture(order *api.ClusterOrder) error {
+	if err := k8sClient.Create(ctx, order); err != nil {
+		return err
+	}
+	secretName := order.Name + "-pull-secret"
+	if order.Spec.PullSecretRef != nil {
+		secretName = order.Spec.PullSecretRef.Name
+	}
+	DeferCleanup(func() {
+		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: order.Namespace}}
+		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, secret))).To(Succeed())
+	})
+	fixturePayload := `{"auths":{}}`
+	if err := pullsecret.Ensure(ctx, k8sClient, order, &fixturePayload); err != nil {
+		return err
+	}
+	return k8sClient.Update(ctx, order)
+}
 
 // driveWorkerCheckpoints migrates legacy stage fixtures to explicit, finite
 // public reconciles. Only durable one-second checkpoints are advanced: errors

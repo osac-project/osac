@@ -249,9 +249,10 @@ var _ = Describe("Clusters server", func() {
 			_, err = templatesDao.Create().
 				SetObject(
 					privatev1.ClusterTemplate_builder{
-						Id:          "my_template",
-						Title:       "My template",
-						Description: "My template",
+						Id:           "my_template",
+						SpecDefaults: seedClusterPullSecretDefaults(ctx, testTenant),
+						Title:        "My template",
+						Description:  "My template",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-template",
 							Tenant: testTenant,
@@ -267,9 +268,10 @@ var _ = Describe("Clusters server", func() {
 			_, err = templatesDao.Create().
 				SetObject(
 					privatev1.ClusterTemplate_builder{
-						Id:          "my_deleted_template",
-						Title:       "My deleted template",
-						Description: "My deleted template",
+						Id:           "my_deleted_template",
+						SpecDefaults: seedClusterPullSecretDefaults(ctx, testTenant),
+						Title:        "My deleted template",
+						Description:  "My deleted template",
 						Metadata: privatev1.Metadata_builder{
 							Name:       "test-deleted-template",
 							Finalizers: []string{"a"},
@@ -288,9 +290,10 @@ var _ = Describe("Clusters server", func() {
 			_, err = templatesDao.Create().
 				SetObject(
 					privatev1.ClusterTemplate_builder{
-						Id:          "my_with_parameters",
-						Title:       "My with parameters",
-						Description: "My with parameters.",
+						Id:           "my_with_parameters",
+						SpecDefaults: seedClusterPullSecretDefaults(ctx, testTenant),
+						Title:        "My with parameters",
+						Description:  "My with parameters.",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-template-params",
 							Tenant: testTenant,
@@ -321,9 +324,10 @@ var _ = Describe("Clusters server", func() {
 			_, err = templatesDao.Create().
 				SetObject(
 					privatev1.ClusterTemplate_builder{
-						Id:          "my_bmit_template",
-						Title:       "My BMI template",
-						Description: "Template using bare metal instance types",
+						Id:           "my_bmit_template",
+						SpecDefaults: seedClusterPullSecretDefaults(ctx, auth.SharedTenant),
+						Title:        "My BMI template",
+						Description:  "Template using bare metal instance types",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-bmit-template",
 							Tenant: auth.SharedTenant,
@@ -1107,6 +1111,7 @@ var _ = Describe("Clusters server", func() {
 					Id:       object.GetId(),
 					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
+						PullSecretSecret: object.GetSpec().GetPullSecretSecret(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
 								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
@@ -2312,9 +2317,10 @@ var _ = Describe("Clusters server", func() {
 				_, err = templatesDao.Create().
 					SetObject(
 						privatev1.ClusterTemplate_builder{
-							Id:          "my_no_fabric_template",
-							Title:       "No fabric template",
-							Description: "Template with BMI that has no fabric port",
+							Id:           "my_no_fabric_template",
+							SpecDefaults: seedClusterPullSecretDefaults(ctx, auth.SharedTenant),
+							Title:        "No fabric template",
+							Description:  "Template with BMI that has no fabric port",
 							Metadata: privatev1.Metadata_builder{
 								Name:   "test-no-fabric-template",
 								Tenant: auth.SharedTenant,
@@ -2430,8 +2436,9 @@ var _ = Describe("Clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			_, err = templatesDao.Create().
 				SetObject(privatev1.ClusterTemplate_builder{
-					Id:    "my_template",
-					Title: "My template",
+					Id:           "my_template",
+					Title:        "My template",
+					SpecDefaults: seedClusterPullSecretDefaults(ctx, testTenant),
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-template",
 						Tenant: testTenant,

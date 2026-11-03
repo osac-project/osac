@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,7 +39,9 @@ import (
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/pullsecret"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
@@ -96,6 +99,7 @@ type task struct {
 	hubId        string
 	hubNamespace string
 	hubClient    clnt.Client
+	pullSecret   *string
 }
 
 // NewFunction creates a new builder that can then be used to create a new cluster reconciler function.
@@ -299,15 +303,17 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
+	created := object == nil
 	// Create or update the Kubernetes object:
 	if object == nil {
 		orderAnnotations := map[string]string{
-			annotations.Tenant: t.cluster.GetMetadata().GetTenant(),
+			annotations.Tenant:  t.cluster.GetMetadata().GetTenant(),
+			annotations.Project: t.cluster.GetMetadata().GetProject(),
 		}
 		if err := setUpgradeAttemptAnnotations(orderAnnotations, t.cluster.GetSpec()); err != nil {
 			return err
 		}
-		object := &osacv1alpha1.ClusterOrder{
+		object = &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:    t.hubNamespace,
 				GenerateName: objectPrefix,
@@ -336,9 +342,21 @@ func (t *task) update(ctx context.Context) error {
 		spec.NetworkAttachment = object.Spec.NetworkAttachment
 		update := object.DeepCopy()
 		update.Spec = spec
+		if t.pullSecret != nil {
+			if object.Spec.PullSecretRef != nil {
+				update.Spec.PullSecretRef = object.Spec.PullSecretRef.DeepCopy()
+			} else {
+				return errPullSecretResolution
+			}
+			if err := pullsecret.Ensure(ctx, t.hubClient, update, t.pullSecret); err != nil {
+				return errPullSecretResolution
+			}
+		}
+		delete(update.Annotations, pullsecret.LastAppliedAnnotation)
 		if update.Annotations == nil {
 			update.Annotations = map[string]string{}
 		}
+		update.Annotations[annotations.Project] = t.cluster.GetMetadata().GetProject()
 		if err := setUpgradeAttemptAnnotations(update.Annotations, t.cluster.GetSpec()); err != nil {
 			return err
 		}
@@ -346,6 +364,7 @@ func (t *task) update(ctx context.Context) error {
 		if err != nil {
 			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
+		object = update
 		t.r.logger.DebugContext(
 			ctx,
 			"Updated cluster order",
@@ -354,6 +373,15 @@ func (t *task) update(ctx context.Context) error {
 		)
 	}
 
+	if created && t.pullSecret != nil {
+		before := object.DeepCopy()
+		if err := pullsecret.Ensure(ctx, t.hubClient, object, t.pullSecret); err != nil {
+			return errPullSecretResolution
+		}
+		if err := t.hubClient.Patch(ctx, object, clnt.MergeFromWithOptions(before, clnt.MergeFromWithOptimisticLock{})); err != nil {
+			return errPullSecretResolution
+		}
+	}
 	if state == privatev1.ClusterState_CLUSTER_STATE_READY && object != nil {
 		if secretErr := t.ensureClusterSecrets(ctx, object); secretErr != nil {
 			t.r.logger.ErrorContext(ctx, "Failed to ensure cluster secrets",
@@ -482,12 +510,25 @@ func equalNetworkAttachment(left, right *osacv1alpha1.ClusterNetworkAttachment) 
 
 func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.ClusterOrderSpec) error {
 	clusterSpec := t.cluster.GetSpec()
+	t.pullSecret = nil
+	parameters, err := pullsecret.Parameters(&osacv1alpha1.ClusterOrder{Spec: *spec})
+	if err != nil {
+		return errPullSecretResolution
+	}
 	if clusterSpec.HasPullSecretSecret() {
 		pullSecret, err := t.resolvePullSecret(ctx, clusterSpec.GetPullSecretSecret())
 		if err != nil {
 			return err
 		}
-		spec.PullSecret = pullSecret
+		t.pullSecret = &pullSecret
+	} else {
+		return errPullSecretResolution
+	}
+	if _, exists := parameters["pull_secret"]; exists || spec.PullSecret != "" {
+		return errPullSecretResolution
+	}
+	if t.pullSecret != nil {
+		spec.PullSecretRef = &corev1.LocalObjectReference{Name: "cluster-" + t.cluster.GetId() + "-pull-secret"}
 	}
 	if clusterSpec.HasSshPublicKey() {
 		spec.SSHPublicKey = clusterSpec.GetSshPublicKey()
@@ -550,11 +591,18 @@ func (t *task) resolvePullSecret(ctx context.Context, ref *privatev1.SecretLocal
 				return "", fmt.Errorf("%w: not authorized to read secret '%s'", errPullSecretResolution, id)
 			}
 		}
-		return "", fmt.Errorf("%w: failed to get secret '%s': %w", errPullSecretResolution, id, err)
+		return "", errPullSecretResolution
 	}
 	object := response.GetObject()
 	if object == nil {
 		return "", fmt.Errorf("%w: secret '%s' not found", errPullSecretResolution, id)
+	}
+	if object.GetType() != privatev1.SecretType_SECRET_TYPE_PULL_SECRET ||
+		object.GetMetadata().HasDeletionTimestamp() ||
+		(object.GetMetadata().GetTenant() != auth.SharedTenant &&
+			(object.GetMetadata().GetTenant() != t.cluster.GetMetadata().GetTenant() ||
+				object.GetMetadata().GetProject() != t.cluster.GetMetadata().GetProject())) {
+		return "", errPullSecretResolution
 	}
 	raw, ok := object.GetData()[dockerConfigJSONKey]
 	if !ok || len(raw) == 0 {
@@ -562,6 +610,9 @@ func (t *task) resolvePullSecret(ctx context.Context, ref *privatev1.SecretLocal
 			"%w: secret '%s' is missing %s key",
 			errPullSecretResolution, id, dockerConfigJSONKey,
 		)
+	}
+	if pullsecret.Validate(raw) != nil {
+		return "", errPullSecretResolution
 	}
 	return string(raw), nil
 }

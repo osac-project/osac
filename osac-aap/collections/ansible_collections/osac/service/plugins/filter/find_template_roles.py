@@ -257,7 +257,6 @@ class ClusterTemplateSpecDefaults(Base):
     Matches the fulfillment-service ClusterTemplateSpecDefaults proto message.
     """
 
-    pull_secret: str | None = None
     pull_secret_secret: SecretLocalReference | None = None
     ssh_public_key: str | None = None
     release_image: str | None = None

@@ -115,7 +115,8 @@ var _ = Describe("Node set removal", func() {
 		templateId = newTemplateID("template_2_nodesets")
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id: templateId,
+				SpecDefaults: clusterPullSecretDefaultsFixture(ctx),
+				Id:           templateId,
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("template-2-nodesets-%s", uuid.New()),
 				}.Build(),

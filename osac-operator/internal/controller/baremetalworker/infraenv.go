@@ -21,11 +21,11 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/pullsecret"
 )
 
 const (
-	infraEnvNameSuffix   = "-infraenv"
-	pullSecretNameSuffix = "-pull-secret"
+	infraEnvNameSuffix = "-infraenv"
 	// ignitionSizeWarningThreshold is 75% of the 64 KiB BMI user data limit; above it the controller
 	// warns that discovery ignition is approaching that ceiling.
 	ignitionSizeWarningThreshold     = 48 * 1024
@@ -260,54 +260,10 @@ func (r *Reconciler) fetchDiscoveryIgnition(
 	return ignition, ctrl.Result{}, nil
 }
 
-// ensurePullSecret ensures the pull secret K8s Secret referenced by the InfraEnv exists.
-// It checks co.Spec.PullSecret first, then falls back to extracting the pull_secret key
-// from co.Spec.TemplateParameters (a JSON-encoded map).
+// ensurePullSecret validates the owned source without moving credentials through AAP.
 func (r *Reconciler) ensurePullSecret(ctx context.Context, co *v1alpha1.ClusterOrder) error {
-	secretName := co.Name + pullSecretNameSuffix
-	key := client.ObjectKey{Name: secretName, Namespace: co.Namespace}
-
-	existing := &corev1.Secret{}
-	if err := r.Get(ctx, key, existing); err == nil {
-		return nil
-	} else if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("checking pull secret %s: %w", key, err)
-	}
-
-	pullSecret := co.Spec.PullSecret
-	if pullSecret == "" && co.Spec.TemplateParameters != "" {
-		var params map[string]interface{}
-		if err := json.Unmarshal([]byte(co.Spec.TemplateParameters), &params); err == nil {
-			if ps, ok := params["pull_secret"].(string); ok {
-				pullSecret = ps
-			}
-		}
-	}
-	if pullSecret == "" {
-		return fmt.Errorf("no pull secret available on ClusterOrder %s (neither spec.pullSecret nor templateParameters.pull_secret)", co.Name)
-	}
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: co.Namespace,
-		},
-		Type: corev1.SecretTypeDockerConfigJson,
-		Data: map[string][]byte{
-			corev1.DockerConfigJsonKey: []byte(pullSecret),
-		},
-	}
-	if err := controllerutil.SetControllerReference(co, secret, r.scheme); err != nil {
-		return fmt.Errorf("setting pull secret owner reference: %w", err)
-	}
-	if err := r.Create(ctx, secret); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return nil
-		}
-		return fmt.Errorf("creating pull secret %s: %w", key, err)
-	}
-	ctrllog.FromContext(ctx).Info("created pull secret for InfraEnv", "secret", key.String())
-	return nil
+	_, err := pullsecret.Read(ctx, r.Client, co)
+	return err
 }
 
 // resolveSSHPublicKey extracts the SSH public key from co.Spec.SSHPublicKey,
@@ -339,7 +295,7 @@ func (r *Reconciler) buildInfraEnv(co *v1alpha1.ClusterOrder, name string) (*uns
 	// No clusterRef is set (late binding): agents
 	// register unbound and are bound explicitly after MAC correlation (OSAC-4160).
 	spec := map[string]interface{}{
-		"pullSecretRef": map[string]interface{}{"name": co.Name + pullSecretNameSuffix},
+		"pullSecretRef": map[string]interface{}{"name": co.Spec.PullSecretRef.Name},
 	}
 	if sshKey := r.resolveSSHPublicKey(co); sshKey != "" {
 		spec["sshAuthorizedKey"] = sshKey

@@ -190,7 +190,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 	}
 	BeforeEach(func() {
 		name := "unified-" + uuid.NewString()
-		co = &api.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Labels: map[string]string{"osac.openshift.io/clusterorder-uuid": "cluster"}, Annotations: map[string]string{"osac.openshift.io/tenant": tenant}}, Spec: api.ClusterOrderSpec{TemplateID: "test", PullSecret: `{"auths":{}}`, NodeRequests: []api.NodeRequest{{NodeSet: "standard", NumberOfNodes: 1, BareMetal: &api.BareMetalNodeSpec{InstanceType: "standard"}}}}}
+		co = &api.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace, Labels: map[string]string{"osac.openshift.io/clusterorder-uuid": "cluster"}, Annotations: map[string]string{"osac.openshift.io/tenant": tenant}}, Spec: api.ClusterOrderSpec{TemplateID: "test", NodeRequests: []api.NodeRequest{{NodeSet: "standard", NumberOfNodes: 1, BareMetal: &api.BareMetalNodeSpec{InstanceType: "standard"}}}}}
 		fc = newWorkerFulfillmentStub()
 		recorder = events.NewFakeRecorder(100)
 		provider = fc
@@ -201,7 +201,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		fc.AddDiskImage(privatev1.DiskImage_builder{Id: "image", Metadata: privatev1.Metadata_builder{Name: "image"}.Build()}.Build())
 		fc.AddBareMetalInstanceType(newInstanceType("standard", "data-0"))
 		r = buildReconciler(k8sClient)
-		Expect(k8sClient.Create(ctx, co)).To(Succeed())
+		Expect(createWorkerClusterOrderFixture(co)).To(Succeed())
 		DeferCleanup(func() {
 			ignition.Close()
 			latest := &api.ClusterOrder{}
@@ -1477,9 +1477,10 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 
 		// Block provisioning prerequisites. Ready demotion still happens on the next
 		// explicit observation and retains identity/history.
-		blocked := getOrder()
-		blocked.Spec.PullSecret = ""
-		Expect(k8sClient.Update(ctx, blocked)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, newInfraEnv(co.Name+"-infraenv"))).To(Succeed())
+		Expect(k8sClient.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name: co.Name + "-pull-secret", Namespace: co.Namespace,
+		}})).To(Succeed())
 		uninstalled := getAgent(agent.GetName())
 		Expect(unstructured.SetNestedSlice(uninstalled.Object, []interface{}{
 			map[string]interface{}{"type": "Installed", "status": "False"},
@@ -1492,6 +1493,8 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		// R09: demotion ends the continuous healthy interval.
 		Expect(demoted.ReadySince).To(BeNil())
 		Expect(fc.CreateCalls()).To(HaveLen(createsBefore))
+		_, err := run()
+		Expect(err).To(HaveOccurred())
 
 		// A protected phase is not resurrected from an installed Agent while provider
 		// cleanup is blocked, and its identity/history survive.
@@ -1502,7 +1505,8 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(k8sClient.Status().Update(ctx, protected)).To(Succeed())
 		before := getOrder().Status.Workers[0]
 		fc.SetDeleteError(errors.New("provider deletion pending"))
-		step()
+		_, err = run()
+		Expect(err).To(HaveOccurred())
 		got := getOrder().Status.Workers[0]
 		Expect(got.Phase).To(Equal("Unbinding"))
 		Expect(got.BareMetalInstance).To(Equal(before.BareMetalInstance))

@@ -93,9 +93,10 @@ var _ = Describe("Public clusters", func() {
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("test-tmpl-%s", uuid.New()[24:32]),
 				}.Build(),
-				Id:          templateId,
-				Title:       "My template %s",
-				Description: "My template.",
+				Id:           templateId,
+				Title:        "My template %s",
+				Description:  "My template.",
+				SpecDefaults: clusterPullSecretDefaultsFixture(ctx),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -281,6 +282,7 @@ var _ = Describe("Public clusters", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					PullSecretSecret:  object.GetSpec().GetPullSecretSecret(),
 					NetworkAttachment: object.GetSpec().GetNetworkAttachment(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": {

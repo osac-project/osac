@@ -90,6 +90,7 @@ type mockComputeInstancesClient struct {
 	listFunc   func(context.Context, *publicv1.ComputeInstancesListRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesListResponse, error)
 	getFunc    func(context.Context, *publicv1.ComputeInstancesGetRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesGetResponse, error)
 	createFunc func(context.Context, *publicv1.ComputeInstancesCreateRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesCreateResponse, error)
+	updateFunc func(context.Context, *publicv1.ComputeInstancesUpdateRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesUpdateResponse, error)
 	deleteFunc func(context.Context, *publicv1.ComputeInstancesDeleteRequest, ...grpc.CallOption) (*publicv1.ComputeInstancesDeleteResponse, error)
 }
 
@@ -147,10 +148,60 @@ func (m *mockComputeInstancesClient) Create(
 	return m.createFunc(ctx, request, options...)
 }
 
+func (m *mockComputeInstancesClient) Update(
+	ctx context.Context, request *publicv1.ComputeInstancesUpdateRequest, options ...grpc.CallOption,
+) (*publicv1.ComputeInstancesUpdateResponse, error) {
+	return m.updateFunc(ctx, request, options...)
+}
+
 func (m *mockComputeInstancesClient) Delete(
 	ctx context.Context, request *publicv1.ComputeInstancesDeleteRequest, options ...grpc.CallOption,
 ) (*publicv1.ComputeInstancesDeleteResponse, error) {
 	return m.deleteFunc(ctx, request, options...)
+}
+
+type mockDiskImagesClient struct {
+	publicv1.DiskImagesClient
+	getFunc func(context.Context, *publicv1.DiskImagesGetRequest, ...grpc.CallOption) (*publicv1.DiskImagesGetResponse, error)
+}
+
+func (m *mockDiskImagesClient) Get(
+	ctx context.Context, request *publicv1.DiskImagesGetRequest, options ...grpc.CallOption,
+) (*publicv1.DiskImagesGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+type mockInstanceTypesClient struct {
+	publicv1.InstanceTypesClient
+	getFunc func(context.Context, *publicv1.InstanceTypesGetRequest, ...grpc.CallOption) (*publicv1.InstanceTypesGetResponse, error)
+}
+
+func (m *mockInstanceTypesClient) Get(
+	ctx context.Context, request *publicv1.InstanceTypesGetRequest, options ...grpc.CallOption,
+) (*publicv1.InstanceTypesGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+type mockSubnetsClient struct {
+	publicv1.SubnetsClient
+	getFunc func(context.Context, *publicv1.SubnetsGetRequest, ...grpc.CallOption) (*publicv1.SubnetsGetResponse, error)
+}
+
+func (m *mockSubnetsClient) Get(
+	ctx context.Context, request *publicv1.SubnetsGetRequest, options ...grpc.CallOption,
+) (*publicv1.SubnetsGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+type mockSecurityGroupsClient struct {
+	publicv1.SecurityGroupsClient
+	listFunc func(context.Context, *publicv1.SecurityGroupsListRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsListResponse, error)
+}
+
+func (m *mockSecurityGroupsClient) List(
+	ctx context.Context, request *publicv1.SecurityGroupsListRequest, options ...grpc.CallOption,
+) (*publicv1.SecurityGroupsListResponse, error) {
+	return m.listFunc(ctx, request, options...)
 }
 
 func requestWithToken(rawToken string) *mcp.CallToolRequest {
@@ -681,6 +732,71 @@ var _ = Describe("handleGetResource", func() {
 				Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
 			}
 		}
+	})
+
+	It("Returns a catalog item from the untyped get_resource handler", func() {
+		catalogItems := &mockComputeInstanceCatalogItemsClient{
+			getFunc: func(
+				context.Context, *publicv1.ComputeInstanceCatalogItemsGetRequest, ...grpc.CallOption,
+			) (*publicv1.ComputeInstanceCatalogItemsGetResponse, error) {
+				return publicv1.ComputeInstanceCatalogItemsGetResponse_builder{
+					Object: publicv1.ComputeInstanceCatalogItem_builder{
+						Id:          "catalog-item-1",
+						Metadata:    publicv1.Metadata_builder{Name: "mcp-compute-catalog-item"}.Build(),
+						Title:       "MCP compute instance",
+						Description: "Catalog item for MCP compute instance integration testing",
+						Published:   true,
+						Template: publicv1.ComputeInstanceTemplateReference_builder{
+							Id: "template-1",
+						}.Build(),
+						Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
+							InstanceType: publicv1.InstanceTypeReferenceFieldPolicy_builder{
+								Editable: publicv1.EditableInstanceTypeReferenceField_builder{}.Build(),
+							}.Build(),
+							BootDisk: publicv1.ComputeInstanceBootDiskFieldPolicies_builder{
+								SizeGib: publicv1.Int32FieldPolicy_builder{
+									Editable: publicv1.EditableInt32Field_builder{}.Build(),
+								}.Build(),
+								StorageTier: publicv1.StorageTierReferenceFieldPolicy_builder{
+									Editable: publicv1.EditableStorageTierReferenceField_builder{}.Build(),
+								}.Build(),
+							}.Build(),
+							RunStrategy: publicv1.ComputeInstanceRunStrategyFieldPolicy_builder{
+								Editable: publicv1.EditableComputeInstanceRunStrategyField_builder{}.Build(),
+							}.Build(),
+							NetworkAttachments: publicv1.ComputeNetworkAttachmentListFieldPolicy_builder{
+								Editable: publicv1.EditableComputeNetworkAttachmentList_builder{}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+
+		handler := handleGetResourceTool(
+			newResourceRegistry(ServerDeps{ComputeInstanceCatalogItemsClient: catalogItems}),
+		)
+		request := requestWithToken("raw-bearer-value")
+		request.Params = &mcp.CallToolParamsRaw{
+			Arguments: json.RawMessage(`{"resource_type":"compute_instance_catalog_item","id":"catalog-item-1"}`),
+		}
+		result, err := handler(context.Background(), request)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.IsError).To(BeFalse())
+
+		encodedResult, marshalErr := json.Marshal(result)
+		Expect(marshalErr).To(Succeed())
+		var wireResult struct {
+			StructuredContent GetResourceOutput `json:"structuredContent"`
+		}
+		Expect(json.Unmarshal(encodedResult, &wireResult)).To(Succeed())
+		output := wireResult.StructuredContent
+		Expect(output.Resource).To(SatisfyAll(
+			HaveKeyWithValue("id", "catalog-item-1"),
+			HaveKeyWithValue("title", "MCP compute instance"),
+			HaveKeyWithValue("published", true),
+		))
+		Expect(output.Resource).To(HaveKey("fields"))
 	})
 
 	It("Gets a compute instance and returns its API representation", func() {

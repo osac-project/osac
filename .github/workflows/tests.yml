@@ -77,7 +77,8 @@ jobs:
             exit 1
           fi
           read -r -a args <<<"${COMMAND}"
-          "${args[@]}"
+          # Bound the runner even when leaked child processes keep test output pipes open.
+          timeout --kill-after=30s 1h "${args[@]}"
       # --- unit tests of osac-ui
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'ui-unit'

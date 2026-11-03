@@ -52,6 +52,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-ope
 | Controller reconciliation, finalizers, status, or CRD interactions | Envtest | `make test` |
 | Controller deployment, watches (including optional TopoLVM watch and remote VMaaS `StorageClass` watch), RBAC, console proxy, networking, or Helm wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#osac-operator) |
 | ClusterOrder upgrade observation admission and deployed timeout settings | Kind component integration | `test/integration/clusterorder_upgrade_contract_test.go`; deploy the current operator, then run `make integration-tests` |
+| ComputeInstance `diskVolumeIDs` schema round-trip and AAP payload preservation | Envtest, provider Unit, and Kind CRD component integration | `make test` and `make integration-tests` |
 | Automatic ExternalIP cleanup for ClusterOrder, ComputeInstance, and BareMetalInstance (NET-CLEAN-07) | Kind component integration — DEV | Isolated installer run and coverage boundary: [NET-CLEAN-07](../docs/INTEGRATION-TESTING.md#net-clean-07-deployed-osac-cleanup) |
 | Networking task inputs, `network_type`/`network_segment` launch keys, `nat_gateway_context`, or accepted manager results (`l3_vni`, `l2_vni`, `external_ip`, `vm_attachment`) | Unit / Envtest against the shared wire goldens | `internal/controller/networking_wire_golden_test.go` and `internal/networktask/wire_golden_test.go` read `../tests/contract/network-task`; run `make test`. The osac-aap half is `test_network_task_wire_contract.py`; change both in one PR. Bound: create/apply/attach tasks of VirtualNetwork, Subnet, ExternalIPPool, ExternalIP, ExternalIPAttachment, NetworkAttachment (overlay) and NATGateway. Not bound (no ticket): delete_*/detach_* tasks, SecurityGroup tasks, query_dhcp_lease, FabricDomain, cluster ingress, physical interfaces |
 | AAP, network task engine, provisioning-provider, KubeVirt, or fulfillment boundary | Qualifying Contract or E2E | Use a boundary-specific suite; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) when coverage is missing |
@@ -67,6 +68,14 @@ Kubernetes/etcd and OSAC CRDs are real; fulfillment responses, ignition HTTP and
 external Agent/InfraEnv progression are test-controlled. Keep the minimal
 InfraEnv/ClusterDeployment and existing Agent/NodePool test CRDs: the controller
 Envtest assertions consume them, not an environment bootstrap.
+
+ComputeInstance feedback coverage ([OSAC-6608](https://redhat.atlassian.net/browse/OSAC-6608))
+is in `internal/controller/computeinstance_feedback_controller_test.go`. It
+checks that normal and deleting feedback updates retain the disk correlation
+and registration lists while excluding them from the outgoing update mask. The
+Controller Suite uses real Kubernetes API/etcd and CRDs; Fulfillment responses
+are controlled by the test client. Run `make test`; this does not exercise a
+deployed Fulfillment service or Volume API.
 
 Worker coverage is owned by **osac-operator [DEV]**:
 

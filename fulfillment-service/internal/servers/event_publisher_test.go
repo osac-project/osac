@@ -919,6 +919,16 @@ var _ = Describe("Event publisher", Ordered, func() {
 			return count
 		}
 
+		drainPendingChanges := func() {
+			for {
+				more, err := pub.drain(drainCtx)
+				Expect(err).ToNot(HaveOccurred())
+				if !more {
+					return
+				}
+			}
+		}
+
 		Describe("Topic creation", func() {
 			It("Publishes to new topics and reuses them for later events", func() {
 				tenant := "topics-" + uuid.New()
@@ -1022,6 +1032,10 @@ var _ = Describe("Event publisher", Ordered, func() {
 				}
 
 				BeforeEach(func() {
+					// Each test database starts from the migrated template, which may contain
+					// outbox rows for seeded catalog roles. Publish those through the real test
+					// broker before replacing it with the protocol mock below.
+					drainPendingChanges()
 					Expect(pub.Close()).To(Succeed())
 					broker = sarama.NewMockBroker(GinkgoT(), 1)
 					DeferCleanup(broker.Close)
@@ -1203,16 +1217,6 @@ var _ = Describe("Event publisher", Ordered, func() {
 				)
 			})
 		})
-		drainPendingChanges := func() {
-			for {
-				more, err := pub.drain(drainCtx)
-				Expect(err).ToNot(HaveOccurred())
-				if !more {
-					return
-				}
-			}
-		}
-
 		insertTenant := func(id string) {
 			_, err := pool.Exec(drainCtx, `
 				insert into tenants (id, name, tenant, creator, data)
@@ -1368,6 +1372,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 		})
 
 		It("Rolls back the transaction when processing is canceled", func() {
+			drainPendingChanges()
 			tenant := "cancel-" + uuid.New()
 			insertChange(tenant, "obj-1", "INSERT")
 			Expect(pub.Close()).To(Succeed())

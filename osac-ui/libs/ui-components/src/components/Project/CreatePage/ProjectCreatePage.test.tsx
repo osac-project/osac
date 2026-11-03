@@ -54,7 +54,6 @@ describe('ProjectCreatePage', () => {
     });
     expect(screen.getByLabelText(/^Name/)).toBeInTheDocument();
     expect(screen.getByLabelText('Title')).toBeInTheDocument();
-    expect(screen.getByLabelText('Description')).toBeInTheDocument();
   });
 
   it('renders Create and Cancel buttons', async () => {

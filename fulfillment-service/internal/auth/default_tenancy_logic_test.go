@@ -250,6 +250,21 @@ var _ = Describe("Default tenancy logic", Ordered, func() {
 			Expect(result.IsTotal()).To(BeTrue())
 		})
 
+		It("grants managed service accounts all project visibility in their tenant", func(ctx context.Context) {
+			subject := &Subject{
+				User:                  "osac-sa-tenant-a-account-id",
+				Tenants:               collections.NewSet("tenant-a"),
+				ManagedServiceAccount: true,
+			}
+			ctx = ContextWithSubject(ctx, subject)
+			result, err := logic.DetermineVisibility(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.IsTenantVisible("tenant-a")).To(BeTrue())
+			Expect(result.IsTenantVisible("tenant-b")).To(BeFalse())
+			Expect(result.IsProjectVisible("tenant-a", "any-project")).To(BeTrue())
+			Expect(result.IsProjectVisible("tenant-b", "any-project")).To(BeFalse())
+		})
+
 		It("Fails when there is no transaction in the context", func(ctx context.Context) {
 			subject := &Subject{
 				User:    "my_user",

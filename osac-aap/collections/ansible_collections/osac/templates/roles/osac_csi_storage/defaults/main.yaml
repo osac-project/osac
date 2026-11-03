@@ -48,5 +48,5 @@ osac_csi_driver_volume_binding_mode: Immediate
 # matching csi_driver_install_vendor_node_socket_paths from OSAC-3290.
 osac_csi_driver_vendor_node_socket_paths:
   vast: /var/lib/kubelet/plugins/csi.vast.vastdata.com
+  netapp: /var/lib/kubelet/plugins/csi.trident.netapp.io
   pure: /var/lib/kubelet/plugins/csi.pure.purestorage.com
-  ontap: /var/lib/kubelet/plugins/csi.trident.netapp.io

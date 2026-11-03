@@ -27,8 +27,12 @@ const CatalogItemDetails = ({ item }: CatalogItemDetailsProps) => {
             >
               <FlexItem>
                 <ResourceDetailHeader
-                  parentTo="/catalog"
-                  parentLabel={t('Catalog')}
+                  parents={[
+                    {
+                      to: '/catalog',
+                      label: t('Catalog'),
+                    },
+                  ]}
                   resourceName={item.metadata?.name || item.title}
                 />
               </FlexItem>

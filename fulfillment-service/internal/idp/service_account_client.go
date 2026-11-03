@@ -91,19 +91,9 @@ func (c *Client) CreateServiceAccountClient(ctx context.Context, clientID, tenan
 		"protocolMappers":           mappers,
 	})
 	if err != nil {
-		lookupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), serviceAccountClientLookupTimeout)
-		_, found, lookupErr := c.FindServiceAccountClient(lookupCtx, clientID, tenantID)
-		cancel()
-		if lookupErr == nil && found {
-			return "", "", "", ErrServiceAccountClientAlreadyExists
-		}
-		if lookupErr != nil {
-			return "", "", "", errors.Join(
-				serviceAccountClientError("create client", err),
-				fmt.Errorf("failed to verify service-account client state: %w", lookupErr),
-			)
-		}
-		return "", "", "", serviceAccountClientError("create client", err)
+		return c.recoverAmbiguousServiceAccountCreation(
+			ctx, clientID, tenantID, "", "", serviceAccountClientError("create client", err),
+		)
 	}
 	defer response.Body.Close()
 
@@ -119,15 +109,45 @@ func (c *Client) CreateServiceAccountClient(ctx context.Context, clientID, tenan
 		registrationAccessToken = created.RegistrationAccessToken
 	}
 	if decodeErr != nil || created.ClientID != clientID {
-		return clientUUID, "", registrationAccessToken, errors.New("invalid service-account client registration response")
+		return c.recoverAmbiguousServiceAccountCreation(
+			ctx, clientID, tenantID, clientUUID, registrationAccessToken,
+			errors.New("invalid service-account client registration response"),
+		)
 	}
 	if _, parseErr := uuid.Parse(clientUUID); parseErr != nil {
-		return clientUUID, "", registrationAccessToken, errors.New("invalid Keycloak client UUID in registration response")
+		return c.recoverAmbiguousServiceAccountCreation(
+			ctx, clientID, tenantID, clientUUID, registrationAccessToken,
+			errors.New("invalid Keycloak client UUID in registration response"),
+		)
 	}
 	if created.Secret == "" || registrationAccessToken == "" {
-		return clientUUID, "", registrationAccessToken, errors.New("incomplete service-account client registration response")
+		return c.recoverAmbiguousServiceAccountCreation(
+			ctx, clientID, tenantID, clientUUID, registrationAccessToken,
+			errors.New("incomplete service-account client registration response"),
+		)
 	}
 	return clientUUID, created.Secret, registrationAccessToken, nil
+}
+
+func (c *Client) recoverAmbiguousServiceAccountCreation(
+	ctx context.Context,
+	clientID, tenantID, clientUUID, registrationToken string,
+	cause error,
+) (string, string, string, error) {
+	if _, err := uuid.Parse(clientUUID); err == nil && registrationToken != "" {
+		return clientUUID, "", registrationToken, cause
+	}
+
+	lookupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), serviceAccountClientLookupTimeout)
+	defer cancel()
+	_, found, lookupErr := c.FindServiceAccountClient(lookupCtx, clientID, tenantID)
+	if lookupErr == nil && found {
+		return "", "", "", ErrServiceAccountClientAlreadyExists
+	}
+	if lookupErr != nil {
+		cause = errors.Join(cause, fmt.Errorf("failed to verify service-account client state: %w", lookupErr))
+	}
+	return clientUUID, "", registrationToken, cause
 }
 
 // FindServiceAccountClient looks up the deterministic client ID with the

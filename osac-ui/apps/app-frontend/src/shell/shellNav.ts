@@ -48,7 +48,6 @@ const getIdpManagerNav = (t: TFunction): NavRow[] => [...getIdpLinks(t), getSecr
 
 const getAdminNav = (t: TFunction): NavRow[] => [
   getCatalogNav(t),
-  getProjectsNav(t),
   {
     kind: 'section',
     id: 'nav-administration',

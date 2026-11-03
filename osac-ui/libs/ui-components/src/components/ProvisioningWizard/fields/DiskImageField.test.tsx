@@ -1,4 +1,5 @@
 import { create } from '@bufbuild/protobuf';
+import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
 import { Formik } from 'formik';
 import { describe, expect, it } from 'vitest';
@@ -41,15 +42,6 @@ const diskImages = [
       sourceRef: 'quay.io/windows:latest',
     },
   }),
-  create(DiskImageSchema, {
-    id: 'disk-image-unspecified',
-    metadata: { name: 'unspecified' },
-    spec: {
-      guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED,
-      lifecycle: DiskImageLifecycle.AVAILABLE,
-      sourceRef: 'quay.io/unspecified:latest',
-    },
-  }),
 ];
 
 const filterDiskImagesByGuestOsFamily = (images: typeof diskImages, filter?: string) => {
@@ -80,6 +72,97 @@ const renderDiskImageField = (
   );
 
 describe('DiskImageField', () => {
+  it.each([
+    [diskImages[0], GuestOSFamily.GUEST_OS_FAMILY_LINUX],
+    [diskImages[2], GuestOSFamily.GUEST_OS_FAMILY_WINDOWS],
+  ] as const)(
+    'initializes an undefined guest OS family from the selected disk image',
+    async (diskImage, guestOsFamily) => {
+      renderWithProviders(
+        <Formik
+          initialValues={{
+            spec: {
+              diskImage: { id: diskImage.id, name: diskImage.metadata?.name ?? '' },
+              guestOsFamily: undefined,
+            },
+          }}
+          onSubmit={() => undefined}
+        >
+          {({ values }) => (
+            <>
+              <DiskImageField name="spec.diskImage" guestOsFamilyName="spec.guestOsFamily" />
+              <output aria-label="selected-family">{values.spec.guestOsFamily}</output>
+              <output aria-label="selected-image">{JSON.stringify(values.spec.diskImage)}</output>
+            </>
+          )}
+        </Formik>,
+        { apiFixtures: { diskImages } },
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('selected-family')).toHaveTextContent(String(guestOsFamily));
+      });
+      expect(screen.getByLabelText('selected-image')).toHaveTextContent(
+        JSON.stringify({ id: diskImage.id, name: diskImage.metadata?.name ?? '' }),
+      );
+    },
+  );
+
+  it('leaves the guest OS family unset without a selected disk image', async () => {
+    renderWithProviders(
+      <Formik
+        initialValues={{
+          spec: {
+            diskImage: emptyResourceSelectValue(),
+            guestOsFamily: undefined,
+          },
+        }}
+        onSubmit={() => undefined}
+      >
+        {({ values }) => (
+          <>
+            <DiskImageField name="spec.diskImage" guestOsFamilyName="spec.guestOsFamily" />
+            <output aria-label="selected-family">{values.spec.guestOsFamily}</output>
+          </>
+        )}
+      </Formik>,
+      { apiFixtures: { diskImages } },
+    );
+
+    await waitFor(() => expect(screen.getByLabelText('selected-family')).toBeEmptyDOMElement());
+  });
+
+  it('shows an error when the selected disk image cannot be loaded', async () => {
+    let getCount = 0;
+    renderWithProviders(
+      <Formik
+        initialValues={{
+          spec: {
+            diskImage: { id: 'disk-image-fedora', name: 'fedora' },
+            guestOsFamily: undefined,
+          },
+        }}
+        onSubmit={() => undefined}
+      >
+        <DiskImageField name="spec.diskImage" guestOsFamilyName="spec.guestOsFamily" />
+      </Formik>,
+      {
+        apiFixtures: { diskImages },
+        transportOverrides: {
+          onDiskImageGet: () => {
+            getCount += 1;
+            throw new ConnectError('Unable to load disk image', Code.Unavailable);
+          },
+        },
+      },
+    );
+
+    await waitFor(() => expect(getCount).toBe(1));
+    expect(await screen.findByText('Could not load disk images')).toBeInTheDocument();
+    expect(screen.getByText('Unable to load disk image')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
   it('stores the selected disk image id and name in Formik', async () => {
     const { user } = renderWithProviders(
       <Formik
@@ -115,7 +198,6 @@ describe('DiskImageField', () => {
   it.each([
     [GuestOSFamily.GUEST_OS_FAMILY_LINUX, 'Linux', 'fedora'],
     [GuestOSFamily.GUEST_OS_FAMILY_WINDOWS, 'Microsoft Windows', 'windows'],
-    [GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED, 'Unspecified', 'fedora'],
   ] as const)('filters disk images for %s', async (guestOsFamily, optionName, imageName) => {
     const { user } = renderWithProviders(
       <Formik
@@ -148,12 +230,39 @@ describe('DiskImageField', () => {
 
     expect(await screen.findByRole('option', { name: imageName })).toBeInTheDocument();
     expect(screen.getAllByRole('option')).toHaveLength(
-      guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_LINUX
-        ? 2
-        : guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_WINDOWS
-          ? 1
-          : 4,
+      guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_LINUX ? 2 : 1,
     );
+  });
+
+  it('shows all disk images when the guest OS family is unspecified', async () => {
+    const { user } = renderWithProviders(
+      <Formik
+        initialValues={{
+          spec: {
+            diskImage: emptyResourceSelectValue(),
+            guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED,
+          },
+        }}
+        onSubmit={() => undefined}
+      >
+        <DiskImageField name="spec.diskImage" guestOsFamilyName="spec.guestOsFamily" />
+      </Formik>,
+      {
+        apiFixtures: { diskImages },
+        transportOverrides: {
+          onDiskImageList: (request) => {
+            const items = filterDiskImagesByGuestOsFamily(diskImages, request.filter);
+            return { items, size: items.length, total: items.length };
+          },
+        },
+      },
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Select the image reference' }));
+
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+    expect(screen.getByRole('option', { name: 'fedora' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'windows' })).toBeInTheDocument();
   });
 
   it('does not show disk image descriptions in typeahead options', async () => {
@@ -216,15 +325,16 @@ describe('DiskImageField', () => {
     await waitFor(() => {
       expect(screen.getByLabelText('selected-image')).toHaveTextContent('{"id":"","name":""}');
     });
+    expect(screen.getByRole('combobox')).toHaveValue('');
   });
 
-  it('sets the guest OS family when an image is selected from Unspecified', async () => {
+  it('clears a Windows image when switching to Linux', async () => {
     const { user } = renderWithProviders(
       <Formik
         initialValues={{
           spec: {
-            diskImage: emptyResourceSelectValue(),
-            guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED,
+            diskImage: { id: 'disk-image-windows', name: 'windows' },
+            guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_WINDOWS,
           },
         }}
         onSubmit={() => undefined}
@@ -232,20 +342,28 @@ describe('DiskImageField', () => {
         {({ values }) => (
           <>
             <DiskImageField name="spec.diskImage" guestOsFamilyName="spec.guestOsFamily" />
-            <output aria-label="selected-family">{values.spec.guestOsFamily}</output>
+            <output aria-label="selected-image">{JSON.stringify(values.spec.diskImage)}</output>
           </>
         )}
       </Formik>,
-      { apiFixtures: { diskImages } },
+      {
+        apiFixtures: { diskImages },
+        transportOverrides: {
+          onDiskImageList: (request) => {
+            const items = filterDiskImagesByGuestOsFamily(
+              [diskImages[0], diskImages[1], diskImages[2]],
+              request.filter,
+            );
+            return { items, size: items.length, total: items.length };
+          },
+        },
+      },
     );
 
-    await user.click(await screen.findByRole('button', { name: 'Select the image reference' }));
-    await user.click(screen.getByRole('option', { name: 'windows' }));
+    await user.click(screen.getByText('Linux'));
 
     await waitFor(() => {
-      expect(screen.getByLabelText('selected-family')).toHaveTextContent(
-        String(GuestOSFamily.GUEST_OS_FAMILY_WINDOWS),
-      );
+      expect(screen.getByLabelText('selected-image')).toHaveTextContent('{"id":"","name":""}');
     });
   });
 

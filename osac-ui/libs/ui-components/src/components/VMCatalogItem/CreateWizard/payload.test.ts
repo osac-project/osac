@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { type ComputeInstanceCatalogItem, type DiskImage, GuestOSFamily } from '@osac/types';
+import type { ComputeInstanceCatalogItem } from '@osac/types';
 
 import {
   buildComputeCatalogItemCreatePayload,
@@ -194,21 +194,16 @@ describe('buildComputeCatalogItemCreatePayload', () => {
 });
 
 describe('compute catalog item initial values', () => {
-  it('leaves the disk image family unrestricted when loading an edit item', () => {
-    const values = getComputeCatalogItemInitialValues(
-      {
-        fields: {
-          diskImage: {
-            behavior: { case: 'locked', value: { id: 'image-1', name: 'windows-image' } },
-          },
+  it('leaves the disk image family undefined when loading an edit item', () => {
+    const values = getComputeCatalogItemInitialValues({
+      fields: {
+        diskImage: {
+          behavior: { case: 'locked', value: { id: 'image-1', name: 'windows-image' } },
         },
-      } as ComputeInstanceCatalogItem,
-      {
-        spec: { guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_WINDOWS },
-      } as DiskImage,
-    );
+      },
+    } as ComputeInstanceCatalogItem);
 
-    expect(values.guestOsFamily).toBe(GuestOSFamily.GUEST_OS_FAMILY_WINDOWS);
+    expect(values.guestOsFamily).toBeUndefined();
     expect(values.diskImage.value).toEqual({ id: 'image-1', name: 'windows-image' });
   });
 });

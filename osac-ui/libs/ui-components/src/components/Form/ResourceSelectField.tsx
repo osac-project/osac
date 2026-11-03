@@ -84,7 +84,7 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
   const [typeaheadKey, setTypeaheadKey] = useState(0);
   const showValidationErrors = useShowFieldValidationErrors();
   const error = getVisibleFieldError(meta, showValidationErrors);
-  const { data, isLoading, error: loadError } = useListResource(service, request);
+  const { data, isLoading, isFetching, error: loadError } = useListResource(service, request);
   const items = useMemo(() => {
     const listed = ((data as { items?: TResource[] } | undefined)?.items ?? []).filter(
       (item) => item.id,
@@ -120,6 +120,7 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
     if (
       !autoSelectSingleOption ||
       isLoading ||
+      isFetching ||
       controlDisabled ||
       items.length !== 1 ||
       selectedId !== ''
@@ -133,6 +134,7 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
     autoSelectSingleOption,
     controlDisabled,
     helpers,
+    isFetching,
     isLoading,
     items,
     onSelectResource,

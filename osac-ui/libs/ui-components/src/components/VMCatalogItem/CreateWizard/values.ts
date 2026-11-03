@@ -1,9 +1,8 @@
 import {
   type ComputeInstanceCatalogItem,
   type ComputeInstanceDiskList,
-  type DiskImage,
   type DiskImageReference,
-  GuestOSFamily,
+  type GuestOSFamily,
   type InstanceTypeReference,
   type StorageTierReference,
 } from '@osac/types';
@@ -27,7 +26,7 @@ import {
 import type { ComputeInstanceDiskValues } from '../../vm/CreateWizard/fields';
 
 export interface ComputeCatalogItemValues extends CatalogGeneralValues {
-  guestOsFamily: GuestOSFamily;
+  guestOsFamily: GuestOSFamily | undefined;
   diskImage: ProvisioningFieldValue<ResourceSelectValue>;
   instanceType: ProvisioningFieldValue<ResourceSelectValue>;
   userData: ProvisioningFieldValue<string>;
@@ -50,7 +49,7 @@ const readDiskListValue = (
 
 export const emptyComputeCatalogItemValues = (): ComputeCatalogItemValues => ({
   ...catalogGeneralValues(),
-  guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+  guestOsFamily: undefined,
   diskImage: provisioningFieldValue(emptyResourceSelectValue()),
   instanceType: provisioningFieldValue(emptyResourceSelectValue()),
   userData: provisioningFieldValue(''),
@@ -60,19 +59,8 @@ export const emptyComputeCatalogItemValues = (): ComputeCatalogItemValues => ({
   additionalDisks: provisioningFieldValue([]),
 });
 
-export const getComputeCatalogItemDiskImageId = (
-  item?: ComputeInstanceCatalogItem,
-): string | undefined => {
-  const diskImage = getFieldFromCatalogItemPolicy<DiskImageReference | undefined>(
-    item?.fields?.diskImage,
-    undefined,
-  );
-  return diskImage.value?.id || undefined;
-};
-
 export const getComputeCatalogItemInitialValues = (
   item?: ComputeInstanceCatalogItem,
-  diskImageResource?: DiskImage,
 ): ComputeCatalogItemValues => {
   if (!item) {
     return emptyComputeCatalogItemValues();
@@ -102,9 +90,7 @@ export const getComputeCatalogItemInitialValues = (
 
   return {
     ...catalogGeneralValuesFromItem(item),
-    guestOsFamily: diskImage.value?.id
-      ? (diskImageResource?.spec?.guestOsFamily ?? GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED)
-      : GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+    guestOsFamily: undefined,
     diskImage: provisioningFieldValue(
       resourceSelectValueFromReference(diskImage.value),
       diskImage.locked,

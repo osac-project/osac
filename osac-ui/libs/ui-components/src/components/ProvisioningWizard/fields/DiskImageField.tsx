@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
+import { Alert, Button, Stack, StackItem } from '@patternfly/react-core';
 import { useField, useFormikContext } from 'formik';
 
 import { type DiskImage, DiskImages, GuestOSFamily } from '@osac/types';
+import { useGetResource } from '@osac/ui-components/api/use-resource';
 import { DISK_IMAGE_NON_OBSOLETE_FILTER } from '@osac/ui-components/api/v1/disk-image';
 import { ResourceSelectField } from '@osac/ui-components/components/Form/ResourceSelectField';
 
@@ -10,7 +12,8 @@ import ProvisioningFieldGroup from './ProvisioningFieldGroup';
 import type { ProvisioningFieldControlProps } from './provisioningFieldValue';
 import { cel } from '../../../api/cel';
 import { useTranslation } from '../../../hooks/useTranslation';
-import { emptyResourceSelectValue } from '../../Form/resourceSelectValue';
+import { getErrorMessage } from '../../../utils/error';
+import { type ResourceSelectValue, emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 
 interface DiskImageFieldProps extends ProvisioningFieldControlProps {
   fieldId?: string;
@@ -28,8 +31,18 @@ const DiskImageField = ({
   autoSelectSingleOption = true,
 }: DiskImageFieldProps) => {
   const { t } = useTranslation();
-  const [guestOsFamilyField] = useField<GuestOSFamily>(guestOsFamilyName);
+  const [diskImageField] = useField<ResourceSelectValue>(name);
+  const [guestOsFamilyField] = useField<GuestOSFamily | undefined>(guestOsFamilyName);
   const { setFieldValue } = useFormikContext();
+  const diskImageId = diskImageField.value?.id;
+  const {
+    data: initialDiskImageResponse,
+    isLoading: isInitialDiskImageLoading,
+    error: initialDiskImageError,
+    refetch: refetchInitialDiskImage,
+  } = useGetResource(DiskImages, { id: diskImageId }, { enabled: Boolean(diskImageId) });
+  const initialDiskImage = initialDiskImageResponse?.object;
+  const rawGuestOsFamily = guestOsFamilyField.value;
   const guestOsFamily = guestOsFamilyField.value ?? GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED;
   const guestOsFamilyLabel =
     {
@@ -38,23 +51,49 @@ const DiskImageField = ({
       [GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED]: t('Unspecified'),
     }[guestOsFamily] ?? t('Unspecified');
   const previousGuestOsFamily = useRef(guestOsFamily);
-  const synchronizedGuestOsFamily = useRef<GuestOSFamily | undefined>(undefined);
 
   useEffect(() => {
+    if (rawGuestOsFamily === undefined) {
+      if (!diskImageId) {
+        previousGuestOsFamily.current = guestOsFamily;
+        return;
+      }
+
+      if (isInitialDiskImageLoading || initialDiskImageError) {
+        return;
+      }
+
+      const initialGuestOsFamily = initialDiskImage?.spec?.guestOsFamily;
+      if (
+        initialGuestOsFamily === undefined ||
+        initialGuestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED
+      ) {
+        previousGuestOsFamily.current = guestOsFamily;
+        return;
+      }
+
+      previousGuestOsFamily.current = initialGuestOsFamily;
+      void setFieldValue(guestOsFamilyName, initialGuestOsFamily);
+      return;
+    }
+
     if (previousGuestOsFamily.current === guestOsFamily) {
       return;
     }
 
     previousGuestOsFamily.current = guestOsFamily;
-    if (synchronizedGuestOsFamily.current === guestOsFamily) {
-      synchronizedGuestOsFamily.current = undefined;
-      return;
-    }
-
-    if (guestOsFamily !== GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED) {
-      void setFieldValue(name, emptyResourceSelectValue(), false);
-    }
-  }, [guestOsFamily, name, setFieldValue]);
+    void setFieldValue(name, emptyResourceSelectValue(), false);
+  }, [
+    diskImageId,
+    guestOsFamily,
+    guestOsFamilyName,
+    initialDiskImage,
+    initialDiskImageError,
+    isInitialDiskImageLoading,
+    name,
+    rawGuestOsFamily,
+    setFieldValue,
+  ]);
 
   const diskImageFilter =
     guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED
@@ -73,7 +112,21 @@ const DiskImageField = ({
       actions={labelInfo}
     >
       <GuestOsFamilyField name={guestOsFamilyName} isDisabled={isDisabled} />
+      {initialDiskImageError && diskImageId ? (
+        <Alert variant="danger" isInline title={t('Could not load disk images')}>
+          <Stack hasGutter>
+            <StackItem>{getErrorMessage(initialDiskImageError)}</StackItem>
+            <StackItem>
+              <Button variant="link" isInline onClick={() => void refetchInitialDiskImage()}>
+                {t('Retry')}
+              </Button>
+            </StackItem>
+          </Stack>
+        </Alert>
+      ) : null}
       <ResourceSelectField<DiskImage>
+        // Remount so PatternFly's internally managed typeahead reflects Formik resets.
+        key={diskImageField.value?.id ?? ''}
         name={name}
         label={t('Select the image reference')}
         fieldId={fieldId}
@@ -84,17 +137,6 @@ const DiskImageField = ({
         autoSelectSingleOption={autoSelectSingleOption}
         placeholder={t('Select a disk image')}
         loadErrorTitle={t('Could not load disk images')}
-        onSelectResource={(_, diskImage) => {
-          const selectedGuestOsFamily = diskImage?.spec?.guestOsFamily;
-          if (
-            guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED &&
-            selectedGuestOsFamily !== undefined &&
-            selectedGuestOsFamily !== GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED
-          ) {
-            synchronizedGuestOsFamily.current = selectedGuestOsFamily;
-            void setFieldValue(guestOsFamilyName, selectedGuestOsFamily);
-          }
-        }}
         emptyTitle={t('No disk images available of guest OS family: {{guestOsFamily}}', {
           guestOsFamily: guestOsFamilyLabel,
         })}

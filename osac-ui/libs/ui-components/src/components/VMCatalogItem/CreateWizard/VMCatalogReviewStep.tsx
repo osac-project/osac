@@ -26,7 +26,7 @@ interface VMCatalogReviewStepProps {
 const resourceValueKey = (value: { id?: string; name?: string }) =>
   `${value.id?.trim() ?? ''}|${value.name?.trim() ?? ''}`;
 
-const guestOsFamilyLabel = (t: TFunction, value: GuestOSFamily): string => {
+const guestOsFamilyLabel = (t: TFunction, value: GuestOSFamily | undefined): string => {
   switch (value) {
     case GuestOSFamily.GUEST_OS_FAMILY_LINUX:
       return t('Linux');
@@ -37,6 +37,9 @@ const guestOsFamilyLabel = (t: TFunction, value: GuestOSFamily): string => {
       return t('Unspecified');
   }
 };
+
+const guestOsFamilyKey = (value: GuestOSFamily | undefined): GuestOSFamily =>
+  value ?? GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED;
 
 const bootDiskSizeLabel = (t: TFunction, value: string): string =>
   value.trim() ? `${value.trim()} GiB` : t('Not set');
@@ -90,8 +93,8 @@ const catalogEditChanges = (
       label: t('Guest operating system'),
       before: guestOsFamilyLabel(t, initialValues.guestOsFamily),
       after: guestOsFamilyLabel(t, values.guestOsFamily),
-      beforeKey: initialValues.guestOsFamily,
-      afterKey: values.guestOsFamily,
+      beforeKey: guestOsFamilyKey(initialValues.guestOsFamily),
+      afterKey: guestOsFamilyKey(values.guestOsFamily),
     },
     {
       label: t('Disk image'),

@@ -157,7 +157,10 @@ describe('VMCatalogItemWizard', () => {
     expect(
       within(guestOsGroup).getByText('Linux-based guest operating systems'),
     ).toBeInTheDocument();
-    expect(within(guestOsGroup).getByRole('radio', { name: /^Linux/ })).toBeChecked();
+    expect(within(guestOsGroup).getAllByRole('radio')).toHaveLength(2);
+    expect(
+      within(guestOsGroup).queryByRole('radio', { name: /^Unspecified/ }),
+    ).not.toBeInTheDocument();
 
     await user.click(within(guestOsGroup).getByText('Microsoft Windows'));
 
@@ -247,7 +250,7 @@ describe('VMCatalogItemWizard', () => {
       expect(screen.getByText('Boot storage tier')).toBeInTheDocument();
       expect(screen.getByText('Additional disks')).toBeInTheDocument();
       expect(screen.getByText('Cloud-init')).toBeInTheDocument();
-      expect(screen.getByText('Linux')).toBeInTheDocument();
+      expect(screen.getByText('Unspecified')).toBeInTheDocument();
       expect(screen.getAllByText('Not set')).toHaveLength(6);
       expect(screen.getByText('Unpublished')).toBeInTheDocument();
       expect(screen.getAllByText('Editable')).toHaveLength(5);

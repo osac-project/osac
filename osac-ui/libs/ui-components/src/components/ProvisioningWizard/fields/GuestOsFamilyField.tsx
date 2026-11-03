@@ -31,7 +31,7 @@ interface GuestOsFamilyFieldProps {
 
 const GuestOsFamilyField = ({ name, isDisabled = false }: GuestOsFamilyFieldProps) => {
   const { t } = useTranslation();
-  const [field, , helpers] = useField<GuestOSFamily>(name);
+  const [field, , helpers] = useField<GuestOSFamily | undefined>(name);
 
   const options: GuestOsFamilyOption[] = [
     {
@@ -45,11 +45,6 @@ const GuestOsFamilyField = ({ name, isDisabled = false }: GuestOsFamilyFieldProp
       title: t('Microsoft Windows'),
       description: t('Windows-based guest operating systems'),
       icon: 'windows',
-    },
-    {
-      value: GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED,
-      title: t('Unspecified'),
-      description: t('Unspecified guest operating systems'),
     },
   ];
 

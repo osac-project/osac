@@ -1,4 +1,4 @@
-import { type ComputeInstanceCatalogItem, GuestOSFamily } from '@osac/types';
+import type { ComputeInstanceCatalogItem, GuestOSFamily } from '@osac/types';
 
 import { type ResourceSelectValue, emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 import {
@@ -41,7 +41,7 @@ export interface ComputeInstanceWizardValues {
   };
   spec: {
     sshKey: ProvisioningFieldValue<string>;
-    guestOsFamily: GuestOSFamily;
+    guestOsFamily: GuestOSFamily | undefined;
     diskImage: ProvisioningFieldValue<ResourceSelectValue>;
     instanceType: ProvisioningFieldValue<ResourceSelectValue>;
     userData: UserDataSourceFormField;
@@ -59,7 +59,7 @@ export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues 
   metadata: { name: '', project: '' },
   spec: {
     sshKey: provisioningFieldValue(''),
-    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+    guestOsFamily: undefined,
     diskImage: provisioningFieldValue(emptyResourceSelectValue()),
     instanceType: provisioningFieldValue(emptyResourceSelectValue()),
     userData: provisioningFieldValue({ source: 'inline', inline: '', secret: '' }),

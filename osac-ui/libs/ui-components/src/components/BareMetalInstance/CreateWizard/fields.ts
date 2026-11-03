@@ -1,4 +1,4 @@
-import { type BareMetalInstanceCatalogItem, GuestOSFamily } from '@osac/types';
+import type { BareMetalInstanceCatalogItem, GuestOSFamily } from '@osac/types';
 
 import { bareMetalDiskImageReferenceFromPolicy } from '../../catalog/bareMetalCatalogItemResourceDisplay';
 import { catalogFieldPolicyLocked } from '../../catalog/catalogFieldPolicyDisplay';
@@ -35,7 +35,7 @@ export interface BareMetalInstanceWizardValues {
   };
   spec: {
     sshKey: ProvisioningFieldValue<string>;
-    guestOsFamily: GuestOSFamily;
+    guestOsFamily: GuestOSFamily | undefined;
     userData: UserDataSourceFormField;
     instanceType: ProvisioningFieldValue<string>;
     diskImage: ProvisioningFieldValue<ResourceSelectValue>;
@@ -62,7 +62,7 @@ export const createEmptyBareMetalInstanceValues = (): BareMetalInstanceWizardVal
   metadata: { name: '', project: '' },
   spec: {
     sshKey: provisioningFieldValue(''),
-    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+    guestOsFamily: undefined,
     userData: provisioningFieldValue({ source: 'inline', inline: '', secret: '' }),
     instanceType: provisioningFieldValue(''),
     diskImage: provisioningFieldValue(emptyResourceSelectValue()),

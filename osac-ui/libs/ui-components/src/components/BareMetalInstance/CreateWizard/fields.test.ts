@@ -3,9 +3,14 @@ import { describe, expect, it } from 'vitest';
 
 import { BareMetalInstanceCatalogItemSchema } from '@osac/types';
 
-import { getBareMetalInstanceInitialValues } from './fields';
+import { createEmptyBareMetalInstanceValues, getBareMetalInstanceInitialValues } from './fields';
 
 describe('getBareMetalInstanceInitialValues', () => {
+  it('leaves the guest OS family undefined until the disk image field initializes it', () => {
+    expect(createEmptyBareMetalInstanceValues().spec.guestOsFamily).toBeUndefined();
+    expect(getBareMetalInstanceInitialValues().spec.guestOsFamily).toBeUndefined();
+  });
+
   it('loads an editable user data source default', () => {
     const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
       id: 'catalog-bm-1',

@@ -1,9 +1,8 @@
 import {
   type BareMetalInstanceCatalogItem,
   type BareMetalInstanceTypeReference,
-  type DiskImage,
   type DiskImageReference,
-  GuestOSFamily,
+  type GuestOSFamily,
 } from '@osac/types';
 
 import {
@@ -24,7 +23,7 @@ import {
 } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
 export interface BareMetalCatalogItemValues extends CatalogGeneralValues {
-  guestOsFamily: GuestOSFamily;
+  guestOsFamily: GuestOSFamily | undefined;
   instanceType: ProvisioningFieldValue<ResourceSelectValue>;
   diskImage: ProvisioningFieldValue<ResourceSelectValue>;
   userData: ProvisioningFieldValue<string>;
@@ -33,26 +32,15 @@ export interface BareMetalCatalogItemValues extends CatalogGeneralValues {
 
 export const emptyBareMetalCatalogItemValues = (): BareMetalCatalogItemValues => ({
   ...catalogGeneralValues(),
-  guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+  guestOsFamily: undefined,
   instanceType: provisioningFieldValue(emptyResourceSelectValue()),
   diskImage: provisioningFieldValue(emptyResourceSelectValue()),
   userData: provisioningFieldValue(''),
   userDataSecret: provisioningFieldValue(''),
 });
 
-export const getBareMetalCatalogItemDiskImageId = (
-  item?: BareMetalInstanceCatalogItem,
-): string | undefined => {
-  const diskImage = getFieldFromCatalogItemPolicy<DiskImageReference | undefined>(
-    item?.fields?.diskImage,
-    undefined,
-  );
-  return diskImage.value?.id || undefined;
-};
-
 export const getBareMetalCatalogItemInitialValues = (
   item?: BareMetalInstanceCatalogItem,
-  diskImageResource?: DiskImage,
 ): BareMetalCatalogItemValues => {
   if (!item) {
     return emptyBareMetalCatalogItemValues();
@@ -70,9 +58,7 @@ export const getBareMetalCatalogItemInitialValues = (
 
   return {
     ...catalogGeneralValuesFromItem(item),
-    guestOsFamily: diskImage.value?.id
-      ? (diskImageResource?.spec?.guestOsFamily ?? GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED)
-      : GuestOSFamily.GUEST_OS_FAMILY_LINUX,
+    guestOsFamily: undefined,
     instanceType: provisioningFieldValue(
       resourceSelectValueFromReference(instanceType.value),
       instanceType.locked,

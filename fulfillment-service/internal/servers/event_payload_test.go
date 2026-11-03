@@ -11,7 +11,7 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 */
 
-package events_test
+package servers
 
 import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"

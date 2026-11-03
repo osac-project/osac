@@ -149,37 +149,37 @@ The creation and VM portion of the full-flow journey runs in this order:
 
 The full-flow projects run in this order:
 
-1. `vmaas-full-flow` creates the infrastructure resources and tenant.
-2. `vmaas-full-flow-launch` creates and verifies the VM.
+1. `vmaas-full-flow-resources` creates the infrastructure resources and tenant.
+2. `vmaas-full-flow` creates and verifies the VM.
 3. `vmaas-full-flow-vm-delete` deletes the VM as the tenant admin.
 4. `vmaas-full-flow-delete` removes the catalog item, disk image, instance
    type, storage tier, tenant-admin RoleBinding and OSAC User, SSH public-key
    Secret, tenant, and generated credential file as the admin user.
 
-Run only the creation portion with:
+Run the complete creation flow, including VM creation, with:
 
 ```bash
 OSAC_VM_FLOW_MODE=create pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow --no-deps
+  --project=vmaas-full-flow
 ```
 
-Run only the deletion portion with:
+Run the complete deletion flow for an existing creation run with:
 
 ```bash
-export OSAC_VM_FLOW_MODE=delete
-pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow-vm-delete --no-deps && \
-pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow-delete --no-deps
+OSAC_VM_FLOW_MODE=delete pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-full-flow-delete
 ```
 
 The creation command stores the non-secret run IDs in
-`/tmp/osac-vmaas-full-flow-state.json`. The deletion-only commands reuse those
+`/tmp/osac-vmaas-full-flow-state.json`. The deletion-only command reuses those
 IDs and must run on the same host. They expect the VM, generated tenant
 credentials, and full-flow resources to already exist. If the creation run
 failed, the state file remains available for cleanup. VM deletion is
 idempotent when the tenant VM list is already empty; a different VM in the
 list is reported as a run-state mismatch instead of being deleted.
+
+The deletion target includes VM deletion first. In `full` mode, its dependency
+chain also runs the complete creation flow before cleanup.
 
 Run the complete creation and deletion flow with:
 
@@ -197,7 +197,7 @@ resource already exists, so the remaining flow steps are not started. Use
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow-launch --headed
+  --project=vmaas-full-flow --headed
 ```
 
 ### Storage tier flow tests

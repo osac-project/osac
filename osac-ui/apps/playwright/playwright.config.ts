@@ -155,18 +155,18 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      name: 'vmaas-full-flow',
+      name: 'vmaas-full-flow-resources',
       testDir: vmaasDir,
       testMatch: /create\.(instance_type|disk_images|storage_tier|catalog|tenant)\.spec\.ts/,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      name: 'vmaas-full-flow-launch',
+      name: 'vmaas-full-flow',
       testDir: vmaasDir,
       testMatch: /create\.vm\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: ['vmaas-full-flow'],
+      dependencies: ['vmaas-full-flow-resources'],
     },
     {
       name: 'vmaas-full-flow-vm-delete',
@@ -174,7 +174,9 @@ export default defineConfig({
       testMatch: /delete\.vm\.spec\.ts/,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: ['vmaas-full-flow-launch'],
+      // In delete mode this is the first cleanup project. In full mode it
+      // follows the complete creation chain before deleting the VM.
+      dependencies: flowMode === 'full' ? ['vmaas-full-flow'] : [],
     },
     {
       name: 'vmaas-full-flow-delete',

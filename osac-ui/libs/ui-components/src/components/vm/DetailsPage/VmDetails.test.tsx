@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,14 +36,11 @@ vi.mock('../../Resource/ResourceDetailHeader', () => ({
   ResourceDetailHeader: ({
     resourceName,
     description,
-    titlePrefix,
   }: {
     resourceName: string;
     description?: string;
-    titlePrefix?: ReactNode;
   }) => (
     <>
-      {titlePrefix ? <span>VM icon</span> : null}
       <h1>{resourceName}</h1>
       {description ? <p>{description}</p> : null}
     </>
@@ -110,7 +106,7 @@ describe('VmDetails', () => {
     expect(screen.getByText('Could not load instance types')).toBeInTheDocument();
     expect(screen.getByText('Instance type unavailable')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'web-01' })).toBeInTheDocument();
-    expect(screen.getByText('VM icon')).toBeInTheDocument();
+    expect(screen.queryByText('VM icon')).not.toBeInTheDocument();
     expect(
       screen.getByText(
         'Review configuration, networking, storage, and utilization for this virtual machine.',

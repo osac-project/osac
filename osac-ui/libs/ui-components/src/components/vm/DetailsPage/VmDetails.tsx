@@ -16,7 +16,6 @@ import VmDetailsSections from './VmDetailsSections';
 import { useDiskImage } from '../../../api/v1/disk-image';
 import { useInstanceType } from '../../../api/v1/instance-types';
 import { useTranslation } from '../../../hooks/useTranslation';
-import { CatalogItemIcon } from '../../../icons';
 import { getErrorMessage } from '../../../utils/error';
 import { VmStatusLabel } from '../../../VmStatusLabel';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
@@ -66,7 +65,6 @@ const VmDetails = ({ vm }: Props) => {
                   description={t(
                     'Review configuration, networking, storage, and utilization for this virtual machine.',
                   )}
-                  titlePrefix={<CatalogItemIcon kind="vm" />}
                   titleAddon={<VmStatusLabel state={vm.status?.state} />}
                 />
               </FlexItem>

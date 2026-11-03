@@ -276,4 +276,38 @@ describe('buildComputeCatalogItemUpdatePayload', () => {
     expect(request.object.fields).toHaveProperty('instanceType', undefined);
     expect(request.object.fields).toHaveProperty('userDataSource', undefined);
   });
+
+  it('clears one boot-disk policy while retaining its sibling policy', () => {
+    const item = {
+      id: 'catalog-item-1',
+      fields: {
+        bootDisk: {
+          sizeGib: { behavior: { case: 'locked', value: 40 } },
+          storageTier: {
+            behavior: {
+              case: 'editable',
+              value: { defaultValue: { id: 'tier-1', name: 'fast' } },
+            },
+          },
+        },
+      },
+    } as ComputeInstanceCatalogItem;
+    const values = emptyComputeCatalogItemValues();
+    values.bootDiskStorageTier = {
+      value: { id: 'tier-2', name: 'standard' },
+      locked: false,
+    };
+
+    const request = buildComputeCatalogItemUpdateRequest(item, values);
+
+    expect(request.object.fields?.bootDisk).toEqual({
+      sizeGib: undefined,
+      storageTier: {
+        behavior: {
+          case: 'editable',
+          value: { defaultValue: { id: 'tier-2', name: 'standard' } },
+        },
+      },
+    });
+  });
 });

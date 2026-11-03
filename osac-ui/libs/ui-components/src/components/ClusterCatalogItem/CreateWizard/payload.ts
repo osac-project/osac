@@ -81,7 +81,9 @@ const buildClusterCatalogItemFieldsPayload = (
   if (podCidr || serviceCidr) {
     fields.network = {
       ...(podCidr ? { podCidr } : {}),
+      ...(!podCidr && item?.fields?.network?.podCidr ? { podCidr: undefined } : {}),
       ...(serviceCidr ? { serviceCidr } : {}),
+      ...(!serviceCidr && item?.fields?.network?.serviceCidr ? { serviceCidr: undefined } : {}),
     };
   } else if (item?.fields?.network) {
     fields.network = {

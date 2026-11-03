@@ -67,7 +67,11 @@ const buildComputeCatalogItemFieldsPayload = (
   if (bootDiskSizeGib || bootDiskStorageTier) {
     fields.bootDisk = {
       ...(bootDiskSizeGib ? { sizeGib: bootDiskSizeGib } : {}),
+      ...(!bootDiskSizeGib && item?.fields?.bootDisk?.sizeGib ? { sizeGib: undefined } : {}),
       ...(bootDiskStorageTier ? { storageTier: bootDiskStorageTier } : {}),
+      ...(!bootDiskStorageTier && item?.fields?.bootDisk?.storageTier
+        ? { storageTier: undefined }
+        : {}),
     };
   } else if (item?.fields?.bootDisk) {
     fields.bootDisk = { sizeGib: undefined, storageTier: undefined };

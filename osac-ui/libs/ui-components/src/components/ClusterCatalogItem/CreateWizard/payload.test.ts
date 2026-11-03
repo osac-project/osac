@@ -183,4 +183,31 @@ describe('buildClusterCatalogItemUpdatePayload', () => {
       serviceCidr: undefined,
     });
   });
+
+  it('clears one network policy while retaining its sibling policy', () => {
+    const item = create(ClusterCatalogItemSchema, {
+      id: 'item-1',
+      fields: {
+        network: {
+          podCidr: {
+            behavior: { case: 'editable', value: { defaultValue: '10.128.0.0/14' } },
+          },
+          serviceCidr: {
+            behavior: { case: 'editable', value: { defaultValue: '10.0.0.0/16' } },
+          },
+        },
+      },
+    });
+    const values = emptyClusterCatalogItemValues();
+    values.podCidr = { value: '10.129.0.0/14', locked: false };
+
+    const request = buildClusterCatalogItemUpdateRequest(item, values);
+
+    expect(request.object.fields?.network).toEqual({
+      podCidr: {
+        behavior: { case: 'editable', value: { defaultValue: '10.129.0.0/14' } },
+      },
+      serviceCidr: undefined,
+    });
+  });
 });

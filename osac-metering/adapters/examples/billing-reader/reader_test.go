@@ -11,6 +11,8 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -115,6 +117,66 @@ var _ = Describe("Totals", func() {
 		Expect(rows[0].Quantity).To(Equal("110.000000"))
 		Expect(rows[1].Key.TenantID).To(Equal("globex"))
 		Expect(rows[1].Quantity).To(Equal("60.000000"))
+	})
+
+	It("sums concurrent adds without losing or double-counting", func() {
+		const workers = 8
+		const perWorker = 100
+
+		// Build every event before the goroutines start, so a Ginkgo helper
+		// never runs off the test goroutine.
+		type work struct {
+			events []cloudevents.Event
+			repeat cloudevents.Event
+		}
+		batches := make([]work, workers)
+		for worker := 0; worker < workers; worker++ {
+			tenant := fmt.Sprintf("tenant-%d", worker)
+			batch := work{repeat: heartbeatForTenant(fmt.Sprintf("worker-%d-repeat", worker), tenant, "5.000000", smallDimensions)}
+			for i := 0; i < perWorker; i++ {
+				batch.events = append(batch.events, heartbeatForTenant(fmt.Sprintf("worker-%d-%d", worker, i), tenant, "1.000000", smallDimensions))
+			}
+			batches[worker] = batch
+		}
+
+		totals := NewTotals()
+		errs := make(chan error, workers)
+		var wg sync.WaitGroup
+		for worker := 0; worker < workers; worker++ {
+			wg.Add(1)
+			go func(batch work) {
+				defer wg.Done()
+				for _, event := range batch.events {
+					if _, err := totals.Add(event); err != nil {
+						errs <- err
+						return
+					}
+				}
+				// Every worker adds the same repeat three times: one accepted
+				// event and two drops.
+				for i := 0; i < 3; i++ {
+					if _, err := totals.Add(batch.repeat); err != nil {
+						errs <- err
+						return
+					}
+				}
+			}(batches[worker])
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		accepted, repeats := totals.Counts()
+		Expect(accepted).To(Equal(workers * (perWorker + 1)))
+		Expect(repeats).To(Equal(workers * 2))
+
+		rows := totals.Rows()
+		Expect(rows).To(HaveLen(workers))
+		for _, row := range rows {
+			Expect(row.Quantity).To(Equal("105.000000"))
+		}
 	})
 
 	It("drops a repeat with the same CloudEvent id", func() {

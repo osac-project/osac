@@ -8,8 +8,8 @@ compliance with the License. You may obtain a copy of the License at
 */
 
 // Package main is the worked example from the metering event contract: a
-// small reader that consumes one tenant's usage topic and prints the
-// billable quantity.
+// small reader that consumes every tenant's heartbeat topics and prints the
+// billable quantity per tenant.
 //
 // It proves the reading rule and is not a production adapter. It keeps its
 // deduplication state in memory, so a restart forgets the ids it has seen.
@@ -22,6 +22,7 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -52,8 +53,11 @@ type Row struct {
 
 // Totals drops repeated CloudEvent ids and adds every remaining event's
 // quantity per UsageKey. A correction is a negative quantity, so adding it
-// subtracts the usage it reverses.
+// subtracts the usage it reverses. Sarama calls ConsumeClaim once per claimed
+// partition, so several goroutines share a Totals and every map and counter is
+// guarded by mu.
 type Totals struct {
+	mu       sync.Mutex
 	seen     map[string]struct{}
 	sums     map[UsageKey]*big.Rat
 	units    map[UsageKey]string
@@ -75,6 +79,9 @@ func NewTotals() *Totals {
 // Add sums one usage event. It returns false when the event repeats an id it
 // has already seen, so the caller can count the repeat without billing it.
 func (t *Totals) Add(event cloudevents.Event) (bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	id := event.ID()
 	if id == "" {
 		return false, fmt.Errorf("usage event has no CloudEvent id")
@@ -123,11 +130,20 @@ func (t *Totals) Add(event cloudevents.Event) (bool, error) {
 // Counts returns how many events were summed and how many repeats were
 // dropped.
 func (t *Totals) Counts() (accepted, repeats int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.accepted, t.repeats
 }
 
 // Rows returns the billable totals in a stable order.
 func (t *Totals) Rows() []Row {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.rowsLocked()
+}
+
+// rowsLocked returns the rows from the maps. The caller holds t.mu.
+func (t *Totals) rowsLocked() []Row {
 	rows := make([]Row, 0, len(t.sums))
 	for key, sum := range t.sums {
 		rows = append(rows, Row{
@@ -159,14 +175,54 @@ func (t *Totals) Rows() []Row {
 	return rows
 }
 
+// tenantUnit is the key of a billable total in the printed output.
+type tenantUnit struct {
+	tenant string
+	unit   string
+}
+
+// tenantTotal is one printed billable total.
+type tenantTotal struct {
+	tenantUnit
+	quantity *big.Rat
+}
+
+// snapshot returns the rows and the per-tenant totals under one lock, so the
+// printed output comes from a single consistent state. Print must not call a
+// locked method while holding the lock.
+func (t *Totals) snapshot() ([]Row, []tenantTotal) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	rows := t.rowsLocked()
+	totals := make(map[tenantUnit]*big.Rat)
+	for _, row := range rows {
+		key := tenantUnit{tenant: row.Key.TenantID, unit: row.Unit}
+		if totals[key] == nil {
+			totals[key] = new(big.Rat)
+		}
+		totals[key].Add(totals[key], t.sums[row.Key])
+	}
+	keys := make([]tenantUnit, 0, len(totals))
+	for key := range totals {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].tenant != keys[j].tenant {
+			return keys[i].tenant < keys[j].tenant
+		}
+		return keys[i].unit < keys[j].unit
+	})
+	sorted := make([]tenantTotal, 0, len(keys))
+	for _, key := range keys {
+		sorted = append(sorted, tenantTotal{tenantUnit: key, quantity: totals[key]})
+	}
+	return rows, sorted
+}
+
 // Print writes one line per billable total and one total per tenant and unit.
 func (t *Totals) Print(w io.Writer) error {
-	type tenantUnit struct {
-		tenant string
-		unit   string
-	}
-	totals := make(map[tenantUnit]*big.Rat)
-	rows := t.Rows()
+	rows, totals := t.snapshot()
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	if _, err := fmt.Fprintln(writer, "TENANT\tRESOURCE TYPE\tRESOURCE\tMETER\tCOMPONENT\tDIMENSIONS\tQUANTITY\tUNIT"); err != nil {
 		return fmt.Errorf("writing totals header: %w", err)
@@ -181,27 +237,12 @@ func (t *Totals) Print(w io.Writer) error {
 			row.Key.Component, dimensions, row.Quantity, row.Unit); err != nil {
 			return fmt.Errorf("writing totals row: %w", err)
 		}
-		key := tenantUnit{tenant: row.Key.TenantID, unit: row.Unit}
-		if totals[key] == nil {
-			totals[key] = new(big.Rat)
-		}
-		totals[key].Add(totals[key], t.sums[row.Key])
 	}
 	if err := writer.Flush(); err != nil {
 		return fmt.Errorf("writing totals: %w", err)
 	}
-	keys := make([]tenantUnit, 0, len(totals))
-	for key := range totals {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].tenant != keys[j].tenant {
-			return keys[i].tenant < keys[j].tenant
-		}
-		return keys[i].unit < keys[j].unit
-	})
-	for _, key := range keys {
-		if _, err := fmt.Fprintf(w, "BILLABLE TOTAL %s: %s %s\n", key.tenant, totals[key].FloatString(6), key.unit); err != nil {
+	for _, total := range totals {
+		if _, err := fmt.Fprintf(w, "BILLABLE TOTAL %s: %s %s\n", total.tenant, total.quantity.FloatString(6), total.unit); err != nil {
 			return fmt.Errorf("writing billable total: %w", err)
 		}
 	}

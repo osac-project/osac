@@ -31,6 +31,9 @@ interface CatalogFormValues {
   catalogItemReference: { id?: string; name?: string };
 }
 
+const isCatalogItemList = <T extends CatalogItem>(value: unknown): value is { items: T[] } =>
+  value !== null && typeof value === 'object' && 'items' in value && Array.isArray(value.items);
+
 interface Props<T extends CatalogItem, V extends CatalogFormValues> {
   catalogService: ResourceService<'list', DescMessage, DescMessage>;
   isInitializing?: boolean;
@@ -55,7 +58,7 @@ export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>(
     catalogService,
     catalogFilter ? { filter: catalogFilter } : {},
     {},
-    (data) => data.items,
+    (data) => (isCatalogItemList<T>(data) ? data.items : []),
   );
   const loading = isInitializing || catalogQuery.isPending;
   const error = catalogQuery.isError;

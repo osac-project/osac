@@ -95,29 +95,46 @@
 
 # Cross-injection canary: each gateway pod must carry exactly ONE auth wasm
 # filter. Best-effort (needs the Envoy admin config_dump) — warn, don't fail.
-- name: "{{ _t.name }} | L1 wasm-filter-count canary (best effort)"
+- name: "{{ _t.name }} | L1 locate gateway pod for wasm canary (best effort)"
   environment:
     KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+  ansible.builtin.command:
+    argv:
+      - oc
+      - get
+      - pods
+      - -n
+      - openshift-ingress
+      - -l
+      - "gateway.networking.k8s.io/gateway-name={{ _t_gateway }}"
+      - -o
+      - "jsonpath={.items[0].metadata.name}"
+  register: _l1_wasm_pod
+  changed_when: false
+  failed_when: false
+
+- name: "{{ _t.name }} | L1 count gateway wasm filters (best effort)"
+  environment:
+    KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+    OSAC_WASM_POD: "{{ _l1_wasm_pod.stdout | trim }}"
   ansible.builtin.shell: |
     set -o pipefail
-    POD=$(oc get pods -n openshift-ingress \
-      -l gateway.networking.k8s.io/gateway-name={{ _t_gateway }} \
-      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    [ -z "$POD" ] && echo "no-pod" && exit 0
-    CNT=$(oc exec -n openshift-ingress "$POD" -c istio-proxy -- \
+    oc exec -n openshift-ingress "$OSAC_WASM_POD" -c istio-proxy -- \
       curl -s localhost:15000/config_dump 2>/dev/null \
-      | grep -c 'envoy.filters.http.wasm' || true)
-    echo "$CNT"
+      | grep -c 'envoy.filters.http.wasm' || true
   args:
     executable: /bin/bash
   register: _l1_wasm
   changed_when: false
-  ignore_errors: true
+  failed_when: false
+  no_log: true
+  when: _l1_wasm_pod.stdout | default('', true) | trim | length > 0
 
 - name: "{{ _t.name }} | L1 wasm canary result"
   ansible.builtin.debug:
     msg: >-
-      wasm auth filters on {{ _t_gateway }} pod: {{ _l1_wasm.stdout | default('unknown') | trim }}
+      wasm auth filters on {{ _t_gateway }} pod:
+      {{ _l1_wasm.stdout | default('no-pod', true) | trim }}
       {{ '(expected >=1; cross-injection if a NEWER gateway shows more than its own)' }}
 
 # =====================================================================
@@ -182,9 +199,16 @@
       environment:
         KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
       ansible.builtin.command:
-        cmd: >-
-          oc auth can-i {{ item.verb }} {{ item.resource }}
-          -n {{ item.ns }} --as=maas-verify --as-group={{ _t_rbac_group }}
+        argv:
+          - oc
+          - auth
+          - can-i
+          - "{{ item.verb }}"
+          - "{{ item.resource }}"
+          - -n
+          - "{{ item.ns }}"
+          - --as=maas-verify
+          - "--as-group={{ _t_rbac_group }}"
       # The object-admin Role is resourceName-scoped to this tenant's own AITenant,
       # so the check must use the resource/name (slash) form — a general
       # `can-i get aitenants` is (correctly) denied.
@@ -224,7 +248,8 @@
           content: "Hello"
       max_tokens: 10
     status_code: [401, 403]
-    validate_certs: false
+    validate_certs: true
+    ca_path: "{{ _verify_ingress_ca_file.path | default(omit) }}"
   register: _l2_unauth
   retries: 12
   delay: 10
@@ -233,11 +258,15 @@
 - name: "{{ _t.name }} | L2 mint SA token (smoke tier)"
   environment:
     KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
-  ansible.builtin.shell: >-
-    oc create token testuser-{{ _smoke_tier.name | regex_replace('-subscription$', '') }}
-    -n {{ _t_govns }} --duration=1h
-  args:
-    executable: /bin/bash
+  ansible.builtin.command:
+    argv:
+      - oc
+      - create
+      - token
+      - "testuser-{{ _smoke_tier.name | regex_replace('-subscription$', '') }}"
+      - -n
+      - "{{ _t_govns }}"
+      - --duration=1h
   register: _l2_token
   changed_when: false
   no_log: true
@@ -253,7 +282,8 @@
       name: "verify-{{ _t_name }}"
       description: Automated verification
     status_code: 201
-    validate_certs: false
+    validate_certs: true
+    ca_path: "{{ _verify_ingress_ca_file.path | default(omit) }}"
   register: _l2_key
   retries: 12
   delay: 10
@@ -274,7 +304,8 @@
           content: "Hello"
       max_tokens: 10
     status_code: 200
-    validate_certs: false
+    validate_certs: true
+    ca_path: "{{ _verify_ingress_ca_file.path | default(omit) }}"
   register: _l2_inf
   retries: 12
   delay: 10
@@ -303,11 +334,15 @@
     - name: "{{ _t.name }} | L3 mint free-tier SA token"
       environment:
         KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
-      ansible.builtin.shell: >-
-        oc create token testuser-{{ _free_tier.name | regex_replace('-subscription$', '') }}
-        -n {{ _t_govns }} --duration=1h
-      args:
-        executable: /bin/bash
+      ansible.builtin.command:
+        argv:
+          - oc
+          - create
+          - token
+          - "testuser-{{ _free_tier.name | regex_replace('-subscription$', '') }}"
+          - -n
+          - "{{ _t_govns }}"
+          - --duration=1h
       register: _l3_token
       changed_when: false
       no_log: true
@@ -323,7 +358,8 @@
           name: "verify-free-{{ _t_name }}"
           description: Rate-limit verification
         status_code: 201
-        validate_certs: false
+        validate_certs: true
+        ca_path: "{{ _verify_ingress_ca_file.path | default(omit) }}"
       register: _l3_key
       retries: 12
       delay: 10
@@ -344,7 +380,8 @@
               content: "Tell me a long story about dragons and knights in a faraway kingdom"
           max_tokens: 50
         status_code: [200, 429]
-        validate_certs: false
+        validate_certs: true
+        ca_path: "{{ _verify_ingress_ca_file.path | default(omit) }}"
       register: _l3_loop
       # Tolerate a transient non-200/429 on a single request (e.g. a momentary 5xx /
       # connection blip at the 200->429 boundary under rapid fire) — the assert below

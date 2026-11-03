@@ -639,47 +639,50 @@ func resourceToolSchema[T any](supportedResourceTypes []ResourceType) json.RawMe
 }
 
 func computeInstanceUpdateToolSchema() json.RawMessage {
-	schema := compatibleToolSchema[UpdateComputeInstanceInput]()
-	var document map[string]any
-	if err := json.Unmarshal(schema, &document); err != nil {
-		panic(fmt.Errorf("decode compute instance update tool schema: %w", err))
-	}
-	properties, ok := document["properties"].(map[string]any)
-	if !ok {
-		panic("compute instance update tool schema has no properties")
-	}
-	version, ok := properties["version"].(map[string]any)
-	if !ok {
-		panic("compute instance update tool schema has no version property")
-	}
-	version["minimum"] = 1
-	encoded, err := json.Marshal(document)
-	if err != nil {
-		panic(fmt.Errorf("encode compute instance update tool schema: %w", err))
-	}
-	return encoded
+	return withToolSchemaProperties(
+		compatibleToolSchema[UpdateComputeInstanceInput](),
+		"compute instance update",
+		func(properties map[string]any) {
+			version, ok := properties["version"].(map[string]any)
+			if !ok {
+				panic("compute instance update tool schema has no version property")
+			}
+			version["minimum"] = 1
+		},
+	)
 }
 
 func networkCreateToolSchema() json.RawMessage {
-	schema := compatibleToolSchema[CreateNetworkResourceInput]()
+	return withToolSchemaProperties(
+		compatibleToolSchema[CreateNetworkResourceInput](),
+		"network create",
+		func(properties map[string]any) {
+			for _, name := range []string{"ingress_rules", "egress_rules"} {
+				property, ok := properties[name].(map[string]any)
+				if !ok {
+					panic(fmt.Sprintf("network create tool schema has no %s property", name))
+				}
+				property["maxItems"] = maxNetworkSecurityRules
+			}
+		},
+	)
+}
+
+func withToolSchemaProperties(
+	schema json.RawMessage, toolName string, mutate func(properties map[string]any),
+) json.RawMessage {
 	var document map[string]any
 	if err := json.Unmarshal(schema, &document); err != nil {
-		panic(fmt.Errorf("decode network create tool schema: %w", err))
+		panic(fmt.Errorf("decode %s tool schema: %w", toolName, err))
 	}
 	properties, ok := document["properties"].(map[string]any)
 	if !ok {
-		panic("network create tool schema has no properties")
+		panic(fmt.Sprintf("%s tool schema has no properties", toolName))
 	}
-	for _, name := range []string{"ingress_rules", "egress_rules"} {
-		property, ok := properties[name].(map[string]any)
-		if !ok {
-			panic(fmt.Sprintf("network create tool schema has no %s property", name))
-		}
-		property["maxItems"] = maxNetworkSecurityRules
-	}
+	mutate(properties)
 	encoded, err := json.Marshal(document)
 	if err != nil {
-		panic(fmt.Errorf("encode network create tool schema: %w", err))
+		panic(fmt.Errorf("encode %s tool schema: %w", toolName, err))
 	}
 	return encoded
 }

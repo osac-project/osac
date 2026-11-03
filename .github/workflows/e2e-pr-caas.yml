@@ -70,7 +70,7 @@ jobs:
       pull-requests: read
     runs-on: ubuntu-latest
     outputs:
-      tier: ${{ (inputs.tier == 'full' || steps.filter.outputs.caas-regression == 'true') && 'full' || '' }}
+      tier: ${{ (inputs.tier == 'full' || steps.comparison.outputs.changed == 'true') && 'full' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -91,7 +91,7 @@ jobs:
             select(.head.sha == $sha) | .base.sha | select(test("^[0-9a-f]{40}$"))
           ' <<<"$pull_json")"
           printf 'sha=%s\n' "$base" >> "$GITHUB_OUTPUT"
-      - name: Find the PR comparison base without checking out PR code
+      - name: Check for CaaS regression changes without checking out PR code
         id: comparison
         env:
           PR_BASE: ${{ steps.base.outputs.sha }}
@@ -100,14 +100,12 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin "$PR_BASE" "$PR_SHA"
           base="$(git merge-base "$PR_BASE" "$PR_SHA")"
-          printf 'sha=%s\n' "$base" >> "$GITHUB_OUTPUT"
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
-        id: filter
-        with:
-          base: ${{ steps.comparison.outputs.sha }}
-          ref: ${{ inputs.sha }}
-          filters: .github/filters/ci-filters.yml
-          predicate-quantifier: every
+          git diff --no-renames --name-only -z "$base" "$PR_SHA" -- tests/e2e/caas/regression/ > "$RUNNER_TEMP/caas-regression-paths"
+          if [[ -s "$RUNNER_TEMP/caas-regression-paths" ]]; then
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          fi
 
   # Named after the suite id of .github/e2e-policy.yml: the line of the suite follows the deepest job of this run.
   caas:

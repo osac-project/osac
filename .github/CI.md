@@ -45,8 +45,9 @@ A pull request that needs CaaS gets the sanity tests (`tests/e2e/caas/sanity`) b
 changed filename is under `tests/e2e/caas/regression/`, its CaaS run automatically selects sanity and regression together,
 with the CaaS references. This includes additions, modifications, deletions, and renames into or out of that directory.
 After the existing PR-input verification, `e2e-pr-caas.yml` reads the PR base SHA and checks the head is still current.
-It uses the existing `paths-filter` action and trusted `caas-regression` filter to compare the verified head with its
-merge-base against the immutable PR base SHA. Only the workflow revision is checked out, never PR code;
+Git compares the verified head with its merge-base against the immutable PR base SHA, restricting the diff to the
+fixed `tests/e2e/caas/regression/` directory pathspec. A nonempty NUL-separated filename list selects full, without
+parsing filenames, including names containing newlines. Only the workflow revision is checked out, never PR code;
 Git/API failures stop the suite instead of using sanity.
 This only selects tests: the existing approval, readiness, and fork authorization requirements still apply.
 

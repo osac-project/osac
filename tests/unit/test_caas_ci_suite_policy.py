@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -167,6 +168,7 @@ def test_pr_selector_has_no_label_override() -> None:
 PR_SHA = "a" * 40
 REGRESSION = "tests/e2e/caas/regression/test_cluster.py"
 SANITY = "tests/e2e/caas/sanity/test_cluster.py"
+UNUSUAL_REGRESSION = 'tests/e2e/caas/regression/$(touch injected); "quoted"\nfile.py'
 FILE_CHANGES = [
     {"filename": REGRESSION, "status": "added"},
     {"filename": REGRESSION, "status": "modified"},
@@ -182,7 +184,7 @@ FILE_CHANGES = [
 @pytest.mark.parametrize("requested", ["", "sanity", "full"])
 def test_filtered_tier_reaches_caas(matched: str, requested: str) -> None:
     expression = _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["labels"]["outputs"]["tier"]
-    expression = expression.replace("steps.filter.outputs.caas-regression", repr(matched))
+    expression = expression.replace("steps.comparison.outputs.changed", repr(matched))
     tier = _selection(expression, "workflow_dispatch", tier=requested)
     full = matched == "true" or requested == "full"
     assert tier == ("full" if full else "")
@@ -240,22 +242,17 @@ def test_pr_base_read_fails_closed(tmp_path: Path, response: str) -> None:
         {"filename": SANITY, "status": "added"},
         {"filename": "tests/e2e/caas/regression-other/test.py", "status": "added"},
         {"filename": SANITY, "status": "base-only"},
-        {"filename": 'tests/e2e/caas/regression/$(touch injected); "quoted".py', "status": "added"},
+        {"filename": "docs/readme.md", "status": "added"},
+        {"filename": UNUSUAL_REGRESSION, "status": "added"},
+        {"filename": "tests/e2e/caas/regression/dir\nname/test.py", "status": "added"},
+        {"filename": UNUSUAL_REGRESSION, "other_files": [SANITY], "status": "added"},
         {"filename": SANITY, "status": "git-error"},
-        {"filename": SANITY, "status": "filter-error"},
+        {"filename": SANITY, "status": "diff-error"},
+        {"filename": SANITY, "status": "output-error"},
     ],
 )
-def test_pinned_paths_filter_on_pr_changes(tmp_path: Path, changed: dict) -> None:
-    companion = os.environ.get("OSAC_PATHS_FILTER_DIR")
-    if not companion:
-        pytest.skip("Set OSAC_PATHS_FILTER_DIR to run the pinned paths-filter action with Node")
-    action = Path(companion).resolve()
+def test_git_directory_selection_on_pr_changes(tmp_path: Path, changed: dict) -> None:
     steps = _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["labels"]["steps"]
-    filtering = next(step for step in steps if step.get("id") == "filter")
-    assert (
-        subprocess.check_output(["git", "-C", str(action), "rev-parse", "HEAD"], text=True).strip()
-        == (filtering["uses"].rsplit("@", 1)[1])
-    )
 
     def git(*args: str) -> str:
         return subprocess.check_output(
@@ -280,6 +277,10 @@ def test_pinned_paths_filter_on_pr_changes(tmp_path: Path, changed: dict) -> Non
     if changed["status"] != "removed":
         filename.parent.mkdir(parents=True, exist_ok=True)
         filename.write_text("after")
+    for other in changed.get("other_files", []):
+        other_file = tmp_path / other
+        other_file.parent.mkdir(parents=True, exist_ok=True)
+        other_file.write_text("another PR change")
     git("add", ".")
     git("commit", "-qm", "PR change")
     head = git("rev-parse", "HEAD")
@@ -292,51 +293,39 @@ def test_pinned_paths_filter_on_pr_changes(tmp_path: Path, changed: dict) -> Non
         git("commit", "-qm", "upstream regression change")
         base = git("rev-parse", "HEAD")
     output = tmp_path / "output"
-    env = {**os.environ, "PR_BASE": base, "PR_SHA": head, "GITHUB_OUTPUT": str(output)}
+    runner_temp = tmp_path / "runner-temp"
+    if changed["status"] != "output-error":
+        runner_temp.mkdir()
+    env = {**os.environ, "PR_BASE": base, "PR_SHA": head, "GITHUB_OUTPUT": str(output), "RUNNER_TEMP": str(runner_temp)}
     comparison = next(step for step in steps if step.get("id") == "comparison")
     if changed["status"] == "git-error":
         git("remote", "remove", "origin")
         env["PR_SHA"] = "f" * 40
-    compared = subprocess.run(
-        ["bash", "-c", comparison["run"]], cwd=tmp_path, env=env, check=False, capture_output=True
-    )
-    if changed["status"] == "git-error":
-        assert compared.returncode != 0
-        assert not output.exists()
-        return
-    assert compared.returncode == 0, compared.stderr
-    comparison_sha = output.read_text().strip().removeprefix("sha=")
-    output.write_text("")
-    result = subprocess.run(
-        ["node", str(action / "dist/index.js")],
-        cwd=tmp_path,
-        env={
-            **env,
-            "GITHUB_EVENT_NAME": "workflow_dispatch",
-            "GITHUB_REPOSITORY": "osac-project/osac",
-            "INPUT_BASE": comparison_sha,
-            "INPUT_REF": head,
-            "INPUT_FILTERS": str(
-                tmp_path / "missing-filter.yml"
-                if changed["status"] == "filter-error"
-                else ROOT / filtering["with"]["filters"]
-            ),
-            "INPUT_PREDICATE-QUANTIFIER": "every",
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if changed["status"] == "filter-error":
+    if changed["status"] == "diff-error":
+        mock_bin = tmp_path / "bin"
+        mock_bin.mkdir()
+        mock = mock_bin / "git"
+        mock.write_text('#!/bin/sh\nif [ "$1" = diff ]; then exit 128; fi\nexec "$REAL_GIT" "$@"\n')
+        mock.chmod(0o755)
+        env["REAL_GIT"] = shutil.which("git")
+        env["PATH"] = f"{mock_bin}:{os.environ['PATH']}"
+    result = subprocess.run(["bash", "-c", comparison["run"]], cwd=tmp_path, env=env, check=False, capture_output=True)
+    if changed["status"] in {"git-error", "diff-error", "output-error"}:
         assert result.returncode != 0
-        assert "caas-regression<<" not in output.read_text()
+        assert not output.exists()
         return
     assert result.returncode == 0, result.stdout + result.stderr
     expected = any(
         path.startswith("tests/e2e/caas/regression/")
         for path in (changed["filename"], changed.get("previous_filename", ""))
     )
-    assert re.search(rf"^caas-regression<<.*\n{str(expected).lower()}\n", output.read_text(), re.MULTILINE)
+    assert output.read_text() == f"changed={str(expected).lower()}\n"
+    expression = _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["labels"]["outputs"]["tier"]
+    expression = expression.replace("steps.comparison.outputs.changed", repr(str(expected).lower()))
+    for requested in ("", "sanity", "full"):
+        assert _selection(expression, "workflow_dispatch", tier=requested) == (
+            "full" if expected or requested == "full" else ""
+        )
     assert git("rev-parse", "HEAD") == base, "path detection must not check out PR code"
     assert not (tmp_path / "injected").exists()
 
@@ -352,19 +341,12 @@ def test_pr_tier_resolution_preserves_trust_boundaries() -> None:
     assert jobs["labels"]["needs"] == "verify"
     assert jobs["labels"]["permissions"] == {"contents": "read", "pull-requests": "read"}
     assert "secrets" not in jobs["labels"]
-    checkout, base, comparison, filtering, _ = jobs["labels"]["steps"]
+    checkout, base, comparison, _ = jobs["labels"]["steps"]
     assert checkout["uses"] == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
     assert checkout["with"] == {"ref": "${{ github.workflow_sha }}", "fetch-depth": 0, "persist-credentials": False}
     assert base["env"]["PR_SHA"] == "${{ inputs.sha }}"
     assert comparison["env"] == {"PR_BASE": "${{ steps.base.outputs.sha }}", "PR_SHA": "${{ inputs.sha }}"}
-    assert filtering["uses"] == "dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d"
-    assert filtering["with"] == {
-        "base": "${{ steps.comparison.outputs.sha }}",
-        "ref": "${{ inputs.sha }}",
-        "filters": ".github/filters/ci-filters.yml",
-        "predicate-quantifier": "every",
-    }
-    assert all("if" not in step and not step.get("continue-on-error") for step in (base, comparison, filtering))
+    assert all("if" not in step and not step.get("continue-on-error") for step in (base, comparison))
     assert "if" not in jobs["labels"]
     assert jobs["verify"]["with"] == {
         "repo": "${{ inputs.repo }}",
@@ -403,6 +385,7 @@ policy = load_policy(Path(root) / '.github/e2e-policy.yml')
 head = 'a' * 40
 for changed in changes:
     paths = tuple(changed[key] for key in ('filename', 'previous_filename') if key in changed)
+    paths += tuple(changed.get('other_files', []))
     assert 'caas' in suites_for_files(policy, paths), paths
     inputs = Inputs(
         number=123, head_sha=head, author='author', state='open', draft=False,
@@ -420,11 +403,11 @@ for changed in changes:
     assert decide(replace(inputs, fork=True)).starts
     bot = Review('coderabbitai[bot]', 'APPROVED', 'NONE', head, permission='write', user_type='Bot')
     assert not decide(replace(inputs, fork=True, reviews=(bot,))).starts
-print('Pinned parent decision: 7 change cases reach CaaS; approval/draft/fork guards preserved')
+print('Pinned parent: regression and mixed newline/sanity cases reach CaaS; approval/draft/fork guards preserved')
 """
     result = subprocess.run(
         ["uv", "run", "--project", companion, "--no-dev", "python", "-c", script],
-        input=json.dumps([str(ROOT), FILE_CHANGES]),
+        input=json.dumps([str(ROOT), [*FILE_CHANGES, {"filename": UNUSUAL_REGRESSION, "other_files": [SANITY]}]]),
         capture_output=True,
         text=True,
         check=False,

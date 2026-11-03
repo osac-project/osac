@@ -137,9 +137,6 @@ e2e-code:
   - '!**/fixtures/**'
   - '!osac-ui/**'
   - '!tools/pr-notify/**'
-caas-regression:
-  - 'tests/e2e/caas/regression/**'
-
 e2e-suite:
   - 'tests/e2e/**'
 

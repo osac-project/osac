@@ -73,7 +73,7 @@ type CreateNetworkResourceOutput struct {
 }
 
 type DeleteNetworkResourceInput struct {
-	ResourceType NetworkResourceType `json:"resource_type" jsonschema:"network resource type: virtual_network, subnet, or security_group"`
+	ResourceType NetworkResourceType `json:"resource_type" jsonschema:"network resource type: virtual_network, subnet, security_group, external_ip, external_ip_attachment, or nat_gateway"`
 	ID           string              `json:"id" jsonschema:"ID of the exact network resource to delete"`
 }
 

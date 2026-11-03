@@ -158,6 +158,7 @@ var _ = Describe("newServer", func() {
 		expectNetworkCreateSchema(tools["create_network_resource"].InputSchema)
 		expectTypedWriteSchema(tools["expose_network_resource"].InputSchema, "resource_type", "name")
 		expectTypedWriteSchema(tools["delete_network_resource"].InputSchema, "resource_type", "id")
+		expectNetworkDeleteSchema(tools["delete_network_resource"].InputSchema)
 		expectComputeInstanceUpdateSchema(tools["update_compute_instance"].InputSchema)
 		expectTypedWriteSchema(tools["create_compute_instance"].InputSchema, "name", "catalog_item")
 		expectTypedWriteSchema(tools["update_compute_instance"].InputSchema, "id", "version")
@@ -407,6 +408,18 @@ func expectNetworkCreateSchema(schema any) {
 		Expect(ok).To(BeTrue(), name)
 		Expect(property["maxItems"]).To(BeNumerically("==", maxNetworkSecurityRules), name)
 	}
+}
+
+func expectNetworkDeleteSchema(schema any) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	resourceType, ok := properties["resource_type"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(resourceType["description"]).To(Equal(
+		"network resource type: virtual_network, subnet, security_group, external_ip, external_ip_attachment, or nat_gateway",
+	))
 }
 
 func expectComputeInstanceCreateSchema(schema any) {

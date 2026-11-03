@@ -408,8 +408,7 @@ func validateSecurityRule(rule *privatev1.SecurityRule, ruleType string, index i
 		IPv4CIDR:    rule.GetIpv4Cidr(),
 	}, ruleType, index)
 	if err != nil {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"%s rule at index %d: %v", ruleType, index, err)
+		return grpcstatus.Error(grpccodes.InvalidArgument, err.Error())
 	}
 
 	return nil

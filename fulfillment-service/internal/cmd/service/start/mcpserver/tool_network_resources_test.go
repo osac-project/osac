@@ -499,7 +499,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		envelope := decodeToolError(err)
 		Expect(envelope.Category).To(Equal("not_found"))
 		Expect(envelope.GRPCCode).To(Equal("NotFound"))
-		Expect(envelope.Details).To(ContainElement("NetworkClass  is missing"))
+		Expect(envelope.Details).To(ContainElement("NetworkClass is not configured"))
 	})
 })
 

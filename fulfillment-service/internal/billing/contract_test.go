@@ -26,6 +26,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing/m360"
+	"github.com/osac-project/osac/fulfillment-service/internal/billing/pricing"
 )
 
 const testContractToken = "super-secret-token"
@@ -178,6 +179,26 @@ var _ = Describe("Adapter contract", func() {
 			It("reports a missing rate card as not-found", func() {
 				_, err := adapter.GetServiceRateCard(ctx, billing.NewServiceRef("svc-1"), "EUR")
 				Expect(err).To(MatchError(billing.ErrRateCardNotFound))
+			})
+
+			It("resolves the same normalized price through the pricing resolver, despite each provider's own native field names", func() {
+				resolver := pricing.NewResolver(adapter)
+				req := pricing.Request{
+					Account:  billing.NewAccountRef("acct-1"),
+					Currency: "USD",
+					Components: []pricing.ComponentRequest{
+						{Service: "GPU Hours", Dimension: "gpu_hours", Values: map[string]string{"gpu_hours": "1"}},
+					},
+				}
+				result, err := resolver.Resolve(ctx, req)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(result.Aggregate).To(Equal(pricing.AggregateCurrent))
+				Expect(result.Components).To(HaveLen(1))
+				c := result.Components[0]
+				Expect(c.State).To(Equal(pricing.StateCovered))
+				Expect(c.Currency).To(Equal("USD"))
+				Expect(c.Unit).To(Equal("second"))
+				Expect(c.PerSecond.String()).To(Equal("0.25"))
 			})
 
 			It("honours the correlation write capability it advertises", func() {

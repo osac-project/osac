@@ -1,0 +1,15 @@
+---
+# playbook_osac_network_task.yml unchanged, with the role default
+# netris_evpn_vnet_gateway_mode set to none. The generic playbook refuses every
+# extra var, so the mode is set here as a fact. It is the only way to run the
+# branch of create_subnet.yaml for a V-Net without a gateway.
+- name: Choose the V-Net gateway mode
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Set the mode
+      ansible.builtin.set_fact:
+        netris_evpn_vnet_gateway_mode: none
+
+- name: Run the generic playbook
+  ansible.builtin.import_playbook: ../../../../../playbook_osac_network_task.yml

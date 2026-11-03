@@ -2,69 +2,16 @@ from __future__ import annotations
 
 import ipaddress
 import subprocess
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking import teardown
 from tests.e2e.networking.cidrs import TENANT_SECOND_OCTETS, run_offset, subnet_cidr, tenant_vn_cidr
-from tests.e2e.networking.vmaas import conftest as vmaas_conftest
 from tests.e2e.networking.vmaas import stack
 from tests.e2e.networking.vmaas import test_vmaas_networking as test_module
-
-SUITE = Path(vmaas_conftest.__file__).parent
-
-
-def _item(path: Path, name: str) -> SimpleNamespace:
-    markers: list[object] = []
-    return SimpleNamespace(path=path, name=name, add_marker=markers.append, markers=markers)
-
-
-def _collect(monkeypatch: pytest.MonkeyPatch, *, enabled: bool) -> list[Any]:
-    monkeypatch.setenv(vmaas_conftest.EXTERNAL_PATH_FLAG, "true" if enabled else "false")
-    items = [
-        _item(SUITE / "external_ip" / "test_pool.py", "pool"),
-        _item(Path("/elsewhere/tests/e2e/vmaas/test_other.py"), "other-before"),
-        _item(SUITE / "references" / "test_refs.py", "refs"),
-        _item(SUITE / "test_vmaas_networking.py", "main-0"),
-        _item(Path("/elsewhere/tests/e2e/vmaas/test_later.py"), "other-after"),
-        _item(SUITE / "test_vmaas_networking.py", "main-1"),
-    ]
-    vmaas_conftest.pytest_collection_modifyitems(config=SimpleNamespace(), items=items)
-    return items
-
-
-def test_main_suite_runs_before_the_external_directories(monkeypatch: pytest.MonkeyPatch) -> None:
-    items = _collect(monkeypatch, enabled=True)
-
-    inside = [item.name for item in items if item.path.is_relative_to(SUITE)]
-    assert inside == ["main-0", "main-1", "pool", "refs"]
-
-
-def test_items_outside_the_suite_keep_their_positions(monkeypatch: pytest.MonkeyPatch) -> None:
-    items = _collect(monkeypatch, enabled=True)
-
-    assert [(i, item.name) for i, item in enumerate(items) if not item.path.is_relative_to(SUITE)] == [
-        (1, "other-before"),
-        (4, "other-after"),
-    ]
-
-
-def test_external_directories_are_skipped_only_when_the_flag_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    off = _collect(monkeypatch, enabled=False)
-    on = _collect(monkeypatch, enabled=True)
-
-    assert {item.name: bool(item.markers) for item in off} == {
-        "main-0": False,
-        "main-1": False,
-        "pool": True,
-        "refs": True,
-        "other-before": False,
-        "other-after": False,
-    }
-    assert not any(item.markers for item in on)
 
 
 @pytest.mark.parametrize(
@@ -182,7 +129,14 @@ def test_poll_or_fail_turns_a_timeout_into_a_diagnosed_failure(monkeypatch: pyte
 
     with pytest.raises(pytest.fail.Exception, match=r"thing timed out\. look at the lab"):
         stack.poll_or_fail(
-            hint="look at the lab", fn=lambda: False, until=bool, retries=2, delay=0, description="thing"
+            hint="look at the lab",
+            fn=lambda: False,
+            until=bool,
+            retries=2,
+            delay=0,
+            description="thing",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="ci-1",
         )
 
 
@@ -254,7 +208,14 @@ def test_wait_owned_gone_names_a_rejected_delete_on_timeout(monkeypatch: pytest.
 
     with pytest.raises(TimeoutError) as exc_info:
         teardown.wait_owned_gone(
-            description="vm gone", api_gone=lambda: False, cr_gone=lambda: True, delete=delete, retries=2, delay=0
+            description="vm gone",
+            api_gone=lambda: False,
+            cr_gone=lambda: True,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="ci-1",
+            delete=delete,
+            retries=2,
+            delay=0,
         )
 
     assert "FailedPrecondition: manual attachment" in str(exc_info.value)

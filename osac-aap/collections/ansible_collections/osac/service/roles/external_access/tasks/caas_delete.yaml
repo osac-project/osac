@@ -1,0 +1,6 @@
+---
+- name: Remove shared CaaS DNS records
+  ansible.builtin.include_tasks: caas_dns_delete.yaml
+
+- name: Clear published CaaS endpoints from ClusterOrder
+  ansible.builtin.include_tasks: clear.yaml

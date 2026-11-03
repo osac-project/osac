@@ -70,11 +70,8 @@ fixture. Removed from the suite: the ICMP SecurityGroup rule rejection, node ser
 isolation and the second-tenant automatic ExternalIP test, which are removed E2E requirements, not
 moved coverage.
 
-The `external_ip/` and `references/` directories and `test_external_ip_billing.py` stay in
-the repository but are not part of this job. Run them by hand against a Netris lab with
-`OSAC_NETRIS_VM_EXTERNAL_PATH_ENABLED=true` for the two directories (they are skipped at
-collection without it) and `METERING_ADAPTER_URL` for the billing file. While they are out of
-the job the ExternalIP delete billing path has no CI signal.
+`test_12b`..`test_12d` bill an ExternalIP and a NATGateway on the module's own VMs, network and
+routed pool. They send no traffic and skip when the metering echo adapter cannot be found.
 
 ## Optional: Stretched VMaaS/BMaaS Netris
 

@@ -8,6 +8,7 @@ import pytest
 from tests.e2e.core import helpers, runner
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
 def test_wait_for_new_vmi_retries_lookup_errors_until_timestamp_changes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -26,6 +27,25 @@ def test_wait_for_new_vmi_retries_lookup_errors_until_timestamp_changes(monkeypa
 
     assert result == "recreated"
     assert k8s.get_vmi_creation_timestamp.call_count == 4
+
+
+def test_wait_helpers_pass_resource_identity_to_poll_until(monkeypatch: pytest.MonkeyPatch) -> None:
+    poll = Mock(return_value=True)
+    monkeypatch.setattr(helpers, "poll_until", poll)
+
+    k8s = Mock(spec=K8sClient)
+    k8s.is_present.return_value = True
+    helpers.wait_for_tenant_cr(k8s=k8s, name="tenant-one")
+
+    grpc = Mock(spec=GRPCClient)
+    grpc.list_baremetal_instance_ids.return_value = ["bmi-one"]
+    helpers.wait_for_bmi_grpc_removal(grpc=grpc, uuid="bmi-one")
+
+    tenant_call, bmi_call = poll.call_args_list
+    assert tenant_call.kwargs["resource_kind"] is WaitResourceKind.TENANT
+    assert tenant_call.kwargs["resource_id"] == "tenant-one"
+    assert bmi_call.kwargs["resource_kind"] is WaitResourceKind.BARE_METAL_INSTANCE
+    assert bmi_call.kwargs["resource_id"] == "bmi-one"
 
 
 def test_delete_instance_type_if_present_ignores_not_found() -> None:

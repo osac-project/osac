@@ -1,0 +1,40 @@
+---
+# One task through the fault proxy. Input: ce_fault {label, task, job, search,
+# key, status, reason, mode, vn, subnet, sg, vm}.
+- name: "Arm the fault - {{ ce_fault.label }}"
+  ansible.builtin.include_tasks: proxy.yaml
+  vars:
+    ce_proxy_steps:
+      - {path: faults/clear}
+      - {path: calls/clear}
+      - path: faults
+        body:
+          key: "{{ ce_fault.key }}"
+          status: "{{ ce_fault.status | default(503) }}"
+          reason: "{{ ce_fault.reason | default('ServiceUnavailable') }}"
+          message: LEAKED-BODY connect.sid=secret
+          mode: "{{ ce_fault.mode | default('respond') }}"
+          sticky: true
+
+- name: "Run the task - {{ ce_fault.label }}"
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: "{{ ce_fault.label }}"
+    sft_expect: retryable
+    sft_message_search: "{{ ce_fault.search }}"
+    sft_env: {K8S_AUTH_KUBECONFIG: "{{ ce_proxy.kubeconfig }}"}
+    ce_task: "{{ ce_fault.task }}"
+    ce_vn_id: "{{ ce_id[ce_fault.vn | default('vn_h')] }}"
+    ce_subnet_id: "{{ ce_id[ce_fault.subnet | default('s_h')] }}"
+    ce_sg_id: "{{ ce_id[ce_fault.sg | default('sg_h')] }}"
+    ce_vm_id: "{{ ce_id.vm_h }}"
+    sft_job: >-
+      {{ lookup('ansible.builtin.vars',
+                {'virtual_network': 'ce_vn_job', 'subnet': 'ce_subnet_job', 'security_group': 'ce_sg_job',
+                 'network_attachment': 'ce_attach_job'}[ce_fault.task.split('_', 1)[1]]) }}
+
+- name: "Check the message holds no body of the API - {{ ce_fault.label }}"
+  ansible.builtin.assert:
+    that: sft_last.error.message is not search('LEAKED-BODY|secret')
+    fail_msg: "{{ ce_fault.label }}: {{ sft_last.error.message }}"
+    quiet: true

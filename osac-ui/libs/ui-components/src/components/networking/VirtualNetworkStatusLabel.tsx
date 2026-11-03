@@ -14,6 +14,7 @@ const VIRTUAL_NETWORK_STATUS_MAP: Record<
   [VirtualNetworkState.PENDING]: { status: 'progressing', text: 'Provisioning' },
   [VirtualNetworkState.READY]: { status: 'ready', text: 'Ready' },
   [VirtualNetworkState.FAILED]: { status: 'failed', text: 'Failed' },
+  [VirtualNetworkState.DELETING]: { status: 'progressing', text: 'Deleting' },
 };
 
 const resolveVirtualNetworkStatus = (

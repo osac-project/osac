@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
     delete_instance_type_if_present,
     unique_name,
@@ -37,6 +37,7 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import (
     HEARTBEAT_TYPE,
     MeteringCollector,
+    billing_account_id,
     interval_seconds,
     net_intervals,
     net_usage_past_by_dimension,
@@ -45,6 +46,7 @@ from tests.e2e.core.metering import (
 )
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.sanity
 
@@ -191,6 +193,8 @@ def _delete_vm(cli: OsacCLI, grpc: GRPCClient, k8s: K8sClient, *, uuid: str, ci_
                 retries=30,
                 delay=2,
                 description=f"deletion timestamp of {ci_name}",
+                resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                resource_id=ci_name,
             )
         )
         wait_for_deletion(k8s=k8s, name=ci_name)
@@ -226,7 +230,10 @@ def test_metering_heartbeat_envelope(
         # carries the dimension, as the resize scenario does, and verify that
         # event's envelope.
         heartbeat = metering.heartbeat_with_dimensions(
-            uuid, {"instance_type": cli.default_instance_type}, timeout=HEARTBEAT_TIMEOUT
+            uuid,
+            {"instance_type": cli.default_instance_type},
+            timeout=HEARTBEAT_TIMEOUT,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
         )
         # verify_event checks the full envelope: CloudEvent type, source,
         # extensions, interval semantics, unit, precision, fixed-point quantity,
@@ -261,6 +268,8 @@ def test_metering_heartbeat_envelope(
             retries=45,
             delay=10,
             description=f"two heartbeats of {uuid} on the {cli.default_instance_type} meter",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
     finally:
         _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
@@ -287,7 +296,10 @@ def test_metering_stop_ends_billing(
         # Anchor on a heartbeat that carries the running instance type: early
         # heartbeats legitimately lack it until the fact lands.
         heartbeat = metering.heartbeat_with_dimensions(
-            uuid, {"instance_type": cli.default_instance_type}, timeout=HEARTBEAT_TIMEOUT
+            uuid,
+            {"instance_type": cli.default_instance_type},
+            timeout=HEARTBEAT_TIMEOUT,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
         )
         metering.verify_event(heartbeat, resource_id=uuid)
 
@@ -300,6 +312,8 @@ def test_metering_stop_ends_billing(
             retries=30,
             delay=10,
             description=f"{ci_name} VM stopped",
+            resource_kind=WaitResourceKind.VIRTUAL_MACHINE,
+            resource_id=ci_name,
         )
 
         # Anchor the final interval on the stop time fulfillment recorded, not on the
@@ -313,6 +327,8 @@ def test_metering_stop_ends_billing(
             retries=30,
             delay=5,
             description=f"{ci_name} instance STOPPED in fulfillment",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
         stopped_at = parse_time(instance["object"]["status"]["stateTransitionTime"])
 
@@ -331,6 +347,8 @@ def test_metering_stop_ends_billing(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"final partial-interval heartbeat of {uuid}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
         _, final_to, _ = usage_interval(final)
 
@@ -345,6 +363,8 @@ def test_metering_stop_ends_billing(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"net billing of {uuid} to end at the stop at {stopped_at}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
 
         # Past the final interval nothing more arrives: the meter stopped.
@@ -394,7 +414,12 @@ def test_metering_resize_splits_dimensions(
             cli, vm_template=vm_template, network_attachment=metering_network_attachment, project=metering_project
         )
         ci_name = _wait_for_running_vm(k8s_hub_client, uuid=uuid)
-        metering.heartbeat_with_dimensions(uuid, {"instance_type": old_type}, timeout=HEARTBEAT_TIMEOUT)
+        metering.heartbeat_with_dimensions(
+            uuid,
+            {"instance_type": old_type},
+            timeout=HEARTBEAT_TIMEOUT,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        )
 
         # Resize and restart, so the running instance type actually changes: the
         # billing dimension follows the type the VM runs, not the request.
@@ -408,6 +433,8 @@ def test_metering_resize_splits_dimensions(
             retries=60,
             delay=5,
             description=f"{ci_name} RestartRequired after resize",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=ci_name,
         )
         previous_restart = k8s_hub_client.get_compute_instance_last_restarted_at(name=ci_name)
         restart_requested = datetime.now(tz=UTC)
@@ -426,11 +453,15 @@ def test_metering_resize_splits_dimensions(
             retries=60,
             delay=5,
             description=f"{ci_name} RestartRequired cleared after restart",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=ci_name,
         )
         running_observed = datetime.now(tz=UTC)
 
         # The new meter starts: a heartbeat with the new dimension arrives.
-        metering.heartbeat_with_dimensions(uuid, {"instance_type": new_type})
+        metering.heartbeat_with_dimensions(
+            uuid, {"instance_type": new_type}, resource_kind=WaitResourceKind.COMPUTE_INSTANCE
+        )
 
         def split_intervals() -> tuple[list, list]:
             events = metering.get_all_events(HEARTBEAT_TYPE, uuid)
@@ -451,6 +482,8 @@ def test_metering_resize_splits_dimensions(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"old meter of {uuid} to end before the new meter starts",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
         assert old_intervals, "no heartbeat arrived on the old instance_type meter"
         assert new_intervals, "no heartbeat arrived on the new instance_type meter"
@@ -551,7 +584,10 @@ def test_metering_delete_ends_billing(
         # Anchor on a heartbeat that carries the running instance type: early
         # heartbeats legitimately lack it until the fact lands.
         heartbeat = metering.heartbeat_with_dimensions(
-            uuid, {"instance_type": cli.default_instance_type}, timeout=HEARTBEAT_TIMEOUT
+            uuid,
+            {"instance_type": cli.default_instance_type},
+            timeout=HEARTBEAT_TIMEOUT,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
         )
         metering.verify_event(heartbeat, resource_id=uuid)
         running_since, _, _ = usage_interval(heartbeat)
@@ -571,6 +607,8 @@ def test_metering_delete_ends_billing(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"final partial-interval heartbeat of {uuid}",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
         _, final_to, _ = usage_interval(final)
 
@@ -613,6 +651,8 @@ def test_metering_delete_ends_billing(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"net billing of {uuid} to end at the recorded deletion",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=uuid,
         )
 
         # Past the final interval nothing more arrives: the meter stopped.
@@ -621,3 +661,148 @@ def test_metering_delete_ends_billing(
         with contextlib.suppress(Exception):
             _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
         raise
+
+
+def _spec_billing_id(spec: dict[str, Any]) -> str | None:
+    """Read the billing id under the camelCase name grpcurl returns."""
+    value = spec.get("externalBillingId")
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
+def _tenant_object(private_grpc: GRPCClient, name: str) -> dict[str, Any]:
+    tenant_id = private_grpc.find_tenant_id(name=name)
+    assert tenant_id, f"private tenant {name} is missing"
+    return private_grpc.call(service=f"{PRIVATE_API}.Tenants/Get", data={"id": tenant_id})["object"]
+
+
+def _set_external_billing_id(
+    private_grpc: GRPCClient, tenant: dict[str, Any], billing_id: str | None
+) -> dict[str, Any]:
+    """Replace TenantSpec, preserving every field except the billing id.
+
+    Private Update replaces the whole spec: sending only the billing id would
+    clear domains and the break-glass secret reference.
+    """
+    spec = dict(tenant.get("spec") or {})
+    spec.pop("external_billing_id", None)
+    spec.pop("externalBillingId", None)
+    if billing_id is not None:
+        spec["externalBillingId"] = billing_id
+    return private_grpc.call(
+        service=f"{PRIVATE_API}.Tenants/Update",
+        data={"object": {"id": tenant["id"], "metadata": tenant.get("metadata") or {}, "spec": spec}},
+    )["object"]
+
+
+def _accounts_by_event_id(metering: MeteringCollector, resource_id: str) -> dict[str, str | None]:
+    return {
+        event["id"]: billing_account_id(event)
+        for event in metering.get_all_events(HEARTBEAT_TYPE, resource_id)
+        if event.get("id")
+    }
+
+
+def _wait_for_billing_account(
+    metering: MeteringCollector,
+    resource_id: str,
+    account: str | None,
+    *,
+    excluding: set[str],
+    timeout: int = HEARTBEAT_TIMEOUT,
+) -> dict[str, Any]:
+    """The first heartbeat of the resource whose billing account matches, skipping known ids."""
+
+    def find() -> dict[str, Any] | None:
+        for event in metering.get_all_events(HEARTBEAT_TYPE, resource_id):
+            event_id = event.get("id", "")
+            if event_id in excluding:
+                continue
+            if billing_account_id(event) == account:
+                return event
+        return None
+
+    return poll_until(
+        fn=find,
+        until=lambda event: event is not None,
+        retries=timeout // 10,
+        delay=10,
+        description=f"heartbeat of {resource_id} with external_billing_account_id={account!r}",
+        resource_kind=WaitResourceKind.HEARTBEAT,
+        resource_id=resource_id,
+    )
+
+
+@pytest.mark.metering
+def test_metering_external_billing_account_on_heartbeats(
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    private_grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    vm_template: str,
+    metering_network_attachment: dict[str, object],
+    metering: MeteringCollector,
+    metering_project: str,
+    jwt_tenant: str,
+) -> None:
+    """Heartbeats on the tenant topic carry the private tenant billing id.
+
+    The JWT tenant is already onboarded, so the test sets the field through
+    private Tenants/Update with a full spec replacement: that is the same
+    document Create writes. Three paths from the design test plan:
+
+    - omit: a tenant without the field publishes heartbeats that omit the key
+    - present: setting the field makes later heartbeats carry it
+    - change: a further change shows on later heartbeats; earlier ones stay
+    """
+    original = _tenant_object(private_grpc, jwt_tenant)
+    uuid: str | None = None
+    ci_name: str | None = None
+    try:
+        _set_external_billing_id(private_grpc, original, None)
+        uuid = _create_vm(
+            cli, vm_template=vm_template, network_attachment=metering_network_attachment, project=metering_project
+        )
+        ci_name = _wait_for_running_vm(k8s_hub_client, uuid=uuid)
+        omitted = metering.heartbeat_with_dimensions(
+            uuid,
+            {"instance_type": cli.default_instance_type},
+            timeout=HEARTBEAT_TIMEOUT,
+            resource_kind=WaitResourceKind.HEARTBEAT,
+        )
+        metering.verify_event(omitted, resource_id=uuid)
+        assert billing_account_id(omitted) is None, (
+            f"heartbeat named billing account {billing_account_id(omitted)!r} before the tenant had one"
+        )
+
+        seen = _accounts_by_event_id(metering, uuid)
+        first_id = "acct-e2e-1"
+        current = _tenant_object(private_grpc, jwt_tenant)
+        _set_external_billing_id(private_grpc, current, first_id)
+        stored = _spec_billing_id(_tenant_object(private_grpc, jwt_tenant).get("spec") or {})
+        assert stored == first_id, f"private Get returned billing id {stored!r}, want {first_id!r}"
+        present = _wait_for_billing_account(metering, uuid, first_id, excluding=set(seen))
+        metering.verify_event(present, resource_id=uuid)
+        assert billing_account_id(present) == first_id
+
+        published = _accounts_by_event_id(metering, uuid)
+        second_id = "acct-e2e-2"
+        current = _tenant_object(private_grpc, jwt_tenant)
+        _set_external_billing_id(private_grpc, current, second_id)
+        changed = _wait_for_billing_account(metering, uuid, second_id, excluding=set(published))
+        metering.verify_event(changed, resource_id=uuid)
+        assert billing_account_id(changed) == second_id
+
+        still = _accounts_by_event_id(metering, uuid)
+        for event_id, account in published.items():
+            assert still.get(event_id) == account, (
+                f"heartbeat {event_id} changed from {account!r} to {still.get(event_id)!r} "
+                "after the tenant billing id was updated"
+            )
+    finally:
+        try:
+            _set_external_billing_id(private_grpc, original, _spec_billing_id(original.get("spec") or {}))
+        finally:
+            if uuid is not None:
+                _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)

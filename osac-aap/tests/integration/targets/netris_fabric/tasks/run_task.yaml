@@ -11,6 +11,7 @@
 #   nf_env       optional settings overriding nf_settings (the role treats an
 #                empty value as an unset setting)
 #   nf_no_requests  optional: true asserts that the task sent no request to Netris
+#   nf_playbook  optional playbook instead of the generic one (a wrapper of it)
 # Output: sft_last (parse_job.yaml), nf_state (the fake's state), nf_calls
 #   (every request of this run), nf_writes (POST/PUT/DELETE of this run as
 #   "METHOD /path" strings, login excluded), nf_write_kinds (the same without
@@ -32,7 +33,7 @@
       - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
       - -i
       - inventory/localhost.yml   # the AAP inventory: localhost with a local connection
-      - playbook_osac_network_task.yml
+      - "{{ nf_playbook | default('playbook_osac_network_task.yml') }}"
       - -e
       - "@{{ nf.root }}/{{ sft_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
     chdir: "{{ nf.repo }}"

@@ -17,6 +17,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until, run_unchecked
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.sanity
 
@@ -129,6 +130,8 @@ def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient, k8s_hub_clie
         retries=30,
         delay=2,
         description=f"Subnet {subnet_id} Fulfillment deletion",
+        resource_kind=WaitResourceKind.SUBNET,
+        resource_id=subnet_id,
     )
     jwt_grpc_tenant1.delete_virtual_network(vn_id=vn_id)
     wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)

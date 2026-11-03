@@ -859,14 +859,27 @@ jobs:
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: main
       test-ref: ${{ needs.prepare.outputs.temp-branch }}
-      # This pipeline only runs via schedule/workflow_dispatch against
-      # main, same safe WIF context as the regular e2e-*-full-install.yml
-      # callers' own enable-ai-diagnostic gating -- see that input's
-      # description in osac-test-infra for the full reasoning. Without
-      # this, a failed e2e run only gets a generic failure Slack ping (see
-      # notify-failure below) with no diagnosis; workflow_run-based Phase 2
-      # doesn't cover this pipeline either, since it tracks a top-level
-      # caller workflow's own name, not this reusable workflow.
+      # This pipeline itself can run from any ref: nightly-build.yaml's
+      # schedule trigger always targets main, but osac-release.yaml can
+      # be dispatched against any selected branch or tag. Only
+      # enable-ai-diagnostic's own condition below is deliberately
+      # restricted to main -- the same safe WIF context as the regular
+      # e2e-*-full-install.yml callers' own enable-ai-diagnostic gating,
+      # see that input's description in osac-test-infra for the full
+      # reasoning. Without this, a failed e2e run only gets a generic
+      # failure Slack ping (see notify-failure below) with no diagnosis;
+      # workflow_run-based Phase 2 doesn't cover this pipeline either,
+      # since it tracks a top-level caller workflow's own name, not this
+      # reusable workflow.
+      #
+      # Deliberately still main-only, NOT extended to release-* branches:
+      # osac-test-infra's vertex-ai-auth action's WIF trust policy is
+      # itself scoped to main only (confirmed directly against that
+      # action's own module comment) -- enabling this for a release
+      # branch would attempt an OIDC token exchange the GCP trust policy
+      # rejects, failing the diagnosis step instead of just skipping it.
+      # Extend WIF trust to release-* refs first if this is ever needed
+      # for release-branch E2E failures.
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
 
   e2e-caas-test:
@@ -2638,6 +2651,8 @@ jobs:
     timeout-minutes: 230
     permissions:
       contents: read
+    outputs:
+      snapshot-name: ${{ steps.release.outputs.snapshot-name }}
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
 
@@ -2676,6 +2691,7 @@ jobs:
     # deliberately never touched by this job -- no ReleasePlan exists for
     # cloud-extensions-prod yet, by design.
     - name: Assemble override Snapshot and create staging Release
+      id: release
       env:
         RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
@@ -2934,6 +2950,16 @@ jobs:
         if not released:
             print(f"::error::Konflux staging release failed after {MAX_RELEASE_ATTEMPTS} attempts: {resource_name}")
             sys.exit(1)
+
+        # Exposed as a job output (not recomputed from github.run_attempt
+        # downstream) because a "re-run failed jobs" attempt only re-runs
+        # failed jobs and their dependents -- a downstream job that reruns
+        # would see a different github.run_attempt than the one THIS job
+        # actually used to compute resource_name, if this job itself
+        # didn't need to re-run. The real value computed here is the only
+        # one guaranteed to match the Snapshot that actually exists.
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            print(f"snapshot-name={resource_name}", file=f)
         PYEOF
 
   # -------------------------------------------------------------------
@@ -3274,6 +3300,7 @@ jobs:
     # actual release step outcome so Slack cannot announce false success.
     outputs:
       release-outcome: ${{ steps.release.outcome }}
+      snapshot-name: ${{ steps.release.outputs.snapshot-name }}
     needs: [prepare, tag, wait-for-konflux-chart-build]
     if: |
       always() && !cancelled() && inputs.mode == 'release' &&
@@ -3529,6 +3556,12 @@ jobs:
         if not released:
             print(f"::error::Konflux chart staging release failed after {MAX_RELEASE_ATTEMPTS} attempts: {resource_name}")
             sys.exit(1)
+
+        # See trigger-konflux-staging-release's identical comment on why
+        # this is exposed as a job output rather than recomputed from
+        # github.run_attempt downstream.
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            print(f"snapshot-name={resource_name}", file=f)
         PYEOF
 
   # Report Konflux only after all image/chart jobs finish, including failures
@@ -3569,6 +3602,14 @@ jobs:
         SKIPPED_TESTS: ${{ needs.notify-release.outputs.skipped-tests }}
         IMAGE_BUILDS: ${{ needs.wait-for-konflux-build.result }}
         IMAGE_RELEASE: ${{ needs.trigger-konflux-staging-release.result }}
+        # Read directly from the jobs that actually computed/used these
+        # names, not recomputed from this job's own github.run_attempt:
+        # a "re-run failed jobs" attempt only re-runs failed jobs and
+        # their dependents, so this job could see a different run_attempt
+        # than the one trigger-konflux-staging-release/-chart actually
+        # used, if those jobs themselves didn't need to re-run.
+        IMAGE_SNAPSHOT: ${{ needs.trigger-konflux-staging-release.outputs.snapshot-name }}
+        CHART_SNAPSHOT: ${{ needs.trigger-konflux-chart-staging-release.outputs.snapshot-name }}
         CHART_TAG_PUSHED: ${{ needs.stamp-and-release-charts.outputs.tag-pushed }}
         CHART_RELEASE: ${{ needs.trigger-konflux-chart-staging-release.outputs.release-outcome || 'not completed' }}
         WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -3592,6 +3633,8 @@ jobs:
           --arg image_release "${IMAGE_RELEASE}" \
           --arg chart_tag "${CHART_TAG_PUSHED:-false}" \
           --arg chart_release "${CHART_RELEASE}" \
+          --arg image_snapshot "${IMAGE_SNAPSHOT}" \
+          --arg chart_snapshot "${CHART_SNAPSHOT}" \
           --arg workflow_url "${WORKFLOW_URL}" \
           '{blocks: [
             {type: "header", text: {type: "plain_text", text: $header}},
@@ -3600,7 +3643,9 @@ jobs:
               "*Konflux image builds:* " + $image_builds + "\n" +
               "*Konflux image staging:* " + $image_release + "\n" +
               "*Konflux chart build tag pushed:* " + $chart_tag + "\n" +
-              "*Konflux chart staging:* " + $chart_release
+              "*Konflux chart staging:* " + $chart_release + "\n" +
+              "*Image Snapshot (for prod promotion):* `" + $image_snapshot + "`\n" +
+              "*Chart Snapshot (for prod promotion):* `" + $chart_snapshot + "`"
             )}},
             {type: "actions", elements: [
               {type: "button", text: {type: "plain_text", text: "View Run"}, url: $workflow_url}

@@ -17,9 +17,29 @@ description: Install Python, uv, and ruff
 runs:
   using: composite
   steps:
-  - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
-    with:
-      python-version: '3.14'
   - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+  - shell: bash
+    # actions/setup-python's version manifest only ships 3.14 builds
+    # tagged for the "rhel" platform label, not "centos" -- a self-hosted
+    # osac-ci runner that reports itself as CentOS can't match either
+    # label, even though the binaries are compatible, and fails outright
+    # ("version not found"). uv's own Python builds are portable
+    # (python-build-standalone), so they install identically regardless
+    # of the runner's distro label.
+    #
+    # A bare `uv python install` isn't enough on its own: uv marks its
+    # managed interpreters PEP 668 "externally managed", so a caller that
+    # does a plain `pip install <tool>` internally (e.g. pre-commit/
+    # action's own `python -m pip install pre-commit` step) fails outright
+    # with "externally-managed-environment" -- confirmed live, this broke
+    # the pre-commit CI job the first time this fix landed. A real venv
+    # (never externally managed) with pip seeded via --seed fixes that for
+    # every caller uniformly, while still giving a bare `python`/`python3`
+    # on PATH the same as actions/setup-python did.
+    run: |
+      uv python install 3.14
+      uv venv --python 3.14 --seed "$HOME/.setup-python-venv"
+      echo "$HOME/.setup-python-venv/bin" >> "$GITHUB_PATH"
+      echo "$HOME/.local/bin" >> "$GITHUB_PATH"
   - shell: bash
     run: uv tool install ruff==0.15.16

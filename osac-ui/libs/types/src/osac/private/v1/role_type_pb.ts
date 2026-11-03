@@ -36,7 +36,7 @@ export const file_osac_private_v1_role_type: GenFile = /*@__PURE__*/
  * groups to control what actions the members of those groups can perform. Roles themselves do not carry any data
  * beyond their identity and metadata; the actual permissions are determined by the system based on the role name.
  *
- * Examples of predefined roles include `cloud-provider-admin`, `tenant-admin`, and `tenant-reader`.
+ * Predefined roles include `cloud-provider-admin`, `cloud-provider-reader`, `tenant-idp-manager`, `tenant-admin`, and `tenant-reader`.
  *
  * @generated from message osac.private.v1.Role
  */
@@ -85,7 +85,7 @@ export const RoleSchema: GenMessage<Role> = /*@__PURE__*/
 export type RoleSpec = Message<"osac.private.v1.RoleSpec"> & {
   /**
    * Human-friendly short description of the role, only a few words, suitable for displaying in one single line on
-   * a UI or CLI. For example: "Cloud Provider Administrator" or "Tenant Reader".
+   * a UI or CLI. For example: "Cloud Provider Administrator" or "Tenant Administrator".
    *
    * @generated from field: string title = 1;
    */

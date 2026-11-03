@@ -442,8 +442,10 @@ the `osac` and `osac-devstack` releases plus `scripts/dev-full/`:
   its default VirtualNetwork + Subnet + SecurityGroup via tenant onboarding, so those are
   ready without manual seeding.
 
-The Kind profiles set `global.networking.provisioningEnabled: false`, so
-networking resources reconcile to READY without a real fabric (Kind has none).
+The standard Kind profile sets `global.networking.provisioningEnabled: false`,
+so networking resources reconcile to READY without a real fabric. The `dev-full`
+profile enables provisioning so AAP can create each tenant's target namespace;
+Kind's CUDN API placeholder accepts those objects without an OVN dataplane.
 
 **Prerequisites** (beyond the base tools) — enforced by `scripts/dev-full/kind-runtime.sh check`:
 

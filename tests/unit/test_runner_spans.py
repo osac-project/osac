@@ -10,6 +10,7 @@ import subprocess
 import pytest
 
 from tests.e2e.core import runner
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
 def test_poll_without_opentelemetry_waits_and_returns(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -18,7 +19,13 @@ def test_poll_without_opentelemetry_waits_and_returns(monkeypatch: pytest.Monkey
 
     assert (
         runner.poll_until(
-            fn=lambda: next(values), until=lambda value: value == "ready", retries=3, delay=0, description="no otel"
+            fn=lambda: next(values),
+            until=lambda value: value == "ready",
+            retries=3,
+            delay=0,
+            description="no otel",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="ci-1",
         )
         == "ready"
     )
@@ -28,7 +35,34 @@ def test_poll_without_opentelemetry_still_raises_on_timeout(monkeypatch: pytest.
     monkeypatch.setattr(runner, "_otel_trace", None)
 
     with pytest.raises(TimeoutError, match="not reached after"):
-        runner.poll_until(fn=lambda: "pending", until=lambda _: False, retries=1, delay=0, description="no otel")
+        runner.poll_until(
+            fn=lambda: "pending",
+            until=lambda _: False,
+            retries=1,
+            delay=0,
+            description="no otel",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="ci-1",
+        )
+
+
+def test_poll_without_opentelemetry_with_resource_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resource identity is a span attribute only: without telemetry the poll is unchanged."""
+    monkeypatch.setattr(runner, "_otel_trace", None)
+    values = iter(["pending", "ready"])
+
+    assert (
+        runner.poll_until(
+            fn=lambda: next(values),
+            until=lambda value: value == "ready",
+            retries=3,
+            delay=0,
+            description="no otel",
+            resource_kind=WaitResourceKind.SUBNET,
+            resource_id="subnet-7",
+        )
+        == "ready"
+    )
 
 
 def test_poll_without_a_tracer_provider(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,10 +74,70 @@ def test_poll_without_a_tracer_provider(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert (
         runner.poll_until(
-            fn=lambda: "ready", until=lambda value: value == "ready", retries=2, delay=0, description="no provider"
+            fn=lambda: "ready",
+            until=lambda value: value == "ready",
+            retries=2,
+            delay=0,
+            description="no provider",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="ci-1",
         )
         == "ready"
     )
+
+
+def test_poll_accepts_enum_member(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The kind must be a WaitResourceKind member."""
+    monkeypatch.setattr(runner, "_otel_trace", None)
+
+    assert (
+        runner.poll_until(
+            fn=lambda: "ready",
+            until=lambda value: value == "ready",
+            retries=1,
+            delay=0,
+            description="kind acceptance",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id="bmi-1",
+        )
+        == "ready"
+    )
+
+
+@pytest.mark.parametrize(
+    "kind", ["ComputeInstence", str(WaitResourceKind.BARE_METAL_INSTANCE)], ids=["unknown-string", "equal-value-string"]
+)
+def test_poll_rejects_non_enum_kind(kind: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A kind must be an enum member, even when a string has a valid value."""
+    monkeypatch.setattr(runner, "_otel_trace", None)
+
+    with pytest.raises(ValueError, match=r"unknown resource_kind.*ComputeInstance"):
+        runner.poll_until(
+            fn=lambda: "ready",
+            until=lambda value: value == "ready",
+            retries=1,
+            delay=0,
+            description="bad kind",
+            resource_kind=kind,
+            resource_id="ci-1",
+        )
+
+
+@pytest.mark.parametrize("resource_id", ["", "   ", None], ids=["empty", "whitespace", "none"])
+def test_poll_rejects_empty_resource_id(resource_id: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An id that names nothing fails fast instead of emitting an empty attribute."""
+    monkeypatch.setattr(runner, "_otel_trace", None)
+
+    with pytest.raises(ValueError, match="non-empty resource_id"):
+        runner.poll_until(
+            fn=lambda: "ready",
+            until=lambda value: value == "ready",
+            retries=1,
+            delay=0,
+            description="bad id",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=resource_id,  # type: ignore[arg-type]
+        )
 
 
 @pytest.fixture(scope="module")
@@ -92,6 +186,8 @@ def test_wait_span_named_after_description_with_outcome(exporter: object, monkey
         retries=3,
         delay=5,
         description="BareMetalInstance to become Running",
+        resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+        resource_id="bmi-42",
     )
 
     spans = wait_spans(exporter, "BareMetalInstance to become Running")
@@ -104,6 +200,95 @@ def test_wait_span_named_after_description_with_outcome(exporter: object, monkey
     assert span.attributes["poll.condition_met"] is True
 
 
+def test_wait_span_carries_resource_identity(exporter: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+    values = iter(["pending", "ready"])
+
+    runner.poll_until(
+        fn=lambda: next(values),
+        until=lambda value: value == "ready",
+        retries=3,
+        delay=5,
+        description="BareMetalInstance bmi-42 to become Ready",
+        resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+        resource_id="bmi-42",
+    )
+
+    span = wait_spans(exporter, "BareMetalInstance bmi-42 to become Ready")[0]
+    assert span.attributes["osac.wait.resource_kind"] == "BareMetalInstance"
+    assert span.attributes["osac.wait.resource_id"] == "bmi-42"
+
+
+def test_wait_span_classifies_itself_as_wait(exporter: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The wait span self-identifies, so service-call panels can exclude it.
+
+    Dashboards count a span as a service call when ``pytest.span_type`` is
+    unset (pytest-opentelemetry types its own spans "test"/"fixture"/"run").
+    A wait span sets the attribute to "wait" at creation, next to its usual
+    wait attributes, which stay unchanged.
+    """
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+    values = iter(["pending", "ready"])
+
+    assert (
+        runner.poll_until(
+            fn=lambda: next(values),
+            until=lambda value: value == "ready",
+            retries=3,
+            delay=5,
+            description="Subnet subnet-7 to become Ready",
+            resource_kind=WaitResourceKind.SUBNET,
+            resource_id="subnet-7",
+        )
+        == "ready"
+    )
+
+    span = wait_spans(exporter, "Subnet subnet-7 to become Ready")[0]
+    assert span.attributes["pytest.span_type"] == "wait"
+    assert span.attributes["poll.delay"] == 5
+    assert span.attributes["poll.retries"] == 3
+    assert span.attributes["poll.attempts"] == 2
+    assert span.attributes["poll.condition_met"] is True
+    assert span.attributes["osac.wait.resource_kind"] == "Subnet"
+    assert span.attributes["osac.wait.resource_id"] == "subnet-7"
+
+
+def test_timed_out_wait_span_classifies_itself_as_wait(exporter: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A timed-out wait keeps the classification and still raises StuckState."""
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(TimeoutError, match="not reached after"):
+        runner.poll_until(
+            fn=lambda: "pending",
+            until=lambda _: False,
+            retries=2,
+            delay=5,
+            description="Volume vol-9 to become Ready",
+            resource_kind=WaitResourceKind.VOLUME,
+            resource_id="vol-9",
+        )
+
+    span = wait_spans(exporter, "Volume vol-9 to become Ready")[0]
+    assert span.attributes["pytest.span_type"] == "wait"
+    assert span.attributes["poll.attempts"] == 2
+    assert span.attributes["poll.condition_met"] is False
+
+
+def test_no_op_wait_span_stays_inert(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without OpenTelemetry the wait span absorbs writes and stores nothing."""
+    monkeypatch.setattr(runner, "_otel_trace", None)
+
+    with runner._wait_span(
+        "no otel wait", delay=5, retries=3, resource_kind=WaitResourceKind.SUBNET, resource_id="subnet-7"
+    ) as span:
+        span.set_attribute("pytest.span_type", "wait")
+        span.set_attribute("poll.delay", 5)
+        span.set_status(object())
+
+    assert span is runner._NO_OP_WAIT_SPAN
+    assert vars(span) == {}
+
+
 def test_wait_span_timeout_sets_error_status_and_raises(exporter: object, monkeypatch: pytest.MonkeyPatch) -> None:
     from opentelemetry.trace import StatusCode
 
@@ -111,7 +296,13 @@ def test_wait_span_timeout_sets_error_status_and_raises(exporter: object, monkey
 
     with pytest.raises(TimeoutError, match="not reached after"):
         runner.poll_until(
-            fn=lambda: "pending", until=lambda _: False, retries=2, delay=5, description="ClusterOrder to become Ready"
+            fn=lambda: "pending",
+            until=lambda _: False,
+            retries=2,
+            delay=5,
+            description="ClusterOrder to become Ready",
+            resource_kind=WaitResourceKind.CLUSTER_ORDER,
+            resource_id="order-7",
         )
 
     spans = wait_spans(exporter, "ClusterOrder to become Ready")
@@ -128,7 +319,13 @@ def test_wait_span_nests_under_the_current_span(exporter: object, monkeypatch: p
 
     with otel_trace.get_tracer("test").start_as_current_span("test call") as call_span:
         runner.poll_until(
-            fn=lambda: "ready", until=lambda value: value == "ready", retries=2, delay=0, description="nested wait"
+            fn=lambda: "ready",
+            until=lambda value: value == "ready",
+            retries=2,
+            delay=0,
+            description="nested wait",
+            resource_kind=WaitResourceKind.SUBNET,
+            resource_id="subnet-7",
         )
 
     spans = wait_spans(exporter, "nested wait")
@@ -157,11 +354,20 @@ def test_wait_span_records_no_exception_and_no_command_on_escaping_error(
         )
 
     with pytest.raises(subprocess.CalledProcessError):
-        runner.poll_until(fn=fail, until=lambda _: True, retries=2, delay=0, description="flaky grpcurl call")
+        runner.poll_until(
+            fn=fail,
+            until=lambda _: True,
+            retries=2,
+            delay=0,
+            description="flaky grpcurl call",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="ci-1",
+        )
 
     spans = wait_spans(exporter, "flaky grpcurl call")
     assert len(spans) == 1
     span = spans[0]
+    assert span.attributes["pytest.span_type"] == "wait"
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description == "poll failed"
     assert span.events == ()

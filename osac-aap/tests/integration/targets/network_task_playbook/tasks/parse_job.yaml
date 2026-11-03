@@ -12,7 +12,8 @@
 # Output: sft_last {rc, stats, result, error, output}.
 - name: "Parse the job output - {{ sft_label }}"
   vars:
-    _sft_doc: "{{ sft_raw.stdout | from_json if sft_raw.stdout is match('^\\s*\\{') else {} }}"
+    # ansible.builtin.pause prints its prompt before the JSON of the callback.
+    _sft_doc: "{{ (sft_raw.stdout | regex_replace('^[^{]*', '')) | from_json if '{' in sft_raw.stdout else {} }}"
   ansible.builtin.set_fact:
     sft_last:
       rc: "{{ sft_raw.rc | int }}"
@@ -81,3 +82,18 @@
     that: sft_last.error.message is search(sft_message_search)
     fail_msg: "{{ sft_label }}: osac_error.message '{{ sft_last.error.message }}' does not match '{{ sft_message_search }}'"
     quiet: true
+
+# With task coverage on, record that this osac_error was asserted, for the
+# fail paths of tests/coverage/role_coverage.py.
+- name: "Record the asserted error - {{ sft_label }}"
+  vars:
+    _sft_coverage_dir: "{{ lookup('ansible.builtin.env', 'OSAC_TASK_COVERAGE_DIR') }}"
+  when:
+    - sft_expect != 'success'
+    - _sft_coverage_dir | length > 0
+  ansible.builtin.copy:
+    dest: "{{ _sft_coverage_dir }}/asserted-{{ sft_label | to_uuid }}-{{ 99999999 | random }}.json"
+    mode: "0600"
+    content: >-
+      {{ {'label': sft_label, 'message': sft_last.error.message, 'retryable': sft_last.error.retryable,
+          'message_checked': (sft_message is defined) or ((sft_message_search | default('')) | length > 0)} | to_json }}

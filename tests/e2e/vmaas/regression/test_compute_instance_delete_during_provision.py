@@ -10,6 +10,7 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.regression
 
@@ -29,6 +30,8 @@ def _wait_for_provision_termination(k8s: K8sClient, *, name: str) -> None:
         retries=60,
         delay=1,
         description=f"provision termination for {name}",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=name,
     )
 
 
@@ -39,6 +42,8 @@ def _wait_for_deprovision_completion(k8s: K8sClient, *, name: str) -> str:
         retries=120,
         delay=1,
         description=f"deprovision completion for {name}",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=name,
     )
     assert result != "Failed", f"Deprovision job failed for {name}"
     return result
@@ -77,6 +82,8 @@ def test_compute_instance_delete_during_provision(
         retries=30,
         delay=2,
         description=f"{ci_name} Starting",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=ci_name,
     )
     deprov_job_id: str = k8s_hub_client.get_compute_instance_latest_job_id(
         name=ci_name, job_type="deprovision", checked=False

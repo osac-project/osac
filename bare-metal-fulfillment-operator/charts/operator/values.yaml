@@ -1,3 +1,8 @@
+global:
+  networking:
+    # Shared provider-networking setting, independent of service/controller enablement.
+    provisioningEnabled: true
+
 fullnameOverride: "bmf-operator"
 
 image:
@@ -35,14 +40,16 @@ env:
   aapTokenSecretName: "osac-aap-api-token"
   aapTokenSecretKey: "token"
   aapInsecureSkipVerify: ""
-  enableNetworkingProvisioning: "false"
 
 secretAPI:
   url: "https://fulfillment-internal-api:8001"
   # Must match the OIDC issuer configured for the Fulfillment Service.
   issuerUrl: ""
   caBundle:
-    configMap: "ca-bundle"
+    # Fresh installs using system-trusted certificates can leave this empty.
+    # Standalone upgrades that relied on the former "ca-bundle" default must
+    # set the existing ConfigMap here before rollout.
+    configMap: ""
     key: "bundle.pem"
 
 netbox:

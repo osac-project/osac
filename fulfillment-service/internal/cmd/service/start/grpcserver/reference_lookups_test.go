@@ -74,6 +74,15 @@ var _ = Describe("RegisterReferenceLookups", func() {
 			strings.Join(missing, "\n  "))
 	})
 
+	It("leaves RoleBinding service-account references for handler validation", func() {
+		for _, name := range []protoreflect.FullName{
+			"osac.private.v1.ServiceAccountReference",
+			"osac.public.v1.ServiceAccountReference",
+		} {
+			Expect(isHandlerOwnedReferenceType(name)).To(BeTrue(), "unexpected generic lookup for %s", name)
+		}
+	})
+
 	It("discovers reference types through direct and nested map values", func() {
 		file := protodesc.ToFileDescriptorProto(testsv1.File_osac_tests_v1_reference_test_types_proto)
 		for _, message := range file.GetMessageType() {
@@ -213,6 +222,44 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Entry("private create default", "private", "Create", "editable"),
 		Entry("public update default", "public", "Update", "editable"),
 		Entry("private update default", "private", "Update", "editable"),
+	)
+
+	DescribeTable("leaves BMI ssh_key references for the project-scoped handler to resolve",
+		func(layer, method string) {
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			v, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+			Expect(err).ToNot(HaveOccurred())
+
+			prefix := "osac." + layer + ".v1."
+			requestType, err := protoregistry.GlobalTypes.FindMessageByName(
+				protoreflect.FullName(prefix + "BareMetalInstances" + method + "Request"))
+			Expect(err).ToNot(HaveOccurred())
+			request := requestType.New().Interface()
+			body := `{"object":{"spec":{"sshKey":{"name":"unresolved-key","project":"wherever"}}}}`
+			if method == "Update" {
+				body = `{"object":{"id":"bmi-id","spec":{"sshKey":{"name":"unresolved-key","project":"wherever"}}},"updateMask":"spec.sshKey"}`
+			}
+			Expect(protojson.Unmarshal([]byte(body), request)).To(Succeed())
+			original := proto.Clone(request)
+
+			called := false
+			_, err = v.UnaryServer(ctx, request, &grpc.UnaryServerInfo{
+				FullMethod: "/" + prefix + "BareMetalInstances/" + method,
+			}, func(_ context.Context, actual any) (any, error) {
+				called = true
+				Expect(proto.Equal(actual.(proto.Message), original)).To(BeTrue(),
+					"interceptor must not resolve or mutate spec.ssh_key")
+				return "ok", nil
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(called).To(BeTrue(), "ssh_key must reach the handler for project-scoped resolution")
+		},
+		Entry("public create", "public", "Create"),
+		Entry("private create", "private", "Create"),
+		Entry("public update", "public", "Update"),
+		Entry("private update", "private", "Update"),
 	)
 
 	It("leaves BMI Create network references for the tenant-scoped handler to resolve", func() {
@@ -376,6 +423,37 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Expect(called).To(BeTrue())
 	})
 
+	It("leaves RoleBinding service-account references for handler validation", func() {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+		Expect(err).ToNot(HaveOccurred())
+		v, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+		Expect(err).ToNot(HaveOccurred())
+
+		methods := []struct {
+			fullMethod string
+			request    protoreflect.FullName
+		}{
+			{publicv1.RoleBindings_Create_FullMethodName, "osac.public.v1.RoleBindingsCreateRequest"},
+			{publicv1.RoleBindings_Update_FullMethodName, "osac.public.v1.RoleBindingsUpdateRequest"},
+			{privatev1.RoleBindings_Create_FullMethodName, "osac.private.v1.RoleBindingsCreateRequest"},
+			{privatev1.RoleBindings_Update_FullMethodName, "osac.private.v1.RoleBindingsUpdateRequest"},
+		}
+		for _, method := range methods {
+			requestType, err := protoregistry.GlobalTypes.FindMessageByName(method.request)
+			Expect(err).ToNot(HaveOccurred())
+			request := requestType.New().Interface()
+			const requestJSON = `{"object":{"spec":{"serviceAccounts":[{"id":"service-account-id"}]}}}`
+			Expect(protojson.Unmarshal([]byte(requestJSON), request)).To(Succeed())
+
+			called := false
+			_, err = v.UnaryServer(context.Background(), request,
+				&grpc.UnaryServerInfo{FullMethod: method.fullMethod},
+				func(context.Context, any) (any, error) { called = true; return nil, nil })
+			Expect(err).ToNot(HaveOccurred(), method.fullMethod)
+			Expect(called).To(BeTrue(), method.fullMethod)
+		}
+	})
 })
 
 type referenceUse struct {
@@ -396,6 +474,9 @@ func isHandlerOwnedReferenceUse(use referenceUse) bool {
 		if slices.Contains(computeInstanceSSHKeyMethods(), use.method) && use.path == "object.spec.ssh_key" {
 			return true
 		}
+		if slices.Contains(bareMetalInstanceSSHKeyMethods(), use.method) && use.path == "object.spec.ssh_key" {
+			return true
+		}
 		return slices.Contains(catalogAuthoringMethods(), use.method) &&
 			(use.path == "object.fields" || strings.HasPrefix(use.path, "object.fields."))
 	default:
@@ -405,7 +486,9 @@ func isHandlerOwnedReferenceUse(use referenceUse) bool {
 
 func isHandlerOwnedReferenceType(name protoreflect.FullName) bool {
 	return name == "osac.private.v1.AddOnOperatorReference" ||
-		name == "osac.public.v1.AddOnOperatorReference"
+		name == "osac.public.v1.AddOnOperatorReference" ||
+		name == "osac.private.v1.ServiceAccountReference" ||
+		name == "osac.public.v1.ServiceAccountReference"
 }
 
 func newTestReferenceValidator() *references.ReferenceValidator {

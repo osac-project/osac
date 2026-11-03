@@ -33,7 +33,7 @@
     hosted_cluster_node_count: >-
       {{ cluster_order.spec.nodeRequests | map(attribute="numberOfNodes") | sum }}
 
-- name: Step - Remove port forwarding
+- name: Step - Remove external access
   ansible.builtin.include_role:
     name: "{{ (delete_step_external_access_override | default(delete_step_external_access_default)).name }}"
     tasks_from: "{{ (delete_step_external_access_override | default(delete_step_external_access_default)).tasks_from }}"

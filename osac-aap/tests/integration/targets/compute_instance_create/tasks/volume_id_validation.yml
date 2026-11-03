@@ -1,0 +1,75 @@
+---
+- name: Reject ComputeInstance disks without Volume IDs
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Reject a missing boot disk Volume ID
+      block:
+        - name: Attempt resource creation without a boot disk Volume ID
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_resources.yaml
+          vars:
+            vm_disk_volume_ids: {}
+            vm_additional_disks: []
+
+        - name: Fail if a missing boot disk Volume ID was accepted
+          ansible.builtin.fail:
+            msg: Resource creation accepted a missing boot disk Volume ID
+      rescue:
+        - name: Confirm the boot disk guard rejected the request
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require boot disk Volume ID'
+              - "'boot' in ansible_failed_result.msg"
+
+    - name: Reject a missing later additional disk Volume ID
+      block:
+        - name: Attempt resource creation without disk-2 Volume ID
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_resources.yaml
+          vars:
+            vm_disk_volume_ids:
+              boot: volume-boot
+              disk-1: volume-data-1
+            vm_additional_disks:
+              - sizeGiB: 10
+                storageTier: local
+              - sizeGiB: 20
+                storageTier: local
+
+        - name: Fail if a missing additional disk Volume ID was accepted
+          ansible.builtin.fail:
+            msg: Resource creation accepted a missing additional disk Volume ID
+      rescue:
+        - name: Confirm the disk-2 guard rejected the request
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require additional disk Volume IDs'
+              - "'disk-2' in (ansible_failed_result.results | map(attribute='msg') | join(' '))"
+
+    - name: Reject an empty additional disk Volume ID
+      block:
+        - name: Attempt resource creation with an empty disk-1 Volume ID
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_resources.yaml
+          vars:
+            vm_disk_volume_ids:
+              boot: volume-boot
+              disk-1: ''
+            vm_additional_disks:
+              - sizeGiB: 10
+                storageTier: local
+
+        - name: Fail if an empty additional disk Volume ID was accepted
+          ansible.builtin.fail:
+            msg: Resource creation accepted an empty additional disk Volume ID
+      rescue:
+        - name: Confirm the empty disk-1 guard rejected the request
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require additional disk Volume IDs'
+              - "'disk-1' in (ansible_failed_result.results | map(attribute='msg') | join(' '))"

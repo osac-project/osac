@@ -126,11 +126,11 @@ class Tool:
 
 GOLANGCI_LINT = Tool(
     name="golangci-lint",
-    version="2.13.2",
+    version="2.15.0",
     github_repo="golangci/golangci-lint",
     version_pattern=r"^golangci-lint has version (?P<version>\S+) built",
     checksums={
-        "golangci-lint-{version}-checksums.txt": "b5830eaec7cf0accdbfe3a27cc372c4987f80a22db494a6bacee287bf4b03c3c",
+        "golangci-lint-{version}-checksums.txt": "364f56cb7ef4555e42bb1754b432b0f40bd914477d962c5888c8a8b5378ce8b6",
     },
 )
 

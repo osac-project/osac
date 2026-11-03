@@ -162,7 +162,7 @@ func (c *runnerContext) persistentPreRun(cmd *cobra.Command, args []string) erro
 			configDir, err,
 		)
 	}
-	err = os.MkdirAll(configDir, 0700)
+	err = os.MkdirAll(configDir, 0700) // #nosec G703 -- user-selected config dir, created with the CLI user's permissions
 	if errors.Is(err, os.ErrExist) {
 		err = nil
 	}
@@ -185,7 +185,7 @@ func (c *runnerContext) persistentPreRun(cmd *cobra.Command, args []string) erro
 			cacheDir, err,
 		)
 	}
-	err = os.MkdirAll(cacheDir, 0700)
+	err = os.MkdirAll(cacheDir, 0700) // #nosec G703 -- user-selected cache dir, created with the CLI user's permissions
 	if errors.Is(err, os.ErrExist) {
 		err = nil
 	}

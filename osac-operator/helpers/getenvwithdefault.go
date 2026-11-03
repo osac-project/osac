@@ -39,14 +39,14 @@ func GetEnvWithDefault[T any](name string, defaultValue T, validator ...func(T) 
 	}
 
 	if err != nil {
-		helperLog.Error(err, "conversion failed, using default", "envVar", name, "value", val, "default", defaultValue)
+		helperLog.Info("conversion failed, using default", "envVar", name, "default", defaultValue)
 		return defaultValue
 	}
 
 	if len(validator) > 0 {
 		for _, v := range validator {
 			if !v(result.(T)) {
-				helperLog.Info("validation failed, using default", "envVar", name, "value", val, "default", defaultValue)
+				helperLog.Info("validation failed, using default", "envVar", name, "default", defaultValue)
 				return defaultValue
 			}
 		}

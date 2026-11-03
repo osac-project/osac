@@ -37,3 +37,14 @@ verification in the plugin/UI tasks.
 ## Complex additions
 
 If the feature requires custom UI logic beyond proxying a Helm value (e.g., multi-step wizards, conditional fields, API calls), flag the UI task as needing design discussion — the schema-driven approach won't cover it.
+
+## Shared networking provisioning control (OSAC-5993)
+
+The umbrella schema defines `global.networking.provisioningEnabled` as a boolean
+with default `true`, producing a checkbox through the existing pipeline. It
+replaces the operator and BMF provisioning controls; old values are rejected
+with migration guidance. Verify plugin schema uptake and Wizard rendering,
+boolean validation and preservation of explicit `false` before declaring UI
+availability. Matching Helm values alone do not establish complete runtime
+disabled-mode behavior. See the
+[shared configuration guide](../../osac-installer/docs/network-backend.md#shared-provider-networking-provisioning-setting).

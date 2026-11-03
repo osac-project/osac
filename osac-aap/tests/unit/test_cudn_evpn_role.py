@@ -733,3 +733,75 @@ def test_creates_never_merge_into_an_object_that_appeared(task: str, step: str, 
     module = task_def["kubernetes.core.k8s"]
     assert module["state"] == "present" and module["apply"] is True
     assert module["server_side_apply"] == {"field_manager": manager, "force_conflicts": False}
+
+
+# ---------------------------------------------------------------------------
+# Inputs and objects no other case reaches
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", [5, "10.0.1.0", "fd00::/64", "10.0.1.1/24"])
+def test_a_subnet_cidr_that_is_not_canonical_ipv4_is_final(value) -> None:
+    subnet = snapshot("Subnet", SUBNET, {"ipv4Cidr": value})
+    assert error("create_subnet", resource=subnet)["message"].endswith("resource.spec.ipv4Cidr must be a canonical IPv4 CIDR")
+
+
+@pytest.mark.parametrize("value", [5, "nope", "fd00::1"])
+def test_a_gateway_that_is_not_an_ipv4_address_is_final(value) -> None:
+    message = error("create_subnet", ipam={**IPAM, "gateway_ipv4": value})["message"]
+    assert message.endswith("ipam.gateway_ipv4 must be a canonical IPv4 address")
+
+
+def test_an_ipam_range_outside_the_subnet_is_final() -> None:
+    message = error("create_subnet", ipam={**IPAM, "physical_ipv4_cidrs": ["192.0.2.0/24"]})["message"]
+    assert message.endswith("ipam.physical_ipv4_cidrs must be inside the Subnet CIDR")
+
+
+def test_a_subnet_outside_the_virtual_network_is_final() -> None:
+    subnet = snapshot("Subnet", SUBNET, {"ipv4Cidr": "192.0.2.0/24"})
+    assert error("create_subnet", resource=subnet)["message"].endswith("the Subnet CIDR must be inside the VirtualNetwork CIDR")
+
+
+def test_a_group_delete_plans_no_rules_and_no_manifest() -> None:
+    result = plan("delete_security_group")
+    assert result["policy_name"] == f"osac-sg-{SG}"
+    assert "rules" not in result and "policy_manifest" not in result
+
+
+def test_security_group_ids_must_be_a_list() -> None:
+    attachment = {"subnet": SUBNET, "interface": {"type": "overlay"}, "security_group_ids": SG}
+    message = error("apply_network_attachment", network_attachment=attachment)["message"]
+    assert message.endswith("network_attachment.security_group_ids must be a list")
+
+
+def owned_cudn() -> dict:
+    manifest = plan("create_subnet")["cudn_manifest"]
+    return copy.deepcopy({**manifest, "metadata": {**manifest["metadata"], "uid": "u1", "resourceVersion": "7"}})
+
+
+def test_a_network_field_of_the_wrong_shape_is_drift() -> None:
+    cudn = owned_cudn()
+    cudn["spec"]["network"]["evpn"] = "EVPN"
+    assert ce.cudn_evpn_cudn_assess(cudn, plan("create_subnet"))["drift"] == ["spec.network.evpn"]
+
+
+def test_a_lost_annotation_is_restored_by_a_metadata_patch() -> None:
+    cudn = owned_cudn()
+    del cudn["metadata"]["annotations"][ce.ANNOTATION_OWNER_REFERENCE]
+    assessed = ce.cudn_evpn_cudn_assess(cudn, plan("create_subnet"))
+    assert assessed["state"] == "owner"
+    assert assessed["metadata_patch"] == {"metadata": {"annotations": plan("create_subnet")["cudn_manifest"]["metadata"]["annotations"]}}
+    assert assessed["selector_patch"] is None
+
+
+def test_an_attachment_only_learns_who_owns_the_network() -> None:
+    attachment = plan("apply_network_attachment")
+    assessed = ce.cudn_evpn_cudn_assess(owned_cudn(), attachment)
+    assert assessed == {"state": "owner", "owner": SUBNET, "drift": [], "metadata_patch": None, "selector_patch": None}
+
+
+def test_the_filter_plugin_publishes_every_helper() -> None:
+    assert set(ce.FilterModule().filters()) == {
+        "cudn_evpn_plan", "cudn_evpn_vtep_state", "cudn_evpn_cudn_ready", "cudn_evpn_cudn_assess",
+        "cudn_evpn_owned", "cudn_evpn_rules_patch", "cudn_evpn_membership_patch",
+    }

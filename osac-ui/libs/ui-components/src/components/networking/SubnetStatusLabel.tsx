@@ -12,7 +12,6 @@ const SUBNET_STATUS_MAP: Record<SubnetState, { status: StatusKind; text: string 
   [SubnetState.READY]: { status: 'ready', text: 'Ready' },
   [SubnetState.FAILED]: { status: 'failed', text: 'Failed' },
   [SubnetState.DELETING]: { status: 'progressing', text: 'Deleting' },
-  [SubnetState.DELETE_FAILED]: { status: 'failed', text: 'Delete Failed' },
 };
 
 const resolveSubnetStatus = (state?: SubnetState): { status: StatusKind; text: string } => {

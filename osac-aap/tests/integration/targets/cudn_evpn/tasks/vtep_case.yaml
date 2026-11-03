@@ -1,0 +1,31 @@
+---
+# create_subnet of a new Subnet while the VTEP reports ce_vtep.conditions: the
+# claim of the hub network must wait, so no hub network is created.
+- name: "Set the VTEP status - {{ ce_vtep.label }}"
+  ansible.builtin.include_tasks: hub.yaml
+  vars:
+    ce_hub_steps:
+      - state: patched
+        def:
+          apiVersion: k8s.ovn.org/v1
+          kind: VTEP
+          metadata: {name: tenant-vtep}
+          status: {conditions: "{{ ce_vtep.conditions }}"}
+
+- name: "Fail create_subnet as retryable - {{ ce_vtep.label }}"
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    sft_label: "{{ ce_vtep.label }}"
+    sft_expect: retryable
+    sft_message_search: "{{ ce_vtep.search }}"
+    ce_task: create_subnet
+    ce_vn_id: "{{ ce_id.vn_n }}"
+    ce_subnet_id: "{{ ce_id.s_n }}"
+    sft_job: "{{ ce_subnet_job }}"
+
+- name: "Read the hub network - {{ ce_vtep.label }}"
+  ansible.builtin.include_tasks: read.yaml
+  vars: {ce_api: k8s.ovn.org/v1, ce_kind: ClusterUserDefinedNetwork, ce_name: "osac-vn-{{ ce_id.vn_n }}"}
+
+- name: "Check nothing was claimed - {{ ce_vtep.label }}"
+  ansible.builtin.assert: {that: ce_obj | length == 0, quiet: true}

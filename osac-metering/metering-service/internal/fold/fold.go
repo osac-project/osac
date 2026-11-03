@@ -166,6 +166,15 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 	if err := database.TakeTenantLock(ctx, tx, database.LockFold, tenant); err != nil {
 		return err
 	}
+	// The billing id is a property of the tenant, read from the event envelope, so the
+	// running value is tracked once for the batch. A missing history row is not the same
+	// as an empty value: the first empty envelope still writes one row.
+	latestBillingID, hasBillingID, err := database.LatestFactValue(
+		ctx, tx, tenant, database.BillingResourceType, tenant, database.BillingField,
+	)
+	if err != nil {
+		return err
+	}
 	for _, message := range messages {
 		event := &privatev1.Event{}
 		if err := proto.Unmarshal(message.Value, event); err != nil {
@@ -176,11 +185,32 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 			}
 			continue
 		}
+		billing, billingChanged, billingErr := changedBillingFact(event, tenant, latestBillingID, hasBillingID)
+		if billingErr != nil {
+			// A billing change with no event time cannot be dated. Skip the record
+			// loudly, as the fold does for every other undatable event, instead of
+			// writing the resource facts and dropping the account.
+			if err := f.skipEvent(ctx, tx, tenant, metrics.SkipMissingEventTime, billingErr, message); err != nil {
+				return err
+			}
+			continue
+		}
 		facts, err := f.extractor.Facts(tenant, event)
 		if err != nil {
 			reason, skip := skipReason(err)
 			if !skip {
 				return err
+			}
+			// The envelope still records the tenant's billing id on a payload this
+			// tenant owns but cannot bill. A misrouted event belongs to another
+			// tenant: writing it here would attribute this tenant's later heartbeats
+			// to that account. A fatal extraction error returns above so this
+			// transaction rolls back instead of advancing past it.
+			if billingChanged && !errors.Is(err, ErrForeignTenant) {
+				if err := database.InsertFacts(ctx, tx, tenant, []database.Fact{billing}, message.Offset+1); err != nil {
+					return err
+				}
+				latestBillingID, hasBillingID = billing.Value, true
 			}
 			// Misrouted or undatable data: folding it would bill the wrong customer or
 			// the wrong minutes, so skip it loudly and keep the fold moving.
@@ -188,6 +218,10 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 				return err
 			}
 			continue
+		}
+		if billingChanged {
+			facts = append(facts, billing)
+			latestBillingID, hasBillingID = billing.Value, true
 		}
 		if len(facts) == 0 {
 			if err := database.AdvanceEventOffset(ctx, tx, tenant, message.Offset+1); err != nil {
@@ -200,6 +234,37 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// changedBillingFact reports the history fact to write when the envelope's billing id
+// differs from the latest stored value. The value is the envelope field, empty when
+// unset. A change that has no event timestamp returns an error: the fold skips that
+// record loudly. An empty id with no stored id is not a change.
+func changedBillingFact(
+	event *privatev1.Event, tenant, latest string, hasLatest bool,
+) (database.Fact, bool, error) {
+	value := event.GetExternalBillingId()
+	if hasLatest && latest == value {
+		return database.Fact{}, false, nil
+	}
+	timestamp := event.GetTimestamp()
+	if timestamp == nil || !timestamp.IsValid() || timestamp.AsTime().IsZero() {
+		// The first empty envelope is recorded only when it has a time. An undated
+		// event that carries no id, and has no stored id, is not a billing change.
+		if !hasLatest && value == "" {
+			return database.Fact{}, false, nil
+		}
+		return database.Fact{}, false, fmt.Errorf(
+			"event %s changes the billing id but has no timestamp", event.GetId(),
+		)
+	}
+	return database.Fact{
+		ResourceType: database.BillingResourceType,
+		ResourceID:   tenant,
+		Field:        database.BillingField,
+		Since:        timestamp.AsTime().UTC().Truncate(time.Second),
+		Value:        value,
+	}, true, nil
 }
 
 // skipReason maps an extraction error the fold must skip loudly, not fail on, to its metric

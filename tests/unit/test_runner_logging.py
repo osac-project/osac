@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from tests.e2e.core import runner
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
 @pytest.mark.parametrize(
@@ -56,6 +57,8 @@ def test_poll_until_logs_description_but_not_values(
             retries=2,
             delay=0,
             description="widget ready",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="widget-1",
         )
 
     messages = [record.getMessage() for record in caplog.records]
@@ -79,6 +82,8 @@ def test_poll_until_redacts_credentials_in_the_description(
             retries=2,
             delay=0,
             description="call with Bearer abcdefgh12345678",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="widget-1",
         )
 
     assert "<redacted>" in caplog.text
@@ -92,7 +97,13 @@ def test_poll_until_timeout_reports_the_description_and_scalar_but_logs_neither(
 
     with caplog.at_level(logging.INFO, logger=runner.logger.name), pytest.raises(TimeoutError) as exc:
         runner.poll_until(
-            fn=lambda: "secret-response", until=lambda _: False, retries=1, delay=0, description="secret-description"
+            fn=lambda: "secret-response",
+            until=lambda _: False,
+            retries=1,
+            delay=0,
+            description="secret-description",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="widget-1",
         )
 
     # The exception reaches the failure report; the shared progress log stays free of runtime values.
@@ -104,7 +115,13 @@ def test_poll_until_timeout_reports_the_description_and_scalar_but_logs_neither(
 def test_poll_until_timeout_does_not_expose_the_content_of_a_container() -> None:
     with pytest.raises(TimeoutError) as exc:
         runner.poll_until(
-            fn=lambda: {"key": "secret-response"}, until=lambda _: False, retries=1, delay=0, description="d"
+            fn=lambda: {"key": "secret-response"},
+            until=lambda _: False,
+            retries=1,
+            delay=0,
+            description="d",
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="widget-1",
         )
 
     assert "secret-response" not in str(exc.value)
@@ -122,6 +139,8 @@ def test_poll_until_recovers_after_a_command_error(monkeypatch: pytest.MonkeyPat
             delay=0,
             description="test recovery",
             retry_on_error=True,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="widget-1",
         )
         == "ready"
     )
@@ -139,7 +158,14 @@ def test_poll_until_retry_error_does_not_log_command_output(
 
     with caplog.at_level(logging.INFO, logger=runner.logger.name), pytest.raises(TimeoutError) as exc:
         runner.poll_until(
-            fn=fail, until=lambda _: False, retries=2, delay=0, description="secret-description", retry_on_error=True
+            fn=fail,
+            until=lambda _: False,
+            retries=2,
+            delay=0,
+            description="secret-description",
+            retry_on_error=True,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id="widget-1",
         )
 
     for secret in ("secret-command", "secret-response"):

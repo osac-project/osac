@@ -1,3 +1,7 @@
+import { MessageInitShape } from '@bufbuild/protobuf';
+
+import { ProjectSchema } from '@osac/types';
+
 import { ProjectCreateValues } from './values';
 
 /**
@@ -5,7 +9,9 @@ import { ProjectCreateValues } from './values';
  * The server derives metadata.project from all segments except the last.
  * See PrivateProjectsServer.Create — metadata.project must be empty or match that prefix.
  */
-export const getCreateProjectPayload = (values: ProjectCreateValues) => {
+export const getCreateProjectPayload = (
+  values: ProjectCreateValues,
+): MessageInitShape<typeof ProjectSchema> => {
   const name = values.metadata.project
     ? `${values.metadata.project}.${values.metadata.name}`
     : values.metadata.name;
@@ -17,7 +23,6 @@ export const getCreateProjectPayload = (values: ProjectCreateValues) => {
     },
     spec: {
       title: values.title,
-      ...(values.description && { description: values.description }),
     },
   };
 };

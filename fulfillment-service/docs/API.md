@@ -655,9 +655,14 @@ omitted from list and mutation responses. Dry-run creation creates no account, c
 recoverable registration credentials. Remove that client from Keycloak; the controller then retries
 provisioning or completes deletion.
 
-Role assignments are managed through RoleBindings; service accounts do not accept role references.
-Support for service-account subjects in RoleBindings is tracked by
-[OSAC-6554](https://redhat.atlassian.net/browse/OSAC-6554).
+Role assignments are managed through tenant-scoped RoleBindings; service accounts do not accept
+role references. A binding can include service-account IDs in `spec.service_accounts`. Fulfillment
+checks the current active bindings for each managed-token request, so removing a binding revokes
+that grant on the next request. Roles embedded in a managed account's JWT do not grant API access.
+The shared Role catalog includes `tenant-admin`, `tenant-automation`, and `tenant-idp-manager`.
+`osac-csi-driver` is stored in the system tenant and is visible to cloud administrators only.
+Migration 139 seeds `tenant-idp-manager`; migration 145 seeds `tenant-automation` and
+`osac-csi-driver`. Migration 141 creates the ServiceAccount tables.
 
 Secret rotation is tracked separately by
 [OSAC-6555](https://redhat.atlassian.net/browse/OSAC-6555).

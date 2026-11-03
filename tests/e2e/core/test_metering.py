@@ -22,7 +22,8 @@ from typing import Any
 
 import pytest
 
-from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
+from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector, billing_account_id
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.vmaas.regression import test_compute_instance_creation as creation
 from tests.e2e.vmaas.sanity import test_metering_billing as billing
 
@@ -193,7 +194,7 @@ def test_verify_accepts_reversed_history_returned_after_its_replacement(monkeypa
     reversal = _heartbeat("reverse-early", START, START + timedelta(seconds=15), "-15.000000", instance_type=None)
     collector = _serve(monkeypatch, [typed, early, reversal])
 
-    collector.expect(HEARTBEAT_TYPE, "vm-7")
+    collector.expect(HEARTBEAT_TYPE, "vm-7", resource_kind=WaitResourceKind.COMPUTE_INSTANCE)
     collector.verify()
 
 
@@ -360,3 +361,24 @@ def test_envelope_journey_cleans_up_the_vm_when_a_setup_wait_fails(monkeypatch: 
             metering_project="billing",
         )
     assert deleted == ["vm-7"], f"created resource escaped cleanup: deletes were {deleted}"
+
+
+def test_billing_account_id_treats_missing_and_empty_as_absent() -> None:
+    """The topic omits the key when the tenant has no id; an empty string is the same."""
+    assert billing_account_id({"data": {}}) is None
+    assert billing_account_id({"data": {"external_billing_account_id": ""}}) is None
+    assert billing_account_id({"data": {"external_billing_account_id": "acct-1"}}) == "acct-1"
+
+
+def test_published_heartbeats_keep_their_billing_account_when_later_ones_change() -> None:
+    """FR-4 on the topic: a later heartbeat with a new account does not rewrite earlier ones."""
+    earlier = _heartbeat("acct-1-beat", START, START + timedelta(minutes=1), "60.000000")
+    earlier["data"]["external_billing_account_id"] = "acct-1"
+    later = _heartbeat("acct-2-beat", START + timedelta(minutes=1), START + timedelta(minutes=2), "60.000000")
+    later["data"]["external_billing_account_id"] = "acct-2"
+    published = {earlier["id"]: billing_account_id(earlier)}
+    topic = [earlier, later]
+    still = {event["id"]: billing_account_id(event) for event in topic}
+    assert still[later["id"]] == "acct-2"
+    for event_id, account in published.items():
+        assert still[event_id] == account

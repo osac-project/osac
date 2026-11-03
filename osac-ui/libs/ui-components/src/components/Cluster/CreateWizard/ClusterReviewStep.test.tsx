@@ -34,6 +34,26 @@ describe('ClusterReviewStep', () => {
     ).toBeInTheDocument();
   });
 
+  it('shows selected security groups for a custom network', async () => {
+    const values = createEmptyClusterValues();
+    values.spec.networkAttachment.value = {
+      useDefaultNetwork: false,
+      virtualNetwork: { id: 'vn-1', name: 'team-network' },
+      subnet: { id: 'subnet-1', name: 'team-subnet' },
+      securityGroups: [
+        { id: 'sg-1', name: 'web' },
+        { id: 'sg-2', name: 'internal' },
+      ],
+    };
+    renderWithProviders(
+      <Formik initialValues={values} onSubmit={() => undefined}>
+        <ClusterReviewStep />
+      </Formik>,
+    );
+
+    expect(await screen.findByText('web, internal')).toBeInTheDocument();
+  });
+
   it('shows the human-readable version, not the metadata.name slug', async () => {
     const emptyValues = createEmptyClusterValues();
     renderWithProviders(
@@ -51,5 +71,24 @@ describe('ClusterReviewStep', () => {
 
     expect(await screen.findByText('4.17.0')).toBeInTheDocument();
     expect(screen.queryByText('4-17-0')).not.toBeInTheDocument();
+  });
+
+  it('uses the simple host type and size display for a node set', async () => {
+    const values = createEmptyClusterValues();
+    values.spec.nodeSetRows.value = [
+      {
+        rowId: 'workers-row',
+        name: 'workers',
+        hostType: { id: 'bmit-worker', name: 'worker' },
+        size: '1',
+      },
+    ];
+    renderWithProviders(
+      <Formik initialValues={values} onSubmit={() => undefined}>
+        <ClusterReviewStep />
+      </Formik>,
+    );
+
+    expect(await screen.findByText('worker: 1')).toBeInTheDocument();
   });
 });

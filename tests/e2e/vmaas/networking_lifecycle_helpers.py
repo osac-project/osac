@@ -15,6 +15,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
 def create_and_wait_for_virtual_network(
@@ -60,7 +61,7 @@ def delete_and_wait_for_subnet(
         wait_for_cr_deletion = wait_for_subnet_cr_deletion
     _delete_and_wait_for_network_resource(
         resource_id=subnet_id,
-        resource_kind="Subnet",
+        resource_kind=WaitResourceKind.SUBNET,
         delete=lambda: grpc.delete_subnet(subnet_id=subnet_id),
         wait_for_cr_deletion=wait_for_cr_deletion,
         list_ids=grpc.list_subnet_ids,
@@ -79,7 +80,7 @@ def delete_and_wait_for_virtual_network(
         wait_for_cr_deletion = wait_for_virtual_network_cr_deletion
     _delete_and_wait_for_network_resource(
         resource_id=virtual_network_id,
-        resource_kind="VirtualNetwork",
+        resource_kind=WaitResourceKind.VIRTUAL_NETWORK,
         delete=lambda: grpc.delete_virtual_network(vn_id=virtual_network_id),
         wait_for_cr_deletion=wait_for_cr_deletion,
         list_ids=grpc.list_virtual_network_ids,
@@ -98,7 +99,7 @@ def delete_and_wait_for_security_group(
         wait_for_cr_deletion = wait_for_security_group_cr_deletion
     _delete_and_wait_for_network_resource(
         resource_id=security_group_id,
-        resource_kind="SecurityGroup",
+        resource_kind=WaitResourceKind.SECURITY_GROUP,
         delete=lambda: grpc.delete_security_group(sg_id=security_group_id),
         wait_for_cr_deletion=wait_for_cr_deletion,
         list_ids=grpc.list_security_group_ids,
@@ -107,7 +108,7 @@ def delete_and_wait_for_security_group(
 
 def _delete_and_wait_for_network_resource(
     resource_id: str,
-    resource_kind: str,
+    resource_kind: WaitResourceKind,
     delete: Callable[[], None],
     wait_for_cr_deletion: Callable[[], None] | None,
     list_ids: Callable[[], list[str]],
@@ -121,4 +122,6 @@ def _delete_and_wait_for_network_resource(
         retries=30,
         delay=5,
         description=f"{resource_kind} {resource_id} removal from API",
+        resource_kind=resource_kind,
+        resource_id=resource_id,
     )

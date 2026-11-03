@@ -496,10 +496,9 @@ func (r *function) storeRegistrationCredentials(ctx context.Context, account *pr
 	accountID := account.GetId()
 	data = cloneSecretData(data)
 	data[serviceaccounts.RegistrationServiceAccountIDKey] = []byte(accountID)
-	baseName := account.GetMetadata().GetName()
 	preferredName := account.GetStatus().GetRegistrationSecret().GetName()
 	for suffix := 0; suffix < 10000; suffix++ {
-		name := serviceaccounts.RegistrationSecretName(baseName, suffix)
+		name := serviceaccounts.RegistrationSecretName(accountID, suffix)
 		if suffix == 0 && preferredName != "" {
 			name = preferredName
 		}

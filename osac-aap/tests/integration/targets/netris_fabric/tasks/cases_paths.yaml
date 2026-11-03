@@ -1,0 +1,451 @@
+---
+# Case 11: every path of the role that the other cases do not reach. A table,
+# so each path is one row; state and writes that need more than the table can
+# say are checked after it. Seeds are shaped as the fake stores what the role
+# creates.
+- name: Paths - run the table
+  ansible.builtin.include_tasks: path_case.yaml
+  loop: "{{ nf_path_cases }}"
+  loop_control:
+    loop_var: _nf_case
+    label: "{{ _nf_case.label }}"
+  vars:
+    nf_seed_vpc:
+      - path: seed
+        body:
+          collection: vpcs
+          objects: [{id: 101, name: "{{ nf_vpc_name }}", adminTenant: {id: 2}, sites: [{id: 1}], vni: "{{ nf_l3_vni }}"}]
+    nf_seed_network:
+      - path: seed
+        body:
+          collection: ipam_subnets
+          objects:
+            - {id: 301, name: "{{ nf_sn_name }}", prefix: "{{ nf_subnet_cidr }}", purpose: common,
+               vpc: {id: 101}, tenant: {id: 2}, sites: [{id: 1}]}
+      - path: seed
+        body:
+          collection: vnets
+          objects:
+            - {id: 401, name: "{{ nf_sn_name }}", state: active, vpc: {id: 101}, tenant: {id: 2}, sites: [{id: 1}],
+               vxlanID: 5000001, gateways: [{prefix: 10.20.1.1/24, dhcpEnabled: false}], ports: []}
+    nf_seed_attached:
+      - path: seed
+        body:
+          collection: vnets
+          objects:
+            - {id: 401, name: "{{ nf_sn_name }}", state: active, vpc: {id: 101}, tenant: {id: 2}, sites: [{id: 1}],
+               vxlanID: 5000001, gateways: [{prefix: 10.20.1.1/24, dhcpEnabled: false}],
+               ports: [{id: 62, state: active, accessMode: true}]}
+    nf_seed_server: "{{ nf_seed_host[:2] }}"
+    nf_seed_provisioning: "{{ nf_seed_host[2:] }}"
+    nf_network: "{{ nf_seed_vpc + nf_seed_network }}"
+    nf_no_owner_vnet:
+      - path: seed
+        body:
+          collection: vnets
+          objects: [{id: 401, name: "{{ nf_sn_name }}", state: active, gateways: [], ports: []}]
+    nf_path_cases:
+      # --------------------------------------------------- physical attachments
+      - label: path-apply-no-provisioning-vnet
+        task: apply_network_attachment
+        job: nf_na_job
+        evpn: true
+        steps: "{{ nf_network + nf_seed_server }}"
+        result: {}
+        writes: [PUT /api/v2/vnet, PUT /api/v2/vnet]
+      - label: path-delete-no-provisioning-vnet
+        task: delete_network_attachment
+        job: nf_na_job
+        evpn: true
+        steps: "{{ nf_seed_vpc + nf_seed_attached + nf_seed_server }}"
+        expect: retryable
+        search: 'step "Fail if V-Net not found" failed'
+        writes: [PUT /api/v2/vnet]
+      - label: path-delete-unknown-port
+        task: delete_network_attachment
+        job: nf_na_job
+        evpn: true
+        iface: {type: physical, name: eth9, mac_address: "{{ nf_mac }}"}
+        steps: "{{ nf_network + nf_seed_host }}"
+        result: {}
+        writes: []
+      - label: path-apply-settle
+        task: apply_network_attachment
+        job: nf_na_job
+        evpn: true
+        env: {NETRIS_PORT_SETTLE_SECONDS: "1"}
+        steps: "{{ nf_network + nf_seed_host }}"
+        result: {}
+      - label: path-delete-settle
+        task: delete_network_attachment
+        job: nf_na_job
+        evpn: true
+        env: {NETRIS_PORT_SETTLE_SECONDS: "1"}
+        steps: "{{ nf_seed_vpc + nf_seed_attached + nf_seed_server + nf_seed_provisioning }}"
+        result: {}
+      - label: path-attach-not-applied
+        task: apply_network_attachment
+        job: nf_na_job
+        evpn: true
+        steps: >-
+          {{ nf_network + nf_seed_host
+             + [{'path': 'faults', 'body': {'key': 'PUT /api/v2/vnet/401', 'status': 200, 'body': {}, 'sticky': true}}] }}
+        expect: retryable
+        search: 'step "Assert port is on target V-Net" failed'
+      - label: path-detach-not-applied
+        task: apply_network_attachment
+        job: nf_na_job
+        evpn: true
+        steps: >-
+          {{ nf_network + nf_seed_host
+             + [{'path': 'faults', 'body': {'key': 'PUT /api/v2/vnet/900', 'status': 200, 'body': {}, 'sticky': true}}] }}
+        expect: retryable
+        search: 'step "Assert port is not on source V-Net" failed'
+      - label: path-attach-vnet-owner-unreported
+        task: apply_network_attachment
+        job: nf_na_job
+        evpn: true
+        steps: "{{ nf_seed_vpc + nf_no_owner_vnet + nf_seed_host }}"
+        expect: final
+        search: "its VPC or tenant is not reported; refusing to use it. OSAC does not retry"
+        writes: []
+      - label: path-attach-vnet-of-another-tenant-in-the-detail
+        task: apply_network_attachment
+        job: nf_na_job
+        evpn: true
+        steps: >-
+          {{ nf_seed_vpc + nf_seed_host
+             + [{'path': 'seed', 'body': {'collection': 'vnets', 'objects': [
+                  {'id': 401, 'name': nf_sn_name, 'state': 'active', 'vpc': {'id': 101}, 'tenant': {'id': 9},
+                   'gateways': [], 'ports': []}]}},
+                {'path': 'set', 'body': {'values': {'list_omit': {'401': ['vpc', 'tenant']}}}}] }}
+        expect: final
+        search: "it belongs to another tenant or VPC; refusing to use it. OSAC does not retry"
+        writes: []
+      - label: path-delete-attachment-invalid-interface
+        task: delete_network_attachment
+        job: nf_na_job
+        iface: {type: sriov}
+        expect: final
+        search: "network_attachment.interface.type must be overlay or physical"
+        writes: []
+      - label: path-lease-no-vpc
+        task: query_dhcp_lease
+        job: nf_na_job
+        expect: retryable
+        search: "Netris VPC .* does not exist yet. OSAC retries the task"
+        writes: []
+      # ------------------------------------------------------------- ExternalIP
+      - label: path-attach-external-ip-invalid-destination
+        task: attach_external_ip
+        job: nf_eipa_job
+        merge: {destination: {address: not-an-address}}
+        expect: final
+        search: "destination.address must be an IPv4 address"
+        writes: []
+      # --------------------------------------------------------------- Subnet
+      - label: path-subnet-vpc-without-vni
+        task: create_subnet
+        job: nf_subnet_job
+        evpn: true
+        steps: >-
+          {{ [{'path': 'seed', 'body': {'collection': 'vpcs', 'objects': [
+               {'id': 101, 'name': nf_vpc_name, 'adminTenant': {'id': 2}, 'sites': [{'id': 1}]}]}}] }}
+        expect: retryable
+        search: "Netris has not assigned the VNI yet"
+        writes: []
+      - label: path-subnet-vpc-with-unusable-vni
+        task: create_subnet
+        job: nf_subnet_job
+        evpn: true
+        steps: >-
+          {{ [{'path': 'seed', 'body': {'collection': 'vpcs', 'objects': [
+               {'id': 101, 'name': nf_vpc_name, 'adminTenant': {'id': 2}, 'sites': [{'id': 1}], 'vni': 99999999}]}}] }}
+        expect: final
+        search: "Netris returned a VNI outside 1..16777215"
+        writes: []
+      - label: path-subnet-without-gateway
+        task: create_subnet
+        job: nf_subnet_job
+        evpn: true
+        playbook: tests/integration/targets/netris_fabric/files/gateway_mode_none.yml
+        steps: "{{ nf_seed_vpc }}"
+        result: {network_segment: {type: evpn, l2_vni: 5000001}}
+        writes: [POST /api/v2/ipam/subnet, POST /api/v2/vnet]
+      - label: path-subnet-unreadable-vnet
+        task: create_subnet
+        job: nf_subnet_job
+        evpn: true
+        steps: >-
+          {{ nf_seed_vpc + nf_no_owner_vnet
+             + [{'path': 'set', 'body': {'values': {'list_omit': {'401': ['vpc', 'tenant']}}}},
+                {'path': 'faults', 'body': {'key': 'GET /api/v2/vnet/401', 'status': 500, 'sticky': true}}] }}
+        expect: retryable
+        search: 'step "Stop unless the V-Net is gone" failed'
+        writes: []
+      - label: path-delete-subnet-ours-next-to-an-unproven-vnet
+        task: delete_subnet
+        job: nf_subnet_job
+        evpn: true
+        steps: >-
+          {{ nf_network + [{'path': 'seed', 'body': {'collection': 'vnets', 'objects': [
+               {'id': 402, 'name': nf_sn_name, 'state': 'active', 'gateways': [], 'ports': []}]}}] }}
+        result: {}
+        writes: [DELETE /api/v2/vnet, DELETE /api/v2/ipam/subnet]
+        vnets_left: [402]
+      # --------------------------------------------------------- VirtualNetwork
+      - label: path-vn-allocation-500
+        task: create_virtual_network
+        job: nf_vn_job
+        evpn: true
+        steps: >-
+          {{ [{'path': 'faults', 'body': {'key': 'POST /api/v2/ipam/allocation', 'status': 500,
+               'body': {'message': 'boom', 'internal': 'LEAKED-BODY'}, 'sticky': true}}] }}
+        expect: retryable
+        search: 'step "Pass on any other failure" failed'
+      - label: path-vn-vpc-id-unusable
+        task: create_virtual_network
+        job: nf_vn_job
+        steps: >-
+          {{ [{'path': 'faults', 'body': {'key': 'POST /api/v2/vpc', 'status': 201, 'body': {'data': {'id': 'abc'}}}}] }}
+        expect: retryable
+        search: 'step "Check the VPC ID" failed'
+      # ---------------------------------------------------------- FabricDomain
+      - label: path-fd-cluster-id-unusable
+        task: create_fabric_domain
+        job: nf_fd_job
+        steps: >-
+          {{ nf_seed_vpc + nf_seed_servers
+             + [{'path': 'faults', 'body': {'key': 'POST /api/v2/server-cluster', 'status': 201, 'body': {'data': {'id': 'abc'}}}},
+                {'path': 'faults', 'body': {'key': 'GET /api/v2/server-cluster/abc', 'status': 200,
+                                            'body': {'data': {'status': {'label': 'Active'}}}}}] }}
+        expect: retryable
+        search: 'step "Check the Server Cluster ID" failed'
+      # ------------------------------------------- every stop, with its message
+      - label: stop-network-type
+        task: create_virtual_network
+        job: nf_vn_job
+        merge: {network_type: vlan}
+        expect: final
+        search: "Netris supports network_type evpn only, not 'vlan'"
+        writes: []
+      - label: stop-vn-cidr
+        task: create_virtual_network
+        job: nf_vn_job
+        merge: {resource: {kind: VirtualNetwork, id: "{{ nf_ids.vn }}", spec: {ipv4Cidr: 10.20.0.1/16}}}
+        expect: final
+        search: "Netris invalid task input: VirtualNetwork spec.ipv4Cidr '10.20.0.1/16' must be a canonical IPv4 CIDR"
+        writes: []
+      - label: stop-subnet-input
+        task: create_subnet
+        job: nf_subnet_job
+        merge: {ipam: {gateway_ipv4: nope, physical_ipv4_cidrs: []}}
+        expect: final
+        search: "Netris invalid task input: ipam.gateway_ipv4 must be an IPv4 address"
+        writes: []
+      - label: stop-subnet-no-vpc
+        task: create_subnet
+        job: nf_subnet_job
+        expect: retryable
+        search: "Netris VPC .* does not exist yet; the VirtualNetwork must be created first"
+        writes: []
+      - label: stop-subnet-foreign-vnet
+        task: create_subnet
+        job: nf_subnet_job
+        steps: >-
+          {{ nf_seed_vpc + [{'path': 'seed', 'body': {'collection': 'vnets', 'objects': [
+               {'id': 401, 'name': nf_sn_name, 'state': 'active', 'vpc': {'id': 101}, 'tenant': {'id': 9}, 'gateways': []}]}}] }}
+        expect: final
+        search: "already exists in another tenant or VPC; refusing to reuse it"
+        writes: []
+      - label: stop-subnet-no-l2-vni
+        task: create_subnet
+        job: nf_subnet_job
+        evpn: true
+        steps: "{{ nf_seed_vpc + [{'path': 'set', 'body': {'values': {'assign_vni': false}}}] }}"
+        expect: retryable
+        search: "Netris has not assigned the VNI yet \\(V-Net"
+        writes: [POST /api/v2/ipam/subnet, POST /api/v2/vnet]
+      - label: stop-delete-subnet-unproven
+        task: delete_subnet
+        job: nf_subnet_job
+        steps: "{{ nf_seed_vpc + nf_no_owner_vnet }}"
+        expect: final
+        search: "its owner is not reported, and the IPAM subnet of the Subnet was not found"
+        writes: []
+        vnets_left: [401]
+      - label: stop-apply-invalid-interface
+        task: apply_network_attachment
+        job: nf_na_job
+        iface: {type: sriov}
+        expect: final
+        search: "network_attachment.interface.type must be overlay or physical"
+        writes: []
+      - label: stop-apply-no-vnet
+        task: apply_network_attachment
+        job: nf_na_job
+        steps: "{{ nf_seed_vpc + nf_seed_host }}"
+        expect: retryable
+        search: "does not exist yet; the Subnet must be created first"
+        writes: []
+      - label: stop-apply-no-physical-range
+        task: apply_network_attachment
+        job: nf_na_job
+        merge: {ipam: {gateway_ipv4: 10.20.1.1, physical_ipv4_cidrs: []}}
+        steps: "{{ nf_network + nf_seed_host }}"
+        expect: final
+        search: "Netris invalid task input: no fabric address range for bare-metal DHCP"
+        writes: []
+      - label: stop-apply-unregistered-host
+        task: apply_network_attachment
+        job: nf_na_job
+        steps: "{{ nf_network }}"
+        expect: retryable
+        search: "Netris has no server named host1 yet"
+        writes: []
+      - label: stop-apply-unknown-port
+        task: apply_network_attachment
+        job: nf_na_job
+        iface: {type: physical, name: eth9, mac_address: "{{ nf_mac }}"}
+        steps: "{{ nf_network + nf_seed_host }}"
+        expect: final
+        search: "Netris server host1 has no port named eth9"
+        writes: []
+      - label: stop-lease-overlay
+        task: query_dhcp_lease
+        job: nf_na_job
+        iface: {type: overlay}
+        expect: final
+        search: "query_dhcp_lease needs a physical interface"
+        writes: []
+      - label: stop-lease-foreign-ipam
+        task: query_dhcp_lease
+        job: nf_na_job
+        steps: >-
+          {{ nf_seed_vpc + [{'path': 'seed', 'body': {'collection': 'ipam_subnets', 'objects': [
+               {'id': 301, 'name': nf_sn_name, 'prefix': nf_subnet_cidr, 'purpose': 'common', 'vpc': {'id': 101},
+                'tenant': {'id': 9}, 'sites': [{'id': 1}]}]}}] }}
+        expect: final
+        search: "already exists in another tenant or VPC; refusing to use it"
+      - label: stop-lease-no-ipam-subnet
+        task: query_dhcp_lease
+        job: nf_na_job
+        steps: "{{ nf_seed_vpc }}"
+        expect: retryable
+        search: "Netris IPAM subnet .* does not exist yet"
+      - label: stop-lease-no-lease
+        task: query_dhcp_lease
+        job: nf_na_job
+        steps: "{{ nf_network }}"
+        expect: retryable
+        search: "Netris has no DHCP lease for the interface MAC address yet"
+      - label: stop-pool-input
+        task: create_external_ip_pool
+        job: nf_pool_job
+        merge: {resource: {kind: ExternalIPPool, id: "{{ nf_ids.pool }}", spec: {cidrs: []}}}
+        expect: final
+        search: "resource.spec.cidrs must hold exactly one canonical IPv4 CIDR"
+        writes: []
+      - label: stop-pool-refused
+        task: create_external_ip_pool
+        job: nf_pool_job
+        steps: >-
+          {{ [{'path': 'faults', 'body': {'key': 'POST /api/v2/ipam/allocation', 'status': 409,
+               'body': {'message': 'overlap', 'internal': 'LEAKED-BODY'}, 'sticky': true}}] }}
+        expect: final
+        search: "Netris refused the ExternalIPPool CIDR 203.0.113.0/30"
+      - label: stop-pool-500
+        task: create_external_ip_pool
+        job: nf_pool_job
+        steps: >-
+          {{ [{'path': 'faults', 'body': {'key': 'POST /api/v2/ipam/allocation', 'status': 500,
+               'body': {'message': 'boom', 'internal': 'LEAKED-BODY'}, 'sticky': true}}] }}
+        expect: retryable
+        search: 'step "Pass on any other failure" failed'
+      - label: stop-eip-full-pool
+        task: create_external_ip
+        job: nf_eip_job
+        steps: >-
+          {{ [{'path': 'seed', 'body': {'collection': 'ipam_subnets', 'objects': [
+               {'id': 311, 'name': 'taken-1', 'prefix': '203.0.113.1/32', 'purpose': 'nat', 'sites': [{'id': 1}], 'tenant': {'id': 2}},
+               {'id': 312, 'name': 'taken-2', 'prefix': '203.0.113.2/32', 'purpose': 'nat', 'sites': [{'id': 1}], 'tenant': {'id': 2}}]}}] }}
+        expect: final
+        search: "Netris ExternalIPPool .* is full: no free address is left"
+        writes: []
+      - label: stop-eip-foreign-reservation
+        task: create_external_ip
+        job: nf_eip_job
+        steps: >-
+          {{ [{'path': 'seed', 'body': {'collection': 'ipam_subnets', 'objects': [
+               {'id': 311, 'name': 'osac-eip-' ~ nf_ids.eip, 'prefix': '203.0.113.1/32', 'purpose': 'nat',
+                'sites': [{'id': 1}], 'tenant': {'id': 9}}]}}] }}
+        expect: final
+        search: "belongs to another tenant, site or pool; refusing to use it"
+        writes: []
+      - label: stop-eip-unusable-pool
+        task: create_external_ip
+        job: nf_eip_job
+        merge: {external_ip_pool: {kind: ExternalIPPool, id: "{{ nf_ids.pool }}", spec: {cidrs: []}}}
+        expect: final
+        search: "the ExternalIP or its pool snapshot is not usable"
+        writes: []
+      - label: stop-eip-provider-500
+        task: create_external_ip
+        job: nf_eip_job
+        steps: >-
+          {{ [{'path': 'faults', 'body': {'key': 'GET /api/v2/ipam/subnets', 'status': 500,
+               'body': {'message': 'boom', 'internal': 'LEAKED-BODY'}, 'sticky': true}}] }}
+        expect: retryable
+        search: 'step "Stop on any other failure" failed'
+        writes: []
+      - label: stop-natgw-input
+        task: create_nat_gateway
+        job: nf_natgw_job
+        merge: {external_ip: {id: "{{ nf_ids.eip }}", address: nope}}
+        expect: final
+        search: "external_ip.address must be an IPv4 address"
+        writes: []
+      - label: stop-natgw-no-vpc
+        task: create_nat_gateway
+        job: nf_natgw_job
+        expect: final
+        search: "does not exist; it was removed outside OSAC"
+        writes: []
+      - label: stop-fd-servers
+        task: create_fabric_domain
+        job: nf_fd_job
+        merge: {resource: {kind: FabricDomain, id: "{{ nf_ids.fd }}", spec: {servers: []}}}
+        expect: final
+        search: "resource.spec.servers must be a non-empty list of host names"
+        writes: []
+      - label: stop-fd-two-templates
+        task: create_fabric_domain
+        job: nf_fd_job
+        env: {NETRIS_RESOURCE_CLASS_MAP: '{"a": {"server_cluster_template_id": 7}, "b": {"server_cluster_template_id": 8}}'}
+        expect: final
+        search: "must name exactly one distinct server_cluster_template_id"
+        writes: []
+      - label: stop-fd-foreign-vpc
+        task: create_fabric_domain
+        job: nf_fd_job
+        steps: >-
+          {{ [{'path': 'seed', 'body': {'collection': 'vpcs', 'objects': [
+               {'id': 101, 'name': nf_vpc_name, 'adminTenant': {'id': 9}, 'sites': [{'id': 1}], 'vni': 5}]}}] }}
+        expect: final
+        search: "belongs to another tenant than the OSAC tenant"
+        writes: []
+      - label: stop-fd-no-vpc
+        task: create_fabric_domain
+        job: nf_fd_job
+        expect: retryable
+        search: "of the VirtualNetwork is not in the OSAC tenant yet"
+        writes: []
+      - label: stop-fd-cluster-in-another-vpc
+        task: create_fabric_domain
+        job: nf_fd_job
+        steps: >-
+          {{ nf_seed_vpc + nf_seed_servers + [{'path': 'seed', 'body': {'collection': 'clusters', 'objects': [
+               {'id': 600, 'name': 'osac-fd-' ~ nf_ids.fd, 'vpc': {'id': 999}}]}}] }}
+        expect: final
+        search: "is in another VPC than"
+        writes: []

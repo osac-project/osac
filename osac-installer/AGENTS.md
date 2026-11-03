@@ -45,6 +45,7 @@ respective areas.
 
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
+| Shared provider-networking provisioning configuration | Helm contract | `make helm-networking-test` (GATE-CONFIG-01) |
 | MCE defaults, lifecycle gate, image overrides, or compatibility RBAC | Helm contract | `make mce-render-test` |
 | Kind runtime selection, sudo authentication, image loading, device-mapper permissions, cluster/storage lifecycle, or devstack Helm apply flags | Unit with command stubs | `make kind-runtime-test` |
 | Deployed dev-full OSAC UI Gateway reachability | Component integration | `./scripts/test-ui-gateway.sh` |

@@ -36,20 +36,41 @@ var _ = Describe("Service account identity", func() {
 			"osac-sa-tenant-a-d3c4e3db-95b8-481d-8b5c-963da477da12"))
 		Expect(serviceaccounts.ClientID(strings.Repeat("t", 63), "d3c4e3db-95b8-481d-8b5c-963da477da12")).To(HaveLen(108))
 	})
-	It("uses the service-account name and suffixes collisions for the registration credential", func() {
-		Expect(serviceaccounts.RegistrationSecretName("robot", 0)).To(Equal("robot"))
-		Expect(serviceaccounts.RegistrationSecretName("robot", 1)).To(Equal("robot-1"))
-		longName := strings.Repeat("a", 63)
-		Expect(serviceaccounts.RegistrationSecretName(longName, 2)).To(Equal(strings.Repeat("a", 61) + "-2"))
-		largeSuffix := serviceaccounts.RegistrationSecretName("robot", 999999999999)
+	It("uses the account ID for registration Secret names", func() {
+		accountID := "d3c4e3db-95b8-481d-8b5c-963da477da12"
+		Expect(serviceaccounts.RegistrationSecretName(accountID, 0)).To(Equal("osac-registration-" + accountID))
+		Expect(serviceaccounts.RegistrationSecretName(accountID, 1)).To(Equal("osac-registration-" + accountID + "-1"))
+		Expect(serviceaccounts.RegistrationSecretName(accountID, 0)).ToNot(Equal(
+			serviceaccounts.RegistrationSecretName("d3c4e3db-95b8-481d-8b5c-963da477da13", 0)))
+		longID := strings.Repeat("a", 63)
+		Expect(len(serviceaccounts.RegistrationSecretName(longID, 2))).To(BeNumerically("<=", 63))
+		largeSuffix := serviceaccounts.RegistrationSecretName(accountID, 999999999999)
 		Expect(largeSuffix).To(HaveSuffix("-999999999999"))
-		Expect(largeSuffix).To(HaveLen(len("robot-999999999999")))
+		Expect(len(largeSuffix)).To(BeNumerically("<=", 63))
 		Expect(serviceaccounts.RegistrationAccessTokenKey).To(Equal("registration_access_token"))
 	})
 	It("uses a tenant-safe resource name for the client credential Secret", func() {
-		name := serviceaccounts.ClientSecretName("d3c4e3db-95b8-481d-8b5c-963da477da12")
+		accountID := "d3c4e3db-95b8-481d-8b5c-963da477da12"
+		name := serviceaccounts.ClientSecretName(accountID)
 		Expect(name).To(Equal("osac-service-account-d3c4e3db-95b8-481d-8b5c-963da477da12"))
 		Expect(len(name)).To(BeNumerically("<=", 63))
-		Expect(name).ToNot(Equal(serviceaccounts.RegistrationSecretName("robot", 0)))
+		Expect(name).ToNot(Equal(serviceaccounts.RegistrationSecretName(accountID, 0)))
 	})
+})
+
+var _ = Describe("Service-account authorization roles", func() {
+	DescribeTable("limits grants to the supported role catalog", func(name string, assignable bool) {
+		Expect(serviceaccounts.IsAssignableRole(name)).To(Equal(assignable))
+	},
+		Entry("automation", "tenant-automation", true),
+		Entry("CSI", "osac-csi-driver", true),
+		Entry("tenant admin", "tenant-admin", true),
+		Entry("IdP manager", "tenant-idp-manager", true),
+		Entry("removed user", "tenant-user", false),
+		Entry("removed reader", "tenant-reader", false),
+		Entry("provider", "cloud-provider-admin", false),
+		Entry("realm role", "realm-management", false),
+		Entry("unknown", "custom", false),
+		Entry("empty", "", false),
+	)
 })

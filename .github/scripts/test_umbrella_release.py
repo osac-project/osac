@@ -257,6 +257,8 @@ class UmbrellaReleaseTests(unittest.TestCase):
             "SKIPPED_TESTS": "",
             "IMAGE_BUILDS": "success",
             "IMAGE_RELEASE": "success",
+            "IMAGE_SNAPSHOT": f"osac-release-v{self.version.replace('.', '-')}-attempt1",
+            "CHART_SNAPSHOT": f"osac-charts-release-v{self.version.replace('.', '-')}-attempt1",
             "CHART_TAG_PUSHED": "true",
             "CHART_RELEASE": "success",
             "WORKFLOW_URL": "https://github.com/osac-project/osac/actions/runs/12345",

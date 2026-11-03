@@ -181,6 +181,53 @@ for validating the release *mechanism* itself (e.g. after a change to
 - A real **staging release** to Red Hat's registry — see "Staging release
   (Konflux)" below.
 
+## Release branches and code freeze
+
+For a release that needs a stabilization period instead of shipping
+straight off `main`, cut a release branch named `release-X.Y` (e.g.
+`release-0.4`) and push it directly to `upstream` — not a fork, since
+every contributor opens PRs against it for the duration of the freeze,
+the same way they would against `main`:
+
+```bash
+git fetch upstream
+git checkout -b release-0.4 upstream/main
+git push upstream release-0.4
+```
+
+GitHub's required checks (`CI`, CodeQL, `jira-reference`, Component Hooks
+Smoke) and Konflux's build/Enterprise-Contract triggers both already
+match any `release-*`-named branch the same way they match `main` — this
+was made generic once, so no workflow/`.tekton` changes are needed per
+release branch. `osac-release.yaml` itself needs no `ref` input either:
+dispatch it against the release branch directly via GitHub's own "Use
+workflow from" selector or `--ref`.
+
+**Landing fixes during the freeze:** land every fix on `main` first via a
+normal PR, then cherry-pick that commit onto the release branch via a
+second PR targeting it (`git cherry-pick -x <sha>`, same review bar and
+required checks). This direction — forward from `main`, never backward —
+keeps `main` from falling behind a short-lived branch and avoids a later
+back-merge silently reintroducing an already-superseded fix. Resolve
+cherry-pick conflicts by hand rather than dropping the fix.
+
+**Branch protection:** ask whoever has GitHub org admin access to add a
+branch-protection rule for `release-X.Y` (or a `release-*` wildcard rule,
+if the org's UI supports one) mirroring `main`'s current rule — same
+required approvals, same required status checks, no force-push/delete —
+*before* the first PR lands on it.
+
+**Dispatching the release** at the end of the freeze is the same
+`osac-release.yaml` dispatch as above, just with `--ref release-X.Y`
+instead of `main`.
+
+**Cleanup:** delete the release branch a few days after the release ships
+and no hotfix need has surfaced — the authoritative record of what
+shipped is the `osac/vX.Y.Z` tag and the published artifacts, not the
+branch. If a patch release (e.g. `0.4.1`) becomes necessary before then,
+dispatch it from the still-live `release-0.4` branch directly rather than
+re-deriving a new branch from the tag.
+
 ## Staging release (Konflux)
 
 Every release run also triggers a separate, independent build through

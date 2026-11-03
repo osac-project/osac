@@ -33,6 +33,10 @@ const schemaSQL = `
 --
 -- Example: tenant acme's VM vm-7 entered RUNNING at 10:00, event 42 carried it:
 --   ('acme', 'ComputeInstance', 'vm-7', 'status.state', '2026-10-05 10:00:00Z', 'RUNNING', 42)
+--
+-- A tenant's external billing account is a row here too: resource_type Tenant,
+-- resource_id the tenant name, field external_billing_id. The round copies the
+-- latest value onto heartbeats. That row is not a billable resource.
 CREATE TABLE IF NOT EXISTS history (
     tenant        TEXT        NOT NULL,
     resource_type TEXT        NOT NULL,

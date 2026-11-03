@@ -1,0 +1,15 @@
+---
+# Clear endpoint metadata published by publish.yaml.
+- name: Clear VIP annotations from ClusterOrder
+  kubernetes.core.k8s:
+    state: patched
+    definition:
+      apiVersion: osac.openshift.io/v1alpha1
+      kind: ClusterOrder
+      metadata:
+        name: "{{ cluster_order.metadata.name }}"
+        namespace: "{{ cluster_order.metadata.namespace }}"
+        annotations:
+          osac.openshift.io/api-endpoint: null
+          osac.openshift.io/ingress-endpoint: null
+  no_log: true

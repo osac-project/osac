@@ -13,7 +13,9 @@ import {
   Stack,
   StackItem,
   Title,
+  Tooltip,
 } from '@patternfly/react-core';
+import HelpIcon from '@patternfly/react-icons/dist/esm/icons/help-icon';
 import { Formik } from 'formik';
 import type { TFunction } from 'i18next';
 import * as Yup from 'yup';
@@ -24,6 +26,7 @@ import {
   usePrivateStorageBackend,
   useUpdateStorageBackend,
 } from '@osac/ui-components/api/v1/private/storage-backends';
+import { CheckboxField } from '@osac/ui-components/components/Form/CheckboxField';
 import { InputField } from '@osac/ui-components/components/Form/InputField';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import NameField from '@osac/ui-components/components/Form/NameField';
@@ -41,6 +44,7 @@ const BACKENDS_LIST_PATH = '/admin/infrastructure/storage/backends';
 interface StorageBackendFormValues {
   metadata: { name: string };
   provider: string;
+  cspManaged: boolean;
   endpoint: string;
   description: string;
   credentials: { username: string; password: string };
@@ -49,6 +53,7 @@ interface StorageBackendFormValues {
 const getInitialValues = (backend?: StorageBackend): StorageBackendFormValues => ({
   metadata: { name: backend?.metadata?.name ?? '' },
   provider: backend?.spec?.provider ?? '',
+  cspManaged: backend?.spec?.cspManaged ?? false,
   endpoint: backend?.spec?.endpoint ?? '',
   description: backend?.spec?.description ?? '',
   credentials: { username: '', password: '' },
@@ -56,28 +61,44 @@ const getInitialValues = (backend?: StorageBackend): StorageBackendFormValues =>
 
 const getStorageBackendSchema = (t: TFunction, isEdit: boolean) => {
   const pairError = t('Enter both username and password, or leave both blank');
+  const pairedCredentials = Yup.object({
+    username: Yup.string().test('credentials-pair', pairError, function (value) {
+      const parent = this.parent as { username?: string; password?: string } | undefined;
+      return !!value === !!parent?.password;
+    }),
+    password: Yup.string().test('credentials-pair', pairError, function (value) {
+      const parent = this.parent as { username?: string; password?: string } | undefined;
+      return !!value === !!parent?.username;
+    }),
+  });
   return Yup.object({
     metadata: Yup.object({ name: resourceNameSchema(t) }),
     provider: Yup.string().required(t('Provider is required')),
-    endpoint: Yup.string().required(t('Endpoint is required')),
+    cspManaged: isEdit
+      ? Yup.boolean()
+      : Yup.boolean().when('provider', {
+          is: 'netapp',
+          then: (schema) => schema.oneOf([true], t('NetApp requires CSP-managed ownership')),
+          otherwise: (schema) =>
+            schema.oneOf([false], t('CSP-managed ownership is only available for NetApp')),
+        }),
+    endpoint: Yup.string().when('cspManaged', {
+      is: false,
+      then: (schema) => schema.required(t('Endpoint is required')),
+    }),
     description: Yup.string(),
-    // On edit, credentials start blank and are all-or-nothing: both blank keeps them
-    // unchanged, both filled replaces them, exactly one filled is invalid (there's no
-    // server-side way to update just one). On create they're always required.
+    // On edit, both blank keeps the credentials unchanged. CSP-managed backends
+    // may also omit them on create; a partial pair is never valid.
     credentials: isEdit
-      ? Yup.object({
-          username: Yup.string().test('credentials-pair', pairError, function (value) {
-            const parent = this.parent as { username?: string; password?: string } | undefined;
-            return !!value === !!parent?.password;
-          }),
-          password: Yup.string().test('credentials-pair', pairError, function (value) {
-            const parent = this.parent as { username?: string; password?: string } | undefined;
-            return !!value === !!parent?.username;
-          }),
-        })
-      : Yup.object({
-          username: Yup.string().required(t('Username is required')),
-          password: Yup.string().required(t('Password is required')),
+      ? pairedCredentials
+      : Yup.object().when('cspManaged', {
+          is: true,
+          then: () => pairedCredentials,
+          otherwise: () =>
+            Yup.object({
+              username: Yup.string().required(t('Username is required')),
+              password: Yup.string().required(t('Password is required')),
+            }),
         }),
   });
 };
@@ -94,9 +115,14 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
     { value: 'vast', label: t('VAST') },
     { value: 'ceph', label: t('Ceph') },
     { value: 'pure', label: t('Pure') },
+    { value: 'netapp', label: t('NetApp') },
   ];
 
   const onSubmit = async (values: StorageBackendFormValues) => {
+    const credentials =
+      values.credentials.username && values.credentials.password
+        ? { credentials: values.credentials }
+        : {};
     try {
       if (backend) {
         await update({
@@ -105,14 +131,7 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
           spec: {
             endpoint: values.endpoint,
             description: values.description,
-            ...(values.credentials.username && values.credentials.password
-              ? {
-                  credentials: {
-                    username: values.credentials.username,
-                    password: values.credentials.password,
-                  },
-                }
-              : {}),
+            ...credentials,
           },
         });
         navigate(BACKENDS_LIST_PATH);
@@ -121,12 +140,10 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
           metadata: values.metadata,
           spec: {
             provider: values.provider,
+            cspManaged: values.cspManaged,
             endpoint: values.endpoint,
             description: values.description,
-            credentials: {
-              username: values.credentials.username,
-              password: values.credentials.password,
-            },
+            ...credentials,
           },
         });
         navigate(`${BACKENDS_LIST_PATH}/${created.id}`);
@@ -159,7 +176,7 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
           validationSchema={getStorageBackendSchema(t, isEdit)}
           onSubmit={onSubmit}
         >
-          {({ submitForm, isSubmitting }) => (
+          {({ submitForm, isSubmitting, setFieldValue, values }) => (
             <Stack hasGutter>
               <LeaveFormConfirmation />
               <StackItem>
@@ -172,12 +189,33 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
                     isRequired
                     isDisabled={isEdit}
                     options={providerOptions}
+                    onSelect={(provider) => void setFieldValue('cspManaged', provider === 'netapp')}
+                  />
+                  <CheckboxField
+                    name="cspManaged"
+                    label={
+                      <>
+                        {t('CSP-managed')}{' '}
+                        <Tooltip content={t('Automatically set based on the provider.')}>
+                          <span
+                            role="img"
+                            aria-label={t('Automatically set based on the provider.')}
+                            tabIndex={0}
+                          >
+                            <HelpIcon aria-hidden />
+                          </span>
+                        </Tooltip>
+                      </>
+                    }
+                    ariaLabel={t('CSP-managed')}
+                    fieldId="storage-backend-csp-managed"
+                    isDisabled
                   />
                   <InputField
                     name="endpoint"
                     label={t('Endpoint')}
                     fieldId="storage-backend-endpoint"
-                    isRequired
+                    isRequired={!values.cspManaged}
                   />
                   <InputField
                     name="description"
@@ -188,7 +226,7 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
                     name="credentials.username"
                     label={t('Username')}
                     fieldId="storage-backend-username"
-                    isRequired={!isEdit}
+                    isRequired={!isEdit && !values.cspManaged}
                     helperText={
                       isEdit ? t('Leave blank to keep the current credentials.') : undefined
                     }
@@ -198,7 +236,7 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
                     label={t('Password')}
                     fieldId="storage-backend-password"
                     type="password"
-                    isRequired={!isEdit}
+                    isRequired={!isEdit && !values.cspManaged}
                   />
                 </OsacForm>
               </StackItem>

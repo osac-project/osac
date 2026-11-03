@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import itertools
 import json
 import logging
 import re
 import time
 import urllib.error
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -13,11 +15,14 @@ from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_TYPE = "osac.resource.heartbeat.v1"
+BILLING_ACCOUNT_FIELD = "external_billing_account_id"
 
 # The resource types the metering engine bills, in the shape heartbeats carry.
 HEARTBEAT_RESOURCE_TYPES = (
@@ -47,6 +52,19 @@ _QUANTITY_RE = re.compile(r"^-?\d+\.\d{6}$")
 # Net usage past a moment is a proportional overlap, and the division can
 # leave a rounding tail smaller than this without being real billing.
 _NET_USAGE_TOLERANCE = Decimal("0.000001")
+
+
+def billing_account_id(event: dict[str, Any]) -> str | None:
+    """The heartbeat's external billing account, or None when the field is omitted.
+
+    The round copies the latest non-empty tenant fact onto new heartbeats and
+    leaves already published ones unchanged. Absence is a missing or empty JSON
+    key, never a billing meter of its own.
+    """
+    value = event.get("data", {}).get(BILLING_ACCOUNT_FIELD)
+    if value is None or value == "":
+        return None
+    return str(value)
 
 
 def parse_time(s: str) -> datetime:
@@ -106,6 +124,80 @@ def net_intervals(events: list[dict[str, Any]]) -> list[tuple[datetime, datetime
     return intervals
 
 
+def assert_contiguous_exact_seconds(events: list[dict[str, Any]], meter: str) -> None:
+    """Every heartbeat bills exactly its interval; consecutive intervals touch."""
+    assert events, f"no typed {meter} heartbeats to assert arithmetic on"
+    for event in events:
+        start, end, quantity = usage_interval(event)
+        assert quantity == interval_seconds(start, end), (
+            f"{meter} quantity {quantity} is not the exact length of its interval ({start}..{end})"
+        )
+    for previous, following in itertools.pairwise(events):
+        previous_end = parse_time(previous["data"]["usage"]["to"])
+        following_start = parse_time(following["data"]["usage"]["from"])
+        assert following_start == previous_end, (
+            f"{meter} billed intervals are not contiguous: {previous_end} then {following_start}"
+        )
+
+
+def delete_recording_timestamp(
+    k8s: K8sClient, *, resource: str, cr_name: str, delete: Callable[[], Any], resource_kind: WaitResourceKind
+) -> datetime | None:
+    """Run `delete` and return the deletion time the API server recorded on the CR.
+
+    The teardown can finish in under a second, so the deletion timestamp is
+    read through a watch established before the delete request: the watch
+    always delivers the modification that stamps it, where a plain get can
+    arrive after the object is already gone. None when the CR never got a
+    timestamp.
+    """
+    deletion_recorded: datetime | None = None
+    try:
+        with k8s.watch_deletion_timestamp(resource=resource, name=cr_name) as deletion_stamp:
+            with contextlib.suppress(Exception):
+                delete()
+            with contextlib.suppress(Exception):
+                deletion_recorded = parse_time(
+                    poll_until(
+                        fn=deletion_stamp,
+                        until=lambda stamp: bool(stamp),
+                        retries=30,
+                        delay=2,
+                        description=f"deletion timestamp of {cr_name}",
+                        resource_kind=resource_kind,
+                        resource_id=cr_name,
+                    )
+                )
+    except Exception:
+        # A watch that never started must not leak the resource: the delete
+        # above never ran, so issue it now, then fail loudly.
+        with contextlib.suppress(Exception):
+            delete()
+        raise
+    return deletion_recorded
+
+
+def assert_dimension_sets_disjoint(events: list[dict[str, Any]], label: str) -> None:
+    """No two billing dimension sets of one resource bill the same span.
+
+    Compares net intervals, not raw spans: a round that ran before a transition
+    was folded bills the old value past it, and a correction cancels only the
+    tail, so the raw spans overlap on correct billing.
+    """
+    by_dimensions: dict[tuple[tuple[str, str], ...], list[dict[str, Any]]] = {}
+    for event in events:
+        by_dimensions.setdefault(dimension_key(event), []).append(event)
+    dimension_sets = [net_intervals(group) for group in by_dimensions.values()]
+    for first, second in itertools.combinations(dimension_sets, 2):
+        for first_start, first_end, _ in first:
+            for second_start, second_end, _ in second:
+                overlaps = first_start < second_end and second_start < first_end
+                assert not overlaps, (
+                    f"two dimension sets of {label} billed the same span: "
+                    f"{first_start}..{first_end} overlaps {second_start}..{second_end}"
+                )
+
+
 def assert_exact_contiguous_life(
     events: list[dict[str, Any]], *, multiplier: Decimal, deletion: datetime, label: str
 ) -> None:
@@ -131,11 +223,11 @@ def assert_exact_contiguous_life(
     )
 
 
-def _matches(event: dict[str, Any], expected: ExpectedEvent) -> bool:
-    return event.get("type") == expected.event_type and (
-        event.get("resource_id") == expected.resource_id
-        or event.get("osacresourceid") == expected.resource_id
-        or event.get("data", {}).get("resource_id") == expected.resource_id
+def _matches(event: dict[str, Any], event_type: str, resource_id: str) -> bool:
+    return event.get("type") == event_type and (
+        event.get("resource_id") == resource_id
+        or event.get("osacresourceid") == resource_id
+        or event.get("data", {}).get("resource_id") == resource_id
     )
 
 
@@ -152,7 +244,7 @@ def _interval_start(event: dict[str, Any]) -> datetime:
         return datetime.max.replace(tzinfo=UTC)
 
 
-def _dimension_key(event: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+def dimension_key(event: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     """The dimension set a heartbeat bills on, as a comparable key.
 
     A negative correction reverses the same set it cancels, so the set groups
@@ -195,7 +287,7 @@ def _net_usage_by_dimension(events: list[dict[str, Any]]) -> dict[tuple[tuple[st
             quantity = Decimal(event["data"]["usage"]["quantity"])
         except (KeyError, ValueError, ArithmeticError):
             continue
-        key = _dimension_key(event)
+        key = dimension_key(event)
         nets[key] = nets.get(key, Decimal(0)) + quantity
     return nets
 
@@ -224,7 +316,7 @@ def net_usage_past_by_dimension(
         # counts in the interval's proportion.
         overlap = interval_seconds(max(start, past), end)
         length = interval_seconds(start, end)
-        key = _dimension_key(event)
+        key = dimension_key(event)
         nets[key] = nets.get(key, Decimal(0)) + quantity * overlap / length
     return nets
 
@@ -233,6 +325,7 @@ def net_usage_past_by_dimension(
 class ExpectedEvent:
     event_type: str
     resource_id: str
+    resource_kind: WaitResourceKind
     timeout: int = 60
 
 
@@ -252,7 +345,7 @@ class MeteringCollector:
 
     Usage in tests::
 
-        metering.expect("osac.resource.heartbeat.v1", resource_id=uuid)
+        metering.expect("osac.resource.heartbeat.v1", resource_id=uuid, resource_kind=WaitResourceKind.COMPUTE_INSTANCE)
         # ... test actions ...
         # metering.verify() runs automatically on fixture teardown
     """
@@ -292,13 +385,15 @@ class MeteringCollector:
         self._expected_tenant = tenant
         return self
 
-    def expect(self, event_type: str, resource_id: str, *, timeout: int = 60) -> None:
+    def expect(self, event_type: str, resource_id: str, *, resource_kind: WaitResourceKind, timeout: int = 60) -> None:
         if event_type != HEARTBEAT_TYPE:
             raise ValueError(
                 f"metering sends only {HEARTBEAT_TYPE}; lifecycle and correction "
                 f"events do not exist, got {event_type!r}"
             )
-        self._expectations.append(ExpectedEvent(event_type=event_type, resource_id=resource_id, timeout=timeout))
+        self._expectations.append(
+            ExpectedEvent(event_type=event_type, resource_id=resource_id, resource_kind=resource_kind, timeout=timeout)
+        )
 
     def verify(self) -> None:
         if not self._expectations:
@@ -319,7 +414,11 @@ class MeteringCollector:
         yet; a late dimension is required only from the first heartbeat that
         carries it (see LATE_DIMENSIONS).
         """
-        events = [ev for ev in self._fetch_events(expected.event_type, expected.resource_id) if _matches(ev, expected)]
+        events = [
+            ev
+            for ev in self._fetch_events(expected.event_type, expected.resource_id)
+            if _matches(ev, expected.event_type, expected.resource_id)
+        ]
         events.sort(key=_interval_start)
         # Reversed history: a meter whose quantities net to zero was billed and
         # taken back, so no late dimension is demanded of it. Tied interval
@@ -335,11 +434,11 @@ class MeteringCollector:
                 if dimensions.get(dimension)
             )
             late_required = carried
-            if _dimension_key(event) in reversed_meters:
+            if dimension_key(event) in reversed_meters:
                 late_required = set()
             self._validate_structure(
                 event,
-                expected,
+                expected.resource_id,
                 late_required=late_required,
                 expect_no_project=self._expect_no_project,
                 expected_tenant=self._expected_tenant,
@@ -356,11 +455,10 @@ class MeteringCollector:
         validated with every late dimension required, so passing it an early
         heartbeat that predates the fact fails.
         """
-        expected = ExpectedEvent(event_type=HEARTBEAT_TYPE, resource_id=resource_id)
         late = LATE_DIMENSIONS.get(event.get("osacresourcetype", ""), ())
         self._validate_structure(
             event,
-            expected,
+            resource_id,
             late_required=set(late),
             expect_no_project=self._expect_no_project,
             expected_tenant=self._expected_tenant,
@@ -369,12 +467,16 @@ class MeteringCollector:
             self._matched.add(event_id)
         self._verified[(HEARTBEAT_TYPE, resource_id)] = event
 
-    def get_event(self, event_type: str, resource_id: str, *, timeout: int = 60) -> dict[str, Any]:
+    def get_event(
+        self, event_type: str, resource_id: str, *, resource_kind: WaitResourceKind, timeout: int = 60
+    ) -> dict[str, Any]:
         """Return a verified event, or poll for one if not yet verified."""
         key = (event_type, resource_id)
         if key in self._verified:
             return self._verified[key]
-        exp = ExpectedEvent(event_type=event_type, resource_id=resource_id, timeout=timeout)
+        exp = ExpectedEvent(
+            event_type=event_type, resource_id=resource_id, resource_kind=resource_kind, timeout=timeout
+        )
         return self._poll_for_event(exp)
 
     def assert_no_events(self, event_type: str, resource_id: str, *, since: str, within: int = 60) -> None:
@@ -390,11 +492,10 @@ class MeteringCollector:
         overruns the window would be missed entirely.
         """
         since_dt = parse_time(since)
-        expected = ExpectedEvent(event_type=event_type, resource_id=resource_id)
         deadline = time.monotonic() + within
         while True:
             events = self._fetch_events(event_type, resource_id)
-            matching = [ev for ev in events if _matches(ev, expected)]
+            matching = [ev for ev in events if _matches(ev, event_type, resource_id)]
             nets = net_usage_past_by_dimension(matching, past=since_dt)
             if any(abs(net) > _NET_USAGE_TOLERANCE for net in nets.values()):
                 raise AssertionError(
@@ -493,6 +594,7 @@ class MeteringCollector:
         resource_id: str,
         wanted: dict[str, str],
         *,
+        resource_kind: WaitResourceKind,
         after: datetime | None = None,
         timeout: int = 300,
         delay: int = 10,
@@ -521,6 +623,8 @@ class MeteringCollector:
             retries=timeout // delay,
             delay=delay,
             description=f"heartbeat of {resource_id} with dimensions {wanted}",
+            resource_kind=resource_kind,
+            resource_id=resource_id,
         )
 
     def _fetch_events(self, event_type: str, resource_id: str) -> list[dict[str, Any]]:
@@ -554,7 +658,7 @@ class MeteringCollector:
                 ev_id = ev.get("id", "")
                 if ev_id and ev_id in self._matched:
                     continue
-                if _matches(ev, expected):
+                if _matches(ev, expected.event_type, expected.resource_id):
                     if ev_id:
                         self._matched.add(ev_id)
                     result.append(ev)
@@ -567,13 +671,15 @@ class MeteringCollector:
             retries=expected.timeout // 2,
             delay=2,
             description=f"metering event type={expected.event_type} resource_id={expected.resource_id}",
+            resource_kind=expected.resource_kind,
+            resource_id=expected.resource_id,
         )
         return result[0]
 
     @staticmethod
     def _validate_structure(
         event: dict[str, Any],
-        expected: ExpectedEvent,
+        resource_id: str,
         *,
         late_required: set[str] | None = None,
         expect_no_project: bool = False,
@@ -585,16 +691,14 @@ class MeteringCollector:
         assert event.get("source") == "osac-metering", f"Wrong source: {event.get('source')}"
         assert event.get("id"), "Missing event id"
         assert event.get("time"), "Missing event time"
-        assert event.get("osacresourceid") == expected.resource_id, (
-            f"Wrong osacresourceid: {event.get('osacresourceid')}"
-        )
+        assert event.get("osacresourceid") == resource_id, f"Wrong osacresourceid: {event.get('osacresourceid')}"
         assert event.get("osacresourcetype") in HEARTBEAT_RESOURCE_TYPES, (
             f"Wrong osacresourcetype: {event.get('osacresourcetype')}"
         )
         assert event.get("osactenant"), "Missing osactenant"
 
         data = event.get("data", {})
-        assert data.get("resource_id") == expected.resource_id, f"Wrong resource_id in data: {data.get('resource_id')}"
+        assert data.get("resource_id") == resource_id, f"Wrong resource_id in data: {data.get('resource_id')}"
         assert data.get("resource_type") == event.get("osacresourcetype"), (
             f"Mismatched resource types: {data.get('resource_type')!r} != {event.get('osacresourcetype')!r}"
         )

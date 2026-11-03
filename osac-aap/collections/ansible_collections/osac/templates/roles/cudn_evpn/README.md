@@ -71,8 +71,8 @@ Every object is named from an API ID and carries
     and `infrastructureSubnets: [<gateway>/32, <network + 2>/32]`:
     OVN-Kubernetes serves the VM gateway (routing it into the IP-VRF,
     symmetric IRB) and uses network + 2 as its management-port address; both
-    are excluded from VM allocation. The fabric does not serve the VM
-    gateway;
+    are excluded from VM allocation. The fabric need not serve the VM
+    gateway; the Netris V-Net is also configured to serve it;
   - has `reservedSubnets` = the Subnet minus `ipam.overlay_ipv4_cidrs`, as the fewest CIDRs, so VMs get addresses only from the overlay
     range (at most 25 entries; more fails as final);
   - carries the label `evpn: "true"` (selected by the installer's
@@ -203,10 +203,10 @@ oc get networkclass -A   # Ready, networkType evpn
 Create the resources as a tenant (`ICMP` rules are rejected; use `all`):
 
 ```bash
-osac create virtualnetwork --name lab-vn --ipv4-cidr 10.60.0.0/16
-osac create subnet --name lab-subnet --virtual-network lab-vn --ipv4-cidr 10.60.1.0/24
+osac create virtualnetwork --name lab-vn --ipv4-cidr 172.16.0.0/16
+osac create subnet --name lab-subnet --virtual-network lab-vn --ipv4-cidr 172.16.1.0/24
 osac create securitygroup --name lab-sg --virtual-network lab-vn \
-  --ingress protocol=all,ipv4-cidr=10.60.1.0/24 \
+  --ingress protocol=all,ipv4-cidr=172.16.1.0/24 \
   --ingress protocol=tcp,port-from=22,port-to=22,ipv4-cidr=0.0.0.0/0 \
   --egress protocol=all,ipv4-cidr=0.0.0.0/0
 osac create computeinstance --template <vm template> --name lab-vm1 \
@@ -230,7 +230,7 @@ oc -n osac-vn-$VN get ipamclaims                 # one persistent claim per VM
 
 In each VM console (`virtctl console -n osac-vn-$VN lab-vm1`): `ip addr`
 shows an address from the overlay range, `ip route` the default route via
-`.1`; `ping -c3 10.60.1.1` reaches the gateway, `ping -c3 <lab-vm2 address>`
+`.1`; `ping -c3 172.16.1.1` reaches the gateway, `ping -c3 <lab-vm2 address>`
 reaches the other VM (check with `oc get vmi -o wide` that both run on one
 node: cross-node traffic needs the real fabric and is out of scope here).
 Check `osac get computeinstance` reports both Ready with their addresses;

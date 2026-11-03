@@ -1,27 +1,16 @@
 ---
-- name: Include network-class-specific create tasks
+- name: Validate the network steps collection
+  ansible.builtin.assert:
+    that:
+      - network_steps_collection | default('') | length > 0
+    fail_msg: >-
+      NETWORK_STEPS_COLLECTION must identify the network steps collection for
+      the generic external-access flow.
+
+- name: Include network-class-specific external access create tasks
   ansible.builtin.include_role:
     name: "{{ network_steps_collection }}.external_access"
     tasks_from: create.yaml
 
-- name: Write VIP annotations to ClusterOrder
-  kubernetes.core.k8s:
-    state: patched
-    definition:
-      apiVersion: osac.openshift.io/v1alpha1
-      kind: ClusterOrder
-      metadata:
-        name: "{{ cluster_order.metadata.name }}"
-        namespace: "{{ cluster_order.metadata.namespace }}"
-        annotations:
-          osac.openshift.io/api-endpoint: "{{ external_access_api_internal_ip }}"
-          osac.openshift.io/ingress-endpoint: >-
-            {{ external_access_metallb_ingress_ip | default(external_access_ingress_ip, true) }}
-  when:
-    - external_access_api_internal_ip is defined
-    - external_access_api_internal_ip | length > 0
-    - >-
-      (external_access_metallb_ingress_ip is defined
-       and external_access_metallb_ingress_ip | length > 0)
-      or (external_access_ingress_ip is defined
-          and external_access_ingress_ip | length > 0)
+- name: Publish backend endpoint addresses
+  ansible.builtin.include_tasks: publish.yaml

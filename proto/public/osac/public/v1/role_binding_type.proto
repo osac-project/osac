@@ -20,11 +20,10 @@ import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/role_type.proto";
 import "osac/public/v1/user_type.proto";
 
-// Represents a binding between a role and a set of users.
+// Represents a binding between a role and a set of subjects.
 //
-// A RoleBinding grants the permissions defined by its referenced role to the users listed in its spec. This is
-// the mechanism by which roles are assigned to users, enabling those users to perform the actions permitted by
-// the role.
+// A RoleBinding grants the permissions defined by its referenced role to the users and service accounts listed in its
+// spec.
 message RoleBinding {
   // Unique identifier of the role binding.
   string id = 1;
@@ -42,7 +41,7 @@ message RoleBinding {
 // Desired state of a role binding.
 message RoleBindingSpec {
   // Reference to the role that this binding refers to. This determines which permissions are granted to the
-  // users listed below.
+  // subjects listed below.
   RoleReference role = 1;
 
   // References to the users that are granted the permissions defined by the role.
@@ -51,6 +50,18 @@ message RoleBindingSpec {
   // To revoke a role from a user, either delete the entire RoleBinding (if the user is the only subject), or
   // update the RoleBinding to remove the user's reference from this list.
   repeated UserReference users = 2;
+
+  // References to the service accounts that are granted the permissions defined by the role.
+  //
+  // To grant a role to a service account, create a RoleBinding with the desired role and include the service account's
+  // ID in this list. Service account grants are evaluated by Fulfillment and are not synchronized to Keycloak roles.
+  repeated ServiceAccountReference service_accounts = 3;
+}
+
+// Reference to a tenant-owned service account.
+message ServiceAccountReference {
+  // Unique identifier assigned by the server.
+  string id = 1;
 }
 
 // Current observed state of a role binding, reflecting its synchronization with the underlying authorization system.

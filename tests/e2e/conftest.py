@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.core import failure_report, failure_snapshot
+from tests.e2e.core import failure_report, failure_snapshot, telemetry
 from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import unique_name, wait_for_grpc_subnet_ready, wait_for_tenant_condition
@@ -26,6 +26,7 @@ from tests.e2e.core.keycloak_admin import (
 from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, poll_until, run, run_unchecked
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
 @pytest.fixture(scope="session")
@@ -102,6 +103,8 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers", "serial: must run alone, not in parallel with other tests (e.g. exhausts a shared resource)"
     )
     failure_report.register(config)
+    # Worker attribution and fixture-reuse spans; inert without OpenTelemetry.
+    telemetry.register(config)
     if config.option.tbstyle == "auto":
         # The long style prints every frame's arguments: tokens, passwords and kubeconfig values. An explicit
         # --tb on the command line is left alone.
@@ -255,7 +258,7 @@ def ensure_tenants(private_grpc: GRPCClient) -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def _wait_for_default_subnets_ready(
-    ensure_jwt_users: None, setup_organization_memberships: None, grpc: GRPCClient
+    ensure_jwt_users: None, setup_organization_memberships: None, grpc: GRPCClient, jwt_tenant: str
 ) -> None:
     """Wait for tenant-default subnets to reach READY in the fulfillment database.
 
@@ -286,6 +289,8 @@ def _wait_for_default_subnets_ready(
         delay=2,
         description="at least one subnet to appear in gRPC",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.TENANT,
+        resource_id=jwt_tenant,
     )
     for subnet_id in subnet_ids:
         wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)

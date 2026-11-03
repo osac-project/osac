@@ -1,10 +1,22 @@
-import { QueryClient } from '@tanstack/react-query';
+import React, { type ReactNode, createElement } from 'react';
+import { createRouterTransport } from '@connectrpc/connect';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { ExternalIPState, SecurityGroupState, SubnetState, VirtualNetworkState } from '@osac/types';
+import {
+  ExternalIPState,
+  Protocol,
+  SecurityGroupState,
+  SecurityGroups,
+  SubnetState,
+  VirtualNetworkState,
+} from '@osac/types';
 
 import {
   VIRTUAL_NETWORK_READY_LIST_FILTER,
+  defaultSecurityGroupListFilter,
+  defaultSubnetListFilter,
   externalIpIdsFilter,
   invalidateSecurityGroupsQueries,
   invalidateSubnetsQueries,
@@ -12,12 +24,32 @@ import {
   securityGroupFilterForVirtualNetwork,
   securityGroupFilterForVirtualNetworkList,
   unallocatedExternalIpFilter,
+  useUpdateSecurityGroup,
   virtualNetworkFilterForSubnetList,
   virtualNetworkScopeFilter,
 } from './networking';
+import { ApiProvider } from '../api-context';
 import { escapeCelStringLiteral } from '../cel';
 
 describe('networking list filters', () => {
+  it('finds only ready IPv4 tenant-default subnets in the selected project', () => {
+    expect(defaultSubnetListFilter('project-a')).toBe(
+      `this.metadata.labels["osac.openshift.io/default"] == "true" && this.metadata.project == "project-a" && this.status.state == ${SubnetState.READY} && has(this.spec.ipv4_cidr)`,
+    );
+  });
+
+  it('escapes a project name in the default subnet filter', () => {
+    expect(defaultSubnetListFilter('project-"a')).toContain(
+      'this.metadata.project == "project-\\"a"',
+    );
+  });
+
+  it('finds the ready tenant-default security group in the subnet network', () => {
+    expect(defaultSecurityGroupListFilter('project-a', 'vn-a')).toBe(
+      `this.metadata.labels["osac.openshift.io/default"] == "true" && this.metadata.project == "project-a" && this.spec.virtual_network.id == "vn-a" && this.status.state == ${SecurityGroupState.READY}`,
+    );
+  });
+
   it('filters virtual networks to ready state using enum integer', () => {
     expect(VIRTUAL_NETWORK_READY_LIST_FILTER).toBe(
       `this.status.state == ${VirtualNetworkState.READY}`,
@@ -142,5 +174,45 @@ describe('networking query invalidation', () => {
 
     expect(qc.getQueryState(['v1/security_groups'])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(['v1/security_groups', ['sg-1']])?.isInvalidated).toBe(true);
+  });
+});
+
+describe('useUpdateSecurityGroup', () => {
+  it('sends rule updates through the public API', async () => {
+    let captured: { object?: unknown } | undefined;
+    const transport = createRouterTransport((router) => {
+      router.service(SecurityGroups, {
+        update: (request) => {
+          captured = request;
+          return { object: request.object };
+        },
+      });
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        ApiProvider,
+        { transport } as React.ComponentProps<typeof ApiProvider>,
+        createElement(QueryClientProvider, { client: queryClient }, children),
+      );
+    const { result } = renderHook(() => useUpdateSecurityGroup(), { wrapper });
+    const object = {
+      id: 'sg-1',
+      metadata: { name: 'sg-web' },
+      spec: {
+        virtualNetwork: { id: 'vn-1' },
+        ingress: [{ protocol: Protocol.TCP, portFrom: 443, portTo: 443 }],
+        egress: [],
+      },
+    };
+
+    await act(async () => {
+      await result.current.mutateAsync({ object });
+    });
+
+    expect(captured?.object).toMatchObject(object);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
   });
 });

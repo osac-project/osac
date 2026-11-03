@@ -69,6 +69,7 @@ import (
 	hubscheme "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/scheme"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/networking"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
 	"github.com/osac-project/osac/fulfillment-service/internal/trust"
@@ -346,6 +347,11 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC client: %w", err)
+	}
+	if err := networking.CheckRemoteInstallationProvisioning(
+		ctx, privatev1.NewInstallationSettingsClient(r.client), r.args.networkingProvisioningEnabled,
+	); err != nil {
+		return err
 	}
 
 	// Create the gRPC server:

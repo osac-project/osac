@@ -20,6 +20,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.vmaas.networking_lifecycle_helpers import (
     create_and_wait_for_subnet,
     create_and_wait_for_virtual_network,
@@ -65,7 +66,15 @@ def _set_deletion_test_finalizer(private_grpc: GRPCClient, ci_id: str, *, presen
             raise
         return True
 
-    poll_until(fn=update_finalizers, until=bool, retries=10, delay=1, description="ComputeInstance test finalizer")
+    poll_until(
+        fn=update_finalizers,
+        until=bool,
+        retries=10,
+        delay=1,
+        description="ComputeInstance test finalizer",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=ci_id,
+    )
 
 
 def test_compute_instance_with_disk_image(

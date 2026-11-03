@@ -59,6 +59,9 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	if err := validateBareMetalInstanceCatalogItemInstanceTypePolicy(ctx, fields.GetInstanceType(), bareMetalInstanceTypesDao); err != nil {
 		return nil, err
 	}
+	if err := validateCatalogItemSSHKeyPolicy(ctx, scope, fields.GetSshKey(), secretsDao); err != nil {
+		return nil, err
+	}
 
 	warnings, err := validateBareMetalInstanceCatalogItemDiskImagePolicy(ctx, scope, fields, template, bareMetalInstanceTypesDao, diskImagesDao)
 	if err != nil {
@@ -152,6 +155,9 @@ func applyBareMetalInstanceCatalogItemPolicies(
 	}
 	if err := applyPolicy(fields.GetDiskImage(), spec.GetDiskImage() != nil, spec.SetDiskImage, decodeDiskImageReferencePolicy, cloneMessage[*privatev1.DiskImageReference]); err != nil {
 		return fmt.Errorf("disk_image: %w", err)
+	}
+	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, spec.SetSshKey, decodeFullSecretReferencePolicy, cloneMessage[*privatev1.SecretReference]); err != nil {
+		return fmt.Errorf("ssh_key: %w", err)
 	}
 	return nil
 }

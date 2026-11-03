@@ -14,11 +14,10 @@ interface NetworkAttachmentReviewFieldsProps {
 }
 
 /**
- * Shared review fields for VN / subnet / security-groups, reused by
- * VM, Cluster, and (in future) bare-metal review steps.
+ * Shared review fields for virtual network, subnet, and selected security groups,
+ * reused by VM, cluster, and bare-metal review steps.
  *
- * Renders three `DescriptionListGroup` items — must be placed inside a
- * PatternFly `DescriptionList`.
+ * Place inside a PatternFly `DescriptionList`.
  */
 export const NetworkAttachmentReviewFields = ({
   virtualNetwork,

@@ -99,6 +99,13 @@ installer values or schema, or when planning their delivery, read the
 Read the linked documents when their trigger applies, including when no skill
 is invoked. Keep them current in the same PR as changes to the contracts they describe.
 
+### Verification and approval
+
+- Optimize for trusted, deployable changes rather than the volume of generated code or artifacts. Include the effort needed to verify changes in delivery planning.
+- Treat generated code, tests, review comments, and agent agreement as proposals, not proof of correctness. Verify important claims with applicable executed tests, policy checks, and boundary evidence; report unresolved findings and checks that could not run.
+- Automate repeatable validation where practical. Define human approval and escalation gates for failed checks, high-risk changes, ambiguity, or insufficient evidence, and keep routine agent coordination from becoming the engineer's main task.
+- Make remaining uncertainty visible before approval. Do not silently carry forward unread findings, untrusted generated tests, or unresolved recommendations.
+
 Run [`tools/bootstrap.sh`](tools/bootstrap.sh) after cloning. It vendors the
 shared AI skills and workflows, links supported agent skill discovery, and
 creates the gitignored external-repository checkouts below. By default it

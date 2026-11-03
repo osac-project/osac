@@ -11,6 +11,7 @@ from typing import Any
 
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import env, poll_until, run, run_unchecked
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
 def _condition(order: dict[str, Any]) -> dict[str, Any]:
@@ -68,6 +69,8 @@ def assert_cluster_trust(
         delay=10,
         description=f"ClusterOrder {order_name} fulfillment trust ready",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=order_name,
     )
     assert _condition(order).get("reason") == "TrustBundleSynchronized"
     bundle = k8s.get_json(resource="configmap", name="ca-bundle")["data"]["bundle.pem"]
@@ -130,6 +133,8 @@ def assert_cluster_trust(
             delay=5,
             description=f"tenant CSI rollout for ClusterOrder {order_name}",
             retry_on_error=True,
+            resource_kind=WaitResourceKind.CLUSTER_ORDER,
+            resource_id=order_name,
         )
     return digest
 

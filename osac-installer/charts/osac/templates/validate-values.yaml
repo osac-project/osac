@@ -1,3 +1,9 @@
+{{- if hasKey (.Values.operator.controllers | default dict) "networkingProvisioning" -}}
+{{- fail "operator.controllers.networkingProvisioning was removed; use global.networking.provisioningEnabled (boolean). Choose one state for all networking consumers." -}}
+{{- end -}}
+{{- if hasKey (.Values.bmf.env | default dict) "enableNetworkingProvisioning" -}}
+{{- fail "bmf.env.enableNetworkingProvisioning was removed; use global.networking.provisioningEnabled (boolean). Choose one state for all networking consumers." -}}
+{{- end -}}
 {{- include "osac.validateValues" . -}}
 {{- if .Values.bmf.netbox.enabled }}
 {{- $serviceIssuer := tpl (required "service.auth.issuerUrl is required when bmf.netbox.enabled is true" .Values.service.auth.issuerUrl) . }}

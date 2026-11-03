@@ -1,0 +1,15 @@
+---
+# Steer the Kubernetes API fault proxy. Input: ce_proxy_steps, a list of
+# {path, body}: POST /__admin/<path> with the body.
+- name: Call the proxy admin endpoint
+  ansible.builtin.uri:
+    url: "{{ ce_proxy.url }}/__admin/{{ _ce_admin.path }}"
+    method: POST
+    body_format: json
+    body: "{{ _ce_admin.body | default({}) }}"
+    use_proxy: false
+    status_code: 200
+  loop: "{{ ce_proxy_steps }}"
+  loop_control:
+    loop_var: _ce_admin
+    label: "{{ _ce_admin.path }}"

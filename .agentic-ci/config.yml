@@ -21,7 +21,7 @@
 sandbox:
   toolchains:
     go: "1.26.3"             # go.work (no go.mod at the repo root, so no auto)
-    golangci-lint: "2.13.2"  # tools/golangci-lint.mk
+    golangci-lint: "2.15.0"  # tools/golangci-lint.mk
     helm: "3.22.0"           # .github/workflows/helm-lint.yaml
     node: "22.23.3"          # osac-ui Containerfile builds on Node.js 22
     pnpm: "9.15.9"           # osac-ui/package.json packageManager

@@ -30,10 +30,6 @@ const externalIpPoolStatusMap = (t: TFunction): Record<ExternalIPPoolState, Stat
     status: 'progressing',
     text: t('Deleting'),
   },
-  [ExternalIPPoolState.EXTERNAL_IP_POOL_STATE_DELETE_FAILED]: {
-    status: 'failed',
-    text: t('Delete failed'),
-  },
 });
 
 const ExternalIpPoolStatusLabel = ({ state }: ExternalIpPoolStatusLabelProps) => {

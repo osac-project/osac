@@ -13,6 +13,7 @@ import pytest
 from tests.e2e.core.failures import Kind, tagged
 from tests.e2e.core.runner import poll_until
 from tests.e2e.core.ssh_probe import probe_connectivity
+from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.vmaas import ssh_helper
 from tests.e2e.networking.vmaas.ssh_helper import HelperExecError, HelperPodError
 
@@ -319,6 +320,8 @@ def wait_for_guest_ssh(vm_namespace: str, vm_name: str, identity_file: str) -> N
             retries=_SSH_READY_RETRIES,
             delay=_SSH_READY_DELAY,
             description=f"guest SSH on {vm_namespace}/{vm_name}",
+            resource_kind=WaitResourceKind.VIRTUAL_MACHINE_INSTANCE,
+            resource_id=vm_name,
         )
     except TimeoutError as exc:
         raise tagged(
@@ -390,6 +393,8 @@ def start_tcp_listener(vm_namespace: str, vm_name: str, identity_file: str, port
         retries=6,
         delay=5,
         description=f"listener on {vm_namespace}/{vm_name}:{port}",
+        resource_kind=WaitResourceKind.VIRTUAL_MACHINE_INSTANCE,
+        resource_id=vm_name,
     )
 
 

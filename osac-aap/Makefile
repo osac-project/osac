@@ -1,10 +1,20 @@
 # Integration tests for osac.workflows collection
 # Note: Must be run from repository root directory
 
-.PHONY: test lint execution-environment-build execution-environment-push kind-load-image
+.PHONY: test lint role-coverage role-coverage-report execution-environment-build execution-environment-push kind-load-image
+
+# Task and Python coverage of the network manager roles (netris, cudn_evpn).
+# `make test` measures it on every run and fails on a gap; see
+# docs/INTEGRATION-TESTING.md and tests/coverage/role_coverage.py.
+ROLE_COVERAGE_DIR ?= $(CURDIR)/tests/coverage/.runs
+ROLE_COVERAGE_ENV = OSAC_TASK_COVERAGE_DIR=$(ROLE_COVERAGE_DIR) \
+	ANSIBLE_CALLBACK_PLUGINS=$(CURDIR)/tests/coverage/callback_plugins \
+	ANSIBLE_CALLBACKS_ENABLED=osac_task_coverage
+ROLE_COVERAGE_PYTEST = --cov --cov-config=tests/coverage/coveragerc --cov-report=json:$(ROLE_COVERAGE_DIR)/python.json
 
 test:
-	uv run --group development pytest tests/unit
+	rm -rf "$(ROLE_COVERAGE_DIR)" && mkdir -p "$(ROLE_COVERAGE_DIR)"
+	$(ROLE_COVERAGE_ENV) uv run --group development pytest tests/unit $(ROLE_COVERAGE_PYTEST)
 	@cd tests/integration && { \
 		set -e; \
 		trap './teardown_test_env.sh' EXIT; \
@@ -12,8 +22,21 @@ test:
 		./setup_test_env.sh; \
 		echo ""; \
 		echo "=== Running integration tests ==="; \
-		./run_tests.sh; \
+		$(ROLE_COVERAGE_ENV) ./run_tests.sh; \
 	}
+	$(MAKE) role-coverage-report
+
+# Only what measures the two roles: the unit tests, then their targets on a
+# small Kind cluster of its own, without the setup of the whole of `make test`.
+role-coverage:
+	rm -rf "$(ROLE_COVERAGE_DIR)" && mkdir -p "$(ROLE_COVERAGE_DIR)"
+	$(ROLE_COVERAGE_ENV) uv run --group development pytest tests/unit $(ROLE_COVERAGE_PYTEST)
+	$(ROLE_COVERAGE_ENV) tests/coverage/run_role_targets.sh
+	$(MAKE) role-coverage-report
+
+role-coverage-report:
+	uv run --group development python tests/coverage/role_coverage.py --dir "$(ROLE_COVERAGE_DIR)" \
+		--python-coverage "$(ROLE_COVERAGE_DIR)/python.json"
 
 lint:
 	uv run ansible-lint

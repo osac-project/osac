@@ -1,0 +1,5 @@
+- name: Run shared CaaS DNS discovery and record lifecycle
+  ansible.builtin.include_tasks: caas_dns_create.yaml
+
+- name: Publish CaaS endpoints to ClusterOrder
+  ansible.builtin.include_tasks: publish.yaml

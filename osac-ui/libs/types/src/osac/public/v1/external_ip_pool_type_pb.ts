@@ -29,7 +29,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/external_ip_pool_type.proto.
  */
 export const file_osac_public_v1_external_ip_pool_type: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3B1YmxpYy92MS9leHRlcm5hbF9pcF9wb29sX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIrYBCg5FeHRlcm5hbElQUG9vbBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjAKBHNwZWMYAyABKAsyIi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQUG9vbFNwZWMSOgoGc3RhdHVzGAQgASgLMiQub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUFBvb2xTdGF0dXNCBOJBAQMiVAoSRXh0ZXJuYWxJUFBvb2xTcGVjEj4KCWlwX2ZhbWlseRgDIAEoDjIYLm9zYWMucHVibGljLnYxLklQRmFtaWx5QhHiQQICBbpICYIBBhABIAAgAiIvChRFeHRlcm5hbElQUG9vbFN0YXR1cxIXCglhdmFpbGFibGUYBiABKANCBOJBAQMiVAoXRXh0ZXJuYWxJUFBvb2xSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIPCgdwcm9qZWN0GAMgASgJEg4KBnNoYXJlZBgEIAEoCGIGcHJvdG8z", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_ip_family_type, file_osac_public_v1_metadata_type]);
+  fileDesc("Cipvc2FjL3B1YmxpYy92MS9leHRlcm5hbF9pcF9wb29sX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIrYBCg5FeHRlcm5hbElQUG9vbBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjAKBHNwZWMYAyABKAsyIi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQUG9vbFNwZWMSOgoGc3RhdHVzGAQgASgLMiQub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUFBvb2xTdGF0dXNCBOJBAQMicwoSRXh0ZXJuYWxJUFBvb2xTcGVjEj4KCWlwX2ZhbWlseRgDIAEoDjIYLm9zYWMucHVibGljLnYxLklQRmFtaWx5QhHiQQICBbpICYIBBhABIAAgAkoECAQQBVIXaW1wbGVtZW50YXRpb25fc3RyYXRlZ3kiLwoURXh0ZXJuYWxJUFBvb2xTdGF0dXMSFwoJYXZhaWxhYmxlGAYgASgDQgTiQQEDIlQKF0V4dGVybmFsSVBQb29sUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZzaGFyZWQYBCABKAhiBnByb3RvMw", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_ip_family_type, file_osac_public_v1_metadata_type]);
 
 /**
  * Represents a pool of external IP addresses available for allocation.
@@ -40,9 +40,6 @@ export const file_osac_public_v1_external_ip_pool_type: GenFile = /*@__PURE__*/
  *
  * "External" means external to the VirtualNetwork. The addresses may be internet-routable or
  * data-center-routable depending on the deployment topology (e.g., air-gapped environments).
- *
- * The implementation_strategy field determines how IPs from this pool are advertised on the target
- * cluster (e.g., MetalLB L2 mode). This field is set by the system and is not user-configurable.
  *
  * Capacity tracking fields in the status (total, allocated, available) reflect the current utilization
  * of the pool across all its CIDR ranges.

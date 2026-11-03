@@ -1,7 +1,8 @@
+import { create } from '@bufbuild/protobuf';
 import { screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Project } from '@osac/types';
+import { type Project, VirtualNetworkSchema } from '@osac/types';
 
 import { VirtualNetworkCreateModal } from './VirtualNetworkCreateModal';
 import * as networkingApi from '../../api/v1/networking';
@@ -114,6 +115,36 @@ describe('VirtualNetworkCreateModal', () => {
       );
       expect(mockNavigate).toHaveBeenCalledWith('/networking/virtual-networks/vn-new');
     });
+  });
+
+  it('returns a created network to the wizard with its selected project', async () => {
+    const onCreated = vi.fn();
+    const network = create(VirtualNetworkSchema, {
+      id: 'vn-new',
+      metadata: { name: 'vn-prod' },
+    });
+    mutateAsync.mockResolvedValue(network);
+
+    const { user } = renderWithProviders(
+      <VirtualNetworkCreateModal
+        onClose={mockOnClose}
+        onCreated={onCreated}
+        initialProject="my-project"
+      />,
+      { apiFixtures: { projects } },
+    );
+
+    await user.type(screen.getByLabelText(/Name/i), 'vn-prod');
+    await user.type(screen.getByLabelText(/IPv4 CIDR/i), '10.0.0.0/16');
+    await user.click(screen.getByRole('button', { name: /Create/i }));
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: { name: 'vn-prod', project: 'my-project' } }),
+      );
+      expect(onCreated).toHaveBeenCalledWith(network);
+    });
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it('shows error alert when create fails', async () => {

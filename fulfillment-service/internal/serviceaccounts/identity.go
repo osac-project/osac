@@ -27,24 +27,26 @@ const RegistrationServiceAccountIDKey = "service_account_id"
 const PendingClientSecretKey = "client_secret"
 const PendingClientSecretRefIDKey = "client_secret_ref_id"
 const PendingClientSecretRefNameKey = "client_secret_ref_name"
+const ManagedClientIDPrefix = "osac-sa-"
 const clientSecretPrefix = "osac-service-account-"
+const registrationSecretPrefix = "osac-registration-"
 
 // ClientID derives an immutable client identifier from validated tenant and account identities.
 func ClientID(tenantID, accountID string) string {
-	return "osac-sa-" + tenantID + "-" + accountID
+	return ManagedClientIDPrefix + tenantID + "-" + accountID
 }
 
-// RegistrationSecretName returns a tenant name followed by an optional collision suffix.
-func RegistrationSecretName(serviceAccountName string, suffix int) string {
+// RegistrationSecretName derives a system-tenant registration Secret name from the unique account ID.
+func RegistrationSecretName(accountID string, suffix int) string {
+	base := registrationSecretPrefix + accountID
 	if suffix == 0 {
-		return serviceAccountName
+		return base
 	}
 	suffixText := fmt.Sprintf("-%d", suffix)
 	maxBaseLength := 63 - len(suffixText)
 	if maxBaseLength < 1 {
 		return ""
 	}
-	base := serviceAccountName
 	if len(base) > maxBaseLength {
 		base = base[:maxBaseLength]
 	}

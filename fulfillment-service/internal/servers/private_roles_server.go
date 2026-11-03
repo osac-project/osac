@@ -100,7 +100,7 @@ func (b *PrivateRolesServerBuilder) Build() (result *PrivateRolesServer, err err
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc(b.filterDesc).
-		AddAllowedTenants(auth.SharedTenant).
+		AddAllowedTenants(auth.SharedTenant, auth.SystemTenant).
 		Build()
 	if err != nil {
 		return

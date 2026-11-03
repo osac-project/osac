@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from tests.e2e.core.runner import poll_until, run_unchecked
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
 def get_jwt(*, keycloak_url: str, realm: str, client_id: str, username: str, password: str) -> str:
@@ -46,5 +47,11 @@ def get_jwt(*, keycloak_url: str, realm: str, client_id: str, username: str, pas
             return None
 
     return poll_until(
-        fn=try_get_token, until=lambda token: token is not None, retries=24, delay=5, description="Keycloak JWT token"
+        fn=try_get_token,
+        until=lambda token: token is not None,
+        retries=24,
+        delay=5,
+        description="Keycloak JWT token",
+        resource_kind=WaitResourceKind.KEYCLOAK_REALM,
+        resource_id=realm,
     )

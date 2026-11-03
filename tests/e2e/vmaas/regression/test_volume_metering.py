@@ -28,11 +28,13 @@ from tests.e2e.core.metering import (
     HEARTBEAT_TYPE,
     MeteringCollector,
     assert_exact_contiguous_life,
+    delete_recording_timestamp,
     interval_seconds,
     parse_time,
     usage_interval,
 )
 from tests.e2e.core.runner import poll_until, run
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = [pytest.mark.regression, pytest.mark.metering]
 
@@ -92,6 +94,8 @@ def test_volume_bills_gibibyte_seconds(
             retries=60,
             delay=5,
             description=f"{name} volume AVAILABLE",
+            resource_kind=WaitResourceKind.VOLUME,
+            resource_id=volume_id,
         )
         # grpcurl renders proto int64 fields as strings.
         assert int(volume["object"]["spec"]["sizeGib"]) == VOLUME_SIZE_GIB
@@ -109,11 +113,15 @@ def test_volume_bills_gibibyte_seconds(
             retries=30,
             delay=2,
             description=f"Volume CR for {volume_id}",
+            resource_kind=WaitResourceKind.VOLUME,
+            resource_id=volume_id,
         )
 
         # The first heartbeat that carries the storage_tier dimension is the first
         # one billed under the capacity meter.
-        heartbeat = metering.heartbeat_with_dimensions(volume_id, {"storage_tier": "local"}, timeout=HEARTBEAT_TIMEOUT)
+        heartbeat = metering.heartbeat_with_dimensions(
+            volume_id, {"storage_tier": "local"}, timeout=HEARTBEAT_TIMEOUT, resource_kind=WaitResourceKind.VOLUME
+        )
         metering.verify_event(heartbeat, resource_id=volume_id)
 
         data = heartbeat["data"]
@@ -131,6 +139,8 @@ def test_volume_bills_gibibyte_seconds(
             retries=HEARTBEAT_TIMEOUT // 10,
             delay=10,
             description=f"two typed heartbeats of volume {volume_id}",
+            resource_kind=WaitResourceKind.VOLUME,
+            resource_id=volume_id,
         )
         typed = metering.typed_heartbeats(volume_id, dimension="storage_tier")
         for event in typed:
@@ -176,38 +186,21 @@ def test_volume_bills_gibibyte_seconds(
 def _delete_volume(grpc: GRPCClient, k8s: K8sClient, *, volume_id: str, cr_name: str | None) -> datetime | None:
     """Delete the volume and return the deletion time the API server recorded.
 
-    The Volume CR's whole teardown can finish in under a second (the vendor
-    deprovisioning of a node-local thin volume is fast), so the deletion
-    timestamp is read through a watch established before the delete request:
-    the watch always delivers the modification that stamps it, where a plain
-    get can arrive after the object is already gone. None when the volume
-    never had a CR to watch: the cleanup path after a failed setup.
+    None when the volume never had a CR to watch: the cleanup path after a
+    failed setup.
     """
     deletion_recorded: datetime | None = None
     if cr_name is None:
         with contextlib.suppress(Exception):
             grpc.call(service=f"{PRIVATE_API}.Volumes/Delete", data={"id": volume_id})
     else:
-        try:
-            with k8s.watch_deletion_timestamp(resource="volume", name=cr_name) as deletion_stamp:
-                with contextlib.suppress(Exception):
-                    grpc.call(service=f"{PRIVATE_API}.Volumes/Delete", data={"id": volume_id})
-                with contextlib.suppress(Exception):
-                    deletion_recorded = parse_time(
-                        poll_until(
-                            fn=deletion_stamp,
-                            until=lambda stamp: bool(stamp),
-                            retries=30,
-                            delay=2,
-                            description=f"deletion timestamp of Volume CR {cr_name}",
-                        )
-                    )
-        except Exception:
-            # A watch that never started must not leak the volume: the
-            # delete above never ran, so issue it now, then fail loudly.
-            with contextlib.suppress(Exception):
-                grpc.call(service=f"{PRIVATE_API}.Volumes/Delete", data={"id": volume_id})
-            raise
+        deletion_recorded = delete_recording_timestamp(
+            k8s,
+            resource="volume",
+            cr_name=cr_name,
+            delete=lambda: grpc.call(service=f"{PRIVATE_API}.Volumes/Delete", data={"id": volume_id}),
+            resource_kind=WaitResourceKind.VOLUME,
+        )
         with contextlib.suppress(Exception):
             poll_until(
                 fn=lambda: not k8s.is_present(resource="volume", name=cr_name),
@@ -215,6 +208,8 @@ def _delete_volume(grpc: GRPCClient, k8s: K8sClient, *, volume_id: str, cr_name:
                 retries=60,
                 delay=5,
                 description=f"{cr_name} Volume CR deletion",
+                resource_kind=WaitResourceKind.VOLUME,
+                resource_id=cr_name,
             )
     poll_until(
         fn=lambda: _volume_gone(grpc, volume_id),
@@ -222,6 +217,8 @@ def _delete_volume(grpc: GRPCClient, k8s: K8sClient, *, volume_id: str, cr_name:
         retries=60,
         delay=5,
         description=f"{volume_id} volume removed",
+        resource_kind=WaitResourceKind.VOLUME,
+        resource_id=volume_id,
     )
     return deletion_recorded
 

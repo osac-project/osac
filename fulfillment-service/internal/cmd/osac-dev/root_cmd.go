@@ -98,7 +98,7 @@ func (c *runnerContext) persistentPreRun(cmd *cobra.Command, args []string) erro
 			cacheDir, err,
 		)
 	}
-	err = os.MkdirAll(cacheDir, 0700)
+	err = os.MkdirAll(cacheDir, 0700) // #nosec G703 -- user-selected cache dir, created with the CLI user's permissions
 	if err != nil {
 		return fmt.Errorf("failed to create cache directory '%s': %w", cacheDir, err)
 	}

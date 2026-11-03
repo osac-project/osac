@@ -144,11 +144,11 @@ var _ = Describe("handleCheckConnection", func() {
 			ResourceTypeInstanceType,
 			ResourceTypeDiskImage,
 			ResourceTypeStorageTier,
+			ResourceTypeProject,
 			ResourceTypeVirtualNetwork,
 			ResourceTypeSubnet,
 			ResourceTypeSecurityGroup,
 			ResourceTypeComputeInstance,
-			ResourceTypeProject,
 			ResourceTypeSecretReference,
 		))
 		Expect(output.Tools).To(Equal([]string{"alpha_tool", "zeta_tool"}))
@@ -156,13 +156,18 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(output.Permissions).To(Equal([]CheckConnectionPermission{
 			{Tenant: "tenant-1", Service: "osac.public.v1.ComputeInstances", Method: "List", Allowed: true},
 			{Tenant: "tenant-1", Service: "osac.public.v1.ComputeInstances", Method: "Create", Allowed: false},
+			{Tenant: "tenant-1", Service: "osac.public.v1.ComputeInstances", Method: "Update", Allowed: false},
 		}))
 		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
 		Expect(tenantListToken).To(Equal(capturedToken))
-		Expect(capturedServices).To(Equal([]string{"osac.public.v1.ComputeInstances", "osac.public.v1.ComputeInstances"}))
-		Expect(capturedMethods).To(Equal([]string{"List", "Create"}))
-		Expect(capturedTenants).To(Equal([]string{"tenant-1", "tenant-1"}))
-		Expect(capturedNames).To(Equal([]string{"mcp-check-connection", "mcp-check-connection"}))
+		Expect(capturedServices).To(Equal([]string{
+			"osac.public.v1.ComputeInstances", "osac.public.v1.ComputeInstances", "osac.public.v1.ComputeInstances",
+		}))
+		Expect(capturedMethods).To(Equal([]string{"List", "Create", "Update"}))
+		Expect(capturedTenants).To(Equal([]string{"tenant-1", "tenant-1", "tenant-1"}))
+		Expect(capturedNames).To(Equal([]string{
+			"mcp-check-connection", "mcp-check-connection", "mcp-check-connection",
+		}))
 	})
 
 	It("Uses an unscoped permission review for a caller without a tenant", func() {
@@ -199,8 +204,26 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(output.Permissions).To(Equal([]CheckConnectionPermission{
 			{Service: "osac.public.v1.ComputeInstances", Method: "List", Allowed: true},
 			{Service: "osac.public.v1.ComputeInstances", Method: "Create", Allowed: true},
+			{Service: "osac.public.v1.ComputeInstances", Method: "Update", Allowed: true},
 		}))
 		Expect(output.PermissionsTruncated).To(BeFalse())
+	})
+
+	It("Preserves a retryable token exchange error", func() {
+		request := requestWithCaller("raw-bearer-value", safeCallerContext{Subject: "user-1"})
+		request.Extra.TokenInfo.Extra[exchangeTokenExtraKey] = apiTokenSource(func(context.Context) (string, error) {
+			return "", errOAuthTokenExchangeUnavailable
+		})
+		handler := handleCheckConnection(
+			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(),
+			&mockTenantsClient{}, &mockSelfSubjectAccessReviewsClient{},
+		)
+		_, _, err := handler(context.Background(), request, CheckConnectionInput{})
+		Expect(err).To(HaveOccurred())
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("service_unavailable"))
+		Expect(envelope.GRPCCode).To(Equal("Unavailable"))
+		Expect(envelope.Retryable).To(BeTrue())
 	})
 
 	It("Preserves a retryable token exchange error", func() {
@@ -286,7 +309,7 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(output.PermissionsTruncated).To(BeFalse())
 		Expect(output.Caller.Tenants).To(HaveLen(maxCheckConnectionTenants))
 		Expect(output.Caller.Tenants).ToNot(ContainElement(auth.SharedTenant))
-		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * 2))
+		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * 3))
 	})
 
 	It("Marks a summary truncated when the total exceeds returned tenants", func() {
@@ -320,7 +343,7 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(output.PermissionsTruncated).To(BeTrue())
 		Expect(output.Caller.Tenants).To(HaveLen(maxCheckConnectionTenants))
 		Expect(output.Caller.Tenants).ToNot(ContainElement(auth.SharedTenant))
-		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * 2))
+		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * 3))
 	})
 
 	It("Uses only the bounded public tenant list for permission checks", func() {
@@ -362,8 +385,8 @@ var _ = Describe("handleCheckConnection", func() {
 			"tenant-00", "tenant-01", "tenant-02", "tenant-03", "tenant-04",
 			"tenant-05", "tenant-06", "tenant-07", "tenant-08", "tenant-09",
 		}))
-		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * 2))
-		Expect(reviewedTenants).To(HaveLen(maxCheckConnectionTenants * 2))
+		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * 3))
+		Expect(reviewedTenants).To(HaveLen(maxCheckConnectionTenants * 3))
 		Expect(reviewedTenants).ToNot(ContainElement("tenant-10"))
 	})
 

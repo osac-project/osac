@@ -58,7 +58,7 @@ const mockCluster = (state: ClusterState): Cluster => ({
       id: 'password-secret-123',
       name: 'my-cluster-password',
     },
-    observedCpVersion: '',
+    observedVersion: '',
     upgradeHistory: [],
   },
   spec: {

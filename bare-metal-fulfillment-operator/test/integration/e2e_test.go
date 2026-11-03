@@ -93,10 +93,11 @@ var _ = Describe("Manager", Ordered, func() {
 
 	Context("Manager", func() {
 		It("should run successfully", func() {
-			By("validating that the controller-manager pod is running with zero restarts")
-			// pod.status.phase stays "Running" even during CrashLoopBackOff — check
-			// container status and restart count to detect crash-looping controllers.
-			verifyControllerUp := func(g Gomega) {
+			By("validating that the controller-manager pod becomes ready and remains stable")
+			// The installation check can restart BMF while Fulfillment starts.
+			// Require readiness, then reject any further restarts.
+			var readyRestarts int64
+			verifyControllerUp := func(g Gomega, stable bool) {
 				cmd := exec.Command("kubectl", "get", "pods",
 					"-l", "app.kubernetes.io/name=bmf",
 					"-n", namespace, "-o", "json")
@@ -125,19 +126,31 @@ var _ = Describe("Manager", Ordered, func() {
 					if pod.Metadata.DeletionTimestamp != nil {
 						continue
 					}
+					controllerPodName = pod.Metadata.Name
 					g.Expect(pod.Status.Phase).To(Equal("Running"))
+					g.Expect(pod.Status.ContainerStatuses).NotTo(BeEmpty())
 					for _, cs := range pod.Status.ContainerStatuses {
 						g.Expect(cs.Ready).To(BeTrue(),
 							fmt.Sprintf("pod %s has unready container", pod.Metadata.Name))
-						g.Expect(cs.RestartCount).To(BeZero(),
-							fmt.Sprintf("pod %s has %d restarts", pod.Metadata.Name, cs.RestartCount))
+						if stable {
+							g.Expect(cs.RestartCount).To(Equal(readyRestarts),
+								fmt.Sprintf("pod %s restarted after becoming ready", pod.Metadata.Name))
+						} else {
+							readyRestarts = cs.RestartCount
+						}
 					}
-					controllerPodName = pod.Metadata.Name
 					running++
 				}
 				g.Expect(running).To(Equal(1), "expected 1 controller pod running")
 			}
-			Eventually(verifyControllerUp, 5*time.Minute, 5*time.Second).Should(Succeed())
+			Eventually(func(g Gomega) { verifyControllerUp(g, false) }, 5*time.Minute, 5*time.Second).Should(Succeed())
+			readyPodName := controllerPodName
+			verifyStable := func(g Gomega) {
+				verifyControllerUp(g, true)
+				g.Expect(controllerPodName).To(Equal(readyPodName), "controller pod changed after becoming ready")
+			}
+			Consistently(verifyStable, 20*time.Second, 5*time.Second).Should(Succeed())
+			verifyStable(NewWithT(GinkgoT()))
 		})
 
 		It("should ensure the metrics endpoint is serving metrics", func() {

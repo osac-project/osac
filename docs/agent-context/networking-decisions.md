@@ -96,7 +96,8 @@ matching EP amendment):
 - OSAC rejects a VNI a live resource holds ("VNI already in use") and retries
   while only a deleting resource holds it.
 - OVN-Kubernetes serves the VM gateway (`defaultGatewayIPs: [gateway_ipv4]`,
-  symmetric IRB into the IP-VRF), not the Fabric. `cudn_evpn` sets
+  symmetric IRB into the IP-VRF). The Fabric need not serve it; the Netris
+  V-Net is also configured to serve it. `cudn_evpn` sets
   `infrastructureSubnets: [gateway/32, network+2/32]`, route targets
   `0:<l2_vni>` / `0:<l3_vni>` and MTU 1500.
 - A VM on a `cudn_evpn` network can ping the node that hosts it, and nothing on

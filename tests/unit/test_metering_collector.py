@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
-from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector, parse_time
+from tests.e2e.core.metering import (
+    HEARTBEAT_TYPE,
+    MeteringCollector,
+    assert_contiguous_exact_seconds,
+    assert_dimension_sets_disjoint,
+    parse_time,
+)
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
 def _heartbeat(
@@ -85,7 +92,15 @@ def test_verify_event_accepts_a_well_formed_heartbeat(collector: MeteringCollect
 
     collector.verify_event(event, resource_id="vm-7")
 
-    assert collector.get_event(HEARTBEAT_TYPE, "vm-7") is event
+    assert collector.get_event(HEARTBEAT_TYPE, "vm-7", resource_kind=WaitResourceKind.COMPUTE_INSTANCE) is event
+
+
+def test_verify_event_accepts_an_external_billing_account(collector: MeteringCollector) -> None:
+    """The account id is optional payload, not a required envelope field."""
+    event = _heartbeat()
+    event["data"]["external_billing_account_id"] = "acct-1"
+
+    collector.verify_event(event, resource_id="vm-7")
 
 
 def test_verify_event_rejects_a_heartbeat_missing_its_dimension(collector: MeteringCollector) -> None:
@@ -115,7 +130,7 @@ def test_verify_accepts_early_heartbeats_that_precede_the_late_dimension(
     # The adapter's order must not matter: the collector orders by interval.
     _serve(collector, monkeypatch, list(reversed(events)))
 
-    collector.expect(HEARTBEAT_TYPE, "vm-7")
+    collector.expect(HEARTBEAT_TYPE, "vm-7", resource_kind=WaitResourceKind.COMPUTE_INSTANCE)
     collector.verify()
 
 
@@ -131,7 +146,7 @@ def test_verify_rejects_a_heartbeat_that_loses_the_dimension_after_it_landed(
     ]
     _serve(collector, monkeypatch, events)
 
-    collector.expect(HEARTBEAT_TYPE, "vm-7")
+    collector.expect(HEARTBEAT_TYPE, "vm-7", resource_kind=WaitResourceKind.COMPUTE_INSTANCE)
     with pytest.raises(AssertionError, match="instance_type"):
         collector.verify()
 
@@ -265,3 +280,55 @@ def test_wait_for_billing_end_times_out_when_the_deletion_is_never_reached(
 
     with pytest.raises(TimeoutError, match="did not reach the deletion"):
         _wait_for_end(collector, monkeypatch, rounds)
+
+
+def _attachment_heartbeat(start: int, end: int, quantity: int, *, attached: bool) -> dict[str, Any]:
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    return {
+        "data": {
+            "billing_dimensions": {"attached": str(attached).lower()},
+            "usage": {
+                "from": (base + timedelta(seconds=start)).isoformat(),
+                "to": (base + timedelta(seconds=end)).isoformat(),
+                "quantity": str(quantity),
+                "unit": "second",
+            },
+        }
+    }
+
+
+def test_dimension_sets_may_touch_at_a_transition() -> None:
+    assert_dimension_sets_disjoint(
+        [_attachment_heartbeat(0, 60, 60, attached=False), _attachment_heartbeat(60, 120, 60, attached=True)],
+        label="ip",
+    )
+
+
+def test_a_cancelled_tail_does_not_count_as_an_overlap() -> None:
+    assert_dimension_sets_disjoint(
+        [
+            _attachment_heartbeat(0, 60, 60, attached=False),
+            _attachment_heartbeat(40, 60, -20, attached=False),
+            _attachment_heartbeat(40, 100, 60, attached=True),
+        ],
+        label="ip",
+    )
+
+
+def test_two_dimension_sets_billing_one_span_fail() -> None:
+    with pytest.raises(AssertionError, match="billed the same span"):
+        assert_dimension_sets_disjoint(
+            [_attachment_heartbeat(0, 60, 60, attached=False), _attachment_heartbeat(40, 100, 60, attached=True)],
+            label="ip",
+        )
+
+
+def test_contiguous_exact_seconds_rejects_a_gap() -> None:
+    events = [_attachment_heartbeat(0, 60, 60, attached=False), _attachment_heartbeat(61, 120, 59, attached=False)]
+    with pytest.raises(AssertionError, match="not contiguous"):
+        assert_contiguous_exact_seconds(events, "allocation")
+
+
+def test_contiguous_exact_seconds_rejects_an_inexact_quantity() -> None:
+    with pytest.raises(AssertionError, match="not the exact length"):
+        assert_contiguous_exact_seconds([_attachment_heartbeat(0, 60, 59, attached=False)], "allocation")

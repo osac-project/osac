@@ -1,4 +1,19 @@
 ---
+- name: Require boot disk Volume ID
+  ansible.builtin.assert:
+    that:
+      - (vm_disk_volume_ids | default({})).get('boot', '') | default('', true) | length > 0
+    fail_msg: ComputeInstance boot disk has no Volume ID
+
+- name: Require additional disk Volume IDs
+  ansible.builtin.assert:
+    that:
+      - (vm_disk_volume_ids | default({})).get('disk-' ~ (idx + 1), '') | default('', true) | length > 0
+    fail_msg: ComputeInstance disk-{{ idx + 1 }} has no Volume ID
+  loop: "{{ vm_additional_disks | default([]) }}"
+  loop_control:
+    index_var: idx
+
 # Phase 1: Resolve all storage tiers before creating any resources.
 
 - name: Resolve StorageClass for boot disk tier
@@ -43,6 +58,8 @@
         name: "{{ compute_instance_name }}-root-disk"
         labels: "{{ default_vm_labels }}"
         namespace: "{{ compute_instance_target_namespace }}"
+        annotations:
+          osac.openshift.io/storage-volume-id: "{{ vm_disk_volume_ids['boot'] }}"
       spec:
         source:
           registry:
@@ -70,6 +87,8 @@
         name: "{{ compute_instance_name }}-disk-{{ idx + 1 }}"
         labels: "{{ default_vm_labels }}"
         namespace: "{{ compute_instance_target_namespace }}"
+        annotations:
+          osac.openshift.io/storage-volume-id: "{{ vm_disk_volume_ids['disk-' ~ (idx + 1)] }}"
       spec:
         source:
           blank: {}

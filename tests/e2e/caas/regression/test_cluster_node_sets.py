@@ -37,9 +37,7 @@ def test_cluster_create_with_two_node_sets(
 
     instance_types = {"compute": "ci-worker-bm", "gpu": "ci-worker-bm-gpu"}
     for instance_type in instance_types.values():
-        private_grpc.ensure_bare_metal_instance_type(
-            name=instance_type, host_label_selector={"osac.openshift.io/host-type": "default"}
-        )
+        private_grpc.ensure_bare_metal_instance_type(name=instance_type)
 
     version = private_grpc.ensure_cluster_version(
         version="4.22.0-rhcos",

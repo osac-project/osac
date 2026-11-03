@@ -21,6 +21,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.sanity
 
@@ -113,6 +114,7 @@ def test_baremetal_instance_lifecycle(
     bmi_disk_image: str,
     bmh_namespace: str,
     test_run_id: str,
+    ssh_key_secret: str,
     ssh_public_key: str,
 ) -> None:
     """Provision a BMI end-to-end and assert its terminal stage, NIC metadata, power cycle, and deprovision."""
@@ -121,9 +123,7 @@ def test_baremetal_instance_lifecycle(
     image = next(item for item in disk_images.get("items", []) if item["metadata"]["name"] == bmi_disk_image)
     assert set(image["spec"]["architecture"]) == {"ARCHITECTURE_AMD64", "ARCHITECTURE_ARM64"}
 
-    bmi_id, _ = jwt_cli_user.create_baremetal_instance(
-        name=name, catalog_item=catalog_item, ssh_key=ssh_public_key, disk_image=bmi_disk_image
-    )
+    bmi_id, _ = jwt_cli_user.create_baremetal_instance(name=name, catalog_item=catalog_item, disk_image=bmi_disk_image)
     bmh_ns = ""
     bmh_name = ""
 
@@ -131,6 +131,14 @@ def test_baremetal_instance_lifecycle(
         assert bmi_id in jwt_grpc_tenant1.list_baremetal_instance_ids()
         bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi_id)
         spec = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id).get("object", {}).get("spec", {})
+        ssh_key = spec.get("ssh_key", spec.get("sshKey", {}))
+        assert ssh_key.get("name") == ssh_key_secret
+        assert ssh_key.get("id"), "BMaaS must persist the canonical SSH-key Secret ID"
+        assert "ssh_public_key" not in spec and "sshPublicKey" not in spec
+        cr_ssh_key = k8s_hub_client.get_baremetal_instance_ssh_public_key(name=bmi_cr_name)
+        assert cr_ssh_key.strip() == ssh_public_key.strip(), (
+            "the registered key material must reach the BMFO CR template parameters"
+        )
         instance_type = spec.get("instance_type", spec.get("instanceType", {}))
         assert instance_type.get("name") == bmi_instance_type, (
             f"BareMetalInstance instance_type {instance_type.get('name')!r} does not match catalog default "
@@ -153,6 +161,8 @@ def test_baremetal_instance_lifecycle(
             retries=30,
             delay=2,
             description=f"{bmi_id} READY condition True",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi_id,
         )
         instance: dict[str, Any] = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id)
         ready_condition: dict[str, Any] = _find_condition(instance, _READY)
@@ -211,6 +221,8 @@ def test_baremetal_instance_lifecycle(
             retries=60,
             delay=5,
             description=f"{bmh_name} powered off",
+            resource_kind=WaitResourceKind.BARE_METAL_HOST,
+            resource_id=bmh_name,
         )
 
         # Power on
@@ -224,6 +236,8 @@ def test_baremetal_instance_lifecycle(
             retries=60,
             delay=5,
             description=f"{bmh_name} powered on",
+            resource_kind=WaitResourceKind.BARE_METAL_HOST,
+            resource_id=bmh_name,
         )
 
         # Deprovision
@@ -260,7 +274,7 @@ def test_baremetal_instance_restart(
     bmh_namespace: str,
     private_grpc: GRPCClient,
     test_run_id: str,
-    ssh_public_key: str,
+    ssh_key_secret: str,
 ) -> None:
     name: str = f"e2e-bmi-restart-{test_run_id}"
     deprecated_disk_image_name = f"e2e-bmi-deprecated-di-{test_run_id}"
@@ -276,7 +290,7 @@ def test_baremetal_instance_restart(
             disk_image_id=deprecated_disk_image_id, lifecycle="DISK_IMAGE_LIFECYCLE_DEPRECATED", api=PRIVATE_API
         )
         bmi_id, warnings = jwt_cli_user.create_baremetal_instance(
-            name=name, catalog_item=catalog_item, disk_image=deprecated_disk_image_name, ssh_key=ssh_public_key
+            name=name, catalog_item=catalog_item, disk_image=deprecated_disk_image_name, ssh_key=ssh_key_secret
         )
         assert any("deprecated" in warning.lower() for warning in warnings), (
             f"Expected a deprecated DiskImage warning, got: {warnings}"
@@ -303,6 +317,8 @@ def test_baremetal_instance_restart(
             retries=60,
             delay=2,
             description=f"{bmi_id} RESTART_IN_PROGRESS condition appears",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi_id,
         )
 
         poll_until(
@@ -311,6 +327,8 @@ def test_baremetal_instance_restart(
             retries=120,
             delay=10,
             description=f"{bmi_id} status.restart_trigger echoes {new_trigger}",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi_id,
         )
 
         poll_until(
@@ -319,6 +337,8 @@ def test_baremetal_instance_restart(
             retries=60,
             delay=5,
             description=f"{bmh_name} powered on after restart",
+            resource_kind=WaitResourceKind.BARE_METAL_HOST,
+            resource_id=bmh_name,
         )
 
         wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)

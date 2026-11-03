@@ -202,6 +202,47 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		Expect(envelope.Details).To(ContainElement(ContainSubstring("unsupported_in_place")))
 	})
 
+	It("Rejects too many ingress rules before dispatch", func() {
+		securityGroups := &mockSecurityGroupsClient{
+			createFunc: func(context.Context, *publicv1.SecurityGroupsCreateRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsCreateResponse, error) {
+				return nil, errors.New("Create should not be called")
+			},
+		}
+
+		handler := handleCreateNetworkResource(nil, nil, securityGroups)
+		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateNetworkResourceInput{
+			ResourceType:     NetworkResourceTypeSecurityGroup,
+			Name:             "demo-security-group",
+			VirtualNetworkID: "virtual-network-1",
+			IngressRules:     make([]NetworkSecurityRuleInput, maxNetworkSecurityRules+1),
+		})
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("invalid_request"))
+		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+		Expect(envelope.Details).To(ContainElement(ContainSubstring("ingress_rules")))
+	})
+
+	It("Rejects too many total security rules before dispatch", func() {
+		securityGroups := &mockSecurityGroupsClient{
+			createFunc: func(context.Context, *publicv1.SecurityGroupsCreateRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsCreateResponse, error) {
+				return nil, errors.New("Create should not be called")
+			},
+		}
+
+		handler := handleCreateNetworkResource(nil, nil, securityGroups)
+		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateNetworkResourceInput{
+			ResourceType:     NetworkResourceTypeSecurityGroup,
+			Name:             "demo-security-group",
+			VirtualNetworkID: "virtual-network-1",
+			IngressRules:     make([]NetworkSecurityRuleInput, maxNetworkSecurityRules),
+			EgressRules:      make([]NetworkSecurityRuleInput, 1),
+		})
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("invalid_request"))
+		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+		Expect(envelope.Details).To(ContainElement(ContainSubstring("in total")))
+	})
+
 	It("Rejects an unsupported create resource type before dispatch", func() {
 		publicCall := func() error { return errors.New("public API should not be called") }
 		virtualNetworks := &mockVirtualNetworksClient{

@@ -41,7 +41,9 @@ with `unsupported_in_place` before any public mutation. Subnet and
 SecurityGroup creation checks the named parent VirtualNetwork first; a missing
 or inaccessible parent returns a named prerequisite error and creates no
 dependent resource. NetworkClass remains provider-managed and is never exposed
-as a tenant write.
+as a tenant write. SecurityGroup creation accepts at most 100 rules in total
+across `ingress_rules` and `egress_rules`, with the same per-direction schema
+limit.
 
 `delete_network_resource` deletes exactly one explicitly named eligible
 resource. It does not cascade: a parent with active dependents returns a

@@ -78,7 +78,7 @@ def _safe_operator_versions(operator: dict[str, Any]) -> list[dict[str, str]]:
 
 def cluster_references(*, k8s: K8sClient, uuid: str, co_name: str, expected_node_sets: set[str]) -> ClusterReferences:
     """Resolve the test-owned HostedCluster and NodePool names."""
-    namespace, hc_name = wait_for_cluster_order_hosted_cluster_reference(k8s=k8s, name=co_name, retries=60, delay=10)
+    hc_name, namespace = wait_for_cluster_order_hosted_cluster_reference(k8s=k8s, name=co_name, retries=60, delay=10)
     return ClusterReferences(
         uuid=uuid, co_name=co_name, namespace=namespace, hc_name=hc_name, expected_node_sets=expected_node_sets
     )

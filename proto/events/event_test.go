@@ -1,7 +1,21 @@
+/*
+Copyright (c) 2026 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/
+
 package events_test
 
 import (
-	"testing"
+	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/gomega"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -11,43 +25,36 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// TestPublicEventPayloads verifies public payload identities and private resource exclusions.
-func TestPublicEventPayloads(t *testing.T) {
+var _ = Describe("Public event payloads", func() {
 	publicPayload := (&publicv1.Event{}).ProtoReflect().Descriptor().Oneofs().ByName("payload")
 	privatePayload := (&privatev1.Event{}).ProtoReflect().Descriptor().Oneofs().ByName("payload")
 	privateResources := map[protoreflect.Name]bool{
 		"hub": true, "network_class": true, "storage_backend": true, "volume": true,
 	}
-	if publicPayload.Fields().Len() != privatePayload.Fields().Len()-len(privateResources) {
-		t.Fatalf("public payload count = %d, want %d", publicPayload.Fields().Len(), privatePayload.Fields().Len()-len(privateResources))
-	}
+	It("Includes all public resources and excludes the four private resources", func() {
+		Expect(publicPayload.Fields().Len()).To(Equal(privatePayload.Fields().Len() - len(privateResources)))
+	})
+
 	for index := range privatePayload.Fields().Len() {
 		privateField := privatePayload.Fields().Get(index)
-		t.Run(string(privateField.Name()), func(t *testing.T) {
+		It("Preserves the visibility and identity of "+string(privateField.Name()), func() {
 			publicField := publicPayload.Fields().ByName(privateField.Name())
 			if privateResources[privateField.Name()] {
-				if publicField != nil {
-					t.Fatal("private resource is exposed in the public event")
-				}
+				Expect(publicField).To(BeNil())
 				return
 			}
-			if publicField == nil {
-				t.Fatal("public resource is missing from the public event")
-			}
-			if publicField.Number() != privateField.Number() || publicField.Message().Name() != privateField.Message().Name() {
-				t.Fatal("public payload number or resource type differs from the private event")
-			}
-			if publicField.Message().ParentFile().Package() != "osac.public.v1" {
-				t.Fatal("public payload references a non-public resource type")
-			}
+			Expect(publicField).NotTo(BeNil())
+			Expect(publicField.Number()).To(Equal(privateField.Number()))
+			Expect(publicField.Message().Name()).To(Equal(privateField.Message().Name()))
+			Expect(publicField.Message().ParentFile().Package()).To(Equal(protoreflect.FullName("osac.public.v1")))
 		})
 	}
-}
+})
 
-// TestPublicExternalIPEventRoundTrip verifies public ExternalIP event JSON serialization.
-func TestPublicExternalIPEventRoundTrip(t *testing.T) {
-	event := &publicv1.Event{}
-	err := protojson.Unmarshal([]byte(`{
+var _ = Describe("Public ExternalIP events", func() {
+	It("Retains the payload through JSON serialization", func() {
+		event := &publicv1.Event{}
+		err := protojson.Unmarshal([]byte(`{
 		"id": "event-id",
 		"type": "EVENT_TYPE_OBJECT_UPDATED",
 		"externalIp": {
@@ -55,54 +62,34 @@ func TestPublicExternalIPEventRoundTrip(t *testing.T) {
 			"status": {"state": "EXTERNAL_IP_STATE_ALLOCATED", "address": "192.0.2.10"}
 		}
 	}`), event)
-	if err != nil {
-		t.Fatalf("unmarshal public ExternalIP event: %v", err)
-	}
-	if event.GetExternalIp().GetId() != "external-ip-id" || event.GetExternalIp().GetStatus().GetAddress() != "192.0.2.10" {
-		t.Fatal("ExternalIP payload was not retained")
-	}
-	data, err := protojson.Marshal(event)
-	if err != nil {
-		t.Fatalf("marshal public ExternalIP event: %v", err)
-	}
-	roundTrip := &publicv1.Event{}
-	if err := protojson.Unmarshal(data, roundTrip); err != nil {
-		t.Fatalf("unmarshal serialized public ExternalIP event: %v", err)
-	}
-	if !proto.Equal(event, roundTrip) {
-		t.Fatal("public ExternalIP event changed during serialization")
-	}
-}
+		Expect(err).NotTo(HaveOccurred())
+		Expect(event.GetExternalIp().GetId()).To(Equal("external-ip-id"))
+		Expect(event.GetExternalIp().GetStatus().GetAddress()).To(Equal("192.0.2.10"))
+		data, err := protojson.Marshal(event)
+		Expect(err).NotTo(HaveOccurred())
+		roundTrip := &publicv1.Event{}
+		Expect(protojson.Unmarshal(data, roundTrip)).To(Succeed())
+		Expect(proto.Equal(event, roundTrip)).To(BeTrue())
+	})
 
-// TestPublicExternalIPEventKeepsPrivateStatusFieldsHidden checks nested status privacy.
-func TestPublicExternalIPEventKeepsPrivateStatusFieldsHidden(t *testing.T) {
 	publicFields := (&publicv1.ExternalIPStatus{}).ProtoReflect().Descriptor().Fields()
 	privateFields := (&privatev1.ExternalIPStatus{}).ProtoReflect().Descriptor().Fields()
 	for _, name := range []protoreflect.Name{"hub", "attribution", "attachment_transition_time", "state_transition_time"} {
-		t.Run(string(name), func(t *testing.T) {
-			if privateFields.ByName(name) == nil {
-				t.Fatal("expected private status field does not exist")
-			}
-			if publicFields.ByName(name) != nil {
-				t.Fatal("private status field is exposed")
-			}
+		It("Keeps the private status field "+string(name)+" hidden", func() {
+			Expect(privateFields.ByName(name)).NotTo(BeNil())
+			Expect(publicFields.ByName(name)).To(BeNil())
 		})
 	}
-	if err := protojson.Unmarshal([]byte(`{"externalIp":{"status":{"hub":"private-hub"}}}`), &publicv1.Event{}); err == nil {
-		t.Fatal("public event JSON accepts a private nested status field")
-	}
-}
+	It("Rejects private nested status fields in JSON", func() {
+		Expect(protojson.Unmarshal([]byte(`{"externalIp":{"status":{"hub":"private-hub"}}}`), &publicv1.Event{})).NotTo(Succeed())
+	})
+})
 
-// TestPublicEventKeepsSignalPrivate verifies the signal name stays private in descriptors and JSON.
-func TestPublicEventKeepsSignalPrivate(t *testing.T) {
-	name := protoreflect.Name("EVENT_TYPE_OBJECT_SIGNALED")
-	if privatev1.EventType(0).Descriptor().Values().ByName(name) == nil {
-		t.Fatal("private signal event type does not exist")
-	}
-	if publicv1.EventType(0).Descriptor().Values().ByName(name) != nil {
-		t.Fatal("signal event type is exposed")
-	}
-	if err := protojson.Unmarshal([]byte(`{"type":"EVENT_TYPE_OBJECT_SIGNALED"}`), &publicv1.Event{}); err == nil {
-		t.Fatal("public event JSON accepts the private signal event name")
-	}
-}
+var _ = Describe("Private signal events", func() {
+	It("Keeps the signal name private in descriptors and rejects it in public JSON", func() {
+		name := protoreflect.Name("EVENT_TYPE_OBJECT_SIGNALED")
+		Expect(privatev1.EventType(0).Descriptor().Values().ByName(name)).NotTo(BeNil())
+		Expect(publicv1.EventType(0).Descriptor().Values().ByName(name)).To(BeNil())
+		Expect(protojson.Unmarshal([]byte(`{"type":"EVENT_TYPE_OBJECT_SIGNALED"}`), &publicv1.Event{})).NotTo(Succeed())
+	})
+})

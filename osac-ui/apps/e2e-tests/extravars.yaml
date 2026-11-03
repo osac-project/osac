@@ -4,11 +4,8 @@
 # OSAC_UI_BASE_URL, OSAC_ADMIN_USERNAME, and OSAC_ADMIN_PASSWORD.
 
 tenant_name: 'tenant1'
-# The tenant-admin password defaults to tenant_name.
-# Optional tenant-admin credentials. When omitted, the username defaults to
-# <tenant_name>-admin and the password defaults to tenant_password or tenant_name.
-# tenant_admin_username: 'tenant1-admin'
-# tenant_admin_password: 'replace-me'
+# The break-glass password is replaced with tenant_password, or tenant_name
+# when tenant_password is not set.
 
 catalog:
   name: 'catalog-item-e2e'

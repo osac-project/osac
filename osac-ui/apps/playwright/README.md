@@ -69,26 +69,24 @@ has no specs, Playwright reports that no tests were found.
 
 ### Tenant flow tests
 
-The tenant specs read `tenant_name` and optional tenant-admin credentials from
-`apps/e2e-tests/extravars.yaml`.
-Set `tenant_password` to the password for the tenant-admin user created by the
-flow. The credential file is updated with that user's credentials so subsequent
-VM and delete specs reuse the same login.
-When `tenant_password` is omitted, the tenant name is used. The create flow
-then creates an OSAC user, grants it `tenant-admin` through a RoleBinding, waits
-for the binding to become `READY`, and uses that user for the VM flow. Set
-`tenant_admin_username` and `tenant_admin_password` when the defaults are not
-appropriate.
-The full flow also invokes the `osac` CLI to create the user and RoleBinding;
-authenticate the CLI with the admin context before running it.
+The tenant specs read `tenant_name` and the optional break-glass replacement
+password from `apps/e2e-tests/extravars.yaml`.
+Set `tenant_password` to the password used after the generated break-glass user
+completes its first login. When it is omitted, the tenant name is used. The
+create flow logs in with the generated break-glass identity, which JIT-creates
+the OSAC User, then uses the private admin CLI to grant that user
+`tenant-admin` through a RoleBinding and waits for `READY`. The same credentials
+are reused for the VM and delete flows.
+The CLI must be authenticated as a private API administrator before running the
+full flow (for example, with `osac login --private`).
 Before running, set it to a tenant that does not already exist. The tenant
 create flow requires that the configured tenant does not already exist; the
 delete flow requires that it exists. All VMaaS specs skip before browser
 actions when `tenant_name` is unset or empty. The setup operations use the
-admin test user. The create flow temporarily saves the generated break-glass
-credentials, then replaces them with tenant-admin credentials in `/tmp` for
-the VM and delete flows. The delete flow removes the user, RoleBinding, tenant,
-and credential file.
+admin test user. The create flow saves the generated break-glass credentials in
+`/tmp`, updates the password after first login, and grants that identity
+tenant-admin permissions. The delete flow removes the RoleBinding, OSAC User,
+tenant, and credential file.
 
 Set the deployment and admin login variables from the [Running](#running) section,
 then run the flows:

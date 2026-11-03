@@ -8,10 +8,14 @@ import { expectOsacCommandSucceeded, runOsacCommand } from './cli';
 
 interface OsacUser {
   id?: string;
+  status?: {
+    keycloak_user_id?: string;
+  };
 }
 
 interface OsacRoleBinding {
   status?: {
+    message?: string;
     state?: string;
   };
 }
@@ -51,55 +55,35 @@ const roleBindingState = (roleBinding: OsacRoleBinding): string => {
 export const tenantAdminRoleBindingName = (tenantName: string): string =>
   `${tenantName}-tenant-admin`;
 
-/** Create a tenant user and grant it the tenant-admin role. */
-export const createTenantAdmin = async (
+/** Grant the tenant-admin role to an existing, IDP-backed tenant user. */
+export const createTenantAdminRoleBinding = async (
   tenantName: string,
   username: string,
-  password: string,
 ): Promise<void> => {
   const manifestDirectory = await mkdtemp(path.join(os.tmpdir(), 'osac-tenant-admin-'));
-  const userManifestPath = path.join(manifestDirectory, 'user.yaml');
   const roleBindingManifestPath = path.join(manifestDirectory, 'role-binding.yaml');
   try {
-    await writeFile(
-      userManifestPath,
-      stringify({
-        '@type': 'type.googleapis.com/osac.public.v1.User',
-        metadata: { name: username, tenant: tenantName },
-        spec: {
-          username,
-          email: `${username}@${tenantName}.osac.local`,
-          enabled: true,
-          credentials: { password, temporary_password: false },
-        },
-      }),
-      { encoding: 'utf8', mode: 0o600 },
-    );
-
-    const createUserResult = await runOsacCommand(['create', '-f', userManifestPath]);
-    expectOsacCommandSucceeded(createUserResult, `Create tenant-admin user '${username}'`);
-
     await expect
       .poll(
         async () => {
           try {
             const user = await getTenantAdminUser(username);
-            return user.id ? user : undefined;
+            return Boolean(user.id && user.status?.keycloak_user_id);
           } catch {
-            return undefined;
+            return false;
           }
         },
         {
-          message: `Wait for tenant-admin user '${username}' to become available`,
+          message: `Wait for tenant-admin user '${username}' to be linked to the IDP`,
           timeout: 120_000,
           intervals: [1_000, 2_000, 5_000],
         },
       )
-      .toMatchObject({ id: expect.any(String) });
+      .toBe(true);
 
     const user = await getTenantAdminUser(username);
-    if (!user.id) {
-      throw new Error(`Tenant-admin user '${username}' has no identifier.`);
+    if (!user.id || !user.status?.keycloak_user_id) {
+      throw new Error(`Tenant-admin user '${username}' is not linked to the IDP.`);
     }
 
     const roleBindingName = tenantAdminRoleBindingName(tenantName);
@@ -126,7 +110,11 @@ export const createTenantAdmin = async (
       .poll(
         async () => {
           try {
-            return roleBindingState(await getRoleBinding(roleBindingName));
+            const roleBinding = await getRoleBinding(roleBindingName);
+            const state = roleBindingState(roleBinding);
+            return state === 'FAILED'
+              ? `FAILED: ${roleBinding.status?.message ?? 'no failure message was provided'}`
+              : state;
           } catch {
             return '';
           }

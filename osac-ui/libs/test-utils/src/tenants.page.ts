@@ -82,22 +82,6 @@ export const updateTenantCredentialsPassword = async (
   await writeFile(credentialsFile, updatedContents, { encoding: 'utf8', mode: 0o600 });
 };
 
-/** Replace the saved tenant username and password after tenant-admin setup. */
-export const updateTenantCredentials = async (
-  credentialsFile: string,
-  username: string,
-  password: string,
-): Promise<void> => {
-  logProgress('tenant-credentials', `Saving tenant-admin credentials in ${credentialsFile}.`);
-  const contents = await readFile(credentialsFile, 'utf8');
-  credentialFromFile(contents, 'Username', credentialsFile);
-  credentialFromFile(contents, 'Password', credentialsFile);
-  const updatedContents = contents
-    .replace(/^Username: .*$/m, () => `Username: ${username}`)
-    .replace(/^Password: .*$/m, () => `Password: ${password}`);
-  await writeFile(credentialsFile, updatedContents, { encoding: 'utf8', mode: 0o600 });
-};
-
 /** Remove the saved credentials for a tenant, if present. */
 export const removeTenantCredentials = async (tenantName: string): Promise<void> => {
   logProgress('tenant-credentials', `Removing credentials for tenant "${tenantName}".`);

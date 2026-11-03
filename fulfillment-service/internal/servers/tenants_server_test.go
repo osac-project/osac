@@ -18,6 +18,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -188,6 +189,37 @@ var _ = Describe("Public tenants server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.Unimplemented))
+		})
+
+		It("Omits the external billing id", func() {
+			billingID := "acct-1"
+			created, err := privateServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: privatev1.Metadata_builder{Name: "billing-tenant"}.Build(),
+					Spec: privatev1.TenantSpec_builder{
+						ExternalBillingId: &billingID,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+
+			got, err := publicServer.Get(ctx, publicv1.TenantsGetRequest_builder{
+				Id: created.GetObject().GetId(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			encoded, err := protojson.Marshal(got.GetObject())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(encoded)).NotTo(ContainSubstring("external_billing_id"))
+			Expect(string(encoded)).NotTo(ContainSubstring("externalBillingId"))
+
+			listed, err := publicServer.List(ctx, publicv1.TenantsListRequest_builder{
+				Filter: new("this.metadata.name == 'billing-tenant'"),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(listed.GetItems()).To(HaveLen(1))
+			encoded, err = protojson.Marshal(listed.GetItems()[0])
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(encoded)).NotTo(ContainSubstring("externalBillingId"))
 		})
 	})
 })

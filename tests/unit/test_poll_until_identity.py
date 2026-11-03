@@ -7,6 +7,11 @@ and also rejects plain string literals for resource_kind: the kind must
 come from WaitResourceKind so a typo or a stale literal cannot slip in
 unnoticed.
 
+Wrappers that call poll_until are checked through their own call sites.
+heartbeat_with_dimensions takes the resource id as its first positional
+parameter and requires only the kind by keyword, so only the kind is
+checked for it.
+
 Calls that forward their arguments with ``**`` (the fast-polling shims in
 unit tests) cannot be checked statically; the required-parameter TypeError
 covers them at runtime.
@@ -21,6 +26,17 @@ from pathlib import Path
 # every one of their callers must declare the identity too.
 WAIT_CALLS = frozenset({"poll_until", "poll_or_fail", "wait_owned_gone"})
 
+# Wrappers that take the resource id as their first positional parameter and
+# require only the kind by keyword. They fail at runtime the same way, so their
+# callers are checked here too.
+KIND_ONLY_CALLS = frozenset({"heartbeat_with_dimensions"})
+
+# The keywords each kind of wrapper must declare on every call.
+REQUIRED_KEYWORDS = {
+    **{name: ("resource_kind", "resource_id") for name in WAIT_CALLS},
+    **{name: ("resource_kind",) for name in KIND_ONLY_CALLS},
+}
+
 
 def call_name(call: ast.Call) -> str:
     fn = call.func
@@ -28,7 +44,7 @@ def call_name(call: ast.Call) -> str:
 
 
 def wait_calls(tree: ast.AST) -> list[ast.Call]:
-    return [node for node in ast.walk(tree) if isinstance(node, ast.Call) and call_name(node) in WAIT_CALLS]
+    return [node for node in ast.walk(tree) if isinstance(node, ast.Call) and call_name(node) in REQUIRED_KEYWORDS]
 
 
 def test_every_wait_call_declares_resource_identity() -> None:
@@ -44,7 +60,7 @@ def test_every_wait_call_declares_resource_identity() -> None:
             keywords = {kw.arg for kw in call.keywords if kw.arg is not None}
             forwards_kwargs = any(kw.arg is None for kw in call.keywords)
             if not forwards_kwargs:
-                for param in ("resource_kind", "resource_id"):
+                for param in REQUIRED_KEYWORDS[call_name(call)]:
                     if param not in keywords:
                         problems.append(f"{location}: {call_name(call)}() missing {param}")
             kind = next((kw.value for kw in call.keywords if kw.arg == "resource_kind"), None)

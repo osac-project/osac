@@ -38,13 +38,14 @@ var _ = Describe("Version", func() {
 		templatesClient     privatev1.ClusterTemplatesClient
 		bmitName            string
 		templateId          string
+		network             catalogItemNetworkFixture
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		// Cluster creates without a network attachment use the tenant's default
-		// networking, which must be READY. No operator runs in this suite.
-		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
+		// Version tests pin explicit ready networking so their metadata
+		// assertions survive the tenant default readiness changing to False.
+		network = createCatalogItemNetworkFixture(ctx, usersGroup, "")
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
@@ -111,8 +112,9 @@ var _ = Describe("Version", func() {
 					Name: clusterName,
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
+					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
 			}.Build(),
 		}.Build())

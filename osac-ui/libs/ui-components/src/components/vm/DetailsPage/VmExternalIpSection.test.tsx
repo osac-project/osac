@@ -75,7 +75,7 @@ describe('VmExternalIpSection', () => {
       />,
     );
 
-    expect(screen.getByText('Not set')).toBeInTheDocument();
+    expect(screen.getByText('-')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Attach external IP' })).toBeEnabled();
   });
 

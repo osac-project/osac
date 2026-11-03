@@ -27,6 +27,8 @@ interface VmExternalIpSectionProps {
   vm: ComputeInstance;
 }
 
+const EMPTY_VALUE = '-';
+
 const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
   const { t } = useTranslation();
   const [attachOpen, setAttachOpen] = useState(false);
@@ -69,7 +71,7 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
         <DescriptionListTerm>{t('External IP')}</DescriptionListTerm>
         <DescriptionListDescription>
           <Flex flexWrap={{ default: 'wrap' }} gap={{ default: 'gapSm' }}>
-            <FlexItem>{isLoading ? t('Loading') : externalIp || t('Not set')}</FlexItem>
+            <FlexItem>{isLoading ? t('Loading') : externalIp || EMPTY_VALUE}</FlexItem>
             <FlexItem>
               <Flex gap={{ default: 'gapSm' }} flexWrap={{ default: 'wrap' }}>
                 {isFailed ? (

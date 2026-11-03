@@ -11,9 +11,10 @@ export interface CatalogStorageTableRow {
 
 interface CatalogStorageTableProps {
   rows: CatalogStorageTableRow[];
+  emptyValue?: ReactNode;
 }
 
-const CatalogStorageTable = ({ rows }: CatalogStorageTableProps) => {
+const CatalogStorageTable = ({ rows, emptyValue }: CatalogStorageTableProps) => {
   const { t } = useTranslation();
 
   return (
@@ -34,7 +35,7 @@ const CatalogStorageTable = ({ rows }: CatalogStorageTableProps) => {
           ))
         ) : (
           <Tr>
-            <Td colSpan={2}>{t('Not set')}</Td>
+            <Td colSpan={2}>{emptyValue ?? t('Not set')}</Td>
           </Tr>
         )}
       </Tbody>

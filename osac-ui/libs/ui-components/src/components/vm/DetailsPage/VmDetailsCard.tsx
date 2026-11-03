@@ -28,7 +28,6 @@ import {
 import EditInstanceTypeModal from './EditInstanceTypeModal';
 import VmExternalIpSection from './VmExternalIpSection';
 import { useTranslation } from '../../../hooks/useTranslation';
-import { displayValue } from '../../../utils/detailFormatters';
 import { VmStatusLabel } from '../../../VmStatusLabel';
 import { guestOsFamilyLabels } from '../../DiskImage/DiskImageTable';
 import { Timestamp } from '../../Primitives/Timestamp';
@@ -48,6 +47,8 @@ interface DetailRowProps {
   label: string;
   children: ReactNode;
 }
+
+const EMPTY_VALUE = '-';
 
 const DetailRow = ({ label, children }: DetailRowProps) => (
   <DescriptionListGroup>
@@ -72,6 +73,8 @@ const disabledInstanceTypeTooltip = (vm: ComputeInstance, t: TFunction): string 
         'The instance type can be changed when the virtual machine is running, paused, or stopped.',
       );
 
+const displayVmValue = (value?: string): string => value?.trim() || EMPTY_VALUE;
+
 const VmDetailsCard = ({
   vm,
   instanceType,
@@ -87,8 +90,8 @@ const VmDetailsCard = ({
   const sshKeyLabel = sshKey?.name || sshKey?.id;
   const guestOsFamily = diskImage?.spec?.guestOsFamily;
   const guestOsFamilyLabel = guestOsFamily
-    ? (guestOsFamilyLabels(t)[guestOsFamily] ?? t('Not set'))
-    : t('Not set');
+    ? (guestOsFamilyLabels(t)[guestOsFamily] ?? EMPTY_VALUE)
+    : EMPTY_VALUE;
   const diskImageLabel =
     diskImage?.metadata?.name || diskImageReference?.name || diskImageReference?.id;
   const instanceTypeLabel = isInstanceTypeLoading
@@ -132,15 +135,15 @@ const VmDetailsCard = ({
             </StackItem>
             <StackItem>
               <DescriptionList isCompact>
-                <DetailRow label={t('Project')}>{displayValue(vm.metadata?.project)}</DetailRow>
+                <DetailRow label={t('Project')}>{displayVmValue(vm.metadata?.project)}</DetailRow>
                 <DetailRow label={t('Status')}>
                   <VmStatusLabel state={vm.status?.state} />
                 </DetailRow>
                 <DetailRow label={t('Created')}>
-                  <Timestamp value={vm.metadata?.creationTimestamp} fallback={t('Not set')} />
+                  <Timestamp value={vm.metadata?.creationTimestamp} fallback={EMPTY_VALUE} />
                 </DetailRow>
                 <DetailRow label={t('Catalog item')}>
-                  {displayValue(catalogItem?.name || catalogItem?.id)}
+                  {displayVmValue(catalogItem?.name || catalogItem?.id)}
                 </DetailRow>
               </DescriptionList>
             </StackItem>
@@ -159,7 +162,7 @@ const VmDetailsCard = ({
                 <DetailRow label={t('Guest operating system family')}>
                   {isDiskImageLoading ? t('Loading') : guestOsFamilyLabel}
                 </DetailRow>
-                <DetailRow label={t('Disk image')}>{displayValue(diskImageLabel)}</DetailRow>
+                <DetailRow label={t('Disk image')}>{displayVmValue(diskImageLabel)}</DetailRow>
                 <DetailRow label={t('Instance type')}>
                   <Flex
                     spaceItems={{ default: 'spaceItemsSm' }}
@@ -176,16 +179,16 @@ const VmDetailsCard = ({
                   </Flex>
                 </DetailRow>
                 <DetailRow label={t('vCPUs')}>
-                  {vcpus === undefined ? t('Not set') : vcpus}
+                  {vcpus === undefined ? EMPTY_VALUE : vcpus}
                 </DetailRow>
                 <DetailRow label={t('Memory')}>
-                  {memoryGib === undefined ? t('Not set') : `${memoryGib} GiB`}
+                  {memoryGib === undefined ? EMPTY_VALUE : `${memoryGib} GiB`}
                 </DetailRow>
                 {gpu ? (
                   <>
                     <DetailRow label={t('GPU count')}>{gpu.count}</DetailRow>
                     <DetailRow label={t('GPU resource name')}>
-                      {displayValue(gpu.resourceName)}
+                      {displayVmValue(gpu.resourceName)}
                     </DetailRow>
                   </>
                 ) : null}
@@ -205,18 +208,18 @@ const VmDetailsCard = ({
               <DescriptionList isCompact>
                 <VmExternalIpSection vm={vm} />
                 {hasWindowsGuest ? (
-                  <DetailRow label={t('Sysprep (Unattend.xml)')}>{t('Not set')}</DetailRow>
+                  <DetailRow label={t('Sysprep (Unattend.xml)')}>{EMPTY_VALUE}</DetailRow>
                 ) : (
                   <>
                     <DetailRow label={t('SSH public key')}>
                       {sshKey?.id && sshKeyLabel ? (
                         <ResourceLink basePath="/secrets" id={sshKey.id} name={sshKeyLabel} />
                       ) : (
-                        displayValue(sshKeyLabel)
+                        displayVmValue(sshKeyLabel)
                       )}
                     </DetailRow>
                     <DetailRow label={t('Cloud-init')}>
-                      <UserDataDetailValue userData={userData} emptyValue={displayValue()} />
+                      <UserDataDetailValue userData={userData} emptyValue={EMPTY_VALUE} />
                     </DetailRow>
                   </>
                 )}

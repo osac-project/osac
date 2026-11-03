@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import type { ComputeInstance } from '@osac/types';
@@ -30,7 +30,7 @@ describe('VmStorageSection', () => {
     expect(container.querySelector('.pf-v6-c-card')).toBeNull();
   });
 
-  it('renders Not set for an empty additional-disk list', () => {
+  it('renders a hyphen without a table for an empty additional-disk list', () => {
     renderWithProviders(
       <VmStorageSection
         vm={
@@ -41,7 +41,10 @@ describe('VmStorageSection', () => {
       />,
     );
 
-    expect(screen.getByRole('cell', { name: 'Not set' })).toBeInTheDocument();
+    const additionalDisksRow = screen.getByText('Additional disks').closest('div') as HTMLElement;
+
+    expect(within(additionalDisksRow).getByText('-')).toBeInTheDocument();
+    expect(screen.queryByRole('grid', { name: 'Additional disks' })).not.toBeInTheDocument();
   });
 
   it('renders VM conditions below the storage details', () => {

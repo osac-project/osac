@@ -52,7 +52,7 @@ const VmNetworkingSection = ({ vm }: VmNetworkingSectionProps) => {
                         name={row.virtualNetwork.name}
                       />
                     ) : (
-                      '—'
+                      '-'
                     )}
                   </Td>
                   <Td dataLabel={t('Subnet')}>{row.subnet}</Td>
@@ -68,7 +68,7 @@ const VmNetworkingSection = ({ vm }: VmNetworkingSectionProps) => {
                             />
                           </span>
                         ))
-                      : '—'}
+                      : '-'}
                   </Td>
                   <Td dataLabel={t('Internal IP')}>{row.internalIp}</Td>
                 </Tr>

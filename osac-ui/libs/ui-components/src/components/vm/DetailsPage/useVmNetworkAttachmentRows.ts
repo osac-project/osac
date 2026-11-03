@@ -57,7 +57,7 @@ export const useVmNetworkAttachmentRows = (vm: ComputeInstance): VmNetworkAttach
         securityGroups: (attachment.securityGroups ?? [])
           .map(({ id }) => findResourceReference(id, securityGroups))
           .filter((resource): resource is VmNetworkResource => resource !== undefined),
-        internalIp: internalIp || '—',
+        internalIp: internalIp || '-',
       };
     });
   }, [vm.spec?.networkAttachments, vm.status, subnets, virtualNetworks, securityGroups]);

@@ -20,14 +20,16 @@ interface VmStorageSectionProps {
   vm: ComputeInstance;
 }
 
+const EMPTY_VALUE = '-';
+
 const VmStorageSection = ({ vm }: VmStorageSectionProps) => {
   const { t } = useTranslation();
   const bootDisk = vm.spec?.bootDisk;
   const additionalDisks = vm.spec?.additionalDisks?.items ?? [];
   const additionalDiskRows: CatalogStorageTableRow[] = additionalDisks.map((disk, index) => ({
     id: `additional-disk-${index}`,
-    size: disk.sizeGib === undefined ? t('Not set') : `${disk.sizeGib} GB`,
-    storageTier: disk.storageTier?.name || disk.storageTier?.id || t('Not set'),
+    size: disk.sizeGib === undefined ? EMPTY_VALUE : `${disk.sizeGib} GB`,
+    storageTier: disk.storageTier?.name || disk.storageTier?.id || EMPTY_VALUE,
   }));
 
   return (
@@ -42,19 +44,23 @@ const VmStorageSection = ({ vm }: VmStorageSectionProps) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Boot disk size')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {bootDisk?.sizeGib === undefined ? t('Not set') : `${bootDisk.sizeGib} GB`}
+              {bootDisk?.sizeGib === undefined ? EMPTY_VALUE : `${bootDisk.sizeGib} GB`}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Boot storage tier')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {bootDisk?.storageTier?.name || bootDisk?.storageTier?.id || t('Not set')}
+              {bootDisk?.storageTier?.name || bootDisk?.storageTier?.id || EMPTY_VALUE}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Additional disks')}</DescriptionListTerm>
             <DescriptionListDescription>
-              <CatalogStorageTable rows={additionalDiskRows} />
+              {additionalDiskRows.length > 0 ? (
+                <CatalogStorageTable rows={additionalDiskRows} emptyValue={EMPTY_VALUE} />
+              ) : (
+                EMPTY_VALUE
+              )}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>

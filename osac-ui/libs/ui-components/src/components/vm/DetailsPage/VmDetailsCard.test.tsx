@@ -93,7 +93,7 @@ describe('VmDetailsCard', () => {
     expect(container.querySelector('.pf-v6-c-card')).toBeNull();
   });
 
-  it('uses an em dash for unresolved VM user data', () => {
+  it('uses a hyphen for unresolved VM user data', () => {
     renderWithProviders(
       <VmDetailsCard
         vm={{ id: 'vm-2', metadata: { name: 'legacy-vm' }, spec: {} } as ComputeInstance}
@@ -102,7 +102,19 @@ describe('VmDetailsCard', () => {
     );
 
     const cloudInitRow = screen.getByText('Cloud-init').closest('div') as HTMLElement;
-    expect(within(cloudInitRow).getByText('—')).toBeInTheDocument();
+    expect(within(cloudInitRow).getByText('-')).toBeInTheDocument();
+  });
+
+  it('uses hyphens instead of Not set for unset VM details', () => {
+    renderWithProviders(
+      <VmDetailsCard
+        vm={{ id: 'vm-2', metadata: { name: 'legacy-vm' }, spec: {} } as ComputeInstance}
+        isInstanceTypeLoading={false}
+      />,
+    );
+
+    expect(screen.queryByText('Not set')).not.toBeInTheDocument();
+    expect(screen.getAllByText('-').length).toBeGreaterThan(0);
   });
 
   it('expands inline user data from the Cloud-init row', async () => {

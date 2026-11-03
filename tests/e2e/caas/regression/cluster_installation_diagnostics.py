@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import tempfile
@@ -18,7 +17,6 @@ from tests.e2e.core.wait_kinds import WaitResourceKind
 POST_INSTALL_MONITOR_SECONDS = 10 * 60
 _DIAGNOSTIC_INTERVAL_SECONDS = 60
 
-logger = logging.getLogger(__name__)
 diagnostics_logger = logging.getLogger(f"{__name__}.diagnostics")
 
 
@@ -79,12 +77,7 @@ def cluster_references(*, k8s: K8sClient, uuid: str, co_name: str, expected_node
     """Resolve the test-owned HostedCluster and NodePool names."""
 
     def _read() -> tuple[str, str]:
-        cluster_order = k8s.get_json(resource="clusterorder", name=co_name)
-        status = _mapping(cluster_order.get("status", {}))
-        reference = _mapping(status.get("clusterReference", {}))
-        namespace = reference.get("namespace") or f"{k8s.namespace}-{co_name}"
-        hc_name = reference.get("hostedClusterName") or co_name
-        return namespace, hc_name
+        return (k8s.get_cluster_order_namespace(name=co_name), k8s.get_cluster_order_hosted_cluster_name(name=co_name))
 
     namespace, hc_name = poll_until(
         fn=_read,
@@ -150,6 +143,9 @@ def _post_install_diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
     for operator in _sequence(snapshot.get("cluster_operators", [])):
         name = _mapping(_mapping(operator).get("metadata", {})).get("name", "")
         operators[name] = {
+            "available": _condition(operator, "Available").get("status") == "True",
+            "progressing": _condition(operator, "Progressing").get("status") == "True",
+            "degraded": _condition(operator, "Degraded").get("status") == "True",
             "conditions": _condition_summary(operator),
             "versions": _safe_operator_versions(_mapping(operator)),
         }
@@ -169,41 +165,26 @@ def _post_install_diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _hosted_ready(hosted: dict[str, Any]) -> bool:
-    """Use HyperShift health conditions for control-plane readiness."""
-    return (
-        _condition(hosted, "Available").get("status") == "True"
-        and _condition(hosted, "Degraded").get("status") != "True"
-    )
-
-
-def _assert_post_install_healthy(snapshot: dict[str, Any]) -> None:
+def _assert_post_install_healthy(diagnostics: dict[str, Any]) -> None:
     """Require the installed HyperShift cluster and guest operators to stay healthy."""
-    cluster_state = _mapping(snapshot.get("cluster", {})).get("status", {}).get("state", "")
-    order_phase = _mapping(snapshot.get("order", {})).get("status", {}).get("phase", "")
-    hosted = _mapping(snapshot.get("hosted", {}))
-    assert cluster_state == "CLUSTER_STATE_READY", "OSAC Cluster became unhealthy after installation"
-    assert order_phase == "Ready", "ClusterOrder became unhealthy after installation"
-    assert _hosted_ready(hosted), "HostedCluster became unhealthy after installation"
-    assert _condition(hosted, "ClusterVersionProgressing").get("status") != "True", (
-        "HostedCluster kept progressing after installation"
-    )
+    assert diagnostics["cluster_state"] == "CLUSTER_STATE_READY", "OSAC Cluster became unhealthy after installation"
+    assert diagnostics["order_phase"] == "Ready", "ClusterOrder became unhealthy after installation"
+    assert diagnostics["hosted_available"], "HostedCluster became unhealthy after installation"
+    assert not diagnostics["hosted_degraded"], "HostedCluster became degraded after installation"
+    assert not diagnostics["hosted_progressing"], "HostedCluster kept progressing after installation"
 
-    for node_set, pool in _mapping(snapshot.get("pools", {})).items():
-        assert _mapping(pool).get("status", {}).get("version", "") != "", f"{node_set} NodePool lost its version"
-        assert _condition(pool, "Ready").get("status") == "True", f"{node_set} NodePool became unhealthy"
-        assert _condition(pool, "AllMachinesReady").get("status") == "True", (
-            f"{node_set} NodePool machines became unhealthy"
-        )
-        assert _condition(pool, "UpdatingVersion").get("status") != "True", f"{node_set} NodePool kept updating"
+    for node_set, pool in _mapping(diagnostics.get("node_pools", {})).items():
+        assert pool["version"] != "", f"{node_set} NodePool lost its version"
+        assert pool["ready"], f"{node_set} NodePool became unhealthy"
+        assert pool["all_machines_ready"], f"{node_set} NodePool machines became unhealthy"
+        assert not pool["updating_version"], f"{node_set} NodePool kept updating"
 
-    operators = _sequence(snapshot.get("cluster_operators", []))
+    operators = _mapping(diagnostics.get("cluster_operators", {}))
     assert operators, "Guest ClusterOperator diagnostics became unavailable"
-    for operator in operators:
-        name = _mapping(_mapping(operator).get("metadata", {})).get("name", "")
-        assert _condition(operator, "Available").get("status") == "True", f"{name} ClusterOperator became unavailable"
-        assert _condition(operator, "Progressing").get("status") == "False", f"{name} ClusterOperator kept progressing"
-        assert _condition(operator, "Degraded").get("status") == "False", f"{name} ClusterOperator became degraded"
+    for name, operator in operators.items():
+        assert operator["available"], f"{name} ClusterOperator became unavailable"
+        assert not operator["progressing"], f"{name} ClusterOperator kept progressing"
+        assert not operator["degraded"], f"{name} ClusterOperator became degraded"
 
 
 def _log_diagnostics(
@@ -216,24 +197,18 @@ def _log_diagnostics(
     if final:
         payload["final"] = True
     payload.update(data)
-    diagnostics_logger.info("CaaS installation diagnostics: %s", json.dumps(payload, sort_keys=True))
+    if diagnostics_logger.isEnabledFor(logging.INFO):
+        diagnostics_logger.info("CaaS installation diagnostics: %s", json.dumps(payload, sort_keys=True))
 
 
 def monitor_post_install_health(*, k8s: K8sClient, grpc: GRPCClient, refs: ClusterReferences) -> float:
     """Monitor the installed cluster for the configured stability window."""
     started = time.monotonic()
-    try:
-        workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
-            k8s=k8s, hosted_cluster_namespace=refs.namespace, hosted_cluster_name=refs.hc_name
-        )
-    except Exception:
-        logger.warning("Post-install diagnostics skipped: workload kubeconfig unavailable")
-        return 0.0
+    workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
+        k8s=k8s, hosted_cluster_namespace=refs.namespace, hosted_cluster_name=refs.hc_name
+    )
 
-    with contextlib.ExitStack() as stack:
-        kubeconfig_file = stack.enter_context(
-            tempfile.NamedTemporaryFile(prefix="osac-post-install-", suffix=".kubeconfig")
-        )
+    with tempfile.NamedTemporaryFile(prefix="osac-post-install-", suffix=".kubeconfig") as kubeconfig_file:
         kubeconfig_file.write(workload_kubeconfig)
         kubeconfig_file.flush()
         workload_k8s = K8sClient(namespace=refs.namespace, kubeconfig=kubeconfig_file.name, as_system_admin=False)
@@ -249,7 +224,7 @@ def monitor_post_install_health(*, k8s: K8sClient, grpc: GRPCClient, refs: Clust
                 _log_diagnostics(
                     component="post-install health", data=final_data, elapsed_seconds=time.monotonic() - started
                 )
-                _assert_post_install_healthy(snapshot)
+                _assert_post_install_healthy(final_data)
             except AssertionError:
                 if final_data is not None:
                     _log_diagnostics(

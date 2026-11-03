@@ -563,12 +563,27 @@ var _ = Describe("MCP server", func() {
 				publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
 			))
 		}, time.Minute, 100*time.Millisecond).Should(Succeed())
-		currentResponse, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
-			Id: computeInstanceID,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		currentVersion := currentResponse.GetObject().GetMetadata().GetVersion()
-		staleVersion := currentVersion + 1
+		var staleVersion int32
+		Eventually(func(g Gomega) {
+			currentResponse, getErr := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: computeInstanceID,
+			}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			currentVersion := currentResponse.GetObject().GetMetadata().GetVersion()
+			g.Expect(currentVersion).To(BeNumerically(">", 0))
+
+			_, updateErr := callMCPTool[mcpserver.UpdateComputeInstanceOutput](
+				ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
+					ID: computeInstanceID, Version: currentVersion, RunStrategy: "HALTED",
+				},
+			)
+			if updateErr != nil {
+				g.Expect(updateErr.Error()).To(ContainSubstring("The resource version is stale"))
+				return
+			}
+			staleVersion = currentVersion
+		}, time.Minute, 100*time.Millisecond).Should(Succeed())
+		Expect(staleVersion).To(BeNumerically(">", 0))
 
 		_, err = callMCPTool[mcpserver.UpdateComputeInstanceOutput](
 			ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{

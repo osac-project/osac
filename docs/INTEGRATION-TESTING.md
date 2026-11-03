@@ -350,9 +350,10 @@ installer command in the tier table remains the component-integration check.
   SDK, deployed Fulfillment, PostgreSQL, and caller-token boundary to
   VirtualNetwork, Subnet, and SecurityGroup create/delete, tenant attribution,
   dependent owner-reference annotations, IPv4 and in-place-edit rejection,
-  cross-tenant parent denial, dependency conflict, and dependency-safe cleanup;
-  the network provider is omitted and fixture helpers complete no-operator
-  deletion. `it_mcp_discovery_test.go` creates
+  bounded SecurityGroup rule rejection without persistence, cross-tenant
+  parent denial, dependency conflict, and dependency-safe cleanup; the network
+  provider is omitted and fixture helpers complete no-operator deletion.
+  `it_mcp_discovery_test.go` creates
   Projects and Secret references for two tenants, verifies caller-scoped
   Project and Secret-reference listing, confirms Secret-reference results
   contain only reference metadata, and checks list-only Secret Get rejection

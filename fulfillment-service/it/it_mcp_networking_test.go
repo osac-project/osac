@@ -287,4 +287,34 @@ var _ = Describe("MCP network resources", func() {
 		Expect(cleanupVirtualNetworkFixture(ctx, virtualNetworks, virtualNetworkID)).To(Succeed())
 		virtualNetworkID = ""
 	})
+
+	It("rejects an oversized SecurityGroup rule request without mutation", func() {
+		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-network-limit", userUsername)
+		securityGroupName := ndUniqueName("mcp-sg-limit")
+		rules := make([]mcpserver.NetworkSecurityRuleInput, 101)
+		for index := range rules {
+			rules[index] = mcpserver.NetworkSecurityRuleInput{
+				Protocol: "all",
+				IPv4Cidr: "0.0.0.0/0",
+			}
+		}
+
+		_, err := callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ResourceType:     mcpserver.NetworkResourceTypeSecurityGroup,
+				Name:             securityGroupName,
+				VirtualNetworkID: "virtual-network-does-not-exist",
+				IngressRules:     rules,
+			},
+		)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`"category":"invalid_request"`))
+		Expect(err.Error()).To(ContainSubstring("more than 100 rules in total"))
+
+		securityGroupList, err := securityGroups.List(ctx, privatev1.SecurityGroupsListRequest_builder{
+			Filter: proto.String(fmt.Sprintf("this.metadata.name == %q", securityGroupName)),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(securityGroupList.GetItems()).To(BeEmpty())
+	})
 })

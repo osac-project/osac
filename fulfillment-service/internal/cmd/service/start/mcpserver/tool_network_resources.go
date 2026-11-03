@@ -201,11 +201,9 @@ func handleDeleteNetworkResource(
 }
 
 func validateNetworkSecurityRuleCounts(input CreateNetworkResourceInput) error {
-	if len(input.IngressRules) > maxNetworkSecurityRules {
-		return fmt.Errorf("ingress_rules must not contain more than %d rules", maxNetworkSecurityRules)
-	}
-	if len(input.EgressRules) > maxNetworkSecurityRules {
-		return fmt.Errorf("egress_rules must not contain more than %d rules", maxNetworkSecurityRules)
+	resourceType := NetworkResourceType(strings.TrimSpace(string(input.ResourceType)))
+	if resourceType != NetworkResourceTypeSecurityGroup {
+		return nil
 	}
 	if len(input.IngressRules)+len(input.EgressRules) > maxNetworkSecurityRules {
 		return fmt.Errorf(

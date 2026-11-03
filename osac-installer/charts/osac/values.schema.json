@@ -738,10 +738,11 @@
         },
         "variant": {
           "type": "string",
-          "description": "Deployment variant",
+          "description": "Deployment variant: openshift renders OpenShift Routes, kind renders Gateway API TLSRoutes, vcluster renders neither (the CI run setup publishes the run's routes in the outer cluster)",
           "enum": [
             "openshift",
-            "kind"
+            "kind",
+            "vcluster"
           ],
           "default": "openshift"
         },
@@ -1704,6 +1705,16 @@
       "type": "object",
       "description": "OSAC Metering Service configuration",
       "properties": {
+        "variant": {
+          "type": "string",
+          "description": "Deployment variant, like service.variant: the echo adapter's OpenShift Route renders only with openshift",
+          "enum": [
+            "openshift",
+            "kind",
+            "vcluster"
+          ],
+          "default": "openshift"
+        },
         "image": {
           "type": "object",
           "properties": {
@@ -1835,7 +1846,14 @@
         },
         "kafka": {
           "type": "object",
-          "description": "Kafka connection for metering events (subchart default)"
+          "description": "Kafka connection for metering events (subchart default)",
+          "properties": {
+            "strimziResources": {
+              "type": "boolean",
+              "description": "Create the metering Strimzi KafkaUsers and KafkaTopics for the in-cluster Kafka; set false with an external Kafka cluster (kafka.enabled=false)",
+              "default": true
+            }
+          }
         },
         "certs": {
           "type": "object",
@@ -2267,6 +2285,16 @@
             "minLength": 1
           },
           "default": {}
+        },
+        "skipChecks": {
+          "type": "array",
+          "description": "Check ids to skip without reasons, for automation. Each is reported as skipped with a fixed reason. An id that matches no check fails the install.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "uniqueItems": true,
+          "default": []
         }
       },
       "additionalProperties": false

@@ -1,0 +1,14 @@
+# VMaaS CI environment -- infrastructure values for the vcluster a run
+# installs OSAC into.
+#
+# install-infra never runs against a vcluster: the infrastructure lives in
+# the outer cluster and is installed once a day there. This file exists for
+# make install-osac's PostgreSQL prerequisite check, which reads it to decide
+# how to verify the database. The run's PostgreSQL is the outer cluster's
+# bundled one, reached through CoreDNS forwarding, and the chart creates the
+# database secrets itself during the install, after the check runs -- so the
+# check must take the bundled path, which defers readiness to the chart's own
+# install --wait.
+
+bundledPostgres:
+  enabled: true

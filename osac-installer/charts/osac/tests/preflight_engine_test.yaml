@@ -326,6 +326,49 @@ tests:
       - matchRegex:
           path: 'data["render.json"]'
           pattern: '"id":"preflight-skip-unknown-id","message":"preflight\.skip names unknown check id\(s\): default-storageclas'
+  - it: "a check listed in skipChecks is skipped with the fixed reason"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_plain, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      preflight.skipChecks:
+        - default-storageclass
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"summary":\{"blocking":0,"fail":0,"pass":14,"skipped":5,"unknown":0,"warn":0\}'
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"default-storageclass","message":"skipped by preflight\.skipChecks","observed":\{\},"remediation"'
+  - it: "a misspelled skipChecks id blocks the install"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_kubevirt, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      preflight.skipChecks:
+        - default-storageclas
+    asserts:
+      - failedTemplate:
+          errorPattern: '"summary":\{"blocking":1,"fail":1,'
+      - failedTemplate:
+          errorPattern: 'FAIL    preflight-skipchecks-unknown-id: preflight\.skipChecks names unknown check id\(s\): default-storageclas'
+      - failedTemplate:
+          errorPattern: 'Fix: Fix the spelling; the ids are listed in files/preflight/catalog\.yaml\.'
   - it: "validation.enabled=false skips every check and never fails"
     kubernetesProvider:
       scheme: *scheme

@@ -297,14 +297,16 @@ rotates.
 Metering uses its own Kafka user and `osac.metering.` topics. The Fulfillment
 Service credentials above do not configure metering.
 
-The current metering chart creates Strimzi `KafkaUser` and `KafkaTopic`
+The metering chart creates Strimzi `KafkaUser` and `KafkaTopic`
 resources and fetches passwords from Secrets in the Kafka namespace. It
 requires Strimzi and the target Kafka cluster's User and Topic Operators
 in the same Kubernetes cluster as OSAC. Setting the platform's
-`kafka.enabled: false` does **not** suppress those metering resources.
-Pointing `metering.kafka.brokers` at an arbitrary external broker is
-therefore insufficient; the chart has no values-only path for supplying
-independent external metering credentials and skipping those resources.
+`kafka.enabled: false` does **not** suppress those metering resources;
+set `metering.kafka.strimziResources: false` as well, and create the
+metering user and its password Secret yourself. The chart still fetches
+that Secret from the Kafka namespace through the local API, so a broker
+in another Kubernetes cluster remains unsupported: there is no
+values-only path for independent external metering credentials.
 
 For the Strimzi cluster in this example, merge these additional values:
 

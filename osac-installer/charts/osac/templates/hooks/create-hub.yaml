@@ -58,8 +58,12 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
+        {{- if ne .Values.service.variant "vcluster" }}
+        {{- /* A fixed UID keeps anyuid-admitted pods non-root on plain clusters;
+             a vcluster's host namespace assigns one from its own SCC range. */}}
         runAsUser: 1000
         fsGroup: 1000
+        {{- end }}
       serviceAccountName: admin
       initContainers:
       {{- include "osac.waitForFulfillment" . | nindent 6 }}

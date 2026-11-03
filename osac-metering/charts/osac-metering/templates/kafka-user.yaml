@@ -3,7 +3,10 @@
      for Kafka authentication. Metering reads every tenant's event topic,
      reads and writes every tenant's heartbeat topic, and creates the
      heartbeat and dead-letter topics of the tenants it serves, verifying
-     the retention of the topics it finds. */}}
+     the retention of the topics it finds. Not rendered with an external
+     Kafka cluster (kafka.strimziResources=false): the user must already
+     exist, created outside the chart. */}}
+{{- if .Values.kafka.strimziResources }}
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -45,3 +48,4 @@ spec:
           - Describe
           - DescribeConfigs
         host: "*"
+{{- end }}

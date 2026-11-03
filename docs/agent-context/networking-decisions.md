@@ -66,13 +66,14 @@ superseded or extended design explicitly.
 8. **DHCP and discovery:** Workloads receive tenant-network addresses through
    DHCP. Discover assigned addresses through the service-specific status and
    feedback paths. For BMaaS, the Fabric Manager owns lease lookup. The target
-   behavior records the selected NIC MAC on BMI status and its NetworkAttachment;
-   the configured AAP job template runs `query_dhcp_lease` after handoff, and BMF
-   mirrors the accepted lease to BMI status. The current implementation does not
-   persist the selected MAC and may fall back to name-based lease matching when
-   MAC resolution is missing or partial. CaaS delegates host provisioning, port
-   moves, and IP discovery to BMaaS. Check the per-service designs for timing
-   and API/ingress VIP allocation.
+   OSAC-6818 implementation [PR #2149](https://github.com/osac-project/osac/pull/2149)
+   records the selected NIC MAC on BMI status and its NetworkAttachment; the
+   configured AAP job template runs
+   `query_dhcp_lease` after handoff, and BMF mirrors only a matching accepted
+   lease to BMI status. Host selection requires a valid mapping for the selected
+   logical port; lease discovery has no host-name fallback. CaaS delegates host
+   provisioning, port moves, and IP discovery to BMaaS. Check the per-service
+   designs for timing and API/ingress VIP allocation.
 9. **Pluggable managers:** Managers register type/capabilities through ConfigMaps
    and supply Ansible roles. Adding a manager for existing capabilities does not
    require API changes. Capability types are fixed by the operator; a new

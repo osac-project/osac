@@ -69,15 +69,12 @@ At host assignment the inventory client can supply an administrator mapping
 from OSAC logical port names to physical MAC addresses. Each key must match the
 network attachment's `interface` and the catalog port name.
 
-**Current implementation:** IP discovery passes a resolved subnet-to-MAC map to
-the query job when available. The current controller does not persist the
-selected MAC on BMI status or the NetworkAttachment spec, and a failed or
-partial mapping can fall back to name-based lease matching.
-
-**Target behavior:** BMF records the selected MAC on BMI status and the
-NetworkAttachment spec, requires a valid inventory MAC for the selected
-interface before creating the attachment, and discovers the lease by that MAC.
-This target behavior is not yet enforced by the current implementation.
+**OSAC-6818 implementation ([PR #2149](https://github.com/osac-project/osac/pull/2149)):**
+BMF requires a valid inventory MAC for the selected interface before creating
+the NetworkAttachment. It records the selected MAC in BMI status and the
+NetworkAttachment spec, then accepts a DHCP lease only when its MAC matches.
+Missing or invalid selected-port mappings do not fall back to host-name lease
+matching.
 Inventory backends:
 
 | Backend | Source | Value format |
@@ -85,7 +82,7 @@ Inventory backends:
 | Metal3 | BareMetalHost annotation `osac.openshift.io/interface-macs` | JSON string |
 | BCM | Device `extra_values["osac_interface_macs"]` | JSON object or JSON string |
 | OpenStack | Ironic node `extra["osac_interface_macs"]` | JSON object |
-| NetBox | Device custom field `osac_interface_macs` | per design |
+| NetBox | Device custom field `osac_interface_macs` | JSON object or JSON string |
 
 For example, an object mapping is `{"data-0":"52:54:00:16:04:83"}`. For
 string-valued BCM metadata, the equivalent device field is:

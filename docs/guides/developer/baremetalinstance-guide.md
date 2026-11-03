@@ -97,10 +97,11 @@ Shared networking resources and gates are described in the
 BareMetalInstance lifecycle. Architecture summary:
 [Bare Metal Server Fulfillment](../../architecture/bm-server-fulfillment.md).
 
-**Implementation status.** The selected-MAC persistence and MAC-only lease
-lookup below describe the target behavior. The current implementation does not
-persist the selected MAC and may fall back to name-based lease matching when
-MAC resolution is missing or partial.
+**Implementation status.** The OSAC-6818 implementation in
+[PR #2149](https://github.com/osac-project/osac/pull/2149) requires a valid
+inventory MAC for the selected interface, stores it in BMI status and the
+NetworkAttachment spec, and accepts DHCP leases only for that MAC. It does not
+use host-name lease matching as a fallback.
 
 **Ownership.** BMF manages host inventory, OS provisioning and power,
 NetworkAttachment lifecycle, handoff, repair marks, and status mirroring. The
@@ -123,14 +124,14 @@ provider provisioning network. After OS provisioning, BMF creates a
 NetworkAttachment; the configured `{{ aap_prefix }}-move-network-attachment`
 AAP job template runs the apply playbook, and the selected Fabric Manager moves
 the port to the Subnet segment and applies policy. BMF then coordinates the
-handoff through the management backend. When the host is powered on, BMF requests
-one handoff reboot so the OS re-DHCPs on the tenant network. If it is already
-powered off, BMF skips the reboot and marks handoff complete; DHCP discovery
-depends on the next power-on. Metal3 uses its handoff annotation. After the
-handoff is confirmed, the configured `{{ aap_prefix }}-query-dhcp-lease` AAP
-job template runs lease discovery for the selected MAC. BMF records the accepted
-lease. OSAC continues querying until a lease is found or discovery reaches a
-terminal failure, and status carries the latest query result. A
+handoff through the management backend. Metal3 uses its hard handoff annotation;
+Ironic drives the host through off to on and explicitly powers it on if it is
+already off. BMF waits for confirmation and fails the handoff if it is not
+confirmed within 15 minutes of `NetworkAttachmentsReady=True`. After
+confirmation, the configured `{{ aap_prefix }}-query-dhcp-lease` AAP job
+template runs lease discovery for the selected MAC. After 10 minutes without a
+lease, BMF emits a `LeaseNotFound` warning while query retries continue; status
+carries the latest query result. A terminal query failure fails discovery. A
 provisioning-network address is never shown as the tenant address.
 
 **Automatic external access.** `--external-ip-attachment` (or the equivalent

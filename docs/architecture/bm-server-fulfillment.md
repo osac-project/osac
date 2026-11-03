@@ -18,10 +18,10 @@ Tier and owner classification for tests is in the design
 | Fabric Manager | Performs provider-side Fabric operations invoked by the AAP playbooks: port and policy changes, DHCP, selected-MAC lease lookup, and port restoration on delete. |
 | osac-operator BMI cleanup / feedback | Manages automatic ExternalIPAttachment lifecycle and reports status changes to fulfillment. |
 
-The selected-MAC persistence and MAC-only discovery in the lifecycle below are
-target behavior. The current implementation does not persist the selected MAC
-and may fall back to host-name lease matching when MAC resolution is missing or
-partial; the companion implementation change is required to enforce the target.
+The OSAC-6818 implementation in [PR #2149](https://github.com/osac-project/osac/pull/2149)
+requires the selected port's valid MAC, records it on BMI status and the
+NetworkAttachment spec, and accepts only a DHCP lease for that MAC. It does not
+fall back to host-name lease matching.
 
 Shared VirtualNetwork, Subnet, SecurityGroup, ExternalIP, and NATGateway behavior
 belongs to Unified / Default Networking. Do not duplicate those contracts here;
@@ -39,12 +39,16 @@ and [networking decisions](../agent-context/networking-decisions.md).
    playbook, which moves the port and applies policy through the selected
    networking role.
 4. After the NetworkAttachment is Ready, BMF coordinates the handoff through the
-   management backend. Ironic skips an extra power-off when the host is already
-   off and proceeds to power it on; Metal3 uses its handoff annotation. BMF marks
-   the handoff complete only after the host is on.
+   management backend. Ironic drives the host through off to on and explicitly
+   powers it on if it is already off; Metal3 uses its hard handoff annotation.
+   BMF marks the handoff complete only after confirmation and fails it if
+   confirmation does not arrive within 15 minutes of
+   `NetworkAttachmentsReady=True`.
 5. After handoff, the configured `{{ aap_prefix }}-query-dhcp-lease` AAP job
    template runs the lease-query playbook for the recorded MAC. BMF mirrors the
-   accepted lease. A provisioning-network address is never presented as the
+   matching accepted lease. After 10 minutes without a lease, BMF emits a
+   `LeaseNotFound` warning and keeps retrying; a terminal query failure fails
+   IP discovery. A provisioning-network address is never presented as the
    tenant IP.
 6. On delete, BMF powers the host off while still on the tenant network (when a
    NetworkAttachment exists). The configured

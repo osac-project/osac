@@ -117,7 +117,7 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 		}
 	}
 
-	queryJob := latestNetworkAttachmentQueryJob(na)
+	queryJob := latestNetworkAttachmentJob(na, networkAttachmentQueryTask)
 	if queryJob != nil && queryJob.State == opv1alpha1.NetworkJobStateFailed {
 		message := queryJob.Message
 		if message == "" {
@@ -136,7 +136,7 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 		return ctrl.Result{}, nil
 	}
 
-	msg := latestNetworkAttachmentQueryMessage(na)
+	msg := latestNetworkAttachmentQueryMessage(queryJob)
 	if msg == "" {
 		msg = "waiting for NetworkAttachment DHCP lease"
 	}
@@ -182,31 +182,18 @@ func (r *BareMetalInstanceReconciler) maybeEmitLeaseNotFound(
 	return warningPrefix
 }
 
-func latestNetworkAttachmentQueryMessage(na *opv1alpha1.NetworkAttachment) string {
-	for i := len(na.Status.Jobs) - 1; i >= 0; i-- {
-		job := na.Status.Jobs[i]
-		if job.Task != networkAttachmentQueryTask {
-			continue
-		}
-		message := job.Message
-		if message == "" {
-			message = "DHCP lease query in progress"
-		}
-		if job.JobID != "" {
-			return fmt.Sprintf("%s (AAP job ID: %s)", message, job.JobID)
-		}
-		return message
+func latestNetworkAttachmentQueryMessage(job *opv1alpha1.NetworkJobStatus) string {
+	if job == nil {
+		return ""
 	}
-	return ""
-}
-
-func latestNetworkAttachmentQueryJob(na *opv1alpha1.NetworkAttachment) *opv1alpha1.NetworkJobStatus {
-	for i := len(na.Status.Jobs) - 1; i >= 0; i-- {
-		if na.Status.Jobs[i].Task == networkAttachmentQueryTask {
-			return &na.Status.Jobs[i]
-		}
+	message := job.Message
+	if message == "" {
+		message = "DHCP lease query in progress"
 	}
-	return nil
+	if job.JobID != "" {
+		return fmt.Sprintf("%s (AAP job ID: %s)", message, job.JobID)
+	}
+	return message
 }
 
 // initNetworkAttachmentStatuses ensures statuses exist for all attachments and syncs

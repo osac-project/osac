@@ -361,11 +361,8 @@ func networkAttachmentConditionMessage(na *opv1alpha1.NetworkAttachment, fallbac
 func latestNetworkAttachmentJobMessage(na *opv1alpha1.NetworkAttachment) string {
 	prefer := []string{networkAttachmentApplyTask, networkAttachmentDeleteTask}
 	for _, task := range prefer {
-		for i := len(na.Status.Jobs) - 1; i >= 0; i-- {
-			job := na.Status.Jobs[i]
-			if job.Task == task && job.Message != "" {
-				return job.Message
-			}
+		if job := latestNetworkAttachmentJob(na, task); job != nil && job.Message != "" {
+			return job.Message
 		}
 	}
 	for i := len(na.Status.Jobs) - 1; i >= 0; i-- {
@@ -376,14 +373,16 @@ func latestNetworkAttachmentJobMessage(na *opv1alpha1.NetworkAttachment) string 
 	return ""
 }
 
-func latestNetworkAttachmentTaskMessage(na *opv1alpha1.NetworkAttachment, task string) string {
+func latestNetworkAttachmentJob(
+	na *opv1alpha1.NetworkAttachment,
+	task string,
+) *opv1alpha1.NetworkJobStatus {
 	for i := len(na.Status.Jobs) - 1; i >= 0; i-- {
-		job := na.Status.Jobs[i]
-		if job.Task == task && job.Message != "" {
-			return job.Message
+		if na.Status.Jobs[i].Task == task {
+			return &na.Status.Jobs[i]
 		}
 	}
-	return ""
+	return nil
 }
 
 func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
@@ -481,8 +480,8 @@ func (r *BareMetalInstanceReconciler) networkAttachmentDeleteMessage(ctx context
 	}
 	na := &opv1alpha1.NetworkAttachment{}
 	if err := r.apiReaderOrClient().Get(ctx, key, na); err == nil {
-		if message := latestNetworkAttachmentTaskMessage(na, networkAttachmentDeleteTask); message != "" {
-			return message
+		if job := latestNetworkAttachmentJob(na, networkAttachmentDeleteTask); job != nil && job.Message != "" {
+			return job.Message
 		}
 	}
 	return "waiting for NetworkAttachment deletion"

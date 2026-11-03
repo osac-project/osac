@@ -53,6 +53,7 @@ func renderReference(sources Sources) ([]byte, error) {
 	}
 	var out strings.Builder
 	writeHeader(&out, sources, views)
+	writeTerms(&out)
 	writeReadingRule(&out)
 	writeLifecycle(&out, sources)
 	writeTransport(&out, sources)
@@ -152,12 +153,37 @@ func writeHeader(out *strings.Builder, sources Sources, views []resourceView) {
 	)
 }
 
+// writeTerms defines the words the rest of the contract uses.
+func writeTerms(out *strings.Builder) {
+	fmt.Fprintf(out, "## Terms\n\n")
+	fmt.Fprintf(out, "| Term | Meaning |\n|---|---|\n")
+	terms := [][2]string{
+		{"Usage event (heartbeat)", "One measured quantity over one interval for one resource and meter, sent as a CloudEvent on the tenant's usage topic."},
+		{"Resource", "The billable object the usage is about, named by `resource_type` and `resource_id`."},
+		{"Metering field registry", "The fields metering tracks on each resource, declared by annotations on the private protos in `proto/metering` and kept in sync with fulfillment's database triggers by drift tests."},
+		{"Meter", "What is measured on a resource, for example a running VM's seconds."},
+		{"Component", "The billable line a meter feeds. It is the meter name unless a rule revision sets another."},
+		{"Billing dimensions", "Name and value pairs that identify the priced variant of the usage, such as an instance type. A change re-keys the usage."},
+		{"Interval", "One span of time: `from` inclusive, `to` exclusive, in UTC with whole seconds."},
+		{"Correction", "A usage event with a negative quantity for the same resource, meter, component, and billing dimensions; it takes back usage already sent."},
+		{"Reader", "The provider's system that reads usage events."},
+		{"Rule revision", "An immutable set of meter rules with an effective date. The chart ships the default revision."},
+		{"Schema version", "The published shape of a usage event, named by the suffix of its CloudEvent type, for example `v1`."},
+		{"External billing account id", "The tenant's id in the provider's billing system, carried by usage events when the tenant has one."},
+	}
+	for _, term := range terms {
+		fmt.Fprintf(out, "| %s | %s |\n", term[0], term[1])
+	}
+	fmt.Fprintf(out, "\n")
+}
+
 func writeReadingRule(out *strings.Builder) {
 	fmt.Fprintf(out, "## How to read usage\n\n")
 	fmt.Fprintf(out,
 		"Add every usage event for one resource, meter, component, and set of billing "+
-			"dimensions. A correction is a negative event, so adding it takes back the usage "+
-			"it corrects. The sum is the billable quantity.\n\n",
+			"dimensions. A correction is a usage event with a negative quantity for the same "+
+			"resource, meter, component, and billing dimensions; adding it takes back the "+
+			"usage it corrects. The sum is the billable quantity.\n\n",
 	)
 	fmt.Fprintf(out,
 		"Match a correction to the usage it corrects by tenant, resource, meter, component, "+
@@ -203,8 +229,8 @@ func writeTransport(out *strings.Builder, sources Sources) {
 		retention = "keeps every record"
 	}
 	fmt.Fprintf(out,
-		"| Retention | Set per installation with `topics.retentionMs`; the default `%s` "+
-			"%s |\n", sources.TopicRetention, retention)
+		"| Retention | Set per installation with `topics.retentionMs` (milliseconds); the "+
+			"default `%s` %s |\n", sources.TopicRetention, retention)
 	fmt.Fprintf(out,
 		"| Compaction | None. Metering refuses a compacted usage topic and sets "+
 			"`cleanup.policy` to `delete` |\n")
@@ -237,7 +263,8 @@ func writeSchemaVersions(out *strings.Builder, sources Sources) {
 	fmt.Fprintf(out, "## Schema versions\n\n")
 	fmt.Fprintf(out,
 		"Every usage event names its schema version in the CloudEvent `type`: the suffix "+
-			"after the last dot, for example `v1` in `%s`.\n\n", schema.HeartbeatType)
+			"after the last dot, for example `%s` in `%s`.\n\n",
+		schema.SchemaVersion, schema.HeartbeatType)
 	fmt.Fprintf(out,
 		"A published schema never changes. A new field is a new version file with the next "+
 			"version and the date it takes effect. The old file stays, so its records stay "+
@@ -285,6 +312,9 @@ func writeSchemaVersions(out *strings.Builder, sources Sources) {
 		writeFieldTable(out, version.Data)
 		fmt.Fprintf(out, "\n")
 	}
+	fmt.Fprintf(out,
+		"The billable line that `component` names is listed in the Component column of "+
+			"each resource table below.\n\n")
 }
 
 func writeFieldTable(out *strings.Builder, fields []schema.Field) {
@@ -306,8 +336,14 @@ func writeFieldRows(out *strings.Builder, prefix string, fields []schema.Field) 
 		if unit == "" {
 			unit = "-"
 		}
+		description := field.Description
+		if field.Name == "billing_dimensions" {
+			description += " The meter's dimensions are listed in the Dimensions table of " +
+				"each resource section; the identity dimensions are listed under " +
+				"Resources and meters."
+		}
 		fmt.Fprintf(out, "| `%s` | %s | %s | %s | %s |\n",
-			name, fieldType, requiredLabel(field.Required), unit, field.Description)
+			name, fieldType, requiredLabel(field.Required), unit, description)
 		if len(field.Fields) > 0 {
 			writeFieldRows(out, name+".", field.Fields)
 		}
@@ -316,9 +352,13 @@ func writeFieldRows(out *strings.Builder, prefix string, fields []schema.Field) 
 
 func writeResources(out *strings.Builder, sources Sources, views []resourceView) {
 	fmt.Fprintf(out, "## Resources and meters\n\n")
+	resourceTypes := make([]string, 0, len(views))
+	for _, view := range views {
+		resourceTypes = append(resourceTypes, "`"+view.Type+"`")
+	}
 	fmt.Fprintf(out,
-		"The values below are the ones events carry in `resource_type`. A cluster appears "+
-			"as `%s`.\n\n", schema.ResourceTypeClusterOrder)
+		"The values below are the ones events carry in `resource_type`: %s.\n\n",
+		strings.Join(resourceTypes, ", "))
 	fmt.Fprintf(out,
 		"The default rule revision is revision `%s`, effective from %s. It is the newest "+
 			"revision the chart ships, and it is immutable: a rule change ships as the next "+
@@ -326,8 +366,14 @@ func writeResources(out *strings.Builder, sources Sources, views []resourceView)
 			"revisions stay in the chart and are immutable.\n\n",
 		sources.Revision.Number, sources.Revision.EffectiveAt.Format("2006-01-02T15:04:05Z"))
 	fmt.Fprintf(out,
+		"A provider that needs different meters ships the next immutable revision with a "+
+			"later effective date; the chart ships revision `%s`. See [the metering chart "+
+			"rules](../../charts/osac-metering/rules/).\n\n", sources.Revision.Number)
+	fmt.Fprintf(out,
 		"`Multiplier` names the tracked field metering has already multiplied into "+
-			"`usage.quantity`. A reader must not apply the multiplier again.\n\n")
+			"`usage.quantity`, or `none`. A reader must not apply it again. In revision "+
+			"`%s`, only Volume `capacity` uses `provisioned_size_gib`: a 100 GiB volume's "+
+			"quantity is already multiplied by 100.\n\n", sources.Revision.Number)
 	writeIdentityDimensions(out)
 	for _, view := range views {
 		writeResource(out, view)
@@ -406,11 +452,14 @@ func writeResource(out *strings.Builder, view resourceView) {
 func writeBillingAccount(out *strings.Builder, sources Sources) {
 	fmt.Fprintf(out, "## Billing account id\n\n")
 	if first := firstVersionWithField(sources.Versions, "external_billing_account_id"); first != "" {
+		earlier := ""
+		if first != sources.Versions[0].Version {
+			earlier = "; earlier versions do not carry it"
+		}
 		fmt.Fprintf(out,
 			"Schema version `%s` and later carry `external_billing_account_id` when the "+
-				"tenant has one; earlier versions do not carry it. A tenant without one "+
-				"omits it. The id labels where the event is reported in the provider's "+
-				"billing system.\n\n", first)
+				"tenant has one%s. A tenant without one omits it. The id labels where the "+
+				"event is reported in the provider's billing system.\n\n", first, earlier)
 		fmt.Fprintf(out,
 			"The id never correlates usage. Match a correction to the event it corrects by "+
 				"tenant, resource, meter, component, and billing dimensions. The id can change "+

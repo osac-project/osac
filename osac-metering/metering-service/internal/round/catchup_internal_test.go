@@ -114,7 +114,7 @@ func TestDecodeHeartbeatReplaysARecordWithItsNamedVersion(t *testing.T) {
 	key := mergeKey()
 	written := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
 	event, err := heartbeat.New(
-		"acme", key, written.Add(-time.Minute), written, 60_000_000, "second", written, 7, "0001",
+		"acme", key, written.Add(-time.Minute), written, 60_000_000, "second", written, 7, "0001", "",
 	)
 	if err != nil {
 		t.Fatalf("building the heartbeat: %v", err)
@@ -155,7 +155,7 @@ func TestDecodeHeartbeatReplaysARecordWithItsNamedVersion(t *testing.T) {
 	}
 
 	unknown, err := heartbeat.New(
-		"acme", key, written.Add(-time.Minute), written, 60_000_000, "second", written, 7, "0001",
+		"acme", key, written.Add(-time.Minute), written, 60_000_000, "second", written, 7, "0001", "",
 	)
 	if err != nil {
 		t.Fatalf("building the heartbeat: %v", err)
@@ -176,7 +176,7 @@ func TestDecodeHeartbeatReplaysARecordWithItsNamedVersion(t *testing.T) {
 	futureV2.CloudEventType = "osac.resource.heartbeat.v2"
 	futureV2.EffectiveAt = written.Add(time.Hour)
 	future, err := heartbeat.New(
-		"acme", key, written.Add(-time.Minute), written, 60_000_000, "second", written, 7, "0001",
+		"acme", key, written.Add(-time.Minute), written, 60_000_000, "second", written, 7, "0001", "",
 	)
 	if err != nil {
 		t.Fatalf("building the heartbeat: %v", err)
@@ -186,8 +186,7 @@ func TestDecodeHeartbeatReplaysARecordWithItsNamedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshaling the heartbeat: %v", err)
 	}
-	if _, err := decodeHeartbeat(payload, append(append([]schema.Version{}, versions...),
-		futureV2)); err == nil ||
+	if _, err := decodeHeartbeat(payload, []schema.Version{versions[0], futureV2}); err == nil ||
 		!strings.Contains(err.Error(), "before that version took effect") {
 		t.Fatalf("a record written before its version took effect must be refused, got %v", err)
 	}
@@ -209,7 +208,7 @@ func TestDecodeHeartbeatAcceptsAV1RecordInsideAV2Window(t *testing.T) {
 
 	event, err := heartbeat.New(
 		"acme", mergeKey(), written.Add(-time.Minute), written, 60_000_000, "second",
-		written, 7, "0001",
+		written, 7, "0001", "",
 	)
 	if err != nil {
 		t.Fatalf("building the heartbeat: %v", err)

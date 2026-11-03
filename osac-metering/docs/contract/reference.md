@@ -4,9 +4,26 @@ This contract covers the usage events OSAC metering publishes: 6 resource types 
 
 It is generated from the metering field registry, the default rule revision the chart ships, and the published schema files. Do not edit it by hand.
 
+## Terms
+
+| Term | Meaning |
+|---|---|
+| Usage event (heartbeat) | One measured quantity over one interval for one resource and meter, sent as a CloudEvent on the tenant's usage topic. |
+| Resource | The billable object the usage is about, named by `resource_type` and `resource_id`. |
+| Metering field registry | The fields metering tracks on each resource, declared by annotations on the private protos in `proto/metering` and kept in sync with fulfillment's database triggers by drift tests. |
+| Meter | What is measured on a resource, for example a running VM's seconds. |
+| Component | The billable line a meter feeds. It is the meter name unless a rule revision sets another. |
+| Billing dimensions | Name and value pairs that identify the priced variant of the usage, such as an instance type. A change re-keys the usage. |
+| Interval | One span of time: `from` inclusive, `to` exclusive, in UTC with whole seconds. |
+| Correction | A usage event with a negative quantity for the same resource, meter, component, and billing dimensions; it takes back usage already sent. |
+| Reader | The provider's system that reads usage events. |
+| Rule revision | An immutable set of meter rules with an effective date. The chart ships the default revision. |
+| Schema version | The published shape of a usage event, named by the suffix of its CloudEvent type, for example `v1`. |
+| External billing account id | The tenant's id in the provider's billing system, carried by usage events when the tenant has one. |
+
 ## How to read usage
 
-Add every usage event for one resource, meter, component, and set of billing dimensions. A correction is a negative event, so adding it takes back the usage it corrects. The sum is the billable quantity.
+Add every usage event for one resource, meter, component, and set of billing dimensions. A correction is a usage event with a negative quantity for the same resource, meter, component, and billing dimensions; adding it takes back the usage it corrects. The sum is the billable quantity.
 
 Match a correction to the usage it corrects by tenant, resource, meter, component, and billing dimensions. Never match by quantity, event id, or interval. A correction is sent in a later round, so it never shares the id of the event it corrects.
 
@@ -27,7 +44,7 @@ To rebuild a billable quantity from retained records, add the records for the ke
 | Topic naming | One usage topic per tenant, named `osac.metering.heartbeat.<tenant>` |
 | Ordering | Each usage topic has one partition, so events arrive in the order metering sent them |
 | Delivery | At least once. A repeat carries the same CloudEvent `id` |
-| Retention | Set per installation with `topics.retentionMs`; the default `-1` keeps every record |
+| Retention | Set per installation with `topics.retentionMs` (milliseconds); the default `-1` keeps every record |
 | Compaction | None. Metering refuses a compacted usage topic and sets `cleanup.policy` to `delete` |
 | Raw event log | Internal. Metering reads `osac.events.<tenant>` and never publishes it |
 | Failed records | Internal. OSAC's adapters write rejected events to `osac.metering.dlq.<tenant>` |
@@ -53,7 +70,7 @@ A published version stays readable for as long as its records are retained. Rete
 
 | Version | CloudEvent type | Effective from | Source file | SHA-256 |
 |---|---|---|---|---|
-| `v1` | `osac.resource.heartbeat.v1` | 1970-01-01T00:00:00Z | `osac-metering/schema/versions/v1.json` | `7a28a18bdacf05b62b62ccdcbfbe68c662bbda17c8dee83154398db5aa9db1c5` |
+| `v1` | `osac.resource.heartbeat.v1` | 1970-01-01T00:00:00Z | `osac-metering/schema/versions/v1.json` | `4414c0cdb75a21169c9636d3fa3a454149c8e1944cc3cc8d9abe86a4a9465917` |
 
 A reader that meets a type it has not adopted alerts, keeps the event, and adds support before that version's effective date. OSAC's adapters forward the CloudEvent type unchanged; they never relabel an event as another version.
 
@@ -82,7 +99,7 @@ A reader that meets a type it has not adopted alerts, keeps the event, and adds 
 | `resource_id` | string | required | - | Id of the resource the usage belongs to. |
 | `meter` | string | required | - | Meter name from the default rule revision, for example compute. |
 | `component` | string | required | - | Billable line the meter feeds. It is the meter name unless the rule revision sets another. |
-| `billing_dimensions` | object of string | required | - | Dimension name to value for the interval. Each event carries its meter's dimensions plus deployment, tenant, project, catalog, template, and meter_type. |
+| `billing_dimensions` | object of string | required | - | Dimension name to value for the interval. Each event carries its meter's dimensions plus deployment, tenant, project, catalog, template, and meter_type. The meter's dimensions are listed in the Dimensions table of each resource section; the identity dimensions are listed under Resources and meters. |
 | `usage` | object | required | - | One measured interval. From is inclusive and to is exclusive. |
 | `usage.semantics` | string, always `interval` | required | - | Always interval: the quantity covers one interval and is never cumulative. |
 | `usage.from` | string | required | UTC, whole seconds | Start of the interval, inclusive. |
@@ -93,14 +110,19 @@ A reader that meets a type it has not adopted alerts, keeps the event, and adds 
 | `heartbeat_time` | string | required | UTC, whole seconds | Round time that produced the event. It is part of the deduplication key. |
 | `last_applied_offset` | integer | required | event-log offset | Position in the tenant's event topic the round had folded. |
 | `rules_revision` | string | required | - | Rule revision that produced the event, for example 0001. |
+| `external_billing_account_id` | string | optional | - | Tenant's external billing account id, when the tenant has one. The event omits it otherwise. |
+
+The billable line that `component` names is listed in the Component column of each resource table below.
 
 ## Resources and meters
 
-The values below are the ones events carry in `resource_type`. A cluster appears as `cluster_order`.
+The values below are the ones events carry in `resource_type`: `bare_metal_instance`, `cluster_order`, `compute_instance`, `external_ip`, `nat_gateway`, `volume`.
 
 The default rule revision is revision `0001`, effective from 1970-01-01T00:00:00Z. It is the newest revision the chart ships, and it is immutable: a rule change ships as the next revision. This reference documents the newest shipped revision only; earlier revisions stay in the chart and are immutable.
 
-`Multiplier` names the tracked field metering has already multiplied into `usage.quantity`. A reader must not apply the multiplier again.
+A provider that needs different meters ships the next immutable revision with a later effective date; the chart ships revision `0001`. See [the metering chart rules](../../charts/osac-metering/rules/).
+
+`Multiplier` names the tracked field metering has already multiplied into `usage.quantity`, or `none`. A reader must not apply it again. In revision `0001`, only Volume `capacity` uses `provisioned_size_gib`: a 100 GiB volume's quantity is already multiplied by 100.
 
 Every usage event also carries these identity dimensions in `billing_dimensions`, besides the meter's own dimensions:
 
@@ -268,7 +290,9 @@ Tracked fields:
 
 ## Billing account id
 
-No published schema version carries an external billing account id yet. When a version adds the field, it labels where each event is reported. It never correlates usage, and a tenant without one omits it.
+Schema version `v1` and later carry `external_billing_account_id` when the tenant has one. A tenant without one omits it. The id labels where the event is reported in the provider's billing system.
+
+The id never correlates usage. Match a correction to the event it corrects by tenant, resource, meter, component, and billing dimensions. The id can change while usage is in flight: metering stamps each event with the id current when its round builds it and never rewrites published events.
 
 ## Regenerating this reference
 

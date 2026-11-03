@@ -140,16 +140,19 @@ var _ = Describe("The generated contract", func() {
 
 		for _, statement := range []string{
 			"Add every usage event for one resource, meter, component, and set of billing dimensions",
-			"A correction is a negative event",
+			"A correction is a usage event with a negative quantity for the same resource, meter, component, and billing dimensions",
+			"## Terms",
 			"Replay decodes every retained record with the current payload shape",
 			"One usage topic per tenant, named `osac.metering.heartbeat.<tenant>`",
 			"Each usage topic has one partition",
 			"At least once",
-			"the default `-1` keeps every record",
+			"`topics.retentionMs` (milliseconds); the default `-1` keeps every record",
 			"Raw event log | Internal",
 			"The reader owns its retries and its failed records",
 			"The CloudEvent `id` is the deduplication key",
 			"It leaves out the quantity",
+			"ships the next immutable revision with a later effective date",
+			"a 100 GiB volume's quantity is already multiplied by 100",
 		} {
 			Expect(reference).To(ContainSubstring(statement))
 		}
@@ -157,7 +160,10 @@ var _ = Describe("The generated contract", func() {
 
 	It("uses the resource type values events carry", func() {
 		reference, _ := generated(sources)
-		Expect(reference).To(ContainSubstring("A cluster appears as `cluster_order`"))
+		Expect(reference).To(ContainSubstring(
+			"The values below are the ones events carry in `resource_type`:",
+		))
+		Expect(reference).To(ContainSubstring("`cluster_order`"))
 		for _, resourceType := range []string{
 			schema.ResourceTypeComputeInstance,
 			schema.ResourceTypeClusterOrder,
@@ -222,7 +228,7 @@ var _ = Describe("The generated contract", func() {
 		}
 		event, err := heartbeat.New(
 			"acme", key, written.Add(-time.Minute), written, 60_000_000, "second",
-			written, 7, sources.Revision.Number,
+			written, 7, sources.Revision.Number, "",
 		)
 		Expect(err).NotTo(HaveOccurred())
 		payload, err := event.MarshalJSON()
@@ -277,34 +283,26 @@ var _ = Describe("The generated contract", func() {
 		Expect(checkable).To(ContainSubstring(hex.EncodeToString(digest[:])))
 	})
 
-	It("publishes the billing account id only when a version carries the field", func() {
+	It("publishes the billing account id from v1 on", func() {
 		reference, checkable := generated(sources)
-		Expect(checkable).NotTo(ContainSubstring("external_billing_account_id"))
-		Expect(reference).To(ContainSubstring(
-			"No published schema version carries an external billing account id yet",
-		))
-
-		versions := slices.Clone(sources.Versions)
-		last := versions[len(versions)-1]
-		last.Data = append(slices.Clone(last.Data), schema.Field{
-			Name:        "external_billing_account_id",
-			Type:        schema.FieldTypeString,
-			Required:    false,
-			Description: "Provider billing account the tenant is billed to.",
-		})
-		versions[len(versions)-1] = last
-
-		reference, checkable = generated(contract.Sources{
-			Resources:         sources.Resources,
-			Revision:          sources.Revision,
-			Versions:          versions,
-			HeartbeatInterval: sources.HeartbeatInterval,
-			TopicRetention:    sources.TopicRetention,
-		})
 		Expect(reference).To(ContainSubstring(
 			"Schema version `v1` and later carry `external_billing_account_id`",
 		))
 		Expect(checkable).To(ContainSubstring(`"external_billing_account_id"`))
+
+		var published struct {
+			Definitions map[string]struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"$defs"`
+		}
+		Expect(json.Unmarshal([]byte(checkable), &published)).To(Succeed())
+		var data struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		Expect(json.Unmarshal(published.Definitions["v1"].Properties["data"], &data)).
+			To(Succeed())
+		Expect(data.Properties).To(HaveKey("external_billing_account_id"))
+		Expect(published.Definitions).To(HaveLen(1))
 	})
 
 	It("refuses a meter the field registry does not list", func() {

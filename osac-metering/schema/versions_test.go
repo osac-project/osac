@@ -62,6 +62,8 @@ var _ = Describe("Published schema versions", func() {
 		Expect(names).To(HaveKey("heartbeat_time"))
 		Expect(names).To(HaveKey("last_applied_offset"))
 		Expect(names).To(HaveKey("rules_revision"))
+		Expect(names).To(HaveKey("external_billing_account_id"))
+		Expect(names["external_billing_account_id"].Required).To(BeFalse())
 
 		usage := names["usage"]
 		Expect(usage.Type).To(Equal(schema.FieldTypeObject))
@@ -86,6 +88,7 @@ var _ = Describe("Published schema versions", func() {
 		version, err = schema.VersionInEffect(time.Unix(0, 0))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(version.Version).To(Equal("v1"))
+
 	})
 
 	It("refuses a record time before the first version and the zero time", func() {

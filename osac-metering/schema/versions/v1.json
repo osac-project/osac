@@ -194,6 +194,13 @@
       "required": true,
       "description": "Rule revision that produced the event, for example 0001.",
       "unit": ""
+    },
+    {
+      "name": "external_billing_account_id",
+      "type": "string",
+      "required": false,
+      "description": "Tenant's external billing account id, when the tenant has one. The event omits it otherwise.",
+      "unit": ""
     }
   ]
 }

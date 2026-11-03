@@ -609,6 +609,8 @@ func shapeOf(typ reflect.Type) (Field, error) {
 			return Field{}, err
 		}
 		return Field{Type: FieldTypeObject, Values: values.Type}, nil
+	case reflect.Pointer:
+		return shapeOf(typ.Elem())
 	case reflect.Struct:
 		nested, err := payloadShape(typ)
 		if err != nil {

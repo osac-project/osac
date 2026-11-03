@@ -34,7 +34,7 @@ func TestCheckPublishedManifestInTheRepository(t *testing.T) {
 func TestCheckPublishedManifestRejectsAnAddedField(t *testing.T) {
 	v1 := repositoryVersion(t, "v1.json")
 	root := manifestFixture(t, map[string]string{"v1.json": v1})
-	writeVersion(t, root, "v1.json", addDataField(t, v1, "external_billing_account_id"))
+	writeVersion(t, root, "v1.json", addDataField(t, v1, "probe_field"))
 	if err := checkPublishedManifest(root); err == nil ||
 		!strings.Contains(err.Error(), "changed") {
 		t.Fatalf("adding a field to a published file must fail the manifest, got %v", err)

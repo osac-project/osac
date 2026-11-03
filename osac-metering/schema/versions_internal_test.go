@@ -423,7 +423,7 @@ func TestLoadVersionsRejectsAVersionThatDropsAField(t *testing.T) {
 
 func TestLoadVersionsAcceptsAVersionThatOnlyAddsAField(t *testing.T) {
 	versions, err := loadVersions(
-		twoVersions(t, addDataField(t, laterVersion(t), "external_billing_account_id")), testNow,
+		twoVersions(t, addDataField(t, laterVersion(t), "provider_region")), testNow,
 	)
 	if err != nil {
 		t.Fatalf("a version that only adds an optional field must load: %v", err)

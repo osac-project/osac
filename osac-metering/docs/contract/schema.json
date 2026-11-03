@@ -14,7 +14,7 @@
       "x-osac-version": "v1",
       "x-osac-effective-at": "1970-01-01T00:00:00Z",
       "x-osac-source-file": "osac-metering/schema/versions/v1.json",
-      "x-osac-source-sha256": "7a28a18bdacf05b62b62ccdcbfbe68c662bbda17c8dee83154398db5aa9db1c5",
+      "x-osac-source-sha256": "4414c0cdb75a21169c9636d3fa3a454149c8e1944cc3cc8d9abe86a4a9465917",
       "type": "object",
       "required": [
         "data",
@@ -41,6 +41,10 @@
             },
             "component": {
               "description": "Billable line the meter feeds. It is the meter name unless the rule revision sets another.",
+              "type": "string"
+            },
+            "external_billing_account_id": {
+              "description": "Tenant's external billing account id, when the tenant has one. The event omits it otherwise.",
               "type": "string"
             },
             "heartbeat_time": {

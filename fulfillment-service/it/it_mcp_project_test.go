@@ -3,7 +3,6 @@ package it
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -252,18 +251,7 @@ var _ = Describe("MCP Project administration", func() {
 func createMCPTenantAdmin(ctx context.Context) (string, string, auth.TokenSource) {
 	GinkgoHelper()
 	username := userUsername
-	keycloakUserID, err := tool.keycloakUserID(ctx, username)
-	Expect(err).ToNot(HaveOccurred())
-
-	role := getOrCreateKeycloakTenantAdminRole(ctx)
-	assignKeycloakRealmRole(ctx, keycloakUserID, role)
-	roleMappings := []map[string]any{role}
-	DeferCleanup(func(ctx context.Context) {
-		status, _, deleteErr := tool.KeycloakAdminRequest(ctx, http.MethodDelete,
-			fmt.Sprintf("/users/%s/role-mappings/realm", keycloakUserID), roleMappings)
-		Expect(deleteErr).ToNot(HaveOccurred())
-		Expect(status).To(Equal(http.StatusNoContent))
-	})
+	grantMCPDiscoveryTenantAdmin(ctx, username)
 
 	tokenSource, err := tool.makeKeycloakTokenSource(ctx, username, usersPassword)
 	Expect(err).ToNot(HaveOccurred())

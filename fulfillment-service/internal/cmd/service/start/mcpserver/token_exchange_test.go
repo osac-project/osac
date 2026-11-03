@@ -195,6 +195,22 @@ var _ = Describe("OAuth token exchange", func() {
 		Expect(err).To(MatchError("OAuth token exchange failed with HTTP 403"))
 	})
 
+	It("maps temporary authorization-server failures as retryable", func() {
+		for _, statusCode := range []int{http.StatusTooManyRequests, http.StatusInternalServerError} {
+			client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: statusCode, Body: io.NopCloser(strings.NewReader(""))}, nil
+			})}
+			exchanger, err := newOAuthTokenExchanger(
+				"https://issuer.example.com/token", "https://mcp.example.com/", "fixture-secret", client, validator,
+			)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = exchanger.Exchange(context.Background(), "mcp-token", incoming)
+
+			Expect(err).To(MatchError(errOAuthTokenExchangeUnavailable), fmt.Sprintf("HTTP %d", statusCode))
+		}
+	})
+
 	It("rejects an exchange response that reuses the MCP token", func() {
 		client := &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 			body := `{"access_token":"mcp-token","token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:access_token"}`

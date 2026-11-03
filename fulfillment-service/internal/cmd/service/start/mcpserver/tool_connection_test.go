@@ -368,6 +368,11 @@ var _ = Describe("handleCheckConnection", func() {
 	It("Bounds concurrent permission reviews", func() {
 		var activeReviews atomic.Int32
 		var maxActiveReviews atomic.Int32
+		totalReviews := int32(maxCheckConnectionTenants * len(checkConnectionMethods))
+		release := make(chan struct{})
+		releaseOnce := sync.Once{}
+		timeout := make(chan struct{})
+		time.AfterFunc(100*time.Millisecond, func() { close(timeout) })
 		reviews := &mockSelfSubjectAccessReviewsClient{
 			createFunc: func(
 				_ context.Context,
@@ -380,6 +385,13 @@ var _ = Describe("handleCheckConnection", func() {
 					if active <= observed || maxActiveReviews.CompareAndSwap(observed, active) {
 						break
 					}
+				}
+				if active == totalReviews {
+					releaseOnce.Do(func() { close(release) })
+				}
+				select {
+				case <-release:
+				case <-timeout:
 				}
 				defer activeReviews.Add(-1)
 				return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{
@@ -404,7 +416,7 @@ var _ = Describe("handleCheckConnection", func() {
 		}), CheckConnectionInput{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * len(checkConnectionMethods)))
-		Expect(maxActiveReviews.Load()).To(BeNumerically("<=", maxCheckConnectionPermissionWorkers))
+		Expect(maxActiveReviews.Load()).To(Equal(int32(maxCheckConnectionPermissionWorkers)))
 	})
 
 	It("Marks permission output truncated when tenant discovery is truncated", func() {

@@ -339,12 +339,14 @@ var _ = Describe("newServer", func() {
 			}),
 		)
 
-		server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
-		registry := newTypedToolRegistry(server)
-		registerWriteTool(registry, baseTool(), writeToolContract{Destructive: true}, newHandler())
-		Expect(func() {
+		It("Rejects duplicate tool names", func() {
+			server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+			registry := newTypedToolRegistry(server)
 			registerWriteTool(registry, baseTool(), writeToolContract{Destructive: true}, newHandler())
-		}).To(Panic())
+			Expect(func() {
+				registerWriteTool(registry, baseTool(), writeToolContract{Destructive: true}, newHandler())
+			}).To(Panic())
+		})
 	})
 })
 
@@ -481,8 +483,8 @@ func expectComputeInstanceUpdateSchema(schema any) {
 	properties, ok := document["properties"].(map[string]any)
 	Expect(ok).To(BeTrue())
 	Expect(properties).To(HaveKey("instance_type_id"))
-	Expect(properties).To(HaveKey("boot_disk"))
 	Expect(properties).To(HaveKey("run_strategy"))
+	Expect(properties).ToNot(HaveKey("boot_disk"))
 	Expect(properties).ToNot(HaveKey("display_name"))
 	Expect(properties).ToNot(HaveKey("description"))
 	Expect(properties).ToNot(HaveKey("catalog_item"))
@@ -500,12 +502,6 @@ func expectComputeInstanceUpdateSchema(schema any) {
 	Expect(ok).To(BeTrue())
 	Expect(version["type"]).To(Equal("integer"))
 	Expect(version["minimum"]).To(Equal(float64(1)))
-	bootDisk, ok := properties["boot_disk"].(map[string]any)
-	Expect(ok).To(BeTrue())
-	bootDiskProperties, ok := bootDisk["properties"].(map[string]any)
-	Expect(ok).To(BeTrue())
-	Expect(bootDiskProperties).To(HaveKey("size_gib"))
-	Expect(bootDiskProperties).To(HaveKey("storage_tier_id"))
 }
 
 func expectTypedWriteSchema(schema any, required ...string) {

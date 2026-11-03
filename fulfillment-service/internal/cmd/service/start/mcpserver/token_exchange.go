@@ -118,6 +118,9 @@ func (e *oauthTokenExchanger) ExchangeWithExpiration(
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		if response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError {
+			return "", time.Time{}, errOAuthTokenExchangeUnavailable
+		}
 		// Authorization server error bodies may contain tokens and identity data.
 		return "", time.Time{}, fmt.Errorf("OAuth token exchange failed with HTTP %d", response.StatusCode)
 	}

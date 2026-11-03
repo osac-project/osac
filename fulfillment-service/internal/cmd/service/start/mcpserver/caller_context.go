@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 
@@ -24,6 +25,7 @@ import (
 )
 
 const callerContextExtraKey = "caller_context"
+const maxSafeSubjectLength = 256
 
 type safeCallerContext struct {
 	Subject          string   `json:"subject"`
@@ -39,7 +41,7 @@ func safeCallerContextFromToken(token *jwt.Token) (safeCallerContext, error) {
 	if err != nil || subject == "" {
 		return safeCallerContext{}, errors.New("MCP caller token has no subject")
 	}
-	if !isSafeIdentifier(subject) {
+	if !isSafeSubject(subject) {
 		return safeCallerContext{}, errors.New("MCP caller token has an unsafe subject")
 	}
 	authContext, err := auth.ExtractAuthContext(token)
@@ -134,4 +136,16 @@ func isSafeIdentifier(value string) bool {
 		}
 	}
 	return true
+}
+
+func isSafeSubject(value string) bool {
+	if len(value) == 0 || len(value) > maxSafeSubjectLength {
+		return false
+	}
+	if isSafeIdentifier(value) {
+		return true
+	}
+	parts := strings.Split(value, ":")
+	return len(parts) == 4 && parts[0] == "system" && parts[1] == "serviceaccount" &&
+		isSafeIdentifier(parts[2]) && isSafeIdentifier(parts[3])
 }

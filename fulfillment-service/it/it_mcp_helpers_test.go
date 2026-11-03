@@ -35,7 +35,9 @@ func connectMCPTokenSource(
 	GinkgoHelper()
 	httpClient := &http.Client{Transport: ghttp.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
 		token, err := tokenSource.Token(request.Context())
-		Expect(err).ToNot(HaveOccurred())
+		if err != nil {
+			return nil, err
+		}
 		request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
 		return http.DefaultTransport.RoundTrip(request)
 	})}

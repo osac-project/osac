@@ -59,40 +59,57 @@ The OSAC platform relies on five core components to deliver governed self-servic
 
 ### Prerequisites & Setup
 
-> **System Requirements** This solution requires the following platforms to be installed
-> and operational:
->
-> - Red Hat OpenShift Advanced Cluster Management (RHACM)
-> - Red Hat OpenShift Virtualization (OCP-Virt) - **Optional**: Only required for VM as a Service (VMaaS) support
-> - Red Hat Ansible Automation Platform (AAP)
-> - A Fabric Manager for bare metal networking, registered by the admin
->   (`global.networking` — see [Networking Configuration](#networking-configuration))
+OSAC depends on a set of supporting components - a cluster management layer, an
+identity provider, a message broker, storage, and so on. You have two options for each:
 
-**Configuration Manifests**
+- **Reuse what you have.** If your cluster already runs RHACM, cert-manager, AAP, or
+  any other component listed below, the installer will use it as-is.
+- **Let the installer deploy it.** Components not present on the cluster can be
+  installed automatically by `make install-infra` when the corresponding values flag is
+  enabled. Refer to the [Installer-Managed Components](#openshift-installer-managed-components)
+  table below for additional information.
 
-The `/prerequisites` directory contains additional manifests required to configure the
-target Hub cluster.
+For reference or manual installation, the [`prerequisites/`](prerequisites/) directory
+contains example manifests for some components.
 
 > **Warning: Cluster-Wide Impact** If you are using a shared cluster or are not the
-> primary administrator, **do not apply these manifests without consultation.** These
-> files modify cluster-wide settings. Please coordinate with the appropriate cluster
-> administrators before proceeding.
+> primary administrator, **do not apply these manifests without consultation.** The
+> installer and the `prerequisites/` manifests modify cluster-wide settings. Coordinate
+> with your cluster administrators before proceeding.
 
-### Prerequisites Summary
+### OpenShift Hard Prerequisites
 
-| **Category** | **Requirement** | **Notes / Details** |
+These must exist before running the installer.
+
+| **Category** | **Requirement** | **Notes** |
 | --------------- | ----------------- | ---------------------- |
 | **Platform** | Red Hat OpenShift Container Platform (OCP) 4.17 or later | Must have cluster admin access to the hub cluster. |
-| **Operators** | Red Hat Advanced Cluster Management (RHACM) 2.18+<br>Red Hat OpenShift Virtualization (OCP-Virt) 4.17+<br>Red Hat Ansible Automation Platform (AAP) 2.5+ | These must be installed and running prior to OSAC installation. |
+| **Cluster Management** | Red Hat Advanced Cluster Management (RHACM) 2.17+ | Required for Hosted Control Planes (CaaS). If we want to use ACM, it must be pre-installed. Otherwise, the installer can deploy a standalone MCE instance — see `mce.enabled` in the [Installer-Managed Components](#openshift-installer-managed-components) table. |
 | **CLI Tools** | `oc` (OpenShift CLI) v4.17+<br>`helm` v3.x<br>`git` | Ensure all CLIs are available in your `PATH`. |
 | **Container Registry Access** | `registry.redhat.io` and `quay.io` | Verify credentials and pull secrets are valid in the target cluster namespace. |
-| **Network / DNS** | Ingress route configured for OSAC services | Required for external access to fulfillment API and AAP UI. |
-| **Authentication / IDM** | Organization Identity Provider (e.g., Keycloak, LDAP, RH-SSO) | Used for tenant and user identity mapping. |
-| **Kafka** | Broker access for fulfillment and metering events | See [external Kafka configuration](../docs/guides/installation/kafka-configuration.md) for connection settings, credentials, ACLs, TLS trust, and a Strimzi example. |
-| **Storage** | Dynamic storage class available (e.g., `ocs-storagecluster-cephfs`, `lvms-storage`) | Required for persistence of operator and AAP components. |
-| **Permissions** | Cluster-admin access to deploy operators and create CRDs | Limited access users can only deploy into namespaces configured by the admin. |
-| **License Files** | `license.zip` (AAP subscription) | Must be placed in your values directory (e.g., `values/<env>/license.zip`). |
-| **Internet Access** | Outbound access to GitHub and `ghcr.io` (for fetching chart dependencies, OCI charts, and releases) | Required during installation and updates. |
+| **Network / DNS** | Cluster ingress and DNS configured | Required for external access to the fulfillment API, Keycloak, and AAP UI. OpenShift's default ingress controller and wildcard DNS (`*.apps.<domain>`) satisfy this. |
+| **Storage** | Dynamic storage class available (e.g., `ocs-storagecluster-cephfs`, `lvms-vg1`) | Required for persistence of OSAC components. If no dynamic storage class exists, the installer can provision one — see `lvms.enabled` in the [Installer-Managed Components](#openshift-installer-managed-components) table. |
+| **Permissions** | Cluster-admin access to deploy operators and create CRDs | Limited-access users can only deploy into namespaces configured by the admin. |
+| **License Files** | `license.zip` (AAP subscription manifest) | Must be placed in your values directory (e.g., `values/<env>/license.zip`). |
+| **Internet Access** | Outbound access to GitHub and `ghcr.io` | Required during installation and updates to fetch chart dependencies, OCI charts, and releases. |
+| **Networking Fabric Manager** | Netris or agentless | Required for bare metal provisioning (CaaS). See [Networking Configuration](#networking-configuration). |
+
+### OpenShift Installer-Managed Components
+
+The following components are **not prerequisites**. If you already have them on your
+cluster, OSAC will use your existing installation. If you don't, the installer can
+deploy them for you by setting the corresponding value in your infra values file.
+
+| **Component** | **Values flag** | **Default** | **Bring your own** |
+| ------------- | --------------- | ----------- | ------------------ |
+| **Keycloak** (authentication / IdP) | `keycloak.enabled` | `true` | The bundled Keycloak is the only supported path via `make install`. The Makefile overrides always derive the issuer URL from the cluster domain (`keycloak-keycloak.$(DOMAIN)/realms/osac`), so disabling this flag and setting `keycloak.hostname` alone does not wire up an external Keycloak. External Keycloak requires modifying the installer's Makefile targets. |
+| **AAP** (Ansible Automation Platform 2.5+) | `aapOperator.enabled` | `true` | Configure instance groups in `aap.instanceGroups`. To use an external AAP instead, see [Using an External AAP Instance](#using-an-external-aap-instance). |
+| **cert-manager** | `certManager.enabled` | `true` | Disable if cert-manager is already installed on the cluster. |
+| **Kafka** (AMQ Streams / Strimzi) | `kafka.enabled` | `false` | Enable to deploy an in-cluster Kafka. Leave disabled and configure an external broker via [kafka-configuration.md](../docs/guides/installation/kafka-configuration.md). |
+| **LVMS** (local volume storage) | `lvms.enabled` | `false` | Enable to deploy LVM Storage as the dynamic storage backend. |
+| **MetalLB** (bare-metal load balancer) | `metallb.enabled` | `false` | Enable if the cluster has no load balancer. Not needed on OpenShift clusters with cloud provider LB support. |
+| **MCE** (MultiCluster Engine) | `mce.enabled` | `false` | Enable only when this installation owns the MCE lifecycle. Leave disabled when RHACM or an existing MCE is already present. |
+| **CNV / OCP-Virt** (VMaaS only) | `cnv.enabled` | `false` | Enable to deploy OpenShift Virtualization for VM as a Service. |
 
 ## Installation
 
@@ -634,6 +651,89 @@ AAP instance groups carry backend credentials for provisioning jobs.
 Configure via Helm values under `aap.instanceGroups.*` in your values file.
 
 See [docs/aap-configuration.md](docs/aap-configuration.md) for details.
+
+#### Using an External AAP Instance
+
+The installer deploys and configures AAP by default. If AAP is already running
+elsewhere, you can point OSAC at it instead. This requires changes in both the
+infra values file and the instance values file.
+
+**In `infra.yaml`** (passed to `install-infra`):
+
+```yaml
+aapOperator:
+  enabled: false   # skips the OLM Subscription; leave enabled if the operator is shared
+```
+
+**In `instance.yaml`** (passed to `install-osac`):
+
+```yaml
+aap:
+  aap:
+    instance:
+      enabled: false     # do not create the AnsibleAutomationPlatform CR
+  apiToken:
+    create: false        # do not run the create-api-token hook (see below)
+  instanceGroups:        # credentials and config for each AAP instance group
+    clusterFulfillment:
+      enabled: true
+      config:
+        # provider-specific keys; see docs/aap-configuration.md
+      secret:
+        # sensitive keys (e.g. cloud credentials)
+
+operator:
+  aap:
+    url: "https://<external-aap-controller>"
+    tokenSecret:
+      name: osac-aap-api-token
+      key: token
+    insecureSkipVerify: "false"
+```
+
+The `create-api-token` hook waits for the bundled AAP admin-password Secret
+and dials the local AAP gateway. It must be disabled when using external AAP
+or the installation will stall waiting for resources that never appear.
+
+**Create the API token Secret manually** before or during `install-osac`. The
+hook normally creates this Secret; without it the operator and
+publish-templates hook cannot authenticate to AAP:
+
+```bash
+oc create secret generic osac-aap-api-token \
+  --from-file=token=/secure/osac-aap-api-token \
+  -n <namespace>
+```
+
+Generate the token from your external AAP's web UI under
+**Users → <admin> → Tokens → Add**, or via its API.
+
+The `osac-publish-templates` hook dials the external AAP automatically when
+`operator.aap.url` is set. The hook triggers the `osac-publish-templates` job
+template on AAP, which is created by the OSAC bootstrap job along with the
+required project, execution environment, inventory, and instance group.
+
+Enable bootstrap and point it at the external AAP hostnames so it configures
+all required objects in `instance.yaml`:
+
+```yaml
+aap:
+  aap:
+    instance:
+      enabled: false
+  bootstrap:
+    enabled: true
+    gateway:
+      hostname: "<external-aap-gateway-hostname>"
+    controller:
+      hostname: "<external-aap-controller-hostname>"
+  apiToken:
+    create: false            # the hook waits for the bundled AAP admin-password
+                             # Secret, which does not exist for external AAP
+```
+
+For the full set of `aap.instanceGroups.*` keys and their meanings, see
+[docs/aap-configuration.md](docs/aap-configuration.md).
 
 #### Networking Configuration
 

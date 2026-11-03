@@ -43,6 +43,8 @@ const (
 	SkipMissingCreationTime = "missing_creation_time"
 	// SkipMissingDeletionTime marks a deletion event without an envelope timestamp.
 	SkipMissingDeletionTime = "missing_deletion_time"
+	// SkipMissingEventTime marks a billing-id change whose event has no timestamp.
+	SkipMissingEventTime = "missing_event_time"
 	// SkipRetention marks the range a topic lost below the stored fold offset.
 	SkipRetention = "retention"
 )

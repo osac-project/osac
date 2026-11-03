@@ -210,6 +210,21 @@ var _ = Describe("translateEvent", func() {
 		Expect(errors.As(err, &nonRetryable)).To(BeTrue())
 	})
 
+	It("omits external_billing_account_id from the m360 payload", func() {
+		ce := buildHeartbeat(
+			"hb-billing", schema.ResourceTypeComputeInstance, "vm-7", "compute", "compute",
+			"60.000000", "second", nil,
+		)
+		var data map[string]any
+		Expect(json.Unmarshal(ce.Data(), &data)).To(Succeed())
+		data["external_billing_account_id"] = "acct-1"
+		Expect(ce.SetData(cloudevents.ApplicationJSON, data)).To(Succeed())
+
+		_, payload, err := translateEvent(ce)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(payload).NotTo(HaveKey("external_billing_account_id"))
+	})
+
 	It("returns NonRetryableError for data that is not an object", func() {
 		ce := cloudevents.NewEvent()
 		ce.SetID("hb-7")

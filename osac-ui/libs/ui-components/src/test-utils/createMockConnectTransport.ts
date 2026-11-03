@@ -1,18 +1,33 @@
 import type { MessageInitShape } from '@bufbuild/protobuf';
 import { Code, ConnectError, type Transport, createRouterTransport } from '@connectrpc/connect';
 
+import type { SelfSubjectAccessReviewsCreateRequest } from '@osac/types';
 import {
   BareMetalInstanceCatalogItem,
+  BareMetalInstanceCatalogItemsCreateRequest,
+  BareMetalInstanceCatalogItemsCreateResponse,
+  type BareMetalInstanceCatalogItemsDeleteRequest,
+  type BareMetalInstanceCatalogItemsUpdateRequest,
+  BareMetalInstanceTemplate,
   BareMetalInstancesCreateRequest,
   BareMetalInstancesCreateResponse,
   Cluster,
   ClusterCatalogItem,
+  type ClusterCatalogItemsCreateRequest,
+  type ClusterCatalogItemsCreateResponse,
+  type ClusterCatalogItemsDeleteRequest,
+  type ClusterCatalogItemsUpdateRequest,
   ClusterTemplate,
   ClusterVersion,
   ClusterVersionsListRequest,
   ClustersCreateRequest,
   ClustersCreateResponse,
   ComputeInstanceCatalogItem,
+  type ComputeInstanceCatalogItemsCreateRequest,
+  ComputeInstanceCatalogItemsCreateResponse,
+  type ComputeInstanceCatalogItemsDeleteRequest,
+  type ComputeInstanceCatalogItemsUpdateRequest,
+  ComputeInstanceTemplate,
   ComputeInstancesCreateRequest,
   ComputeInstancesCreateResponse,
   DiskImage,
@@ -57,6 +72,7 @@ import {
   Secret,
   SecurityGroup,
   SelfSubjectAccessReviews,
+  SelfSubjectAccessReviewsCreateResponseSchema,
   ServiceTier,
   Subnet,
   SubnetsGetRequest,
@@ -72,15 +88,23 @@ import {
 } from '@osac/types';
 import {
   BareMetalInstanceCatalogItems,
+  BareMetalInstanceCatalogItemsDeleteResponseSchema,
+  BareMetalInstanceCatalogItemsUpdateResponseSchema,
+  BareMetalInstanceTemplates,
   BareMetalInstances,
   Capabilities,
   ClusterCatalogItems,
+  ClusterCatalogItemsDeleteResponseSchema,
+  ClusterCatalogItemsUpdateResponseSchema,
   ClusterTemplates,
   ClusterVersionState,
   ClusterVersions,
   ClusterVersionsListResponseSchema,
   Clusters,
   ComputeInstanceCatalogItems,
+  ComputeInstanceCatalogItemsDeleteResponseSchema,
+  ComputeInstanceCatalogItemsUpdateResponseSchema,
+  ComputeInstanceTemplates,
   ComputeInstances,
   DiskImageLifecycle,
   DiskImages,
@@ -176,6 +200,7 @@ import {
   StorageTiersListResponseSchema,
 } from '@osac/types/private';
 
+import { catalogItemMatchesListFilter } from './catalog-item-list-filter';
 import { UnauthorizedError } from '../utils/unauthorizedError';
 
 export type MockApiFixtures = {
@@ -184,7 +209,9 @@ export type MockApiFixtures = {
   clusters?: Cluster[];
   clusterCatalogItems?: ClusterCatalogItem[];
   bareMetalCatalogItems?: BareMetalInstanceCatalogItem[];
+  bareMetalInstanceTemplates?: BareMetalInstanceTemplate[];
   clusterTemplates?: ClusterTemplate[];
+  computeInstanceTemplates?: ComputeInstanceTemplate[];
   clusterVersions?: ClusterVersion[];
   tenants?: PrivateTenant[];
   virtualNetworks?: VirtualNetwork[];
@@ -245,19 +272,12 @@ const matchesStringEqualityFilter = (
   field: string,
   value: string | undefined,
 ): boolean => {
-  const prefix = field + ' == "';
-  if (!filter?.startsWith(prefix)) {
+  if (!filter) {
     return true;
   }
-  const match = /^((?:\\.|[^"\\])*)"(?:\s*&&.*)?$/.exec(filter.slice(prefix.length));
-  if (!match) {
-    return false;
-  }
-  try {
-    return value === JSON.parse('"' + match[1] + '"');
-  } catch {
-    return false;
-  }
+  const escapedField = field.replaceAll('.', '\\.');
+  const match = filter.match(new RegExp(`${escapedField} == "([^"]+)"`));
+  return !match || match[1] === value;
 };
 
 const matchesProjectSearchFilter = (filter: string | undefined, project: Project): boolean => {
@@ -388,6 +408,54 @@ const matchesStorageTierActiveFilter = (
 };
 
 export type MockTransportOverrides = {
+  onSelfSubjectAccessReview?: (
+    req: SelfSubjectAccessReviewsCreateRequest,
+  ) =>
+    | MessageInitShape<typeof SelfSubjectAccessReviewsCreateResponseSchema>
+    | Promise<MessageInitShape<typeof SelfSubjectAccessReviewsCreateResponseSchema>>;
+  onComputeInstanceCatalogItemCreate?: (
+    req: ComputeInstanceCatalogItemsCreateRequest,
+  ) =>
+    | ComputeInstanceCatalogItemsCreateResponse
+    | Promise<ComputeInstanceCatalogItemsCreateResponse>;
+  onComputeInstanceCatalogItemUpdate?: (
+    req: ComputeInstanceCatalogItemsUpdateRequest,
+  ) =>
+    | MessageInitShape<typeof ComputeInstanceCatalogItemsUpdateResponseSchema>
+    | Promise<MessageInitShape<typeof ComputeInstanceCatalogItemsUpdateResponseSchema>>;
+  onComputeInstanceCatalogItemDelete?: (
+    req: ComputeInstanceCatalogItemsDeleteRequest,
+  ) =>
+    | MessageInitShape<typeof ComputeInstanceCatalogItemsDeleteResponseSchema>
+    | Promise<MessageInitShape<typeof ComputeInstanceCatalogItemsDeleteResponseSchema>>;
+  onClusterCatalogItemCreate?: (
+    req: ClusterCatalogItemsCreateRequest,
+  ) => ClusterCatalogItemsCreateResponse | Promise<ClusterCatalogItemsCreateResponse>;
+  onClusterCatalogItemUpdate?: (
+    req: ClusterCatalogItemsUpdateRequest,
+  ) =>
+    | MessageInitShape<typeof ClusterCatalogItemsUpdateResponseSchema>
+    | Promise<MessageInitShape<typeof ClusterCatalogItemsUpdateResponseSchema>>;
+  onClusterCatalogItemDelete?: (
+    req: ClusterCatalogItemsDeleteRequest,
+  ) =>
+    | MessageInitShape<typeof ClusterCatalogItemsDeleteResponseSchema>
+    | Promise<MessageInitShape<typeof ClusterCatalogItemsDeleteResponseSchema>>;
+  onBareMetalInstanceCatalogItemCreate?: (
+    req: BareMetalInstanceCatalogItemsCreateRequest,
+  ) =>
+    | BareMetalInstanceCatalogItemsCreateResponse
+    | Promise<BareMetalInstanceCatalogItemsCreateResponse>;
+  onBareMetalInstanceCatalogItemUpdate?: (
+    req: BareMetalInstanceCatalogItemsUpdateRequest,
+  ) =>
+    | MessageInitShape<typeof BareMetalInstanceCatalogItemsUpdateResponseSchema>
+    | Promise<MessageInitShape<typeof BareMetalInstanceCatalogItemsUpdateResponseSchema>>;
+  onBareMetalInstanceCatalogItemDelete?: (
+    req: BareMetalInstanceCatalogItemsDeleteRequest,
+  ) =>
+    | MessageInitShape<typeof BareMetalInstanceCatalogItemsDeleteResponseSchema>
+    | Promise<MessageInitShape<typeof BareMetalInstanceCatalogItemsDeleteResponseSchema>>;
   onClusterCreate?: (req: ClustersCreateRequest) => ClustersCreateResponse;
   onComputeInstanceCreate?: (
     req: ComputeInstancesCreateRequest,
@@ -524,7 +592,9 @@ export const createMockConnectTransport = (
   const clusters = fixtures.clusters ?? [];
   const clusterCatalogItems = fixtures.clusterCatalogItems ?? [];
   const bareMetalCatalogItems = fixtures.bareMetalCatalogItems ?? [];
+  const bareMetalInstanceTemplates = fixtures.bareMetalInstanceTemplates ?? [];
   const clusterTemplates = fixtures.clusterTemplates ?? [];
+  const computeInstanceTemplates = fixtures.computeInstanceTemplates ?? [];
   const clusterVersions = fixtures.clusterVersions ?? [];
   const tenants = fixtures.tenants ?? [];
   const identityProviders = fixtures.identityProviders ?? [];
@@ -559,14 +629,35 @@ export const createMockConnectTransport = (
       });
 
       router.service(SelfSubjectAccessReviews, {
-        create: () => ({ object: { status: { allowed: true } } }),
+        create: (req) =>
+          overrides.onSelfSubjectAccessReview?.(req) ?? { object: { status: { allowed: true } } },
       });
 
       router.service(ComputeInstanceCatalogItems, {
-        list: () => ({ items: catalogItems }),
+        list: (req) => ({
+          items: catalogItems.filter((item) => catalogItemMatchesListFilter(item, req.filter)),
+        }),
         get: (req) => ({
           object: catalogItems.find((i) => i.id === req.id),
         }),
+        create: (req) => {
+          if (overrides.onComputeInstanceCatalogItemCreate) {
+            return overrides.onComputeInstanceCatalogItemCreate(req);
+          }
+          return { object: req.object };
+        },
+        update: (req) => {
+          if (overrides.onComputeInstanceCatalogItemUpdate) {
+            return overrides.onComputeInstanceCatalogItemUpdate(req);
+          }
+          return { object: req.object };
+        },
+        delete: (req) => {
+          if (overrides.onComputeInstanceCatalogItemDelete) {
+            return overrides.onComputeInstanceCatalogItemDelete(req);
+          }
+          return {};
+        },
       });
 
       router.service(ComputeInstances, {
@@ -578,17 +669,82 @@ export const createMockConnectTransport = (
         },
       });
 
+      router.service(ComputeInstanceTemplates, {
+        list: () => ({ items: computeInstanceTemplates }),
+        get: (req) => {
+          const template = computeInstanceTemplates.find((i) => i.id === req.id);
+          if (!template) {
+            throw new ConnectError(
+              `Compute instance template not found in test: ${req.id}`,
+              Code.NotFound,
+            );
+          }
+          return { object: template };
+        },
+      });
+
       router.service(ClusterCatalogItems, {
-        list: () => ({ items: clusterCatalogItems }),
+        list: (req) => ({
+          items: clusterCatalogItems.filter((item) =>
+            catalogItemMatchesListFilter(item, req.filter),
+          ),
+        }),
         get: (req) => ({
           object: clusterCatalogItems.find((i) => i.id === req.id),
         }),
+        create: (req) => {
+          if (overrides.onClusterCatalogItemCreate) {
+            return overrides.onClusterCatalogItemCreate(req);
+          }
+          return { object: req.object };
+        },
+        update: (req) => {
+          if (overrides.onClusterCatalogItemUpdate) {
+            return overrides.onClusterCatalogItemUpdate(req);
+          }
+          return { object: req.object };
+        },
+        delete: (req) => {
+          if (overrides.onClusterCatalogItemDelete) {
+            return overrides.onClusterCatalogItemDelete(req);
+          }
+          return {};
+        },
       });
 
       router.service(BareMetalInstanceCatalogItems, {
-        list: () => ({ items: bareMetalCatalogItems }),
+        list: (req) => ({
+          items: bareMetalCatalogItems.filter((item) =>
+            catalogItemMatchesListFilter(item, req.filter),
+          ),
+        }),
         get: (req) => ({
           object: bareMetalCatalogItems.find((i) => i.id === req.id),
+        }),
+        create: (req) => {
+          if (overrides.onBareMetalInstanceCatalogItemCreate) {
+            return overrides.onBareMetalInstanceCatalogItemCreate(req);
+          }
+          return { object: req.object };
+        },
+        update: (req) => {
+          if (overrides.onBareMetalInstanceCatalogItemUpdate) {
+            return overrides.onBareMetalInstanceCatalogItemUpdate(req);
+          }
+          return { object: req.object };
+        },
+        delete: (req) => {
+          if (overrides.onBareMetalInstanceCatalogItemDelete) {
+            return overrides.onBareMetalInstanceCatalogItemDelete(req);
+          }
+          return {};
+        },
+      });
+
+      router.service(BareMetalInstanceTemplates, {
+        list: () => ({ items: bareMetalInstanceTemplates }),
+        get: (req) => ({
+          object: bareMetalInstanceTemplates.find((i) => i.id === req.id),
         }),
       });
 
@@ -609,6 +765,7 @@ export const createMockConnectTransport = (
       });
 
       router.service(ClusterTemplates, {
+        list: () => ({ items: clusterTemplates }),
         get: (req) => {
           const template = clusterTemplates.find((i) => i.id === req.id);
           if (!template) {

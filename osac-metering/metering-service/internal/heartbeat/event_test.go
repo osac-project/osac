@@ -10,6 +10,7 @@ compliance with the License. You may obtain a copy of the License at
 package heartbeat_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -63,7 +64,7 @@ func TestNewRejectsCorruptedDimensions(t *testing.T) {
 	from := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
 	_, err := heartbeat.New(
 		"acme", key, from, from.Add(time.Minute), 60_000_000, "second",
-		from.Add(2*time.Minute), 1, "0001",
+		from.Add(2*time.Minute), 1, "0001", "",
 	)
 	if err == nil {
 		t.Fatal("corrupted dimension JSON must fail the heartbeat")
@@ -110,5 +111,49 @@ func TestIDIsStableAcrossQuantitiesAndUniqueAcrossRounds(t *testing.T) {
 		if id == same {
 			t.Fatalf("changing %s must change the ID", name)
 		}
+	}
+}
+
+func TestNewSetsExternalBillingAccountIDOnlyWhenPresent(t *testing.T) {
+	key := database.LedgerKey{
+		ResourceType: "compute_instance", ResourceID: "vm-1",
+		Meter: "compute", Component: "compute", Dimensions: `{"instance_type":"small"}`,
+	}
+	from := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	to := from.Add(time.Minute)
+	roundTime := from.Add(2 * time.Minute)
+
+	event, err := heartbeat.New(
+		"acme", key, from, to, 60_000_000, "second", roundTime, 1, "0001", "acct-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := heartbeat.Data(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.ExternalBillingAccountID == nil || *data.ExternalBillingAccountID != "acct-1" {
+		t.Fatalf("billing id = %v, want acct-1", data.ExternalBillingAccountID)
+	}
+	if !strings.Contains(string(event.Data()), "external_billing_account_id") {
+		t.Fatal("payload omitted external_billing_account_id")
+	}
+
+	event, err = heartbeat.New(
+		"acme", key, from, to, 60_000_000, "second", roundTime, 1, "0001", "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = heartbeat.Data(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.ExternalBillingAccountID != nil {
+		t.Fatalf("empty billing id was set to %q", *data.ExternalBillingAccountID)
+	}
+	if strings.Contains(string(event.Data()), "external_billing_account_id") {
+		t.Fatal("empty billing id was written into the payload")
 	}
 }

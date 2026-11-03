@@ -14,18 +14,16 @@ import { useFormikContext } from 'formik';
 
 import { Projects } from '@osac/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
-import { useInstanceType } from '@osac/ui-components/api/v1/instance-types';
 import {
   fullProjectPathToQueryFilter,
   getProjectName,
 } from '@osac/ui-components/components/Project/utils';
-import { formatInstanceTypeReviewLabelFromType } from '@osac/ui-components/components/vm/utils';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
 import { ComputeInstanceWizardValues } from './fields';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { displayValue } from '../../../utils/detailFormatters';
 import { NetworkAttachmentReviewFields } from '../../ProvisioningWizard/NetworkAttachmentReviewFields';
-import { formatReviewScalar } from '../../ProvisioningWizard/reviewFormatters';
 import { getVmStorageRows } from '../../ProvisioningWizard/storageRows';
 
 export const VmReviewStep = () => {
@@ -33,18 +31,12 @@ export const VmReviewStep = () => {
   const { values } = useFormikContext<ComputeInstanceWizardValues>();
 
   const {
-    data: instanceType,
-    isLoading: instanceLoading,
-    error: instanceErr,
-  } = useInstanceType(values.spec.instanceType.value);
-
-  const {
     data: projects,
     isLoading: projectsLoading,
     error: projectsError,
   } = useListResource(Projects, { filter: fullProjectPathToQueryFilter(values.metadata.project) });
 
-  if (instanceLoading || projectsLoading) {
+  if (projectsLoading) {
     return (
       <Bullseye>
         <Spinner />
@@ -65,17 +57,12 @@ export const VmReviewStep = () => {
   const networking = values.spec.networking;
   const networkAttachment = networking.networkAttachment.value;
   const isCustomNetwork = !networkAttachment.useDefaultNetwork;
+  const userData = values.spec.userData.value;
+  const selectedUserData = userData.source === 'secret' ? userData.secret : userData.inline;
+  const userDataReview = selectedUserData.trim() ? t('Configured') : displayValue();
 
   return (
     <Stack hasGutter>
-      {!!instanceErr && (
-        <StackItem>
-          <Alert variant="warning" isInline title={t('Failed to fetch instance type')}>
-            {getErrorMessage(instanceErr)}
-          </Alert>
-        </StackItem>
-      )}
-
       {!!projectsError && (
         <StackItem>
           <Alert variant="warning" isInline title={t('Failed to fetch project')}>
@@ -106,42 +93,31 @@ export const VmReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Name')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.metadata.name)}
+              {displayValue(values.metadata.name)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('SSH public key')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.spec.sshKey.value)}
+              {displayValue(values.spec.sshKey.value)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Disk image')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {values.spec.diskImage.value.name || values.spec.diskImage.value.id || '—'}
+              {values.spec.diskImage.value.name || ''}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Instance type')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatInstanceTypeReviewLabelFromType(
-                instanceType,
-                undefined,
-                values.spec.instanceType.value,
-              )}
+              {values.spec.instanceType.value.name || ''}
             </DescriptionListDescription>
           </DescriptionListGroup>
 
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Cloud-init')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {formatReviewScalar(
-                values.spec.userDataSource.value === 'secret'
-                  ? values.spec.userDataSecret.value
-                  : values.spec.userData.value,
-                values.spec.userDataSource.value === 'inline',
-              )}
-            </DescriptionListDescription>
+            <DescriptionListDescription>{userDataReview}</DescriptionListDescription>
           </DescriptionListGroup>
 
           <DescriptionListGroup>

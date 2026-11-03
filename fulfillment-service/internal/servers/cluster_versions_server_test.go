@@ -18,8 +18,10 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -36,11 +38,21 @@ var _ = Describe("Public cluster versions server", func() {
 		BeforeEach(func() {
 			var err error
 
+			// ClusterVersions are platform-scoped. Exercise them with a caller whose
+			// default tenant is shared.
+			sharedTenancy := auth.NewMockTenancyLogic(ctrl)
+			sharedTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+				Return(auth.AllTenants, nil).AnyTimes()
+			sharedTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+				Return(auth.SharedTenant, nil).AnyTimes()
+			sharedTenancy.EXPECT().DetermineVisibility(gomock.Any()).
+				Return(auth.TotalVisibility(), nil).AnyTimes()
+
 			// Create the public server:
 			publicServer, err = NewClusterVersionsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
+				SetTenancyLogic(sharedTenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -48,7 +60,7 @@ var _ = Describe("Public cluster versions server", func() {
 			privateServer, err = NewPrivateClusterVersionsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
+				SetTenancyLogic(sharedTenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -59,7 +71,7 @@ var _ = Describe("Public cluster versions server", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			diskImage, err := diskImagesDao.Create().SetObject(privatev1.DiskImage_builder{
-				Metadata: privatev1.Metadata_builder{Name: "public-cluster-version-image", Tenant: testTenant}.Build(),
+				Metadata: privatev1.Metadata_builder{Name: "public-cluster-version-image", Tenant: auth.SharedTenant}.Build(),
 				Spec: privatev1.DiskImageSpec_builder{
 					Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
 				}.Build(),

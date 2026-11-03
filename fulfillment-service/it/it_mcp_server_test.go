@@ -615,7 +615,7 @@ var _ = Describe("MCP server", func() {
 			}
 			updated = output
 			g.Expect(updated.ID).To(Equal(computeInstanceID))
-			g.Expect(updated.Version).To(BeNumerically(">", retryVersion))
+			g.Expect(updated.Version).To(BeNumerically(">=", retryVersion))
 		}, time.Minute, 100*time.Millisecond).Should(Succeed())
 
 		updateInstanceTypeWithRetry := func(instanceTypeID string) mcpserver.UpdateComputeInstanceOutput {

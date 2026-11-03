@@ -74,7 +74,7 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
   );
 
   await testStep('catalog-launch', 'Log in as the tenant user', () =>
-    openAndLogin(page, '/', tenantCredentials.username, tenantCredentials.password, 'tenant_type'),
+    openAndLogin(page, '/', tenantCredentials.username, tenantCredentials.password, 'tenant_admin'),
   );
 
   await testStep('catalog-launch', 'Open the tenant Catalog', () => openCatalogPage(page));

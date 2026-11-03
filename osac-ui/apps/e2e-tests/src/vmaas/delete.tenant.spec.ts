@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { access } from 'node:fs/promises';
 
-import { tenantNameOrSkip } from './test_data';
+import { tenantAdminUsername, tenantNameOrSkip } from './test_data';
+import { deleteTenantAdmin } from '../../../../libs/osac-cli/src/tenant_admin';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openTenantsPage } from '../../../../libs/test-utils/src/main.page';
@@ -42,6 +43,14 @@ test('deletes the requested tenant', async ({ page }) => {
     `Verify tenant "${configuredTenantName}" exists before deletion`,
     () => expectTenantToExist(page, configuredTenantName),
   );
+  if (tenantAdminUsername) {
+    const configuredTenantAdminUsername = tenantAdminUsername;
+    await testStep(
+      'tenant-delete',
+      `Remove tenant-admin user and role binding for "${configuredTenantName}"`,
+      () => deleteTenantAdmin(configuredTenantName, configuredTenantAdminUsername),
+    );
+  }
   await testStep('tenant-delete', `Delete tenant "${configuredTenantName}"`, () =>
     deleteTenant(page, configuredTenantName),
   );

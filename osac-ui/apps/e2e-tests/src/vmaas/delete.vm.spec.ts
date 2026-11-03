@@ -40,7 +40,7 @@ test(`deletes VM ${vmTestName}`, async ({ page }) => {
   );
 
   await testStep('vm-delete', 'Log in as the tenant user', () =>
-    openAndLogin(page, '/', tenantCredentials.username, tenantCredentials.password, 'tenant_type'),
+    openAndLogin(page, '/', tenantCredentials.username, tenantCredentials.password, 'tenant_admin'),
   );
 
   await testStep('vm-delete', 'Open the tenant Virtual Machines page', () => openVmsPage(page));

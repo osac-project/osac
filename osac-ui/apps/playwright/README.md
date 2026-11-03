@@ -69,20 +69,26 @@ has no specs, Playwright reports that no tests were found.
 
 ### Tenant flow tests
 
-The tenant specs read `tenant_name` and the replacement first-login password
-from `apps/e2e-tests/extravars.yaml`.
-Set `tenant_password` to the password Keycloak should use after the generated
-temporary password is replaced. The credential file is updated after that
-first login so subsequent VM and delete specs reuse the new password.
-When `tenant_password` is omitted, the tenant name is used.
+The tenant specs read `tenant_name` and optional tenant-admin credentials from
+`apps/e2e-tests/extravars.yaml`.
+Set `tenant_password` to the password for the tenant-admin user created by the
+flow. The credential file is updated with that user's credentials so subsequent
+VM and delete specs reuse the same login.
+When `tenant_password` is omitted, the tenant name is used. The create flow
+then creates an OSAC user, grants it `tenant-admin` through a RoleBinding, waits
+for the binding to become `READY`, and uses that user for the VM flow. Set
+`tenant_admin_username` and `tenant_admin_password` when the defaults are not
+appropriate.
+The full flow also invokes the `osac` CLI to create the user and RoleBinding;
+authenticate the CLI with the admin context before running it.
 Before running, set it to a tenant that does not already exist. The tenant
 create flow requires that the configured tenant does not already exist; the
 delete flow requires that it exists. All VMaaS specs skip before browser
-actions when `tenant_name` is unset or empty. These flows always authenticate
-with the admin test user. The create flow saves the generated tenant
-break-glass credentials in `/tmp` using a filename containing the tenant name,
-logs in with those credentials as the tenant, and the delete flow removes the
-file after the tenant is deleted.
+actions when `tenant_name` is unset or empty. The setup operations use the
+admin test user. The create flow temporarily saves the generated break-glass
+credentials, then replaces them with tenant-admin credentials in `/tmp` for
+the VM and delete flows. The delete flow removes the user, RoleBinding, tenant,
+and credential file.
 
 Set the deployment and admin login variables from the [Running](#running) section,
 then run the flows:

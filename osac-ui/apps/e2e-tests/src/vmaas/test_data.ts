@@ -83,6 +83,8 @@ interface RawExtravars {
   lifecycle_actions: LifecycleAction[];
   tenant_name?: string;
   tenant_password?: string;
+  tenant_admin_username?: string;
+  tenant_admin_password?: string;
 }
 
 export interface CatalogFieldsTestData {
@@ -311,6 +313,8 @@ const {
   lifecycle_actions: rawLifecycleActions,
   tenant_name: rawTenantName,
   tenant_password: rawTenantPassword,
+  tenant_admin_username: rawTenantAdminUsername,
+  tenant_admin_password: rawTenantAdminPassword,
 } = rawExtravars;
 const diskImageTestRunId = requiredString(
   process.env.OSAC_DISK_IMAGE_TEST_RUN_ID,
@@ -333,6 +337,10 @@ const storageTierTestName = rawStorageTier.name
 
 export const tenantName: string | undefined = rawTenantName;
 export const tenantPassword: string | undefined = rawTenantPassword;
+export const tenantAdminUsername: string | undefined =
+  rawTenantAdminUsername ?? (rawTenantName ? `${rawTenantName}-admin` : undefined);
+export const tenantAdminPassword: string =
+  rawTenantAdminPassword ?? rawTenantPassword ?? rawTenantName ?? '';
 
 export const tenantNameOrSkip = (): string | undefined => {
   if (tenantName !== undefined) {

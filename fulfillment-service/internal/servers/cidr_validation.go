@@ -21,6 +21,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -48,15 +49,12 @@ func parseAndValidateCIDR(cidrStr string, ipVersion string) (string, error) {
 // address supplied by the caller. Networking API contracts use canonical
 // prefixes so that the persisted value and the request value are identical.
 func parseAndValidateCanonicalCIDR(cidrStr string, ipVersion string) (string, error) {
-	canonical, err := parseAndValidateCIDR(cidrStr, ipVersion)
+	prefix, err := validation.ParseCanonicalIPv4CIDR(cidrStr)
 	if err != nil {
-		return "", err
-	}
-	if canonical != cidrStr {
 		return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"CIDR '%s' is not canonical; use '%s'", cidrStr, canonical)
+			"invalid %s CIDR '%s': %v", ipVersion, cidrStr, err)
 	}
-	return canonical, nil
+	return prefix.String(), nil
 }
 
 func validateCanonicalIPv4Address(fieldPath, address string) error {

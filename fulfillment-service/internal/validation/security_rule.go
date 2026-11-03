@@ -15,7 +15,6 @@ package validation
 
 import (
 	"fmt"
-	"net/netip"
 	"strings"
 )
 
@@ -92,11 +91,7 @@ func ValidateCanonicalIPv4CIDR(field, value string) error {
 	if value == "" {
 		return fmt.Errorf("%s is required and must be a canonical IPv4 CIDR", field)
 	}
-	prefix, err := netip.ParsePrefix(value)
-	if err != nil {
-		return fmt.Errorf("%s must be a canonical IPv4 CIDR with no host bits set", field)
-	}
-	if !prefix.Addr().Is4() || prefix != prefix.Masked() {
+	if _, err := ParseCanonicalIPv4CIDR(value); err != nil {
 		return fmt.Errorf("%s must be a canonical IPv4 CIDR with no host bits set", field)
 	}
 	return nil

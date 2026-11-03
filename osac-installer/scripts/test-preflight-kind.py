@@ -332,12 +332,12 @@ def case_fresh_install_lists_every_fault_once(c: Cluster) -> None:
     c.kubectl("delete", "configmap", f"{RELEASE}-preflight-report", "-n", c.ns, "--ignore-not-found")
     sc = default_storageclass(c)
     node = c.kubectl("get", "nodes", "-o", "jsonpath={.items[0].metadata.name}").stdout
-    set_default_storageclass(c, sc, None)
-    c.kubectl("cordon", node)
-    c.kubectl("delete", "secret", "fulfillment-controller-credentials", "-n", c.ns)
-    c.kubectl("delete", "crd", CERT_MANAGER_CRD)
     case_error = None
     try:
+        set_default_storageclass(c, sc, None)
+        c.kubectl("cordon", node)
+        c.kubectl("delete", "secret", "fulfillment-controller-credentials", "-n", c.ns)
+        c.kubectl("delete", "crd", CERT_MANAGER_CRD)
         started = time.monotonic()
         proc = c.install("--wait")
         elapsed = time.monotonic() - started

@@ -3,7 +3,10 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Page, SkipToContent } from '@patternfly/react-core';
 
 import { ServiceTier } from '@osac/types';
-import { CatalogItemDetailPage } from '@osac/ui-components/components/catalog/details/CatalogItemDetailPage.tsx';
+import BareMetalInstanceCatalogItemDetailPage from '@osac/ui-components/components/BareMetalInstanceCatalogItem/Details/BareMetalInstanceCatalogItemDetailPage';
+import { CatalogItemCreatePage } from '@osac/ui-components/components/CatalogItem/CatalogItemCreatePage';
+import CatalogItemEditPage from '@osac/ui-components/components/CatalogItem/CatalogItemEditPage';
+import ClusterCatalogItemDetailPage from '@osac/ui-components/components/ClusterCatalogItem/Details/ClusterCatalogItemDetailPage';
 import ErrorBoundary from '@osac/ui-components/components/ErrorBoundary/ErrorBoundary';
 import ExternalIpRoutes from '@osac/ui-components/components/ExternalIp/ExternalIpRoutes';
 import { ExternalIpPoolRoutes } from '@osac/ui-components/components/ExternalIpPool/ExternalIpPoolRoutes';
@@ -12,6 +15,7 @@ import ProjectRoutes from '@osac/ui-components/components/Project/ProjectRoutes'
 import ProjectMembershipRoutes from '@osac/ui-components/components/ProjectMembership/ProjectMembershipRoutes';
 import RoleBindingRoutes from '@osac/ui-components/components/RoleBinding/RoleBindingRoutes';
 import SecretRoutes from '@osac/ui-components/components/Secret/SecretRoutes';
+import VMCatalogItemDetailPage from '@osac/ui-components/components/VMCatalogItem/Details/VMCatalogItemDetailPage';
 import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import AttachNatGatewayWizardPage from '@osac/ui-components/pages/networking/AttachNatGatewayWizardPage';
@@ -68,11 +72,47 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
             </ShellRoute>
           }
         />
+        {(role === 'admin' || role === 'tenant-admin') && (
+          <>
+            <Route
+              path="/catalog/:kind/create"
+              element={
+                <ShellRoute>
+                  <CatalogItemCreatePage />
+                </ShellRoute>
+              }
+            />
+            <Route
+              path="/catalog/:kind/:id/edit"
+              element={
+                <ShellRoute>
+                  <CatalogItemEditPage />
+                </ShellRoute>
+              }
+            />
+          </>
+        )}
         <Route
-          path="/catalog/:kind/:id"
+          path="/catalog/vm/:id"
           element={
             <ShellRoute>
-              <CatalogItemDetailPage />
+              <VMCatalogItemDetailPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/catalog/cluster/:id"
+          element={
+            <ShellRoute>
+              <ClusterCatalogItemDetailPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/catalog/bm/:id"
+          element={
+            <ShellRoute>
+              <BareMetalInstanceCatalogItemDetailPage />
             </ShellRoute>
           }
         />

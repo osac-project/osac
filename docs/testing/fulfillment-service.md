@@ -19,8 +19,10 @@ Touched-area requirements: [component guide](../../fulfillment-service/AGENTS.md
 
 ## Selecting coverage
 
-- CLI/API-only contracts belong in `it/`; operator and provider journeys belong
-  in E2E. Use the suite setup and skip conditions to identify the actual boundary.
+- CLI/API-only contracts belong in `it/`. Complete provisioning journeys across
+  operators and providers belong in E2E; component integration and Contract tests
+  still cover their specific boundaries. Use the suite setup and skip conditions
+  to identify the actual boundary.
 - Tests behind `ndSkipUnlessProviderNetworkingEnabled` skip in the standard
   Fulfillment target. Their presence is not evidence for the enabled-provider path.
 - Fixture-written readiness conditions prove status projection, not automatic

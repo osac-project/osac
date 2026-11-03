@@ -29,5 +29,5 @@ Touched-area requirements: [component guide](../../osac-metering/AGENTS.md#integ
 
 ## Coverage gaps
 
-- Deployed cross-component journeys (tenant onboarding creating the three topics) belong to the `[QE]` E2E work; the event-to-heartbeat path on a hub is covered by the metering sanity tier in `tests/e2e/vmaas/sanity/test_metering_billing.py`.
+- Deployed cross-component journeys (tenant onboarding creating the three topics) belong to the `[QE]` E2E work; the event-to-heartbeat path on a hub is covered by the metering sanity tier in `../tests/e2e/vmaas/sanity/test_metering_billing.py`.
 - The M360 contract test needs a real tenant configured per environment; it is skipped when the variables are absent. It verifies submission and synchronous acceptance or rejection; verifying the billed totals needs a usage query path the adapter does not have yet.

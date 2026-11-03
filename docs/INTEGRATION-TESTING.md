@@ -216,9 +216,7 @@ See [operator cleanup setup and boundaries](testing/osac-operator.md#networking-
 
 ### NET-CLEAN-08 deployed BMF ownership boundary
 
-See [BMF suite boundaries](testing/bare-metal-fulfillment-operator.md) and the
-[isolated cleanup setup](testing/osac-operator.md#networking-cleanup-lifecycle-coverage-net-clean-07).
-The BMF suite uses static provider resources; it does not establish real provider cleanup.
+See [BMF cleanup setup and boundaries](testing/bare-metal-fulfillment-operator.md#networking-cleanup-ownership-net-clean-08).
 
 ### R03 unified worker cleanup implementation checkpoint
 

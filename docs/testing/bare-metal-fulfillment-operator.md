@@ -26,6 +26,17 @@ Touched-area requirements: [component guide](../../bare-metal-fulfillment-operat
 - **Metal3, BCM, Ironic, BMC, power, or hardware semantics:** Static CRDs and HTTP test doubles do not satisfy a real-boundary requirement.
 - **Generated CRDs or Helm CRDs:** Keep generated artifacts synchronized.
 
+## Networking cleanup ownership (NET-CLEAN-08)
+
+The [cleanup ownership suite](../../bare-metal-fulfillment-operator/test/integration/networking_cleanup_test.go)
+exercises the installed BMF manager and Kubernetes persistence. Metal3 hardware
+status and OSAC cleanup completion are simulated; it does not exercise a real
+provider or the OSAC operator's cleanup implementation.
+
+Run the Component integration (CI) command above with `SUITE=bmf`. Use its own
+Kind cluster and ports when running alongside the operator suite, following
+[Multi-branch test isolation](../MULTI-BRANCH-ISOLATION.md).
+
 ## Coverage gaps
 
 The current Kind suite deliberately stops at static Metal3 resources and

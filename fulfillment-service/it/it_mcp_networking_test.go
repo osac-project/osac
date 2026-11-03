@@ -325,6 +325,7 @@ var _ = Describe("MCP network resources", func() {
 	})
 
 	It("creates and deletes public exposure resources through the public API", func() {
+		ndSkipUnlessProviderNetworkingEnabled(ctx, "MCP public exposure resources")
 		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-exposure-client", userUsername)
 		networking := newNDClients()
 

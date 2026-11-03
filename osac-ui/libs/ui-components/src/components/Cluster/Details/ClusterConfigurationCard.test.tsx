@@ -1,12 +1,13 @@
 import React, { type ReactNode, createElement } from 'react';
 import { create } from '@bufbuild/protobuf';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
   type Cluster,
   ClusterSchema,
+  type ClusterVersion,
   ClusterVersionSchema,
   ClusterVersionState,
 } from '@osac/types';
@@ -16,13 +17,31 @@ import { ApiProvider } from '../../../api/api-context';
 import { createMockConnectTransport } from '../../../test-utils/createMockConnectTransport';
 
 const obsoleteVersion = create(ClusterVersionSchema, {
-  id: 'v4.15',
-  metadata: { name: 'v4.15' },
-  spec: { version: '4.15.0', state: ClusterVersionState.OBSOLETE, enabled: true },
+  id: 'v4.17',
+  metadata: { name: 'v4.17' },
+  spec: { version: '4.17.0', state: ClusterVersionState.OBSOLETE, enabled: false },
 });
 
-const renderCard = (cluster: Cluster) => {
-  const transport = createMockConnectTransport({ clusterVersions: [obsoleteVersion] });
+const desiredVersion = create(ClusterVersionSchema, {
+  id: 'v4.18',
+  metadata: { name: 'v4.18' },
+  spec: { version: '4.18.0', state: ClusterVersionState.ACTIVE, enabled: true },
+});
+
+const renderCard = (
+  cluster: Cluster,
+  versions: ClusterVersion[] = [obsoleteVersion, desiredVersion],
+) => {
+  const listFilters: (string | undefined)[] = [];
+  const transport = createMockConnectTransport(
+    { clusterVersions: versions },
+    {
+      onClusterVersionList: (request) => {
+        listFilters.push(request.filter);
+        return { items: versions };
+      },
+    },
+  );
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -32,50 +51,92 @@ const renderCard = (cluster: Cluster) => {
       { transport } as React.ComponentProps<typeof ApiProvider>,
       createElement(QueryClientProvider, { client: queryClient }, children),
     );
-  return render(<ClusterConfigurationCard cluster={cluster} />, { wrapper });
+  return {
+    ...render(<ClusterConfigurationCard cluster={cluster} />, { wrapper }),
+    listFilters,
+    queryClient,
+  };
 };
 
-describe('ClusterConfigurationCard version join', () => {
-  it('shows a skeleton while loading, then the resolved version and lifecycle label', async () => {
-    const { container } = renderCard(
-      create(ClusterSchema, { id: 'cl-1', spec: { version: { id: 'v4.15', name: 'v4.15' } } }),
+describe('ClusterConfigurationCard current version', () => {
+  it('shows the observed version and its lifecycle when the desired target differs', async () => {
+    const { listFilters } = renderCard(
+      create(ClusterSchema, {
+        id: 'cl-1',
+        spec: { version: { id: 'v4.18', name: 'v4.18' } },
+        status: { observedVersion: '4.17.0' },
+      }),
     );
 
-    expect(container.querySelector('.pf-v6-c-skeleton')).not.toBeNull();
-
-    // Get resolves regardless of lifecycle state (obsolete included).
-    expect(await screen.findByText('4.15.0')).toBeInTheDocument();
-    expect(screen.getByText('Obsolete')).toBeInTheDocument();
+    const versionRow = screen
+      .getByText('Current version')
+      .closest('.pf-v6-c-description-list__group');
+    expect(versionRow).toHaveTextContent('4.17.0');
+    expect(screen.queryByText('4.18.0')).not.toBeInTheDocument();
+    expect(await screen.findByText('Obsolete')).toBeInTheDocument();
+    expect(listFilters).toHaveLength(1);
+    expect(listFilters[0]).toContain('this.spec.version == "4.17.0"');
+    expect(listFilters[0]).toContain('this.spec.state');
+    expect(listFilters[0]).toContain('this.spec.enabled');
   });
 
-  it('falls back to the raw reference name with no label when unresolved', async () => {
-    renderCard(
+  it('shows an unknown current version when the observation is missing', () => {
+    const { listFilters } = renderCard(
       create(ClusterSchema, {
         id: 'cl-2',
-        spec: { version: { id: 'gone', name: '4.99.0-missing' } },
+        spec: { version: { id: 'v4.18', name: 'v4.18' } },
       }),
     );
 
-    expect(await screen.findByText('4.99.0-missing')).toBeInTheDocument();
-    const versionGroup = screen
-      .getByText('4.99.0-missing')
+    const versionRow = screen
+      .getByText('Current version')
       .closest('.pf-v6-c-description-list__group');
-    expect(versionGroup?.querySelector('.pf-v6-c-label')).toBeNull();
+    expect(versionRow).toHaveTextContent('—');
+    expect(versionRow?.querySelector('.pf-v6-c-label')).toBeNull();
+    expect(screen.queryByText('4.18.0')).not.toBeInTheDocument();
+    expect(listFilters).toHaveLength(0);
   });
 
-  it('falls back to the raw reference name with no label when the version id is empty (legacy cluster)', async () => {
-    renderCard(
+  it('shows an unmatched observation without a lifecycle badge', async () => {
+    const { listFilters, queryClient } = renderCard(
       create(ClusterSchema, {
         id: 'cl-3',
-        spec: { version: { id: '', name: '4.14.0-legacy' } },
+        spec: { version: { id: 'v4.18', name: 'v4.18' } },
+        status: { observedVersion: '4.16.0' },
       }),
+      [desiredVersion],
     );
 
-    // Empty id disables the Get query; no skeleton, straight to the raw name.
-    expect(await screen.findByText('4.14.0-legacy')).toBeInTheDocument();
-    const versionGroup = screen
-      .getByText('4.14.0-legacy')
+    await waitFor(() => expect(listFilters).toHaveLength(1));
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    const versionRow = screen
+      .getByText('Current version')
       .closest('.pf-v6-c-description-list__group');
-    expect(versionGroup?.querySelector('.pf-v6-c-label')).toBeNull();
+    expect(versionRow).toHaveTextContent('4.16.0');
+    expect(versionRow?.querySelector('.pf-v6-c-label')).toBeNull();
+  });
+
+  it('updates the current version and badge when the observation advances', async () => {
+    const cluster = create(ClusterSchema, {
+      id: 'cl-4',
+      spec: { version: { id: 'v4.18', name: 'v4.18' } },
+      status: { observedVersion: '4.17.0' },
+    });
+    const { rerender } = renderCard(cluster);
+    expect(await screen.findByText('Obsolete')).toBeInTheDocument();
+
+    rerender(
+      <ClusterConfigurationCard
+        cluster={create(ClusterSchema, {
+          id: 'cl-4',
+          spec: { version: { id: 'v4.18', name: 'v4.18' } },
+          status: { observedVersion: '4.18.0' },
+        })}
+      />,
+    );
+
+    expect(screen.getByText('4.18.0')).toBeInTheDocument();
+    expect(screen.queryByText('4.17.0')).not.toBeInTheDocument();
+    expect(await screen.findByText('Active')).toBeInTheDocument();
   });
 });

@@ -8,12 +8,16 @@ import {
   DescriptionListTerm,
   Flex,
   FlexItem,
-  Skeleton,
 } from '@patternfly/react-core';
 
-import type { Cluster } from '@osac/types';
+import type { Cluster, ClusterVersion } from '@osac/types';
 
-import { useClusterVersion } from '../../../api/v1/cluster-versions';
+import { cel } from '../../../api/cel';
+import {
+  CLUSTER_VERSION_ALL_STATES_LIST_FILTER,
+  useClusterVersions,
+} from '../../../api/v1/cluster-versions';
+import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { Timestamp } from '../../Primitives/Timestamp';
 import ClusterVersionLifecycleLabel from '../ClusterVersionLifecycleLabel';
@@ -23,10 +27,24 @@ interface ClusterConfigurationCardProps {
 }
 
 export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardProps) => {
+  const { t } = useTranslation();
   const catalogItem = cluster.spec?.catalogItem;
-  const { data: clusterVersion, isLoading: isVersionLoading } = useClusterVersion(
-    cluster.spec?.version?.id,
+  const currentVersion = cluster.status?.observedVersion.trim() ?? '';
+  const { data: clusterVersions = [] } = useClusterVersions(
+    {
+      filter: cel<ClusterVersion>((filter) =>
+        filter.and(
+          filter.field('spec.version').equals(currentVersion),
+          CLUSTER_VERSION_ALL_STATES_LIST_FILTER,
+        ),
+      ),
+    },
+    { enabled: Boolean(currentVersion) },
   );
+  const matchingClusterVersion = clusterVersions.find(
+    (version) => version.spec?.version === currentVersion,
+  );
+
   return (
     <Card isFullHeight>
       <CardTitle>Cluster configuration</CardTitle>
@@ -39,23 +57,19 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>Version</DescriptionListTerm>
+            <DescriptionListTerm>{t('Current version')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {isVersionLoading ? (
-                <Skeleton width="150px" />
-              ) : clusterVersion ? (
-                <Flex
-                  spaceItems={{ default: 'spaceItemsSm' }}
-                  alignItems={{ default: 'alignItemsCenter' }}
-                >
-                  <FlexItem>{displayValue(clusterVersion.spec?.version)}</FlexItem>
+              <Flex
+                spaceItems={{ default: 'spaceItemsSm' }}
+                alignItems={{ default: 'alignItemsCenter' }}
+              >
+                <FlexItem>{displayValue(currentVersion)}</FlexItem>
+                {matchingClusterVersion && (
                   <FlexItem>
-                    <ClusterVersionLifecycleLabel clusterVersion={clusterVersion} />
+                    <ClusterVersionLifecycleLabel clusterVersion={matchingClusterVersion} />
                   </FlexItem>
-                </Flex>
-              ) : (
-                displayValue(cluster.spec?.version?.name)
-              )}
+                )}
+              </Flex>
             </DescriptionListDescription>
           </DescriptionListGroup>
 

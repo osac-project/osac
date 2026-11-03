@@ -71,8 +71,8 @@ describe('ClusterDetailsPageContent', () => {
       apiFixtures: { externalIpAttachments: [] },
     });
 
-    expect(screen.queryByText('Cluster version')).toBeInTheDocument();
-    expect(screen.getByText('4.17.0')).toBeInTheDocument();
+    const versionRail = screen.getByText('Cluster version').closest('.pf-v6-c-card');
+    expect(versionRail).toHaveTextContent('4.17.0');
     const upgradeButton = screen.getByRole('button', { name: 'Upgrade cluster' });
     expect(upgradeButton).toBeDisabled();
     expect(upgradeButton).toHaveAccessibleDescription('Upgrade eligibility is unavailable.');

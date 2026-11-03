@@ -73,6 +73,22 @@ var _ = Describe("MCP Project administration", func() {
 		Expect(initialProject.GetMetadata().GetCreator()).To(Equal(userID))
 		Expect(initialProject.GetMetadata().GetProject()).To(BeEmpty())
 
+		_, err = adminProjects.Signal(ctx, privatev1.ProjectsSignalRequest_builder{Id: created.ID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func(g Gomega) {
+			adminResponse, adminErr := adminProjects.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: created.ID}.Build())
+			g.Expect(adminErr).ToNot(HaveOccurred())
+			g.Expect(adminResponse.GetObject().GetStatus().GetState()).To(Equal(
+				privatev1.ProjectState_PROJECT_STATE_ACTIVE,
+			))
+			publicResponse, publicErr := projects.Get(ctx, publicv1.ProjectsGetRequest_builder{Id: created.ID}.Build())
+			g.Expect(publicErr).ToNot(HaveOccurred())
+			g.Expect(publicResponse.GetObject().GetStatus().GetState()).To(Equal(
+				publicv1.ProjectState_PROJECT_STATE_ACTIVE,
+			))
+			initialProject = publicResponse.GetObject()
+		}, time.Minute, time.Second).Should(Succeed())
+
 		retrieved, err := callMCPTool[mcpserver.GetResourceOutput](ctx, session, "get_resource", mcpserver.GetResourceInput{
 			ResourceType: mcpserver.ResourceTypeProject,
 			ID:           created.ID,
@@ -136,16 +152,6 @@ var _ = Describe("MCP Project administration", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(afterLastWrite.GetObject().GetSpec().GetTitle()).To(Equal("Last-write title"))
 		Expect(afterLastWrite.GetObject().GetSpec().GetDescription()).To(Equal("Updated description"))
-
-		_, err = adminProjects.Signal(ctx, privatev1.ProjectsSignalRequest_builder{Id: created.ID}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Eventually(func(g Gomega) {
-			response, err := adminProjects.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: created.ID}.Build())
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(
-				privatev1.ProjectState_PROJECT_STATE_ACTIVE,
-			))
-		}, time.Minute, time.Second).Should(Succeed())
 
 		versionBeforeUnsupported, err := projects.Get(ctx, publicv1.ProjectsGetRequest_builder{Id: created.ID}.Build())
 		Expect(err).ToNot(HaveOccurred())

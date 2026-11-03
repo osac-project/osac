@@ -798,7 +798,7 @@ ifeq ($(SUITE),operator-multicluster)
 		$(DEVSTACK_HELM_APPLY_ARGS) \
 		--wait-for-jobs --timeout 20m
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set lvms.enabled=true --set hubAccess.enabled=false --set validation.enabled=false --set operator.aap.url=http://awx-service.$(NS).svc.cluster.local:80/api --set operator.controllers.networking=true --set operator.controllers.networkingProvisioning=true --set global.services.caas.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false"
+		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set lvms.enabled=true --set hubAccess.enabled=false --set validation.enabled=false --set operator.aap.url=http://awx-service.$(NS).svc.cluster.local:80/api --set operator.controllers.networking=true --set global.networking.provisioningEnabled=true --set global.services.caas.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false"
 	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration/multicluster
 endif
 ifeq ($(SUITE),bmf)

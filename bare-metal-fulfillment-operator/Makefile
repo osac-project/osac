@@ -63,10 +63,10 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /test/integration) -coverprofile cover.out
 
-# Run integration tests against a pre-existing Kind cluster. The installer
-# provides a scripted setup and test path: `make -C osac-installer install-infra
-# PLATFORM=kind PROFILE=dev NS=osac`, then `make -C osac-installer test
-# PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf`.
+# Run integration tests against a pre-existing Kind cluster. From the OSAC
+# monorepo root run:
+#   make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+#   make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf
 .PHONY: integration-tests
 integration-tests: manifests generate ## Run integration tests against a Kind cluster.
 	ginkgo run --timeout 30m -v test/integration

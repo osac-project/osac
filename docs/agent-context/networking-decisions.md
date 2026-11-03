@@ -65,12 +65,14 @@ superseded or extended design explicitly.
    the resource-specific message types and compatibility rules below.
 8. **DHCP and discovery:** Workloads receive tenant-network addresses through
    DHCP. Discover assigned addresses through the service-specific status and
-   feedback paths. For BMaaS, the Fabric Manager owns lease lookup. BMF records
-   the selected NIC MAC on BMI status and its NetworkAttachment; the configured
-   AAP job template runs `query_dhcp_lease` after handoff, and BMF mirrors the
-   accepted lease to BMI status. CaaS delegates host provisioning, port moves,
-   and IP discovery to BMaaS. Check the per-service designs for timing and
-   API/ingress VIP allocation.
+   feedback paths. For BMaaS, the Fabric Manager owns lease lookup. The target
+   behavior records the selected NIC MAC on BMI status and its NetworkAttachment;
+   the configured AAP job template runs `query_dhcp_lease` after handoff, and BMF
+   mirrors the accepted lease to BMI status. The current implementation does not
+   persist the selected MAC and may fall back to name-based lease matching when
+   MAC resolution is missing or partial. CaaS delegates host provisioning, port
+   moves, and IP discovery to BMaaS. Check the per-service designs for timing
+   and API/ingress VIP allocation.
 9. **Pluggable managers:** Managers register type/capabilities through ConfigMaps
    and supply Ansible roles. Adding a manager for existing capabilities does not
    require API changes. Capability types are fixed by the operator; a new

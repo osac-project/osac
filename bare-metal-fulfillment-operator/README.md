@@ -57,19 +57,28 @@ the BMI lifecycle and mirror the lease reported on the NetworkAttachment.
 
 NetworkAttachment operations use the configured
 `{{ aap_prefix }}-move-network-attachment` and
-`{{ aap_prefix }}-query-dhcp-lease` AAP job templates. `osac-aap` executes
-`playbook_osac_move_network_attachment.yml` and
+`{{ aap_prefix }}-query-dhcp-lease` AAP job templates. The osac-operator
+NetworkAttachment controller starts these jobs during reconciliation.
+`osac-aap` executes `playbook_osac_move_network_attachment.yml` and
 `playbook_osac_query_dhcp_lease.yml`; the selected Fabric Manager performs the
 provider-side port, policy, and DHCP operations. See the
 [BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md)
 ([component responsibilities](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md#component-responsibilities)).
 
-At host assignment the inventory client supplies an administrator mapping from
-OSAC logical port names to physical MAC addresses. Each key must match the
-network attachment's `interface` and the catalog port name. BMF records the
-selected MAC on BMI status and the NetworkAttachment spec. BMF requires a valid
-inventory MAC for the selected interface before creating the attachment, so BMI
-lease discovery uses that selected NIC. Inventory backends:
+At host assignment the inventory client can supply an administrator mapping
+from OSAC logical port names to physical MAC addresses. Each key must match the
+network attachment's `interface` and the catalog port name.
+
+**Current implementation:** IP discovery passes a resolved subnet-to-MAC map to
+the query job when available. The current controller does not persist the
+selected MAC on BMI status or the NetworkAttachment spec, and a failed or
+partial mapping can fall back to name-based lease matching.
+
+**Target behavior:** BMF records the selected MAC on BMI status and the
+NetworkAttachment spec, requires a valid inventory MAC for the selected
+interface before creating the attachment, and discovers the lease by that MAC.
+This target behavior is not yet enforced by the current implementation.
+Inventory backends:
 
 | Backend | Source | Value format |
 |---------|--------|--------------|

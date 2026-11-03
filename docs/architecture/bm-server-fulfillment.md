@@ -12,10 +12,16 @@ Tier and owner classification for tests is in the design
 | Component | Role |
 |---|---|
 | fulfillment-service | Validates and stores the BMI network attachment; maps BMI network conditions to API `NETWORK_READY`; admits create/delete guards. |
-| bare-metal-fulfillment-operator (BMF) | Manages inventory, host provisioning and power, records the selected MAC, creates and deletes NetworkAttachments, coordinates handoff and repair marks, and mirrors network status. |
+| bare-metal-fulfillment-operator (BMF) | Manages inventory, host provisioning and power, creates and deletes NetworkAttachments, coordinates handoff and repair marks, and mirrors network status. |
+| osac-operator NetworkAttachment controller | Starts the configured AAP jobs for attachment apply/delete and DHCP lease discovery during reconciliation. |
 | osac-aap | Executes the `{{ aap_prefix }}-move-network-attachment` and `{{ aap_prefix }}-query-dhcp-lease` AAP job templates using `playbook_osac_move_network_attachment.yml` and `playbook_osac_query_dhcp_lease.yml`. The playbooks invoke the selected networking role. |
 | Fabric Manager | Performs provider-side Fabric operations invoked by the AAP playbooks: port and policy changes, DHCP, selected-MAC lease lookup, and port restoration on delete. |
 | osac-operator BMI cleanup / feedback | Manages automatic ExternalIPAttachment lifecycle and reports status changes to fulfillment. |
+
+The selected-MAC persistence and MAC-only discovery in the lifecycle below are
+target behavior. The current implementation does not persist the selected MAC
+and may fall back to host-name lease matching when MAC resolution is missing or
+partial; the companion implementation change is required to enforce the target.
 
 Shared VirtualNetwork, Subnet, SecurityGroup, ExternalIP, and NATGateway behavior
 belongs to Unified / Default Networking. Do not duplicate those contracts here;

@@ -97,12 +97,18 @@ Shared networking resources and gates are described in the
 BareMetalInstance lifecycle. Architecture summary:
 [Bare Metal Server Fulfillment](../../architecture/bm-server-fulfillment.md).
 
+**Implementation status.** The selected-MAC persistence and MAC-only lease
+lookup below describe the target behavior. The current implementation does not
+persist the selected MAC and may fall back to name-based lease matching when
+MAC resolution is missing or partial.
+
 **Ownership.** BMF manages host inventory, OS provisioning and power,
 NetworkAttachment lifecycle, handoff, repair marks, and status mirroring. The
 configured `{{ aap_prefix }}-move-network-attachment` and
 `{{ aap_prefix }}-query-dhcp-lease` AAP job templates run the port-move and
-lease-query playbooks; the selected Fabric Manager performs provider-side port,
-SecurityGroup, and DHCP operations.
+lease-query playbooks. The osac-operator NetworkAttachment controller starts
+these jobs during reconciliation; the selected Fabric Manager performs
+provider-side port, SecurityGroup, and DHCP operations.
 
 **Attachment.** A BareMetalInstance has at most one tenant network attachment.
 Omit the attachment to use the tenant's default Subnet and SecurityGroup, or

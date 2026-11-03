@@ -3,11 +3,9 @@ import * as Yup from 'yup';
 
 import { cidrsOverlap } from '../../validation/cidr-validation';
 import { resourceNameSchema } from '../../validation/resource-name';
-import type { ProvisioningFieldValue } from '../ProvisioningWizard/fields/provisioningFieldValue';
-
 interface CidrNetworkValues {
-  podCidr?: Partial<ProvisioningFieldValue<string>>;
-  serviceCidr?: Partial<ProvisioningFieldValue<string>>;
+  podCidr?: { value?: string };
+  serviceCidr?: { value?: string };
 }
 
 interface NodeSetWithName {

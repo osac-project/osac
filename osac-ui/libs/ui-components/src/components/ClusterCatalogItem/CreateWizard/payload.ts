@@ -3,12 +3,8 @@ import type { MessageInitShape } from '@bufbuild/protobuf';
 import { type ClusterCatalogItem, ClusterCatalogItemSchema } from '@osac/types';
 
 import type { ClusterCatalogItemValues } from './values';
-import { buildUpdateMaskPaths } from '../../../api/v1/update-mask';
 import { catalogGeneralItemPayload } from '../../CatalogItem/CatalogGeneralStep';
-import {
-  catalogFieldPolicyClearPath,
-  catalogFieldPolicyFromValue,
-} from '../../CatalogItem/catalogItemPolicy';
+import { catalogFieldPolicyFromValue } from '../../CatalogItem/catalogItemPolicy';
 import type { ClusterNodeSetRow } from '../../Cluster/CreateWizard/fields';
 import { type ResourceSelectValue } from '../../Form/resourceSelectValue';
 
@@ -58,17 +54,22 @@ const toNodeSetMap = (value: ClusterNodeSetRow[]) => {
 
 const buildClusterCatalogItemFieldsPayload = (
   values: ClusterCatalogItemValues,
+  item?: ClusterCatalogItem,
 ): CatalogItemFieldsInit => {
   const fields: CatalogItemFieldsInit = {};
 
   const version = catalogFieldPolicyFromValue(values.version, isEmptyResource, toVersionReference);
   if (version) {
     fields.version = version;
+  } else if (item?.fields?.version) {
+    fields.version = undefined;
   }
 
   const nodeSets = catalogFieldPolicyFromValue(values.nodeSets, isEmptyNodeSetList, toNodeSetMap);
   if (nodeSets) {
     fields.nodeSets = nodeSets;
+  } else if (item?.fields?.nodeSets) {
+    fields.nodeSets = undefined;
   }
 
   const podCidr = catalogFieldPolicyFromValue(values.podCidr, isEmptyString, toTrimmedString);
@@ -81,6 +82,11 @@ const buildClusterCatalogItemFieldsPayload = (
     fields.network = {
       ...(podCidr ? { podCidr } : {}),
       ...(serviceCidr ? { serviceCidr } : {}),
+    };
+  } else if (item?.fields?.network) {
+    fields.network = {
+      podCidr: undefined,
+      serviceCidr: undefined,
     };
   }
 
@@ -98,11 +104,11 @@ export const buildClusterCatalogItemCreatePayload = (
 });
 
 export const buildClusterCatalogItemUpdatePayload = (
-  _item: ClusterCatalogItem,
+  item: ClusterCatalogItem,
   values: ClusterCatalogItemValues,
 ): MessageInitShape<typeof ClusterCatalogItemSchema> => ({
   description: values.description,
-  fields: buildClusterCatalogItemFieldsPayload(values),
+  fields: buildClusterCatalogItemFieldsPayload(values, item),
 });
 
 export const buildClusterCatalogItemUpdateRequest = (
@@ -110,32 +116,5 @@ export const buildClusterCatalogItemUpdateRequest = (
   values: ClusterCatalogItemValues,
 ) => {
   const payload = buildClusterCatalogItemUpdatePayload(item, values);
-  const object = { id: item.id, ...payload };
-  const fields = payload.fields;
-  const clearPaths = [
-    catalogFieldPolicyClearPath(item.fields?.version, fields?.version, 'fields.version'),
-    catalogFieldPolicyClearPath(item.fields?.nodeSets, fields?.nodeSets, 'fields.node_sets'),
-    catalogFieldPolicyClearPath(
-      item.fields?.network?.podCidr,
-      fields?.network?.podCidr,
-      'fields.network.pod_cidr',
-    ),
-    catalogFieldPolicyClearPath(
-      item.fields?.network?.serviceCidr,
-      fields?.network?.serviceCidr,
-      'fields.network.service_cidr',
-    ),
-  ].flat();
-
-  return {
-    object,
-    updateMask: {
-      paths: [
-        ...new Set([
-          ...buildUpdateMaskPaths(object, { schema: ClusterCatalogItemSchema }),
-          ...clearPaths,
-        ]),
-      ],
-    },
-  };
+  return { object: { id: item.id, ...payload } };
 };

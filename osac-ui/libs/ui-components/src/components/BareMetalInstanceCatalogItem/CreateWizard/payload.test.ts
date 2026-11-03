@@ -238,8 +238,7 @@ describe('bare metal catalog item initial values and updates', () => {
 
     const request = buildBareMetalCatalogItemUpdateRequest(item, emptyBareMetalCatalogItemValues());
 
-    expect(request.updateMask.paths).toEqual(
-      expect.arrayContaining(['id', 'fields.instance_type', 'fields.disk_image']),
-    );
+    expect(request.object.fields).toHaveProperty('instanceType', undefined);
+    expect(request.object.fields).toHaveProperty('diskImage', undefined);
   });
 });

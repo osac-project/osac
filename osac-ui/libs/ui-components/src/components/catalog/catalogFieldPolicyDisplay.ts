@@ -6,14 +6,6 @@ export type FieldPolicyLike<T = unknown> =
     }
   | undefined;
 
-export interface CatalogReference {
-  id?: string;
-  name?: string;
-}
-
-export const isCatalogReference = (value: object): value is CatalogReference =>
-  'name' in value && typeof value.name === 'string';
-
 export const catalogFieldPolicyBehavior = (
   policy: FieldPolicyLike,
 ): CatalogFieldPolicyBehavior | undefined => {
@@ -39,15 +31,6 @@ export const catalogFieldPolicyValue = <T>(policy: FieldPolicyLike<T>): T | unde
     return (behavior.value as { defaultValue?: T }).defaultValue;
   }
   return undefined;
-};
-
-export const catalogReferenceLabel = (
-  reference: CatalogReference | undefined,
-): string | undefined => {
-  if (!reference) {
-    return undefined;
-  }
-  return reference.name || undefined;
 };
 
 export const CATALOG_RESOURCE_EMPTY_DISPLAY = '—';

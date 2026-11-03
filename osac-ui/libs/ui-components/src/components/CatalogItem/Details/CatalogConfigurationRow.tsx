@@ -17,19 +17,13 @@ import {
 
 interface CatalogConfigurationRowProps {
   label: string;
-  value?: string;
-  policy: unknown;
-  valueContent?: ReactNode;
+  value: ReactNode;
+  policy: FieldPolicyLike;
 }
 
-export const CatalogConfigurationRow = ({
-  label,
-  value,
-  policy,
-  valueContent,
-}: CatalogConfigurationRowProps) => {
+export const CatalogConfigurationRow = ({ label, value, policy }: CatalogConfigurationRowProps) => {
   const { t } = useTranslation();
-  const behavior = catalogFieldPolicyBehavior(policy as FieldPolicyLike);
+  const behavior = catalogFieldPolicyBehavior(policy);
 
   if (!behavior) {
     return null;
@@ -40,7 +34,7 @@ export const CatalogConfigurationRow = ({
       <DescriptionListTerm>{label}</DescriptionListTerm>
       <DescriptionListDescription>
         <Flex flexWrap={{ default: 'nowrap' }} gap={{ default: 'gapXs' }}>
-          <FlexItem>{valueContent ?? value ?? t('Not set')}</FlexItem>
+          <FlexItem>{value ?? t('Not set')}</FlexItem>
           <FlexItem>
             <CatalogFieldEditabilityLabel behavior={behavior} />
           </FlexItem>
@@ -50,5 +44,5 @@ export const CatalogConfigurationRow = ({
   );
 };
 
-export const hasConfiguredPolicy = (...policies: unknown[]): boolean =>
-  policies.some((policy) => catalogFieldPolicyIsConfigured(policy as FieldPolicyLike));
+export const hasConfiguredPolicy = (...policies: FieldPolicyLike[]): boolean =>
+  policies.some(catalogFieldPolicyIsConfigured);

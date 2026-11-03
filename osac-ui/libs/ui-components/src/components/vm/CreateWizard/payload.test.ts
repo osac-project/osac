@@ -97,6 +97,7 @@ describe('buildComputeInstanceCreatePayload', () => {
           },
         ],
         autoExternalIpAttachment: false,
+        userDataSource: { source: { case: 'inline', value: '' } },
       },
     });
   });

@@ -53,10 +53,10 @@ export type UserDataSourceFormField = ProvisioningFieldValue<UserDataSourceFormV
 
 /** Maps the complete OSAC-7033 user data source policy into wizard form fields. */
 export const getUserDataSourceFieldsFromPolicy = (
-  policy: FieldPolicyLike<unknown>,
+  policy: FieldPolicyLike<UserDataSource>,
 ): UserDataSourceFormField => {
   const field = getFieldFromCatalogItemPolicy(policy, undefined);
-  const source = (field.value as UserDataSource | undefined)?.source;
+  const source = field.value?.source;
   const isSecret = source?.case === 'secret';
   const inlineValue = source?.case === 'inline' ? source.value : undefined;
   const secretValue = source?.case === 'secret' ? source.value.name : undefined;
@@ -64,8 +64,8 @@ export const getUserDataSourceFieldsFromPolicy = (
   return provisioningFieldValue(
     {
       source: isSecret ? 'secret' : 'inline',
-      inline: typeof inlineValue === 'string' ? inlineValue : '',
-      secret: typeof secretValue === 'string' ? secretValue : '',
+      inline: inlineValue ?? '',
+      secret: secretValue ?? '',
     },
     field.locked,
   );
@@ -74,7 +74,6 @@ export const getUserDataSourceFieldsFromPolicy = (
 /** Serializes the selected user-data source unless it is locked or empty. */
 export const getUserDataSourcePayload = (
   fields: UserDataSourceFormField,
-  initialFields?: UserDataSourceFormField,
 ): MessageInitShape<typeof UserDataSourceSchema> | undefined => {
   if (fields.locked) {
     return undefined;
@@ -83,10 +82,7 @@ export const getUserDataSourcePayload = (
   const { source, inline, secret } = fields.value;
   const value = (source === 'secret' ? secret : inline).trim();
   if (!value) {
-    const initialValue = initialFields
-      ? (initialFields.value[initialFields.value.source] ?? '').trim()
-      : '';
-    return initialValue ? { source: { case: 'inline', value: '' } } : undefined;
+    return source === 'inline' ? { source: { case: 'inline', value: '' } } : undefined;
   }
 
   return source === 'secret'

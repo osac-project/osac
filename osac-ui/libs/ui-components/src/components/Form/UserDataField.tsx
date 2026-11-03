@@ -49,9 +49,9 @@ const UserDataField = ({
   const sourceName = `${name}.source`;
   const secretRefName = `${name}.secret`;
   const inlineName = `${name}.inline`;
-  const [sourceField, sourceMeta, sourceHelpers] = useField<string>(sourceName);
+  const [{ value }, sourceMeta, sourceHelpers] = useField<'secret' | 'inline'>(sourceName);
   const showValidationErrors = useShowFieldValidationErrors();
-  const currentSource = sourceField.value === 'secret' ? 'secret' : 'inline';
+  const currentSource = value === 'secret' ? 'secret' : 'inline';
   const sourceError = getVisibleFieldError(sourceMeta, showValidationErrors);
   const options: UserDataSourceOption[] = [
     {

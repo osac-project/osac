@@ -7,6 +7,7 @@ import { resourceNameSchema } from '@osac/ui-components/validation/resource-name
 import type { ClusterNodeSetRow } from './fields';
 import { buildCidrSchema } from '../../../validation/cidr-validation';
 import { isValidSshPublicKey } from '../../ProvisioningWizard/credentialValidation';
+import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 import {
   clusterNetworkDoNotOverlapTest,
   clusterNodeSetRowSchema,
@@ -49,8 +50,14 @@ const buildClusterFieldDefinitions = (t: TFunction) => {
     ),
     specNetwork: yup
       .object({
-        podCidr: lockedField(buildCidrSchema(t, 'ipv4')),
-        serviceCidr: lockedField(buildCidrSchema(t, 'ipv4')),
+        podCidr: yup.object<ProvisioningFieldValue<string>>({
+          value: buildCidrSchema(t, 'ipv4'),
+          locked: yup.boolean(),
+        }),
+        serviceCidr: yup.object<ProvisioningFieldValue<string>>({
+          value: buildCidrSchema(t, 'ipv4'),
+          locked: yup.boolean(),
+        }),
       })
       .test('service-cidr-no-overlap', clusterNetworkDoNotOverlapTest(t)),
     specAutoExternalIpAttachment: yup.boolean(),

@@ -177,8 +177,10 @@ describe('buildClusterCatalogItemUpdatePayload', () => {
 
     const request = buildClusterCatalogItemUpdateRequest(item, emptyClusterCatalogItemValues());
 
-    expect(request.updateMask.paths).toEqual(
-      expect.arrayContaining(['id', 'fields.version', 'fields.network.service_cidr']),
-    );
+    expect(request.object.fields).toHaveProperty('version', undefined);
+    expect(request.object.fields?.network).toEqual({
+      podCidr: undefined,
+      serviceCidr: undefined,
+    });
   });
 });

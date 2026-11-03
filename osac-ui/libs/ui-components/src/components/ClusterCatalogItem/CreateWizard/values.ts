@@ -1,5 +1,6 @@
 import type {
   ClusterCatalogItem,
+  ClusterNodeSetMap,
   ClusterNodeSetMapPolicy,
   ClusterVersionReference,
 } from '@osac/types';
@@ -27,16 +28,9 @@ export interface ClusterCatalogItemValues extends CatalogGeneralValues {
   serviceCidr: ProvisioningFieldValue<string>;
 }
 
-const readStringValue = (value: string | undefined): string => value ?? '';
-
 const readNodeSetRows = (policy: ClusterNodeSetMapPolicy | undefined) => {
-  const behavior = policy?.behavior;
-  const items =
-    behavior?.case === 'locked'
-      ? behavior.value.items
-      : behavior?.case === 'editable'
-        ? behavior.value.defaultValue?.items
-        : undefined;
+  const items = getFieldFromCatalogItemPolicy<ClusterNodeSetMap | undefined>(policy, undefined)
+    .value?.items;
 
   return Object.entries(items ?? {}).map(([name, nodeSet]) => ({
     ...createEmptyNodeSetRow(),
@@ -82,12 +76,12 @@ export const getClusterCatalogItemInitialValues = (
       resourceSelectValueFromReference(version.value),
       version.locked,
     ),
-    nodeSets: {
-      value: readNodeSetRows(nodeSetPolicy),
-      locked: nodeSetPolicy?.behavior.case === 'locked',
-    },
-    podCidr: provisioningFieldValue(readStringValue(podCidr.value), podCidr.locked),
-    serviceCidr: provisioningFieldValue(readStringValue(serviceCidr.value), serviceCidr.locked),
+    nodeSets: provisioningFieldValue(
+      readNodeSetRows(nodeSetPolicy),
+      nodeSetPolicy?.behavior.case === 'locked',
+    ),
+    podCidr: provisioningFieldValue(podCidr.value ?? '', podCidr.locked),
+    serviceCidr: provisioningFieldValue(serviceCidr.value ?? '', serviceCidr.locked),
   };
 };
 

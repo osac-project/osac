@@ -230,9 +230,9 @@ describe('buildComputeCatalogItemUpdatePayload', () => {
     expect(request.object.fields?.diskImage).toEqual({
       behavior: { case: 'locked', value: { id: 'img-2', name: 'new-image' } },
     });
-    expect(request.updateMask.paths).toEqual(
-      expect.arrayContaining(['fields.disk_image.locked.id', 'fields.disk_image.locked.name']),
-    );
+    expect(request.object.fields?.diskImage).toEqual({
+      behavior: { case: 'locked', value: { id: 'img-2', name: 'new-image' } },
+    });
   });
 
   it('omits name, tenant, project, and template, and includes the governed fields', () => {
@@ -273,8 +273,7 @@ describe('buildComputeCatalogItemUpdatePayload', () => {
 
     const request = buildComputeCatalogItemUpdateRequest(item, emptyComputeCatalogItemValues());
 
-    expect(request.updateMask.paths).toEqual(
-      expect.arrayContaining(['id', 'fields.instance_type', 'fields.user_data_source']),
-    );
+    expect(request.object.fields).toHaveProperty('instanceType', undefined);
+    expect(request.object.fields).toHaveProperty('userDataSource', undefined);
   });
 });

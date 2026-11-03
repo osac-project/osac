@@ -15,7 +15,7 @@ import CatalogReview, {
   CatalogReviewValue,
   catalogReviewChanges,
   catalogReviewPolicyLabel,
-  catalogReviewResourceLabel,
+  catalogReviewResourceKey,
   catalogReviewValue,
 } from '../../CatalogItem/CatalogReview';
 import { formatClusterNodeSetReview } from '../../Cluster/CreateWizard/clusterNodeSetReview';
@@ -55,10 +55,10 @@ const catalogEditChanges = (
   const fields: CatalogReviewField[] = [
     {
       label: t('Version'),
-      before: catalogReviewResourceLabel(t, initialValues.version.value),
-      after: catalogReviewResourceLabel(t, values.version.value),
-      beforeKey: `${initialValues.version.value.id?.trim() ?? ''}|${initialValues.version.value.name?.trim() ?? ''}`,
-      afterKey: `${values.version.value.id?.trim() ?? ''}|${values.version.value.name?.trim() ?? ''}`,
+      before: catalogReviewValue(t, initialValues.version.value.name),
+      after: catalogReviewValue(t, values.version.value.name),
+      beforeKey: catalogReviewResourceKey(initialValues.version.value),
+      afterKey: catalogReviewResourceKey(values.version.value),
     },
     {
       label: t('Version access'),
@@ -119,10 +119,11 @@ const ClusterCatalogReviewStep = ({ item }: ClusterCatalogReviewStepProps) => {
   const { role } = useSession();
   const { initialValues, values } = useFormikContext<ClusterCatalogItemValues>();
   const isEdit = Boolean(item);
-  const editChanges = isEdit ? catalogEditChanges(t, initialValues, values) : [];
-
   return (
-    <CatalogReview isEdit={isEdit} editChanges={editChanges}>
+    <CatalogReview
+      isEdit={isEdit}
+      editChanges={isEdit ? catalogEditChanges(t, initialValues, values) : []}
+    >
       <CatalogReviewSection title={t('Details')}>
         {role === 'admin' && (
           <CatalogReviewRow
@@ -149,7 +150,7 @@ const ClusterCatalogReviewStep = ({ item }: ClusterCatalogReviewStepProps) => {
           value={
             <CatalogReviewValue
               field={values.version}
-              value={catalogReviewResourceLabel(t, values.version.value)}
+              value={catalogReviewValue(t, values.version.value.name)}
             />
           }
         />

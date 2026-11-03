@@ -29,6 +29,7 @@ describe('buildBareMetalInstanceCreatePayload', () => {
         },
         networkAttachments: [],
         autoExternalIpAttachment: false,
+        userDataSource: { source: { case: 'inline', value: '' } },
       },
     });
   });

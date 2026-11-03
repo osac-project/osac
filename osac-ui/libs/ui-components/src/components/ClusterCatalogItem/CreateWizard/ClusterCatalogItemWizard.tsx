@@ -85,7 +85,6 @@ const ClusterCatalogItemWizard = ({ item }: ClusterCatalogItemWizardProps) => {
       parentTo="/catalog"
       parentLabel={t('Catalog')}
       title={item ? t('Edit cluster catalog item') : t('Create cluster catalog item')}
-      wizardAriaLabel={t('Cluster catalog item wizard')}
       navAriaLabel={t('Create cluster catalog item steps')}
       onStepChange={setCurrentStep}
       footer={

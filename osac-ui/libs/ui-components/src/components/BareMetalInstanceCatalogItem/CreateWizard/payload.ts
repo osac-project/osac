@@ -3,12 +3,8 @@ import type { MessageInitShape } from '@bufbuild/protobuf';
 import { type BareMetalInstanceCatalogItem, BareMetalInstanceCatalogItemSchema } from '@osac/types';
 
 import type { BareMetalCatalogItemValues } from './values';
-import { buildUpdateMaskPaths } from '../../../api/v1/update-mask';
 import { catalogGeneralItemPayload } from '../../CatalogItem/CatalogGeneralStep';
-import {
-  catalogFieldPolicyClearPath,
-  catalogFieldPolicyFromValue,
-} from '../../CatalogItem/catalogItemPolicy';
+import { catalogFieldPolicyFromValue } from '../../CatalogItem/catalogItemPolicy';
 import { catalogUserDataPolicyFromValues } from '../../CatalogItem/catalogUserData';
 import { type ResourceSelectValue } from '../../Form/resourceSelectValue';
 
@@ -25,6 +21,7 @@ const toInstanceTypeReference = (value: ResourceSelectValue) => ({
 });
 const buildBareMetalCatalogItemFieldsPayload = (
   values: BareMetalCatalogItemValues,
+  item?: BareMetalInstanceCatalogItem,
 ): CatalogItemFieldsInit => {
   const fields: CatalogItemFieldsInit = {};
 
@@ -35,16 +32,22 @@ const buildBareMetalCatalogItemFieldsPayload = (
   );
   if (instanceType) {
     fields.instanceType = instanceType;
+  } else if (item?.fields?.instanceType) {
+    fields.instanceType = undefined;
   }
 
   const diskImage = catalogFieldPolicyFromValue(values.diskImage, isEmptyResource);
   if (diskImage) {
     fields.diskImage = diskImage;
+  } else if (item?.fields?.diskImage) {
+    fields.diskImage = undefined;
   }
 
   const userDataSource = catalogUserDataPolicyFromValues(values);
   if (userDataSource) {
     fields.userDataSource = userDataSource;
+  } else if (item?.fields?.userDataSource) {
+    fields.userDataSource = undefined;
   }
 
   return fields;
@@ -61,11 +64,11 @@ export const buildBareMetalCatalogItemCreatePayload = (
 });
 
 export const buildBareMetalCatalogItemUpdatePayload = (
-  _item: BareMetalInstanceCatalogItem,
+  item: BareMetalInstanceCatalogItem,
   values: BareMetalCatalogItemValues,
 ): MessageInitShape<typeof BareMetalInstanceCatalogItemSchema> => ({
   description: values.description,
-  fields: buildBareMetalCatalogItemFieldsPayload(values),
+  fields: buildBareMetalCatalogItemFieldsPayload(values, item),
 });
 
 export const buildBareMetalCatalogItemUpdateRequest = (
@@ -73,31 +76,5 @@ export const buildBareMetalCatalogItemUpdateRequest = (
   values: BareMetalCatalogItemValues,
 ) => {
   const payload = buildBareMetalCatalogItemUpdatePayload(item, values);
-  const object = { id: item.id, ...payload };
-  const fields = payload.fields;
-  const clearPaths = [
-    catalogFieldPolicyClearPath(
-      item.fields?.instanceType,
-      fields?.instanceType,
-      'fields.instance_type',
-    ),
-    catalogFieldPolicyClearPath(item.fields?.diskImage, fields?.diskImage, 'fields.disk_image'),
-    catalogFieldPolicyClearPath(
-      item.fields?.userDataSource,
-      fields?.userDataSource,
-      'fields.user_data_source',
-    ),
-  ].flat();
-
-  return {
-    object,
-    updateMask: {
-      paths: [
-        ...new Set([
-          ...buildUpdateMaskPaths(object, { schema: BareMetalInstanceCatalogItemSchema }),
-          ...clearPaths,
-        ]),
-      ],
-    },
-  };
+  return { object: { id: item.id, ...payload } };
 };

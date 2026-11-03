@@ -11,7 +11,7 @@ import { Timestamp } from '@osac/ui-components/components/Primitives/Timestamp';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField';
 import { useSession } from '@osac/ui-components/hooks/use-session';
 
-import CatalogItemActionsMenu from './CatalogItemActionsMenu';
+import CatalogItemActionsMenu from './CatalogItemActionsMenuForItem';
 import { type CatalogItem, catalogItemDetailsPath } from './catalogItemDisplay';
 import {
   computeCatalogItemFields,
@@ -28,8 +28,6 @@ interface CatalogItemTableProps {
 const isComputeCatalogItem = (item: CatalogItem): item is ComputeInstanceCatalogItem =>
   item.$typeName === 'osac.public.v1.ComputeInstanceCatalogItem';
 
-const displayReferenceName = (name: string | undefined): string => name || '-';
-
 const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups }) => {
   const { t } = useTranslation();
   const { role, tenantId } = useSession();
@@ -42,7 +40,6 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
   const createdLabel = t('Created');
   const actionsLabel = t('Actions');
   const isVmTable = items[0] ? isComputeCatalogItem(items[0]) : false;
-  const dateLabel = role === 'admin' || role === 'tenant-admin' ? createdLabel : null;
 
   return (
     <Table aria-label={t('Catalog items')} variant="compact">
@@ -58,12 +55,8 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
           ) : (
             <Th>{configurationLabel}</Th>
           )}
-          {dateLabel ? (
-            <>
-              <Th>{tenantLabel}</Th>
-              <Th>{dateLabel}</Th>
-            </>
-          ) : null}
+          <Th>{tenantLabel}</Th>
+          <Th>{createdLabel}</Th>
           <Th aria-label={actionsLabel} />
         </Tr>
       </Thead>
@@ -85,17 +78,13 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
             {isComputeCatalogItem(item) ? (
               <>
                 <Td dataLabel={instanceTypeLabel}>
-                  {displayReferenceName(
-                    computeInstanceTypeReferenceFromPolicy(
-                      computeCatalogItemFields(item)?.instanceType,
-                    )?.name,
-                  )}
+                  {computeInstanceTypeReferenceFromPolicy(
+                    computeCatalogItemFields(item)?.instanceType,
+                  )?.name || '-'}
                 </Td>
                 <Td dataLabel={diskImageLabel}>
-                  {displayReferenceName(
-                    computeDiskImageReferenceFromPolicy(computeCatalogItemFields(item)?.diskImage)
-                      ?.name,
-                  )}
+                  {computeDiskImageReferenceFromPolicy(computeCatalogItemFields(item)?.diskImage)
+                    ?.name || '-'}
                 </Td>
               </>
             ) : (
@@ -103,16 +92,12 @@ const CatalogItemTable: FC<CatalogItemTableProps> = ({ items, resourceLookups })
                 <CatalogItemResources catalogItem={item} resourceLookups={resourceLookups} />
               </Td>
             )}
-            {dateLabel ? (
-              <>
-                <Td dataLabel={tenantLabel}>
-                  <CatalogItemTenant catalogItem={item} />
-                </Td>
-                <Td dataLabel={dateLabel}>
-                  <Timestamp value={item.metadata?.creationTimestamp} />
-                </Td>
-              </>
-            ) : null}
+            <Td dataLabel={tenantLabel}>
+              <CatalogItemTenant catalogItem={item} />
+            </Td>
+            <Td dataLabel={createdLabel}>
+              <Timestamp value={item.metadata?.creationTimestamp} />
+            </Td>
             <Td dataLabel={actionsLabel} isActionCell>
               {role === 'tenant-user' ? (
                 <CatalogItemLaunchButton isDisabled={!item.published} catalogItem={item} />

@@ -27,9 +27,10 @@ interface GuestOsFamilyOption {
 interface GuestOsFamilyFieldProps {
   name: string;
   isDisabled?: boolean;
+  onSelect?: (value: GuestOSFamily) => void;
 }
 
-const GuestOsFamilyField = ({ name, isDisabled = false }: GuestOsFamilyFieldProps) => {
+const GuestOsFamilyField = ({ name, isDisabled = false, onSelect }: GuestOsFamilyFieldProps) => {
   const { t } = useTranslation();
   const [field, , helpers] = useField<GuestOSFamily | undefined>(name);
 
@@ -58,7 +59,7 @@ const GuestOsFamilyField = ({ name, isDisabled = false }: GuestOsFamilyFieldProp
       <Gallery hasGutter minWidths={{ default: '30%' }}>
         {options.map((option) => {
           const isSelected = field.value === option.value;
-          const cardId = `${name.replaceAll('.', '-')}-guest-os-${option.value}`;
+          const cardId = `${option.value}`;
 
           return (
             <GalleryItem key={option.value}>
@@ -72,6 +73,7 @@ const GuestOsFamilyField = ({ name, isDisabled = false }: GuestOsFamilyFieldProp
                 onClick={() => {
                   if (!isDisabled) {
                     void helpers.setValue(option.value);
+                    onSelect?.(option.value);
                   }
                 }}
               >
@@ -84,6 +86,7 @@ const GuestOsFamilyField = ({ name, isDisabled = false }: GuestOsFamilyFieldProp
                     onChange: (_event, checked) => {
                       if (checked && !isDisabled) {
                         void helpers.setValue(option.value);
+                        onSelect?.(option.value);
                       }
                     },
                     hasNoOffset: true,

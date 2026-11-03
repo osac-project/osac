@@ -3,12 +3,8 @@ import type { MessageInitShape } from '@bufbuild/protobuf';
 import { type ComputeInstanceCatalogItem, ComputeInstanceCatalogItemSchema } from '@osac/types';
 
 import type { ComputeCatalogItemValues } from './values';
-import { buildUpdateMaskPaths } from '../../../api/v1/update-mask';
 import { catalogGeneralItemPayload } from '../../CatalogItem/CatalogGeneralStep';
-import {
-  catalogFieldPolicyClearPath,
-  catalogFieldPolicyFromValue,
-} from '../../CatalogItem/catalogItemPolicy';
+import { catalogFieldPolicyFromValue } from '../../CatalogItem/catalogItemPolicy';
 import { catalogUserDataPolicyFromValues } from '../../CatalogItem/catalogUserData';
 import { type ResourceSelectValue } from '../../Form/resourceSelectValue';
 import type { ComputeInstanceDiskValues } from '../../vm/CreateWizard/fields';
@@ -34,22 +30,29 @@ const toDiskListRef = (value: ComputeInstanceDiskValues[]) => ({
 
 const buildComputeCatalogItemFieldsPayload = (
   values: ComputeCatalogItemValues,
+  item?: ComputeInstanceCatalogItem,
 ): CatalogItemFieldsInit => {
   const fields: CatalogItemFieldsInit = {};
 
   const diskImage = catalogFieldPolicyFromValue(values.diskImage, isEmptyResource);
   if (diskImage) {
     fields.diskImage = diskImage;
+  } else if (item?.fields?.diskImage) {
+    fields.diskImage = undefined;
   }
 
   const instanceType = catalogFieldPolicyFromValue(values.instanceType, isEmptyResource);
   if (instanceType) {
     fields.instanceType = instanceType;
+  } else if (item?.fields?.instanceType) {
+    fields.instanceType = undefined;
   }
 
   const userDataSource = catalogUserDataPolicyFromValues(values);
   if (userDataSource) {
     fields.userDataSource = userDataSource;
+  } else if (item?.fields?.userDataSource) {
+    fields.userDataSource = undefined;
   }
 
   const bootDiskSizeGib = catalogFieldPolicyFromValue(
@@ -66,6 +69,8 @@ const buildComputeCatalogItemFieldsPayload = (
       ...(bootDiskSizeGib ? { sizeGib: bootDiskSizeGib } : {}),
       ...(bootDiskStorageTier ? { storageTier: bootDiskStorageTier } : {}),
     };
+  } else if (item?.fields?.bootDisk) {
+    fields.bootDisk = { sizeGib: undefined, storageTier: undefined };
   }
 
   const additionalDisks = catalogFieldPolicyFromValue(
@@ -75,6 +80,8 @@ const buildComputeCatalogItemFieldsPayload = (
   );
   if (additionalDisks) {
     fields.additionalDisks = additionalDisks;
+  } else if (item?.fields?.additionalDisks) {
+    fields.additionalDisks = undefined;
   }
 
   return fields;
@@ -99,11 +106,11 @@ export const buildComputeCatalogItemCreatePayload = (
  * convention.
  */
 export const buildComputeCatalogItemUpdatePayload = (
-  _item: ComputeInstanceCatalogItem,
+  item: ComputeInstanceCatalogItem,
   values: ComputeCatalogItemValues,
 ): MessageInitShape<typeof ComputeInstanceCatalogItemSchema> => ({
   description: values.description,
-  fields: buildComputeCatalogItemFieldsPayload(values),
+  fields: buildComputeCatalogItemFieldsPayload(values, item),
 });
 
 export const buildComputeCatalogItemUpdateRequest = (
@@ -111,46 +118,5 @@ export const buildComputeCatalogItemUpdateRequest = (
   values: ComputeCatalogItemValues,
 ) => {
   const payload = buildComputeCatalogItemUpdatePayload(item, values);
-  const object = { id: item.id, ...payload };
-  const fields = payload.fields;
-  const clearPaths = [
-    catalogFieldPolicyClearPath(item.fields?.diskImage, fields?.diskImage, 'fields.disk_image'),
-    catalogFieldPolicyClearPath(
-      item.fields?.instanceType,
-      fields?.instanceType,
-      'fields.instance_type',
-    ),
-    catalogFieldPolicyClearPath(
-      item.fields?.userDataSource,
-      fields?.userDataSource,
-      'fields.user_data_source',
-    ),
-    catalogFieldPolicyClearPath(
-      item.fields?.bootDisk?.sizeGib,
-      fields?.bootDisk?.sizeGib,
-      'fields.boot_disk.size_gib',
-    ),
-    catalogFieldPolicyClearPath(
-      item.fields?.bootDisk?.storageTier,
-      fields?.bootDisk?.storageTier,
-      'fields.boot_disk.storage_tier',
-    ),
-    catalogFieldPolicyClearPath(
-      item.fields?.additionalDisks,
-      fields?.additionalDisks,
-      'fields.additional_disks',
-    ),
-  ].flat();
-
-  return {
-    object,
-    updateMask: {
-      paths: [
-        ...new Set([
-          ...buildUpdateMaskPaths(object, { schema: ComputeInstanceCatalogItemSchema }),
-          ...clearPaths,
-        ]),
-      ],
-    },
-  };
+  return { object: { id: item.id, ...payload } };
 };

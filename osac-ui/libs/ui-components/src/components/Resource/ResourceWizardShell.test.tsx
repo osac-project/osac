@@ -19,7 +19,6 @@ describe('ResourceWizardShell', () => {
         parentTo="/resources"
         parentLabel="Resources"
         title="Resource wizard"
-        wizardAriaLabel="Resource wizard"
         navAriaLabel="Resource wizard steps"
         onStepChange={() => undefined}
         footer={<Button>Save resource</Button>}

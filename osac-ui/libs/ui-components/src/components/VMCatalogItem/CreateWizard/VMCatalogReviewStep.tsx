@@ -16,15 +16,13 @@ import CatalogReview, {
   CatalogReviewValue,
   catalogReviewChanges,
   catalogReviewPolicyLabel,
-  catalogReviewResourceLabel,
+  catalogReviewResourceKey,
+  catalogReviewValue,
 } from '../../CatalogItem/CatalogReview';
 
 interface VMCatalogReviewStepProps {
   item?: ComputeInstanceCatalogItem;
 }
-
-const resourceValueKey = (value: { id?: string; name?: string }) =>
-  `${value.id?.trim() ?? ''}|${value.name?.trim() ?? ''}`;
 
 const guestOsFamilyLabel = (t: TFunction, value: GuestOSFamily | undefined): string => {
   switch (value) {
@@ -48,7 +46,7 @@ const additionalDisksKey = (values: ComputeCatalogItemValues['additionalDisks'][
   JSON.stringify(
     values.map((disk) => ({
       sizeGib: disk.sizeGib.trim(),
-      storageTier: resourceValueKey(disk.storageTier),
+      storageTier: catalogReviewResourceKey(disk.storageTier),
     })),
   );
 
@@ -60,7 +58,7 @@ const additionalDisksLabel = (
     ? values
         .map((disk, index) => {
           const size = disk.sizeGib.trim() ? `${disk.sizeGib.trim()} GiB` : t('Not set');
-          const tier = catalogReviewResourceLabel(t, disk.storageTier);
+          const tier = catalogReviewValue(t, disk.storageTier.name);
           return `${t('Disk set {{number}}', { number: index + 1 })}: ${size} · ${tier}`;
         })
         .join('; ')
@@ -98,10 +96,10 @@ const catalogEditChanges = (
     },
     {
       label: t('Disk image'),
-      before: catalogReviewResourceLabel(t, initialValues.diskImage.value),
-      after: catalogReviewResourceLabel(t, values.diskImage.value),
-      beforeKey: resourceValueKey(initialValues.diskImage.value),
-      afterKey: resourceValueKey(values.diskImage.value),
+      before: catalogReviewValue(t, initialValues.diskImage.value.name),
+      after: catalogReviewValue(t, values.diskImage.value.name),
+      beforeKey: catalogReviewResourceKey(initialValues.diskImage.value),
+      afterKey: catalogReviewResourceKey(values.diskImage.value),
     },
     {
       label: t('Disk image access'),
@@ -112,10 +110,10 @@ const catalogEditChanges = (
     },
     {
       label: t('Instance type'),
-      before: catalogReviewResourceLabel(t, initialValues.instanceType.value),
-      after: catalogReviewResourceLabel(t, values.instanceType.value),
-      beforeKey: resourceValueKey(initialValues.instanceType.value),
-      afterKey: resourceValueKey(values.instanceType.value),
+      before: catalogReviewValue(t, initialValues.instanceType.value.name),
+      after: catalogReviewValue(t, values.instanceType.value.name),
+      beforeKey: catalogReviewResourceKey(initialValues.instanceType.value),
+      afterKey: catalogReviewResourceKey(values.instanceType.value),
     },
     {
       label: t('Instance type access'),
@@ -140,10 +138,10 @@ const catalogEditChanges = (
     },
     {
       label: t('Boot storage tier'),
-      before: catalogReviewResourceLabel(t, initialValues.bootDiskStorageTier.value),
-      after: catalogReviewResourceLabel(t, values.bootDiskStorageTier.value),
-      beforeKey: resourceValueKey(initialValues.bootDiskStorageTier.value),
-      afterKey: resourceValueKey(values.bootDiskStorageTier.value),
+      before: catalogReviewValue(t, initialValues.bootDiskStorageTier.value.name),
+      after: catalogReviewValue(t, values.bootDiskStorageTier.value.name),
+      beforeKey: catalogReviewResourceKey(initialValues.bootDiskStorageTier.value),
+      afterKey: catalogReviewResourceKey(values.bootDiskStorageTier.value),
     },
     {
       label: t('Boot storage tier access'),
@@ -190,14 +188,13 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
   const { role } = useSession();
   const { initialValues, values } = useFormikContext<ComputeCatalogItemValues>();
   const isEdit = Boolean(item);
-  const editChanges = isEdit ? catalogEditChanges(t, initialValues, values) : [];
   const notSet = t('Not set');
-  const diskImage = catalogReviewResourceLabel(t, values.diskImage.value);
-  const instanceTypeLabel = catalogReviewResourceLabel(t, values.instanceType.value);
-  const userDataReview = userDataLabel(t, values);
 
   return (
-    <CatalogReview isEdit={isEdit} editChanges={editChanges}>
+    <CatalogReview
+      isEdit={isEdit}
+      editChanges={isEdit ? catalogEditChanges(t, initialValues, values) : []}
+    >
       <CatalogReviewSection title={t('Details')}>
         {role === 'admin' && (
           <CatalogReviewRow
@@ -225,11 +222,21 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
         />
         <CatalogReviewRow
           label={t('Disk image')}
-          value={<CatalogReviewValue field={values.diskImage} value={diskImage} />}
+          value={
+            <CatalogReviewValue
+              field={values.diskImage}
+              value={catalogReviewValue(t, values.diskImage.value.name)}
+            />
+          }
         />
         <CatalogReviewRow
           label={t('Instance type')}
-          value={<CatalogReviewValue field={values.instanceType} value={instanceTypeLabel} />}
+          value={
+            <CatalogReviewValue
+              field={values.instanceType}
+              value={catalogReviewValue(t, values.instanceType.value.name)}
+            />
+          }
         />
       </CatalogReviewSection>
 
@@ -248,7 +255,7 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
           value={
             <CatalogReviewValue
               field={values.bootDiskStorageTier}
-              value={catalogReviewResourceLabel(t, values.bootDiskStorageTier.value)}
+              value={catalogReviewValue(t, values.bootDiskStorageTier.value.name)}
             />
           }
         />
@@ -264,7 +271,7 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
                       <StackItem key={`${disk.sizeGib}-${index}`}>
                         {`${t('Disk set {{number}}', { number: index + 1 })}: ${
                           disk.sizeGib.trim() ? `${disk.sizeGib.trim()} GiB` : notSet
-                        } · ${catalogReviewResourceLabel(t, disk.storageTier)}`}
+                        } · ${catalogReviewValue(t, disk.storageTier.name)}`}
                       </StackItem>
                     ))}
                   </Stack>
@@ -280,7 +287,7 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
       <CatalogReviewSection title={t('Access & Initial run')}>
         <CatalogReviewRow
           label={t('Cloud-init')}
-          value={<CatalogReviewValue field={values.userData} value={userDataReview} />}
+          value={<CatalogReviewValue field={values.userData} value={userDataLabel(t, values)} />}
         />
       </CatalogReviewSection>
     </CatalogReview>

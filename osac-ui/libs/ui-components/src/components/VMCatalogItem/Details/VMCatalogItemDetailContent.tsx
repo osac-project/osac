@@ -14,18 +14,15 @@ import {
   StackItem,
   Title,
 } from '@patternfly/react-core';
-import type { TFunction } from 'i18next';
 
 import type { ComputeInstanceCatalogItem, StorageTierReference } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
 import CatalogFieldEditabilityLabel from '../../catalog/CatalogFieldEditabilityLabel';
 import {
-  type CatalogReference,
   type FieldPolicyLike,
   catalogFieldPolicyBehavior,
   catalogFieldPolicyValue,
-  catalogReferenceLabel,
 } from '../../catalog/catalogFieldPolicyDisplay';
 import { GLOBAL_TENANT_VALUE } from '../../catalog/catalogItemDisplay';
 import {
@@ -33,9 +30,7 @@ import {
   computeInstanceTypeReferenceFromPolicy,
   int32ValueFromPolicy,
 } from '../../catalog/computeCatalogItemResourceDisplay';
-import CatalogStorageTable, {
-  type CatalogStorageTableRow,
-} from '../../CatalogItem/Details/CatalogStorageTable';
+import AdditionalDisksTable from '../../CatalogItem/Details/AdditionalDisksTable';
 import CatalogUserDataDetailValue from '../../CatalogItem/Details/CatalogUserDataDetailValue';
 import { Timestamp } from '../../Primitives/Timestamp';
 
@@ -93,22 +88,6 @@ const GovernedDetailValue = ({ value, policy }: GovernedDetailValueProps) => {
   );
 };
 
-interface AdditionalDisk {
-  sizeGib?: number;
-  storageTier?: { id?: string; name?: string };
-}
-
-const additionalDisksFromPolicy = (value: unknown): AdditionalDisk[] => {
-  if (!value || typeof value !== 'object') {
-    return [];
-  }
-  const items = (value as { items?: AdditionalDisk[] }).items;
-  return items ?? [];
-};
-
-const displayReference = (reference: CatalogReference | undefined, t: TFunction): string =>
-  catalogReferenceLabel(reference) ?? t('Not set');
-
 const VMCatalogItemDetailContent = ({ item }: VMCatalogItemDetailContentProps) => {
   const { t } = useTranslation();
   const fields = item.fields;
@@ -116,22 +95,15 @@ const VMCatalogItemDetailContent = ({ item }: VMCatalogItemDetailContentProps) =
   const diskImageReference = computeDiskImageReferenceFromPolicy(fields?.diskImage);
   const bootDiskSize = int32ValueFromPolicy(fields?.bootDisk?.sizeGib);
   const storageTier = catalogFieldPolicyValue<StorageTierReference>(fields?.bootDisk?.storageTier);
-  const templateName = catalogReferenceLabel(item.template);
-  const project = item.metadata?.project?.trim();
-  const tenant = item.metadata?.tenant?.trim();
+  const templateName = item.template?.name;
+  const project = item.metadata?.project;
+  const tenant = item.metadata?.tenant;
   const visibilityValue =
     tenant === GLOBAL_TENANT_VALUE ? t('Global public') : tenant || t('Not set');
-  const diskImageValue = displayReference(diskImageReference, t);
-  const instanceTypeValue = displayReference(instanceTypeReference, t);
+  const diskImageValue = diskImageReference?.name || t('Not set');
+  const instanceTypeValue = instanceTypeReference?.name || t('Not set');
   const bootDiskSizeValue = bootDiskSize === undefined ? t('Not set') : `${bootDiskSize} GiB`;
-  const additionalDisks = additionalDisksFromPolicy(
-    catalogFieldPolicyValue(fields?.additionalDisks),
-  );
-  const additionalDiskRows: CatalogStorageTableRow[] = additionalDisks.map((disk, index) => ({
-    id: `additional-disk-${index}`,
-    size: disk.sizeGib === undefined ? t('Not set') : `${disk.sizeGib} GiB`,
-    storageTier: catalogReferenceLabel(disk.storageTier) ?? t('Not set'),
-  }));
+  const additionalDisks = catalogFieldPolicyValue(fields?.additionalDisks)?.items || [];
 
   return (
     <Grid hasGutter>
@@ -143,7 +115,7 @@ const VMCatalogItemDetailContent = ({ item }: VMCatalogItemDetailContentProps) =
               {item.published ? t('Live') : t('Unpublished')}
             </Label>
           </DetailRow>
-          <DetailRow label={t('Provisioning template')}>{templateName ?? t('Not set')}</DetailRow>
+          <DetailRow label={t('Provisioning template')}>{templateName || t('Not set')}</DetailRow>
           <DetailRow label={t('Visibility')}>{visibilityValue}</DetailRow>
           {project ? <DetailRow label={t('Project')}>{project}</DetailRow> : null}
           <DetailRow label={t('Created')}>
@@ -185,7 +157,7 @@ const VMCatalogItemDetailContent = ({ item }: VMCatalogItemDetailContentProps) =
           </DetailRow>
           <DetailRow label={t('Boot storage tier')}>
             <GovernedDetailValue
-              value={displayReference(storageTier, t)}
+              value={storageTier?.name || t('Not set')}
               policy={fields?.bootDisk?.storageTier}
             />
           </DetailRow>
@@ -194,8 +166,8 @@ const VMCatalogItemDetailContent = ({ item }: VMCatalogItemDetailContentProps) =
               <GovernedDetailValue value={t('Additional disks')} policy={fields?.additionalDisks} />
             }
           >
-            {additionalDiskRows.length ? (
-              <CatalogStorageTable rows={additionalDiskRows} />
+            {additionalDisks.length ? (
+              <AdditionalDisksTable disks={additionalDisks} />
             ) : (
               t('Not set')
             )}

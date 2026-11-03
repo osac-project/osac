@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { Alert, Button, Stack, StackItem } from '@patternfly/react-core';
 import { useField, useFormikContext } from 'formik';
 
@@ -40,7 +40,13 @@ const DiskImageField = ({
     isLoading: isInitialDiskImageLoading,
     error: initialDiskImageError,
     refetch: refetchInitialDiskImage,
-  } = useGetResource(DiskImages, { id: diskImageId }, { enabled: Boolean(diskImageId) });
+  } = useGetResource(
+    DiskImages,
+    { id: diskImageId },
+    {
+      enabled: Boolean(diskImageId && guestOsFamilyField.value === undefined),
+    },
+  );
   const initialDiskImage = initialDiskImageResponse?.object;
   const rawGuestOsFamily = guestOsFamilyField.value;
   const guestOsFamily = guestOsFamilyField.value ?? GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED;
@@ -50,60 +56,50 @@ const DiskImageField = ({
       [GuestOSFamily.GUEST_OS_FAMILY_WINDOWS]: t('Microsoft Windows'),
       [GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED]: t('Unspecified'),
     }[guestOsFamily] ?? t('Unspecified');
-  const previousGuestOsFamily = useRef(guestOsFamily);
 
   useEffect(() => {
-    if (rawGuestOsFamily === undefined) {
-      if (!diskImageId) {
-        previousGuestOsFamily.current = guestOsFamily;
-        return;
-      }
-
-      if (isInitialDiskImageLoading || initialDiskImageError) {
-        return;
-      }
-
-      const initialGuestOsFamily = initialDiskImage?.spec?.guestOsFamily;
-      if (
-        initialGuestOsFamily === undefined ||
-        initialGuestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED
-      ) {
-        previousGuestOsFamily.current = guestOsFamily;
-        return;
-      }
-
-      previousGuestOsFamily.current = initialGuestOsFamily;
-      void setFieldValue(guestOsFamilyName, initialGuestOsFamily);
+    if (
+      rawGuestOsFamily !== undefined ||
+      !diskImageId ||
+      isInitialDiskImageLoading ||
+      initialDiskImageError
+    ) {
       return;
     }
 
-    if (previousGuestOsFamily.current === guestOsFamily) {
+    const initialGuestOsFamily = initialDiskImage?.spec?.guestOsFamily;
+    if (
+      initialGuestOsFamily === undefined ||
+      initialGuestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED
+    ) {
       return;
     }
 
-    previousGuestOsFamily.current = guestOsFamily;
-    void setFieldValue(name, emptyResourceSelectValue(), false);
+    void setFieldValue(guestOsFamilyName, initialGuestOsFamily);
   }, [
     diskImageId,
-    guestOsFamily,
     guestOsFamilyName,
     initialDiskImage,
     initialDiskImageError,
     isInitialDiskImageLoading,
-    name,
     rawGuestOsFamily,
     setFieldValue,
   ]);
 
-  const diskImageFilter =
-    guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED
-      ? DISK_IMAGE_NON_OBSOLETE_FILTER
-      : cel<DiskImage>((filter) =>
-          filter.and(
-            DISK_IMAGE_NON_OBSOLETE_FILTER,
-            filter.field('spec.guestOsFamily').equals(guestOsFamily),
-          ),
-        );
+  const diskImageFilter = cel<DiskImage>((filter) =>
+    filter.and(
+      DISK_IMAGE_NON_OBSOLETE_FILTER,
+      guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED
+        ? undefined
+        : filter.field('spec.guestOsFamily').equals(guestOsFamily),
+    ),
+  );
+
+  const handleGuestOsFamilySelect = (selectedGuestOsFamily: GuestOSFamily) => {
+    if (guestOsFamily !== selectedGuestOsFamily) {
+      void setFieldValue(name, emptyResourceSelectValue(), false);
+    }
+  };
 
   return (
     <ProvisioningFieldGroup
@@ -111,8 +107,12 @@ const DiskImageField = ({
       titleId={`${fieldId}-group`}
       actions={labelInfo}
     >
-      <GuestOsFamilyField name={guestOsFamilyName} isDisabled={isDisabled} />
-      {initialDiskImageError && diskImageId ? (
+      <GuestOsFamilyField
+        name={guestOsFamilyName}
+        isDisabled={isDisabled}
+        onSelect={handleGuestOsFamilySelect}
+      />
+      {initialDiskImageError && diskImageId && rawGuestOsFamily === undefined ? (
         <Alert variant="danger" isInline title={t('Could not load disk images')}>
           <Stack hasGutter>
             <StackItem>{getErrorMessage(initialDiskImageError)}</StackItem>

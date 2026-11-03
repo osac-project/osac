@@ -81,7 +81,6 @@ const BareMetalCatalogItemWizard = ({ item }: BareMetalCatalogItemWizardProps) =
       parentTo="/catalog"
       parentLabel={t('Catalog')}
       title={item ? t('Edit bare metal catalog item') : t('Create bare metal catalog item')}
-      wizardAriaLabel={t('Bare metal catalog item wizard')}
       navAriaLabel={t('Create bare metal catalog item steps')}
       onStepChange={setCurrentStep}
       footer={

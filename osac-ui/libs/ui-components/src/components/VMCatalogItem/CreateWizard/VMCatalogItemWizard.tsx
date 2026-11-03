@@ -81,7 +81,6 @@ const VMCatalogItemWizard = ({ item }: VMCatalogItemWizardProps) => {
       parentTo="/catalog"
       parentLabel={t('Catalog')}
       title={item ? t('Edit VM catalog item') : t('Create VM Catalog Item')}
-      wizardAriaLabel={t('Compute catalog item wizard')}
       navAriaLabel={t('Create compute catalog item steps')}
       onStepChange={setCurrentStep}
       footer={

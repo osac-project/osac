@@ -12,7 +12,7 @@ import {
 } from '@osac/types';
 import { UserRole } from '@osac/ui-components/shellTypes';
 
-import CatalogItemActionsMenu from './CatalogItemActionsMenu';
+import CatalogItemActionsMenu from './CatalogItemActionsMenuForItem';
 import type { MockTransportOverrides } from '../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 

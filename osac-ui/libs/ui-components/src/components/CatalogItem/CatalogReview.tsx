@@ -104,11 +104,11 @@ export const catalogReviewPolicyLabel = (
   field: ProvisioningFieldValue<unknown>,
 ): string => (field.locked ? t('Locked') : t('Editable'));
 
-export const catalogReviewResourceLabel = (t: TFunction, value: CatalogResourceReference): string =>
-  value.name?.trim() || t('Not set');
-
 export const catalogReviewValue = (t: TFunction, value?: string): string =>
   value?.trim() || t('Not set');
+
+export const catalogReviewResourceKey = (value: CatalogResourceReference): string =>
+  `${value.id?.trim() ?? ''}|${value.name?.trim() ?? ''}`;
 
 const CatalogReview = ({ children, editChanges, isEdit }: CatalogReviewStepProps) => {
   const { t } = useTranslation();

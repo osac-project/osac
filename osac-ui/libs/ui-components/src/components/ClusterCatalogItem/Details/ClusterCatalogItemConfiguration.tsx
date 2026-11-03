@@ -5,12 +5,7 @@ import type { ClusterCatalogItem } from '@osac/types';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { catalogFieldPolicyValue } from '../../catalog/catalogFieldPolicyDisplay';
-import {
-  clusterCatalogItemFields,
-  clusterNodeSetMapPolicy,
-  clusterVersionReference,
-  formatClusterCatalogVersionLabel,
-} from '../../catalog/clusterCatalogItemResourceDisplay';
+import { formatClusterCatalogVersionLabel } from '../../catalog/clusterCatalogItemResourceDisplay';
 import {
   CatalogConfigurationRow,
   hasConfiguredPolicy,
@@ -23,10 +18,10 @@ interface ClusterCatalogItemConfigurationProps {
 
 const ClusterCatalogItemConfiguration = ({ item }: ClusterCatalogItemConfigurationProps) => {
   const { t } = useTranslation();
-  const fields = clusterCatalogItemFields(item);
+  const fields = item.fields;
   const versionPolicy = fields?.version;
-  const versionReference = clusterVersionReference(fields);
-  const nodeSetsPolicy = clusterNodeSetMapPolicy(fields);
+  const versionReference = catalogFieldPolicyValue(fields?.version);
+  const nodeSetsPolicy = fields?.nodeSets;
   const network = fields?.network;
   const hasConfiguredField = hasConfiguredPolicy(
     versionPolicy,
@@ -46,7 +41,7 @@ const ClusterCatalogItemConfiguration = ({ item }: ClusterCatalogItemConfigurati
         value={
           versionReference
             ? displayValue(formatClusterCatalogVersionLabel(undefined, versionReference))
-            : undefined
+            : null
         }
         policy={versionPolicy}
       />

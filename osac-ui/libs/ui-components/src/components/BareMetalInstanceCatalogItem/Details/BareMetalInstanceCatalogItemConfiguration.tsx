@@ -50,7 +50,7 @@ const BareMetalInstanceCatalogItemConfiguration = ({
       />
       <CatalogConfigurationRow
         label={t('User data')}
-        valueContent={<CatalogUserDataDetailValue policy={fields?.userDataSource} />}
+        value={<CatalogUserDataDetailValue policy={fields?.userDataSource} />}
         policy={fields?.userDataSource}
       />
     </DescriptionList>

@@ -17,7 +17,7 @@ import CatalogItemResources from '@osac/ui-components/components/catalog/Catalog
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField';
 import { useSession } from '@osac/ui-components/hooks/use-session';
 
-import CatalogItemActionsMenu from './CatalogItemActionsMenu';
+import CatalogItemActionsMenu from './CatalogItemActionsMenuForItem';
 import { CatalogItem, catalogItemDetailsPath, getCatalogItemKind } from './catalogItemDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
 import { CatalogItemIcon } from '../../icons';

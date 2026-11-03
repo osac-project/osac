@@ -1,53 +1,50 @@
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/react-core';
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
 import { UserRole } from '@osac/ui-components/shellTypes';
 
-import {
-  type CatalogItem,
-  catalogItemDetailsPath,
-  catalogItemEditPath,
-  getCatalogCreateActionPath,
-} from './catalogItemDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
-import BareMetalInstanceCatalogItemDeleteModal from '../BareMetalInstanceCatalogItem/Details/BareMetalInstanceCatalogItemDeleteModal';
-import { canManageCatalogItem } from '../CatalogItem/canManageCatalogItem';
-import { useSetCatalogItemPublished } from '../CatalogItem/useSetCatalogItemPublished';
-import ClusterCatalogItemDeleteModal from '../ClusterCatalogItem/Details/ClusterCatalogItemDeleteModal';
 import DeleteResourceButton from '../Resource/DeleteResourceButton';
-import VMCatalogItemDeleteModal from '../VMCatalogItem/Details/VMCatalogItemDeleteModal';
 
-interface CatalogItemActionsMenuProps {
-  item: CatalogItem;
-  role: UserRole;
-  tenantId: string;
+export interface CatalogItemDeleteModalProps {
+  onClose: VoidFunction;
+  onSuccess: VoidFunction;
 }
 
-const CatalogItemActionsMenu = ({ item, role, tenantId }: CatalogItemActionsMenuProps) => {
+interface CatalogItemActionsMenuProps {
+  name: string;
+  published: boolean;
+  detailsPath: string;
+  launchPath: string;
+  editPath: string;
+  role: UserRole;
+  canManage: boolean;
+  onSetPublished: (published: boolean) => void;
+  renderDeleteModal: (props: CatalogItemDeleteModalProps) => ReactNode;
+}
+
+const CatalogItemActionsMenu = ({
+  name,
+  published,
+  detailsPath,
+  launchPath,
+  editPath,
+  role,
+  canManage,
+  onSetPublished,
+  renderDeleteModal,
+}: CatalogItemActionsMenuProps) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const { setPublished } = useSetCatalogItemPublished(item);
-  const canManage = canManageCatalogItem(role, tenantId, item);
-
   const deleteModal = deleteOpen
-    ? (() => {
-        const modalProps = {
-          onClose: () => setDeleteOpen(false),
-          onSuccess: () => setDeleteOpen(false),
-        };
-        switch (item.$typeName) {
-          case 'osac.public.v1.ComputeInstanceCatalogItem':
-            return <VMCatalogItemDeleteModal item={item} {...modalProps} />;
-          case 'osac.public.v1.ClusterCatalogItem':
-            return <ClusterCatalogItemDeleteModal item={item} {...modalProps} />;
-          case 'osac.public.v1.BareMetalInstanceCatalogItem':
-            return <BareMetalInstanceCatalogItemDeleteModal item={item} {...modalProps} />;
-        }
-      })()
+    ? renderDeleteModal({
+        onClose: () => setDeleteOpen(false),
+        onSuccess: () => setDeleteOpen(false),
+      })
     : null;
 
   return (
@@ -65,7 +62,7 @@ const CatalogItemActionsMenu = ({ item, role, tenantId }: CatalogItemActionsMenu
               event.stopPropagation();
               setOpen((isOpen) => !isOpen);
             }}
-            aria-label={t('Actions for {{name}}', { name: item.metadata?.name || '' })}
+            aria-label={t('Actions for {{name}}', { name })}
           >
             <EllipsisVIcon />
           </MenuToggle>
@@ -75,17 +72,17 @@ const CatalogItemActionsMenu = ({ item, role, tenantId }: CatalogItemActionsMenu
           <DropdownItem
             onClick={() => {
               setOpen(false);
-              navigate(catalogItemDetailsPath(item));
+              navigate(detailsPath);
             }}
           >
             {t('View details')}
           </DropdownItem>
           {role === 'tenant-admin' || role === 'tenant-user' ? (
             <DropdownItem
-              isDisabled={!item.published}
+              isDisabled={!published}
               onClick={() => {
                 setOpen(false);
-                navigate(getCatalogCreateActionPath(item));
+                navigate(launchPath);
               }}
             >
               {t('Launch instance')}
@@ -95,7 +92,7 @@ const CatalogItemActionsMenu = ({ item, role, tenantId }: CatalogItemActionsMenu
             <DropdownItem
               onClick={() => {
                 setOpen(false);
-                navigate(catalogItemEditPath(item));
+                navigate(editPath);
               }}
             >
               {t('Edit')}
@@ -105,10 +102,10 @@ const CatalogItemActionsMenu = ({ item, role, tenantId }: CatalogItemActionsMenu
             <DropdownItem
               onClick={() => {
                 setOpen(false);
-                setPublished(!item.published);
+                onSetPublished(!published);
               }}
             >
-              {item.published ? t('Unpublish') : t('Publish')}
+              {published ? t('Unpublish') : t('Publish')}
             </DropdownItem>
           ) : null}
           {canManage ? (

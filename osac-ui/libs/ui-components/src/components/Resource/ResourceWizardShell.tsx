@@ -23,7 +23,6 @@ interface ResourceWizardShellProps<TValues extends FormikValues, TStepId extends
   parentTo: string;
   parentLabel: string;
   title: string;
-  wizardAriaLabel: string;
   navAriaLabel: string;
   onStepChange: (stepId: TStepId) => void;
   footer: NonNullable<WizardProps['footer']>;
@@ -37,7 +36,6 @@ const ResourceWizardShell = <TValues extends FormikValues, TStepId extends strin
   parentTo,
   parentLabel,
   title,
-  wizardAriaLabel,
   navAriaLabel,
   onStepChange,
   footer,
@@ -67,11 +65,7 @@ const ResourceWizardShell = <TValues extends FormikValues, TStepId extends strin
         </PageSection>
         <FieldValidationProvider>
           <LeaveFormConfirmation />
-          <PageSection
-            hasBodyWrapper={false}
-            type={PageSectionTypes.wizard}
-            aria-label={wizardAriaLabel}
-          >
+          <PageSection hasBodyWrapper={false} type={PageSectionTypes.wizard} aria-label={title}>
             <Wizard
               navAriaLabel={navAriaLabel}
               isVisitRequired

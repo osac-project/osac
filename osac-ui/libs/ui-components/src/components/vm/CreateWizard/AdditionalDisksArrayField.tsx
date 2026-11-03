@@ -30,8 +30,7 @@ export const AdditionalDisksArrayField = ({
   autoSelectSingleOption = true,
 }: AdditionalDisksArrayFieldProps) => {
   const { t } = useTranslation();
-  const [field, , helpers] = useField<ComputeInstanceDiskValues[]>(name);
-  const disks = field.value ?? [];
+  const [{ value: disks }, , helpers] = useField<ComputeInstanceDiskValues[]>(name);
 
   useEffect(() => {
     if (isRequired && disks.length === 0) {

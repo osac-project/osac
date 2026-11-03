@@ -14,15 +14,13 @@ import CatalogReview, {
   CatalogReviewValue,
   catalogReviewChanges,
   catalogReviewPolicyLabel,
-  catalogReviewResourceLabel,
+  catalogReviewResourceKey,
+  catalogReviewValue,
 } from '../../CatalogItem/CatalogReview';
 
 interface BareMetalCatalogReviewStepProps {
   item?: BareMetalInstanceCatalogItem;
 }
-
-const resourceValueKey = (value: { id?: string; name?: string }) =>
-  `${value.id?.trim() ?? ''}|${value.name?.trim() ?? ''}`;
 
 const userDataKey = (values: BareMetalCatalogItemValues) =>
   JSON.stringify({
@@ -31,10 +29,12 @@ const userDataKey = (values: BareMetalCatalogItemValues) =>
     secret: values.userDataSecret.value,
   });
 
-const userDataLabel = (t: TFunction, values: BareMetalCatalogItemValues): string =>
-  values.userData.value.trim() || values.userDataSecret.value.trim()
-    ? t('Configured')
-    : t('Not set');
+const userDataLabel = (t: TFunction, values: BareMetalCatalogItemValues): string => {
+  if (values.userDataSecret.value.trim()) {
+    return t('Configured');
+  }
+  return values.userData.value.trim() ? t('Configured') : t('Not set');
+};
 
 const catalogEditChanges = (
   t: TFunction,
@@ -44,10 +44,10 @@ const catalogEditChanges = (
   const fields: CatalogReviewField[] = [
     {
       label: t('Instance type'),
-      before: catalogReviewResourceLabel(t, initialValues.instanceType.value),
-      after: catalogReviewResourceLabel(t, values.instanceType.value),
-      beforeKey: resourceValueKey(initialValues.instanceType.value),
-      afterKey: resourceValueKey(values.instanceType.value),
+      before: catalogReviewValue(t, initialValues.instanceType.value.name),
+      after: catalogReviewValue(t, values.instanceType.value.name),
+      beforeKey: catalogReviewResourceKey(initialValues.instanceType.value),
+      afterKey: catalogReviewResourceKey(values.instanceType.value),
     },
     {
       label: t('Instance type access'),
@@ -58,10 +58,10 @@ const catalogEditChanges = (
     },
     {
       label: t('Disk image'),
-      before: catalogReviewResourceLabel(t, initialValues.diskImage.value),
-      after: catalogReviewResourceLabel(t, values.diskImage.value),
-      beforeKey: resourceValueKey(initialValues.diskImage.value),
-      afterKey: resourceValueKey(values.diskImage.value),
+      before: catalogReviewValue(t, initialValues.diskImage.value.name),
+      after: catalogReviewValue(t, values.diskImage.value.name),
+      beforeKey: catalogReviewResourceKey(initialValues.diskImage.value),
+      afterKey: catalogReviewResourceKey(values.diskImage.value),
     },
     {
       label: t('Disk image access'),
@@ -95,8 +95,8 @@ const BareMetalCatalogReviewStep = ({ item }: BareMetalCatalogReviewStepProps) =
   const { initialValues, values } = useFormikContext<BareMetalCatalogItemValues>();
   const isEdit = Boolean(item);
   const editChanges = isEdit ? catalogEditChanges(t, initialValues, values) : [];
-  const instanceType = catalogReviewResourceLabel(t, values.instanceType.value);
-  const diskImage = catalogReviewResourceLabel(t, values.diskImage.value);
+  const instanceType = catalogReviewValue(t, values.instanceType.value.name);
+  const diskImage = catalogReviewValue(t, values.diskImage.value.name);
   const userDataReview = userDataLabel(t, values);
 
   return (

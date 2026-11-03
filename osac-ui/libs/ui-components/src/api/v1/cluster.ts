@@ -13,15 +13,8 @@ export const useClusters = () => {
   return useListResource(Clusters, { filter }, {}, (reply) => reply.items);
 };
 
-export const useCluster = (id: string) => {
-  const trimmedId = id?.trim() ?? '';
-  return useGetResource(
-    Clusters,
-    { id: trimmedId },
-    { enabled: Boolean(trimmedId) },
-    (reply) => reply.object,
-  );
-};
+export const useCluster = (id: string) =>
+  useGetResource(Clusters, { id }, { enabled: Boolean(id) }, (reply) => reply.object);
 
 export const useDeleteCluster = () => {
   const client = useApiFetch(Clusters);

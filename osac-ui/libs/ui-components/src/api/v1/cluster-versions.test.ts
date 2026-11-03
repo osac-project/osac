@@ -196,6 +196,32 @@ describe('useConfiguredClusterVersion', () => {
     expect(result.current.isError).toBe(false);
   });
 
+  it('forwards a configured reference ID unchanged', async () => {
+    const configured = create(ClusterVersionSchema, {
+      id: '  version-1  ',
+      metadata: { name: 'current' },
+      spec: { version: '4.15.0' },
+    });
+    let requestedId: string | undefined;
+    const transport = createRouterTransport((router) => {
+      router.service(ClusterVersions, {
+        get: (request) => {
+          requestedId = request.id;
+          return { object: configured };
+        },
+      });
+    });
+    const { wrapper } = makeWrapper(transport);
+    const reference = create(ClusterVersionReferenceSchema, {
+      id: configured.id,
+      name: configured.metadata?.name,
+    });
+    const { result } = renderHook(() => useConfiguredClusterVersion(reference), { wrapper });
+
+    await waitFor(() => expect(result.current.data?.id).toBe(configured.id));
+    expect(requestedId).toBe(configured.id);
+  });
+
   it('uses a name-scoped all-states List for a name-only reference', async () => {
     const configured = makeClusterVersion('4-15-0', ClusterVersionState.OBSOLETE, false);
     let capturedFilter: string | undefined;

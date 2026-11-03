@@ -564,7 +564,7 @@ var _ = Describe("MCP server", func() {
 			))
 		}, time.Minute, 100*time.Millisecond).Should(Succeed())
 		var staleVersion int32
-		Eventually(func(g Gomega) {
+		Eventually(func(g Gomega) error {
 			currentResponse, getErr := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
 				Id: computeInstanceID,
 			}.Build())
@@ -579,9 +579,10 @@ var _ = Describe("MCP server", func() {
 			)
 			if updateErr != nil {
 				g.Expect(updateErr.Error()).To(ContainSubstring("The resource version is stale"))
-				return
+				return updateErr
 			}
 			staleVersion = currentVersion
+			return nil
 		}, time.Minute, 100*time.Millisecond).Should(Succeed())
 		Expect(staleVersion).To(BeNumerically(">", 0))
 

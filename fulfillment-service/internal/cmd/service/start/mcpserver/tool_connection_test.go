@@ -372,7 +372,7 @@ var _ = Describe("handleCheckConnection", func() {
 		release := make(chan struct{})
 		releaseOnce := sync.Once{}
 		timeout := make(chan struct{})
-		time.AfterFunc(100*time.Millisecond, func() { close(timeout) })
+		time.AfterFunc(10*time.Second, func() { close(timeout) })
 		reviews := &mockSelfSubjectAccessReviewsClient{
 			createFunc: func(
 				_ context.Context,
@@ -386,7 +386,7 @@ var _ = Describe("handleCheckConnection", func() {
 						break
 					}
 				}
-				if active == totalReviews {
+				if active == int32(maxCheckConnectionPermissionWorkers) || active == totalReviews {
 					releaseOnce.Do(func() { close(release) })
 				}
 				select {

@@ -69,7 +69,6 @@ describe('SubnetCreateModal', () => {
       status: {
         $typeName: 'osac.public.v1.SubnetStatus',
         state: SubnetState.READY,
-        computeInstanceUnsupportedReason: '',
       },
     },
   ];

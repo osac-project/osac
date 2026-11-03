@@ -9,7 +9,6 @@ interface NetworkFieldsProps {
   networkAttachmentName: string;
   externalIpAttachmentName: string;
   isDisabled?: boolean;
-  requireVmSupport?: boolean;
   autoExternalIpHelperText?: string;
 }
 
@@ -17,7 +16,6 @@ const NetworkFields = ({
   networkAttachmentName,
   externalIpAttachmentName,
   isDisabled = false,
-  requireVmSupport = false,
   autoExternalIpHelperText,
 }: NetworkFieldsProps) => {
   const { t } = useTranslation();
@@ -29,11 +27,7 @@ const NetworkFields = ({
       </Content>
       <ProvisioningField name={networkAttachmentName}>
         {({ valueName, isDisabled: fieldIsDisabled }) => (
-          <NetworkAttachmentFields
-            name={valueName}
-            isDisabled={isDisabled || fieldIsDisabled}
-            requireVmSupport={requireVmSupport}
-          />
+          <NetworkAttachmentFields name={valueName} isDisabled={isDisabled || fieldIsDisabled} />
         )}
       </ProvisioningField>
       <Divider />

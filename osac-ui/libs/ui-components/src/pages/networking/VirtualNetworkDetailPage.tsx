@@ -168,7 +168,6 @@ export const VirtualNetworkDetailPage = () => {
                             <Th>{t('Name')}</Th>
                             <Th>{t('Status')}</Th>
                             <Th>{t('CIDR')}</Th>
-                            <Th>{t('VM support')}</Th>
                           </Tr>
                         </Thead>
                         <Tbody>
@@ -181,14 +180,6 @@ export const VirtualNetworkDetailPage = () => {
                                 <SubnetStatusLabel state={subnet.status?.state} />
                               </Td>
                               <Td dataLabel="CIDR">{subnet.spec?.ipv4Cidr ?? '—'}</Td>
-                              <Td dataLabel={t('VM support')}>
-                                {subnet.status?.computeInstanceSupported === true
-                                  ? t('Supported')
-                                  : subnet.status?.computeInstanceUnsupportedReason ||
-                                    (subnet.status?.computeInstanceSupported === false
-                                      ? t('Unsupported')
-                                      : t('Not yet determined'))}
-                              </Td>
                             </Tr>
                           ))}
                         </Tbody>

@@ -75,17 +75,11 @@ export const useSecurityGroups = (
 
 // Scope + ready filter: use where only attachable subnets are valid (e.g. the VM
 // provisioning wizard). Not for the detail page — it hides non-ready subnets.
-export const virtualNetworkFilterForSubnetList = (
-  virtualNetworkId?: string,
-  requireVmSupport = false,
-) =>
+export const virtualNetworkFilterForSubnetList = (virtualNetworkId: string) =>
   cel<Subnet>((filter) =>
     filter.and(
-      virtualNetworkId
-        ? filter.field('spec.virtualNetwork.id').equals(virtualNetworkId)
-        : undefined,
+      filter.field('spec.virtualNetwork.id').equals(virtualNetworkId),
       filter.field('status.state').equals(SubnetState.READY),
-      ...(requireVmSupport ? [filter.field('status.computeInstanceSupported').equals(true)] : []),
     ),
   );
 

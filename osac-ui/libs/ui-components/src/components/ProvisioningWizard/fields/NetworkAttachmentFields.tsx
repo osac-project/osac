@@ -26,14 +26,9 @@ interface NetworkWizardValues {
 interface NetworkAttachmentFieldsProps {
   name: string;
   isDisabled?: boolean;
-  requireVmSupport?: boolean;
 }
 
-const NetworkAttachmentFields = ({
-  name,
-  isDisabled = false,
-  requireVmSupport = false,
-}: NetworkAttachmentFieldsProps) => {
+const NetworkAttachmentFields = ({ name, isDisabled = false }: NetworkAttachmentFieldsProps) => {
   const { t } = useTranslation();
   const { values } = useFormikContext<NetworkWizardValues>();
   const [field, , helpers] = useField<NetworkAttachmentFormFields>(name);
@@ -97,7 +92,6 @@ const NetworkAttachmentFields = ({
             <SubnetField
               name={`${name}.subnet`}
               virtualNetworkName={`${name}.virtualNetwork`}
-              requireVmSupport={requireVmSupport}
               isRequired
               isDisabled={isDisabled}
             />

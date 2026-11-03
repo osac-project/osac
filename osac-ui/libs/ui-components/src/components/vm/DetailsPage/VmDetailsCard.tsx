@@ -33,6 +33,7 @@ import { displayValue } from '../../../utils/detailFormatters';
 import { VmStatusLabel } from '../../../VmStatusLabel';
 import { guestOsFamilyLabels } from '../../DiskImage/DiskImageTable';
 import { Timestamp } from '../../Primitives/Timestamp';
+import UserDataDetailValue from '../../UserData/UserDataDetailValue';
 import { formatInstanceTypeDisplayName } from '../utils';
 
 interface VmDetailsCardProps {
@@ -99,12 +100,16 @@ const VmDetailsCard = ({
   const gpu = instanceType?.spec?.gpu;
   const hasWindowsGuest = guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_WINDOWS;
   const userDataSource = vm.spec?.userDataSource?.source;
-  const userDataConfigured =
+  const userData =
     userDataSource?.case === 'inline'
-      ? Boolean(userDataSource.value.trim())
+      ? { source: 'inline' as const, value: userDataSource.value }
       : userDataSource?.case === 'secret'
-        ? Boolean(userDataSource.value.id || userDataSource.value.name)
-        : false;
+        ? {
+            source: 'secret' as const,
+            value: userDataSource.value.name || '',
+            secretId: userDataSource.value.id || undefined,
+          }
+        : undefined;
   const canEdit = canEditInstanceType(vm);
   const editButton = (
     <Button
@@ -213,7 +218,7 @@ const VmDetailsCard = ({
                       )}
                     </DetailRow>
                     <DetailRow label={t('Cloud-init')}>
-                      {userDataConfigured ? t('Configured') : t('Not set')}
+                      <UserDataDetailValue userData={userData} emptyValue={displayValue()} />
                     </DetailRow>
                   </>
                 )}

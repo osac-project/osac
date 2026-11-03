@@ -1,9 +1,7 @@
-import { useState } from 'react';
-import { CodeBlock, CodeBlockCode, ExpandableSection } from '@patternfly/react-core';
-
 import type { UserDataSource } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
+import UserDataDetailValue from '../../UserData/UserDataDetailValue';
 import type { CatalogFieldPolicyLike } from '../catalogItemPolicy';
 import { catalogUserDataFieldFromPolicy } from '../catalogUserData';
 
@@ -13,30 +11,9 @@ interface CatalogUserDataDetailValueProps {
 
 const CatalogUserDataDetailValue = ({ policy }: CatalogUserDataDetailValueProps) => {
   const { t } = useTranslation();
-  const [isExpanded, setIsExpanded] = useState(false);
   const userData = catalogUserDataFieldFromPolicy(policy).value;
-  const hasValue = userData.value.trim().length > 0;
 
-  if (!hasValue) {
-    return t('Not set');
-  }
-
-  if (userData.source === 'secret') {
-    return t('Configured');
-  }
-
-  return (
-    <ExpandableSection
-      isExpanded={isExpanded}
-      onToggle={(_, expanded) => setIsExpanded(expanded)}
-      toggleContent={t('Configured')}
-      toggleAriaLabel={isExpanded ? t('Collapse user data') : t('Expand user data')}
-    >
-      <CodeBlock>
-        <CodeBlockCode>{userData.value}</CodeBlockCode>
-      </CodeBlock>
-    </ExpandableSection>
-  );
+  return <UserDataDetailValue userData={userData} emptyValue={t('Not set')} />;
 };
 
 export default CatalogUserDataDetailValue;

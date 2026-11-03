@@ -18,10 +18,6 @@ vi.mock('./VmStorageSection', () => ({
   default: () => <section aria-label="Storage">Storage section</section>,
 }));
 
-vi.mock('./VmUserDataCard', () => ({
-  default: () => <section aria-label="User data">User data section</section>,
-}));
-
 const vm = {
   id: 'vm-1',
   spec: { userDataSource: { source: { case: 'inline', value: '#cloud-config' } } },
@@ -42,8 +38,8 @@ describe('VmDetailsSections', () => {
     expect(screen.getByRole('region', { name: 'Details card' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Networking' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Storage' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'User data' })).toBeInTheDocument();
-    expect(screen.getAllByRole('separator')).toHaveLength(3);
+    expect(screen.queryByRole('region', { name: 'User data' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('separator')).toHaveLength(2);
     expect(container.querySelector('.pf-v6-c-card')).toBeNull();
   });
 

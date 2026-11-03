@@ -88,6 +88,24 @@ const vmItem = create(ComputeInstanceCatalogItemSchema, {
   },
 });
 
+const vmSecretItem = create(ComputeInstanceCatalogItemSchema, {
+  id: 'catalog-secret',
+  metadata: { name: 'catalog-secret', tenant: 'tenant-1' },
+  fields: {
+    userDataSource: {
+      behavior: {
+        case: 'locked',
+        value: {
+          source: {
+            case: 'secret',
+            value: { id: 'user-data-secret', name: 'cloud-init-secret' },
+          },
+        },
+      },
+    },
+  },
+});
+
 const clusterItem = create(ClusterCatalogItemSchema, {
   id: 'catalog-cluster',
   metadata: { name: 'catalog-cluster', tenant: 'tenant-1' },
@@ -222,6 +240,17 @@ describe('CatalogItemDetailContent', () => {
     expect(screen.queryByText('Network attachments')).not.toBeInTheDocument();
     expect(screen.queryByText('Auto external IP')).not.toBeInTheDocument();
     expectNoResourceListFetches(fetches);
+  });
+
+  it('links VM catalog Secret user data to the Secret resource', () => {
+    renderWithProviders(<VMCatalogItemDetailContent item={vmSecretItem} />, {
+      transportOverrides: noResourceListFetches(createResourceListFetches()),
+    });
+
+    expect(screen.getByRole('link', { name: 'cloud-init-secret' })).toHaveAttribute(
+      'href',
+      '/secrets/user-data-secret',
+    );
   });
 
   it('shows configured cluster fields and excludes unsupported policies', () => {

@@ -5,7 +5,6 @@ import type { ComputeInstance, DiskImage, InstanceType } from '@osac/types';
 import VmDetailsCard from './VmDetailsCard';
 import VmNetworkingSection from './VmNetworkingSection';
 import VmStorageSection from './VmStorageSection';
-import VmUserDataCard from './VmUserDataCard';
 
 interface VmDetailsSectionsProps {
   vm: ComputeInstance;
@@ -22,10 +21,6 @@ const VmDetailsSections = ({
   diskImage,
   isDiskImageLoading,
 }: VmDetailsSectionsProps) => {
-  const userDataSource = vm.spec?.userDataSource?.source;
-  const hasInlineUserData =
-    userDataSource?.case === 'inline' && Boolean(userDataSource.value.trim());
-
   return (
     <PageSection hasBodyWrapper={false}>
       <Stack hasGutter>
@@ -50,16 +45,6 @@ const VmDetailsSections = ({
         <StackItem>
           <VmStorageSection vm={vm} />
         </StackItem>
-        {hasInlineUserData ? (
-          <>
-            <StackItem>
-              <Divider />
-            </StackItem>
-            <StackItem>
-              <VmUserDataCard vm={vm} />
-            </StackItem>
-          </>
-        ) : null}
       </Stack>
     </PageSection>
   );

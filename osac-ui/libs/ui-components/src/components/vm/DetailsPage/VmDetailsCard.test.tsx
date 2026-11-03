@@ -1,5 +1,5 @@
 import { create } from '@bufbuild/protobuf';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -93,7 +93,7 @@ describe('VmDetailsCard', () => {
     expect(container.querySelector('.pf-v6-c-card')).toBeNull();
   });
 
-  it('uses Not set for unresolved configuration values', () => {
+  it('uses an em dash for unresolved VM user data', () => {
     renderWithProviders(
       <VmDetailsCard
         vm={{ id: 'vm-2', metadata: { name: 'legacy-vm' }, spec: {} } as ComputeInstance}
@@ -101,7 +101,33 @@ describe('VmDetailsCard', () => {
       />,
     );
 
-    expect(screen.getAllByText('Not set').length).toBeGreaterThan(0);
+    const cloudInitRow = screen.getByText('Cloud-init').closest('div') as HTMLElement;
+    expect(within(cloudInitRow).getByText('—')).toBeInTheDocument();
+  });
+
+  it('expands inline user data from the Cloud-init row', async () => {
+    const { user } = renderCard();
+
+    await user.click(screen.getByRole('button', { name: 'Expand user data' }));
+
+    expect(screen.getByText('#cloud-config')).toBeVisible();
+  });
+
+  it('links Secret-backed user data to the Secret resource', () => {
+    renderCard({
+      ...vm,
+      spec: {
+        ...vm.spec,
+        userDataSource: {
+          source: { case: 'secret', value: { id: 'user-data-secret', name: 'cloud-init-secret' } },
+        },
+      },
+    } as ComputeInstance);
+
+    expect(screen.getByRole('link', { name: 'cloud-init-secret' })).toHaveAttribute(
+      'href',
+      '/secrets/user-data-secret',
+    );
   });
 
   it.each([

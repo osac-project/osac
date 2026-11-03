@@ -79,13 +79,13 @@ type runnerContext struct {
 		computeInstance string
 		timeout         time.Duration
 	}
-	logger                      *slog.Logger
-	console                     *terminal.Console
-	settings                    *config.Settings
-	poolsClient                 publicv1.ExternalIPPoolsClient
-	eipsClient                  publicv1.ExternalIPsClient
-	ciClient                    publicv1.ComputeInstancesClient
-	attachClient                publicv1.ExternalIPAttachmentsClient
+	logger       *slog.Logger
+	console      *terminal.Console
+	settings     *config.Settings
+	poolsClient  publicv1.ExternalIPPoolsClient
+	eipsClient   publicv1.ExternalIPsClient
+	ciClient     publicv1.ComputeInstancesClient
+	attachClient publicv1.ExternalIPAttachmentsClient
 }
 
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {

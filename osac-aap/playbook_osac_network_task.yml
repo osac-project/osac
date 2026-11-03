@@ -1,0 +1,120 @@
+---
+# The generic networking playbook (network manager contract §4.3). Every
+# networking job template runs it. It calls one task file of the manager role
+# recorded on the resource; the role alone decides results and errors.
+- name: Run one network manager task
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    osac_network_fabric_tasks:
+      - create_virtual_network
+      - delete_virtual_network
+      - create_subnet
+      - delete_subnet
+      - create_security_group
+      - delete_security_group
+      - apply_network_attachment
+      - delete_network_attachment
+      - query_dhcp_lease
+      - create_external_ip_pool
+      - delete_external_ip_pool
+      - create_external_ip
+      - delete_external_ip
+      - attach_external_ip
+      - detach_external_ip
+      - create_nat_gateway
+      - delete_nat_gateway
+      - create_fabric_domain
+      - delete_fabric_domain
+      - reserve_cluster_ingress_ip
+      - release_cluster_ingress_ip
+    osac_network_kubernetes_tasks:
+      - create_virtual_network
+      - delete_virtual_network
+      - create_subnet
+      - delete_subnet
+      - create_security_group
+      - delete_security_group
+      - apply_network_attachment
+      - delete_network_attachment
+
+  pre_tasks:
+    # The operator launches every networking job with only osac_job_vars; AAP
+    # adds its own awx_*/tower_* job metadata. Any other extra var could
+    # override a manager setting, so the job fails as final.
+    - name: Check the job input
+      vars:
+        _osac_network_unexpected_vars: >-
+          {{ query('osac.service.launch_extra_vars')
+             | reject('match', '^(osac_job_vars$|awx_|tower_)') | list }}
+        _osac_network_task_set: >-
+          {{ osac_network_fabric_tasks
+             if (osac_job_vars.manager.type | default('')) == 'fabric'
+             else osac_network_kubernetes_tasks }}
+      ansible.builtin.set_fact:
+        osac_network_input_error: >-
+          {%- if _osac_network_unexpected_vars | length > 0 -%}
+          the job input has extra vars other than osac_job_vars: {{ _osac_network_unexpected_vars | join(', ') }}
+          {%- elif osac_job_vars is not defined or osac_job_vars is not mapping -%}
+          the job input has no osac_job_vars mapping
+          {%- elif osac_job_vars.manager is not defined or osac_job_vars.manager is not mapping
+                   or osac_job_vars.manager.type | default('') not in ['fabric', 'kubernetes'] -%}
+          osac_job_vars.manager.type must be fabric or kubernetes
+          {%- elif osac_job_vars.task | default('') not in _osac_network_task_set -%}
+          task {{ osac_job_vars.task | default('') }} is not in the
+          {{ osac_job_vars.manager.type }} manager task set
+          {%- endif -%}
+
+    - name: Fail when the job input is not a network manager task input
+      when: osac_network_input_error | default("", true) | length > 0
+      block:
+        - name: Report the invalid job input
+          ansible.builtin.set_stats:
+            aggregate: false
+            per_host: false
+            data:
+              osac_error:
+                message: "{{ osac_network_input_error }}"
+                retryable: false
+
+        - name: Stop the job
+          ansible.builtin.fail:
+            msg: "{{ osac_network_input_error }}"
+
+    - name: Show the task
+      ansible.builtin.debug:
+        msg: >-
+          {{ osac_job_vars.manager.name | default('') }} {{ osac_job_vars.task }}
+          {{ osac_job_vars.resource.kind | default('') }} {{ osac_job_vars.resource.id | default('') }}
+
+    - name: Find the task file of the manager role
+      ansible.builtin.set_fact:
+        osac_network_task_file: >-
+          {{ lookup('osac.service.network_task_file',
+                    osac_job_vars.manager.ansible_role | default(''),
+                    osac_job_vars.task) }}
+
+    - name: Fail when the role or its task file is missing
+      when: osac_network_task_file | length == 0
+      block:
+        - name: Report the missing role or task file
+          ansible.builtin.set_stats:
+            aggregate: false
+            per_host: false
+            data:
+              osac_error:
+                message: >-
+                  role {{ osac_job_vars.manager.ansible_role | default('') }} or task file
+                  {{ osac_job_vars.task }} not found in the execution environment
+                retryable: true
+
+        - name: Stop the job
+          ansible.builtin.fail:
+            msg: "The manager role or its task file is not in the execution environment."
+
+  tasks:
+    - name: Run the manager task
+      ansible.builtin.include_role:
+        name: "{{ osac_job_vars.manager.ansible_role }}"
+        tasks_from: "{{ osac_job_vars.task }}"

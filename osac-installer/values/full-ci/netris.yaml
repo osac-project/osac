@@ -1,0 +1,17 @@
+# Netris + CUDN EVPN overlay for the full CI profile, shared by the full and
+# stretched suites, layered after instance.yaml. The Netris backend of
+# osac-test-infra generates the lab values (controller, site, excluded ranges,
+# secrets) in netris-runtime.yaml. The EVPN underlay is provisioned separately.
+global:
+  networking:
+    provisioningEnabled: true
+    fabricManager: netris
+    k8sManager: cudn_evpn
+
+aap:
+  instanceGroups:
+    networkFulfillment:
+      enabled: true
+      config:
+        NETRIS_USERNAME: "netris"
+        NETRIS_VALIDATE_CERTS: "false"

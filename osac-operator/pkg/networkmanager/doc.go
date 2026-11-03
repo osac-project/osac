@@ -14,9 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package networkmanager provides discovery and validation of network manager
-// registrations. Managers are registered as labeled ConfigMaps in the operator
-// namespace. Fabric managers (osac.openshift.io/network-fabric-manager) handle
-// physical networking, while k8s managers (osac.openshift.io/network-k8s-manager)
-// bridge the Kubernetes OVN overlay to the physical fabric.
+// Package networkmanager parses and resolves network manager registrations
+// (network manager integration contract §4.2). A manager registers with one
+// immutable ConfigMap in the operator namespace, labelled
+// osac.openshift.io/network-fabric-manager or
+// osac.openshift.io/network-k8s-manager. Discovery.Resolve resolves the
+// managers a NetworkClass selects and returns the error message the
+// NetworkClass reports when resolution fails.
 package networkmanager

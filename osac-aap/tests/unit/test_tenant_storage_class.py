@@ -53,6 +53,33 @@ OSAC_AAP = Path(__file__).resolve().parents[2]
             "same-class",
             None,
         ),
+        (
+            [
+                {"name": "   ", "tier": "fast"},
+                {"name": "slow-class", "tier": "slow"},
+            ],
+            "fast",
+            None,
+            "Available tiers: slow.",
+        ),
+        (
+            [
+                {"name": "   ", "tier": "fast"},
+                {"name": "fast-class", "tier": "fast"},
+            ],
+            "fast",
+            "fast-class",
+            None,
+        ),
+        (
+            [
+                {"name": " fast-class ", "tier": "fast"},
+                {"name": "fast-class", "tier": "fast"},
+            ],
+            "fast",
+            "fast-class",
+            None,
+        ),
     ],
 )
 def test_tier_selection_contract(

@@ -24,10 +24,11 @@ import (
 )
 
 type FabricDomainsServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
+	logger             *slog.Logger
+	attributionLogic   auth.AttributionLogic
+	tenancyLogic       auth.TenancyLogic
+	metricsRegisterer  prometheus.Registerer
+	networkingSettings *NetworkingSettings
 }
 
 var _ publicv1.FabricDomainsServer = (*FabricDomainsServer)(nil)
@@ -61,6 +62,13 @@ func (b *FabricDomainsServerBuilder) SetMetricsRegisterer(value prometheus.Regis
 	return b
 }
 
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *FabricDomainsServerBuilder) SetNetworkingSettings(value NetworkingSettings) *FabricDomainsServerBuilder {
+	b.networkingSettings = &value
+	return b
+}
+
 func (b *FabricDomainsServerBuilder) Build() (*FabricDomainsServer, error) {
 	if b.logger == nil {
 		return nil, errors.New("logger is mandatory")
@@ -76,12 +84,11 @@ func (b *FabricDomainsServerBuilder) Build() (*FabricDomainsServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The DAO validates filters against the public schema at this boundary.
 	delegate, err := NewPrivateFabricDomainsServer().
 		SetLogger(b.logger).SetAttributionLogic(b.attributionLogic).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
+		SetTenancyLogic(b.tenancyLogic).SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc((*publicv1.FabricDomain)(nil).ProtoReflect().Descriptor()).
+		SetNetworkingSettings(resolveNetworkingSettings(b.networkingSettings)).
 		Build()
 	if err != nil {
 		return nil, err
@@ -152,31 +159,6 @@ func (s *FabricDomainsServer) Create(ctx context.Context, request *publicv1.Fabr
 		return nil, grpcstatus.Error(grpccodes.Internal, "failed to process fabric domain")
 	}
 	return publicv1.FabricDomainsCreateResponse_builder{Object: item}.Build(), nil
-}
-
-func (s *FabricDomainsServer) Update(ctx context.Context, request *publicv1.FabricDomainsUpdateRequest) (*publicv1.FabricDomainsUpdateResponse, error) {
-	ctx = withPublicAPIView(ctx)
-	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
-		return nil, err
-	}
-
-	if request.GetObject() == nil {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "object is mandatory")
-	}
-	privateObject := &privatev1.FabricDomain{}
-	if err := s.inMapper.Copy(ctx, request.GetObject(), privateObject); err != nil {
-		return nil, publicInputMappingError(err, "failed to process fabric domain")
-	}
-	privateRequest := privatev1.FabricDomainsUpdateRequest_builder{Object: privateObject, UpdateMask: request.GetUpdateMask(), Lock: request.GetLock()}.Build()
-	privateResponse, err := s.delegate.Update(ctx, privateRequest)
-	if err != nil {
-		return nil, err
-	}
-	item := &publicv1.FabricDomain{}
-	if err := s.outMapper.Copy(ctx, privateResponse.GetObject(), item); err != nil {
-		return nil, grpcstatus.Error(grpccodes.Internal, "failed to process fabric domain")
-	}
-	return publicv1.FabricDomainsUpdateResponse_builder{Object: item}.Build(), nil
 }
 
 func (s *FabricDomainsServer) Delete(ctx context.Context, request *publicv1.FabricDomainsDeleteRequest) (*publicv1.FabricDomainsDeleteResponse, error) {

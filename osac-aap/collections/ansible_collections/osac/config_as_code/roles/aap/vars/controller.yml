@@ -118,6 +118,8 @@ controller_templates: # noqa: var-naming[no-role-prefix]
       - "{{ aap_prefix }}-compute-instance-operations-ig"
     allow_simultaneous: true
     ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
     verbosity: 0
   - name: "{{ aap_prefix }}-delete-compute-instance"
     project: "{{ aap_prefix }}"
@@ -130,6 +132,8 @@ controller_templates: # noqa: var-naming[no-role-prefix]
       - "{{ aap_prefix }}-compute-instance-operations-ig"
     allow_simultaneous: true
     ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
     verbosity: 0
   - name: "{{ aap_prefix }}-report-hosted-cluster-status-success"
     project: "{{ aap_prefix }}"
@@ -165,7 +169,8 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
     job_type: run
-    playbook: "osac-aap/playbook_osac_create_virtual_network.yml"
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
     inventory: "{{ aap_prefix }}-networking-operations"
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
@@ -173,12 +178,15 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
     verbosity: 0
   - name: "{{ aap_prefix }}-delete-virtual-network"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
     job_type: run
-    playbook: "osac-aap/playbook_osac_delete_virtual_network.yml"
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
     inventory: "{{ aap_prefix }}-networking-operations"
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
@@ -186,12 +194,15 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
     verbosity: 0
   - name: "{{ aap_prefix }}-create-subnet"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
     job_type: run
-    playbook: "osac-aap/playbook_osac_create_subnet.yml"
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
     inventory: "{{ aap_prefix }}-networking-operations"
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
@@ -199,12 +210,15 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
     verbosity: 0
   - name: "{{ aap_prefix }}-delete-subnet"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
     job_type: run
-    playbook: "osac-aap/playbook_osac_delete_subnet.yml"
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
     inventory: "{{ aap_prefix }}-networking-operations"
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
@@ -212,144 +226,15 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
-    verbosity: 0
-  - name: "{{ aap_prefix }}-create-external-ip-pool"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_create_external_ip_pool.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
-    verbosity: 0
-  - name: "{{ aap_prefix }}-delete-external-ip-pool"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_delete_external_ip_pool.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
-    verbosity: 0
-  # IPAM allocate-from-pool is non-atomic: concurrent creates could pick
-  # the same IP. Serialized to prevent duplicate allocation.
-  - name: "{{ aap_prefix }}-create-external-ip"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_create_external_ip.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: false
-    ask_variables_on_launch: true
-    verbosity: 0
-  - name: "{{ aap_prefix }}-delete-external-ip"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_delete_external_ip.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
-    verbosity: 0
-  - name: "{{ aap_prefix }}-attach-external-ip"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_attach_external_ip.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
-    verbosity: 0
-  - name: "{{ aap_prefix }}-detach-external-ip"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_detach_external_ip.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
-    verbosity: 0
-  - name: "{{ aap_prefix }}-create-nat-gateway"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_create_nat_gateway.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
-    verbosity: 0
-  - name: "{{ aap_prefix }}-delete-nat-gateway"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_delete_nat_gateway.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
-    verbosity: 0
-  - name: "{{ aap_prefix }}-create-fabric-domain"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_create_server_cluster.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
-    verbosity: 0
-  - name: "{{ aap_prefix }}-delete-fabric-domain"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_delete_server_cluster.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
     verbosity: 0
   - name: "{{ aap_prefix }}-create-security-group"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
     job_type: run
-    playbook: "osac-aap/playbook_osac_create_security_group.yml"
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
     inventory: "{{ aap_prefix }}-networking-operations"
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
@@ -357,12 +242,15 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
     verbosity: 0
   - name: "{{ aap_prefix }}-delete-security-group"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
     job_type: run
-    playbook: "osac-aap/playbook_osac_delete_security_group.yml"
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
     inventory: "{{ aap_prefix }}-networking-operations"
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
@@ -370,6 +258,248 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     prevent_instance_group_fallback: true
     allow_simultaneous: true
     ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-apply-network-attachment"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-network-attachment"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-query-dhcp-lease"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-external-ip-pool"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-external-ip-pool"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-external-ip"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-external-ip"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-attach-external-ip"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-detach-external-ip"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-nat-gateway"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-nat-gateway"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-fabric-domain"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-fabric-domain"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-reserve-cluster-ingress-ip"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
+  - name: "{{ aap_prefix }}-release-cluster-ingress-ip"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    # Every networking task runs the generic playbook (network manager contract §4.3).
+    playbook: "osac-aap/playbook_osac_network_task.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
     verbosity: 0
   - name: "{{ aap_prefix }}-create-bare-metal-pool"
     project: "{{ aap_prefix }}"
@@ -471,33 +601,6 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     allow_simultaneous: false
     ask_variables_on_launch: true
     verbosity: 0
-  - name: "{{ aap_prefix }}-move-network-attachment"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_move_network_attachment.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
-    verbosity: 0
-  - name: "{{ aap_prefix }}-query-dhcp-lease"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_query_dhcp_lease.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
-    verbosity: 0
-
 controller_job_template_surveys: # noqa: var-naming[no-role-prefix]
   - name: "{{ aap_prefix }}-create-hosted-cluster-post-install"
     survey_enabled: true
@@ -755,8 +858,6 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                     key: password
               - name: LICENSE_MANIFEST_PATH
                 value: /var/secrets/config-as-code/license.zip
-              - name: NETRIS_CA_PATH
-                value: "{{ netris_ca_path }}"
             volumeMounts:
               - name: config-as-code-manifest-volume
                 mountPath: /var/secrets/config-as-code

@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 
-	ovnv1 "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/userdefinednetwork/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -55,7 +54,6 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
-// +kubebuilder:rbac:groups=k8s.ovn.org,resources=userdefinednetworks,verbs=get;list;watch;create;update;patch;delete
 
 func NewTenantReconciler(
 	mgr mcmanager.Manager,
@@ -179,11 +177,6 @@ func (r *TenantReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 		Named("tenant").
 		Watches(
 			&corev1.Namespace{},
-			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToTenant),
-			mcbuilder.WithPredicates(tenantLabelPredicate),
-		).
-		Watches(
-			&ovnv1.UserDefinedNetwork{},
 			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToTenant),
 			mcbuilder.WithPredicates(tenantLabelPredicate),
 		).

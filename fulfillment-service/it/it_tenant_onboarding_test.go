@@ -254,7 +254,8 @@ var _ = Describe("Tenant deletion with projects", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		By("Verifying the tenant is not immediately removed (blocked by project FK)")
+		By("Verifying the tenant and hub Tenant CR/Namespace are not removed while projects exist")
+		kubeClient := tool.KubeClient()
 		Consistently(
 			func(g Gomega) {
 				getResp, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
@@ -262,6 +263,19 @@ var _ = Describe("Tenant deletion with projects", func() {
 				}.Build())
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(getResp.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+
+				tenantList := &osacv1alpha1.TenantList{}
+				err = kubeClient.List(ctx, tenantList, crclient.MatchingLabels{
+					labels.TenantID: id,
+				}, crclient.InNamespace(hubNamespace))
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(tenantList.Items).To(HaveLen(1))
+				g.Expect(tenantList.Items[0].GetDeletionTimestamp().IsZero()).To(BeTrue())
+
+				ns := &corev1.Namespace{}
+				err = kubeClient.Get(ctx, crclient.ObjectKey{Name: name}, ns)
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(ns.GetDeletionTimestamp().IsZero()).To(BeTrue())
 			},
 			10*time.Second,
 			time.Second,

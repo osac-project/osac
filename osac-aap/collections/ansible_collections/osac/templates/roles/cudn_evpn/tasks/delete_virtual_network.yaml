@@ -1,0 +1,27 @@
+---
+# Kubernetes delete_virtual_network: remove the VirtualNetwork namespace (and
+# with it the baseline deny) once OSAC has deleted every child. A namespace
+# without this VirtualNetwork's owner labels is never touched.
+- name: Run cudn_evpn delete_virtual_network
+  block:
+    - name: Plan the task
+      ansible.builtin.include_tasks: _plan.yaml
+
+    - name: Read the VirtualNetwork namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ cudn_evpn.namespace }}"
+      register: _cudn_evpn_ns
+
+    - name: Delete the namespace and wait until it is gone
+      when:
+        - _cudn_evpn_ns.resources | length > 0
+        - _cudn_evpn_ns.resources[0] | osac.templates.cudn_evpn_owned('virtualnetwork', cudn_evpn.vn_id, cudn_evpn.tenant)
+      ansible.builtin.include_tasks: _delete.yaml
+      vars:
+        cudn_evpn_object: "{{ _cudn_evpn_ns.resources[0] | combine({'apiVersion': 'v1', 'kind': 'Namespace'}) }}"
+
+  rescue:
+    - name: Report the failure to OSAC
+      ansible.builtin.include_tasks: _fail.yaml

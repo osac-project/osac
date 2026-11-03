@@ -39,7 +39,7 @@ osac_render=$(helm template osac charts/osac --namespace osac \
   --set-string global.osacDeploymentId=osac/osac)
 if ! awk '/name: OSAC_ENABLE_NETWORKING_PROVISIONING/ { getline; if ($0 ~ /value: "true"/) found = 1 } END { exit !found }' \
   <<<"$osac_render"; then
-  echo "dev-full must enable Subnet AAP provisioning so every tenant gets a target namespace" >&2
+  echo "Kind dev-full must enable provider networking so AAP creates each tenant's target namespace" >&2
   exit 1
 fi
 if awk 'BEGIN { RS = "---" } /kind: Deployment/ && /name: osac-ui/ { found = 1 } END { exit found ? 0 : 1 }' \

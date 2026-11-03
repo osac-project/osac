@@ -185,6 +185,7 @@ spec:
         - --grpc-listener-tls-crt=/etc/fulfillment-controller/tls/tls.crt
         - --grpc-listener-tls-key=/etc/fulfillment-controller/tls/tls.key
         - --metrics-listener-address=0.0.0.0:8002
+        {{- include "fulfillment-service.networkingArgs" . | nindent 8 }}
         - --vault-endpoint={{ $vaultEndpoint }}
         - --vault-namespace={{ $vaultNamespace }}
         - --vault-kv-mount-path={{ $vaultKVMountPath }}

@@ -168,4 +168,38 @@ describe('SecurityGroupRuleModal', () => {
     });
     expect(mutateAsync).not.toHaveBeenCalled();
   });
+
+  it('does not offer ICMP for a new rule', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <SecurityGroupRuleModal onClose={vi.fn()} securityGroup={securityGroup} direction="egress" />,
+    );
+
+    await user.click(screen.getByLabelText(/^Protocol/i));
+
+    expect(screen.getByRole('option', { name: 'All' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'ICMP' })).not.toBeInTheDocument();
+  });
+
+  it('keeps ICMP when editing a stored ICMP rule', () => {
+    const withIcmp = {
+      ...securityGroup,
+      spec: {
+        ...securityGroup.spec,
+        ingress: [{ protocol: Protocol.ICMP, ipv4Cidr: '10.0.0.0/8' }],
+      },
+    } as unknown as SecurityGroup;
+
+    render(
+      <SecurityGroupRuleModal
+        onClose={vi.fn()}
+        securityGroup={withIcmp}
+        direction="ingress"
+        ruleIndex={0}
+      />,
+    );
+
+    expect(screen.getByLabelText(/Protocol/i)).toHaveTextContent('ICMP');
+  });
 });

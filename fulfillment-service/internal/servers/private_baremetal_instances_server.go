@@ -352,7 +352,7 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	hubReferences := make([]networkingHubReference, 0, len(candidate.GetSpec().GetNetworkAttachments())*2)
 	for i, attachment := range candidate.GetSpec().GetNetworkAttachments() {
 		source := fmt.Sprintf(" in spec.network_attachments[%d]", i)
-		subnet, resolveErr := resolveAndCanonicalizeLockedReference(ctx, s.subnetsDao, candidate.GetMetadata(), attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument)
+		subnet, resolveErr := resolveNetworkingReference(ctx, s.subnetsDao, candidate.GetMetadata(), attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument, true)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
@@ -365,7 +365,7 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 			hubID:        subnet.GetStatus().GetHub(),
 		})
 		for _, ref := range attachment.GetSecurityGroups() {
-			group, resolveErr := resolveAndCanonicalizeLockedReference(ctx, s.securityGroupsDao, candidate.GetMetadata(), ref, "security group", grpccodes.InvalidArgument)
+			group, resolveErr := resolveNetworkingReference(ctx, s.securityGroupsDao, candidate.GetMetadata(), ref, "security group", grpccodes.InvalidArgument, true)
 			if resolveErr != nil {
 				return nil, resolveErr
 			}
@@ -377,9 +377,6 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 				id:           group.GetId(),
 				hubID:        group.GetStatus().GetHub(),
 			})
-		}
-		if err = validateBareMetalSubnetFabricManager(ctx, subnet, fmt.Sprintf("network_attachments[%d]", i), s.virtualNetworksDao, s.networkClassesDao, s.logger); err != nil {
-			return
 		}
 	}
 	if len(hubReferences) > 0 {
@@ -637,8 +634,8 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 		attachment.SetSubnet(privatev1.SubnetLocalReference_builder{Id: defaultSubnet.GetId()}.Build())
 		resolvedSubnet = defaultSubnet
 	} else if securityGroupsMissing(attachment) {
-		resolvedSubnet, err = resolveAndCanonicalizeReference(ctx, s.subnetsDao, bmi.GetMetadata(),
-			attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument)
+		resolvedSubnet, err = resolveNetworkingReference(ctx, s.subnetsDao, bmi.GetMetadata(),
+			attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument, false)
 		if err != nil {
 			return err
 		}
@@ -1049,55 +1046,10 @@ func validateBareMetalAttachmentsForInstanceType(
 	return nil
 }
 
-// validateBareMetalSubnetFabricManager checks that the resolved subnet's NetworkClass
-// defines the fabric manager required to provision bare metal networking.
-// BareMetalInstance provisioning is a fabric-level operation with no k8sManager fallback.
-// Missing downstream dependencies are ignored for compatibility with existing resources and fixtures.
-func validateBareMetalSubnetFabricManager(
-	ctx context.Context,
-	subnet *privatev1.Subnet,
-	source string,
-	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork],
-	networkClassesDao *dao.GenericDAO[*privatev1.NetworkClass],
-	logger *slog.Logger,
-) error {
-	// The fabric manager is configured on the NetworkClass reached through the subnet's VirtualNetwork.
-	virtualNetworkKey := refKey(subnet.GetSpec().GetVirtualNetwork())
-	vnResp, err := virtualNetworksDao.Get().SetId(virtualNetworkKey).Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return nil
-		}
-		logger.ErrorContext(ctx, "Failed to lookup virtual network for fabric manager validation",
-			slog.String("virtual_network_id", virtualNetworkKey), slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network_attachments")
-	}
-
-	networkClassKey := refKey(vnResp.GetObject().GetSpec().GetNetworkClass())
-	ncResp, err := networkClassesDao.Get().SetId(networkClassKey).Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return nil
-		}
-		logger.ErrorContext(ctx, "Failed to lookup network class for fabric manager validation",
-			slog.String("network_class_id", networkClassKey), slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network_attachments")
-	}
-
-	if !ncResp.GetObject().HasFabricManager() {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"%s: subnet '%s' uses NetworkClass '%s' which has no 'fabric_manager'; "+
-				"bare metal instances require a fabric manager", source, subnet.GetId(), networkClassKey)
-	}
-	return nil
-}
-
 func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 	ctx context.Context, bmi *privatev1.BareMetalInstance,
 ) error {
-	pool, err := SelectExternalIPPool(ctx, s.externalIPPoolDao, privatev1.IPFamily_IP_FAMILY_IPV4)
+	pool, err := SelectExternalIPPool(ctx, s.logger, s.externalIPPoolDao, 1)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
 	}

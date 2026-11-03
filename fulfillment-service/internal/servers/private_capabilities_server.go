@@ -28,6 +28,7 @@ type PrivateCapabilitiesServerBuilder struct {
 	logger                   *slog.Logger
 	authnTrustedTokenIssuers []string
 	serviceFlags             *services.Flags
+	provisioningEnabled      bool
 }
 
 var _ privatev1.CapabilitiesServer = (*PrivateCapabilitiesServer)(nil)
@@ -39,6 +40,7 @@ type PrivateCapabilitiesServer struct {
 	logger                   *slog.Logger
 	authnTrustedTokenIssuers []string
 	serviceFlags             *services.Flags
+	provisioningEnabled      bool
 }
 
 // NewPrivateCapabilitiesServer creates a builder that can then be used to configure and create a new private
@@ -56,6 +58,13 @@ func (b *PrivateCapabilitiesServerBuilder) SetLogger(value *slog.Logger) *Privat
 // SetServiceFlags sets the services advertised by the server.
 func (b *PrivateCapabilitiesServerBuilder) SetServiceFlags(value *services.Flags) *PrivateCapabilitiesServerBuilder {
 	b.serviceFlags = value
+	return b
+}
+
+// SetNetworkingProvisioningEnabled sets the value of global.networking.provisioningEnabled that the startup checks
+// compared with the value stored at the first start. The operator and the bare metal fulfillment operator read it.
+func (b *PrivateCapabilitiesServerBuilder) SetNetworkingProvisioningEnabled(value bool) *PrivateCapabilitiesServerBuilder {
+	b.provisioningEnabled = value
 	return b
 }
 
@@ -82,6 +91,7 @@ func (b *PrivateCapabilitiesServerBuilder) Build() (result *PrivateCapabilitiesS
 		logger:                   b.logger,
 		authnTrustedTokenIssuers: authnTrustedTokenIssuers,
 		serviceFlags:             b.serviceFlags,
+		provisioningEnabled:      b.provisioningEnabled,
 	}
 	return
 }
@@ -93,7 +103,8 @@ func (s *PrivateCapabilitiesServer) Get(ctx context.Context,
 		Authn: &privatev1.AuthnCapabilities{
 			TrustedTokenIssuers: s.authnTrustedTokenIssuers,
 		},
-		EnabledServices: enabledPrivateServiceTiers(s.serviceFlags),
+		EnabledServices:               enabledPrivateServiceTiers(s.serviceFlags),
+		NetworkingProvisioningEnabled: s.provisioningEnabled,
 	}.Build()
 	return response, nil
 }

@@ -170,7 +170,11 @@ jobs:
 
     - name: Test networking values
       working-directory: osac-installer
-      run: ./scripts/test-networking-values.sh
+      run: uv run --project .. python scripts/test-networking-values.py
+
+    - name: Test the NetworkClass step
+      working-directory: osac-installer
+      run: python3 scripts/test-network-class-step.py
 
     - name: Test MCE rendering
       working-directory: osac-installer

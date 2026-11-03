@@ -53,6 +53,8 @@ var _ = Describe("Tenancy logic", func() {
 		}
 		createTenant("my-tenant")
 		createTenant("your-tenant")
+		seedReadyDefaultNetworking("my-tenant", 0)
+		seedReadyDefaultNetworking("your-tenant", 0)
 
 		// Create a default cluster version for version resolution:
 		seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
@@ -73,7 +75,15 @@ var _ = Describe("Tenancy logic", func() {
 			SetLogger(logger).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
 		_, err = instanceTypesDao.Create().SetObject(privatev1.BareMetalInstanceType_builder{
-			Id: "worker-bmit", Metadata: privatev1.Metadata_builder{Name: "worker-bmit", Tenant: auth.SharedTenant}.Build(),
+			Id:       "worker-bmit",
+			Metadata: privatev1.Metadata_builder{Name: "worker-bmit", Tenant: auth.SharedTenant}.Build(),
+			Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+				Hardware: privatev1.BareMetalHardwareSpec_builder{
+					NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+						privatev1.BareMetalNetworkPortSpec_builder{Name: "data-0", Role: "fabric"}.Build(),
+					},
+				}.Build(),
+			}.Build(),
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 	})

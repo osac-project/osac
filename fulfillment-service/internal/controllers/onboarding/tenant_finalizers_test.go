@@ -106,11 +106,11 @@ func TestTenantCleanupBarriers(t *testing.T) {
 				projects := NewMockProjectsClient(ctrl)
 				hubs := controllers.NewMockHubsClient(ctrl)
 				r := &function{hubsClient: hubs, projectsClient: projects}
-				hubs.EXPECT().List(gomock.Any(), gomock.Any()).Return(privatev1.HubsListResponse_builder{}.Build(), nil)
 				if failure {
 					projects.EXPECT().List(gomock.Any(), gomock.Any()).Return(nil, errors.New("cleanup failed"))
 				} else {
 					projects.EXPECT().List(gomock.Any(), gomock.Any()).Return(privatev1.ProjectsListResponse_builder{}.Build(), nil)
+					hubs.EXPECT().List(gomock.Any(), gomock.Any()).Return(privatev1.HubsListResponse_builder{}.Build(), nil)
 				}
 
 				list := []string{finalizers.TenantOnboarding, "unrelated"}

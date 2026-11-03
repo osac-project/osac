@@ -19,16 +19,20 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	clocktesting "k8s.io/utils/clock/testing"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -36,20 +40,12 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const testTemplateParams = `{"key": "value"}`
-
-func expectVMIStatusInTargetCache(ctx context.Context, targetClient client.Client, expected *kubevirtv1.VirtualMachineInstance) {
-	Eventually(func(g Gomega) {
-		observed := &kubevirtv1.VirtualMachineInstance{}
-		key := types.NamespacedName{Namespace: expected.Namespace, Name: expected.Name}
-		g.Expect(targetClient.Get(ctx, key, observed)).To(Succeed())
-		g.Expect(observed.Status.Interfaces).To(Equal(expected.Status.Interfaces))
-	}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
-}
 
 // createReadyTenant creates a Tenant with the given name in the namespace and sets status to Ready.
 // If the tenant already exists, it is updated to Ready.
@@ -69,6 +65,36 @@ func createReadyTenant(ctx context.Context, namespace, name string) {
 	tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
 	tenant.Status.Namespace = namespace
 	Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+}
+
+// testTenantCondition builds a Tenant status condition fixture.
+func testTenantCondition(condType osacv1alpha1.TenantConditionType, condStatus metav1.ConditionStatus, reason string) metav1.Condition {
+	return metav1.Condition{Type: string(condType), Status: condStatus, Reason: reason, Message: reason}
+}
+
+// testTierDefinitions builds resolved tier definitions served by provider.
+func testTierDefinitions(provider string, names ...string) []provisioning.TierDefinition {
+	defs := make([]provisioning.TierDefinition, 0, len(names))
+	for _, name := range names {
+		defs = append(defs, provisioning.TierDefinition{Name: name, Provider: provider})
+	}
+	return defs
+}
+
+// storageReadinessCase is one checkStorageReadiness decision: the Tenant
+// storage status, the requested tiers, and what catalog resolution returned
+// on this provisioning pass. A tier listed in neither osacTiers nor cspTiers
+// with skipped set was dropped by a backend or credential lookup failure.
+type storageReadinessCase struct {
+	conditions []metav1.Condition
+	classes    []osacv1alpha1.ResolvedStorageClass
+	requested  []string
+	osacTiers  []string
+	cspTiers   []string
+	skipped    bool
+	catalogErr bool
+	wantReady  bool
+	wantMsg    []string
 }
 
 // deleteTenantInNamespace removes a Tenant by name in the given namespace (clears finalizers first).
@@ -126,6 +152,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 					},
 					Spec: newTestComputeInstanceSpec("test_template"),
 				}
+				resource.Spec.DiskVolumeIDs = map[string]string{
+					"boot":   "volume-boot",
+					"disk-1": "volume-data-1",
+				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 
@@ -154,7 +184,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			By("Reconciling the deleted resource")
 			Eventually(func() error {
-				controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+				controllerReconciler := newTestCIReconciler("", namespaceName, "", 100*time.Millisecond)
 				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 					NamespacedName: typeNamespacedName,
 				}})
@@ -168,7 +198,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 		})
 		It("should successfully reconcile the resource", func() {
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := newTestCIReconciler("", namespaceName, "", 100*time.Millisecond)
 
 			// Reconcile inside Eventually: the first call may requeue if
 			// the envtest cache has not yet propagated the Tenant status
@@ -184,80 +214,14 @@ var _ = Describe("ComputeInstance Controller", func() {
 				g.Expect(vm.Status.TenantReference).NotTo(BeNil())
 				g.Expect(vm.Status.TenantReference.Name).To(Equal(tenantName))
 				g.Expect(vm.Status.TenantReference.Namespace).To(Equal(namespaceName))
+				g.Expect(vm.Spec.DiskVolumeIDs).To(Equal(map[string]string{
+					"boot":   "volume-boot",
+					"disk-1": "volume-data-1",
+				}))
 			}, 10*time.Second, 200*time.Millisecond).Should(Succeed())
 
 			By("Verifying the finalizer is set on the ComputeInstance resource")
 			Expect(vm.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
-		})
-	})
-
-	Context("deletion status persistence", func() {
-		It("persists terminal job status before removing the base finalizer", func() {
-			ctx := context.Background()
-			instance := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:       "test-deletion-status-order",
-					Namespace:  "default",
-					Finalizers: []string{osacComputeInstanceFinalizer, osacComputeInstanceFeedbackFinalizer},
-				},
-				Spec: newTestComputeInstanceSpec("test_template"),
-			}
-			key := client.ObjectKeyFromObject(instance)
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
-			DeferCleanup(func() {
-				remaining := &osacv1alpha1.ComputeInstance{}
-				if k8sClient.Get(ctx, key, remaining) == nil {
-					remaining.Finalizers = nil
-					Expect(k8sClient.Update(ctx, remaining)).To(Succeed())
-				}
-			})
-
-			instance.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
-			instance.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
-				JobID:                  "deprovision-job",
-				Type:                   osacv1alpha1.JobTypeDeprovision,
-				Timestamp:              metav1.Now(),
-				State:                  osacv1alpha1.JobStateRunning,
-				BlockDeletionOnFailure: true,
-			}}
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
-			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
-
-			reconciler := NewComputeInstanceReconciler(
-				testMcManager, "", "", "", &mockProvisioningProvider{name: "aap"},
-				100*time.Millisecond, 0, mcmanager.LocalCluster,
-			)
-			Eventually(func(g Gomega) {
-				cached := &osacv1alpha1.ComputeInstance{}
-				g.Expect(reconciler.Get(ctx, key, cached)).To(Succeed())
-				g.Expect(cached.DeletionTimestamp.IsZero()).To(BeFalse())
-				g.Expect(cached.Status.ProvisioningJobs).To(HaveLen(1))
-				g.Expect(cached.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateRunning))
-			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
-
-			request := mcreconcile.Request{Request: reconcile.Request{NamespacedName: key}}
-			result, err := reconciler.Reconcile(ctx, request)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(100 * time.Millisecond))
-
-			persisted := &osacv1alpha1.ComputeInstance{}
-			Expect(k8sClient.Get(ctx, key, persisted)).To(Succeed())
-			Expect(persisted.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
-			Expect(persisted.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseDeleting))
-			Expect(persisted.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateSucceeded))
-
-			Eventually(func(g Gomega) {
-				cached := &osacv1alpha1.ComputeInstance{}
-				g.Expect(reconciler.Get(ctx, key, cached)).To(Succeed())
-				g.Expect(cached.Status.ProvisioningJobs[0].State).To(Equal(osacv1alpha1.JobStateSucceeded))
-			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
-
-			result, err = reconciler.Reconcile(ctx, request)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(BeZero())
-			Expect(k8sClient.Get(ctx, key, persisted)).To(Succeed())
-			Expect(persisted.Finalizers).NotTo(ContainElement(osacComputeInstanceFinalizer))
-			Expect(persisted.Finalizers).To(ContainElement(osacComputeInstanceFeedbackFinalizer))
 		})
 	})
 
@@ -285,19 +249,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			key := types.NamespacedName{Name: managedThenUnmanaged.Name, Namespace: namespaceName}
 
-			mockProv := &mockProvisioningProvider{
-				name: "aap",
-				triggerDeprovisionFunc: func(ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
-					return &provisioning.DeprovisionResult{
-						Action: provisioning.DeprovisionSkipped,
-					}, nil
-				},
-			}
-			controllerReconciler := NewComputeInstanceReconciler(
-				testMcManager, "", "", namespaceName,
-				mockProv,
-				100*time.Millisecond, 0, mcmanager.LocalCluster,
-			)
+			controllerReconciler := newTestCIReconciler("", "", namespaceName, 100*time.Millisecond)
 
 			Expect(k8sClient.Delete(ctx, managedThenUnmanaged)).To(Succeed())
 
@@ -481,6 +433,31 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(instance.Status.RunningConfigSince.Time).To(Equal(before.Time))
 		})
 
+		It("RestartedResizeStampsTheRunningTransitionNotNow", func() {
+			// A resize that needs a restart: the pending restart clears the
+			// recorded running config, so the record after the restart is a
+			// first record. The VM returned to Running 15 s ago but the job
+			// completion is only noticed now: the new type must date from the
+			// Running transition, or the old type bills the gap.
+			instance := steadyState(runningInstance(metav1.ConditionTrue, true))
+			recordRunningConfig(instance)
+			Expect(instance.Status.RunningConfigVersion).To(BeEmpty())
+			Expect(instance.Status.RunningConfigSince).To(BeNil())
+
+			runningAt := time.Now().Add(-15 * time.Second).UTC()
+			runningTime := metav1.NewTime(runningAt)
+			instance.Status.PhaseTransitionTime = &runningTime
+			instance.Labels[osacComputeInstanceTypeNameLabel] = "standard-16-64"
+			instance.SetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired,
+				metav1.ConditionFalse, "", osacv1alpha1.ReasonAsExpected)
+
+			recordRunningConfig(instance)
+
+			Expect(instance.Status.RunningInstanceTypeName).To(Equal("standard-16-64"))
+			Expect(instance.Status.RunningConfigSince).ToNot(BeNil())
+			Expect(instance.Status.RunningConfigSince.Time).To(BeTemporally("~", runningAt, time.Second))
+		})
+
 		It("NameOnlyResizeDoesNotBackdateTheNewType", func() {
 			// A name-only resize: two instance type names resolve to identical
 			// CPU, memory, and GPU specs, so the config hash is unchanged and
@@ -521,7 +498,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 		ctx := context.Background()
 
 		BeforeEach(func() {
-			reconciler = NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
+			reconciler = newTestCIReconciler("", "", "", 0)
 		})
 
 		It("should compute and store a version of the spec", func() {
@@ -660,898 +637,6 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
-	Context("getDefaultVMIIPAddress", func() {
-		var reconciler *ComputeInstanceReconciler
-		ctx := context.Background()
-
-		BeforeEach(func() {
-			reconciler = NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
-		})
-
-		It("returns the default network IP even when another interface appears first", func() {
-			const wantIP = "10.0.0.42"
-			vmi := &kubevirtv1.VirtualMachineInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-vmi-ip",
-					Namespace: "default",
-				},
-				Status: kubevirtv1.VirtualMachineInstanceStatus{
-					Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{
-						{IP: "10.0.0.43", Name: "ignored"},
-						{IP: wantIP, Name: "default"},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, vmi)).To(Succeed())
-			DeferCleanup(func() {
-				_ = k8sClient.Delete(ctx, vmi)
-			})
-
-			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
-			Expect(err).NotTo(HaveOccurred())
-			expectVMIStatusInTargetCache(ctx, targetClient, vmi)
-
-			ip := reconciler.getDefaultVMIIPAddress(ctx, targetClient, vmi.Namespace, vmi.Name)
-			Expect(ip).To(Equal(wantIP))
-		})
-
-		It("returns no IP when the default network has no address", func() {
-			vmi := &kubevirtv1.VirtualMachineInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-vmi-ip-without-default",
-					Namespace: "default",
-				},
-				Status: kubevirtv1.VirtualMachineInstanceStatus{
-					Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{
-						{IP: "192.0.2.7", Name: "unrelated"},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, vmi)).To(Succeed())
-			DeferCleanup(func() {
-				_ = k8sClient.Delete(ctx, vmi)
-			})
-
-			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
-			Expect(err).NotTo(HaveOccurred())
-			expectVMIStatusInTargetCache(ctx, targetClient, vmi)
-
-			ip := reconciler.getDefaultVMIIPAddress(ctx, targetClient, vmi.Namespace, vmi.Name)
-			Expect(ip).To(BeEmpty())
-		})
-	})
-
-	Context("handleKubeVirtVM network attachment status", func() {
-		ctx := context.Background()
-
-		It("reports the default interface IP with the referenced Subnet ID", func() {
-			const (
-				subnetName = "ci-status-subnet"
-				subnetID   = "subnet-id-123"
-				targetNS   = subnetName
-				vmiName    = "ci-status-vmi"
-				wantIP     = "10.0.0.42"
-			)
-			subnet := &osacv1alpha1.Subnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      subnetName,
-					Namespace: "default",
-					Labels:    map[string]string{osacSubnetIDLabel: subnetID},
-				},
-				Spec: osacv1alpha1.SubnetSpec{
-					VirtualNetwork: "ci-status-vnet",
-					IPv4CIDR:       "10.0.0.0/24",
-				},
-			}
-			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, subnet) })
-
-			targetNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
-			Expect(k8sClient.Create(ctx, targetNamespace)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, targetNamespace) })
-
-			reconciler := NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
-			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
-			Expect(err).NotTo(HaveOccurred())
-
-			vmi := &kubevirtv1.VirtualMachineInstance{
-				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
-				Status: kubevirtv1.VirtualMachineInstanceStatus{
-					Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{
-						{IP: "192.0.2.7", Name: "unrelated"},
-						{IP: wantIP, Name: "default"},
-					},
-				},
-			}
-			Expect(targetClient.Create(ctx, vmi)).To(Succeed())
-			DeferCleanup(func() { _ = targetClient.Delete(ctx, vmi) })
-			expectVMIStatusInTargetCache(ctx, targetClient, vmi)
-
-			instance := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{Name: "ci-status-test", Namespace: "default"},
-				Spec: osacv1alpha1.ComputeInstanceSpec{
-					NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetName}},
-				},
-			}
-			vm := &kubevirtv1.VirtualMachine{
-				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
-				Status: kubevirtv1.VirtualMachineStatus{
-					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
-					Conditions: []kubevirtv1.VirtualMachineCondition{{
-						Type: kubevirtv1.VirtualMachineReady, Status: corev1.ConditionTrue,
-					}},
-				},
-			}
-
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, vm)).To(Succeed())
-			Expect(instance.Status.IPAddress).To(Equal(wantIP))
-			Expect(instance.Status.ComputeNetworkAttachmentStatuses).To(Equal([]osacv1alpha1.ComputeNetworkAttachmentStatus{{
-				SubnetRef: subnetID,
-				IPAddress: wantIP,
-			}}))
-		})
-
-		It("clears attachment status when the default interface IP is outside the Subnet CIDR", func() {
-			const (
-				subnetName = "ci-status-outside-subnet"
-				targetNS   = subnetName
-				vmiName    = "ci-status-outside-vmi"
-			)
-			subnet := &osacv1alpha1.Subnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      subnetName,
-					Namespace: "default",
-					Labels:    map[string]string{osacSubnetIDLabel: "subnet-id-outside"},
-				},
-				Spec: osacv1alpha1.SubnetSpec{
-					VirtualNetwork: "ci-status-vnet",
-					IPv4CIDR:       "10.0.3.0/24",
-				},
-			}
-			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, subnet) })
-
-			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
-			Expect(k8sClient.Create(ctx, namespace)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, namespace) })
-
-			reconciler := NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
-			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
-			Expect(err).NotTo(HaveOccurred())
-			vmi := &kubevirtv1.VirtualMachineInstance{
-				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
-				Status: kubevirtv1.VirtualMachineInstanceStatus{
-					Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{{IP: "192.0.2.42", Name: "default"}},
-				},
-			}
-			Expect(targetClient.Create(ctx, vmi)).To(Succeed())
-			DeferCleanup(func() { _ = targetClient.Delete(ctx, vmi) })
-			expectVMIStatusInTargetCache(ctx, targetClient, vmi)
-
-			instance := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{Name: "ci-status-outside-test", Namespace: "default"},
-				Spec:       osacv1alpha1.ComputeInstanceSpec{NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetName}}},
-				Status: osacv1alpha1.ComputeInstanceStatus{
-					IPAddress: "10.0.3.42",
-					ComputeNetworkAttachmentStatuses: []osacv1alpha1.ComputeNetworkAttachmentStatus{{
-						SubnetRef: "subnet-id-outside",
-						IPAddress: "10.0.3.42",
-					}},
-				},
-			}
-			vm := &kubevirtv1.VirtualMachine{
-				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
-				Status: kubevirtv1.VirtualMachineStatus{
-					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
-					Conditions: []kubevirtv1.VirtualMachineCondition{{
-						Type: kubevirtv1.VirtualMachineReady, Status: corev1.ConditionTrue,
-					}},
-				},
-			}
-
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, vm)).To(Succeed())
-			Expect(instance.Status.IPAddress).To(BeEmpty())
-			Expect(instance.Status.ComputeNetworkAttachmentStatuses).To(BeEmpty())
-		})
-
-		It("does not report an attachment status when the Subnet ID is missing", func() {
-			const (
-				subnetName = "ci-status-missing-id-subnet"
-				targetNS   = subnetName
-				vmiName    = "ci-status-missing-id-vmi"
-			)
-			subnet := &osacv1alpha1.Subnet{
-				ObjectMeta: metav1.ObjectMeta{Name: subnetName, Namespace: "default"},
-				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: "ci-status-vnet", IPv4CIDR: "10.0.2.0/24"},
-			}
-			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, subnet) })
-
-			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
-			Expect(k8sClient.Create(ctx, namespace)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, namespace) })
-
-			reconciler := NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
-			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
-			Expect(err).NotTo(HaveOccurred())
-			vmi := &kubevirtv1.VirtualMachineInstance{
-				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
-				Status: kubevirtv1.VirtualMachineInstanceStatus{
-					Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{{IP: "10.0.2.42", Name: "default"}},
-				},
-			}
-			Expect(targetClient.Create(ctx, vmi)).To(Succeed())
-			DeferCleanup(func() { _ = targetClient.Delete(ctx, vmi) })
-			expectVMIStatusInTargetCache(ctx, targetClient, vmi)
-
-			instance := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{Name: "ci-status-missing-id-test", Namespace: "default"},
-				Spec:       osacv1alpha1.ComputeInstanceSpec{NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetName}}},
-			}
-			vm := &kubevirtv1.VirtualMachine{
-				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
-				Status: kubevirtv1.VirtualMachineStatus{
-					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
-					Conditions:      []kubevirtv1.VirtualMachineCondition{{Type: kubevirtv1.VirtualMachineReady, Status: corev1.ConditionTrue}},
-				},
-			}
-
-			err = reconciler.handleKubeVirtVM(ctx, targetClient, instance, vm)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(osacSubnetIDLabel))
-			Expect(instance.Status.ComputeNetworkAttachmentStatuses).To(BeEmpty())
-		})
-
-		It("does not report an attachment status without a default interface IP", func() {
-			const (
-				subnetName = "ci-status-empty-subnet"
-				targetNS   = subnetName
-				vmiName    = "ci-status-empty-vmi"
-			)
-			subnet := &osacv1alpha1.Subnet{
-				ObjectMeta: metav1.ObjectMeta{Name: subnetName, Namespace: "default", Labels: map[string]string{osacSubnetIDLabel: "subnet-id-empty"}},
-				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: "ci-status-vnet", IPv4CIDR: "10.0.1.0/24"},
-			}
-			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, subnet) })
-
-			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
-			Expect(k8sClient.Create(ctx, namespace)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, namespace) })
-
-			reconciler := NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
-			targetClient, err := getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
-			Expect(err).NotTo(HaveOccurred())
-			vmi := &kubevirtv1.VirtualMachineInstance{
-				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
-				Status:     kubevirtv1.VirtualMachineInstanceStatus{Interfaces: []kubevirtv1.VirtualMachineInstanceNetworkInterface{{IP: "192.0.2.8", Name: "unrelated"}}},
-			}
-			Expect(targetClient.Create(ctx, vmi)).To(Succeed())
-			DeferCleanup(func() { _ = targetClient.Delete(ctx, vmi) })
-			expectVMIStatusInTargetCache(ctx, targetClient, vmi)
-
-			instance := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{Name: "ci-status-empty-test", Namespace: "default"},
-				Spec:       osacv1alpha1.ComputeInstanceSpec{NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetName}}},
-				Status: osacv1alpha1.ComputeInstanceStatus{
-					ComputeNetworkAttachmentStatuses: []osacv1alpha1.ComputeNetworkAttachmentStatus{{
-						SubnetRef: "stale-subnet-id",
-						IPAddress: "192.0.2.8",
-					}},
-				},
-			}
-			vm := &kubevirtv1.VirtualMachine{
-				ObjectMeta: metav1.ObjectMeta{Name: vmiName, Namespace: targetNS},
-				Status: kubevirtv1.VirtualMachineStatus{
-					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
-					Conditions:      []kubevirtv1.VirtualMachineCondition{{Type: kubevirtv1.VirtualMachineReady, Status: corev1.ConditionTrue}},
-				},
-			}
-
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, vm)).To(Succeed())
-			Expect(instance.Status.IPAddress).To(BeEmpty())
-			Expect(instance.Status.ComputeNetworkAttachmentStatuses).To(BeEmpty())
-		})
-	})
-
-	Context("Helper functions", func() {
-		Describe("isCanonicalIPv4AddressInSubnet", func() {
-			It("accepts only canonical IPv4 addresses contained by an IPv4 subnet", func() {
-				Expect(isCanonicalIPv4AddressInSubnet("10.0.3.42", "10.0.3.0/24")).To(BeTrue())
-				Expect(isCanonicalIPv4AddressInSubnet("192.0.2.42", "10.0.3.0/24")).To(BeFalse())
-				Expect(isCanonicalIPv4AddressInSubnet("2001:db8::42", "10.0.3.0/24")).To(BeFalse())
-				Expect(isCanonicalIPv4AddressInSubnet("010.0.3.42", "10.0.3.0/24")).To(BeFalse())
-				Expect(isCanonicalIPv4AddressInSubnet("10.0.3.42", "invalid-cidr")).To(BeFalse())
-			})
-		})
-
-		Describe("computeInstanceTargetNamespace", func() {
-			It("uses the tenant name when status.namespace is unset", func() {
-				tenant := &osacv1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}
-				Expect(computeInstanceTargetNamespace(tenant, "")).To(Equal("tenant"))
-			})
-
-			It("retains an existing tenant namespace", func() {
-				tenant := &osacv1alpha1.Tenant{Status: osacv1alpha1.TenantStatus{Namespace: "existing"}}
-				Expect(computeInstanceTargetNamespace(tenant, "")).To(Equal("existing"))
-			})
-
-			It("prefers the subnet namespace", func() {
-				tenant := &osacv1alpha1.Tenant{Status: osacv1alpha1.TenantStatus{Namespace: "existing"}}
-				Expect(computeInstanceTargetNamespace(tenant, "subnet")).To(Equal("subnet"))
-			})
-		})
-
-		Describe("provisioning.FindJobByID", func() {
-			It("should return nil when jobs slice is empty", func() {
-				jobs := []osacv1alpha1.JobStatus{}
-				result := provisioning.FindJobByID(jobs, "job-123")
-				Expect(result).To(BeNil())
-			})
-
-			It("should return nil when job ID is not found", func() {
-				jobs := []osacv1alpha1.JobStatus{
-					{
-						JobID:     "job-1",
-						Type:      osacv1alpha1.JobTypeProvision,
-						Timestamp: metav1.NewTime(time.Now().UTC()),
-						State:     osacv1alpha1.JobStatePending,
-					},
-					{
-						JobID:     "job-2",
-						Type:      osacv1alpha1.JobTypeDeprovision,
-						Timestamp: metav1.NewTime(time.Now().UTC()),
-						State:     osacv1alpha1.JobStateRunning,
-					},
-				}
-				result := provisioning.FindJobByID(jobs, "job-999")
-				Expect(result).To(BeNil())
-			})
-
-			It("should return pointer to job when found", func() {
-				jobs := []osacv1alpha1.JobStatus{
-					{
-						JobID:     "job-1",
-						Type:      osacv1alpha1.JobTypeProvision,
-						Timestamp: metav1.NewTime(time.Now().UTC()),
-						State:     osacv1alpha1.JobStatePending,
-						Message:   "First job",
-					},
-					{
-						JobID:     "job-2",
-						Type:      osacv1alpha1.JobTypeDeprovision,
-						Timestamp: metav1.NewTime(time.Now().UTC()),
-						State:     osacv1alpha1.JobStateRunning,
-						Message:   "Second job",
-					},
-				}
-				result := provisioning.FindJobByID(jobs, "job-2")
-				Expect(result).NotTo(BeNil())
-				Expect(result.JobID).To(Equal("job-2"))
-				Expect(result.State).To(Equal(osacv1alpha1.JobStateRunning))
-				Expect(result.Message).To(Equal("Second job"))
-			})
-		})
-
-		Describe("appendJob", func() {
-			var reconciler *ComputeInstanceReconciler
-
-			BeforeEach(func() {
-				reconciler = NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 3, mcmanager.LocalCluster)
-			})
-
-			It("should append job to empty slice", func() {
-				jobs := []osacv1alpha1.JobStatus{}
-				newJob := osacv1alpha1.JobStatus{
-					JobID:     "job-1",
-					Type:      osacv1alpha1.JobTypeProvision,
-					Timestamp: metav1.NewTime(time.Now().UTC()),
-					State:     osacv1alpha1.JobStatePending,
-				}
-				result := provisioning.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
-				Expect(result).To(HaveLen(1))
-				Expect(result[0].JobID).To(Equal("job-1"))
-			})
-
-			It("should append job when under max history", func() {
-				jobs := []osacv1alpha1.JobStatus{
-					{
-						JobID:     "job-1",
-						Type:      osacv1alpha1.JobTypeProvision,
-						Timestamp: metav1.NewTime(time.Now().UTC()),
-						State:     osacv1alpha1.JobStatePending,
-					},
-				}
-				newJob := osacv1alpha1.JobStatus{
-					JobID:     "job-2",
-					Type:      osacv1alpha1.JobTypeDeprovision,
-					Timestamp: metav1.NewTime(time.Now().UTC()),
-					State:     osacv1alpha1.JobStateRunning,
-				}
-				result := provisioning.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
-				Expect(result).To(HaveLen(2))
-				Expect(result[0].JobID).To(Equal("job-1"))
-				Expect(result[1].JobID).To(Equal("job-2"))
-			})
-
-			It("should trim old jobs when exceeding max history", func() {
-				baseTime := time.Now().UTC()
-				jobs := []osacv1alpha1.JobStatus{
-					{
-						JobID:     "job-1",
-						Type:      osacv1alpha1.JobTypeProvision,
-						Timestamp: metav1.NewTime(baseTime),
-						State:     osacv1alpha1.JobStatePending,
-					},
-					{
-						JobID:     "job-2",
-						Type:      osacv1alpha1.JobTypeProvision,
-						Timestamp: metav1.NewTime(baseTime.Add(time.Second)),
-						State:     osacv1alpha1.JobStateRunning,
-					},
-					{
-						JobID:     "job-3",
-						Type:      osacv1alpha1.JobTypeDeprovision,
-						Timestamp: metav1.NewTime(baseTime.Add(2 * time.Second)),
-						State:     osacv1alpha1.JobStateSucceeded,
-					},
-				}
-				newJob := osacv1alpha1.JobStatus{
-					JobID:     "job-4",
-					Type:      osacv1alpha1.JobTypeProvision,
-					Timestamp: metav1.NewTime(baseTime.Add(3 * time.Second)),
-					State:     osacv1alpha1.JobStatePending,
-				}
-				// MaxJobHistory is 3, so adding 4th job should remove job-1
-				result := provisioning.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
-				Expect(result).To(HaveLen(3))
-				Expect(result[0].JobID).To(Equal("job-2"))
-				Expect(result[1].JobID).To(Equal("job-3"))
-				Expect(result[2].JobID).To(Equal("job-4"))
-			})
-
-			It("should keep trimming as jobs are added", func() {
-				baseTime := time.Now().UTC()
-				jobs := []osacv1alpha1.JobStatus{
-					{
-						JobID:     "job-1",
-						Type:      osacv1alpha1.JobTypeProvision,
-						Timestamp: metav1.NewTime(baseTime),
-						State:     osacv1alpha1.JobStatePending,
-					},
-					{
-						JobID:     "job-2",
-						Type:      osacv1alpha1.JobTypeProvision,
-						Timestamp: metav1.NewTime(baseTime.Add(time.Second)),
-						State:     osacv1alpha1.JobStateRunning,
-					},
-					{
-						JobID:     "job-3",
-						Type:      osacv1alpha1.JobTypeDeprovision,
-						Timestamp: metav1.NewTime(baseTime.Add(2 * time.Second)),
-						State:     osacv1alpha1.JobStateSucceeded,
-					},
-				}
-				// Add job-4 (removes job-1)
-				jobs = provisioning.AppendJob(jobs, osacv1alpha1.JobStatus{
-					JobID:     "job-4",
-					Type:      osacv1alpha1.JobTypeProvision,
-					Timestamp: metav1.NewTime(baseTime.Add(3 * time.Second)),
-					State:     osacv1alpha1.JobStatePending,
-				}, reconciler.MaxJobHistory)
-				Expect(jobs).To(HaveLen(3))
-				Expect(jobs[0].JobID).To(Equal("job-2"))
-
-				// Add job-5 (removes job-2)
-				jobs = provisioning.AppendJob(jobs, osacv1alpha1.JobStatus{
-					JobID:     "job-5",
-					Type:      osacv1alpha1.JobTypeDeprovision,
-					Timestamp: metav1.NewTime(baseTime.Add(4 * time.Second)),
-					State:     osacv1alpha1.JobStateRunning,
-				}, reconciler.MaxJobHistory)
-				Expect(jobs).To(HaveLen(3))
-				Expect(jobs[0].JobID).To(Equal("job-3"))
-				Expect(jobs[1].JobID).To(Equal("job-4"))
-				Expect(jobs[2].JobID).To(Equal("job-5"))
-			})
-
-			It("should use default max history when set", func() {
-				reconciler := NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, provisioning.DefaultMaxJobHistory, mcmanager.LocalCluster)
-				jobs := []osacv1alpha1.JobStatus{}
-				// Add 15 jobs
-				baseTime := time.Now().UTC()
-				for i := 1; i <= 15; i++ {
-					newJob := osacv1alpha1.JobStatus{
-						JobID:     fmt.Sprintf("job-%d", i),
-						Type:      osacv1alpha1.JobTypeProvision,
-						Timestamp: metav1.NewTime(baseTime.Add(time.Duration(i) * time.Second)),
-						State:     osacv1alpha1.JobStatePending,
-					}
-					jobs = provisioning.AppendJob(jobs, newJob, reconciler.MaxJobHistory)
-				}
-				// Should keep only last 10
-				Expect(jobs).To(HaveLen(provisioning.DefaultMaxJobHistory))
-			})
-		})
-
-		Describe("updateJob", func() {
-			It("should return false when job ID not found", func() {
-				jobs := []osacv1alpha1.JobStatus{
-					{
-						JobID:     "job-1",
-						Type:      osacv1alpha1.JobTypeProvision,
-						Timestamp: metav1.NewTime(time.Now().UTC()),
-						State:     osacv1alpha1.JobStatePending,
-					},
-				}
-				updatedJob := osacv1alpha1.JobStatus{
-					JobID:     "job-999",
-					Type:      osacv1alpha1.JobTypeProvision,
-					Timestamp: metav1.NewTime(time.Now().UTC()),
-					State:     osacv1alpha1.JobStateSucceeded,
-				}
-				result := provisioning.UpdateJob(jobs, updatedJob)
-				Expect(result).To(BeFalse())
-				// Original job should be unchanged
-				Expect(jobs[0].State).To(Equal(osacv1alpha1.JobStatePending))
-			})
-
-			It("should return false when jobs slice is empty", func() {
-				jobs := []osacv1alpha1.JobStatus{}
-				updatedJob := osacv1alpha1.JobStatus{
-					JobID:     "job-1",
-					Type:      osacv1alpha1.JobTypeProvision,
-					Timestamp: metav1.NewTime(time.Now().UTC()),
-					State:     osacv1alpha1.JobStateSucceeded,
-				}
-				result := provisioning.UpdateJob(jobs, updatedJob)
-				Expect(result).To(BeFalse())
-			})
-
-			It("should update job and return true when found", func() {
-				baseTime := time.Now().UTC()
-				jobs := []osacv1alpha1.JobStatus{
-					{
-						JobID:     "job-1",
-						Type:      osacv1alpha1.JobTypeProvision,
-						Timestamp: metav1.NewTime(baseTime),
-						State:     osacv1alpha1.JobStatePending,
-						Message:   "Initial message",
-					},
-				}
-				updatedTime := baseTime.Add(5 * time.Second)
-				updatedJob := osacv1alpha1.JobStatus{
-					JobID:     "job-1",
-					Type:      osacv1alpha1.JobTypeProvision,
-					Timestamp: metav1.NewTime(updatedTime),
-					State:     osacv1alpha1.JobStateSucceeded,
-					Message:   "Updated message",
-				}
-				result := provisioning.UpdateJob(jobs, updatedJob)
-				Expect(result).To(BeTrue())
-				// Job should be fully updated
-				Expect(jobs[0].JobID).To(Equal("job-1"))
-				Expect(jobs[0].State).To(Equal(osacv1alpha1.JobStateSucceeded))
-				Expect(jobs[0].Message).To(Equal("Updated message"))
-				Expect(jobs[0].Timestamp.Time).To(Equal(updatedTime))
-			})
-
-			It("should update correct job when multiple jobs exist", func() {
-				baseTime := time.Now().UTC()
-				jobs := []osacv1alpha1.JobStatus{
-					{
-						JobID:     "job-1",
-						Type:      osacv1alpha1.JobTypeProvision,
-						Timestamp: metav1.NewTime(baseTime),
-						State:     osacv1alpha1.JobStatePending,
-						Message:   "First job",
-					},
-					{
-						JobID:     "job-2",
-						Type:      osacv1alpha1.JobTypeDeprovision,
-						Timestamp: metav1.NewTime(baseTime.Add(time.Second)),
-						State:     osacv1alpha1.JobStateRunning,
-						Message:   "Second job",
-					},
-					{
-						JobID:     "job-3",
-						Type:      osacv1alpha1.JobTypeProvision,
-						Timestamp: metav1.NewTime(baseTime.Add(2 * time.Second)),
-						State:     osacv1alpha1.JobStatePending,
-						Message:   "Third job",
-					},
-				}
-				updatedJob := osacv1alpha1.JobStatus{
-					JobID:     "job-2",
-					Type:      osacv1alpha1.JobTypeDeprovision,
-					Timestamp: metav1.NewTime(baseTime.Add(3 * time.Second)),
-					State:     osacv1alpha1.JobStateSucceeded,
-					Message:   "Second job completed",
-				}
-				result := provisioning.UpdateJob(jobs, updatedJob)
-				Expect(result).To(BeTrue())
-				// Only job-2 should be updated
-				Expect(jobs[0].State).To(Equal(osacv1alpha1.JobStatePending))
-				Expect(jobs[0].Message).To(Equal("First job"))
-				Expect(jobs[1].State).To(Equal(osacv1alpha1.JobStateSucceeded))
-				Expect(jobs[1].Message).To(Equal("Second job completed"))
-				Expect(jobs[2].State).To(Equal(osacv1alpha1.JobStatePending))
-				Expect(jobs[2].Message).To(Equal("Third job"))
-			})
-
-			It("should update all fields of the job", func() {
-				baseTime := time.Now().UTC()
-				jobs := []osacv1alpha1.JobStatus{
-					{
-						JobID:                  "job-1",
-						Type:                   osacv1alpha1.JobTypeProvision,
-						Timestamp:              metav1.NewTime(baseTime),
-						State:                  osacv1alpha1.JobStatePending,
-						Message:                "Initial",
-						BlockDeletionOnFailure: false,
-					},
-				}
-				updatedJob := osacv1alpha1.JobStatus{
-					JobID:                  "job-1",
-					Type:                   osacv1alpha1.JobTypeDeprovision, // Changed type
-					Timestamp:              metav1.NewTime(baseTime.Add(time.Minute)),
-					State:                  osacv1alpha1.JobStateFailed,
-					Message:                "Failed with error",
-					BlockDeletionOnFailure: true,
-				}
-				result := provisioning.UpdateJob(jobs, updatedJob)
-				Expect(result).To(BeTrue())
-				Expect(jobs[0].Type).To(Equal(osacv1alpha1.JobTypeDeprovision))
-				Expect(jobs[0].State).To(Equal(osacv1alpha1.JobStateFailed))
-				Expect(jobs[0].Message).To(Equal("Failed with error"))
-				Expect(jobs[0].BlockDeletionOnFailure).To(BeTrue())
-			})
-		})
-
-		Describe("EvaluateAction (formerly shouldTriggerProvision)", func() {
-			evaluateAction := func(instance *osacv1alpha1.ComputeInstance) (provisioning.Action, *osacv1alpha1.JobStatus) {
-				provState := &provisioning.State{
-					Jobs:                 &instance.Status.ProvisioningJobs,
-					DesiredConfigVersion: instance.Status.DesiredConfigVersion,
-				}
-				return provisioning.EvaluateAction(provState, func() bool {
-					return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, k8sClient, client.ObjectKeyFromObject(instance), &osacv1alpha1.ComputeInstance{}, func(obj client.Object) []osacv1alpha1.JobStatus {
-						return obj.(*osacv1alpha1.ComputeInstance).Status.ProvisioningJobs
-					})
-				})
-			}
-
-			It("should trigger when no job exists and config versions differ", func() {
-				instance := &osacv1alpha1.ComputeInstance{
-					Status: osacv1alpha1.ComputeInstanceStatus{
-						DesiredConfigVersion: "abc123",
-					},
-				}
-				action, job := evaluateAction(instance)
-				Expect(action).To(Equal(provisioning.Trigger))
-				Expect(job).To(BeNil())
-			})
-
-			It("should trigger when job has empty ID and config versions differ", func() {
-				instance := &osacv1alpha1.ComputeInstance{
-					Status: osacv1alpha1.ComputeInstanceStatus{
-						DesiredConfigVersion: "abc123",
-						ProvisioningJobs:     []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: ""}},
-					},
-				}
-				action, _ := evaluateAction(instance)
-				Expect(action).To(Equal(provisioning.Trigger))
-			})
-
-			It("should poll when job is still running", func() {
-				instance := &osacv1alpha1.ComputeInstance{
-					Status: osacv1alpha1.ComputeInstanceStatus{
-						ProvisioningJobs: []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStateRunning}},
-					},
-				}
-				action, job := evaluateAction(instance)
-				Expect(action).To(Equal(provisioning.Poll))
-				Expect(job).NotTo(BeNil())
-				Expect(job.JobID).To(Equal("job-1"))
-			})
-
-			It("should poll when job is pending", func() {
-				instance := &osacv1alpha1.ComputeInstance{
-					Status: osacv1alpha1.ComputeInstanceStatus{
-						ProvisioningJobs: []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStatePending}},
-					},
-				}
-				action, job := evaluateAction(instance)
-				Expect(action).To(Equal(provisioning.Poll))
-				Expect(job).NotTo(BeNil())
-			})
-
-			It("should skip when job succeeded with matching ConfigVersion", func() {
-				instance := &osacv1alpha1.ComputeInstance{
-					Status: osacv1alpha1.ComputeInstanceStatus{
-						DesiredConfigVersion: "abc123",
-						ProvisioningJobs:     []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "abc123"}},
-					},
-				}
-				action, job := evaluateAction(instance)
-				Expect(action).To(Equal(provisioning.Skip))
-				Expect(job).NotTo(BeNil())
-			})
-
-			It("should trigger when job succeeded but ConfigVersion differs", func() {
-				instance := &osacv1alpha1.ComputeInstance{
-					Status: osacv1alpha1.ComputeInstanceStatus{
-						DesiredConfigVersion: "new-version",
-						ProvisioningJobs:     []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "old-version"}},
-					},
-				}
-				action, job := evaluateAction(instance)
-				Expect(action).To(Equal(provisioning.Trigger))
-				Expect(job).NotTo(BeNil())
-			})
-
-			It("should trigger when job failed with different ConfigVersion", func() {
-				instance := &osacv1alpha1.ComputeInstance{
-					Status: osacv1alpha1.ComputeInstanceStatus{
-						DesiredConfigVersion: "new-version",
-						ProvisioningJobs:     []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStateFailed, ConfigVersion: "old-version"}},
-					},
-				}
-				action, job := evaluateAction(instance)
-				Expect(action).To(Equal(provisioning.Trigger))
-				Expect(job).NotTo(BeNil())
-			})
-
-			It("should backoff when job failed with matching ConfigVersion", func() {
-				instance := &osacv1alpha1.ComputeInstance{
-					Status: osacv1alpha1.ComputeInstanceStatus{
-						DesiredConfigVersion: "abc123",
-						ProvisioningJobs:     []osacv1alpha1.JobStatus{{Type: osacv1alpha1.JobTypeProvision, JobID: "job-1", State: osacv1alpha1.JobStateFailed, ConfigVersion: "abc123"}},
-					},
-				}
-				action, job := evaluateAction(instance)
-				Expect(action).To(Equal(provisioning.Backoff))
-				Expect(job).NotTo(BeNil())
-			})
-
-			It("should backoff when latest job failed with matching ConfigVersion", func() {
-				instance := &osacv1alpha1.ComputeInstance{
-					ObjectMeta: metav1.ObjectMeta{Name: "test-backoff", Namespace: "default"},
-					Spec:       newTestComputeInstanceSpec("test_template"),
-					Status: osacv1alpha1.ComputeInstanceStatus{
-						DesiredConfigVersion: "abc123",
-						ProvisioningJobs: []osacv1alpha1.JobStatus{{
-							Type:          osacv1alpha1.JobTypeProvision,
-							JobID:         "job-1",
-							State:         osacv1alpha1.JobStateFailed,
-							ConfigVersion: "abc123",
-						}},
-					},
-				}
-				action, job := evaluateAction(instance)
-				Expect(action).To(Equal(provisioning.Backoff))
-				Expect(job).NotTo(BeNil())
-			})
-
-			It("should requeue when API server has non-terminal job but cache shows none", func() {
-				instanceName := "test-api-server-check-no-cache"
-				apiInstance := &osacv1alpha1.ComputeInstance{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      instanceName,
-						Namespace: "default",
-					},
-					Spec: newTestComputeInstanceSpec("test_template"),
-				}
-				Expect(k8sClient.Create(ctx, apiInstance)).To(Succeed())
-				DeferCleanup(func() {
-					_ = k8sClient.Delete(ctx, apiInstance)
-				})
-
-				jobTimestamp := metav1.NewTime(time.Now().UTC())
-				apiInstance.Status.DesiredConfigVersion = "v1"
-				apiInstance.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
-					{Type: osacv1alpha1.JobTypeProvision, JobID: "running-job", State: osacv1alpha1.JobStateRunning, Timestamp: jobTimestamp},
-				}
-				Expect(k8sClient.Status().Update(ctx, apiInstance)).To(Succeed())
-
-				staleInstance := &osacv1alpha1.ComputeInstance{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      instanceName,
-						Namespace: "default",
-					},
-					Status: osacv1alpha1.ComputeInstanceStatus{
-						DesiredConfigVersion: "v1",
-					},
-				}
-
-				action, job := evaluateAction(staleInstance)
-				Expect(action).To(Equal(provisioning.Requeue))
-				Expect(job).To(BeNil())
-			})
-
-			It("should requeue when API server has non-terminal job but cache shows terminal job with version mismatch", func() {
-				instanceName := "test-api-server-check-stale-terminal"
-				apiInstance := &osacv1alpha1.ComputeInstance{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      instanceName,
-						Namespace: "default",
-					},
-					Spec: newTestComputeInstanceSpec("test_template"),
-				}
-				Expect(k8sClient.Create(ctx, apiInstance)).To(Succeed())
-				DeferCleanup(func() {
-					_ = k8sClient.Delete(ctx, apiInstance)
-				})
-
-				oldJobTimestamp := metav1.NewTime(time.Now().UTC().Add(-time.Minute))
-				newJobTimestamp := metav1.NewTime(time.Now().UTC())
-				apiInstance.Status.DesiredConfigVersion = "v2"
-				apiInstance.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
-					{Type: osacv1alpha1.JobTypeProvision, JobID: "old-job", State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "v1", Timestamp: oldJobTimestamp},
-					{Type: osacv1alpha1.JobTypeProvision, JobID: "new-running-job", State: osacv1alpha1.JobStateRunning, Timestamp: newJobTimestamp},
-				}
-				Expect(k8sClient.Status().Update(ctx, apiInstance)).To(Succeed())
-
-				staleInstance := &osacv1alpha1.ComputeInstance{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      instanceName,
-						Namespace: "default",
-					},
-					Status: osacv1alpha1.ComputeInstanceStatus{
-						DesiredConfigVersion: "v2",
-						ProvisioningJobs: []osacv1alpha1.JobStatus{
-							{Type: osacv1alpha1.JobTypeProvision, JobID: "old-job", State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "v1"},
-						},
-					},
-				}
-
-				action, job := evaluateAction(staleInstance)
-				Expect(action).To(Equal(provisioning.Requeue))
-				Expect(job).To(BeNil())
-			})
-
-			It("should trigger when API server also shows no non-terminal job", func() {
-				instanceName := "test-api-server-check-all-terminal"
-				apiInstance := &osacv1alpha1.ComputeInstance{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      instanceName,
-						Namespace: "default",
-					},
-					Spec: newTestComputeInstanceSpec("test_template"),
-				}
-				Expect(k8sClient.Create(ctx, apiInstance)).To(Succeed())
-				DeferCleanup(func() {
-					_ = k8sClient.Delete(ctx, apiInstance)
-				})
-
-				jobTimestamp := metav1.NewTime(time.Now().UTC())
-				apiInstance.Status.DesiredConfigVersion = "v2"
-				apiInstance.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
-					{Type: osacv1alpha1.JobTypeProvision, JobID: "done-job", State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "v1", Timestamp: jobTimestamp},
-				}
-				Expect(k8sClient.Status().Update(ctx, apiInstance)).To(Succeed())
-
-				staleInstance := &osacv1alpha1.ComputeInstance{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      instanceName,
-						Namespace: "default",
-					},
-					Status: osacv1alpha1.ComputeInstanceStatus{
-						DesiredConfigVersion: "v2",
-						ProvisioningJobs: []osacv1alpha1.JobStatus{
-							{Type: osacv1alpha1.JobTypeProvision, JobID: "done-job", State: osacv1alpha1.JobStateSucceeded, ConfigVersion: "v1"},
-						},
-					},
-				}
-
-				action, job := evaluateAction(staleInstance)
-				Expect(action).To(Equal(provisioning.Trigger))
-				Expect(job).NotTo(BeNil())
-				Expect(job.JobID).To(Equal("done-job"))
-			})
-		})
-	})
-
 	Context("Phase regression prevention", func() {
 		const namespaceName = "default"
 
@@ -1587,7 +672,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := newTestCIReconciler("", namespaceName, "", 100*time.Millisecond)
 
 			// Wait for the CI to appear in the controller's cache before calling Reconcile
 			// directly. Without this, r.Get() inside Reconcile returns NotFound (cache miss)
@@ -1628,19 +713,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			triggerCount := 0
-			provider := &mockProvisioningProvider{
-				name: "aap",
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-					triggerCount++
-					return &provisioning.ProvisionResult{
-						JobID:        fmt.Sprintf("job-%d", triggerCount),
-						InitialState: osacv1alpha1.JobStateRunning,
-						Message:      "running",
-					}, nil
-				},
-			}
-			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			aapFake := newWLFakeAAP()
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
 
 			Eventually(func() error {
 				return reconciler.Client.Get(ctx, objectKey, &osacv1alpha1.ComputeInstance{})
@@ -1652,11 +726,22 @@ var _ = Describe("ComputeInstance Controller", func() {
 			_, err := reconciler.Reconcile(ctx, reconcileRequest)
 			Expect(err).NotTo(HaveOccurred())
 
-			// Second reconcile — should NOT trigger provisioning again
+			// Second reconcile at once — the cache may still miss the provision
+			// entry; the resourceVersion-conditional write then conflicts and
+			// launches nothing.
+			_, err = reconciler.Reconcile(ctx, reconcileRequest)
+			Expect(err == nil || errors.IsConflict(err)).To(BeTrue(), "unexpected error: %v", err)
+
+			// Once the cache shows the entry, a reconcile tracks the job.
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Client.Get(ctx, objectKey, cached)).To(Succeed())
+				g.Expect(cached.Status.Jobs).To(HaveLen(1))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
 			_, err = reconciler.Reconcile(ctx, reconcileRequest)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(triggerCount).To(Equal(1), "TriggerProvision should be called exactly once")
+			Expect(aapFake.tasks()).To(Equal([]string{computeInstanceProvisionTask}), "the provision job is launched exactly once")
 		})
 
 		It("should set Starting phase when no KubeVirt VM exists", func() {
@@ -1679,7 +764,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := newTestCIReconciler("", namespaceName, "", 100*time.Millisecond)
 
 			// Wait for the CI to appear in the controller's cache before calling Reconcile directly.
 			Eventually(func() error {
@@ -1964,7 +1049,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 		}
 
-		createCIAndReconcile := func(name, tenantName string, provider *mockProvisioningProvider, configure func(*ComputeInstanceReconciler)) {
+		createCIAndReconcile := func(name, tenantName string, aapFake *wlFakeAAP, configure func(*ComputeInstanceReconciler)) {
 			createReadyTenant(ctx, namespaceName, tenantName)
 			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
 			resource := &osacv1alpha1.ComputeInstance{
@@ -1979,7 +1064,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
 			if configure != nil {
 				configure(reconciler)
 			}
@@ -2000,23 +1085,14 @@ var _ = Describe("ComputeInstance Controller", func() {
 				deleteTenantInNamespace(ctx, namespaceName, tenantName)
 			})
 
-			var gotTiers []provisioning.TierDefinition
-			var sawTiers bool
-			provider := &mockProvisioningProvider{
-				name: "aap",
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
-					sawTiers = true
-					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
-				},
-			}
+			aapFake := newWLFakeAAP()
 
-			createCIAndReconcile(resourceName, tenantName, provider, func(r *ComputeInstanceReconciler) {
+			createCIAndReconcile(resourceName, tenantName, aapFake, func(r *ComputeInstanceReconciler) {
 				r.TiersClient = tierDefsTiersClient()
 				r.BackendsClient = tierDefsBackendsClient()
 			})
 
-			Expect(sawTiers).To(BeTrue())
+			gotTiers := launchedTierDefinitions(aapFake)
 			Expect(gotTiers).To(HaveLen(1))
 			Expect(gotTiers[0].Name).To(Equal("fast"))
 		})
@@ -2029,23 +1105,14 @@ var _ = Describe("ComputeInstance Controller", func() {
 				deleteTenantInNamespace(ctx, namespaceName, tenantName)
 			})
 
-			var gotConns map[string]provisioning.BackendConnection
-			var sawConns bool
-			provider := &mockProvisioningProvider{
-				name: "aap",
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-					gotConns = provisioning.StorageBackendConnectionsFromContext(ctx)
-					sawConns = true
-					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
-				},
-			}
+			aapFake := newWLFakeAAP()
 
-			createCIAndReconcile(resourceName, tenantName, provider, func(r *ComputeInstanceReconciler) {
+			createCIAndReconcile(resourceName, tenantName, aapFake, func(r *ComputeInstanceReconciler) {
 				r.TiersClient = tierDefsTiersClient()
 				r.BackendsClient = tierDefsBackendsClient()
 			})
 
-			Expect(sawConns).To(BeTrue())
+			gotConns := launchedBackendConnections(aapFake)
 			Expect(gotConns).To(HaveKeyWithValue("backend-1", provisioning.BackendConnection{
 				Endpoint: "https://vast.example.com",
 				Username: testBackendUsername,
@@ -2061,26 +1128,25 @@ var _ = Describe("ComputeInstance Controller", func() {
 				deleteTenantInNamespace(ctx, namespaceName, tenantName)
 			})
 
-			var gotTiers []provisioning.TierDefinition
-			var sawTiers bool
-			provider := &mockProvisioningProvider{
-				name: "aap",
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
-					sawTiers = true
-					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
-				},
-			}
+			aapFake := newWLFakeAAP()
 
 			// No TiersClient/BackendsClient configured — matches the default zero
 			// value used by every other test in this file.
-			createCIAndReconcile(resourceName, tenantName, provider, nil)
+			createCIAndReconcile(resourceName, tenantName, aapFake, nil)
 
-			Expect(sawTiers).To(BeTrue())
+			gotTiers := launchedTierDefinitions(aapFake)
 			Expect(gotTiers).To(BeEmpty())
 		})
 
-		It("should proceed without tier data when tier resolution fails (non-fatal)", func() {
+		failingTiersClient := func() *mockStorageTiersLister {
+			return &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return nil, fmt.Errorf("tier API unavailable")
+				},
+			}
+		}
+
+		It("should defer provisioning when tier resolution fails and the target cluster has no StorageClass for a requested tier", func() {
 			const resourceName = "test-tier-ctx-resolve-error"
 			const tenantName = "tenant-tier-ctx-resolve-error"
 			DeferCleanup(func() {
@@ -2088,28 +1154,49 @@ var _ = Describe("ComputeInstance Controller", func() {
 				deleteTenantInNamespace(ctx, namespaceName, tenantName)
 			})
 
-			var gotTiers []provisioning.TierDefinition
-			var sawTiers bool
-			provider := &mockProvisioningProvider{
-				name: "aap",
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-					gotTiers = provisioning.StorageTierDefinitionsFromContext(ctx)
-					sawTiers = true
-					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
-				},
-			}
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
 
-			createCIAndReconcile(resourceName, tenantName, provider, func(r *ComputeInstanceReconciler) {
-				r.TiersClient = &mockStorageTiersLister{
-					listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
-						return nil, fmt.Errorf("tier API unavailable")
-					},
-				}
+			createCIAndReconcile(resourceName, tenantName, aapFake, func(r *ComputeInstanceReconciler) {
+				r.TiersClient = failingTiersClient()
 				r.BackendsClient = tierDefsBackendsClient()
 			})
 
-			Expect(sawTiers).To(BeTrue())
-			Expect(gotTiers).To(BeEmpty())
+			Expect(capture.count).To(BeZero())
+			updated := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: namespaceName}, updated)).To(Succeed())
+			cond := updated.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(cond.Message).To(ContainSubstring("storage tier catalog resolution failed"))
+			Expect(cond.Message).To(ContainSubstring("have no StorageClass on the target cluster: standard"))
+		})
+
+		It("should proceed without tier data when tier resolution fails and the target cluster already has the requested StorageClass", func() {
+			const resourceName = "test-tier-ctx-resolve-error-fallback"
+			const tenantName = "tenant-tier-ctx-resolve-error-fallback"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			createLabeledStorageClass(ctx, "sc-resolve-error-standard", tenantName, "standard")
+			waitForStorageClassInCache("sc-resolve-error-standard")
+
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+
+			createCIAndReconcile(resourceName, tenantName, aapFake, func(r *ComputeInstanceReconciler) {
+				r.TiersClient = failingTiersClient()
+				r.BackendsClient = tierDefsBackendsClient()
+			})
+
+			Expect(capture.count).To(Equal(1))
+			Expect(capture.tiers).To(BeEmpty())
+			Expect(capture.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{
+				{Name: "sc-resolve-error-standard", Tier: "standard"},
+			}))
 		})
 	})
 
@@ -2140,16 +1227,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			createReadyTenant(ctx, namespaceName, tenantName)
 
-			var gotSCs []osacv1alpha1.ResolvedStorageClass
-			var sawSCs bool
-			provider := &mockProvisioningProvider{
-				name: "aap",
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
-					sawSCs = true
-					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
-				},
-			}
+			aapFake := newWLFakeAAP()
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			resource := &osacv1alpha1.ComputeInstance{
@@ -2164,14 +1242,14 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
 			Eventually(func() error {
 				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
 			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
 
 			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(sawSCs).To(BeTrue())
+			gotSCs := launchedTenantStorageClasses(aapFake)
 			Expect(gotSCs).To(HaveLen(1))
 			Expect(gotSCs[0].Name).To(Equal("sc-fallback-1"))
 			Expect(gotSCs[0].Tier).To(Equal("local"))
@@ -2187,16 +1265,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			createReadyTenant(ctx, namespaceName, tenantName)
 
-			var gotSCs []osacv1alpha1.ResolvedStorageClass
-			var sawSCs bool
-			provider := &mockProvisioningProvider{
-				name: "aap",
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
-					sawSCs = true
-					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
-				},
-			}
+			aapFake := newWLFakeAAP()
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			resource := &osacv1alpha1.ComputeInstance{
@@ -2211,14 +1280,14 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
 			Eventually(func() error {
 				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
 			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
 
 			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(sawSCs).To(BeTrue())
+			gotSCs := launchedTenantStorageClasses(aapFake)
 			Expect(gotSCs).To(BeNil())
 		})
 
@@ -2245,16 +1314,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
 
-			var gotSCs []osacv1alpha1.ResolvedStorageClass
-			var sawSCs bool
-			provider := &mockProvisioningProvider{
-				name: "aap",
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
-					sawSCs = true
-					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
-				},
-			}
+			aapFake := newWLFakeAAP()
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			resource := &osacv1alpha1.ComputeInstance{
@@ -2269,7 +1329,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
 
 			mgrClient := testMcManager.GetLocalManager().GetClient()
 			Eventually(func(g Gomega) {
@@ -2284,7 +1344,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(sawSCs).To(BeTrue())
+			gotSCs := launchedTenantStorageClasses(aapFake)
 			Expect(gotSCs).To(HaveLen(1))
 			Expect(gotSCs[0].Name).To(Equal("ceph-fast"))
 			Expect(gotSCs[0].Tier).To(Equal("fast"))
@@ -2312,16 +1372,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				"Ready", "storage controller resolved")
 			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
 
-			var gotSCs []osacv1alpha1.ResolvedStorageClass
-			var sawSCs bool
-			provider := &mockProvisioningProvider{
-				name: "aap",
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
-					sawSCs = true
-					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
-				},
-			}
+			aapFake := newWLFakeAAP()
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			resource := &osacv1alpha1.ComputeInstance{
@@ -2336,7 +1387,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
 
 			mgrClient := testMcManager.GetLocalManager().GetClient()
 			Eventually(func(g Gomega) {
@@ -2351,7 +1402,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(sawSCs).To(BeTrue())
+			gotSCs := launchedTenantStorageClasses(aapFake)
 			Expect(gotSCs).To(BeNil(), "should not resolve from cluster when storage controller already ran")
 		})
 
@@ -2368,16 +1419,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			createReadyTenant(ctx, namespaceName, tenantName)
 
-			var gotSCs []osacv1alpha1.ResolvedStorageClass
-			var sawSCs bool
-			provider := &mockProvisioningProvider{
-				name: "aap",
-				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
-					sawSCs = true
-					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
-				},
-			}
+			aapFake := newWLFakeAAP()
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			resource := &osacv1alpha1.ComputeInstance{
@@ -2393,7 +1435,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
 			fakeRecorder := events.NewFakeRecorder(100)
-			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
 			reconciler.Recorder = fakeRecorder
 			Eventually(func() error {
 				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
@@ -2401,7 +1443,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(sawSCs).To(BeTrue())
+			gotSCs := launchedTenantStorageClasses(aapFake)
 			Expect(gotSCs).To(BeNil(), "ambiguous tier should not be injected")
 			Eventually(fakeRecorder.Events).Should(Receive(And(
 				ContainSubstring("Warning"),
@@ -2415,21 +1457,2041 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
+	Context("CSP-managed and mixed CSP/OSAC storage provisioning (OSAC-6596)", func() {
+		const namespaceName = "default"
+
+		ctx := context.Background()
+
+		deleteCI := func(name string) {
+			ci := &osacv1alpha1.ComputeInstance{}
+			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+			if err := k8sClient.Get(ctx, nn, ci); err == nil {
+				ci.Finalizers = nil
+				Expect(client.IgnoreNotFound(k8sClient.Update(ctx, ci))).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, ci))).To(Succeed())
+			}
+		}
+
+		waitForTenantInCache := func(tenantName string, check func(Gomega, *osacv1alpha1.Tenant)) {
+			mgrClient := testMcManager.GetLocalManager().GetClient()
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.Tenant{}
+				g.Expect(mgrClient.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, cached)).To(Succeed())
+				check(g, cached)
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+		}
+
+		It("should provision a pure-CSP NetApp ComputeInstance with filtered tenant_storage_classes and no JIT tier definitions or backend connections", func() {
+			const resourceName = "test-ci-pure-csp-netapp"
+			const tenantName = "tenant-ci-pure-csp-netapp"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			tenant.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "CSP storage ready")
+			tenant.Status.StorageClasses = []osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+				{Name: "netapp-silver-sc", Tier: "silver"},
+			}
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+				g.Expect(t.Status.StorageClasses).To(HaveLen(2))
+			})
+
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.BootDisk.StorageTier = "gold"
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("gold", "be-netapp"),
+							newTestStorageTier("silver", "be-netapp"),
+						},
+					}.Build(), nil
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					Expect(in.GetId()).To(Equal("be-netapp"))
+					return newTestCSPManagedBackendGetResponse("netapp"), nil
+				},
+			}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(capture.count).To(Equal(1))
+			Expect(capture.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+			}))
+			Expect(capture.tiers).To(BeEmpty())
+			Expect(capture.conns).To(BeEmpty())
+		})
+
+		It("should provision a mixed CSP/OSAC ComputeInstance with filtered tenant_storage_classes and only OSAC-managed JIT tiers/connections", func() {
+			const resourceName = "test-ci-mixed-storage"
+			const tenantName = "tenant-ci-mixed-storage"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			tenant.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "CSP storage ready")
+			tenant.SetStatusCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "Cluster storage ready")
+			// The OSAC-managed tier fast has no StorageClass yet, so it needs JIT
+			// tier data next to the mapped CSP tiers.
+			tenant.Status.StorageClasses = []osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+				{Name: "netapp-silver-sc", Tier: "silver"},
+			}
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+				g.Expect(t.Status.StorageClasses).To(HaveLen(2))
+			})
+
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.BootDisk.StorageTier = "gold"
+			spec.AdditionalDisks = []osacv1alpha1.DiskSpec{
+				{SizeGiB: 50, StorageTier: "fast"},
+			}
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("gold", "be-netapp"),
+							newTestStorageTier("silver", "be-netapp"),
+							newTestStorageTier("fast", "be-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "be-netapp":
+						return newTestCSPManagedBackendGetResponse("netapp"), nil
+					case "be-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "not found")
+					}
+				},
+			}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(capture.count).To(Equal(1))
+			Expect(capture.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+			}))
+			Expect(capture.tiers).To(HaveLen(1))
+			Expect(capture.tiers[0].Name).To(Equal("fast"))
+			Expect(capture.tiers[0].BackendID).To(Equal("be-vast"))
+			Expect(capture.conns).To(HaveLen(1))
+			Expect(capture.conns).To(HaveKeyWithValue("be-vast", provisioning.BackendConnection{
+				Endpoint: "https://vast.example.com",
+				Username: testBackendUsername,
+				Password: testBackendPassword,
+			}))
+		})
+
+		It("should block ComputeInstance provisioning and set ReasonTenantNotReady when StorageReady is absent or False", func() {
+			By("Subcase A: StorageReady condition is absent while a CSP tier is requested")
+			const resourceAbsent = "test-ci-sr-absent"
+			const tenantAbsent = "tenant-ci-sr-absent"
+			DeferCleanup(func() {
+				deleteCI(resourceAbsent)
+				deleteTenantInNamespace(ctx, namespaceName, tenantAbsent)
+			})
+
+			createReadyTenant(ctx, namespaceName, tenantAbsent)
+			waitForTenantInCache(tenantAbsent, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).To(BeNil())
+			})
+
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+
+			specAbsent := newTestComputeInstanceSpec("test_template")
+			specAbsent.BootDisk.StorageTier = "gold"
+			nnAbsent := types.NamespacedName{Name: resourceAbsent, Namespace: namespaceName}
+			ciAbsent := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceAbsent,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantAbsent,
+					},
+				},
+				Spec: specAbsent,
+			}
+			Expect(k8sClient.Create(ctx, ciAbsent)).To(Succeed())
+
+			fakeRecorderAbsent := events.NewFakeRecorder(100)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			reconciler.Recorder = fakeRecorderAbsent
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier("gold", "be-netapp")},
+					}.Build(), nil
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("netapp"), nil
+				},
+			}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nnAbsent, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnAbsent}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+
+			updatedAbsent := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnAbsent, updatedAbsent)).To(Succeed())
+			Expect(updatedAbsent.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+			provCond := updatedAbsent.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCond).NotTo(BeNil())
+			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(provCond.Message).To(ContainSubstring("StorageReady"))
+			Eventually(fakeRecorderAbsent.Events).Should(Receive(And(
+				ContainSubstring(eventReasonTenantNotReady),
+				ContainSubstring("StorageReady"),
+			)))
+
+			// Wait for cache to see ReasonTenantNotReady before second Reconcile
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Client.Get(ctx, nnAbsent, cached)).To(Succeed())
+				c := cached.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+				g.Expect(c).NotTo(BeNil())
+				g.Expect(c.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			res, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnAbsent}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+			Expect(fakeRecorderAbsent.Events).NotTo(Receive())
+
+			By("Subcase B: StorageReady=False with Reason NotFound")
+			const resourceFalse = "test-ci-sr-false"
+			const tenantFalse = "tenant-ci-sr-false"
+			DeferCleanup(func() {
+				deleteCI(resourceFalse)
+				deleteTenantInNamespace(ctx, namespaceName, tenantFalse)
+			})
+
+			tenantObj := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantFalse, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenantObj)).To(Succeed())
+			tenantObj.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenantObj.Status.Namespace = namespaceName
+			tenantObj.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionFalse,
+				osacv1alpha1.TenantReasonNotFound, "Missing StorageClass for tier gold")
+			Expect(k8sClient.Status().Update(ctx, tenantObj)).To(Succeed())
+			waitForTenantInCache(tenantFalse, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				sr := t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)
+				g.Expect(sr).NotTo(BeNil())
+				g.Expect(sr.Status).To(Equal(metav1.ConditionFalse))
+			})
+
+			nnFalse := types.NamespacedName{Name: resourceFalse, Namespace: namespaceName}
+			ciFalse := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceFalse,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantFalse,
+					},
+				},
+				Spec: specAbsent,
+			}
+			Expect(k8sClient.Create(ctx, ciFalse)).To(Succeed())
+
+			fakeRecorderFalse := events.NewFakeRecorder(100)
+			reconciler.Recorder = fakeRecorderFalse
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nnFalse, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnFalse}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+
+			updatedFalse := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnFalse, updatedFalse)).To(Succeed())
+			Expect(updatedFalse.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+			provCondFalse := updatedFalse.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCondFalse).NotTo(BeNil())
+			Expect(provCondFalse.Status).To(Equal(metav1.ConditionFalse))
+			Expect(provCondFalse.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(provCondFalse.Message).To(ContainSubstring("StorageReady"))
+			Expect(provCondFalse.Message).To(ContainSubstring("Missing StorageClass for tier gold"))
+			Eventually(fakeRecorderFalse.Events).Should(Receive(And(
+				ContainSubstring(eventReasonTenantNotReady),
+				ContainSubstring("StorageReady"),
+			)))
+
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Client.Get(ctx, nnFalse, cached)).To(Succeed())
+				c := cached.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+				g.Expect(c).NotTo(BeNil())
+				g.Expect(c.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			res, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnFalse}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+			Expect(fakeRecorderFalse.Events).NotTo(Receive())
+		})
+
+		It("should block ComputeInstance provisioning when StorageReady is latched True but a requested CSP tier is missing or ambiguous in Tenant.status.storageClasses, without falling back to cluster lookup", func() {
+			const resourceName = "test-ci-latched-missing-tier"
+			const tenantName = "tenant-ci-latched-missing-tier"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			// Create a target-cluster StorageClass labeled for tenantName to prove the
+			// target-cluster fallback is not used when StorageReady is set / CSP tiers are requested.
+			createLabeledStorageClass(ctx, "sc-cluster-fallback-silver", tenantName, "silver")
+
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			tenant.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "CSP storage ready")
+			tenant.Status.StorageClasses = []osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+			}
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+				g.Expect(t.Status.StorageClasses).To(HaveLen(1))
+			})
+
+			By("Subcase A: missing requested tier in Tenant.status.storageClasses via envtest Reconcile")
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.BootDisk.StorageTier = "gold"
+			spec.AdditionalDisks = []osacv1alpha1.DiskSpec{
+				{SizeGiB: 20, StorageTier: "silver"},
+			}
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("gold", "be-netapp"),
+							newTestStorageTier("silver", "be-netapp"),
+						},
+					}.Build(), nil
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("netapp"), nil
+				},
+			}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+
+			updated := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
+			provCond := updated.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCond).NotTo(BeNil())
+			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(provCond.Message).To(ContainSubstring("missing tier(s): silver"))
+
+			By("Subcase B: ambiguous duplicate tier via direct unit call on checkStorageReadiness")
+			inMemoryTenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+				Status: osacv1alpha1.TenantStatus{
+					Phase: osacv1alpha1.TenantPhaseReady,
+					StorageClasses: []osacv1alpha1.ResolvedStorageClass{
+						{Name: "netapp-gold-sc", Tier: "gold"},
+						{Name: "sc-1", Tier: "silver"},
+						{Name: "sc-2", Tier: "silver"},
+					},
+				},
+			}
+			inMemoryTenant.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "CSP storage ready")
+
+			ready, msg := checkStorageReadiness(inMemoryTenant, []string{"gold", "silver"}, []string{"gold", "silver"}, nil, nil)
+			Expect(ready).To(BeFalse())
+			Expect(msg).To(ContainSubstring("ambiguous tier(s): silver"))
+
+			By("Subcase C: requestedCSPTiers classifies non-OSAC tiers as CSP tiers when cspTiers is non-empty even before StorageReady is set")
+			preOnboardTenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(requestedCSPTiers(
+				preOnboardTenant,
+				[]string{"platinum", "fast"},
+				[]provisioning.TierDefinition{{Name: "fast", Provider: "vast"}},
+				[]provisioning.TierDefinition{{Name: "gold", Provider: "netapp"}},
+			)).To(Equal([]string{"platinum"}))
+		})
+
+		It("should fail closed with ReasonTenantNotReady when tier resolution fails and a requested tier has no StorageClass in Tenant status, or when an unmapped requested tier is skipped in the catalog", func() {
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+
+			By("Subcase A: Tenant has StorageReady=True, TiersClient returns codes.Unavailable, and requested tier silver has no StorageClass")
+			const resourceA = "test-ci-tiererr-sr-set"
+			const tenantA = "tenant-ci-tiererr-sr-set"
+			DeferCleanup(func() {
+				deleteCI(resourceA)
+				deleteTenantInNamespace(ctx, namespaceName, tenantA)
+			})
+
+			tA := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantA, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tA)).To(Succeed())
+			tA.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tA.Status.Namespace = namespaceName
+			tA.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "CSP storage ready")
+			tA.Status.StorageClasses = []osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+			}
+			Expect(k8sClient.Status().Update(ctx, tA)).To(Succeed())
+			waitForTenantInCache(tenantA, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+			})
+
+			specA := newTestComputeInstanceSpec("test_template")
+			specA.BootDisk.StorageTier = "gold"
+			specA.AdditionalDisks = []osacv1alpha1.DiskSpec{
+				{SizeGiB: 20, StorageTier: "silver"},
+			}
+			nnA := types.NamespacedName{Name: resourceA, Namespace: namespaceName}
+			ciA := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        resourceA,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantA},
+				},
+				Spec: specA,
+			}
+			Expect(k8sClient.Create(ctx, ciA)).To(Succeed())
+
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return nil, status.Error(codes.Unavailable, "fulfillment service unavailable")
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nnA, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnA}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+
+			updatedA := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnA, updatedA)).To(Succeed())
+			condA := updatedA.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(condA).NotTo(BeNil())
+			Expect(condA.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condA.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(condA.Message).To(ContainSubstring("storage tier catalog resolution failed"))
+			Expect(condA.Message).To(ContainSubstring("have no StorageClass in Tenant status: silver"))
+			Expect(condA.Message).NotTo(ContainSubstring("gold"))
+
+			By("Subcase B: Newly Ready Tenant has StorageReady absent and StorageBackendReady=False (Reason=TierResolutionFailed)")
+			const resourceB = "test-ci-tiererr-sbr-failed"
+			const tenantB = "tenant-ci-tiererr-sbr-failed"
+			DeferCleanup(func() {
+				deleteCI(resourceB)
+				deleteTenantInNamespace(ctx, namespaceName, tenantB)
+			})
+
+			tB := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantB, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tB)).To(Succeed())
+			tB.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tB.Status.Namespace = namespaceName
+			tB.SetStatusCondition(osacv1alpha1.TenantConditionStorageBackendReady, metav1.ConditionFalse,
+				"TierResolutionFailed", "failed to resolve storage tier definitions")
+			Expect(k8sClient.Status().Update(ctx, tB)).To(Succeed())
+			waitForTenantInCache(tenantB, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				sb := t.GetStatusCondition(osacv1alpha1.TenantConditionStorageBackendReady)
+				g.Expect(sb).NotTo(BeNil())
+				g.Expect(sb.Reason).To(Equal("TierResolutionFailed"))
+			})
+
+			nnB := types.NamespacedName{Name: resourceB, Namespace: namespaceName}
+			ciB := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        resourceB,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantB},
+				},
+				Spec: specA,
+			}
+			Expect(k8sClient.Create(ctx, ciB)).To(Succeed())
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nnB, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnB}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+
+			updatedB := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnB, updatedB)).To(Succeed())
+			condB := updatedB.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(condB).NotTo(BeNil())
+			Expect(condB.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condB.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(condB.Message).To(ContainSubstring("storage tier catalog resolution failed"))
+
+			By("Subcase C: TiersClient returns a tier whose backend is NotFound (setting skippedTiers=true) and ComputeInstance requests that skipped tier")
+			const resourceC = "test-ci-skipped-tier"
+			const tenantC = "tenant-ci-skipped-tier"
+			DeferCleanup(func() {
+				deleteCI(resourceC)
+				deleteTenantInNamespace(ctx, namespaceName, tenantC)
+			})
+
+			tC := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantC, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tC)).To(Succeed())
+			tC.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tC.Status.Namespace = namespaceName
+			tC.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue,
+				osacv1alpha1.TenantReasonFound, "CSP storage ready")
+			tC.Status.StorageClasses = []osacv1alpha1.ResolvedStorageClass{
+				{Name: "netapp-gold-sc", Tier: "gold"},
+			}
+			Expect(k8sClient.Status().Update(ctx, tC)).To(Succeed())
+			waitForTenantInCache(tenantC, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+			})
+
+			specC := newTestComputeInstanceSpec("test_template")
+			specC.BootDisk.StorageTier = "gold"
+			specC.AdditionalDisks = []osacv1alpha1.DiskSpec{
+				{SizeGiB: 40, StorageTier: "fast-skipped"},
+			}
+			nnC := types.NamespacedName{Name: resourceC, Namespace: namespaceName}
+			ciC := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        resourceC,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantC},
+				},
+				Spec: specC,
+			}
+			Expect(k8sClient.Create(ctx, ciC)).To(Succeed())
+
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("gold", "be-netapp"),
+							newTestStorageTier("fast-skipped", "be-missing"),
+						},
+					}.Build(), nil
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					if in.GetId() == "be-netapp" {
+						return newTestCSPManagedBackendGetResponse("netapp"), nil
+					}
+					return nil, status.Error(codes.NotFound, "backend not found")
+				},
+			}
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nnC, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnC}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+
+			updatedC := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnC, updatedC)).To(Succeed())
+			condC := updatedC.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(condC).NotTo(BeNil())
+			Expect(condC.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condC.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			Expect(condC.Message).To(ContainSubstring("unresolved backend references for requested tier(s): fast-skipped"))
+			Expect(condC.Message).NotTo(ContainSubstring("missing tier(s)"))
+		})
+
+		It("should bypass checkStorageReadiness on non-trigger paths when CSP storage is unready", func() {
+			const tenantName = "tenant-ci-nontrigger-unready"
+			DeferCleanup(func() {
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			tenant.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionFalse,
+				"ProvisioningFailed", "Missing StorageClass for tier gold")
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				sr := t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)
+				g.Expect(sr).NotTo(BeNil())
+				g.Expect(sr.Status).To(Equal(metav1.ConditionFalse))
+			})
+
+			var tiersListCalls int
+			var backendsGetCalls int
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			reconciler.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					tiersListCalls++
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier("gold", "be-netapp")},
+					}.Build(), nil
+				},
+			}
+			reconciler.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					backendsGetCalls++
+					return newTestCSPManagedBackendGetResponse("netapp"), nil
+				},
+			}
+
+			By("Subcase A: unit checks on willTriggerProvisioning for ManagementStateManual, a running job, a job that ended for this spec, a retry in backoff and after it, a cancelled job, and a stale ended job; storageGateCondition by VM presence")
+			provisionEntry := func(state osacv1alpha1.NetworkJobState) []osacv1alpha1.NetworkJobStatus {
+				return []osacv1alpha1.NetworkJobStatus{{
+					Task:    computeInstanceProvisionTask,
+					Manager: osacv1alpha1.NetworkJobManagerNone,
+					Attempt: 1,
+					JobID:   "5001",
+					State:   state,
+				}}
+			}
+			baseCI := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "unit-gate-ci", Namespace: namespaceName, UID: "unit-gate-ci"},
+				Status: osacv1alpha1.ComputeInstanceStatus{
+					DesiredConfigVersion:   "v1",
+					ProvisionConfigVersion: "v1",
+				},
+			}
+			Expect(reconciler.willTriggerProvisioning(baseCI)).To(BeTrue())
+
+			manualCI := baseCI.DeepCopy()
+			manualCI.Annotations = map[string]string{osacComputeInstanceManagementStateAnnotation: ManagementStateManual}
+			Expect(reconciler.willTriggerProvisioning(manualCI)).To(BeFalse())
+
+			// A failed job is final for its spec (VMaaS design, Create step 5).
+			for _, state := range []osacv1alpha1.NetworkJobState{
+				osacv1alpha1.NetworkJobStateRunning,
+				osacv1alpha1.NetworkJobStateSucceeded,
+				osacv1alpha1.NetworkJobStateFailed,
+			} {
+				ciWithJob := baseCI.DeepCopy()
+				ciWithJob.Status.Jobs = provisionEntry(state)
+				Expect(reconciler.willTriggerProvisioning(ciWithJob)).To(BeFalse(), "expected false for job state %s", state)
+			}
+
+			// A job cancelled in AAP with no delete pending runs again at once, so
+			// it needs the storage context and the gate.
+			cancelledCI := baseCI.DeepCopy()
+			cancelledCI.Status.Jobs = provisionEntry(osacv1alpha1.NetworkJobStateCancelled)
+			Expect(reconciler.willTriggerProvisioning(cancelledCI)).To(BeTrue())
+
+			// Once the backoff delay of a retry has elapsed the engine launches the
+			// next attempt, so storage preparation and readiness gating must run.
+			backoffClock := clocktesting.NewFakeClock(time.Now())
+			reconciler.Engine.WithClock(backoffClock)
+			retryingCI := baseCI.DeepCopy()
+			retryingCI.Status.Jobs = provisionEntry(osacv1alpha1.NetworkJobStateRetrying)
+			Expect(reconciler.willTriggerProvisioning(retryingCI)).To(BeFalse())
+			backoffClock.Step(networktask.Backoff(computeInstanceProvisionTask, 1, 1) + time.Second)
+			Expect(reconciler.willTriggerProvisioning(retryingCI)).To(BeTrue())
+
+			// A day-2 spec change on an existing VM leaves the job that ended on a
+			// stale config version, which triggers (and therefore gates) a new job.
+			// That holds for a failed job as well: a new spec runs it again.
+			for _, state := range []osacv1alpha1.NetworkJobState{
+				osacv1alpha1.NetworkJobStateSucceeded,
+				osacv1alpha1.NetworkJobStateFailed,
+			} {
+				staleCI := baseCI.DeepCopy()
+				staleCI.Status.ProvisionConfigVersion = "v0"
+				staleCI.Status.Jobs = provisionEntry(state)
+				Expect(reconciler.willTriggerProvisioning(staleCI)).To(BeTrue(), "expected true for stale job state %s", state)
+			}
+
+			Expect(storageGateCondition(nil)).To(Equal(osacv1alpha1.ComputeInstanceConditionProvisioned))
+			Expect(storageGateCondition(&kubevirtv1.VirtualMachine{})).To(Equal(osacv1alpha1.ComputeInstanceConditionConfigurationApplied))
+
+			By("Subcase B: envtest Reconcile with ManagementStateManual bypasses CSP gate when CSP storage is unready")
+			const manualName = "test-ci-nontrigger-manual"
+			DeferCleanup(func() { deleteCI(manualName) })
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.BootDisk.StorageTier = "gold"
+			nnManual := types.NamespacedName{Name: manualName, Namespace: namespaceName}
+			ciManual := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      manualName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+						osacComputeInstanceManagementStateAnnotation: ManagementStateManual,
+					},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, ciManual)).To(Succeed())
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nnManual, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			res, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnManual}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
+			Expect(capture.count).To(BeZero())
+			Expect(tiersListCalls).To(BeZero())
+			Expect(backendsGetCalls).To(BeZero())
+
+			updatedManual := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnManual, updatedManual)).To(Succeed())
+			condManual := updatedManual.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(condManual).NotTo(BeNil())
+			Expect(condManual.Reason).To(Equal(osacv1alpha1.ReasonWaitingForVM))
+
+			By("Subcase C: envtest Reconcile with an in-flight, retrying, completed, or failed provision job bypasses CSP gate when CSP storage is unready")
+			desiredVer, err := provisioning.ComputeDesiredConfigVersion(spec)
+			Expect(err).NotTo(HaveOccurred())
+
+			for _, tc := range []struct {
+				name        string
+				jobState    osacv1alpha1.NetworkJobState
+				wantRequeue bool
+				wantReason  string
+			}{
+				{name: "test-ci-nontrigger-running", jobState: osacv1alpha1.NetworkJobStateRunning, wantRequeue: true, wantReason: osacv1alpha1.ReasonWaitingForVM},
+				{name: "test-ci-nontrigger-retrying", jobState: osacv1alpha1.NetworkJobStateRetrying, wantRequeue: true, wantReason: osacv1alpha1.ReasonWaitingForVM},
+				{name: "test-ci-nontrigger-succeeded", jobState: osacv1alpha1.NetworkJobStateSucceeded, wantRequeue: false, wantReason: osacv1alpha1.ReasonWaitingForVM},
+				// Failed is final until the spec changes, so unlike a backoff it
+				// does not requeue.
+				{name: "test-ci-nontrigger-failed", jobState: osacv1alpha1.NetworkJobStateFailed, wantRequeue: false, wantReason: osacv1alpha1.ReasonProvisioningFailed},
+			} {
+				DeferCleanup(func() { deleteCI(tc.name) })
+				nnJob := types.NamespacedName{Name: tc.name, Namespace: namespaceName}
+				ciJob := &osacv1alpha1.ComputeInstance{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:        tc.name,
+						Namespace:   namespaceName,
+						Annotations: map[string]string{osacTenantKey: tenantName},
+						Finalizers:  []string{osacComputeInstanceFinalizer},
+					},
+					Spec: spec,
+				}
+				Expect(k8sClient.Create(ctx, ciJob)).To(Succeed())
+				ciJob.Status.DesiredConfigVersion = desiredVer
+				ciJob.Status.ProvisionConfigVersion = desiredVer
+				ciJob.Status.Jobs = []osacv1alpha1.NetworkJobStatus{{
+					Task:    computeInstanceProvisionTask,
+					Manager: osacv1alpha1.NetworkJobManagerNone,
+					Attempt: 1,
+					JobID:   aapFake.addJob("running"),
+					State:   tc.jobState,
+					Message: "existing job",
+				}}
+				Expect(k8sClient.Status().Update(ctx, ciJob)).To(Succeed())
+
+				Eventually(func(g Gomega) {
+					cached := &osacv1alpha1.ComputeInstance{}
+					g.Expect(reconciler.Client.Get(ctx, nnJob, cached)).To(Succeed())
+					g.Expect(cached.Status.Jobs).To(HaveLen(1))
+					g.Expect(cached.Status.Jobs[0].State).To(Equal(tc.jobState))
+				}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+				res, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnJob}})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(capture.count).To(BeZero())
+				Expect(tiersListCalls).To(BeZero())
+				Expect(backendsGetCalls).To(BeZero())
+				if tc.wantRequeue {
+					Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+				} else {
+					Expect(res.RequeueAfter).To(BeZero())
+				}
+
+				updatedJob := &osacv1alpha1.ComputeInstance{}
+				Expect(k8sClient.Get(ctx, nnJob, updatedJob)).To(Succeed())
+				condJob := updatedJob.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+				Expect(condJob).NotTo(BeNil())
+				Expect(condJob.Reason).NotTo(Equal(osacv1alpha1.ReasonTenantNotReady))
+				Expect(condJob.Reason).To(Equal(tc.wantReason))
+			}
+		})
+
+		It("should reconcile StorageReconciler into Tenant.Status and hand off cleanly to ComputeInstanceReconciler", func() {
+			const resourceName = "test-ci-storage-handoff"
+			const tenantName = "tenant-ci-storage-handoff"
+			const cspGoldSC = "sc-handoff-netapp-gold"
+			const cspBronzeSC = "sc-handoff-netapp-bronze"
+			const osacFastSC = "sc-handoff-vast-fast"
+
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+			})
+
+			sharedTiersClient := &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("gold", "be-netapp"),
+							newTestStorageTier("bronze", "be-netapp"),
+							newTestStorageTier("fast", "be-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+			sharedBackendsClient := &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "be-netapp":
+						return newTestCSPManagedBackendGetResponse("netapp"), nil
+					case "be-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "backend not found")
+					}
+				},
+			}
+
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+
+			ciReconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			ciReconciler.TiersClient = sharedTiersClient
+			ciReconciler.BackendsClient = sharedBackendsClient
+
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.BootDisk.StorageTier = "gold"
+			spec.AdditionalDisks = []osacv1alpha1.DiskSpec{
+				{SizeGiB: 50, StorageTier: "fast"},
+			}
+			nnCI := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			ci := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        resourceName,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantName},
+				},
+				Spec: spec,
+			}
+			Expect(k8sClient.Create(ctx, ci)).To(Succeed())
+			Eventually(func() error {
+				return ciReconciler.Client.Get(ctx, nnCI, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			By("Step 1: ComputeInstanceReconciler gates before StorageReconciler has populated Tenant.Status")
+			res, err := ciReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnCI}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+
+			By("Step 2: Create real labeled StorageClasses and run StorageReconciler to populate Tenant.Status")
+			for _, scDef := range []struct {
+				name, tenantLabel, tier string
+			}{
+				{name: cspGoldSC, tenantLabel: cspManagedTenantValue, tier: "gold"},
+				{name: cspBronzeSC, tenantLabel: cspManagedTenantValue, tier: "bronze"},
+				{name: osacFastSC, tenantLabel: tenantName, tier: "fast"},
+			} {
+				createLabeledStorageClass(ctx, scDef.name, scDef.tenantLabel, scDef.tier)
+				waitForStorageClassInCache(scDef.name)
+			}
+
+			storageReconciler := NewStorageReconciler(
+				testMcManager, namespaceName, mcmanager.LocalCluster,
+				nil, nil, 100*time.Millisecond, provisioning.DefaultMaxJobHistory,
+			)
+			storageReconciler.Client = k8sClient
+			storageReconciler.TiersClient = sharedTiersClient
+			storageReconciler.BackendsClient = sharedBackendsClient
+
+			nnTenant := types.NamespacedName{Name: tenantName, Namespace: namespaceName}
+			_, err = storageReconciler.Reconcile(ctx, storageReconcileRequest(nnTenant))
+			Expect(err).NotTo(HaveOccurred())
+
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				sr := t.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)
+				g.Expect(sr).NotTo(BeNil())
+				g.Expect(sr.Status).To(Equal(metav1.ConditionTrue))
+				g.Expect(t.Status.StorageClasses).To(ConsistOf(
+					osacv1alpha1.ResolvedStorageClass{Name: cspGoldSC, Tier: "gold"},
+					osacv1alpha1.ResolvedStorageClass{Name: cspBronzeSC, Tier: "bronze"},
+					osacv1alpha1.ResolvedStorageClass{Name: osacFastSC, Tier: "fast"},
+				))
+			})
+
+			By("Step 3: ComputeInstanceReconciler consumes StorageReconciler's Tenant.Status, filters out bronze, and triggers provisioning without tier or backend data for the already-mapped tiers")
+			_, err = ciReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnCI}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(capture.count).To(Equal(1))
+			Expect(capture.scs).To(ConsistOf(
+				osacv1alpha1.ResolvedStorageClass{Name: cspGoldSC, Tier: "gold"},
+				osacv1alpha1.ResolvedStorageClass{Name: osacFastSC, Tier: "fast"},
+			))
+			Expect(capture.tiers).To(BeEmpty())
+			Expect(capture.conns).To(BeEmpty())
+
+			By("Step 4: A ComputeInstance on the mixed CSP/OSAC tenant requesting only OSAC tier 'fast' filters out unrequested CSP StorageClasses")
+			const osacOnlyName = "test-ci-storage-handoff-osac-only"
+			DeferCleanup(func() { deleteCI(osacOnlyName) })
+			specOSACOnly := newTestComputeInstanceSpec("test_template")
+			specOSACOnly.BootDisk.StorageTier = "fast"
+			nnOSACOnly := types.NamespacedName{Name: osacOnlyName, Namespace: namespaceName}
+			ciOSACOnly := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        osacOnlyName,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantName},
+				},
+				Spec: specOSACOnly,
+			}
+			Expect(k8sClient.Create(ctx, ciOSACOnly)).To(Succeed())
+			Eventually(func() error {
+				return ciReconciler.Client.Get(ctx, nnOSACOnly, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err = ciReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnOSACOnly}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(capture.count).To(Equal(2))
+			Expect(capture.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{
+				{Name: osacFastSC, Tier: "fast"},
+			}))
+
+			By("Step 5: Day-2 re-provisioning (kv != nil and a spec change after the job ended) injects filtered tenant_storage_classes while keeping Provisioned=True")
+			vm := &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Labels: map[string]string{
+						osacComputeInstanceNameLabel: resourceName,
+					},
+				},
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
+				},
+			}
+			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vm))).To(Succeed())
+			})
+			Eventually(func(g Gomega) {
+				cachedVM := &kubevirtv1.VirtualMachine{}
+				g.Expect(ciReconciler.Client.Get(ctx, types.NamespacedName{Name: resourceName, Namespace: namespaceName}, cachedVM)).To(Succeed())
+				g.Expect(cachedVM.Status.PrintableStatus).To(Equal(kubevirtv1.VirtualMachineStatusRunning))
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			latestCI := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nnCI, latestCI)).To(Succeed())
+			now := metav1.Now()
+			latestCI.Spec.RestartRequestedAt = &now
+			Expect(k8sClient.Update(ctx, latestCI)).To(Succeed())
+			Expect(latestCI.Status.Jobs).To(HaveLen(1))
+			latestCI.Status.Jobs[0].State = osacv1alpha1.NetworkJobStateSucceeded
+			Expect(k8sClient.Status().Update(ctx, latestCI)).To(Succeed())
+			Eventually(func(g Gomega) {
+				cachedCI := &osacv1alpha1.ComputeInstance{}
+				g.Expect(ciReconciler.Client.Get(ctx, nnCI, cachedCI)).To(Succeed())
+				g.Expect(cachedCI.Spec.RestartRequestedAt).NotTo(BeNil())
+				g.Expect(cachedCI.Status.Jobs).To(HaveLen(1))
+				g.Expect(cachedCI.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateSucceeded))
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			capture.scs = nil
+			_, err = ciReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nnCI}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(capture.count).To(Equal(3))
+			Expect(capture.scs).To(ConsistOf(
+				osacv1alpha1.ResolvedStorageClass{Name: cspGoldSC, Tier: "gold"},
+				osacv1alpha1.ResolvedStorageClass{Name: osacFastSC, Tier: "fast"},
+			))
+			Expect(k8sClient.Get(ctx, nnCI, latestCI)).To(Succeed())
+			provCond := latestCI.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			Expect(provCond).NotTo(BeNil())
+			Expect(provCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(provCond.Reason).To(Equal(osacv1alpha1.ReasonInfrastructureReady))
+		})
+
+		catalogTiersClient := func(tiers ...*privatev1.StorageTier) *mockStorageTiersLister {
+			return &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{Items: tiers}.Build(), nil
+				},
+			}
+		}
+
+		unavailableTiersClient := func() *mockStorageTiersLister {
+			return &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return nil, status.Error(codes.Unavailable, "fulfillment service unavailable")
+				},
+			}
+		}
+
+		// mixedBackendsClient serves a CSP-managed NetApp backend, an OSAC-managed
+		// VAST backend with an inline password, and an OSAC-managed VAST backend
+		// whose password comes from a Secret.
+		mixedBackendsClient := func() *mockStorageBackendsClient {
+			return &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "be-netapp":
+						return newTestCSPManagedBackendGetResponse("netapp"), nil
+					case "be-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					case "be-vast-secret":
+						return newTestStorageBackendGetResponseWithSecret("vast", "secret-vast-password"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "backend not found")
+					}
+				},
+			}
+		}
+
+		failingSecretsClient := func() *mockSecretsClient {
+			return &mockSecretsClient{
+				getFunc: func(context.Context, *privatev1.SecretsGetRequest, ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+					return nil, status.Error(codes.Unavailable, "secrets service unavailable")
+				},
+			}
+		}
+
+		createStorageTenant := func(tenantName string, classes []osacv1alpha1.ResolvedStorageClass, conditions ...metav1.Condition) {
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			DeferCleanup(func() { deleteTenantInNamespace(ctx, namespaceName, tenantName) })
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			tenant.Status.StorageClasses = classes
+			for _, cond := range conditions {
+				tenant.SetStatusCondition(osacv1alpha1.TenantConditionType(cond.Type), cond.Status, cond.Reason, cond.Message)
+			}
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseReady))
+				g.Expect(t.Status.StorageClasses).To(HaveLen(len(classes)))
+				g.Expect(t.Status.Conditions).To(HaveLen(len(conditions)))
+			})
+		}
+
+		setTenantStorageClasses := func(tenantName string, classes []osacv1alpha1.ResolvedStorageClass) {
+			tenant := &osacv1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, tenant)).To(Succeed())
+			tenant.Status.StorageClasses = classes
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+			waitForTenantInCache(tenantName, func(g Gomega, t *osacv1alpha1.Tenant) {
+				g.Expect(t.Status.StorageClasses).To(ConsistOf(classes))
+			})
+		}
+
+		storageSpec := func(bootTier string, additionalTiers ...string) osacv1alpha1.ComputeInstanceSpec {
+			spec := newTestComputeInstanceSpec("test_template")
+			spec.BootDisk.StorageTier = bootTier
+			for _, tier := range additionalTiers {
+				spec.AdditionalDisks = append(spec.AdditionalDisks, osacv1alpha1.DiskSpec{SizeGiB: 20, StorageTier: tier})
+			}
+			return spec
+		}
+
+		createStorageCI := func(name, tenantName string, spec osacv1alpha1.ComputeInstanceSpec) types.NamespacedName {
+			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+			Expect(k8sClient.Create(ctx, &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        name,
+					Namespace:   namespaceName,
+					Annotations: map[string]string{osacTenantKey: tenantName},
+				},
+				Spec: spec,
+			})).To(Succeed())
+			DeferCleanup(func() { deleteCI(name) })
+			Eventually(func() error {
+				return testMcManager.GetLocalManager().GetClient().Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+			return nn
+		}
+
+		reconcileCI := func(r *ComputeInstanceReconciler, nn types.NamespacedName) reconcile.Result {
+			res, err := r.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			return res
+		}
+
+		getCI := func(nn types.NamespacedName) *osacv1alpha1.ComputeInstance {
+			ci := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+			return ci
+		}
+
+		// waitForCachedCI waits until the reconciler reads the stored object, so
+		// its next status write cannot conflict.
+		waitForCachedCI := func(r *ComputeInstanceReconciler, nn types.NamespacedName) {
+			want := getCI(nn).ResourceVersion
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(r.Client.Get(ctx, nn, cached)).To(Succeed())
+				g.Expect(cached.ResourceVersion).To(Equal(want))
+			}, 5*time.Second, 20*time.Millisecond).Should(Succeed())
+		}
+
+		expectCondition := func(ci *osacv1alpha1.ComputeInstance, condType osacv1alpha1.ComputeInstanceConditionType,
+			condStatus metav1.ConditionStatus, reason string) *metav1.Condition {
+			cond := ci.GetStatusCondition(condType)
+			Expect(cond).NotTo(BeNil(), "condition %s is missing", condType)
+			Expect(cond.Status).To(Equal(condStatus), "condition %s status", condType)
+			Expect(cond.Reason).To(Equal(reason), "condition %s reason", condType)
+			return cond
+		}
+
+		goldSC := osacv1alpha1.ResolvedStorageClass{Name: "netapp-gold-sc", Tier: "gold"}
+		silverSC := osacv1alpha1.ResolvedStorageClass{Name: "netapp-silver-sc", Tier: "silver"}
+		fastSC := osacv1alpha1.ResolvedStorageClass{Name: "vast-fast-sc", Tier: "fast"}
+
+		It("should reuse existing Tenant.status.storageClasses mappings for requested tiers without calling the storage tier catalog, which may be unavailable", func() {
+			By("Subcase A: mixed CSP/OSAC tenant with StorageReady=True and every requested tier mapped")
+			const resourceA = "test-ci-reuse-catalog-down-mixed"
+			const tenantA = "tenant-ci-reuse-catalog-down-mixed"
+			createStorageTenant(tenantA, []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC, silverSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound),
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnA := createStorageCI(resourceA, tenantA, storageSpec("gold", "fast"))
+
+			var capA triggerCapture
+			tiers := unavailableTiersClient()
+			backends := mixedBackendsClient()
+			aapFake := capturingAAP(newWLFakeAAP(), &capA)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			reconciler.TiersClient = tiers
+			reconciler.BackendsClient = backends
+
+			reconcileCI(reconciler, nnA)
+			Expect(capA.count).To(Equal(1))
+			Expect(capA.scs).To(ConsistOf(goldSC, fastSC))
+			Expect(capA.tiers).To(BeEmpty())
+			Expect(capA.conns).To(BeEmpty())
+			Expect(tiers.listCallCount).To(BeZero())
+			Expect(backends.getCallCount).To(BeZero())
+			expectCondition(getCI(nnA), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonWaitingForVM)
+
+			By("Subcase B: pure-OSAC tenant whose StorageReconciler also hit the outage (StorageBackendReady=TierResolutionFailed) keeps its existing mapping")
+			const resourceB = "test-ci-reuse-catalog-down-osac"
+			const tenantB = "tenant-ci-reuse-catalog-down-osac"
+			createStorageTenant(tenantB, []osacv1alpha1.ResolvedStorageClass{fastSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageBackendReady, metav1.ConditionFalse, "TierResolutionFailed"),
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnB := createStorageCI(resourceB, tenantB, storageSpec("fast"))
+
+			var capB triggerCapture
+			capturingAAP(aapFake, &capB)
+			reconcileCI(reconciler, nnB)
+			Expect(capB.count).To(Equal(1))
+			Expect(capB.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{fastSC}))
+			Expect(capB.tiers).To(BeEmpty())
+			Expect(capB.conns).To(BeEmpty())
+		})
+
+		It("should reuse an existing mapping without resolving its backend credential, and still resolve credentials for a requested tier that needs JIT", func() {
+			catalog := catalogTiersClient(
+				newTestStorageTier("gold", "be-netapp"),
+				newTestStorageTier("fast", "be-vast-secret"),
+				newTestStorageTier("bronze", "be-vast"),
+			)
+
+			By("Subcase A: mixed CSP/OSAC tenant with every requested tier mapped never reads fast's password Secret")
+			const resourceA = "test-ci-reuse-secret-down-mixed"
+			const tenantA = "tenant-ci-reuse-secret-down-mixed"
+			createStorageTenant(tenantA, []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound),
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnA := createStorageCI(resourceA, tenantA, storageSpec("gold", "fast"))
+
+			var capA triggerCapture
+			secrets := failingSecretsClient()
+			aapFake := capturingAAP(newWLFakeAAP(), &capA)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			reconciler.TiersClient = catalog
+			reconciler.BackendsClient = mixedBackendsClient()
+			reconciler.SecretsClient = secrets
+
+			reconcileCI(reconciler, nnA)
+			Expect(secrets.getCallCount).To(BeZero())
+			Expect(capA.count).To(Equal(1))
+			Expect(capA.scs).To(ConsistOf(goldSC, fastSC))
+			Expect(capA.tiers).To(BeEmpty())
+			Expect(capA.conns).To(BeEmpty())
+
+			By("Subcase B: pure-OSAC tenant whose only requested tier is mapped never reads the Secret either")
+			const resourceB = "test-ci-reuse-secret-down-osac"
+			const tenantB = "tenant-ci-reuse-secret-down-osac"
+			createStorageTenant(tenantB, []osacv1alpha1.ResolvedStorageClass{fastSC},
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnB := createStorageCI(resourceB, tenantB, storageSpec("fast"))
+
+			var capB triggerCapture
+			capturingAAP(aapFake, &capB)
+			reconcileCI(reconciler, nnB)
+			Expect(secrets.getCallCount).To(BeZero())
+			Expect(capB.count).To(Equal(1))
+			Expect(capB.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{fastSC}))
+			Expect(capB.tiers).To(BeEmpty())
+			Expect(capB.conns).To(BeEmpty())
+
+			By("Subcase C: an unmapped tier forces the lookup, and a mapped tier whose Secret cannot be read does not block it")
+			const resourceC = "test-ci-reuse-secret-down-jit"
+			const tenantC = "tenant-ci-reuse-secret-down-jit"
+			createStorageTenant(tenantC, []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound),
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnC := createStorageCI(resourceC, tenantC, storageSpec("gold", "fast", "bronze"))
+
+			var capC triggerCapture
+			capturingAAP(aapFake, &capC)
+			reconcileCI(reconciler, nnC)
+			Expect(secrets.getCallCount).To(Equal(1))
+			Expect(capC.count).To(Equal(1))
+			Expect(capC.scs).To(ConsistOf(goldSC, fastSC))
+			Expect(capC.tiers).To(HaveLen(1))
+			Expect(capC.tiers[0].Name).To(Equal("bronze"))
+			Expect(capC.conns).To(HaveKey("be-vast"))
+			Expect(capC.conns).NotTo(HaveKey("be-vast-secret"))
+		})
+
+		It("should keep gating requested tiers that still need catalog data during a lookup failure, while unmapped OSAC tiers keep JIT provisioning when the catalog resolves", func() {
+			By("Subcase A: pure-OSAC tenant requesting unmapped OSAC tier bronze while the catalog is unavailable")
+			const resourceA = "test-ci-gate-catalog-down-jit"
+			const tenantA = "tenant-ci-gate-catalog-down-jit"
+			createStorageTenant(tenantA, []osacv1alpha1.ResolvedStorageClass{fastSC},
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnA := createStorageCI(resourceA, tenantA, storageSpec("fast", "bronze"))
+
+			var capA triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capA)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			reconciler.TiersClient = unavailableTiersClient()
+			reconciler.BackendsClient = mixedBackendsClient()
+
+			res := reconcileCI(reconciler, nnA)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capA.count).To(BeZero())
+			condA := expectCondition(getCI(nnA), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(condA.Message).To(ContainSubstring("storage tier catalog resolution failed"))
+			Expect(condA.Message).To(ContainSubstring("have no StorageClass in Tenant status: bronze"))
+
+			By("Subcase B: mixed tenant with StorageReady=False cannot classify mapped tiers as OSAC-managed while the catalog is unavailable")
+			const resourceB = "test-ci-gate-catalog-down-sr-false"
+			const tenantB = "tenant-ci-gate-catalog-down-sr-false"
+			createStorageTenant(tenantB, []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionFalse, osacv1alpha1.TenantReasonNotFound),
+				testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnB := createStorageCI(resourceB, tenantB, storageSpec("fast"))
+
+			res = reconcileCI(reconciler, nnB)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capA.count).To(BeZero())
+			condB := expectCondition(getCI(nnB), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(condB.Message).To(ContainSubstring("StorageReady=False"))
+
+			By("Subcase C: with the catalog resolving, an unmapped OSAC tier proceeds with JIT tier data next to a mapped CSP tier")
+			const resourceC = "test-ci-jit-unmapped-osac"
+			const tenantC = "tenant-ci-jit-unmapped-osac"
+			createStorageTenant(tenantC, []osacv1alpha1.ResolvedStorageClass{goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnC := createStorageCI(resourceC, tenantC, storageSpec("gold", "fast"))
+
+			var capC triggerCapture
+			capturingAAP(aapFake, &capC)
+			reconciler.TiersClient = catalogTiersClient(
+				newTestStorageTier("gold", "be-netapp"),
+				newTestStorageTier("fast", "be-vast"),
+			)
+			reconcileCI(reconciler, nnC)
+			Expect(capC.count).To(Equal(1))
+			Expect(capC.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{goldSC}))
+			Expect(capC.tiers).To(HaveLen(1))
+			Expect(capC.tiers[0].Name).To(Equal("fast"))
+			Expect(capC.conns).To(HaveKey("be-vast"))
+			Expect(capC.conns).NotTo(HaveKey("be-netapp"))
+		})
+
+		// settleRunningCI records a succeeded provisioning job for the current spec
+		// on a ComputeInstance whose VM is running, then reconciles it to steady
+		// state so a later spec change becomes a day-2 provisioning trigger.
+		settleRunningCI := func(r *ComputeInstanceReconciler, nn types.NamespacedName, vmName string) {
+			vm := &kubevirtv1.VirtualMachine{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      vmName,
+					Namespace: namespaceName,
+					Labels:    map[string]string{osacComputeInstanceNameLabel: nn.Name},
+				},
+				Status: kubevirtv1.VirtualMachineStatus{
+					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
+					Conditions: []kubevirtv1.VirtualMachineCondition{
+						{Type: kubevirtv1.VirtualMachineReady, Status: corev1.ConditionTrue},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vm))).To(Succeed())
+			})
+			Eventually(func(g Gomega) {
+				cachedVM := &kubevirtv1.VirtualMachine{}
+				g.Expect(r.Client.Get(ctx, types.NamespacedName{Name: vmName, Namespace: namespaceName}, cachedVM)).To(Succeed())
+				g.Expect(cachedVM.Status.PrintableStatus).To(Equal(kubevirtv1.VirtualMachineStatusRunning))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			ci := getCI(nn)
+			version, err := provisioning.ComputeDesiredConfigVersion(ci.Spec)
+			Expect(err).NotTo(HaveOccurred())
+			ci.Status.DesiredConfigVersion = version
+			ci.Status.ProvisionConfigVersion = version
+			ci.Status.VirtualMachineReference = &osacv1alpha1.VirtualMachineReferenceType{
+				Namespace:                  namespaceName,
+				KubeVirtVirtualMachineName: vmName,
+			}
+			ci.Status.Jobs = []osacv1alpha1.NetworkJobStatus{{
+				Task:    computeInstanceProvisionTask,
+				Manager: osacv1alpha1.NetworkJobManagerNone,
+				Attempt: 1,
+				JobID:   "initial-provision-job",
+				State:   osacv1alpha1.NetworkJobStateSucceeded,
+			}}
+			Expect(k8sClient.Status().Update(ctx, ci)).To(Succeed())
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(r.Client.Get(ctx, nn, cached)).To(Succeed())
+				g.Expect(cached.Status.Jobs).To(HaveLen(1))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			reconcileCI(r, nn)
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(r.Client.Get(ctx, nn, cached)).To(Succeed())
+				g.Expect(cached.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseRunning))
+				g.Expect(cached.IsStatusConditionTrue(osacv1alpha1.ComputeInstanceConditionProvisioned)).To(BeTrue())
+				g.Expect(cached.IsStatusConditionTrue(osacv1alpha1.ComputeInstanceConditionConfigurationApplied)).To(BeTrue())
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+		}
+
+		// resizeCI changes memoryGiB (a mutable field), which moves the desired
+		// config version and makes the next reconcile trigger a day-2 job.
+		resizeCI := func(r *ComputeInstanceReconciler, nn types.NamespacedName) {
+			ci := getCI(nn)
+			ci.Spec.MemoryGiB *= 2
+			Expect(k8sClient.Update(ctx, ci)).To(Succeed())
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(r.Client.Get(ctx, nn, cached)).To(Succeed())
+				g.Expect(cached.Spec.MemoryGiB).To(Equal(ci.Spec.MemoryGiB))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+		}
+
+		expectRunningVMStatus := func(ci *osacv1alpha1.ComputeInstance) {
+			Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseRunning))
+			expectCondition(ci, osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionTrue, osacv1alpha1.ReasonInfrastructureReady)
+			expectCondition(ci, osacv1alpha1.ComputeInstanceConditionReady, metav1.ConditionTrue, osacv1alpha1.ReasonAsExpected)
+		}
+
+		It("should gate a day-2 provisioning job on an existing VM when a requested CSP tier has lost its StorageClass mapping, without overwriting the running VM's status", func() {
+			const resourceName = "test-ci-day2-csp-gate"
+			const tenantName = "tenant-ci-day2-csp-gate"
+			// StorageReady is latched True, so it stays True after the silver
+			// CSP-managed StorageClass disappears from Tenant.status.storageClasses.
+			createStorageTenant(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC, silverSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nn := createStorageCI(resourceName, tenantName, storageSpec("gold", "silver"))
+
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			reconciler.TiersClient = catalogTiersClient(
+				newTestStorageTier("gold", "be-netapp"),
+				newTestStorageTier("silver", "be-netapp"),
+			)
+			reconciler.BackendsClient = mixedBackendsClient()
+
+			settleRunningCI(reconciler, nn, resourceName)
+			Expect(capture.count).To(BeZero())
+
+			setTenantStorageClasses(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC})
+			fakeRecorder := events.NewFakeRecorder(100)
+			reconciler.Recorder = fakeRecorder
+
+			By("Step 1: a resize triggers a day-2 job, which is gated on the missing silver mapping")
+			resizeCI(reconciler, nn)
+			res := reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+
+			gated := getCI(nn)
+			expectRunningVMStatus(gated)
+			cfgCond := expectCondition(gated, osacv1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(cfgCond.Message).To(ContainSubstring("missing tier(s): silver"))
+			Expect(gated.Status.Jobs).To(HaveLen(1))
+			Expect(gated.Status.Jobs[0].JobID).To(Equal("initial-provision-job"))
+			Expect(gated.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateSucceeded))
+			Eventually(fakeRecorder.Events).Should(Receive(And(
+				ContainSubstring(eventReasonTenantNotReady),
+				ContainSubstring("missing tier(s): silver"),
+			)))
+
+			By("Step 2: the next reconcile stays gated without emitting a duplicate TenantNotReady event")
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Client.Get(ctx, nn, cached)).To(Succeed())
+				c := cached.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionConfigurationApplied)
+				g.Expect(c).NotTo(BeNil())
+				g.Expect(c.Reason).To(Equal(osacv1alpha1.ReasonTenantNotReady))
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+			res = reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+			Expect(fakeRecorder.Events).NotTo(Receive())
+			expectRunningVMStatus(getCI(nn))
+
+			By("Step 3: once the silver mapping returns, the day-2 job triggers with both requested StorageClasses")
+			setTenantStorageClasses(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC, silverSC})
+			reconcileCI(reconciler, nn)
+			Expect(capture.count).To(Equal(1))
+			Expect(capture.scs).To(ConsistOf(goldSC, silverSC))
+
+			triggered := getCI(nn)
+			expectRunningVMStatus(triggered)
+			cfgCond = expectCondition(triggered, osacv1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionFalse, osacv1alpha1.ReasonAsExpected)
+			Expect(cfgCond.Message).To(Equal("Applying configuration"))
+		})
+
+		It("should trigger a day-2 provisioning job on an existing VM with JIT tier data for an unmapped OSAC-managed tier", func() {
+			const resourceName = "test-ci-day2-osac-jit"
+			const tenantName = "tenant-ci-day2-osac-jit"
+			createStorageTenant(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nn := createStorageCI(resourceName, tenantName, storageSpec("gold", "fast"))
+
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			reconciler.TiersClient = catalogTiersClient(
+				newTestStorageTier("gold", "be-netapp"),
+				newTestStorageTier("fast", "be-vast"),
+			)
+			reconciler.BackendsClient = mixedBackendsClient()
+
+			settleRunningCI(reconciler, nn, resourceName)
+			resizeCI(reconciler, nn)
+			reconcileCI(reconciler, nn)
+
+			Expect(capture.count).To(Equal(1))
+			Expect(capture.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{goldSC}))
+			Expect(capture.tiers).To(HaveLen(1))
+			Expect(capture.tiers[0].Name).To(Equal("fast"))
+			Expect(capture.conns).To(HaveKey("be-vast"))
+			Expect(capture.conns).NotTo(HaveKey("be-netapp"))
+
+			triggered := getCI(nn)
+			expectRunningVMStatus(triggered)
+			expectCondition(triggered, osacv1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionFalse, osacv1alpha1.ReasonAsExpected)
+		})
+
+		It("should provision a CSP-managed VAST ComputeInstance with the supplied StorageClass and never resolve or forward the backend's credentials", func() {
+			vastGoldSC := osacv1alpha1.ResolvedStorageClass{Name: "vast-gold-sc", Tier: "gold"}
+			catalog := catalogTiersClient(
+				newTestStorageTier("gold", "be-vast-csp"),
+				newTestStorageTier("bronze", "be-vast"),
+			)
+			backends := &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "be-vast-csp":
+						return newTestCSPManagedBackendWithCredentialsGetResponse("vast", "secret-vast-csp-password"), nil
+					case "be-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "backend not found")
+					}
+				},
+			}
+			secrets := failingSecretsClient()
+
+			By("Subcase A: the CSP-managed VAST tier is mapped and StorageReady=True, so the job proceeds with no catalog, backend, or Secret lookup")
+			const resourceA = "test-ci-csp-vast-mapped"
+			const tenantA = "tenant-ci-csp-vast-mapped"
+			createStorageTenant(tenantA, []osacv1alpha1.ResolvedStorageClass{vastGoldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnA := createStorageCI(resourceA, tenantA, storageSpec("gold"))
+
+			var capA triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capA)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			reconciler.TiersClient = catalog
+			reconciler.BackendsClient = backends
+			reconciler.SecretsClient = secrets
+
+			reconcileCI(reconciler, nnA)
+			Expect(capA.count).To(Equal(1))
+			Expect(capA.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{vastGoldSC}))
+			Expect(capA.tiers).To(BeEmpty())
+			Expect(capA.conns).To(BeEmpty())
+			Expect(catalog.listCallCount).To(BeZero())
+			Expect(backends.getCallCount).To(BeZero())
+			Expect(secrets.getCallCount).To(BeZero())
+
+			By("Subcase B: an unmapped OSAC tier forces the catalog lookup, which excludes the CSP-managed VAST backend's tier definition, connection, and Secret")
+			const resourceB = "test-ci-csp-vast-with-jit"
+			const tenantB = "tenant-ci-csp-vast-with-jit"
+			createStorageTenant(tenantB, []osacv1alpha1.ResolvedStorageClass{vastGoldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nnB := createStorageCI(resourceB, tenantB, storageSpec("gold", "bronze"))
+
+			var capB triggerCapture
+			capturingAAP(aapFake, &capB)
+			reconcileCI(reconciler, nnB)
+			Expect(capB.count).To(Equal(1))
+			Expect(capB.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{vastGoldSC}))
+			Expect(capB.tiers).To(HaveLen(1))
+			Expect(capB.tiers[0].Name).To(Equal("bronze"))
+			Expect(capB.conns).To(HaveKey("be-vast"))
+			Expect(capB.conns).NotTo(HaveKey("be-vast-csp"))
+			Expect(catalog.listCallCount).To(Equal(1))
+			Expect(secrets.getCallCount).To(BeZero())
+
+			By("Subcase C: StorageReady=False keeps a mapped CSP-managed VAST tier gated")
+			const resourceC = "test-ci-csp-vast-not-ready"
+			const tenantC = "tenant-ci-csp-vast-not-ready"
+			createStorageTenant(tenantC, []osacv1alpha1.ResolvedStorageClass{vastGoldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionFalse, osacv1alpha1.TenantReasonNotFound))
+			nnC := createStorageCI(resourceC, tenantC, storageSpec("gold"))
+
+			var capC triggerCapture
+			capturingAAP(aapFake, &capC)
+			res := reconcileCI(reconciler, nnC)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capC.count).To(BeZero())
+			condC := expectCondition(getCI(nnC), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(condC.Message).To(ContainSubstring("StorageReady=False"))
+			Expect(secrets.getCallCount).To(BeZero())
+		})
+
+		It("should prepare storage context and enforce CSP readiness gating when retrying a failed job after backoff elapses", func() {
+			const resourceName = "test-ci-backoff-retry-storage"
+			const tenantName = "tenant-ci-backoff-retry-storage"
+			createStorageTenant(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nn := createStorageCI(resourceName, tenantName, storageSpec("gold", "silver", "fast"))
+
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			backoffClock := clocktesting.NewFakeClock(time.Now())
+			reconciler.Engine.WithClock(backoffClock)
+			reconciler.TiersClient = catalogTiersClient(
+				newTestStorageTier("gold", "be-netapp"),
+				newTestStorageTier("silver", "be-netapp"),
+				newTestStorageTier("fast", "be-vast"),
+			)
+			reconciler.BackendsClient = mixedBackendsClient()
+
+			By("Step 0: the first attempt runs while silver is mapped and ends in a retryable AAP error")
+			setTenantStorageClasses(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC, silverSC})
+			reconcileCI(reconciler, nn)
+			Expect(capture.count).To(Equal(1))
+			waitForCachedCI(reconciler, nn)
+			aapFake.finish(computeInstanceProvisionTask, "error", "")
+			reconcileCI(reconciler, nn)
+			Expect(getCI(nn).Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRetrying))
+			waitForCachedCI(reconciler, nn)
+			setTenantStorageClasses(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC})
+
+			By("Step 1: during the backoff nothing is resolved, gated, or launched")
+			catalog, ok := reconciler.TiersClient.(*mockStorageTiersLister)
+			Expect(ok).To(BeTrue())
+			catalogCalls := catalog.listCallCount
+			res := reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(BeNumerically(">", defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(Equal(1))
+			Expect(catalog.listCallCount).To(Equal(catalogCalls))
+			expectCondition(getCI(nn), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonWaitingForVM)
+			waitForCachedCI(reconciler, nn)
+
+			By("Step 2: when backoff has elapsed but CSP tier silver is unmapped, the retry is gated on storage readiness")
+			backoffClock.Step(networktask.Backoff(computeInstanceProvisionTask, 1, 1) + time.Second)
+			res = reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(Equal(1))
+			gated := getCI(nn)
+			Expect(gated.Status.Jobs).To(HaveLen(1))
+			Expect(gated.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRetrying))
+			Expect(gated.Status.Jobs[0].Attempt).To(Equal(int32(1)))
+			cond := expectCondition(gated, osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(cond.Message).To(ContainSubstring("missing tier(s): silver"))
+			waitForCachedCI(reconciler, nn)
+
+			By("Step 3: once silver is mapped in Tenant.status.storageClasses, the elapsed-backoff retry triggers with injected StorageClasses and JIT tier/backend data")
+			setTenantStorageClasses(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC, silverSC})
+			reconcileCI(reconciler, nn)
+			Expect(capture.count).To(Equal(2))
+			Expect(capture.scs).To(ConsistOf(goldSC, silverSC))
+			Expect(capture.tiers).To(HaveLen(1))
+			Expect(capture.tiers[0].Name).To(Equal("fast"))
+			Expect(capture.conns).To(HaveKey("be-vast"))
+			Expect(capture.conns).NotTo(HaveKey("be-netapp"))
+
+			retried := getCI(nn)
+			Expect(retried.Status.Jobs).To(HaveLen(1))
+			Expect(retried.Status.Jobs[0].Attempt).To(Equal(int32(2)))
+			Expect(retried.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRunning))
+			Expect(retried.Status.Jobs[0].JobID).To(Equal(strconv.Itoa(aapFake.last(computeInstanceProvisionTask).id)))
+		})
+
+		It("should run a failed provision job again for a new spec only once storage is ready, and keep it final for the same spec", func() {
+			const resourceName = "test-ci-failed-rerun-storage"
+			const tenantName = "tenant-ci-failed-rerun-storage"
+			createStorageTenant(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nn := createStorageCI(resourceName, tenantName, storageSpec("gold"))
+
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+
+			By("Step 1: the job fails for good and the same spec stays failed, gated or not")
+			reconcileCI(reconciler, nn)
+			Expect(capture.count).To(Equal(1))
+			waitForCachedCI(reconciler, nn)
+			aapFake.finish(computeInstanceProvisionTask, "failed", "")
+			reconcileCI(reconciler, nn)
+			Expect(getCI(nn).Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateFailed))
+			waitForCachedCI(reconciler, nn)
+			setTenantStorageClasses(tenantName, nil)
+			res := reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(BeZero())
+			Expect(capture.count).To(Equal(1))
+			failed := getCI(nn)
+			Expect(failed.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
+			expectCondition(failed, osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonProvisioningFailed)
+			waitForCachedCI(reconciler, nn)
+
+			By("Step 2: a new spec would run the job again, so it is gated with the failed entry untouched")
+			resizeCI(reconciler, nn)
+			res = reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(Equal(1))
+			gated := getCI(nn)
+			Expect(gated.Status.Jobs).To(HaveLen(1))
+			Expect(gated.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateFailed))
+			Expect(gated.Status.Jobs[0].Attempt).To(Equal(int32(1)))
+			Expect(gated.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
+			cond := expectCondition(gated, osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(cond.Message).To(ContainSubstring("missing tier(s): gold"))
+			waitForCachedCI(reconciler, nn)
+
+			By("Step 3: with the mapping back the job runs as the next attempt")
+			setTenantStorageClasses(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC})
+			reconcileCI(reconciler, nn)
+			Expect(capture.count).To(Equal(2))
+			Expect(capture.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{goldSC}))
+			rerun := getCI(nn)
+			Expect(rerun.Status.Jobs[0].Attempt).To(Equal(int32(2)))
+			Expect(rerun.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRunning))
+			Expect(rerun.Status.ProvisionConfigVersion).To(Equal(rerun.Status.DesiredConfigVersion))
+		})
+
+		It("should not launch a job cancelled by hand in AAP without the storage context, and gate its next attempt", func() {
+			const resourceName = "test-ci-hand-cancel-storage"
+			const tenantName = "tenant-ci-hand-cancel-storage"
+			createStorageTenant(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nn := createStorageCI(resourceName, tenantName, storageSpec("gold"))
+
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+
+			By("Step 1: the job is running when CSP storage loses the mapping and AAP reports the job canceled")
+			reconcileCI(reconciler, nn)
+			Expect(capture.count).To(Equal(1))
+			waitForCachedCI(reconciler, nn)
+			setTenantStorageClasses(tenantName, nil)
+			aapFake.setJobStatus(getCI(nn).Status.Jobs[0].JobID, "canceled")
+
+			By("Step 2: the poll records the end of the job and launches nothing")
+			reconcileCI(reconciler, nn)
+			Expect(capture.count).To(Equal(1))
+			Expect(getCI(nn).Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateCancelled))
+			waitForCachedCI(reconciler, nn)
+
+			By("Step 3: the next attempt is gated until the mapping returns")
+			res := reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(Equal(1))
+			cond := expectCondition(getCI(nn), osacv1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			Expect(cond.Message).To(ContainSubstring("missing tier(s): gold"))
+			waitForCachedCI(reconciler, nn)
+
+			setTenantStorageClasses(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC})
+			reconcileCI(reconciler, nn)
+			Expect(capture.count).To(Equal(2))
+			Expect(capture.scs).To(Equal([]osacv1alpha1.ResolvedStorageClass{goldSC}))
+			Expect(getCI(nn).Status.Jobs[0].Attempt).To(Equal(int32(2)))
+		})
+
+		It("should keep reporting a requested restart while its day-2 job is gated", func() {
+			const resourceName = "test-ci-day2-restart-gate"
+			const tenantName = "tenant-ci-day2-restart-gate"
+			createStorageTenant(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC, silverSC},
+				testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound))
+			nn := createStorageCI(resourceName, tenantName, storageSpec("gold", "silver"))
+
+			var capture triggerCapture
+			aapFake := capturingAAP(newWLFakeAAP(), &capture)
+			reconciler := newTestCIReconcilerWithFake(aapFake, "", namespaceName, "", 100*time.Millisecond)
+			settleRunningCI(reconciler, nn, resourceName)
+			setTenantStorageClasses(tenantName, []osacv1alpha1.ResolvedStorageClass{goldSC})
+
+			ci := getCI(nn)
+			requested := metav1.Now()
+			ci.Spec.RestartRequestedAt = &requested
+			Expect(k8sClient.Update(ctx, ci)).To(Succeed())
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.ComputeInstance{}
+				g.Expect(reconciler.Client.Get(ctx, nn, cached)).To(Succeed())
+				g.Expect(cached.Spec.RestartRequestedAt).NotTo(BeNil())
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			res := reconcileCI(reconciler, nn)
+			Expect(res.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(capture.count).To(BeZero())
+
+			gated := getCI(nn)
+			expectRunningVMStatus(gated)
+			expectCondition(gated, osacv1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionFalse, osacv1alpha1.ReasonTenantNotReady)
+			restart := gated.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartInProgress)
+			Expect(restart).NotTo(BeNil())
+			Expect(restart.Status).To(Equal(metav1.ConditionTrue))
+		})
+	})
+
+	Context("Storage readiness gating decisions (OSAC-6596)", func() {
+		srTrue := testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound)
+		srFalse := testTenantCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionFalse, osacv1alpha1.TenantReasonNotFound)
+		csrTrue := testTenantCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue, osacv1alpha1.TenantReasonFound)
+		tierResolutionFailed := testTenantCondition(osacv1alpha1.TenantConditionStorageBackendReady, metav1.ConditionFalse, "TierResolutionFailed")
+
+		goldSC := osacv1alpha1.ResolvedStorageClass{Name: "netapp-gold-sc", Tier: "gold"}
+		fastSC := osacv1alpha1.ResolvedStorageClass{Name: "vast-fast-sc", Tier: "fast"}
+
+		DescribeTable("checkStorageReadiness",
+			func(tc storageReadinessCase) {
+				tenant := &osacv1alpha1.Tenant{
+					ObjectMeta: metav1.ObjectMeta{Name: "tenant-readiness"},
+					Status: osacv1alpha1.TenantStatus{
+						Phase:          osacv1alpha1.TenantPhaseReady,
+						StorageClasses: tc.classes,
+						Conditions:     tc.conditions,
+					},
+				}
+				osacTiers := testTierDefinitions("vast", tc.osacTiers...)
+				cspTiers := testTierDefinitions("netapp", tc.cspTiers...)
+				var tierErr error
+				if tc.catalogErr {
+					// resolveAndPartitionTierContext returns no tiers alongside a catalog error.
+					osacTiers, cspTiers = nil, nil
+					tierErr = status.Error(codes.Unavailable, "fulfillment service unavailable")
+				}
+				reqCSPTiers := requestedCSPTiers(tenant, tc.requested, osacTiers, cspTiers)
+				unresolvedTiers := unresolvedRequestedTiers(tc.requested, osacTiers, cspTiers, tc.skipped)
+
+				ready, msg := checkStorageReadiness(tenant, tc.requested, reqCSPTiers, unresolvedTiers, tierErr)
+				Expect(ready).To(Equal(tc.wantReady), "message: %s", msg)
+				if tc.wantReady {
+					Expect(msg).To(BeEmpty())
+				}
+				for _, want := range tc.wantMsg {
+					Expect(msg).To(ContainSubstring(want))
+				}
+			},
+			// Catalog resolves.
+			Entry("OSAC-only tier on a pure-OSAC tenant", storageReadinessCase{
+				conditions: []metav1.Condition{csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC},
+				requested: []string{"fast"}, osacTiers: []string{"fast"}, wantReady: true,
+			}),
+			Entry("mapped CSP tier with StorageReady=True", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue}, classes: []osacv1alpha1.ResolvedStorageClass{goldSC},
+				requested: []string{"gold"}, cspTiers: []string{"gold"}, wantReady: true,
+			}),
+			Entry("CSP tier before StorageReady is set", storageReadinessCase{
+				requested: []string{"gold"}, cspTiers: []string{"gold"},
+				wantMsg: []string{"StorageReady condition is not set"},
+			}),
+			Entry("CSP tier with StorageReady=False", storageReadinessCase{
+				conditions: []metav1.Condition{srFalse}, classes: []osacv1alpha1.ResolvedStorageClass{goldSC},
+				requested: []string{"gold"}, cspTiers: []string{"gold"},
+				wantMsg: []string{"StorageReady=False"},
+			}),
+			Entry("unmapped CSP tier while StorageReady is latched True", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue}, classes: []osacv1alpha1.ResolvedStorageClass{goldSC},
+				requested: []string{"gold", "silver"}, cspTiers: []string{"gold", "silver"},
+				wantMsg: []string{"missing tier(s): silver"},
+			}),
+			Entry("CSP tier mapped only to a whitespace StorageClass name", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue},
+				classes:    []osacv1alpha1.ResolvedStorageClass{goldSC, {Name: "   ", Tier: "silver"}},
+				requested:  []string{"silver"}, cspTiers: []string{"gold", "silver"},
+				wantMsg: []string{"missing tier(s): silver"},
+			}),
+			Entry("unmapped OSAC tier next to a mapped CSP tier keeps JIT", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue}, classes: []osacv1alpha1.ResolvedStorageClass{goldSC},
+				requested: []string{"gold", "fast"}, osacTiers: []string{"fast"}, cspTiers: []string{"gold"}, wantReady: true,
+			}),
+			Entry("OSAC-only request on a mixed tenant with StorageReady=False", storageReadinessCase{
+				conditions: []metav1.Condition{srFalse}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC},
+				requested: []string{"fast"}, osacTiers: []string{"fast"}, cspTiers: []string{"gold"}, wantReady: true,
+			}),
+			// Catalog unavailable.
+			Entry("catalog unavailable: every requested tier mapped with StorageReady=True", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue, csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				requested: []string{"gold", "fast"}, catalogErr: true, wantReady: true,
+			}),
+			Entry("catalog unavailable: requested tier without a mapping", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue}, classes: []osacv1alpha1.ResolvedStorageClass{goldSC},
+				requested: []string{"gold", "silver"}, catalogErr: true,
+				wantMsg: []string{"storage tier catalog resolution failed", "have no StorageClass in Tenant status: silver"},
+			}),
+			Entry("catalog unavailable: requested tier with an ambiguous mapping", storageReadinessCase{
+				conditions: []metav1.Condition{csrTrue},
+				classes:    []osacv1alpha1.ResolvedStorageClass{{Name: "sc-fast-1", Tier: "fast"}, {Name: "sc-fast-2", Tier: "fast"}},
+				requested:  []string{"fast"}, catalogErr: true,
+				wantMsg: []string{"have no StorageClass in Tenant status: fast"},
+			}),
+			Entry("catalog unavailable: mapped tiers cannot be classified while StorageReady=False", storageReadinessCase{
+				conditions: []metav1.Condition{srFalse, csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				requested: []string{"fast"}, catalogErr: true,
+				wantMsg: []string{"StorageReady=False"},
+			}),
+			Entry("catalog unavailable: onboarded pure-OSAC tenant during a StorageReconciler outage", storageReadinessCase{
+				conditions: []metav1.Condition{tierResolutionFailed, csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC},
+				requested: []string{"fast"}, catalogErr: true, wantReady: true,
+			}),
+			Entry("catalog unavailable: pure-OSAC tenant requesting an unmapped tier that needs JIT", storageReadinessCase{
+				conditions: []metav1.Condition{csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC},
+				requested: []string{"fast", "bronze"}, catalogErr: true,
+				wantMsg: []string{"have no StorageClass in Tenant status: bronze"},
+			}),
+			Entry("catalog unavailable: newly Ready tenant whose storage onboarding failed tier resolution", storageReadinessCase{
+				conditions: []metav1.Condition{tierResolutionFailed},
+				requested:  []string{"fast"}, catalogErr: true,
+				wantMsg: []string{"have no StorageClass in Tenant status: fast"},
+			}),
+			Entry("catalog unavailable: tenant without storage status uses the target-cluster lookup", storageReadinessCase{
+				requested: []string{"standard"}, catalogErr: true, wantReady: true,
+			}),
+			// Backend or credential lookup skipped a catalog tier.
+			Entry("skipped OSAC tier with an existing mapping on a mixed tenant", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue, csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				requested: []string{"gold", "fast"}, cspTiers: []string{"gold"}, skipped: true, wantReady: true,
+			}),
+			Entry("skipped OSAC tier with an existing mapping on a pure-OSAC tenant", storageReadinessCase{
+				conditions: []metav1.Condition{csrTrue}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC},
+				requested: []string{"fast"}, skipped: true, wantReady: true,
+			}),
+			Entry("skipped tier without a mapping", storageReadinessCase{
+				conditions: []metav1.Condition{srTrue}, classes: []osacv1alpha1.ResolvedStorageClass{goldSC},
+				requested: []string{"gold", "fast"}, cspTiers: []string{"gold"}, skipped: true,
+				wantMsg: []string{"unresolved backend references for requested tier(s): fast"},
+			}),
+			Entry("skipped mapped tier cannot be classified while StorageReady=False", storageReadinessCase{
+				conditions: []metav1.Condition{srFalse}, classes: []osacv1alpha1.ResolvedStorageClass{fastSC, goldSC},
+				requested: []string{"fast"}, cspTiers: []string{"gold"}, skipped: true,
+				wantMsg: []string{"StorageReady=False"},
+			}),
+		)
+
+		DescribeTable("storageClassesCoverRequestedTiers",
+			func(conditions []metav1.Condition, classes []osacv1alpha1.ResolvedStorageClass, requested []string, want bool) {
+				tenant := &osacv1alpha1.Tenant{
+					ObjectMeta: metav1.ObjectMeta{Name: "tenant-coverage"},
+					Status:     osacv1alpha1.TenantStatus{Phase: osacv1alpha1.TenantPhaseReady, StorageClasses: classes, Conditions: conditions},
+				}
+				Expect(storageClassesCoverRequestedTiers(tenant, requested)).To(Equal(want))
+			},
+			Entry("no requested tiers", nil, nil, nil, false),
+			Entry("every tier mapped with StorageReady unset", []metav1.Condition{csrTrue},
+				[]osacv1alpha1.ResolvedStorageClass{fastSC}, []string{"fast"}, true),
+			Entry("every tier mapped with StorageReady=True", []metav1.Condition{srTrue},
+				[]osacv1alpha1.ResolvedStorageClass{fastSC, goldSC}, []string{"gold", "fast"}, true),
+			Entry("tier mapped but StorageReady=False", []metav1.Condition{srFalse},
+				[]osacv1alpha1.ResolvedStorageClass{fastSC}, []string{"fast"}, false),
+			Entry("one requested tier unmapped", []metav1.Condition{srTrue},
+				[]osacv1alpha1.ResolvedStorageClass{goldSC}, []string{"gold", "fast"}, false),
+			Entry("requested tier with an ambiguous mapping", []metav1.Condition{csrTrue},
+				[]osacv1alpha1.ResolvedStorageClass{{Name: "sc-fast-1", Tier: "fast"}, {Name: "sc-fast-2", Tier: "fast"}}, []string{"fast"}, false),
+			Entry("requested tier mapped only to a whitespace name", []metav1.Condition{srTrue},
+				[]osacv1alpha1.ResolvedStorageClass{{Name: "   ", Tier: "fast"}}, []string{"fast"}, false),
+			Entry("status tier names are matched trimmed and case-insensitively", []metav1.Condition{srTrue},
+				[]osacv1alpha1.ResolvedStorageClass{{Name: "vast-fast-sc", Tier: " FAST "}}, []string{"fast"}, true),
+		)
+	})
+
 	Context("handleKubeVirtVM", func() {
 		var (
-			ctx          context.Context
-			reconciler   *ComputeInstanceReconciler
-			targetClient client.Client
-			instance     *osacv1alpha1.ComputeInstance
+			ctx        context.Context
+			reconciler *ComputeInstanceReconciler
+			instance   *osacv1alpha1.ComputeInstance
 		)
 
 		BeforeEach(func() {
 			ctx = context.Background()
-			reconciler = NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
-			var err error
-			targetClient, err = getTargetClient(ctx, reconciler.mgr, reconciler.targetCluster)
-			Expect(err).NotTo(HaveOccurred())
+			reconciler = newTestCIReconciler("", "", "", 0)
 			instance = &osacv1alpha1.ComputeInstance{}
+			// Ready also needs NetworkReady=True (VMaaS design).
+			instance.SetStatusCondition(osacv1alpha1.ComputeInstanceConditionNetworkReady, metav1.ConditionTrue,
+				"", osacv1alpha1.ReasonProvisioningDisabled)
 		})
 
 		It("sets Provisioned=True and Ready=True when VM is Running and Ready", func() {
@@ -2441,7 +3503,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					},
 				},
 			}
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+			reconciler.handleKubeVirtVM(ctx, instance, kv)
+			reconciler.reconcileReadyCondition(instance, kv)
 
 			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
 			Expect(provCond.Status).To(Equal(metav1.ConditionTrue))
@@ -2458,7 +3521,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					PrintableStatus: kubevirtv1.VirtualMachineStatusRunning,
 				},
 			}
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+			reconciler.handleKubeVirtVM(ctx, instance, kv)
+			reconciler.reconcileReadyCondition(instance, kv)
 
 			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
 			Expect(provCond.Status).To(Equal(metav1.ConditionTrue))
@@ -2478,7 +3542,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					},
 				},
 			}
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+			reconciler.handleKubeVirtVM(ctx, instance, kv)
+			reconciler.reconcileReadyCondition(instance, kv)
 
 			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned).Status).To(Equal(metav1.ConditionTrue))
 			Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired).Status).To(Equal(metav1.ConditionTrue))
@@ -2491,7 +3556,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					PrintableStatus: kubevirtv1.VirtualMachineStatusProvisioning,
 				},
 			}
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+			reconciler.handleKubeVirtVM(ctx, instance, kv)
+			reconciler.reconcileReadyCondition(instance, kv)
 
 			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
 			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
@@ -2516,7 +3582,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					},
 				},
 			}
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+			reconciler.handleKubeVirtVM(ctx, instance, kv)
+			reconciler.reconcileReadyCondition(instance, kv)
 
 			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
 			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
@@ -2530,7 +3597,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					PrintableStatus: kubevirtv1.VirtualMachineStatusDataVolumeError,
 				},
 			}
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+			reconciler.handleKubeVirtVM(ctx, instance, kv)
+			reconciler.reconcileReadyCondition(instance, kv)
 
 			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
 			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
@@ -2544,7 +3612,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					PrintableStatus: kubevirtv1.VirtualMachineStatusPvcNotFound,
 				},
 			}
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+			reconciler.handleKubeVirtVM(ctx, instance, kv)
+			reconciler.reconcileReadyCondition(instance, kv)
 
 			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
 			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
@@ -2558,7 +3627,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					PrintableStatus: kubevirtv1.VirtualMachineStatusUnschedulable,
 				},
 			}
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+			reconciler.handleKubeVirtVM(ctx, instance, kv)
+			reconciler.reconcileReadyCondition(instance, kv)
 
 			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
 			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
@@ -2579,7 +3649,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					},
 				},
 			}
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+			reconciler.handleKubeVirtVM(ctx, instance, kv)
+			reconciler.reconcileReadyCondition(instance, kv)
 
 			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
 			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
@@ -2595,7 +3666,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					PrintableStatus: kubevirtv1.VirtualMachinePrintableStatus(""),
 				},
 			}
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+			reconciler.handleKubeVirtVM(ctx, instance, kv)
+			reconciler.reconcileReadyCondition(instance, kv)
 
 			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
 			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
@@ -2609,7 +3681,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 					PrintableStatus: kubevirtv1.VirtualMachinePrintableStatus("SomeFutureErrorStatus"),
 				},
 			}
-			Expect(reconciler.handleKubeVirtVM(ctx, targetClient, instance, kv)).To(Succeed())
+			reconciler.handleKubeVirtVM(ctx, instance, kv)
+			reconciler.reconcileReadyCondition(instance, kv)
 
 			provCond := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
 			Expect(provCond.Status).To(Equal(metav1.ConditionFalse))
@@ -2660,7 +3733,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
 			fakeRecorder := events.NewFakeRecorder(100)
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := newTestCIReconciler("", namespaceName, "", 100*time.Millisecond)
 			controllerReconciler.Recorder = fakeRecorder
 
 			Eventually(func() error {
@@ -2719,7 +3792,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
 			fakeRecorder := events.NewFakeRecorder(100)
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := newTestCIReconciler("", namespaceName, "", 100*time.Millisecond)
 			controllerReconciler.Recorder = fakeRecorder
 
 			Eventually(func() error {
@@ -2841,7 +3914,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				return mgrClient.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
 			}).Should(Succeed())
 
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := newTestCIReconciler("", namespaceName, "", 100*time.Millisecond)
 
 			// First reconcile: sets tenant reference
 			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
@@ -2908,7 +3981,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				return mgrClient.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
 			}).Should(Succeed())
 
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := newTestCIReconciler("", namespaceName, "", 100*time.Millisecond)
 
 			// Reconcile should fail because tenant does not exist
 			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
@@ -2958,7 +4031,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := newTestCIReconciler("", namespaceName, "", 100*time.Millisecond)
 			Eventually(func() error {
 				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
 			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
@@ -3011,7 +4084,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := newTestCIReconciler("", namespaceName, "", 100*time.Millisecond)
 			Eventually(func() error {
 				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
 			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
@@ -3029,6 +4102,63 @@ var _ = Describe("ComputeInstance Controller", func() {
 				g.Expect(cond.Reason).To(Equal("TenantNotReady"))
 				g.Expect(cond.Message).To(ContainSubstring("ClusterStorageReady"))
 				g.Expect(cond.Message).To(ContainSubstring("sc1, sc2"))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+		})
+
+		It("should include StorageReady condition in Provisioned message", func() {
+			const resourceName = "test-ci-tenant-sr-msg"
+			const tenantName = "tenant-sr-msg"
+			DeferCleanup(func() { deleteCI(resourceName) })
+			DeferCleanup(func() { deleteTenantInNamespace(ctx, namespaceName, tenantName) })
+
+			// Create tenant in Progressing state with a StorageReady condition
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
+			tenant.SetStatusCondition(
+				osacv1alpha1.TenantConditionStorageReady,
+				metav1.ConditionFalse,
+				"ProvisioningFailed",
+				"NetApp SVM creation failed for tenant "+tenantName,
+			)
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			controllerReconciler := newTestCIReconciler("", namespaceName, "", 100*time.Millisecond)
+			Eventually(func(g Gomega) {
+				cachedTenant := &osacv1alpha1.Tenant{}
+				g.Expect(controllerReconciler.Client.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, cachedTenant)).To(Succeed())
+				g.Expect(cachedTenant.Status.Phase).To(Equal(osacv1alpha1.TenantPhaseProgressing))
+				g.Expect(cachedTenant.GetStatusCondition(osacv1alpha1.TenantConditionStorageReady)).NotTo(BeNil())
+				g.Expect(controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})).To(Succeed())
+			}, 5*time.Second, 50*time.Millisecond).Should(Succeed())
+
+			result, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+
+			ci := &osacv1alpha1.ComputeInstance{}
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
+				cond := ci.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+				g.Expect(cond).NotTo(BeNil())
+				g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+				g.Expect(cond.Reason).To(Equal("TenantNotReady"))
+				g.Expect(cond.Message).To(ContainSubstring("StorageReady: NetApp SVM creation failed for tenant " + tenantName))
 			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 		})
 
@@ -3065,7 +4195,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			controllerReconciler := newTestCIReconciler("", namespaceName, "", 100*time.Millisecond)
 			Eventually(func() error {
 				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
 			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
@@ -3111,380 +4241,12 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
-	Context("resolveSubnetTargetNamespace", func() {
-		const namespaceName = "default"
-		var (
-			reconciler *ComputeInstanceReconciler
-			ctx        context.Context
-		)
-
-		BeforeEach(func() {
-			ctx = context.Background()
-			reconciler = NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
-		})
-
-		It("should return empty string when subnetRef is not set", func() {
-			instance := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-ci-no-subnet",
-					Namespace: namespaceName,
-				},
-				Spec: newTestComputeInstanceSpec("test_template"),
-			}
-
-			subnetNS, err := reconciler.resolveSubnetTargetNamespace(ctx, instance)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(subnetNS).To(BeEmpty())
-		})
-
-		It("should return subnet CR name when subnet CR exists", func() {
-			const subnetRef = "test-subnet-cr"
-
-			// Create Subnet CR
-			subnet := &osacv1alpha1.Subnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      subnetRef,
-					Namespace: namespaceName,
-				},
-				Spec: osacv1alpha1.SubnetSpec{
-					VirtualNetwork: "vnet-123",
-					IPv4CIDR:       "10.0.0.0/24",
-				},
-			}
-			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
-			defer func() {
-				_ = k8sClient.Delete(ctx, subnet)
-			}()
-
-			instance := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-ci-with-subnet",
-					Namespace: namespaceName,
-				},
-				Spec: newTestComputeInstanceSpec("test_template"),
-			}
-			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetRef}}
-
-			// Wait for Subnet CR to be cached
-			Eventually(func() error {
-				return k8sClient.Get(ctx, types.NamespacedName{Name: subnetRef, Namespace: namespaceName}, &osacv1alpha1.Subnet{})
-			}).Should(Succeed())
-
-			subnetNS, err := reconciler.resolveSubnetTargetNamespace(ctx, instance)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(subnetNS).To(Equal(subnetRef))
-		})
-
-		It("should return error when subnet CR does not exist", func() {
-			instance := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-ci-missing-subnet",
-					Namespace: namespaceName,
-				},
-				Spec: newTestComputeInstanceSpec("test_template"),
-			}
-			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: "nonexistent-subnet"}}
-
-			subnetNS, err := reconciler.resolveSubnetTargetNamespace(ctx, instance)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("failed to get Subnet CR"))
-			Expect(subnetNS).To(BeEmpty())
-		})
-	})
-
-	Context("VM search namespace with subnetRef", func() {
-		const namespaceName = "default"
-
-		ctx := context.Background()
-
-		deleteCI := func(name string) {
-			ci := &osacv1alpha1.ComputeInstance{}
-			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
-			if err := k8sClient.Get(ctx, nn, ci); err == nil {
-				ci.Finalizers = nil
-				_ = k8sClient.Update(ctx, ci)
-				_ = k8sClient.Delete(ctx, ci)
-			}
-		}
-
-		It("should reconcile successfully when subnetRef is set and Subnet CR exists", func() {
-			const resourceName = "test-ci-subnet-vm-ns"
-			const tenantName = "tenant-subnet-vm-ns"
-			const subnetRef = "test-subnet-vm-ns"
-			defer deleteCI(resourceName)
-			createReadyTenant(ctx, namespaceName, tenantName)
-			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
-
-			// Create Subnet CR — the subnet name becomes the namespace where the VM will be searched
-			subnet := &osacv1alpha1.Subnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      subnetRef,
-					Namespace: namespaceName,
-				},
-				Spec: osacv1alpha1.SubnetSpec{
-					VirtualNetwork: "vnet-123",
-					IPv4CIDR:       "10.0.0.0/24",
-				},
-			}
-			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
-			defer func() {
-				_ = k8sClient.Delete(ctx, subnet)
-			}()
-
-			// Wait for Subnet CR to be cached
-			Eventually(func() error {
-				return k8sClient.Get(ctx, types.NamespacedName{Name: subnetRef, Namespace: namespaceName}, &osacv1alpha1.Subnet{})
-			}).Should(Succeed())
-
-			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
-			spec := newTestComputeInstanceSpec("test_template")
-			spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetRef}}
-			resource := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      resourceName,
-					Namespace: namespaceName,
-					Annotations: map[string]string{
-						osacTenantKey: tenantName,
-					},
-				},
-				Spec: spec,
-			}
-			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
-
-			Eventually(func() error {
-				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
-			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
-
-			// Reconcile should succeed — it resolves the subnet namespace for VM lookup
-			// instead of using the tenant namespace (this is the bug fix).
-			// No VM exists in envtest, so phase should be Starting.
-			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
-			Expect(err).NotTo(HaveOccurred())
-
-			ci := &osacv1alpha1.ComputeInstance{}
-			Eventually(func(g Gomega) {
-				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
-			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
-		})
-
-		It("should requeue when subnetRef is set but Subnet CR does not exist", func() {
-			const resourceName = "test-ci-missing-subnet-vm"
-			const tenantName = "tenant-missing-subnet-vm"
-			defer deleteCI(resourceName)
-			createReadyTenant(ctx, namespaceName, tenantName)
-			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
-
-			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
-			spec := newTestComputeInstanceSpec("test_template")
-			spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: "nonexistent-subnet-cr"}}
-			resource := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      resourceName,
-					Namespace: namespaceName,
-					Annotations: map[string]string{
-						osacTenantKey: tenantName,
-					},
-				},
-				Spec: spec,
-			}
-			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
-
-			Eventually(func() error {
-				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
-			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
-
-			// Reconcile should return RequeueAfter (no error) when Subnet CR is missing
-			result, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
-		})
-
-		It("should persist subnet-target-namespace annotation to the API server", func() {
-			const resourceName = "test-ci-subnet-anno-persist"
-			const tenantName = "tenant-subnet-anno-persist"
-			const subnetRef = "test-subnet-anno-persist"
-			defer deleteCI(resourceName)
-			createReadyTenant(ctx, namespaceName, tenantName)
-			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
-
-			// Create Subnet CR
-			subnet := &osacv1alpha1.Subnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      subnetRef,
-					Namespace: namespaceName,
-				},
-				Spec: osacv1alpha1.SubnetSpec{
-					VirtualNetwork: "vnet-123",
-					IPv4CIDR:       "10.0.0.0/24",
-				},
-			}
-			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
-			defer func() {
-				_ = k8sClient.Delete(ctx, subnet)
-			}()
-
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
-
-			// Wait for Subnet CR to be cached by the reconciler's manager cache
-			Eventually(func() error {
-				return controllerReconciler.Client.Get(ctx, types.NamespacedName{Name: subnetRef, Namespace: namespaceName}, &osacv1alpha1.Subnet{})
-			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
-
-			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
-			spec := newTestComputeInstanceSpec("test_template")
-			spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetRef}}
-			resource := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      resourceName,
-					Namespace: namespaceName,
-					Annotations: map[string]string{
-						osacTenantKey: tenantName,
-					},
-				},
-				Spec: spec,
-			}
-			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-
-			Eventually(func() error {
-				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
-			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
-
-			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Verify the annotation was persisted to the API server (not just in-memory)
-			ci := &osacv1alpha1.ComputeInstance{}
-			Eventually(func(g Gomega) {
-				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-				g.Expect(ci.Annotations).To(HaveKeyWithValue(osacSubnetTargetNamespaceAnnotation, subnetRef))
-			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
-		})
-
-		It("should not update annotation when subnet-target-namespace is already correct", func() {
-			const resourceName = "test-ci-subnet-anno-noop"
-			const tenantName = "tenant-subnet-anno-noop"
-			const subnetRef = "test-subnet-anno-noop"
-			defer deleteCI(resourceName)
-			createReadyTenant(ctx, namespaceName, tenantName)
-			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
-
-			// Create Subnet CR
-			subnet := &osacv1alpha1.Subnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      subnetRef,
-					Namespace: namespaceName,
-				},
-				Spec: osacv1alpha1.SubnetSpec{
-					VirtualNetwork: "vnet-123",
-					IPv4CIDR:       "10.0.0.0/24",
-				},
-			}
-			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
-			defer func() {
-				_ = k8sClient.Delete(ctx, subnet)
-			}()
-
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
-
-			// Wait for Subnet CR to be cached by the reconciler's manager cache
-			Eventually(func() error {
-				return controllerReconciler.Client.Get(ctx, types.NamespacedName{Name: subnetRef, Namespace: namespaceName}, &osacv1alpha1.Subnet{})
-			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
-
-			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
-			spec := newTestComputeInstanceSpec("test_template")
-			spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetRef}}
-			resource := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      resourceName,
-					Namespace: namespaceName,
-					Annotations: map[string]string{
-						osacTenantKey:                       tenantName,
-						osacSubnetTargetNamespaceAnnotation: subnetRef, // already correct
-					},
-				},
-				Spec: spec,
-			}
-			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-
-			Eventually(func() error {
-				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
-			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
-
-			// First reconcile adds the finalizer, which triggers an r.Update().
-			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
-			Expect(err).NotTo(HaveOccurred())
-
-			// Capture the Generation after the first reconcile. Generation only
-			// increments on spec changes, not on metadata or status updates, so
-			// it stays stable across reconciles that only touch status.
-			ci := &osacv1alpha1.ComputeInstance{}
-			Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-			genBefore := ci.Generation
-			annotationsBefore := ci.Annotations
-
-			// Second reconcile — finalizer and annotation are already in place,
-			// so syncMetadataPreflight should skip the r.Update() call entirely.
-			_, err = controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
-			Expect(err).NotTo(HaveOccurred())
-
-			ciAfter := &osacv1alpha1.ComputeInstance{}
-			Expect(k8sClient.Get(ctx, nn, ciAfter)).To(Succeed())
-			Expect(ciAfter.Annotations).To(HaveKeyWithValue(osacSubnetTargetNamespaceAnnotation, subnetRef))
-			Expect(ciAfter.Generation).To(Equal(genBefore), "Generation should not change when no spec/metadata write occurs")
-			Expect(ciAfter.Annotations).To(Equal(annotationsBefore), "Annotations should be unchanged across reconciles")
-		})
-
-		It("should not set subnet-target-namespace annotation when subnetRef is empty", func() {
-			const resourceName = "test-ci-no-subnet-vm-ns"
-			const tenantName = "tenant-no-subnet-vm"
-			defer deleteCI(resourceName)
-			createReadyTenant(ctx, namespaceName, tenantName)
-			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
-
-			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
-			resource := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      resourceName,
-					Namespace: namespaceName,
-					Annotations: map[string]string{
-						osacTenantKey: tenantName,
-					},
-				},
-				Spec: newTestComputeInstanceSpec("test_template"),
-			}
-			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
-
-			Eventually(func() error {
-				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
-			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
-
-			// When no subnetRef, should use tenant namespace (default behavior)
-			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
-			Expect(err).NotTo(HaveOccurred())
-
-			ci := &osacv1alpha1.ComputeInstance{}
-			Eventually(func(g Gomega) {
-				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
-				g.Expect(ci.Annotations).NotTo(HaveKey(osacSubnetTargetNamespaceAnnotation))
-			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
-		})
-	})
-
 	Context("lastRestartedAt update after provisioning", func() {
 		var reconciler *ComputeInstanceReconciler
 		ctx := context.Background()
 
 		BeforeEach(func() {
-			reconciler = NewComputeInstanceReconciler(testMcManager, "", "", "", &mockProvisioningProvider{}, 0, 0, mcmanager.LocalCluster)
+			reconciler = newTestCIReconciler("", "", "", 0)
 		})
 
 		It("should set lastRestartedAt when restartRequestedAt is set and config versions match", func() {
@@ -3708,87 +4470,6 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 			}
 			Expect(spec.PrimarySubnetRef()).To(Equal("primary-subnet"))
-		})
-	})
-
-	Context("resolveSubnetTargetNamespace with networkAttachments", func() {
-		const namespaceName = "default"
-		ctx := context.Background()
-
-		deleteCI := func(name string) {
-			ci := &osacv1alpha1.ComputeInstance{}
-			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
-			if err := k8sClient.Get(ctx, nn, ci); err == nil {
-				ci.Finalizers = nil
-				_ = k8sClient.Update(ctx, ci)
-				_ = k8sClient.Delete(ctx, ci)
-			}
-		}
-
-		It("should resolve subnet namespace from networkAttachments[0].subnetRef", func() {
-			const resourceName = "test-ci-network-attachments"
-			const tenantName = "tenant-network-attachments"
-			const subnetRef = "test-subnet-network-attachments"
-			defer deleteCI(resourceName)
-			createReadyTenant(ctx, namespaceName, tenantName)
-			defer deleteTenantInNamespace(ctx, namespaceName, tenantName)
-
-			// Create Subnet CR
-			subnet := &osacv1alpha1.Subnet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      subnetRef,
-					Namespace: namespaceName,
-				},
-				Spec: osacv1alpha1.SubnetSpec{
-					VirtualNetwork: "vnet-456",
-					IPv4CIDR:       "10.1.0.0/24",
-				},
-			}
-			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
-			defer func() {
-				_ = k8sClient.Delete(ctx, subnet)
-			}()
-
-			// Wait for Subnet CR to be cached
-			Eventually(func() error {
-				return k8sClient.Get(ctx, types.NamespacedName{Name: subnetRef, Namespace: namespaceName}, &osacv1alpha1.Subnet{})
-			}).Should(Succeed())
-
-			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
-			spec := newTestComputeInstanceSpec("test_template")
-			spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
-				{SubnetRef: subnetRef, SecurityGroupRefs: []string{"sg-test"}},
-			}
-			resource := &osacv1alpha1.ComputeInstance{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      resourceName,
-					Namespace: namespaceName,
-					Annotations: map[string]string{
-						osacTenantKey: tenantName,
-					},
-				},
-				Spec: spec,
-			}
-			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-
-			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", &mockProvisioningProvider{name: "aap"}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
-
-			Eventually(func() error {
-				return controllerReconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
-			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
-
-			// Reconcile should succeed and resolve subnet namespace from networkAttachments
-			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
-			Expect(err).NotTo(HaveOccurred())
-
-			ci := &osacv1alpha1.ComputeInstance{}
-			Eventually(func(g Gomega) {
-				g.Expect(k8sClient.Get(ctx, nn, ci)).To(Succeed())
-				g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseStarting))
-				// Verify subnet-target-namespace annotation was set
-				g.Expect(ci.Annotations).To(HaveKey(osacSubnetTargetNamespaceAnnotation))
-				g.Expect(ci.Annotations[osacSubnetTargetNamespaceAnnotation]).To(Equal(subnetRef))
-			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 		})
 	})
 

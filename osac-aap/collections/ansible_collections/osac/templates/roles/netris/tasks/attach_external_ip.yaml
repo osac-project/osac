@@ -1,115 +1,54 @@
 ---
-# ExternalIPAttachment maps to a Netris DNAT rule
-# Creates a DNAT rule on the SoftGate: external IP -> internal target IP
-# Resolves the external IP address from the ExternalIP CR (same model as
-# ExternalIP resolving from ExternalIPPool)
+# ExternalIPAttachment -> Netris DNAT rule osac-eipa-<attachment id>:
+# external_ip.address -> destination.address, in the VPC osac-vn-<VN id> of a
+# tenant_virtual_network destination or in NETRIS_MGMT_VPC_ID for
+# provider_management. Get-or-create by name; a rule of the same name in another
+# VPC or with other addresses is a final error.
+- name: Attach the ExternalIP on Netris
+  block:
+    - name: Check the settings
+      ansible.builtin.include_tasks: _settings.yaml
+      vars:
+        netris_require: [controller, credentials, site, tenant]
 
-- name: Validate ExternalIPAttachment annotations
-  ansible.builtin.assert:
-    that:
-      - external_ip_attachment.metadata is defined
-      - external_ip_attachment.metadata.annotations is defined
-      - "'osac.openshift.io/externalip-name' in external_ip_attachment.metadata.annotations"
-      - "'osac.openshift.io/target-ip' in external_ip_attachment.metadata.annotations"
-    fail_msg: >-
-      ExternalIPAttachment requires annotations
-      'osac.openshift.io/externalip-name' (ExternalIP CR name) and
-      'osac.openshift.io/target-ip' (resolved internal IP).
+    - name: Check the task input
+      ansible.builtin.include_tasks: _input.yaml
 
-- name: Extract ExternalIPAttachment configuration
-  ansible.builtin.set_fact:
-    attachment_name: "{{ external_ip_attachment.metadata.name }}"
-    attachment_namespace: "{{ external_ip_attachment.metadata.namespace }}"
-    attachment_externalip_name: >-
-      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-name'] }}
-    attachment_target_ip: >-
-      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/target-ip'] }}
+    - name: Plan the DNAT rule
+      ansible.builtin.set_fact:
+        _netris_nat: "{{ osac_job_vars | osac.templates.netris_nat_plan }}"
 
-- name: Look up ExternalIP CR to get allocated address
-  kubernetes.core.k8s_info:
-    api_version: osac.openshift.io/v1alpha1
-    kind: ExternalIP
-    name: "{{ attachment_externalip_name }}"
-    namespace: "{{ attachment_namespace }}"
-  register: _eip_lookup
+    - name: Stop on an invalid attachment input
+      vars:
+        netris_fail:
+          message: "{{ _netris_nat.error }}"
+          retryable: false
+      when: _netris_nat.error | length > 0
+      ansible.builtin.include_tasks: _fail.yaml
 
-- name: Validate ExternalIP CR found with allocated address
-  ansible.builtin.assert:
-    that:
-      - _eip_lookup.resources | length > 0
-      - _eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] is defined
-    fail_msg: >-
-      ExternalIP '{{ attachment_externalip_name }}' not found or missing
-      'osac.openshift.io/allocated-address' annotation. The ExternalIP must
-      be allocated before creating an attachment.
+    - name: Build the object names
+      ansible.builtin.include_tasks: _names.yaml
 
-- name: Extract allocated external IP address
-  ansible.builtin.set_fact:
-    attachment_external_ip: >-
-      {{ _eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] }}
+    - name: Find the VPC of the destination
+      ansible.builtin.include_tasks: _nat_vpc.yaml
+      vars:
+        netris_nat_domain: "{{ _netris_nat.domain }}"
+        netris_nat_vpc_required: true
 
-- name: Display ExternalIPAttachment information
-  ansible.builtin.debug:
-    msg:
-      - "Creating Netris DNAT rule for ExternalIPAttachment '{{ attachment_name }}'"
-      - "External IP: {{ attachment_external_ip }} (from ExternalIP '{{ attachment_externalip_name }}')"
-      - "Target IP: {{ attachment_target_ip }}"
-
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
-
-# The DNAT rule must live in the VPC that owns the target IP. The operator passes
-# the tenant VirtualNetwork name; the Netris VPC is named after it. Default to the
-# mgmt VPC (cluster-level rules) and override when a tenant VPC is resolved.
-- name: Determine tenant VirtualNetwork name
-  ansible.builtin.set_fact:
-    attachment_vn_name: >-
-      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/virtual-network-name']
-         | default('', true) }}
-
-- name: Default NAT VPC to the management VPC
-  ansible.builtin.set_fact:
-    attachment_nat_vpc_id: "{{ netris_mgmt_vpc_id }}"
-    attachment_nat_vpc_name: "{{ netris_mgmt_vpc_name | default('') }}"
-
-- name: Look up tenant VPC by VirtualNetwork name
-  ansible.builtin.include_role:
-    name: netris.controller.vpc
-    tasks_from: read
-  vars:
-    vpc_name: "{{ attachment_vn_name }}"
-  when: attachment_vn_name | length > 0
-
-- name: Use tenant VPC when resolved
-  ansible.builtin.set_fact:
-    attachment_nat_vpc_id: "{{ netris_vpc.id }}"
-    attachment_nat_vpc_name: "{{ netris_vpc.name }}"
-  when:
-    - attachment_vn_name | length > 0
-    - netris_vpc is defined
-    - netris_vpc is not none
-
-- name: Create DNAT rule for ExternalIPAttachment
-  ansible.builtin.include_role:
-    name: netris.controller.nat
-    tasks_from: create
-  vars:
-    nat_name: "{{ attachment_name }}-dnat"
-    nat_site_id: "{{ netris_site_id }}"
-    nat_vpc_id: "{{ attachment_nat_vpc_id }}"
-    nat_vpc_name: "{{ attachment_nat_vpc_name }}"
-    nat_action: dnat
-    nat_protocol: all
-    nat_destination_address: "{{ attachment_external_ip }}/32"
-    nat_dnat_to_ip: "{{ attachment_target_ip }}/32"
-    nat_comment: "OSAC ExternalIPAttachment {{ attachment_name }}"
-
-- name: Display DNAT rule creation result
-  ansible.builtin.debug:
-    msg: >-
-      DNAT rule '{{ attachment_name }}-dnat'
-      {{ (nat_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
-      (ID: {{ nat_id | default('unknown') }})
-      — {{ attachment_external_ip }} -> {{ attachment_target_ip }}
+    - name: Create the DNAT rule
+      ansible.builtin.include_role:
+        name: netris.controller.nat
+        tasks_from: create
+      vars:
+        nat_name: "{{ netris_names.eipa_dnat }}"
+        nat_site_id: "{{ netris_site_id | int }}"
+        nat_vpc_id: "{{ netris_nat_vpc.id }}"
+        nat_vpc_name: "{{ netris_nat_vpc.name }}"
+        nat_action: dnat
+        nat_protocol: all
+        nat_destination_address: "{{ _netris_nat.external }}/32"
+        nat_dnat_to_ip: "{{ _netris_nat.internal }}/32"
+        nat_comment: "OSAC ExternalIPAttachment {{ netris_in.resource_id }}"
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

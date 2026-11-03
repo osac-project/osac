@@ -74,6 +74,15 @@ var _ = Describe("RegisterReferenceLookups", func() {
 			strings.Join(missing, "\n  "))
 	})
 
+	It("leaves RoleBinding service-account references for handler validation", func() {
+		for _, name := range []protoreflect.FullName{
+			"osac.private.v1.ServiceAccountReference",
+			"osac.public.v1.ServiceAccountReference",
+		} {
+			Expect(isHandlerOwnedReferenceType(name)).To(BeTrue(), "unexpected generic lookup for %s", name)
+		}
+	})
+
 	It("discovers reference types through direct and nested map values", func() {
 		file := protodesc.ToFileDescriptorProto(testsv1.File_osac_tests_v1_reference_test_types_proto)
 		for _, message := range file.GetMessageType() {
@@ -274,6 +283,50 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Expect(called).To(BeTrue())
 	})
 
+	It("leaves NATGateway Create ExternalIP references for the handler to resolve", func() {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+		Expect(err).NotTo(HaveOccurred())
+		v, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, testCase := range []struct {
+			name       string
+			fullMethod string
+			request    proto.Message
+		}{
+			{
+				name:       "private API",
+				fullMethod: privatev1.NATGateways_Create_FullMethodName,
+				request: privatev1.NATGatewaysCreateRequest_builder{Object: privatev1.NATGateway_builder{
+					Spec: privatev1.NATGatewaySpec_builder{
+						ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "missing-external-ip"}.Build(),
+					}.Build(),
+				}.Build()}.Build(),
+			},
+			{
+				name:       "public API",
+				fullMethod: publicv1.NATGateways_Create_FullMethodName,
+				request: publicv1.NATGatewaysCreateRequest_builder{Object: publicv1.NATGateway_builder{
+					Spec: publicv1.NATGatewaySpec_builder{
+						ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: "missing-external-ip"}.Build(),
+					}.Build(),
+				}.Build()}.Build(),
+			},
+		} {
+			By("passing the " + testCase.name + " request to the handler")
+			called := false
+			_, err = v.UnaryServer(context.Background(), testCase.request,
+				&grpc.UnaryServerInfo{FullMethod: testCase.fullMethod},
+				func(_ context.Context, actual any) (any, error) {
+					called = true
+					return "ok", nil
+				})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(called).To(BeTrue(), "ExternalIP lookup must happen after the NATGateway handler's default-NAT guard")
+		}
+	})
+
 	It("does not reject identity provider client_secret_secret as unregistered", func() {
 		request := privatev1.IdentityProvidersCreateRequest_builder{
 			Object: privatev1.IdentityProvider_builder{
@@ -332,6 +385,37 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Expect(called).To(BeTrue())
 	})
 
+	It("leaves RoleBinding service-account references for handler validation", func() {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+		Expect(err).ToNot(HaveOccurred())
+		v, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+		Expect(err).ToNot(HaveOccurred())
+
+		methods := []struct {
+			fullMethod string
+			request    protoreflect.FullName
+		}{
+			{publicv1.RoleBindings_Create_FullMethodName, "osac.public.v1.RoleBindingsCreateRequest"},
+			{publicv1.RoleBindings_Update_FullMethodName, "osac.public.v1.RoleBindingsUpdateRequest"},
+			{privatev1.RoleBindings_Create_FullMethodName, "osac.private.v1.RoleBindingsCreateRequest"},
+			{privatev1.RoleBindings_Update_FullMethodName, "osac.private.v1.RoleBindingsUpdateRequest"},
+		}
+		for _, method := range methods {
+			requestType, err := protoregistry.GlobalTypes.FindMessageByName(method.request)
+			Expect(err).ToNot(HaveOccurred())
+			request := requestType.New().Interface()
+			const requestJSON = `{"object":{"spec":{"serviceAccounts":[{"id":"service-account-id"}]}}}`
+			Expect(protojson.Unmarshal([]byte(requestJSON), request)).To(Succeed())
+
+			called := false
+			_, err = v.UnaryServer(context.Background(), request,
+				&grpc.UnaryServerInfo{FullMethod: method.fullMethod},
+				func(context.Context, any) (any, error) { called = true; return nil, nil })
+			Expect(err).ToNot(HaveOccurred(), method.fullMethod)
+			Expect(called).To(BeTrue(), method.fullMethod)
+		}
+	})
 })
 
 type referenceUse struct {
@@ -361,7 +445,9 @@ func isHandlerOwnedReferenceUse(use referenceUse) bool {
 
 func isHandlerOwnedReferenceType(name protoreflect.FullName) bool {
 	return name == "osac.private.v1.AddOnOperatorReference" ||
-		name == "osac.public.v1.AddOnOperatorReference"
+		name == "osac.public.v1.AddOnOperatorReference" ||
+		name == "osac.private.v1.ServiceAccountReference" ||
+		name == "osac.public.v1.ServiceAccountReference"
 }
 
 func newTestReferenceValidator() *references.ReferenceValidator {

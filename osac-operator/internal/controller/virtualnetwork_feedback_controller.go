@@ -23,7 +23,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -68,8 +67,13 @@ func NewVirtualNetworkFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.Cl
 		Save: func(ctx context.Context, remote *privatev1.VirtualNetwork) error {
 			_, err := vnClient.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
 				Object:     remote,
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{feedbackStatusStatePath}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{feedbackStatusStatePath, feedbackStatusMessagePath}},
 			}.Build())
+			if err != nil {
+				return err
+			}
+			// Signal on change, so the fulfillment service acts on the new state.
+			_, err = vnClient.Signal(ctx, privatev1.VirtualNetworksSignalRequest_builder{Id: remote.GetId()}.Build())
 			return err
 		},
 		Signal: func(ctx context.Context, id string) error {
@@ -102,34 +106,23 @@ func (r *VirtualNetworkFeedbackReconciler) Reconcile(ctx context.Context, reques
 	return r.bridge.Reconcile(ctx, request)
 }
 
-func syncVirtualNetworkUpdate(ctx context.Context, obj *v1alpha1.VirtualNetwork, remote *privatev1.VirtualNetwork) error {
-	syncVirtualNetworkPhase(ctx, obj, remote)
-	return nil
-}
-
-// VN proto has no DELETING/DELETE_FAILED states, so deletion maps Failed to
-// FAILED and everything else to PENDING.
-func syncVirtualNetworkDelete(_ context.Context, obj *v1alpha1.VirtualNetwork, remote *privatev1.VirtualNetwork) error {
-	if obj.Status.Phase == v1alpha1.VirtualNetworkPhaseFailed {
-		remote.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED)
-		return nil
-	}
-	remote.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING)
-	return nil
-}
-
-func syncVirtualNetworkPhase(ctx context.Context, obj *v1alpha1.VirtualNetwork, remote *privatev1.VirtualNetwork) {
-	switch obj.Status.Phase {
-	case v1alpha1.VirtualNetworkPhaseProgressing:
-		remote.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING)
-	case v1alpha1.VirtualNetworkPhaseFailed:
-		remote.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED)
-	case v1alpha1.VirtualNetworkPhaseReady:
-		remote.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
-	case v1alpha1.VirtualNetworkPhaseDeleting:
-		remote.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING)
+func syncVirtualNetworkUpdate(_ context.Context, obj *v1alpha1.VirtualNetwork, remote *privatev1.VirtualNetwork) error {
+	status := remote.GetStatus()
+	state, message := networkFeedback(obj, obj.Status.Conditions)
+	switch state {
+	case networkFeedbackReady:
+		status.SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
+	case networkFeedbackFailed:
+		status.SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED)
+	case networkFeedbackDeleting:
+		status.SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_DELETING)
 	default:
-		log := ctrllog.FromContext(ctx)
-		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
+		status.SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING)
 	}
+	feedbackMessage(message, status.SetMessage, status.ClearMessage)
+	return nil
+}
+
+func syncVirtualNetworkDelete(ctx context.Context, obj *v1alpha1.VirtualNetwork, remote *privatev1.VirtualNetwork) error {
+	return syncVirtualNetworkUpdate(ctx, obj, remote)
 }

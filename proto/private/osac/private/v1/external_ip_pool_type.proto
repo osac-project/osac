@@ -32,9 +32,6 @@ option (cleanapi.file).package = "osac.public.v1";
 // "External" means external to the VirtualNetwork. The addresses may be internet-routable or
 // data-center-routable depending on the deployment topology (e.g., air-gapped environments).
 //
-// The implementation_strategy field determines how IPs from this pool are advertised on the target
-// cluster (e.g., MetalLB L2 mode). This field is set by the system and is not user-configurable.
-//
 // Capacity tracking fields in the status (total, allocated, available) reflect the current utilization
 // of the pool across all its CIDR ranges.
 message ExternalIPPool {
@@ -89,15 +86,9 @@ message ExternalIPPoolSpec {
     (buf.validate.field).enum = {defined_only: true, not_in: [0, 2]}
   ];
 
-  // Backend strategy used to advertise IPs from this pool on the target cluster.
-  //
-  // Set by the system based on cluster configuration. Not user-configurable. Currently the
-  // only supported strategy is "metallb-l2" (MetalLB Layer 2 advertisement mode).
-  string implementation_strategy = 4 [
-    (cleanapi.field).private = true,
-    (google.api.field_behavior) = OUTPUT_ONLY,
-    (google.api.field_behavior) = IMMUTABLE
-  ];
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 4;
+  reserved "implementation_strategy";
 }
 
 // Represents the current operational state of an ExternalIPPool.
@@ -175,12 +166,10 @@ enum ExternalIPPoolState {
   // Maps from CRD phase "Deleting".
   EXTERNAL_IP_POOL_STATE_DELETING = 4;
 
-  // The pool deletion has failed.
-  //
-  // The deprovision operation encountered an error and could not complete. The status.message
-  // field contains error details. Manual intervention may be required before retrying deletion.
-  // No CRD phase equivalent (follows the Subnet pattern for proto-level tracking).
-  EXTERNAL_IP_POOL_STATE_DELETE_FAILED = 5;
+  // DELETE_FAILED was removed: a delete that fails keeps the DELETING state and reports the failure in
+  // status.message.
+  reserved 5;
+  reserved "EXTERNAL_IP_POOL_STATE_DELETE_FAILED";
 }
 
 // Reference to an ExternalIPPool resource.

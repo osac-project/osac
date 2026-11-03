@@ -24,6 +24,13 @@
       ansible.builtin.set_fact:
         osac_job_vars:
           resource: "{{ test_compute_instance }}"
+          # Provider networking disabled (what CI deploys): the operator's vm_network is
+          # the default pod network with masquerade in the VM namespace.
+          vm_network:
+            namespace: test-subnet
+            networks: [{name: default, pod: {}}]
+            interfaces: [{name: default, masquerade: {}}]
+            labels: {osac.openshift.io/compute-instance-id: 3c0b9d2e-2222-4a5b-9c7d-2e4f6a8b0c12}
         tenant_storage_class_storage_classes:
           - name: "test-storage-class"
             tier: "local"

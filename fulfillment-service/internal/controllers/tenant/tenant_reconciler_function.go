@@ -50,12 +50,13 @@ import (
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
 type FunctionBuilder struct {
-	hubCache       controllers.HubCache
-	logger         *slog.Logger
-	connection     *grpc.ClientConn
-	idpManager     *idp.TenantManager
-	vaultLifecycle vault.LifecycleClient
-	defaultNetwork defaultnetworking.Manager
+	provisioningEnabled *bool
+	hubCache            controllers.HubCache
+	logger              *slog.Logger
+	connection          *grpc.ClientConn
+	idpManager          *idp.TenantManager
+	vaultLifecycle      vault.LifecycleClient
+	defaultNetwork      defaultnetworking.Manager
 }
 
 // NewFunction creates a builder that can be used to configure and create reconciler functions.
@@ -94,6 +95,13 @@ func (b *FunctionBuilder) SetHubCache(value controllers.HubCache) *FunctionBuild
 	return b
 }
 
+// SetProvisioningEnabled sets the value of global.networking.provisioningEnabled. With provider networking disabled
+// the default ExternalIP and NATGateway are not required. The default is true.
+func (b *FunctionBuilder) SetProvisioningEnabled(value bool) *FunctionBuilder {
+	b.provisioningEnabled = &value
+	return b
+}
+
 // SetDefaultNetworking sets the controller-owned manager for tenant default
 // networking. This is optional for focused controller tests and reserved
 // tenants, but is configured by the production controller process.
@@ -126,7 +134,12 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		return
 	}
 
+	provisioningEnabled := true
+	if b.provisioningEnabled != nil {
+		provisioningEnabled = *b.provisioningEnabled
+	}
 	result = &function{
+		provisioningEnabled:   provisioningEnabled,
 		hubCache:              b.hubCache,
 		hubsClient:            privatev1.NewHubsClient(b.connection),
 		logger:                b.logger,
@@ -149,6 +162,7 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 
 // function is the implementation of the reconciler function.
 type function struct {
+	provisioningEnabled   bool
 	hubCache              controllers.HubCache
 	hubsClient            privatev1.HubsClient
 	logger                *slog.Logger
@@ -181,7 +195,11 @@ func (r *function) Run(ctx context.Context, tenant *privatev1.Tenant) error {
 		// Persist both barriers before doing any external work.
 	} else if tenant.HasMetadata() && tenant.GetMetadata().HasDeletionTimestamp() {
 		if err := task.delete(ctx); err != nil {
-			return err
+			// While the default networking resources are deleted, persist the Deleting condition.
+			if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
+				return err
+			}
+			reconcileErr = err
 		}
 	} else {
 		reconcileErr = task.update(ctx)
@@ -205,6 +223,7 @@ type task struct {
 	r                      *function
 	tenant                 *privatev1.Tenant
 	defaultNetworkDefaults *privatev1.NetworkDefaults
+	defaultNetworkErr      error
 }
 
 const tenantDeletionRetryInterval = time.Second
@@ -529,6 +548,9 @@ func (t *task) delete(ctx context.Context) error {
 		if err := t.r.defaultNetwork.Delete(ctx, t.tenant.GetMetadata().GetName()); err != nil {
 			wrapped := fmt.Errorf("failed to delete default networking: %w", err)
 			if errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
+				t.updateCondition(privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+					privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "Deleting",
+					"Deleting the default networking resources: "+strings.Join(t.remainingDefaults(ctx), ", "))
 				return controllers.RequeueAtInterval(wrapped, tenantDeletionRetryInterval)
 			}
 			return wrapped
@@ -851,6 +873,12 @@ func (t *task) ensureDefaultNetworking(ctx context.Context) error {
 		return nil
 	}
 	defaults, err := t.r.defaultNetwork.Ensure(ctx, t.tenant.GetMetadata().GetName())
+	if errors.Is(err, defaultnetworking.ErrNoPoolCapacity) || errors.Is(err, defaultnetworking.ErrNoReadyPool) {
+		// Reported by the DefaultNetworkingReady condition.
+		t.defaultNetworkDefaults = defaults
+		t.defaultNetworkErr = err
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -858,6 +886,19 @@ func (t *task) ensureDefaultNetworking(ctx context.Context) error {
 	return nil
 }
 
+// defaultPoolRetryInterval is how often a tenant waiting for a READY ExternalIPPool retries.
+const defaultPoolRetryInterval = 30 * time.Second
+
+// defaultResource is one of the tenant's default networking resources and its readiness.
+type defaultResource struct {
+	name   string
+	ready  bool
+	failed bool
+}
+
+// checkDefaultNetworkingReadiness sets the DefaultNetworkingReady condition: True once the default VirtualNetwork,
+// Subnet and SecurityGroup are READY and, with provider networking enabled, the default ExternalIP is ALLOCATED and
+// the default NATGateway READY.
 func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 	tenantName := t.tenant.GetMetadata().GetName()
 	condType := privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY
@@ -867,175 +908,213 @@ func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 			"ReservedTenant", "Reserved tenants do not require default networking")
 		return nil
 	}
-
 	if t.r.virtualNetworksClient == nil {
 		return nil
 	}
-	defaults := t.defaultNetworkDefaults
-	if t.r.defaultNetwork == nil {
-		var err error
-		defaults, err = t.activeNetworkDefaults(ctx)
-		if err != nil {
-			return err
-		}
+
+	networkClass, err := t.activeNetworkClass(ctx)
+	if err != nil {
+		return err
+	}
+	if networkClass == nil {
+		t.setPending("no NetworkClass is configured")
+		return nil
+	}
+	if networkClass.GetStatus().GetState() != privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY {
+		t.setPending(fmt.Sprintf("the NetworkClass is not READY (current state: %s)",
+			networkClass.GetStatus().GetState()))
+		return nil
+	}
+	if errors.Is(t.defaultNetworkErr, defaultnetworking.ErrNoPoolCapacity) {
+		t.setFailed("no READY IPv4 ExternalIPPool has capacity")
+		return nil
 	}
 
-	filter := fmt.Sprintf("%s && this.metadata.tenant == %q", defaultLabelFilter, tenantName)
-	subnetFilter := fmt.Sprintf("%s && this.metadata.tenant == %q && this.metadata.name == %q",
-		defaultLabelFilter, tenantName, "default-ipv4")
-
+	resources, err := t.listDefaultResources(ctx)
+	if err != nil {
+		return err
+	}
 	var pending, failed []string
-	present := map[string]bool{}
-
-	vns, err := t.r.virtualNetworksClient.List(ctx, privatev1.VirtualNetworksListRequest_builder{
-		Filter: new(filter),
-	}.Build())
-	if err != nil {
-		return fmt.Errorf("failed to list default virtual networks: %w", err)
-	}
-	for _, vn := range vns.GetItems() {
-		name := fmt.Sprintf("VirtualNetwork/%s", vn.GetMetadata().GetName())
-		present[name] = true
-		switch vn.GetStatus().GetState() {
-		case privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY:
-		case privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED:
-			failed = append(failed, name)
-		default:
-			pending = append(pending, name)
+	for _, resource := range resources {
+		switch {
+		case resource.failed:
+			failed = append(failed, resource.name)
+		case !resource.ready:
+			pending = append(pending, resource.name)
 		}
 	}
-
-	subnets, err := t.r.subnetsClient.List(ctx, privatev1.SubnetsListRequest_builder{
-		Filter: new(subnetFilter),
-	}.Build())
-	if err != nil {
-		return fmt.Errorf("failed to list default subnets: %w", err)
-	}
-	for _, s := range subnets.GetItems() {
-		name := fmt.Sprintf("Subnet/%s", s.GetMetadata().GetName())
-		present[name] = true
-		switch s.GetStatus().GetState() {
-		case privatev1.SubnetState_SUBNET_STATE_READY:
-		case privatev1.SubnetState_SUBNET_STATE_FAILED, privatev1.SubnetState_SUBNET_STATE_DELETE_FAILED:
-			failed = append(failed, name)
-		default:
-			pending = append(pending, name)
-		}
-	}
-
-	sgs, err := t.r.securityGroupsClient.List(ctx, privatev1.SecurityGroupsListRequest_builder{
-		Filter: new(filter),
-	}.Build())
-	if err != nil {
-		return fmt.Errorf("failed to list default security groups: %w", err)
-	}
-	for _, sg := range sgs.GetItems() {
-		name := fmt.Sprintf("SecurityGroup/%s", sg.GetMetadata().GetName())
-		present[name] = true
-		switch sg.GetStatus().GetState() {
-		case privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY:
-		case privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED, privatev1.SecurityGroupState_SECURITY_GROUP_STATE_DELETE_FAILED:
-			failed = append(failed, name)
-		default:
-			pending = append(pending, name)
-		}
-	}
-
-	eips, err := t.r.externalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{
-		Filter: new(filter),
-	}.Build())
-	if err != nil {
-		return fmt.Errorf("failed to list default external IPs: %w", err)
-	}
-	for _, eip := range eips.GetItems() {
-		name := fmt.Sprintf("ExternalIP/%s", eip.GetMetadata().GetName())
-		present[name] = true
-		switch eip.GetStatus().GetState() {
-		case privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED:
-		case privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED:
-			failed = append(failed, name)
-		default:
-			pending = append(pending, name)
-		}
-	}
-
-	ngs, err := t.r.natGatewaysClient.List(ctx, privatev1.NATGatewaysListRequest_builder{
-		Filter: new(filter),
-	}.Build())
-	if err != nil {
-		return fmt.Errorf("failed to list default NAT gateways: %w", err)
-	}
-	for _, ng := range ngs.GetItems() {
-		name := fmt.Sprintf("NATGateway/%s", ng.GetMetadata().GetName())
-		present[name] = true
-		switch ng.GetStatus().GetState() {
-		case privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY:
-		case privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED:
-			failed = append(failed, name)
-		default:
-			pending = append(pending, name)
-		}
-	}
-
-	defaultCount := len(vns.GetItems()) + len(subnets.GetItems()) + len(sgs.GetItems()) +
-		len(eips.GetItems()) + len(ngs.GetItems())
-	if defaults == nil && defaultCount == 0 {
-		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-			"NoDefaultNetworking", "No default networking resources configured")
-		return nil
-	}
-
 	if len(failed) > 0 {
-		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-			"ResourceFailed", fmt.Sprintf("Default networking resources failed: %s", strings.Join(failed, ", ")))
+		t.setFailed(fmt.Sprintf("Default networking resources failed: %s", strings.Join(failed, ", ")))
 		return nil
 	}
-	pending = append(pending, missingDefaultResources(defaults, present)...)
 	if len(pending) > 0 {
-		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-			"ResourcesPending", fmt.Sprintf("Default networking resources pending: %s", strings.Join(pending, ", ")))
+		message := fmt.Sprintf("Default networking resources pending: %s", strings.Join(pending, ", "))
+		if errors.Is(t.defaultNetworkErr, defaultnetworking.ErrNoReadyPool) {
+			message += "; no READY IPv4 ExternalIPPool"
+			t.setPending(message)
+			return controllers.RequeueAtInterval(defaultnetworking.ErrNoReadyPool, defaultPoolRetryInterval)
+		}
+		t.setPending(message)
 		return nil
 	}
-	t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-		"AllResourcesReady", "All default networking resources are ready")
+	reason, message := "AllResourcesReady", "All default networking resources are ready"
+	if !t.r.provisioningEnabled {
+		reason = "ProvisioningDisabled"
+		message = "The default VirtualNetwork, Subnet and SecurityGroup are ready; provider networking is " +
+			"disabled, so there is no default ExternalIP or NATGateway"
+	}
+	if !t.isConditionTrue(condType) {
+		t.r.logger.InfoContext(ctx, "DefaultNetworkingReady", slog.String("tenant", tenantName),
+			slog.String("reason", reason))
+	}
+	t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE, reason, message)
 	return nil
 }
 
-func (t *task) activeNetworkDefaults(ctx context.Context) (*privatev1.NetworkDefaults, error) {
-	filter := "!has(this.metadata.deletion_timestamp)"
-	response, err := t.r.networkClassesClient.List(ctx, privatev1.NetworkClassesListRequest_builder{
-		Filter: new(filter), Limit: new(int32(2)),
+func (t *task) setPending(message string) {
+	t.updateCondition(privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+		privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "ResourcesPending", message)
+}
+
+func (t *task) setFailed(message string) {
+	t.r.logger.Error("DefaultNetworkingFailed", slog.String("tenant", t.tenant.GetMetadata().GetName()),
+		slog.String("message", message))
+	t.updateCondition(privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+		privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "ResourceFailed", message)
+}
+
+// listDefaultResources returns the required default resources of the tenant, including the missing ones.
+func (t *task) listDefaultResources(ctx context.Context) ([]defaultResource, error) {
+	tenantName := t.tenant.GetMetadata().GetName()
+	byName := func(name string) string {
+		return fmt.Sprintf("%s && this.metadata.tenant == %q && this.metadata.name == %q",
+			defaultLabelFilter, tenantName, name)
+	}
+	var result []defaultResource
+	vns, err := t.r.virtualNetworksClient.List(ctx, privatev1.VirtualNetworksListRequest_builder{
+		Filter: new(byName("default")),
 	}.Build())
 	if err != nil {
-		return nil, fmt.Errorf("failed to list active NetworkClasses: %w", err)
+		return nil, fmt.Errorf("failed to list default virtual networks: %w", err)
 	}
-	if response.GetTotal() > 1 || len(response.GetItems()) > 1 {
-		return nil, errors.New("multiple active NetworkClasses are configured")
+	resource := defaultResource{name: "VirtualNetwork/default"}
+	for _, item := range vns.GetItems() {
+		resource.ready = item.GetStatus().GetState() == privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY
+		resource.failed = item.GetStatus().GetState() == privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED
+	}
+	result = append(result, resource)
+
+	subnets, err := t.r.subnetsClient.List(ctx, privatev1.SubnetsListRequest_builder{
+		Filter: new(byName("default-ipv4")),
+	}.Build())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list default subnets: %w", err)
+	}
+	resource = defaultResource{name: "Subnet/default-ipv4"}
+	for _, item := range subnets.GetItems() {
+		resource.ready = item.GetStatus().GetState() == privatev1.SubnetState_SUBNET_STATE_READY
+		resource.failed = item.GetStatus().GetState() == privatev1.SubnetState_SUBNET_STATE_FAILED
+	}
+	result = append(result, resource)
+
+	groups, err := t.r.securityGroupsClient.List(ctx, privatev1.SecurityGroupsListRequest_builder{
+		Filter: new(byName("default")),
+	}.Build())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list default security groups: %w", err)
+	}
+	resource = defaultResource{name: "SecurityGroup/default"}
+	for _, item := range groups.GetItems() {
+		resource.ready = item.GetStatus().GetState() == privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY
+		resource.failed = item.GetStatus().GetState() == privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED
+	}
+	result = append(result, resource)
+
+	if !t.r.provisioningEnabled {
+		return result, nil
+	}
+
+	externalIPs, err := t.r.externalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{
+		Filter: new(byName("default-nat")),
+	}.Build())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list default external IPs: %w", err)
+	}
+	resource = defaultResource{name: "ExternalIP/default-nat"}
+	for _, item := range externalIPs.GetItems() {
+		resource.ready = item.GetStatus().GetState() == privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED
+		resource.failed = item.GetStatus().GetState() == privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED
+	}
+	result = append(result, resource)
+
+	gateways, err := t.r.natGatewaysClient.List(ctx, privatev1.NATGatewaysListRequest_builder{
+		Filter: new(byName("default")),
+	}.Build())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list default NAT gateways: %w", err)
+	}
+	resource = defaultResource{name: "NATGateway/default"}
+	for _, item := range gateways.GetItems() {
+		resource.ready = item.GetStatus().GetState() == privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY
+		resource.failed = item.GetStatus().GetState() == privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED
+	}
+	result = append(result, resource)
+	return result, nil
+}
+
+// remainingDefaults names the default networking resources of a tenant that is being deleted that still exist.
+func (t *task) remainingDefaults(ctx context.Context) []string {
+	if t.r.virtualNetworksClient == nil {
+		return nil
+	}
+	filter := fmt.Sprintf("%s && this.metadata.tenant == %q", defaultLabelFilter, t.tenant.GetMetadata().GetName())
+	var names []string
+	if response, err := t.r.natGatewaysClient.List(ctx,
+		privatev1.NATGatewaysListRequest_builder{Filter: new(filter)}.Build()); err == nil {
+		for _, item := range response.GetItems() {
+			names = append(names, "NATGateway/"+item.GetMetadata().GetName())
+		}
+	}
+	if response, err := t.r.externalIPsClient.List(ctx,
+		privatev1.ExternalIPsListRequest_builder{Filter: new(filter)}.Build()); err == nil {
+		for _, item := range response.GetItems() {
+			names = append(names, "ExternalIP/"+item.GetMetadata().GetName())
+		}
+	}
+	if response, err := t.r.subnetsClient.List(ctx,
+		privatev1.SubnetsListRequest_builder{Filter: new(filter)}.Build()); err == nil {
+		for _, item := range response.GetItems() {
+			names = append(names, "Subnet/"+item.GetMetadata().GetName())
+		}
+	}
+	if response, err := t.r.securityGroupsClient.List(ctx,
+		privatev1.SecurityGroupsListRequest_builder{Filter: new(filter)}.Build()); err == nil {
+		for _, item := range response.GetItems() {
+			names = append(names, "SecurityGroup/"+item.GetMetadata().GetName())
+		}
+	}
+	if response, err := t.r.virtualNetworksClient.List(ctx,
+		privatev1.VirtualNetworksListRequest_builder{Filter: new(filter)}.Build()); err == nil {
+		for _, item := range response.GetItems() {
+			names = append(names, "VirtualNetwork/"+item.GetMetadata().GetName())
+		}
+	}
+	return names
+}
+
+// activeNetworkClass returns the deployment NetworkClass, or nil when there is none.
+func (t *task) activeNetworkClass(ctx context.Context) (*privatev1.NetworkClass, error) {
+	response, err := t.r.networkClassesClient.List(ctx, privatev1.NetworkClassesListRequest_builder{
+		Limit: new(int32(2)),
+	}.Build())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list NetworkClasses: %w", err)
+	}
+	if len(response.GetItems()) > 1 {
+		return nil, errors.New("multiple NetworkClasses are configured")
 	}
 	if len(response.GetItems()) == 0 {
 		return nil, nil
 	}
-	return response.GetItems()[0].GetSpec().GetDefaults(), nil
-}
-
-func missingDefaultResources(defaults *privatev1.NetworkDefaults, present map[string]bool) []string {
-	required := []string{"VirtualNetwork/default", "SecurityGroup/default"}
-	if defaults != nil {
-		if defaults.GetSubnetIpv4Cidr() != "" {
-			required = append(required, "Subnet/default-ipv4")
-		}
-		if defaults.GetSubnetIpv6Cidr() != "" {
-			required = append(required, "Subnet/default-ipv6")
-		}
-		if defaults.GetEnableNatGateway() {
-			required = append(required, "ExternalIP/default-nat", "NATGateway/default")
-		}
-	}
-	var missing []string
-	for _, name := range required {
-		if !present[name] {
-			missing = append(missing, name)
-		}
-	}
-	return missing
+	return response.GetItems()[0], nil
 }

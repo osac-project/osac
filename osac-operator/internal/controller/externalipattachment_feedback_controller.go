@@ -27,7 +27,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -37,6 +36,13 @@ import (
 
 var ErrExternalIPAttachmentNotFound = errors.New("external IP attachment not found in fulfillment service")
 
+// externalIPAttachmentFeedbackPaths is the update mask of the feedback Save. The
+// address is not in it: the fulfillment service sets it at create and rejects it
+// in a status update mask.
+var externalIPAttachmentFeedbackPaths = []string{
+	feedbackStatusStatePath, feedbackStatusMessagePath, feedbackStatusStateTransitionTimePath,
+}
+
 type ExternalIPAttachmentFeedbackReconciler struct {
 	bridge              *feedback.Bridge[*v1alpha1.ExternalIPAttachment, *privatev1.ExternalIPAttachment]
 	networkingNamespace string
@@ -44,7 +50,6 @@ type ExternalIPAttachmentFeedbackReconciler struct {
 
 func NewExternalIPAttachmentFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConnInterface, networkingNamespace string) *ExternalIPAttachmentFeedbackReconciler {
 	attachClient := privatev1.NewExternalIPAttachmentsClient(grpcConn)
-	eipClient := privatev1.NewExternalIPsClient(grpcConn)
 	r := &ExternalIPAttachmentFeedbackReconciler{networkingNamespace: networkingNamespace}
 	r.bridge = &feedback.Bridge[*v1alpha1.ExternalIPAttachment, *privatev1.ExternalIPAttachment]{
 		Client:    hubClient,
@@ -75,11 +80,14 @@ func NewExternalIPAttachmentFeedbackReconciler(hubClient clnt.Client, grpcConn g
 		},
 		Save: func(ctx context.Context, remote *privatev1.ExternalIPAttachment) error {
 			_, err := attachClient.Update(ctx, privatev1.ExternalIPAttachmentsUpdateRequest_builder{
-				Object: remote,
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
-					feedbackStatusStatePath, "status.external_ip_address", feedbackStatusMessagePath, feedbackStatusStateTransitionTimePath,
-				}},
+				Object:     remote,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: externalIPAttachmentFeedbackPaths},
 			}.Build())
+			if err != nil {
+				return err
+			}
+			// Signal on change, so the fulfillment service acts on the new state.
+			_, err = attachClient.Signal(ctx, privatev1.ExternalIPAttachmentsSignalRequest_builder{Id: remote.GetId()}.Build())
 			return err
 		},
 		Signal: func(ctx context.Context, id string) error {
@@ -88,7 +96,7 @@ func NewExternalIPAttachmentFeedbackReconciler(hubClient clnt.Client, grpcConn g
 			}.Build())
 			return err
 		},
-		SyncUpdate: newExternalIPAttachmentSyncUpdate(eipClient, hubClient),
+		SyncUpdate: newExternalIPAttachmentSyncUpdate(hubClient),
 		SyncDelete: newExternalIPAttachmentSyncDelete(hubClient),
 		IsNotFound: func(err error) bool { return errors.Is(err, ErrExternalIPAttachmentNotFound) },
 	}
@@ -112,27 +120,29 @@ func (r *ExternalIPAttachmentFeedbackReconciler) Reconcile(ctx context.Context, 
 	return r.bridge.Reconcile(ctx, request)
 }
 
-// newExternalIPAttachmentSyncUpdate returns a SyncUpdate that captures eipClient
-// for syncing the parent's address to the attachment.
-func newExternalIPAttachmentSyncUpdate(eipClient privatev1.ExternalIPsClient, hubClient clnt.Client) func(context.Context, *v1alpha1.ExternalIPAttachment, *privatev1.ExternalIPAttachment) error {
+// newExternalIPAttachmentSyncUpdate returns a SyncUpdate that syncs the state and
+// settles the parent ExternalIP CRD.
+func newExternalIPAttachmentSyncUpdate(hubClient clnt.Client) func(context.Context, *v1alpha1.ExternalIPAttachment, *privatev1.ExternalIPAttachment) error {
 	return func(ctx context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) error {
 		if err := backfillAttachmentStateTransitionTime(ctx, hubClient, obj); err != nil {
 			return err
 		}
 		syncExternalIPAttachmentState(ctx, obj, remote)
-		syncExternalIPAttachmentAddress(ctx, eipClient, remote)
 		transition := obj.Status.StateTransitionTime
 		var transitionTime *timestamppb.Timestamp
 		if transition != nil {
 			transitionTime = timestamppb.New(transition.Time)
 		}
 		return syncExternalIPAttachmentParentCRD(ctx, hubClient, obj.Namespace, remote.GetSpec().GetExternalIp().GetId(),
-			obj.Status.Phase == v1alpha1.ExternalIPAttachmentPhaseReady, transitionTime)
+			externalIPAttachmentReady(obj), transitionTime)
 	}
 }
 
 func newExternalIPAttachmentSyncDelete(hubClient clnt.Client) func(context.Context, *v1alpha1.ExternalIPAttachment, *privatev1.ExternalIPAttachment) error {
 	return func(ctx context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) error {
+		if err := backfillAttachmentStateTransitionTime(ctx, hubClient, obj); err != nil {
+			return err
+		}
 		if err := syncExternalIPAttachmentDelete(ctx, obj, remote); err != nil {
 			return err
 		}
@@ -143,82 +153,45 @@ func newExternalIPAttachmentSyncDelete(hubClient clnt.Client) func(context.Conte
 	}
 }
 
-// syncExternalIPAttachmentDelete maps ExternalIPAttachment CR status during deletion.
-// Failed attachments report FAILED, and everything else reports DELETING: an attachment
-// whose deletion timestamp is set is going away whatever phase its status still carries,
-// including the empty phase of an attachment deleted before any controller status write.
-//
-// The state and its time come from the same place. The Failed phase the CR records dates
-// its own transition, an event the controller observed. The DELETING reported for every
-// other phase is forced: the phase predates the deletion, so its time is not the
-// deletion's — the deletion started at the deletion timestamp, and dating the report at
-// the old phase's time would erase the billed span up to the deletion. An attachment
-// deleted before any controller status write has no phase time either, and the deletion
-// timestamp covers it.
-func syncExternalIPAttachmentDelete(_ context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) error {
-	var at *timestamppb.Timestamp
-	switch obj.Status.Phase {
-	case v1alpha1.ExternalIPAttachmentPhaseFailed:
-		remote.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_FAILED)
-		at = stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
-	default:
-		remote.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_DELETING)
-		at = laterTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
-	}
-	if at == nil {
-		if remote.GetStatus().GetStateTransitionTime() != nil {
-			return nil
-		}
-		return fmt.Errorf("external IP attachment %s has no state transition time", remote.GetId())
+func externalIPAttachmentReady(obj *v1alpha1.ExternalIPAttachment) bool {
+	state, _ := networkFeedback(obj, obj.Status.Conditions)
+	return state == networkFeedbackReady
+}
+
+func syncExternalIPAttachmentDelete(ctx context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) error {
+	stored := remote.GetStatus().GetStateTransitionTime()
+	syncExternalIPAttachmentState(ctx, obj, remote)
+	at, err := deletingTransitionTime(obj.Status.StateTransitionTime, obj.DeletionTimestamp, stored,
+		"external IP attachment", remote.GetId())
+	if err != nil {
+		return err
 	}
 	remote.GetStatus().SetStateTransitionTime(at)
 	return nil
 }
 
 func syncExternalIPAttachmentStateTransitionTime(obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) {
-	at := stateTransitionTimeOf(obj.Status.StateTransitionTime, obj.DeletionTimestamp)
-	if at == nil {
+	if obj.Status.StateTransitionTime == nil {
 		remote.GetStatus().ClearStateTransitionTime()
 		return
 	}
-	remote.GetStatus().SetStateTransitionTime(at)
+	remote.GetStatus().SetStateTransitionTime(timestamppb.New(obj.Status.StateTransitionTime.Time))
 }
 
-func syncExternalIPAttachmentState(ctx context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) {
-	switch obj.Status.Phase {
-	case v1alpha1.ExternalIPAttachmentPhaseProgressing:
-		remote.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING)
-	case v1alpha1.ExternalIPAttachmentPhaseReady:
+func syncExternalIPAttachmentState(_ context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) {
+	state, message := networkFeedback(obj, obj.Status.Conditions)
+	feedbackMessage(message, remote.GetStatus().SetMessage, remote.GetStatus().ClearMessage)
+	switch state {
+	case networkFeedbackReady:
 		remote.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY)
-	case v1alpha1.ExternalIPAttachmentPhaseFailed:
+	case networkFeedbackFailed:
 		remote.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_FAILED)
+	case networkFeedbackDeleting:
+		remote.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_DELETING)
 	default:
-		log := ctrllog.FromContext(ctx)
-		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
+		remote.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING)
 	}
-
 	syncExternalIPAttachmentStateTransitionTime(obj, remote)
-}
-
-func syncExternalIPAttachmentAddress(ctx context.Context, eipClient privatev1.ExternalIPsClient, remote *privatev1.ExternalIPAttachment) {
-	externalIPRef := remote.GetSpec().GetExternalIp()
-	if externalIPRef.GetId() == "" {
-		return
-	}
-	response, err := eipClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
-		Id: externalIPRef.GetId(),
-	}.Build())
-	if err != nil {
-		ctrllog.FromContext(ctx).Error(err, "Failed to fetch parent ExternalIP for address sync", "externalIPID", externalIPRef.GetId())
-		return
-	}
-	obj := response.GetObject()
-	if obj == nil || !obj.HasStatus() {
-		return
-	}
-	if addr := obj.GetStatus().GetAddress(); addr != "" {
-		remote.GetStatus().SetExternalIpAddress(addr)
-	}
 }
 
 func syncExternalIPAttachmentParentCRD(

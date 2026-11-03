@@ -209,6 +209,7 @@ spec:
         - --enable-vmaas={{ include "fulfillment-service.serviceEnabled" (list . "vmaas") }}
         - --enable-bmaas={{ include "fulfillment-service.serviceEnabled" (list . "bmaas") }}
         - --enable-maas={{ include "fulfillment-service.serviceEnabled" (list . "maas") }}
+        {{- include "fulfillment-service.networkingArgs" . | nindent 8 }}
         - --vault-endpoint={{ $vaultEndpoint }}
         - --vault-namespace={{ $vaultNamespace }}
         - --vault-kv-mount-path={{ $vaultKVMountPath }}

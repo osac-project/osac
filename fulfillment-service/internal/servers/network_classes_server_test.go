@@ -14,341 +14,230 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
-	"context"
-	"fmt"
+	"net/netip"
 
-	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var _ = Describe("Network classes server", func() {
 	var server *PrivateNetworkClassesServer
 
-	BeforeEach(func() {
-		var err error
-		server, err = NewPrivateNetworkClassesServer().
+	newServer := func(settings NetworkingSettings) *PrivateNetworkClassesServer {
+		result, err := NewPrivateNetworkClassesServer().
 			SetLogger(logger).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
+			SetNetworkingSettings(settings).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
-	})
-
-	create := func() *privatev1.NetworkClass {
-		response, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("test-nc-%s", uuid.NewString()[:8])}.Build(),
-				Title:         "Test Network Class",
-				FabricManager: new("netris"),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		return response.GetObject()
+		return result
 	}
 
-	createWithDefaults := func(defaults *privatev1.NetworkDefaults) *privatev1.NetworkClass {
-		response, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("test-nc-%s", uuid.NewString()[:8])}.Build(),
-				Title:         "Network Class with defaults",
-				FabricManager: new("netris"),
-				Spec:          privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+	// installerObject is the object the installer sends.
+	installerObject := func() *privatev1.NetworkClass {
+		return privatev1.NetworkClass_builder{
+			Title:         "OSAC NetworkClass",
+			Description:   "Deployment networking",
+			FabricManager: "netris",
+			K8SManager:    new("cudn"),
+			Spec: privatev1.NetworkClassSpec_builder{
+				Defaults: privatev1.NetworkDefaults_builder{
+					VirtualNetworkIpv4Cidr: "10.0.0.0/16",
+					SubnetIpv4Cidr:         "10.0.0.0/24",
+				}.Build(),
+				EastWestCapabilities: privatev1.NetworkClassEastWestCapabilities_builder{
+					SupportsEastWestEthernet: true,
+				}.Build(),
+				AddressPlan: fixtureAddressPlan(),
 			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		return response.GetObject()
-	}
-
-	validDefaults := func() *privatev1.NetworkDefaults {
-		return privatev1.NetworkDefaults_builder{
-			VirtualNetworkIpv4Cidr: "10.0.0.0/16",
-			SubnetIpv4Cidr:         "10.0.1.0/24",
 		}.Build()
 	}
 
-	Describe("singleton admission", func() {
-		It("clears caller status and initializes a manager-backed NetworkClass as pending", func() {
-			response, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-				Object: privatev1.NetworkClass_builder{
-					Title:         "Provider network",
-					FabricManager: new("netris"),
-					K8SManager:    new("cudn_evpn"),
-					Status: privatev1.NetworkClassStatus_builder{
-						Hub:     "caller-hub",
-						State:   privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED,
-						Message: new("caller status"),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			status := response.GetObject().GetStatus()
-			Expect(status.GetState()).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
-			Expect(status.GetHub()).To(BeEmpty())
-			Expect(status.HasMessage()).To(BeFalse())
-		})
+	create := func(object *privatev1.NetworkClass) (*privatev1.NetworkClass, error) {
+		response, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{Object: object}.Build())
+		return response.GetObject(), err
+	}
 
-		It("initializes a fabric-only NetworkClass as ready", func() {
-			response, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-				Object: privatev1.NetworkClass_builder{
-					Title:         "Provider network",
-					FabricManager: new("netris"),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetStatus().GetState()).To(Equal(
-				privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
-		})
-
-		It("rejects a second active NetworkClass", func() {
-			first := create()
-			Expect(first.GetId()).ToNot(BeEmpty())
-
-			_, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-				Object: privatev1.NetworkClass_builder{
-					Title:         "Second network",
-					FabricManager: new("neutron"),
-				}.Build(),
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err).To(MatchError(ContainSubstring("only one NetworkClass per deployment")))
-		})
-
-		It("allows a replacement after the existing NetworkClass is soft-deleted", func() {
-			first := create()
-			tx, err := database.TxFromContext(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			_, err = tx.Exec(ctx, `update network_classes set deletion_timestamp = now() where id = $1`, first.GetId())
-			Expect(err).ToNot(HaveOccurred())
-
-			second := create()
-			Expect(second.GetId()).ToNot(Equal(first.GetId()))
-		})
-
-		It("is also enforced by the database unique singleton index", func() {
-			networkClassDAO, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-			build := func(name string) *privatev1.NetworkClass {
-				return privatev1.NetworkClass_builder{
-					Title:         "Provider network",
-					FabricManager: new("netris"),
-					Metadata: privatev1.Metadata_builder{
-						Name:   name,
-						Tenant: auth.SharedTenant,
-					}.Build(),
-				}.Build()
-			}
-			_, err = networkClassDAO.Create().SetObject(build("first")).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			_, err = networkClassDAO.Create().SetObject(build("second")).Do(ctx)
-			Expect(err).To(HaveOccurred())
-		})
+	BeforeEach(func() {
+		server = newServer(DefaultNetworkingSettings())
 	})
 
-	Describe("CRUD and status ownership", func() {
-		It("lists, gets, updates, and deletes the singleton", func() {
-			created := create()
-			listResponse, err := server.List(ctx, privatev1.NetworkClassesListRequest_builder{}.Build())
+	Describe("Create", func() {
+		It("creates the installer NetworkClass in PENDING state, named after the fabric manager", func() {
+			object, err := create(installerObject())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(listResponse.GetItems()).To(HaveLen(1))
-
-			name := created.GetMetadata().GetName()
-			updated, err := server.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
-				Object: privatev1.NetworkClass_builder{
-					Id:       created.GetId(),
-					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
-					Title:    "Updated provider network",
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"title"}},
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(updated.GetObject().GetTitle()).To(Equal("Updated provider network"))
-
-			_, err = server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: created.GetId()}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(object.GetStatus().GetState()).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
+			Expect(object.GetMetadata().GetName()).To(Equal("netris"))
+			Expect(object.GetSpec().GetAddressPlan().GetOverlay()).To(BeNumerically("==", 0.75))
 		})
 
-		It("rejects changing the singleton's tenant and preserves the stored object", func() {
-			created := create()
-
-			// Tenant immutability is enforced by the database trigger, which aborts the
-			// current transaction, so the rejected update runs inside a savepoint.
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			txErr = tx.Savepoint(ctx, func(savepointCtx context.Context) error {
-				_, updateErr := server.Update(savepointCtx, privatev1.NetworkClassesUpdateRequest_builder{
-					Object: privatev1.NetworkClass_builder{
-						Id:       created.GetId(),
-						Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
-					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
-				}.Build())
-				return updateErr
-			})
-			Expect(txErr).To(HaveOccurred())
-			Expect(grpcstatus.Code(txErr)).To(Equal(grpccodes.InvalidArgument))
-			Expect(txErr.Error()).To(ContainSubstring("metadata.tenant"))
-			Expect(txErr.Error()).To(ContainSubstring("immutable"))
-
-			stored, getErr := server.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: created.GetId()}.Build())
-			Expect(getErr).ToNot(HaveOccurred())
-			Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
-
-			_, err := server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: created.GetId()}.Build())
+		It("allows only one NetworkClass", func() {
+			_, err := create(installerObject())
 			Expect(err).ToNot(HaveOccurred())
+			_, err = create(installerObject())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("only one NetworkClass per deployment is allowed"))
 		})
 
-		It("blocks deletion while a VirtualNetwork still references the NetworkClass", func() {
-			networkClass := create()
-			networkClass.SetStatus(privatev1.NetworkClassStatus_builder{
+		It("rejects status on create", func() {
+			object := installerObject()
+			object.SetStatus(privatev1.NetworkClassStatus_builder{
 				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
 			}.Build())
-			networkClassDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-				SetLogger(logger).SetTenancyLogic(tenancy).Build()
-			Expect(err).ToNot(HaveOccurred())
-			_, err = networkClassDao.Update().SetObject(networkClass).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			virtualNetworks, err := NewPrivateVirtualNetworksServer().
-				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
-			Expect(err).ToNot(HaveOccurred())
-			_, err = virtualNetworks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Metadata: privatev1.Metadata_builder{Name: "network-class-dependent-vn", Tenant: testTenant}.Build(),
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClass.GetId()}.Build(),
-						Region:       "us-west-1",
-						Ipv4Cidr:     new("10.20.0.0/16"),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClass.GetId()}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("VirtualNetwork"))
-			Expect(err.Error()).To(ContainSubstring(networkClass.GetId()))
+			_, err := create(object)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 		})
 
-		It("derives a DNS name from the configured manager", func() {
-			response, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-				Object: privatev1.NetworkClass_builder{
-					Title:      "Kubernetes-only network",
-					K8SManager: new("cudn_localnet"),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetMetadata().GetName()).To(Equal("cudn-localnet"))
-		})
+		DescribeTable("rejects invalid objects",
+			func(mutate func(*privatev1.NetworkClass), message string) {
+				object := installerObject()
+				mutate(object)
+				_, err := create(object)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring(message))
+			},
+			Entry("missing title", func(o *privatev1.NetworkClass) { o.SetTitle("") }, "title"),
+			Entry("missing fabric manager", func(o *privatev1.NetworkClass) { o.SetFabricManager("") },
+				"fabric_manager"),
+			Entry("empty Kubernetes manager", func(o *privatev1.NetworkClass) { o.SetK8SManager("") },
+				"k8s_manager"),
+			Entry("missing defaults", func(o *privatev1.NetworkClass) { o.GetSpec().ClearDefaults() },
+				"spec.defaults"),
+			Entry("missing address plan", func(o *privatev1.NetworkClass) { o.GetSpec().ClearAddressPlan() },
+				"address_plan"),
+			Entry("Subnet outside the VirtualNetwork", func(o *privatev1.NetworkClass) {
+				o.GetSpec().GetDefaults().SetSubnetIpv4Cidr("10.9.0.0/24")
+			}, "subnet_ipv4_cidr"),
+			Entry("share not a multiple of 1/16", func(o *privatev1.NetworkClass) {
+				o.GetSpec().SetAddressPlan(privatev1.AddressPlan_builder{
+					Overlay: 0.7, Fabric: 0.15, LbVip: 0.15,
+				}.Build())
+			}, "address"),
+			Entry("default Subnet beyond the prefix limit", func(o *privatev1.NetworkClass) {
+				o.GetSpec().GetDefaults().SetSubnetIpv4Cidr("10.0.0.0/27")
+			}, "prefix limit"),
+		)
 
-		It("preserves a caller-provided metadata name", func() {
-			response, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-				Object: privatev1.NetworkClass_builder{
-					Metadata:      privatev1.Metadata_builder{Name: "provider-network"}.Build(),
-					Title:         "Provider network",
-					FabricManager: new("netris"),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetMetadata().GetName()).To(Equal("provider-network"))
+		It("rejects a default range that overlaps an excluded range", func() {
+			server = newServer(NetworkingSettings{
+				ProvisioningEnabled: true,
+				ExcludedIPv4CIDRs:   []netip.Prefix{netip.MustParsePrefix("10.0.128.0/17")},
+			})
+			_, err := create(installerObject())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("10.0.128.0/17"))
 		})
 	})
 
-	Describe("manager validation", func() {
-		It("requires at least one manager", func() {
-			_, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-				Object: privatev1.NetworkClass_builder{Title: "No manager"}.Build(),
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err).To(MatchError(ContainSubstring("fabric_manager")))
-		})
+	Describe("Update", func() {
+		var object *privatev1.NetworkClass
 
-		It("allows a Kubernetes-only manager", func() {
-			response, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-				Object: privatev1.NetworkClass_builder{
-					Title:      "K8s-only",
-					K8SManager: new("cudn"),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetK8SManager()).To(Equal("cudn"))
-		})
-
-		It("keeps manager configuration immutable once set", func() {
-			created := create()
+		patchPlan := func(plan *privatev1.AddressPlan) error {
 			_, err := server.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
-				Object:     privatev1.NetworkClass_builder{Id: created.GetId(), FabricManager: new("neutron")}.Build(),
+				Object: privatev1.NetworkClass_builder{
+					Id:   object.GetId(),
+					Spec: privatev1.NetworkClassSpec_builder{AddressPlan: plan}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.address_plan"}},
+			}.Build())
+			return err
+		}
+
+		BeforeEach(func() {
+			var err error
+			object, err = create(installerObject())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("accepts writing the stored address plan again", func() {
+			Expect(patchPlan(object.GetSpec().GetAddressPlan())).To(Succeed())
+		})
+
+		It("rejects an address plan change even when no VirtualNetwork exists", func() {
+			err := patchPlan(privatev1.AddressPlan_builder{Overlay: 0.5, Fabric: 0.25, LbVip: 0.25}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("spec is immutable"))
+			response, err := server.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(response.GetObject().GetSpec().GetAddressPlan(),
+				object.GetSpec().GetAddressPlan())).To(BeTrue())
+		})
+
+		It("rejects an address plan change while a VirtualNetwork exists", func() {
+			createTenant("tenant-a")
+			seedVirtualNetwork("tenant-a", "10.1.0.0/16", privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, nil)
+			err := patchPlan(privatev1.AddressPlan_builder{Overlay: 0.5, Fabric: 0.25, LbVip: 0.25}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("spec is immutable"))
+		})
+
+		It("rejects other spec changes", func() {
+			_, err := server.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+				Object: privatev1.NetworkClass_builder{
+					Id:            object.GetId(),
+					FabricManager: "other",
+				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"fabric_manager"}},
 			}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err).To(MatchError(ContainSubstring("immutable")))
+			Expect(err.Error()).To(ContainSubstring("spec is immutable"))
 		})
 
-	})
-
-	Describe("defaults configuration", func() {
-		It("validates and persists defaults without making them a second selection mechanism", func() {
-			created := createWithDefaults(validDefaults())
-			Expect(created.GetSpec().GetDefaults().GetVirtualNetworkIpv4Cidr()).To(Equal("10.0.0.0/16"))
-		})
-
-		DescribeTable("rejects IPv6 default CIDR configuration",
-			func(defaults *privatev1.NetworkDefaults) {
-				_, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-					Object: privatev1.NetworkClass_builder{
-						Title:         "IPv6 defaults",
-						FabricManager: new("netris"),
-						Spec:          privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			},
-			Entry("virtual network CIDR", privatev1.NetworkDefaults_builder{
-				VirtualNetworkIpv6Cidr: "2001:db8::/32",
-			}.Build()),
-			Entry("subnet CIDR", privatev1.NetworkDefaults_builder{
-				SubnetIpv6Cidr: "2001:db8:1::/64",
-			}.Build()),
-		)
-
-		It("rejects IPv6 default CIDR configuration on update", func() {
-			created := createWithDefaults(validDefaults())
+		It("accepts the operator status fields", func() {
 			_, err := server.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 				Object: privatev1.NetworkClass_builder{
-					Id: created.GetId(),
-					Spec: privatev1.NetworkClassSpec_builder{Defaults: privatev1.NetworkDefaults_builder{
-						VirtualNetworkIpv4Cidr: "10.0.0.0/16",
-						SubnetIpv4Cidr:         "10.0.1.0/24",
-						SubnetIpv6Cidr:         "2001:db8:1::/64",
-					}.Build()}.Build(),
+					Id: object.GetId(),
+					Status: privatev1.NetworkClassStatus_builder{
+						State:       privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+						Message:     new("ready"),
+						NetworkType: "evpn",
+					}.Build(),
 				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.defaults"}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"status.state", "status.message", "status.network_managers", "status.network_type",
+				}},
 			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).ToNot(HaveOccurred())
+		})
+	})
+
+	Describe("Delete", func() {
+		var object *privatev1.NetworkClass
+
+		BeforeEach(func() {
+			var err error
+			object, err = create(installerObject())
+			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("rejects a subnet CIDR without its parent virtual-network CIDR", func() {
-			_, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-				Object: privatev1.NetworkClass_builder{
-					Title:         "Invalid defaults",
-					FabricManager: new("netris"),
-					Spec: privatev1.NetworkClassSpec_builder{Defaults: privatev1.NetworkDefaults_builder{
-						SubnetIpv4Cidr: "10.0.1.0/24",
-					}.Build()}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		It("rejects the delete while a VirtualNetwork exists", func() {
+			createTenant("tenant-a")
+			vn := seedVirtualNetwork("tenant-a", "10.1.0.0/16",
+				privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, nil)
+			_, err := server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring(vn.GetId()))
+		})
+
+		It("rejects the delete while an ExternalIPPool exists", func() {
+			pool := seedExternalIPPool("192.0.2.0/24", 256)
+			_, err := server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring(pool.GetId()))
+		})
+
+		It("deletes the NetworkClass and accepts a second delete", func() {
+			_, err := server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(grpcstatus.Code(err)).To(BeElementOf(grpccodes.OK, grpccodes.NotFound))
 		})
 	})
 })

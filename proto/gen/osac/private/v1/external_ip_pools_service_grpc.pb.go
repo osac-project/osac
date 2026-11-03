@@ -51,7 +51,7 @@ type ExternalIPPoolsClient interface {
 	// Creates a new external IP pool.
 	Create(ctx context.Context, in *ExternalIPPoolsCreateRequest, opts ...grpc.CallOption) (*ExternalIPPoolsCreateResponse, error)
 	// Updates an existing external IP pool. Only metadata fields (name, labels, annotations) are mutable.
-	// All spec fields (cidrs, ip_family, implementation_strategy) are immutable after creation.
+	// All spec fields (cidrs, ip_family) are immutable after creation.
 	Update(ctx context.Context, in *ExternalIPPoolsUpdateRequest, opts ...grpc.CallOption) (*ExternalIPPoolsUpdateResponse, error)
 	// Deletes an external IP pool. Rejected if allocated ExternalIPs still reference this pool.
 	Delete(ctx context.Context, in *ExternalIPPoolsDeleteRequest, opts ...grpc.CallOption) (*ExternalIPPoolsDeleteResponse, error)
@@ -138,7 +138,7 @@ type ExternalIPPoolsServer interface {
 	// Creates a new external IP pool.
 	Create(context.Context, *ExternalIPPoolsCreateRequest) (*ExternalIPPoolsCreateResponse, error)
 	// Updates an existing external IP pool. Only metadata fields (name, labels, annotations) are mutable.
-	// All spec fields (cidrs, ip_family, implementation_strategy) are immutable after creation.
+	// All spec fields (cidrs, ip_family) are immutable after creation.
 	Update(context.Context, *ExternalIPPoolsUpdateRequest) (*ExternalIPPoolsUpdateResponse, error)
 	// Deletes an external IP pool. Rejected if allocated ExternalIPs still reference this pool.
 	Delete(context.Context, *ExternalIPPoolsDeleteRequest) (*ExternalIPPoolsDeleteResponse, error)

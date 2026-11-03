@@ -1,0 +1,60 @@
+{{- if .Values.service.enabled }}
+{{/*
+Rejects changes to networking resources from identities other than the OSAC
+controllers (unified networking design, Non-goals): the fulfillment
+controllers (hub-access), the OSAC operator, BMF, and the AAP job pods
+(osac-sa). The Kubernetes garbage collector and namespace controller are
+allowed so cascades of an OSAC delete still work. Helm deletes the policy and
+binding first on uninstall (unknown kinds go first). One OSAC release per
+cluster: the binding matches the release namespace, but cluster-scoped OSAC
+resources are matched in every namespace.
+*/}}
+{{- $ns := .Release.Namespace }}
+{{- $allowed := list
+      (printf "system:serviceaccount:%s:hub-access" $ns)
+      (printf "system:serviceaccount:%s:%s" $ns (include "osac.operatorServiceAccountName" .))
+      (printf "system:serviceaccount:%s:%s" $ns (include "osac.bmfServiceAccountName" .))
+      (printf "system:serviceaccount:%s:osac-sa" $ns)
+      "system:serviceaccount:kube-system:generic-garbage-collector"
+      "system:serviceaccount:kube-system:namespace-controller" }}
+{{- $networking := list "networkclasses" "externalippools" "virtualnetworks" "subnets" "securitygroups" "externalips" "externalipattachments" "natgateways" "fabricdomains" "networkattachments" }}
+{{- $resources := list }}
+{{- range $networking }}{{ $resources = append (append $resources .) (printf "%s/status" .) }}{{ end }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $ns }}-osac-managed-resources
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["osac.openshift.io"]
+      apiVersions: ["*"]
+      operations: ["CREATE", "UPDATE", "DELETE"]
+      resources: {{ toJson $resources }}
+  variables:
+  - name: osacIdentity
+    expression: {{ printf "request.userInfo.username in %s" (toJson $allowed) | quote }}
+  - name: networking
+    expression: {{ printf "request.resource.resource in %s" (toJson $networking) | quote }}
+  validations:
+  - expression: "variables.osacIdentity || !variables.networking"
+    message: "OSAC manages this resource; change it through the fulfillment API"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $ns }}-osac-managed-resources
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $ns }}-osac-managed-resources
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ $ns }}
+{{- end }}

@@ -1,0 +1,14 @@
+---
+# The Netris Fabric Manager does not reserve a cluster ingress address yet
+# (design decision D-6). The task fails as final so the operator reports it.
+- name: Reserve the cluster ingress address on Netris
+  block:
+    - name: Report that the task is not supported
+      ansible.builtin.include_tasks: _fail.yaml
+      vars:
+        netris_fail:
+          message: "Netris reserve_cluster_ingress_ip: not supported by the Netris Fabric Manager yet."
+          retryable: false
+  rescue:
+    - name: Report the error
+      ansible.builtin.include_tasks: _rescue.yaml

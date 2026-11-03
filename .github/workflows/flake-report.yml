@@ -47,9 +47,18 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p flake-input
-          gh api --paginate --slurp \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${CAMPAIGN_ID}/attempts/${ATTEMPT}/jobs?per_page=100" \
-            > flake-input/jobs.json
+          for attempt in 1 2 3 4 5; do
+            if gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${CAMPAIGN_ID}/attempts/${ATTEMPT}/jobs?per_page=100" \
+              > flake-input/jobs.json; then
+              break
+            fi
+            if [[ "$attempt" == 5 ]]; then
+              exit 1
+            fi
+            echo "::warning::Job retrieval failed; retrying in 5 seconds."
+            sleep 5
+          done
       # List saved logs for links. The reporter filters expired files and other attempts.
       # Job results determine success or failure; the report leaves log contents unread.
       - name: Fetch diagnostic artifacts
@@ -60,9 +69,18 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p flake-input
-          gh api --paginate --slurp \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${CAMPAIGN_ID}/artifacts?per_page=100" \
-            > flake-input/artifacts.json
+          for attempt in 1 2 3 4 5; do
+            if gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${CAMPAIGN_ID}/artifacts?per_page=100" \
+              > flake-input/artifacts.json; then
+              break
+            fi
+            if [[ "$attempt" == 5 ]]; then
+              exit 1
+            fi
+            echo "::warning::Artifact retrieval failed; retrying in 5 seconds."
+            sleep 5
+          done
       # Produce a report even if a download failed. SOURCE_SHA identifies the
       # campaign's workflow commit; its tested commit comes from the saved plan.
       - name: Generate report

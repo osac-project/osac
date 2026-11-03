@@ -18,6 +18,11 @@ def _tasks(path: Path) -> list[dict]:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
+def _block(path: Path) -> list[dict]:
+    """The tasks of the main block of a contract task file."""
+    return yaml.safe_load(path.read_text(encoding="utf-8"))[0]["block"]
+
+
 def _named_task(tasks: list[dict], name: str) -> dict:
     return next(task for task in tasks if task.get("name") == name)
 
@@ -63,28 +68,16 @@ def test_ipam_create_and_delete_match_the_complete_requested_identity() -> None:
 
 
 def test_netris_subnet_flow_supplies_full_identity_to_ipam_roles() -> None:
-    create = _tasks(TEMPLATE_NETRIS / "create_subnet.yaml")
-    parent_ipam_create = _named_task(create, "Create IPAM subnet in Netris controller")
-    assert parent_ipam_create["vars"]["ipam_vpc_id"] == "{{ _parent_vpc.id }}"
-    assert parent_ipam_create["vars"]["ipam_tenant_id"] == "{{ netris_tenant_id }}"
+    create = _block(TEMPLATE_NETRIS / "create_subnet.yaml")
+    parent_ipam_create = _named_task(create, "Create the IPAM subnet")
+    assert parent_ipam_create["vars"]["ipam_vpc_id"] == "{{ netris_vpc.id }}"
+    assert parent_ipam_create["vars"]["ipam_tenant_id"] == "{{ netris_tenant_id | int }}"
 
-    delete = _tasks(TEMPLATE_NETRIS / "delete_subnet.yaml")
-    parent_vnet = _named_task(delete, "Set parent VirtualNetwork name")
-    assert parent_vnet["when"] == "is_cudn_evpn"
-    parent_lookup = _named_task(delete, "Find the exact IPAM parent for this Subnet")
-    assert parent_lookup["ansible.builtin.include_role"]["tasks_from"] == "find_subnet_by_identity"
-    assert parent_lookup["vars"] == {
-        "ipam_name": "{{ subnet_name }}",
-        "ipam_cidr": "{{ subnet_ipv4_cidr }}",
-        "ipam_vpc_id": "{{ _parent_vpc.id }}",
-        "ipam_tenant_id": "{{ netris_tenant_id }}",
-    }
-    child_delete = _named_task(delete, "Delete the reserved EVPN fabric IPAM subnet")
-    assert child_delete["vars"]["ipam_parent_id"] == "{{ _subnet_ipam_parent.id }}"
-    assert child_delete["vars"]["ipam_vpc_id"] == "{{ _parent_vpc.id }}"
-    assert child_delete["vars"]["ipam_tenant_id"] == "{{ netris_tenant_id }}"
-    orphan_guard = _named_task(delete, "Fail if a reserved child remains without its parent identity")
-    assert orphan_guard["ansible.builtin.assert"]["that"] == ["ipam_subnet_by_identity is not mapping"]
+    delete = _block(TEMPLATE_NETRIS / "delete_subnet.yaml")
+    ipam_delete = _named_task(delete, "Delete the IPAM subnet")
+    assert ipam_delete["ansible.builtin.include_role"]["tasks_from"] == "delete_subnet"
+    assert ipam_delete["vars"]["ipam_tenant_id"] == "{{ netris_tenant_id | int }}"
+    assert "'vpc.id': _netris_vpc_id" in ipam_delete["vars"]["ipam_expected_fields"]
 
 
 def test_vnet_create_delete_and_gateway_update_are_identity_scoped() -> None:
@@ -115,24 +108,20 @@ def test_vnet_create_delete_and_gateway_update_are_identity_scoped() -> None:
     delete_request = _named_task(delete, "Delete V-Net")["netris.controller.protected_uri"]
     assert delete_request["url"].endswith("/api/v2/vnet/{{ _existing_vnet.id }}")
 
-    subnet_create = _tasks(TEMPLATE_NETRIS / "create_subnet.yaml")
-    role_call = _named_task(subnet_create, "Create V-Net in Netris controller")
-    assert role_call["vars"]["vnet_vpc_id"] == "{{ _parent_vpc.id }}"
-    assert role_call["vars"]["vnet_tenant_id"] == "{{ netris_tenant_id }}"
-    validation_index = next(
-        index
-        for index, task in enumerate(subnet_create)
-        if task.get("name") == "Validate V-Net ownership before gateway reconciliation"
-    )
-    update_index = next(
-        index
-        for index, task in enumerate(subnet_create)
-        if task.get("name") == "Update existing V-Net gateway and DHCP range"
-    )
-    assert validation_index < update_index
-    ownership = subnet_create[validation_index]["ansible.builtin.assert"]["that"]
-    assert "netris_vnet_detail.get('vpc', {}).get('id', 0) | int == _parent_vpc.id | int" in ownership
-    assert "netris_vnet_detail.get('tenant', {}).get('id', 0) | int == netris_tenant_id | int" in ownership
+    subnet_create = _block(TEMPLATE_NETRIS / "create_subnet.yaml")
+    for name in ("Create the V-Net with a gateway", "Create the V-Net without a gateway"):
+        role_call = _named_task(subnet_create, name)
+        assert role_call["vars"]["vnet_vpc_id"] == "{{ netris_vpc.id }}"
+        assert role_call["vars"]["vnet_tenant_id"] == "{{ netris_tenant_id | int }}"
+    # The create role compares vpc, tenant and site of an existing V-Net before
+    # it is reused, so the update below only touches an owned V-Net.
+    names = [task.get("name") for task in subnet_create]
+    assert names.index("Create the V-Net with a gateway") < names.index("Update the gateway and DHCP of an existing V-Net")
+
+    subnet_delete = _block(TEMPLATE_NETRIS / "delete_subnet.yaml")
+    vnet_delete = _named_task(subnet_delete, "Delete the V-Net")
+    assert vnet_delete["vars"]["vnet_tenant_id"] == "{{ netris_tenant_id | int }}"
+    assert "'vpc.id': _netris_vpc_id" in vnet_delete["vars"]["vnet_expected_fields"]
 
 
 def test_parent_vpc_lookup_matches_id_and_tenant_and_rejects_ambiguity() -> None:
@@ -165,7 +154,7 @@ def test_parent_vpc_lookup_matches_id_and_tenant_and_rejects_ambiguity() -> None
     assert "vpc_lookup_id" in read_args
     assert "vpc_id" not in read_args
 
-    subnet_create = _tasks(TEMPLATE_NETRIS / "create_subnet.yaml")
-    role_call = _named_task(subnet_create, "Look up parent VPC by name")
-    assert role_call["vars"]["vpc_lookup_id"] == "{{ subnet_virtual_network_vpc_id }}"
-    assert role_call["vars"]["vpc_tenant_id"] == "{{ netris_tenant_id }}"
+    subnet_create = _block(TEMPLATE_NETRIS / "create_subnet.yaml")
+    role_call = _named_task(subnet_create, "Look up the VPC of the VirtualNetwork")
+    assert role_call["vars"]["vpc_name"] == "{{ netris_names.vpc }}"
+    assert role_call["vars"]["vpc_tenant_id"] == "{{ netris_tenant_id | int }}"

@@ -235,6 +235,108 @@ var _ = Describe("Client", func() {
 		})
 	})
 
+	Describe("LaunchJobTemplate labels", func() {
+		It("sends the label IDs", func() {
+			var body map[string]any
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(json.NewDecoder(r.Body).Decode(&body)).To(Succeed())
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(`{"id": 7}`))
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+			resp, err := client.LaunchJobTemplate(ctx, aap.LaunchJobTemplateRequest{
+				TemplateName: "osac-create-subnet",
+				ExtraVars:    map[string]any{"osac_job_vars": map[string]any{"task": "create_subnet"}},
+				Labels:       []int{11},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.JobID).To(Equal(7))
+			Expect(body["labels"]).To(Equal([]any{float64(11)}))
+		})
+	})
+
+	Describe("EnsureLabel", func() {
+		It("returns an existing label of the organization", func() {
+			posts := 0
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/v2/organizations/":
+					Expect(r.URL.Query().Get("name")).To(Equal("osac"))
+					_, _ = w.Write([]byte(`{"count":1,"results":[{"id":3,"name":"osac"}]}`))
+				case r.URL.Path == "/v2/labels/" && r.Method == http.MethodGet:
+					Expect(r.URL.Query().Get("organization")).To(Equal("3"))
+					_, _ = w.Write([]byte(`{"count":1,"results":[{"id":9,"name":"osac-create_subnet-fabric-a-1"}]}`))
+				default:
+					posts++
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+			id, err := client.EnsureLabel(ctx, "osac", "osac-create_subnet-fabric-a-1")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(id).To(Equal(9))
+			Expect(posts).To(Equal(0))
+		})
+
+		It("creates a missing label, with a numeric organization, and caches no label", func() {
+			var created map[string]any
+			labels := 0
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.URL.Path).To(Equal("/v2/labels/"))
+				if r.Method == http.MethodGet {
+					if labels > 0 {
+						_, _ = w.Write([]byte(`{"count":1,"results":[{"id":12,"name":"l"}]}`))
+						return
+					}
+					_, _ = w.Write([]byte(`{"count":0,"results":[]}`))
+					return
+				}
+				labels++
+				Expect(json.NewDecoder(r.Body).Decode(&created)).To(Succeed())
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(`{"id":12,"name":"l"}`))
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+			id, err := client.EnsureLabel(ctx, "5", "l")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(id).To(Equal(12))
+			Expect(created).To(Equal(map[string]any{"name": "l", "organization": float64(5)}))
+			// Not cached: a second call looks the label up again and finds it.
+			id, err = client.EnsureLabel(ctx, "5", "l")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(id).To(Equal(12))
+			Expect(labels).To(Equal(1))
+		})
+	})
+
+	Describe("ListJobsByLabel", func() {
+		It("lists jobs by label name, lowest ID first", func() {
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.URL.Path).To(Equal("/v2/jobs/"))
+				Expect(r.URL.Query().Get("labels__name")).To(Equal("osac-x-fabric-a-2"))
+				Expect(r.URL.Query().Get("order_by")).To(Equal("id"))
+				_, _ = w.Write([]byte(`{"next":null,"results":[{"id":4,"status":"running"},{"id":6,"status":"pending"}]}`))
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+			jobs, err := client.ListJobsByLabel(ctx, "osac-x-fabric-a-2")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(jobs).To(HaveLen(2))
+			Expect(jobs[0].ID).To(Equal(4))
+		})
+	})
+
+	Describe("GetJob job_explanation", func() {
+		It("reads job_explanation", func() {
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"id":4,"status":"failed","job_explanation":"Job terminated due to timeout"}`))
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+			job, err := client.GetJob(ctx, "4")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(job.JobExplanation).To(Equal("Job terminated due to timeout"))
+		})
+	})
+
 	Describe("GetJob", func() {
 		Context("when job exists", func() {
 			BeforeEach(func() {
@@ -277,38 +379,6 @@ var _ = Describe("Client", func() {
 				_, err := client.GetJob(ctx, "999")
 				Expect(err).To(HaveOccurred())
 			})
-		})
-	})
-
-	Describe("ListJobs", func() {
-		It("filters jobs by template and follows AAP pagination", func() {
-			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				Expect(r.URL.Path).To(Equal(fmt.Sprintf("/%s/jobs/", aap.APIVersion)))
-				Expect(r.URL.Query().Get("job_template")).To(Equal("77"))
-				Expect(r.URL.Query().Get("page_size")).To(Equal("200"))
-				Expect(r.URL.Query().Get("order_by")).To(Equal("-id"))
-				w.Header().Set("Content-Type", "application/json")
-				if r.URL.Query().Get("page") == "1" {
-					_ = json.NewEncoder(w).Encode(map[string]any{
-						"next":    "/api/v2/jobs/?page=2",
-						"results": []map[string]any{{"id": 20, "status": "running", "extra_vars": `{"a":1}`}},
-					})
-					return
-				}
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"next":    nil,
-					"results": []map[string]any{{"id": 19, "status": "successful", "extra_vars": `{"a":2}`}},
-				})
-			}))
-			defer server.Close()
-			client = aap.NewClient(server.URL, "test-token", false)
-
-			jobs, err := client.ListJobs(ctx, 77)
-
-			Expect(err).NotTo(HaveOccurred())
-			Expect(jobs).To(HaveLen(2))
-			Expect(jobs[0].ID).To(Equal(20))
-			Expect(jobs[1].ID).To(Equal(19))
 		})
 	})
 

@@ -80,3 +80,24 @@ Returns non-empty string for enabled, empty for disabled (for use in {{- if incl
 {{- end -}}
 {{- $enabled -}}
 {{- end }}
+
+{{/*
+Networking installation settings, from global.networking:
+- provisioningEnabled (default true): whether OSAC runs provider networking jobs. It can't change after installation.
+- excludedIpv4Cidrs (default empty): canonical IPv4 CIDRs that the provider's infrastructure uses.
+Renders the command line arguments shared by the gRPC server and the controllers.
+*/}}
+{{- define "fulfillment-service.networkingArgs" -}}
+{{- $networking := dict -}}
+{{- if .Values.global -}}
+{{- $networking = .Values.global.networking | default dict -}}
+{{- end -}}
+{{- $enabled := true -}}
+{{- if hasKey $networking "provisioningEnabled" -}}
+{{- $enabled = $networking.provisioningEnabled -}}
+{{- end }}
+- --networking-provisioning-enabled={{ $enabled }}
+{{- with $networking.excludedIpv4Cidrs }}
+- --networking-excluded-ipv4-cidrs={{ join "," . }}
+{{- end }}
+{{- end }}

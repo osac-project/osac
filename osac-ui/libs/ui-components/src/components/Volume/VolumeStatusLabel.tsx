@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next';
 
 import { VolumeState } from '@osac/types';
+import { getVolumeStatusMap } from '@osac/ui-components/components/Volume/utils';
 
 import { useTranslation } from '../../hooks/useTranslation';
 import { ResourceStatusLabel, type StatusKind } from '../Resource/ResourceStatusLabel';
@@ -8,17 +9,6 @@ import { ResourceStatusLabel, type StatusKind } from '../Resource/ResourceStatus
 interface VolumeStatusLabelProps {
   state?: VolumeState;
 }
-
-const getVolumeStatusMap = (
-  t: TFunction,
-): Record<VolumeState, { status: StatusKind; text: string }> => ({
-  [VolumeState.UNSPECIFIED]: { status: 'unspecified', text: t('Unspecified') },
-  [VolumeState.CREATING]: { status: 'progressing', text: t('Creating') },
-  [VolumeState.AVAILABLE]: { status: 'ready', text: t('Available') },
-  [VolumeState.FAILED]: { status: 'failed', text: t('Failed') },
-  [VolumeState.DELETING]: { status: 'unspecified', text: t('Deleting') },
-  [VolumeState.DELETED]: { status: 'unspecified', text: t('Deleted') },
-});
 
 const resolveVolumeStatus = (
   state: VolumeState | undefined,

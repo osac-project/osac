@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -245,6 +246,27 @@ var _ = Describe("OAuth token exchange", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = exchanger.Exchange(context.Background(), "mcp-token", incoming)
 		Expect(err).To(MatchError("OAuth token exchange returned an invalid access token response"))
+	})
+})
+
+var _ = Describe("safeTokenExchangeError", func() {
+	It("maps transport unavailability to a retryable service-unavailable envelope", func() {
+		err := fmt.Errorf("dial tcp: %w", errOAuthTokenExchangeUnavailable)
+		envelope := decodeToolError(safeTokenExchangeError(err))
+		Expect(envelope.Category).To(Equal("service_unavailable"))
+		Expect(envelope.GRPCCode).To(Equal("Unavailable"))
+		Expect(envelope.Message).To(Equal("The authentication service is currently unavailable. Retry after checking service status."))
+		Expect(envelope.Retryable).To(BeTrue())
+		Expect(envelope.Details).To(Equal([]string{}))
+	})
+
+	It("maps other exchange failures to a non-retryable authentication envelope", func() {
+		envelope := decodeToolError(safeTokenExchangeError(errors.New("invalid_grant and sensitive-token")))
+		Expect(envelope.Category).To(Equal("authentication"))
+		Expect(envelope.GRPCCode).To(Equal("Unauthenticated"))
+		Expect(envelope.Message).To(Equal("MCP authentication failed. Sign in again and retry."))
+		Expect(envelope.Retryable).To(BeFalse())
+		Expect(envelope.Details).To(Equal([]string{}))
 	})
 })
 

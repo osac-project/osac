@@ -19,21 +19,15 @@ import "cleanapi/cleanapi.proto";
 import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
-import "osac/private/v1/network_class_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
 // Represents a tenant-isolated virtual network.
 //
-// VirtualNetwork provides network isolation for compute instances within a region. Each VirtualNetwork is backed
-// by a specific NetworkClass implementation strategy (e.g., "udn-net" for User-Defined Networks, "phys-net" for
-// physical network infrastructure).
+// VirtualNetwork provides network isolation for a tenant's workloads. The deployment's NetworkClass decides which
+// managers implement it. VirtualNetworks support canonical IPv4 addressing only.
 //
-// VirtualNetworks currently support canonical IPv4 addressing only. The legacy ipv6_cidr field remains in the
-// wire contract for compatibility, but non-empty IPv6 and dual-stack requests are rejected.
-//
-// Tenant isolation is enforced via the standard Metadata tenant field. VirtualNetworks are scoped to
-// a single region and cannot span multiple regions.
+// Tenant isolation is enforced via the standard Metadata tenant field.
 message VirtualNetwork {
   // Unique identifier of the virtual network.
   string id = 1;
@@ -71,38 +65,9 @@ message VirtualNetworkSpec {
     }
   ];
 
-  // Legacy IPv6 CIDR field. IPv6 and dual-stack networking are not supported; non-empty values are rejected.
-  //
-  optional string ipv6_cidr = 2 [
-    (google.api.field_behavior) = IMMUTABLE,
-    (buf.validate.field).cel = {
-      id: "ipv6_cidr_not_supported"
-      message: "IPv6 and dual-stack networking are not supported"
-      expression: "this == ''"
-    }
-  ];
-  // Region where the network is created. This is required and immutable after creation.
-  //
-  // VirtualNetworks are region-scoped resources and cannot span multiple regions. Compute instances can only
-  // attach to VirtualNetworks in the same region.
-  //
-  // Example: "us-east-1", "eu-west-2"
-  string region = 3 [
-    (cleanapi.field).private = true,
-    (google.api.field_behavior) = REQUIRED,
-    (google.api.field_behavior) = IMMUTABLE
-  ];
-  // The NetworkClass for this VirtualNetwork. If omitted on creation, the default NetworkClass is used.
-  // Once set (either explicitly or via default), this field is immutable.
-  //
-  // The selected NetworkClass determines the network backend (via its fabric_manager/k8s_manager) and the
-  // available capabilities. The NetworkClass must support the IP addressing mode implied by whichever of
-  // ipv4_cidr and ipv6_cidr are set below.
-  NetworkClassReference network_class = 4 [
-    (cleanapi.field).private = true,
-    (google.api.field_behavior) = OPTIONAL,
-    (google.api.field_behavior) = IMMUTABLE
-  ];
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 2, 3, 4;
+  reserved "ipv6_cidr", "region", "network_class";
 }
 
 // Represents the current operational state of a VirtualNetwork.
@@ -119,7 +84,7 @@ message VirtualNetworkStatus {
   // "Configuring network backend".
   //
   // For FAILED state, this contains error details explaining what went wrong, such as "Invalid CIDR range" or
-  // "NetworkClass does not support dual-stack".
+  // "the Fabric Manager rejected the CIDR".
   //
   // For READY state, this is typically empty or contains confirmation like "Network ready for compute instances".
   optional string message = 2;
@@ -162,13 +127,18 @@ enum VirtualNetworkState {
   // Common failure reasons include:
   // - Invalid CIDR notation
   // - CIDR block conflicts with existing networks
-  // - NetworkClass does not support requested capabilities (e.g., dual-stack not supported)
   // - NetworkClass is not in READY state
   // - Network backend configuration error
   //
   // The status.message field will contain specific error details. Failed networks typically require deletion
   // and recreation with corrected parameters.
   VIRTUAL_NETWORK_STATE_FAILED = 3;
+
+  // Delete was accepted; the network is being removed. A VirtualNetwork in this state never changes state again.
+  VIRTUAL_NETWORK_STATE_DELETING = 4;
+
+  // Field number 5 is reserved (DELETE_FAILED is not a state).
+  reserved 5;
 }
 
 // Local reference to a VirtualNetwork resource.

@@ -135,7 +135,21 @@ class StorageMappingTests(unittest.TestCase):
         mapping: list[dict[str, str]] | None,
         definitions: list[dict[str, str]] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        job = {"resource": copy.deepcopy(self.resource)}
+        job = {
+            "resource": copy.deepcopy(self.resource),
+            # As the operator sends it with provider networking disabled: the
+            # default pod network with masquerade in the VM namespace.
+            "vm_network": {
+                "namespace": self.namespace,
+                "networks": [{"name": "default", "pod": {}}],
+                "interfaces": [{"name": "default", "masquerade": {}}],
+                "labels": {
+                    "osac.openshift.io/compute-instance-id": (
+                        "3c0b9d2e-3333-4a5b-9c7d-2e4f6a8b0c12"
+                    )
+                },
+            },
+        }
         if mapping is not None:
             job["tenant_storage_classes"] = mapping
         if definitions is not None:
@@ -233,7 +247,8 @@ class StorageMappingTests(unittest.TestCase):
                     disk["spec"]["source"],
                     {
                         "registry": {
-                            "url": "docker://quay.io/containerdisks/fedora:latest"
+                            "pullMethod": "node",
+                            "url": "docker://quay.io/containerdisks/fedora:latest",
                         }
                     },
                 )
@@ -288,8 +303,10 @@ class StorageMappingTests(unittest.TestCase):
 
     def test_osac_managed_jit_classes_extend_the_shared_mapping(self) -> None:
         managed_class = f"osac-{self.namespace}-balanced"
-        self.owned_classes.append(managed_class)
+        unwanted_fast_jit_class = f"osac-{self.namespace}-fast"
+        self.owned_classes.extend([managed_class, unwanted_fast_jit_class])
         definitions = [
+            {"name": "fast", "provider": "lvms", "protocol": "block"},
             {"name": "balanced", "provider": "lvms", "protocol": "block"},
             {
                 "name": "not-requested",
@@ -304,6 +321,9 @@ class StorageMappingTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("osac.service.storage_provider :", result.stdout)
         self.assertIn("osac.templates.lvms_storage :", result.stdout)
+        with self.assertRaises(ApiException) as fast_lookup:
+            self.storage.read_storage_class(unwanted_fast_jit_class)
+        self.assertEqual(fast_lookup.exception.status, 404)
         managed = self.storage.read_storage_class(managed_class)
         self.assertEqual(managed.provisioner, "topolvm.io")
         self.assertEqual(
@@ -328,7 +348,7 @@ class StorageMappingTests(unittest.TestCase):
             definitions,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("osac.service.storage_provider :", result.stdout)
+        self.assertNotIn("osac.service.storage_provider :", result.stdout)
         self.assertEqual(
             self._assert_disk_specs(
                 [self.classes["fast"], managed_class, self.classes["archive"]]

@@ -60,8 +60,12 @@ const SecretDetailsPageContent = ({ secret }: SecretDetailsPageContentProps) => 
             >
               <FlexItem>
                 <ResourceDetailHeader
-                  parentTo="/secrets"
-                  parentLabel={t('Secrets')}
+                  parents={[
+                    {
+                      to: '/secrets',
+                      label: t('Secrets'),
+                    },
+                  ]}
                   resourceName={secretName}
                 />
               </FlexItem>

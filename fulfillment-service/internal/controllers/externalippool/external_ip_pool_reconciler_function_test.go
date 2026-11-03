@@ -76,56 +76,6 @@ var _ = Describe("buildSpec", func() {
 		Expect(spec.IPFamily).To(Equal("IPv4"))
 	})
 
-	It("Maps IPv6 family to flat spec fields", func() {
-		t := &task{
-			externalIPPool: privatev1.ExternalIPPool_builder{
-				Id: "pool-ipv6",
-				Spec: privatev1.ExternalIPPoolSpec_builder{
-					Cidrs:    []string{"2001:db8::/32"},
-					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV6,
-				}.Build(),
-			}.Build(),
-		}
-
-		spec := t.buildSpec()
-
-		Expect(spec.CIDRs).To(Equal([]string{"2001:db8::/32"}))
-		Expect(spec.IPFamily).To(Equal("IPv6"))
-	})
-
-	It("Includes implementationStrategy when set", func() {
-		t := &task{
-			externalIPPool: privatev1.ExternalIPPool_builder{
-				Id: "pool-impl-strategy",
-				Spec: privatev1.ExternalIPPoolSpec_builder{
-					Cidrs:                  []string{"203.0.113.0/24"},
-					IpFamily:               privatev1.IPFamily_IP_FAMILY_IPV4,
-					ImplementationStrategy: "metallb-l2",
-				}.Build(),
-			}.Build(),
-		}
-
-		spec := t.buildSpec()
-
-		Expect(spec.ImplementationStrategy).To(Equal("metallb-l2"))
-	})
-
-	It("Omits implementationStrategy when empty", func() {
-		t := &task{
-			externalIPPool: privatev1.ExternalIPPool_builder{
-				Id: "pool-no-impl-strategy",
-				Spec: privatev1.ExternalIPPoolSpec_builder{
-					Cidrs:    []string{"203.0.113.0/24"},
-					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
-				}.Build(),
-			}.Build(),
-		}
-
-		spec := t.buildSpec()
-
-		Expect(spec.ImplementationStrategy).To(BeEmpty())
-	})
-
 })
 
 var _ = Describe("validateIPFamily", func() {
@@ -142,7 +92,7 @@ var _ = Describe("validateIPFamily", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	It("should succeed for IPv6", func() {
+	It("should fail for the reserved IPv6 family", func() {
 		t := &task{
 			externalIPPool: privatev1.ExternalIPPool_builder{
 				Spec: privatev1.ExternalIPPoolSpec_builder{
@@ -152,7 +102,7 @@ var _ = Describe("validateIPFamily", func() {
 		}
 
 		err := t.validateIPFamily()
-		Expect(err).ToNot(HaveOccurred())
+		Expect(err).To(MatchError(errUnsupportedIPFamily))
 	})
 
 	It("should fail for unspecified IP family", func() {
@@ -374,7 +324,8 @@ var _ = Describe("delete", func() {
 		}.Build()
 
 		f := &function{
-			logger: logger,
+			logger:              logger,
+			networkingHubReader: &fakeNetworkingHubReader{err: controllers.ErrNoNetworkingHubs},
 		}
 
 		t := &task{
@@ -924,7 +875,7 @@ var _ = Describe("hub persistence", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	It("should select hub and return without creating ExternalIPPool CR", func() {
+	It("should persist the hub and create the ExternalIPPool CR in the same reconcile", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 
@@ -966,11 +917,10 @@ var _ = Describe("hub persistence", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(pool.GetStatus().GetHub()).To(Equal(hubID))
 
-		// No CR should be created on first reconcile — hub was just selected
 		list := &osacv1alpha1.ExternalIPPoolList{}
 		err = fakeClient.List(ctx, list)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(list.Items).To(BeEmpty())
+		Expect(list.Items).To(HaveLen(1))
 	})
 
 	It("should not create CR when no hubs available", func() {
@@ -1074,7 +1024,7 @@ var _ = Describe("hub persistence", func() {
 		Expect(list.Items[0].Namespace).To(Equal(hubNamespace))
 	})
 
-	It("should create CR on second reconcile after hub is persisted", func() {
+	It("should adopt the CR created by an earlier reconcile", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 
@@ -1112,16 +1062,16 @@ var _ = Describe("hub persistence", func() {
 			maskCalculator:        nil,
 		}
 
-		// First reconcile: hub is empty, so hub is selected and persisted but no CR created
+		// First reconcile: the hub is selected and persisted, then the CR is created
 		err := f.run(ctx, pool)
 		Expect(err).ToNot(HaveOccurred())
 
 		list := &osacv1alpha1.ExternalIPPoolList{}
 		err = fakeClient.List(ctx, list)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(list.Items).To(BeEmpty())
+		Expect(list.Items).To(HaveLen(1))
 
-		// Second reconcile: hub already set, CR should be created
+		// Second reconcile: the existing CR is patched, not duplicated
 		pool.GetStatus().SetHub(hubID)
 
 		err = f.run(ctx, pool)

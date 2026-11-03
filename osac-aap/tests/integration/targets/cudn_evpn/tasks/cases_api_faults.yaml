@@ -1,0 +1,52 @@
+---
+# What a Kind API server cannot be made to do: answer one request with an error
+# or lose the connection. Every task runs against fixtures/kube/fault_proxy.py,
+# which forwards everything else to Kind unchanged. Each failure must be a
+# retryable osac_error that names the step and only the HTTP status and reason.
+- name: API faults - start the proxy
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ (playbook_dir ~ '/../../../fixtures/kube/fault_proxy.py') | realpath }}"
+      - --kubeconfig
+      - "{{ sft.kubeconfig }}"
+      - --port-file
+      - "{{ sft.root }}/proxy-port"
+      - --out-kubeconfig
+      - "{{ sft.root }}/proxy-kubeconfig"
+  async: 3600
+  poll: 0
+  register: _ce_proxy_server
+  changed_when: false
+
+- name: API faults - wait for the proxy port
+  ansible.builtin.slurp:
+    src: "{{ sft.root }}/proxy-port"
+  register: _ce_proxy_port
+  until: _ce_proxy_port is succeeded
+  retries: 30
+  delay: 1
+
+- name: API faults - record the proxy
+  ansible.builtin.set_fact:
+    ce_proxy:
+      url: "http://127.0.0.1:{{ _ce_proxy_port.content | b64decode | trim }}"
+      kubeconfig: "{{ sft.root }}/proxy-kubeconfig"
+
+- name: API faults - run the cases
+  ansible.builtin.include_tasks: fault_case.yaml
+  loop: "{{ ce_fault_cases }}"
+  loop_control:
+    loop_var: ce_fault
+    label: "{{ ce_fault.label }}"
+
+- name: API faults - a server-side apply conflict on the claim leaves no hub network
+  ansible.builtin.include_tasks: read.yaml
+  vars: {ce_api: k8s.ovn.org/v1, ce_kind: ClusterUserDefinedNetwork, ce_name: "osac-vn-{{ ce_id.vn_n }}"}
+- name: API faults - nothing was claimed
+  ansible.builtin.assert: {that: ce_obj | length == 0, quiet: true}
+
+- name: API faults - stop the proxy
+  ansible.builtin.include_tasks: proxy.yaml
+  vars:
+    ce_proxy_steps: [{path: shutdown}]

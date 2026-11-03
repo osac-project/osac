@@ -18,6 +18,17 @@ variant: kind
 # and is intended only for development environments.
 debug: false
 
+# Global settings shared with the other OSAC charts. The installer sets them.
+global:
+  networking:
+    # Whether OSAC runs provider networking jobs. It is set at installation and can't change afterwards: the
+    # fulfillment service refuses to start when it differs from the value stored at its first start.
+    provisioningEnabled: true
+
+    # Canonical IPv4 CIDRs that the provider's infrastructure uses. VirtualNetwork, ExternalIPPool and Cluster
+    # ranges can't overlap them.
+    excludedIpv4Cidrs: []
+
 # Controller configuration:
 controller:
 

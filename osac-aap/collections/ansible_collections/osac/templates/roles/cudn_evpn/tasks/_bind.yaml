@@ -1,0 +1,35 @@
+---
+# Bind the attachment's VM to one SecurityGroup policy. Input: cudn_evpn_sg_id.
+- name: Read the SecurityGroup policy
+  kubernetes.core.k8s_info:
+    api_version: networking.k8s.io/v1
+    kind: NetworkPolicy
+    namespace: "{{ cudn_evpn.namespace }}"
+    name: "osac-sg-{{ cudn_evpn_sg_id }}"
+  register: _cudn_evpn_bind_policy
+
+- name: Stop while the SecurityGroup policy does not exist
+  when: _cudn_evpn_bind_policy.resources | length == 0
+  ansible.builtin.include_tasks: _stop.yaml
+  vars:
+    cudn_evpn_stop:
+      message: >-
+        cudn_evpn apply_network_attachment: SecurityGroup {{ cudn_evpn_sg_id }} has no policy in
+        the VirtualNetwork namespace yet (its create has not completed); OSAC retries the task.
+      retryable: true
+
+- name: Stop when the policy belongs to something else
+  when: not (_cudn_evpn_bind_policy.resources[0] | osac.templates.cudn_evpn_owned('securitygroup', cudn_evpn_sg_id, cudn_evpn.tenant))
+  ansible.builtin.include_tasks: _stop.yaml
+  vars:
+    cudn_evpn_stop:
+      message: >-
+        cudn_evpn apply_network_attachment: NetworkPolicy osac-sg-{{ cudn_evpn_sg_id }} exists without
+        SecurityGroup {{ cudn_evpn_sg_id }}'s owner labels. A cluster administrator must remove it.
+      retryable: false
+
+- name: Add the VM to the SecurityGroup policy and keep its rules
+  ansible.builtin.include_tasks: _patch_policy.yaml
+  vars:
+    cudn_evpn_policy: "{{ _cudn_evpn_bind_policy.resources[0] }}"
+    cudn_evpn_patch: "{{ _cudn_evpn_bind_policy.resources[0] | osac.templates.cudn_evpn_membership_patch([cudn_evpn.target_id], []) }}"

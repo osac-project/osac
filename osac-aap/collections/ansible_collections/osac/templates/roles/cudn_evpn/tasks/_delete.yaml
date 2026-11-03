@@ -1,0 +1,40 @@
+---
+# Delete one hub object that this resource owns and wait until it is gone.
+# Input: cudn_evpn_object (the object as read). The uid precondition makes the
+# delete apply only to the object that was read, never to a newer one.
+- name: Delete the hub object
+  when: not (cudn_evpn_object.metadata.deletionTimestamp | default(false))
+  kubernetes.core.k8s:
+    state: absent
+    api_version: "{{ cudn_evpn_object.apiVersion }}"
+    kind: "{{ cudn_evpn_object.kind }}"
+    name: "{{ cudn_evpn_object.metadata.name }}"
+    namespace: "{{ cudn_evpn_object.metadata.namespace | default(omit) }}"
+    delete_options:
+      preconditions:
+        uid: "{{ cudn_evpn_object.metadata.uid }}"
+
+- name: Wait until the hub object is gone
+  kubernetes.core.k8s_info:
+    api_version: "{{ cudn_evpn_object.apiVersion }}"
+    kind: "{{ cudn_evpn_object.kind }}"
+    name: "{{ cudn_evpn_object.metadata.name }}"
+    namespace: "{{ cudn_evpn_object.metadata.namespace | default(omit) }}"
+  register: _cudn_evpn_gone
+  until: >-
+    _cudn_evpn_gone.resources | default([])
+    | selectattr('metadata.uid', 'equalto', cudn_evpn_object.metadata.uid) | list | length == 0
+  retries: "{{ cudn_evpn_gone_retries }}"
+  delay: "{{ cudn_evpn_gone_delay }}"
+  ignore_errors: true
+
+- name: Stop when the hub object is still there
+  when: _cudn_evpn_gone is failed
+  ansible.builtin.include_tasks: _stop.yaml
+  vars:
+    cudn_evpn_stop:
+      message: >-
+        cudn_evpn {{ cudn_evpn.task }}: {{ cudn_evpn_object.kind }} {{ cudn_evpn_object.metadata.name }}
+        is not gone after {{ cudn_evpn_gone_retries * cudn_evpn_gone_delay }} seconds
+        (something on the hub still uses it); OSAC retries the delete.
+      retryable: true

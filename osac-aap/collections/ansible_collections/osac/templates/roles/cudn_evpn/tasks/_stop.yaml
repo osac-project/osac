@@ -1,0 +1,9 @@
+---
+# Stop the task with a known error. Input: cudn_evpn_stop {message, retryable}.
+- name: Record the error
+  ansible.builtin.set_fact:
+    cudn_evpn_error: "{{ cudn_evpn_stop }}"
+
+- name: Fail
+  ansible.builtin.fail:
+    msg: "{{ cudn_evpn_error.message }}"

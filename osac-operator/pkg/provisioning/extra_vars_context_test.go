@@ -18,98 +18,6 @@ const (
 )
 
 var _ = Describe("ExtraVarsContext", func() {
-	Describe("SubnetParentVirtualNetwork", func() {
-		It("should round-trip the resolved parent identity", func() {
-			ctx := context.Background()
-			parent := provisioning.SubnetParentVirtualNetwork{
-				FulfillmentID: "44444444-4444-4444-8444-444444444444",
-				KubernetesUID: "55555555-5555-4555-8555-555555555555",
-				TenantID:      "tenant-a",
-				Phase:         "Ready",
-			}
-
-			ctx = provisioning.WithSubnetParentVirtualNetwork(ctx, parent)
-			Expect(provisioning.SubnetParentVirtualNetworkFromContext(ctx)).To(Equal(parent))
-		})
-
-		It("should return the zero value when the parent identity is absent", func() {
-			Expect(provisioning.SubnetParentVirtualNetworkFromContext(context.Background())).To(BeZero())
-		})
-	})
-
-	Describe("ExternalIPPool", func() {
-		It("round-trips the resolved pool identity", func() {
-			pool := provisioning.ExternalIPPoolContext{
-				FulfillmentID: "44444444-4444-4444-8444-444444444444",
-				KubernetesUID: "55555555-5555-4555-8555-555555555555",
-				TenantID:      "tenant-a",
-				CIDR:          "198.51.100.0/24",
-				Phase:         "Ready",
-			}
-			ctx := provisioning.WithExternalIPPool(context.Background(), pool)
-			Expect(provisioning.ExternalIPPoolFromContext(ctx)).To(Equal(pool))
-		})
-
-		It("returns zero values when no pool context is present", func() {
-			Expect(provisioning.ExternalIPPoolFromContext(context.Background())).To(BeZero())
-		})
-	})
-
-	Describe("ExternalIPAttachmentContext", func() {
-		It("round-trips the controller-resolved dependency snapshot", func() {
-			value := provisioning.ExternalIPAttachmentContext{
-				ExternalIP: provisioning.ExternalIPAttachmentExternalIPContext{
-					Name: "public-ip", Namespace: "networking", FulfillmentID: "eip-id",
-					KubernetesUID: "eip-uid", TenantID: "tenant-a", Address: "198.51.100.10",
-					State: "Allocated", Phase: "Ready",
-				},
-				Target: provisioning.ExternalIPAttachmentTargetContext{
-					Kind: "BareMetalInstance", Name: "machine", Namespace: "bmaas",
-					FulfillmentID: "bmi-id", KubernetesUID: "bmi-uid", TenantID: "tenant-a",
-					IPAddress: "10.0.0.10", Ready: true,
-				},
-				Subnet: provisioning.ExternalIPAttachmentSubnetContext{
-					Name: "subnet", Namespace: "networking", FulfillmentID: "subnet-id",
-					KubernetesUID: "subnet-uid", TenantID: "tenant-a", IPv4CIDR: "10.0.0.0/24",
-					VirtualNetworkID: "vn-id", Phase: "Ready",
-				},
-				VirtualNetwork: provisioning.ExternalIPAttachmentVirtualNetworkContext{
-					Name: "network", Namespace: "networking", FulfillmentID: "vn-id",
-					KubernetesUID: "vn-uid", TenantID: "tenant-a", Phase: "Ready",
-				},
-			}
-			ctx := provisioning.WithExternalIPAttachmentContext(context.Background(), value)
-			Expect(provisioning.ExternalIPAttachmentContextFromContext(ctx)).To(Equal(value))
-		})
-
-		It("returns a zero value when attachment context is absent", func() {
-			Expect(provisioning.ExternalIPAttachmentContextFromContext(context.Background())).To(BeZero())
-		})
-	})
-
-	Describe("NATGatewayContext", func() {
-		It("round-trips the controller-resolved dependency snapshot", func() {
-			value := provisioning.NATGatewayContext{
-				ExternalIP: provisioning.NATGatewayExternalIPContext{
-					Name: "egress-ip", Namespace: "networking", FulfillmentID: "eip-id",
-					KubernetesUID: "eip-uid", TenantID: "tenant-a", Address: "198.51.100.10",
-					State: "Allocated", Phase: "Ready",
-				},
-				VirtualNetwork: provisioning.NATGatewayVirtualNetworkContext{
-					Name: "network", Namespace: "networking", FulfillmentID: "vn-id",
-					KubernetesUID: "vn-uid", TenantID: "tenant-a", IPv4CIDR: "10.0.0.0/16",
-					Phase: "Ready",
-				},
-			}
-			ctx := provisioning.WithNATGatewayContext(context.Background(), value)
-			Expect(provisioning.NATGatewayContextFromContext(ctx)).To(Equal(value))
-		})
-
-		It("returns the zero value when context is absent", func() {
-			Expect(provisioning.NATGatewayContextFromContext(context.Background())).To(BeZero())
-		})
-	})
-
 	Describe("AdminKubeconfig", func() {
 		It("should round-trip a kubeconfig value", func() {
 			ctx := context.Background()
@@ -189,6 +97,19 @@ var _ = Describe("ExtraVarsContext", func() {
 			result := provisioning.StorageBackendConnectionsFromContext(ctx)
 
 			Expect(result).To(BeNil())
+		})
+	})
+
+	Describe("NetworkAttachmentMACs", func() {
+		It("should round-trip subnet to MAC mappings", func() {
+			macs := map[string]string{"subnet-1": "02:00:00:00:00:01"}
+			ctx := provisioning.WithNetworkAttachmentMACs(context.Background(), macs)
+
+			Expect(provisioning.NetworkAttachmentMACsFromContext(ctx)).To(Equal(macs))
+		})
+
+		It("should return nil when no mappings are set", func() {
+			Expect(provisioning.NetworkAttachmentMACsFromContext(context.Background())).To(BeNil())
 		})
 	})
 

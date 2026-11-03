@@ -46,6 +46,7 @@ type PrivateClustersServerBuilder struct {
 	metricsRegisterer            prometheus.Registerer
 	filterDesc                   protoreflect.MessageDescriptor
 	addOnOperatorResolverFactory addOnOperatorResolverFactory
+	networkingSettings           *NetworkingSettings
 }
 
 var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
@@ -68,6 +69,8 @@ type PrivateClustersServer struct {
 	generic                   *GenericServer[*privatev1.Cluster]
 	lifecycle                 *externalIPLifecycle
 	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
+	tenantsDao                *dao.GenericDAO[*privatev1.Tenant]
+	settings                  NetworkingSettings
 }
 
 func NewPrivateClustersServer() *PrivateClustersServerBuilder {
@@ -109,6 +112,13 @@ func (b *PrivateClustersServerBuilder) SetAddOnOperatorResolverFactory(value add
 	return b
 }
 
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *PrivateClustersServerBuilder) SetNetworkingSettings(value NetworkingSettings) *PrivateClustersServerBuilder {
+	b.networkingSettings = &value
+	return b
+}
+
 type addOnOperatorResolverFactory func(*dao.GenericDAO[*privatev1.AddOnOperator]) *addOnOperatorResourceResolver
 
 func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, err error) {
@@ -122,6 +132,10 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		return
 	}
 	networkClassesDao, err := newNetworkClassesDAO(b.logger, b.tenancyLogic, b.metricsRegisterer)
+	if err != nil {
+		return
+	}
+	tenantsDao, err := newGuardDAO[*privatev1.Tenant](b.logger)
 	if err != nil {
 		return
 	}
@@ -259,6 +273,8 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		templatesDao:              templatesDao,
 		catalogItemsDao:           catalogItemsDao,
 		bareMetalInstanceTypesDao: bareMetalInstanceTypesDao,
+		tenantsDao:                tenantsDao,
+		settings:                  resolveNetworkingSettings(b.networkingSettings),
 		clusterVersionsDao:        clusterVersionsDao,
 		networkClassesDao:         networkClassesDao,
 		subnetsDao:                subnetsDao,
@@ -447,6 +463,9 @@ func (s *PrivateClustersServer) validateClusterUpdateRequest(ctx context.Context
 
 func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, current, candidate *privatev1.Cluster,
 	request *privatev1.ClustersUpdateRequest) error {
+	if current.GetMetadata().GetTenant() != candidate.GetMetadata().GetTenant() {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "metadata.tenant is immutable")
+	}
 	// An unmasked metadata-only request omits spec. Keep the stored spec so its
 	// version and node sets are not interpreted as a metering-relevant change.
 	if request.GetUpdateMask() == nil && request.GetObject().GetSpec() == nil && current.GetSpec() != nil {
@@ -1036,6 +1055,13 @@ func validateClusterNetworkAttachmentImmutability(current, candidate *privatev1.
 	if !updateIncludesField(updateMask, "spec.network_attachment") {
 		return nil
 	}
+	// The create resolves the attachment, so a maskless update that omits it keeps the stored one.
+	if updateMask == nil && !candidate.GetSpec().HasNetworkAttachment() {
+		if candidate.HasSpec() && current.GetSpec().HasNetworkAttachment() {
+			candidate.GetSpec().SetNetworkAttachment(cloneMessage(current.GetSpec().GetNetworkAttachment()))
+		}
+		return nil
+	}
 	existingAttachment := current.GetSpec().GetNetworkAttachment()
 	newAttachment := candidate.GetSpec().GetNetworkAttachment()
 	existingSubnet := existingAttachment.GetSubnet()
@@ -1077,6 +1103,14 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 		s.logger.ErrorContext(ctx, "failed to determine target tenant", slog.Any("error", err))
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to determine target tenant")
 	}
+	tenants, err := s.tenantsDao.List().SetFilter(fmt.Sprintf("this.id == %q", tenant)).SetLimit(1).Do(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "failed to check target tenant", slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to check target tenant")
+	}
+	if len(tenants.GetItems()) == 0 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "tenant '%s' doesn't exist", tenant)
+	}
 
 	spec := cluster.GetSpec()
 	subnet, err := findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenant, cluster.GetMetadata().GetProject())
@@ -1085,7 +1119,10 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet")
 	}
 	if subnet == nil {
-		return nil
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "tenant default networking is not ready")
+	}
+	if err := requireDefaultNetworkingReady(ctx, s.tenantsDao, tenant); err != nil {
+		return err
 	}
 
 	attachment := privatev1.ClusterNetworkAttachment_builder{
@@ -1098,19 +1135,18 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 		s.logger.ErrorContext(ctx, "failed to look up default security group", slog.Any("error", err))
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default security group")
 	}
-	if sg != nil {
-		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
-			privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
-		})
+	if sg == nil {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "tenant default networking is not ready")
 	}
+	attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
+		privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
+	})
 
 	spec.SetNetworkAttachment(attachment)
 
 	attrs := []slog.Attr{
 		slog.String("subnet_id", subnet.GetId()),
-	}
-	if sg != nil {
-		attrs = append(attrs, slog.String("security_group_id", sg.GetId()))
+		slog.String("security_group_id", sg.GetId()),
 	}
 	s.logger.LogAttrs(ctx, slog.LevelInfo, "auto-injected default network attachment", attrs...)
 	return nil
@@ -1135,8 +1171,8 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 			"spec.network_attachment.subnet is required")
 	}
 
-	subnet, err := resolveAndCanonicalizeLockedReference(ctx, s.subnetsDao, cluster.GetMetadata(), subnetRef,
-		"subnet", grpccodes.NotFound)
+	subnet, err := resolveNetworkingReference(ctx, s.subnetsDao, cluster.GetMetadata(), subnetRef,
+		"subnet", grpccodes.NotFound, true)
 	if err != nil {
 		if grpcstatus.Code(err) == grpccodes.NotFound {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -1167,8 +1203,8 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 				"spec.network_attachment.security_groups[%d]: reference is empty", i)
 		}
 
-		sg, err := resolveAndCanonicalizeLockedReference(ctx, s.securityGroupsDao, cluster.GetMetadata(), sgRef,
-			"security group", grpccodes.NotFound)
+		sg, err := resolveNetworkingReference(ctx, s.securityGroupsDao, cluster.GetMetadata(), sgRef,
+			"security group", grpccodes.NotFound, true)
 		if err != nil {
 			if grpcstatus.Code(err) == grpccodes.NotFound {
 				return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -1255,7 +1291,7 @@ func selectClusterFabricInterface(instanceType *privatev1.BareMetalInstanceType)
 // autoProvisionExternalIPs creates the API and ingress ExternalIPs. The ClusterOrder
 // reconciler requests their ExternalIPAttachments once the cluster endpoints are ready.
 func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cluster *privatev1.Cluster) error {
-	pool, err := SelectExternalIPPool(ctx, s.externalIPPoolDao, privatev1.IPFamily_IP_FAMILY_IPV4)
+	pool, err := SelectExternalIPPool(ctx, s.logger, s.externalIPPoolDao, 2)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
 	}

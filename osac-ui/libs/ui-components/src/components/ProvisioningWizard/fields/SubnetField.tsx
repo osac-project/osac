@@ -1,18 +1,27 @@
 import { useField } from 'formik';
 
-import { Subnets } from '@osac/types';
+import { type Subnet, Subnets } from '@osac/types';
 
 import type { ProvisioningFieldControlProps } from './provisioningFieldValue';
 import { virtualNetworkFilterForSubnetList } from '../../../api/v1/networking';
 import { useTranslation } from '../../../hooks/useTranslation';
-import { ResourceSelectField } from '../../Form/ResourceSelectField';
+import { type ResourceListItem, ResourceSelectField } from '../../Form/ResourceSelectField';
 import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
 
 interface SubnetFieldProps extends ProvisioningFieldControlProps {
   virtualNetworkName: string;
+  isRequired?: boolean;
 }
 
-const SubnetField = ({ name, virtualNetworkName, isDisabled = false }: SubnetFieldProps) => {
+const getSubnetCidr = (item: ResourceListItem): string | undefined =>
+  (item as Subnet).spec?.ipv4Cidr;
+
+const SubnetField = ({
+  name,
+  virtualNetworkName,
+  isRequired = false,
+  isDisabled = false,
+}: SubnetFieldProps) => {
   const { t } = useTranslation();
   const [virtualNetwork] = useField<ResourceSelectValue>(virtualNetworkName);
   const virtualNetworkId = virtualNetwork.value?.id ?? '';
@@ -28,6 +37,8 @@ const SubnetField = ({ name, virtualNetworkName, isDisabled = false }: SubnetFie
       }
       isDisabled={isDisabled || !virtualNetworkId}
       autoSelectSingleOption
+      isRequired={isRequired}
+      getOptionDescription={getSubnetCidr}
       placeholder={t('Select subnet')}
       loadErrorTitle={t('Could not load subnets')}
     />

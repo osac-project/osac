@@ -40,7 +40,6 @@ var _ = Describe("Describe Subnet", func() {
 				Spec: publicv1.SubnetSpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 					Ipv4Cidr:       new("10.0.1.0/24"),
-					Ipv6Cidr:       new("2001:db8::/64"),
 				}.Build(),
 				Status: publicv1.SubnetStatus_builder{
 					State:   publicv1.SubnetState_SUBNET_STATE_READY,
@@ -53,7 +52,6 @@ var _ = Describe("Describe Subnet", func() {
 			Expect(output).To(ContainSubstring("example-subnet"))
 			Expect(output).To(ContainSubstring("vnet-abc123"))
 			Expect(output).To(ContainSubstring("10.0.1.0/24"))
-			Expect(output).To(ContainSubstring("2001:db8::/64"))
 			Expect(output).To(ContainSubstring("READY"))
 			Expect(output).To(ContainSubstring("Subnet ready"))
 		})
@@ -77,13 +75,12 @@ var _ = Describe("Describe Subnet", func() {
 				Id: "subnet-003",
 				Spec: publicv1.SubnetSpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
-					Ipv6Cidr:       new("2001:db8::/64"),
 				}.Build(),
 			}.Build()
 
 			output := formatSubnet(s)
 			Expect(output).To(MatchRegexp(`IPv4 CIDR:\s+-`))
-			Expect(output).To(ContainSubstring("2001:db8::/64"))
+			Expect(output).NotTo(ContainSubstring("IPv6"))
 		})
 
 		It("should strip SUBNET_STATE_ prefix from state", func() {
@@ -100,20 +97,6 @@ var _ = Describe("Describe Subnet", func() {
 			output := formatSubnet(s)
 			Expect(output).To(ContainSubstring("READY"))
 			Expect(output).NotTo(ContainSubstring("SUBNET_STATE_"))
-		})
-
-		It("should show '-' for IPv6 CIDR when not set", func() {
-			s := publicv1.Subnet_builder{
-				Id: "subnet-006",
-				Spec: publicv1.SubnetSpec_builder{
-					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
-					Ipv4Cidr:       new("10.0.1.0/24"),
-				}.Build(),
-			}.Build()
-
-			output := formatSubnet(s)
-			Expect(output).To(ContainSubstring("10.0.1.0/24"))
-			Expect(output).To(MatchRegexp(`IPv6 CIDR:\s+-`))
 		})
 
 		It("should show '-' for message when status has no message", func() {

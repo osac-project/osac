@@ -1,0 +1,336 @@
+---
+# Case 8: deletes are absent-tolerant and ordered, the VNI is freed last. Also
+# the Subnet and ExternalIPPool delete scenarios of the former
+# netris_subnet_delete and netris_parent_delete targets.
+- name: Delete - start with an EVPN VirtualNetwork and Subnet
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: "{{ nf_reset }}"}
+
+- name: Delete - create the VirtualNetwork
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: del-vn-create
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Delete - create the Subnet
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: del-subnet-create
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Delete - a failing IPAM subnet delete after the V-Net delete is retryable
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/ipam/subnet/*", status: 500, body: {message: boom}, sticky: true}}
+
+- name: Delete - delete the Subnet while the IPAM delete fails
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_subnet
+    sft_label: del-subnet-ipam-fault
+    sft_expect: retryable
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Delete - the V-Net is gone, its IPAM subnet remains, the L2 VNI is free
+  ansible.builtin.assert:
+    that:
+      - nf_state.vnets == []
+      - nf_state.ipam_subnets | length == 1
+      - nf_state.vni.vnet.free == [5000001]
+      - nf_write_kinds[0] == 'DELETE /api/v2/vnet'
+    quiet: true
+
+- name: Delete - the fault goes away
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: [{path: faults/clear}]}
+
+- name: Delete - the rerun completes the Subnet delete
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_subnet
+    sft_label: del-subnet-rerun
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Delete - the Subnet objects are all gone
+  ansible.builtin.assert:
+    that:
+      - nf_state.vnets == []
+      - nf_state.ipam_subnets == []
+      - nf_write_kinds == ['DELETE /api/v2/ipam/subnet']
+    quiet: true
+
+- name: Delete - a failing VPC delete keeps the L3 VNI allocated
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/vpc/*", status: 500, body: {message: boom}, sticky: true}}
+
+- name: Delete - delete the VirtualNetwork while the VPC delete fails
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_virtual_network
+    sft_label: del-vn-vpc-fault
+    sft_expect: retryable
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Delete - the allocation is gone first, the VPC and its VNI remain
+  ansible.builtin.assert:
+    that:
+      - nf_state.nats == []
+      - nf_state.allocations == []
+      - nf_state.vpcs | length == 1
+      - nf_state.vni.vpc.free == []
+      - nf_write_kinds == ['DELETE /api/v2/ipam/allocation', 'DELETE /api/v2/vpc']
+    quiet: true
+
+- name: Delete - the fault goes away
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: [{path: faults/clear}]}
+
+- name: Delete - the rerun completes the VirtualNetwork delete
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_virtual_network
+    sft_label: del-vn-rerun
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Delete - the VPC is deleted last and its VNI is free
+  ansible.builtin.assert:
+    that:
+      - nf_state.vpcs == []
+      - nf_state.vni.vpc.free == [10001]
+      - nf_write_kinds == ['DELETE /api/v2/vpc']
+    quiet: true
+
+- name: Delete - deleting the VirtualNetwork again succeeds without a write
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_virtual_network
+    sft_label: del-vn-absent
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Delete - deleting an absent Subnet succeeds without a write
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_subnet
+    sft_label: del-subnet-absent
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Delete - the absent deletes wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+# The Subnet delete scenarios of the former netris_subnet_delete target.
+- name: Subnet delete - start with a Subnet
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: "{{ nf_reset }}"}
+
+- name: Subnet delete - create the VirtualNetwork
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: sd-vn-create
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Subnet delete - create the Subnet
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: sd-subnet-create
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Subnet delete - the V-Net delete answers 404, the IPAM subnet is still deleted
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/vnet/401", status: 404, body: {message: gone}}}
+
+- name: Subnet delete - run the delete
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_subnet
+    sft_label: sd-vnet-404
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Subnet delete - the V-Net delete was sent first, then the IPAM subnet delete
+  ansible.builtin.assert:
+    that:
+      - nf_write_kinds == ['DELETE /api/v2/vnet', 'DELETE /api/v2/ipam/subnet']
+      - nf_state.ipam_subnets == []
+    quiet: true
+
+- name: Subnet delete - restart with a Subnet whose V-Net delete fails with 500
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - path: seed
+        body:
+          collection: ipam_subnets
+          objects: [{id: 305, name: "{{ nf_sn_name }}", prefix: "{{ nf_subnet_cidr }}", purpose: common, vpc: {id: 101}, tenant: {id: 2}, sites: [{id: 1}]}]
+      - {path: faults, body: {key: "DELETE /api/v2/vnet/401", status: 500, body: {message: boom}}}
+
+- name: Subnet delete - the V-Net delete fails with 500
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_subnet
+    sft_label: sd-vnet-500
+    sft_expect: retryable
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Subnet delete - it stopped at the failed V-Net delete and kept the IPAM subnet
+  ansible.builtin.assert:
+    that:
+      - nf_write_kinds == ['DELETE /api/v2/vnet']
+      - nf_state.ipam_subnets | length == 1
+      - nf_state.vnets | length == 1
+    quiet: true
+
+- name: Subnet delete - an already absent V-Net completes the IPAM cleanup
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: remove, body: {collection: vnets, id: 401}}
+
+- name: Subnet delete - run the delete without a V-Net
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_subnet
+    sft_label: sd-vnet-absent
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Subnet delete - only the IPAM subnet was deleted
+  ansible.builtin.assert:
+    that:
+      - nf_write_kinds == ['DELETE /api/v2/ipam/subnet']
+      - nf_state.ipam_subnets == []
+    quiet: true
+
+- name: Subnet delete - an IPAM subnet delete that answers 404 still succeeds
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - path: seed
+        body:
+          collection: ipam_subnets
+          objects: [{id: 306, name: "{{ nf_sn_name }}", prefix: "{{ nf_subnet_cidr }}", purpose: common, vpc: {id: 101}, tenant: {id: 2}, sites: [{id: 1}]}]
+      - {path: faults, body: {key: "DELETE /api/v2/ipam/subnet/306", status: 404, body: {message: gone}}}
+
+- name: Subnet delete - run the delete with the IPAM 404
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_subnet
+    sft_label: sd-ipam-404
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {}
+
+- name: Subnet delete - only the IPAM subnet delete was sent
+  ansible.builtin.assert:
+    that: nf_write_kinds == ['DELETE /api/v2/ipam/subnet']
+    quiet: true
+
+# The ExternalIPPool delete scenarios of the former netris_parent_delete target.
+- name: Pool delete - start with a pool allocation
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: "{{ nf_reset }}"}
+
+- name: Pool delete - create the pool
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_external_ip_pool
+    sft_label: pd-create
+    sft_expect: success
+    nf_job: "{{ nf_pool_job }}"
+
+- name: Pool delete - an allocation delete that answers 404 succeeds
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/ipam/allocation/*", status: 404, body: {message: gone}}}
+
+- name: Pool delete - run the delete with the allocation 404
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_external_ip_pool
+    sft_label: pd-404
+    sft_expect: success
+    nf_job: "{{ nf_pool_job }}"
+    nf_result: {}
+
+- name: Pool delete - an allocation delete that answers 400 fails (cleanup is retried anyway)
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/ipam/allocation/*", status: 400, body: {message: dependency}}}
+
+- name: Pool delete - run the delete with the allocation 400
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_external_ip_pool
+    sft_label: pd-400
+    sft_expect: retryable
+    nf_job: "{{ nf_pool_job }}"
+
+- name: Pool delete - an allocation delete that answers 500 is retryable
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - {path: faults, body: {key: "DELETE /api/v2/ipam/allocation/*", status: 500, body: {message: boom}}}
+
+- name: Pool delete - run the delete with the allocation 500
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_external_ip_pool
+    sft_label: pd-500
+    sft_expect: retryable
+    nf_job: "{{ nf_pool_job }}"
+
+- name: Pool delete - the allocation is still there after the failures, then the delete completes
+  ansible.builtin.assert:
+    that: nf_state.allocations | length == 1
+    quiet: true
+
+- name: Pool delete - run the delete without a fault
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_external_ip_pool
+    sft_label: pd-ok
+    sft_expect: success
+    nf_job: "{{ nf_pool_job }}"
+    nf_result: {}
+
+- name: Pool delete - an absent pool needs no DELETE
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: delete_external_ip_pool
+    sft_label: pd-absent
+    sft_expect: success
+    nf_job: "{{ nf_pool_job }}"
+    nf_result: {}
+
+- name: Pool delete - the absent pool sent no write
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_state.allocations == []
+    quiet: true

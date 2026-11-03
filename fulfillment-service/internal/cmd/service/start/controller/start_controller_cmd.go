@@ -69,6 +69,7 @@ import (
 	hubscheme "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/scheme"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/networking"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
 	"github.com/osac-project/osac/fulfillment-service/internal/trust"
@@ -175,6 +176,19 @@ func Cmd() *cobra.Command {
 		"",
 		idpClientSecretFlagHelp,
 	)
+	flags.BoolVar(
+		&runner.args.networkingProvisioningEnabled,
+		"networking-provisioning-enabled",
+		true,
+		"Value of global.networking.provisioningEnabled: whether OSAC runs provider networking jobs.",
+	)
+	flags.StringSliceVar(
+		&runner.args.networkingExcludedIPv4CIDRs,
+		"networking-excluded-ipv4-cidrs",
+		nil,
+		"Value of global.networking.excludedIpv4Cidrs. The controllers accept it for symmetry with the "+
+			"gRPC server, which checks it.",
+	)
 	vault.AddBaseFlags(flags)
 	vault.AddLifecycleFlags(flags)
 	network.AddGrpcClientFlags(flags, network.GrpcClientName, network.DefaultGrpcAddress)
@@ -204,6 +218,9 @@ type runnerContext struct {
 		idpClientSecretFile  string
 		vaultBase            vault.BaseConfig
 		vaultLifecycle       vault.LifecycleConfig
+
+		networkingProvisioningEnabled bool
+		networkingExcludedIPv4CIDRs   []string
 	}
 	client *grpc.ClientConn
 }
@@ -331,6 +348,11 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC client: %w", err)
 	}
+	if err := networking.CheckRemoteInstallationProvisioning(
+		ctx, privatev1.NewInstallationSettingsClient(r.client), r.args.networkingProvisioningEnabled,
+	); err != nil {
+		return err
+	}
 
 	// Create the gRPC server:
 	r.logger.InfoContext(ctx, "Creating gRPC listener")
@@ -410,6 +432,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	r.logger.InfoContext(ctx, "Creating default networking manager")
 	defaultNetworking, err := defaultnetworking.NewManager().
 		SetLogger(r.logger).
+		SetProvisioningEnabled(r.args.networkingProvisioningEnabled).
 		SetConnection(r.client).
 		Build()
 	if err != nil {
@@ -1082,6 +1105,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetIdpManager(idpManager).
 		SetVaultLifecycle(vaultLifecycleClient).
 		SetDefaultNetworking(defaultNetworking).
+		SetProvisioningEnabled(r.args.networkingProvisioningEnabled).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create tenant reconciler function: %w", err)

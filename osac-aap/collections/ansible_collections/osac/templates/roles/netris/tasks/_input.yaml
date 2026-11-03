@@ -1,0 +1,18 @@
+---
+# Read the task input and check the API IDs.
+# Input: netris_require_parents (optional), a list of virtual_network, subnet,
+#   external_ip_pool that the task needs besides its resource.
+# Sets netris_in {resource_id, resource_kind, virtual_network_id, subnet_id,
+#   external_ip_pool_id}; an ID the task does not have is "". A malformed
+#   input fails as final.
+- name: Read the task input
+  ansible.builtin.set_fact:
+    netris_in: "{{ osac_job_vars | osac.templates.netris_contract_input(netris_require_parents | default([])) }}"
+
+- name: Stop on an invalid task input
+  when: netris_in.error is not none
+  ansible.builtin.include_tasks: _fail.yaml
+  vars:
+    netris_fail:
+      message: "{{ netris_in.error }}"
+      retryable: false

@@ -596,8 +596,7 @@ type ExternalIPAttachmentStatus struct {
 	State ExternalIPAttachmentState `protobuf:"varint,1,opt,name=state,proto3,enum=osac.public.v1.ExternalIPAttachmentState" json:"state,omitempty"`
 	// Allocated IP address from the parent ExternalIP.
 	//
-	// Populated for convenience once the attachment reaches READY state. Mirrors the address
-	// field from the referenced ExternalIP's status.
+	// Set at create from the ExternalIP's address; never changes.
 	ExternalIpAddress string `protobuf:"bytes,2,opt,name=external_ip_address,json=externalIpAddress,proto3" json:"external_ip_address,omitempty"`
 	// Human-readable message providing additional details about the current state.
 	//
@@ -684,8 +683,7 @@ type ExternalIPAttachmentStatus_builder struct {
 	State ExternalIPAttachmentState
 	// Allocated IP address from the parent ExternalIP.
 	//
-	// Populated for convenience once the attachment reaches READY state. Mirrors the address
-	// field from the referenced ExternalIP's status.
+	// Set at create from the ExternalIP's address; never changes.
 	ExternalIpAddress string
 	// Human-readable message providing additional details about the current state.
 	//

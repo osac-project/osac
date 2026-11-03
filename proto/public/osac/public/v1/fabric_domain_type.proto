@@ -32,8 +32,8 @@ message FabricDomainSpec {
   // Fabric type. This field is immutable after creation.
   FabricDomainType type = 1 [(google.api.field_behavior) = IMMUTABLE];
 
-  // Hostnames of servers that belong to the domain.
-  repeated string servers = 2;
+  // Host names of the tenant's BareMetalInstances that belong to the domain. Immutable after creation.
+  repeated string servers = 2 [(google.api.field_behavior) = IMMUTABLE];
 
   // OSAC VirtualNetwork ID associated with the domain. Required for the supported EthernetEW type and immutable.
   string virtual_network = 3 [
@@ -44,6 +44,8 @@ message FabricDomainSpec {
 
 message FabricDomainStatus {
   repeated FabricDomainCondition conditions = 1;
+  reserved 3;
+  reserved "vpc_id";
   repeated FabricDomainMemberStatus members = 4;
 }
 

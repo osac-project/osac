@@ -21,6 +21,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.sanity
 
@@ -153,6 +154,8 @@ def test_baremetal_instance_lifecycle(
             retries=30,
             delay=2,
             description=f"{bmi_id} READY condition True",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi_id,
         )
         instance: dict[str, Any] = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id)
         ready_condition: dict[str, Any] = _find_condition(instance, _READY)
@@ -211,6 +214,8 @@ def test_baremetal_instance_lifecycle(
             retries=60,
             delay=5,
             description=f"{bmh_name} powered off",
+            resource_kind=WaitResourceKind.BARE_METAL_HOST,
+            resource_id=bmh_name,
         )
 
         # Power on
@@ -224,6 +229,8 @@ def test_baremetal_instance_lifecycle(
             retries=60,
             delay=5,
             description=f"{bmh_name} powered on",
+            resource_kind=WaitResourceKind.BARE_METAL_HOST,
+            resource_id=bmh_name,
         )
 
         # Deprovision
@@ -303,6 +310,8 @@ def test_baremetal_instance_restart(
             retries=60,
             delay=2,
             description=f"{bmi_id} RESTART_IN_PROGRESS condition appears",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi_id,
         )
 
         poll_until(
@@ -311,6 +320,8 @@ def test_baremetal_instance_restart(
             retries=120,
             delay=10,
             description=f"{bmi_id} status.restart_trigger echoes {new_trigger}",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi_id,
         )
 
         poll_until(
@@ -319,6 +330,8 @@ def test_baremetal_instance_restart(
             retries=60,
             delay=5,
             description=f"{bmh_name} powered on after restart",
+            resource_kind=WaitResourceKind.BARE_METAL_HOST,
+            resource_id=bmh_name,
         )
 
         wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)

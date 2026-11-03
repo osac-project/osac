@@ -50,6 +50,7 @@ import (
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -182,6 +183,37 @@ func createLabeledStorageClass(ctx context.Context, name, tenant, tier string) {
 	})
 }
 
+// createOSACManagedStorageClass creates a tenant StorageClass carrying the
+// managed-by label that OSAC teardown requires before deleting it, and
+// registers a DeferCleanup hook to delete it.
+func createOSACManagedStorageClass(ctx context.Context, name, tenant, tier string) {
+	sc := &storagev1.StorageClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				osacTenantKey:                  tenant,
+				osacStorageTierLabel:           tier,
+				"app.kubernetes.io/managed-by": "osac-aap",
+			},
+		},
+		Provisioner: "kubernetes.io/no-provisioner",
+	}
+	Expect(k8sClient.Create(ctx, sc)).To(Succeed())
+	waitForIndexedClientObject(sc)
+	DeferCleanup(func() {
+		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, sc))).To(Succeed())
+	})
+}
+
+// drainEvents returns and removes every event currently buffered in recorder.
+func drainEvents(recorder *events.FakeRecorder) []string {
+	var drained []string
+	for len(recorder.Events) > 0 {
+		drained = append(drained, <-recorder.Events)
+	}
+	return drained
+}
+
 // waitForStorageClassInCache polls the local manager's cached client until the
 // named StorageClass is visible to controller reads.
 func waitForStorageClassInCache(scName string) {
@@ -287,6 +319,27 @@ func newTestCSPManagedBackendGetResponse(provider string) *privatev1.StorageBack
 			Spec: privatev1.StorageBackendSpec_builder{
 				Provider:   provider,
 				CspManaged: true,
+			}.Build(),
+		}.Build(),
+	}.Build()
+}
+
+// newTestCSPManagedBackendWithCredentialsGetResponse builds a
+// StorageBackendsGetResponse fixture for a CSP-managed backend that also carries
+// an endpoint, inline credentials, and a password_secret reference. None of it
+// may be resolved or forwarded for a CSP-managed backend.
+func newTestCSPManagedBackendWithCredentialsGetResponse(provider, secretID string) *privatev1.StorageBackendsGetResponse {
+	return privatev1.StorageBackendsGetResponse_builder{
+		Object: privatev1.StorageBackend_builder{
+			Spec: privatev1.StorageBackendSpec_builder{
+				Provider:   provider,
+				CspManaged: true,
+				Endpoint:   "https://" + provider + ".example.com",
+				Credentials: privatev1.StorageBackendCredentials_builder{
+					Username:       testBackendUsername,
+					Password:       testBackendPassword,
+					PasswordSecret: privatev1.SecretLocalReference_builder{Id: secretID}.Build(),
+				}.Build(),
 			}.Build(),
 		}.Build(),
 	}.Build()
@@ -1471,6 +1524,93 @@ var _ = Describe("Storage Controller", func() {
 			}))
 			Expect(ctxConns).NotTo(HaveKey("backend-csp"))
 		})
+
+		It("should skip secret resolution and exclude cspManaged=true VAST backends configured with inline password or password_secret, while preserving OSAC-managed caller behavior", func() {
+			tiersClient := &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-vast-inline", "be-csp-vast-inline"),
+							newTestStorageTier("csp-vast-secret", "be-csp-vast-secret"),
+							newTestStorageTier("osac-vast", "be-osac-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+			backendsClient := &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "be-csp-vast-inline":
+						return privatev1.StorageBackendsGetResponse_builder{
+							Object: privatev1.StorageBackend_builder{
+								Spec: privatev1.StorageBackendSpec_builder{
+									Provider:   "vast",
+									CspManaged: true,
+									Endpoint:   "https://csp-vast-inline.example.com",
+									Credentials: privatev1.StorageBackendCredentials_builder{
+										Username: testBackendUsername,
+										Password: testBackendPassword,
+									}.Build(),
+								}.Build(),
+							}.Build(),
+						}.Build(), nil
+					case "be-csp-vast-secret":
+						return privatev1.StorageBackendsGetResponse_builder{
+							Object: privatev1.StorageBackend_builder{
+								Spec: privatev1.StorageBackendSpec_builder{
+									Provider:   "vast",
+									CspManaged: true,
+									Endpoint:   "https://csp-vast-secret.example.com",
+									Credentials: privatev1.StorageBackendCredentials_builder{
+										Username:       testBackendUsername,
+										PasswordSecret: privatev1.SecretLocalReference_builder{Id: "csp-vast-secret-id"}.Build(),
+									}.Build(),
+								}.Build(),
+							}.Build(),
+						}.Build(), nil
+					case "be-osac-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					default:
+						return nil, status.Error(codes.NotFound, "not found")
+					}
+				},
+			}
+			secretsClient := &mockSecretsClient{
+				getFunc: func(context.Context, *privatev1.SecretsGetRequest, ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+					Fail("SecretsClient.Get must not be called for cspManaged VAST backends even when password_secret is set")
+					return nil, nil
+				},
+			}
+
+			osacDefs, cspDefs, conns, skipped, err := resolveTierDefinitionsWithStatus(ctx, tiersClient, backendsClient, secretsClient)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(skipped).To(BeFalse())
+			Expect(secretsClient.getCallCount).To(Equal(0))
+			Expect(osacDefs).To(HaveLen(1))
+			Expect(osacDefs[0].Name).To(Equal("osac-vast"))
+			Expect(cspDefs).To(HaveLen(2))
+			Expect(cspDefs[0].Name).To(Equal("csp-vast-inline"))
+			Expect(cspDefs[1].Name).To(Equal("csp-vast-secret"))
+			Expect(conns).To(HaveLen(1))
+			Expect(conns).To(HaveKey("be-osac-vast"))
+			Expect(conns).NotTo(HaveKey("be-csp-vast-inline"))
+			Expect(conns).NotTo(HaveKey("be-csp-vast-secret"))
+
+			// Verify shared OSAC-managed callers (resolveTierDefinitions and resolveAndPartitionTierContext)
+			// return and inject only the cspManaged=false tier and connection.
+			callerDefs, callerConns, err := resolveTierDefinitions(ctx, tiersClient, backendsClient, secretsClient)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(callerDefs).To(Equal(osacDefs))
+			Expect(callerConns).To(Equal(conns))
+
+			partCtx, partOSAC, partCSP, partSkipped, err := resolveAndPartitionTierContext(ctx, tiersClient, backendsClient, secretsClient, "computeInstance", "test-ci")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(partSkipped).To(BeFalse())
+			Expect(partOSAC).To(Equal(osacDefs))
+			Expect(partCSP).To(Equal(cspDefs))
+			Expect(provisioning.StorageTierDefinitionsFromContext(partCtx)).To(Equal(osacDefs))
+			Expect(provisioning.StorageBackendConnectionsFromContext(partCtx)).To(Equal(conns))
+		})
 	})
 
 	Context("Tier definitions in AAP extra_vars context", func() {
@@ -1839,6 +1979,7 @@ var _ = Describe("Storage Controller", func() {
 			name := "storage-test-guard-delete-retain-finalizer"
 			createReadyTenantForStorage(ctx, name, testNamespace)
 
+			fakeRecorder := events.NewFakeRecorder(100)
 			deprovTriggers := 0
 			clusterProvider := &mockProvisioningProvider{
 				name: "cluster-storage-mock",
@@ -1857,6 +1998,7 @@ var _ = Describe("Storage Controller", func() {
 				nil, clusterProvider, pollInterval,
 				provisioning.DefaultMaxJobHistory,
 			)
+			r.Recorder = fakeRecorder
 			r.TiersClient = &mockStorageTiersLister{
 				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
 					return nil, status.Error(codes.Unavailable, "fulfillment service unreachable")
@@ -1875,11 +2017,33 @@ var _ = Describe("Storage Controller", func() {
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 			Expect(tenant.Finalizers).To(ContainElement(storageFinalizer))
 
+			co := newClusterOrder("co-guard-del-"+name, testNamespace, map[string]string{
+				osacTenantKey: name,
+			})
+			controllerutil.AddFinalizer(co, clusterStorageFinalizer)
+			Expect(k8sClient.Create(ctx, co)).To(Succeed())
+			DeferCleanup(func() {
+				updated := &v1alpha1.ClusterOrder{}
+				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updated); err == nil {
+					if controllerutil.RemoveFinalizer(updated, clusterStorageFinalizer) {
+						Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+					}
+				}
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, co))).To(Succeed())
+			})
+			waitForIndexedClientObject(co)
+
 			Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
+			Eventually(func(g Gomega) {
+				t := &v1alpha1.Tenant{}
+				g.Expect(indexedClient.Get(ctx, nn, t)).To(Succeed())
+				g.Expect(t.DeletionTimestamp.IsZero()).To(BeFalse())
+			}).Should(Succeed())
 
 			// Reconcile with DeletionTimestamp set: tier resolution still fails,
 			// so handleDelete retains the finalizer and requeues instead of
-			// launching AAP deprovisioning without backend connections.
+			// stripping CaaS ClusterOrder finalizers or launching AAP deprovisioning
+			// without backend connections.
 			Eventually(func(g Gomega) {
 				deleteResult, reconcileErr := r.Reconcile(ctx, storageReconcileRequest(nn))
 				g.Expect(reconcileErr).NotTo(HaveOccurred())
@@ -1890,7 +2054,21 @@ var _ = Describe("Storage Controller", func() {
 				g.Expect(k8sClient.Get(ctx, nn, t)).To(Succeed())
 				g.Expect(t.Finalizers).To(ContainElement(storageFinalizer),
 					"finalizer must be retained — deprovisioning deferred until tier resolution recovers")
+
+				updatedCO := &v1alpha1.ClusterOrder{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+				g.Expect(updatedCO.Finalizers).To(ContainElement(clusterStorageFinalizer),
+					"CaaS ClusterOrder finalizer must be retained when tier resolution fails during tenant deletion")
 			}).Should(Succeed())
+
+			var recordedEvents []string
+			for len(fakeRecorder.Events) > 0 {
+				recordedEvents = append(recordedEvents, <-fakeRecorder.Events)
+			}
+			Expect(recordedEvents).To(ContainElement(And(
+				ContainSubstring("TierResolutionFailed"),
+				ContainSubstring("Storage tier resolution failed during deletion, deferring deprovisioning"),
+			)))
 
 			Expect(deprovTriggers).To(Equal(0),
 				"deprovisioning AAP must not be called when tier resolution failed during deletion")
@@ -1961,7 +2139,7 @@ var _ = Describe("Storage Controller", func() {
 				backendProvider, nil, pollInterval,
 				provisioning.DefaultMaxJobHistory,
 			)
-			// TiersClient is set but BackendsClient is nil — resolveAndInjectTierContext
+			// TiersClient is set but BackendsClient is nil — resolveAndPartitionTierContext
 			// requires both to attempt resolution, so it skips and returns nil error.
 			// This covers the partial-client misconfiguration path: no tier resolution
 			// is attempted, no error is raised, and deletion proceeds normally.
@@ -3983,12 +4161,34 @@ var _ = Describe("Storage Controller", func() {
 				Expect(client.IgnoreNotFound(err)).To(Succeed())
 			}
 
-			By("not skipping deprovisioning when an OSAC-managed backend is still registered or a tier was skipped")
+			By("retaining storageFinalizer, preserving CaaS ClusterOrder finalizer, and emitting StorageTeardownBlocked when 0 OSAC tiers resolve but a hub Secret still exists")
+			fakeRecorder := events.NewFakeRecorder(100)
+			r.Recorder = fakeRecorder
 			nameOSACBackendRemains := "csp-delete-osac-backend-remains"
 			createReadyTenantForStorage(ctx, nameOSACBackendRemains, testNamespace)
 			nnRemains := types.NamespacedName{Name: nameOSACBackendRemains, Namespace: testNamespace}
 			_, err = r.Reconcile(ctx, storageReconcileRequest(nnRemains))
 			Expect(err).NotTo(HaveOccurred())
+
+			coRemains := newClusterOrder("co-remains-"+nameOSACBackendRemains, testNamespace, map[string]string{
+				osacTenantKey: nameOSACBackendRemains,
+			})
+			controllerutil.AddFinalizer(coRemains, clusterStorageFinalizer)
+			Expect(k8sClient.Create(ctx, coRemains)).To(Succeed())
+			DeferCleanup(func() {
+				updated := &v1alpha1.ClusterOrder{}
+				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(coRemains), updated); err == nil {
+					if controllerutil.RemoveFinalizer(updated, clusterStorageFinalizer) {
+						Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+					}
+				}
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, coRemains))).To(Succeed())
+			})
+			waitForIndexedClientObject(coRemains)
+
+			// Create a tenant hub Secret so hubSecretReady == true in handleBackendDeprovisioning,
+			// exercising the !r.canProvisionOSACStorage(ctx) guard rather than the !hubSecretReady fallback.
+			createHubSecret(ctx, nameOSACBackendRemains, secretsNamespace)
 
 			// Simulate 0 tiers remaining, but an OSAC-managed backend (cspManaged: false) is still registered.
 			r.BackendsClient = &mockStorageBackendsClient{
@@ -4009,13 +4209,138 @@ var _ = Describe("Storage Controller", func() {
 			tenantRemains := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nnRemains, tenantRemains)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, tenantRemains)).To(Succeed())
+			drainEvents(fakeRecorder)
 
-			_, err = r.Reconcile(ctx, storageReconcileRequest(nnRemains))
+			res, err := r.Reconcile(ctx, storageReconcileRequest(nnRemains))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(deprovTriggers).To(BeNumerically(">", 0),
-				"must not skip deprovisioning when an OSAC-managed backend is still registered")
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+			Expect(deprovTriggers).To(BeZero())
+			Expect(k8sClient.Get(ctx, nnRemains, tenantRemains)).To(Succeed())
+			Expect(tenantRemains.Finalizers).To(ContainElement(storageFinalizer))
 
-			By("not skipping deprovisioning when a tier was skipped by resolveTierDefinitions due to a missing backend secret")
+			updatedCORemains := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(coRemains), updatedCORemains)).To(Succeed())
+			Expect(updatedCORemains.Finalizers).To(ContainElement(clusterStorageFinalizer))
+
+			Expect(drainEvents(fakeRecorder)).To(ContainElement(And(
+				ContainSubstring("StorageTeardownBlocked"),
+				ContainSubstring("hub Secret"),
+				ContainSubstring("Restore the storage tier"),
+			)))
+
+			controllerutil.RemoveFinalizer(tenantRemains, storageFinalizer)
+			Expect(k8sClient.Update(ctx, tenantRemains)).To(Succeed())
+
+			By("retaining storageFinalizer when 0 OSAC tiers resolve but an OSAC-managed tenant StorageClass remains")
+			nameManagedSC := "csp-delete-managed-sc-remains"
+			createReadyTenantForStorage(ctx, nameManagedSC, testNamespace)
+			nnManagedSC := types.NamespacedName{Name: nameManagedSC, Namespace: testNamespace}
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnManagedSC))
+			Expect(err).NotTo(HaveOccurred())
+			createOSACManagedStorageClass(ctx, "osac-managed-sc-"+nameManagedSC, nameManagedSC, "osac-gold")
+			waitForStorageClassInCache("osac-managed-sc-" + nameManagedSC)
+
+			tenantManagedSC := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnManagedSC, tenantManagedSC)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenantManagedSC)).To(Succeed())
+			drainEvents(fakeRecorder)
+
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nnManagedSC))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+			Expect(deprovTriggers).To(BeZero())
+			Expect(k8sClient.Get(ctx, nnManagedSC, tenantManagedSC)).To(Succeed())
+			Expect(tenantManagedSC.Finalizers).To(ContainElement(storageFinalizer))
+			Expect(drainEvents(fakeRecorder)).To(ContainElement(And(
+				ContainSubstring("StorageTeardownBlocked"),
+				ContainSubstring("1 OSAC-managed StorageClass(es)"),
+			)))
+
+			controllerutil.RemoveFinalizer(tenantManagedSC, storageFinalizer)
+			Expect(k8sClient.Update(ctx, tenantManagedSC)).To(Succeed())
+
+			By("retaining storageFinalizer when 0 OSAC tiers resolve but backend provision job history has no successful deprovision")
+			nameJobHistory := "csp-delete-job-history-remains"
+			createReadyTenantForStorage(ctx, nameJobHistory, testNamespace)
+			nnJobHistory := types.NamespacedName{Name: nameJobHistory, Namespace: testNamespace}
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnJobHistory))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenantJobHistory := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnJobHistory, tenantJobHistory)).To(Succeed())
+			tenantJobHistory.Status.StorageBackendJobs = []v1alpha1.JobStatus{{
+				JobID:     "be-prov-done",
+				Type:      v1alpha1.JobTypeProvision,
+				State:     v1alpha1.JobStateSucceeded,
+				Timestamp: metav1.Now(),
+			}}
+			Expect(k8sClient.Status().Update(ctx, tenantJobHistory)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenantJobHistory)).To(Succeed())
+			drainEvents(fakeRecorder)
+
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nnJobHistory))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+			Expect(deprovTriggers).To(BeZero())
+			Expect(k8sClient.Get(ctx, nnJobHistory, tenantJobHistory)).To(Succeed())
+			Expect(tenantJobHistory.Finalizers).To(ContainElement(storageFinalizer))
+			Expect(drainEvents(fakeRecorder)).To(ContainElement(And(
+				ContainSubstring("StorageTeardownBlocked"),
+				ContainSubstring("storage backend job history"),
+			)))
+
+			By("removing the finalizer once both deprovision stages already succeeded, even though job history remains")
+			Expect(k8sClient.Get(ctx, nnJobHistory, tenantJobHistory)).To(Succeed())
+			tenantJobHistory.Status.ClusterStorageJobs = []v1alpha1.JobStatus{{
+				JobID:     "cs-deprov-done",
+				Type:      v1alpha1.JobTypeDeprovision,
+				State:     v1alpha1.JobStateSucceeded,
+				Timestamp: metav1.Now(),
+			}}
+			tenantJobHistory.Status.StorageBackendJobs = append(tenantJobHistory.Status.StorageBackendJobs, v1alpha1.JobStatus{
+				JobID:     "be-deprov-done",
+				Type:      v1alpha1.JobTypeDeprovision,
+				State:     v1alpha1.JobStateSucceeded,
+				Timestamp: metav1.NewTime(time.Now().Add(time.Second)),
+			})
+			Expect(k8sClient.Status().Update(ctx, tenantJobHistory)).To(Succeed())
+
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nnJobHistory))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
+			Expect(deprovTriggers).To(BeZero())
+			err = k8sClient.Get(ctx, nnJobHistory, tenantJobHistory)
+			if err == nil {
+				Expect(tenantJobHistory.Finalizers).NotTo(ContainElement(storageFinalizer))
+			} else {
+				Expect(client.IgnoreNotFound(err)).To(Succeed())
+			}
+
+			By("removing the finalizer when 0 OSAC tiers resolve and only a customer-created tenant StorageClass remains")
+			nameCustomerSC := "csp-delete-customer-sc-remains"
+			createReadyTenantForStorage(ctx, nameCustomerSC, testNamespace)
+			nnCustomerSC := types.NamespacedName{Name: nameCustomerSC, Namespace: testNamespace}
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnCustomerSC))
+			Expect(err).NotTo(HaveOccurred())
+			createLabeledStorageClass(ctx, "customer-sc-"+nameCustomerSC, nameCustomerSC, "osac-gold")
+			waitForStorageClassInCache("customer-sc-" + nameCustomerSC)
+
+			tenantCustomerSC := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnCustomerSC, tenantCustomerSC)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenantCustomerSC)).To(Succeed())
+
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nnCustomerSC))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
+			Expect(deprovTriggers).To(BeZero())
+			err = k8sClient.Get(ctx, nnCustomerSC, tenantCustomerSC)
+			if err == nil {
+				Expect(tenantCustomerSC.Finalizers).NotTo(ContainElement(storageFinalizer))
+			} else {
+				Expect(client.IgnoreNotFound(err)).To(Succeed())
+			}
+
+			By("retaining storageFinalizer, preserving CaaS ClusterOrder finalizer, emitting TierResolutionFailed, and requeueing without triggering empty-tier deprovisioning when a tier was skipped by resolveTierDefinitions")
 			deprovTriggers = 0
 			nameSkippedTier := "csp-delete-skipped-tier"
 			createReadyTenantForStorage(ctx, nameSkippedTier, testNamespace)
@@ -4027,8 +4352,27 @@ var _ = Describe("Storage Controller", func() {
 			}
 			_, err = r.Reconcile(ctx, storageReconcileRequest(nnSkipped))
 			Expect(err).NotTo(HaveOccurred())
+			for len(fakeRecorder.Events) > 0 {
+				<-fakeRecorder.Events
+			}
 
-			// Now return a tier whose backend is NotFound (skipped during resolution -> 0 osacTiers, skippedTiers=true).
+			coSkipped := newClusterOrder("co-skipped-"+nameSkippedTier, testNamespace, map[string]string{
+				osacTenantKey: nameSkippedTier,
+			})
+			controllerutil.AddFinalizer(coSkipped, clusterStorageFinalizer)
+			Expect(k8sClient.Create(ctx, coSkipped)).To(Succeed())
+			DeferCleanup(func() {
+				updated := &v1alpha1.ClusterOrder{}
+				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(coSkipped), updated); err == nil {
+					if controllerutil.RemoveFinalizer(updated, clusterStorageFinalizer) {
+						Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+					}
+				}
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, coSkipped))).To(Succeed())
+			})
+			waitForIndexedClientObject(coSkipped)
+
+			// Now return a tier whose backend is NotFound (skipped during resolution -> 0 osacTiers, skippedOSACTiers=true).
 			r.TiersClient = &mockStorageTiersLister{
 				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
 					return privatev1.StorageTiersListResponse_builder{
@@ -4047,10 +4391,416 @@ var _ = Describe("Storage Controller", func() {
 			Expect(k8sClient.Get(ctx, nnSkipped, tenantSkipped)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, tenantSkipped)).To(Succeed())
 
-			_, err = r.Reconcile(ctx, storageReconcileRequest(nnSkipped))
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nnSkipped))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(deprovTriggers).To(BeNumerically(">", 0),
-				"must not skip deprovisioning when a tier was skipped during resolution")
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+			Expect(deprovTriggers).To(BeZero())
+			Expect(k8sClient.Get(ctx, nnSkipped, tenantSkipped)).To(Succeed())
+			Expect(tenantSkipped.Finalizers).To(ContainElement(storageFinalizer))
+
+			updatedCOSkipped := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(coSkipped), updatedCOSkipped)).To(Succeed())
+			Expect(updatedCOSkipped.Finalizers).To(ContainElement(clusterStorageFinalizer))
+
+			var skippedEvents []string
+			for len(fakeRecorder.Events) > 0 {
+				skippedEvents = append(skippedEvents, <-fakeRecorder.Events)
+			}
+			Expect(skippedEvents).To(ContainElement(And(
+				ContainSubstring("TierResolutionFailed"),
+				ContainSubstring("One or more storage tiers could not be resolved during deletion, deferring deprovisioning"),
+			)))
+
+			controllerutil.RemoveFinalizer(tenantSkipped, storageFinalizer)
+			Expect(k8sClient.Update(ctx, tenantSkipped)).To(Succeed())
+
+			By("retaining storageFinalizer for a pure-CSP Tenant when an unrelated catalog tier is skipped")
+			deprovTriggers = 0
+			namePureCSPSkipped := "csp-delete-pure-csp-unrelated-skipped"
+			createReadyTenantForStorage(ctx, namePureCSPSkipped, testNamespace)
+			nnPureCSPSkipped := types.NamespacedName{Name: namePureCSPSkipped, Namespace: testNamespace}
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-del-gold", "backend-csp"),
+							newTestStorageTier("osac-unrelated-skipped", "backend-missing"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, req *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					if req.GetId() == "backend-csp" {
+						return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+					}
+					return nil, status.Error(codes.NotFound, "backend not found")
+				},
+			}
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnPureCSPSkipped))
+			Expect(err).NotTo(HaveOccurred())
+			for len(fakeRecorder.Events) > 0 {
+				<-fakeRecorder.Events
+			}
+
+			tenantPureCSPSkipped := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnPureCSPSkipped, tenantPureCSPSkipped)).To(Succeed())
+			Expect(tenantPureCSPSkipped.Finalizers).To(ContainElement(storageFinalizer))
+			Expect(k8sClient.Delete(ctx, tenantPureCSPSkipped)).To(Succeed())
+
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nnPureCSPSkipped))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+			Expect(deprovTriggers).To(BeZero())
+			Expect(k8sClient.Get(ctx, nnPureCSPSkipped, tenantPureCSPSkipped)).To(Succeed())
+			Expect(tenantPureCSPSkipped.Finalizers).To(ContainElement(storageFinalizer))
+			Expect(drainEvents(fakeRecorder)).To(ContainElement(ContainSubstring("TierResolutionFailed")))
+
+			controllerutil.RemoveFinalizer(tenantPureCSPSkipped, storageFinalizer)
+			Expect(k8sClient.Update(ctx, tenantPureCSPSkipped)).To(Succeed())
+		})
+
+		It("should not skip cluster or backend deprovisioning when 0 OSAC tiers resolve but a deprovision job is active or failed with BlockDeletionOnFailure", func() {
+			csPolls := 0
+			bePolls := 0
+			backendProvider := &mockProvisioningProvider{
+				name: "backend-mock",
+				getDeprovisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+					bePolls++
+					return provisioning.ProvisionStatus{
+						JobID:   jobID,
+						State:   v1alpha1.JobStateRunning,
+						Message: "still running",
+					}, nil
+				},
+			}
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-mock",
+				getDeprovisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+					csPolls++
+					return provisioning.ProvisionStatus{
+						JobID:   jobID,
+						State:   v1alpha1.JobStateRunning,
+						Message: "still running",
+					}, nil
+				},
+			}
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				backendProvider, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return &privatev1.StorageTiersListResponse{}, nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{}
+
+			By("continuing to poll an active ClusterStorageJobs deprovision job when 0 OSAC tiers resolve")
+			nameActiveCS := "csp-delete-active-cs-deprov"
+			createReadyTenantForStorage(ctx, nameActiveCS, testNamespace)
+			nnActiveCS := types.NamespacedName{Name: nameActiveCS, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nnActiveCS))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenantActiveCS := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnActiveCS, tenantActiveCS)).To(Succeed())
+			tenantActiveCS.Status.ClusterStorageJobs = []v1alpha1.JobStatus{
+				{
+					JobID:     "cs-deprov-running",
+					Type:      v1alpha1.JobTypeDeprovision,
+					State:     v1alpha1.JobStateRunning,
+					Timestamp: metav1.Now(),
+				},
+			}
+			Expect(k8sClient.Status().Update(ctx, tenantActiveCS)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenantActiveCS)).To(Succeed())
+
+			res, err := r.Reconcile(ctx, storageReconcileRequest(nnActiveCS))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+			Expect(csPolls).To(Equal(1))
+			Expect(k8sClient.Get(ctx, nnActiveCS, tenantActiveCS)).To(Succeed())
+			Expect(tenantActiveCS.Finalizers).To(ContainElement(storageFinalizer))
+
+			By("blocking deletion on a failed ClusterStorageJobs deprovision job with BlockDeletionOnFailure=true when 0 OSAC tiers resolve")
+			Expect(k8sClient.Get(ctx, nnActiveCS, tenantActiveCS)).To(Succeed())
+			tenantActiveCS.Status.ClusterStorageJobs = []v1alpha1.JobStatus{
+				{
+					JobID:                  "cs-deprov-failed",
+					Type:                   v1alpha1.JobTypeDeprovision,
+					State:                  v1alpha1.JobStateFailed,
+					BlockDeletionOnFailure: true,
+					Timestamp:              metav1.Now(),
+				},
+			}
+			Expect(k8sClient.Status().Update(ctx, tenantActiveCS)).To(Succeed())
+
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nnActiveCS))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(k8sClient.Get(ctx, nnActiveCS, tenantActiveCS)).To(Succeed())
+			Expect(tenantActiveCS.Finalizers).To(ContainElement(storageFinalizer))
+
+			controllerutil.RemoveFinalizer(tenantActiveCS, storageFinalizer)
+			Expect(k8sClient.Update(ctx, tenantActiveCS)).To(Succeed())
+
+			By("continuing to poll an active StorageBackendJobs deprovision job when 0 OSAC tiers resolve")
+			nameActiveBE := "csp-delete-active-be-deprov"
+			createReadyTenantForStorage(ctx, nameActiveBE, testNamespace)
+			nnActiveBE := types.NamespacedName{Name: nameActiveBE, Namespace: testNamespace}
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nnActiveBE))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenantActiveBE := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nnActiveBE, tenantActiveBE)).To(Succeed())
+			tenantActiveBE.Status.StorageBackendJobs = []v1alpha1.JobStatus{
+				{
+					JobID:     "be-deprov-running",
+					Type:      v1alpha1.JobTypeDeprovision,
+					State:     v1alpha1.JobStateRunning,
+					Timestamp: metav1.Now(),
+				},
+			}
+			Expect(k8sClient.Status().Update(ctx, tenantActiveBE)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenantActiveBE)).To(Succeed())
+
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nnActiveBE))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+			Expect(bePolls).To(Equal(1))
+			Expect(k8sClient.Get(ctx, nnActiveBE, tenantActiveBE)).To(Succeed())
+			Expect(tenantActiveBE.Finalizers).To(ContainElement(storageFinalizer))
+
+			By("blocking deletion on a failed StorageBackendJobs deprovision job with BlockDeletionOnFailure=true when 0 OSAC tiers resolve")
+			Expect(k8sClient.Get(ctx, nnActiveBE, tenantActiveBE)).To(Succeed())
+			tenantActiveBE.Status.StorageBackendJobs = []v1alpha1.JobStatus{
+				{
+					JobID:                  "be-deprov-failed",
+					Type:                   v1alpha1.JobTypeDeprovision,
+					State:                  v1alpha1.JobStateFailed,
+					BlockDeletionOnFailure: true,
+					Timestamp:              metav1.Now(),
+				},
+			}
+			Expect(k8sClient.Status().Update(ctx, tenantActiveBE)).To(Succeed())
+
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nnActiveBE))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(k8sClient.Get(ctx, nnActiveBE, tenantActiveBE)).To(Succeed())
+			Expect(tenantActiveBE.Finalizers).To(ContainElement(storageFinalizer))
+
+			controllerutil.RemoveFinalizer(tenantActiveBE, storageFinalizer)
+			Expect(k8sClient.Update(ctx, tenantActiveBE)).To(Succeed())
+		})
+
+		It("should retain storageFinalizer and requeue on handleDelete while a tenant ComputeInstance or Volume CR still exists on the hub", func() {
+			deprovTriggers := 0
+			backendProvider := &mockProvisioningProvider{
+				name: "backend-mock",
+				triggerDeprovisionFunc: func(context.Context, client.Object, []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+					deprovTriggers++
+					return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "unexpected-be-del"}, nil
+				},
+			}
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-mock",
+				triggerDeprovisionFunc: func(context.Context, client.Object, []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+					deprovTriggers++
+					return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "unexpected-cs-del"}, nil
+				},
+			}
+
+			createLabeledStorageClass(ctx, "csp-workload-wait-sc", cspManagedTenantValue, "csp-del-gold")
+			waitForStorageClassInCache("csp-workload-wait-sc")
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				backendProvider, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-del-gold", "backend-csp"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestCSPManagedBackendGetResponse("aws-ebs"), nil
+				},
+			}
+
+			name := "csp-delete-waits-for-workloads"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Finalizers).To(ContainElement(storageFinalizer))
+
+			ci := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-ci-" + name,
+					Namespace:   testNamespace,
+					Annotations: map[string]string{osacTenantKey: name},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, ci)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, ci))).To(Succeed())
+			})
+			waitForIndexedClientObject(ci)
+
+			Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
+			res, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+			Expect(deprovTriggers).To(BeZero())
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Finalizers).To(ContainElement(storageFinalizer))
+
+			vol := &v1alpha1.Volume{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-vol-" + name,
+					Namespace:   testNamespace,
+					Annotations: map[string]string{osacTenantKey: name},
+				},
+				Spec: v1alpha1.VolumeSpec{
+					StorageTier: "csp-del-gold",
+					SizeGiB:     10,
+					AccessMode:  v1alpha1.VolumeAccessModeReadWriteOnce,
+				},
+			}
+			Expect(k8sClient.Create(ctx, vol)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vol))).To(Succeed())
+			})
+			waitForIndexedClientObject(vol)
+
+			Expect(k8sClient.Delete(ctx, ci)).To(Succeed())
+			waitForIndexedClientObjectGone(ci)
+
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(Equal(pollInterval))
+			Expect(deprovTriggers).To(BeZero())
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Finalizers).To(ContainElement(storageFinalizer))
+
+			otherTenant := "other-tenant-" + name
+			otherCI := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "other-ci-" + name,
+					Namespace:   testNamespace,
+					Annotations: map[string]string{osacTenantKey: otherTenant},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, otherCI)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, otherCI))).To(Succeed())
+			})
+			waitForIndexedClientObject(otherCI)
+
+			otherVol := &v1alpha1.Volume{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "other-vol-" + name,
+					Namespace:   testNamespace,
+					Annotations: map[string]string{osacTenantKey: otherTenant},
+				},
+				Spec: v1alpha1.VolumeSpec{
+					StorageTier: "csp-del-gold",
+					SizeGiB:     10,
+					AccessMode:  v1alpha1.VolumeAccessModeReadWriteOnce,
+				},
+			}
+			Expect(k8sClient.Create(ctx, otherVol)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, otherVol))).To(Succeed())
+			})
+			waitForIndexedClientObject(otherVol)
+
+			Expect(k8sClient.Delete(ctx, vol)).To(Succeed())
+			waitForIndexedClientObjectGone(vol)
+
+			res, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero())
+			Expect(deprovTriggers).To(BeZero())
+
+			err = k8sClient.Get(ctx, nn, tenant)
+			if err == nil {
+				Expect(tenant.Finalizers).NotTo(ContainElement(storageFinalizer))
+			} else {
+				Expect(client.IgnoreNotFound(err)).To(Succeed())
+			}
+		})
+
+		It("should filter workload watch events to deletions and map them only to deleting Tenants", func() {
+			pred := tenantWorkloadDeletePredicate()
+			annotatedCI := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "watch-pred-ci",
+					Namespace:   testNamespace,
+					Annotations: map[string]string{osacTenantKey: "some-tenant"},
+				},
+			}
+			unannotatedCI := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "watch-pred-ci-no-tenant",
+					Namespace: testNamespace,
+				},
+			}
+			Expect(pred.Create(event.CreateEvent{Object: annotatedCI})).To(BeFalse())
+			Expect(pred.Update(event.UpdateEvent{ObjectNew: annotatedCI})).To(BeFalse())
+			Expect(pred.Generic(event.GenericEvent{Object: annotatedCI})).To(BeFalse())
+			Expect(pred.Delete(event.DeleteEvent{Object: unannotatedCI})).To(BeFalse())
+			Expect(pred.Delete(event.DeleteEvent{Object: annotatedCI})).To(BeTrue())
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+
+			name := "watch-map-deleting-tenant"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			vol := &v1alpha1.Volume{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "watch-map-vol",
+					Namespace:   testNamespace,
+					Annotations: map[string]string{osacTenantKey: name},
+				},
+			}
+			Expect(r.mapTenantWorkloadToDeletingTenant(ctx, vol)).To(BeEmpty())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, tenant)).To(Succeed())
+			Expect(r.mapTenantWorkloadToDeletingTenant(ctx, vol)).To(ConsistOf(
+				reconcile.Request{NamespacedName: nn},
+			))
+
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			controllerutil.RemoveFinalizer(tenant, storageFinalizer)
+			Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
 		})
 
 		It("should fail closed without querying local StorageClasses when r.targetCluster is remote and not registered", func() {
@@ -4208,6 +4958,91 @@ var _ = Describe("Storage Controller", func() {
 			Expect(backendCond).NotTo(BeNil())
 			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(backendCond.Reason).To(Equal("TierResolutionFailed"))
+		})
+
+		It("should trigger 0 BackendProvider and 0 ClusterStorageProvider AAP jobs and skip SecretsClient.Get when reconciling a Tenant against a cspManaged=true VAST backend with supplied credentials", func() {
+			name := "csp-pure-vast-with-creds"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createLabeledStorageClass(ctx, "csp-vast-gold-sc", cspManagedTenantValue, "csp-vast-gold")
+			waitForStorageClassInCache("csp-vast-gold-sc")
+
+			backendTriggers := 0
+			clusterTriggers := 0
+			backendProvider := &mockProvisioningProvider{
+				name: "backend-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					backendTriggers++
+					return &provisioning.ProvisionResult{JobID: "unexpected-be", InitialState: v1alpha1.JobStateRunning}, nil
+				},
+			}
+			clusterProvider := &mockProvisioningProvider{
+				name: "cluster-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					clusterTriggers++
+					return &provisioning.ProvisionResult{JobID: "unexpected-cs", InitialState: v1alpha1.JobStateRunning}, nil
+				},
+			}
+
+			secretsClient := &mockSecretsClient{
+				getFunc: func(context.Context, *privatev1.SecretsGetRequest, ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+					Fail("SecretsClient.Get must not be called for a cspManaged=true VAST backend")
+					return nil, nil
+				},
+			}
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				backendProvider, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.Client = k8sClient
+			r.SecretsClient = secretsClient
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("csp-vast-gold", "be-csp-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, _ *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return privatev1.StorageBackendsGetResponse_builder{
+						Object: privatev1.StorageBackend_builder{
+							Spec: privatev1.StorageBackendSpec_builder{
+								Provider:   "vast",
+								CspManaged: true,
+								Endpoint:   "https://vast-csp.example.com",
+								Credentials: privatev1.StorageBackendCredentials_builder{
+									Username:       testBackendUsername,
+									Password:       testBackendPassword,
+									PasswordSecret: privatev1.SecretLocalReference_builder{Id: "vast-csp-secret"}.Build(),
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(), nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(backendTriggers).To(BeZero())
+			Expect(clusterTriggers).To(BeZero())
+			Expect(secretsClient.getCallCount).To(BeZero())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			srCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageReady)
+			Expect(srCond).NotTo(BeNil())
+			Expect(srCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(srCond.Reason).To(Equal(v1alpha1.TenantReasonFound))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)).To(BeNil())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)).To(BeNil())
+			Expect(tenant.Status.StorageClasses).To(Equal([]v1alpha1.ResolvedStorageClass{
+				{Name: "csp-vast-gold-sc", Tier: "csp-vast-gold"},
+			}))
 		})
 	})
 

@@ -1,0 +1,46 @@
+---
+# Change one object on the hub, as OVN-Kubernetes, the installer or an
+# administrator would.
+# Input: ce_hub_steps, a list of:
+#   {state: patched|present|absent, def: <object>}   write through kubernetes.core.k8s
+#   {finalize: {api, kind, name}}                     remove the test finalizer
+#   {json: {api, kind, name, ns, patch}}              a JSON patch
+- name: Write the object on the hub
+  when: _ce_step.def is defined
+  kubernetes.core.k8s:
+    state: "{{ _ce_step.state | default('present') }}"
+    merge_type: "{{ 'merge' if (_ce_step.state | default('present')) == 'patched' else omit }}"
+    definition: "{{ _ce_step.def }}"
+  loop: "{{ ce_hub_steps }}"
+  loop_control:
+    loop_var: _ce_step
+    label: "{{ (_ce_step.def | default({})).kind | default('other step') }}"
+
+- name: Apply the JSON patches
+  when: _ce_step.json is defined
+  kubernetes.core.k8s_json_patch:
+    api_version: "{{ _ce_step.json.api }}"
+    kind: "{{ _ce_step.json.kind }}"
+    name: "{{ _ce_step.json.name }}"
+    namespace: "{{ _ce_step.json.ns | default(omit) }}"
+    patch: "{{ _ce_step.json.patch }}"
+  loop: "{{ ce_hub_steps }}"
+  loop_control:
+    loop_var: _ce_step
+    label: "{{ (_ce_step.json | default({})).kind | default('other step') }}"
+
+- name: Remove the test finalizers
+  when: _ce_step.finalize is defined
+  kubernetes.core.k8s:
+    state: patched
+    merge_type: merge
+    definition:
+      apiVersion: "{{ _ce_step.finalize.api }}"
+      kind: "{{ _ce_step.finalize.kind }}"
+      metadata:
+        name: "{{ _ce_step.finalize.name }}"
+        finalizers: []
+  loop: "{{ ce_hub_steps }}"
+  loop_control:
+    loop_var: _ce_step
+    label: "{{ (_ce_step.finalize | default({})).kind | default('other step') }}"

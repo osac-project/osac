@@ -12,7 +12,7 @@ name: jira-reference
 on:  # yamllint disable-line rule:truthy
   pull_request:
     types: [opened, labeled, unlabeled, edited, synchronize, reopened]
-    branches: [main]
+    branches: [main, 'release-*']
   merge_group:
 
 permissions:

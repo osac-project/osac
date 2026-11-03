@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from collections.abc import Callable
 
+from tests.e2e.core import failure_snapshot
 from tests.e2e.core.runner import env
 
 log = logging.getLogger(__name__)
@@ -84,3 +86,19 @@ def ssh_via_external_ip(external_ip: str, command: str = "hostname", timeout: in
     if rc != 0:
         raise subprocess.CalledProcessError(rc, command, out)
     return out.splitlines()[0] if out else ""
+
+
+def register_guest_snapshot(name: str, bmis: Callable[[], list[dict[str, str]]]) -> None:
+    """Add the BMIs returned by `bmis()` (dicts with `name` and `ssh_host`) to the failure snapshot."""
+
+    def runner_for(host: str) -> Callable[[str, int], tuple[str, int]]:
+        return lambda command, timeout: ssh_unchecked(host, command, timeout=timeout)
+
+    def guests() -> list[tuple[str, Callable[[str, int], tuple[str, int]]]]:
+        return [(b.get("name", b["ssh_host"]), runner_for(b["ssh_host"])) for b in bmis() if b.get("ssh_host")]
+
+    failure_snapshot.SOURCES.register(name, failure_snapshot.guest_source(guests), kinds=failure_snapshot.GUEST_KINDS)
+
+
+def unregister_guest_snapshot(name: str) -> None:
+    failure_snapshot.SOURCES.unregister(name)

@@ -1,159 +1,225 @@
 {{/*
-Expand global.networking into the effective NetworkClass fields and AAP knobs.
-
-Public API is manager-first:
-  fabricManager: "" | netris | agentless_net | cudn_net (CaaS/ci.steps only; vlan reserved)
-  k8sManager: "" | k8s_only
-
-Defaults when keys are omitted: fabricManager "" + k8sManager k8s_only (agentless).
-Setting fabricManager to netris without an explicit k8sManager leaves k8sManager empty.
-
-Validated combinations:
-  - fabricManager=netris + k8sManager="" → netris AAP + NetworkClass fabricManager=netris
-  - fabricManager=agentless_net + k8sManager="" → AgentlessNet stub + NetworkClass fabricManager=agentless_net
-  - fabricManager=cudn_net + k8sManager="" → CaaS ci.steps + CUDN NetworkClass
-  - fabricManager="" + k8sManager=k8s_only → agentless AAP + NetworkClass k8sManager=k8s_only
-  - fabricManager="" + k8sManager="" → expert empty profile; networkClass must supply a manager
-
-Rejected combinations:
-  - any use of removed keys provider / overlay
-  - both fabricManager and k8sManager set (non-empty)
-  - fabricManager netris without a netris config block
-  - fabricManager vlan (reserved); cudn_net without CaaS/ci.steps is rejected by validateValues
-  - unknown fabricManager / k8sManager values
-  - empty profile with no manager on the effective NetworkClass
-
-Returns a dict with:
-  fabricManager, k8sManager, aapNetrisEnabled, aapAgentlessEnabled, netris,
-  networkClass, aap
+Networking helpers (unified networking design). values.schema.json checks each
+field; osac.networking.validate checks the cross-field rules. The installer's
+NetworkClass step (files/network-class-step.py) checks them again together
+with the rules that need the fulfillment service.
 */}}
-{{- define "osac.networking.effective" -}}
-{{- $networking := ((.Values.global).networking) | default dict -}}
 
-{{- if or (hasKey $networking "provider") (hasKey $networking "overlay") -}}
-  {{- fail "global.networking.provider and global.networking.overlay were removed; set fabricManager and k8sManager instead (see docs/network-backend.md)" -}}
-{{- end -}}
-
-{{- $fabricManager := $networking.fabricManager | default "" -}}
-{{- $k8sManager := "" -}}
-{{- if hasKey $networking "k8sManager" -}}
-  {{- $k8sManager = $networking.k8sManager | default "" -}}
-{{- else if eq $fabricManager "" -}}
-  {{- $k8sManager = "k8s_only" -}}
+{{/* Enabled services that shape the address plan (MaaS adds nothing). */}}
+{{- define "osac.networking.enabledServices" -}}
+{{- $s := .Values.global.services -}}
+{{- toJson (dict "vmaas" $s.vmaas.enabled "bmaas" $s.bmaas.enabled "caas" $s.caas.enabled) -}}
 {{- end -}}
 
-{{- $allowedFabric := list "" "netris" "agentless_net" "cudn_net" -}}
-{{- $reservedFabric := list "vlan" -}}
-{{- $allowedK8s := list "" "k8s_only" -}}
-
-{{- if has $fabricManager $reservedFabric -}}
-  {{- fail (printf "global.networking.fabricManager %q is reserved and not yet supported" $fabricManager) -}}
+{{/*
+The address plan in force: global.networking.networkClass.addressPlan when set,
+otherwise the default plan derived from the enabled services and k8sManager.
+Returns JSON {overlay, fabric, lbVip, explicit}.
+*/}}
+{{- define "osac.networking.addressPlan" -}}
+{{- $networking := .Values.global.networking -}}
+{{- $plan := ($networking.networkClass | default dict).addressPlan -}}
+{{- if $plan -}}
+{{- toJson (dict "overlay" $plan.overlay "fabric" $plan.fabric "lbVip" $plan.lbVip "explicit" true) -}}
+{{- else -}}
+{{- $services := include "osac.networking.enabledServices" . | fromJson -}}
+{{- $derived := list 0.0 1.0 0.0 -}}
+{{- if $networking.k8sManager -}}
+  {{- if $services.caas -}}{{- $derived = list 0.5 0.25 0.25 -}}
+  {{- else if $services.bmaas -}}{{- $derived = list 0.5 0.5 0.0 -}}
+  {{- else -}}{{- $derived = list 0.75 0.25 0.0 -}}
+  {{- end -}}
+{{- else if $services.caas -}}
+  {{- $derived = list 0.0 0.75 0.25 -}}
 {{- end -}}
-{{- if not (has $fabricManager $allowedFabric) -}}
-  {{- fail (printf "global.networking.fabricManager must be \"\", netris, agentless_net, or cudn_net (got %q)" $fabricManager) -}}
+{{- toJson (dict "overlay" (index $derived 0) "fabric" (index $derived 1) "lbVip" (index $derived 2) "explicit" false) -}}
 {{- end -}}
-{{- if not (has $k8sManager $allowedK8s) -}}
-  {{- fail (printf "global.networking.k8sManager must be \"\" or k8s_only (got %q)" $k8sManager) -}}
-{{- end -}}
-{{- if and (ne $fabricManager "") (ne $k8sManager "") -}}
-  {{- fail (printf "global.networking cannot set both fabricManager=%q and k8sManager=%q; choose one manager" $fabricManager $k8sManager) -}}
-{{- end -}}
-{{- if and (eq $fabricManager "netris") (not $networking.netris) -}}
-  {{- fail "global.networking.fabricManager=netris requires global.networking.netris configuration" -}}
-{{- end -}}
-
-{{- $aapNetrisEnabled := eq $fabricManager "netris" -}}
-{{- $aapAgentlessEnabled := or (eq $fabricManager "agentless_net") (eq $k8sManager "k8s_only") -}}
-{{- $aapNetworkClass := "" -}}
-{{- $aapNetworkSteps := "" -}}
-{{- if $aapNetrisEnabled -}}
-  {{- $aapNetworkClass = "netris" -}}
-  {{- $aapNetworkSteps = "netris.steps" -}}
-{{- else if eq $fabricManager "agentless_net" -}}
-  {{- $aapNetworkClass = "agentless_net" -}}
-  {{- $aapNetworkSteps = "agentless_net.steps" -}}
-{{- else if eq $fabricManager "cudn_net" -}}
-  {{- $aapNetworkClass = "ci" -}}
-  {{- $aapNetworkSteps = "ci.steps" -}}
-{{- else if $aapAgentlessEnabled -}}
-  {{- $aapNetworkSteps = "agentless_net.steps" -}}
 {{- end -}}
 
-{{- $defaultTitle := "K8s-only networking" -}}
-{{- $defaultDescription := "Provides Kubernetes-native networking without a separate physical fabric." -}}
-{{- if eq $fabricManager "netris" -}}
-  {{- $defaultTitle = "Netris Network Implementation" -}}
-  {{- $defaultDescription = "Provisions networking resources using Netris Controller API." -}}
-{{- else if eq $fabricManager "agentless_net" -}}
-  {{- $defaultTitle = "AgentlessNet VirtualNetwork and Subnet baseline" -}}
-  {{- $defaultDescription = "Implements UID-keyed VirtualNetwork namespaces, /31 transit links, Cumulus Subnet VLANs, gateways, and per-VirtualNetwork DHCP. SecurityGroups, NAT, workload attachment, BGP, and external access remain unsupported." -}}
-{{- else if eq $fabricManager "cudn_net" -}}
-  {{- $defaultTitle = "CUDN Network Implementation" -}}
-  {{- $defaultDescription = "CUDN overlay for virtual bare-metal CaaS." -}}
-{{- else if and (eq $fabricManager "") (eq $k8sManager "") -}}
-  {{- $defaultTitle = "Custom Network Implementation" -}}
-  {{- $defaultDescription = "NetworkClass managers are supplied via networkClass overrides." -}}
+{{/*
+Prefix limit of a plan: 28 - log2(1/g), where g is the largest power of two at
+most 1 that divides every non-zero share. Shares are multiples of 1/16, so the
+limit is 24 + log2 of the largest of 16, 8, 4, 2, 1 that divides every non-zero
+share counted in sixteenths.
+*/}}
+{{- define "osac.networking.prefixLimit" -}}
+{{- $sixteenths := list -}}
+{{- range $share := list .overlay .fabric .lbVip -}}
+  {{- $n := mulf $share 16 | int -}}
+  {{- if gt $n 0 }}{{ $sixteenths = append $sixteenths $n }}{{ end -}}
+{{- end -}}
+{{- $limit := 24 -}}
+{{- range $exp, $m := list 1 2 4 8 16 -}}
+  {{- $divides := true -}}
+  {{- range $sixteenths }}{{ if ne (mod . $m) 0 }}{{ $divides = false }}{{ end }}{{ end -}}
+  {{- if $divides }}{{ $limit = add 24 $exp }}{{ end -}}
+{{- end -}}
+{{- $limit -}}
 {{- end -}}
 
-{{- $defaultNetworkClass := dict
-  "enabled" true
-  "title" $defaultTitle
-  "description" $defaultDescription
-  "fabricManager" $fabricManager
-  "k8sManager" $k8sManager
-  "isDefault" true
+{{/*
+Parse an IPv4 CIDR string. Returns JSON {address, prefix, canonical}: the
+address as an integer, the prefix length, and whether the host bits are zero.
+*/}}
+{{- define "osac.networking.parseCidr" -}}
+{{- $parts := splitList "/" . -}}
+{{- $octets := splitList "." (first $parts) -}}
+{{- $address := 0 -}}
+{{- range $octets }}{{ $address = add (mul $address 256) (atoi .) }}{{ end -}}
+{{- $prefix := atoi (last $parts) -}}
+{{- $size := 1 -}}
+{{- range until (sub 32 $prefix | int) }}{{ $size = mul $size 2 }}{{ end -}}
+{{- toJson (dict "address" $address "prefix" $prefix "size" $size "canonical" (eq (mod $address $size) 0)) -}}
+{{- end -}}
+
+{{/* Fail the render when the networking values break a cross-field rule. */}}
+{{- define "osac.networking.validate" -}}
+{{- $networking := .Values.global.networking -}}
+{{- $services := include "osac.networking.enabledServices" . | fromJson -}}
+{{- $nc := $networking.networkClass | default dict -}}
+{{- if not $networking.fabricManager -}}
+  {{- fail "global.networking.fabricManager is required: set it to the name in the Fabric Manager registration" -}}
+{{- end -}}
+{{- if and $services.vmaas (not $networking.k8sManager) -}}
+  {{- fail "global.networking.k8sManager is required when VMaaS is enabled (set cudn_evpn)" -}}
+{{- end -}}
+{{- if and $networking.provisioningEnabled (not .Values.aap.instanceGroups.networkFulfillment.enabled) -}}
+  {{- fail "global.networking.provisioningEnabled requires aap.instanceGroups.networkFulfillment.enabled=true" -}}
+{{- end -}}
+
+{{- $planPath := "global.networking.networkClass.addressPlan" -}}
+{{- if $nc.addressPlan -}}
+  {{- $set := 0 -}}
+  {{- range $share := list "overlay" "fabric" "lbVip" }}{{ if hasKey $nc.addressPlan $share }}{{ $set = add1 $set }}{{ end }}{{ end -}}
+  {{- if ne $set 3 -}}
+    {{- fail (printf "%s must set overlay, fabric, and lbVip together" $planPath) -}}
+  {{- end -}}
+{{- end -}}
+{{- $plan := include "osac.networking.addressPlan" . | fromJson -}}
+{{- $sum := 0.0 -}}
+{{- range $share := list "overlay" "fabric" "lbVip" -}}
+  {{- $v := index $plan $share -}}
+  {{- $sixteenths := mulf $v 16 -}}
+  {{- if or (ne $v $v) (lt $v 0.0) (gt $v 1.0) (ne $sixteenths (floor $sixteenths)) -}}
+    {{- fail (printf "%s.%s must be a multiple of 0.0625 from 0 to 1 (got %v)" $planPath $share $v) -}}
+  {{- end -}}
+  {{- $sum = addf $sum $v -}}
+{{- end -}}
+{{- if ne $sum 1.0 -}}
+  {{- fail (printf "%s shares must sum to exactly 1 (got %v)" $planPath $sum) -}}
+{{- end -}}
+{{- if ne (gt (float64 $plan.overlay) 0.0) (not (empty $networking.k8sManager)) -}}
+  {{- fail (printf "%s.overlay must be greater than 0 exactly when global.networking.k8sManager is set" $planPath) -}}
+{{- end -}}
+{{- if and (or $services.bmaas $services.caas) (eq (float64 $plan.fabric) 0.0) -}}
+  {{- fail (printf "%s.fabric must be greater than 0 when BMaaS or CaaS is enabled" $planPath) -}}
+{{- end -}}
+{{- if and $services.caas (eq (float64 $plan.lbVip) 0.0) -}}
+  {{- fail (printf "%s.lbVip must be greater than 0 when CaaS is enabled" $planPath) -}}
+{{- end -}}
+
+{{- $defaultsPath := "global.networking.networkClass.defaults" -}}
+{{- $defaults := $nc.defaults -}}
+{{- $cidrs := dict -}}
+{{- range $field := list "virtualNetworkIPv4CIDR" "subnetIPv4CIDR" -}}
+  {{- $value := index $defaults $field -}}
+  {{- $cidr := include "osac.networking.parseCidr" $value | fromJson -}}
+  {{- if not $cidr.canonical -}}
+    {{- fail (printf "%s.%s must be a canonical IPv4 CIDR (got %s)" $defaultsPath $field $value) -}}
+  {{- end -}}
+  {{- $_ := set $cidrs $field $cidr -}}
+{{- end -}}
+{{- $vn := $cidrs.virtualNetworkIPv4CIDR -}}
+{{- $subnet := $cidrs.subnetIPv4CIDR -}}
+{{- $subnetStart := int64 $subnet.address -}}
+{{- if or (lt (int $subnet.prefix) (int $vn.prefix)) (ne (sub $subnetStart (mod $subnetStart (int64 $vn.size))) (int64 $vn.address)) -}}
+  {{- fail (printf "%s.subnetIPv4CIDR must be inside virtualNetworkIPv4CIDR" $defaultsPath) -}}
+{{- end -}}
+{{- $limit := include "osac.networking.prefixLimit" $plan | int -}}
+{{- if gt (int $subnet.prefix) $limit -}}
+  {{- fail (printf "%s.subnetIPv4CIDR prefix /%d is longer than the address plan's prefix limit /%d" $defaultsPath (int $subnet.prefix) $limit) -}}
+{{- end -}}
+{{- range $direction := list "ingressRules" "egressRules" -}}
+  {{- range $i, $rule := (index $defaults $direction | default list) -}}
+    {{- if and (hasKey $rule "portFrom") (hasKey $rule "portTo") (gt (int $rule.portFrom) (int $rule.portTo)) -}}
+      {{- fail (printf "%s.%s[%d]: portFrom (%v) must be <= portTo (%v)" $defaultsPath $direction $i $rule.portFrom $rule.portTo) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if and $networking.provisioningEnabled (eq ($networking.k8sManager | default "") "cudn_evpn") -}}
+  {{- range $field := list "ingressRules" "egressRules" -}}
+    {{- range $i, $rule := (index $defaults $field | default list) -}}
+      {{- if eq $rule.protocol "PROTOCOL_ICMP" -}}
+        {{- fail (printf "%s.%s[%d]: PROTOCOL_ICMP needs the security_group_icmp capability, which cudn_evpn does not declare; use PROTOCOL_ALL" $defaultsPath $field $i) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* SecurityGroup rules in the private API's JSON shape. */}}
+{{- define "osac.networking.apiRules" -}}
+{{- $rules := list -}}
+{{- range . -}}
+  {{- $rule := dict "protocol" .protocol "ipv4_cidr" .ipv4Cidr -}}
+  {{- if hasKey . "portFrom" }}{{ $_ := set $rule "port_from" .portFrom }}{{ end -}}
+  {{- if hasKey . "portTo" }}{{ $_ := set $rule "port_to" .portTo }}{{ end -}}
+  {{- $rules = append $rules $rule -}}
+{{- end -}}
+{{- toJson $rules -}}
+{{- end -}}
+
+{{/* Input of the installer's NetworkClass step (files/network-class-step.py). */}}
+{{- define "osac.networking.stepInput" -}}
+{{- $networking := .Values.global.networking -}}
+{{- $nc := $networking.networkClass -}}
+{{- $plan := include "osac.networking.addressPlan" . | fromJson -}}
+{{- $ew := $nc.eastWestCapabilities | default dict -}}
+{{- $input := dict
+  "fabric_manager" $networking.fabricManager
+  "k8s_manager" ($networking.k8sManager | default "")
   "defaults" (dict
-    "virtualNetworkIPv4CIDR" "10.200.0.0/16"
-    "subnetIPv4CIDR" "10.200.0.0/20"
-    "enableNatGateway" false
-    "egressRules" (list (dict "protocol" "PROTOCOL_ALL" "ipv4Cidr" "0.0.0.0/0"))
-  )
+    "virtual_network_ipv4_cidr" $nc.defaults.virtualNetworkIPv4CIDR
+    "subnet_ipv4_cidr" $nc.defaults.subnetIPv4CIDR
+    "ingress_rules" (include "osac.networking.apiRules" ($nc.defaults.ingressRules | default list) | fromJsonArray)
+    "egress_rules" (include "osac.networking.apiRules" ($nc.defaults.egressRules | default list) | fromJsonArray))
+  "east_west_capabilities" (dict "supports_east_west_ethernet" ($ew.supportsEastWestEthernet | default false))
+  "address_plan" (dict "overlay" $plan.overlay "fabric" $plan.fabric "lb_vip" $plan.lbVip)
+  "address_plan_explicit" $plan.explicit
+  "services" (include "osac.networking.enabledServices" . | fromJson)
+  "excluded_ipv4_cidrs" ($networking.excludedIpv4Cidrs | default list)
+  "provisioning_enabled" $networking.provisioningEnabled
 -}}
-
-{{- $networkClassOverride := $networking.networkClass | default dict -}}
-{{- $effectiveNetworkClass := mergeOverwrite (deepCopy $defaultNetworkClass) (deepCopy $networkClassOverride) -}}
-{{- $effectiveDefaults := mergeOverwrite (deepCopy $defaultNetworkClass.defaults) ($networkClassOverride.defaults | default dict) -}}
-{{- $_ := set $effectiveNetworkClass "defaults" $effectiveDefaults -}}
-
-{{- $effectiveFabric := $effectiveNetworkClass.fabricManager | default "" -}}
-{{- $effectiveK8s := $effectiveNetworkClass.k8sManager | default "" -}}
-{{- if and (eq $effectiveFabric "") (eq $effectiveK8s "") -}}
-  {{- fail "global.networking requires fabricManager, k8sManager, or networkClass overrides that set a manager" -}}
-{{- end -}}
-{{- if and (ne $effectiveFabric "") (ne $effectiveK8s "") -}}
-  {{- fail (printf "effective NetworkClass cannot set both fabricManager=%q and k8sManager=%q" $effectiveFabric $effectiveK8s) -}}
-{{- end -}}
-{{- if has $effectiveFabric $reservedFabric -}}
-  {{- fail (printf "NetworkClass fabricManager %q is reserved and not yet supported" $effectiveFabric) -}}
-{{- end -}}
-{{- if and (ne $effectiveFabric "") (not (has $effectiveFabric $allowedFabric)) -}}
-  {{- fail (printf "NetworkClass fabricManager must be \"\", netris, agentless_net, or cudn_net (got %q)" $effectiveFabric) -}}
-{{- end -}}
-{{- if and (ne $effectiveK8s "") (not (has $effectiveK8s $allowedK8s)) -}}
-  {{- fail (printf "NetworkClass k8sManager must be \"\" or k8s_only (got %q)" $effectiveK8s) -}}
-{{- end -}}
-{{- if and (ne $fabricManager "") (ne $effectiveFabric $fabricManager) -}}
-  {{- fail (printf "global.networking.networkClass.fabricManager must be %s when fabricManager=%s (got %q)" $fabricManager $fabricManager $effectiveFabric) -}}
-{{- end -}}
-{{- if and (eq $effectiveFabric "cudn_net") (ne $fabricManager "cudn_net") -}}
-  {{- fail "networkClass.fabricManager=cudn_net requires global.networking.fabricManager=cudn_net" -}}
-{{- end -}}
-{{- if and (eq $fabricManager "agentless_net") (ne $effectiveFabric "agentless_net") -}}
-  {{- fail (printf "global.networking.networkClass.fabricManager must be agentless_net when fabricManager=agentless_net (got %q)" $effectiveFabric) -}}
+{{- toJson $input -}}
 {{- end -}}
 
-{{- $netris := $networking.netris | default dict -}}
-{{- if and $aapNetrisEnabled (not ($netris.controllerUrl | default "")) -}}
-  {{- fail "global.networking.netris.controllerUrl is required when fabricManager=netris" -}}
+{{/*
+Service account names of the OSAC controllers that may write OSAC-managed
+resources (ValidatingAdmissionPolicy). They mirror the subcharts' own
+serviceAccountName helpers, which cannot be called with the umbrella's values.
+*/}}
+{{- define "osac.subchartFullname" -}}
+{{- $values := index . 0 -}}
+{{- $chartName := index . 1 -}}
+{{- $release := index . 2 -}}
+{{- if $values.fullnameOverride -}}
+{{- $values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default $chartName $values.nameOverride -}}
+{{- if contains $name $release -}}
+{{- $release | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" $release $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
-{{- dict
-      "fabricManager" $fabricManager
-      "k8sManager" $k8sManager
-      "aapNetrisEnabled" $aapNetrisEnabled
-      "aapAgentlessEnabled" $aapAgentlessEnabled
-      "netris" $netris
-      "networkClass" $effectiveNetworkClass
-      "aap" (dict "networkClass" $aapNetworkClass "networkStepsCollection" $aapNetworkSteps)
-    | toYaml -}}
+{{- define "osac.operatorServiceAccountName" -}}
+{{- $values := .Values.operator -}}
+{{- (($values.serviceAccount | default dict).name) | default (include "osac.subchartFullname" (list $values "operator" .Release.Name)) -}}
+{{- end -}}
+
+{{- define "osac.bmfServiceAccountName" -}}
+{{- $values := .Values.bmf -}}
+{{- (($values.serviceAccount | default dict).name) | default (include "osac.subchartFullname" (list $values "bmf" .Release.Name)) -}}
 {{- end -}}

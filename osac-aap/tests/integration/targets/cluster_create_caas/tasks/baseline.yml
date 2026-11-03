@@ -18,9 +18,6 @@
         install_step_hosted_cluster_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml
-        install_step_cluster_network_override:
-          name: osac.workflows.workflow_helpers
-          tasks_from: noop.yml
         install_step_external_access_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml
@@ -60,8 +57,16 @@
           - template_id == "osac.templates.ocp_ci_small"
         fail_msg: "CaaS template ID not extracted correctly"
 
-    - name: Verify CaaS does not dispatch the pool infrastructure phase
+    - name: Verify CaaS waits for operator-owned Agents and configures external access
       ansible.builtin.assert:
         that:
           - install_step_cluster_infra_default is not defined
-          - install_step_cluster_network_default is defined
+          - install_step_wait_for_agents_default is not defined
+          - install_step_cluster_network_default is not defined
+          - install_step_external_access_default is defined
+          - install_step_external_access_default.name == "osac.service.external_access"
+          - install_step_external_access_default.tasks_from == "caas_create.yaml"
+        fail_msg: >-
+          ocp_ci_small must use service-owned CaaS external access tasks,
+          without the old
+          install_step_cluster_network_default (OSAC-5697).

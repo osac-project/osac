@@ -1,0 +1,9 @@
+# The Python plugins of the Netris Fabric Manager and the cudn_evpn Kubernetes
+# Manager. Used by `make test` through pytest-cov (see Makefile).
+[run]
+branch = True
+include =
+    */osac/templates/plugins/filter/netris_contract.py
+    */osac/templates/plugins/filter/cudn_evpn.py
+    */osac/templates/plugins/modules/netris_external_ip.py
+    */osac/templates/plugins/module_utils/netris_external_ip.py

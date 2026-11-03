@@ -28,11 +28,12 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // Networking tenant isolation exercises the private API Create path with admin
-// TotalVisibility. Cross-tenant reference rejection must not rely on DAO
-// tenancy filtering (which is a no-op for private callers).
+// TotalVisibility. Cross-tenant references must be rejected without exposing
+// details about the referenced resource's tenant.
 var _ = Describe("Networking tenant isolation", func() {
 	var (
 		ctx context.Context
@@ -83,13 +84,7 @@ var _ = Describe("Networking tenant isolation", func() {
 			deleteTenant(cleanupCtx, tenantsClient, projectsClient, tenantAID, tenantAName)
 		})
 
-		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("nc-%s", uuid.New()[24:32])}.Build(),
-				Title:         "Networking tenant isolation NetworkClass",
-				FabricManager: new("netris"),
-			}.Build(),
-		}.Build())
+		ncResp, err := sharedNetworkClass(ctx, networkClassesClient)
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId = ncResp.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
@@ -123,9 +118,7 @@ var _ = Describe("Networking tenant isolation", func() {
 					Tenant: tenant,
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new(ipv4Cidr),
+					Ipv4Cidr: new(ipv4Cidr),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -205,6 +198,7 @@ var _ = Describe("Networking tenant isolation", func() {
 	}
 
 	createExternalIP := func(tenant, poolID string) string {
+		ndSkipUnlessProviderNetworkingEnabled(ctx, "ExternalIP tenant isolation")
 		eipID := fmt.Sprintf("eip-%s", uuid.New())
 		_, err := externalIPsClient.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 			Object: privatev1.ExternalIP_builder{
@@ -272,7 +266,7 @@ var _ = Describe("Networking tenant isolation", func() {
 			}.Build())
 		})
 
-		templateID := fmt.Sprintf("tmpl-%s", uuid.New())
+		templateID := newTemplateID("tmpl")
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:    templateID,
@@ -331,7 +325,7 @@ var _ = Describe("Networking tenant isolation", func() {
 			}.Build(),
 		}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
+		Expect(err).To(MatchError(ContainSubstring("does not exist")))
 	})
 
 	It("accepts Subnet referencing same-tenant VirtualNetwork", func() {
@@ -371,7 +365,7 @@ var _ = Describe("Networking tenant isolation", func() {
 			}.Build(),
 		}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
+		Expect(err).To(MatchError(ContainSubstring("does not exist")))
 	})
 
 	It("accepts ExternalIP referencing a shared ExternalIPPool", func() {
@@ -380,6 +374,7 @@ var _ = Describe("Networking tenant isolation", func() {
 	})
 
 	It("rejects ExternalIP referencing ExternalIPPool from an unrelated tenant", func() {
+		ndSkipUnlessProviderNetworkingEnabled(ctx, "ExternalIP tenant isolation")
 		poolID := createReadyPool(tenantBName)
 
 		_, err := externalIPsClient.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
@@ -393,8 +388,35 @@ var _ = Describe("Networking tenant isolation", func() {
 				}.Build(),
 			}.Build(),
 		}.Build())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+	})
+
+	It("resolves an ExternalIPPool by name for a tenant user and hides an unrelated tenant's pool", func() {
+		// With provider networking disabled the handler rejects every ExternalIP create. A shared pool that the
+		// reference interceptor resolved therefore reaches the handler and fails there with FAILED_PRECONDITION,
+		// while an unresolved reference fails earlier with INVALID_ARGUMENT.
+		ndSkipIfProviderNetworkingEnabled(ctx, "the tenant user ExternalIPPool name reference")
+		poolName := func(poolID string) string {
+			response, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject().GetMetadata().GetName()
+		}
+		sharedName := poolName(createReadyPool(""))
+		unrelatedName := poolName(createReadyPool(tenantBName))
+		createByName := func(name string) error {
+			_, err := newNDClients().publicExternalIPs.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
+				Object: publicv1.ExternalIP_builder{
+					Metadata: publicv1.Metadata_builder{Name: ndUniqueName("eip")}.Build(),
+					Spec: publicv1.ExternalIPSpec_builder{
+						Pool: publicv1.ExternalIPPoolReference_builder{Name: name}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			return err
+		}
+
+		ndExpectCode(createByName(sharedName), grpccodes.FailedPrecondition, "provider networking is disabled")
+		ndExpectCode(createByName(unrelatedName), grpccodes.InvalidArgument)
 	})
 
 	It("rejects NATGateway referencing VirtualNetwork from a different tenant", func() {
@@ -415,8 +437,7 @@ var _ = Describe("Networking tenant isolation", func() {
 				}.Build(),
 			}.Build(),
 		}.Build())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 	})
 
 	It("rejects NATGateway referencing ExternalIP from a different tenant", func() {
@@ -437,8 +458,7 @@ var _ = Describe("Networking tenant isolation", func() {
 				}.Build(),
 			}.Build(),
 		}.Build())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 	})
 
 	It("rejects ExternalIPAttachment referencing ExternalIP from a different tenant", func() {
@@ -467,7 +487,6 @@ var _ = Describe("Networking tenant isolation", func() {
 				}.Build(),
 			}.Build(),
 		}.Build())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument), "attachment create error: %v", err)
-		Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound), "attachment create error: %v", err)
 	})
 })

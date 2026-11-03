@@ -16,7 +16,8 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import run_unchecked
+from tests.e2e.core.runner import poll_until, run_unchecked
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.sanity
 
@@ -81,7 +82,7 @@ def test_invalid_token_rejected(fulfillment_address: str) -> None:
 
 def test_jwt_virtual_network_lifecycle(jwt_grpc_tenant1: GRPCClient) -> None:
     vn_name: str = f"jwt-smoke-{uuid4().hex[:8]}"
-    vn_id: str = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="10.200.0.0/16")
+    vn_id: str = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="172.19.0.0/16")
     assert vn_id in jwt_grpc_tenant1.list_virtual_network_ids()
 
     vn: dict = jwt_grpc_tenant1.get_virtual_network(vn_id=vn_id)
@@ -92,7 +93,7 @@ def test_jwt_virtual_network_lifecycle(jwt_grpc_tenant1: GRPCClient) -> None:
 
 def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient, k8s_hub_client: K8sClient) -> None:
     vn_name: str = f"jwt-sg-vnet-{uuid4().hex[:8]}"
-    vn_id: str = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="10.202.0.0/16")
+    vn_id: str = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="172.25.0.0/16")
     vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
 
     for _ in range(90):
@@ -104,7 +105,7 @@ def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient, k8s_hub_clie
         pytest.fail(f"VirtualNetwork {vn_id} did not reach READY state within 180s")
 
     subnet_name: str = f"jwt-sg-subnet-{uuid4().hex[:8]}"
-    subnet_id: str = jwt_grpc_tenant1.create_subnet(name=subnet_name, virtual_network=vn_id, ipv4_cidr="10.202.1.0/24")
+    subnet_id: str = jwt_grpc_tenant1.create_subnet(name=subnet_name, virtual_network=vn_id, ipv4_cidr="172.25.1.0/24")
     subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
     for _ in range(90):
         sn = jwt_grpc_tenant1.get_subnet(subnet_id=subnet_id)
@@ -123,6 +124,15 @@ def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient, k8s_hub_clie
     wait_for_security_group_deletion(k8s=k8s_hub_client, name=sg_cr_name)
     jwt_grpc_tenant1.delete_subnet(subnet_id=subnet_id)
     wait_for_subnet_deletion(k8s=k8s_hub_client, name=subnet_cr_name)
+    poll_until(
+        fn=lambda: subnet_id not in jwt_grpc_tenant1.list_subnet_ids(),
+        until=lambda removed: removed is True,
+        retries=30,
+        delay=2,
+        description=f"Subnet {subnet_id} Fulfillment deletion",
+        resource_kind=WaitResourceKind.SUBNET,
+        resource_id=subnet_id,
+    )
     jwt_grpc_tenant1.delete_virtual_network(vn_id=vn_id)
     wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
 
@@ -132,7 +142,7 @@ def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient, k8s_hub_clie
 
 def test_jwt_tenant_isolation(jwt_grpc_tenant1: GRPCClient, jwt_grpc_tenant2: GRPCClient) -> None:
     vn_name: str = f"tenant-iso-{uuid4().hex[:8]}"
-    vn_id: str = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="10.201.0.0/16")
+    vn_id: str = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="172.24.0.0/16")
 
     assert vn_id in jwt_grpc_tenant1.list_virtual_network_ids()
     assert vn_id not in jwt_grpc_tenant2.list_virtual_network_ids()

@@ -224,21 +224,14 @@ func (t *task) update(ctx context.Context) error {
 	}
 
 	// Pass 2: select hub.
-	hubJustSelected := t.virtualNetwork.GetStatus().GetHub() == ""
 	t.r.logger.DebugContext(ctx, "VN update: pass 2 — selectHub",
-		slog.String("id", id), slog.Bool("is_default", isDefault),
-		slog.Bool("hub_just_selected", hubJustSelected))
+		slog.String("id", id), slog.Bool("is_default", isDefault))
 	if err := t.selectHub(ctx); err != nil {
 		t.r.logger.ErrorContext(ctx, "VN update: pass 2 — selectHub failed",
 			slog.String("id", id), slog.Bool("is_default", isDefault), slog.Any("error", err))
 		return err
 	}
 	t.virtualNetwork.GetStatus().SetHub(t.hubId)
-	if hubJustSelected {
-		t.r.logger.DebugContext(ctx, "VN update: pass 2 done — hub selected, returning early",
-			slog.String("id", id), slog.Bool("is_default", isDefault), slog.String("hub", t.hubId))
-		return nil
-	}
 	t.r.logger.DebugContext(ctx, "VN update: pass 2 done — hub already set",
 		slog.String("id", id), slog.Bool("is_default", isDefault), slog.String("hub", t.hubId))
 
@@ -321,11 +314,15 @@ func (t *task) delete(ctx context.Context) (err error) {
 	// Do nothing if we don't know the hub yet:
 	t.hubId = t.virtualNetwork.GetStatus().GetHub()
 	if t.hubId == "" {
-		// No hub assigned, nothing to clean up on K8s side.
-		t.removeFinalizer()
-		return nil
+		// The CR may exist without status.hub when the controller restarted between its create and the hub
+		// write, so look it up in the canonical hub.
+		if selectErr := t.selectHub(ctx); selectErr != nil {
+			t.removeFinalizer()
+			return nil
+		}
+	} else {
+		err = t.getHub(ctx)
 	}
-	err = t.getHub(ctx)
 	if err != nil {
 		// Check if the hub has been decommissioned (deleted from database)
 		if errors.Is(err, controllers.ErrHubNotFound) {
@@ -483,10 +480,7 @@ func (t *task) setPending(err error) {
 // buildSpec constructs the spec for the Kubernetes VirtualNetwork object based on the
 // virtual network from the database.
 func (t *task) buildSpec() osacv1alpha1.VirtualNetworkSpec {
-	spec := osacv1alpha1.VirtualNetworkSpec{
-		Region:       t.virtualNetwork.GetSpec().GetRegion(),
-		NetworkClass: controllers.RefKeyStr(t.virtualNetwork.GetSpec().GetNetworkClass()),
-	}
+	spec := osacv1alpha1.VirtualNetworkSpec{}
 
 	// Add IPv4 CIDR if present:
 	if t.virtualNetwork.GetSpec().HasIpv4Cidr() {

@@ -1,0 +1,218 @@
+---
+# Cases 2 and 3: VirtualNetwork and Subnet results, VNIs, V-Net body, reruns.
+- name: VN - start empty
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: "{{ nf_reset }}"}
+
+- name: VN - create without a network type
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: vn-create-without-network-type
+    sft_expect: success
+    nf_job: "{{ nf_vn_job }}"
+    nf_result: {backend_id: "101"}
+
+- name: VN - the result has backend_id only, as a string; no NAT rule
+  ansible.builtin.assert:
+    that:
+      - sft_last.result.keys() | list == ['backend_id']
+      - sft_last.result.backend_id is string
+      - nf_state.vpcs | length == 1
+      - nf_state.vpcs[0].name == nf_vpc_name
+      - nf_state.vpcs[0].adminTenant.id == 2
+      - nf_state.allocations | length == 1
+      - nf_state.allocations[0].name == nf_vpc_name
+      - nf_state.allocations[0].prefix == nf_vn_cidr
+      - nf_state.allocations[0].vpc.id == 101
+      - nf_state.nats == []
+    quiet: true
+
+- name: VN - start empty for the network type
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: "{{ nf_reset }}"}
+
+- name: VN - create with the evpn network type
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: vn-create-evpn
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+    nf_result: {backend_id: "101", l3_vni: 10001}
+
+- name: VN - backend_id is a string, l3_vni an integer, keys exact
+  ansible.builtin.assert:
+    that:
+      - sft_last.result.keys() | sort == ['backend_id', 'l3_vni']
+      - sft_last.result.backend_id is string
+      - sft_last.result.l3_vni is integer
+      - sft_last.result.l3_vni == nf_state.vpcs[0].vni
+      - nf_state.nats == []
+    quiet: true
+
+- name: VN - rerun returns the same l3_vni and creates nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: vn-create-evpn-rerun
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+    nf_result: {backend_id: "101", l3_vni: 10001}
+
+- name: VN - the rerun wrote nothing
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_state.vpcs | length == 1
+      - nf_state.allocations | length == 1
+      - nf_state.nats == []
+    quiet: true
+
+# Case 3: Subnet on an EVPN VirtualNetwork.
+- name: Subnet - create on the EVPN VirtualNetwork
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: subnet-create-evpn
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {network_segment: {type: evpn, l2_vni: 5000001}}
+
+- name: Subnet - l2_vni is the vxlanID of the V-Net, which has the gateway and no DHCP
+  vars:
+    _vnet: "{{ nf_state.vnets | selectattr('name', 'equalto', nf_sn_name) | first }}"
+    _ipam: "{{ nf_state.ipam_subnets | selectattr('name', 'equalto', nf_sn_name) | first }}"
+  ansible.builtin.assert:
+    that:
+      - sft_last.result.network_segment.keys() | sort == ['l2_vni', 'type']
+      - sft_last.result.network_segment.l2_vni is integer
+      - sft_last.result.network_segment.l2_vni == _vnet.vxlanID
+      - _vnet.vpc.id == 101
+      - _vnet.tenant.id == 2
+      - _vnet.gateways | length == 1
+      - _vnet.gateways[0].prefix == nf_ipam.gateway_ipv4 ~ '/24'
+      - not (_vnet.gateways[0].dhcpEnabled | default(false))
+      - _vnet.gateways[0].dhcpStartIp is not defined
+      - _ipam.prefix == nf_subnet_cidr
+      - _ipam.vpc.id == 101
+      - _vnet.vxlanID != nf_state.vpcs[0].vni
+    quiet: true
+
+- name: Subnet - rerun returns the same segment and writes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: subnet-create-evpn-rerun
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {network_segment: {type: evpn, l2_vni: 5000001}}
+
+- name: Subnet - the rerun wrote nothing
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_state.vnets | length == 1
+      - nf_state.ipam_subnets | length == 1
+    quiet: true
+
+- name: Subnet - a drifted gateway is corrected with one PUT, DHCP stays off
+  ansible.builtin.include_tasks: admin.yaml
+  vars:
+    nf_steps:
+      - path: update
+        body: {collection: vnets, id: 401, fields: {gateways: [{id: 7, prefix: 10.20.1.9/24, dhcpEnabled: false}]}}
+
+- name: Subnet - rerun after the gateway drift
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: subnet-create-evpn-gateway-drift
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+    nf_result: {network_segment: {type: evpn, l2_vni: 5000001}}
+
+- name: Subnet - the gateway is back on gateway_ipv4
+  ansible.builtin.assert:
+    that:
+      - nf_write_kinds == ['PUT /api/v2/vnet']
+      - nf_state.vnets[0].gateways[0].prefix == '10.20.1.1/24'
+    quiet: true
+
+# Subnet without a network type: the V-Net body as the role builds it.
+- name: Subnet - start empty for the plain Subnet
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: "{{ nf_reset }}"}
+
+- name: Subnet - create the plain VirtualNetwork
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: plain-vn-create
+    sft_expect: success
+    nf_job: "{{ nf_vn_job }}"
+
+- name: Subnet - create without a network type
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: subnet-create-plain
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job }}"
+    nf_result: {}
+
+- name: Subnet - the V-Net serves gateway_ipv4 and DHCP over the physical ranges
+  vars:
+    _gw: "{{ (nf_state.vnets | selectattr('name', 'equalto', nf_sn_name) | first).gateways[0] }}"
+  ansible.builtin.assert:
+    that:
+      - _gw.prefix == '10.20.1.1/24'
+      - _gw.dhcpEnabled
+      - _gw.dhcpStartIp == '10.20.1.8'
+      - _gw.dhcpEndIp == '10.20.1.31'
+    quiet: true
+
+- name: Subnet - rerun of the plain Subnet writes nothing
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    sft_label: subnet-create-plain-rerun
+    sft_expect: success
+    nf_job: "{{ nf_subnet_job }}"
+    nf_result: {}
+
+- name: Subnet - the plain rerun wrote nothing
+  ansible.builtin.assert:
+    that: nf_writes == []
+    quiet: true
+
+# Case 4: the parent snapshot's l3Vni differs from the VPC's vni.
+- name: Subnet - start empty for the l3Vni mismatch
+  ansible.builtin.include_tasks: admin.yaml
+  vars: {nf_steps: "{{ nf_reset }}"}
+
+- name: Subnet - create the EVPN VirtualNetwork for the mismatch
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_virtual_network
+    sft_label: mismatch-vn-create
+    sft_expect: success
+    nf_job: "{{ nf_vn_job | combine(nf_evpn) }}"
+
+- name: Subnet - a parent l3Vni that differs from the VPC vni is a final error
+  ansible.builtin.include_tasks: run_task.yaml
+  vars:
+    nf_task: create_subnet
+    nf_l3_vni: 777
+    sft_label: subnet-create-l3vni-mismatch
+    sft_expect: final
+    sft_message_search: "10001.*777"
+    nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
+
+- name: Subnet - the mismatch created nothing
+  ansible.builtin.assert:
+    that:
+      - nf_writes == []
+      - nf_state.vnets == []
+      - nf_state.ipam_subnets == []
+    quiet: true

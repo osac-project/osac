@@ -67,7 +67,7 @@ var _ = Describe("Cluster reconciler", func() {
 	BeforeEach(func() {
 		// Create a context:
 		ctx = context.Background()
-		getOrCreateTenantDefaultNetworkClassFixture(ctx)
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		// Create the clients:
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
@@ -103,7 +103,7 @@ var _ = Describe("Cluster reconciler", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		// Create a template for testing:
-		templateId = fmt.Sprintf("my_template_%s", uuid.New())
+		templateId = newTemplateID("my_template")
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          templateId,

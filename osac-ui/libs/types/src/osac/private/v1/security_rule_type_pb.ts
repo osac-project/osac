@@ -25,7 +25,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/security_rule_type.proto.
  */
 export const file_osac_private_v1_security_rule_type: GenFile = /*@__PURE__*/
-  fileDesc("Cihvc2FjL3ByaXZhdGUvdjEvc2VjdXJpdHlfcnVsZV90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEiiwMKDFNlY3VyaXR5UnVsZRIrCghwcm90b2NvbBgBIAEoDjIZLm9zYWMucHJpdmF0ZS52MS5Qcm90b2NvbBIWCglwb3J0X2Zyb20YAiABKAVIAIgBARIUCgdwb3J0X3RvGAMgASgFSAGIAQEScwoJaXB2NF9jaWRyGAQgASgJQlu6SFi6AU4KE2Nhbm9uaWNhbF9pcHY0X2NpZHISHW11c3QgYmUgYSBjYW5vbmljYWwgSVB2NCBDSURSGhh0aGlzLmlzSXBQcmVmaXgoNCwgdHJ1ZSnIAQFyAhABSAKIAQESdQoJaXB2Nl9jaWRyGAUgASgJQl26SFq6AVcKF2lwdjZfY2lkcl9ub3Rfc3VwcG9ydGVkEjBJUHY2IGFuZCBkdWFsLXN0YWNrIG5ldHdvcmtpbmcgYXJlIG5vdCBzdXBwb3J0ZWQaCnRoaXMgPT0gJydIA4gBAUIMCgpfcG9ydF9mcm9tQgoKCF9wb3J0X3RvQgwKCl9pcHY0X2NpZHJCDAoKX2lwdjZfY2lkciptCghQcm90b2NvbBIYChRQUk9UT0NPTF9VTlNQRUNJRklFRBAAEhAKDFBST1RPQ09MX1RDUBABEhAKDFBST1RPQ09MX1VEUBACEhEKDVBST1RPQ09MX0lDTVAQAxIQCgxQUk9UT0NPTF9BTEwQBEIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_cleanapi_cleanapi, file_buf_validate_validate]);
+  fileDesc("Cihvc2FjL3ByaXZhdGUvdjEvc2VjdXJpdHlfcnVsZV90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEizQUKDFNlY3VyaXR5UnVsZRIrCghwcm90b2NvbBgBIAEoDjIZLm9zYWMucHJpdmF0ZS52MS5Qcm90b2NvbBIWCglwb3J0X2Zyb20YAiABKAVIAIgBARIUCgdwb3J0X3RvGAMgASgFSAGIAQEScwoJaXB2NF9jaWRyGAQgASgJQlu6SFi6AU4KE2Nhbm9uaWNhbF9pcHY0X2NpZHISHW11c3QgYmUgYSBjYW5vbmljYWwgSVB2NCBDSURSGhh0aGlzLmlzSXBQcmVmaXgoNCwgdHJ1ZSnIAQFyAhABSAKIAQE6swO6SK8DGj0KEXByb3RvY29sX3JlcXVpcmVkEhRwcm90b2NvbCBpcyByZXF1aXJlZBoSdGhpcy5wcm90b2NvbCAhPSAwGu0CCg1wb3J0c190Y3BfdWRwEoABdGNwIGFuZCB1ZHAgcnVsZXMgcmVxdWlyZSBwb3J0X2Zyb20gYW5kIHBvcnRfdG8gZnJvbSAxIHRvIDY1NTM1IHdpdGggcG9ydF9mcm9tIDw9IHBvcnRfdG87IGljbXAgYW5kIGFsbCBydWxlcyBtdXN0IG5vdCBzZXQgcG9ydHMa2AEodGhpcy5wcm90b2NvbCA9PSAxIHx8IHRoaXMucHJvdG9jb2wgPT0gMikgPyAoaGFzKHRoaXMucG9ydF9mcm9tKSAmJiBoYXModGhpcy5wb3J0X3RvKSAmJiB0aGlzLnBvcnRfZnJvbSA+PSAxICYmIHRoaXMucG9ydF90byA8PSA2NTUzNSAmJiB0aGlzLnBvcnRfZnJvbSA8PSB0aGlzLnBvcnRfdG8pIDogKCFoYXModGhpcy5wb3J0X2Zyb20pICYmICFoYXModGhpcy5wb3J0X3RvKSlCDAoKX3BvcnRfZnJvbUIKCghfcG9ydF90b0IMCgpfaXB2NF9jaWRySgQIBRAGUglpcHY2X2NpZHIqbQoIUHJvdG9jb2wSGAoUUFJPVE9DT0xfVU5TUEVDSUZJRUQQABIQCgxQUk9UT0NPTF9UQ1AQARIQCgxQUk9UT0NPTF9VRFAQAhIRCg1QUk9UT0NPTF9JQ01QEAMSEAoMUFJPVE9DT0xfQUxMEARCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_cleanapi_cleanapi, file_buf_validate_validate]);
 
 /**
  * Defines a single firewall rule for network traffic filtering.
@@ -34,10 +34,8 @@ export const file_osac_private_v1_security_rule_type: GenFile = /*@__PURE__*/
  * destination CIDR blocks. Rules are stateful - return traffic for established connections is automatically
  * allowed.
  *
- * Port ranges apply only to TCP and UDP protocols. For ICMP and ALL protocols, port fields are ignored.
- *
- * Rules currently support canonical IPv4 CIDRs only. The legacy ipv6_cidr field remains in the wire contract for
- * compatibility, but non-empty IPv6 and dual-stack requests are rejected.
+ * TCP and UDP rules require a port range; ICMP and ALL rules must not set ports. Rules support canonical IPv4 CIDRs
+ * only.
  *
  * @generated from message osac.private.v1.SecurityRule
  */
@@ -46,7 +44,8 @@ export type SecurityRule = Message<"osac.private.v1.SecurityRule"> & {
    * Protocol to match for this rule.
    *
    * Use PROTOCOL_ALL to match all protocols (wildcard). Use PROTOCOL_TCP or PROTOCOL_UDP when port ranges
-   * are needed. Use PROTOCOL_ICMP for ping and other ICMP traffic.
+   * are needed. Use PROTOCOL_ICMP for ping and other ICMP traffic where the deployment's network managers
+   * support it; otherwise it is rejected and PROTOCOL_ALL, which includes ICMP, is the alternative.
    *
    * @generated from field: osac.private.v1.Protocol protocol = 1;
    */
@@ -55,8 +54,8 @@ export type SecurityRule = Message<"osac.private.v1.SecurityRule"> & {
   /**
    * Starting port number for the rule (1-65535).
    *
-   * Required for tcp/udp protocols, ignored for icmp/all. For single port, set port_from = port_to.
-   * Must be <= port_to. Validation enforced at service layer.
+   * Required for tcp/udp protocols and not allowed for icmp/all. For a single port, set port_from = port_to.
+   * Must be <= port_to.
    *
    * Example: 22 (SSH), 80 (HTTP), 443 (HTTPS), 3306 (MySQL)
    *
@@ -67,8 +66,8 @@ export type SecurityRule = Message<"osac.private.v1.SecurityRule"> & {
   /**
    * Ending port number for the rule (1-65535).
    *
-   * Required for tcp/udp protocols, ignored for icmp/all. Must be >= port_from. For single port, set
-   * port_from = port_to. Validation enforced at service layer.
+   * Required for tcp/udp protocols and not allowed for icmp/all. Must be >= port_from. For a single port, set
+   * port_from = port_to.
    *
    * Example: 22 (single port), 8000 (range 8000-9000)
    *
@@ -86,13 +85,6 @@ export type SecurityRule = Message<"osac.private.v1.SecurityRule"> & {
    * @generated from field: optional string ipv4_cidr = 4;
    */
   ipv4Cidr?: string | undefined;
-
-  /**
-   * Legacy IPv6 CIDR field. IPv6 and dual-stack networking are not supported; non-empty values are rejected.
-   *
-   * @generated from field: optional string ipv6_cidr = 5;
-   */
-  ipv6Cidr?: string | undefined;
 };
 
 /**
@@ -106,7 +98,7 @@ export const SecurityRuleSchema: GenMessage<SecurityRule> = /*@__PURE__*/
  * Network protocol types for SecurityRule matching.
  *
  * Determines which layer 4 protocol the rule applies to. Protocol affects whether port range fields are
- * applicable (TCP/UDP) or ignored (ICMP/ALL).
+ * required (TCP/UDP) or not allowed (ICMP/ALL).
  *
  * @generated from enum osac.private.v1.Protocol
  */
@@ -137,16 +129,17 @@ export enum Protocol {
   UDP = 2,
 
   /**
-   * ICMP protocol (ping and other control messages). Port ranges are not applicable.
+   * ICMP protocol (ping and other control messages). Port ranges are not allowed.
    *
    * Used for network diagnostics (ping), error reporting, and control messages.
+   * Rejected on deployments whose network managers do not support it; PROTOCOL_ALL includes ICMP.
    *
    * @generated from enum value: PROTOCOL_ICMP = 3;
    */
   ICMP = 3,
 
   /**
-   * All protocols (wildcard). Port ranges are not applicable.
+   * All protocols (wildcard). Port ranges are not allowed.
    *
    * Matches any protocol. Useful for allowing all traffic from a trusted CIDR block or for egress rules
    * that permit all outbound traffic.

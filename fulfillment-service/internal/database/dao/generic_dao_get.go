@@ -30,8 +30,9 @@ import (
 // GetRequest represents a request to get a single object by its identifier.
 type GetRequest[O Object] struct {
 	request[O]
-	id   string
-	lock bool
+	id        string
+	lock      bool
+	shareLock bool
 }
 
 // SetId sets the identifier of the object to retrieve.
@@ -43,6 +44,13 @@ func (r *GetRequest[O]) SetId(value string) *GetRequest[O] {
 // SetLock sets whether to lock the object for update.
 func (r *GetRequest[O]) SetLock(value bool) *GetRequest[O] {
 	r.lock = value
+	return r
+}
+
+// SetShareLock sets whether to take a shared row lock on the object. Shared locks don't block each other but block
+// an exclusive lock taken with SetLock. SetLock takes precedence when both are set.
+func (r *GetRequest[O]) SetShareLock(value bool) *GetRequest[O] {
+	r.shareLock = value
 	return r
 }
 
@@ -112,23 +120,13 @@ func (r *GetRequest[O]) do(ctx context.Context) (response *GetResponse[O], err e
 	)
 	if r.lock {
 		buffer.WriteString(" for update")
+	} else if r.shareLock {
+		buffer.WriteString(" for share")
 	}
 
 	// Execute the SQL statement:
 	sql := buffer.String()
-	var (
-		name            string
-		creationTs      time.Time
-		deletionTs      time.Time
-		finalizers      []string
-		creator         string
-		tenant          string
-		project         string
-		labelsData      []byte
-		annotationsData []byte
-		version         int32
-		data            []byte
-	)
+	stored := storedObject{id: r.id}
 	err = func() (err error) {
 		start := time.Now()
 		row := r.queryRow(ctx, getOpType, sql, r.sql.params...)
@@ -136,17 +134,17 @@ func (r *GetRequest[O]) do(ctx context.Context) (response *GetResponse[O], err e
 			r.recordOpDuration(getOpType, start, err)
 		}()
 		return row.Scan(
-			&name,
-			&creationTs,
-			&deletionTs,
-			&finalizers,
-			&creator,
-			&tenant,
-			&project,
-			&labelsData,
-			&annotationsData,
-			&version,
-			&data,
+			&stored.name,
+			&stored.creationTs,
+			&stored.deletionTs,
+			&stored.finalizers,
+			&stored.creator,
+			&stored.tenant,
+			&stored.project,
+			&stored.labelsData,
+			&stored.annotationsData,
+			&stored.version,
+			&stored.data,
 		)
 	}()
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -163,34 +161,10 @@ func (r *GetRequest[O]) do(ctx context.Context) (response *GetResponse[O], err e
 		return
 	}
 
-	// Prepare the object:
-	object := r.cloneObject(r.newObject())
-	err = r.unmarshalData(data, object)
+	object, err := r.objectFromRow(stored)
 	if err != nil {
 		return
 	}
-	labels, err := r.unmarshalMap(labelsData)
-	if err != nil {
-		return
-	}
-	annotations, err := r.unmarshalMap(annotationsData)
-	if err != nil {
-		return
-	}
-	metadata := r.makeMetadata(makeMetadataArgs{
-		creationTs:  creationTs,
-		deletionTs:  deletionTs,
-		finalizers:  finalizers,
-		creator:     creator,
-		tenant:      tenant,
-		project:     project,
-		name:        name,
-		labels:      labels,
-		annotations: annotations,
-		version:     version,
-	})
-	object.SetId(r.id)
-	r.setMetadata(object, metadata)
 
 	// Create the response:
 	response = &GetResponse[O]{

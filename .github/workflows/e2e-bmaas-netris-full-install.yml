@@ -48,8 +48,7 @@ jobs:
       pull-requests: read
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-netris-full-install.yml@main
     with:
-      suite: bmaas_networking
-      osac-profile: bmaas-ci
+      deploy-suite: bmaas
       osac-repo: https://github.com/${{ inputs.repo }}.git
       osac-branch: ${{ inputs.sha }}
       components: >-

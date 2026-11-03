@@ -195,7 +195,7 @@ describe('buildClusterCreatePayload', () => {
     expect(payload.spec).not.toHaveProperty('networkAttachment');
   });
 
-  it('includes networkAttachment with subnet and security groups when pickers have values', () => {
+  it('includes selected security groups with a custom subnet', () => {
     const values = {
       ...createEmptyClusterValues(),
       catalogItemReference: { name: clusterCatalogItem.title, id: clusterCatalogItem.id },
@@ -219,6 +219,20 @@ describe('buildClusterCreatePayload', () => {
     expect(payload.spec?.networkAttachment).toEqual({
       subnet: { id: 'my-subnet' },
       securityGroups: [{ id: 'sg-1' }, { id: 'sg-2' }],
+    });
+  });
+
+  it('leaves security group selection to the server when none is chosen', () => {
+    const values = createEmptyClusterValues();
+    values.spec.networkAttachment.value = {
+      useDefaultNetwork: false,
+      virtualNetwork: { id: 'vn-1', name: 'tenant-vn' },
+      subnet: { id: 'subnet-1', name: 'tenant-subnet' },
+      securityGroups: [],
+    };
+
+    expect(buildClusterCreatePayload(values).spec?.networkAttachment).toEqual({
+      subnet: { id: 'subnet-1' },
     });
   });
 

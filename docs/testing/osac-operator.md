@@ -120,7 +120,8 @@ fixture's uniqueness model nor installed RBAC asserts those boundaries. The
 current Kind suite has no worker contract fixture exercising them; do not count
 Unit/Envtest, compile checks or chart renders as substitutes. Optional same-UID
 Agent binding-change Delete resourceVersion coverage (R03-E6) remains proposed,
-not a completion gate.
+not a completion gate. No owner or Jira follow-up has been identified, so this
+coverage gap remains unresolved.
 
 Real Assisted Service artifacts/selectors/binding, AAP/HyperShift/CAP-Agent,
 provider/drain and hardware create/scale/delete journeys remain **[QE] E2E**

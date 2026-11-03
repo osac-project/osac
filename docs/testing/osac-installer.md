@@ -57,12 +57,12 @@ Coverage gaps:
 ## OSAC-5343 deployed enablement coverage
 
 The release E2E path adds these assertions to existing user journeys. The
-umbrella chart defaults `global.fulfillmentTrust.enabled=true`, which enables
-trust reconciliation for tenant-scoped ClusterOrders. Run release E2E only
-after the compatible admission image and tenant CSI trust chart are deployed
-and trust identities exist. The
-standard dev and CI profiles override this feature to disabled. Set
-`OSAC_FULFILLMENT_TRUST_E2E=true` only for the release suite. These tests use
+release E2E environment must set `global.fulfillmentTrust.enabled=true` to
+enable trust reconciliation for tenant-scoped ClusterOrders. The standard dev
+and CI profiles keep this feature disabled. Run release E2E only after the
+compatible admission image and tenant CSI trust chart are deployed and trust
+identities exist. Set `OSAC_FULFILLMENT_TRUST_E2E=true` only for the release
+suite. These tests use
 real Fulfillment Service, operator, tenant Kubernetes API, CSI, and (where
 enabled) Kafka/metering services; they do not use protocol test doubles. The
 test harness may read the hosted-cluster kubeconfig to inspect target state;

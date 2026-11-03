@@ -21,7 +21,7 @@ Touched-area requirements: [component guide](../../osac-csi-driver/AGENTS.md#int
 
 - **Request/response mapping, validation, or driver helpers:** Cover protocol errors and backend status mapping.
 - **CSI controller/node routing or CSI protocol behavior:** The sanity suite is required but remains fake-vendor coverage.
-- **Fulfillment private Volume API contract:** A fake generated client does not prove compatibility with the deployed service.
+- **Fulfillment's private Volume API contract:** A fake generated client does not prove compatibility with the deployed service.
 - **Vendor attach, detach, mount, or storage lifecycle:** The fake vendor cannot satisfy a real storage-backend requirement.
 - **Helm/deployment changes:** Build an image when container/deployment inputs change.
 

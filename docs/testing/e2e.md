@@ -24,8 +24,13 @@ pytest collection proves import/selection readiness only.
 
 ## Coverage gaps
 
-- Netris VMaaS does not cover inter-subnet routing, ICMP capability rejection
-  through AAP, or second-tenant automatic ExternalIP ingress/garbage collection.
+- VM-to-VM inter-subnet routing across CUDNs is out of scope for Phase 1 and
+  tracked for Phase 2 by [OSAC-3667](https://redhat.atlassian.net/browse/OSAC-3667).
+- The Netris VMaaS suite under [OSAC-4291](https://redhat.atlassian.net/browse/OSAC-4291)
+  does not cover the ICMP-capable AAP path or the combined second-tenant
+  automatic ExternalIP ingress and garbage-collection journey. No follow-up
+  owner or ticket has been identified for these two E2E gaps; both remain
+  unresolved.
 - Pool capacity, attachment validation and name-reference cases have lower-tier
   tests in Fulfillment. They do not replace provider release or cross-component
   billing evidence. Provider-enabled Fulfillment specs skip in its standard

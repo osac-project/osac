@@ -11,7 +11,7 @@ Touched-area requirements: [component guide](../../osac-metering/AGENTS.md#integ
 
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
-| Unit | Co-located tests in `schema/`, `metering-service/` (rules, usage evaluation), and `adapters/`; `make test` | Schema, rule revision parsing and startup checks, usage evaluation (meters, gate semantics, duration arithmetic), adapter translation, runner, retry, ordering | Kafka and PostgreSQL are not required. |
+| Unit | From repository root: `make -C osac-metering/schema test` and `make -C osac-metering/adapters test`; from `osac-metering/metering-service/`: `go test ./internal/usage ./internal/rules` | Schema and rule parsing, pure usage evaluation, and adapter/runner behavior | These commands do not start PostgreSQL or Kafka. The M360 contract test skips unless its real-tenant variables are set. |
 | Component integration (database) | `metering-service/internal/database`; included by `make test` | A real PostgreSQL testcontainer, the event-log schema, idempotent fact writes, ledger and outbox round trips | Kafka is not exercised. |
 | Component integration (Kafka and database) | `metering-service/internal/fold` and `metering-service/internal/round`; included by `make test` | A real Kafka broker and PostgreSQL: fold determinism across restarts, duplicates, and shuffles; heartbeat rounds, catch-up and recovery, relay resend with the same IDs | The billing provider and fulfillment are not exercised; events are produced directly. |
 | Component integration (combined pipeline) | `metering-service/internal/pipeline`; included by `make test` | A real Kafka broker and PostgreSQL with the fold, round, and relay wired in one process: envelope, per-interval continuation, stop, resize split, delete, and volume billing, asserted on the tenant's heartbeat topic | The billing provider and fulfillment are not exercised; events are produced directly and rounds run at fixed times. |
@@ -19,6 +19,11 @@ Touched-area requirements: [component guide](../../osac-metering/AGENTS.md#integ
 | E2E | Cross-component OSAC metering/E2E deployment | The deployed metering pipeline and its configured Kafka/provider dependencies | Depends on the installer environment and enabled metering path. |
 | Helm render and lint | `make -C osac-metering helm-lint` (repository root) | Chart templates, rule revision 0001, and the admission policy that protects it | Deployed behavior. |
 | Helm render | `make -C osac-installer metering-auth-render-test` (repository root) | Metering Deployment, rules ConfigMap, admission policy and binding, and absence of fulfillment credentials in the vmaas-ci, bmaas-ci, caas-ci, and full-ci profiles | Does not verify a deployed metering pipeline. |
+
+From the repository root, `make -C osac-metering test` runs the full component
+suite across schema, metering-service, adapters, and rule revision checks. It
+includes the PostgreSQL and Kafka integration suites below; do not describe it
+as a unit-only command.
 
 ## Coverage notes
 
@@ -30,4 +35,4 @@ Touched-area requirements: [component guide](../../osac-metering/AGENTS.md#integ
 ## Coverage gaps
 
 - Deployed cross-component journeys (tenant onboarding creating the three topics) belong to the `[QE]` E2E work; the event-to-heartbeat path on a hub is covered by the metering sanity tier in `../tests/e2e/vmaas/sanity/test_metering_billing.py`.
-- The M360 contract test needs a real tenant configured per environment; it is skipped when the variables are absent. It verifies submission and synchronous acceptance or rejection; verifying the billed totals needs a usage query path the adapter does not have yet.
+- The M360 contract test needs a real tenant configured per environment; it is skipped when the variables are absent. It verifies submission and synchronous acceptance or rejection. Verifying billed totals needs a usage query path the adapter does not have; this remains unresolved, with no specific owner or follow-up ticket identified. The related [OSAC-4286](https://redhat.atlassian.net/browse/OSAC-4286) provider E2E epic is unassigned and does not assign this readback work.

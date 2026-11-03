@@ -6576,6 +6576,7 @@ var _ = Describe("Private clusters server", func() {
 				_, err = tenantDao.Update().SetObject(tenant).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
+				By("rejecting the omitted attachment while the readiness reads False")
 				const name = "default-network-not-ready"
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
@@ -6601,6 +6602,27 @@ var _ = Describe("Private clusters server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(listed.GetTotal()).To(BeZero(), "a rejected Cluster Create must not persist the Cluster")
+
+				By("storing a complete explicit attachment despite the not-ready defaults")
+				created, err := server.Create(ctx, newCaaSNodeSetCreateRequest("explicit-network-after-readiness-reset",
+					map[string]*privatev1.ClusterNodeSet{
+						"compute": privatev1.ClusterNodeSet_builder{
+							Size: proto.Int32(3),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+								Id: "bmit-fabric-id", Shared: true,
+							}.Build(),
+						}.Build(),
+					}, privatev1.ClusterNetworkAttachment_builder{
+						Subnet:         privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+						SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "default-sg"}.Build()},
+					}.Build()))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(created).ToNot(BeNil())
+				Expect(created.GetObject().GetId()).ToNot(BeEmpty())
+				storedAttachment := created.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(storedAttachment.GetSubnet().GetId()).To(Equal("subnet-1"))
+				Expect(storedAttachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(storedAttachment.GetSecurityGroups()[0].GetId()).To(Equal("default-sg"))
 			})
 
 			It("Resolves tenant defaults when provider networking is disabled", func() {

@@ -9,6 +9,19 @@
 # tpl expansion is implied. Supply credentials, license and mirrors separately.
 # Keep global.clusterDomain and the explicit service/issuer hostnames in this
 # protected values file; do not correct only the command-line clusterDomain.
+# Identity endpoint URL forms:
+# service.idp.url is the Keycloak BASE URL, for example:
+#   https://keycloak-keycloak.<approved-site-apps-domain>
+# Do not append /realms/<realm> to that base URL.
+# ui.auth.oidcIssuerURL, service.auth.issuerUrl and
+# service.vault.keycloakIssuerUrl are full REALM ISSUER URLs, for example:
+#   https://keycloak-keycloak.<approved-site-apps-domain>/realms/osac
+# Keep these three issuer URLs equal to the exact approved OIDC issuer.
+# The application-domain placeholder remains valid for this reference profile.
+# If the approved identity hostname or realm differs, explicitly override
+# these issuer fields and the corresponding Keycloak base URL rather than
+# inferring the identity hostname or realm from the application domain.
+# Preserve the existing credential and CA settings.
 global:
   osacDeploymentId: demo/osac-sno-01
   clusterDomain: <approved-site-apps-domain>

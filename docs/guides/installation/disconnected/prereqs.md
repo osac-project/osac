@@ -119,7 +119,7 @@ For OpenShift 4.22, creating an IDMS does not drain or reboot nodes, while creat
 
 Check affected-pool convergence:
 
-For each affected pool, record its current state separately: unpaused, observedGeneration=current generation, Updated=True, updatedMachineCount=machineCount, unavailable/degraded counts zero, and Degraded=False. See the [OpenShift 4.22 mirror-set behavior](https://docs.openshift.com/it/documentation/openshift_container_platform/4.22/html/disconnected_environments/updating-a-cluster-in-a-disconnected-environment). Consume the completed rollout; do not reapply policies here.
+For each affected pool, record its current state separately: unpaused, observedGeneration=current generation, Updated=True, updatedMachineCount=machineCount, unavailable/degraded counts zero, and Degraded=False. See the [OpenShift 4.22 mirror-set behavior](https://github.com/openshift/openshift-docs/blob/enterprise-4.22/modules/images-configuration-registry-mirror.adoc). Consume the completed rollout; do not reapply policies here.
 
 | Package visibility | Required channel | Selection |
 | --- | --- | --- |

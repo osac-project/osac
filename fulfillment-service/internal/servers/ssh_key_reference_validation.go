@@ -49,6 +49,44 @@ func canonicalSSHKeySecretReference(secret *privatev1.Secret) *privatev1.SecretR
 	}.Build()
 }
 
+// resolveAndCanonicalizeSSHKeyReference resolves the tenant-scoped SSH-key
+// Secret referenced by an instance's spec.ssh_key field and returns its
+// canonical reference for storage. A nil reference is a no-op. NotFound
+// errors are normalized to the shared not-found message so callers cannot
+// distinguish an invisible Secret from a missing one.
+func resolveAndCanonicalizeSSHKeyReference(
+	ctx context.Context,
+	logger *slog.Logger,
+	secretsDao *dao.GenericDAO[*privatev1.Secret],
+	secretStore vault.SecretStore,
+	metadata *privatev1.Metadata,
+	reference *privatev1.SecretReference,
+) (*privatev1.SecretReference, error) {
+	if reference == nil {
+		return nil, nil
+	}
+	if metadata == nil {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+			"cannot resolve ssh_key reference without instance metadata")
+	}
+	resolved, err := resolveTenantScopedSSHKey(
+		ctx,
+		logger,
+		secretsDao,
+		secretStore,
+		metadata.GetTenant(),
+		reference,
+		"spec.ssh_key",
+	)
+	if err != nil {
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return nil, grpcstatus.Error(grpccodes.NotFound, sshKeyReferenceNotFoundMessage)
+		}
+		return nil, err
+	}
+	return resolved.reference, nil
+}
+
 type resolvedTenantSSHKey struct {
 	reference *privatev1.SecretReference
 	publicKey []byte

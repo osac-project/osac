@@ -58,6 +58,12 @@ linters:
       - linters:
           - staticcheck
         text: HostType.*deprecated
+      # ssh_public_key is proto-deprecated in favour of the registered ssh_key
+      # Secret reference but the cluster worker still builds the deprecated
+      # field until it migrates to Secret references.
+      - linters:
+          - staticcheck
+        text: SshPublicKey.*deprecated
       # Preserve the existing exported Go field name used by API consumers.
       - linters:
           - staticcheck

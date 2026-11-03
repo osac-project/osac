@@ -109,6 +109,10 @@ var _ = Describe("Catalog item views", func() {
 				NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{Locked: publicv1.ClusterNodeSetMap_builder{Items: map[string]*publicv1.ClusterCatalogNodeSet{
 					"workers": publicv1.ClusterCatalogNodeSet_builder{Size: 3, BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Name: "compute", Shared: true}.Build()}.Build(),
 				}}.Build()}.Build(),
+				AddOnOperators: publicv1.AddOnOperatorReferenceListFieldPolicy_builder{Locked: publicv1.AddOnOperatorReferenceList_builder{Items: []*publicv1.AddOnOperatorReference{
+					publicv1.AddOnOperatorReference_builder{Name: "cert-manager", Shared: true}.Build(),
+					publicv1.AddOnOperatorReference_builder{Name: "openshift-ai", Shared: true}.Build(),
+				}}.Build()}.Build(),
 				AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Editable: publicv1.EditableBoolField_builder{DefaultValue: new(false)}.Build()}.Build(),
 				NetworkAttachment:        publicv1.ClusterNetworkAttachmentFieldPolicy_builder{Locked: publicv1.ClusterNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Name: "net"}.Build()}.Build()}.Build(),
 			}.Build(),
@@ -116,9 +120,35 @@ var _ = Describe("Catalog item views", func() {
 		output := printView(clusterView(item), false)
 		requireContains(output, "Scope:      Tenant (project: platform)", "template-id (shared, project: infra)", "default: 4-20 (shared)",
 			"LOCKED    pull", `"10.0.0.0/16"`, `default: "172.30.0.0/16"`, "workers: 3 nodes; bare metal instance type: compute (shared)",
-			"default: false", "subnet: net", "Published:  No",
+			"LOCKED    2 items", "cert-manager (shared)", "openshift-ai (shared)", "default: false", "subnet: net", "Published:  No",
 			"Full catalog item definition: osac get clustercatalogitem cluster-item -o yaml")
 		Expect(output).NotTo(ContainSubstring("--tenant shared"))
+	})
+
+	It("renders editable add-on operators with their default", func() {
+		item := publicv1.ClusterCatalogItem_builder{
+			Fields: publicv1.ClusterCatalogItemFields_builder{
+				AddOnOperators: publicv1.AddOnOperatorReferenceListFieldPolicy_builder{Editable: publicv1.EditableAddOnOperatorReferenceList_builder{
+					DefaultValue: publicv1.AddOnOperatorReferenceList_builder{Items: []*publicv1.AddOnOperatorReference{
+						publicv1.AddOnOperatorReference_builder{Name: "cert-manager", Shared: true}.Build(),
+					}}.Build(),
+				}.Build()}.Build(),
+			}.Build(),
+		}.Build()
+
+		output := printView(clusterView(item), false)
+		requireContains(output, "Add-on operators", "EDITABLE  default: 1 item", "cert-manager (shared)")
+	})
+
+	It("renders editable add-on operators without a default", func() {
+		item := publicv1.ClusterCatalogItem_builder{
+			Fields: publicv1.ClusterCatalogItemFields_builder{
+				AddOnOperators: publicv1.AddOnOperatorReferenceListFieldPolicy_builder{Editable: publicv1.EditableAddOnOperatorReferenceList_builder{}.Build()}.Build(),
+			}.Build(),
+		}.Build()
+
+		output := printView(clusterView(item), false)
+		Expect(output).To(MatchRegexp(`Add-on operators\s+EDITABLE\s*\n`))
 	})
 
 	It("renders editable cluster node sets in sorted order with unresolved references", func() {

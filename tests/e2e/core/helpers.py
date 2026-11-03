@@ -6,8 +6,10 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 from uuid import uuid4
 
@@ -16,6 +18,7 @@ import pytest
 from tests.e2e.caas.readiness_diagnostics import snapshot_cluster_readiness
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import StuckState, poll_until, run_unchecked
 from tests.e2e.core.sanitize import sanitize_text
 from tests.e2e.core.wait_kinds import WaitResourceKind
@@ -1424,3 +1427,23 @@ def wait_for_bmh_available(*, k8s: K8sClient, name: str, bmh_namespace: str) -> 
         resource_kind=WaitResourceKind.BARE_METAL_HOST,
         resource_id=name,
     )
+
+
+@contextmanager
+def registered_ssh_key_secret(cli: OsacCLI, public_key: str, name: str) -> Iterator[str]:
+    """Register an SSH public key as a tenant Secret and clean it up afterward.
+
+    The CLI --ssh-key flag and spec.ssh_key reference take the Secret name.
+    """
+    with tempfile.NamedTemporaryFile(mode="w", prefix="bmi-e2e-key-", suffix=".pub") as key_file:
+        key_file.write(public_key)
+        key_file.flush()
+        cli.create_secret(name=name, from_files={"public_key": key_file.name}, secret_type="ssh-public-key")
+
+    try:
+        yield name
+    finally:
+        try:
+            cli.delete_secret(name=name)
+        except Exception as e:
+            print(f"WARNING: Failed to delete SSH-key Secret {name}: {e}")

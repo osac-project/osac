@@ -36,6 +36,59 @@ def test_create_cluster_serializes_node_sets_as_cli_assignments(monkeypatch: pyt
     ]
 
 
+def test_create_cluster_serializes_add_on_operators_as_repeated_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    args: list[str] = []
+
+    def record_command(_self: OsacCLI, *command: str) -> str:
+        args.extend(command)
+        return "Created cluster 'cluster-id'"
+
+    monkeypatch.setattr(OsacCLI, "_run", record_command)
+    cli = object.__new__(OsacCLI)
+
+    assert cli.create_cluster(template="sandbox", add_on_operators=["cert-manager", "gpu-operator"]) == "cluster-id"
+    assert args == [
+        "create",
+        "cluster",
+        "--template",
+        "sandbox",
+        "--add-on-operator",
+        "cert-manager",
+        "--add-on-operator",
+        "gpu-operator",
+    ]
+
+
+def test_create_cluster_with_catalog_item_serializes_add_on_operators(monkeypatch: pytest.MonkeyPatch) -> None:
+    args: list[str] = []
+
+    def record_command(_self: OsacCLI, *command: str) -> str:
+        args.extend(command)
+        return "Created cluster 'cluster-id'"
+
+    monkeypatch.setattr(OsacCLI, "_run", record_command)
+    cli = object.__new__(OsacCLI)
+
+    assert (
+        cli.create_cluster_with_catalog_item(
+            catalog_item="sandbox", name="test-cluster", add_on_operators=["cert-manager", "gpu-operator"]
+        )
+        == "cluster-id"
+    )
+    assert args == [
+        "create",
+        "cluster",
+        "--catalog-item",
+        "sandbox",
+        "--name",
+        "test-cluster",
+        "--add-on-operator",
+        "cert-manager",
+        "--add-on-operator",
+        "gpu-operator",
+    ]
+
+
 def test_pull_secret_fixture_creates_typed_secret_before_use_and_deletes_after(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[tuple[str, ...]] = []
 

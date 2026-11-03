@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import itertools
 import json
 import logging
 import re
 import time
 import urllib.error
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -13,6 +15,7 @@ from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
@@ -121,6 +124,80 @@ def net_intervals(events: list[dict[str, Any]]) -> list[tuple[datetime, datetime
     return intervals
 
 
+def assert_contiguous_exact_seconds(events: list[dict[str, Any]], meter: str) -> None:
+    """Every heartbeat bills exactly its interval; consecutive intervals touch."""
+    assert events, f"no typed {meter} heartbeats to assert arithmetic on"
+    for event in events:
+        start, end, quantity = usage_interval(event)
+        assert quantity == interval_seconds(start, end), (
+            f"{meter} quantity {quantity} is not the exact length of its interval ({start}..{end})"
+        )
+    for previous, following in itertools.pairwise(events):
+        previous_end = parse_time(previous["data"]["usage"]["to"])
+        following_start = parse_time(following["data"]["usage"]["from"])
+        assert following_start == previous_end, (
+            f"{meter} billed intervals are not contiguous: {previous_end} then {following_start}"
+        )
+
+
+def delete_recording_timestamp(
+    k8s: K8sClient, *, resource: str, cr_name: str, delete: Callable[[], Any], resource_kind: WaitResourceKind
+) -> datetime | None:
+    """Run `delete` and return the deletion time the API server recorded on the CR.
+
+    The teardown can finish in under a second, so the deletion timestamp is
+    read through a watch established before the delete request: the watch
+    always delivers the modification that stamps it, where a plain get can
+    arrive after the object is already gone. None when the CR never got a
+    timestamp.
+    """
+    deletion_recorded: datetime | None = None
+    try:
+        with k8s.watch_deletion_timestamp(resource=resource, name=cr_name) as deletion_stamp:
+            with contextlib.suppress(Exception):
+                delete()
+            with contextlib.suppress(Exception):
+                deletion_recorded = parse_time(
+                    poll_until(
+                        fn=deletion_stamp,
+                        until=lambda stamp: bool(stamp),
+                        retries=30,
+                        delay=2,
+                        description=f"deletion timestamp of {cr_name}",
+                        resource_kind=resource_kind,
+                        resource_id=cr_name,
+                    )
+                )
+    except Exception:
+        # A watch that never started must not leak the resource: the delete
+        # above never ran, so issue it now, then fail loudly.
+        with contextlib.suppress(Exception):
+            delete()
+        raise
+    return deletion_recorded
+
+
+def assert_dimension_sets_disjoint(events: list[dict[str, Any]], label: str) -> None:
+    """No two billing dimension sets of one resource bill the same span.
+
+    Compares net intervals, not raw spans: a round that ran before a transition
+    was folded bills the old value past it, and a correction cancels only the
+    tail, so the raw spans overlap on correct billing.
+    """
+    by_dimensions: dict[tuple[tuple[str, str], ...], list[dict[str, Any]]] = {}
+    for event in events:
+        by_dimensions.setdefault(dimension_key(event), []).append(event)
+    dimension_sets = [net_intervals(group) for group in by_dimensions.values()]
+    for first, second in itertools.combinations(dimension_sets, 2):
+        for first_start, first_end, _ in first:
+            for second_start, second_end, _ in second:
+                overlaps = first_start < second_end and second_start < first_end
+                assert not overlaps, (
+                    f"two dimension sets of {label} billed the same span: "
+                    f"{first_start}..{first_end} overlaps {second_start}..{second_end}"
+                )
+
+
 def assert_exact_contiguous_life(
     events: list[dict[str, Any]], *, multiplier: Decimal, deletion: datetime, label: str
 ) -> None:
@@ -167,7 +244,7 @@ def _interval_start(event: dict[str, Any]) -> datetime:
         return datetime.max.replace(tzinfo=UTC)
 
 
-def _dimension_key(event: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+def dimension_key(event: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     """The dimension set a heartbeat bills on, as a comparable key.
 
     A negative correction reverses the same set it cancels, so the set groups
@@ -210,7 +287,7 @@ def _net_usage_by_dimension(events: list[dict[str, Any]]) -> dict[tuple[tuple[st
             quantity = Decimal(event["data"]["usage"]["quantity"])
         except (KeyError, ValueError, ArithmeticError):
             continue
-        key = _dimension_key(event)
+        key = dimension_key(event)
         nets[key] = nets.get(key, Decimal(0)) + quantity
     return nets
 
@@ -239,7 +316,7 @@ def net_usage_past_by_dimension(
         # counts in the interval's proportion.
         overlap = interval_seconds(max(start, past), end)
         length = interval_seconds(start, end)
-        key = _dimension_key(event)
+        key = dimension_key(event)
         nets[key] = nets.get(key, Decimal(0)) + quantity * overlap / length
     return nets
 
@@ -357,7 +434,7 @@ class MeteringCollector:
                 if dimensions.get(dimension)
             )
             late_required = carried
-            if _dimension_key(event) in reversed_meters:
+            if dimension_key(event) in reversed_meters:
                 late_required = set()
             self._validate_structure(
                 event,

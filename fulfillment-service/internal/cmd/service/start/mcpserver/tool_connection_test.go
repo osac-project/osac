@@ -139,7 +139,8 @@ var _ = Describe("handleCheckConnection", func() {
 
 		expectedTools := []string{
 			"check_connection", "create_compute_instance", "create_project", "delete_compute_instance",
-			"get_resource", "list_resources", "update_compute_instance", "update_project",
+			"get_resource", "list_resources", "restart_compute_instance", "set_compute_instance_power",
+			"update_compute_instance", "update_project",
 		}
 		handler := handleCheckConnection(
 			"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(expectedTools...),

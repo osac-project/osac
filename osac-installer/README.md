@@ -145,6 +145,15 @@ Ensure your values directory contains the necessary secret files:
 
 - **AAP License:** Place `license.zip` in `values/<env>/`
 - **Pull Secret:** Place `pull-secret.json` in `values/<env>/`
+- **Keycloak admin password:** The `osac-infra` chart has no built-in admin
+  password for production installs. When `keycloak.devFixtures.enabled` is
+  enabled for Kind/CI, the chart generates random admin and test-user passwords
+  and reuses existing credentials on upgrades, rotating a legacy `admin`
+  default to a random password once. For production, supply a
+  protected local values overlay or
+  `KEYCLOAK_HELM_ARGS="--set-file keycloak.adminPassword=/path/to/password"`.
+  On upgrades, a changed admin password is applied to the existing Keycloak
+  master account before the canonical credential Secret is updated.
 
 ### Installation
 
@@ -169,6 +178,7 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
 | `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args for the OSAC chart only |
+| `KEYCLOAK_HELM_ARGS` | Extra Helm args for `osac-infra` only, such as `--set-file keycloak.adminPassword=/secure/path` |
 | `DRY_RUN=1` | Render all releases from `make install` with `helm template`; no cluster connections or cluster commands are used |
 | `DRY_RUN_CLUSTER_DOMAIN` | Cluster ingress domain required for an OpenShift dry run |
 | `DRY_RUN_OCP_VERSION` | OpenShift major.minor version required for an OpenShift dry run, e.g. `4.20` |
@@ -178,6 +188,9 @@ To preview the full Kind install without making cluster changes:
 ```bash
 make install PLATFORM=kind PROFILE=dev NS=osac DRY_RUN=1
 ```
+
+The Kind profile generates random Keycloak credentials for the render. The
+dry-run output includes the rendered Secret; treat it as sensitive.
 
 For OpenShift, provide the cluster-specific values explicitly because dry-run
 mode does not query the cluster:

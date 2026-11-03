@@ -47,6 +47,7 @@ respective areas.
 |---|---|---|
 | Shared provider-networking provisioning configuration | Helm contract | `make helm-networking-test` (GATE-CONFIG-01) |
 | MCE defaults, lifecycle gate, image overrides, or compatibility RBAC | Helm contract | `make mce-render-test` |
+| `osac-deps` CLI hook pod identity and security context | Helm contract | `make osac-deps-hook-security-render-test`; included in `make helm-validate`; real Helm render, no cluster |
 | Kind runtime selection, sudo authentication, image loading, device-mapper permissions, cluster/storage lifecycle, or devstack Helm apply flags | Unit with command stubs | `make kind-runtime-test` |
 | Deployed dev-full OSAC UI Gateway reachability | Component integration | `./scripts/test-ui-gateway.sh` |
 | TopoLVM chart dependency download, cache reuse, build scoping, or install preparation | Unit with command stubs | `make kind-runtime-test` |
@@ -58,6 +59,7 @@ respective areas.
 | Billing provider values, Secret mount, or tuning bounds | Helm contract | `make billing-render-test` |
 | Fulfillment token helper or dev-full hook credential wiring | Unit and Helm contract | `make fulfillment-auth-test` and `make dev-full-render-test` |
 | Service-account IDP credential mount and Keycloak management roles | Helm contract | `make service-account-idp-render-test` |
+| Keycloak read-only filesystems, writable paths, database UID preservation, or admin password upgrades | Helm contract | `make keycloak-security-context-test keycloak-admin-rotation-test` |
 | Deployed dev-full hook authentication | Component integration | Coverage gap tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); local `install-devstack` invokes the hooks but does not assert token acceptance. |
 | Fulfillment Volume lifecycle | Component integration | `../fulfillment-service/it/it_volume_lifecycle_test.go` covers Volume creation and deletion, status, hub assignment, and cleanup through `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment`. |
 | `global.networking` values, schema, networking validation, cudn_evpn or Netris registration (`test_cudn_evpn_registration_is_contract_format`, `test_netris_registration_is_contract_format`), admission policy, or `network-fulfillment-ig` rendering | Helm contract | `make helm-networking-test` |

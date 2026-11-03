@@ -74,15 +74,29 @@ subjects:
 {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-console-proxy-subjectaccessreview
+  labels:
+    {{- include "osac-operator.consoleProxy.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "osac-operator.fullname" . }}-console-proxy-auth-delegator
+  name: {{ include "osac-operator.fullname" . }}-console-proxy-subjectaccessreview
   labels:
     {{- include "osac-operator.consoleProxy.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: system:auth-delegator
+  name: {{ include "osac-operator.fullname" . }}-console-proxy-subjectaccessreview
 subjects:
 - kind: ServiceAccount
   name: {{ include "osac-operator.fullname" . }}-console-proxy

@@ -35,6 +35,8 @@ EXTRA_HELM_ARGS ?=
 OIDC_IDP_CA_FILE ?=
 export OIDC_IDP_CA_FILE
 OIDC_IDP_CA_HELM_ARGS = $(if $(strip $(OIDC_IDP_CA_FILE)),--set-file keycloak.oidcIdpTrust.caPem="$${OIDC_IDP_CA_FILE}")
+# Extra arguments for osac-infra only (for example, --set-file Keycloak inputs).
+KEYCLOAK_HELM_ARGS ?=
 FULFILLMENT_GINKGO_ARGS ?=
 FULFILLMENT_IT_REPORT_DIR ?=
 fulfillment-json-report = $(if $(strip $(FULFILLMENT_IT_REPORT_DIR)),--json-report="$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(1).json)")
@@ -451,6 +453,7 @@ endif
 		--set osacNamespace=$(NS) \
 		$(INFRA_HELM_ARGS) \
 		$(OIDC_IDP_CA_HELM_ARGS) \
+		$(KEYCLOAK_HELM_ARGS) \
 		--wait-for-jobs --timeout 30m \
 	|| { echo "=== osac-infra hook jobs ==="; kubectl get jobs,pods,cm -n osac-infra || true; kubectl logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; kubectl get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
 	@bash -c 'source scripts/lib.sh && wait_for_infra_ready kubectl'
@@ -485,6 +488,7 @@ else
 		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.route.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
+		$(KEYCLOAK_HELM_ARGS) \
 		2>/dev/null \
 		| awk \
 			-e '/^kind: Job$$/ { job=1 }' \
@@ -505,6 +509,7 @@ else
 		--set keycloak.uiUrl=https://$(UI_HOSTNAME) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
 		$(OIDC_IDP_CA_HELM_ARGS) \
+		$(KEYCLOAK_HELM_ARGS) \
 		--timeout "$${helm_timeout_seconds}s" --wait-for-jobs \
 	|| { \
 		echo "=== osac-infra release status ==="; \
@@ -686,7 +691,8 @@ ifeq ($(PLATFORM),kind)
 		--namespace osac-infra \
 		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
-		$(OIDC_IDP_CA_HELM_ARGS)
+		$(OIDC_IDP_CA_HELM_ARGS) \
+		$(KEYCLOAK_HELM_ARGS)
 else
 	helm template osac-deps $(DEPS_CHART) \
 		--namespace osac-deps \
@@ -701,7 +707,8 @@ else
 		--set keycloak.route.hostname=keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
 		--set keycloak.uiUrl=https://osac-ui-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac" \
-		$(OIDC_IDP_CA_HELM_ARGS)
+		$(OIDC_IDP_CA_HELM_ARGS) \
+		$(KEYCLOAK_HELM_ARGS)
 endif
 	helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
@@ -742,7 +749,8 @@ install-multicluster: ## Prepare a VMaaS workload cluster, then install OSAC on 
 		EVPN_VALUES="$(INFRA_VALUES)"
 	$(MAKE) install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
 		KUBECONFIG="$(KUBECONFIG)" \
-		INFRA_VALUES_EXTRA="-f values/vmaas-ci/multicluster-infra.yaml"
+		INFRA_VALUES_EXTRA="-f values/vmaas-ci/multicluster-infra.yaml" \
+		KEYCLOAK_HELM_ARGS="$(KEYCLOAK_HELM_ARGS)"
 	$(MAKE) install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
 		KUBECONFIG="$(KUBECONFIG)" \
 		REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \
@@ -882,13 +890,17 @@ helm-devstack-deps: ## Build osac-devstack Helm dependencies
 .PHONY: helm-lint
 helm-lint: helm-deps helm-infra-deps ## Lint all charts
 	helm lint $(DEPS_CHART)
-	helm lint $(INFRA_CHART)
+	helm lint $(INFRA_CHART) --set keycloak.devFixtures.enabled=true
 	helm lint $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
 .PHONY: helm-template
 helm-template: helm-infra-deps ## Dry-run render all templates
 	helm template osac-deps $(DEPS_CHART)
-	helm template osac-infra $(INFRA_CHART)
+# This render-only value satisfies the chart's required admin password without
+# writing rendered Keycloak Secrets to the terminal or CI logs.
+	@helm template osac-infra $(INFRA_CHART) \
+		--set-string keycloak.adminPassword=helm-template-only \
+		$(KEYCLOAK_HELM_ARGS) >/dev/null
 	helm template osac $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
 # Schema-error patterns accept Helm 3 dotted paths and Helm 4 JSON pointers.
@@ -903,7 +915,8 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 		node_render="$$(mktemp)"; \
 		infra_render="$$(mktemp)"; \
 		error_render="$$(mktemp)"; \
-		trap 'rm -f "$$caas_render" "$$vmaas_render" "$$default_operator_render" "$$full_render" "$$custom_render" "$$node_render" "$$infra_render" "$$error_render"' EXIT; \
+		controller_render="$$(mktemp)"; \
+		trap 'rm -f "$$caas_render" "$$vmaas_render" "$$default_operator_render" "$$full_render" "$$custom_render" "$$node_render" "$$infra_render" "$$error_render" "$$controller_render"' EXIT; \
 		assert_helm_failure() { \
 			expected="$$1"; shift; \
 			if "$$@" >/dev/null 2>"$$error_render"; then \
@@ -964,6 +977,9 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 		rg -Fq -- '--fulfillment-client-id=$$(FULFILLMENT_CLIENT_ID)' "$$node_render"; \
 		rg -q 'name: osac-csi-fulfillment-config' "$$node_render"; \
 		rg -q 'secretName: osac-csi-driver-credentials' "$$node_render"; \
+		helm template csi-driver ../osac-csi-driver/charts/csi-driver \
+			--show-only templates/controller-deployment.yaml > "$$controller_render"; \
+		python3 -c 'import sys,yaml; docs=[d for d in yaml.safe_load_all(open(sys.argv[1])) if d]; dep=next(d for d in docs if d.get("kind")=="Deployment"); container=next(c for c in dep["spec"]["template"]["spec"]["containers"] if c.get("name")=="osac-csi-driver"); assert container.get("securityContext",{}).get("runAsNonRoot") is True, "CSI controller must enforce its image non-root user"' "$$controller_render"; \
 		helm template osac-infra $(INFRA_CHART) \
 			--values values/caas-ci/infra.yaml > "$$infra_render"; \
 		! rg -q 'osac-infra-create-csi-creds|osac-csi-driver-credentials' "$$infra_render"; \
@@ -1021,9 +1037,21 @@ ensure-inotify: ## Opt in to native Linux host inotify preparation (floor 512)
 infra-ready-wait-test: ## Check install-infra waits for the issuer, PostgreSQL and Kafka when the profile creates them (stub kubectl)
 	bash scripts/test-infra-ready-wait.sh
 
+.PHONY: keycloak-security-context-test
+keycloak-security-context-test: helm-infra-deps ## Check Keycloak read-only filesystems and database UID preservation
+	uv run --project .. python scripts/test-keycloak-security-context.py
+
+.PHONY: keycloak-admin-rotation-test
+keycloak-admin-rotation-test: helm-infra-deps ## Check Keycloak admin password upgrades
+	uv run --project .. python scripts/test-keycloak-admin-rotation.py
+
 .PHONY: kind-runtime-test
 kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster cleanup with command stubs
 	python3 scripts/test-kind-runtime.py
+
+.PHONY: osac-deps-hook-security-render-test
+osac-deps-hook-security-render-test: helm-deps ## Check rootless security context on osac-deps CLI hook Jobs
+	uv run --project .. python scripts/test-osac-deps-hook-security.py
 
 .PHONY: bmf-netbox-render-test
 bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret API Helm wiring
@@ -1038,21 +1066,33 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test network-class-step-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test keycloak-security-context-test keycloak-admin-rotation-test bmf-netbox-render-test chart-name-independence-render-test osac-deps-hook-security-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
-	@for d in values/*/; do \
+	@set -euo pipefail; \
+	validation_dir="$$(mktemp -d)"; \
+	trap 'rm -rf "$$validation_dir"' EXIT; \
+	python3 -c 'import secrets; print(secrets.token_hex(32), end="")' > "$$validation_dir/keycloak-admin-password"; \
+	chmod 600 "$$validation_dir/keycloak-admin-password"; \
+	for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		extra=""; \
 		case "$${d%/}" in \
 			values/bmaas-netbox-ci) extra="--values values/bmaas-ci/infra.yaml";; \
 		esac; \
-		[ -f "$$infra" ] && echo "Validating $$infra..." && \
-			helm template osac-deps $(DEPS_CHART) $$extra --values "$$infra" && \
-			helm template osac-infra $(INFRA_CHART) $$extra --values "$$infra"; \
-	done
-	@echo "Validating values/dev/kind-infra.yaml..."
-	helm template osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml
+		if [ -f "$$infra" ]; then \
+			echo "Validating $$infra..."; \
+			helm template osac-deps $(DEPS_CHART) $$extra --values "$$infra"; \
+			if [ "$$infra" = values/dev/infra.yaml ]; then \
+				helm template osac-infra $(INFRA_CHART) $$extra --values "$$infra" \
+					--set-file "keycloak.adminPassword=$$validation_dir/keycloak-admin-password" >/dev/null; \
+			else \
+				helm template osac-infra $(INFRA_CHART) $$extra --values "$$infra" >/dev/null; \
+			fi; \
+		fi; \
+	done; \
+	echo "Validating values/dev/kind-infra.yaml..."; \
+	helm template osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml >/dev/null
 	./scripts/validate-keycloak-credentials.sh
 	./scripts/validate-hub-access-rbac.sh
 	./scripts/validate-keycloak-ui-redirect-uris.py

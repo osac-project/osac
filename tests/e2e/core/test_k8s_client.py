@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import secrets
 
 import pytest
 
@@ -34,6 +36,39 @@ def test_get_json_supports_an_explicit_namespace(monkeypatch: pytest.MonkeyPatch
             "order",
             "-n",
             "osac-order",
+            "-o",
+            "json",
+        )
+    ]
+
+
+def test_get_secret_value_reads_the_explicit_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, ...]] = []
+    password = secrets.token_urlsafe(32)
+    encoded = base64.b64encode(password.encode("utf-8")).decode("ascii")
+
+    def fake_run(*args: str, **_kwargs: object) -> str:
+        calls.append(args)
+        return json.dumps({"data": {"admin-password": encoded}})
+
+    monkeypatch.setattr(k8s_client, "run", fake_run)
+
+    result = K8sClient(namespace="osac-devel").get_secret_value(
+        name="keycloak-admin-credentials", key="admin-password", namespace="keycloak"
+    )
+
+    if result != password:
+        pytest.fail("Secret value did not round-trip", pytrace=False)
+    assert calls == [
+        (
+            "kubectl",
+            "--as",
+            "system:admin",
+            "get",
+            "secret",
+            "keycloak-admin-credentials",
+            "-n",
+            "keycloak",
             "-o",
             "json",
         )
@@ -102,9 +137,7 @@ def test_get_storage_class_for_tier_and_datavolume_support_tenant_and_vm_namespa
     ) in calls
 
 
-def test_get_storage_class_for_tier_fallback_uses_target_tenant(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_get_storage_class_for_tier_fallback_uses_target_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, ...]] = []
 
     def fake_run(*args: str, **_kwargs: object) -> str:
@@ -117,10 +150,7 @@ def test_get_storage_class_for_tier_fallback_uses_target_tenant(
                     {
                         "metadata": {
                             "name": "shared-gold-sc",
-                            "labels": {
-                                "osac.openshift.io/storage-tier": "gold",
-                                "osac.openshift.io/tenant": "shared",
-                            },
+                            "labels": {"osac.openshift.io/storage-tier": "gold", "osac.openshift.io/tenant": "shared"},
                         }
                     },
                     {
@@ -149,12 +179,9 @@ def test_get_storage_class_for_tier_fallback_uses_target_tenant(
 
     hub_client = K8sClient(namespace="osac-devel", kubeconfig="/tmp/hub-kubeconfig")
     virt_client = K8sClient(namespace="osac-devel", kubeconfig="/tmp/virt-kubeconfig")
-    assert (
-        hub_client.get_storage_class_for_tier(
-            tier_name="gold", tenant_name="tenant1", storage_class_client=virt_client
-        )
-        == "tenant-gold-sc"
-    )
+    assert hub_client.get_storage_class_for_tier(
+        tier_name="gold", tenant_name="tenant1", storage_class_client=virt_client
+    ) == "tenant-gold-sc"
     assert (
         "kubectl",
         "--kubeconfig",

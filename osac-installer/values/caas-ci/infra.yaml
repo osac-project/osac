@@ -26,7 +26,7 @@ keycloak:
   enabled: true
   route:
     publicIngress: true
-  # Optional local credentials override; keep credentials out of Git:
+  # Optional local admin credential override; keep real credentials out of Git.
   # adminUsername: ${KC_ADMIN_USER}
   # adminPassword: ${KC_ADMIN_PASSWORD}
   # devFixtures:
@@ -39,8 +39,7 @@ keycloak:
   # hostname: keycloak-keycloak.apps.<cluster-domain>
   # route:
   #   hostname: keycloak-keycloak.apps.<cluster-domain>
-  # Seed known passwords for the realm's built-in test users -- the e2e
-  # suite logs in as these accounts by password.
+  # Seed built-in test users with random credentials persisted in the Secret.
   devFixtures:
     enabled: true
 kafka:

@@ -39,7 +39,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-csi
 | CSI controller/node routing or CSI protocol behavior | Unit (CSI sanity) | `make test` |
 | Fulfillment private Volume API contract | Contract or E2E | Regenerate with `buf generate`, then qualifying cross-component suite |
 | Vendor attach, detach, mount, or storage lifecycle | Component integration or E2E | Required suite is currently unavailable; track [OSAC-4845](https://redhat.atlassian.net/browse/OSAC-4845) |
-| Helm/deployment changes | Helm validation plus applicable E2E | `helm lint charts/csi-driver`; `helm lint charts/csi-backends` |
+| Helm/deployment changes | Helm validation plus applicable E2E | `helm lint charts/csi-driver`; `helm lint charts/csi-backends`; `make -C ../osac-installer csi-render-test` for the rendered controller/node contract |
 
 CSI sanity uses a fake vendor and fulfillment stub; it does not cover a real backend.
 

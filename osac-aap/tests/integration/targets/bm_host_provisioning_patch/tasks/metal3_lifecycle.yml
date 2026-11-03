@@ -93,6 +93,9 @@
           ansible.builtin.include_role:
             name: osac.templates.bm_host_provisioning
             tasks_from: create_metal3.yaml
+          vars:
+            bm_host_metal3_wait_retries: 10
+            bm_host_metal3_wait_delay: 3
 
         - name: Confirm the provisioned-status driver completed
           ansible.builtin.include_tasks: ../check_bmh_status_driver.yml
@@ -145,6 +148,9 @@
           ansible.builtin.include_role:
             name: osac.templates.bm_host_provisioning
             tasks_from: delete_metal3.yaml
+          vars:
+            bm_host_metal3_wait_retries: 10
+            bm_host_metal3_wait_delay: 3
 
         - name: Confirm the available-status driver completed
           ansible.builtin.include_tasks: ../check_bmh_status_driver.yml

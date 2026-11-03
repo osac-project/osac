@@ -138,8 +138,8 @@
         name: "{{ bmh_name }}"
       register: bmh_provision_status
       until: bmh_provision_status.resources[0].status.provisioning.state | default('') == "provisioned"
-      retries: 120
-      delay: 30
+      retries: "{{ bm_host_metal3_wait_retries }}"
+      delay: "{{ bm_host_metal3_wait_delay }}"
 
 - name: Metal3 provisioning completed
   ansible.builtin.debug:

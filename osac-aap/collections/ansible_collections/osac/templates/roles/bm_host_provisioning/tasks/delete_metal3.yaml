@@ -66,8 +66,8 @@
           until: >-
             bmh_deprovision_status.resources | length > 0 and
             bmh_deprovision_status.resources[0].status.provisioning.state | default('') in ["available", "ready"]
-          retries: 120
-          delay: 30
+          retries: "{{ bm_host_metal3_wait_retries }}"
+          delay: "{{ bm_host_metal3_wait_delay }}"
 
         - name: Clear generated root device hint
           vars:

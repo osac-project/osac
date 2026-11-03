@@ -241,8 +241,16 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 			created, err := tenants.Create(ctx, privatev1.TenantsCreateRequest_builder{
 				Object: privatev1.Tenant_builder{
 					Metadata: metadata,
-					// Hold onboarding so it cannot repair the defaults under test.
-					Status: privatev1.TenantStatus_builder{State: privatev1.TenantState_TENANT_STATE_FAILED}.Build(),
+					// Hold onboarding and establish readiness together, before the reconciler sees this Tenant.
+					Status: privatev1.TenantStatus_builder{
+						State: privatev1.TenantState_TENANT_STATE_FAILED,
+						Conditions: []*privatev1.TenantCondition{
+							privatev1.TenantCondition_builder{
+								Type:   privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+								Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+							}.Build(),
+						},
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
@@ -251,7 +259,6 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				deleteTenant(cleanupCtx, tenants, privatev1.NewProjectsClient(tool.InternalView().AdminConn()),
 					tenant, metadata.GetName())
 			})
-			Expect(setTenantDefaultNetworkingCondition(ctx, tenant, true)).To(Succeed())
 			clustersClient = publicv1.NewClustersClient(tool.ExternalView().AdminConn())
 		})
 

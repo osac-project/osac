@@ -10,5 +10,6 @@ exclude_paths:
   - execution-environment/ # Built artifacts, not source
   - rpms.lock.yaml # Generated RPM lockfile uses the generator's YAML style
 kinds:
+  - tasks: "**/tests/integration/common/run_agentless_provider_playbook.yaml"
   # Integration test files are playbooks (multi-play), not task files
   - playbook: "**/integration/**/tasks/*.yml"

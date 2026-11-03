@@ -678,54 +678,66 @@ var _ = Describe("Event publisher", Ordered, func() {
 			cancel, done := startPublisher(pub)
 			defer stopPublisher(cancel, done)
 
-			stamped := collectKafkaEvents(client, DefaultEventTopicPrefix+withID, 2)
-			Expect(stamped[0].event.GetExternalBillingId()).To(Equal("acct-1"))
-			Expect(stamped[1].event.GetExternalBillingId()).To(Equal("acct-1"))
-			for _, tenant := range []string{withoutRow, withoutID} {
-				events := collectKafkaEvents(client, DefaultEventTopicPrefix+tenant, 1)
-				Expect(events[0].event.HasExternalBillingId()).To(BeFalse())
+			// The tenant insert fires create_default_project and is itself a tracked
+			// change, so the topic carries the default project create, the tenant
+			// create, p-1 and p-2. All four must carry the account.
+			stamped := collectKafkaEvents(client, DefaultEventTopicPrefix+withID, 4)
+			Expect(stamped).To(HaveLen(4))
+			for _, got := range stamped {
+				Expect(got.event.GetExternalBillingId()).To(Equal("acct-1"))
+			}
+			// A tenant insert also creates its default project, so the topic carries
+			// that project create plus the tenant create and p-4.
+			for tenant, count := range map[string]int{withoutRow: 1, withoutID: 3} {
+				for _, got := range collectKafkaEvents(client, DefaultEventTopicPrefix+tenant, count) {
+					Expect(got.event.HasExternalBillingId()).To(BeFalse())
+				}
 			}
 		})
 
-		It("Stamps a deleted tenant from its latest archived row", func() {
-			deleted := "archived-" + uuid.New()
-			live := "live-" + uuid.New()
-			cleared := "cleared-" + uuid.New()
+		It("Stamps the events of a tenant deleted in the same batch", func() {
+			tenant := "deleted-" + uuid.New()
 			_, err := pool.Exec(encodeCtx, `
 				insert into tenants (id, name, tenant, creator, data)
-				values
-					($1, $1, $1, 'system', '{"spec":{"external_billing_id":"acct-live"}}'),
-					($2, $2, $2, 'system', '{}')
-			`, live, cleared)
+				values ($1, $1, $1, 'system', '{"spec":{"external_billing_id":"acct-gone"}}')
+			`, tenant)
 			Expect(err).NotTo(HaveOccurred())
 			_, err = pool.Exec(encodeCtx, `
-				insert into archived_tenants (
-					id, name, tenant, creator, data, creation_timestamp, deletion_timestamp
-				)
-				values
-					($1 || '-old', $1, $1, 'system', '{"spec":{"external_billing_id":"acct-old"}}',
-						now() - interval '2 hours', now() - interval '2 hours'),
-					($1 || '-new', $1, $1, 'system', '{"spec":{"external_billing_id":"acct-1"}}',
-						now() - interval '1 hour', now() - interval '1 hour'),
-					($2 || '-old', $2, $2, 'system', '{"spec":{"external_billing_id":"acct-old"}}',
-						now(), now()),
-					($3 || '-old', $3, $3, 'system', '{"spec":{"external_billing_id":"acct-old"}}',
-						now(), now())
-			`, deleted, live, cleared)
+				insert into projects (id, name, tenant, project, creator, data)
+				values ($1, 'p-kept', $2, ''::ltree, 'system', '{}')
+			`, uuid.New(), tenant)
 			Expect(err).NotTo(HaveOccurred())
-			insertChange("projects", deleted, "p-deleted", "")
-			insertChange("projects", live, "p-live", "")
-			insertChange("projects", cleared, "p-cleared", "")
+
+			// Delete the projects and then the tenant, the order the tenants server uses.
+			// The tenant row is gone when the publisher runs, so the id can only come
+			// from the delete change in this batch.
+			_, err = pool.Exec(encodeCtx, `delete from projects where tenant = $1`, tenant)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = pool.Exec(encodeCtx, `delete from tenants where name = $1`, tenant)
+			Expect(err).NotTo(HaveOccurred())
 
 			cancel, done := startPublisher(pub)
 			defer stopPublisher(cancel, done)
 
-			deletedEvents := collectKafkaEvents(client, DefaultEventTopicPrefix+deleted, 1)
-			Expect(deletedEvents[0].event.GetExternalBillingId()).To(Equal("acct-1"))
-			liveEvents := collectKafkaEvents(client, DefaultEventTopicPrefix+live, 1)
-			Expect(liveEvents[0].event.GetExternalBillingId()).To(Equal("acct-live"))
-			clearedEvents := collectKafkaEvents(client, DefaultEventTopicPrefix+cleared, 1)
-			Expect(clearedEvents[0].event.HasExternalBillingId()).To(BeFalse())
+			// The tenant insert also creates the default project, so both projects and
+			// the tenant produce a create and a delete, six events in one batch.
+			events := collectKafkaEvents(client, DefaultEventTopicPrefix+tenant, 6)
+			Expect(events).To(HaveLen(6))
+			for _, got := range events {
+				Expect(got.event.GetExternalBillingId()).To(Equal("acct-gone"))
+			}
+
+			// The tenant delete event is the one whose id has no other source, because
+			// the tenant row is gone when the publisher runs.
+			var tenantDelete *privatev1.Event
+			for _, got := range events {
+				if got.event.GetTenant() != nil &&
+					got.event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED {
+					tenantDelete = got.event
+				}
+			}
+			Expect(tenantDelete).NotTo(BeNil())
+			Expect(tenantDelete.GetExternalBillingId()).To(Equal("acct-gone"))
 		})
 
 		It("Keeps the billing id when tenant break-glass credentials are redacted", func() {
@@ -755,9 +767,17 @@ var _ = Describe("Event publisher", Ordered, func() {
 			cancel, done := startPublisher(pub)
 			defer stopPublisher(cancel, done)
 
-			events := collectKafkaEvents(client, topic, 1)
-			Expect(events[0].event.GetExternalBillingId()).To(Equal("acct-9"))
-			Expect(events[0].event.GetTenant().GetStatus().GetBreakGlassCredentials()).To(BeNil())
+			// The tenant insert also publishes its default project, so find the tenant
+			// event instead of assuming the first one.
+			var tenantEvent *privatev1.Event
+			for _, got := range collectKafkaEvents(client, topic, 2) {
+				if got.event.GetTenant() != nil {
+					tenantEvent = got.event
+				}
+			}
+			Expect(tenantEvent).NotTo(BeNil())
+			Expect(tenantEvent.GetExternalBillingId()).To(Equal("acct-9"))
+			Expect(tenantEvent.GetTenant().GetStatus().GetBreakGlassCredentials()).To(BeNil())
 		})
 
 		It("Maps each Event payload type to a unique table name", func() {

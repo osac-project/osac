@@ -128,6 +128,13 @@ type eventPublisherChange struct {
 	timestamp time.Time
 }
 
+// preparedChange is a change converted to an event once, so that the drain and the publish step use the same event.
+type preparedChange struct {
+	change *eventPublisherChange
+	event  *privatev1.Event
+	err    error
+}
+
 // eventPublisherObjectJson is the JSON shape of the 'data' column of the changes table.
 type eventPublisherObjectJson struct {
 	ID                string            `json:"id"`
@@ -770,11 +777,6 @@ func (p *EventPublisher) drain(ctx context.Context) (more bool, err error) {
 
 	// Convert each change once. Publishing uses this same event, so a change that
 	// cannot be converted fails here and is not converted a second time.
-	type preparedChange struct {
-		change *eventPublisherChange
-		event  *privatev1.Event
-		err    error
-	}
 	prepared := make([]preparedChange, len(changes))
 	seenTenants := make(map[string]struct{}, len(changes))
 	tenants := make([]string, 0, len(changes))
@@ -801,6 +803,7 @@ func (p *EventPublisher) drain(ctx context.Context) (more bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	addDeletedTenantBillingIDs(prepared, billingIDs)
 
 	// Process the changes:
 	for _, item := range prepared {
@@ -1279,10 +1282,8 @@ func (p *EventPublisher) payloadIdentity(event *privatev1.Event) (objectTenant, 
 	return
 }
 
-// billingIDsByTenant returns the stored spec.external_billing_id for each tenant name.
-// A live row wins. When that row is already gone, the latest archived row supplies the
-// id, so a tenant delete event still carries the account the tenant had when it was
-// removed. Tenants with no row or no id are absent from the map.
+// billingIDsByTenant returns the stored spec.external_billing_id for each tenant name. Tenants with no row or no id
+// are absent from the map.
 func (p *EventPublisher) billingIDsByTenant(
 	ctx context.Context, tx pgx.Tx, tenants []string,
 ) (map[string]string, error) {
@@ -1294,20 +1295,6 @@ func (p *EventPublisher) billingIDsByTenant(
 		select name, data #>> '{spec,external_billing_id}'
 		from tenants
 		where name = any($1)
-		union all
-		select name, billing_id
-		from (
-			select distinct on (name)
-				name,
-				data #>> '{spec,external_billing_id}' as billing_id
-			from archived_tenants
-			where name = any($1)
-			  and not exists (
-				  select 1 from tenants
-				  where tenants.name = archived_tenants.name
-			  )
-			order by name, deletion_timestamp desc, archival_timestamp desc
-		) archived
 	`, tenants)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read tenant billing ids: %w", err)
@@ -1327,6 +1314,28 @@ func (p *EventPublisher) billingIDsByTenant(
 		return nil, fmt.Errorf("failed to read tenant billing ids: %w", err)
 	}
 	return ids, nil
+}
+
+// addDeletedTenantBillingIDs copies the billing id of each tenant deleted by this batch into the map. The tenant row is
+// already gone, so the delete change is the last place its id is recorded. Ids found in the database are kept, and
+// tenants without an id are left absent.
+func addDeletedTenantBillingIDs(changes []preparedChange, ids map[string]string) {
+	for _, change := range changes {
+		if change.err != nil || change.change.op != eventPublisherOpDelete {
+			continue
+		}
+		tenant := change.event.GetTenant()
+		if tenant == nil {
+			continue
+		}
+		name := tenant.GetMetadata().GetName()
+		if _, ok := ids[name]; ok {
+			continue
+		}
+		if id := tenant.GetSpec().GetExternalBillingId(); id != "" {
+			ids[name] = id
+		}
+	}
 }
 
 func (p *EventPublisher) registerUnpublishedCountMetric(registerer prometheus.Registerer) error {

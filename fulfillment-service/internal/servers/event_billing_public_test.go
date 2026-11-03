@@ -14,22 +14,22 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
-	"testing"
-
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// The public event stream is a tenant-facing interface. The billing id is private, so the
-// public event message must not have the field the private envelope carries.
-func TestPublicEventOmitsExternalBillingID(t *testing.T) {
-	g := NewWithT(t)
-	publicFields := (&publicv1.Event{}).ProtoReflect().Descriptor().Fields()
-	g.Expect(publicFields.ByName("external_billing_id")).To(BeNil())
+// The public event stream is a tenant-facing interface. The billing id is private, so the public event message must not
+// have the field the private envelope carries.
+var _ = Describe("Public event", func() {
+	It("Omits the external billing id", func() {
+		publicFields := (&publicv1.Event{}).ProtoReflect().Descriptor().Fields()
+		Expect(publicFields.ByName("external_billing_id")).To(BeNil())
 
-	privateField := (&privatev1.Event{}).ProtoReflect().Descriptor().Fields().ByName("external_billing_id")
-	g.Expect(privateField).NotTo(BeNil())
-	g.Expect(int(privateField.Number())).To(Equal(40))
-}
+		privateField := (&privatev1.Event{}).ProtoReflect().Descriptor().Fields().ByName("external_billing_id")
+		Expect(privateField).NotTo(BeNil())
+		Expect(int(privateField.Number())).To(Equal(40))
+	})
+})

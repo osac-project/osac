@@ -64,6 +64,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/user"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/virtualnetwork"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/volume"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/workloadcluster"
 	internalhealth "github.com/osac-project/osac/fulfillment-service/internal/health"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	hubscheme "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/scheme"
@@ -500,6 +501,41 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 				"Cluster reconciler failed",
 				slog.Any("error", err),
 			)
+		}
+	}()
+
+	// Create the WorkloadCluster observer. WorkloadCluster is provider-global
+	// and its API is registered whenever MaaS is enabled; the reconciler uses
+	// the same Hub cache and credentials as the other Hub-backed controllers.
+	r.logger.InfoContext(ctx, "Creating workload cluster reconciler")
+	workloadClusterReconcilerFunction, err := workloadcluster.NewFunction().
+		SetLogger(r.logger).
+		SetConnection(r.client).
+		SetHubCache(hubCache).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create workload cluster reconciler function: %w", err)
+	}
+	workloadClusterReconciler, err := controllers.NewReconciler[*privatev1.WorkloadCluster]().
+		SetSync(r.args.sync).
+		SetLogger(r.logger).
+		SetName("workload-cluster").
+		SetClient(r.client).
+		SetFunction(workloadClusterReconcilerFunction).
+		SetSyncInterval(10 * time.Second).
+		SetEventFilter("has(event.workload_cluster) && event.type != EVENT_TYPE_OBJECT_UPDATED").
+		SetHealthReporter(healthAggregator).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create workload cluster reconciler: %w", err)
+	}
+	r.logger.InfoContext(ctx, "Starting workload cluster reconciler")
+	go func() {
+		err := workloadClusterReconciler.Start(ctx)
+		if err == nil || errors.Is(err, context.Canceled) {
+			r.logger.InfoContext(ctx, "Workload cluster reconciler finished")
+		} else {
+			r.logger.ErrorContext(ctx, "Workload cluster reconciler failed", slog.Any("error", err))
 		}
 	}()
 

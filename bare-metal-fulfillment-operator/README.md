@@ -66,9 +66,10 @@ provider-side port, policy, and DHCP operations. See the
 
 At host assignment the inventory client supplies an administrator mapping from
 OSAC logical port names to physical MAC addresses. Each key must match the
-network attachment's `interface` and the catalog port name. The operator records
-the selected MAC on the BMI status and NetworkAttachment; lease discovery uses
-that MAC only (no host-name or interface-name fallback). Inventory backends:
+network attachment's `interface` and the catalog port name. BMF records the
+selected MAC on BMI status and the NetworkAttachment spec. BMF requires a valid
+inventory MAC for the selected interface before creating the attachment, so BMI
+lease discovery uses that selected NIC. Inventory backends:
 
 | Backend | Source | Value format |
 |---------|--------|--------------|

@@ -233,9 +233,15 @@ type filterOracleCase struct {
 // allowlist-based translator (internal/database/billing_account.go), not dao.FilterTranslator — a targeted
 // filter-oracle regression test for it (covering the private-only provider_account_reference field) is added
 // separately in billing_accounts_server_test.go.
+// TenantBillingAssignment is excluded for the same registration-wiring reason: a flat, bespoke-filter resource
+// (internal/database/tenant_billing_assignment.go) registered standalone, not through RegisterResourceServers, so
+// it is unreachable on this test's gRPC server. Its TenantBillingAssignment message has no private-only field
+// (unlike BillingAccount, whose provider_account_reference is private), so no separate targeted filter-oracle
+// regression test is needed for it.
 var resourcesExcludedFromDiscovery = map[string]bool{
-	"User":           true,
-	"BillingAccount": true,
+	"User":                    true,
+	"BillingAccount":          true,
+	"TenantBillingAssignment": true,
 }
 
 // discoverFilterOracleCases walks the public/private proto registries, pairs every public/private message by

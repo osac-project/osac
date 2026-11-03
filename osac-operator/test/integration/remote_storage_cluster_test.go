@@ -33,11 +33,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -1457,7 +1459,7 @@ func deployAndStageCSPFixtureServer(svcUIDOutPtr, podUIDOutPtr *string) {
 	Expect(err).NotTo(HaveOccurred())
 	*svcUIDOutPtr = svcUID
 
-	podUID, err := createMgmtFixtureFromYAML(cspFixturePodYAML(operatorImage))
+	podUID, err := createMgmtFixtureFromYAML(cspFixturePodYAML(operatorImage, operatorNetworkingProvisioningEnabled()))
 	Expect(err).NotTo(HaveOccurred())
 	*podUIDOutPtr = podUID
 
@@ -1518,16 +1520,45 @@ spec:
 `, cspFixtureResourceName, operatorNamespace, cspFixtureResourceName)
 }
 
-func cspFixturePodYAML(image string) string {
+// operatorNetworkingProvisioningEnabled preserves the installed mode when the
+// fixture replaces Fulfillment; changing it would trip the operator startup guard.
+func operatorNetworkingProvisioningEnabled() bool {
+	output, err := runMgmtKubectl("get", "deployment", operatorDeploymentName(),
+		"-n", operatorNamespace, "-o", "json")
+	Expect(err).NotTo(HaveOccurred())
+	var deployment appsv1.Deployment
+	Expect(json.Unmarshal(output, &deployment)).To(Succeed())
+	for _, container := range deployment.Spec.Template.Spec.Containers {
+		if container.Name != "manager" {
+			continue
+		}
+		for _, env := range container.Env {
+			if env.Name == "OSAC_PROVISIONING_ENABLED" {
+				Expect(env.ValueFrom).To(BeNil(), "the fixture requires the chart's literal networking setting")
+				enabled, parseErr := strconv.ParseBool(env.Value)
+				Expect(parseErr).NotTo(HaveOccurred(), "invalid operator networking provisioning setting")
+				return enabled
+			}
+		}
+		// Match the operator default when no explicit setting is present.
+		return true
+	}
+	Fail("operator Deployment has no manager container")
+	return false
+}
+
+func cspFixturePodYAML(image string, networkingProvisioningEnabled bool) string {
 	startScript := fmt.Sprintf(
 		"while [ ! -x /work/fixture-server ]; do sleep 0.1; done; "+
 			"exec /work/fixture-server --tls-cert=/tls/tls.crt --tls-key=/tls/tls.key "+
 			"--oidc-addr=:8443 --grpc-addr=:8444 --http-addr=:8080 "+
-			"--issuer-url=%s --client-id=%s --client-credential=%s --access-marker=%s",
+			"--issuer-url=%s --client-id=%s --client-credential=%s --access-marker=%s "+
+			"--networking-provisioning-enabled=%t",
 		cspFixtureIssuerURL,
 		cspFixtureClientIdentifier,
 		cspFixtureClientCredentialValue,
 		cspFixtureAccessMarker,
+		networkingProvisioningEnabled,
 	)
 	return fmt.Sprintf(`apiVersion: v1
 kind: Pod

@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 
@@ -32,7 +33,19 @@ import (
 )
 
 func TestInstallationSettingsStartupRPC(t *testing.T) {
-	fixture := &fixtureServer{expectedBearer: "fixture-test-access-marker"}
+	for _, enabled := range []bool{false, true} {
+		t.Run("networking="+strconv.FormatBool(enabled), func(t *testing.T) {
+			testInstallationSettingsStartupRPC(t, enabled)
+		})
+	}
+}
+
+func testInstallationSettingsStartupRPC(t *testing.T, enabled bool) {
+	t.Helper()
+	fixture := &fixtureServer{
+		expectedBearer:                "fixture-test-access-marker",
+		networkingProvisioningEnabled: enabled,
+	}
 	server := grpc.NewServer(grpc.UnaryInterceptor(fixture.unaryAuthInterceptor))
 	fixture.registerGRPCServices(server)
 	listener := bufconn.Listen(1024 * 1024)
@@ -60,8 +73,8 @@ func TestInstallationSettingsStartupRPC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read installation settings during operator startup: %v", err)
 	}
-	if !response.GetNetworkingProvisioningEnabled() {
-		t.Fatal("fixture must match the remote integration deployment's enabled networking provisioning")
+	if got := response.GetNetworkingProvisioningEnabled(); got != enabled {
+		t.Fatalf("networking provisioning: got %t, want %t", got, enabled)
 	}
 	if _, err := client.Get(ctx, &privatev1.InstallationSettingsGetRequest{}); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("unauthenticated settings request: expected Unauthenticated, got %v", err)

@@ -337,6 +337,38 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				setSubnetReady(ctx, subnets, id)
 			case "pending":
 				waitForSubnetPending(subnets, id)
+			case "failed":
+				waitForSubnetPending(subnets, id)
+				resp, getErr := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
+				Expect(getErr).NotTo(HaveOccurred())
+				subnet := resp.GetObject()
+				subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_FAILED)
+				_, updateErr := subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+					Object: subnet, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+				}.Build())
+				Expect(updateErr).NotTo(HaveOccurred())
+				Eventually(func(g Gomega) {
+					current, err := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(current.GetObject().GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_FAILED))
+				}, time.Minute, time.Second).Should(Succeed())
+			case "deleting":
+				waitForSubnetPending(subnets, id)
+				resp, getErr := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
+				Expect(getErr).NotTo(HaveOccurred())
+				subnet := resp.GetObject()
+				subnet.GetMetadata().SetFinalizers([]string{"test.osac.openshift.io/hold"})
+				_, updateErr := subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+					Object: subnet, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+				}.Build())
+				Expect(updateErr).NotTo(HaveOccurred())
+				_, deleteErr := subnets.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: id}.Build())
+				Expect(deleteErr).NotTo(HaveOccurred())
+				Eventually(func(g Gomega) {
+					current, err := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(current.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+				}, time.Minute, time.Second).Should(Succeed())
 			}
 			return id
 		}
@@ -372,6 +404,38 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				setSecurityGroupReady(ctx, groups, id)
 			case "pending":
 				waitForSecurityGroupPending(groups, id)
+			case "failed":
+				waitForSecurityGroupPending(groups, id)
+				resp, getErr := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+				Expect(getErr).NotTo(HaveOccurred())
+				group := resp.GetObject()
+				group.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED)
+				_, updateErr := groups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+					Object: group, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+				}.Build())
+				Expect(updateErr).NotTo(HaveOccurred())
+				Eventually(func(g Gomega) {
+					current, err := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(current.GetObject().GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED))
+				}, time.Minute, time.Second).Should(Succeed())
+			case "deleting":
+				waitForSecurityGroupPending(groups, id)
+				resp, getErr := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+				Expect(getErr).NotTo(HaveOccurred())
+				group := resp.GetObject()
+				group.GetMetadata().SetFinalizers([]string{"test.osac.openshift.io/hold"})
+				_, updateErr := groups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+					Object: group, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+				}.Build())
+				Expect(updateErr).NotTo(HaveOccurred())
+				_, deleteErr := groups.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: id}.Build())
+				Expect(deleteErr).NotTo(HaveOccurred())
+				Eventually(func(g Gomega) {
+					current, err := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(current.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+				}, time.Minute, time.Second).Should(Succeed())
 			}
 			return id
 		}
@@ -429,6 +493,14 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					newProjectSubnet(project, virtualNetworkId, true, "pending")
 					newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
 				}, grpccodes.FailedPrecondition, "SUBNET_STATE_PENDING"),
+			Entry("failed default Subnet",
+				func(project, virtualNetworkId string) {
+					newProjectSubnet(project, virtualNetworkId, true, "failed")
+				}, grpccodes.FailedPrecondition, "SUBNET_STATE_FAILED"),
+			Entry("deleting default Subnet",
+				func(project, virtualNetworkId string) {
+					newProjectSubnet(project, virtualNetworkId, true, "deleting")
+				}, grpccodes.FailedPrecondition, "is being deleted"),
 			Entry("missing default SecurityGroup",
 				func(project, virtualNetworkId string) {
 					newProjectSubnet(project, virtualNetworkId, true, "ready")
@@ -438,6 +510,16 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					newProjectSubnet(project, virtualNetworkId, true, "ready")
 					newProjectSecurityGroup(project, virtualNetworkId, true, "pending")
 				}, grpccodes.FailedPrecondition, "SECURITY_GROUP_STATE_PENDING"),
+			Entry("failed default SecurityGroup",
+				func(project, virtualNetworkId string) {
+					newProjectSubnet(project, virtualNetworkId, true, "ready")
+					newProjectSecurityGroup(project, virtualNetworkId, true, "failed")
+				}, grpccodes.FailedPrecondition, "SECURITY_GROUP_STATE_FAILED"),
+			Entry("deleting default SecurityGroup",
+				func(project, virtualNetworkId string) {
+					newProjectSubnet(project, virtualNetworkId, true, "ready")
+					newProjectSecurityGroup(project, virtualNetworkId, true, "deleting")
+				}, grpccodes.FailedPrecondition, "is being deleted"),
 		)
 
 		It("resolves ready tenant defaults and stores both references", func() {

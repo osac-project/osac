@@ -18,6 +18,16 @@ const vm = {
   status: { state: ComputeInstanceState.RUNNING },
 } as ComputeInstance;
 
+const stoppedVm = {
+  ...vm,
+  status: { state: ComputeInstanceState.STOPPED },
+} as ComputeInstance;
+
+const failedVm = {
+  ...vm,
+  status: { state: ComputeInstanceState.FAILED },
+} as ComputeInstance;
+
 describe('VmDetailsActionButtons', () => {
   it('renders lifecycle and delete actions without external IP controls', () => {
     renderWithProviders(<VmDetailsActionButtons vm={vm} onOpenConsole={vi.fn()} />);
@@ -38,5 +48,17 @@ describe('VmDetailsActionButtons', () => {
     await user.click(screen.getByRole('button', { name: 'Open console' }));
 
     expect(onOpenConsole).toHaveBeenCalledOnce();
+  });
+
+  it('disables the console action when the VM is not running', () => {
+    renderWithProviders(<VmDetailsActionButtons vm={stoppedVm} onOpenConsole={vi.fn()} />);
+
+    expect(screen.getByRole('button', { name: 'Open console' })).toBeDisabled();
+  });
+
+  it('allows restarting a failed VM', () => {
+    renderWithProviders(<VmDetailsActionButtons vm={failedVm} onOpenConsole={vi.fn()} />);
+
+    expect(screen.getByRole('button', { name: 'Restart' })).toBeEnabled();
   });
 });

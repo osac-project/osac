@@ -9,8 +9,6 @@ import {
   ToolbarContent,
   ToolbarItem,
 } from '@patternfly/react-core';
-import CompressIcon from '@patternfly/react-icons/dist/esm/icons/compress-icon';
-import ExpandIcon from '@patternfly/react-icons/dist/esm/icons/expand-icon';
 import PasteIcon from '@patternfly/react-icons/dist/esm/icons/paste-icon';
 
 import type { ConsoleTransport, ConsoleUiConnectionState } from './console.types';
@@ -18,24 +16,19 @@ import { useTranslation } from '../../hooks/useTranslation';
 
 interface Props {
   connectionState: ConsoleUiConnectionState;
-  isFullscreen: boolean;
   onPaste?: () => void;
-  onToggleFullscreen: () => void;
   consoleTransport: ConsoleTransport;
   onConsoleTransportChange: (transport: ConsoleTransport) => void;
 }
 
 const ConsoleToolbar = ({
   connectionState,
-  isFullscreen,
   onPaste,
-  onToggleFullscreen,
   consoleTransport,
   onConsoleTransportChange,
 }: Props) => {
   const { t } = useTranslation();
   const isConnected = connectionState === 'connected';
-  const fullscreenDisabled = !isConnected;
 
   const [isTransportOpen, setIsTransportOpen] = useState(false);
   // SelectOption values are ConsoleTransport strings, so onSelect passes the choice through.
@@ -91,17 +84,6 @@ const ConsoleToolbar = ({
               </SelectOption>
             </SelectList>
           </Select>
-        </ToolbarItem>
-        <ToolbarItem>
-          <Button
-            variant="secondary"
-            icon={isFullscreen ? <CompressIcon /> : <ExpandIcon />}
-            aria-label={isFullscreen ? t('Exit full screen') : t('Full screen')}
-            isDisabled={fullscreenDisabled}
-            onClick={onToggleFullscreen}
-          >
-            {isFullscreen ? t('Exit full screen') : t('Full screen')}
-          </Button>
         </ToolbarItem>
       </ToolbarContent>
     </Toolbar>

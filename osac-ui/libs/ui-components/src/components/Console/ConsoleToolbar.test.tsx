@@ -8,18 +8,15 @@ import ConsoleToolbar from './ConsoleToolbar';
 const renderToolbar = (overrides: Partial<Parameters<typeof ConsoleToolbar>[0]> = {}) => {
   const onConsoleTransportChange = vi.fn<(transport: ConsoleTransport) => void>();
   const onPaste = vi.fn();
-  const onToggleFullscreen = vi.fn();
   const props = {
     connectionState: 'connected' as ConsoleUiConnectionState,
-    isFullscreen: false,
     onPaste,
-    onToggleFullscreen,
     consoleTransport: 'vnc' as ConsoleTransport,
     onConsoleTransportChange,
     ...overrides,
   };
   render(<ConsoleToolbar {...props} />);
-  return { onConsoleTransportChange, onPaste, onToggleFullscreen };
+  return { onConsoleTransportChange, onPaste };
 };
 
 describe('ConsoleToolbar', () => {
@@ -55,22 +52,19 @@ describe('ConsoleToolbar', () => {
     expect(onConsoleTransportChange).toHaveBeenCalledWith('serial');
   });
 
-  it('enables Paste and Full screen while connected and forwards their clicks', async () => {
+  it('enables Paste while connected and forwards its click', async () => {
     const user = userEvent.setup();
-    const { onPaste, onToggleFullscreen } = renderToolbar({ connectionState: 'connected' });
+    const { onPaste } = renderToolbar({ connectionState: 'connected' });
 
     await user.click(screen.getByRole('button', { name: 'Paste from clipboard' }));
-    await user.click(screen.getByRole('button', { name: 'Full screen' }));
 
     expect(onPaste).toHaveBeenCalled();
-    expect(onToggleFullscreen).toHaveBeenCalled();
   });
 
-  it('disables Paste and Full screen while not connected', () => {
+  it('disables Paste while not connected', () => {
     renderToolbar({ connectionState: 'connecting' });
 
     expect(screen.getByRole('button', { name: 'Paste from clipboard' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Full screen' })).toBeDisabled();
     // The transport selector stays usable regardless of connection state.
     expect(screen.getByRole('button', { name: 'Select console type' })).toBeEnabled();
   });

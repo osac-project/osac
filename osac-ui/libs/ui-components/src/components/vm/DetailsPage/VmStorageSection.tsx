@@ -3,6 +3,9 @@ import {
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
+  Divider,
+  Grid,
+  GridItem,
   Stack,
   StackItem,
   Title,
@@ -15,6 +18,8 @@ import CatalogStorageTable, {
   type CatalogStorageTableRow,
 } from '../../catalog/details/CatalogStorageTable';
 import { ResourceConditionsTable } from '../../Resource/ResourceConditionsTable';
+
+import './VmStorageSection.css';
 
 interface VmStorageSectionProps {
   vm: ComputeInstance;
@@ -57,7 +62,18 @@ const VmStorageSection = ({ vm }: VmStorageSectionProps) => {
             <DescriptionListTerm>{t('Additional disks')}</DescriptionListTerm>
             <DescriptionListDescription>
               {additionalDiskRows.length > 0 ? (
-                <CatalogStorageTable rows={additionalDiskRows} emptyValue={EMPTY_VALUE} />
+                <Grid>
+                  <GridItem lg={6}>
+                    <CatalogStorageTable
+                      rows={additionalDiskRows}
+                      emptyValue={EMPTY_VALUE}
+                      className="osac-vm-storage-table"
+                    />
+                  </GridItem>
+                  <GridItem>
+                    <Divider />
+                  </GridItem>
+                </Grid>
               ) : (
                 EMPTY_VALUE
               )}

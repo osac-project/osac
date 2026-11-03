@@ -12,13 +12,14 @@ export interface CatalogStorageTableRow {
 interface CatalogStorageTableProps {
   rows: CatalogStorageTableRow[];
   emptyValue?: ReactNode;
+  className?: string;
 }
 
-const CatalogStorageTable = ({ rows, emptyValue }: CatalogStorageTableProps) => {
+const CatalogStorageTable = ({ rows, emptyValue, className }: CatalogStorageTableProps) => {
   const { t } = useTranslation();
 
   return (
-    <Table aria-label={t('Additional disks')} variant="compact">
+    <Table aria-label={t('Additional disks')} variant="compact" className={className}>
       <Thead>
         <Tr>
           <Th>{t('Size')}</Th>

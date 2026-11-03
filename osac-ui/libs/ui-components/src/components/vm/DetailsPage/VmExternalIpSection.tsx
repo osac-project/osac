@@ -96,8 +96,7 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
                 ) : null}
                 {!showDetach && !isAttaching && !isFailed ? (
                   <Button
-                    variant="link"
-                    isInline
+                    variant="secondary"
                     isDisabled={actionDisabled || !canAttach}
                     isLoading={isLoading}
                     onClick={() => setAttachOpen(true)}
@@ -107,8 +106,7 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
                 ) : null}
                 {showDetach && !isDetaching ? (
                   <Button
-                    variant="link"
-                    isInline
+                    variant="secondary"
                     isDisabled={actionDisabled || isDetaching}
                     isLoading={isLoading}
                     onClick={() => setDetachOpen(true)}

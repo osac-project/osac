@@ -58,6 +58,7 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
       masthead={<ShellMasthead onLogout={logout} />}
       sidebar={<ShellSidebar />}
       isManagedSidebar
+      isContentFilled
       mainContainerId={MAIN_CONTENT_ID}
       skipToContent={
         <SkipToContent href={`#${MAIN_CONTENT_ID}`}>{t('Skip to content')}</SkipToContent>

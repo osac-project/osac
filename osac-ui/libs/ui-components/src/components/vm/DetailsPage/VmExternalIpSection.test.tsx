@@ -76,7 +76,9 @@ describe('VmExternalIpSection', () => {
     );
 
     expect(screen.getByText('-')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Attach external IP' })).toBeEnabled();
+    const attachButton = screen.getByRole('button', { name: 'Attach external IP' });
+    expect(attachButton).toBeEnabled();
+    expect(attachButton).toHaveClass('pf-m-secondary');
   });
 
   it('keeps Attach visible during a background attachment refresh', () => {
@@ -115,12 +117,12 @@ describe('VmExternalIpSection', () => {
     expect(screen.getByText('Attaching external IP...')).toBeInTheDocument();
   });
 
-  it('renders the compact inline Detach action for an attached external IP', () => {
+  it('renders a secondary Detach action for an attached external IP', () => {
     setAttachment([attachment(ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_READY)]);
 
     renderWithProviders(<VmExternalIpSection vm={vm} />);
 
     const detachButton = screen.getByRole('button', { name: 'Detach' });
-    expect(detachButton).toHaveClass('pf-m-inline');
+    expect(detachButton).toHaveClass('pf-m-secondary');
   });
 });

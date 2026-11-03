@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   Alert,
   Divider,
@@ -19,7 +18,6 @@ import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import { VmStatusLabel } from '../../../VmStatusLabel';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
-import VmConsoleTab from '../console/VmConsoleTab';
 
 interface Props {
   vm: ComputeInstance;
@@ -27,13 +25,15 @@ interface Props {
 
 const VmDetails = ({ vm }: Props) => {
   const { t } = useTranslation();
-  const [showConsole, setShowConsole] = useState(false);
   const {
     data: instanceType,
     isLoading: isInstanceTypeLoading,
     error: instanceTypeError,
   } = useInstanceType(vm.spec?.instanceType?.id);
   const { data: diskImage, isLoading: isDiskImageLoading } = useDiskImage(vm.spec?.diskImage?.id);
+  const openConsole = () => {
+    window.open(`/vms/${encodeURIComponent(vm.id)}/console`, '_blank', 'noopener,noreferrer');
+  };
 
   return (
     <>
@@ -69,7 +69,7 @@ const VmDetails = ({ vm }: Props) => {
                 />
               </FlexItem>
               <FlexItem>
-                <VmDetailsActionButtons vm={vm} onOpenConsole={() => setShowConsole(true)} />
+                <VmDetailsActionButtons vm={vm} onOpenConsole={openConsole} />
               </FlexItem>
             </Flex>
           </StackItem>
@@ -86,11 +86,6 @@ const VmDetails = ({ vm }: Props) => {
         diskImage={diskImage}
         isDiskImageLoading={isDiskImageLoading}
       />
-      {showConsole ? (
-        <PageSection hasBodyWrapper={false}>
-          <VmConsoleTab vm={vm} />
-        </PageSection>
-      ) : null}
     </>
   );
 };

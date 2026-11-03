@@ -28,10 +28,6 @@ vi.mock('./VmDetailsSections', () => ({
   default: () => <div>VM detail sections</div>,
 }));
 
-vi.mock('../console/VmConsoleTab', () => ({
-  default: () => <div>Console surface</div>,
-}));
-
 vi.mock('../../Resource/ResourceDetailHeader', () => ({
   ResourceDetailHeader: ({
     resourceName,
@@ -85,13 +81,15 @@ describe('VmDetails', () => {
     expect(screen.getAllByRole('separator')).toHaveLength(1);
   });
 
-  it('opens the console surface from the header action', async () => {
+  it('opens the dedicated console route in a new tab from the header action', async () => {
     const user = userEvent.setup();
+    const openWindow = vi.spyOn(window, 'open').mockReturnValue(null);
     renderDetails();
 
     await user.click(screen.getByRole('button', { name: 'Open console' }));
 
-    expect(screen.getByText('Console surface')).toBeInTheDocument();
+    expect(openWindow).toHaveBeenCalledWith('/vms/vm-1/console', '_blank', 'noopener,noreferrer');
+    openWindow.mockRestore();
   });
 
   it('shows an alert and still renders the page when instance type lookup fails', () => {

@@ -27,7 +27,10 @@ const VmDetailsActionButtons = ({ vm, onOpenConsole }: VmDetailsActionButtonsPro
   const canStart = state === ComputeInstanceState.STOPPED;
   const canStop = state === ComputeInstanceState.RUNNING || state === ComputeInstanceState.PAUSED;
   const canRestart =
-    state === ComputeInstanceState.RUNNING || state === ComputeInstanceState.PAUSED;
+    state === ComputeInstanceState.RUNNING ||
+    state === ComputeInstanceState.PAUSED ||
+    state === ComputeInstanceState.FAILED;
+  const canOpenConsole = state === ComputeInstanceState.RUNNING;
   const canDelete = state !== ComputeInstanceState.DELETING;
 
   return (
@@ -44,7 +47,12 @@ const VmDetailsActionButtons = ({ vm, onOpenConsole }: VmDetailsActionButtonsPro
         spaceItems={{ default: 'spaceItemsSm' }}
         flexWrap={{ default: 'wrap' }}
       >
-        <Button variant="primary" icon={<ExternalLinkAltIcon />} onClick={onOpenConsole}>
+        <Button
+          variant="primary"
+          icon={<ExternalLinkAltIcon />}
+          isDisabled={!canOpenConsole}
+          onClick={onOpenConsole}
+        >
           Open console
         </Button>
         <Button

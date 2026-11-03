@@ -24,7 +24,7 @@ Authentication
 ==============
 
 If your Ansible controller is not in AWS, authentication is handled by either
-specifying your access and secret key as ENV variables or inventory plugin arguments. 
+specifying your access and secret key as ENV variables or inventory plugin arguments.
 
 For environment variables:
 
@@ -77,10 +77,10 @@ If your Ansible controller is running on an EC2 instance with an assigned IAM Ro
 See the documentation for the controller `for more details <https://docs.ansible.com/ansible-tower/latest/html/userguide/inventories.html#ug-source-ec2>`_.
 
 You can also use the ARN of the IAM role to assume to perform the inventory lookup.
-This can be useful for connecting across different accounts, or to limit user access. 
+This can be useful for connecting across different accounts, or to limit user access.
 To do so, you should specify the ``iam_role_arn``.
 You should still provide AWS credentials with enough privilege to perform the AssumeRole action.
-       
+
 .. code-block:: yaml
 
     # demo.aws_ec2.yml
@@ -132,24 +132,24 @@ Some examples are shown below:
   hostnames:
     # This option allows displaying the public ip addresses.
     - ip-address
-  
+
     # This option allows displaying the private ip addresses using `tag:Name` as a prefix.
     # `name` can be one of the options specified in http://docs.aws.amazon.com/cli/latest/reference/ec2/describe-instances.html#options.
     - name: 'private-ip-address'
       separator: '_'
       prefix: 'tag:Name'
-    
+
     # Using literal values for hostname
     # # Hostname will be aws-test_literal
     - name: 'test_literal'
-      separator: '-'       
+      separator: '-'
       prefix: 'aws'
-  
+
     # To use tags as hostnames use the syntax `tag:Name=Value` to use the hostname `Name_Value`, or
     # `tag:Name` to use the value of the Name tag. If value provided does not exist in the above options,
     # it will be used as a literal string.
     - name: 'tag:Tag1=Test1,Tag2=Test2'
-    
+
     # Use dns-name attribute as hostname
     - dns-name
 
@@ -177,23 +177,23 @@ Some examples are shown below:
     # This creates host groups based on architecture.
     - prefix: arch
       key: architecture
-    
+
     # This creates host groups based on `x86_64` architecture.
     - prefix: arch
       key: architecture
       value:
           'x86_64'
-    
+
     # This creates host groups based on availability zone.
     - prefix: az
       key: placement.availability_zone
-    
+
     # If the EC2 tag Name had the value `redhat` the tag variable would be: `tag_Name_redhat`.
-    # Similarly, if a tag existed for an AWS EC2 instance as `Applications` with the value of `nodejs` the  
+    # Similarly, if a tag existed for an AWS EC2 instance as `Applications` with the value of `nodejs` the
     # variable would be: `tag_Applications_nodejs`.
     - prefix: tag
-      key: tags
-    
+      key: ec2_tags
+
     # This creates host groups using instance_type, e.g., `instance_type_z3_tiny`.
     - prefix: instance_type
       key: instance_type
@@ -201,9 +201,9 @@ Some examples are shown below:
     # This creates host groups using security_groups id, e.g., `security_groups_sg_abcd1234` group for each security group.
     - key: 'security_groups|json_query("[].group_id")'
       prefix: 'security_groups'
-    
-    # This creates a host group for each value of the Application tag.
-    - key: tags.Application
+
+    # This creates a host group for each value of the Environment tag.
+    - key: ec2_tags['Environment']
       separator: ''
 
     # This creates a host group per region e.g., `aws_region_us_east_2`.
@@ -211,14 +211,14 @@ Some examples are shown below:
       prefix: aws_region
 
     # This creates host groups based on the value of a custom tag `Role` and adds them to a metagroup called `project`.
-    - key: tags['Role']
+    - key: ec2_tags['Role']
       prefix: foo
       parent_group: "project"
-    
+
     # This creates a common parent group for all EC2 availability zones.
     - key: placement.availability_zone
       parent_group: all_ec2_zones
-    
+
     # This creates a group per distro (distro_CentOS, distro_Debian) and assigns the hosts that have matching values to it,
     # using the default separator "_".
     - prefix: distro
@@ -237,8 +237,8 @@ Some examples are shown below:
   groups:
     # This created two groups - `Production` and `PreProduction` based on tags
     # These conditionals are expressed using Jinja2 syntax.
-    redhat: "'Production' in tags.Environment"
-    ubuntu: "'PreProduction' in tags.Environment"
+    redhat: "'Production' in ec2_tags.Environment"
+    ubuntu: "'PreProduction' in ec2_tags.Environment"
 
     # This created a libvpc group based on specific condition on `vpc_id`.
     libvpc: vpc_id == 'vpc-####'
@@ -259,13 +259,13 @@ Some examples are shown below:
     location_vars:
       location: "east_coast"
       server_type: "ansible_hostname | regex_replace ('(.{6})(.{2}).*', '\\2')"
-    
+
     # This sets location variable.
     location: "'east_coast'"
 
     # This lets you connect over SSM to the instance id.
     ansible_host: instance_id
-    ansible_connection: 'community.aws.aws_ssm'
+    ansible_connection: 'amazon.aws.aws_ssm'
 
     # This defines combinations of host servers, IP addresses, and related SSH private keys.
     ansible_host: private_ip_address
@@ -277,7 +277,7 @@ Some examples are shown below:
 
     # Host variables that are strings need to be wrapped with two sets of quotes.
     # See https://docs.ansible.com/ansible/latest/plugins/inventory.html#using-inventory-plugins for details.
-    ansible_connection: '"community.aws.aws_ssm"'
+    ansible_connection: '"amazon.aws.aws_ssm"'
     ansible_user: '"ssm-user"'
 
 
@@ -294,7 +294,7 @@ Some examples are shown below:
       - 'planets'
   - tag:Environment:
       - 'demo'
-  
+
   # This excludes everything from the inventory that has the following tag:Name.
   exclude_filters:
   - tag:Name:
@@ -318,7 +318,7 @@ Some examples are shown below:
       - dev
       - qa
     instance.group-id: sg-xxxxxxxx
-   
+
     # This selects only instances with tag `Name` fulfilling specific conditions.
     - tag:Name:
       - dev-*
@@ -329,18 +329,26 @@ Some examples are shown below:
 ``use_contrib_script_compatible_ec2_tag_keys`` and ``use_contrib_script_compatible_sanitization``
 -------------------------------------------------------------------------------------------------
 
+.. deprecated:: 11.2.0
+   The ``use_contrib_script_compatible_ec2_tag_keys`` option is deprecated and will be removed in a release after 2026-12-01.
+   Use the ``ec2_tags`` structure instead (e.g. ``ec2_tags.TAGNAME`` rather than ``ec2_tag_TAGNAME``).
+
+.. deprecated:: 11.2.0
+   The ``use_contrib_script_compatible_sanitization`` option is deprecated and will be removed in a release after 2026-12-01.
+   Use Ansible's default group name sanitization instead.
+
 ``use_contrib_script_compatible_ec2_tag_keys`` exposes the host tags with ec2_tag_TAGNAME keys like the old ec2.py inventory script when it's True.
 
 By default the ``aws_ec2`` plugin is using a general group name sanitization to create safe and usable group names for use in Ansible.
 
-``use_contrib_script_compatible_ec2_tag_keys`` allows you to override that, in efforts to allow migration from the old inventory script and matches the sanitization of groups when the script's replace_dash_in_groups option is set to False.
+``use_contrib_script_compatible_sanitization`` allows you to override that, in efforts to allow migration from the old inventory script and matches the sanitization of groups when the script's replace_dash_in_groups option is set to False.
 To replicate behavior of replace_dash_in_groups = True with constructed groups, you will need to replace hyphens with underscores via the regex_replace filter for those entries.
 
 For this to work you should also turn off the TRANSFORM_INVALID_GROUP_CHARS setting, otherwise the core engine will just use the standard sanitization on top.
 
 This is not the default as such names break certain functionality as not all characters are valid Python identifiers which group names end up being used as.
 
-The use of this feature is discouraged and we advise to migrate to the new tags structure.
+The use of this feature is discouraged and we advise to migrate to the new ec2_tags structure.
 
 .. code-block:: yaml
 
@@ -393,7 +401,7 @@ After providing any required options, you can view the populated inventory with 
             }
         }
     },
-    all": {
+    "all": {
           "children": [
               "aws_ec2",
               "ungrouped"
@@ -411,7 +419,7 @@ After providing any required options, you can view the populated inventory with 
 ``hostvars_prefix`` and ``hostvars_suffix``
 -------------------------------------------
 
-``hostvars_prefix`` and ``hostvars_sufix`` allow to set up a prefix and suffix for host variables.
+``hostvars_prefix`` and ``hostvars_suffix`` allow to set up a prefix and suffix for host variables.
 
 .. code-block:: yaml
 
@@ -458,7 +466,7 @@ Now the output of ``ansible-inventory -i demo.aws_ec2.yml --list``:
             }
         }
     },
-    all": {
+    "all": {
           "children": [
               "aws_ec2",
               "ungrouped"
@@ -487,6 +495,26 @@ Now the output of ``ansible-inventory -i demo.aws_ec2.yml --list``:
 ``use_ssm_inventory: True`` enables fetching additional EC2 instance information from the AWS Systems Manager (SSM) inventory service into hostvars. By leveraging the SSM inventory data, the ``use_ssm_inventory`` option provides additional details and attributes about the EC2 instances in your inventory.
 These details can include operating system information, installed software, network configurations, and custom inventory attributes defined in SSM.
 
+
+``route53_enabled``
+---------------------
+
+``route53_enabled: True`` enables to use the Route 53 DNS information as host name. The ``route53_hostnames`` option specifies the list of Route 53 DNS name suffix to consider while filtering host names while the ``route53_excluded_zones`` option specifies the list of Route53 host zones to exclude.
+
+ .. code-block:: yaml
+
+    # route53_inventory.aws_ec2.yml
+    plugin: aws_ec2
+    # This enables Route53 DNS information
+    route53_enabled: true
+    # Specifies the list of Route53 DNS zones to exclude
+    route53_excluded_zones:
+    - foo.bar.zone1
+    - foo.bar.zone2
+    # Specifies the list of Route53 DNS suffix to consider
+    route53_hostnames:
+    - example.net
+    - example.org
 
 ``cache``
 ---------
@@ -534,13 +562,13 @@ Here is an ``aws_ec2`` complex example utilizing some of the previously listed o
       - us-east-1
       - us-east-2
     keyed_groups:
-      # add hosts to tag_Name_value groups for each aws_ec2 host's tags.Name variable.
-      - key: tags.Name
+      # add hosts to tag_Name_value groups for each aws_ec2 host's ec2_tags.Name variable.
+      - key: ec2_tags.Name
         prefix: tag_Name_
         separator: ""
     groups:
       # add hosts to the group dev if any of the dictionary's keys or values is the word 'dev'.
-      development: "'dev' in (tags|list)"
+      development: "'dev' in (ec2_tags|list)"
     filters:
       tag:Name:
         - 'instance-01'
@@ -563,7 +591,7 @@ Here is an ``aws_ec2`` complex example utilizing some of the previously listed o
       # This sets the `ansible_host` variable to connect with the private IP address without changing the hostname.
       ansible_host: private_ip_address
 
-If a host does not have the variables in the configuration above (i.e. ``tags.Name``, ``tags``, ``private_ip_address``), the host will not be added to groups other than those that the inventory plugin creates and the ``ansible_host`` host variable will not be modified.
+If a host does not have the variables in the configuration above (i.e. ``ec2_tags.Name``, ``ec2_tags``, ``private_ip_address``), the host will not be added to groups other than those that the inventory plugin creates and the ``ansible_host`` host variable will not be modified.
 
 Now the output of ``ansible-inventory -i demo.aws_ec2.yml --graph``:
 
@@ -591,7 +619,7 @@ If you want to use dynamic inventory inside the playbook, you just need to menti
     - name: Ansible Test Playbook
       gather_facts: false
       hosts: tag_Name_instance_02
-      
+
       tasks:
         - name: Run Shell Command
           command: echo "Hello World"

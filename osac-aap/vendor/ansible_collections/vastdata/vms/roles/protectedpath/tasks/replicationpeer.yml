@@ -1,0 +1,40 @@
+---
+- name: Ensure native replication peer
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ protectedpath_vms[replicationpeer.cluster] }}"
+    id: "{{ replicationpeer.id | default(omit) }}"
+    leading_vip: "{{ replicationpeer.leading_vip | default(omit) }}"
+    mss: "{{ replicationpeer.mss | default(omit) }}"
+    name: "{{ replicationpeer.name | default(omit) }}"
+    password: "{{ replicationpeer.password | default(omit) }}"
+    peer_certificate: "{{ replicationpeer.peer_certificate | default(omit) }}"
+    pool_id: "{{ replicationpeer_pool_id | int }}"
+    remote_vips: "{{ replicationpeer.remote_vips | default(omit) }}"
+    secure_mode: "{{ replicationpeer.secure_mode | default(omit) }}"
+    transport_mode: "{{ replicationpeer.transport_mode | default(omit) }}"
+    version: "{{ replicationpeer.version | default(omit) }}"
+    state: "{{ replicationpeer.state | default('present') }}"
+    wait: "{{ replicationpeer.wait | default(omit) }}"
+    wait_timeout: "{{ replicationpeer.wait_timeout | default(omit) }}"
+  register: replicationpeer_ensure
+  failed_when: false
+
+- name: Verify native replication peer after failed create
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ protectedpath_vms[replicationpeer.cluster] }}"
+    name: "{{ replicationpeer.name }}"
+    state: present
+  check_mode: true
+  register: replicationpeer_verify
+  failed_when: false
+  when: replicationpeer_ensure.failed | default(false) | bool
+
+- name: Fail unresolved native replication peer create
+  ansible.builtin.fail:
+    msg: >-
+      Failed to create native replication peer "{{ replicationpeer.name }}" on
+      cluster "{{ replicationpeer.cluster }}", and follow-up lookup did not find
+      the created peer. Original error: {{ replicationpeer_ensure.msg | default(replicationpeer_ensure) }}
+  when:
+    - replicationpeer_ensure.failed | default(false) | bool
+    - (replicationpeer_verify.nativereplicationremotetargets.id | default(replicationpeer_verify.nativereplicationremotetargets.Id | default(0)) | int) < 1

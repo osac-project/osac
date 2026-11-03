@@ -268,7 +268,7 @@ import tempfile
 from shlex import quote as shlex_quote
 
 from ansible.errors import AnsibleError, AnsibleFileNotFound
-from ansible.module_utils._text import to_bytes
+from ansible.module_utils.common.text.converters import to_bytes
 from ansible.module_utils.parsing.convert_bool import boolean
 from ansible.parsing.yaml.loader import AnsibleLoader
 from ansible.plugins.connection import BUFSIZE, ConnectionBase

@@ -1,4 +1,0 @@
-minor_changes:
-  - common - Add get_error_message() utility function for safe API error extraction (#496)
-bugfixes:
-  - purefb - Fix unsafe res.errors[0].message access that could cause IndexError (#496)

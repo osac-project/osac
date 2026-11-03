@@ -575,6 +575,20 @@ var _ = ginkgo.Describe("ComputeDesiredConfigVersion", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(v1).NotTo(Equal(v2))
 	})
+
+	ginkgo.It("preserves the hash of a ClusterOrder with an empty node image", func() {
+		spec := v1alpha1.ClusterOrderSpec{NodeRequests: []v1alpha1.NodeRequest{{
+			NodeSet: "workers", NumberOfNodes: 3,
+		}}}
+		hash, err := ComputeDesiredConfigVersion(spec)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(hash).To(Equal("398d688e45d7741c"))
+
+		spec.NodeRequests[0].ReleaseImage = "registry.example/ocp:4.21.0"
+		withImage, err := ComputeDesiredConfigVersion(spec)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(withImage).NotTo(Equal(hash))
+	})
 })
 
 var _ = ginkgo.Describe("FindLatestJobByType", func() {

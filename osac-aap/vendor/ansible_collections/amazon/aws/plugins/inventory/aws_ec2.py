@@ -19,6 +19,14 @@ description:
 notes:
   - If no credentials are provided and the control node has an associated IAM instance profile then the
     role will be used for authentication.
+  - The C(tags) host variable is deprecated and will be removed in a release after 2026-12-01.
+    Use C(ec2_tags) instead to avoid conflicts with Ansible reserved variable names.
+    Set O(use_deprecated_tags=false) to disable the C(tags) host variable, and this warning, before then.
+  - The C(ec2_tags) host variable was added in version 11.2.0.
+  - The C(use_contrib_script_compatible_ec2_tag_keys) option is deprecated and will be removed in a release after 2026-12-01.
+    Use the C(ec2_tags) structure instead (e.g. use C(ec2_tags.TAGNAME) rather than C(ec2_tag_TAGNAME)).
+  - The C(use_contrib_script_compatible_sanitization) option is deprecated and will be removed in a release after 2026-12-01.
+    Use Ansible's default group name sanitization instead.
 author:
   - Sloane Hertel (@s-hertel)
 options:
@@ -103,7 +111,7 @@ options:
   use_contrib_script_compatible_sanitization:
     description:
       - By default this plugin is using a general group name sanitization to create safe and usable group names for use in Ansible.
-        This option allows you to override that, in efforts to allow migration from the old inventory script and
+        This option allows you to override that, in efforts to allow migration from the old C(ec2.py) inventory script and
         matches the sanitization of groups when the script's ``replace_dash_in_groups`` option is set to ``False``.
         To replicate behavior of ``replace_dash_in_groups = True`` with constructed groups,
         you will need to replace hyphens with underscores via the regex_replace filter for those entries.
@@ -111,15 +119,29 @@ options:
         otherwise the core engine will just use the standard sanitization on top.
       - This is not the default as such names break certain functionality as not all characters are valid Python identifiers
         which group names end up being used as.
+      - The use of this feature is deprecated and will be removed in a release after 2026-12-01.
+        Use Ansible's default group name sanitization instead.
     type: bool
     default: false
   use_contrib_script_compatible_ec2_tag_keys:
     description:
-      - Expose the host tags with ec2_tag_TAGNAME keys like the old ec2.py inventory script.
-      - The use of this feature is discouraged and we advise to migrate to the new ``tags`` structure.
+      - Expose the host tags with C(ec2_tag_TAGNAME) keys like the old C(ec2.py) inventory script.
+      - The use of this feature is deprecated and will be removed in a release after 2026-12-01.
+        Use the C(ec2_tags) structure instead (e.g. use C(ec2_tags.TAGNAME) rather than C(ec2_tag_TAGNAME)).
     type: bool
     default: false
     version_added: 1.5.0
+  use_deprecated_tags:
+    description:
+      - Whether to include the deprecated C(tags) host variable alongside C(ec2_tags).
+      - Set to V(false) to stop the plugin from adding the C(tags) host variable, which also
+        disables this plugin's C(tags) deprecation warning and Ansible's reserved variable
+        name warning for C(tags).
+      - The use of this feature is deprecated and will be removed in a release after 2026-12-01.
+        Use the C(ec2_tags) structure instead.
+    type: bool
+    default: true
+    version_added: 12.0.0
   hostvars_prefix:
     description:
       - The prefix for host variables names coming from AWS.
@@ -139,6 +161,28 @@ options:
     type: bool
     default: false
     version_added: 6.0.0
+  route53_enabled:
+    description:
+      - Whether or not to use the Route53 DNS as host name.
+      - When set to V(true), Route53 hostnames will be included.
+    type: bool
+    default: false
+    version_added: 10.1.0
+  route53_hostnames:
+    description:
+      - Specifies the Route53 DNS name suffix to consider.
+      - Consider only Route53 zone with name ending with the value specified here.
+    type: list
+    elements: str
+    default: []
+    version_added: 10.1.0
+  route53_excluded_zones:
+    description:
+      - A list of Route53 zones to exclude.
+    type: list
+    elements: str
+    default: []
+    version_added: 10.1.0
 """
 
 EXAMPLES = r"""
@@ -203,21 +247,21 @@ keyed_groups:
     key: 'architecture'
   # Add hosts to tag_Name_Value groups for each Name/Value tag pair
   - prefix: tag
-    key: tags
+    key: ec2_tags
   # Add hosts to e.g. instance_type_z3_tiny
   - prefix: instance_type
     key: instance_type
   # Create security_groups_sg_abcd1234 group for each SG
   - key: 'security_groups|json_query("[].group_id")'
     prefix: 'security_groups'
-  # Create a group for each value of the Application tag
-  - key: tags.Application
+  # Create a group for each value of the Environment tag
+  - key: ec2_tags['Environment']
     separator: ''
   # Create a group per region e.g. aws_region_us_east_2
   - key: placement.region
     prefix: aws_region
   # Create a group (or groups) based on the value of a custom tag "Role" and add them to a metagroup called "project"
-  - key: tags['Role']
+  - key: ec2_tags['Role']
     prefix: foo
     parent_group: "project"
 # Set individual variables with compose
@@ -255,7 +299,7 @@ filters:
   instance-state-name: running
 keyed_groups:
   - prefix: tag
-    key: tags
+    key: ec2_tags
 compose:
   ansible_host: public_dns_name
 groups:
@@ -278,16 +322,39 @@ regions:
   - us-east-1
 hostnames:
   - "tag:Name | replace('test', 'prod')"
+
+---
+
+# Define inventory with Route53 enabled and filtering specific route53 host names suffix.
+plugin: amazon.aws.aws_ec2
+regions:
+  - us-east-1
+route53_enabled: true
+route53_hostnames:
+  - .example.com
+  - .another_example.org
+
+---
+
+# Define inventory with Route53 enabled and excluded zones.
+plugin: amazon.aws.aws_ec2
+regions:
+  - us-east-1
+route53_enabled: true
+route53_excluded_zones:
+  - ansible.bar.net
+  - ansible.foo.net
 """
 
 import re
+from collections import defaultdict
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Set
 
-try:
-    import botocore
-except ImportError:
-    pass  # will be captured by imported HAS_BOTO3
-
-from ansible.module_utils._text import to_text
+from ansible.errors import AnsibleError
+from ansible.module_utils.common.text.converters import to_text
 
 try:
     from ansible.template import trust_as_template
@@ -295,10 +362,13 @@ except ImportError:
     trust_as_template = None
 from ansible.module_utils.common.dict_transformations import camel_dict_to_snake_dict
 
-from ansible_collections.amazon.aws.plugins.module_utils.botocore import is_boto3_error_code
+from ansible_collections.amazon.aws.plugins.module_utils.common import get_collection_info
+from ansible_collections.amazon.aws.plugins.module_utils.ec2 import describe_availability_zones
 from ansible_collections.amazon.aws.plugins.module_utils.tagging import boto3_tag_list_to_ansible_dict
 from ansible_collections.amazon.aws.plugins.module_utils.transformation import ansible_dict_to_boto3_filter_list
+from ansible_collections.amazon.aws.plugins.plugin_utils.inventory import AnsibleInventoryPermissionsError
 from ansible_collections.amazon.aws.plugins.plugin_utils.inventory import AWSInventoryBase
+from ansible_collections.amazon.aws.plugins.plugin_utils.inventory import InventoryErrorHandler
 
 # The mappings give an array of keys to get from the filter name to the value
 # returned by boto3's EC2 describe_instances method.
@@ -403,7 +473,14 @@ instance_data_filter_to_boto_attr = {
 }
 
 
-def _get_tag_hostname(preference, instance):
+def _get_tag_hostname(preference: str, instance: Dict[str, Any]) -> Any:
+    """
+    Extract hostname from instance tags based on preference string.
+
+    :param preference: Tag preference string (e.g., "tag:Name" or "tag:Name,Environment")
+    :param instance: EC2 instance dictionary containing Tags
+    :return: Tag value(s) as string or list of strings
+    """
     tag_hostnames = preference.split("tag:", 1)[1]
     expected_single_value = False
     if "," in tag_hostnames:
@@ -429,19 +506,45 @@ def _get_tag_hostname(preference, instance):
 
 
 def _prepare_host_vars(
-    original_host_vars,
-    hostvars_prefix=None,
-    hostvars_suffix=None,
-    use_contrib_script_compatible_ec2_tag_keys=False,
-):
-    host_vars = camel_dict_to_snake_dict(original_host_vars, ignore_list=["Tags"])
-    host_vars["tags"] = boto3_tag_list_to_ansible_dict(original_host_vars.get("Tags", []))
+    original_host_vars: Dict[str, Any],
+    availability_zone_ids: Dict[str, str],
+    hostvars_prefix: str = None,
+    hostvars_suffix: str = None,
+    use_contrib_script_compatible_ec2_tag_keys: bool = False,
+    use_deprecated_tags: bool = True,
+) -> Dict[str, Any]:
+    """
+    Transform EC2 instance data into Ansible host variables.
 
-    # Allow easier grouping by region
+    Converts camelCase keys to snake_case, processes tags, adds region info,
+    and applies optional prefixes/suffixes.
+
+    :param original_host_vars: Raw EC2 instance data
+    :param availability_zone_ids: Dictionary mapping zone names to zone IDs
+    :param hostvars_prefix: Optional prefix to add to all host variable names
+    :param hostvars_suffix: Optional suffix to add to all host variable names
+    :param use_contrib_script_compatible_ec2_tag_keys: If True, create ec2_tag_* variables
+    :param use_deprecated_tags: If True, also expose the deprecated 'tags' host variable
+    :return: Dictionary of processed host variables
+    """
+    host_vars = camel_dict_to_snake_dict(original_host_vars, ignore_list=["Tags"])
+    host_vars["ec2_tags"] = boto3_tag_list_to_ansible_dict(original_host_vars.get("Tags", []))
+    if use_deprecated_tags:
+        # ec2_tags is the new key, tags is deprecated but kept for backward compatibility
+        host_vars["tags"] = host_vars["ec2_tags"]
+    else:
+        # camel_dict_to_snake_dict() above already renamed the raw 'Tags' key to 'tags';
+        # drop it so the deprecated host variable is fully absent, not just left unconverted.
+        host_vars.pop("tags", None)
+
+    # Allow easier grouping by region or by AZ ID
     host_vars["placement"]["region"] = host_vars["placement"]["availability_zone"][:-1]
+    host_vars["placement"]["availability_zone_id"] = availability_zone_ids.get(
+        host_vars["placement"]["availability_zone"]
+    )
 
     if use_contrib_script_compatible_ec2_tag_keys:
-        for k, v in host_vars["tags"].items():
+        for k, v in host_vars["ec2_tags"].items():
             host_vars[f"ec2_tag_{k}"] = v
 
     if hostvars_prefix or hostvars_suffix:
@@ -456,18 +559,20 @@ def _prepare_host_vars(
     return host_vars
 
 
-def _compile_values(obj, attr):
+def _compile_values(obj: Any, attr: str) -> Any:
     """
+    Recursively extract attribute values from nested lists/dicts.
+
     :param obj: A list or dict of instance attributes
-    :param attr: A key
-    :return The value(s) found via the attr
+    :param attr: A key to extract from the object
+    :return: The value(s) found via the attr
     """
     if obj is None:
         return
 
     temp_obj = []
 
-    if isinstance(obj, list) or isinstance(obj, tuple):
+    if isinstance(obj, (list, tuple)):
         for each in obj:
             value = _compile_values(each, attr)
             if value:
@@ -475,17 +580,20 @@ def _compile_values(obj, attr):
     else:
         temp_obj = obj.get(attr)
 
-    has_indexes = any([isinstance(temp_obj, list), isinstance(temp_obj, tuple)])
+    has_indexes = any([isinstance(temp_obj, (list, tuple))])
     if has_indexes and len(temp_obj) == 1:
         return temp_obj[0]
 
     return temp_obj
 
 
-def _get_boto_attr_chain(filter_name, instance):
+def _get_boto_attr_chain(filter_name: str, instance: Dict[str, Any]) -> Any:
     """
-    :param filter_name: The filter
-    :param instance: instance dict returned by boto3 ec2 describe_instances()
+    Resolve filter name to instance attribute value by following boto3 attribute chain.
+
+    :param filter_name: Filter name (e.g., 'dns-name', 'private-ip-address')
+    :param instance: Instance dict returned by boto3 ec2 describe_instances()
+    :return: Attribute value from instance, or filter_name as literal if not recognized
     """
     allowed_filters = sorted(
         list(instance_data_filter_to_boto_attr.keys()) + list(instance_meta_filter_to_boto_attr.keys())
@@ -506,24 +614,75 @@ def _get_boto_attr_chain(filter_name, instance):
     return instance_value
 
 
-def _describe_ec2_instances(connection, filters):
+@InventoryErrorHandler.common_error_handler("describe EC2 instances")
+def _describe_ec2_instances(connection: Any, filters: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Describe EC2 instances using the given boto3 EC2 client.
+
+    :param connection: boto3 client for EC2
+    :param filters: List of filters to apply to the describe operation
+    :return: Dictionary containing reservations and instance data
+    """
     paginator = connection.get_paginator("describe_instances")
     return paginator.paginate(Filters=filters).build_full_result()
 
 
-def _get_ssm_information(client, filters):
+@InventoryErrorHandler.common_error_handler("get SSM inventory information")
+def _get_ssm_information(client: Any, filters: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Retrieve SSM inventory information using the given boto3 SSM client.
+
+    :param client: boto3 client for SSM
+    :param filters: List of filters to apply to the inventory query
+    :return: Dictionary containing inventory entities and metadata
+    """
     paginator = client.get_paginator("get_inventory")
     return paginator.paginate(Filters=filters).build_full_result()
 
 
+@InventoryErrorHandler.common_error_handler("list Route53 hosted zones")
+def _list_hosted_zones(client: Any, **kwargs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    List all hosted zones using the given boto3 Route53 client.
+
+    :param client: boto3 client for Route53
+    :param kwargs: Additional parameters for the paginator
+    :return: List of hosted zones
+    """
+    paginator = client.get_paginator("list_hosted_zones")
+    return paginator.paginate(**kwargs).build_full_result()["HostedZones"]
+
+
+@InventoryErrorHandler.common_error_handler("list Route53 resource record sets")
+def _list_resource_record_sets(client: Any, hosted_zone_id: str, **kwargs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Retrieve all resource record sets for a specific hosted zone in Route53.
+
+    :param client: A boto3 Route53 client.
+    :param hosted_zone_id: The ID of the hosted zone whose records should be listed.
+    :param kwargs: Optional keyword arguments to pass to the paginator.
+    :return: A list of dictionaries representing resource record sets.
+    """
+    paginator = client.get_paginator("list_resource_record_sets")
+    return paginator.paginate(HostedZoneId=hosted_zone_id, **kwargs).build_full_result()["ResourceRecordSets"]
+
+
+def _remove_trailing_dot(data: str) -> str:
+    """Remove the trailing dot from a string"""
+    if data.endswith("."):
+        return data[:-1]
+    return data
+
+
 class InventoryModule(AWSInventoryBase):
-    NAME = "amazon.aws.aws_ec2"
+    NAME = f"{get_collection_info()['name']}.aws_ec2"
     INVENTORY_FILE_SUFFIXES = ("aws_ec2.yml", "aws_ec2.yaml")
 
     def __init__(self):
         super().__init__()
 
         self.group_prefix = "aws_ec2_"
+        self._availability_zone_cache = {}
 
     def _get_instances_by_region(self, regions, filters, strict_permissions):
         """
@@ -540,27 +699,63 @@ class InventoryModule(AWSInventoryBase):
         for connection, _region in self.all_clients("ec2"):
             try:
                 reservations = _describe_ec2_instances(connection, filters).get("Reservations")
-                instances = []
-                for r in reservations:
-                    new_instances = r["Instances"]
-                    reservation_details = {
-                        "OwnerId": r["OwnerId"],
-                        "RequesterId": r.get("RequesterId", ""),
-                        "ReservationId": r["ReservationId"],
-                    }
-                    for instance in new_instances:
-                        instance.update(reservation_details)
-                    instances.extend(new_instances)
-            except is_boto3_error_code("UnauthorizedOperation") as e:
-                if not strict_permissions:
-                    continue
-                self.fail_aws("Failed to describe instances", exception=e)
-            except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
-                self.fail_aws("Failed to describe instances", exception=e)
+            except AnsibleInventoryPermissionsError:
+                if strict_permissions:
+                    raise
+                continue
+
+            instances = []
+            for r in reservations:
+                new_instances = r["Instances"]
+                reservation_details = {
+                    "OwnerId": r["OwnerId"],
+                    "RequesterId": r.get("RequesterId", ""),
+                    "ReservationId": r["ReservationId"],
+                }
+                for instance in new_instances:
+                    instance.update(reservation_details)
+                instances.extend(new_instances)
 
             all_instances.extend(instances)
 
         return all_instances
+
+    def _describe_azs_by_region(self, region: str) -> Dict[str, Dict[str, Any]]:
+        """
+        Describe availability zones for a given region with caching.
+
+        :param region: AWS region name
+        :return: Dictionary mapping zone names to zone information
+        """
+        if region in self._availability_zone_cache:
+            return self._availability_zone_cache[region]
+
+        connection = self.client("ec2", region=region)
+        az_info = {az["ZoneName"]: az for az in describe_availability_zones(connection)}
+
+        self._availability_zone_cache[region] = az_info
+        return az_info
+
+    def _get_availability_zone_ids(self, strict_permissions: bool) -> Dict[str, str]:
+        """
+        Get availability zone ID mappings for all configured regions.
+
+        :param strict_permissions: Whether to fail or ignore 403 error codes
+        :return: Dictionary mapping zone names to zone IDs
+        """
+        availability_zone_ids = {}
+
+        for _connection, region in self.all_clients("ec2"):
+            try:
+                az_info = self._describe_azs_by_region(region)
+                for zone_name, zone_data in az_info.items():
+                    availability_zone_ids[zone_name] = zone_data["ZoneId"]
+            except AnsibleInventoryPermissionsError:
+                if strict_permissions:
+                    raise
+                continue
+
+        return availability_zone_ids
 
     def _sanitize_hostname(self, hostname):
         if ":" in to_text(hostname):
@@ -585,10 +780,36 @@ class InventoryModule(AWSInventoryBase):
                 template_var = "{{%s|%s}}" % (hostname, jinja2_filter)
             if trust_as_template:
                 template_var = trust_as_template(template_var)
-            hostname = self.templar.template(variable=template_var, disable_lookups=False)
+            hostname = self.templar.template(variable=template_var)
         if isinstance(hostname, list) and return_single_hostname:
             hostname = hostname[0] if hostname else None
         return hostname
+
+    @property
+    def route53_enabled(self) -> bool:
+        return self.get_option("route53_enabled")
+
+    def _process_hostname_dict_preference(self, instance, preference):
+        """
+        Process a dict preference to construct a hostname.
+
+        :param instance: an instance dict returned by boto3 ec2 describe_instances()
+        :param preference: a dict containing 'name', optional 'prefix', and optional 'separator'
+        :return: constructed hostname or None
+        """
+        if "name" not in preference:
+            raise AnsibleError("A 'name' key must be defined in a hostnames dictionary.")
+
+        hostname = self._get_preferred_hostname(instance, [preference["name"]])
+        if "prefix" not in preference:
+            return hostname
+
+        hostname_from_prefix = self._get_preferred_hostname(instance, [preference["prefix"]])
+        if not (hostname and hostname_from_prefix):
+            return hostname
+
+        separator = preference.get("separator", "_")
+        return hostname_from_prefix + separator + hostname
 
     def _get_preferred_hostname(self, instance, hostnames):
         """
@@ -596,27 +817,60 @@ class InventoryModule(AWSInventoryBase):
         :param hostnames: a list of hostname destination variables in order of preference
         :return the preferred identifer for the host
         """
+        if self.route53_enabled:
+            route53_hostnames = self._get_instance_route53_hostnames(instance)
+            if route53_hostnames:
+                # This method returns only one hostname
+                return self._sanitize_hostname(sorted(route53_hostnames)[0])
+
         if not hostnames:
             hostnames = ["dns-name", "private-dns-name"]
 
-        hostname = None
         for preference in hostnames:
             if isinstance(preference, dict):
-                if "name" not in preference:
-                    self.fail_aws("A 'name' key must be defined in a hostnames dictionary.")
-                hostname = self._get_preferred_hostname(instance, [preference["name"]])
-                hostname_from_prefix = None
-                if "prefix" in preference:
-                    hostname_from_prefix = self._get_preferred_hostname(instance, [preference["prefix"]])
-                separator = preference.get("separator", "_")
-                if hostname and hostname_from_prefix and "prefix" in preference:
-                    hostname = hostname_from_prefix + separator + hostname
+                hostname = self._process_hostname_dict_preference(instance, preference)
             else:
                 hostname = self._get_hostname_with_jinja2_filter(instance, preference, return_single_hostname=True)
+
             if hostname:
-                break
-        if hostname:
-            return self._sanitize_hostname(hostname)
+                return self._sanitize_hostname(hostname)
+
+        return None
+
+    def _process_all_hostnames_dict_preference(self, instance, preference):
+        """
+        Process a dict preference to construct a hostname for the all hostnames case.
+
+        :param instance: an instance dict returned by boto3 ec2 describe_instances()
+        :param preference: a dict containing 'name', optional 'prefix', and optional 'separator'
+        :return: constructed hostname (string or list) or None
+        """
+        if "name" not in preference:
+            raise AnsibleError("A 'name' key must be defined in a hostnames dictionary.")
+
+        hostname = self._get_all_hostnames(instance, [preference["name"]])
+        if "prefix" not in preference:
+            return hostname
+
+        hostname_from_prefix = self._get_all_hostnames(instance, [preference["prefix"]])
+        if not (hostname and hostname_from_prefix):
+            return hostname
+
+        separator = preference.get("separator", "_")
+        return hostname_from_prefix[0] + separator + hostname[0]
+
+    def _add_hostname_to_list(self, hostname_list, hostname):
+        """
+        Add a hostname to the list, handling both string and list types.
+
+        :param hostname_list: the list to add to
+        :param hostname: the hostname(s) to add (string or list)
+        """
+        if isinstance(hostname, list):
+            for host in hostname:
+                hostname_list.append(self._sanitize_hostname(host))
+        elif isinstance(hostname, str):
+            hostname_list.append(self._sanitize_hostname(hostname))
 
     def _get_all_hostnames(self, instance, hostnames):
         """
@@ -624,31 +878,21 @@ class InventoryModule(AWSInventoryBase):
         :param hostnames: a list of hostname destination variables
         :return all the candidats matching the expectation
         """
+        hostname_list = []
+        if self.route53_enabled:
+            hostname_list = [self._sanitize_hostname(name) for name in self._get_instance_route53_hostnames(instance)]
+
         if not hostnames:
             hostnames = ["dns-name", "private-dns-name"]
 
-        hostname = None
-        hostname_list = []
         for preference in hostnames:
             if isinstance(preference, dict):
-                if "name" not in preference:
-                    self.fail_aws("A 'name' key must be defined in a hostnames dictionary.")
-                hostname = self._get_all_hostnames(instance, [preference["name"]])
-                hostname_from_prefix = None
-                if "prefix" in preference:
-                    hostname_from_prefix = self._get_all_hostnames(instance, [preference["prefix"]])
-                separator = preference.get("separator", "_")
-                if hostname and hostname_from_prefix and "prefix" in preference:
-                    hostname = hostname_from_prefix[0] + separator + hostname[0]
+                hostname = self._process_all_hostnames_dict_preference(instance, preference)
             else:
                 hostname = self._get_hostname_with_jinja2_filter(instance, preference)
 
             if hostname:
-                if isinstance(hostname, list):
-                    for host in hostname:
-                        hostname_list.append(self._sanitize_hostname(host))
-                elif isinstance(hostname, str):
-                    hostname_list.append(self._sanitize_hostname(hostname))
+                self._add_hostname_to_list(hostname_list, hostname)
 
         return hostname_list
 
@@ -698,6 +942,37 @@ class InventoryModule(AWSInventoryBase):
                         x["SsmInventory"] = content[0]
                     break
 
+    def _map_route53_records(self) -> Dict[str, Set[str]]:
+        """Get and store the map of resource records to domain names that point to them."""
+        route53_excluded_zones = [_remove_trailing_dot(zone) for zone in self.get_option("route53_excluded_zones")]
+        route53_map = defaultdict(set)
+        for connection, _region in self.all_clients("route53"):
+            for zone in _list_hosted_zones(connection):
+                if _remove_trailing_dot(zone["Name"]) in route53_excluded_zones:
+                    continue
+                for record in _list_resource_record_sets(client=connection, hosted_zone_id=zone["Id"]):
+                    for resource in record.get("ResourceRecords", []):
+                        route53_map[_remove_trailing_dot(resource["Value"])].add(_remove_trailing_dot(record["Name"]))
+        return route53_map
+
+    def _is_matching_route53_hostname(self, hostname: str) -> bool:
+        route53_hostnames = self.get_option("route53_hostnames")
+        result = True
+        if route53_hostnames:
+            result = any((hostname.endswith(name) for name in route53_hostnames))
+        return result
+
+    def _get_instance_route53_hostnames(self, instance: Dict[str, Any]) -> List[str]:
+        """Check if an instance is referenced in the records we have from
+        Route53. If it is, return the list of domain names pointing to that
+        instance. If nothing points to it, return an empty list."""
+
+        hostnames = set()
+        for attr in ("PublicDnsName", "PrivateDnsName", "PublicIpAddress", "PrivateIpAddress"):
+            if (attr_value := instance.get(attr)) and attr_value in self.route53_resource_record_mapping:
+                hostnames.update(self.route53_resource_record_mapping[attr_value])
+        return [name for name in hostnames if self._is_matching_route53_hostname(name)]
+
     def _get_multiple_ssm_inventories(self, connection, instance_ids):
         result = []
         # SSM inventory filters Values list can contain a maximum of 40 items so we need to retrieve 40 at a time
@@ -715,10 +990,12 @@ class InventoryModule(AWSInventoryBase):
         self,
         groups,
         hostnames,
+        availability_zone_ids,
         allow_duplicated_hosts=False,
         hostvars_prefix=None,
         hostvars_suffix=None,
         use_contrib_script_compatible_ec2_tag_keys=False,
+        use_deprecated_tags=True,
     ):
         for group in groups:
             group = self.inventory.add_group(group)
@@ -726,10 +1003,12 @@ class InventoryModule(AWSInventoryBase):
                 hosts=groups[group],
                 group=group,
                 hostnames=hostnames,
+                availability_zone_ids=availability_zone_ids,
                 allow_duplicated_hosts=allow_duplicated_hosts,
                 hostvars_prefix=hostvars_prefix,
                 hostvars_suffix=hostvars_suffix,
                 use_contrib_script_compatible_ec2_tag_keys=use_contrib_script_compatible_ec2_tag_keys,
+                use_deprecated_tags=use_deprecated_tags,
             )
             self.inventory.add_child("all", group)
 
@@ -737,10 +1016,12 @@ class InventoryModule(AWSInventoryBase):
         self,
         hosts,
         hostnames,
+        availability_zone_ids,
         allow_duplicated_hosts=False,
         hostvars_prefix=None,
         hostvars_suffix=None,
         use_contrib_script_compatible_ec2_tag_keys=False,
+        use_deprecated_tags=True,
     ):
         for host in hosts:
             if allow_duplicated_hosts:
@@ -752,9 +1033,11 @@ class InventoryModule(AWSInventoryBase):
 
             host_vars = _prepare_host_vars(
                 host,
+                availability_zone_ids,
                 hostvars_prefix,
                 hostvars_suffix,
                 use_contrib_script_compatible_ec2_tag_keys,
+                use_deprecated_tags,
             )
             for name in hostname_list:
                 yield to_text(name), host_vars
@@ -764,28 +1047,34 @@ class InventoryModule(AWSInventoryBase):
         hosts,
         group,
         hostnames,
+        availability_zone_ids,
         allow_duplicated_hosts=False,
         hostvars_prefix=None,
         hostvars_suffix=None,
         use_contrib_script_compatible_ec2_tag_keys=False,
+        use_deprecated_tags=True,
     ):
         """
         :param hosts: a list of hosts to be added to a group
         :param group: the name of the group to which the hosts belong
         :param hostnames: a list of hostname destination variables in order of preference
+        :param availability_zone_ids: Dictionary mapping zone names to zone IDs
         :param bool allow_duplicated_hosts: if true, accept same host with different names
         :param str hostvars_prefix: starts the hostvars variable name with this prefix
         :param str hostvars_suffix: ends the hostvars variable name with this suffix
         :param bool use_contrib_script_compatible_ec2_tag_keys: transform the host name with the legacy naming system
+        :param bool use_deprecated_tags: if true, also expose the deprecated 'tags' host variable
         """
 
         for name, host_vars in self.iter_entry(
             hosts,
             hostnames,
+            availability_zone_ids,
             allow_duplicated_hosts=allow_duplicated_hosts,
             hostvars_prefix=hostvars_prefix,
             hostvars_suffix=hostvars_suffix,
             use_contrib_script_compatible_ec2_tag_keys=use_contrib_script_compatible_ec2_tag_keys,
+            use_deprecated_tags=use_deprecated_tags,
         ):
             self.inventory.add_host(name, group=group)
             for k, v in host_vars.items():
@@ -813,10 +1102,8 @@ class InventoryModule(AWSInventoryBase):
     def parse(self, inventory, loader, path, cache=True):
         super().parse(inventory, loader, path, cache=cache)
 
-        if self.get_option("use_contrib_script_compatible_sanitization"):
-            self._sanitize_group_name = self._legacy_script_compatible_group_sanitization
-
         # get user specifications
+        collection_name = get_collection_info()["name"]
         regions = self.get_option("regions")
         include_filters = self.build_include_filters()
         exclude_filters = self.get_option("exclude_filters")
@@ -826,8 +1113,35 @@ class InventoryModule(AWSInventoryBase):
 
         hostvars_prefix = self.get_option("hostvars_prefix")
         hostvars_suffix = self.get_option("hostvars_suffix")
+        use_contrib_script_compatible_sanitization = self.get_option("use_contrib_script_compatible_sanitization")
         use_contrib_script_compatible_ec2_tag_keys = self.get_option("use_contrib_script_compatible_ec2_tag_keys")
+        use_deprecated_tags = self.get_option("use_deprecated_tags")
         use_ssm_inventory = self.get_option("use_ssm_inventory")
+
+        if use_deprecated_tags:
+            self.display.deprecated(
+                "The 'tags' host variable is deprecated. Use 'ec2_tags' instead.",
+                date="2026-12-01",
+                collection_name=collection_name,
+            )
+
+        if use_contrib_script_compatible_sanitization:
+            self.display.deprecated(
+                "The 'use_contrib_script_compatible_sanitization' option is deprecated. "
+                "Use Ansible's default group name sanitization instead.",
+                date="2026-12-01",
+                collection_name=collection_name,
+            )
+
+            self._sanitize_group_name = self._legacy_script_compatible_group_sanitization
+
+        if use_contrib_script_compatible_ec2_tag_keys:
+            self.display.deprecated(
+                "The 'use_contrib_script_compatible_ec2_tag_keys' option is deprecated. "
+                "Use the 'ec2_tags' structure instead.",
+                date="2026-12-01",
+                collection_name=collection_name,
+            )
 
         if not all(isinstance(element, (dict, str)) for element in hostnames):
             self.fail_aws("Hostnames should be a list of dict and str.")
@@ -837,13 +1151,20 @@ class InventoryModule(AWSInventoryBase):
         if not result_was_cached:
             results = self._query(regions, include_filters, exclude_filters, strict_permissions, use_ssm_inventory)
 
+        if self.route53_enabled:
+            self.route53_resource_record_mapping = self._map_route53_records()
+
+        availability_zone_ids = self._get_availability_zone_ids(strict_permissions)
+
         self._populate(
             results,
             hostnames,
+            availability_zone_ids,
             allow_duplicated_hosts=allow_duplicated_hosts,
             hostvars_prefix=hostvars_prefix,
             hostvars_suffix=hostvars_suffix,
             use_contrib_script_compatible_ec2_tag_keys=use_contrib_script_compatible_ec2_tag_keys,
+            use_deprecated_tags=use_deprecated_tags,
         )
 
         self.update_cached_result(path, cache, results)

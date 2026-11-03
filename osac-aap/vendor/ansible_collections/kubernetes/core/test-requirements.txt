@@ -7,3 +7,6 @@ pytest-mock
 pytest-forked
 virtualenv
 pytest-ansible
+
+# OSAC security floors; maintained in scripts/patch_vendor_requirements.py.
+setuptools>=84.2.1

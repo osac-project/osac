@@ -6,15 +6,16 @@ from ansible.module_utils.basic import AnsibleModule, env_fallback
 from ansible.module_utils.urls import Request, SSLValidationError, ConnectionError
 from ansible.module_utils.parsing.convert_bool import boolean as strtobool
 from ansible.module_utils.six import PY2
-from ansible.module_utils.six import raise_from, string_types
+from ansible.module_utils.six import raise_from
 from ansible.module_utils.six.moves import StringIO
 from ansible.module_utils.six.moves.urllib.error import HTTPError
 from ansible.module_utils.six.moves.http_cookiejar import CookieJar
 from ansible.module_utils.six.moves.urllib.parse import urlparse, urlencode, quote
 from ansible.module_utils.six.moves.configparser import ConfigParser, NoOptionError
+from base64 import b64encode
 from socket import getaddrinfo, IPPROTO_TCP
 import time
-import re
+import random
 from json import loads, dumps
 from os.path import isfile, expanduser, split, join, exists, isdir
 from os import access, R_OK, getcwd, environ, getenv
@@ -24,9 +25,9 @@ try:
     from ansible.module_utils.compat.version import LooseVersion as Version
 except ImportError:
     try:
-        from distutils.version import LooseVersion as Version
+        from packaging.version import Version
     except ImportError:
-        raise AssertionError('To use this plugin or module with ansible-core 2.11, you need to use Python < 3.12 with distutils.version present')
+        raise AssertionError('To use this plugin or module you need to use Python >= 3.12')
 
 try:
     import yaml
@@ -34,6 +35,21 @@ try:
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
+
+# 502/503: request never reached the server — always safe to retry any method
+ALWAYS_RETRYABLE = {
+    502: ['GET', 'POST', 'PATCH', 'DELETE'],  # Bad Gateway
+    503: ['GET', 'POST', 'PATCH', 'DELETE'],  # Service Unavailable
+}
+
+# 500/504: idempotent methods only — GETs are reads, PATCH/DELETE are
+# idempotent by definition; POST is excluded unless we know it's safe.
+IDEMPOTENT_RETRYABLE = {
+    500: ['GET', 'PATCH', 'DELETE'],  # Internal Server Error
+    504: ['GET', 'PATCH', 'DELETE'],  # Gateway Timeout
+}
+
+CONTROLLER_BASE_PATH_ENV_VAR = "CONTROLLER_OPTIONAL_API_URLPATTERN_PREFIX"
 
 
 class ConfigFileException(Exception):
@@ -47,15 +63,51 @@ class ItemNotDefined(Exception):
 class ControllerModule(AnsibleModule):
     url = None
     AUTH_ARGSPEC = dict(
-        controller_host=dict(required=False, aliases=['tower_host'], fallback=(env_fallback, ['CONTROLLER_HOST', 'TOWER_HOST'])),
-        controller_username=dict(required=False, aliases=['tower_username'], fallback=(env_fallback, ['CONTROLLER_USERNAME', 'TOWER_USERNAME'])),
-        controller_password=dict(no_log=True, aliases=['tower_password'], required=False, fallback=(env_fallback, ['CONTROLLER_PASSWORD', 'TOWER_PASSWORD'])),
-        validate_certs=dict(type='bool', aliases=['tower_verify_ssl'], required=False, fallback=(env_fallback, ['CONTROLLER_VERIFY_SSL', 'TOWER_VERIFY_SSL'])),
-        request_timeout=dict(type='float', required=False, fallback=(env_fallback, ['CONTROLLER_REQUEST_TIMEOUT'])),
-        controller_oauthtoken=dict(
-            type='raw', no_log=True, aliases=['tower_oauthtoken'], required=False, fallback=(env_fallback, ['CONTROLLER_OAUTH_TOKEN', 'TOWER_OAUTH_TOKEN'])
+        controller_host=dict(
+            required=False,
+            aliases=['tower_host', 'aap_hostname'],
+            fallback=(env_fallback, ['CONTROLLER_HOST', 'TOWER_HOST', 'AAP_HOSTNAME'])),
+        controller_username=dict(
+            required=False,
+            aliases=['tower_username', 'aap_username'],
+            fallback=(env_fallback, ['CONTROLLER_USERNAME', 'TOWER_USERNAME', 'AAP_USERNAME'])),
+        controller_password=dict(
+            no_log=True,
+            aliases=['tower_password', 'aap_password'],
+            required=False,
+            fallback=(env_fallback, ['CONTROLLER_PASSWORD', 'TOWER_PASSWORD', 'AAP_PASSWORD'])),
+        validate_certs=dict(
+            type='bool',
+            aliases=['tower_verify_ssl', 'aap_validate_certs'],
+            required=False,
+            fallback=(env_fallback, ['CONTROLLER_VERIFY_SSL', 'TOWER_VERIFY_SSL', 'AAP_VALIDATE_CERTS'])),
+        request_timeout=dict(
+            type='float',
+            aliases=['aap_request_timeout'],
+            required=False,
+            fallback=(env_fallback, ['CONTROLLER_REQUEST_TIMEOUT', 'AAP_REQUEST_TIMEOUT'])),
+        max_retries=dict(
+            type='int',
+            aliases=['aap_max_retries'],
+            required=False,
+            fallback=(env_fallback, ['AAP_MAX_RETRIES'])),
+        retry_backoff_factor=dict(
+            type='int',
+            aliases=['aap_retry_backoff_factor'],
+            required=False,
+            fallback=(env_fallback, ['AAP_RETRY_BACKOFF_FACTOR'])),
+        aap_token=dict(
+            type='raw',
+            no_log=True,
+            aliases=['oauth_token', 'controller_oauthtoken', 'tower_oauthtoken'],
+            required=False,
+            fallback=(env_fallback, ['CONTROLLER_OAUTH_TOKEN', 'TOWER_OAUTH_TOKEN', 'AAP_TOKEN'])
         ),
-        controller_config_file=dict(type='path', aliases=['tower_config_file'], required=False, default=None),
+        controller_config_file=dict(
+            type='path',
+            aliases=['tower_config_file'],
+            required=False,
+            default=None),
     )
     # Associations of these types are ordered and have special consideration in the modified associations function
     ordered_associations = ['instance_groups', 'galaxy_credentials', 'input_inventories']
@@ -65,20 +117,27 @@ class ControllerModule(AnsibleModule):
         'password': 'controller_password',
         'verify_ssl': 'validate_certs',
         'request_timeout': 'request_timeout',
-        'oauth_token': 'controller_oauthtoken',
+        'max_retries': 'max_retries',
+        'retry_backoff_factor': 'retry_backoff_factor',
+        'aap_token': 'aap_token',
     }
     host = '127.0.0.1'
     username = None
     password = None
+    aap_token = None
     verify_ssl = True
     request_timeout = 10
-    oauth_token = None
-    oauth_token_id = None
+    max_retries = 5
+    retry_backoff_factor = 2
     authenticated = False
     config_name = 'tower_cli.cfg'
     version_checked = False
     error_callback = None
     warn_callback = None
+    apps_api_versions = {
+        "awx": "v2",
+        "gateway": "v1",
+    }
 
     def __init__(self, argument_spec=None, direct_params=None, error_callback=None, warn_callback=None, **kwargs):
         full_argspec = {}
@@ -104,22 +163,10 @@ class ControllerModule(AnsibleModule):
             if direct_value is not None:
                 setattr(self, short_param, direct_value)
 
-        # Perform magic depending on whether controller_oauthtoken is a string or a dict
-        if self.params.get('controller_oauthtoken'):
-            token_param = self.params.get('controller_oauthtoken')
-            if isinstance(token_param, dict):
-                if 'token' in token_param:
-                    self.oauth_token = self.params.get('controller_oauthtoken')['token']
-                else:
-                    self.fail_json(msg="The provided dict in controller_oauthtoken did not properly contain the token entry")
-            elif isinstance(token_param, string_types):
-                self.oauth_token = self.params.get('controller_oauthtoken')
-            else:
-                error_msg = "The provided controller_oauthtoken type was not valid ({0}). Valid options are str or dict.".format(type(token_param).__name__)
-                self.fail_json(msg=error_msg)
+        self._parse_aap_token()
 
         # Perform some basic validation
-        if not re.match('^https{0,1}://', self.host):
+        if not self.host.startswith(("https://", "http://")):  # NOSONAR
             self.host = "https://{0}".format(self.host)
 
         # Try to parse the hostname as a url
@@ -144,14 +191,24 @@ class ControllerModule(AnsibleModule):
         except Exception as e:
             self.fail_json(msg="Unable to resolve controller_host ({1}): {0}".format(self.url.hostname, e))
 
-    def build_url(self, endpoint, query_params=None):
+    def _parse_aap_token(self):
+        # aap_token can be the token string itself, or the dict that the
+        # ansible.platform.token module sets as the aap_token fact
+        if isinstance(self.aap_token, dict):
+            if 'token' in self.aap_token:
+                self.aap_token = self.aap_token['token']
+            else:
+                self.fail_json(msg="The provided dict in aap_token did not properly contain the token entry")
+
+    def build_url(self, endpoint, query_params=None, app_key=None):
         # Make sure we start with /api/vX
         if not endpoint.startswith("/"):
             endpoint = "/{0}".format(endpoint)
         hostname_prefix = self.url_prefix.rstrip("/")
-        api_path = self.api_path()
+        api_path = self.api_path(app_key=app_key)
+        api_version = self.apps_api_versions.get(app_key, self.apps_api_versions.get("awx", "v2"))
         if not endpoint.startswith(hostname_prefix + api_path):
-            endpoint = hostname_prefix + f"{api_path}v2{endpoint}"
+            endpoint = hostname_prefix + f"{api_path}{api_version}{endpoint}"
         if not endpoint.endswith('/') and '?' not in endpoint:
             endpoint = "{0}/".format(endpoint)
 
@@ -241,7 +298,8 @@ class ControllerModule(AnsibleModule):
 
                     # If we made it here then we have values from reading the ini file, so let's pull them out into a dict
                     config_data = {}
-                    for honorred_setting in self.short_params:
+                    # 'oauth_token' is the legacy (pre-aap_token) config file key, kept for backward compatibility
+                    for honorred_setting in list(self.short_params) + ['oauth_token']:
                         try:
                             config_data[honorred_setting] = config.get('general', honorred_setting)
                         except NoOptionError:
@@ -252,6 +310,12 @@ class ControllerModule(AnsibleModule):
 
         except Exception as e:
             raise_from(ConfigFileException("An unknown exception occured trying to load config file: {0}".format(e)), e)
+
+        # Backward compatibility: config files written for older collection
+        # releases used the oauth_token key; map it to aap_token.
+        # If both keys are present, the new aap_token key wins.
+        if 'oauth_token' in config_data and 'aap_token' not in config_data:
+            config_data['aap_token'] = config_data['oauth_token']
 
         # If we made it here, we have a dict which has values in it from our config, any final settings logic can be performed here
         for honorred_setting in self.short_params:
@@ -292,7 +356,7 @@ class ControllerModule(AnsibleModule):
 class ControllerAPIModule(ControllerModule):
     # TODO: Move the collection version check into controller_module.py
     # This gets set by the make process so whatever is in here is irrelevant
-    _COLLECTION_VERSION = "4.6.11"
+    _COLLECTION_VERSION = "4.8.12"
     _COLLECTION_TYPE = "controller"
     # This maps the collections type (awx/tower) to the values returned by the API
     # Those values can be found in awx/api/generics.py line 204
@@ -327,8 +391,7 @@ class ControllerAPIModule(ControllerModule):
             for field_name in ControllerAPIModule.IDENTITY_FIELDS.values():
                 if field_name in item:
                     return item[field_name]
-
-            if item.get('type', None) in ('o_auth2_access_token', 'credential_input_source'):
+            if item.get('type', None) == 'credential_input_source':
                 return item['id']
 
         if allow_unknown:
@@ -474,6 +537,49 @@ class ControllerAPIModule(ControllerModule):
     def resolve_name_to_id(self, endpoint, name_or_id):
         return self.get_exactly_one(endpoint, name_or_id)['id']
 
+    def is_retryable(self, status_code, method, endpoint):
+        """
+        Determine whether a failed request is safe to retry.
+
+        Args:
+            status_code (int):  HTTP status code returned by the server.
+            method      (str):  HTTP verb in uppercase ('GET', 'POST', etc.).
+            endpoint    (str):  The API endpoint path (e.g. '/api/v2/job_templates/1/launch/').
+
+        Returns:
+            bool: True if the request can safely be retried.
+        """
+        # --- Always safe: 502/503 mean the request never reached AWX ---
+        if method in ALWAYS_RETRYABLE.get(status_code, []):
+            return True
+
+        # --- Safe for inherently idempotent methods (GET, PATCH, DELETE) ---
+        if method in IDEMPOTENT_RETRYABLE.get(status_code, []):
+            return True
+
+        # --- POST/PATCH on 500/504: safe UNLESS the endpoint triggers execution ---
+        if method in ('POST', 'PATCH') and status_code in (500, 504):
+
+            # /launch, /relaunch, /callback etc. — retrying would double-execute
+            # Catches: /job_templates/1/launch/, /workflow_job_templates/1/launch/,
+            #          /jobs/1/relaunch/, /ad_hoc_commands/1/relaunch/ …
+            launch_keywords = ('/launch', '/relaunch', '/callback')
+            if any(kw in endpoint for kw in launch_keywords):
+                return False
+
+            # POST to the ad_hoc_commands collection root creates AND immediately
+            # executes the command — not safe to retry.
+            # PATCH to /ad_hoc_commands/<id>/ is fine (handled by PATCH branch above
+            # but would also pass through here correctly).
+            if method == 'POST' and endpoint.rstrip('/').endswith('/ad_hoc_commands'):
+                return False
+
+            # All other POST/PATCH endpoints (create resource, update resource) are
+            # safe: a 500/504 before the DB transaction commits means no side-effect.
+            return True
+
+        return False
+
     def make_request(self, method, endpoint, *args, **kwargs):
         # In case someone is calling us directly; make sure we were given a method, let's not just assume a GET
         if not method:
@@ -487,189 +593,226 @@ class ControllerAPIModule(ControllerModule):
         # Extract the headers, this will be used in a couple of places
         headers = kwargs.get('headers', {})
 
-        # Authenticate to AWX (if we don't have a token and if not already done so)
-        if not self.oauth_token and not self.authenticated:
-            # This method will set a cookie in the cookie jar for us and also an oauth_token
-            self.authenticate(**kwargs)
-        if self.oauth_token:
-            # If we have a oauth token, we just use a bearer header
-            headers['Authorization'] = 'Bearer {0}'.format(self.oauth_token)
+        headers['Authorization'] = self._get_authorization_header(**kwargs)
 
         if method in ['POST', 'PUT', 'PATCH']:
             headers.setdefault('Content-Type', 'application/json')
             kwargs['headers'] = headers
 
-        data = None  # Important, if content type is not JSON, this should not be dict type
+        data = None
         if headers.get('Content-Type', '') == 'application/json':
             data = dumps(kwargs.get('data', {}))
 
-        try:
-            response = self.session.open(
-                method, url.geturl(),
-                headers=headers,
-                timeout=self.request_timeout,
-                validate_certs=self.verify_ssl,
-                follow_redirects=True,
-                data=data
-            )
-        except (SSLValidationError) as ssl_err:
-            self.fail_json(msg="Could not establish a secure connection to your host ({1}): {0}.".format(url.netloc, ssl_err))
-        except (ConnectionError) as con_err:
-            self.fail_json(msg="There was a network error of some kind trying to connect to your host ({1}): {0}.".format(url.netloc, con_err))
-        except (HTTPError) as he:
-            # Sanity check: Did the server send back some kind of internal error?
-            if he.code >= 500:
-                self.fail_json(msg='The host sent back a server error ({1}): {0}. Please check the logs and try again later'.format(url.path, he))
-            # Sanity check: Did we fail to authenticate properly?  If so, fail out now; this is always a failure.
-            elif he.code == 401:
-                self.fail_json(msg='Invalid authentication credentials for {0} (HTTP 401).'.format(url.path))
-            # Sanity check: Did we get a forbidden response, which means that the user isn't allowed to do this? Report that.
-            elif he.code == 403:
-                # Hack: Tell the customer to use the platform supported collection when interacting with Org, Team, User Controller endpoints
-                err_msg = he.fp.read().decode('utf-8')
-                try:
-                    # Defensive coding. Handle json responses and non-json responses
-                    err_msg = loads(err_msg)
-                    err_msg = err_msg['detail']
-                # JSONDecodeError only available on Python 3.5+
-                except ValueError:
-                    pass
-                prepend_msg = " Use the collection ansible.platform to modify resources Organization, User, or Team." if (
-                    "this resource via the platform ingress") in err_msg else ""
-                self.fail_json(msg="You don't have permission to {1} to {0} (HTTP 403).{2}".format(url.path, method, prepend_msg))
-            # Sanity check: Did we get a 404 response?
-            # Requests with primary keys will return a 404 if there is no response, and we want to consistently trap these.
-            elif he.code == 404:
-                if kwargs.get('return_none_on_404', False):
-                    return None
-                self.fail_json(msg='The requested object could not be found at {0}.'.format(url.path))
-            # Sanity check: Did we get a 405 response?
-            # A 405 means we used a method that isn't allowed. Usually this is a bad request, but it requires special treatment because the
-            # API sends it as a logic error in a few situations (e.g. trying to cancel a job that isn't running).
-            elif he.code == 405:
-                self.fail_json(msg="Cannot make a request with the {0} method to this endpoint {1}".format(method, url.path))
-            # Sanity check: Did we get some other kind of error?  If so, write an appropriate error message.
-            elif he.code >= 400:
-                # We are going to return a 400 so the module can decide what to do with it
-                page_data = he.read()
-                try:
-                    return {'status_code': he.code, 'json': loads(page_data)}
-                # JSONDecodeError only available on Python 3.5+
-                except ValueError:
-                    return {'status_code': he.code, 'text': page_data}
-            elif he.code == 204 and method == 'DELETE':
-                # A 204 is a normal response for a delete function
-                pass
-            else:
-                self.fail_json(msg="Unexpected return code when calling {0}: {1}".format(url.geturl(), he))
-        except (Exception) as e:
-            self.fail_json(msg="There was an unknown error when trying to connect to {2}: {0} {1}".format(type(e).__name__, e, url.geturl()))
+        # ----------------------------------------------------------------
+        # Retry loop — wraps only the session.open() + HTTPError handling
+        # Everything above (auth, URL building) happens once before the loop
+        # ----------------------------------------------------------------
+        max_retries = self.max_retries
+        backoff_factor = self.retry_backoff_factor
+        last_response = None
 
-        if not self.version_checked:
-            # In PY2 we get back an HTTPResponse object but PY2 is returning an addinfourl
-            # First try to get the headers in PY3 format and then drop down to PY2.
-            try:
-                controller_type = response.getheader('X-API-Product-Name', None)
-                controller_version = response.getheader('X-API-Product-Version', None)
-            except Exception:
-                controller_type = response.info().getheader('X-API-Product-Name', None)
-                controller_version = response.info().getheader('X-API-Product-Version', None)
+        for attempt in range(max_retries + 1):  # attempt 0 = first try
 
-            parsed_collection_version = Version(self._COLLECTION_VERSION).version
-            if controller_version:
-                parsed_controller_version = Version(controller_version).version
-                if controller_type == 'AWX':
-                    collection_compare_ver = parsed_collection_version[0]
-                    controller_compare_ver = parsed_controller_version[0]
-                else:
-                    collection_compare_ver = "{0}.{1}".format(parsed_collection_version[0], parsed_collection_version[1])
-                    controller_compare_ver = '{0}.{1}'.format(parsed_controller_version[0], parsed_controller_version[1])
-
-                if self._COLLECTION_TYPE not in self.collection_to_version or self.collection_to_version[self._COLLECTION_TYPE] != controller_type:
-                    self.warn("You are using the {0} version of this collection but connecting to {1}".format(self._COLLECTION_TYPE, controller_type))
-                elif collection_compare_ver != controller_compare_ver:
-                    self.warn(
-                        "You are running collection version {0} but connecting to {2} version {1}".format(
-                            self._COLLECTION_VERSION, controller_version, controller_type
-                        )
+            if attempt > 0:
+                sleep_time = (backoff_factor ** (attempt - 1)) * (0.5 + random.random())
+                self.warn(
+                    'Retrying {0} {1} (attempt {2}/{3}) after {4}s due to status {5}'.format(
+                        method, url.path, attempt, max_retries, sleep_time,
+                        last_response if last_response else 'connection error'
                     )
-
-            self.version_checked = True
-
-        response_body = ''
-        try:
-            response_body = response.read()
-        except (Exception) as e:
-            self.fail_json(msg="Failed to read response body: {0}".format(e))
-
-        response_json = {}
-        if response_body and response_body != '':
-            try:
-                response_json = loads(response_body)
-            except (Exception) as e:
-                self.fail_json(msg="Failed to parse the response json: {0}".format(e))
-
-        if PY2:
-            status_code = response.getcode()
-        else:
-            status_code = response.status
-        return {'status_code': status_code, 'json': response_json}
-
-    def api_path(self):
-
-        default_api_path = "/api/"
-        if self._COLLECTION_TYPE != "awx":
-            default_api_path = "/api/controller/"
-        prefix = getenv('CONTROLLER_OPTIONAL_API_URLPATTERN_PREFIX', default_api_path)
-        return prefix
-
-    def authenticate(self, **kwargs):
-        if self.username and self.password:
-            # Attempt to get a token from /api/v2/tokens/ by giving it our username/password combo
-            # If we have a username and password, we need to get a session cookie
-            login_data = {
-                "description": "Automation Platform Controller Module Token",
-                "application": None,
-                "scope": "write",
-            }
-            # Preserve URL prefix
-            endpoint = self.url_prefix.rstrip('/') + f'{self.api_path()}v2/tokens/'
-            # Post to the tokens endpoint with baisc auth to try and get a token
-            api_token_url = (self.url._replace(path=endpoint)).geturl()
-
+                )
+                time.sleep(sleep_time)
             try:
                 response = self.session.open(
-                    'POST',
-                    api_token_url,
-                    validate_certs=self.verify_ssl,
+                    method, url.geturl(),
+                    headers=headers,
                     timeout=self.request_timeout,
+                    validate_certs=self.verify_ssl,
                     follow_redirects=True,
-                    force_basic_auth=True,
-                    url_username=self.username,
-                    url_password=self.password,
-                    data=dumps(login_data),
-                    headers={'Content-Type': 'application/json'},
+                    data=data
                 )
-            except HTTPError as he:
+
+            except (SSLValidationError) as ssl_err:
+                # SSL errors are never retryable — cert problems won't fix themselves
+                self.fail_json(msg="Could not establish a secure connection to your host ({0}): {1}.".format(url.netloc, ssl_err))
+
+            except (ConnectionError) as con_err:
+                # Connection errors may be transient — retry if we have attempts left
+                last_response = 'ConnectionError'
+                if attempt < max_retries:
+                    continue
+                self.fail_json(msg="There was a network error of some kind trying to connect to your host ({0}): {1}.".format(url.netloc, con_err))
+
+            except (HTTPError) as he:
+                # ---- Retryable HTTP errors ----
+                if self.is_retryable(he.code, method, url.path):
+                    # Exhausted retries on a retryable error go on to regular failure checks.
+                    if attempt < max_retries:
+                        continue
+                    # Exhausted retries - provide informative message
+                    self.fail_json(
+                        msg="Request to {0} failed with status {1} after {2} retries. "
+                            "This may indicate the server is overloaded.".format(url.path, he.code, max_retries)
+                    )
+                # ---- Non-retryable HTTP errors (existing behaviour preserved) ----
+                if he.code >= 500:
+                    self.fail_json(msg='The host sent back a server error ({1}): {0}. Please check the logs and try again later'.format(url.path, he))
+                elif he.code == 401:
+                    self.fail_json(msg='Invalid authentication credentials for {0} (HTTP 401).'.format(url.path))
+                elif he.code == 403:
+                    body = he.read()
+                    raw = body.decode('utf-8') if isinstance(body, bytes) else str(body)
+                    if 'unable to connect to database' in raw.lower():
+                        if attempt < max_retries:
+                            continue
+                        self.fail_json(
+                            msg="Request to {0} failed with status 403 (database unavailable) after {1} retries.".format(url.path, max_retries),
+                        )
+                    # Reuse raw instead of reading again
+                    try:
+                        err_msg = loads(raw)
+                        err_msg = err_msg['detail']
+                    except (ValueError, KeyError):
+                        err_msg = raw
+                    prepend_msg = " Use the collection ansible.platform to modify resources Organization, User, or Team." if (
+                        "this resource via the platform ingress") in err_msg else ""
+                    self.fail_json(msg="You don't have permission to {1} to {0} (HTTP 403).{2}".format(url.path, method, prepend_msg))
+                elif he.code == 404:
+                    if kwargs.get('return_none_on_404', False):
+                        return None
+                    self.fail_json(msg='The requested object could not be found at {0}.'.format(url.path))
+                elif he.code == 405:
+                    self.fail_json(msg="Cannot make a request with the {0} method to this endpoint {1}".format(method, url.path))
+                elif he.code >= 400:
+                    page_data = he.read()
+                    try:
+                        return {'status_code': he.code, 'json': loads(page_data)}
+                    except ValueError:
+                        return {'status_code': he.code, 'text': page_data}
+                else:
+                    self.fail_json(msg="Unexpected return code when calling {0}: {1}".format(url.geturl(), he))
+
+            except (Exception) as e:
+                self.fail_json(msg="There was an unknown error when trying to connect to {2}: {0} {1}".format(type(e).__name__, e, url.geturl()))
+
+            # ----------------------------------------------------------------
+            # Successful response — fall through from session.open()
+            # The version check and response parsing happen once on success
+            # ----------------------------------------------------------------
+            if not self.version_checked:
                 try:
-                    resp = he.read()
-                except Exception as e:
-                    resp = 'unknown {0}'.format(e)
-                self.fail_json(msg='Failed to get token: {0}'.format(he), response=resp)
-            except (Exception) as e:
-                # Sanity check: Did the server send back some kind of internal error?
-                self.fail_json(msg='Failed to get token: {0}'.format(e))
+                    controller_type = response.getheader('X-API-Product-Name', None)
+                    controller_version = response.getheader('X-API-Product-Version', None)
+                except Exception:
+                    controller_type = response.info().getheader('X-API-Product-Name', None)
+                    controller_version = response.info().getheader('X-API-Product-Version', None)
 
-            token_response = None
+                parsed_collection_version = Version(self._COLLECTION_VERSION).version
+                if controller_version:
+                    parsed_controller_version = Version(controller_version).version
+                    if controller_type == 'AWX':
+                        collection_compare_ver = parsed_collection_version[0]
+                        controller_compare_ver = parsed_controller_version[0]
+                    else:
+                        collection_compare_ver = "{0}.{1}".format(parsed_collection_version[0], parsed_collection_version[1])
+                        controller_compare_ver = '{0}.{1}'.format(parsed_controller_version[0], parsed_controller_version[1])
+
+                    if self._COLLECTION_TYPE not in self.collection_to_version or self.collection_to_version[self._COLLECTION_TYPE] != controller_type:
+                        self.warn("You are using the {0} version of this collection but connecting to {1}".format(self._COLLECTION_TYPE, controller_type))
+                    elif collection_compare_ver != controller_compare_ver:
+                        self.warn(
+                            "You are running collection version {0} but connecting to {2} version {1}".format(
+                                self._COLLECTION_VERSION, controller_version, controller_type
+                            )
+                        )
+
+                self.version_checked = True
+
+            response_body = ''
             try:
-                token_response = response.read()
-                response_json = loads(token_response)
-                self.oauth_token_id = response_json['id']
-                self.oauth_token = response_json['token']
+                response_body = response.read()
             except (Exception) as e:
-                self.fail_json(msg="Failed to extract token information from login response: {0}".format(e), **{'response': token_response})
+                self.fail_json(msg="Failed to read response body: {0}".format(e))
 
-        # If we have neither of these, then we can try un-authenticated access
+            response_json = {}
+            if response_body and response_body != '':
+                try:
+                    response_json = loads(response_body)
+                except (Exception) as e:
+                    self.fail_json(msg="Failed to parse the response json: {0}".format(e))
+
+            if PY2:
+                status_code = response.getcode()
+            else:
+                status_code = response.status
+
+            return {'status_code': status_code, 'json': response_json}
+
+    def api_path(self, app_key=None):
+
+        default_api_path = "/api/"
+        if self._COLLECTION_TYPE != "awx" or app_key is not None:
+            if app_key is None:
+                app_key = "controller"
+
+            default_api_path = "/api/{0}/".format(app_key)
+
+        prefix = default_api_path
+        if app_key is None or app_key == "controller":
+            # if the env variable exists use it only when app is not defined or controller
+            controller_base_path = getenv(CONTROLLER_BASE_PATH_ENV_VAR)
+            if controller_base_path:
+                self.warn(
+                    "using controller base path from environment variable:"
+                    " {0} = {1}".format(CONTROLLER_BASE_PATH_ENV_VAR, controller_base_path)
+                )
+                prefix = controller_base_path
+
+        if not prefix.startswith('/'):
+            prefix = "/{0}".format(prefix)
+
+        if not prefix.endswith('/'):
+            prefix = "{0}/".format(prefix)
+
+        return prefix
+
+    def _get_authorization_header(self, **kwargs):
+        if self.aap_token:
+            return 'Bearer {0}'.format(self.aap_token)
+
+        # Authenticate to AWX (if not already done so)
+        if not self.authenticated:
+            # This method will set a cookie in the cookie jar for us
+            self.authenticate(**kwargs)
+
+        return self._get_basic_authorization_header()
+
+    def _get_basic_authorization_header(self):
+        basic_credentials = b64encode("{0}:{1}".format(self.username, self.password).encode()).decode()
+        return "Basic {0}".format(basic_credentials)
+
+    def _authenticate_with_basic_auth(self):
+        if self.username and self.password:
+            # use api url /api/v2/me to get current user info as a testing request
+            me_url = self.build_url("me").geturl()
+            self.session.open(
+                "GET",
+                me_url,
+                validate_certs=self.verify_ssl,
+                timeout=self.request_timeout,
+                follow_redirects=True,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": self._get_basic_authorization_header(),
+                },
+            )
+
+    def authenticate(self, **kwargs):
+        try:
+            self._authenticate_with_basic_auth()
+        except Exception as exp:
+            self.fail_json(msg='Failed to get user info: {0}'.format(exp))
+
         self.authenticated = True
 
     def delete_if_needed(self, existing_item, item_type=None, on_delete=None, auto_exit=True):
@@ -1019,34 +1162,7 @@ class ControllerAPIModule(ControllerModule):
             )
 
     def logout(self):
-        if self.authenticated and self.oauth_token_id:
-            # Attempt to delete our current token from /api/v2/tokens/
-            # Post to the tokens endpoint with baisc auth to try and get a token
-            endpoint = self.url_prefix.rstrip('/') + f'{self.api_path()}v2/tokens/{self.oauth_token_id}/'
-            api_token_url = (self.url._replace(path=endpoint, query=None)).geturl()  # in error cases, fail_json exists before exception handling
-
-            try:
-                self.session.open(
-                    'DELETE',
-                    api_token_url,
-                    validate_certs=self.verify_ssl,
-                    timeout=self.request_timeout,
-                    follow_redirects=True,
-                    force_basic_auth=True,
-                    url_username=self.username,
-                    url_password=self.password,
-                )
-                self.oauth_token_id = None
-                self.authenticated = False
-            except HTTPError as he:
-                try:
-                    resp = he.read()
-                except Exception as e:
-                    resp = 'unknown {0}'.format(e)
-                self.warn('Failed to release token: {0}, response: {1}'.format(he, resp))
-            except (Exception) as e:
-                # Sanity check: Did the server send back some kind of internal error?
-                self.warn('Failed to release token {0}: {1}'.format(self.oauth_token_id, e))
+        self.authenticated = False
 
     def is_job_done(self, job_status):
         if job_status in ['new', 'pending', 'waiting', 'running']:

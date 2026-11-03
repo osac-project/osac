@@ -1,7 +1,8 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 # Copyright: (c) 2026, VAST Data
-# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+# Apache License 2.0 (see LICENSE or https://www.apache.org/licenses/LICENSE-2.0)
+# SPDX-License-Identifier: Apache-2.0
 
 from __future__ import absolute_import, division, print_function
 
@@ -17,41 +18,6 @@ description:
   - Supports check_mode and diff for idempotent operations.
 version_added: "1.0.0"
 options:
-  vms:
-    description: VAST VMS connection parameters.
-    type: dict
-    required: true
-    suboptions:
-      host:
-        description: VAST VMS hostname or IP address.
-        required: true
-        type: str
-      validate_certs:
-        description: Validate SSL certificates.
-        type: bool
-        default: true
-      timeout:
-        description: Request timeout in seconds.
-        type: int
-      token:
-        description: API token (VAST 5.3+). Mutually exclusive with username/password.
-        type: str
-      username:
-        description: Username for authentication. Mutually exclusive with token.
-        type: str
-      password:
-        description: Password for authentication. Mutually exclusive with token.
-        type: str
-      tenant:
-        description: Tenant name (optional).
-        type: str
-      api_version:
-        description: API version (optional). Defaults to 'latest' if not specified.
-        type: str
-      debug:
-        description: Enable HTTP debug traces. Traces are emitted as warnings on failure.
-        type: bool
-        default: false
   id:
     description: Resource ID for direct lookup. Mutually exclusive with name-based identification.
     type: int
@@ -128,6 +94,10 @@ options:
     description: "Enable NFS behavior of inheriting POSIX settings from the parent directory versus configured values. "
     type: bool
 
+  is_block_default_policy:
+    description: "Specifies whether to make this View Policy default for BLOCK Requires VMS 5.5 or later."
+    type: bool
+
   is_s3_default_policy:
     description: "Specifies whether to make the view policy the default policy used for S3 endpoint views."
     type: bool
@@ -147,6 +117,10 @@ options:
 
   nfs_case_insensitive:
     description: "Force case insensitivity for NFSv3 and NFSv4"
+    type: bool
+
+  nfs_enforce_mtls:
+    description: "Specifies whether we enforce mTLS authentication over NFS. Requires VMS 5.5 or later."
     type: bool
 
   nfs_enforce_tls:
@@ -255,6 +229,11 @@ options:
     description: "S3 Bucket Acl"
     type: dict
 
+  s3_bucket_full_control:
+    description: "S3 Bucket Full Control Requires VMS 5.5 or later."
+    type: list
+    elements: dict
+
   s3_flavor_allow_free_listing:
     description: |
       Allow NFS clients freely list bucket views and their subdirectories, regardless of individual object permissions.
@@ -345,6 +324,10 @@ options:
     type: list
     elements: str
 
+  smb_recursive_change_notify:
+    description: "Whether to enable SMB Recursive Change Notify Requires VMS 5.5 or later."
+    type: bool
+
   tenant_id:
     description: "Tenant ID"
     type: int
@@ -367,6 +350,12 @@ options:
   use_auth_provider:
     description: "Not in use"
     type: bool
+
+  vip_pools:
+    description: |
+      Dedicate VIP Pools to the view policy. Specify VIP Pool IDs in a comma separated list. Requires VMS 5.5 or later.
+    type: list
+    elements: int
   state:
     description: Desired state of the resource.
     type: str
@@ -383,6 +372,7 @@ options:
 author:
   - VAST Data (@vastdata)
 extends_documentation_fragment:
+  - vastdata.vms.conn
   - ansible.builtin.action_common_attributes
 attributes:
   check_mode:
@@ -488,10 +478,12 @@ ARGUMENT_SPEC: Dict[str, Any] = {
     "flavor": {"type": "str", "default": None, "choices": ["NFS", "SMB", "MIXED_LAST_WINS", "S3_NATIVE"]},
     "gid_inheritance": {"type": "str", "default": None, "choices": ["BSD", "LINUX"]},
     "inherit_parent_mode_bits": {"type": "bool", "default": None},
+    "is_block_default_policy": {"type": "bool", "default": None},
     "is_s3_default_policy": {"type": "bool", "default": None},
     "name": {"type": "str", "default": None},
     "nfs_all_squash": {"type": "list", "default": None, "elements": "str"},
     "nfs_case_insensitive": {"type": "bool", "default": None},
+    "nfs_enforce_mtls": {"type": "bool", "default": None},
     "nfs_enforce_tls": {"type": "bool", "default": None},
     "nfs_enforce_tls_relaxed": {"type": "bool", "default": None},
     "nfs_minimal_protection_level": {"type": "str", "default": None},
@@ -508,6 +500,7 @@ ARGUMENT_SPEC: Dict[str, Any] = {
     "read_only": {"type": "list", "default": None, "elements": "str"},
     "read_write": {"type": "list", "default": None, "elements": "str"},
     "s3_bucket_acl": {"type": "dict", "default": None},
+    "s3_bucket_full_control": {"type": "list", "default": None, "elements": "dict"},
     "s3_flavor_allow_free_listing": {"type": "bool", "default": None},
     "s3_flavor_detect_full_pathname": {"type": "bool", "default": None},
     "s3_object_acl": {"type": "dict", "default": None},
@@ -521,10 +514,12 @@ ARGUMENT_SPEC: Dict[str, Any] = {
     "smb_is_ca": {"type": "bool", "default": None},
     "smb_read_only": {"type": "list", "default": None, "elements": "str"},
     "smb_read_write": {"type": "list", "default": None, "elements": "str"},
+    "smb_recursive_change_notify": {"type": "bool", "default": None},
     "tenant_id": {"type": "int", "default": None},
     "trash_access": {"type": "list", "default": None, "elements": "str"},
     "use_32bit_fileid": {"type": "str", "default": None},
     "use_auth_provider": {"type": "bool", "default": None},
+    "vip_pools": {"type": "list", "default": None, "elements": "int"},
     "state": {"type": "str", "choices": ["present", "absent"], "default": "present"},
     "wait": {"type": "bool", "default": True},
     "wait_timeout": {"type": "int", "default": 300},
@@ -540,7 +535,16 @@ class ViewpolicyResource(BaseResource):
     resource_name = "viewpolicies"
     singular = "viewpolicy"
     lookup_field = "name"
+    create_only_fields = {"s3_bucket_full_control"}  # Fields only valid during creation
     update_only_fields = {"s3_bucket_acl"}  # Fields only valid during updates
+    generated_min_version = (5, 4)  # oldest VMS version these modules were generated for
+    field_versions = {
+        "is_block_default_policy": {"min": (5, 5), "max": None},
+        "nfs_enforce_mtls": {"min": (5, 5), "max": None},
+        "s3_bucket_full_control": {"min": (5, 5), "max": None},
+        "smb_recursive_change_notify": {"min": (5, 5), "max": None},
+        "vip_pools": {"min": (5, 5), "max": None},
+    }
 
 
 # END AUTOGENERATED RESOURCE_CLASS

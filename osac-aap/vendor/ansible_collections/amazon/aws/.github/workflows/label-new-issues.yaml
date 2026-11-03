@@ -1,0 +1,18 @@
+---
+name: label new issues
+on:
+  issues:
+    types:
+      - opened
+      - reopened
+
+jobs:
+  add_label:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions-ecosystem/action-add-labels@18f1af5e3544586314bbe15c0273249c770b2daf # v1
+        with:
+          labels: needs_triage

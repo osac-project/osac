@@ -21,7 +21,7 @@ description:
   - There are options for unpacking the chart after download.
 
 requirements:
-  - "helm >= 3.0, <4.0.0 (https://github.com/helm/helm/releases)"
+  - "helm >= 3.0.0 (https://github.com/helm/helm/releases)"
 
 options:
   chart_ref:
@@ -122,6 +122,13 @@ options:
       - The path of a helm binary to use.
     required: false
     type: path
+  plain_http:
+    description:
+      - Use HTTP instead of HTTPS when working with OCI registries
+      - Requires Helm >= 3.13.0
+    type: bool
+    default: False
+    version_added: 6.1.0
 """
 
 EXAMPLES = r"""
@@ -353,6 +360,7 @@ def main():
         chart_ssl_cert_file=dict(type="path"),
         chart_ssl_key_file=dict(type="path"),
         binary_path=dict(type="path"),
+        plain_http=dict(type="bool", default=False),
     )
     module = AnsibleHelmModule(
         argument_spec=argspec,
@@ -364,7 +372,7 @@ def main():
         mutually_exclusive=[("chart_version", "chart_devel")],
     )
 
-    # Validate Helm version >=3.0.0,<4.0.0
+    # Validate Helm version >=3.0.0
     module.validate_helm_version()
 
     helm_version = module.get_helm_version()
@@ -374,6 +382,7 @@ def main():
         chart_ca_cert="3.1.0",
         chart_ssl_cert_file="3.1.0",
         chart_ssl_key_file="3.1.0",
+        plain_http="3.13.0",
     )
 
     def test_version_requirement(opt):
@@ -413,6 +422,7 @@ def main():
         skip_tls_certs_check=dict(key="insecure-skip-tls-verify"),
         chart_devel=dict(key="devel"),
         untar_chart=dict(key="untar"),
+        plain_http=dict(key="plain-http"),
     )
 
     for k, v in helm_flag_args.items():

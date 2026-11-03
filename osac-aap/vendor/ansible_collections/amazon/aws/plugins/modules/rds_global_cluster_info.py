@@ -153,43 +153,36 @@ global_clusters:
                 sample: false
 """
 
-
-try:
-    import botocore
-except ImportError:
-    pass  # handled by AnsibleAWSModule
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
 
 from ansible.module_utils.common.dict_transformations import camel_dict_to_snake_dict
 
-from ansible_collections.amazon.aws.plugins.module_utils.botocore import is_boto3_error_code
 from ansible_collections.amazon.aws.plugins.module_utils.modules import AnsibleAWSModule
-from ansible_collections.amazon.aws.plugins.module_utils.retries import AWSRetry
+from ansible_collections.amazon.aws.plugins.module_utils.rds import AnsibleRDSError
+from ansible_collections.amazon.aws.plugins.module_utils.rds import describe_global_clusters
 
 
-@AWSRetry.jittered_backoff(retries=10)
-def _describe_global_clusters(client, **params):
-    try:
-        paginator = client.get_paginator("describe_global_clusters")
-        return paginator.paginate(**params).build_full_result()["GlobalClusters"]
-    except is_boto3_error_code("GlobalClusterNotFoundFault"):
-        return []
+def global_cluster_info(client, module: AnsibleAWSModule, global_cluster_id: Optional[str]) -> List[Dict[str, Any]]:
+    """Return attributes of Aurora global database cluster(s).
 
+    Parameters:
+        client: boto3 rds client
+        module: AnsibleAWSModule
+        global_cluster_id: Unique identifier of global cluster to describe
 
-def cluster_info(client, module):
-    global_cluster_id = module.params.get("global_cluster_identifier")
-
-    params = dict()
+    Returns:
+        List of global cluster attribute dicts in snake_case format
+    """
+    params = {}
     if global_cluster_id:
         params["GlobalClusterIdentifier"] = global_cluster_id
 
-    try:
-        result = _describe_global_clusters(client, **params)
-    except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
-        module.fail_json_aws(e, "Couldn't get Global cluster information.")
+    results = describe_global_clusters(client, **params)
 
-    return dict(
-        changed=False, global_clusters=[camel_dict_to_snake_dict(cluster, ignore_list=["Tags"]) for cluster in result]
-    )
+    return [camel_dict_to_snake_dict(cluster, ignore_list=["Tags"]) for cluster in results]
 
 
 def main():
@@ -202,12 +195,15 @@ def main():
         supports_check_mode=True,
     )
 
-    try:
-        client = module.client("rds", retry_decorator=AWSRetry.jittered_backoff(retries=10))
-    except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
-        module.fail_json_aws(e, msg="Failed to connect to AWS.")
+    client = module.client("rds")
 
-    module.exit_json(**cluster_info(client, module))
+    try:
+        module.exit_json(
+            changed=False,
+            global_clusters=global_cluster_info(client, module, module.params.get("global_cluster_identifier")),
+        )
+    except AnsibleRDSError as e:
+        module.fail_json_aws(e, msg="Could not describe global clusters.")
 
 
 if __name__ == "__main__":

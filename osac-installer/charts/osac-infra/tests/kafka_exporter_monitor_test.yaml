@@ -29,6 +29,20 @@ tests:
           path: spec.podMetricsEndpoints[0].path
           value: /metrics
 
+  - it: merges configured PodMonitor labels
+    set:
+      kafka.enabled: true
+      kafka.exporter.podMonitor.labels:
+        release: kube-prometheus-stack
+        team: metering
+    asserts:
+      - equal:
+          path: metadata.labels.release
+          value: kube-prometheus-stack
+      - equal:
+          path: metadata.labels.team
+          value: metering
+
   - it: renders no PodMonitor when Kafka is disabled
     set:
       kafka.enabled: false

@@ -20,21 +20,25 @@ spec:
   groups:
     - name: osac-metering-readers
       rules:
+        {{- range .Values.readers }}
         - alert: MeteringReaderLag
-          # Strimzi's Kafka Exporter reports one series per reader consumer
-          # group and topic. The group is the reader name, so the alert names
-          # the reader. The threshold is a value because a small tenant grows
-          # lag slowly; see prometheusRule.readerLagThreshold.
-          expr: kafka_consumergroup_lag{consumergroup=~`{{ include "osac-metering.readerGroupRegex" . }}`} > {{ .Values.prometheusRule.readerLagThreshold }}
+          # One rule per reader, pinned to its consumer group and its current
+          # tenant topic. A reader reassigned to another tenant leaves its old
+          # offsets on the old topic; without the topic the stale series would
+          # alert as if the reader were behind on the new tenant.
+          expr: kafka_consumergroup_lag{consumergroup="{{ .name }}",topic="osac.metering.heartbeat.{{ .tenant }}"} > {{ $.Values.prometheusRule.readerLagThreshold }}
           for: 15m
           labels:
             severity: warning
+            reader: {{ .name | quote }}
+            tenant: {{ .tenant | quote }}
           annotations:
-            summary: Metering reader {{`{{ $labels.consumergroup }}`}} is behind
+            summary: Metering reader {{ .name }} is behind
             description: >-
-              Reader {{`{{ $labels.consumergroup }}`}} is more than
-              {{ .Values.prometheusRule.readerLagThreshold }} usage events
-              behind on {{`{{ $labels.topic }}`}}. Check that the reader is
-              running and that its credentials are still granted. A reader
-              that has never consumed has no lag series.
+              Reader {{ .name }} is more than
+              {{ $.Values.prometheusRule.readerLagThreshold }} usage events
+              behind on osac.metering.heartbeat.{{ .tenant }}. Check that the
+              reader is running and that its credentials are still granted. A
+              reader that has never consumed has no lag series.
+        {{- end }}
 {{- end }}

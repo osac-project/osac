@@ -218,6 +218,7 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 			// decode or does not know stays uncommitted, so a restart sees it
 			// again instead of losing it, and the run stops with an error.
 			if err := c.sum(message); err != nil {
+				c.recordError(err)
 				return err
 			}
 			session.MarkMessage(message, "")

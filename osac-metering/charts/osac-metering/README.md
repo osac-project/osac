@@ -16,12 +16,23 @@ See `values.yaml`. The notable groups:
 ## Reader grants
 
 A reader is an outside billing system that reads one tenant's usage events
-with its own credentials. Add one entry per reader to `readers`:
+with its own credentials. Add one entry per reader to `readers` when the chart
+is installed standalone:
 
 ```yaml
 readers:
   - name: billing-reader
     tenant: acme
+```
+
+Through the umbrella installer chart, set the same list at
+`metering.readers`:
+
+```yaml
+metering:
+  readers:
+    - name: billing-reader
+      tenant: acme
 ```
 
 The chart renders one Strimzi `KafkaUser` per entry. The user gets a read ACL
@@ -67,9 +78,12 @@ reader may fall further behind, or lower it for a small tenant. A reader that
 has never consumed has no consumer group and no lag series, so this alert
 cannot fire for it; check that the group exists before relying on the alert.
 Strimzi's Kafka Exporter, enabled on the installer's Kafka resource and scraped
-by a PodMonitor, supplies `kafka_consumergroup_lag`. The reader lag rule is
-rendered into the Kafka namespace, where the exporter series live, because user
-workload monitoring evaluates a rule against its own namespace.
+by a PodMonitor, supplies `kafka_consumergroup_lag`. The chart renders one
+reader lag rule per reader in the Kafka namespace, where the exporter series
+live, because user workload monitoring evaluates a rule against its own
+namespace. Each rule names the reader's consumer group and its current tenant
+topic, so a reader reassigned to another tenant does not alert on the offsets
+it left on the former tenant's topic.
 
 ## Rule revisions
 

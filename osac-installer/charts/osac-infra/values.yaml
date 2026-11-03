@@ -186,6 +186,12 @@ kafka:
     size: 100Gi
   version: "4.2.0"
   metadataVersion: "4.2-IV0"
+  exporter:
+    podMonitor:
+      # Extra labels for the Kafka Exporter PodMonitor, for Prometheus
+      # installations that select monitors by label (for example a
+      # kube-prometheus-stack release label).
+      labels: {}
 
 # --- Shared PostgreSQL (dev/CI only) ---
 bundledPostgres:

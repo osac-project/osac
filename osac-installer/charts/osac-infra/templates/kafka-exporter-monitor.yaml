@@ -15,6 +15,9 @@ metadata:
   namespace: osac-kafka
   labels:
     {{- include "osac-infra.labels" . | nindent 4 }}
+    {{- with .Values.kafka.exporter.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   selector:
     matchLabels:

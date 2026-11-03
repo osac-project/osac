@@ -19,7 +19,8 @@ stopped at 10:02:30. The total is 110 seconds.
 
 ## Grant the reader
 
-Add the reader to the platform values, with one entry per tenant:
+Add the reader to the values, with one entry per tenant. On the umbrella
+installer chart, set `metering.readers`:
 
 ```yaml
 metering:
@@ -27,6 +28,17 @@ metering:
     - name: billing-reader
       tenant: acme
 ```
+
+On the standalone `osac-metering` chart, set the top-level `readers` list:
+
+```yaml
+readers:
+  - name: billing-reader
+    tenant: acme
+```
+
+The example assumes the umbrella installer, so the grant is under
+`metering.readers`.
 
 Apply the change with the installer's supported path, which builds the chart
 dependencies and installs the platform layer:
@@ -61,8 +73,8 @@ oc get configmap ca-bundle -n osac -o jsonpath='{.data.bundle\.pem}' \
   | oc create configmap ca-bundle --from-file=bundle.pem=/dev/stdin -n osac-kafka
 ```
 
-Then run a Job in `osac-kafka` that mounts the reader's Secret and that CA
-ConfigMap:
+Then save this Job as `/tmp/billing-reader-job.yaml`. It mounts the reader's
+Secret and that CA ConfigMap:
 
 ```yaml
 apiVersion: batch/v1
@@ -107,7 +119,9 @@ spec:
 ```
 
 ```sh
+oc apply -f /tmp/billing-reader-job.yaml
 kubectl logs job/billing-reader-example -n osac-kafka
+oc delete job billing-reader-example -n osac-kafka
 oc delete configmap ca-bundle -n osac-kafka
 ```
 

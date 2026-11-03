@@ -788,6 +788,12 @@ ifeq ($(SUITE),operator-multicluster)
 	$(call kind-load-image,localhost/fulfillment-service:it)
 	@echo "Installing AWX for real AAP provisioning..."
 	$(MAKE) helm-devstack-deps
+ifeq ($(HELM_MAJOR),4)
+	@if helm plugin list | awk '$$1 == "osac-dev-full-awx-image" { found=1 } END { exit !found }'; then \
+		helm plugin uninstall osac-dev-full-awx-image; \
+	fi
+	helm plugin install scripts/dev-full/helm-post-renderer
+endif
 	helm upgrade --install osac-devstack charts/osac-devstack \
 		--namespace $(NS) --create-namespace \
 		--set osacNamespace=$(NS) \
@@ -795,6 +801,7 @@ ifeq ($(SUITE),operator-multicluster)
 		--set ui.enabled=false \
 		--set catalog.enabled=false \
 		--set tenant.enabled=false \
+		--post-renderer $(DEV_FULL_HELM_POST_RENDERER) \
 		$(DEVSTACK_HELM_APPLY_ARGS) \
 		--wait-for-jobs --timeout 20m
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \

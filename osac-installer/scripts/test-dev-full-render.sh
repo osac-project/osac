@@ -313,4 +313,86 @@ if ! grep -Fq 'image: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.22.1' <<<"$prox
   exit 1
 fi
 
-echo "Dev-full render, ARM64 admission, cluster-version, TLS, and Helm post-render checks passed."
+# Verify that the raw AWX operator chart still carries the old gcr.io
+# image (pre-renderer), confirming the post-renderer is actually
+# required.
+raw_proxy_render=$(helm template test charts/osac-devstack --namespace osac \
+  "${profile_values[@]}" \
+  --show-only charts/awx-operator/templates/deployment-awx-operator-controller-manager.yaml)
+if ! grep -Fq 'image: gcr.io/kubebuilder/kube-rbac-proxy:v0.15.0' <<<"$raw_proxy_render"; then
+  echo "raw AWX operator chart must still reference the gcr.io image that the post-renderer replaces" >&2
+  exit 1
+fi
+
+# Verify operator-multicluster SUITE post-renderer: extract the EXACT
+# "helm upgrade --install osac-devstack" command from the dry-run and
+# verify it contains --post-renderer with the correct value, not some
+# other post-renderer flag from install-osac or install-devstack.
+multicluster_make_output=$(make --no-print-directory --dry-run test \
+  PLATFORM=kind PROFILE=dev NS=osac SUITE=operator-multicluster)
+
+# Extract the AWX devstack helm upgrade command specifically.
+# It's the line starting with "helm upgrade --install osac-devstack".
+awx_helm_cmd=$(awk '/helm upgrade --install osac-devstack/{found=1} found{print} found && /--timeout/{exit}' \
+  <<<"$multicluster_make_output")
+if [ -z "$awx_helm_cmd" ]; then
+  echo "operator-multicluster dry-run must contain 'helm upgrade --install osac-devstack'" >&2
+  exit 1
+fi
+
+# The AWX helm command must contain --post-renderer.
+if ! grep -Fq -- '--post-renderer' <<<"$awx_helm_cmd"; then
+  echo "operator-multicluster AWX helm upgrade must include --post-renderer" >&2
+  echo "AWX command was: $awx_helm_cmd" >&2
+  exit 1
+fi
+
+# Verify that Helm 3 uses the script path as the post-renderer value.
+if [ "${HELM_MAJOR:-3}" = "3" ]; then
+  if ! grep -Fq 'scripts/dev-full/helm-post-renderer/helm-post-render.sh' <<<"$awx_helm_cmd"; then
+    echo "Helm 3 operator-multicluster must use the shell script post-renderer" >&2
+    exit 1
+  fi
+fi
+
+# Verify Helm 4 plugin install guard appears BEFORE the AWX helm
+# upgrade in the full dry-run output.
+helm4_output=$(make --no-print-directory --dry-run test \
+  PLATFORM=kind PROFILE=dev NS=osac SUITE=operator-multicluster \
+  HELM_MAJOR=4)
+awx_helm4_cmd=$(awk '/helm upgrade --install osac-devstack/{found=1} found{print} found && /--timeout/{exit}' \
+  <<<"$helm4_output")
+if ! grep -Fq 'osac-dev-full-awx-image' <<<"$awx_helm4_cmd"; then
+  echo "Helm 4 operator-multicluster must use the plugin name as post-renderer" >&2
+  exit 1
+fi
+if ! awk '/helm plugin install.*helm-post-renderer/{pi=NR} /helm upgrade --install osac-devstack/{hu=NR} END{exit !(pi && hu && pi<hu)}' \
+  <<<"$helm4_output"; then
+  echo "Helm 4 plugin install must appear before the AWX helm upgrade" >&2
+  exit 1
+fi
+
+# Negative test: the install-osac helm upgrade command must NOT
+# contain --post-renderer (only the AWX devstack command should).
+install_osac_cmd=$(awk '/helm upgrade --install osac /{found=1} found{print} found && /--timeout/{exit}' \
+  <<<"$multicluster_make_output" || true)
+if grep -Fq -- '--post-renderer' <<<"$install_osac_cmd" 2>/dev/null; then
+  echo "install-osac command must not contain --post-renderer (only AWX devstack should)" >&2
+  exit 1
+fi
+
+# Semantic render: template the AWX deployment with the actual
+# multicluster flags (virt/ui/catalog/tenant disabled) and verify
+# the post-renderer replaces the image.
+multicluster_render=$(helm template test charts/osac-devstack --namespace osac \
+  --set virt.enabled=false --set ui.enabled=false \
+  --set catalog.enabled=false --set tenant.enabled=false \
+  --show-only charts/awx-operator/templates/deployment-awx-operator-controller-manager.yaml \
+  | scripts/dev-full/helm-post-renderer/helm-post-render.sh)
+if ! grep -Fq 'image: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.22.1' <<<"$multicluster_render" \
+  || grep -Fq 'image: gcr.io/kubebuilder/kube-rbac-proxy:v0.15.0' <<<"$multicluster_render"; then
+  echo "AWX operator image must be replaced with multicluster flags" >&2
+  exit 1
+fi
+
+echo "Dev-full render, ARM64 admission, cluster-version, TLS, multicluster post-renderer, and Helm post-render checks passed."

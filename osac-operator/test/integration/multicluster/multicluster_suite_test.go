@@ -838,13 +838,9 @@ func updateAWXProjectToCurrentSHA() {
 		branch, refspec, githubRef)
 
 	// Look up the project ID.
-	listCmd := fmt.Sprintf(
-		`curl -sf "%s/projects/?name=osac-aap" `+
-			`-H "Authorization: Bearer %s"`,
-		awxAPI, awxToken)
-	out, err := runKubectlHub("exec",
-		"deploy/awx-task", "-n", operatorNamespace,
-		"--", "bash", "-c", listCmd)
+	out, err := runAWXGet(awxToken,
+		fmt.Sprintf("%s/projects/?name=osac-aap", awxAPI),
+		operatorNamespace)
 	Expect(err).NotTo(HaveOccurred(), "query AWX project")
 
 	var projResp struct {
@@ -862,26 +858,17 @@ func updateAWXProjectToCurrentSHA() {
 		`{"scm_branch":"%s","scm_refspec":"%s",`+
 			`"scm_delete_on_update":true}`,
 		branch, refspec)
-	patchCmd := fmt.Sprintf(
-		`curl -sf -X PATCH "%s/projects/%d/" `+
-			`-H "Authorization: Bearer %s" `+
-			`-H "Content-Type: application/json" `+
-			`-d '%s'`,
-		awxAPI, projectID, awxToken, patchPayload)
-	_, err = runKubectlHub("exec",
-		"deploy/awx-task", "-n", operatorNamespace,
-		"--", "bash", "-c", patchCmd)
+	_, err = runAWXPatch(awxToken,
+		fmt.Sprintf("%s/projects/%d/", awxAPI, projectID),
+		patchPayload, operatorNamespace)
 	Expect(err).NotTo(HaveOccurred(),
 		"patch AWX project branch")
 
 	// Trigger a project update (re-sync from Git at the new ref).
-	syncCmd := fmt.Sprintf(
-		`curl -sf -X POST "%s/projects/%d/update/" `+
-			`-H "Authorization: Bearer %s"`,
-		awxAPI, projectID, awxToken)
-	_, err = runKubectlHub("exec",
-		"deploy/awx-task", "-n", operatorNamespace,
-		"--", "bash", "-c", syncCmd)
+	_, err = runAWXPost(awxToken,
+		fmt.Sprintf("%s/projects/%d/update/",
+			awxAPI, projectID),
+		"", operatorNamespace)
 	Expect(err).NotTo(HaveOccurred(),
 		"trigger AWX project re-sync")
 	_, _ = fmt.Fprintf(GinkgoWriter,
@@ -922,16 +909,13 @@ func waitForAWXProjectAndTemplates() {
 	// repeated /update/ POSTs while the previous one is still running
 	// (which keeps the project stuck in "running" indefinitely).
 	resyncAttempted := false
+	stdoutFetched := false
 	Eventually(func() error {
-		listProjects := fmt.Sprintf(
-			`curl -sf "%s/projects/?name=osac-aap" `+
-				`-H "Authorization: Bearer %s"`,
-			awxAPI, awxToken)
-		out, err := runKubectlHub("exec",
-			"deploy/awx-task", "-n", operatorNamespace, "--",
-			"bash", "-c", listProjects)
+		out, err := runAWXGet(awxToken,
+			fmt.Sprintf("%s/projects/?name=osac-aap", awxAPI),
+			operatorNamespace)
 		if err != nil {
-			return fmt.Errorf("list AWX projects: %w\n%s", err, out)
+			return fmt.Errorf("list AWX projects: %w", err)
 		}
 		var resp struct {
 			Results []struct {
@@ -951,34 +935,36 @@ func waitForAWXProjectAndTemplates() {
 		}
 		if status == "failed" || status == "error" ||
 			status == "canceled" {
-			// Fetch the last project update stdout for
-			// diagnostics (the Git error message lives here).
 			projID := resp.Results[0].ID
-			diagCmd := fmt.Sprintf(
-				`curl -sf "%s/project_updates/`+
-					`?project=%d&order_by=-id&page_size=1" `+
-					`-H "Authorization: Bearer %s"`,
-				awxAPI, projID, awxToken)
-			diagOut, _ := runKubectlHub("exec",
-				"deploy/awx-task", "-n",
-				operatorNamespace, "--",
-				"bash", "-c", diagCmd)
+
+			// Fetch update metadata for diagnostics.
+			diagOut, _ := runAWXGet(awxToken,
+				fmt.Sprintf(
+					"%s/project_updates/"+
+						"?project=%d&order_by=-id"+
+						"&page_size=1",
+					awxAPI, projID),
+				operatorNamespace)
 			_, _ = fmt.Fprintf(GinkgoWriter,
 				"AWX project update diag: %s\n",
 				diagOut)
 
+			// Fetch the actual stdout from the failed
+			// project update (once) — the Git/SCM error
+			// message that explains the failure.
+			if !stdoutFetched {
+				stdoutFetched = true
+				dumpFailedProjectUpdateStdout(
+					awxAPI, awxToken, projID)
+			}
+
 			if !resyncAttempted {
 				resyncAttempted = true
-				resync := fmt.Sprintf(
-					`curl -sf -X POST `+
-						`"%s/projects/%d/update/" `+
-						`-H "Authorization: `+
-						`Bearer %s"`,
-					awxAPI, projID, awxToken)
-				_, _ = runKubectlHub("exec",
-					"deploy/awx-task", "-n",
-					operatorNamespace, "--",
-					"bash", "-c", resync)
+				_, _ = runAWXPost(awxToken,
+					fmt.Sprintf(
+						"%s/projects/%d/update/",
+						awxAPI, projID),
+					"", operatorNamespace)
 				return fmt.Errorf(
 					"AWX project status is %q; "+
 						"triggered re-sync",
@@ -1047,13 +1033,10 @@ func waitForAWXProjectAndTemplates() {
 	// on compute templates; the operator supplies resolved classes via
 	// osac_job_vars.  Create templates without extra_vars if missing.
 	for _, td := range requiredTemplates {
-		getTemplate := fmt.Sprintf(
-			`curl -sf "%s/job_templates/?name=%s" `+
-				`-H "Authorization: Bearer %s"`,
-			awxAPI, td.Name, awxToken)
-		out, err := runKubectlHub("exec",
-			"deploy/awx-task", "-n", operatorNamespace,
-			"--", "bash", "-c", getTemplate)
+		out, err := runAWXGet(awxToken,
+			fmt.Sprintf("%s/job_templates/?name=%s",
+				awxAPI, td.Name),
+			operatorNamespace)
 		Expect(err).NotTo(HaveOccurred(),
 			"query template %s", td.Name)
 
@@ -1072,19 +1055,15 @@ func waitForAWXProjectAndTemplates() {
 		// Template missing — create it now (project is synced).
 		_, _ = fmt.Fprintf(GinkgoWriter,
 			"creating missing AWX job template %s\n", td.Name)
-		createTmpl := fmt.Sprintf(
-			`curl -sf -X POST "%s/job_templates/" `+
-				`-H "Authorization: Bearer %s" `+
-				`-H "Content-Type: application/json" `+
-				`-d '{"name":"%s","organization":1,`+
+		createBody := fmt.Sprintf(
+			`{"name":"%s","organization":1,`+
 				`"inventory":%d,"project":%d,`+
 				`"playbook":"%s",`+
-				`"ask_variables_on_launch":true}'`,
-			awxAPI, awxToken, td.Name,
-			inventoryID, projectID, td.Playbook)
-		createOut, err := runKubectlHub("exec",
-			"deploy/awx-task", "-n", operatorNamespace,
-			"--", "bash", "-c", createTmpl)
+				`"ask_variables_on_launch":true}`,
+			td.Name, inventoryID, projectID, td.Playbook)
+		createOut, err := runAWXPost(awxToken,
+			fmt.Sprintf("%s/job_templates/", awxAPI),
+			createBody, operatorNamespace)
 		Expect(err).NotTo(HaveOccurred(),
 			"create template %s: %s", td.Name, createOut)
 	}
@@ -1100,13 +1079,9 @@ func lookupAWXProjectAndInventory(
 	awxAPI, awxToken string,
 ) (projectID, inventoryID int) {
 	// Project.
-	cmd := fmt.Sprintf(
-		`curl -sf "%s/projects/?name=osac-aap" `+
-			`-H "Authorization: Bearer %s"`,
-		awxAPI, awxToken)
-	out, err := runKubectlHub("exec",
-		"deploy/awx-task", "-n", operatorNamespace,
-		"--", "bash", "-c", cmd)
+	out, err := runAWXGet(awxToken,
+		fmt.Sprintf("%s/projects/?name=osac-aap", awxAPI),
+		operatorNamespace)
 	Expect(err).NotTo(HaveOccurred(), "lookup AWX project")
 	var projResp struct {
 		Results []struct {
@@ -1133,13 +1108,9 @@ func lookupOrCreateAWXInventory(
 	const inventoryName = "OSAC Dev"
 
 	// Try to find the existing inventory.
-	getCmd := fmt.Sprintf(
-		`curl -sf "%s/inventories/?name=OSAC+Dev" `+
-			`-H "Authorization: Bearer %s"`,
-		awxAPI, awxToken)
-	out, err := runKubectlHub("exec",
-		"deploy/awx-task", "-n", operatorNamespace,
-		"--", "bash", "-c", getCmd)
+	out, err := runAWXGet(awxToken,
+		fmt.Sprintf("%s/inventories/?name=OSAC+Dev", awxAPI),
+		operatorNamespace)
 	Expect(err).NotTo(HaveOccurred(), "query AWX inventory")
 
 	var listResp struct {
@@ -1160,15 +1131,11 @@ func lookupOrCreateAWXInventory(
 	_, _ = fmt.Fprintf(GinkgoWriter,
 		"AWX inventory %q not found; creating it\n",
 		inventoryName)
-	createCmd := fmt.Sprintf(
-		`curl -sf -X POST "%s/inventories/" `+
-			`-H "Authorization: Bearer %s" `+
-			`-H "Content-Type: application/json" `+
-			`-d '{"name":"%s","organization":1}'`,
-		awxAPI, awxToken, inventoryName)
-	out, err = runKubectlHub("exec",
-		"deploy/awx-task", "-n", operatorNamespace,
-		"--", "bash", "-c", createCmd)
+	out, err = runAWXPost(awxToken,
+		fmt.Sprintf("%s/inventories/", awxAPI),
+		fmt.Sprintf(`{"name":"%s","organization":1}`,
+			inventoryName),
+		operatorNamespace)
 	Expect(err).NotTo(HaveOccurred(),
 		"create AWX inventory: %s", out)
 
@@ -1183,16 +1150,12 @@ func lookupOrCreateAWXInventory(
 		inventoryName, createResp.ID)
 
 	// Add a localhost host so AAP jobs can run locally.
-	hostCmd := fmt.Sprintf(
-		`curl -sf -X POST "%s/inventories/%d/hosts/" `+
-			`-H "Authorization: Bearer %s" `+
-			`-H "Content-Type: application/json" `+
-			`-d '{"name":"localhost",`+
-			`"variables":"ansible_connection: local"}'`,
-		awxAPI, createResp.ID, awxToken)
-	_, _ = runKubectlHub("exec",
-		"deploy/awx-task", "-n", operatorNamespace,
-		"--", "bash", "-c", hostCmd)
+	_, _ = runAWXPost(awxToken,
+		fmt.Sprintf("%s/inventories/%d/hosts/",
+			awxAPI, createResp.ID),
+		`{"name":"localhost",`+
+			`"variables":"ansible_connection: local"}`,
+		operatorNamespace)
 
 	return createResp.ID
 }
@@ -1301,31 +1264,30 @@ spec:
 	// using kubectl port-forward or directly from a pod. Since the test host
 	// cannot reach cluster-internal services, use kubectl exec on an AWX pod
 	// to curl the local API.
-	createIG := fmt.Sprintf(
-		`curl -sf -X POST %s/instance_groups/ `+
-			`-H "Authorization: Bearer %s" `+
-			`-H "Content-Type: application/json" `+
-			`-d '{"name":"multicluster-test-ig","is_container_group":true,"pod_spec_override":%s}'`,
-		awxAPI, decodedToken, jsonEscape(podSpec))
-
-	// Run curl from an AWX task pod.
-	igOut, err := runKubectlHub("exec",
-		"deploy/awx-task", "-n", operatorNamespace, "--",
-		"bash", "-c", createIG)
+	createBody := fmt.Sprintf(
+		`{"name":"multicluster-test-ig",`+
+			`"is_container_group":true,`+
+			`"pod_spec_override":%s}`,
+		jsonEscape(podSpec))
+	igOut, err := runAWXPost(decodedToken,
+		fmt.Sprintf("%s/instance_groups/", awxAPI),
+		createBody, operatorNamespace)
 	if err != nil {
-		// May already exist from a previous run — try to update instead.
-		_, _ = fmt.Fprintf(GinkgoWriter, "ContainerGroup create returned: %v (may already exist)\n%s\n", err, igOut)
+		// May already exist from a previous run.
+		_, _ = fmt.Fprintf(GinkgoWriter,
+			"ContainerGroup create returned: %v "+
+				"(may already exist)\n%s\n",
+			err, igOut)
 	}
 
 	// Get the ContainerGroup ID.
-	getIG := fmt.Sprintf(
-		`curl -sf %s/instance_groups/?name=multicluster-test-ig `+
-			`-H "Authorization: Bearer %s"`,
-		awxAPI, decodedToken)
-	igListOut, err := runKubectlHub("exec",
-		"deploy/awx-task", "-n", operatorNamespace, "--",
-		"bash", "-c", getIG)
-	Expect(err).NotTo(HaveOccurred(), "list InstanceGroups: %s", igListOut)
+	igListOut, err := runAWXGet(decodedToken,
+		fmt.Sprintf(
+			"%s/instance_groups/?name=multicluster-test-ig",
+			awxAPI),
+		operatorNamespace)
+	Expect(err).NotTo(HaveOccurred(),
+		"list InstanceGroups: %s", igListOut)
 
 	// Parse the ID from the response. Local struct because pkg/aap has
 	// no exported InstanceGroup type — its API surface covers only job
@@ -1358,38 +1320,43 @@ spec:
 		"osac-delete-security-group",
 	} {
 		// Get template ID.
-		getTemplate := fmt.Sprintf(
-			`curl -sf "%s/job_templates/?name=%s" -H "Authorization: Bearer %s"`,
-			awxAPI, tmpl, decodedToken)
-		tmplOut, err := runKubectlHub("exec",
-			"deploy/awx-task", "-n", operatorNamespace, "--",
-			"bash", "-c", getTemplate)
-		Expect(err).NotTo(HaveOccurred(), "get template %s: %s", tmpl, tmplOut)
+		tmplOut, err := runAWXGet(decodedToken,
+			fmt.Sprintf("%s/job_templates/?name=%s",
+				awxAPI, tmpl),
+			operatorNamespace)
+		Expect(err).NotTo(HaveOccurred(),
+			"get template %s: %s", tmpl, tmplOut)
 
 		var tmplList struct {
 			Results []struct {
 				ID int `json:"id"`
 			} `json:"results"`
 		}
-		Expect(json.Unmarshal(tmplOut, &tmplList)).To(Succeed(), "parse template list for %s", tmpl)
+		Expect(json.Unmarshal(tmplOut, &tmplList)).To(Succeed(),
+			"parse template list for %s", tmpl)
 		Expect(tmplList.Results).NotTo(BeEmpty(),
-			"job template %s must exist — waitForAWXProjectAndTemplates should have ensured this", tmpl)
+			"job template %s must exist — "+
+				"waitForAWXProjectAndTemplates "+
+				"should have ensured this", tmpl)
 		tmplID := tmplList.Results[0].ID
 
 		// Associate the ContainerGroup with the template.
-		assocIG := fmt.Sprintf(
-			`curl -sf -X POST %s/job_templates/%d/instance_groups/ `+
-				`-H "Authorization: Bearer %s" `+
-				`-H "Content-Type: application/json" `+
-				`-d '{"id":%d}'`,
-			awxAPI, tmplID, decodedToken, igID)
-		assocOut, err := runKubectlHub("exec",
-			"deploy/awx-task", "-n", operatorNamespace, "--",
-			"bash", "-c", assocIG)
+		assocOut, err := runAWXPost(decodedToken,
+			fmt.Sprintf(
+				"%s/job_templates/%d/instance_groups/",
+				awxAPI, tmplID),
+			fmt.Sprintf(`{"id":%d}`, igID),
+			operatorNamespace)
 		if err != nil {
-			_, _ = fmt.Fprintf(GinkgoWriter, "WARNING: associate IG with %s: %v\n%s\n", tmpl, err, assocOut)
+			_, _ = fmt.Fprintf(GinkgoWriter,
+				"WARNING: associate IG with %s: "+
+					"%v\n%s\n",
+				tmpl, err, assocOut)
 		} else {
-			_, _ = fmt.Fprintf(GinkgoWriter, "associated ContainerGroup %d with template %s (id=%d)\n", igID, tmpl, tmplID)
+			_, _ = fmt.Fprintf(GinkgoWriter,
+				"associated ContainerGroup %d with "+
+					"template %s (id=%d)\n",
+				igID, tmpl, tmplID)
 		}
 	}
 }
@@ -1398,6 +1365,157 @@ spec:
 func jsonEscape(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// maxAWXResponseBytes caps AWX API response body capture so a
+// runaway endpoint cannot exhaust memory.  Most responses are
+// small JSON; 2 MiB is generous.
+const maxAWXResponseBytes = 2 << 20
+
+// maxAWXStderrBytes caps stderr from AWX curl for diagnostics.
+const maxAWXStderrBytes = 64 * 1024
+
+// awxCurlTimeout bounds each AWX API call (including kubectl exec
+// overhead) to prevent a hung API from blocking the suite.
+const awxCurlTimeout = 60 * time.Second
+
+// runAWXCurl executes an HTTP request against the AWX API from
+// inside the awx-task pod, passing the bearer token via curl's
+// stdin config (--config -) so the credential never appears in
+// process argv, log output, or error messages.
+//
+// method is the HTTP method (GET, POST, PATCH); empty defaults to
+// GET.  body is the JSON request body (empty for bodyless requests).
+// The namespace determines which pod to exec into.
+//
+// Returns the response body (bounded) and any error.  Errors
+// include sanitized stderr but never the bearer token.
+// invalidBearerChars matches characters that must not appear in a
+// bearer token passed through curl --config stdin.  CR, LF, NUL,
+// double-quote, and backslash would break or inject into the curl
+// config line.  Reject them with a generic error that never echoes
+// the invalid value.
+var invalidBearerChars = regexp.MustCompile(
+	"[\x00-\x1f\x7f\"\\\\]")
+
+func runAWXCurl(
+	token, url, method, body, namespace string,
+) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(
+		context.Background(), awxCurlTimeout)
+	defer cancel()
+	return runAWXCurlWithContext(
+		ctx, token, url, method, body, namespace)
+}
+
+// runAWXCurlWithContext is the context-accepting implementation.
+// runAWXCurl wraps it with the production timeout.  Tests use
+// this directly when a shorter deadline is needed.
+func runAWXCurlWithContext(
+	ctx context.Context,
+	token, url, method, body, namespace string,
+) ([]byte, error) {
+	// Reject tokens with characters that could break or inject
+	// into the curl config line.
+	if len(token) == 0 {
+		return nil, fmt.Errorf(
+			"AWX curl: bearer token is empty")
+	}
+	if invalidBearerChars.MatchString(token) {
+		return nil, fmt.Errorf(
+			"AWX curl: bearer token contains " +
+				"invalid characters (rejected)")
+	}
+
+	// Build kubectl exec args with curl reading auth from stdin.
+	// The token is passed via the pipe, never in argv.
+	args := []string{
+		"exec", "-i", "deploy/awx-task",
+		"-n", namespace, "--",
+		"curl", "--config", "-", "-sf",
+	}
+	if method != "" && method != "GET" {
+		args = append(args, "-X", method)
+	}
+	if body != "" {
+		args = append(args,
+			"-H", "Content-Type: application/json",
+			"-d", body)
+	}
+	args = append(args, url)
+
+	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	dir, _ := utils.GetProjectDir()
+	cmd.Dir = dir
+
+	// Pipe the auth header via stdin so it stays out of argv.
+	cmd.Stdin = strings.NewReader(
+		fmt.Sprintf("header = \"Authorization: Bearer %s\"\n",
+			token))
+
+	// Capture stdout and stderr separately with bounded writers.
+	stdoutBW := newBoundedWriter(maxAWXResponseBytes)
+	stderrBW := newBoundedWriter(maxAWXStderrBytes)
+	cmd.Stdout = stdoutBW
+	cmd.Stderr = stderrBW
+
+	// Log only the safe method and endpoint — never the full
+	// args (body could carry secrets in other call sites) and
+	// never the token (which is in stdin only).
+	_, _ = fmt.Fprintf(GinkgoWriter,
+		"AWX %s %s (ns=%s)\n", method, url, namespace)
+
+	err := cmd.Run()
+
+	// Redact the known token value, then apply the generic
+	// whole-blob redactor so callers that log or Expect the
+	// returned output never expose credentials — even ones
+	// the caller does not know about (e.g. echoed by AWX).
+	redactAll := func(b []byte) []byte {
+		s := strings.ReplaceAll(
+			string(b), token, "[REDACTED]")
+		return []byte(sanitizeOutput(s))
+	}
+
+	// Guard truncated output FIRST — a partial response may
+	// cut mid-secret, so return nil rather than a dangerous
+	// prefix.  Truncated stderr is also unsafe to echo.
+	if stdoutBW.Truncated() || stderrBW.Truncated() {
+		return nil, fmt.Errorf(
+			"AWX curl %s %s: response truncated "+
+				"(exceeded output bounds)",
+			method, url)
+	}
+
+	safeStdout := redactAll(stdoutBW.Bytes())
+	safeStderr := string(redactAll(stderrBW.Bytes()))
+
+	if err != nil {
+		return nil, fmt.Errorf(
+			"AWX curl %s %s: %w\nstderr: %s",
+			method, url, err, safeStderr)
+	}
+
+	return safeStdout, nil
+}
+
+// runAWXGet is a convenience wrapper for GET requests.
+func runAWXGet(token, url, namespace string) ([]byte, error) {
+	return runAWXCurl(token, url, "GET", "", namespace)
+}
+
+// runAWXPost is a convenience wrapper for POST requests with a body.
+func runAWXPost(
+	token, url, body, namespace string,
+) ([]byte, error) {
+	return runAWXCurl(token, url, "POST", body, namespace)
+}
+
+// runAWXPatch is a convenience wrapper for PATCH requests with a body.
+func runAWXPatch(
+	token, url, body, namespace string,
+) ([]byte, error) {
+	return runAWXCurl(token, url, "PATCH", body, namespace)
 }
 
 // patchOperatorForRemoteCluster patches the operator Deployment to add the
@@ -1578,14 +1696,12 @@ func dumpProvisioningDiagnostics(ciName, namespace string) {
 	}{
 		{"AWX projects", "projects/?page_size=5"},
 		{"AWX job templates", "job_templates/?page_size=20"},
-		{"AWX jobs (recent)", "jobs/?order_by=-id&page_size=10"},
+		{"AWX jobs (recent)",
+			"jobs/?order_by=-id&page_size=10"},
 	} {
-		cmd := fmt.Sprintf(
-			`curl -sf "%s/%s" -H "Authorization: Bearer %s"`,
-			awxAPI, query.path, awxToken)
-		if out, err := runKubectlHub("exec",
-			"deploy/awx-task", "-n", namespace,
-			"--", "bash", "-c", cmd); err == nil {
+		if out, err := runAWXGet(awxToken,
+			fmt.Sprintf("%s/%s", awxAPI, query.path),
+			namespace); err == nil {
 			_, _ = fmt.Fprintf(GinkgoWriter,
 				"--- %s ---\n%s\n", query.label, out)
 		}
@@ -1604,16 +1720,14 @@ func dumpProvisioningDiagnostics(ciName, namespace string) {
 // the AWX API. This provides the actual Ansible error message that
 // caused the failure — the jobs list only shows metadata.
 func dumpFailedAWXJobStdout(awxAPI, awxToken, namespace string) {
-	listCmd := fmt.Sprintf(
-		`curl -sf "%s/jobs/?order_by=-id&page_size=10" `+
-			`-H "Authorization: Bearer %s"`,
-		awxAPI, awxToken)
-	out, err := runKubectlHub("exec",
-		"deploy/awx-task", "-n", namespace,
-		"--", "bash", "-c", listCmd)
+	out, err := runAWXGet(awxToken,
+		fmt.Sprintf(
+			"%s/jobs/?order_by=-id&page_size=10", awxAPI),
+		namespace)
 	if err != nil {
 		_, _ = fmt.Fprintf(GinkgoWriter,
-			"--- AWX job list for stdout fetch failed: %v ---\n", err)
+			"--- AWX job list for stdout fetch "+
+				"failed: %v ---\n", err)
 		return
 	}
 
@@ -1626,7 +1740,8 @@ func dumpFailedAWXJobStdout(awxAPI, awxToken, namespace string) {
 	}
 	if err := json.Unmarshal(out, &resp); err != nil {
 		_, _ = fmt.Fprintf(GinkgoWriter,
-			"--- parse AWX job list failed: %v ---\n", err)
+			"--- parse AWX job list failed: %v ---\n",
+			err)
 		return
 	}
 
@@ -1641,13 +1756,11 @@ func dumpFailedAWXJobStdout(awxAPI, awxToken, namespace string) {
 		if !isFailed && !isStorage {
 			continue
 		}
-		stdoutCmd := fmt.Sprintf(
-			`curl -sf "%s/jobs/%d/stdout/?format=txt" `+
-				`-H "Authorization: Bearer %s"`,
-			awxAPI, job.ID, awxToken)
-		stdoutOut, err := runKubectlHub("exec",
-			"deploy/awx-task", "-n", namespace,
-			"--", "bash", "-c", stdoutCmd)
+		stdoutOut, err := runAWXGet(awxToken,
+			fmt.Sprintf(
+				"%s/jobs/%d/stdout/?format=txt",
+				awxAPI, job.ID),
+			namespace)
 		if err != nil {
 			_, _ = fmt.Fprintf(GinkgoWriter,
 				"--- AWX job %d (%s) [%s] stdout "+
@@ -1681,6 +1794,77 @@ func dumpFailedAWXJobStdout(awxAPI, awxToken, namespace string) {
 					"%v ---\n", err)
 		}
 	}
+}
+
+// dumpFailedProjectUpdateStdout fetches the stdout of the most
+// recent project update for the given project ID.  This is the
+// diagnostic that reveals the actual Git/SCM error when an AWX
+// project sync fails — the update metadata only shows status, not
+// the error message.
+//
+// Output is sanitized and bounded.  Called at most once per
+// failure detection cycle (guarded by the caller's
+// stdoutFetched flag).
+func dumpFailedProjectUpdateStdout(
+	awxAPI, awxToken string, projectID int,
+) {
+	// Get the most recent project update ID.
+	updatesOut, err := runAWXGet(awxToken,
+		fmt.Sprintf(
+			"%s/project_updates/?project=%d"+
+				"&order_by=-id&page_size=1",
+			awxAPI, projectID),
+		operatorNamespace)
+	if err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter,
+			"--- project update list failed: %v ---\n",
+			err)
+		return
+	}
+
+	var updates struct {
+		Results []struct {
+			ID     int    `json:"id"`
+			Status string `json:"status"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(updatesOut, &updates); err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter,
+			"--- parse project updates failed: "+
+				"%v ---\n", err)
+		return
+	}
+	if len(updates.Results) == 0 {
+		_, _ = fmt.Fprintf(GinkgoWriter,
+			"--- no project updates found for "+
+				"project %d ---\n", projectID)
+		return
+	}
+
+	updateID := updates.Results[0].ID
+	updateStatus := updates.Results[0].Status
+
+	// Fetch the stdout (the actual Git error output).
+	stdoutOut, err := runAWXGet(awxToken,
+		fmt.Sprintf(
+			"%s/project_updates/%d/stdout/?format=txt",
+			awxAPI, updateID),
+		operatorNamespace)
+	if err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter,
+			"--- project update %d stdout fetch "+
+				"failed: %v ---\n",
+			updateID, err)
+		return
+	}
+
+	// Sanitize the stdout before logging — it may contain
+	// repository URLs, tokens, or configuration details.
+	safeStdout := sanitizeOutput(string(stdoutOut))
+	_, _ = fmt.Fprintf(GinkgoWriter,
+		"--- AWX project update %d [%s] stdout ---\n"+
+			"%s\n",
+		updateID, updateStatus, safeStdout)
 }
 
 func removeFinalizers(kind, name, namespace string) {

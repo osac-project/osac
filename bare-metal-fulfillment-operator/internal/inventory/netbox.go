@@ -691,39 +691,12 @@ func (c *NetBoxClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHost
 	if c.api == nil {
 		return nil, errNetBoxClientNotImplemented
 	}
-
-	nativeMACs, err := c.nativeLogicalPortMACs(ctx, deviceID)
+	macs, err := c.customFieldLogicalPortMACs(ctx, deviceID)
 	if err != nil {
 		return nil, err
 	}
-	customMACs, err := c.customFieldLogicalPortMACs(ctx, deviceID)
-	if err != nil {
-		return nil, err
-	}
-	return mergeLogicalPortMACs(nativeMACs, customMACs), nil
-}
-
-func mergeLogicalPortMACs(nativeMACs, customMACs map[string]string) map[string]string {
-	macs := make(map[string]string)
-	for name, mac := range nativeMACs {
-		macs[name] = mac
-	}
-	for name, mac := range customMACs {
-		macs[name] = mac
-	}
-	return macs
-}
-
-func (c *NetBoxClient) nativeLogicalPortMACs(ctx context.Context, deviceID string) (map[string]string, error) {
-	interfaces, err := c.api.ListDeviceInterfaces(ctx, deviceID)
-	if err != nil {
-		return nil, err
-	}
-	macs := make(map[string]string, len(interfaces))
-	for _, iface := range interfaces {
-		if iface.PrimaryMAC != "" {
-			macs[iface.Name] = iface.PrimaryMAC
-		}
+	if macs == nil {
+		return map[string]string{}, nil
 	}
 	return macs, nil
 }

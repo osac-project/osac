@@ -156,7 +156,24 @@ export const waitForVmToBeDeleted = async (
 
         const table = page.getByRole(...VmsMainPage.vmsTable);
         const emptyState = page.getByText(...VmsMainPage.emptyState);
-        await expect(table.or(emptyState)).toBeVisible();
+        const filteredEmptyState = page.getByText(...VmsMainPage.filteredEmptyState);
+        await expect
+          .poll(
+            async () => {
+              if (await table.isVisible().catch(() => false)) {
+                return 'table';
+              }
+              if (await emptyState.isVisible().catch(() => false)) {
+                return 'empty';
+              }
+              if (await filteredEmptyState.isVisible().catch(() => false)) {
+                return 'filtered-empty';
+              }
+              return '';
+            },
+            { timeout: 15_000, intervals: [250, 500, 1_000] },
+          )
+          .toBeTruthy();
         if ((await table.count()) === 0) {
           return 0;
         }

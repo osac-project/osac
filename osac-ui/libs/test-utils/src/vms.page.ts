@@ -24,6 +24,22 @@ export const openVmsPage = async (page: Page): Promise<void> => {
   await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
 };
 
+/** Return the VM names currently visible in the tenant VM list. */
+export const listVmNames = async (page: Page): Promise<string[]> => {
+  const table = page.getByRole(...VmsMainPage.vmsTable);
+  const emptyState = page.getByText(...VmsMainPage.emptyState);
+  await expect(table.or(emptyState)).toBeVisible();
+  if ((await table.count()) === 0) {
+    return [];
+  }
+
+  return table
+    .locator(...VmsMainPage.vmNameCell)
+    .getByRole('link')
+    .allTextContents()
+    .then((names) => names.map((name) => name.trim()).filter(Boolean));
+};
+
 /** Verify that a VM row appears in the tenant VM list. */
 export const expectVmToExist = async (
   page: Page,

@@ -177,7 +177,9 @@ The creation command stores the non-secret run IDs in
 `/tmp/osac-vmaas-full-flow-state.json`. The deletion-only commands reuse those
 IDs and must run on the same host. They expect the VM, generated tenant
 credentials, and full-flow resources to already exist. If the creation run
-failed, the state file remains available for cleanup.
+failed, the state file remains available for cleanup. VM deletion is
+idempotent when the tenant VM list is already empty; a different VM in the
+list is reported as a run-state mismatch instead of being deleted.
 
 Run the complete creation and deletion flow with:
 

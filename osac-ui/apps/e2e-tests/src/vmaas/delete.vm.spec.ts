@@ -10,6 +10,7 @@ import {
 } from '../../../../libs/test-utils/src/tenants.page';
 import {
   deleteVm,
+  listVmNames,
   openVmDetailsPage,
   openVmsPage,
   waitForVmToBeDeleted,
@@ -44,6 +45,19 @@ test(`deletes VM ${vmTestName}`, async ({ page }) => {
   );
 
   await testStep('vm-delete', 'Open the tenant Virtual Machines page', () => openVmsPage(page));
+  const vmNames = await testStep('vm-delete', 'Check the tenant VM list', () => listVmNames(page));
+  if (!vmNames.includes(vmTestName)) {
+    if (vmNames.length === 0) {
+      logProgress('vm-delete', `VM "${vmTestName}" is already absent; continuing cleanup.`);
+      return;
+    }
+
+    throw new Error(
+      `VM "${vmTestName}" was not found. The tenant VM list contains: ${vmNames.join(', ')}. ` +
+        'Use the run state from the creation flow that produced the VM.',
+    );
+  }
+
   await testStep('vm-delete', `Open VM "${vmTestName}" details`, () =>
     openVmDetailsPage(page, vmTestName),
   );

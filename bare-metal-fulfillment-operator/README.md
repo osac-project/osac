@@ -46,19 +46,43 @@ networkClass: openstack
 - `hostClass` — host management class to use
 - `networkClass` — network class to use
 
-### Logical port MAC mappings
+### Networking and logical port MAC mappings
 
-IP discovery asks the inventory client for an administrator-supplied mapping
+With provider networking enabled, BMF coordinates the BareMetalInstance network
+lifecycle: host assignment, NetworkAttachment create/delete, handoff, repair
+marks, and status mirroring. The implementation lives in
+`internal/controller/baremetalinstance_networking.go` and
+`internal/controller/baremetalinstance_ip_discovery.go`; those controllers manage
+the BMI lifecycle and mirror the lease reported on the NetworkAttachment.
+
+NetworkAttachment operations use the configured
+`{{ aap_prefix }}-move-network-attachment` and
+`{{ aap_prefix }}-query-dhcp-lease` AAP job templates. The osac-operator
+NetworkAttachment controller starts these jobs during reconciliation.
+`osac-aap` executes `playbook_osac_move_network_attachment.yml` and
+`playbook_osac_query_dhcp_lease.yml`; the selected Fabric Manager performs the
+provider-side port, policy, and DHCP operations. See the
+[BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md)
+([component responsibilities](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md#component-responsibilities)).
+
+At host assignment the inventory client can supply an administrator mapping
 from OSAC logical port names to physical MAC addresses. Each key must match the
-network attachment's `interface` and the catalog port name, as defined by the
-[BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md).
-Inventory backends provide these sources:
+network attachment's `interface` and the catalog port name.
+
+**OSAC-6818 implementation ([PR #2149](https://github.com/osac-project/osac/pull/2149)):**
+BMF requires a valid inventory MAC for the selected interface before creating
+the NetworkAttachment. It records the selected MAC in BMI status and the
+NetworkAttachment spec, then accepts a DHCP lease only when its MAC matches.
+Missing or invalid selected-port mappings do not fall back to host-name lease
+matching.
+Inventory backends:
 
 | Backend | Source | Value format |
 |---------|--------|--------------|
 | Metal3 | BareMetalHost annotation `osac.openshift.io/interface-macs` | JSON string |
 | BCM | Device `extra_values["osac_interface_macs"]` | JSON object or JSON string |
 | OpenStack | Ironic node `extra["osac_interface_macs"]` | JSON object |
+| NetBox | Device custom field `osac_interface_macs` | JSON object or JSON string |
 
 For example, an object mapping is `{"data-0":"52:54:00:16:04:83"}`. For
 string-valued BCM metadata, the equivalent device field is:
@@ -70,9 +94,9 @@ string-valued BCM metadata, the equivalent device field is:
 BCM returns an empty mapping when its extra value is absent, null, or an empty
 string, or when an explicit empty object is configured.
 Backends return an empty mapping when none is configured, and an error for
-malformed data or backend failures. IP discovery retains its server-name lease
-matching fallback when the requested logical port has no MAC or lookup fails.
-Physical interface names and NIC ordering do not supply a logical mapping.
+malformed data or backend failures. Host selection skips a host without an
+inventory name or without a valid MAC for the selected fabric port. Physical
+interface names and NIC ordering do not supply a logical mapping.
 
 ### Management
 

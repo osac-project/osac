@@ -102,6 +102,85 @@ osac create baremetalinstance \
   --ssh-key "$(cat ~/.ssh/id_ed25519.pub)"
 ```
 
+## Networking
+
+Bare-metal networking follows the accepted
+[BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md).
+Shared networking resources and gates are described in the
+[networking guide](networking-guide.md); this section covers only the
+BareMetalInstance lifecycle. Architecture summary:
+[Bare Metal Server Fulfillment](../../architecture/bm-server-fulfillment.md).
+
+**Implementation status.** The OSAC-6818 implementation in
+[PR #2149](https://github.com/osac-project/osac/pull/2149) requires a valid
+inventory MAC for the selected interface, stores it in BMI status and the
+NetworkAttachment spec, and accepts DHCP leases only for that MAC. It does not
+use host-name lease matching as a fallback.
+
+**Ownership.** BMF manages host inventory, OS provisioning and power,
+NetworkAttachment lifecycle, handoff, repair marks, and status mirroring. The
+configured `{{ aap_prefix }}-move-network-attachment` and
+`{{ aap_prefix }}-query-dhcp-lease` AAP job templates run the port-move and
+lease-query playbooks. The osac-operator NetworkAttachment controller starts
+these jobs during reconciliation; the selected Fabric Manager performs
+provider-side port, SecurityGroup, and DHCP operations.
+
+**Attachment.** A BareMetalInstance has at most one tenant network attachment.
+Omit the attachment to use the tenant's default Subnet and SecurityGroup, or
+supply a partial selection; the resolved choice is fixed after creation. When
+several tenant-facing interfaces exist, you may select the physical interface
+(`interface`); otherwise the platform picks a consistent default. System-only
+or unknown interfaces are rejected. The sole attachment is the host's primary
+route; there is no separate primary-network choice.
+
+**Create path (provider networking enabled).** The host is imaged on the
+provider provisioning network. After OS provisioning, BMF creates a
+NetworkAttachment; the configured `{{ aap_prefix }}-move-network-attachment`
+AAP job template runs the apply playbook, and the selected Fabric Manager moves
+the port to the Subnet segment and applies policy. BMF then coordinates the
+handoff through the management backend. Metal3 uses its hard handoff annotation;
+Ironic drives the host through off to on and explicitly powers it on if it is
+already off. BMF waits for confirmation and fails the handoff if it is not
+confirmed within 15 minutes of `NetworkAttachmentsReady=True`. After
+confirmation, the configured `{{ aap_prefix }}-query-dhcp-lease` AAP job
+template runs lease discovery for the selected MAC. After 10 minutes without a
+lease, BMF emits a `LeaseNotFound` warning while query retries continue; status
+carries the latest query result. A terminal query failure fails discovery. A
+provisioning-network address is never shown as the tenant address.
+
+**Automatic external access.** `--external-ip-attachment` (or the equivalent
+API field) requests an ExternalIP and ExternalIPAttachment for the server.
+Inbound access starts only after the tenant endpoint is ready and a real
+address is allocated. Automatic external resources are removed when the
+server is deleted.
+
+**Delete and repair.** BMF returns the host to inventory only after
+tenant-network cleanup completes. The configured
+`{{ aap_prefix }}-move-network-attachment` job template runs the offboard
+playbook to return Fabric ports to the provisioning network. BMF writes a repair
+mark before release only when provider networking is enabled and a FabricDomain
+retains a `status.jobs` entry showing that its `create_fabric_domain` job started
+while `spec.servers` lists the host. If the mark cannot be persisted, BMF does
+not release the host. Selection skips marked hosts until a Cloud Provider Admin
+clears the mark (see the design support procedures).
+
+**Provider networking disabled.** Host provisioning and deprovisioning stay
+available on the provisioning network. OSAC does not move tenant interfaces,
+discover tenant addresses, or promise tenant routing or ExternalIP access.
+Server readiness then attests OS provisioning only.
+
+Example create with an explicit attachment and automatic external access:
+
+```bash
+osac create baremetalinstance \
+  --name worker-0 \
+  --catalog-item standard-bare-metal \
+  --disk-image rhel-9-4-amd64 \
+  --network-attachment subnet=<subnet-id>,interface=data-0,security-groups=<sg-id> \
+  --external-ip-attachment \
+  --ssh-key "$(cat ~/.ssh/id_ed25519.pub)"
+```
+
 ## Validation, lifecycle, and deletion
 
 OSAC resolves the DiskImage reference before creating the instance. The

@@ -5,8 +5,8 @@ including IP, MAC, or network-attachment data on any provisioned resource.
 
 ## Authoritative sources and implementation status
 
-This summary was checked against the accepted designs on `enhancement-proposals`
-`main` on 2026-09-30. Read the applicable full designs before finalizing scope:
+`enhancement-proposals` contains the authoritative accepted designs. Read the
+applicable full designs before finalizing scope:
 
 - [Unified networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-unified-networking/design.md)
 - [Default networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-default-networking/design.md)
@@ -63,8 +63,14 @@ superseded or extended design explicitly.
    the resource-specific message types and compatibility rules below.
 8. **DHCP and discovery:** Workloads receive tenant-network addresses through
    DHCP. Discover assigned addresses through the service-specific status and
-   feedback paths. BMaaS queries fabric DHCP leases by NIC MAC; CaaS delegates
-   host provisioning, port moves, and IP discovery to BMaaS. Check the per-service
+   feedback paths. For BMaaS, the Fabric Manager owns lease lookup. The target
+   OSAC-6818 implementation [PR #2149](https://github.com/osac-project/osac/pull/2149)
+   records the selected NIC MAC on BMI status and its NetworkAttachment; the
+   configured AAP job template runs
+   `query_dhcp_lease` after handoff, and BMF mirrors only a matching accepted
+   lease to BMI status. Host selection requires a valid mapping for the selected
+   logical port; lease discovery has no host-name fallback. CaaS delegates host
+   provisioning, port moves, and IP discovery to BMaaS. Check the per-service
    designs for timing and API/ingress VIP allocation.
 9. **Pluggable managers:** Managers register type/capabilities through ConfigMaps
    and supply Ansible roles. Adding a manager for existing capabilities does not

@@ -86,6 +86,7 @@ describe('VmDetails', () => {
 
     expect(screen.getByText('VM detail sections')).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('separator')).toHaveLength(1);
   });
 
   it('opens the console surface from the header action', async () => {

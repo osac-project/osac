@@ -1,11 +1,10 @@
 import {
-  Card,
-  CardBody,
-  CardTitle,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
+  Stack,
+  StackItem,
   Title,
 } from '@patternfly/react-core';
 
@@ -31,13 +30,13 @@ const VmStorageSection = ({ vm }: VmStorageSectionProps) => {
   }));
 
   return (
-    <Card>
-      <CardTitle>
+    <Stack hasGutter>
+      <StackItem>
         <Title headingLevel="h2" size="lg">
           {t('Storage')}
         </Title>
-      </CardTitle>
-      <CardBody>
+      </StackItem>
+      <StackItem>
         <DescriptionList isCompact>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Boot disk size')}</DescriptionListTerm>
@@ -58,8 +57,8 @@ const VmStorageSection = ({ vm }: VmStorageSectionProps) => {
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>
-      </CardBody>
-    </Card>
+      </StackItem>
+    </Stack>
   );
 };
 

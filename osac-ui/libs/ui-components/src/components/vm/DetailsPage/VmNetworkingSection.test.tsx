@@ -23,7 +23,9 @@ describe('VmNetworkingSection', () => {
       },
     ]);
 
-    renderWithProviders(<VmNetworkingSection vm={{ id: 'vm-1' } as ComputeInstance} />);
+    const { container } = renderWithProviders(
+      <VmNetworkingSection vm={{ id: 'vm-1' } as ComputeInstance} />,
+    );
 
     expect(screen.getByText('Networking')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Virtual network' })).toBeInTheDocument();
@@ -32,6 +34,7 @@ describe('VmNetworkingSection', () => {
     expect(screen.getByRole('columnheader', { name: 'Internal IP' })).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: '10.0.0.5' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add network/i })).not.toBeInTheDocument();
+    expect(container.querySelector('.pf-v6-c-card')).toBeNull();
   });
 
   it('shows an empty state when there are no attachments', () => {

@@ -1,5 +1,13 @@
 import { useState } from 'react';
-import { Alert, Flex, FlexItem, PageSection, Stack, StackItem } from '@patternfly/react-core';
+import {
+  Alert,
+  Divider,
+  Flex,
+  FlexItem,
+  PageSection,
+  Stack,
+  StackItem,
+} from '@patternfly/react-core';
 
 import type { ComputeInstance } from '@osac/types';
 
@@ -66,6 +74,9 @@ const VmDetails = ({ vm }: Props) => {
                 <VmDetailsActionButtons vm={vm} onOpenConsole={() => setShowConsole(true)} />
               </FlexItem>
             </Flex>
+          </StackItem>
+          <StackItem>
+            <Divider />
           </StackItem>
         </Stack>
       </PageSection>

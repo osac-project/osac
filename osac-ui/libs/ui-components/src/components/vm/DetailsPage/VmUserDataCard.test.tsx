@@ -30,10 +30,11 @@ describe('VmUserDataCard', () => {
   });
 
   it('is collapsed by default and reveals content on expand', async () => {
-    const { user } = renderCard();
+    const { container, user } = renderCard();
 
     expect(screen.getByText('Cloud Init User Data')).toBeInTheDocument();
     expect(screen.queryByText(/#cloud-config/)).not.toBeInTheDocument();
+    expect(container.querySelector('.pf-v6-c-card')).toBeNull();
 
     const toggle = screen.getByRole('button', { name: /Expand user data/ });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -59,6 +60,6 @@ describe('VmUserDataCard', () => {
 
     await user.click(screen.getByRole('button', { name: /Expand user data/ }));
 
-    expect(document.querySelector('#vm-user-data-card pre')?.textContent).toBe(userData);
+    expect(screen.getByText(/#cloud-config/).textContent).toBe(userData);
   });
 });

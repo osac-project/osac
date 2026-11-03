@@ -1,11 +1,5 @@
 import { useState } from 'react';
-import {
-  Card,
-  CardBody,
-  CardExpandableContent,
-  CardHeader,
-  CardTitle,
-} from '@patternfly/react-core';
+import { CodeBlock, CodeBlockCode, ExpandableSection } from '@patternfly/react-core';
 
 import type { ComputeInstance } from '@osac/types';
 
@@ -25,29 +19,21 @@ const VmUserDataCard = ({ vm }: VmUserDataCardProps) => {
     return null;
   }
 
-  const cardId = 'vm-user-data-card';
-  const titleId = 'vm-user-data-card-title';
-  const toggleId = 'vm-user-data-toggle';
-
   return (
-    <Card id={cardId} isExpanded={isExpanded}>
-      <CardHeader
-        onExpand={() => setIsExpanded((current) => !current)}
-        toggleButtonProps={{
-          id: toggleId,
-          'aria-label': isExpanded ? t('Collapse user data') : t('Expand user data'),
-          'aria-labelledby': `${titleId} ${toggleId}`,
-          'aria-expanded': isExpanded,
-        }}
-      >
-        <CardTitle id={titleId}>{t('Cloud Init User Data')}</CardTitle>
-      </CardHeader>
-      <CardExpandableContent>
-        <CardBody>
-          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{userData}</pre>
-        </CardBody>
-      </CardExpandableContent>
-    </Card>
+    <ExpandableSection
+      isExpanded={isExpanded}
+      onToggle={(_, expanded) => setIsExpanded(expanded)}
+      toggleTextCollapsed={t('Cloud Init User Data')}
+      toggleTextExpanded={t('Cloud Init User Data')}
+      toggleAriaLabel={isExpanded ? t('Collapse user data') : t('Expand user data')}
+      toggleWrapper="h2"
+    >
+      {isExpanded ? (
+        <CodeBlock>
+          <CodeBlockCode>{userData}</CodeBlockCode>
+        </CodeBlock>
+      ) : null}
+    </ExpandableSection>
   );
 };
 

@@ -55,8 +55,8 @@ const renderCard = (cardVm: ComputeInstance = vm) =>
   renderWithProviders(<VmDetailsCard vm={cardVm} />);
 
 describe('VmDetailsCard', () => {
-  it('renders overview, configuration, and access fields in one card', () => {
-    renderWithProviders(
+  it('renders overview, configuration, and access fields without a card wrapper', () => {
+    const { container } = renderWithProviders(
       <VmDetailsCard
         vm={vm}
         instanceType={instanceType}
@@ -69,7 +69,6 @@ describe('VmDetailsCard', () => {
       />,
     );
 
-    expect(screen.getByText('Details')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Configuration' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
@@ -91,6 +90,7 @@ describe('VmDetailsCard', () => {
       '/secrets/secret-1',
     );
     expect(screen.getByText('Configured')).toBeInTheDocument();
+    expect(container.querySelector('.pf-v6-c-card')).toBeNull();
   });
 
   it('uses Not set for unresolved configuration values', () => {

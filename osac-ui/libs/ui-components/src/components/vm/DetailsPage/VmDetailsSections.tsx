@@ -1,4 +1,4 @@
-import { PageSection, Stack, StackItem } from '@patternfly/react-core';
+import { Divider, PageSection, Stack, StackItem } from '@patternfly/react-core';
 
 import type { ComputeInstance, DiskImage, InstanceType } from '@osac/types';
 
@@ -23,12 +23,8 @@ const VmDetailsSections = ({
   isDiskImageLoading,
 }: VmDetailsSectionsProps) => {
   const userDataSource = vm.spec?.userDataSource?.source;
-  const hasUserData =
-    userDataSource?.case === 'inline'
-      ? Boolean(userDataSource.value.trim())
-      : userDataSource?.case === 'secret'
-        ? Boolean(userDataSource.value.id || userDataSource.value.name)
-        : false;
+  const hasInlineUserData =
+    userDataSource?.case === 'inline' && Boolean(userDataSource.value.trim());
 
   return (
     <PageSection hasBodyWrapper={false}>
@@ -43,15 +39,26 @@ const VmDetailsSections = ({
           />
         </StackItem>
         <StackItem>
+          <Divider />
+        </StackItem>
+        <StackItem>
           <VmNetworkingSection vm={vm} />
+        </StackItem>
+        <StackItem>
+          <Divider />
         </StackItem>
         <StackItem>
           <VmStorageSection vm={vm} />
         </StackItem>
-        {hasUserData ? (
-          <StackItem>
-            <VmUserDataCard vm={vm} />
-          </StackItem>
+        {hasInlineUserData ? (
+          <>
+            <StackItem>
+              <Divider />
+            </StackItem>
+            <StackItem>
+              <VmUserDataCard vm={vm} />
+            </StackItem>
+          </>
         ) : null}
       </Stack>
     </PageSection>

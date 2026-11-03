@@ -17,7 +17,7 @@ describe('VmStorageSection', () => {
       },
     } as ComputeInstance;
 
-    renderWithProviders(<VmStorageSection vm={vm} />);
+    const { container } = renderWithProviders(<VmStorageSection vm={vm} />);
 
     expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
     expect(screen.getByText('Boot disk size')).toBeInTheDocument();
@@ -26,6 +26,7 @@ describe('VmStorageSection', () => {
     expect(screen.getByText('balanced')).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: '100 GB' })).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: 'fast' })).toBeInTheDocument();
+    expect(container.querySelector('.pf-v6-c-card')).toBeNull();
   });
 
   it('renders Not set for an empty additional-disk list', () => {

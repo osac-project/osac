@@ -3,9 +3,6 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Button,
-  Card,
-  CardBody,
-  CardTitle,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
@@ -120,116 +117,114 @@ const VmDetailsCard = ({
   );
 
   return (
-    <Card>
-      <CardTitle>{t('Details')}</CardTitle>
-      <CardBody>
-        <Grid hasGutter>
-          <GridItem md={4}>
-            <Stack hasGutter>
-              <StackItem>
-                <Title headingLevel="h2" size="lg">
-                  {t('Overview')}
-                </Title>
-              </StackItem>
-              <StackItem>
-                <DescriptionList isCompact>
-                  <DetailRow label={t('Project')}>{displayValue(vm.metadata?.project)}</DetailRow>
-                  <DetailRow label={t('Status')}>
-                    <VmStatusLabel state={vm.status?.state} />
-                  </DetailRow>
-                  <DetailRow label={t('Created')}>
-                    <Timestamp value={vm.metadata?.creationTimestamp} fallback={t('Not set')} />
-                  </DetailRow>
-                  <DetailRow label={t('Catalog item')}>
-                    {displayValue(catalogItem?.name || catalogItem?.id)}
-                  </DetailRow>
-                </DescriptionList>
-              </StackItem>
-            </Stack>
-          </GridItem>
+    <>
+      <Grid hasGutter>
+        <GridItem md={4}>
+          <Stack hasGutter>
+            <StackItem>
+              <Title headingLevel="h2" size="lg">
+                {t('Overview')}
+              </Title>
+            </StackItem>
+            <StackItem>
+              <DescriptionList isCompact>
+                <DetailRow label={t('Project')}>{displayValue(vm.metadata?.project)}</DetailRow>
+                <DetailRow label={t('Status')}>
+                  <VmStatusLabel state={vm.status?.state} />
+                </DetailRow>
+                <DetailRow label={t('Created')}>
+                  <Timestamp value={vm.metadata?.creationTimestamp} fallback={t('Not set')} />
+                </DetailRow>
+                <DetailRow label={t('Catalog item')}>
+                  {displayValue(catalogItem?.name || catalogItem?.id)}
+                </DetailRow>
+              </DescriptionList>
+            </StackItem>
+          </Stack>
+        </GridItem>
 
-          <GridItem md={4}>
-            <Stack hasGutter>
-              <StackItem>
-                <Title headingLevel="h2" size="lg">
-                  {t('Configuration')}
-                </Title>
-              </StackItem>
-              <StackItem>
-                <DescriptionList isCompact>
-                  <DetailRow label={t('Guest operating system family')}>
-                    {isDiskImageLoading ? t('Loading') : guestOsFamilyLabel}
-                  </DetailRow>
-                  <DetailRow label={t('Disk image')}>{displayValue(diskImageLabel)}</DetailRow>
-                  <DetailRow label={t('Instance type')}>
-                    <Flex
-                      spaceItems={{ default: 'spaceItemsSm' }}
-                      alignItems={{ default: 'alignItemsCenter' }}
-                    >
-                      {instanceTypeLabel}
-                      {canEdit ? (
-                        editButton
+        <GridItem md={4}>
+          <Stack hasGutter>
+            <StackItem>
+              <Title headingLevel="h2" size="lg">
+                {t('Configuration')}
+              </Title>
+            </StackItem>
+            <StackItem>
+              <DescriptionList isCompact>
+                <DetailRow label={t('Guest operating system family')}>
+                  {isDiskImageLoading ? t('Loading') : guestOsFamilyLabel}
+                </DetailRow>
+                <DetailRow label={t('Disk image')}>{displayValue(diskImageLabel)}</DetailRow>
+                <DetailRow label={t('Instance type')}>
+                  <Flex
+                    spaceItems={{ default: 'spaceItemsSm' }}
+                    alignItems={{ default: 'alignItemsCenter' }}
+                  >
+                    {instanceTypeLabel}
+                    {canEdit ? (
+                      editButton
+                    ) : (
+                      <Tooltip content={disabledInstanceTypeTooltip(vm, t)}>
+                        <span tabIndex={0}>{editButton}</span>
+                      </Tooltip>
+                    )}
+                  </Flex>
+                </DetailRow>
+                <DetailRow label={t('Name')}>{displayValue(vm.metadata?.name)}</DetailRow>
+                <DetailRow label={t('vCPUs')}>
+                  {vcpus === undefined ? t('Not set') : vcpus}
+                </DetailRow>
+                <DetailRow label={t('Memory')}>
+                  {memoryGib === undefined ? t('Not set') : `${memoryGib} GiB`}
+                </DetailRow>
+                {gpu ? (
+                  <>
+                    <DetailRow label={t('GPU count')}>{gpu.count}</DetailRow>
+                    <DetailRow label={t('GPU resource name')}>
+                      {displayValue(gpu.resourceName)}
+                    </DetailRow>
+                  </>
+                ) : null}
+              </DescriptionList>
+            </StackItem>
+          </Stack>
+        </GridItem>
+
+        <GridItem md={4}>
+          <Stack hasGutter>
+            <StackItem>
+              <Title headingLevel="h2" size="lg">
+                {t('Access & Initial run')}
+              </Title>
+            </StackItem>
+            <StackItem>
+              <DescriptionList isCompact>
+                <VmExternalIpSection vm={vm} />
+                {hasWindowsGuest ? (
+                  <DetailRow label={t('Sysprep (Unattend.xml)')}>{t('Not set')}</DetailRow>
+                ) : (
+                  <>
+                    <DetailRow label={t('SSH public key')}>
+                      {sshKeyDetailsUrl && sshKeyLabel ? (
+                        <Link to={sshKeyDetailsUrl}>{sshKeyLabel}</Link>
                       ) : (
-                        <Tooltip content={disabledInstanceTypeTooltip(vm, t)}>
-                          <span tabIndex={0}>{editButton}</span>
-                        </Tooltip>
+                        displayValue(sshKeyLabel)
                       )}
-                    </Flex>
-                  </DetailRow>
-                  <DetailRow label={t('Name')}>{displayValue(vm.metadata?.name)}</DetailRow>
-                  <DetailRow label={t('vCPUs')}>
-                    {vcpus === undefined ? t('Not set') : vcpus}
-                  </DetailRow>
-                  <DetailRow label={t('Memory')}>
-                    {memoryGib === undefined ? t('Not set') : `${memoryGib} GiB`}
-                  </DetailRow>
-                  {gpu ? (
-                    <>
-                      <DetailRow label={t('GPU count')}>{gpu.count}</DetailRow>
-                      <DetailRow label={t('GPU resource name')}>
-                        {displayValue(gpu.resourceName)}
-                      </DetailRow>
-                    </>
-                  ) : null}
-                </DescriptionList>
-              </StackItem>
-            </Stack>
-          </GridItem>
+                    </DetailRow>
+                    <DetailRow label={t('Cloud-init')}>
+                      {userDataConfigured ? t('Configured') : t('Not set')}
+                    </DetailRow>
+                  </>
+                )}
+              </DescriptionList>
+            </StackItem>
+          </Stack>
+        </GridItem>
+      </Grid>
 
-          <GridItem md={4}>
-            <Stack hasGutter>
-              <StackItem>
-                <Title headingLevel="h2" size="lg">
-                  {t('Access & Initial run')}
-                </Title>
-              </StackItem>
-              <StackItem>
-                <DescriptionList isCompact>
-                  <VmExternalIpSection vm={vm} />
-                  {hasWindowsGuest ? (
-                    <DetailRow label={t('Sysprep (Unattend.xml)')}>{t('Not set')}</DetailRow>
-                  ) : (
-                    <>
-                      <DetailRow label={t('SSH public key')}>
-                        {sshKeyDetailsUrl && sshKeyLabel ? (
-                          <Link to={sshKeyDetailsUrl}>{sshKeyLabel}</Link>
-                        ) : (
-                          displayValue(sshKeyLabel)
-                        )}
-                      </DetailRow>
-                      <DetailRow label={t('Cloud-init')}>
-                        {userDataConfigured ? t('Configured') : t('Not set')}
-                      </DetailRow>
-                    </>
-                  )}
-                </DescriptionList>
-              </StackItem>
-            </Stack>
-          </GridItem>
-        </Grid>
-      </CardBody>
       {editOpen ? <EditInstanceTypeModal vm={vm} onClose={() => setEditOpen(false)} /> : null}
-    </Card>
+    </>
   );
 };
 

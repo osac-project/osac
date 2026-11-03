@@ -1,4 +1,4 @@
-import { Card, CardBody, CardTitle, Title } from '@patternfly/react-core';
+import { Stack, StackItem, Title } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import type { ComputeInstance } from '@osac/types';
@@ -16,13 +16,13 @@ const VmNetworkingSection = ({ vm }: VmNetworkingSectionProps) => {
   const rows = useVmNetworkAttachmentRows(vm);
 
   return (
-    <Card>
-      <CardTitle>
+    <Stack hasGutter>
+      <StackItem>
         <Title headingLevel="h2" size="lg">
           {t('Networking')}
         </Title>
-      </CardTitle>
-      <CardBody>
+      </StackItem>
+      <StackItem>
         {rows.length > 0 ? (
           <Table aria-label={t('Networking')} variant="compact" borders>
             <Thead>
@@ -47,8 +47,8 @@ const VmNetworkingSection = ({ vm }: VmNetworkingSectionProps) => {
         ) : (
           <SubtleContent component="p">{t('No virtual networks configured.')}</SubtleContent>
         )}
-      </CardBody>
-    </Card>
+      </StackItem>
+    </Stack>
   );
 };
 

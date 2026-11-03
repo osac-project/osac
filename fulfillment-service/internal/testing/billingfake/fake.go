@@ -40,6 +40,7 @@ type Scenario struct {
 }
 
 // AccountSpec scripts one provider account. ExternalID is its correlation value, empty when it has none.
+// BaseCurrency is empty when the scripted provider does not supply one, mimicking M360.
 type AccountSpec struct {
 	ID             string               `json:"id"`
 	Name           string               `json:"name"`
@@ -47,6 +48,7 @@ type AccountSpec struct {
 	State          billing.AccountState `json:"state"`
 	RawStatus      string               `json:"rawStatus"`
 	ApprovalStatus string               `json:"approvalStatus"`
+	BaseCurrency   string               `json:"baseCurrency"`
 }
 
 // ServiceSpec scripts one provider service. Rates are keyed by the requested currency; two services with the same
@@ -171,7 +173,7 @@ func (f *Fake) find(id string) (*AccountSpec, error) {
 func toAccount(a *AccountSpec) billing.Account {
 	return billing.Account{
 		Ref: billing.NewAccountRef(a.ID), Name: a.Name, ExternalID: a.ExternalID, State: a.State,
-		RawStatus: a.RawStatus, ApprovalStatus: a.ApprovalStatus,
+		RawStatus: a.RawStatus, ApprovalStatus: a.ApprovalStatus, BaseCurrency: a.BaseCurrency,
 	}
 }
 

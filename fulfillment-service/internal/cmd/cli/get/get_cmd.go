@@ -28,6 +28,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/billingaccount"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/billingproviderstatus"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/externalippool"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/storagetier"
@@ -65,6 +66,7 @@ func Cmd() *cobra.Command {
 		RunE:                  runner.run,
 		ValidArgsFunction:     completeObjectTypes,
 	}
+	result.AddCommand(billingaccount.Cmd())
 	result.AddCommand(billingproviderstatus.Cmd())
 	result.AddCommand(externalippool.Cmd())
 	result.AddCommand(storagetier.Cmd())

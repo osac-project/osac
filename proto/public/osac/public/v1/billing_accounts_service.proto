@@ -1,0 +1,72 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/api/annotations.proto";
+import "osac/public/v1/billing_account_type.proto";
+
+message BillingAccountsListRequest {
+  // Index of the first result. If not specified the default value will be zero.
+  optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server. When not specified all the results will be returned.
+  optional int32 limit = 2;
+
+  // Filter criteria.
+  //
+  // The value of this parameter is a [CEL](https://cel.dev) expression used to select which objects to return. The
+  // built-in `this` variable refers to the object being tested. If the expression evaluates to `true` the object
+  // is included in the results. For example, to retrieve only active accounts:
+  //
+  //     this.state == "BILLING_ACCOUNT_STATE_ACTIVE"
+  //
+  // If this isn't provided, or if the value is empty, then all the accounts that the caller has permission to see
+  // will be returned.
+  optional string filter = 3;
+
+  // Order criteria.
+  //
+  // The syntax of this parameter is similar to the syntax of the _order by_ clause of a SQL statement, but using
+  // the names of the attributes of the billing account instead of the names of the columns of a table. For
+  // example, in order to sort accounts descending by display name the value should be:
+  //
+  //     display_name desc
+  //
+  // If the parameter isn't provided, or if the value is empty, then the order of the results is undefined.
+  optional string order = 4;
+}
+
+message BillingAccountsListResponse {
+  // Actual number of items returned.
+  int32 size = 1;
+
+  // Total number of items of the collection that match the search criteria, regardless of the number of results
+  // requested with the `limit` parameter.
+  int32 total = 2;
+
+  // Discovered billing accounts. An empty list means no accounts were discovered; it does not mean billing is
+  // disabled.
+  repeated BillingAccount items = 3;
+}
+
+service BillingAccounts {
+  // Reads the configured billing provider's account list (refreshing the local record of it), then returns the
+  // discovered accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled, and `UNAVAILABLE` when the
+  // provider cannot be reached: it never serves a stale list unmarked as current.
+  rpc List(BillingAccountsListRequest) returns (BillingAccountsListResponse) {
+    option (google.api.http) = {get: "/api/fulfillment/v1/billing/accounts"};
+  }
+}

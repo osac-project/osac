@@ -720,6 +720,32 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	// filterable-resource-exempt: singleton status read, no List RPC or CEL filter field
 	publicv1.RegisterBillingProviderStatusesServer(grpcServer, billingProviderStatusesServer)
 
+	// Create the billing accounts servers. BillingAccounts.List does have a filter/order-capable List RPC, but
+	// billing_accounts is a deliberately flat, provider-global table (design.md Sec4.2), not the generic
+	// Metadata/Spec/Status jsonb object shape RegisterResourceServers and dao.FilterTranslator assume, so it uses
+	// its own small allowlist-based filter/order translator instead (internal/database/billing_account.go).
+	c.logger.InfoContext(ctx, "Creating billing accounts servers")
+	privateBillingAccountsServer, err := servers.NewPrivateBillingAccountsServer().
+		SetLogger(c.logger).
+		SetProvider(billingProvider).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private billing accounts server: %w", err)
+	}
+	billingAccountsServer, err := servers.NewBillingAccountsServer().
+		SetLogger(c.logger).
+		SetDelegate(privateBillingAccountsServer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create public billing accounts server: %w", err)
+	}
+	// filterable-resource-exempt: filter/order use a bespoke flat-table translator (internal/database/
+	// billing_account.go), not dao.FilterTranslator/GenericDAO, so this is not a RegisterResourceServers resource
+	publicv1.RegisterBillingAccountsServer(grpcServer, billingAccountsServer)
+	// filterable-resource-exempt: filter/order use a bespoke flat-table translator (internal/database/
+	// billing_account.go), not dao.FilterTranslator/GenericDAO, so this is not a RegisterResourceServers resource
+	privatev1.RegisterBillingAccountsServer(grpcServer, privateBillingAccountsServer)
+
 	// Create the capabilities servers:
 	c.logger.InfoContext(ctx, "Creating capabilities servers")
 	capabilitiesServer, err := servers.NewCapabilitiesServer().

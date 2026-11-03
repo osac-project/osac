@@ -228,8 +228,14 @@ type filterOracleCase struct {
 // built early (for JIT provisioning, before RegisterResourceServers is even called) and its public half is built
 // afterward in run() — a targeted filter-oracle regression test for Users (covering the private-only
 // UserStatus.keycloak_user_id field) is added separately in users_server_test.go as part of this same fix.
+// BillingAccount is excluded because it is a flat, non-object-shaped resource (design.md Sec4.2) registered
+// standalone in start_grpc_server_cmd.go, not through RegisterResourceServers, and its filter/order is a bespoke
+// allowlist-based translator (internal/database/billing_account.go), not dao.FilterTranslator — a targeted
+// filter-oracle regression test for it (covering the private-only provider_account_reference field) is added
+// separately in billing_accounts_server_test.go.
 var resourcesExcludedFromDiscovery = map[string]bool{
-	"User": true,
+	"User":           true,
+	"BillingAccount": true,
 }
 
 // discoverFilterOracleCases walks the public/private proto registries, pairs every public/private message by

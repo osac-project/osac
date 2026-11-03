@@ -57,7 +57,7 @@ fold, round, or relay behavior; they are the determinism gate for billing.
 
 - Fulfillment proto types are the shared top-level `proto/` module, imported as `github.com/osac-project/osac/proto/gen/...`. `metering-service/` no longer generates its own copy; `make generate` there just delegates to `make -C ../../proto generate`. Commit the regenerated `proto/gen/` (see `proto/AGENTS.md`); never edit generated code manually.
 - `docs/contract/` is generated from the field registry, the default rule revision, and `schema/versions/`. Change the sources and run `make -C osac-metering contract`; never edit the reference or the schema file by hand.
-- A published version file is pinned in `schema/versions/published.sha256`. A new version file needs its own entry; CI fails when an existing file's bytes differ from the manifest.
+- A published version file is pinned in `schema/published.sha256`. A new version file needs its own entry; CI fails when an existing file's bytes differ from the manifest.
 - Use `go mod tidy` for dependency updates in the affected module.
 
 ## Validation

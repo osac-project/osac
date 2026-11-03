@@ -504,6 +504,32 @@ func TestVersionCheckRequiredPayload(t *testing.T) {
 		!strings.Contains(err.Error(), `missing required field "usage.quantity"`) {
 		t.Fatalf("want a missing nested field error, got %v", err)
 	}
+
+	// An optional object that is present must still be complete; one that is absent may be
+	// omitted.
+	optional := versions[0]
+	optional.Data = append([]Field{}, versions[0].Data...)
+	for i := range optional.Data {
+		if optional.Data[i].Name == "usage" {
+			optional.Data[i].Required = false
+		}
+	}
+	if err := optional.CheckRequiredPayload(broken); err == nil ||
+		!strings.Contains(err.Error(), `missing required field "usage.quantity"`) {
+		t.Fatalf("a present optional object must be complete, got %v", err)
+	}
+	var omitted map[string]any
+	if err := json.Unmarshal(payload, &omitted); err != nil {
+		t.Fatalf("decoding the test payload: %v", err)
+	}
+	delete(omitted, "usage")
+	omittedPayload, err := json.Marshal(omitted)
+	if err != nil {
+		t.Fatalf("encoding the test payload: %v", err)
+	}
+	if err := optional.CheckRequiredPayload(omittedPayload); err != nil {
+		t.Fatalf("an absent optional object must be accepted, got %v", err)
+	}
 }
 
 func TestLoadVersionsRejectsAChangedEnvelopeConstant(t *testing.T) {

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # A published schema file never changes after release. A reader holds the file and validates
-# every record against it, and metering replays retained records with the version in effect
-# when they were written, so an edit would re-read old records with a new shape and bill them
-# wrong. A field change ships as the next version file, never as an edit of a published one.
-# This mirrors the rule-revision check in test-rules-unchanged.sh.
+# records against it, and metering validates a record's named version and then decodes it with
+# the current add-only payload shape, so an edit would re-read old records with a changed
+# shape and bill them wrong. A field change ships as the next version file, never as an edit
+# of a published one. This mirrors the rule-revision check in test-rules-unchanged.sh.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."

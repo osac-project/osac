@@ -425,7 +425,7 @@ func writeRegeneration(out *strings.Builder) {
 			"meter, or a schema file arrives with its regenerated reference.\n\n", SchemaName)
 	fmt.Fprintf(out,
 		"Every schema version file is pinned by SHA-256 in "+
-			"`osac-metering/schema/versions/published.sha256`; a new version adds its own "+
+			"`osac-metering/schema/published.sha256`; a new version adds its own "+
 			"entry, and CI fails when a published file differs from it.\n")
 }
 

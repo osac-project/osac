@@ -40,13 +40,13 @@ const versionDirectory = "versions"
 // manifestName is the committed SHA-256 manifest of the version files.
 const manifestName = "published.sha256"
 
-//go:embed versions/*.json versions/published.sha256
+//go:embed versions/*.json published.sha256
 var versionFiles embed.FS
 
 // publishedManifest pins the bytes of every published version file. A version file never
 // changes, and a new file needs its own committed entry.
 //
-//go:embed versions/published.sha256
+//go:embed published.sha256
 var publishedManifest []byte
 
 // FieldType is the JSON type a schema field carries.
@@ -819,14 +819,14 @@ func checkRequiredFields(
 ) error {
 	for _, field := range fields {
 		raw, found := values[field.Name]
-		if !field.Required {
-			continue
-		}
 		if !found || string(raw) == "null" {
-			return fmt.Errorf(
-				"record names schema version %s but is missing required field %q",
-				version, prefix+field.Name,
-			)
+			if field.Required {
+				return fmt.Errorf(
+					"record names schema version %s but is missing required field %q",
+					version, prefix+field.Name,
+				)
+			}
+			continue
 		}
 		if len(field.Fields) == 0 {
 			continue

@@ -123,13 +123,13 @@ All OLM rows use `source: redhat-operators` and `sourceNamespace: openshift-mark
 
 | Operator | Namespace | Channel | CSV Pin | Approval Strategy | CatalogSource | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| cert-manager | `cert-manager-operator` | `stable-v1` | None specified; record resolved CSV | Automatic | `redhat-operators` | Package/Subscription `openshift-cert-manager-operator`; AllNamespaces |
+| cert-manager | `cert-manager-operator` | `stable-v1` | None specified; record resolved CSV | Automatic | `redhat-operators` | Package/Subscription `openshift-cert-manager-operator`; use the recommended AllNamespaces installation mode for cert-manager Operator 1.15.0 and later; see the scope note below |
 | trust-manager | `cert-manager` | Not OLM | Not a CSV: standalone `v0.20.0` | Reviewed release manifest/adoption | Not applicable | Install after cert-manager webhook readiness; do not invent a Subscription |
 | MetalLB | `metallb-system` | `stable` | None specified; record resolved CSV | Automatic | `redhat-operators` | Package/Subscription `metallb-operator`; OwnNamespace; only with MetalLB |
 | LVMS | `openshift-storage` | `stable-<cluster-major.minor>` | None specified; record resolved CSV | Automatic | `redhat-operators` | Package/Subscription `lvms-operator`; OwnNamespace; only with LVMS |
 | AMQ Streams | `osac-kafka` | `stable` | No cross-release fixed pin; review resolved CSV | Manual | `redhat-operators` | Package/Subscription `amq-streams`; OwnNamespace; only in-cluster Kafka |
 | AAP | `ansible-aap` | `stable-2.6-cluster-scoped` | `aap-operator.v2.6.0-0.1787258256` | Manual, exact pin | `redhat-operators` | Package `ansible-automation-platform-operator`; Subscription `dev-ansible-automation-platform`; AllNamespaces |
-| OpenShift Virtualization / VMaaS | `openshift-cnv` | `stable` | None specified; record resolved CSV | Automatic | `redhat-operators` | Package/Subscription `kubevirt-hyperconverged`; OwnNamespace; VMaaS only |
+| OpenShift Virtualization / VMaaS | `openshift-cnv` | `stable` | None specified; record resolved CSV | Automatic | `redhat-operators` | Package/Subscription `kubevirt-hyperconverged`; OperatorGroup `kubevirt-hyperconverged-group` with `spec.targetNamespaces: [openshift-cnv]`; OwnNamespace; VMaaS only |
 
 > **CVE-2026-75884:** This AAP CSV is the last release before the CVE fix; the pin is accepted as source-correct for OSAC 0.0.62.
 > Source correctness is not security approval. No automatic pin change is authorized; monitor for a patched CSV.
@@ -140,25 +140,31 @@ All OLM rows use `source: redhat-operators` and `sourceNamespace: openshift-mark
 
 Core with external Kafka requires two OLM installations, plus standalone trust-manager. MCE is not installed by this guide. The VMaaS product identity here is the source's OpenShift Virtualization/CNV, not multicluster engine.
 
-For AllNamespaces, `spec.targetNamespaces` is absent/empty. For OwnNamespace, it contains exactly the installation namespace. Reuse compatible existing groups; never add a second group to make a copied pattern work.
+For AllNamespaces, use an OperatorGroup with `spec: {}` and no `spec.targetNamespaces` restriction. For OwnNamespace, `spec.targetNamespaces` contains exactly the installation namespace. For cert-manager Operator 1.15.0 and later, follow the product-recommended AllNamespaces installation path in `cert-manager-operator`. The OwnNamespace setting in the internal `osac-deps` reference is an OLM installation-mode difference; do not describe it as proof that cert-manager cannot issue or manage certificates cluster-wide. Reuse an owner-approved compatible existing OperatorGroup; do not create a competing group or change an existing installation's scope without its owner's reviewed migration procedure.
 
-**Package gate** — set `$PACKAGE`, `$CHANNEL` and `$CSV_PIN` from the row; use an empty pin only where the row has none.
+**Package gate** — set `$PACKAGE`, `$CHANNEL` and `$CSV_PIN` from the product row. This observation checks package/channel visibility in the intended mirrored catalog, not whether a moving channel head equals the selected initial CSV.
 
 ```bash
-oc --request-timeout=30s get packagemanifest "$PACKAGE" -n openshift-marketplace -o json | jq -e --arg package "$PACKAGE" --arg channel "$CHANNEL" --arg pin "$CSV_PIN" '.metadata.name == $package and .status.catalogSource == "redhat-operators" and .status.catalogSourceNamespace == "openshift-marketplace" and any(.status.channels[]; .name == $channel and ($pin == "" or .currentCSV == $pin))'
+(set -o pipefail; oc --request-timeout=30s get packagemanifest "${PACKAGE:?Set the selected package}" -n openshift-marketplace -o json | jq -e --arg package "$PACKAGE" --arg channel "${CHANNEL:?Set the selected channel}" '.metadata.name == $package and .status.catalogSource == "redhat-operators" and .status.catalogSourceNamespace == "openshift-marketplace" and any(.status.channels[]?; .name == $channel)') || exit 1
 ```
 
-Expected: `true`. A different AAP channel head blocks this reference procedure; return to the catalog compatibility owner rather than approving another bundle.
+Expected: `true`. For AAP, a later channel head is not by itself a failure. The approved `aap-operator.v2.6.0-0.1787258256` bundle and its required images must still be available in the approved catalog/mirror. Set that exact `startingCSV` and `installPlanApproval: Manual`, review the complete referenced InstallPlan and current security disposition, and approve only the reviewed plan under the existing identity/precondition rules.
 
 **Manual-plan gate** — use the frozen, reviewed plan UID, CSV set, bundle set, and Subscription specification from private inputs, including the AAP security authorization/verified mapping and, when selected, the AMQ resolved-CSV/v1 compatibility decision above. Missing authorization, mapping, or selected compatibility evidence blocks approval and acceptance. This gate performs no approval or mutation.
 
-**CSV gate** — `$CSV` is the recorded installed CSV for `$SUB` in `$OPERATOR_NAMESPACE`.
+**AAP installed-pin observation — after the approved plan completes:** set `$SUB=dev-ansible-automation-platform`, `$OPERATOR_NAMESPACE=ansible-aap` and `$CSV_PIN=aap-operator.v2.6.0-0.1787258256` from the reviewed product row. Check that the intended Subscription remains Manual, retains that `startingCSV`, and reports the same exact `status.installedCSV`:
 
 ```bash
-oc --request-timeout=30s get csv "$CSV" -n "$OPERATOR_NAMESPACE" -o json | jq -e '.status.phase == "Succeeded"'
+(set -o pipefail; oc --request-timeout=30s get subscription "${SUB:?Set the reviewed Subscription}" -n "${OPERATOR_NAMESPACE:?Set the reviewed operator namespace}" -o json | jq -e --arg sub "$SUB" --arg ns "$OPERATOR_NAMESPACE" --arg pin "${CSV_PIN:?Set the approved AAP pin}" '.metadata.name == $sub and .metadata.namespace == $ns and .spec.name == "ansible-automation-platform-operator" and .spec.channel == "stable-2.6-cluster-scoped" and .spec.source == "redhat-operators" and .spec.sourceNamespace == "openshift-marketplace" and .spec.installPlanApproval == "Manual" and .spec.startingCSV == $pin and .status.installedCSV == $pin') || exit 1
 ```
 
-Expected: `true`. Also require the Subscription to identify this intended CSV; a copied CSV elsewhere is not evidence.
+Expected: `true`. A missing/different installed CSV fails this observation even when the channel head is newer.
+
+**CSV gate** — `$CSV` is the intended CSV identified by the reviewed Subscription in `$OPERATOR_NAMESPACE`.
+
+```bash
+(set -o pipefail; oc --request-timeout=30s get csv "${CSV:?Set the intended installed CSV}" -n "${OPERATOR_NAMESPACE:?Set the reviewed operator namespace}" -o json | jq -e '.status.phase == "Succeeded"') || exit 1
+```
 
 Expected: `true`. Also require the Subscription to identify this intended CSV; a copied CSV elsewhere is not evidence.
 
@@ -444,6 +450,14 @@ Use the canonical guides rather than duplicating service provisioning:
 
 Record each applicable canonical identity observation separately; cleanup of temporary token inputs is required on failure as well as success. A token alone does not prove authorization.
 
+**Keycloak Route — reference/adopted setup only:** production Keycloak remains a governed customer-managed prerequisite; this note does not instruct customers to install the internal infrastructure chart or add its server-management fields to the `osac` umbrella values. If the identity owner used the approved 0.0.62 reference implementation, its Route renders only when both `keycloak.enabled=true` and the render capabilities include `route.openshift.io/v1`. For an approved offline render of that reference, supply the target cluster's reviewed Route API capability and inspect the emitted Route; setting a hostname or `publicIngress` alone does not establish that a Route exists. `keycloak.route.publicIngress=true` selects `reencrypt`; false selects `passthrough`.
+
+For a selected `reencrypt` Route, complete the following before accepting routed identity checks:
+
+1. The identity/PKI owner identifies the actual Route, hostname, backend Service and certificate chain currently served by Keycloak. Obtain the approved **public backend-CA chain**; do not substitute the frontend ingress CA or access a signer private key merely to obtain public material.
+2. Check `spec.tls.destinationCACertificate`. In 0.0.62, `patch-keycloak-route` is additionally gated on `caIssuer.enabled` (as well as enabled Keycloak and public ingress). When Phase 1 separately owns the issuer and `caIssuer.enabled=false`, the helper is absent: the authorized Route owner must manually set `spec.tls.destinationCACertificate` to the reviewed backend-CA chain. Read the live Route's UID/resourceVersion and submit a reviewed JSON Patch with those identity/version tests in the same request, preserving unrelated Route fields and the intended `reencrypt`/Service binding. A conflict requires a fresh read and review, not a stale retry or permission expansion.
+3. Read back the exact destination public chain; verify the intended Route/host/service and admission state, router-to-backend TLS, and hostname/chain-validated issuer discovery from the required client contexts.
+
 **Database gate** — confirm rendered `dbInit.host`, database names, subjects and signer, including bootstrap `postgres` authorization and verify-full TLS.
 
 Record the rendered database-field observations separately from the database owner's compatibility and bootstrap-authorization decision; a field check is not functional database acceptance. If the provider disallows the unconditional bootstrap, stop with chart/database owners; pre-provisioning an application database does not remove the hook.
@@ -475,6 +489,8 @@ Expected: `true`.
 **Kafka functional gate** — selected-provider DNS, bootstrap and advertised-broker TLS, SCRAM authentication, canonical topic/group authorization and reviewed execution context.
 
 Record each applicable canonical Kafka check separately, including its selected provider and execution context; do not combine them into a whole-stage Kafka-readiness certificate. Operator CSV readiness alone is not broker or client readiness. For in-cluster Kafka, retire only the recorded temporary probe identity through owner-approved UID-preconditioned cleanup.
+
+For the mandatory metering provider observations, run [Mandatory metering provider checkpoint — prereqs.md §4.1](prereqs.md#41-mandatory-metering-provider-checkpoint) after the approved provider setup and before the OSAC Helm installation. This reference names the prerequisite guide's section, not an unnumbered subsection of this file. Keep its existing role-container observations unchanged; actual metering function remains Phase 2 acceptance in `installation.md`.
 
 ### AAP Git source handoff
 
@@ -561,6 +577,7 @@ spec:
 | --- | --- |
 | `existing` | Requires `with_metallb=false`; adopt the approved existing provider and create no MetalLB resources. Recheck allocation and client traffic for both Core and Core + VMaaS. |
 | `metallb` | Requires `with_metallb=true` and VMaaS enabled; first verify the selected MetalLB operator and owner-approved operands, then test allocation and client traffic. |
+| `none` | No provider is declared. Do not install MetalLB automatically or report `loadbalancer: pass`. Stop the dependent preparation/installation until the service and network owners resolve the selected profile's LoadBalancer requirement and record an explicitly supported selection and acceptance contract. |
 
 Both branches require current provider readiness, disposable Service address allocation and successful traffic from the administration and intended consumer networks, using a site-approved protocol/fixture. Installing MetalLB is not a substitute for a failed existing-provider test.
 

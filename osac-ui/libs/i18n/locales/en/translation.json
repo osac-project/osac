@@ -584,6 +584,7 @@
   "Host type is required": "Host type is required",
   "Human-friendly short title for this IdP": "Human-friendly short title for this IdP",
   "I have saved the credentials": "I have saved the credentials",
+  "I understand this may cause downtime": "I understand this may cause downtime",
   "ICMP": "ICMP",
   "Identity provider create wizard": "Identity provider create wizard",
   "Identity providers": "Identity providers",
@@ -1141,6 +1142,7 @@
   "Windows": "Windows",
   "Windows-based guest operating systems": "Windows-based guest operating systems",
   "Worker nodes": "Worker nodes",
+  "Workloads may be unavailable while the single worker node upgrades.": "Workloads may be unavailable while the single worker node upgrades.",
   "Yes": "Yes",
   "You are not authorized to access this resource.": "You are not authorized to access this resource."
 }

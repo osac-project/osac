@@ -21,6 +21,7 @@ import { type ClusterVersion, Clusters } from '@osac/types';
 import { useUpdateResource } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getApiErrorMessage } from '../../../utils/error';
+import { CheckboxField } from '../../Form/CheckboxField';
 import OsacForm from '../../Form/OsacForm';
 import { SelectField } from '../../Form/SelectField';
 import { isDeprecatedVersion, versionDisplayName } from '../CreateWizard/versionUtils';
@@ -29,11 +30,13 @@ export interface UpgradeClusterDialogProps {
   clusterId: string;
   currentVersion?: string;
   eligibleVersions: ClusterVersion[];
+  workerNodeCount: number;
   onClose: () => void;
 }
 
 interface FormValues {
   targetVersionId: string;
+  acknowledgeDowntime: boolean;
 }
 
 const validationSchema = (t: TFunction) =>
@@ -43,11 +46,13 @@ const UpgradeClusterDialog = ({
   clusterId,
   currentVersion,
   eligibleVersions,
+  workerNodeCount,
   onClose,
 }: UpgradeClusterDialogProps) => {
   const { t } = useTranslation();
   const updateCluster = useUpdateResource(Clusters, { retry: false });
   const [submitError, setSubmitError] = useState<unknown>();
+  const requiresDowntimeAcknowledgement = workerNodeCount === 1;
   const options = eligibleVersions.map((version) => {
     const label = versionDisplayName(version, version.id);
     return {
@@ -58,8 +63,11 @@ const UpgradeClusterDialog = ({
     };
   });
 
-  const handleSubmit = async ({ targetVersionId }: FormValues) => {
-    if (!eligibleVersions.some((version) => version.id === targetVersionId)) {
+  const handleSubmit = async ({ targetVersionId, acknowledgeDowntime }: FormValues) => {
+    if (
+      !eligibleVersions.some((version) => version.id === targetVersionId) ||
+      (requiresDowntimeAcknowledgement && !acknowledgeDowntime)
+    ) {
       return;
     }
     setSubmitError(undefined);
@@ -76,7 +84,7 @@ const UpgradeClusterDialog = ({
 
   return (
     <Formik<FormValues>
-      initialValues={{ targetVersionId: '' }}
+      initialValues={{ targetVersionId: '', acknowledgeDowntime: false }}
       validationSchema={validationSchema(t)}
       onSubmit={handleSubmit}
     >
@@ -115,6 +123,25 @@ const UpgradeClusterDialog = ({
                   helperText={t('Choose a target version to continue.')}
                   popperProps={{ appendTo: 'inline' }}
                 />
+                {requiresDowntimeAcknowledgement && (
+                  <>
+                    <Alert
+                      variant="warning"
+                      isInline
+                      isLiveRegion
+                      title={t(
+                        'Workloads may be unavailable while the single worker node upgrades.',
+                      )}
+                    />
+                    <CheckboxField
+                      name="acknowledgeDowntime"
+                      label={t('I understand this may cause downtime')}
+                      fieldId="upgrade-cluster-downtime-acknowledgement"
+                      isRequired
+                      isDisabled={pending}
+                    />
+                  </>
+                )}
               </OsacForm>
               {eligibleVersions.length === 0 ? (
                 <Alert variant="warning" isInline title={t('No upgrade targets are available.')} />
@@ -157,7 +184,11 @@ const UpgradeClusterDialog = ({
               <Button
                 variant="primary"
                 onClick={submitForm}
-                isDisabled={pending || !selectedTargetExists}
+                isDisabled={
+                  pending ||
+                  !selectedTargetExists ||
+                  (requiresDowntimeAcknowledgement && !values.acknowledgeDowntime)
+                }
                 isLoading={pending}
               >
                 {t('Upgrade cluster')}

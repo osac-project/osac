@@ -33,10 +33,12 @@ type UpdateResult = { object?: Cluster };
 const renderDialog = ({
   eligibleVersions = [activeVersion, deprecatedVersion],
   currentVersion = '4.17.0',
+  workerNodeCount = 2,
   onUpdate,
 }: {
   eligibleVersions?: ClusterVersion[];
   currentVersion?: string;
+  workerNodeCount?: number;
   onUpdate?: (request: ClustersUpdateRequest) => UpdateResult | Promise<UpdateResult>;
 } = {}) => {
   const requests: ClustersUpdateRequest[] = [];
@@ -54,6 +56,7 @@ const renderDialog = ({
       clusterId="cluster-1"
       currentVersion={currentVersion}
       eligibleVersions={eligibleVersions}
+      workerNodeCount={workerNodeCount}
       onClose={onClose}
     />,
     { transport },
@@ -106,6 +109,44 @@ describe('UpgradeClusterDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onClose).toHaveBeenCalledOnce();
     expect(requests).toHaveLength(0);
+  });
+
+  it('requires downtime acknowledgement before submitting for one worker node', async () => {
+    const { user, requests } = renderDialog({ workerNodeCount: 1 });
+
+    const warning = screen.getByText(
+      'Workloads may be unavailable while the single worker node upgrades.',
+    );
+    expect(warning.closest('[aria-live]')).toHaveAttribute('aria-live', 'polite');
+    const acknowledgement = screen.getByRole('checkbox', {
+      name: 'I understand this may cause downtime',
+    });
+    expect(acknowledgement).not.toBeChecked();
+    expect(acknowledgement).toBeRequired();
+
+    await selectTarget(user, '4.18.0');
+    const submitButton = screen.getByRole('button', { name: /Upgrade cluster/ });
+    expect(submitButton).toBeDisabled();
+    await user.click(acknowledgement);
+    expect(acknowledgement).toBeChecked();
+    expect(submitButton).toBeEnabled();
+
+    await user.click(submitButton);
+    await waitFor(() => expect(requests).toHaveLength(1));
+  });
+
+  it('does not require downtime acknowledgement with multiple worker nodes', async () => {
+    const { user } = renderDialog({ workerNodeCount: 2 });
+
+    expect(
+      screen.queryByText('Workloads may be unavailable while the single worker node upgrades.'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('checkbox', { name: 'I understand this may cause downtime' }),
+    ).not.toBeInTheDocument();
+
+    await selectTarget(user, '4.18.0');
+    expect(screen.getByRole('button', { name: /Upgrade cluster/ })).toBeEnabled();
   });
 
   it('closes only the target menu on Escape and keeps the selected target', async () => {
@@ -186,6 +227,7 @@ describe('UpgradeClusterDialog', () => {
           clusterId="cluster-1"
           currentVersion="4.17.0"
           eligibleVersions={[activeVersion]}
+          workerNodeCount={2}
           onClose={onClose}
         />
       </>,

@@ -58,6 +58,13 @@ const attachment = {
   },
 } as unknown as ExternalIPAttachment;
 
+interface WorkerCountCase {
+  name: string;
+  statusNodeSets: Record<string, { size?: number }>;
+  specNodeSets: Record<string, { size?: number }>;
+  warning: boolean;
+}
+
 describe('ClusterDetailsPageContent', () => {
   it('shows the observed version rail on every tab with a safe unavailable reason', async () => {
     const { user } = renderWithProviders(<ClusterDetailsPageContent cluster={cluster} />, {
@@ -99,6 +106,122 @@ describe('ClusterDetailsPageContent', () => {
       expect(screen.queryByRole('dialog', { name: 'Upgrade cluster' })).not.toBeInTheDocument(),
     );
     await waitFor(() => expect(upgradeButton).toHaveFocus());
+  });
+
+  it.each<WorkerCountCase>([
+    {
+      name: 'uses the current status count before the desired spec count',
+      statusNodeSets: { compute: { size: 1 } },
+      specNodeSets: { compute: { size: 2 } },
+      warning: true,
+    },
+    {
+      name: 'does not warn when status has multiple workers even if spec has one',
+      statusNodeSets: { compute: { size: 2 } },
+      specNodeSets: { compute: { size: 1 } },
+      warning: false,
+    },
+    {
+      name: 'falls back to spec sizes when status node sets are absent',
+      statusNodeSets: {},
+      specNodeSets: { compute: { size: 1 } },
+      warning: true,
+    },
+    {
+      name: 'falls back to the matching spec size when a status size is missing',
+      statusNodeSets: { compute: {} },
+      specNodeSets: { compute: { size: 1 } },
+      warning: true,
+    },
+    {
+      name: 'treats a current status size of zero as known instead of falling back',
+      statusNodeSets: { compute: { size: 0 } },
+      specNodeSets: { compute: { size: 1 } },
+      warning: false,
+    },
+    {
+      name: 'sums all current status node-set sizes',
+      statusNodeSets: { compute: { size: 1 }, gpu: { size: 1 } },
+      specNodeSets: { compute: { size: 1 } },
+      warning: false,
+    },
+  ])('$name', async ({ statusNodeSets, specNodeSets, warning }) => {
+    const clusterWithWorkers = create(ClusterSchema, {
+      id: 'cluster-1',
+      spec: { nodeSets: specNodeSets },
+      status: {
+        state: ClusterState.READY,
+        observedVersion: '4.17.0',
+        nodeSets: statusNodeSets,
+      },
+    });
+    const { user } = renderWithProviders(
+      <ClusterDetailsPageContent
+        cluster={clusterWithWorkers}
+        upgrade={{ action: { kind: 'available' }, eligibleVersions: [eligibleVersion] }}
+      />,
+      { apiFixtures: { externalIpAttachments: [] } },
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Upgrade cluster' }));
+    const dialog = screen.getByRole('dialog', { name: 'Upgrade cluster' });
+    const checkbox = within(dialog).queryByRole('checkbox', {
+      name: 'I understand this may cause downtime',
+    });
+    if (warning) {
+      expect(
+        within(dialog).getByText(
+          'Workloads may be unavailable while the single worker node upgrades.',
+        ),
+      ).toBeInTheDocument();
+      expect(checkbox).not.toBeChecked();
+    } else {
+      expect(
+        within(dialog).queryByText(
+          'Workloads may be unavailable while the single worker node upgrades.',
+        ),
+      ).not.toBeInTheDocument();
+      expect(checkbox).not.toBeInTheDocument();
+    }
+  });
+
+  it('resets the one-worker acknowledgement whenever the dialog opens', async () => {
+    const oneWorkerCluster = create(ClusterSchema, {
+      id: 'cluster-1',
+      status: {
+        state: ClusterState.READY,
+        observedVersion: '4.17.0',
+        nodeSets: { compute: { size: 1 } },
+      },
+    });
+    const { user } = renderWithProviders(
+      <ClusterDetailsPageContent
+        cluster={oneWorkerCluster}
+        upgrade={{ action: { kind: 'available' }, eligibleVersions: [eligibleVersion] }}
+      />,
+      { apiFixtures: { externalIpAttachments: [] } },
+    );
+
+    const upgradeButton = screen.getByRole('button', { name: 'Upgrade cluster' });
+    await user.click(upgradeButton);
+    await user.click(
+      screen.getByRole('checkbox', { name: 'I understand this may cause downtime' }),
+    );
+    expect(
+      screen.getByRole('checkbox', { name: 'I understand this may cause downtime' }),
+    ).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await user.click(upgradeButton);
+    const dialog = screen.getByRole('dialog', { name: 'Upgrade cluster' });
+    const acknowledgement = within(dialog).getByRole('checkbox', {
+      name: 'I understand this may cause downtime',
+    });
+    expect(acknowledgement).not.toBeChecked();
+    await user.click(within(dialog).getByLabelText(/^Target version/));
+    await user.click(within(dialog).getByRole('option', { name: '4.18.0' }));
+    expect(within(dialog).getByRole('button', { name: /Upgrade cluster/ })).toBeDisabled();
   });
 
   it('closes and clears the upgrade dialog when the cluster identity changes', async () => {

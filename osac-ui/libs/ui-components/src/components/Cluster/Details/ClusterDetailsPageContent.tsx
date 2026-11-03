@@ -49,6 +49,16 @@ const CLUSTER_DETAIL_OVERVIEW_TAB_ID = 'cluster-detail-overview';
 const CLUSTER_DETAIL_NETWORKING_TAB_ID = 'cluster-detail-networking';
 const CLUSTER_DETAIL_NODE_SETS_TAB_ID = 'cluster-detail-node-sets';
 
+const countCurrentWorkerNodes = (cluster: Cluster): number => {
+  const statusNodeSets = cluster.status?.nodeSets ?? {};
+  const specNodeSets = cluster.spec?.nodeSets ?? {};
+  const currentNodeSets = Object.keys(statusNodeSets).length ? statusNodeSets : specNodeSets;
+  return Object.entries(currentNodeSets).reduce(
+    (total, [name, nodeSet]) => total + (nodeSet.size ?? specNodeSets[name]?.size ?? 0),
+    0,
+  );
+};
+
 const ClusterDetailsPageContent = ({ cluster, upgrade }: ClusterDetailViewProps) => {
   const { t } = useTranslation();
   const [activeTabKey, setActiveTabKey] = useState(0);
@@ -202,6 +212,7 @@ const ClusterDetailsPageContent = ({ cluster, upgrade }: ClusterDetailViewProps)
           clusterId={cluster.id}
           currentVersion={cluster.status?.observedVersion}
           eligibleVersions={upgrade.eligibleVersions}
+          workerNodeCount={countCurrentWorkerNodes(cluster)}
           onClose={() => setUpgradeDialogClusterId(undefined)}
         />
       )}

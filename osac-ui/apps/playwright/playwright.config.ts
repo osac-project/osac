@@ -73,6 +73,9 @@ const slowMo = Number(process.env.PW_SLOW_MO) || 0;
 export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
+  // These tests mutate shared live resources. Stop after the first failure so
+  // duplicate-resource failures do not allow the rest of the flow to proceed.
+  maxFailures: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: 'html',
   expect: {

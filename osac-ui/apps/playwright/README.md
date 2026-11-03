@@ -131,7 +131,9 @@ pnpm --filter @osac/playwright exec playwright test \
 
 The flow uses the same values from `apps/e2e-tests/extravars.yaml` as the
 individual create projects. The catalog item therefore continues to use the
-configured existing template, instance type, and disk image references.
+configured existing template, instance type, and disk image references. The
+runner stops after the first failure, including a preflight failure because a
+resource already exists, so the remaining flow steps are not started.
 
 ### Storage tier flow tests
 

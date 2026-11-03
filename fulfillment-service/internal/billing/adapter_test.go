@@ -111,6 +111,18 @@ var _ = Describe("ForEachAccount", func() {
 	})
 })
 
+var _ = Describe("SanitizeProviderText", func() {
+	It("strips every control character and keeps every printable rune", func() {
+		Expect(billing.SanitizeProviderText("clean name")).To(Equal("clean name"))
+		Expect(billing.SanitizeProviderText("evil\x1b]52;x;wg\x07name")).To(Equal("evil]52;x;wgname"),
+			"the ESC and BEL controls must not survive; without ESC the letters they wrapped are inert")
+		Expect(billing.SanitizeProviderText("tab\tand\nnewline\r\ncarriage")).To(Equal("tabandnewlinecarriage"))
+		Expect(billing.SanitizeProviderText("del\x7f and C1\u0085 controls")).To(Equal("del and C1 controls"))
+		Expect(billing.SanitizeProviderText("ünïcode ✓ stays")).To(Equal("ünïcode ✓ stays"))
+		Expect(billing.SanitizeProviderText("")).To(Equal(""))
+	})
+})
+
 var _ = Describe("CountAccountsWithExternalID", func() {
 	It("counts a single match and no match exactly", func() {
 		one := &pagedAdapter{pages: []billing.AccountPage{

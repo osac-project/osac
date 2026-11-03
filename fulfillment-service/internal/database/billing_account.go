@@ -17,8 +17,9 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // BillingAccountUpsert carries one discovered account's provider-observed values into
@@ -91,10 +92,15 @@ func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (
 
 // MarkBillingAccountsUnobserved marks UNKNOWN every billing_accounts row for providerKey whose
 // provider_account_reference is not in seenReferences, i.e. the account disappeared from the
-// provider's current list. The row is retained, never deleted.
+// provider's current list. The row is retained, never deleted. A nil seenReferences is treated as empty:
+// pgx encodes a nil slice as SQL NULL, and "not (x = any(NULL))" is NULL, which would match no rows and
+// silently skip the sweep for a provider whose list has become empty.
 func MarkBillingAccountsUnobserved(
 	ctx context.Context, tx Tx, providerKey string, seenReferences []string, observedAt time.Time,
 ) error {
+	if seenReferences == nil {
+		seenReferences = []string{}
+	}
 	_, err := tx.Exec(ctx, `
 		update billing_accounts
 		set state = 'UNKNOWN', status_observed_at = $1
@@ -117,16 +123,6 @@ type BillingAccountRow struct {
 	CorrelationID    string
 	State            string
 	StatusObservedAt time.Time
-}
-
-// ErrInvalidBillingAccountsQuery reports a malformed filter or order expression in a ListBillingAccounts call.
-// Callers should map it to INVALID_ARGUMENT; any other error ListBillingAccounts returns is a database execution
-// failure and should be treated as an internal error instead - the two must not be conflated, or a transient
-// database problem gets reported to the caller as "your request is invalid".
-type ErrInvalidBillingAccountsQuery struct{ error }
-
-func invalidQueryf(format string, args ...any) error {
-	return &ErrInvalidBillingAccountsQuery{fmt.Errorf(format, args...)}
 }
 
 // billingAccountColumns maps the API field names accepted in filter/order expressions to their
@@ -153,54 +149,33 @@ var billingAccountColumns = map[string]string{
 // generic Metadata/Spec/Status object shape, which billing_accounts deliberately does not use.
 var filterClausePattern = regexp.MustCompile(`^this\.([a-z_]+) == "([^"]*)"$`)
 
-func billingAccountFilterSQL(filter string) (sql string, args []any, err error) {
-	if filter == "" {
-		return "", nil, nil
-	}
-	var sqlClauses []string
-	for _, clause := range strings.Split(filter, "&&") {
-		match := filterClausePattern.FindStringSubmatch(strings.TrimSpace(clause))
+// billingAccountFilterSQL translates a filter expression into a SQL WHERE clause and its args, using
+// filterClausePattern and billingAccountColumns. Returns "", nil, nil for an empty filter.
+func billingAccountFilterSQL(filter string) (string, []any, error) {
+	return translateFlatTableFilter(filter, func(clause string, addArg func(any) string) (string, error) {
+		match := filterClausePattern.FindStringSubmatch(clause)
 		if match == nil {
-			return "", nil, invalidQueryf(
+			return "", invalidFlatTableQueryf(
 				`unsupported filter clause %q: only this.<field> == "<value>" clauses joined by && are supported`,
-				strings.TrimSpace(clause))
+				clause)
 		}
 		column, ok := billingAccountColumns[match[1]]
 		if !ok {
-			return "", nil, invalidQueryf("unknown filter field %q", match[1])
+			return "", invalidFlatTableQueryf("unknown filter field %q", match[1])
 		}
-		args = append(args, match[2])
-		sqlClauses = append(sqlClauses, fmt.Sprintf("%s = $%d", column, len(args)))
-	}
-	return strings.Join(sqlClauses, " and "), args, nil
+		return column + " = " + addArg(match[2]), nil
+	})
 }
 
-// orderPattern matches "<field>" or "<field> asc|desc".
-//
-// shortcut: order supports only a single field, not a comma-separated list. Upgrade alongside the
-// filter translator above if a future story needs multi-field ordering on a flat table.
-var orderPattern = regexp.MustCompile(`^([a-z_]+)(?: (asc|desc))?$`)
-
-func billingAccountOrderSQL(order string) (sql string, err error) {
-	if order == "" {
-		return "id", nil
-	}
-	match := orderPattern.FindStringSubmatch(strings.TrimSpace(order))
-	if match == nil {
-		return "", invalidQueryf(`unsupported order expression %q: only "<field>" or "<field> asc|desc" is supported`, order)
-	}
-	column, ok := billingAccountColumns[match[1]]
-	if !ok {
-		return "", invalidQueryf("unknown order field %q", match[1])
-	}
-	if match[2] != "" {
-		return column + " " + match[2], nil
-	}
-	return column, nil
+// billingAccountOrderSQL translates an order expression into a SQL ORDER BY column (with optional
+// asc/desc), defaulting to "id" for an empty order.
+func billingAccountOrderSQL(order string) (string, error) {
+	return translateFlatTableOrder(order, billingAccountColumns, "id")
 }
 
 // ListBillingAccounts returns the page of billing_accounts rows matching filter, ordered by
-// order, along with the total count of matching rows ignoring offset/limit.
+// order, along with the total count of matching rows ignoring offset/limit. An unset limit serves
+// flatTableDefaultLimit rows and an explicit one is clamped to flatTableMaxLimit.
 func ListBillingAccounts(ctx context.Context, tx Tx, offset, limit int32, filter, order string) (
 	items []BillingAccountRow, total int32, err error) {
 	whereSQL, args, err := billingAccountFilterSQL(filter)
@@ -211,35 +186,14 @@ func ListBillingAccounts(ctx context.Context, tx Tx, offset, limit int32, filter
 	if err != nil {
 		return nil, 0, err
 	}
-	where := ""
-	if whereSQL != "" {
-		where = " where " + whereSQL
-	}
-
-	if err = tx.QueryRow(ctx, "select count(*) from billing_accounts"+where, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count billing accounts: %w", err)
-	}
-
-	args = append(args, limit, offset)
-	rows, err := tx.Query(ctx, fmt.Sprintf(`
-		select id, provider_key, display_name, base_currency, coalesce(correlation_id, ''), state, status_observed_at
-		from billing_accounts%s
-		order by %s
-		limit $%d offset $%d`, where, orderSQL, len(args)-1, len(args)), args...)
-	if err != nil {
-		return nil, 0, fmt.Errorf("list billing accounts: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var row BillingAccountRow
-		if err = rows.Scan(&row.ID, &row.ProviderKey, &row.DisplayName, &row.BaseCurrency,
-			&row.CorrelationID, &row.State, &row.StatusObservedAt); err != nil {
-			return nil, 0, fmt.Errorf("scan billing account: %w", err)
-		}
-		items = append(items, row)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("list billing accounts: %w", err)
-	}
-	return items, total, nil
+	return listFlatTable(ctx, tx, "billing_accounts", "billing accounts",
+		"id, provider_key, display_name, base_currency, coalesce(correlation_id, ''), state, status_observed_at",
+		whereSQL, orderSQL, args, limit, offset, func(row pgx.Row) (BillingAccountRow, error) {
+			var item BillingAccountRow
+			if err := row.Scan(&item.ID, &item.ProviderKey, &item.DisplayName, &item.BaseCurrency,
+				&item.CorrelationID, &item.State, &item.StatusObservedAt); err != nil {
+				return BillingAccountRow{}, fmt.Errorf("scan billing account: %w", err)
+			}
+			return item, nil
+		})
 }

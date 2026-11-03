@@ -34,6 +34,11 @@ type TenantBillingAssignmentsServerBuilder struct {
 var _ publicv1.TenantBillingAssignmentsServer = (*TenantBillingAssignmentsServer)(nil)
 
 // TenantBillingAssignmentsServer is the public server; it delegates to the private one.
+//
+// Tenant isolation note: a tenant billing assignment names its tenant only as data - this server applies no
+// scoping by the caller's tenant, so a caller that reaches a method can read every tenant's assignment.
+// authz.rego's default deny keeps these methods admin-only, and the authorization evaluator suites pin that.
+// If a future change grants tenant roles access to any method here, add a caller-tenant filter to it first.
 type TenantBillingAssignmentsServer struct {
 	publicv1.UnimplementedTenantBillingAssignmentsServer
 	logger    *slog.Logger
@@ -59,6 +64,8 @@ func (b *TenantBillingAssignmentsServerBuilder) SetDelegate(
 	return b
 }
 
+// Build validates that SetLogger and SetDelegate were both called, builds the public/private mappers, and
+// returns the configured server.
 func (b *TenantBillingAssignmentsServerBuilder) Build() (result *TenantBillingAssignmentsServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -88,6 +95,7 @@ func (b *TenantBillingAssignmentsServerBuilder) Build() (result *TenantBillingAs
 	return
 }
 
+// toPublic maps a private tenant billing assignment to its public proto form.
 func (s *TenantBillingAssignmentsServer) toPublic(ctx context.Context, in *privatev1.TenantBillingAssignment) (
 	*publicv1.TenantBillingAssignment, error) {
 	out := &publicv1.TenantBillingAssignment{}
@@ -98,6 +106,7 @@ func (s *TenantBillingAssignmentsServer) toPublic(ctx context.Context, in *priva
 	return out, nil
 }
 
+// toPrivate maps a public tenant billing assignment to its private proto form.
 func (s *TenantBillingAssignmentsServer) toPrivate(ctx context.Context, in *publicv1.TenantBillingAssignment) (
 	*privatev1.TenantBillingAssignment, error) {
 	out := &privatev1.TenantBillingAssignment{}

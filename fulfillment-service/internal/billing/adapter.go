@@ -15,6 +15,8 @@ package billing
 
 import (
 	"context"
+	"strings"
+	"unicode"
 )
 
 // MaxListPages bounds how many pages of one provider list OSAC reads, whatever the caller: the correlation
@@ -63,6 +65,19 @@ func CountAccountsWithExternalID(ctx context.Context, adapter Adapter, value str
 		return 0, err
 	}
 	return count, nil
+}
+
+// SanitizeProviderText strips control characters from provider-supplied text. A billing provider is an
+// external system whose account names and correlation values are free-form strings: without this, a
+// compromised or misbehaving provider could plant terminal escape sequences that the CLI renders verbatim into
+// an administrator's terminal. Every printable rune - spaces, punctuation, non-ASCII letters - is kept.
+func SanitizeProviderText(text string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, text)
 }
 
 // Adapter is the only boundary through which OSAC talks to a billing provider. It exposes normalized values only.

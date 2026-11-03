@@ -34,6 +34,12 @@ type BillingAccountsServerBuilder struct {
 var _ publicv1.BillingAccountsServer = (*BillingAccountsServer)(nil)
 
 // BillingAccountsServer is the public server; it delegates to the private one.
+//
+// Tenant isolation note: billing accounts are a platform-wide, admin-only surface, and this server applies no
+// tenant scoping of its own - every method reaches every stored account. authz.rego's default deny keeps these
+// methods out of every allow set, so only Cloud Provider Admins reach them; the authorization evaluator suites
+// pin that. If a future change grants tenant roles access to any method here, add a tenant-scoped filter to it
+// first: unlike RegisterResourceServers resources, these delegates do not filter by the caller's tenant.
 type BillingAccountsServer struct {
 	publicv1.UnimplementedBillingAccountsServer
 	logger    *slog.Logger
@@ -57,6 +63,7 @@ func (b *BillingAccountsServerBuilder) SetDelegate(value *PrivateBillingAccounts
 	return b
 }
 
+// Build validates that SetLogger and SetDelegate were both called and returns the configured server.
 func (b *BillingAccountsServerBuilder) Build() (result *BillingAccountsServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")

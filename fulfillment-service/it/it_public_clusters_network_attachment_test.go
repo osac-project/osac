@@ -255,9 +255,13 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 			clustersClient = publicv1.NewClustersClient(tool.ExternalView().AdminConn())
 		})
 
-		newIsolatedVirtualNetwork := func(project string) string {
+		newIsolatedVirtualNetwork := func(project string, defaultLabelled bool) string {
 			networks := privatev1.NewVirtualNetworksClient(tool.InternalView().ControllerConn())
 			id := fmt.Sprintf("test-vnet-%s", uuid.New())
+			labels := map[string]string{}
+			if defaultLabelled {
+				labels[tenantDefaultNetworkingLabel] = "true"
+			}
 			_, err := networks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
 					Id: id,
@@ -266,7 +270,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 						Tenant:      tenant,
 						Project:     project,
 						Annotations: map[string]string{"osac.openshift.io/management-state": "unmanaged"},
-						Labels:      map[string]string{tenantDefaultNetworkingLabel: "true"},
+						Labels:      labels,
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.100.0.0/16"),
@@ -312,6 +316,10 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				labels[tenantDefaultNetworkingLabel] = "true"
 				name = "default-ipv4"
 			}
+			finalizers := []string{}
+			if state == "deleting" {
+				finalizers = []string{"test.osac.openshift.io/hold"}
+			}
 			_, err := subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 				Object: privatev1.Subnet_builder{
 					Id: id,
@@ -321,6 +329,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 						Project:     project,
 						Annotations: map[string]string{"osac.openshift.io/management-state": "unmanaged"},
 						Labels:      labels,
+						Finalizers:  finalizers,
 					}.Build(),
 					Spec: privatev1.SubnetSpec_builder{
 						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
@@ -356,18 +365,14 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				waitForSubnetPending(subnets, id)
 				resp, getErr := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
 				Expect(getErr).NotTo(HaveOccurred())
-				subnet := resp.GetObject()
-				subnet.GetMetadata().SetFinalizers([]string{"test.osac.openshift.io/hold"})
-				_, updateErr := subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
-					Object: subnet, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
-				}.Build())
-				Expect(updateErr).NotTo(HaveOccurred())
+				Expect(resp.GetObject().GetMetadata().GetFinalizers()).To(ContainElement("test.osac.openshift.io/hold"))
 				_, deleteErr := subnets.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: id}.Build())
 				Expect(deleteErr).NotTo(HaveOccurred())
 				Eventually(func(g Gomega) {
 					current, err := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
 					g.Expect(err).NotTo(HaveOccurred())
 					g.Expect(current.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+					g.Expect(current.GetObject().GetMetadata().GetFinalizers()).To(ContainElement("test.osac.openshift.io/hold"))
 				}, time.Minute, time.Second).Should(Succeed())
 			}
 			return id
@@ -380,6 +385,10 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 			if defaultLabelled {
 				labels[tenantDefaultNetworkingLabel] = "true"
 			}
+			finalizers := []string{}
+			if state == "deleting" {
+				finalizers = []string{"test.osac.openshift.io/hold"}
+			}
 			_, err := groups.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
 				Object: privatev1.SecurityGroup_builder{
 					Id: id,
@@ -389,6 +398,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 						Project:     project,
 						Annotations: map[string]string{"osac.openshift.io/management-state": "unmanaged"},
 						Labels:      labels,
+						Finalizers:  finalizers,
 					}.Build(),
 					Spec: privatev1.SecurityGroupSpec_builder{
 						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
@@ -423,18 +433,14 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				waitForSecurityGroupPending(groups, id)
 				resp, getErr := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
 				Expect(getErr).NotTo(HaveOccurred())
-				group := resp.GetObject()
-				group.GetMetadata().SetFinalizers([]string{"test.osac.openshift.io/hold"})
-				_, updateErr := groups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
-					Object: group, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
-				}.Build())
-				Expect(updateErr).NotTo(HaveOccurred())
+				Expect(resp.GetObject().GetMetadata().GetFinalizers()).To(ContainElement("test.osac.openshift.io/hold"))
 				_, deleteErr := groups.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: id}.Build())
 				Expect(deleteErr).NotTo(HaveOccurred())
 				Eventually(func(g Gomega) {
 					current, err := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
 					g.Expect(err).NotTo(HaveOccurred())
 					g.Expect(current.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+					g.Expect(current.GetObject().GetMetadata().GetFinalizers()).To(ContainElement("test.osac.openshift.io/hold"))
 				}, time.Minute, time.Second).Should(Succeed())
 			}
 			return id
@@ -467,7 +473,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		DescribeTable("classifies an omitted attachment with an unusable tenant default",
 			func(configure func(project, virtualNetworkId string), code grpccodes.Code, reason string) {
 				project := createCatalogItemProjectFixture(ctx, tenant)
-				virtualNetworkId := newIsolatedVirtualNetwork(project)
+				virtualNetworkId := newIsolatedVirtualNetwork(project, true)
 				configure(project, virtualNetworkId)
 
 				clusterId := fmt.Sprintf("test-cluster-%s", uuid.New())
@@ -524,7 +530,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 
 		It("resolves ready tenant defaults and stores both references", func() {
 			project := createCatalogItemProjectFixture(ctx, tenant)
-			virtualNetworkId := newIsolatedVirtualNetwork(project)
+			virtualNetworkId := newIsolatedVirtualNetwork(project, true)
 			defaultSubnetId := newProjectSubnet(project, virtualNetworkId, true, "ready")
 			defaultSecurityGroupId := newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
 
@@ -556,7 +562,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 
 		It("preserves a complete explicit attachment without labelled defaults", func() {
 			project := createCatalogItemProjectFixture(ctx, tenant)
-			virtualNetworkId := newIsolatedVirtualNetwork(project)
+			virtualNetworkId := newIsolatedVirtualNetwork(project, false)
 			explicitSubnetId := newProjectSubnet(project, virtualNetworkId, false, "ready")
 			explicitSecurityGroupId := newProjectSecurityGroup(project, virtualNetworkId, false, "ready")
 

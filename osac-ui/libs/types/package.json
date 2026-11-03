@@ -9,6 +9,7 @@
   },
   "scripts": {
     "gen-types": "node scripts/gen-types.mjs",
+    "dev-gen-types": "buf generate --template dev.buf.gen.yaml",
     "lint": "echo 'no lint target'"
   },
   "dependencies": {

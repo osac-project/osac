@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "gen-types": "pnpm --filter @osac/types run gen-types",
+    "dev-gen-types": "pnpm --filter @osac/types run dev-gen-types",
     "i18n": "pnpm --filter @osac/i18n run i18n",
     "dev": "concurrently \"pnpm dev:proxy\" \"pnpm dev:frontend\"",
     "dev:proxy": "bash scripts/dev-proxy.sh",

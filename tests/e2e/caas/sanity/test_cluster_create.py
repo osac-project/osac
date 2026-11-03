@@ -28,6 +28,7 @@ from tests.e2e.core.helpers import (
     wait_for_cluster_guest_readiness,
     wait_for_cluster_order_condition,
     wait_for_cluster_order_cr,
+    wait_for_cluster_order_hosted_cluster_reference,
     wait_for_cluster_progressing,
     wait_for_cluster_ready,
     wait_for_hosted_cluster_kubeconfig,
@@ -265,19 +266,7 @@ def _assert_cluster_version_propagated(
     co_release_image = cluster_order_spec.get("releaseImage", "")
     assert co_release_image, "ClusterOrder should have a resolved releaseImage"
 
-    hosted_cluster_name, hosted_cluster_ns = poll_until(
-        fn=lambda: (
-            k8s.get_cluster_order_hosted_cluster_name(name=co_name),
-            k8s.get_cluster_order_namespace(name=co_name),
-        ),
-        until=lambda reference: all(reference),
-        retries=30,
-        delay=5,
-        description=f"{co_name} HostedCluster reference",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
+    hosted_cluster_name, hosted_cluster_ns = wait_for_cluster_order_hosted_cluster_reference(k8s=k8s, name=co_name)
     hosted_cluster_image = run(
         *k8s._base(),
         "get",

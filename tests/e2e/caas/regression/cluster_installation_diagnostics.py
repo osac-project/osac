@@ -9,10 +9,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import wait_for_hosted_cluster_kubeconfig
+from tests.e2e.core.helpers import wait_for_cluster_order_hosted_cluster_reference, wait_for_hosted_cluster_kubeconfig
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.runner import poll_until, time
-from tests.e2e.core.wait_kinds import WaitResourceKind
+from tests.e2e.core.runner import time
 
 POST_INSTALL_MONITOR_SECONDS = 10 * 60
 _DIAGNOSTIC_INTERVAL_SECONDS = 60
@@ -75,20 +74,7 @@ def _safe_operator_versions(operator: dict[str, Any]) -> list[dict[str, str]]:
 
 def cluster_references(*, k8s: K8sClient, uuid: str, co_name: str, expected_node_sets: set[str]) -> ClusterReferences:
     """Resolve the test-owned HostedCluster and NodePool names."""
-
-    def _read() -> tuple[str, str]:
-        return (k8s.get_cluster_order_namespace(name=co_name), k8s.get_cluster_order_hosted_cluster_name(name=co_name))
-
-    namespace, hc_name = poll_until(
-        fn=_read,
-        until=lambda refs: bool(refs[0] and refs[1]),
-        retries=60,
-        delay=10,
-        description="test-owned HostedCluster reference",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
+    namespace, hc_name = wait_for_cluster_order_hosted_cluster_reference(k8s=k8s, name=co_name, retries=60, delay=10)
     return ClusterReferences(
         uuid=uuid, co_name=co_name, namespace=namespace, hc_name=hc_name, expected_node_sets=expected_node_sets
     )
@@ -96,10 +82,8 @@ def cluster_references(*, k8s: K8sClient, uuid: str, co_name: str, expected_node
 
 def _snapshot(*, k8s: K8sClient, grpc: GRPCClient, refs: ClusterReferences, workload_k8s: K8sClient) -> dict[str, Any]:
     """Read test-owned API, HyperShift, and guest health resources."""
-    hosted = _sequence(
-        _mapping(k8s.list_json(resource="hostedclusters.hypershift.openshift.io", namespace=refs.namespace)).get(
-            "items", []
-        )
+    hosted = k8s.get_json(
+        resource="hostedclusters.hypershift.openshift.io", name=refs.hc_name, namespace=refs.namespace
     )
     pools = _sequence(
         _mapping(k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=refs.namespace)).get("items", [])
@@ -118,7 +102,7 @@ def _snapshot(*, k8s: K8sClient, grpc: GRPCClient, refs: ClusterReferences, work
     return {
         "order": k8s.get_json(resource="clusterorder", name=refs.co_name),
         "cluster": grpc.get_cluster(cluster_id=refs.uuid)["object"],
-        "hosted": next((item for item in hosted if _mapping(item).get("metadata", {}).get("name") == refs.hc_name), {}),
+        "hosted": hosted,
         "pools": owned_pools,
         "cluster_operators": cluster_operators,
     }
@@ -160,7 +144,6 @@ def _post_install_diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
         "hosted_history_version": newest.get("version", ""),
         "hosted_history_state": newest.get("state", ""),
         "node_pools": pools,
-        "cluster_operator_count": len(operators),
         "cluster_operators": operators,
     }
 

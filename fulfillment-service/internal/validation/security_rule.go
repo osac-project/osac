@@ -29,10 +29,12 @@ const (
 )
 
 type SecurityRule struct {
-	Protocol SecurityRuleProtocol
-	PortFrom *int32
-	PortTo   *int32
-	IPv4CIDR string
+	Protocol    SecurityRuleProtocol
+	PortFrom    int32
+	PortTo      int32
+	HasPortFrom bool
+	HasPortTo   bool
+	IPv4CIDR    string
 }
 
 func ParseSecurityRuleProtocol(value string) (SecurityRuleProtocol, error) {
@@ -52,39 +54,55 @@ func ParseSecurityRuleProtocol(value string) (SecurityRuleProtocol, error) {
 	}
 }
 
-func ValidateSecurityRule(rule SecurityRule, field string) error {
+func ValidateSecurityRule(rule SecurityRule, field string, index int) error {
 	switch rule.Protocol {
 	case SecurityRuleProtocolTCP, SecurityRuleProtocolUDP:
-		if rule.PortFrom == nil || rule.PortTo == nil {
+		if !rule.HasPortFrom || !rule.HasPortTo {
 			return fmt.Errorf(
 				"%s: tcp and udp rules require port_from and port_to",
-				field,
+				securityRuleField(field, index),
 			)
 		}
-		if *rule.PortFrom < 1 || *rule.PortFrom > 65535 {
-			return fmt.Errorf("%s: port_from must be between 1 and 65535", field)
+		if rule.PortFrom < 1 || rule.PortFrom > 65535 {
+			return fmt.Errorf(
+				"%s: port_from must be between 1 and 65535",
+				securityRuleField(field, index),
+			)
 		}
-		if *rule.PortTo < 1 || *rule.PortTo > 65535 {
-			return fmt.Errorf("%s: port_to must be between 1 and 65535", field)
+		if rule.PortTo < 1 || rule.PortTo > 65535 {
+			return fmt.Errorf(
+				"%s: port_to must be between 1 and 65535",
+				securityRuleField(field, index),
+			)
 		}
-		if *rule.PortFrom > *rule.PortTo {
+		if rule.PortFrom > rule.PortTo {
 			return fmt.Errorf(
 				"%s: port_from (%d) cannot be greater than port_to (%d)",
-				field, *rule.PortFrom, *rule.PortTo,
+				securityRuleField(field, index), rule.PortFrom, rule.PortTo,
 			)
 		}
 	case SecurityRuleProtocolICMP, SecurityRuleProtocolAll:
-		if rule.PortFrom != nil || rule.PortTo != nil {
+		if rule.HasPortFrom || rule.HasPortTo {
 			return fmt.Errorf(
 				"%s: icmp and all rules must not set port_from or port_to",
-				field,
+				securityRuleField(field, index),
 			)
 		}
 	default:
-		return fmt.Errorf("%s: protocol is required", field)
+		return fmt.Errorf(
+			"%s: protocol is required",
+			securityRuleField(field, index),
+		)
 	}
 
-	return ValidateCanonicalIPv4CIDR(field+".ipv4_cidr", rule.IPv4CIDR)
+	return ValidateCanonicalIPv4CIDR(
+		securityRuleField(field, index)+".ipv4_cidr",
+		rule.IPv4CIDR,
+	)
+}
+
+func securityRuleField(field string, index int) string {
+	return fmt.Sprintf("%s[%d]", field, index)
 }
 
 func ValidateCanonicalIPv4CIDR(field, value string) error {

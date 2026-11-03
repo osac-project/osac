@@ -292,7 +292,7 @@ func networkSecurityRulesFromInput(
 ) ([]*publicv1.SecurityRule, error) {
 	rules := make([]*publicv1.SecurityRule, len(inputs))
 	for index, input := range inputs {
-		rule, err := networkSecurityRuleFromInput(input, fmt.Sprintf("%s[%d]", field, index))
+		rule, err := networkSecurityRuleFromInput(input, field, index)
 		if err != nil {
 			return nil, err
 		}
@@ -301,17 +301,26 @@ func networkSecurityRulesFromInput(
 	return rules, nil
 }
 
-func networkSecurityRuleFromInput(input NetworkSecurityRuleInput, field string) (*publicv1.SecurityRule, error) {
+func networkSecurityRuleFromInput(
+	input NetworkSecurityRuleInput, field string, index int,
+) (*publicv1.SecurityRule, error) {
 	protocol, err := validation.ParseSecurityRuleProtocol(input.Protocol)
 	if err != nil {
-		return nil, fmt.Errorf("%s.%w", field, err)
+		return nil, fmt.Errorf("%s[%d].%w", field, index, err)
 	}
-	err = validation.ValidateSecurityRule(validation.SecurityRule{
+	securityRule := validation.SecurityRule{
 		Protocol: protocol,
-		PortFrom: input.PortFrom,
-		PortTo:   input.PortTo,
 		IPv4CIDR: input.IPv4Cidr,
-	}, field)
+	}
+	if input.PortFrom != nil {
+		securityRule.PortFrom = *input.PortFrom
+		securityRule.HasPortFrom = true
+	}
+	if input.PortTo != nil {
+		securityRule.PortTo = *input.PortTo
+		securityRule.HasPortTo = true
+	}
+	err = validation.ValidateSecurityRule(securityRule, field, index)
 	if err != nil {
 		return nil, err
 	}

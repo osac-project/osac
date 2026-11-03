@@ -16,7 +16,6 @@ package servers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"slices"
 
@@ -400,21 +399,14 @@ func validateSecurityRule(rule *privatev1.SecurityRule, ruleType string, index i
 			"%s rule at index %d is nil", ruleType, index)
 	}
 
-	var portFrom, portTo *int32
-	if rule.HasPortFrom() {
-		portFromValue := rule.GetPortFrom()
-		portFrom = &portFromValue
-	}
-	if rule.HasPortTo() {
-		portToValue := rule.GetPortTo()
-		portTo = &portToValue
-	}
 	err := validation.ValidateSecurityRule(validation.SecurityRule{
-		Protocol: validation.SecurityRuleProtocol(rule.GetProtocol()),
-		PortFrom: portFrom,
-		PortTo:   portTo,
-		IPv4CIDR: rule.GetIpv4Cidr(),
-	}, fmt.Sprintf("%s rule at index %d", ruleType, index))
+		Protocol:    validation.SecurityRuleProtocol(rule.GetProtocol()),
+		PortFrom:    rule.GetPortFrom(),
+		PortTo:      rule.GetPortTo(),
+		HasPortFrom: rule.HasPortFrom(),
+		HasPortTo:   rule.HasPortTo(),
+		IPv4CIDR:    rule.GetIpv4Cidr(),
+	}, ruleType, index)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"%s rule at index %d: %v", ruleType, index, err)

@@ -21,7 +21,7 @@ import (
 var _ = Describe("Security rule validation", func() {
 	DescribeTable("validates the shared field contract",
 		func(rule SecurityRule, expectedError string) {
-			err := ValidateSecurityRule(rule, "ingress_rules[0]")
+			err := ValidateSecurityRule(rule, "ingress_rules", 0)
 			if expectedError == "" {
 				Expect(err).NotTo(HaveOccurred())
 				return
@@ -29,8 +29,8 @@ var _ = Describe("Security rule validation", func() {
 			Expect(err).To(MatchError(ContainSubstring(expectedError)))
 		},
 		Entry("accepts TCP with a valid range", SecurityRule{
-			Protocol: SecurityRuleProtocolTCP,
-			PortFrom: int32Pointer(22), PortTo: int32Pointer(80),
+			Protocol: SecurityRuleProtocolTCP, PortFrom: 22, PortTo: 80,
+			HasPortFrom: true, HasPortTo: true,
 			IPv4CIDR: "192.168.0.0/24",
 		}, ""),
 		Entry("rejects an unsupported protocol", SecurityRule{
@@ -40,13 +40,13 @@ var _ = Describe("Security rule validation", func() {
 			Protocol: SecurityRuleProtocolTCP, IPv4CIDR: "0.0.0.0/0",
 		}, "require port_from and port_to"),
 		Entry("rejects ports on ICMP", SecurityRule{
-			Protocol: SecurityRuleProtocolICMP,
-			PortFrom: int32Pointer(1), PortTo: int32Pointer(1),
+			Protocol: SecurityRuleProtocolICMP, PortFrom: 1, PortTo: 1,
+			HasPortFrom: true, HasPortTo: true,
 			IPv4CIDR: "0.0.0.0/0",
 		}, "must not set port_from or port_to"),
 		Entry("rejects a reversed port range", SecurityRule{
-			Protocol: SecurityRuleProtocolTCP,
-			PortFrom: int32Pointer(100), PortTo: int32Pointer(22),
+			Protocol: SecurityRuleProtocolTCP, PortFrom: 100, PortTo: 22,
+			HasPortFrom: true, HasPortTo: true,
 			IPv4CIDR: "0.0.0.0/0",
 		}, "cannot be greater than port_to"),
 		Entry("rejects a non-canonical CIDR", SecurityRule{
@@ -60,7 +60,3 @@ var _ = Describe("Security rule validation", func() {
 		Expect(protocol).To(Equal(SecurityRuleProtocolTCP))
 	})
 })
-
-func int32Pointer(value int32) *int32 {
-	return &value
-}

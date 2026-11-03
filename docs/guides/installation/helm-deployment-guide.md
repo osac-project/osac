@@ -487,7 +487,9 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 
 For a multicluster VMaaS deployment, `make install-multicluster` uses the
 infra values to configure EVPN on the workload cluster. The management-cluster
-overlay keeps `evpn.enabled` disabled.
+overlay keeps `evpn.enabled` disabled. OSAC provider networking with VMs on a
+separate cluster is not supported in this release (see "Not supported" in the
+customer installation guide).
 
 Add a node by adding it to `evpn.nodes` and rerunning `make install`. Remove a
 node by deleting its entry and rerunning `make install`; the installer deletes
@@ -503,13 +505,13 @@ and RBAC resources on uninstall. To remove the labeled EVPN resources manually:
 oc delete routeadvertisements,vteps -l osac.openshift.io/evpn=true
 oc delete frrconfigurations -n openshift-frr-k8s -l osac.openshift.io/evpn=true
 oc delete nncp -l osac.openshift.io/evpn=true
+oc delete nmstate -l osac.openshift.io/evpn=true
 ```
 
 Restore the cluster network operator settings separately if the cluster no
-longer needs them. The VTEP range and uplink ranges must not overlap tenant
-address space. Add these infrastructure ranges to
-`global.networking.excludedIpv4Cidrs` in the `osac` chart when that value is
-available in the installed chart.
+longer needs them. The VTEP range, the fabric loopback ranges and the uplink
+ranges must not overlap tenant address space. Add them to
+`global.networking.excludedIpv4Cidrs` in the `osac` chart.
 
 ## When Prerequisites Already Exist
 

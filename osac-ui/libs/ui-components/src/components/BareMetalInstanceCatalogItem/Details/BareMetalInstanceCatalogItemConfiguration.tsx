@@ -9,10 +9,8 @@ import {
   bareMetalInstanceTypeReferenceFromPolicy,
   formatBareMetalCatalogDiskImage,
 } from '../../catalog/bareMetalCatalogItemResourceDisplay';
-import {
-  CatalogConfigurationRow,
-  hasConfiguredPolicy,
-} from '../../CatalogItem/Details/CatalogConfigurationRow';
+import { catalogFieldPolicyIsConfigured } from '../../catalog/catalogFieldPolicyDisplay';
+import { CatalogConfigurationRow } from '../../CatalogItem/Details/CatalogConfigurationRow';
 import CatalogUserDataDetailValue from '../../CatalogItem/Details/CatalogUserDataDetailValue';
 
 interface BareMetalInstanceCatalogItemConfigurationProps {
@@ -26,10 +24,8 @@ const BareMetalInstanceCatalogItemConfiguration = ({
   const fields = bareMetalCatalogItemFields(item);
   const instanceTypeReference = bareMetalInstanceTypeReferenceFromPolicy(fields?.instanceType);
   const diskImageReference = bareMetalDiskImageReferenceFromPolicy(fields?.diskImage);
-  const hasConfiguredField = hasConfiguredPolicy(
-    fields?.instanceType,
-    fields?.diskImage,
-    fields?.userDataSource,
+  const hasConfiguredField = [fields?.instanceType, fields?.diskImage, fields?.userDataSource].some(
+    catalogFieldPolicyIsConfigured,
   );
 
   if (!hasConfiguredField) {

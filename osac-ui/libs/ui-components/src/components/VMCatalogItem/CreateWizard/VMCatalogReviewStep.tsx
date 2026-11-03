@@ -188,7 +188,6 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
   const { role } = useSession();
   const { initialValues, values } = useFormikContext<ComputeCatalogItemValues>();
   const isEdit = Boolean(item);
-  const notSet = t('Not set');
 
   return (
     <CatalogReview
@@ -270,7 +269,7 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
                     {values.additionalDisks.value.map((disk, index) => (
                       <StackItem key={`${disk.sizeGib}-${index}`}>
                         {`${t('Disk set {{number}}', { number: index + 1 })}: ${
-                          disk.sizeGib.trim() ? `${disk.sizeGib.trim()} GiB` : notSet
+                          disk.sizeGib.trim() ? `${disk.sizeGib.trim()} GiB` : t('Not set')
                         } · ${catalogReviewValue(t, disk.storageTier.name)}`}
                       </StackItem>
                     ))}
@@ -278,7 +277,7 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
                 }
               />
             ) : (
-              notSet
+              t('Not set')
             )
           }
         />

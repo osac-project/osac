@@ -4,12 +4,12 @@ import type { ClusterCatalogItem } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
-import { catalogFieldPolicyValue } from '../../catalog/catalogFieldPolicyDisplay';
-import { formatClusterCatalogVersionLabel } from '../../catalog/clusterCatalogItemResourceDisplay';
 import {
-  CatalogConfigurationRow,
-  hasConfiguredPolicy,
-} from '../../CatalogItem/Details/CatalogConfigurationRow';
+  catalogFieldPolicyIsConfigured,
+  catalogFieldPolicyValue,
+} from '../../catalog/catalogFieldPolicyDisplay';
+import { formatClusterCatalogVersionLabel } from '../../catalog/clusterCatalogItemResourceDisplay';
+import { CatalogConfigurationRow } from '../../CatalogItem/Details/CatalogConfigurationRow';
 import CatalogNodeSets from '../../CatalogItem/Details/CatalogNodeSets';
 
 interface ClusterCatalogItemConfigurationProps {
@@ -23,12 +23,12 @@ const ClusterCatalogItemConfiguration = ({ item }: ClusterCatalogItemConfigurati
   const versionReference = catalogFieldPolicyValue(fields?.version);
   const nodeSetsPolicy = fields?.nodeSets;
   const network = fields?.network;
-  const hasConfiguredField = hasConfiguredPolicy(
+  const hasConfiguredField = [
     versionPolicy,
     nodeSetsPolicy,
     network?.podCidr,
     network?.serviceCidr,
-  );
+  ].some(catalogFieldPolicyIsConfigured);
 
   if (!hasConfiguredField) {
     return <Content component="p">{t('No governed configuration')}</Content>;

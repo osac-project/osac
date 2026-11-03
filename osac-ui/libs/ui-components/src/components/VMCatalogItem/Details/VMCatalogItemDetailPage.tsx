@@ -16,14 +16,14 @@ export const VMCatalogItemDetailPage = () => {
   const navigate = useNavigate();
   const { id = '' } = useParams() as { id: string };
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const { data, isLoading, isError, error, refetch } = useGetResource(ComputeInstanceCatalogItems, {
+  const { data, isLoading, error, refetch } = useGetResource(ComputeInstanceCatalogItems, {
     id,
   });
   const item = data?.object;
 
   return (
     <ResourceDetailsPage
-      error={isError ? error : undefined}
+      error={error}
       found={!!item}
       isLoading={isLoading}
       parentTo="/catalog"

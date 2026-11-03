@@ -12,7 +12,6 @@ import CatalogFieldEditabilityLabel from '../../catalog/CatalogFieldEditabilityL
 import {
   type FieldPolicyLike,
   catalogFieldPolicyBehavior,
-  catalogFieldPolicyIsConfigured,
 } from '../../catalog/catalogFieldPolicyDisplay';
 
 interface CatalogConfigurationRowProps {
@@ -43,6 +42,3 @@ export const CatalogConfigurationRow = ({ label, value, policy }: CatalogConfigu
     </DescriptionListGroup>
   );
 };
-
-export const hasConfiguredPolicy = (...policies: FieldPolicyLike[]): boolean =>
-  policies.some(catalogFieldPolicyIsConfigured);

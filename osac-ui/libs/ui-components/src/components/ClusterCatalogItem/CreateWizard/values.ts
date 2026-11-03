@@ -1,9 +1,4 @@
-import type {
-  ClusterCatalogItem,
-  ClusterNodeSetMap,
-  ClusterNodeSetMapPolicy,
-  ClusterVersionReference,
-} from '@osac/types';
+import type { ClusterCatalogItem, ClusterNodeSetMap, ClusterVersionReference } from '@osac/types';
 
 import {
   type CatalogGeneralValues,
@@ -28,18 +23,6 @@ export interface ClusterCatalogItemValues extends CatalogGeneralValues {
   serviceCidr: ProvisioningFieldValue<string>;
 }
 
-const readNodeSetRows = (policy: ClusterNodeSetMapPolicy | undefined) => {
-  const items = getFieldFromCatalogItemPolicy<ClusterNodeSetMap | undefined>(policy, undefined)
-    .value?.items;
-
-  return Object.entries(items ?? {}).map(([name, nodeSet]) => ({
-    ...createEmptyNodeSetRow(),
-    name,
-    hostType: resourceSelectValueFromReference(nodeSet.baremetalInstanceType),
-    size: nodeSet.size ? String(nodeSet.size) : '',
-  }));
-};
-
 export const emptyClusterCatalogItemValues = (): ClusterCatalogItemValues => ({
   ...catalogGeneralValues(),
   version: provisioningFieldValue(emptyResourceSelectValue()),
@@ -57,6 +40,16 @@ export const getClusterCatalogItemInitialValues = (
 
   const fields = item.fields;
   const nodeSetPolicy = fields?.nodeSets;
+  const nodeSetItems = getFieldFromCatalogItemPolicy<ClusterNodeSetMap | undefined>(
+    nodeSetPolicy,
+    undefined,
+  ).value?.items;
+  const nodeSetRows = Object.entries(nodeSetItems ?? {}).map(([name, nodeSet]) => ({
+    ...createEmptyNodeSetRow(),
+    name,
+    hostType: resourceSelectValueFromReference(nodeSet.baremetalInstanceType),
+    size: nodeSet.size ? String(nodeSet.size) : '',
+  }));
   const version = getFieldFromCatalogItemPolicy<ClusterVersionReference | undefined>(
     fields?.version,
     undefined,
@@ -76,10 +69,7 @@ export const getClusterCatalogItemInitialValues = (
       resourceSelectValueFromReference(version.value),
       version.locked,
     ),
-    nodeSets: provisioningFieldValue(
-      readNodeSetRows(nodeSetPolicy),
-      nodeSetPolicy?.behavior.case === 'locked',
-    ),
+    nodeSets: provisioningFieldValue(nodeSetRows, nodeSetPolicy?.behavior.case === 'locked'),
     podCidr: provisioningFieldValue(podCidr.value ?? '', podCidr.locked),
     serviceCidr: provisioningFieldValue(serviceCidr.value ?? '', serviceCidr.locked),
   };

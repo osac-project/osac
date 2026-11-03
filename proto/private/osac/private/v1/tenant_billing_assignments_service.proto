@@ -1,0 +1,129 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "cleanapi/cleanapi.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/private/v1/tenant_billing_assignment_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
+message TenantBillingAssignmentsListRequest {
+  // Index of the first result. If not specified the default value will be zero.
+  optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server. When not specified all the results will be returned.
+  optional int32 limit = 2;
+
+  // Filter criteria.
+  //
+  // The value of this parameter is a [CEL](https://cel.dev) expression used to select which objects to return. The
+  // built-in `this` variable refers to the object being tested. For example, to retrieve only the assignments for
+  // one tenant:
+  //
+  //     this.spec.tenant_id == "tenant-a"
+  optional string filter = 3;
+
+  // Order criteria.
+  //
+  // The syntax of this parameter is similar to the syntax of the _order by_ clause of a SQL statement, but using
+  // the names of the attributes of the assignment instead of the names of the columns of a table.
+  optional string order = 4;
+}
+
+message TenantBillingAssignmentsListResponse {
+  // Actual number of items returned.
+  int32 size = 1;
+
+  // Total number of items of the collection that match the search criteria, regardless of the number of results
+  // requested with the `limit` parameter.
+  int32 total = 2;
+
+  // Current and historical assignment intervals.
+  repeated TenantBillingAssignment items = 3;
+}
+
+message TenantBillingAssignmentsGetRequest {
+  string id = 1;
+}
+
+message TenantBillingAssignmentsGetResponse {
+  TenantBillingAssignment object = 1;
+}
+
+message TenantBillingAssignmentsCreateRequest {
+  TenantBillingAssignment object = 1;
+}
+
+message TenantBillingAssignmentsCreateResponse {
+  TenantBillingAssignment object = 1;
+}
+
+message TenantBillingAssignmentsUpdateRequest {
+  TenantBillingAssignment object = 1;
+
+  // Fields of spec to update. billing_account_id is the only field this method accepts changes to; it is
+  // required on the wire regardless of the mask, so the mask carries no additional information today.
+  google.protobuf.FieldMask update_mask = 2;
+}
+
+message TenantBillingAssignmentsUpdateResponse {
+  TenantBillingAssignment object = 1;
+}
+
+// Reads or changes a tenant's time-versioned billing-account assignment. Billing disabled fails every method with
+// FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Only Cloud Provider Admins may call any
+// method on this service; there is no tenant self-service read path. Create and Update resolve
+// billing_account.correlation_id (generate, adopt, or fail on conflict) and validate a unique provider-side
+// match before persisting; see billing.ResolveAccountCorrelationID.
+service TenantBillingAssignments {
+  // Lists current and historical assignments.
+  rpc List(TenantBillingAssignmentsListRequest) returns (TenantBillingAssignmentsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/billing/tenant_billing_assignments"};
+  }
+
+  // Gets one assignment interval.
+  rpc Get(TenantBillingAssignmentsGetRequest) returns (TenantBillingAssignmentsGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/billing/tenant_billing_assignments/{id}"
+      response_body: "object"
+    };
+  }
+
+  // Assigns a tenant to a billing account. Rejects a tenant that already has an active assignment or an account
+  // already linked to another tenant with FAILED_PRECONDITION/ACCOUNT_ALREADY_BOUND, and an INACTIVE or UNKNOWN
+  // account with FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN.
+  rpc Create(TenantBillingAssignmentsCreateRequest) returns (TenantBillingAssignmentsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/private/v1/billing/tenant_billing_assignments"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Replaces the tenant's active account. Closes the previous interval and opens a new one in the same
+  // transaction. A resubmission for the same tenant and account re-runs correlation resolution; it is a no-op
+  // when the current interval is already CONNECTED.
+  rpc Update(TenantBillingAssignmentsUpdateRequest) returns (TenantBillingAssignmentsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/private/v1/billing/tenant_billing_assignments/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+}

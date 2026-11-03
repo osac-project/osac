@@ -977,4 +977,47 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				[]any{"cloud-provider-reader"}, []any{}, false),
 		)
 	})
+
+	Describe("tenant billing assignments authorization", func() {
+		const (
+			publicAssignmentsList   = "/osac.public.v1.TenantBillingAssignments/List"
+			publicAssignmentsGet    = "/osac.public.v1.TenantBillingAssignments/Get"
+			publicAssignmentsCreate = "/osac.public.v1.TenantBillingAssignments/Create"
+			publicAssignmentsUpdate = "/osac.public.v1.TenantBillingAssignments/Update"
+		)
+		DescribeTable("only admins may read or write assignments; design.md has no tenant self-service path",
+			func(ctx context.Context, method string, username string, roles []any, groups []any, allowed bool) {
+				evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
+				Expect(err).ToNot(HaveOccurred())
+				authContext := &AuthContext{
+					Username:     username,
+					Groups:       groups,
+					AuthMethod:   "jwt",
+					Organization: []any{"acme-corp"},
+					RealmAccess:  map[string]any{"roles": roles},
+					Tenant:       "acme-corp",
+				}
+				decision, err := evaluator.Evaluate(ctx, authContext, method)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(Equal(allowed))
+			},
+			Entry("List: admin group", publicAssignmentsList, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("List: osac-admin service account", publicAssignmentsList, "service-account-osac-admin",
+				[]any{}, []any{}, true),
+			Entry("List: tenant user", publicAssignmentsList, "billing-test", []any{"user"}, []any{}, false),
+			Entry("List: tenant admin", publicAssignmentsList, "billing-test", []any{"tenant-admin"}, []any{}, false),
+			Entry("List: tenant IdP manager", publicAssignmentsList, "billing-test", []any{"tenant-idp-manager"}, []any{}, false),
+			Entry("List: tenant reader", publicAssignmentsList, "billing-test", []any{"tenant-reader"}, []any{}, false),
+			Entry("List: cloud provider reader", publicAssignmentsList, "billing-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+			Entry("Get: admin group", publicAssignmentsGet, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("Get: tenant user", publicAssignmentsGet, "billing-test", []any{"user"}, []any{}, false),
+			Entry("Get: tenant reader", publicAssignmentsGet, "billing-test", []any{"tenant-reader"}, []any{}, false),
+			Entry("Create: admin group", publicAssignmentsCreate, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("Create: tenant user", publicAssignmentsCreate, "billing-test", []any{"user"}, []any{}, false),
+			Entry("Create: tenant admin", publicAssignmentsCreate, "billing-test", []any{"tenant-admin"}, []any{}, false),
+			Entry("Update: admin group", publicAssignmentsUpdate, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("Update: tenant user", publicAssignmentsUpdate, "billing-test", []any{"user"}, []any{}, false),
+		)
+	})
 })

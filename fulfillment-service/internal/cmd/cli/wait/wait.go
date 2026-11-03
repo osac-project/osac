@@ -17,6 +17,7 @@ package wait
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -107,6 +108,9 @@ func Poll[T any](ctx context.Context, opts Options[T]) (T, error) {
 	if maxInterval <= 0 {
 		maxInterval = 10 * time.Second
 	}
+	if interval > maxInterval {
+		interval = maxInterval
+	}
 
 	failureSet := make(map[string]bool, len(opts.FailureStates))
 	for _, s := range opts.FailureStates {
@@ -116,14 +120,22 @@ func Poll[T any](ctx context.Context, opts Options[T]) (T, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	var last string
 	for {
 		resource, err := opts.Fetch(ctx)
 		if err != nil {
 			var zero T
+			// A deadline error caused by the timeout context is a
+			// timeout, whatever the fetch layer returned.
+			if errors.Is(err, context.DeadlineExceeded) &&
+				ctx.Err() == context.DeadlineExceeded {
+				return zero, &ErrTimeout{After: timeout, Current: last}
+			}
 			return zero, err
 		}
 
 		state := opts.StateOf(resource)
+		last = state
 
 		if opts.OnProgress != nil {
 			opts.OnProgress(resource)
@@ -141,6 +153,9 @@ func Poll[T any](ctx context.Context, opts Options[T]) (T, error) {
 		select {
 		case <-ctx.Done():
 			var zero T
+			if ctx.Err() == context.Canceled {
+				return zero, ctx.Err()
+			}
 			return zero, &ErrTimeout{After: timeout, Current: state}
 		case <-time.After(interval):
 			interval *= 2

@@ -1,8 +1,9 @@
 # OSAC Helm Deployment Guide
 
-Deploy the prerequisite Operators and infrastructure layer (phase 1) for
-OSAC on a clean connected OpenShift cluster, using `oc` and Helm from a
-monorepo checkout. If your cluster already has the prerequisites, see the
+This guide provides an administrator procedure for deploying the prerequisite
+Operators and infrastructure layer (phase 1) for OSAC on a clean connected
+OpenShift cluster, using `oc` and Helm from a monorepo checkout. If your cluster
+already has the prerequisites, see the
 [customer install guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md)
 to install just the published `osac` chart.
 
@@ -438,6 +439,12 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 
 ## EVPN host networking (VMaaS)
 
+Platform administrators can use the following Helm procedure to prepare
+EVPN host networking. Coordinate it with the fabric administrators
+before installing OSAC with provider networking enabled. The customer guide
+requires the resulting host configuration and BGP readiness; administrators
+can follow their environment's procedure to prepare those prerequisites.
+
 Set the `evpn` values in the same infra values file passed to `osac-deps` and
 `osac-infra`. The installer configures the OpenShift side of the VMaaS CUDN
 EVPN connection in this order:
@@ -486,9 +493,11 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 | `evpn.nodes[].uplinks[].peerAddress` | IPv4 address of the connected fabric BGP peer, supplied by the fabric admin. |
 | `evpn.nodes[].uplinks[].peerASN` | ASN of the connected fabric peer, supplied by the fabric admin. |
 
-For a separate VMaaS workload cluster, pass these `evpn` values to the phase
-1b install on the workload cluster. Keep `evpn.enabled: false` on the
-management cluster. See
+If administrators separately prepare EVPN host networking on a workload
+cluster using this procedure, pass these `evpn` values to its phase 1b install.
+Keep `evpn.enabled: false` on the management cluster. This host preparation is
+optional for the separate-cluster layout documented below, which runs with
+provider networking disabled. See
 [Separate VMaaS workload cluster](#separate-vmaas-workload-cluster).
 
 OSAC provider networking with VMs on a separate cluster is not supported in
@@ -520,16 +529,18 @@ longer needs them. The VTEP range, the fabric loopback ranges and the uplink
 ranges must not overlap tenant address space. Add them to
 `global.networking.excludedIpv4Cidrs` in the `osac` chart.
 
-For phase 2, use the complete
+For phase 2 with chart `0.0.64`, use the complete
 [CUDN EVPN with Netris example](customer-install-guide.md#cudn-evpn-with-netris).
-It configures the Netris AAP backend, registers `cudn_evpn` with
-`capabilities: [ipv4]`, and enables the expert NetworkClass path with
-`global.expertOverrides.networkClass: true`. That path also requires
-`networkClass.enabled: true`, a nonempty title, and the Netris and EVPN
-manager names. The subchart has no built-in `cudn_evpn` registration defaults;
-enabling it alone creates an invalid registration with empty capabilities.
-The normal `global.networking.k8sManager` setting accepts only `""` or
-`k8s_only`, so it cannot select `cudn_evpn` directly.
+Set `global.networking.fabricManager: netris` and
+`global.networking.k8sManager: cudn_evpn`. The umbrella chart renders both
+manager registrations automatically. Set
+`operator.networkManagers.enabled: false` to suppress legacy subchart
+registrations; do not add duplicate Netris or CUDN EVPN entries there.
+Configure Netris coordinates and credentials in
+`aap.instanceGroups.networkFulfillment.config` and `.secret`.
+The old expert NetworkClass block and `k8s_only` selection do not apply to
+`0.0.64`. Networking selection and the provider-provisioning switch are fixed
+at the first installation; a successful Helm render does not verify the fabric.
 
 ### Adding CA roots to the shared bundle at runtime
 
@@ -572,7 +583,9 @@ Run the OSAC management services on one OpenShift cluster and the virtual
 machines on another. Both clusters need `cluster-admin` access and different
 API server addresses. Disable CaaS and BMaaS. The operator refuses to start
 with a remote kubeconfig when either the cluster controller or the
-bare-metal-instance controller is enabled.
+bare-metal-instance controller is enabled. Keep
+`global.networking.provisioningEnabled: false` in the phase-2 values; provider
+networking with VMs on a separate cluster is not supported in this release.
 
 Create the workload kubeconfig Secret on the management cluster before phase
 2. The Secret contents and the console-proxy label are described in
@@ -581,11 +594,14 @@ The phase-2 values that mount that Secret are in the
 [customer install guide](customer-install-guide.md#64-installing-vmaas-on-a-separate-workload-cluster).
 
 **Workload cluster.** Point `KUBECONFIG` at the workload cluster. In
-`my-workload-infra-values.yaml`, enable `cnv` and `lvms`. Enable `evpn` when that
-cluster uses CUDN EVPN, as described in
-[EVPN host networking (VMaaS)](#evpn-host-networking-vmaas). Disable the other
-phase-1 toggles. Set `certManager.enabled`, `trustManager.enabled`, and
-`caIssuer.enabled` to `false`; the latter two remain enabled by default even
+`my-workload-infra-values.yaml`, enable `cnv`. Enable `lvms` if LVM Storage
+needs to be installed on that cluster. Keep `evpn.enabled: false` for this
+layout, which uses the default pod network. If administrators prepare EVPN
+host networking separately, use their environment's procedure;
+the [EVPN host networking procedure](#evpn-host-networking-vmaas) above is one
+example. This does not enable OSAC provider networking across clusters.
+Disable the other phase-1 toggles. Set `certManager.enabled`,
+`trustManager.enabled`, and `caIssuer.enabled` to `false`; the latter two remain enabled by default even
 when `certManager` is disabled. Also disable `aapOperator`, `keycloak`,
 `mce`, `kafka`, and `bundledVault`. Run
 [Phase 1a](#phase-1a-install-prerequisite-operators) and
@@ -614,10 +630,13 @@ evpn:
 Run phase 1a and phase 1b, replacing `-f my-infra-values.yaml` with
 `-f my-management-infra-values.yaml` in both commands. Then run phase 2 with
 the remote kubeconfig values from the customer install guide. The Secret must
-exist in the OSAC namespace before `helm upgrade --install osac`. Keep
-`lvms.enabled: true` in the phase-2 `my-values.yaml` to register the workload
-cluster's local StorageBackend and StorageTier in fulfillment. Installing
-LVMS through phase 1 alone does not perform that registration.
+exist in the OSAC namespace before `helm upgrade --install osac`. For
+production, keep `lvms.enabled: false` in the phase-2 `my-values.yaml`, including
+when the workload cluster uses LVMS. Storage administrators must prepare the
+StorageBackend, StorageTier, and tenant storage configuration; installing the
+LVM Storage Operator and its operand does not register an OSAC storage offering.
+The automatic local-storage registration hook is for development and CI only;
+see [Evaluation only](customer-install-guide.md#92-evaluation-only).
 
 ## When Prerequisites Already Exist
 
@@ -718,6 +737,7 @@ Back up any data you need before upgrading.
 | Value | Default | What it does |
 |-------|---------|-------------|
 | `hubAccess.enabled` | `false` | Creates hub-access SA/RBAC and registers local cluster as a hub. Only for environments where fulfillment-service and hub are the same cluster. |
+| `lvms.enabled` | `false` | Development and CI only. Registers the `local` LVMS StorageBackend and StorageTier in Fulfillment. Keep `false` in production; administrators prepare storage registration and tenant configuration. This instance-chart value is separate from the infrastructure toggle that installs LVM Storage. |
 
 ## Infrastructure Configuration
 

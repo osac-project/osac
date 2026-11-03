@@ -18,7 +18,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/osac-project/osac-metering/internal/contract"
+	"github.com/osac-project/osac-metering/tools/contract"
 )
 
 func main() {

@@ -27,10 +27,10 @@ import (
 
 	"github.com/osac-project/osac/proto/metering"
 
-	"github.com/osac-project/osac-metering/internal/contract"
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/heartbeat"
 	"github.com/osac-project/osac-metering/schema"
+	"github.com/osac-project/osac-metering/tools/contract"
 )
 
 func TestContract(t *testing.T) {
@@ -264,10 +264,6 @@ var _ = Describe("The generated contract", func() {
 		instance, err = jsonschema.UnmarshalJSON(bytes.NewReader(payload))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(compiled.Validate(instance)).NotTo(Succeed())
-	})
-
-	It("pins every published version file by SHA-256", func() {
-		Expect(schema.CheckPublishedManifest()).To(Succeed())
 	})
 
 	It("records the hash of the published file a reader holds", func() {

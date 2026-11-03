@@ -31,7 +31,7 @@ contract:
 
 # Fails when the committed contract files are stale.
 contract-check:
-	go test ./internal/contract
+	go test ./tools/contract
 
 # Proto codegen is no longer per-module. Regenerate the shared
 # tree once from the repo-root proto/ module: `make -C ../../proto generate`.

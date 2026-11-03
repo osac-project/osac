@@ -10,13 +10,9 @@ in compliance with the License. You may obtain a copy of the License at
 package schema
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -540,68 +536,5 @@ func TestLoadVersionsRejectsAChangedEnvelopeConstant(t *testing.T) {
 	_, err := loadVersions(files, testNow)
 	if err == nil || !strings.Contains(err.Error(), `want "osac-metering"`) {
 		t.Fatalf("want an envelope constant error, got %v", err)
-	}
-}
-
-// manifestFor builds a SHA-256 manifest for the given version files.
-func manifestFor(contents map[string]string) string {
-	names := make([]string, 0, len(contents))
-	for name := range contents {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var manifest strings.Builder
-	for _, name := range names {
-		digest := sha256.Sum256([]byte(contents[name]))
-		fmt.Fprintf(&manifest, "%s  %s\n", hex.EncodeToString(digest[:]), name)
-	}
-	return manifest.String()
-}
-
-func TestCheckPublishedManifest(t *testing.T) {
-	if err := CheckPublishedManifest(); err != nil {
-		t.Fatalf("the committed manifest does not match the published files: %v", err)
-	}
-}
-
-func TestVerifyManifestRejectsAnAddedField(t *testing.T) {
-	original := publishedFile(t, "v1.json")
-	changed := addDataField(t, original, "external_billing_account_id")
-	files := fstest.MapFS{versionDirectory + "/v1.json": {Data: []byte(changed)}}
-	err := verifyManifest(files, []byte(manifestFor(map[string]string{"v1.json": original})))
-	if err == nil || !strings.Contains(err.Error(), "changed") {
-		t.Fatalf("adding a field to a published file must fail the manifest, got %v", err)
-	}
-}
-
-func TestVerifyManifestRejectsARemovedField(t *testing.T) {
-	original := publishedFile(t, "v1.json")
-	changed := dropDataField(t, original, "rules_revision")
-	files := fstest.MapFS{versionDirectory + "/v1.json": {Data: []byte(changed)}}
-	err := verifyManifest(files, []byte(manifestFor(map[string]string{"v1.json": original})))
-	if err == nil || !strings.Contains(err.Error(), "changed") {
-		t.Fatalf("removing a field from a published file must fail the manifest, got %v", err)
-	}
-}
-
-func TestVerifyManifestAcceptsANewVersionWithAnEntry(t *testing.T) {
-	v1 := publishedFile(t, "v1.json")
-	v2 := addDataField(t, laterVersion(t), "external_billing_account_id")
-	files := fstest.MapFS{
-		versionDirectory + "/v1.json": {Data: []byte(v1)},
-		versionDirectory + "/v2.json": {Data: []byte(v2)},
-	}
-	manifest := manifestFor(map[string]string{"v1.json": v1, "v2.json": v2})
-	if err := verifyManifest(files, []byte(manifest)); err != nil {
-		t.Fatalf("a new version with its own manifest entry must pass: %v", err)
-	}
-	if _, err := loadVersions(files, testNow); err != nil {
-		t.Fatalf("the new version must also load: %v", err)
-	}
-
-	withoutV2 := manifestFor(map[string]string{"v1.json": v1})
-	if err := verifyManifest(files, []byte(withoutV2)); err == nil ||
-		!strings.Contains(err.Error(), "has no entry") {
-		t.Fatalf("a new version without an entry must fail, got %v", err)
 	}
 }

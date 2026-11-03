@@ -37,17 +37,8 @@ const heartbeatTypePrefix = "osac.resource.heartbeat."
 // the version. A file never changes after release; adding a field is a new file.
 const versionDirectory = "versions"
 
-// manifestName is the committed SHA-256 manifest of the version files.
-const manifestName = "published.sha256"
-
-//go:embed versions/*.json published.sha256
+//go:embed versions/*.json
 var versionFiles embed.FS
-
-// publishedManifest pins the bytes of every published version file. A version file never
-// changes, and a new file needs its own committed entry.
-//
-//go:embed published.sha256
-var publishedManifest []byte
 
 // FieldType is the JSON type a schema field carries.
 type FieldType string
@@ -133,88 +124,6 @@ type Version struct {
 // mismatch must stop the build.
 func PublishedVersions() ([]Version, error) {
 	return loadVersions(versionFiles, time.Now().UTC())
-}
-
-// CheckPublishedManifest verifies the embedded version files against the committed SHA-256
-// manifest. It fails when a published file changed, when a file has no manifest entry, or when
-// the manifest names a file that is gone. A new version is allowed only with its own entry.
-func CheckPublishedManifest() error {
-	return verifyManifest(versionFiles, publishedManifest)
-}
-
-// verifyManifest checks every version file against the manifest and every manifest entry
-// against a file. The manifest is committed by hand: a new version needs an explicit entry.
-func verifyManifest(fsys fs.FS, manifest []byte) error {
-	entries := map[string]string{}
-	for index, line := range strings.Split(string(manifest), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) != 2 {
-			return fmt.Errorf(
-				"%s line %d is not '<sha256>  <version>.json'", manifestName, index+1,
-			)
-		}
-		digest := fields[0]
-		name := strings.TrimPrefix(fields[1], "*")
-		if !sha256Pattern.MatchString(digest) {
-			return fmt.Errorf("%s line %d has an invalid SHA-256 %q", manifestName, index+1, digest)
-		}
-		if !versionFileNamePattern.MatchString(name) {
-			return fmt.Errorf("%s line %d names %q, want v<number>.json", manifestName, index+1, name)
-		}
-		if _, repeated := entries[name]; repeated {
-			return fmt.Errorf("%s lists %s more than once", manifestName, name)
-		}
-		entries[name] = digest
-	}
-
-	paths, err := fs.Glob(fsys, versionDirectory+"/*.json")
-	if err != nil {
-		return fmt.Errorf("listing schema versions: %w", err)
-	}
-	seen := map[string]bool{}
-	for _, path := range paths {
-		name := pathpkg.Base(path)
-		want, found := entries[name]
-		if !found {
-			return fmt.Errorf(
-				"published schema %s has no entry in %s; add its SHA-256 explicitly",
-				name, manifestName,
-			)
-		}
-		content, err := fs.ReadFile(fsys, path)
-		if err != nil {
-			return fmt.Errorf("reading %s: %w", path, err)
-		}
-		digest := sha256.Sum256(content)
-		actual := hex.EncodeToString(digest[:])
-		if actual != want {
-			return fmt.Errorf(
-				"published schema %s changed: %s records %s, the file is %s; a published "+
-					"version is immutable, so ship the next version with its own entry",
-				name, manifestName, want, actual,
-			)
-		}
-		seen[name] = true
-	}
-
-	extra := make([]string, 0, len(entries))
-	for name := range entries {
-		if !seen[name] {
-			extra = append(extra, name)
-		}
-	}
-	sort.Strings(extra)
-	if len(extra) > 0 {
-		return fmt.Errorf(
-			"%s lists %s, which no published schema file provides", manifestName,
-			strings.Join(extra, ", "),
-		)
-	}
-	return nil
 }
 
 // VersionInEffect returns the version in effect at a record's writing time: the latest
@@ -856,8 +765,6 @@ func versionNumber(version string) int {
 }
 
 var (
-	versionPattern         = regexp.MustCompile(`^v[1-9][0-9]*$`)
-	versionFileNamePattern = regexp.MustCompile(`^v[1-9][0-9]*\.json$`)
-	fieldNamePattern       = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-	sha256Pattern          = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	versionPattern   = regexp.MustCompile(`^v[1-9][0-9]*$`)
+	fieldNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 )

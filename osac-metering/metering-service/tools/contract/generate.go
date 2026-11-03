@@ -59,9 +59,13 @@ func Write(repoRoot string) error {
 	return nil
 }
 
-// Check fails when a committed file differs from the regenerated one, so a change to a
-// resource, a meter, or a schema file cannot merge without its regenerated reference.
+// Check fails when a published schema file differs from its SHA-256 manifest, or when a
+// committed contract file differs from the regenerated one, so a change to a resource, a
+// meter, or a schema file cannot merge without its regenerated reference.
 func Check(repoRoot string) error {
+	if err := checkPublishedManifest(repoRoot); err != nil {
+		return err
+	}
 	sources, err := LoadSources(repoRoot)
 	if err != nil {
 		return err

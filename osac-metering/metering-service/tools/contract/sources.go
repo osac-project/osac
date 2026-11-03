@@ -7,11 +7,11 @@ in compliance with the License. You may obtain a copy of the License at
   http://www.apache.org/licenses/LICENSE-2.0
 */
 
-// Package contract generates the published metering contract: a reference a person reads and
-// a JSON Schema a tool checks. Both come from data that already exists: the metering field
-// registry, the default rule revision the chart ships, the published schema files, and the
-// chart defaults the reference quotes. The prose a reader sees is written here, but every
-// number and list it repeats comes from those inputs.
+// Package contract is a build and code-generation tool. It writes the published metering
+// contract, a reference a person reads and a JSON Schema a tool checks, from data that already
+// exists: the metering field registry, the default rule revision the chart ships, the
+// published schema files, and the chart defaults the reference quotes. It is not part of the
+// metering service: the service binary must not import it.
 package contract
 
 import (

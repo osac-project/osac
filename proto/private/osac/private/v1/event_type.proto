@@ -52,6 +52,7 @@ import "osac/private/v1/subnet_type.proto";
 import "osac/private/v1/user_type.proto";
 import "osac/private/v1/virtual_network_type.proto";
 import "osac/private/v1/volume_type.proto";
+import "osac/private/v1/workload_cluster_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -111,6 +112,7 @@ message Event {
     AddOnOperator add_on_operator = 37 [(cleanapi.field).private = true];
     FabricDomain fabric_domain = 38 [(cleanapi.field).private = true];
     ServiceAccount service_account = 39 [(cleanapi.field).private = true];
+    WorkloadCluster workload_cluster = 41 [(cleanapi.field).private = true];
   }
 
   reserved 10;

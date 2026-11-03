@@ -812,6 +812,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 			v1alpha1.HostConditionReasonNetworkHandoffFailed,
 		)
 		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		bmi.Status.NetworkHandoffLastErrorFingerprint = ""
 	}
 
 	currentReason := ""
@@ -823,6 +824,21 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 		if r.networkHandoffDeadlineExceeded(bmi) {
 			markHandoffFailed("")
 			return ctrl.Result{}, nil
+		}
+		if bmi.Status.NetworkHandoffLastErrorFingerprint == "" {
+			powerStatus, err := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if powerStatus == nil {
+				return ctrl.Result{}, fmt.Errorf("management backend returned nil power status for host %s", bmi.Spec.ExternalHostID)
+			}
+			if powerStatus.FailureMessage != "" && powerStatus.FailureMessageIsCurrent {
+				markHandoffFailed(powerStatus.FailureMessage)
+				return ctrl.Result{}, nil
+			}
+			bmi.Status.NetworkHandoffLastErrorFingerprint = management.FailureMessageFingerprint(powerStatus.FailureMessage)
+			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 		}
 		if err := r.ManagementClient.RequestNetworkHandoff(ctx, bmi.Spec.ExternalHostID); err != nil {
 			if errors.Is(err, management.ErrTransitioning) {
@@ -841,7 +857,12 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 	}
 
-	obs, err := r.ManagementClient.ObserveNetworkHandoff(ctx, bmi.Spec.ExternalHostID, currentReason)
+	obs, err := r.ManagementClient.ObserveNetworkHandoff(
+		ctx,
+		bmi.Spec.ExternalHostID,
+		currentReason,
+		bmi.Status.NetworkHandoffLastErrorFingerprint,
+	)
 	if err != nil {
 		if errors.Is(err, management.ErrTransitioning) {
 			if r.networkHandoffDeadlineExceeded(bmi) {
@@ -867,6 +888,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 		}
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
 			metav1.ConditionTrue, reason, msg)
+		bmi.Status.NetworkHandoffLastErrorFingerprint = ""
 		return ctrl.Result{}, nil
 	}
 	if r.networkHandoffDeadlineExceeded(bmi) {
@@ -944,7 +966,13 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkOffboardShutdown(
 	if powerStatus == nil {
 		return ctrl.Result{}, fmt.Errorf("management backend returned nil power status for host %s", bmi.Spec.ExternalHostID)
 	}
-	if powerStatus.FailureMessage != "" && powerStatus.FailureMessageIsCurrent {
+	currentPowerFailure := powerStatus.FailureMessage != "" && powerStatus.FailureMessageIsCurrent
+	if !currentPowerFailure && powerStatus.FailureMessage != "" && !powerStatus.IsTransitioning &&
+		bmi.Status.NetworkOffboardLastErrorFingerprint != "" {
+		currentPowerFailure = management.FailureMessageFingerprint(powerStatus.FailureMessage) !=
+			bmi.Status.NetworkOffboardLastErrorFingerprint
+	}
+	if currentPowerFailure {
 		r.setNetworkCondition(
 			bmi,
 			v1alpha1.HostConditionNetworkOffboardComplete,
@@ -961,16 +989,33 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkOffboardShutdown(
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete,
 			metav1.ConditionTrue, "Succeeded",
 			"Host powered off; safe to move port to provisioning network")
+		bmi.Status.NetworkOffboardLastErrorFingerprint = ""
 		log.Info("Offboard shutdown complete")
 		return ctrl.Result{}, nil
 	}
 
 	if powerStatus.IsTransitioning {
+		if bmi.Status.NetworkOffboardLastErrorFingerprint == "" {
+			bmi.Status.NetworkOffboardLastErrorFingerprint = management.FailureMessageFingerprint(powerStatus.FailureMessage)
+		}
+		if offboardCond == nil || offboardCond.Status != metav1.ConditionFalse ||
+			offboardCond.Reason != v1alpha1.HostConditionReasonProgressing {
+			bmi.SetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete,
+				metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
+				"Waiting for host power-off before moving port to provisioning network")
+		}
 		log.Info("Host transitioning, waiting for power off")
 		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 	}
 
 	// Host is powered on — power it off
+	if bmi.Status.NetworkOffboardLastErrorFingerprint == "" {
+		bmi.Status.NetworkOffboardLastErrorFingerprint = management.FailureMessageFingerprint(powerStatus.FailureMessage)
+		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
+			"Preparing to power off host before moving port to provisioning network")
+		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+	}
 	if err := r.ManagementClient.SetPowerState(ctx, bmi.Spec.ExternalHostID, management.PowerOff); err != nil {
 		if errors.Is(err, management.ErrTransitioning) {
 			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil

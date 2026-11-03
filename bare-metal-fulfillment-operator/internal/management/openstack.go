@@ -243,7 +243,9 @@ func (c *OpenStackClient) RequestNetworkHandoff(ctx context.Context, hostID stri
 }
 
 // ObserveNetworkHandoff drives the Ironic PoweringOff → PoweringOn sequence.
-func (c *OpenStackClient) ObserveNetworkHandoff(ctx context.Context, hostID, currentReason string) (HandoffObservation, error) {
+func (c *OpenStackClient) ObserveNetworkHandoff(
+	ctx context.Context, hostID, currentReason, lastErrorFingerprint string,
+) (HandoffObservation, error) {
 	status, err := c.GetPowerState(ctx, hostID)
 	if err != nil {
 		return HandoffObservation{}, err
@@ -251,7 +253,11 @@ func (c *OpenStackClient) ObserveNetworkHandoff(ctx context.Context, hostID, cur
 	if status == nil {
 		return HandoffObservation{}, fmt.Errorf("node %s: nil power status", hostID)
 	}
-	if status.FailureMessage != "" && status.FailureMessageIsCurrent {
+	currentFailure := status.FailureMessage != "" && status.FailureMessageIsCurrent
+	if !currentFailure && status.FailureMessage != "" && !status.IsTransitioning && lastErrorFingerprint != "" {
+		currentFailure = FailureMessageFingerprint(status.FailureMessage) != lastErrorFingerprint
+	}
+	if currentFailure {
 		return HandoffObservation{
 			Failed:  true,
 			Reason:  "NetworkHandoffFailed",

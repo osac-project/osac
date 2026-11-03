@@ -343,7 +343,9 @@ var _ = Describe("OpenStack Management Backend", func() {
 				defer server.Close()
 
 				client := newMockOpenStackClient(server)
-				observation, err := client.ObserveNetworkHandoff(ctx, testNodeID, currentReason)
+				observation, err := client.ObserveNetworkHandoff(
+					ctx, testNodeID, currentReason, management.FailureMessageFingerprint("stale power error"),
+				)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(powerOffRequested).To(BeTrue())
 				Expect(observation.Confirmed).To(BeFalse())
@@ -374,7 +376,9 @@ var _ = Describe("OpenStack Management Backend", func() {
 			defer server.Close()
 
 			client := newMockOpenStackClient(server)
-			observation, err := client.ObserveNetworkHandoff(ctx, testNodeID, "Progressing")
+			observation, err := client.ObserveNetworkHandoff(
+				ctx, testNodeID, "Progressing", management.FailureMessageFingerprint("stale power error"),
+			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(powerOnRequested).To(BeTrue())
 			Expect(observation.Failed).To(BeFalse())
@@ -391,7 +395,51 @@ var _ = Describe("OpenStack Management Backend", func() {
 			defer server.Close()
 
 			client := newMockOpenStackClient(server)
-			observation, err := client.ObserveNetworkHandoff(ctx, testNodeID, "Progressing")
+			observation, err := client.ObserveNetworkHandoff(
+				ctx, testNodeID, "Progressing", management.FailureMessageFingerprint("stale power error"),
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(observation.Failed).To(BeFalse())
+			Expect(observation.Reason).To(Equal("PoweringOff"))
+		})
+
+		It("reports a changed Ironic LastError after the power transition settles", func() {
+			powerOffRequested := false
+			server := mockIronicServer(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPut {
+					powerOffRequested = true
+					Fail("must report the asynchronous failure before requesting another power change")
+				}
+				w.WriteHeader(http.StatusOK)
+				_, err := w.Write([]byte(`{"uuid":"` + testNodeID + `","power_state":"power on","target_power_state":null,"last_error":"BMC refused the handoff power-off"}`))
+				Expect(err).NotTo(HaveOccurred())
+			})
+			defer server.Close()
+
+			client := newMockOpenStackClient(server)
+			observation, err := client.ObserveNetworkHandoff(
+				ctx, testNodeID, "PoweringOff", management.FailureMessageFingerprint("previous power failure"),
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(powerOffRequested).To(BeFalse())
+			Expect(observation.Failed).To(BeTrue())
+			Expect(observation.Reason).To(Equal("NetworkHandoffFailed"))
+			Expect(observation.Message).To(Equal("BMC refused the handoff power-off"))
+		})
+
+		It("waits for a transitioning node even if Ironic LastError changed", func() {
+			server := mockIronicServer(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Method).To(Equal(http.MethodGet))
+				w.WriteHeader(http.StatusOK)
+				_, err := w.Write([]byte(`{"uuid":"` + testNodeID + `","power_state":"power on","target_power_state":"power off","last_error":"new but transitioning error"}`))
+				Expect(err).NotTo(HaveOccurred())
+			})
+			defer server.Close()
+
+			client := newMockOpenStackClient(server)
+			observation, err := client.ObserveNetworkHandoff(
+				ctx, testNodeID, "PoweringOff", management.FailureMessageFingerprint("previous power failure"),
+			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(observation.Failed).To(BeFalse())
 			Expect(observation.Reason).To(Equal("PoweringOff"))

@@ -251,7 +251,7 @@ func (m *Metal3Client) RequestNetworkHandoff(ctx context.Context, hostID string)
 	return nil
 }
 
-func (m *Metal3Client) ObserveNetworkHandoff(ctx context.Context, hostID, _ string) (HandoffObservation, error) {
+func (m *Metal3Client) ObserveNetworkHandoff(ctx context.Context, hostID, _, _ string) (HandoffObservation, error) {
 	bmh, err := m.getBMH(ctx, hostID)
 	if err != nil {
 		return HandoffObservation{}, err

@@ -331,7 +331,7 @@ var _ = Describe("Metal3 Management Backend", func() {
 			})
 			m := newMetal3ManagementClient(bmh)
 
-			obs, err := m.ObserveNetworkHandoff(ctx, metal3TestNamespace+"/host-handoff-obs", "Progressing")
+			obs, err := m.ObserveNetworkHandoff(ctx, metal3TestNamespace+"/host-handoff-obs", "Progressing", "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(obs.Confirmed).To(BeFalse())
 
@@ -342,7 +342,7 @@ var _ = Describe("Metal3 Management Backend", func() {
 			updated.Status.PoweredOn = true
 			Expect(m.TestClient().Status().Update(ctx, updated)).To(Succeed())
 
-			obs, err = m.ObserveNetworkHandoff(ctx, metal3TestNamespace+"/host-handoff-obs", "Progressing")
+			obs, err = m.ObserveNetworkHandoff(ctx, metal3TestNamespace+"/host-handoff-obs", "Progressing", "")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(obs.Confirmed).To(BeTrue())
 			Expect(obs.Reason).To(Equal("Succeeded"))

@@ -3,6 +3,8 @@ package management
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 )
@@ -56,8 +58,9 @@ type Client interface {
 	// Ironic begins a power-off. Idempotent when a handoff is already pending.
 	RequestNetworkHandoff(ctx context.Context, hostID string) error
 	// ObserveNetworkHandoff advances or confirms a pending handoff. currentReason
-	// is the BMI condition reason (empty before the first request).
-	ObserveNetworkHandoff(ctx context.Context, hostID, currentReason string) (HandoffObservation, error)
+	// is the BMI condition reason. lastErrorFingerprint is the provider failure
+	// message fingerprint captured before the handoff request.
+	ObserveNetworkHandoff(ctx context.Context, hostID, currentReason, lastErrorFingerprint string) (HandoffObservation, error)
 	// ClearPendingNetworkHandoff prepares the host for network offboarding.
 	// Metal3 sets spec.online=false and removes any handoff annotation in one
 	// patch so cancellation cannot boot a host held off by the annotation.
@@ -66,6 +69,13 @@ type Client interface {
 }
 
 type NewClientFunc func(ctx context.Context, cfg *Config) (Client, error)
+
+// FailureMessageFingerprint returns a stable, non-reversible fingerprint for
+// comparing provider failure text across power-operation reconciles.
+func FailureMessageFingerprint(message string) string {
+	fingerprint := sha256.Sum256([]byte(message))
+	return hex.EncodeToString(fingerprint[:])
+}
 
 var newClientFuncs = make(map[string]NewClientFunc)
 

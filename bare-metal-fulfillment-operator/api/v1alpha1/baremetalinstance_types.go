@@ -336,6 +336,16 @@ type BareMetalInstanceStatus struct {
 	// DesiredConfigVersion is a hash of the spec, used to detect spec changes and control retry behavior.
 	// +kubebuilder:validation:Optional
 	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
+	// NetworkHandoffLastErrorFingerprint records the Ironic LastError value
+	// before the handoff power request, so a changed LastError can be attributed
+	// to the current operation rather than a previous one.
+	// +kubebuilder:validation:Optional
+	NetworkHandoffLastErrorFingerprint string `json:"networkHandoffLastErrorFingerprint,omitempty"`
+	// NetworkOffboardLastErrorFingerprint records the Ironic LastError value
+	// before the offboard power request, so a changed LastError can be attributed
+	// to the current operation rather than a previous one.
+	// +kubebuilder:validation:Optional
+	NetworkOffboardLastErrorFingerprint string `json:"networkOffboardLastErrorFingerprint,omitempty"`
 	// RunStrategy is the observed power state of the instance.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Enum=Always;Halted

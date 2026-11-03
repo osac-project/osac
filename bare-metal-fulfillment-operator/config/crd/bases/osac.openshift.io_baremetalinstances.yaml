@@ -387,6 +387,18 @@ spec:
                       type: string
                   type: object
                 type: array
+              networkHandoffLastErrorFingerprint:
+                description: |-
+                  NetworkHandoffLastErrorFingerprint records the Ironic LastError value
+                  before the handoff power request, so a changed LastError can be attributed
+                  to the current operation rather than a previous one.
+                type: string
+              networkOffboardLastErrorFingerprint:
+                description: |-
+                  NetworkOffboardLastErrorFingerprint records the Ironic LastError value
+                  before the offboard power request, so a changed LastError can be attributed
+                  to the current operation rather than a previous one.
+                type: string
               networkingJobs:
                 description: NetworkingJobs tracks the history of network attachment
                   provisioning/deprovisioning.

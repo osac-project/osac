@@ -114,7 +114,7 @@ type mockManagementClient struct {
 	triggerRestartFunc             func(ctx context.Context, hostID string) error
 	isRestartCompleteFunc          func(ctx context.Context, hostID string) (bool, error)
 	requestNetworkHandoffFunc      func(ctx context.Context, hostID string) error
-	observeNetworkHandoffFunc      func(ctx context.Context, hostID, currentReason string) (management.HandoffObservation, error)
+	observeNetworkHandoffFunc      func(ctx context.Context, hostID, currentReason, lastErrorFingerprint string) (management.HandoffObservation, error)
 	clearPendingNetworkHandoffFunc func(ctx context.Context, hostID string) error
 }
 
@@ -153,9 +153,11 @@ func (m *mockManagementClient) RequestNetworkHandoff(ctx context.Context, hostID
 	return nil
 }
 
-func (m *mockManagementClient) ObserveNetworkHandoff(ctx context.Context, hostID, currentReason string) (management.HandoffObservation, error) {
+func (m *mockManagementClient) ObserveNetworkHandoff(
+	ctx context.Context, hostID, currentReason, lastErrorFingerprint string,
+) (management.HandoffObservation, error) {
 	if m.observeNetworkHandoffFunc != nil {
-		return m.observeNetworkHandoffFunc(ctx, hostID, currentReason)
+		return m.observeNetworkHandoffFunc(ctx, hostID, currentReason, lastErrorFingerprint)
 	}
 	return management.HandoffObservation{Confirmed: true, Reason: "Succeeded", Message: "Host rebooted onto the tenant network"}, nil
 }
@@ -2139,7 +2141,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			handoffRequestCount++
 			return nil
 		}
-		mockMgmtClient.observeNetworkHandoffFunc = func(ctx context.Context, hostID, currentReason string) (management.HandoffObservation, error) {
+		mockMgmtClient.observeNetworkHandoffFunc = func(ctx context.Context, hostID, currentReason, lastErrorFingerprint string) (management.HandoffObservation, error) {
 			if handoffConfirmed {
 				return management.HandoffObservation{
 					Confirmed: true,
@@ -2198,6 +2200,31 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 	})
 
 	Describe("reconcileNetworkHandoffReboot", func() {
+		BeforeEach(func() {
+			bareMetalInstance.Status.NetworkHandoffLastErrorFingerprint = management.FailureMessageFingerprint("")
+		})
+
+		It("persists the Ironic LastError baseline before requesting the handoff", func() {
+			bareMetalInstance.Status.NetworkHandoffLastErrorFingerprint = ""
+			mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
+				return &management.PowerStatus{
+					State: management.PowerOn, FailureMessage: "previous Ironic failure",
+				}, nil
+			}
+
+			result, err := reconciler.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(5 * time.Second))
+			Expect(handoffRequestCount).To(BeZero())
+			Expect(bareMetalInstance.Status.NetworkHandoffLastErrorFingerprint).To(
+				Equal(management.FailureMessageFingerprint("previous Ironic failure")))
+			Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)).To(BeNil())
+
+			_, err = reconciler.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(handoffRequestCount).To(Equal(1))
+		})
+
 		It("skips reboot when NetworkingNamespace is empty", func() {
 			reconciler.NetworkingNamespace = ""
 
@@ -2466,9 +2493,11 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 				},
 			},
 		}
+		bareMetalInstance.Status.NetworkOffboardLastErrorFingerprint = management.FailureMessageFingerprint("")
 	})
 
 	It("powers off a running host and sets condition to Progressing", func() {
+		bareMetalInstance.Status.NetworkOffboardLastErrorFingerprint = management.FailureMessageFingerprint("stale Ironic error")
 		mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
 			return &management.PowerStatus{
 				State: management.PowerOn, IsTransitioning: false, FailureMessage: "stale Ironic error",
@@ -2487,7 +2516,44 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
 	})
 
+	It("persists the Ironic LastError baseline before requesting offboard power-off", func() {
+		bareMetalInstance.Status.NetworkOffboardLastErrorFingerprint = ""
+		mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
+			return &management.PowerStatus{State: management.PowerOn, FailureMessage: "previous Ironic failure"}, nil
+		}
+
+		result, err := reconciler.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(5 * time.Second))
+		Expect(setPowerCallCount).To(BeZero())
+		Expect(bareMetalInstance.Status.NetworkOffboardLastErrorFingerprint).To(
+			Equal(management.FailureMessageFingerprint("previous Ironic failure")))
+
+		_, err = reconciler.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(setPowerCallCount).To(Equal(1))
+	})
+
+	It("reports a changed Ironic LastError during offboard", func() {
+		bareMetalInstance.Status.NetworkOffboardLastErrorFingerprint = management.FailureMessageFingerprint("previous Ironic failure")
+		mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
+			return &management.PowerStatus{
+				State: management.PowerOn, FailureMessage: "BMC refused the offboard power-off",
+			}, nil
+		}
+
+		result, err := reconciler.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(5 * time.Second))
+		Expect(setPowerCallCount).To(BeZero())
+		cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete)
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonPowerOffFailed))
+		Expect(cond.Message).To(Equal("BMC refused the offboard power-off"))
+	})
+
 	It("completes for a stable-off host despite a stale power error", func() {
+		bareMetalInstance.Status.NetworkOffboardLastErrorFingerprint = management.FailureMessageFingerprint("stale Ironic error")
 		mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
 			return &management.PowerStatus{
 				State: management.PowerOff, FailureMessage: "stale Ironic error",
@@ -2547,7 +2613,9 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 		Expect(setPowerCallCount).To(Equal(0))
 
 		cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete)
-		Expect(cond).To(BeNil())
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
 	})
 
 	It("cancels a pending handoff before waiting on its power transition", func() {
@@ -2565,7 +2633,10 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(5 * time.Second))
 		Expect(calls).To(Equal([]string{"cancel-handoff", "get-power-state"}))
-		Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete)).To(BeNil())
+		cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete)
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
 	})
 
 	It("is a no-op when already complete", func() {
@@ -2670,7 +2741,7 @@ var _ = Describe("BareMetalInstance networking feature gate (OSAC_NETWORKING_NAM
 			handoffRequestCount++
 			return nil
 		}
-		mockMgmtClient.observeNetworkHandoffFunc = func(_ context.Context, _, _ string) (management.HandoffObservation, error) {
+		mockMgmtClient.observeNetworkHandoffFunc = func(_ context.Context, _, _, _ string) (management.HandoffObservation, error) {
 			return management.HandoffObservation{
 				Reason:  v1alpha1.HostConditionReasonProgressing,
 				Message: "Waiting for network-handoff reboot confirmation",
@@ -2698,6 +2769,7 @@ var _ = Describe("BareMetalInstance networking feature gate (OSAC_NETWORKING_NAM
 				},
 			},
 		}
+		bareMetalInstance.Status.NetworkHandoffLastErrorFingerprint = management.FailureMessageFingerprint("")
 	})
 
 	Describe("networking disabled (NetworkingNamespace empty)", func() {

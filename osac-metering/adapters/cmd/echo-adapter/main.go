@@ -16,6 +16,10 @@ in compliance with the License. You may obtain a copy of the License at
 // Events are logged to stdout and stored in a bounded ring buffer
 // queryable via GET /events and GET /events/count.
 //
+// Every HTTP request logs one line when the handler returns: method, path,
+// status, duration_ms, remote_addr, and client_gone. A missing line means
+// the request never reached this process.
+//
 // Usage:
 //
 //	export KAFKA_BROKERS="localhost:9092"
@@ -138,7 +142,7 @@ func main() {
 		mux.HandleFunc("GET /events/{id}", store.HandleEventByID)
 		httpServer := &http.Server{
 			Addr:              metricsAddr,
-			Handler:           mux,
+			Handler:           echo.RequestLogger(logger, mux),
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       10 * time.Second,
 			WriteTimeout:      10 * time.Second,

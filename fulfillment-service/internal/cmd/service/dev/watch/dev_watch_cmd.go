@@ -149,11 +149,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 		if err != nil {
 			return fmt.Errorf("stream failed: %w", err)
 		}
-		c.logger.InfoContext(
-			ctx,
-			"Received event",
-			slog.Any("event", response.Event),
-		)
+		c.logEvent(ctx, response.GetEvent())
 	}
 
 	// Wait for a signal:
@@ -163,6 +159,24 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	<-stop
 	c.logger.InfoContext(ctx, "Signal received, shutting down")
 	return nil
+}
+
+func (c *runnerContext) logEvent(ctx context.Context, event *publicv1.Event) {
+	payloadKind := "none"
+	if event != nil {
+		message := event.ProtoReflect()
+		payload := message.WhichOneof(message.Descriptor().Oneofs().ByName("payload"))
+		if payload != nil {
+			payloadKind = string(payload.Name())
+		}
+	}
+	c.logger.InfoContext(
+		ctx,
+		"Received event",
+		slog.String("event_id", event.GetId()),
+		slog.String("event_type", event.GetType().String()),
+		slog.String("payload_kind", payloadKind),
+	)
 }
 
 // watchUserAgent is the user agent string for the watch command.

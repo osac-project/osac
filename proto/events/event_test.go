@@ -11,6 +11,7 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
+// TestPublicEventPayloads verifies public payload identities and private resource exclusions.
 func TestPublicEventPayloads(t *testing.T) {
 	publicPayload := (&publicv1.Event{}).ProtoReflect().Descriptor().Oneofs().ByName("payload")
 	privatePayload := (&privatev1.Event{}).ProtoReflect().Descriptor().Oneofs().ByName("payload")
@@ -43,6 +44,7 @@ func TestPublicEventPayloads(t *testing.T) {
 	}
 }
 
+// TestPublicExternalIPEventRoundTrip verifies public ExternalIP event JSON serialization.
 func TestPublicExternalIPEventRoundTrip(t *testing.T) {
 	event := &publicv1.Event{}
 	err := protojson.Unmarshal([]byte(`{
@@ -72,6 +74,7 @@ func TestPublicExternalIPEventRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPublicExternalIPEventKeepsPrivateStatusFieldsHidden checks nested status privacy.
 func TestPublicExternalIPEventKeepsPrivateStatusFieldsHidden(t *testing.T) {
 	publicFields := (&publicv1.ExternalIPStatus{}).ProtoReflect().Descriptor().Fields()
 	privateFields := (&privatev1.ExternalIPStatus{}).ProtoReflect().Descriptor().Fields()
@@ -90,6 +93,7 @@ func TestPublicExternalIPEventKeepsPrivateStatusFieldsHidden(t *testing.T) {
 	}
 }
 
+// TestPublicEventKeepsSignalPrivate verifies the signal name stays private in descriptors and JSON.
 func TestPublicEventKeepsSignalPrivate(t *testing.T) {
 	name := protoreflect.Name("EVENT_TYPE_OBJECT_SIGNALED")
 	if privatev1.EventType(0).Descriptor().Values().ByName(name) == nil {

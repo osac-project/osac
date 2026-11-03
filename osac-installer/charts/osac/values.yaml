@@ -387,7 +387,7 @@ metering:
     repository: ghcr.io/osac-project/metering-service
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
     pullPolicy: Always
-  # Outside systems that read every tenant's usage events with their own
+  # Outside systems that read every tenant's heartbeat topics with their own
   # credentials. Each entry names one reader and no tenant; the reader name is
   # also its Kafka consumer group, where lag is reported. The grant covers the
   # osac.metering.heartbeat. topic prefix, so a new tenant needs no chart

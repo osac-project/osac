@@ -54,7 +54,7 @@ kafka:
 topics:
   retentionMs: "-1"
 
-# Readers: outside systems that read every tenant's usage events with their
+# Readers: outside systems that read every tenant's heartbeat topics with their
 # own credentials. Each entry names one reader and no tenant, and the chart
 # renders one KafkaUser with a read and describe ACL on the
 # osac.metering.heartbeat. topic prefix and a read ACL on a consumer group

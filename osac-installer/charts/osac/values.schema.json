@@ -1750,7 +1750,7 @@
         },
         "readers": {
           "type": "array",
-          "description": "Outside systems that read every tenant's usage events. Each entry names one reader and no tenant, and renders one Strimzi KafkaUser with a read and describe ACL on the osac.metering.heartbeat. topic prefix and a read ACL on a consumer group named after the reader. The prefix covers tenants created after the grant. Grant and revoke a reader with a helm upgrade; neither restarts metering. Set through values; the Enclave Wizard renders no control for this list, so operators add entries in their values file",
+          "description": "Outside systems that read every tenant's heartbeat topics. Each entry names one reader and no tenant, and renders one Strimzi KafkaUser with a read and describe ACL on the osac.metering.heartbeat. topic prefix and a read ACL on a consumer group named after the reader. The prefix covers tenants created after the grant. Grant and revoke a reader with a helm upgrade; neither restarts metering. Set through values; the Enclave Wizard renders no control for this list, so operators add entries in their values file",
           "default": [],
           "items": {
             "type": "object",

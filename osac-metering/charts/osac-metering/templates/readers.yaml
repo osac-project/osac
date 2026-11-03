@@ -1,6 +1,6 @@
 {{- /*
 One KafkaUser per entry in .Values.readers. A reader is an outside system
-that reads every tenant's usage events with its own credentials, granted and
+that reads every tenant's heartbeat topics with its own credentials, granted and
 revoked as chart values.
 
 The user reads the heartbeat topic prefix osac.metering.heartbeat. and one

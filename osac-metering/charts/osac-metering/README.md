@@ -9,7 +9,7 @@ protects it.
 See `values.yaml`. The notable groups:
 
 - `heartbeat.interval` — the round interval, default `60s`.
-- `readers` — outside systems allowed to read every tenant's usage events.
+- `readers` — outside systems allowed to read every tenant's heartbeat topics.
 - `echoAdapter.enabled`, `m360Adapter.enabled` — the provider adapters.
 - `database.connection` — the projected secret holding the database URL.
 

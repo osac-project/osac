@@ -38,9 +38,10 @@ page sizes are rejected before a public API call.
 accepts only the typed fields for the selected resource, requires canonical
 IPv4 CIDRs, and rejects edit-shaped input containing an existing resource ID
 with `unsupported_in_place` before any public mutation. Subnet and
-SecurityGroup creation checks the named parent VirtualNetwork first; a missing
-or inaccessible parent returns a named prerequisite error and creates no
-dependent resource. NetworkClass remains provider-managed and is never exposed
+SecurityGroup creation passes the named parent VirtualNetwork to the public
+Create call. A missing or inaccessible parent is rejected there and returns a
+named prerequisite error without creating a dependent resource. NetworkClass
+remains provider-managed and is never exposed
 as a tenant write. SecurityGroup creation accepts at most 100 rules in total
 across `ingress_rules` and `egress_rules`, with the same per-direction schema
 limit.

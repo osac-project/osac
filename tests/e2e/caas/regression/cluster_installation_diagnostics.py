@@ -144,7 +144,7 @@ def _post_install_diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _assert_post_install_healthy(diagnostics: dict[str, Any]) -> None:
+def _assert_post_install_healthy(diagnostics: dict[str, Any], expected_node_sets: set[str]) -> None:
     """Require the installed HyperShift cluster and guest operators to stay healthy."""
     assert diagnostics["cluster_state"] == "CLUSTER_STATE_READY", "OSAC Cluster became unhealthy after installation"
     assert diagnostics["order_phase"] == "Ready", "ClusterOrder became unhealthy after installation"
@@ -152,7 +152,9 @@ def _assert_post_install_healthy(diagnostics: dict[str, Any]) -> None:
     assert not diagnostics["hosted_degraded"], "HostedCluster became degraded after installation"
     assert not diagnostics["hosted_progressing"], "HostedCluster kept progressing after installation"
 
-    for node_set, pool in _mapping(diagnostics.get("node_pools", {})).items():
+    node_pools = _mapping(diagnostics.get("node_pools", {}))
+    assert set(node_pools) == expected_node_sets, "Expected NodePool NodeSets are missing"
+    for node_set, pool in node_pools.items():
         assert pool["version"] != "", f"{node_set} NodePool lost its version"
         assert pool["ready"], f"{node_set} NodePool became unhealthy"
         assert pool["all_machines_ready"], f"{node_set} NodePool machines became unhealthy"
@@ -182,10 +184,10 @@ def _log_diagnostics(
 
 def monitor_post_install_health(*, k8s: K8sClient, grpc: GRPCClient, refs: ClusterReferences) -> None:
     """Monitor the installed cluster for the configured stability window."""
-    started = time.monotonic()
     workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
         k8s=k8s, hosted_cluster_namespace=refs.namespace, hosted_cluster_name=refs.hc_name
     )
+    started = time.monotonic()
 
     with tempfile.NamedTemporaryFile(prefix="osac-post-install-", suffix=".kubeconfig") as kubeconfig_file:
         kubeconfig_file.write(workload_kubeconfig)
@@ -201,7 +203,7 @@ def monitor_post_install_health(*, k8s: K8sClient, grpc: GRPCClient, refs: Clust
                 _log_diagnostics(
                     component="post-install health", data=final_data, elapsed_seconds=time.monotonic() - started
                 )
-                _assert_post_install_healthy(final_data)
+                _assert_post_install_healthy(final_data, refs.expected_node_sets)
             except AssertionError:
                 if final_data is not None:
                     _log_diagnostics(

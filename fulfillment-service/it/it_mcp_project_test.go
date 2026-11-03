@@ -58,6 +58,14 @@ var _ = Describe("MCP Project administration", func() {
 		Expect(userResponse.GetSize()).To(Equal(int32(1)))
 		userID := userResponse.GetItems()[0].GetId()
 
+		Eventually(func(g Gomega) {
+			response, err := projects.Get(ctx, publicv1.ProjectsGetRequest_builder{Id: created.ID}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(
+				publicv1.ProjectState_PROJECT_STATE_ACTIVE,
+			))
+		}, time.Minute, 100*time.Millisecond).Should(Succeed())
+
 		initial, err := projects.Get(ctx, publicv1.ProjectsGetRequest_builder{Id: created.ID}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		initialProject := initial.GetObject()

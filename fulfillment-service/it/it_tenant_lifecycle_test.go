@@ -906,7 +906,7 @@ var _ = Describe("Tenant authorization boundaries", func() {
 		By("Verifying 'organization' claim contains the org name")
 		orgClaim, ok := claims["organization"]
 		Expect(ok).To(BeTrue(), "JWT should contain 'organization' claim")
-		orgNames, err := ExtractOrganizationNames(orgClaim)
+		orgNames, err := auth.OrganizationNames(orgClaim)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(orgNames).To(ContainElement(name))
 

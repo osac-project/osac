@@ -481,18 +481,26 @@ def main() -> None:
             )
 
         if params["action"] == "mark_network_attachment_ready":
-            entry = store.mark_network_attachment_ready(params["uid"], params["tenant_id"])
-            module.exit_json(changed=entry["phase"] == "ready", attachment=entry)
+            entry, changed = store.mark_network_attachment_ready(
+                params["uid"], params["tenant_id"], check_mode=module.check_mode
+            )
+            module.exit_json(changed=changed, attachment=entry or {})
 
         if params["action"] == "begin_delete_network_attachment":
             entry = store.begin_delete_network_attachment(
-                params["uid"], params["tenant_id"], params["virtual_network_uid"]
+                params["uid"],
+                params["tenant_id"],
+                params["virtual_network_uid"],
+                check_mode=module.check_mode,
             )
             module.exit_json(changed=entry is not None, found=entry is not None, attachment=entry or {})
 
         if params["action"] == "finish_delete_network_attachment":
             entry, state_changed, dhcp_changed = store.finish_delete_network_attachment(
-                params["uid"], params["tenant_id"], params.get("dhcp_supervisor")
+                params["uid"],
+                params["tenant_id"],
+                params.get("dhcp_supervisor"),
+                check_mode=module.check_mode,
             )
             module.exit_json(changed=state_changed or dhcp_changed, found=entry is not None)
 

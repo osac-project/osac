@@ -210,7 +210,7 @@ def prepare_network_attachment_state(tmp_path, monkeypatch, *, ready=True):
         "systemd",
     )
     if ready:
-        attachment = store.mark_network_attachment_ready(
+        attachment, _ = store.mark_network_attachment_ready(
             NETWORK_ATTACHMENT_ID, TENANT_ONE
         )
     return store, attachment
@@ -1807,6 +1807,81 @@ def test_empty_physical_ipam_has_no_dhcp_scope_and_rejects_attachment(
         assert connection.execute("SELECT count(*) FROM network_attachment_ports").fetchone() == (0,)
 
 
+def test_network_attachment_check_mode_does_not_change_state_or_reconcile_dhcp(
+    tmp_path, monkeypatch
+):
+    store, attachment = prepare_network_attachment_state(
+        tmp_path, monkeypatch, ready=False
+    )
+    database_before = store.path.read_bytes()
+    monkeypatch.setattr(
+        agentless_net_state,
+        "preflight_dhcp_supervisor",
+        lambda *_args, **_kwargs: pytest.fail("check mode must not preflight DHCP"),
+    )
+    monkeypatch.setattr(
+        agentless_net_state,
+        "reconcile_virtual_network_dhcp",
+        lambda *_args, **_kwargs: pytest.fail("check mode must not reconcile DHCP"),
+    )
+
+    planned_ready, changed = store.mark_network_attachment_ready(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE, check_mode=True
+    )
+    assert planned_ready["phase"] == "ready"
+    assert changed is True
+    assert store.get_network_attachment(NETWORK_ATTACHMENT_ID, TENANT_ONE) == attachment
+
+    planned_delete = store.begin_delete_network_attachment(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE, UID_ONE, check_mode=True
+    )
+    assert planned_delete["phase"] == "deleting"
+    assert store.get_network_attachment(NETWORK_ATTACHMENT_ID, TENANT_ONE) == attachment
+
+    planned_cleanup, state_changed, dhcp_changed = store.finish_delete_network_attachment(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE, check_mode=True
+    )
+    assert planned_cleanup["phase"] == "deleting"
+    assert state_changed is True
+    assert dhcp_changed is False
+    assert store.get_network_attachment(NETWORK_ATTACHMENT_ID, TENANT_ONE) == attachment
+    assert store.path.read_bytes() == database_before
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM deleted_resources WHERE kind = 'NetworkAttachment'"
+        ).fetchone() == (0,)
+
+
+def test_mark_network_attachment_ready_reports_only_phase_transition(tmp_path, monkeypatch):
+    store, _ = prepare_network_attachment_state(tmp_path, monkeypatch, ready=False)
+
+    ready, changed = store.mark_network_attachment_ready(NETWORK_ATTACHMENT_ID, TENANT_ONE)
+    retried, changed_again = store.mark_network_attachment_ready(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE
+    )
+
+    assert ready["phase"] == "ready"
+    assert retried == ready
+    assert changed is True
+    assert changed_again is False
+
+
+def test_mark_network_attachment_ready_check_mode_without_reservation_is_noop(tmp_path):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    subnet, _ = reserve_subnet(store, uid=UID_TWO, cidr="10.0.1.0/24")
+    mark_subnet_ready(store, subnet)
+    database_before = store.path.read_bytes()
+
+    entry, changed = store.mark_network_attachment_ready(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE, check_mode=True
+    )
+
+    assert entry is None
+    assert changed is False
+    assert store.path.read_bytes() == database_before
+
+
 def test_network_attachment_delete_wins_and_retains_claims_until_cleanup(
     tmp_path, monkeypatch
 ):
@@ -3269,6 +3344,85 @@ def test_get_network_attachment_module_returns_the_saved_reservation(monkeypatch
         "attachment": saved,
     }
     module_object.fail_json.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("action", "method", "result", "expected", "expected_call"),
+    [
+        (
+            "mark_network_attachment_ready",
+            "mark_network_attachment_ready",
+            ({"uid": NETWORK_ATTACHMENT_ID, "phase": "ready"}, True),
+            {
+                "changed": True,
+                "attachment": {"uid": NETWORK_ATTACHMENT_ID, "phase": "ready"},
+            },
+            (NETWORK_ATTACHMENT_ID, TENANT_ONE),
+        ),
+        (
+            "mark_network_attachment_ready",
+            "mark_network_attachment_ready",
+            (None, False),
+            {"changed": False, "attachment": {}},
+            (NETWORK_ATTACHMENT_ID, TENANT_ONE),
+        ),
+        (
+            "begin_delete_network_attachment",
+            "begin_delete_network_attachment",
+            {"uid": NETWORK_ATTACHMENT_ID, "phase": "deleting"},
+            {
+                "changed": True,
+                "found": True,
+                "attachment": {"uid": NETWORK_ATTACHMENT_ID, "phase": "deleting"},
+            },
+            (NETWORK_ATTACHMENT_ID, TENANT_ONE, UID_ONE),
+        ),
+        (
+            "finish_delete_network_attachment",
+            "finish_delete_network_attachment",
+            ({"uid": NETWORK_ATTACHMENT_ID, "phase": "deleting"}, True, False),
+            {"changed": True, "found": True},
+            (NETWORK_ATTACHMENT_ID, TENANT_ONE, None),
+        ),
+    ],
+)
+def test_network_attachment_write_actions_pass_check_mode_to_store(
+    action, method, result, expected, expected_call, monkeypatch
+):
+    module = importlib.import_module(
+        "ansible_collections.osac.templates.plugins.modules.agentless_net_state"
+    )
+
+    class ModuleExit(Exception):
+        pass
+
+    calls = {}
+    module_object = SimpleNamespace(
+        params={
+            "action": action,
+            "state_file": "/unused/state.sqlite3",
+            "uid": NETWORK_ATTACHMENT_ID,
+            "tenant_id": TENANT_ONE,
+            "virtual_network_uid": UID_ONE,
+            "dhcp_supervisor": None,
+        },
+        check_mode=True,
+        exit_json=lambda **kwargs: (_ for _ in ()).throw(ModuleExit(kwargs)),
+        fail_json=lambda **kwargs: pytest.fail(f"unexpected module error: {kwargs}"),
+    )
+    monkeypatch.setattr(
+        module, "AnsibleModule", lambda **kwargs: calls.update(kwargs) or module_object
+    )
+    store = Mock()
+    getattr(store, method).return_value = result
+    monkeypatch.setattr(module, "StateStore", lambda _path: store)
+
+    with pytest.raises(ModuleExit) as exited:
+        module.main()
+
+    assert exited.value.args[0] == expected
+    getattr(store, method).assert_called_once_with(*expected_call, check_mode=True)
+    assert calls["supports_check_mode"] is True
 
 
 @pytest.mark.parametrize(

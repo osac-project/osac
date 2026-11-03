@@ -2136,16 +2136,27 @@ class StateStore:
             return entry, changed, dhcp_changed
 
     def mark_network_attachment_ready(
-        self, uid: str, tenant_id: str
-    ) -> dict[str, Any]:
+        self, uid: str, tenant_id: str, *, check_mode: bool = False
+    ) -> tuple[dict[str, Any] | None, bool]:
         with self._locked_database(create=False, read_only=True) as connection:
             if connection is None:
+                if check_mode:
+                    return None, False
                 raise StateError("NetworkAttachment provider state is missing")
             entry = self._network_attachment_for_uid(connection, uid)
             if entry is None:
+                if check_mode:
+                    return None, False
                 raise StateError("NetworkAttachment provider state is missing")
             if entry["tenant_id"] != tenant_id:
                 raise StateError("NetworkAttachment tenant does not match saved state")
+            if check_mode:
+                self._reject_deleted(connection, "NetworkAttachment", uid, tenant_id)
+                self._validate_network_attachment_dependencies(
+                    connection, entry, require_ready=True
+                )
+                ready = {**entry, "phase": "ready"}
+                return ready, entry["phase"] != "ready"
             virtual_network_uid = entry["virtual_network_uid"]
         with self._resource_locked(virtual_network_uid):
             with self._locked_database(create=False) as connection:
@@ -2161,6 +2172,9 @@ class StateStore:
                         connection, current, require_ready=True
                     )
                     del parent, subnet
+                    if current["phase"] == "ready":
+                        connection.rollback()
+                        return current, False
                     ready = {**current, "phase": "ready"}
                     row = self._row_for_network_attachment_entry(ready)
                     connection.execute(
@@ -2170,19 +2184,39 @@ class StateStore:
                         (*row[1:], row[0]),
                     )
                     connection.commit()
-                    return ready
+                    return ready, True
                 except BaseException:
                     if connection.in_transaction:
                         connection.rollback()
                     raise
 
     def begin_delete_network_attachment(
-        self, uid: str, tenant_id: str, virtual_network_uid: str
+        self,
+        uid: str,
+        tenant_id: str,
+        virtual_network_uid: str,
+        *,
+        check_mode: bool = False,
     ) -> dict[str, Any] | None:
         if not _is_canonical_uuid(uid) or not _is_canonical_uuid(virtual_network_uid):
             raise StateError("NetworkAttachment and VirtualNetwork API IDs must be canonical UUIDs")
         if not _is_valid_tenant_id(tenant_id):
             raise StateError("NetworkAttachment tenant is required")
+        if check_mode:
+            with self._locked_database(create=False, read_only=True) as connection:
+                if connection is None:
+                    return None
+                current = self._network_attachment_for_uid(connection, uid)
+                if current is None:
+                    return None
+                if (
+                    current["tenant_id"] != tenant_id
+                    or current["virtual_network_uid"] != virtual_network_uid
+                ):
+                    raise StateError(
+                        "NetworkAttachment delete identity does not match saved state"
+                    )
+                return {**current, "phase": "deleting"}
         with self._resource_locked(virtual_network_uid):
             with self._locked_database(create=True) as connection:
                 connection.execute("BEGIN IMMEDIATE")
@@ -2210,7 +2244,12 @@ class StateStore:
                     raise
 
     def finish_delete_network_attachment(
-        self, uid: str, tenant_id: str, dhcp_supervisor: str | None = None
+        self,
+        uid: str,
+        tenant_id: str,
+        dhcp_supervisor: str | None = None,
+        *,
+        check_mode: bool = False,
     ) -> tuple[dict[str, Any] | None, bool, bool]:
         with self._locked_database(create=False, read_only=True) as connection:
             if connection is None:
@@ -2221,14 +2260,21 @@ class StateStore:
             if entry["tenant_id"] != tenant_id:
                 raise StateError("NetworkAttachment tenant does not match saved state")
             virtual_network_uid = entry["virtual_network_uid"]
-        with self._resource_locked(virtual_network_uid):
+        operation_lock = (
+            contextlib.nullcontext()
+            if check_mode
+            else self._resource_locked(virtual_network_uid)
+        )
+        with operation_lock:
             with self._locked_database(create=False, read_only=True) as connection:
                 if connection is None:
                     return None, False, False
                 current = self._network_attachment_for_uid(connection, uid)
                 if current is None:
                     return None, False, False
-                if current["tenant_id"] != tenant_id or current["phase"] != "deleting":
+                if current["tenant_id"] != tenant_id:
+                    raise StateError("NetworkAttachment tenant does not match saved state")
+                if not check_mode and current["phase"] != "deleting":
                     raise StateError("NetworkAttachment is not ready for provider cleanup")
                 parent, subnet = self._validate_network_attachment_dependencies(
                     connection, current, require_ready=False
@@ -2250,6 +2296,8 @@ class StateStore:
                     )
                     if destination.get("address") == current["address"]:
                         raise StateError("BareMetalInstance still has an ExternalIPAttachment")
+            if check_mode:
+                return {**current, "phase": "deleting"}, True, False
             if dhcp_supervisor is None:
                 try:
                     dhcp_supervisor = preflight_dhcp_supervisor(virtual_network_uid)

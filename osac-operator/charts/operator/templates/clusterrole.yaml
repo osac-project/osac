@@ -9,10 +9,20 @@ rules:
   - ""
   resources:
   - namespaces
-  - serviceaccounts
   verbs:
   - create
   - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
   - get
   - list
   - patch
@@ -252,12 +262,19 @@ rules:
   - rolebindings
   verbs:
   - create
-  - delete
   - get
   - list
   - patch
   - update
   - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterroles
+  resourceNames:
+  - admin
+  verbs:
+  - bind
 - apiGroups:
   - storage.k8s.io
   resources:

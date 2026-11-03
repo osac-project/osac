@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import secrets
 
 import pytest
 
@@ -34,6 +36,39 @@ def test_get_json_supports_an_explicit_namespace(monkeypatch: pytest.MonkeyPatch
             "order",
             "-n",
             "osac-order",
+            "-o",
+            "json",
+        )
+    ]
+
+
+def test_get_secret_value_reads_the_explicit_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, ...]] = []
+    password = secrets.token_urlsafe(32)
+    encoded = base64.b64encode(password.encode("utf-8")).decode("ascii")
+
+    def fake_run(*args: str, **_kwargs: object) -> str:
+        calls.append(args)
+        return json.dumps({"data": {"admin-password": encoded}})
+
+    monkeypatch.setattr(k8s_client, "run", fake_run)
+
+    result = K8sClient(namespace="osac-devel").get_secret_value(
+        name="keycloak-admin-credentials", key="admin-password", namespace="keycloak"
+    )
+
+    if result != password:
+        pytest.fail("Secret value did not round-trip", pytrace=False)
+    assert calls == [
+        (
+            "kubectl",
+            "--as",
+            "system:admin",
+            "get",
+            "secret",
+            "keycloak-admin-credentials",
+            "-n",
+            "keycloak",
             "-o",
             "json",
         )

@@ -64,7 +64,10 @@ def configured_mce(chart: pathlib.Path, overlay: pathlib.Path | None = None) -> 
 
 
 def render(release: str, chart: pathlib.Path, *args: str) -> list[dict[str, Any]]:
-    command = [os.environ.get("HELM_BIN", "helm"), "template", release, str(chart), *args]
+    command = [os.environ.get("HELM_BIN", "helm"), "template", release, str(chart)]
+    if chart.name == "osac-infra":
+        command.extend(["--set", "keycloak.devFixtures.enabled=true"])
+    command.extend(args)
     result = subprocess.run(command, check=False, capture_output=True, text=True)
     if result.returncode:
         raise RuntimeError(f"Helm render failed: {' '.join(command)}\n{result.stderr}")

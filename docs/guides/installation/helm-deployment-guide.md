@@ -422,9 +422,9 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `kafka.metadataVersion` | Kafka metadata version. | `4.2-IV0` |
 | `keycloak.enabled` | Deploys the bundled Keycloak and the `osac` realm in the `keycloak` namespace. | `true` |
 | `keycloak.adminUsername` | Keycloak bootstrap admin user name. Change this value. | `admin` |
-| `keycloak.adminPassword` | Keycloak bootstrap admin password. Change this value. | `admin` |
-| `keycloak.defaultUserPassword` | Password seeded for the built-in realm users. | `foobar` |
-| `keycloak.devFixtures.enabled` | Seeds fixed, known passwords for the built-in test users. Must be `false` outside of evaluation. | `false` |
+| `keycloak.adminPassword` | Required when dev fixtures are disabled. With dev fixtures enabled, an omitted password is randomly generated and retained from the existing Secret on upgrade. | Required outside dev/CI |
+| `keycloak.defaultUserPassword` | Optional override for the built-in test-user password; when omitted with dev fixtures enabled, it is randomly generated and retained from the existing Secret on upgrade. | Generated for dev fixtures |
+| `keycloak.devFixtures.enabled` | Seeds built-in test identities with random credentials. Must be `false` outside of evaluation. | `false` |
 | `keycloak.route.hostname` | External route host name for Keycloak. The installation sets it. | `""` |
 | `keycloak.route.publicIngress` | Changes the Keycloak route from `passthrough` to `reencrypt` for clusters with publicly trusted ingress certificates. See [Infrastructure Configuration](#infrastructure-configuration). | `false` |
 | `keycloak.realmOverwrite` | Re-imports the realm definition on upgrade. | `true` |
@@ -437,6 +437,14 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `bundledVault.enabled` | Deploys an in-cluster OpenBao secret store for development and evaluation. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
 | `bundledVault.podSecurityContext` | Pod-level `securityContext` for the OpenBao deployment. Defaults to `{runAsNonRoot: true}` with no hardcoded UID so OpenShift's restricted-v2 SCC can allocate from the namespace range. Override with a fixed UID (e.g. `runAsUser: 100`) on platforms that require one. | `{runAsNonRoot: true}` |
 | `cliImage` | The `oc` image that the chart hook jobs use. | `origin-cli:4.20.0` |
+
+The `osac-infra` chart fails closed when Keycloak is enabled without an admin
+password and dev fixtures are disabled. Kind and named CI profiles enable dev
+fixtures, which generate random credentials on first install and reuse the
+`keycloak/keycloak-admin-credentials` Secret during upgrades. For production,
+keep the admin password in a protected local overlay or provide a password file
+with `KEYCLOAK_HELM_ARGS`; do not put real passwords in tracked profile values.
+A dry-run render includes the resulting Secret and must be handled as sensitive.
 
 ## EVPN host networking (VMaaS)
 

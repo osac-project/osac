@@ -1042,7 +1042,50 @@ fi
                 self.assertFalse(self.archive.exists())
                 self.assertFalse(any("upgrade --install" in cmd for cmd in self.commands()))
 
-    def test_installer_helm_apply_flags_match_each_release(self):
+    def test_keycloak_passwords_use_profile_generation_or_explicit_input(self) -> None:
+        installer = self.prepare_helm_dependencies()
+        self.write_command("oc", 'echo 4.20.1')
+        cases = [
+            ("kind", "dev", "values/dev/kind-infra.yaml", None),
+            ("kind", "dev-full", "values/dev/kind-infra.yaml", None),
+            ("openshift", "caas-ci", "values/caas-ci/infra.yaml", None),
+            (
+                "openshift",
+                "dev",
+                "values/dev/infra.yaml",
+                "--set-file keycloak.adminPassword=/secure/keycloak-admin-password",
+            ),
+        ]
+        for platform, profile, infra_values, keycloak_args in cases:
+            with self.subTest(platform=platform, profile=profile):
+                command = [
+                    "make",
+                    "--no-print-directory",
+                    "--dry-run",
+                    "-C",
+                    str(installer),
+                    "install-infra",
+                    f"PLATFORM={platform}",
+                    f"PROFILE={profile}",
+                    "NS=osac",
+                    "CONTAINER_TOOL=podman",
+                ]
+                if keycloak_args:
+                    command.append(f"KEYCLOAK_HELM_ARGS={keycloak_args}")
+                result = subprocess.run(
+                    command,
+                    env=self.env,
+                    text=True,
+                    capture_output=True,
+                    timeout=15,
+                )
+                self.assert_success(result)
+                self.assertIn(infra_values, result.stdout)
+                self.assertNotIn("keycloak-ci-fixtures.yaml", result.stdout)
+                if keycloak_args:
+                    self.assertIn(keycloak_args, result.stdout)
+
+    def test_installer_helm_apply_flags_match_each_release(self) -> None:
         for version in ("v3.19.0", "v4.2.2"):
             self.write_command("helm", f"echo {version}")
             for target, release in (("install-devstack", "osac-devstack"), ("install-osac", "osac")):
@@ -1055,8 +1098,11 @@ fi
                     )
                     self.assert_success(result)
                     command_text = result.stdout.replace("\\\n", " ")
-                    commands = [shlex.split("helm upgrade --install " + line)
-                                for line in command_text.split("helm upgrade --install ")[1:]]
+                    commands = []
+                    for line in command_text.splitlines():
+                        marker = "helm upgrade --install "
+                        if marker in line:
+                            commands.append(shlex.split(line[line.index(marker) :]))
                     self.assertEqual(len(commands), 1, result.stdout)
                     args = commands[0]
                     self.assertEqual(args[3], release)

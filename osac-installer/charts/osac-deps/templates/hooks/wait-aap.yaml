@@ -69,6 +69,8 @@ spec:
       labels:
         {{- include "osac-deps.hookLabels" . | nindent 8 }}
     spec:
+      securityContext:
+        {{- toYaml .Values.cliJobPodSecurityContext | nindent 8 }}
       serviceAccountName: osac-deps-wait-aap
       restartPolicy: OnFailure
       volumes:

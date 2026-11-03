@@ -1,4 +1,33 @@
 {{- if .Values.keycloak.enabled }}
+{{- $existingCredentials := lookup "v1" "Secret" "keycloak" "keycloak-admin-credentials" -}}
+{{- $existingCredentialData := dict -}}
+{{- if $existingCredentials -}}
+  {{- $existingCredentialData = (get $existingCredentials "data" | default (dict)) -}}
+{{- end -}}
+{{- $adminPassword := .Values.keycloak.adminPassword -}}
+{{- if not $adminPassword -}}
+  {{- if .Values.keycloak.devFixtures.enabled -}}
+    {{- $storedAdminPassword := (get $existingCredentialData "admin-password" | default "") -}}
+    {{- if $storedAdminPassword -}}
+      {{- $adminPassword = ($storedAdminPassword | b64dec) -}}
+    {{- else -}}
+      {{- $adminPassword = randAlphaNum 32 -}}
+    {{- end -}}
+  {{- else -}}
+    {{- fail "keycloak.adminPassword is required when keycloak.enabled is true" -}}
+  {{- end -}}
+{{- end -}}
+{{- $defaultUserPassword := .Values.keycloak.defaultUserPassword -}}
+{{- if .Values.keycloak.devFixtures.enabled -}}
+  {{- if not $defaultUserPassword -}}
+    {{- $storedDefaultUserPassword := (get $existingCredentialData "default-user-password" | default "") -}}
+    {{- if $storedDefaultUserPassword -}}
+      {{- $defaultUserPassword = ($storedDefaultUserPassword | b64dec) -}}
+    {{- else -}}
+      {{- $defaultUserPassword = randAlphaNum 32 -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -74,8 +103,15 @@ rules:
   - ""
   resources:
   - secrets
+  resourceNames:
+  - keycloak-database-password
   verbs:
   - get
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
   - create
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -160,8 +196,10 @@ metadata:
 type: Opaque
 stringData:
   admin-username: {{ .Values.keycloak.adminUsername | quote }}
-  admin-password: {{ .Values.keycloak.adminPassword | quote }}
-  default-user-password: {{ .Values.keycloak.defaultUserPassword | quote }}
+  admin-password: {{ required "keycloak.adminPassword is required when keycloak.enabled is true" $adminPassword | quote }}
+  {{ if .Values.keycloak.devFixtures.enabled }}
+  default-user-password: {{ required "keycloak.defaultUserPassword is required when keycloak.devFixtures.enabled is true" $defaultUserPassword | quote }}
+  {{ end }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -292,6 +330,8 @@ spec:
         app: keycloak-database
     spec:
       serviceAccountName: keycloak-database
+      securityContext:
+        {{- include "osac-infra.keycloakDatabasePodSecurityContext" . | nindent 8 }}
       volumes:
       - name: server-cert
         secret:
@@ -306,9 +346,34 @@ spec:
       - name: data
         persistentVolumeClaim:
           claimName: keycloak-database
+      - name: postgres-run
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
       initContainers:
       - name: password-generator
         image: {{ .Values.cliImage }}
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+          {{- with .Values.cliJobPodSecurityContext }}
+          {{- with .runAsUser }}
+          runAsUser: {{ . }}
+          {{- end }}
+          {{- end }}
+        env:
+        - name: HOME
+          value: /tmp
+        - name: TMPDIR
+          value: /tmp
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
         command:
         - /bin/bash
         - -c
@@ -324,6 +389,14 @@ spec:
       - name: server
         image: {{ .Values.keycloak.images.postgres }}
         imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         env:
         - name: POSTGRESQL_USER
           value: keycloak
@@ -337,6 +410,10 @@ spec:
         volumeMounts:
         - name: data
           mountPath: /var/lib/pgsql/data
+        - name: postgres-run
+          mountPath: /var/run/postgresql
+        - name: tmp
+          mountPath: /tmp
         - name: server-cert
           mountPath: /secrets/cert
         - name: server-config
@@ -366,11 +443,22 @@ spec:
         app: keycloak-service
     spec:
       serviceAccountName: keycloak-service
+      securityContext:
+        {{- include "osac-infra.cliJobPodSecurityContext" . | nindent 8 }}
       volumes:
       - name: realm-raw
         configMap:
           name: keycloak-realm
       - name: realm
+        emptyDir: {}
+      - name: keycloak-data
+        emptyDir: {}
+      # Keycloak's build-time DB and feature options require Quarkus
+      # augmentation. Seed this volume from the image, build it in an init
+      # container, then run the server with --optimized and a read-only root.
+      - name: keycloak-quarkus
+        emptyDir: {}
+      - name: tmp
         emptyDir: {}
       - name: scripts
         configMap:
@@ -391,9 +479,72 @@ spec:
               path: ca-bundle.pem
       {{- end }}
       initContainers:
+      - name: seed-keycloak-quarkus
+        image: {{ .Values.keycloak.images.keycloak }}
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        command:
+        - /bin/sh
+        - -ec
+        - cp -R /opt/keycloak/lib/quarkus/. /keycloak-quarkus/
+        volumeMounts:
+        - name: keycloak-quarkus
+          mountPath: /keycloak-quarkus
+      - name: build-keycloak-quarkus
+        image: {{ .Values.keycloak.images.keycloak }}
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: KC_DB
+          value: postgres
+        {{- if .Values.keycloak.devFixtures.enabled }}
+        - name: KC_FEATURES
+          value: resource-indicators
+        {{- end }}
+        - name: HOME
+          value: /tmp
+        - name: TMPDIR
+          value: /tmp
+        {{- range .Values.keycloak.extraEnv }}
+        - name: {{ .name | quote }}
+          value: {{ .value | quote }}
+        {{- end }}
+        command: ["/opt/keycloak/bin/kc.sh", "build"]
+        volumeMounts:
+        - name: keycloak-quarkus
+          mountPath: /opt/keycloak/lib/quarkus
+        - name: keycloak-data
+          mountPath: /opt/keycloak/data
+        - name: tmp
+          mountPath: /tmp
       - name: wait-for-database
         image: {{ .Values.keycloak.images.postgres }}
         imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
         command:
         - /bin/bash
         - -c
@@ -405,6 +556,14 @@ spec:
       - name: resolve-realm-secrets
         image: {{ .Values.cliImage }}
         imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         command: ["/bin/bash", "/scripts/resolve-realm-secrets.sh"]
         env:
         - name: KEYCLOAK_NAMESPACE
@@ -413,6 +572,10 @@ spec:
           value: /realm-raw/realm.json
         - name: REALM_OUTPUT_PATH
           value: /realm/realm.json
+        - name: HOME
+          value: /tmp
+        - name: TMPDIR
+          value: /tmp
         - name: OSAC_UI_URL
           value: {{ .Values.keycloak.uiUrl | quote }}
         - name: REALM_ADMIN_USERNAME
@@ -434,11 +597,28 @@ spec:
           readOnly: true
         - name: realm
           mountPath: /realm
+        - name: tmp
+          mountPath: /tmp
       containers:
       - name: keycloak
         image: {{ .Values.keycloak.images.keycloak }}
         imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         volumeMounts:
+        - name: keycloak-data
+          mountPath: /opt/keycloak/data
+        - name: keycloak-quarkus
+          mountPath: /opt/keycloak/lib/quarkus
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
         - name: realm
           mountPath: /opt/keycloak/data/import
           readOnly: true
@@ -502,6 +682,7 @@ spec:
         {{- end }}
         args:
         - start
+        - --optimized
         - --import-realm
         ports:
         - name: https
@@ -576,10 +757,10 @@ data:
     #!/bin/bash
     set -euo pipefail
 
+    # keycloak-tls-cert is issued by default-ca with the "keycloak" DNS SAN.
+    # Trust only its public CA certificate; never disable TLS verification.
     KEYCLOAK_CA_FILE=/etc/keycloak/ca/ca.crt
-    keycloak_curl() {
-      curl --cacert "${KEYCLOAK_CA_FILE}" "$@"
-    }
+    keycloak_curl() { curl --cacert "${KEYCLOAK_CA_FILE}" "$@"; }
 
     echo "Waiting for Keycloak to be ready..."
     for i in $(seq 1 120); do
@@ -843,9 +1024,19 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      securityContext:
+        {{- include "osac-infra.cliJobPodSecurityContext" . | nindent 8 }}
       containers:
       - name: set-passwords
         image: {{ .Values.cliImage }}
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         command:
         - /bin/bash
         - /scripts/set-passwords.sh
@@ -881,12 +1072,6 @@ spec:
           limits:
             cpu: 200m
             memory: 256Mi
-        securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          capabilities:
-            drop:
-            - "ALL"
         volumeMounts:
         - name: scripts
           mountPath: /scripts
@@ -909,6 +1094,7 @@ spec:
       - name: keycloak-ca
         secret:
           secretName: keycloak-tls-cert
+          # Mount only the public CA; the Job does not need the TLS private key.
           items:
           - key: ca.crt
             path: ca.crt

@@ -112,7 +112,7 @@ spec:
               mountPath: /csi/osac
             - name: kubelet-dir
               mountPath: /var/lib/kubelet
-              mountPropagation: Bidirectional
+              readOnly: true
             - name: lvms-socket-dir
               mountPath: {{ .Values.node.lvmsNodeSocketDir }}
               readOnly: true
@@ -129,7 +129,16 @@ spec:
           resources:
             {{- toYaml .Values.node.resources | nindent 12 }}
           securityContext:
-            privileged: {{ .Values.node.privileged }}
+            # This container only proxies CSI calls to vendor sockets; the
+            # vendor node plugins own mount operations and privilege needs.
+            # The kubelet plugin directory is a hostPath and does not receive
+            # fsGroup ownership changes, so the proxy needs UID 0 to create
+            # csi.sock there. It remains unprivileged with no capabilities.
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
             runAsUser: 0
 
         - name: csi-node-driver-registrar

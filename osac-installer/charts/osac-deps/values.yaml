@@ -1,5 +1,10 @@
 cliImage: quay.io/openshift/origin-cli:4.20.0
 
+# origin-cli has a root image default. OpenShift's restricted SCC provides an
+# arbitrary UID; Kind profiles supply their compatible numeric UID override.
+cliJobPodSecurityContext:
+  runAsNonRoot: true
+
 # OLM CatalogSource for operator Subscriptions.
 # Override these when using a mirrored catalog in disconnected environments.
 catalogSource: redhat-operators

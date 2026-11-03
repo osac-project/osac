@@ -113,6 +113,7 @@ const BareMetalCatalogReviewStep = ({ item }: BareMetalCatalogReviewStepProps) =
           />
         )}
         <CatalogReviewRow label={t('Name')} value={displayValue(values.metadata.name)} />
+        <CatalogReviewRow label={t('Description')} value={displayValue(values.description)} />
         <CatalogReviewRow
           label={t('Provisioning template')}
           value={displayValue(values.template.name || '')}

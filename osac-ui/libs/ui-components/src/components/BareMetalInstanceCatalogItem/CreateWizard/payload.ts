@@ -54,6 +54,7 @@ export const buildBareMetalCatalogItemCreatePayload = (
   values: BareMetalCatalogItemValues,
 ): MessageInitShape<typeof BareMetalInstanceCatalogItemSchema> => ({
   metadata: catalogGeneralItemPayload(values),
+  description: values.description,
   template: values.template,
   published: false,
   fields: buildBareMetalCatalogItemFieldsPayload(values),
@@ -63,6 +64,7 @@ export const buildBareMetalCatalogItemUpdatePayload = (
   _item: BareMetalInstanceCatalogItem,
   values: BareMetalCatalogItemValues,
 ): MessageInitShape<typeof BareMetalInstanceCatalogItemSchema> => ({
+  description: values.description,
   fields: buildBareMetalCatalogItemFieldsPayload(values),
 });
 

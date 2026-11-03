@@ -15,11 +15,13 @@ describe('buildComputeCatalogItemCreatePayload', () => {
     const values = emptyComputeCatalogItemValues();
     values.metadata.name = 'my-item';
     values.metadata.project = 'team-a';
+    values.description = 'A virtual machine offering';
     values.template = { id: 'template-1', name: 'compute-template' };
 
     const payload = buildComputeCatalogItemCreatePayload(values);
 
     expect(payload.fields).toEqual({});
+    expect(payload.description).toBe('A virtual machine offering');
     expect(payload.published).toBe(false);
     expect(payload.metadata).toEqual({ name: 'my-item', project: 'team-a' });
     expect(payload.template).toEqual({ id: 'template-1', name: 'compute-template' });
@@ -239,11 +241,13 @@ describe('buildComputeCatalogItemUpdatePayload', () => {
     values.metadata.tenant = { id: 'tenant-1', name: '' };
     values.metadata.project = 'team-a';
     values.template = { id: 'template-1', name: '' };
+    values.description = 'Updated description';
     values.userData = { value: 'echo hi', locked: true };
 
     const payload = buildComputeCatalogItemUpdatePayload(item, values);
 
     expect(payload.metadata).toBeUndefined();
+    expect(payload.description).toBe('Updated description');
     expect(payload.template).toBeUndefined();
     expect(payload.fields?.userDataSource).toEqual({
       behavior: {

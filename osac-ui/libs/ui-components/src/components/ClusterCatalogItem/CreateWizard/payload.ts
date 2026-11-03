@@ -91,6 +91,7 @@ export const buildClusterCatalogItemCreatePayload = (
   values: ClusterCatalogItemValues,
 ): MessageInitShape<typeof ClusterCatalogItemSchema> => ({
   metadata: catalogGeneralItemPayload(values),
+  description: values.description,
   template: values.template,
   published: false,
   fields: buildClusterCatalogItemFieldsPayload(values),
@@ -100,6 +101,7 @@ export const buildClusterCatalogItemUpdatePayload = (
   _item: ClusterCatalogItem,
   values: ClusterCatalogItemValues,
 ): MessageInitShape<typeof ClusterCatalogItemSchema> => ({
+  description: values.description,
   fields: buildClusterCatalogItemFieldsPayload(values),
 });
 

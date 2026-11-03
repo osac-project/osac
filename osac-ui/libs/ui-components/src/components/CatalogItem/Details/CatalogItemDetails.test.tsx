@@ -34,6 +34,7 @@ const makeItem = (published: boolean): ComputeInstanceCatalogItem =>
   ({
     $typeName: 'osac.public.v1.ComputeInstanceCatalogItem',
     id: 'catalog-vm',
+    description: 'A catalog VM offering',
     metadata: {
       name: 'catalog-vm',
       tenant: 'tenant-1',
@@ -89,6 +90,7 @@ describe('CatalogItemDetails', () => {
     renderDetails(makeItem(false));
 
     expect(screen.getAllByText('Unpublished').length).toBeGreaterThan(0);
+    expect(screen.getByText('A catalog VM offering')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
     expect(screen.getByText('Created')).toBeInTheDocument();
     expect(screen.getByText('Visibility')).toBeInTheDocument();

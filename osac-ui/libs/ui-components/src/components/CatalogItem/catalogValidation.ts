@@ -41,6 +41,7 @@ export const catalogGeneralStepSchema = (t: TFunction, role: UserRole) => {
 
   return yup.object({
     scope: yup.string(),
+    description: yup.string(),
     metadata: yup
       .object({
         name: resourceNameSchema(t),

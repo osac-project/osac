@@ -15,6 +15,7 @@ describe('buildClusterCatalogItemCreatePayload', () => {
     const values = emptyClusterCatalogItemValues();
     values.metadata.name = 'my-cluster-item';
     values.metadata.project = 'team-a';
+    values.description = 'A cluster offering';
     values.template = { id: 'template-1', name: 'cluster-template' };
 
     const payload = buildClusterCatalogItemCreatePayload(values);
@@ -23,6 +24,7 @@ describe('buildClusterCatalogItemCreatePayload', () => {
       name: 'my-cluster-item',
       project: 'team-a',
     });
+    expect(payload.description).toBe('A cluster offering');
     expect(payload.template).toEqual({ id: 'template-1', name: 'cluster-template' });
     expect(payload.published).toBe(false);
     expect(payload.fields).toEqual({});
@@ -139,6 +141,7 @@ describe('buildClusterCatalogItemUpdatePayload', () => {
     values.metadata.project = 'team-a';
     values.metadata.tenant = { id: 'tenant-1', name: '' };
     values.template = { id: 'template-1', name: '' };
+    values.description = 'Updated description';
     values.podCidr = { value: '10.128.0.0/14', locked: true };
 
     const payload = buildClusterCatalogItemUpdatePayload(
@@ -147,6 +150,7 @@ describe('buildClusterCatalogItemUpdatePayload', () => {
     );
 
     expect(payload.metadata).toBeUndefined();
+    expect(payload.description).toBe('Updated description');
     expect(payload.template).toBeUndefined();
     expect(payload.fields?.network?.podCidr).toEqual({
       behavior: { case: 'locked', value: '10.128.0.0/14' },

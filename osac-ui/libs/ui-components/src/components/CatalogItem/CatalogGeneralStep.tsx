@@ -12,6 +12,7 @@ import CatalogScopeField from './CatalogScopeField';
 import { useSession } from '../../hooks/use-session';
 import { useTranslation } from '../../hooks/useTranslation';
 import { GLOBAL_TENANT_VALUE } from '../catalog/catalogItemDisplay';
+import { InputField } from '../Form/InputField';
 import NameField from '../Form/NameField';
 import OsacForm from '../Form/OsacForm';
 import ProjectField from '../Form/ProjectField';
@@ -27,6 +28,7 @@ export type CatalogItemScope = 'global' | 'tenant';
 
 export interface CatalogGeneralValues {
   scope: CatalogItemScope;
+  description: string;
   metadata: {
     name: string;
     project: string;
@@ -38,12 +40,14 @@ export interface CatalogGeneralValues {
 
 export const catalogGeneralValues = (): CatalogGeneralValues => ({
   scope: 'tenant',
+  description: '',
   metadata: { name: '', project: '', tenant: emptyResourceSelectValue() },
   template: emptyResourceSelectValue(),
 });
 
 /** Shape shared by all catalog item kinds, used to prefill `CatalogGeneralValues` for edit. */
 export interface CatalogItemGeneralLike {
+  description?: string;
   metadata?: {
     name?: string;
     project?: string;
@@ -60,6 +64,7 @@ export const catalogGeneralValuesFromItem = (
   const scope: CatalogItemScope = tenant === GLOBAL_TENANT_VALUE ? 'global' : 'tenant';
   return {
     scope,
+    description: item.description ?? '',
     metadata: {
       name: metadata?.name ?? '',
       project: metadata?.project ?? '',
@@ -133,6 +138,12 @@ const CatalogGeneralStep = ({
             <ProjectField isDisabled={isEdit} />
           )}
           <NameField isDisabled={isEdit} />
+          <InputField
+            name="description"
+            label={t('Description')}
+            fieldId="catalog-item-description"
+            multiline
+          />
           <ResourceSelectField
             name="template"
             label={t('Provisioning template')}

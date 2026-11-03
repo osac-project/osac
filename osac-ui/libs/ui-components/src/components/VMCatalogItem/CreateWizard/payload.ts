@@ -84,6 +84,7 @@ export const buildComputeCatalogItemCreatePayload = (
   values: ComputeCatalogItemValues,
 ): MessageInitShape<typeof ComputeInstanceCatalogItemSchema> => ({
   metadata: catalogGeneralItemPayload(values),
+  description: values.description,
   template: values.template,
   published: false,
   fields: buildComputeCatalogItemFieldsPayload(values),
@@ -101,6 +102,7 @@ export const buildComputeCatalogItemUpdatePayload = (
   _item: ComputeInstanceCatalogItem,
   values: ComputeCatalogItemValues,
 ): MessageInitShape<typeof ComputeInstanceCatalogItemSchema> => ({
+  description: values.description,
   fields: buildComputeCatalogItemFieldsPayload(values),
 });
 

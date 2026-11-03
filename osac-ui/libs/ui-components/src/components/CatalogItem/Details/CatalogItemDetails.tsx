@@ -68,6 +68,7 @@ const CatalogItemDetails = ({
                     },
                   ]}
                   resourceName={resourceName}
+                  description={item.description}
                   titlePrefix={titlePrefix}
                   titleAddon={
                     showStatus

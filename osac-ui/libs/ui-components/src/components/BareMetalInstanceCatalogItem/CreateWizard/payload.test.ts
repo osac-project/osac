@@ -15,6 +15,7 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
     const values = emptyBareMetalCatalogItemValues();
     values.metadata.name = 'my-bare-metal-item';
     values.metadata.project = 'team-a';
+    values.description = 'A bare metal offering';
     values.template = { id: 'template-1', name: 'baremetal-template' };
 
     const payload = buildBareMetalCatalogItemCreatePayload(values);
@@ -23,6 +24,7 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
       name: 'my-bare-metal-item',
       project: 'team-a',
     });
+    expect(payload.description).toBe('A bare metal offering');
     expect(payload.template).toEqual({ id: 'template-1', name: 'baremetal-template' });
     expect(payload.published).toBe(false);
     expect(payload.fields).toEqual({});
@@ -199,6 +201,7 @@ describe('bare metal catalog item initial values and updates', () => {
     values.metadata.tenant = { id: 'tenant-1', name: '' };
     values.metadata.project = 'team-a';
     values.template = { id: 'template-1', name: '' };
+    values.description = 'Updated description';
     values.userData = { value: 'echo hi', locked: true };
 
     const payload = buildBareMetalCatalogItemUpdatePayload(
@@ -207,6 +210,7 @@ describe('bare metal catalog item initial values and updates', () => {
     );
 
     expect(payload.metadata).toBeUndefined();
+    expect(payload.description).toBe('Updated description');
     expect(payload.template).toBeUndefined();
     expect(payload.fields?.userDataSource).toEqual({
       behavior: {

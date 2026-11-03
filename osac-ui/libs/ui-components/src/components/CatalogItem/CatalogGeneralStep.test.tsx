@@ -76,10 +76,10 @@ describe('CatalogGeneralStep', () => {
     expect(catalogGeneralItemPayload(values)).toMatchObject({ tenant: ' tenant-1 ' });
   });
 
-  it('does not show a catalog item description field', () => {
+  it('shows a catalog item description field', () => {
     renderStep(false);
 
-    expect(screen.queryByRole('textbox', { name: 'Description' })).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Description' })).toBeInTheDocument();
   });
 
   it('renders the General heading', () => {
@@ -225,6 +225,7 @@ describe('CatalogGeneralStep', () => {
 
 describe('catalogGeneralValuesFromItem', () => {
   const baseItem = {
+    description: 'A catalog item description',
     metadata: {
       name: 'my-item',
       project: 'team-a',
@@ -236,6 +237,7 @@ describe('catalogGeneralValuesFromItem', () => {
   it('derives a tenant scope and populates fields from a tenant-scoped item', () => {
     expect(catalogGeneralValuesFromItem(baseItem)).toEqual({
       scope: 'tenant',
+      description: 'A catalog item description',
       metadata: {
         name: 'my-item',
         project: 'team-a',

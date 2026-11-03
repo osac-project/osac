@@ -143,7 +143,7 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
         VmCreatePage.sshPublicKey,
         /^(?!No secret available$).+/,
       );
-      await page.getByLabel(...VmCreatePage.cloudInit).fill(cloudInit);
+      await page.locator(...VmCreatePage.cloudInit).fill(cloudInit);
       await page.getByRole(...VmCreatePage.next).click();
       return selectedSshKey;
     },

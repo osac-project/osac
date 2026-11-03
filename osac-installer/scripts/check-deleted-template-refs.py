@@ -20,6 +20,10 @@ hooks/pre-install-validate.yaml while scripts/test-bmf-netbox-render.py still
 asserted Job/osac-pre-install-validate, and that test failed on main until the
 reference was removed.
 
+Rename detection is off, so a moved template is reported as a deletion. When it
+still renders the same resources from its new path, those names are left out of
+the search: the resource is live, and a test that asserts it is not stale.
+
 Matching whole names keeps a generic word from failing the build: deleting
 ``templates/deployment.yaml`` no longer trips over tests that mention a
 ``metering/templates/deployment.yaml`` that still exists.
@@ -90,6 +94,19 @@ def path_fragment(template: str) -> str:
     return "/".join(parts[index - 1 :])
 
 
+def name_fragments_in(text: str) -> set[str]:
+    """Literal parts of the resource names that template text declares."""
+    fragments: set[str] = set()
+    for match in NAME_LINE.finditer(text):
+        for piece in TEMPLATED.split(match.group(1)):
+            piece = piece.strip().strip("'\"-")
+            # A single word ("ui", "report") is too generic to attribute to one
+            # chart; the path fragment still covers the file itself.
+            if "-" in piece and len(piece) >= 6:
+                fragments.add(piece)
+    return fragments
+
+
 def name_fragments(base_ref: str, template: str) -> set[str]:
     """Literal parts of the resource names the deleted template declared."""
     result = subprocess.run(
@@ -99,14 +116,19 @@ def name_fragments(base_ref: str, template: str) -> set[str]:
         capture_output=True,
         text=True,
     )
+    return name_fragments_in(result.stdout)
+
+
+def live_name_fragments() -> set[str]:
+    """Resource-name parts that a chart template present at HEAD still declares."""
     fragments: set[str] = set()
-    for match in NAME_LINE.finditer(result.stdout):
-        for piece in TEMPLATED.split(match.group(1)):
-            piece = piece.strip().strip("'\"-")
-            # A single word ("ui", "report") is too generic to attribute to one
-            # chart; the path fragment still covers the file itself.
-            if "-" in piece and len(piece) >= 6:
-                fragments.add(piece)
+    for path in sorted((REPO_ROOT / "osac-installer/charts").glob("**/templates/**/*")):
+        if not path.is_file() or path.suffix not in TEMPLATE_SUFFIXES:
+            continue
+        try:
+            fragments |= name_fragments_in(path.read_text(encoding="utf-8"))
+        except UnicodeDecodeError:
+            continue
     return fragments
 
 
@@ -147,9 +169,10 @@ def main(arguments: list[str]) -> int:
         return 2
     base = merge_base(arguments[0])
     templates = deleted_templates(base)
+    live = live_name_fragments()
     failing = 0
     for template in templates:
-        identifiers = {path_fragment(template)} | name_fragments(base, template)
+        identifiers = {path_fragment(template)} | (name_fragments(base, template) - live)
         hits = references(identifiers)
         if not hits:
             continue

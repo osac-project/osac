@@ -98,11 +98,15 @@ def _walk_yaml(
         seen = set()
         for key_node, value_node in node.value:
             key, text = _yaml_key(key_node, resolve)
-            if key in seen:
+            # Python considers True == 1, but a YAML loader constructs ``true``
+            # and ``1`` as different keys, and Helm keeps both. Compare the
+            # type as well so only keys the loader really collapses collide.
+            identity = (type(key), key)
+            if identity in seen:
                 problems.append(
                     f"{path or '<root>'}: duplicate key {text!r} at line {key_node.start_mark.line + 1}"
                 )
-            seen.add(key)
+            seen.add(identity)
             _walk_yaml(value_node, f"{path}.{text}", problems, resolve, visited)
     elif isinstance(node, yaml.SequenceNode):
         for index, value in enumerate(node.value):

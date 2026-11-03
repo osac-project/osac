@@ -626,7 +626,7 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `cnv.enabled` | Creates the OpenShift Virtualization `Subscription` and the `HyperConverged` custom resource when this release manages CNV. For VMaaS, leave it `false` when administrators manage CNV separately. | `false` |
 | `cnv.channel` | Update channel for OpenShift Virtualization. | `stable` |
 | `evpn.enabled` | Configures OpenShift host networking for VMaaS CUDN EVPN; requires OpenShift 4.22 or later. Leave disabled on Kind. | `false` |
-| `lvms.enabled` | Creates the LVM Storage `Subscription` and the `LVMCluster` custom resource. | `false` |
+| `lvms.enabled` | Creates the LVM Storage `Subscription` and worker-scoped `LVMCluster`, allowlisting `/dev/sample-osac-disk` through `optionalPaths`. It does not create that device. | `false` |
 | `lvms.channel` | Update channel for LVM Storage. Set it to `stable-<cluster_minor>` at installation. | `stable-4.22` |
 | `metallb.enabled` | Creates the MetalLB `Subscription`, the `caas-address-pool` `IPAddressPool`, and the `L2Advertisement`. | `false` |
 | `metallb.channel` | Update channel for MetalLB. | `stable` |
@@ -1154,6 +1154,10 @@ mce:          { enabled: false }
 - Disabling `cnv.enabled` skips the `HyperConverged` custom resource.
   Disabling `lvms.enabled` skips an `LVMCluster` custom resource that uses
   device class `vg1`, thin pool size 90 percent, and overprovision ratio 10.
+  The chart-managed `vg1` uses worker-node selection and the optional path
+  `/dev/sample-osac-disk`; no loop-device setup is included. If no listed path
+  exists on a selected worker, LVMS may leave the cluster degraded and storage
+  provisioning unavailable rather than discover other disks.
   Disabling `metallb.enabled` skips an `IPAddressPool` custom resource named
   `caas-address-pool` with the fixed range `192.168.100.240` to
   `192.168.100.250`. If you already run the Operator, keep the toggle `false`
@@ -1197,6 +1201,11 @@ mce:          { enabled: false }
 
 On a shared cluster, do not change cluster-scoped prerequisites without the
 agreement of the cluster owner.
+
+The chart-managed LVMS allowlist is intended for development and CI. Production
+customers who manage LVMS should leave `lvms.enabled: false` and configure
+their own `LVMCluster` device selector. This change does not alter the separate
+manual prerequisite manifest or remote-cluster bootstrap path.
 
 ### Skipping Phase 1 Entirely
 

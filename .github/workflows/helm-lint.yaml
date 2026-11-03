@@ -192,6 +192,10 @@ jobs:
       working-directory: osac-installer
       run: uv run --project .. make billing-render-test
 
+    - name: Test LVMS optional-path rendering
+      working-directory: osac-installer
+      run: uv run --project .. make lvms-optional-path-render-test
+
     - name: Test BMF NetBox rendering
       if: steps.should-run.outputs.run
       working-directory: osac-installer

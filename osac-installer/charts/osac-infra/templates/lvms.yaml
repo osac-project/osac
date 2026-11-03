@@ -20,6 +20,14 @@ data:
         deviceClasses:
           - name: vg1
             default: true
+            nodeSelector:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: node-role.kubernetes.io/worker
+                      operator: Exists
+            deviceSelector:
+              optionalPaths:
+                - /dev/sample-osac-disk
             thinPoolConfig:
               name: thin-pool-1
               sizePercent: 90

@@ -205,6 +205,9 @@ the Keycloak bootstrap passwords, and disable `bundledPostgres` and
 an external database and Vault-compatible secret store; see the [customer
 install guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md)
 and [secrets management configuration guide](secrets-management-configuration.md).
+The full external-PostgreSQL/-OpenBao wiring (connection Secrets, mTLS
+certificates, values) is in the
+[external services support guide](external-services-support-guide.md).
 The customer install guide also explains how to configure `my-values.yaml` for
 the services you plan to deploy. Check the LVMS device configuration and
 MetalLB address range against your cluster, and set `cnv.enabled: true` if
@@ -487,7 +490,9 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 
 For a multicluster VMaaS deployment, `make install-multicluster` uses the
 infra values to configure EVPN on the workload cluster. The management-cluster
-overlay keeps `evpn.enabled` disabled.
+overlay keeps `evpn.enabled` disabled. OSAC provider networking with VMs on a
+separate cluster is not supported in this release (see "Not supported" in the
+customer installation guide).
 
 Add a node by adding it to `evpn.nodes` and rerunning `make install`. Remove a
 node by deleting its entry and rerunning `make install`; the installer deletes
@@ -503,13 +508,13 @@ and RBAC resources on uninstall. To remove the labeled EVPN resources manually:
 oc delete routeadvertisements,vteps -l osac.openshift.io/evpn=true
 oc delete frrconfigurations -n openshift-frr-k8s -l osac.openshift.io/evpn=true
 oc delete nncp -l osac.openshift.io/evpn=true
+oc delete nmstate -l osac.openshift.io/evpn=true
 ```
 
 Restore the cluster network operator settings separately if the cluster no
-longer needs them. The VTEP range and uplink ranges must not overlap tenant
-address space. Add these infrastructure ranges to
-`global.networking.excludedIpv4Cidrs` in the `osac` chart when that value is
-available in the installed chart.
+longer needs them. The VTEP range, the fabric loopback ranges and the uplink
+ranges must not overlap tenant address space. Add them to
+`global.networking.excludedIpv4Cidrs` in the `osac` chart.
 
 ## When Prerequisites Already Exist
 

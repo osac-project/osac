@@ -1,0 +1,3 @@
+SERVICE           DIMENSION      VALUE     ACCEPTS ANY VALUE  CATALOG ITEMS
+compute_instance  instance_type  m1.small  false              basic-vm
+cluster           node_count     <any>     true               flex-cluster

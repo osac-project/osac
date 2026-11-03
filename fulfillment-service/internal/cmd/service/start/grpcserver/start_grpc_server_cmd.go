@@ -720,6 +720,31 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	// filterable-resource-exempt: singleton status read, no List RPC or CEL filter field
 	publicv1.RegisterBillingProviderStatusesServer(grpcServer, billingProviderStatusesServer)
 
+	// Create the catalog pricing inputs servers:
+	c.logger.InfoContext(ctx, "Creating catalog pricing inputs servers")
+	privateCatalogPricingInputsServer, err := servers.NewPrivateCatalogPricingInputsServer().
+		SetLogger(c.logger).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private catalog pricing inputs server: %w", err)
+	}
+	catalogPricingInputsServer, err := servers.NewCatalogPricingInputsServer().
+		SetLogger(c.logger).
+		SetDelegate(privateCatalogPricingInputsServer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create public catalog pricing inputs server: %w", err)
+	}
+	// filterable-resource-exempt: derived aggregation over two existing catalog-item DAOs; the List RPC does have a
+	// CEL filter field, but it's evaluated in-memory against the aggregated rows (see
+	// filterCatalogPricingInputs in private_catalog_pricing_inputs_server.go), not through a DAO-backed
+	// GenericServer.List(), so it doesn't fit RegisterResourceServers's shared code path.
+	publicv1.RegisterCatalogPricingInputsServer(grpcServer, catalogPricingInputsServer)
+	// filterable-resource-exempt: see the justification above the public registration two lines up.
+	privatev1.RegisterCatalogPricingInputsServer(grpcServer, privateCatalogPricingInputsServer)
+
 	// Create the capabilities servers:
 	c.logger.InfoContext(ctx, "Creating capabilities servers")
 	capabilitiesServer, err := servers.NewCapabilitiesServer().

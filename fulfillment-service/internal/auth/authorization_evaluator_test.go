@@ -929,4 +929,44 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				[]any{"cloud-provider-reader"}, []any{}, false),
 		)
 	})
+
+	Describe("catalog pricing inputs authorization", func() {
+		const (
+			publicCatalogPricingInputsList  = "/osac.public.v1.CatalogPricingInputs/List"
+			privateCatalogPricingInputsList = "/osac.private.v1.CatalogPricingInputs/List"
+		)
+		DescribeTable("only admins may list the metered catalog inventory",
+			func(ctx context.Context, method string, username string, roles []any, groups []any, allowed bool) {
+				evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
+				Expect(err).ToNot(HaveOccurred())
+				authContext := &AuthContext{
+					Username:     username,
+					Groups:       groups,
+					AuthMethod:   "jwt",
+					Organization: []any{"acme-corp"},
+					RealmAccess:  map[string]any{"roles": roles},
+					Tenant:       "acme-corp",
+				}
+				decision, err := evaluator.Evaluate(ctx, authContext, method)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(Equal(allowed))
+			},
+			Entry("public: admin group", publicCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"user"}, []any{"admins"}, true),
+			Entry("public: tenant admin", publicCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"tenant-admin"}, []any{}, false),
+			Entry("public: tenant reader", publicCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"tenant-reader"}, []any{}, false),
+			Entry("public: cloud provider reader", publicCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+			Entry("private: admin group", privateCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"user"}, []any{"admins"}, true),
+			Entry("private: tenant admin", privateCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"tenant-admin"}, []any{}, false),
+			Entry("private: tenant reader", privateCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"tenant-reader"}, []any{}, false),
+			Entry("private: cloud provider reader", privateCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+		)
+	})
 })

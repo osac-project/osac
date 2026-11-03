@@ -2,6 +2,8 @@ import { type SemVer, compare, eq, gt, lt, parse } from 'semver';
 
 import { type Cluster, ClusterState, type ClusterVersion, ClusterVersionState } from '@osac/types';
 
+import { matchesClusterVersionReference } from '../../../api/v1/cluster-version-reference';
+
 export type ClusterUpgradeBlockedReason =
   | 'cluster-failed'
   | 'cluster-deleting'
@@ -41,29 +43,6 @@ const blocked = (blockedReason: ClusterUpgradeBlockedReason): ClusterUpgradeChoi
   blockedReason,
 });
 
-const matchesConfiguredReference = (cluster: Cluster, version: ClusterVersion): boolean => {
-  const reference = cluster.spec?.version;
-  if (!reference || (!reference.id && !reference.name)) {
-    return false;
-  }
-  if (reference.id && version.id !== reference.id) {
-    return false;
-  }
-  if (reference.name && version.metadata?.name !== reference.name) {
-    return false;
-  }
-  if (!reference.id) {
-    return (
-      version.metadata?.project === reference.project &&
-      (version.metadata?.tenant === 'shared') === reference.shared
-    );
-  }
-  return (
-    (!reference.project || version.metadata?.project === reference.project) &&
-    (!reference.shared || version.metadata?.tenant === 'shared')
-  );
-};
-
 export const resolveClusterUpgradeChoices = (
   cluster: Cluster,
   configuredVersion: ClusterVersion | undefined,
@@ -78,7 +57,12 @@ export const resolveClusterUpgradeChoices = (
       return blocked('cluster-delete-failed');
   }
 
-  if (!configuredVersion || !matchesConfiguredReference(cluster, configuredVersion)) {
+  const reference = cluster.spec?.version;
+  if (
+    !reference ||
+    !configuredVersion ||
+    !matchesClusterVersionReference(reference, configuredVersion)
+  ) {
     return blocked('configured-version-unresolved');
   }
   const configured = parseStrictSemVer(configuredVersion.spec?.version);

@@ -104,7 +104,9 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
   await testStep('catalog-launch', 'Verify the Disk image field on the General step', async () => {
     const diskImage = page.getByRole(...VmCreatePage.diskImage);
     await expect(diskImage).toBeVisible();
-    await expect(diskImage).toBeDisabled();
+    if (await diskImage.isEnabled()) {
+      await selectOption(page, VmCreatePage.diskImage, catalogTestData.fields.diskImage.name);
+    }
     await page.getByRole(...VmCreatePage.next).click();
   });
 

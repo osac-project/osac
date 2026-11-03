@@ -41,7 +41,7 @@ export const VmCreatePage = {
   useTenantDefaultNetwork: ['checkbox', { name: 'Use tenant default network', exact: true }],
   autoExternalIp: ['checkbox', { name: 'Auto External IP Attachment', exact: true }],
   sshPublicKey: ['button', { name: 'SSH public key', exact: true }],
-  cloudInit: ['Cloud-init'],
+  cloudInit: ['#inline-user-data'],
   next: ['button', { name: 'Next', exact: true }],
   create: ['button', { name: 'Create', exact: true }],
   configurationHeading: ['heading', { name: 'Configuration', exact: true }],

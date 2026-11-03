@@ -30,8 +30,11 @@ underlying Secret object.
 When a required Secret is missing, typed write tools return the shared
 `not_found` safe-error envelope. The result names the missing Secret
 reference and directs the caller to the existing `/secrets/create` wizard.
-MCP never accepts or returns Secret bytes; after the Secret exists, the
-caller resumes with `list_resources` and the resulting reference.
+MCP never accepts or returns Secret bytes, and the current typed write schemas
+do not consume a Secret reference. Create the Secret in the wizard, update the
+owning configuration outside MCP when it must point to that new Secret, and
+then retry the original typed write. A direct reference-consuming write
+boundary is owned by OSAC-5861.
 
 List requests use the explicit `filter` field and bounded pagination. The
 default page size is 50, the maximum is 100, and negative offsets or invalid

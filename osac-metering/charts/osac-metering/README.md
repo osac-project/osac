@@ -9,20 +9,19 @@ protects it.
 See `values.yaml`. The notable groups:
 
 - `heartbeat.interval` — the round interval, default `60s`.
-- `readers` — outside systems allowed to read one tenant's usage events.
+- `readers` — outside systems allowed to read every tenant's usage events.
 - `echoAdapter.enabled`, `m360Adapter.enabled` — the provider adapters.
 - `database.connection` — the projected secret holding the database URL.
 
 ## Reader grants
 
-A reader is an outside billing system that reads one tenant's usage events
-with its own credentials. Add one entry per reader to `readers` when the chart
-is installed standalone:
+A reader is an outside billing system that reads every tenant's heartbeat
+topics, `osac.metering.heartbeat.<tenant>`, with one credential. Add one entry
+per reader to `readers` when the chart is installed standalone:
 
 ```yaml
 readers:
   - name: billing-reader
-    tenant: acme
 ```
 
 Through the umbrella installer chart, set the same list at
@@ -32,58 +31,63 @@ Through the umbrella installer chart, set the same list at
 metering:
   readers:
     - name: billing-reader
-      tenant: acme
 ```
 
-The chart renders one Strimzi `KafkaUser` per entry. The user gets a read ACL
-on `osac.metering.heartbeat.<tenant>` and a read ACL on a consumer group named
-after the reader. It gets nothing else: it cannot write, cannot read the raw
-event log or the dead-letter topic, and cannot read another tenant's topic.
-The reader name is also its consumer group, which is the name Kafka Exporter
-reports lag under.
+The entry names the reader and no tenant. The chart renders one Strimzi
+`KafkaUser` per entry with a read and describe ACL on the
+`osac.metering.heartbeat.` topic prefix and a read ACL on a consumer group named
+after the reader. The prefix covers every tenant, including tenants created
+after the grant, so onboarding a tenant needs no chart change and hands over no
+new Secret. The user gets nothing else: it cannot write, cannot read the raw
+event log or a dead-letter topic. The reader name is also its consumer group,
+which is the name Kafka Exporter reports lag under. The reader lists the
+heartbeat topics by prefix at startup; a tenant created after the reader starts
+is read on its next restart.
 
-Reader names must be unique; a repeated name fails the render. `system` and
-`shared` are rejected because metering never creates their usage topics. Names
-that start with `osac-` or `osac.` are reserved for OSAC, as are the KafkaUsers
-this chart creates (`osac-metering` and its adapters): a collision would let a
-reader replace an OSAC user's ACLs or join an adapter's consumer group. The
-umbrella chart additionally rejects `fulfillment-service`, the KafkaUser it
-creates for the fulfillment service.
+Reader names must be unique; a repeated name fails the render. Names that start
+with `osac-` or `osac.` are reserved for OSAC, as are the KafkaUsers this chart
+creates (`osac-metering` and its adapters): a collision would let a reader
+replace an OSAC user's ACLs or join an adapter's consumer group. The umbrella
+chart additionally rejects `fulfillment-service`, the KafkaUser it creates for
+the fulfillment service.
 
 The list is set through Helm values. The Enclave Wizard's schema-to-control
 mapping covers enums, booleans, strings, and numbers only, so it renders no
 control for this list of objects; that is the deliberate decision, and there is
 no Wizard field for it. Flattening the list into per-reader scalar keys would
 fit the mapping, but every grant would then need several keys kept in step, and
-a mistake would grant the wrong tenant. The list stays values-only.
+a mistake would grant the wrong reader. The list stays values-only.
 
 Grant or revoke a reader by applying the values again with the installer. The
 metering Deployment does not depend on these values, so nothing restarts. On
 revocation Strimzi deletes the user, its password Secret, and its ACLs; the
-running reader fails its next fetch rather than waiting to be told. Offboarding
-a tenant means removing its reader entries in the same change that retires the
-tenant; the records stay until the tenant's topics are deleted.
+running reader fails its next fetch rather than waiting to be told, and it loses
+access to every tenant at once. Offboarding a tenant deletes that tenant's
+heartbeat topics after the final invoice, so every reader loses that tenant
+while its credential still covers the remaining ones.
 
-The reader needs the bootstrap address, the shared OSAC CA, and its
-password from the Secret named after it in the Kafka namespace. Hand those
-over out of band. The chart never writes them into the repository.
+One credential reads every tenant, so a leaked reader Secret exposes all of
+them. The Secret exists once per reader, in the Kafka namespace, and is named
+after the reader. Hand its password, the shared OSAC CA, and the bootstrap
+address to the reader's owner out of band; the chart writes none of them into
+the repository. There is no per-tenant Secret and no per-tenant revocation: to
+stop one tenant, stop the reader or delete that tenant's heartbeat topics.
 
 To see how far behind a reader is, enable `prometheusRule.enabled`: the
 `MeteringReaderLag` alert fires when a reader group is more than
 `prometheusRule.readerLagThreshold` records behind for 15 minutes (default 15).
-A metered resource sends about one heartbeat per minute, so a single-VM tenant
-grows lag by about one record per minute: the default catches a stalled reader
-in about half an hour. Busy tenants cross it sooner. Raise the threshold if a
-reader may fall further behind, or lower it for a small tenant. A reader that
-has never consumed has no consumer group and no lag series, so this alert
-cannot fire for it; check that the group exists before relying on the alert.
-Strimzi's Kafka Exporter, enabled on the installer's Kafka resource and scraped
-by a PodMonitor, supplies `kafka_consumergroup_lag`. The chart renders one
-reader lag rule per reader in the Kafka namespace, where the exporter series
-live, because user workload monitoring evaluates a rule against its own
-namespace. Each rule names the reader's consumer group and its current tenant
-topic, so a reader reassigned to another tenant does not alert on the offsets
-it left on the former tenant's topic.
+The exporter reports one lag series per heartbeat topic under the group, so the
+alert names the topic that is behind. A metered resource sends about one
+heartbeat per minute, so a single-VM tenant grows lag by about one record per
+minute: the default catches a stalled reader in about half an hour. Busy
+tenants cross it sooner. Raise the threshold if a reader may fall further
+behind, or lower it for a small tenant. A reader that has never consumed has no
+consumer group and no lag series, so this alert cannot fire for it; check that
+the group exists before relying on the alert. Strimzi's Kafka Exporter, enabled
+on the installer's Kafka resource and scraped by a PodMonitor, supplies
+`kafka_consumergroup_lag`. The chart renders one rule per reader in the Kafka
+namespace, where the exporter series live, because user workload monitoring
+evaluates a rule against its own namespace.
 
 ## Rule revisions
 

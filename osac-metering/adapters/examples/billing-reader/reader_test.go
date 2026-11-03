@@ -26,6 +26,12 @@ import (
 // small in project web.
 func heartbeat(id, quantity string, dimensions map[string]string) cloudevents.Event {
 	GinkgoHelper()
+	return heartbeatForTenant(id, "acme", quantity, dimensions)
+}
+
+// heartbeatForTenant builds the same event for another tenant.
+func heartbeatForTenant(id, tenant, quantity string, dimensions map[string]string) cloudevents.Event {
+	GinkgoHelper()
 
 	event := cloudevents.NewEvent()
 	event.SetID(id)
@@ -33,7 +39,7 @@ func heartbeat(id, quantity string, dimensions map[string]string) cloudevents.Ev
 	event.SetSource("osac-metering")
 	event.SetTime(time.Date(2026, 10, 5, 10, 1, 0, 0, time.UTC))
 	Expect(event.SetData(cloudevents.ApplicationJSON, schema.HeartbeatData{
-		TenantID:          "acme",
+		TenantID:          tenant,
 		ResourceType:      schema.ResourceTypeComputeInstance,
 		ResourceID:        "vm-7",
 		Meter:             "compute",
@@ -82,6 +88,7 @@ var _ = Describe("Totals", func() {
 		Expect(rows[0].Quantity).To(Equal("110.000000"))
 		Expect(rows[0].Unit).To(Equal("second"))
 		Expect(rows[0].Key).To(Equal(UsageKey{
+			TenantID:     "acme",
 			ResourceType: schema.ResourceTypeComputeInstance,
 			ResourceID:   "vm-7",
 			Meter:        "compute",
@@ -89,6 +96,25 @@ var _ = Describe("Totals", func() {
 			Dimensions:   `{"boot_disk_size_gib":"30","deployment":"example/deployment","image":"rhel-9","instance_type":"small","project":"web","tenant":"acme"}`,
 		}))
 		Expect(rows[0].Dimensions).To(Equal("boot_disk_size_gib=30,deployment=example/deployment,image=rhel-9,instance_type=small,project=web,tenant=acme"))
+	})
+
+	It("keeps every tenant's usage separate", func() {
+		totals := NewTotals()
+		for _, event := range []cloudevents.Event{
+			heartbeatForTenant("acme-event", "acme", "110.000000", smallDimensions),
+			heartbeatForTenant("globex-event", "globex", "60.000000", smallDimensions),
+		} {
+			added, err := totals.Add(event)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(added).To(BeTrue())
+		}
+
+		rows := totals.Rows()
+		Expect(rows).To(HaveLen(2))
+		Expect(rows[0].Key.TenantID).To(Equal("acme"))
+		Expect(rows[0].Quantity).To(Equal("110.000000"))
+		Expect(rows[1].Key.TenantID).To(Equal("globex"))
+		Expect(rows[1].Quantity).To(Equal("60.000000"))
 	})
 
 	It("drops a repeat with the same CloudEvent id", func() {
@@ -183,7 +209,7 @@ var _ = Describe("Totals", func() {
 		Expect(totals.Print(&output)).To(Succeed())
 		Expect(output.String()).To(ContainSubstring("vm-7"))
 		Expect(output.String()).To(ContainSubstring("15.000000"))
-		Expect(output.String()).To(ContainSubstring("BILLABLE TOTAL: 15.000000 second"))
+		Expect(output.String()).To(ContainSubstring("BILLABLE TOTAL acme: 15.000000 second"))
 	})
 })
 

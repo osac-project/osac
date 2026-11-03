@@ -387,12 +387,13 @@ metering:
     repository: ghcr.io/osac-project/metering-service
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
     pullPolicy: Always
-  # Outside systems that read one tenant's usage events with their own
-  # credentials. Each entry names one reader and one tenant; the reader name is
-  # also its Kafka consumer group, where lag is reported. Add or remove an
-  # entry and run helm upgrade to grant or revoke; no OSAC service restarts.
-  # This is a list of objects, so the Enclave Wizard renders no control for it;
-  # operators set it in values.
+  # Outside systems that read every tenant's usage events with their own
+  # credentials. Each entry names one reader and no tenant; the reader name is
+  # also its Kafka consumer group, where lag is reported. The grant covers the
+  # osac.metering.heartbeat. topic prefix, so a new tenant needs no chart
+  # change. Add or remove an entry and run helm upgrade to grant or revoke; no
+  # OSAC service restarts. This is a list of objects, so the Enclave Wizard
+  # renders no control for it; operators set it in values.
   readers: []
   database:
     connection:

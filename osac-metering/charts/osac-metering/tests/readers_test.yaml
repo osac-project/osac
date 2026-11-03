@@ -11,7 +11,6 @@ tests:
     set:
       readers:
         - name: billing-reader
-          tenant: acme
     asserts:
       - hasDocuments:
           count: 1
@@ -35,15 +34,15 @@ tests:
       - equal:
           path: spec.authorization.type
           value: simple
-      # Exactly two ACLs: a read on the tenant's usage topic and a read on the
-      # reader's consumer group. No write, no other topic, no other group.
+      # Exactly two ACLs: read and describe on the heartbeat topic prefix, and
+      # read on the reader's consumer group. No write, no other topic.
       - equal:
           path: spec.authorization.acls
           value:
             - resource:
                 type: topic
-                name: osac.metering.heartbeat.acme
-                patternType: literal
+                name: osac.metering.heartbeat.
+                patternType: prefix
               operations:
                 - Read
                 - Describe
@@ -56,13 +55,11 @@ tests:
                 - Read
               host: "*"
 
-  - it: renders one KafkaUser per reader with its own topic and group
+  - it: reads the same topic prefix from every reader's own group
     set:
       readers:
         - name: billing-reader
-          tenant: acme
         - name: audit-reader
-          tenant: globex
     asserts:
       - hasDocuments:
           count: 2
@@ -72,7 +69,11 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.authorization.acls[0].resource.name
-          value: osac.metering.heartbeat.acme
+          value: osac.metering.heartbeat.
+        documentIndex: 0
+      - equal:
+          path: spec.authorization.acls[0].resource.patternType
+          value: prefix
         documentIndex: 0
       - equal:
           path: spec.authorization.acls[1].resource.name
@@ -84,7 +85,7 @@ tests:
         documentIndex: 1
       - equal:
           path: spec.authorization.acls[0].resource.name
-          value: osac.metering.heartbeat.globex
+          value: osac.metering.heartbeat.
         documentIndex: 1
       - equal:
           path: spec.authorization.acls[1].resource.name
@@ -95,7 +96,6 @@ tests:
     set:
       readers:
         - name: audit-reader
-          tenant: globex
     asserts:
       - hasDocuments:
           count: 1
@@ -107,9 +107,7 @@ tests:
     set:
       readers:
         - name: billing-reader
-          tenant: acme
         - name: billing-reader
-          tenant: globex
     asserts:
       - failedTemplate:
           errorPattern: 'duplicate metering reader "billing-reader": each reader name must be unique'
@@ -118,7 +116,6 @@ tests:
     set:
       readers:
         - name: Billing_Reader
-          tenant: acme
     asserts:
       - failedTemplate:
           errorPattern: 'metering reader "Billing_Reader" must be a lowercase DNS name'
@@ -127,7 +124,6 @@ tests:
     set:
       readers:
         - name: osac-metering
-          tenant: acme
     asserts:
       - failedTemplate:
           errorPattern: 'metering reader "osac-metering" is a KafkaUser OSAC owns'
@@ -136,7 +132,6 @@ tests:
     set:
       readers:
         - name: osac-metering-echo-adapter
-          tenant: acme
     asserts:
       - failedTemplate:
           errorPattern: 'metering reader "osac-metering-echo-adapter" is a KafkaUser OSAC owns'
@@ -145,7 +140,6 @@ tests:
     set:
       readers:
         - name: osac-metering-m360-adapter
-          tenant: acme
     asserts:
       - failedTemplate:
           errorPattern: 'metering reader "osac-metering-m360-adapter" is a KafkaUser OSAC owns'
@@ -154,7 +148,6 @@ tests:
     set:
       readers:
         - name: osac-billing-reader
-          tenant: acme
     asserts:
       - failedTemplate:
           errorPattern: 'metering reader "osac-billing-reader" uses the reserved osac- or osac. name prefix'
@@ -163,34 +156,14 @@ tests:
     set:
       readers:
         - name: osac.billing-reader
-          tenant: acme
     asserts:
       - failedTemplate:
           errorPattern: 'metering reader "osac.billing-reader" uses the reserved osac- or osac. name prefix'
 
-  - it: rejects a tenant name that is not a lowercase DNS name
+  - it: rejects a reader name longer than a KafkaUser name
     set:
       readers:
-        - name: billing-reader
-          tenant: Acme
+        - name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     asserts:
       - failedTemplate:
-          errorPattern: 'metering reader "billing-reader" has tenant "Acme", which is not a lowercase DNS name'
-
-  - it: rejects the shared tenant, which has no usage topic
-    set:
-      readers:
-        - name: billing-reader
-          tenant: shared
-    asserts:
-      - failedTemplate:
-          errorPattern: 'metering reader "billing-reader" names built-in tenant "shared", which has no usage topic'
-
-  - it: rejects a built-in tenant that has no usage topic
-    set:
-      readers:
-        - name: billing-reader
-          tenant: system
-    asserts:
-      - failedTemplate:
-          errorPattern: 'metering reader "billing-reader" names built-in tenant "system", which has no usage topic'
+          errorPattern: 'metering reader "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" must be at most 253 characters'

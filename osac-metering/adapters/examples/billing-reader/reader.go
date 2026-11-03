@@ -29,11 +29,12 @@ import (
 	"github.com/osac-project/osac-metering/schema"
 )
 
-// UsageKey groups the events the contract bills together: one resource, one
-// meter, one component, and one set of billing dimensions. Dimensions holds
-// the canonical encoding of the map, not the readable text, so two different
-// maps cannot form one key.
+// UsageKey groups the events the contract bills together: one tenant, one
+// resource, one meter, one component, and one set of billing dimensions.
+// Dimensions holds the canonical encoding of the map, not the readable text,
+// so two different maps cannot form one key.
 type UsageKey struct {
+	TenantID     string
 	ResourceType string
 	ResourceID   string
 	Meter        string
@@ -101,6 +102,7 @@ func (t *Totals) Add(event cloudevents.Event) (bool, error) {
 	}
 
 	key := UsageKey{
+		TenantID:     data.TenantID,
 		ResourceType: data.ResourceType,
 		ResourceID:   data.ResourceID,
 		Meter:        data.Meter,
@@ -137,6 +139,9 @@ func (t *Totals) Rows() []Row {
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		a, b := rows[i].Key, rows[j].Key
+		if a.TenantID != b.TenantID {
+			return a.TenantID < b.TenantID
+		}
 		if a.ResourceType != b.ResourceType {
 			return a.ResourceType < b.ResourceType
 		}
@@ -154,12 +159,16 @@ func (t *Totals) Rows() []Row {
 	return rows
 }
 
-// Print writes one line per billable total and one total per unit.
+// Print writes one line per billable total and one total per tenant and unit.
 func (t *Totals) Print(w io.Writer) error {
-	totals := make(map[string]*big.Rat)
+	type tenantUnit struct {
+		tenant string
+		unit   string
+	}
+	totals := make(map[tenantUnit]*big.Rat)
 	rows := t.Rows()
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "RESOURCE TYPE\tRESOURCE\tMETER\tCOMPONENT\tDIMENSIONS\tQUANTITY\tUNIT"); err != nil {
+	if _, err := fmt.Fprintln(writer, "TENANT\tRESOURCE TYPE\tRESOURCE\tMETER\tCOMPONENT\tDIMENSIONS\tQUANTITY\tUNIT"); err != nil {
 		return fmt.Errorf("writing totals header: %w", err)
 	}
 	for _, row := range rows {
@@ -167,26 +176,32 @@ func (t *Totals) Print(w io.Writer) error {
 		if dimensions == "" {
 			dimensions = "-"
 		}
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.Key.ResourceType, row.Key.ResourceID, row.Key.Meter, row.Key.Component,
-			dimensions, row.Quantity, row.Unit); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			row.Key.TenantID, row.Key.ResourceType, row.Key.ResourceID, row.Key.Meter,
+			row.Key.Component, dimensions, row.Quantity, row.Unit); err != nil {
 			return fmt.Errorf("writing totals row: %w", err)
 		}
-		if totals[row.Unit] == nil {
-			totals[row.Unit] = new(big.Rat)
+		key := tenantUnit{tenant: row.Key.TenantID, unit: row.Unit}
+		if totals[key] == nil {
+			totals[key] = new(big.Rat)
 		}
-		totals[row.Unit].Add(totals[row.Unit], t.sums[row.Key])
+		totals[key].Add(totals[key], t.sums[row.Key])
 	}
 	if err := writer.Flush(); err != nil {
 		return fmt.Errorf("writing totals: %w", err)
 	}
-	units := make([]string, 0, len(totals))
-	for unit := range totals {
-		units = append(units, unit)
+	keys := make([]tenantUnit, 0, len(totals))
+	for key := range totals {
+		keys = append(keys, key)
 	}
-	sort.Strings(units)
-	for _, unit := range units {
-		if _, err := fmt.Fprintf(w, "BILLABLE TOTAL: %s %s\n", totals[unit].FloatString(6), unit); err != nil {
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].tenant != keys[j].tenant {
+			return keys[i].tenant < keys[j].tenant
+		}
+		return keys[i].unit < keys[j].unit
+	})
+	for _, key := range keys {
+		if _, err := fmt.Fprintf(w, "BILLABLE TOTAL %s: %s %s\n", key.tenant, totals[key].FloatString(6), key.unit); err != nil {
 			return fmt.Errorf("writing billable total: %w", err)
 		}
 	}

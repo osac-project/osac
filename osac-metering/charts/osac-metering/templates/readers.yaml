@@ -1,24 +1,24 @@
 {{- /*
 One KafkaUser per entry in .Values.readers. A reader is an outside system
-that reads one tenant's usage events with its own credentials, granted and
+that reads every tenant's usage events with its own credentials, granted and
 revoked as chart values.
 
-The user reads one literal topic, osac.metering.heartbeat.<tenant>, and one
-consumer group named after the reader. It gets no write ACL, no Describe on
-another topic, and no access to the raw event log or the dead-letter topics.
-The group name is the reader name, so the lag Strimzi's Kafka exporter
-reports maps to the reader.
+The user reads the heartbeat topic prefix osac.metering.heartbeat. and one
+consumer group named after the reader. The prefix covers every tenant,
+including tenants created after the grant, so onboarding a tenant needs no
+chart change. It gets no write ACL and no access to the raw event log or the
+dead-letter topics. The group name is the reader name, so the lag Strimzi's
+Kafka exporter reports maps to the reader.
 
-Names are rejected when they repeat, are not a lowercase DNS name, name a
-built-in tenant, or collide with a KafkaUser OSAC owns. A collision would
-let a reader replace an OSAC user's ACLs or split an adapter's consumer
-group, so the whole osac- and osac. namespaces are reserved.
+Names are rejected when they repeat, are not a lowercase DNS name, or collide
+with a KafkaUser OSAC owns. A collision would let a reader replace an OSAC
+user's ACLs or split an adapter's consumer group, so the whole osac- and osac.
+namespaces are reserved.
 */}}
 {{- $reserved := list "osac-metering" "osac-metering-echo-adapter" "osac-metering-m360-adapter" -}}
 {{- $seen := dict -}}
 {{- range .Values.readers }}
 {{- $name := required "readers[].name is required" .name -}}
-{{- $tenant := required (printf "readers[%q].tenant is required" $name) .tenant -}}
 {{- if hasKey $seen $name }}
 {{- fail (printf "duplicate metering reader %q: each reader name must be unique" $name) }}
 {{- end }}
@@ -32,11 +32,8 @@ group, so the whole osac- and osac. namespaces are reserved.
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $name) }}
 {{- fail (printf "metering reader %q must be a lowercase DNS name: letters, digits, dots, and dashes" $name) }}
 {{- end }}
-{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $tenant) }}
-{{- fail (printf "metering reader %q has tenant %q, which is not a lowercase DNS name" $name $tenant) }}
-{{- end }}
-{{- if or (eq $tenant "system") (eq $tenant "shared") }}
-{{- fail (printf "metering reader %q names built-in tenant %q, which has no usage topic" $name $tenant) }}
+{{- if gt (len $name) 253 }}
+{{- fail (printf "metering reader %q must be at most 253 characters" $name) }}
 {{- end }}
 ---
 apiVersion: kafka.strimzi.io/v1
@@ -56,8 +53,8 @@ spec:
     acls:
       - resource:
           type: topic
-          name: osac.metering.heartbeat.{{ $tenant }}
-          patternType: literal
+          name: osac.metering.heartbeat.
+          patternType: prefix
         operations:
           - Read
           - Describe

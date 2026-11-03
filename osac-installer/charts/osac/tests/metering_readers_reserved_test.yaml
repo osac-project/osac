@@ -8,7 +8,6 @@ tests:
     set:
       metering.readers:
         - name: billing-reader
-          tenant: acme
     asserts:
       - hasDocuments:
           count: 0
@@ -17,7 +16,6 @@ tests:
     set:
       metering.readers:
         - name: fulfillment-service
-          tenant: acme
     asserts:
       - failedTemplate:
           errorPattern: 'metering reader "fulfillment-service" is a KafkaUser OSAC owns'
@@ -26,7 +24,6 @@ tests:
     set:
       metering.readers:
         - name: osac-billing-reader
-          tenant: acme
     asserts:
       - failedTemplate:
           errorPattern: 'metering reader "osac-billing-reader" uses the reserved osac- or osac. name prefix'

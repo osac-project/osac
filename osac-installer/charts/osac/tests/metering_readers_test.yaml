@@ -8,7 +8,6 @@ tests:
     set:
       metering.readers:
         - name: billing-reader
-          tenant: acme
     asserts:
       - hasDocuments:
           count: 1
@@ -19,7 +18,10 @@ tests:
           value: billing-reader
       - equal:
           path: spec.authorization.acls[0].resource.name
-          value: osac.metering.heartbeat.acme
+          value: osac.metering.heartbeat.
+      - equal:
+          path: spec.authorization.acls[0].resource.patternType
+          value: prefix
       - equal:
           path: spec.authorization.acls[0].operations
           value:
@@ -29,19 +31,27 @@ tests:
           path: spec.authorization.acls[1].resource.name
           value: billing-reader
 
-  - it: rejects a reader entry without a tenant
+  - it: rejects a tenant field, because one reader covers every tenant
     set:
       metering.readers:
         - name: billing-reader
+          tenant: acme
     asserts:
       - failedTemplate:
-          errorPattern: "'/metering/readers/0': missing property 'tenant'"
+          errorPattern: "at '/metering/readers/0': additional properties 'tenant' not allowed"
+
+  - it: rejects a reader entry without a name
+    set:
+      metering.readers:
+        - {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/metering/readers/0': missing property 'name'"
 
   - it: rejects a reader name longer than a KafkaUser name
     set:
       metering.readers:
         - name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          tenant: acme
     asserts:
       - failedTemplate:
           errorPattern: "'/metering/readers/0/name': maxLength: got 254, want 253"

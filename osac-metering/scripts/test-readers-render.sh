@@ -24,8 +24,7 @@ readers() {
 
 deployment "$tmp/deployment-without-readers.yaml"
 deployment "$tmp/deployment-with-reader.yaml" \
-	--set 'readers[0].name=billing-reader' \
-	--set 'readers[0].tenant=acme'
+	--set 'readers[0].name=billing-reader'
 
 if ! diff -u "$tmp/deployment-without-readers.yaml" "$tmp/deployment-with-reader.yaml"; then
 	echo "The metering Deployment must not change when a reader is granted or" \
@@ -35,12 +34,9 @@ fi
 
 readers "$tmp/two-readers.yaml" \
 	--set 'readers[0].name=billing-reader' \
-	--set 'readers[0].tenant=acme' \
-	--set 'readers[1].name=audit-reader' \
-	--set 'readers[1].tenant=globex'
+	--set 'readers[1].name=audit-reader'
 readers "$tmp/after-removal.yaml" \
-	--set 'readers[0].name=audit-reader' \
-	--set 'readers[0].tenant=globex'
+	--set 'readers[0].name=audit-reader'
 
 grep -q '^  name: billing-reader$' "$tmp/two-readers.yaml" || {
 	echo "The grant must render the reader's KafkaUser." >&2

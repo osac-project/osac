@@ -7,19 +7,21 @@ compliance with the License. You may obtain a copy of the License at
   http://www.apache.org/licenses/LICENSE-2.0
 */
 
-// billing-reader consumes one tenant's usage topic under the reader name the
-// grant gave it, drops repeated CloudEvent ids, sums each billable quantity,
-// and prints the totals. It is the worked example from the metering event
-// contract, not a production adapter.
+// billing-reader consumes every tenant's heartbeat topics under the reader
+// name the grant gave it, drops repeated CloudEvent ids, sums each billable
+// quantity per tenant, and prints the totals. It is the worked example from
+// the metering event contract, not a production adapter.
 //
 // It stops with a non-zero exit when it cannot read an event. The unread event
 // stays uncommitted, so the reader sees it again on the next run rather than
 // dropping it.
 //
+// The reader lists the heartbeat topics once at startup. A tenant created
+// after it starts is read on the next restart, not during this run.
+//
 // Connection values come from the environment; the repository carries none:
 //
 //	KAFKA_BROKERS              bootstrap address (required)
-//	KAFKA_TOPIC                e.g. osac.metering.heartbeat.acme (required)
 //	KAFKA_CONSUMER_GROUP       the reader name in its grant (required)
 //	KAFKA_TLS_ENABLED          "false" to disable TLS (default: enabled)
 //	KAFKA_TLS_CA_CERT          path to the shared OSAC CA file
@@ -41,7 +43,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -57,7 +58,6 @@ import (
 
 func main() {
 	brokers := envutil.RequireEnv("KAFKA_BROKERS")
-	topic := envutil.RequireEnv("KAFKA_TOPIC")
 	group := envutil.RequireEnv("KAFKA_CONSUMER_GROUP")
 
 	idleTimeout, err := time.ParseDuration(envutil.EnvOrDefault("READER_IDLE_TIMEOUT", "30s"))
@@ -92,12 +92,12 @@ func main() {
 		}
 	}()
 
-	topicExists, err := topicExists(client, topic)
+	topics, err := kafka.HeartbeatTopics(client)
 	if err != nil {
-		log.Fatalf("listing Kafka topics: %v", err)
+		log.Fatalf("listing heartbeat topics: %v", err)
 	}
-	if !topicExists {
-		log.Fatalf("topic %s does not exist: check the reader's tenant and that metering has served it", topic)
+	if len(topics) == 0 {
+		log.Fatalf("no osac.metering.heartbeat.* topics exist; check that metering has served a tenant")
 	}
 
 	consumerGroup, err := sarama.NewConsumerGroupFromClient(group, client)
@@ -133,9 +133,10 @@ func main() {
 		}
 	}()
 
-	logger.Printf("reading %s as group %s; stopping after %s without a message", topic, group, idleTimeout)
+	logger.Printf("reading %d heartbeat topics: %v", len(topics), topics)
+	logger.Printf("consuming as group %s; stopping after %s without a message", group, idleTimeout)
 	for runCtx.Err() == nil {
-		if err := consumerGroup.Consume(runCtx, []string{topic}, handler); err != nil {
+		if err := consumerGroup.Consume(runCtx, topics, handler); err != nil {
 			if errors.Is(err, context.Canceled) {
 				break
 			}
@@ -159,20 +160,6 @@ func main() {
 	}
 }
 
-// topicExists reports whether the grant's topic is on the broker. A missing
-// topic is a wrong grant or a tenant metering has not served, not an empty
-// stream, so the reader stops with a message instead of printing zero.
-func topicExists(client sarama.Client, topic string) (bool, error) {
-	if err := client.RefreshMetadata(); err != nil {
-		return false, fmt.Errorf("refreshing metadata: %w", err)
-	}
-	topics, err := client.Topics()
-	if err != nil {
-		return false, fmt.Errorf("listing topics: %w", err)
-	}
-	return slices.Contains(topics, topic), nil
-}
-
 // initialOffset maps READER_START_OFFSET to the offset a reader with no
 // committed position starts from.
 func initialOffset(value string) (int64, error) {
@@ -186,28 +173,40 @@ func initialOffset(value string) (int64, error) {
 	}
 }
 
-// consumer sums each claimed message and stops the run after the topic has
-// been quiet for idle. It is called from one goroutine per claim, so the
-// shared totals are safe only because a usage topic has one partition; each
-// claim has its own idle timer, and the first fatal error is mutex-guarded.
+// consumer sums each claimed message and stops the run after every claim has
+// been quiet for idle. Several claims run at once, one per partition over all
+// heartbeat topics, so the idle timer is shared and reset by any message, and
+// the totals and first error are mutex-guarded.
 type consumer struct {
 	totals *Totals
 	idle   time.Duration
 	cancel context.CancelFunc
 	logger *log.Logger
 
+	timerMu sync.Mutex
+	timer   *time.Timer
+
 	errMu sync.Mutex
 	err   error
 }
 
-func (c *consumer) Setup(sarama.ConsumerGroupSession) error { return nil }
+func (c *consumer) Setup(sarama.ConsumerGroupSession) error {
+	c.timerMu.Lock()
+	c.timer = time.AfterFunc(c.idle, c.expire)
+	c.timerMu.Unlock()
+	return nil
+}
 
-func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error { return nil }
+func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error {
+	c.timerMu.Lock()
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+	c.timerMu.Unlock()
+	return nil
+}
 
 func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	idle := time.NewTimer(c.idle)
-	defer idle.Stop()
-
 	for {
 		select {
 		case message, ok := <-claim.Messages():
@@ -222,15 +221,24 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 				return err
 			}
 			session.MarkMessage(message, "")
-			idle.Reset(c.idle)
-		case <-idle.C:
-			c.logger.Printf("no message for %s; printing the billable totals", c.idle)
-			c.cancel()
-			return nil
+			c.touch()
 		case <-session.Context().Done():
 			return nil
 		}
 	}
+}
+
+func (c *consumer) touch() {
+	c.timerMu.Lock()
+	if c.timer != nil {
+		c.timer.Reset(c.idle)
+	}
+	c.timerMu.Unlock()
+}
+
+func (c *consumer) expire() {
+	c.logger.Printf("no message for %s; printing the billable totals", c.idle)
+	c.cancel()
 }
 
 func (c *consumer) sum(message *sarama.ConsumerMessage) error {

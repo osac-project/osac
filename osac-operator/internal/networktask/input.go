@@ -30,6 +30,8 @@ import (
 const (
 	// TenantAnnotation carries the tenant API ID of a CR; osac_job_vars.tenant comes from it.
 	TenantAnnotation = "osac.openshift.io/tenant"
+	// ExternalIPContractVersionAnnotation selects the ExternalIP result contract.
+	ExternalIPContractVersionAnnotation = "osac.openshift.io/externalip-contract-version"
 	// apiVersion of every snapshot.
 	snapshotAPIVersion = "osac.openshift.io/v1alpha1"
 )
@@ -70,21 +72,28 @@ func Snapshot(obj client.Object, kind string, spec any, fields ...string) (map[s
 			}
 		}
 	}
+	metadata := map[string]any{
+		"name":       obj.GetName(),
+		"namespace":  obj.GetNamespace(),
+		"uid":        string(obj.GetUID()),
+		"generation": obj.GetGeneration(),
+	}
+	if version := obj.GetAnnotations()[ExternalIPContractVersionAnnotation]; version != "" {
+		// Only pass the contract selector to AAP; other Kubernetes annotations
+		// are not part of the manager input and may contain private data.
+		metadata["annotations"] = map[string]string{ExternalIPContractVersionAnnotation: version}
+	}
 	return map[string]any{
 		"apiVersion": snapshotAPIVersion,
 		"kind":       kind,
 		"id":         APIID(obj, kind),
-		"metadata": map[string]any{
-			"name":       obj.GetName(),
-			"namespace":  obj.GetNamespace(),
-			"uid":        string(obj.GetUID()),
-			"generation": obj.GetGeneration(),
-		},
-		"spec": picked,
+		"metadata":   metadata,
+		"spec":       picked,
 	}, nil
 }
 
-// NewInput starts a stored task input: {resource: <snapshot>, tenant}. tenant
+// NewInput starts a stored task input: {resource: <snapshot>, tenant}. The
+// snapshot retains the selected ExternalIP contract annotation. tenant
 // comes from the osac.openshift.io/tenant annotation and is left out when the
 // annotation is absent or for an ExternalIPPool. Add the task's other keys
 // (virtual_network, subnet, ipam, target, ...) to the returned map.
@@ -119,6 +128,33 @@ func LoadInput(obj v1alpha1.NetworkInputObject) (map[string]any, error) {
 		return nil, fmt.Errorf("reading stored task input: %w", err)
 	}
 	return input, nil
+}
+
+// ResourceGeneration returns metadata.generation from a stored task input's
+// resource snapshot. Cleanup tasks use the original create snapshot, so its
+// generation is the value a manager must return even if the live object has
+// since changed.
+func ResourceGeneration(input map[string]any) (int64, error) {
+	resource, ok := input["resource"]
+	if !ok {
+		return 0, fmt.Errorf("stored task input has no resource snapshot")
+	}
+	data, err := json.Marshal(resource)
+	if err != nil {
+		return 0, fmt.Errorf("reading stored resource generation: %w", err)
+	}
+	var snapshot struct {
+		Metadata struct {
+			Generation *int64 `json:"generation"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return 0, fmt.Errorf("reading stored resource generation: %w", err)
+	}
+	if snapshot.Metadata.Generation == nil || *snapshot.Metadata.Generation < 0 {
+		return 0, fmt.Errorf("stored resource snapshot has no valid metadata.generation")
+	}
+	return *snapshot.Metadata.Generation, nil
 }
 
 // WithLaunchKeys returns a copy of input with keys added at launch (for

@@ -1,0 +1,52 @@
+---
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Set the MetalLB release operation
+  ansible.builtin.set_fact:
+    metallb_external_ip_operation: external_ip.release
+
+- name: Validate the MetalLB ExternalIP v1 release input
+  ansible.builtin.include_tasks: _validate_external_ip_v1.yaml
+
+- name: Inspect the MetalLB reservation before release
+  ansible.builtin.include_tasks: _inspect_external_ip_service_v1.yaml
+
+- name: Delete the owned MetalLB reservation Service
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: absent
+    api_version: v1
+    kind: Service
+    name: "{{ metallb_external_ip_service_name }}"
+    namespace: metallb-system
+    wait: true
+    wait_timeout: 300
+  when: metallb_external_ip_service_read.resources | length > 0
+
+- name: Verify the MetalLB reservation Service is absent
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "{{ metallb_external_ip_service_name }}"
+    namespace: metallb-system
+  register: metallb_external_ip_release_info
+  retries: 30
+  delay: 2
+  until: metallb_external_ip_release_info.resources | length == 0
+
+- name: Return the MetalLB ExternalIP v1 release result
+  ansible.builtin.set_stats:
+    data:
+      osac_result:
+        schemaVersion: v1
+        operation: external_ip.release
+        resourceUID: "{{ metallb_external_ip_uid }}"
+        observedGeneration: "{{ metallb_external_ip_generation | int }}"
+        data: {}
+    per_host: false
+    aggregate: false
+  when: not ansible_check_mode

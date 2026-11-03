@@ -38,6 +38,14 @@
       - delete_security_group
       - apply_network_attachment
       - delete_network_attachment
+    # The operator admits these four lifecycle tasks only for the explicitly
+    # registered k8s_only v1 ExternalIP manager. Keep them out of the general
+    # Kubernetes manager task set.
+    osac_network_k8s_only_external_ip_tasks:
+      - create_external_ip_pool
+      - delete_external_ip_pool
+      - create_external_ip
+      - delete_external_ip
 
   pre_tasks:
     # The operator launches every networking job with only osac_job_vars; AAP
@@ -45,13 +53,38 @@
     # override a manager setting, so the job fails as final.
     - name: Check the job input
       vars:
+        _osac_network_job_vars: >-
+          {{ osac_job_vars
+             if osac_job_vars is defined and osac_job_vars is mapping
+             else {} }}
+        _osac_network_manager: >-
+          {{ _osac_network_job_vars.get('manager', {})
+             if _osac_network_job_vars.get('manager', {}) is mapping
+             else {} }}
+        _osac_network_resource: >-
+          {{ _osac_network_job_vars.get('resource', {})
+             if _osac_network_job_vars.get('resource', {}) is mapping
+             else {} }}
+        _osac_network_metadata: >-
+          {{ _osac_network_resource.get('metadata', {})
+             if _osac_network_resource.get('metadata', {}) is mapping
+             else {} }}
+        _osac_network_annotations: >-
+          {{ _osac_network_metadata.get('annotations', {})
+             if _osac_network_metadata.get('annotations', {}) is mapping
+             else {} }}
         _osac_network_unexpected_vars: >-
           {{ query('osac.service.launch_extra_vars')
              | reject('match', '^(osac_job_vars$|awx_|tower_)') | list }}
         _osac_network_task_set: >-
           {{ osac_network_fabric_tasks
-             if (osac_job_vars.manager.type | default('')) == 'fabric'
-             else osac_network_kubernetes_tasks }}
+             if _osac_network_manager.get('type', '') == 'fabric'
+             else osac_network_kubernetes_tasks
+             + (osac_network_k8s_only_external_ip_tasks
+                if _osac_network_manager.get('type', '') == 'kubernetes'
+                   and _osac_network_manager.get('name', '') == 'k8s_only'
+                   and _osac_network_manager.get('ansible_role', '') == 'osac.templates.k8s_only'
+                else []) }}
       ansible.builtin.set_fact:
         osac_network_input_error: >-
           {%- if _osac_network_unexpected_vars | length > 0 -%}
@@ -61,6 +94,13 @@
           {%- elif osac_job_vars.manager is not defined or osac_job_vars.manager is not mapping
                    or osac_job_vars.manager.type | default('') not in ['fabric', 'kubernetes'] -%}
           osac_job_vars.manager.type must be fabric or kubernetes
+          {%- elif osac_job_vars.task | default('') in ['create_external_ip', 'delete_external_ip']
+                   and _osac_network_manager.get('type', '') == 'kubernetes'
+                   and _osac_network_manager.get('name', '') == 'k8s_only'
+                   and _osac_network_manager.get('ansible_role', '') == 'osac.templates.k8s_only'
+                   and _osac_network_annotations.get(
+                     'osac.openshift.io/externalip-contract-version', '') != 'v1' -%}
+          k8s_only ExternalIP tasks require the v1 contract annotation
           {%- elif osac_job_vars.task | default('') not in _osac_network_task_set -%}
           task {{ osac_job_vars.task | default('') }} is not in the
           {{ osac_job_vars.manager.type }} manager task set

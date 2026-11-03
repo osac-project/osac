@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -127,6 +128,87 @@ var _ = Describe("ExternalIPPool and ExternalIP controllers", func() {
 		reconcileNet(eips, eip)
 		Expect(eip.Status.Address).To(Equal("198.51.100.19"))
 		expectReady(eip, metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
+	})
+
+	It("uses the explicit k8s_only v1 contract for pool and ExternalIP lifecycle", func() {
+		h.networkClass(true, false)
+		nc := &v1alpha1.NetworkClass{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: h.ns, Name: "default"}, nc)).To(Succeed())
+		nc.Status.NetworkManagers = &v1alpha1.NetworkManagers{
+			Fabric: &v1alpha1.NetworkManagerRef{
+				Name: "agentless_net", AnsibleRole: "osac.templates.agentless_net", ExternalIPContractVersion: "v1",
+			},
+			Kubernetes: &v1alpha1.NetworkManagerRef{
+				Name: "k8s_only", AnsibleRole: "osac.templates.k8s_only", ExternalIPContractVersion: "v1",
+			},
+		}
+		Expect(k8sClient.Status().Update(ctx, nc)).To(Succeed())
+
+		pool := &v1alpha1.ExternalIPPool{ObjectMeta: h.meta(kindExternalIPPool, "pool-k8s-only"),
+			Spec: v1alpha1.ExternalIPPoolSpec{CIDRs: []string{"198.51.100.0/24"}, IPFamily: "IPv4"}}
+		Expect(k8sClient.Create(ctx, pool)).To(Succeed())
+		reconcileNet(pools, pool)
+		Expect(pool.Status.NetworkManagers.Fabric).To(BeNil())
+		Expect(pool.Status.NetworkManagers.Kubernetes.Name).To(Equal("k8s_only"))
+		h.aap.succeed(networktask.CreateExternalIPPool, netK8s)
+		reconcileNet(pools, pool)
+		expectReady(pool, metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
+
+		eipMeta := h.meta(kindExternalIP, "eip-k8s-only")
+		eipMeta.Annotations = map[string]string{networktask.TenantAnnotation: "tenant-a"}
+		eip := &v1alpha1.ExternalIP{ObjectMeta: eipMeta,
+			Spec: v1alpha1.ExternalIPSpec{Pool: "pool-k8s-only"}}
+		Expect(k8sClient.Create(ctx, eip)).To(Succeed())
+		eip.Status.Address = "198.51.100.18"
+		Expect(k8sClient.Status().Update(ctx, eip)).To(Succeed())
+		reconcileNet(eips, eip)
+		allocation := h.aap.latest(networktask.CreateExternalIP, netK8s)
+		Expect(allocation.vars["existing_address"]).To(Equal("198.51.100.18"))
+		resource := allocation.vars["resource"].(map[string]any)
+		metadata := resource["metadata"].(map[string]any)
+		annotations := metadata["annotations"].(map[string]any)
+		Expect(annotations[networktask.ExternalIPContractVersionAnnotation]).To(Equal("v1"))
+		Expect(metadata["uid"]).To(Equal(string(eip.UID)))
+		Expect(metadata["generation"]).To(BeNumerically("==", eip.Generation))
+
+		allocationResult := fmt.Sprintf(
+			`{"osac_result":{"schemaVersion":"v1","operation":"external_ip.allocate","resourceUID":%q,"observedGeneration":%d,"data":{"address":"198.51.100.19"}}}`,
+			string(eip.UID), eip.Generation,
+		)
+		h.aap.finish(networktask.CreateExternalIP, netK8s, "successful", allocationResult)
+		reconcileNet(eips, eip)
+		Expect(eip.Status.Address).To(Equal("198.51.100.19"))
+		expectReady(eip, metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
+
+		createGeneration := eip.Generation
+		// Simulate a persisted create snapshot whose generation differs from
+		// the live object. Cleanup must validate against the stored request.
+		input := taskInput(eip)
+		resource = input["resource"].(map[string]any)
+		metadata = resource["metadata"].(map[string]any)
+		releaseGeneration := createGeneration + 1
+		metadata["generation"] = releaseGeneration
+		Expect(networktask.StoreInput(eip, input)).To(Succeed())
+		Expect(k8sClient.Status().Update(ctx, eip)).To(Succeed())
+
+		deleteNet(eip)
+		reconcileNet(eips, eip)
+		release := h.aap.latest(networktask.DeleteExternalIP, netK8s)
+		Expect(path(release.vars, "resource", "metadata", "annotations", networktask.ExternalIPContractVersionAnnotation)).To(Equal("v1"))
+		Expect(path(release.vars, "resource", "metadata", "generation")).To(BeNumerically("==", releaseGeneration))
+		releaseResult := fmt.Sprintf(
+			`{"osac_result":{"schemaVersion":"v1","operation":"external_ip.release","resourceUID":%q,"observedGeneration":%d,"data":{}}}`,
+			string(eip.UID), releaseGeneration,
+		)
+		h.aap.finish(networktask.DeleteExternalIP, netK8s, "successful", releaseResult)
+		_, exists := reconcileNet(eips, eip)
+		Expect(exists).To(BeFalse())
+
+		deleteNet(pool)
+		reconcileNet(pools, pool)
+		h.aap.succeed(networktask.DeleteExternalIPPool, netK8s)
+		_, exists = reconcileNet(pools, pool)
+		Expect(exists).To(BeFalse())
 	})
 
 	It("rejects the pool's broadcast address", func() {

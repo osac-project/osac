@@ -1,0 +1,85 @@
+---
+- name: Normalize the ExternalIP v1 resource and pool fields
+  ansible.builtin.set_fact:
+    metallb_external_ip_metadata: "{{ metallb_external_ip.metadata | default({}, true) }}"
+    metallb_external_ip_labels: >-
+      {{ (metallb_external_ip.metadata | default({}, true)).get('labels', {}) }}
+    metallb_external_ip_annotations: >-
+      {{ (metallb_external_ip.metadata | default({}, true)).get('annotations', {}) }}
+    metallb_external_ip_pool_metadata: >-
+      {{ metallb_external_ip_pool.metadata | default({}, true) }}
+    metallb_external_ip_pool_spec: >-
+      {{ metallb_external_ip_pool.spec | default({}, true) }}
+    metallb_external_ip_name: >-
+      {{ (metallb_external_ip.metadata | default({}, true)).get('name', '') }}
+    metallb_external_ip_id: >-
+      {{ metallb_external_ip.get(
+           'id', (metallb_external_ip.metadata | default({}, true)).get(
+             'labels', {}).get('osac.openshift.io/externalip-uuid', '')) }}
+    metallb_external_ip_uid: >-
+      {{ (metallb_external_ip.metadata | default({}, true)).get('uid', '') }}
+    metallb_external_ip_generation: >-
+      {{ (metallb_external_ip.metadata | default({}, true)).get('generation', -1) }}
+    metallb_external_ip_pool_id: >-
+      {{ metallb_external_ip_pool.get(
+           'id', metallb_external_ip_pool.get('fulfillment_id', '')) }}
+    metallb_external_ip_pool_uid: >-
+      {{ (metallb_external_ip_pool.metadata | default({}, true)).get(
+           'uid', metallb_external_ip_pool.get('kubernetes_uid', '')) }}
+    metallb_external_ip_pool_cidrs: >-
+      {{ (metallb_external_ip_pool.spec | default({}, true)).get(
+           'cidrs', [metallb_external_ip_pool.get('cidr', '')]) }}
+    metallb_external_ip_pool_name: >-
+      {{ (metallb_external_ip_pool.metadata | default({}, true)).get(
+           'name', (metallb_external_ip.metadata | default({}, true)).get(
+             'annotations', {}).get('osac.openshift.io/externalippool-name', '')) }}
+    metallb_external_ip_tenant: >-
+      {{ osac_job_vars.get('tenant', (metallb_external_ip.metadata | default({}, true)).get(
+           'annotations', {}).get('osac.openshift.io/tenant', '')) }}
+    metallb_external_ip_pool_tenant: >-
+      {{ metallb_external_ip_pool.get('tenant_id', '') }}
+    metallb_external_ip_uid_service_name: >-
+      osac-eip-{{ (metallb_external_ip.metadata | default({}, true)).get('uid', '') }}
+    metallb_external_ip_legacy_service_name: >-
+      osac-eip-{{ (metallb_external_ip.metadata | default({}, true)).get('name', '') }}
+
+- name: Validate the MetalLB ExternalIP v1 task input
+  ansible.builtin.assert:
+    that:
+      - metallb_external_ip_name | length > 0
+      - metallb_external_ip_metadata.get('namespace', '') | length > 0
+      - metallb_external_ip_uid | length > 0
+      - metallb_external_ip_generation is number
+      - metallb_external_ip_generation | int >= 0
+      - metallb_external_ip_id | length > 0
+      - metallb_external_ip_annotations.get('osac.openshift.io/externalip-contract-version', '') == 'v1'
+      - metallb_external_ip_tenant | length > 0
+      - metallb_external_ip_pool_name | length > 0
+      - metallb_external_ip.spec.pool is defined
+      - metallb_external_ip_pool_id | length > 0
+      - metallb_external_ip.spec.pool == metallb_external_ip_pool_id
+      - metallb_external_ip_pool_uid | length > 0
+      - metallb_external_ip_pool_cidrs is sequence
+      - metallb_external_ip_pool_cidrs is not string
+      - metallb_external_ip_pool_cidrs | length > 0
+      - >-
+        metallb_external_ip_pool_tenant | length == 0
+        or metallb_external_ip_pool_tenant == 'shared'
+        or metallb_external_ip_pool_tenant == metallb_external_ip_tenant
+    fail_msg: >-
+      MetalLB ExternalIP v1 requires the stored ExternalIP identity, tenant,
+      and matching ExternalIPPool snapshot with at least one CIDR. Pool
+      readiness and deletion lifecycle are enforced by the operator that
+      creates this task input.
+
+- name: Require a non-empty CIDR in the stored ExternalIPPool snapshot
+  ansible.builtin.assert:
+    that:
+      - item | string | length > 0
+    fail_msg: "The stored ExternalIPPool snapshot contains an empty CIDR."
+  loop: "{{ metallb_external_ip_pool_cidrs }}"
+
+- name: Set the MetalLB ExternalIP v1 identity
+  ansible.builtin.set_fact:
+    metallb_external_ip_uid_service_name: "osac-eip-{{ metallb_external_ip_uid }}"
+    metallb_external_ip_legacy_service_name: "osac-eip-{{ metallb_external_ip_name }}"

@@ -86,6 +86,21 @@ var _ = Describe("Resolve (TC-REG-01)", func() {
 		Expect(res.NetworkType).To(Equal("evpn"))
 	})
 
+	It("records the registered ExternalIP contract version", func() {
+		res, err := resolve(false, "cudn_evpn", fabric(nil), k8s(map[string]string{
+			networkmanager.DataKeyExternalIPContractVersion: "v1",
+		}))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.Kubernetes.ExternalIPContractVersion).To(Equal("v1"))
+	})
+
+	It("rejects an unsupported ExternalIP contract version", func() {
+		_, err := resolve(false, "cudn_evpn", fabric(nil), k8s(map[string]string{
+			networkmanager.DataKeyExternalIPContractVersion: "v2",
+		}))
+		Expect(err).To(MatchError(ContainSubstring("unsupported ExternalIP contract version \"v2\"")))
+	})
+
 	It("leaves the network type empty without a Kubernetes Manager", func() {
 		res, err := resolve(false, "", fabric(map[string]string{"network_types": "<delete>"}))
 		Expect(err).NotTo(HaveOccurred())

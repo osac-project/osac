@@ -3,7 +3,7 @@
 # playbook itself, each case in its own child ansible-playbook process launched
 # like an AAP job (`-e @extravars`). Checks:
 #   - the playbook's fixed task sets are exactly the contract's 21 Fabric and
-#     8 Kubernetes tasks;
+#     8 Kubernetes tasks, with a separate four-task k8s_only ExternalIP set;
 #   - the playbook includes the registered role's task file named by the job;
 #     a task of the set runs that task file of a real role (the Netris
 #     SecurityGroup no-op) and publishes no osac_result/osac_error;
@@ -52,6 +52,11 @@
       - delete_security_group
       - apply_network_attachment
       - delete_network_attachment
+    ntp_k8s_only_external_ip_tasks:
+      - create_external_ip_pool
+      - delete_external_ip_pool
+      - create_external_ip
+      - delete_external_ip
     # A role that does not exist: a job rejected before the role lookup must run no manager task.
     ntp_absent_role: osac.test_overrides.absent_network
     # A real role with a task that needs no backend: the Netris SecurityGroup no-op.
@@ -96,6 +101,28 @@
               missing {{ ntp_kubernetes_tasks | difference(_ntp_play.vars.osac_network_kubernetes_tasks) }},
               unexpected {{ _ntp_play.vars.osac_network_kubernetes_tasks | difference(ntp_kubernetes_tasks) }}
 
+        - name: Check the k8s_only ExternalIP exception stays limited to four lifecycle tasks
+          ansible.builtin.assert:
+            that:
+              - _ntp_play.vars.osac_network_k8s_only_external_ip_tasks | length == 4
+              - _ntp_play.vars.osac_network_k8s_only_external_ip_tasks | sort == ntp_k8s_only_external_ip_tasks | sort
+            fail_msg: >-
+              osac_network_k8s_only_external_ip_tasks is
+              {{ _ntp_play.vars.osac_network_k8s_only_external_ip_tasks }}
+
+        - name: Check the Kubernetes exception requires the registered k8s_only role
+          vars:
+            _ntp_text: "{{ lookup('ansible.builtin.file', ntp.repo ~ '/playbook_osac_network_task.yml') }}"
+          ansible.builtin.assert:
+            that:
+              - _ntp_text.find("_osac_network_manager.get('name', '') == 'k8s_only'") >= 0
+              - _ntp_text.find("_osac_network_manager.get('ansible_role', '') == 'osac.templates.k8s_only'") >= 0
+              - _ntp_text.find("'osac.openshift.io/externalip-contract-version'") >= 0
+              - _ntp_text.find("!= 'v1'") >= 0
+            fail_msg: >-
+              The Kubernetes exception must require the k8s_only role and
+              the v1 ExternalIP annotation.
+
         - name: Check the playbook includes the registered role's task file
           vars:
             _ntp_text: "{{ lookup('ansible.builtin.file', ntp.repo ~ '/playbook_osac_network_task.yml') }}"
@@ -106,6 +133,25 @@
             fail_msg: >-
               playbook_osac_network_task.yml must include_role osac_job_vars.manager.ansible_role
               with tasks_from osac_job_vars.task (contract §4.3)
+
+        - name: Require v1 before dispatching a k8s_only ExternalIP address task
+          ansible.builtin.include_tasks: run_job.yaml
+          vars:
+            ntp_label: k8s-only-requires-v1-external-ip-contract
+            ntp_expect: final
+            ntp_message: k8s_only ExternalIP tasks require the v1 contract annotation
+            ntp_job:
+              osac_job_vars:
+                manager:
+                  name: k8s_only
+                  type: kubernetes
+                  ansible_role: osac.templates.k8s_only
+                task: create_external_ip
+                resource:
+                  kind: ExternalIP
+                  id: missing-contract-version
+                  metadata:
+                    annotations: {}
 
         - name: Run a task of the Fabric set through a real manager role
           ansible.builtin.include_tasks: run_job.yaml

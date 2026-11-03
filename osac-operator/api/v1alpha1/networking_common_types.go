@@ -98,6 +98,12 @@ type NetworkManagerRef struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	AnsibleRole string `json:"ansibleRole"`
+
+	// ExternalIPContractVersion is the registered ExternalIP result contract.
+	// Empty keeps the manager's existing unversioned handoff.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=v1
+	ExternalIPContractVersion string `json:"externalIPContractVersion,omitempty"`
 }
 
 // NetworkManagers records the managers of a resource at create (contract §4.1).

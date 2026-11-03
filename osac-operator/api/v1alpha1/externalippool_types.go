@@ -47,7 +47,7 @@ type ExternalIPPoolStatus struct {
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 
-	// NetworkManagers records the Fabric Manager taken from the NetworkClass at create.
+	// NetworkManagers records the manager selection copied from the NetworkClass at create.
 	// +kubebuilder:validation:Optional
 	NetworkManagers *NetworkManagers `json:"networkManagers,omitempty"`
 

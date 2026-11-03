@@ -3,6 +3,13 @@
 # 1. Creates IPAddressPool with autoAssign: false, avoidBuggyIPs: true, and addresses from CR spec.cidrs
 # 2. Creates L2Advertisement referencing the IPAddressPool by name
 
+- name: Normalize the ExternalIPPool manager input
+  ansible.builtin.set_fact:
+    metallb_external_ip_pool: >-
+      {{ osac_job_vars.resource
+         if osac_job_vars.resource is defined
+         else external_ip_pool | default({}, true) }}
+
 - name: Include get remote cluster kubeconfig
   ansible.builtin.include_role:
     name: osac.service.common
@@ -10,8 +17,8 @@
 
 - name: Extract ExternalIPPool configuration
   ansible.builtin.set_fact:
-    pool_name: "{{ external_ip_pool.metadata.name }}"
-    pool_cidrs: "{{ external_ip_pool.spec.cidrs }}"
+    pool_name: "{{ metallb_external_ip_pool.metadata.name }}"
+    pool_cidrs: "{{ metallb_external_ip_pool.spec.cidrs }}"
 
 - name: Display ExternalIPPool information
   ansible.builtin.debug:

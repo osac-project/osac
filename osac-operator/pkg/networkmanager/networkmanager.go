@@ -48,6 +48,9 @@ const (
 	DataKeyNetworkTypes = "network_types"
 	// DataKeyNetworkType is the network type of a Kubernetes Manager.
 	DataKeyNetworkType = "network_type"
+	// DataKeyExternalIPContractVersion opts an ExternalIP manager into a
+	// versioned task-result contract. Empty preserves the legacy handoff.
+	DataKeyExternalIPContractVersion = "externalIPContractVersion"
 
 	// CapabilityEastWestEthernet means the Fabric Manager implements the FabricDomain tasks.
 	CapabilityEastWestEthernet = "eastWestEthernet"
@@ -89,24 +92,27 @@ var (
 		FabricManager: {
 			DataKeyName: true, DataKeyAnsibleRole: true, DataKeyDescription: true,
 			DataKeyCapabilities: true, DataKeyNetworkTypes: true,
+			DataKeyExternalIPContractVersion: true,
 		},
 		KubernetesManager: {
 			DataKeyName: true, DataKeyAnsibleRole: true, DataKeyDescription: true,
 			DataKeyCapabilities: true, DataKeyNetworkType: true,
+			DataKeyExternalIPContractVersion: true,
 		},
 	}
 )
 
 // Manager is a parsed and validated manager registration (contract §4.2).
 type Manager struct {
-	Name         string
-	AnsibleRole  string
-	Description  string
-	Capabilities []string
-	NetworkTypes []string
-	NetworkType  string
-	Type         ManagerType
-	ConfigMapRef types.NamespacedName
+	Name                      string
+	AnsibleRole               string
+	Description               string
+	Capabilities              []string
+	NetworkTypes              []string
+	NetworkType               string
+	ExternalIPContractVersion string
+	Type                      ManagerType
+	ConfigMapRef              types.NamespacedName
 }
 
 // HasCapability reports whether the manager declares the capability.
@@ -155,11 +161,15 @@ func ParseConfigMap(cm *corev1.ConfigMap, managerType ManagerType) (*Manager, er
 		return nil, fmt.Errorf("%s: ansible_role %q is not a fully qualified role name <namespace>.<collection>.<role>", ref, role)
 	}
 	m := &Manager{
-		Name:         name,
-		AnsibleRole:  role,
-		Description:  cm.Data[DataKeyDescription],
-		Type:         managerType,
-		ConfigMapRef: types.NamespacedName{Namespace: cm.Namespace, Name: cm.Name},
+		Name:                      name,
+		AnsibleRole:               role,
+		Description:               cm.Data[DataKeyDescription],
+		Type:                      managerType,
+		ExternalIPContractVersion: cm.Data[DataKeyExternalIPContractVersion],
+		ConfigMapRef:              types.NamespacedName{Namespace: cm.Namespace, Name: cm.Name},
+	}
+	if m.ExternalIPContractVersion != "" && m.ExternalIPContractVersion != "v1" {
+		return nil, fmt.Errorf("%s: unsupported ExternalIP contract version %q", ref, m.ExternalIPContractVersion)
 	}
 	var err error
 	if m.Capabilities, err = parseList(ref, DataKeyCapabilities, cm.Data[DataKeyCapabilities], validCapabilities[managerType], "capability"); err != nil {

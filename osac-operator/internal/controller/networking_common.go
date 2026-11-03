@@ -326,6 +326,41 @@ func copyManagers(obj networkResource, managers *v1alpha1.NetworkManagers, fabri
 	obj.SetNetworkManagers(copied)
 }
 
+// copyExternalIPManager records only the manager selected to own an
+// ExternalIPPool, preserving the existing single-manager status contract.
+func copyExternalIPManager(obj networkResource, managers *v1alpha1.NetworkManagers) error {
+	if obj.GetNetworkManagers() != nil || managers == nil {
+		return nil
+	}
+	manager, ref, err := externalIPManager(managers)
+	if err != nil {
+		return err
+	}
+	copied := &v1alpha1.NetworkManagers{}
+	if manager == v1alpha1.NetworkJobManagerKubernetes {
+		copied.Kubernetes = ref.DeepCopy()
+	} else {
+		copied.Fabric = ref.DeepCopy()
+	}
+	obj.SetNetworkManagers(copied)
+	return nil
+}
+
+// externalIPManager selects the explicitly registered k8s_only v1 manager
+// when present; otherwise ExternalIP tasks remain on the Fabric Manager.
+func externalIPManager(managers *v1alpha1.NetworkManagers) (v1alpha1.NetworkJobManager, *v1alpha1.NetworkManagerRef, error) {
+	if managers == nil {
+		return "", nil, fmt.Errorf("ExternalIP has no recorded network managers")
+	}
+	if ref := managers.Kubernetes; ref != nil && ref.Name == "k8s_only" && ref.ExternalIPContractVersion == "v1" {
+		return v1alpha1.NetworkJobManagerKubernetes, ref, nil
+	}
+	if managers.Fabric != nil {
+		return v1alpha1.NetworkJobManagerFabric, managers.Fabric, nil
+	}
+	return "", nil, fmt.Errorf("ExternalIP has no supported Fabric Manager or k8s_only v1 manager")
+}
+
 // inputOf returns the stored task input, or the input built by build when
 // none is stored yet. store writes it (and extra, when set) to the object; it
 // is a no-op once the input is stored. Pass store as the BeforeLaunch of the

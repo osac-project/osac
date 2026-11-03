@@ -1,2 +1,0 @@
-bugfixes:
-  - purefb_fs - Fixed failure to apply policies to existing filesystems due to incorrect API check and non-existent patch method

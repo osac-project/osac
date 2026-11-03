@@ -25,7 +25,7 @@ Requirements
 ------------
 The below requirements are needed on the host that executes this module.
 
-- helm (https://github.com/helm/helm/releases)
+- helm >= 3.0.0 (https://github.com/helm/helm/releases)
 
 
 Parameters
@@ -118,6 +118,24 @@ Parameters
                 </td>
                 <td>
                         <div>Provide a URL for accessing the API. Can also be specified via <code>K8S_AUTH_HOST</code> environment variable.</div>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="1">
+                    <div class="ansibleOptionAnchor" id="parameter-"></div>
+                    <b>keyring</b>
+                    <a class="ansibleOptionLink" href="#parameter-" title="Permalink to this option"></a>
+                    <div style="font-size: small">
+                        <span style="color: purple">path</span>
+                    </div>
+                    <div style="font-style: italic; font-size: small; color: darkgreen">added in 6.5.0</div>
+                </td>
+                <td>
+                </td>
+                <td>
+                        <div>Location of public keys used for verification.</div>
+                        <div>Only valid with <code>state=present</code>, which maps to the <code>helm plugin install</code> subcommand.</div>
+                        <div>This option requires helm version &gt;= 4.0.0.</div>
                 </td>
             </tr>
             <tr>
@@ -229,6 +247,28 @@ Parameters
                 <td>
                         <div>Whether or not to verify the API server&#x27;s SSL certificates. Can also be specified via <code>K8S_AUTH_VERIFY_SSL</code> environment variable.</div>
                         <div style="font-size: small; color: darkgreen"><br/>aliases: verify_ssl</div>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="1">
+                    <div class="ansibleOptionAnchor" id="parameter-"></div>
+                    <b>verify</b>
+                    <a class="ansibleOptionLink" href="#parameter-" title="Permalink to this option"></a>
+                    <div style="font-size: small">
+                        <span style="color: purple">boolean</span>
+                    </div>
+                    <div style="font-style: italic; font-size: small; color: darkgreen">added in 6.4.0</div>
+                </td>
+                <td>
+                        <ul style="margin: 0; padding: 0"><b>Choices:</b>
+                                    <li>no</li>
+                                    <li><div style="color: blue"><b>yes</b>&nbsp;&larr;</div></li>
+                        </ul>
+                </td>
+                <td>
+                        <div>Verify the plugin signature before installing.</div>
+                        <div>This option requires helm version &gt;= 4.0.0</div>
+                        <div>Used with <em>state=present</em>.</div>
                 </td>
             </tr>
     </table>

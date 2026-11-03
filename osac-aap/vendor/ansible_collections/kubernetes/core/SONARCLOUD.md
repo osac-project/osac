@@ -21,7 +21,7 @@ Workflow files:
 
 Scanner configuration lives in [sonar-project.properties](sonar-project.properties).
 
-The **coverage** job (in **`all_green`**) uses **`ansible-test`** (`units --coverage`, then **`coverage combine`** / **`coverage xml`**) with **ansible-core `stable-2.18`** on **`stable-5`**, then writes **`coverage.xml`** with workspace paths normalized for Sonar. **`pytest-cov`** is listed in **`tests/unit/requirements.txt`** for parity and any direct pytest runs; **`ansible-test`** still owns the coverage data used in CI.
+The **coverage** job (in **`all_green`**) uses **`ansible-test`** (`units --coverage`, then **`coverage combine`** / **`coverage xml`**) with **ansible-core `stable-2.18`** on **`stable-6`**, then writes **`coverage.xml`** with workspace paths normalized for Sonar. **`pytest-cov`** is listed in **`tests/unit/requirements.txt`** for parity and any direct pytest runs; **`ansible-test`** still owns the coverage data used in CI.
 
 **`sonarcloud.yml`** declares a required secret **`ANSIBLE_COLLECTIONS_ORG_SONAR_TOKEN_CICD_BOT`** and **`permissions: contents: read`**, **`pull-requests: read`**.
 

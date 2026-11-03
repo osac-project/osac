@@ -282,3 +282,7 @@ setuptools==80.10.2 --hash=sha256:8b0e9d10c784bf7d262c4e5ec5d4ec94127ce206e8738f
 # gated behind docs/test/testing extras, never requested here, so no
 # further cascade -- confirmed via its real sdist pyproject.toml.
 zope.interface==8.7 --hash=sha256:0b47b62e8d0d99b24bcdd32f4f2120425e5019c3bee2ad69a0e1d75737487a96
+# dnspython 2.9.2's PEP 517 build backend requires uv_build>=0.9.21,<0.14.0;
+# Cachi2 must prefetch this backend explicitly for the hermetic sdist build.
+# Its sdist uses maturin>=1,<2, already pinned above.
+uv_build==0.12.24 --hash=sha256:7f67b18a83af209b66b1ec3d6ed565406dab2ebfee7bbe3598b541e7d39a5e5a

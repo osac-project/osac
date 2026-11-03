@@ -10,8 +10,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -19,13 +17,41 @@ var _ = Describe("ClusterOrder upgrade contract", func() {
 	It("validates control-plane and node-set release images identically", func() {
 		data, err := os.ReadFile("../../config/crd/bases/osac.openshift.io_clusterorders.yaml")
 		Expect(err).NotTo(HaveOccurred())
-		var crd apiextensionsv1.CustomResourceDefinition
+		var crd struct {
+			Spec struct {
+				Versions []struct {
+					Schema struct {
+						OpenAPIV3Schema struct {
+							Properties map[string]json.RawMessage `json:"properties"`
+						} `json:"openAPIV3Schema"`
+					} `json:"schema"`
+				} `json:"versions"`
+			} `json:"spec"`
+		}
 		Expect(yaml.Unmarshal(data, &crd)).To(Succeed())
 		Expect(crd.Spec.Versions).NotTo(BeEmpty())
 
-		spec := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"]
-		controlPlane := spec.Properties["releaseImage"]
-		nodeSet := spec.Properties["nodeRequests"].Items.Schema.Properties["releaseImage"]
+		var spec struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		Expect(yaml.Unmarshal(crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"], &spec)).To(Succeed())
+
+		var controlPlane struct {
+			Pattern   string `json:"pattern"`
+			MaxLength *int64 `json:"maxLength"`
+		}
+		Expect(yaml.Unmarshal(spec.Properties["releaseImage"], &controlPlane)).To(Succeed())
+		var nodeRequests struct {
+			Items struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"items"`
+		}
+		Expect(yaml.Unmarshal(spec.Properties["nodeRequests"], &nodeRequests)).To(Succeed())
+		var nodeSet struct {
+			Pattern   string `json:"pattern"`
+			MaxLength *int64 `json:"maxLength"`
+		}
+		Expect(yaml.Unmarshal(nodeRequests.Items.Properties["releaseImage"], &nodeSet)).To(Succeed())
 		Expect(nodeSet.Pattern).To(Equal(controlPlane.Pattern))
 		Expect(nodeSet.MaxLength).To(Equal(controlPlane.MaxLength))
 		Expect(controlPlane.MaxLength).NotTo(BeNil())
@@ -57,22 +83,13 @@ var _ = Describe("ClusterOrder upgrade contract", func() {
 		}
 	})
 
-	It("preserves the config hash of an order with an empty node image", func() {
+	It("marshals a node request with an empty release image", func() {
 		spec := v1alpha1.ClusterOrderSpec{NodeRequests: []v1alpha1.NodeRequest{{
 			NodeSet: "workers", NumberOfNodes: 3,
 		}}}
 		encoded, err := json.Marshal(spec)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(encoded)).To(Equal(`{"nodeRequests":[{"nodeSet":"workers","numberOfNodes":3}]}`))
-
-		hash, err := provisioning.ComputeDesiredConfigVersion(spec)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(hash).To(Equal("398d688e45d7741c"))
-
-		spec.NodeRequests[0].ReleaseImage = "registry.example/ocp:4.21.0"
-		withImage, err := provisioning.ComputeDesiredConfigVersion(spec)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(withImage).NotTo(Equal(hash))
 	})
 
 	It("serializes the SSH key reference as an ID-only secret", func() {

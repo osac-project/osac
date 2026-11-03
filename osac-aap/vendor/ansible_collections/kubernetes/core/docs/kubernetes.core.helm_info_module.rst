@@ -25,7 +25,7 @@ Requirements
 ------------
 The below requirements are needed on the host that executes this module.
 
-- helm (https://github.com/helm/helm/releases)
+- helm >= 3.0.0 (https://github.com/helm/helm/releases)
 - yaml (https://pypi.org/project/PyYAML/)
 
 

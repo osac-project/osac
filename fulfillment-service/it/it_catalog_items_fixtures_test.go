@@ -196,7 +196,7 @@ func createCatalogItemComputeInstanceTypeFixture(ctx context.Context) string {
 }
 
 func createCatalogItemStorageTierFixture(ctx context.Context) string {
-	return createCatalogItemStorageTierFixtureForProvider(ctx, "test")
+	return createCatalogItemStorageTierFixtureForProvider(ctx, "vast")
 }
 
 func createCatalogItemStorageTierFixtureForProvider(ctx context.Context, provider string) string {

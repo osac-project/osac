@@ -466,8 +466,9 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 			Object: privatev1.StorageBackend_builder{
 				Metadata: privatev1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 				Spec: privatev1.StorageBackendSpec_builder{
-					Provider: "metadata-test",
-					Endpoint: "https://storage.example.invalid",
+					Provider:   "netapp",
+					Endpoint:   "https://storage.example.org",
+					CspManaged: true,
 					Credentials: privatev1.StorageBackendCredentials_builder{
 						Username: "metadata-test",
 						Password: fixtureStorageBackendPassword,

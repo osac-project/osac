@@ -125,6 +125,47 @@
           - result is changed
           - result.tags | length == 0
 
+    - name: Set a tag using the resource_tags alias
+      amazon.aws.ec2_tag:
+        resource: "{{ volume.volume_id }}"
+        resource_tags:
+          alias_key: alias_value
+      register: result
+
+    - ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.added_tags | length == 1
+          - result.tags | length == 1
+          - result.tags.alias_key == 'alias_value'
+
+    - name: Set a tag using the resource_tags alias - idempotency
+      amazon.aws.ec2_tag:
+        resource: "{{ volume.volume_id }}"
+        resource_tags:
+          alias_key: alias_value
+      register: result
+
+    - ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.tags | length == 1
+          - result.tags.alias_key == 'alias_value'
+
+    - name: Remove a tag set via the alias, using the tags parameter name
+      amazon.aws.ec2_tag:
+        resource: "{{ volume.volume_id }}"
+        state: absent
+        tags:
+          alias_key: alias_value
+      register: result
+
+    - ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.removed_tags | length == 1
+          - "'alias_key' in result.removed_tags"
+
   always:
     - name: Remove the volume
       amazon.aws.ec2_vol:

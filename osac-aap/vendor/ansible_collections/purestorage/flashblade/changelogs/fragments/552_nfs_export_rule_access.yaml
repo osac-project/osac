@@ -1,5 +1,0 @@
-bugfixes:
-  - purefb_policy - Fixed NFS export policy rules not updating when only the ``access`` value (e.g. root-squash to no-squash) changed; ``access`` was missing from the idempotency comparison.
-  - purefb_policy - Fixed policy rule updates (NFS export, SMB share, SMB client, network access) resetting unspecified fields to null; patches now use merged values so omitted fields are kept.
-  - purefb_policy - Fixed an object store access policy rule update referencing a non-existent key when preserving existing source IPs.
-  - purefb_policy - Fixed snapshot policy updates dropping the ``at`` time and timezone (reverting to an interval-only rule) when ``every`` or ``keep_for`` were changed without re-specifying ``at``.

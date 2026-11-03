@@ -1,2 +1,0 @@
-minor_changes:
-  - purefb_ds - Added new state of ``test`` to enable directory services to run diagnostics test

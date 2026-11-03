@@ -1,4 +1,0 @@
-bugfixes:
-  - purefb_fs - Restore the ``nfs_rules`` parameter, silently ignored since v1.25.0. Inline NFS export rules are applied again on create and update for non-realm filesystems.
-deprecated_features:
-  - purefb_fs - The ``nfs_rules`` parameter is deprecated in favour of ``export_policy`` and will be removed in 2.0.0. A deprecation notice is emitted when it is used.

@@ -13,13 +13,34 @@ try:
 except ImportError:
     pass
 
+from ansible.module_utils.ansible_release import __version__ as ANSIBLE_VERSION
 from ansible.module_utils.common.dict_transformations import camel_dict_to_snake_dict
 
 from ansible_collections.amazon.aws.plugins.module_utils.botocore import HAS_BOTO3
 from ansible_collections.amazon.aws.plugins.module_utils.modules import AnsibleAWSModule
 
+
+def _ansible_version_at_least(version_str):
+    """Check if running ansible-core version is at least the specified version."""
+    try:
+        current = tuple(int(p) for p in ANSIBLE_VERSION.split(".")[:2])
+        required = tuple(int(p) for p in version_str.split(".")[:2])
+        return current >= required
+    except Exception:
+        return False
+
+
 if not HAS_BOTO3:
     pytestmark = pytest.mark.skip("test_fail_json_aws.py requires the python modules 'boto3' and 'botocore'")
+
+# ansible-core >= 2.19 only reports a traceback (the `exception` field) when it
+# has been enabled for the module. On the target side this is driven by the
+# `_ansible_tracebacks_for` module argument rather than the controller-side
+# ANSIBLE_DISPLAY_TRACEBACK setting. Older cores don't recognise this argument
+# (it is rejected as an unsupported parameter) and always populate `exception`,
+# so it must only be passed on ansible-core >= 2.19.
+# See: https://github.com/ansible-collections/amazon.aws/issues/2929
+TRACEBACK_ARGS = {"_ansible_tracebacks_for": ["error"]} if _ansible_version_at_least("2.19") else {}
 
 
 class TestFailJsonAwsTestSuite:
@@ -55,7 +76,7 @@ class TestFailJsonAwsTestSuite:
     # ========================================================
     #   Passing fail_json_aws nothing more than a ClientError
     # ========================================================
-    @pytest.mark.parametrize("stdin", [{}], indirect=["stdin"])
+    @pytest.mark.parametrize("stdin", [TRACEBACK_ARGS], indirect=["stdin"])
     def test_fail_client_minimal(self, monkeypatch, stdin, capfd):
         monkeypatch.setattr(botocore, "__version__", "1.2.3")
         monkeypatch.setattr(boto3, "__version__", "1.2.4")
@@ -74,15 +95,15 @@ class TestFailJsonAwsTestSuite:
         assert return_val.get("msg") == self.EXAMPLE_MSG
         assert return_val.get("boto3_version") == "1.2.4"
         assert return_val.get("botocore_version") == "1.2.3"
-        assert return_val.get("exception") is not None
         assert return_val.get("failed")
         assert return_val.get("response_metadata") == self.CAMEL_RESPONSE
         assert return_val.get("error") == self.CAMEL_ERROR
+        assert return_val.get("exception") is not None
 
     # ========================================================
     #   Passing fail_json_aws a ClientError and a message
     # ========================================================
-    @pytest.mark.parametrize("stdin", [{}], indirect=["stdin"])
+    @pytest.mark.parametrize("stdin", [TRACEBACK_ARGS], indirect=["stdin"])
     def test_fail_client_msg(self, monkeypatch, stdin, capfd):
         monkeypatch.setattr(botocore, "__version__", "1.2.3")
         monkeypatch.setattr(boto3, "__version__", "1.2.4")
@@ -101,15 +122,15 @@ class TestFailJsonAwsTestSuite:
         assert return_val.get("msg") == self.FAIL_MSG + ": " + self.EXAMPLE_MSG
         assert return_val.get("boto3_version") == "1.2.4"
         assert return_val.get("botocore_version") == "1.2.3"
-        assert return_val.get("exception") is not None
         assert return_val.get("failed")
         assert return_val.get("response_metadata") == self.CAMEL_RESPONSE
         assert return_val.get("error") == self.CAMEL_ERROR
+        assert return_val.get("exception") is not None
 
     # ========================================================
     #   Passing fail_json_aws a ClientError and a message as a positional argument
     # ========================================================
-    @pytest.mark.parametrize("stdin", [{}], indirect=["stdin"])
+    @pytest.mark.parametrize("stdin", [TRACEBACK_ARGS], indirect=["stdin"])
     def test_fail_client_positional_msg(self, monkeypatch, stdin, capfd):
         monkeypatch.setattr(botocore, "__version__", "1.2.3")
         monkeypatch.setattr(boto3, "__version__", "1.2.4")
@@ -128,15 +149,15 @@ class TestFailJsonAwsTestSuite:
         assert return_val.get("msg") == self.FAIL_MSG + ": " + self.EXAMPLE_MSG
         assert return_val.get("boto3_version") == "1.2.4"
         assert return_val.get("botocore_version") == "1.2.3"
-        assert return_val.get("exception") is not None
         assert return_val.get("failed")
         assert return_val.get("response_metadata") == self.CAMEL_RESPONSE
         assert return_val.get("error") == self.CAMEL_ERROR
+        assert return_val.get("exception") is not None
 
     # ========================================================
     #   Passing fail_json_aws a ClientError and an arbitrary key
     # ========================================================
-    @pytest.mark.parametrize("stdin", [{}], indirect=["stdin"])
+    @pytest.mark.parametrize("stdin", [TRACEBACK_ARGS], indirect=["stdin"])
     def test_fail_client_key(self, monkeypatch, stdin, capfd):
         monkeypatch.setattr(botocore, "__version__", "1.2.3")
         monkeypatch.setattr(boto3, "__version__", "1.2.4")
@@ -156,15 +177,15 @@ class TestFailJsonAwsTestSuite:
         assert return_val.get("extra_key") == "Some Value"
         assert return_val.get("boto3_version") == "1.2.4"
         assert return_val.get("botocore_version") == "1.2.3"
-        assert return_val.get("exception") is not None
         assert return_val.get("failed")
         assert return_val.get("response_metadata") == self.CAMEL_RESPONSE
         assert return_val.get("error") == self.CAMEL_ERROR
+        assert return_val.get("exception") is not None
 
     # ========================================================
     #   Passing fail_json_aws a ClientError, and arbitraty key and a message
     # ========================================================
-    @pytest.mark.parametrize("stdin", [{}], indirect=["stdin"])
+    @pytest.mark.parametrize("stdin", [TRACEBACK_ARGS], indirect=["stdin"])
     def test_fail_client_msg_and_key(self, monkeypatch, stdin, capfd):
         monkeypatch.setattr(botocore, "__version__", "1.2.3")
         monkeypatch.setattr(boto3, "__version__", "1.2.4")
@@ -184,15 +205,15 @@ class TestFailJsonAwsTestSuite:
         assert return_val.get("extra_key") == "Some Value"
         assert return_val.get("boto3_version") == "1.2.4"
         assert return_val.get("botocore_version") == "1.2.3"
-        assert return_val.get("exception") is not None
         assert return_val.get("failed")
         assert return_val.get("response_metadata") == self.CAMEL_RESPONSE
         assert return_val.get("error") == self.CAMEL_ERROR
+        assert return_val.get("exception") is not None
 
     # ========================================================
     #   Passing fail_json_aws nothing more than a BotoCoreError
     # ========================================================
-    @pytest.mark.parametrize("stdin", [{}], indirect=["stdin"])
+    @pytest.mark.parametrize("stdin", [TRACEBACK_ARGS], indirect=["stdin"])
     def test_fail_botocore_minimal(self, monkeypatch, stdin, capfd):
         monkeypatch.setattr(botocore, "__version__", "1.2.3")
         monkeypatch.setattr(boto3, "__version__", "1.2.4")
@@ -211,15 +232,15 @@ class TestFailJsonAwsTestSuite:
         assert return_val.get("msg") == self.DEFAULT_CORE_MSG
         assert return_val.get("boto3_version") == "1.2.4"
         assert return_val.get("botocore_version") == "1.2.3"
-        assert return_val.get("exception") is not None
         assert return_val.get("failed")
         assert "response_metadata" not in return_val
         assert "error" not in return_val
+        assert return_val.get("exception") is not None
 
     # ========================================================
     #   Passing fail_json_aws BotoCoreError and a message
     # ========================================================
-    @pytest.mark.parametrize("stdin", [{}], indirect=["stdin"])
+    @pytest.mark.parametrize("stdin", [TRACEBACK_ARGS], indirect=["stdin"])
     def test_fail_botocore_msg(self, monkeypatch, stdin, capfd):
         monkeypatch.setattr(botocore, "__version__", "1.2.3")
         monkeypatch.setattr(boto3, "__version__", "1.2.4")
@@ -238,16 +259,16 @@ class TestFailJsonAwsTestSuite:
         assert return_val.get("msg") == self.FAIL_MSG + ": " + self.DEFAULT_CORE_MSG
         assert return_val.get("boto3_version") == "1.2.4"
         assert return_val.get("botocore_version") == "1.2.3"
-        assert return_val.get("exception") is not None
         assert return_val.get("failed")
         assert "response_metadata" not in return_val
         assert "error" not in return_val
+        assert return_val.get("exception") is not None
 
     # ========================================================
     #   Passing fail_json_aws BotoCoreError and a message as a positional
     #   argument
     # ========================================================
-    @pytest.mark.parametrize("stdin", [{}], indirect=["stdin"])
+    @pytest.mark.parametrize("stdin", [TRACEBACK_ARGS], indirect=["stdin"])
     def test_fail_botocore_positional_msg(self, monkeypatch, stdin, capfd):
         monkeypatch.setattr(botocore, "__version__", "1.2.3")
         monkeypatch.setattr(boto3, "__version__", "1.2.4")
@@ -266,15 +287,15 @@ class TestFailJsonAwsTestSuite:
         assert return_val.get("msg") == self.FAIL_MSG + ": " + self.DEFAULT_CORE_MSG
         assert return_val.get("boto3_version") == "1.2.4"
         assert return_val.get("botocore_version") == "1.2.3"
-        assert return_val.get("exception") is not None
         assert return_val.get("failed")
         assert "response_metadata" not in return_val
         assert "error" not in return_val
+        assert return_val.get("exception") is not None
 
     # ========================================================
     #   Passing fail_json_aws a BotoCoreError and an arbitrary key
     # ========================================================
-    @pytest.mark.parametrize("stdin", [{}], indirect=["stdin"])
+    @pytest.mark.parametrize("stdin", [TRACEBACK_ARGS], indirect=["stdin"])
     def test_fail_botocore_key(self, monkeypatch, stdin, capfd):
         monkeypatch.setattr(botocore, "__version__", "1.2.3")
         monkeypatch.setattr(boto3, "__version__", "1.2.4")
@@ -294,15 +315,15 @@ class TestFailJsonAwsTestSuite:
         assert return_val.get("extra_key") == "Some Value"
         assert return_val.get("boto3_version") == "1.2.4"
         assert return_val.get("botocore_version") == "1.2.3"
-        assert return_val.get("exception") is not None
         assert return_val.get("failed")
         assert "response_metadata" not in return_val
         assert "error" not in return_val
+        assert return_val.get("exception") is not None
 
     # ========================================================
     #   Passing fail_json_aws BotoCoreError, an arbitry key and a message
     # ========================================================
-    @pytest.mark.parametrize("stdin", [{}], indirect=["stdin"])
+    @pytest.mark.parametrize("stdin", [TRACEBACK_ARGS], indirect=["stdin"])
     def test_fail_botocore_msg_and_key(self, monkeypatch, stdin, capfd):
         monkeypatch.setattr(botocore, "__version__", "1.2.3")
         monkeypatch.setattr(boto3, "__version__", "1.2.4")
@@ -322,7 +343,7 @@ class TestFailJsonAwsTestSuite:
         assert return_val.get("extra_key") == "Some Value"
         assert return_val.get("boto3_version") == "1.2.4"
         assert return_val.get("botocore_version") == "1.2.3"
-        assert return_val.get("exception") is not None
         assert return_val.get("failed")
         assert "response_metadata" not in return_val
         assert "error" not in return_val
+        assert return_val.get("exception") is not None

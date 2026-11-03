@@ -130,7 +130,10 @@ dhcp_options_id:
     type: str
     returned: when available
 dhcp_config:
-    description: The boto2-style DHCP options created, associated or found
+    description:
+      - The boto2-style DHCP options created, associated or found.
+      - This return value has been deprecated and will be removed in a release after
+        2026-12-01. Use RV(dhcp_options) instead.
     returned: when available
     type: dict
     contains:
@@ -142,7 +145,7 @@ dhcp_config:
           - 10.0.0.1
           - 10.0.1.1
       domain-name:
-        description: The domain name for hosts in the DHCP option sets
+        description: The domain name for hosts in the DHCP option sets.
         returned: when available
         type: list
         sample:
@@ -199,12 +202,12 @@ EXAMPLES = r"""
     inherit_existing: true
     delete_old: false
 
-## Create a DHCP option set with 4.4.4.4 and 8.8.8.8 as the specified DNS servers, with tags
+## Create a DHCP option set with 8.8.4.4 and 8.8.8.8 as the specified DNS servers, with tags
 ## but do not assign to a VPC
 - amazon.aws.ec2_vpc_dhcp_option:
     region: us-east-1
     dns_servers:
-      - 4.4.4.4
+      - 8.8.4.4
       - 8.8.8.8
     tags:
       Name: google servers
@@ -214,7 +217,7 @@ EXAMPLES = r"""
 - amazon.aws.ec2_vpc_dhcp_option:
     region: us-east-1
     dns_servers:
-      - 4.4.4.4
+      - 8.8.4.4
       - 8.8.8.8
     tags:
       Name: google servers
@@ -532,6 +535,13 @@ def main() -> None:
     )
 
     module = AnsibleAWSModule(argument_spec=argument_spec, check_boto3=False, supports_check_mode=True)
+
+    module.deprecate(
+        "The 'dhcp_config' return value is deprecated. Use 'dhcp_options' instead.",
+        date="2026-12-01",
+        collection_name="amazon.aws",
+    )
+
     state = module.params["state"]
     new_config = create_dhcp_config(module.params)
 

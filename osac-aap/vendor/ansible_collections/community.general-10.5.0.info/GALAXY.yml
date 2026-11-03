@@ -5,4 +5,4 @@ namespace: community
 server: https://galaxy.ansible.com/api/
 signatures: []
 version: 10.5.0
-version_url: /api/v3/plugin/ansible/content/published/collections/index/community/general/versions/10.5.0/
+version_url: /api/content/published/v3/plugin/ansible/content/published/collections/index/community/general/versions/10.5.0/

@@ -34,8 +34,9 @@ Synopsis
 Requirements
 ------------
 
-The following requirement is needed on the host that executes this module.
+The following requirements are needed on the host that executes this module.
 
+- ``ansible-core`` version lower than 2.19.
 - The ``cloud.common`` collection (https://github.com/ansible-collections/cloud.common)
 
 You will also need to set the environment variable ``ENABLE_TURBO_MODE=1`` on the managed host. This can be done in the same ways you would usually do so, for example::

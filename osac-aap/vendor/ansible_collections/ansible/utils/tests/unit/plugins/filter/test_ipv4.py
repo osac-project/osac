@@ -14,11 +14,6 @@ __metaclass__ = type
 
 from unittest import TestCase
 
-import pytest
-
-from ansible.errors import AnsibleFilterError
-from ansible.template import AnsibleUndefined
-
 from ansible_collections.ansible.utils.plugins.filter.ipv4 import _ipv4
 
 
@@ -44,15 +39,6 @@ VALID_OUTPUT2 = ["192.24.2.1"]
 class TestIp4(TestCase):
     def setUp(self):
         pass
-
-    def test_ipv4_undefined_value(self):
-        """Check ipv4 filter undefined value"""
-        args = ["", AnsibleUndefined(name="my_ip"), ""]
-        with pytest.raises(
-            AnsibleFilterError,
-            match="Unrecognized type <<class 'ansible.template.AnsibleUndefined'>> for ipv4 filter <value>",
-        ):
-            _ipv4(*args)
 
     def test_ipv4_filter_empty_query(self):
         """Check ipv4 filter empty query"""

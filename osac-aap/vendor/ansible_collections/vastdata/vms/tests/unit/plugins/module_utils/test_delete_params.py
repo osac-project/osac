@@ -47,6 +47,25 @@ def _make_resource(delete_query=None, delete_body=None, params=None):
     return res
 
 
+def _make_lifecycle_resource(params=None):
+    """Build a BaseResource instance with enough state for _run_lifecycle."""
+
+    res = _make_resource(params=params)
+    res.check_mode = True
+    res.cluster_mm = None
+    res.required_versions = {}
+    res.field_versions = {}
+    res.field_transforms = {}
+    res.update_only_fields = {"state"}
+    res.create_only_fields = set()
+    res.delete_query_params = set()
+    res.delete_body_params = set()
+    res.lookup_field = "name"
+    res.include_ephemeral_in_updates = False
+    res.get = MagicMock(return_value=None)
+    return res
+
+
 def _make_client():
     """Build a VastClient with a stubbed requests.Session."""
     client = VastClient.__new__(VastClient)
@@ -237,3 +256,38 @@ class TestBuildDesiredStateExclusion:
         """Verify None values are excluded from desired state."""
         res = _make_resource(params={"name": "foo", "path": None})
         assert res.build_desired_state() == {"name": "foo"}
+
+
+class TestBaseResourceLifecycle:
+    """Test BaseResource lifecycle behavior."""
+
+    def test_create_does_not_warn_for_framework_state_field(self):
+        """Verify Ansible state is not reported as an API update-only field."""
+        res = _make_lifecycle_resource(params={"name": "foo", "state": "present", "wait": True})
+
+        res._run_lifecycle()
+
+        res.module.warn.assert_not_called()
+
+    def test_create_applies_update_only_fields_via_followup_patch(self):
+        """Verify update-only fields provided on create are applied via a follow-up PATCH."""
+        res = _make_lifecycle_resource(
+            params={"name": "foo", "enabled": True, "state": "present", "wait": True},
+        )
+        res.check_mode = False
+        res.update_only_fields = {"enabled"}
+        res.can_create = True
+        res.async_create = False
+        res.async_update = False
+        res.get = MagicMock(return_value=None)
+        res.create = MagicMock(return_value={"id": 42, "name": "foo", "enabled": False})
+        res.update = MagicMock(return_value={"id": 42, "name": "foo", "enabled": True})
+
+        res._run_lifecycle()
+
+        res.create.assert_called_once_with({"name": "foo"})
+        res.update.assert_called_once_with(42, {"enabled": True})
+        res.module.warn.assert_not_called()
+        result = res.module.exit_json.call_args.kwargs
+        assert result["changed"] is True
+        assert result["things"]["enabled"] is True

@@ -2,7 +2,7 @@
  "collection_info": {
   "namespace": "vastdata",
   "name": "vms",
-  "version": "1.2.0",
+  "version": "2.2.0",
   "authors": [
    "VAST Data"
   ],
@@ -27,7 +27,7 @@
   "name": "FILES.json",
   "ftype": "file",
   "chksum_type": "sha256",
-  "chksum_sha256": "24a62ea846c52560c38f1b6f10bea02921bd000e505106a4545736924e535011",
+  "chksum_sha256": "e25ef74f8c56d4ca507a9b43d559fa85e688b8070c165887706a13c14b80620c",
   "format": 1
  },
  "format": 1

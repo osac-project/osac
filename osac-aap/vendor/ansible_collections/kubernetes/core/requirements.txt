@@ -1,3 +1,7 @@
 kubernetes>=24.2.0
 requests-oauthlib
 jsonpatch
+
+# OSAC security floors; maintained in scripts/patch_vendor_requirements.py.
+oauthlib>=4.0.0
+urllib3>=2.8.0

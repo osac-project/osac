@@ -28,9 +28,8 @@
 # LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 # USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from ansible.module_utils._text import to_native
-from ansible.module_utils._text import to_text
-from ansible.module_utils.six import string_types
+from ansible.module_utils.common.text.converters import to_native
+from ansible.module_utils.common.text.converters import to_text
 
 
 def boto3_tag_list_to_ansible_dict(tags_list, tag_name_key_name=None, tag_value_key_name=None):
@@ -170,7 +169,7 @@ def boto3_tag_specifications(tags_dict, types=None):
         specifications.append(dict(Tags=tag_list))
         return specifications
 
-    if isinstance(types, string_types):
+    if isinstance(types, str):
         types = [types]
 
     for type_name in types:

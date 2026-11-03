@@ -26,10 +26,10 @@ class TestMinimalVersionTestSuite:
     # Prepare some data for use in our testing
     # ========================================================
     def setup_method(self):
-        self.MINIMAL_BOTO3 = "1.28.0"
-        self.MINIMAL_BOTOCORE = "1.31.0"
-        self.OLD_BOTO3 = "1.27.999"
-        self.OLD_BOTOCORE = "1.30.999"
+        self.MINIMAL_BOTO3 = "1.38.23"
+        self.MINIMAL_BOTOCORE = "1.38.23"
+        self.OLD_BOTO3 = "1.37.999"
+        self.OLD_BOTOCORE = "1.37.999"
 
     # ========================================================
     #   Test we don't warn when using valid versions
@@ -49,7 +49,6 @@ class TestMinimalVersionTestSuite:
         return_val = json.loads(out)
 
         assert return_val.get("exception") is None
-        assert return_val.get("invocation") is not None
         assert return_val.get("failed") is None
         assert return_val.get("error") is None
         assert return_val.get("warnings") is None
@@ -72,7 +71,6 @@ class TestMinimalVersionTestSuite:
         return_val = json.loads(out)
 
         assert return_val.get("exception") is None
-        assert return_val.get("invocation") is not None
         assert return_val.get("failed") is None
         assert return_val.get("error") is None
         assert return_val.get("warnings") is None
@@ -99,7 +97,6 @@ class TestMinimalVersionTestSuite:
         pprint(return_val)
 
         assert return_val.get("exception") is None
-        assert return_val.get("invocation") is not None
         assert return_val.get("failed") is None
         assert return_val.get("error") is None
         assert return_val.get("warnings") is not None
@@ -107,8 +104,9 @@ class TestMinimalVersionTestSuite:
         assert len(warnings) == 1
         # Assert that we have a warning about the version but be
         # relaxed about the exact message
-        assert "boto3" in warnings[0]
-        assert self.MINIMAL_BOTO3 in warnings[0]
+        warning = str(warnings[0])
+        assert "boto3" in warning
+        assert self.MINIMAL_BOTO3 in warning
 
     # ========================================================
     #   Test we warn when using an old version of botocore
@@ -132,7 +130,6 @@ class TestMinimalVersionTestSuite:
         pprint(return_val)
 
         assert return_val.get("exception") is None
-        assert return_val.get("invocation") is not None
         assert return_val.get("failed") is None
         assert return_val.get("error") is None
         assert return_val.get("warnings") is not None
@@ -140,8 +137,9 @@ class TestMinimalVersionTestSuite:
         assert len(warnings) == 1
         # Assert that we have a warning about the version but be
         # relaxed about the exact message
-        assert "botocore" in warnings[0]
-        assert self.MINIMAL_BOTOCORE in warnings[0]
+        warning = str(warnings[0])
+        assert "botocore" in warning
+        assert self.MINIMAL_BOTOCORE in warning
 
     # ========================================================
     #   Test we warn when using an old version of botocore and boto3
@@ -165,7 +163,6 @@ class TestMinimalVersionTestSuite:
         pprint(return_val)
 
         assert return_val.get("exception") is None
-        assert return_val.get("invocation") is not None
         assert return_val.get("failed") is None
         assert return_val.get("error") is None
         assert return_val.get("warnings") is not None
@@ -175,6 +172,7 @@ class TestMinimalVersionTestSuite:
 
         warning_dict = dict()
         for warning in warnings:
+            warning = str(warning)
             if "boto3" in warning:
                 warning_dict["boto3"] = warning
             if "botocore" in warning:

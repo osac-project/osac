@@ -1,2 +1,0 @@
-bugfixes:
- - purefb_user - Fixed NameError by replacing deprecated AdminRole with ReferenceWritable when changing user roles

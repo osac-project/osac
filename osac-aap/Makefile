@@ -1,7 +1,7 @@
 # Integration tests for osac.workflows collection
 # Note: Must be run from repository root directory
 
-.PHONY: test lint role-coverage role-coverage-report execution-environment-build execution-environment-push kind-load-image
+.PHONY: test lint role-coverage role-coverage-report vendor-collections execution-environment-build execution-environment-push kind-load-image
 
 # Task and Python coverage of the network manager roles (netris, cudn_evpn).
 # `make test` measures it on every run and fails on a gap; see
@@ -41,6 +41,14 @@ role-coverage-report:
 lint:
 	uv run ansible-lint
 
+# Reinstall pinned third-party collections and apply OSAC's maintained
+# dependency floors and documentation-example sanitization. Do not edit vendor/
+# directly; the overlay source is scripts/patch_vendor_requirements.py.
+vendor-collections:
+	rm -rf vendor
+	ansible-galaxy collection install --no-deps --pre -r collections/requirements.yml
+	python3 scripts/patch_vendor_requirements.py
+
 # Not a generic docker/Containerfile build like the other components --
 # ansible-builder assembles the execution environment image from
 # execution-environment.yaml, producing a local EE_LOCAL_TAG, which is
@@ -51,7 +59,10 @@ IMG ?= ghcr.io/osac-project/osac-aap:latest
 CONTAINER_TOOL ?= podman
 EE_CONTAINER_PLATFORM ?=
 
-EE_PLATFORM_ARGS = $(if $(EE_CONTAINER_PLATFORM),--extra-build-cli-args="--platform=$(EE_CONTAINER_PLATFORM)",)
+# Match the curated vendor tree: infra.aap_configuration declares ansible.eda,
+# but OSAC intentionally omits that unused collection and its Python deps.
+EE_GALAXY_ARGS = --build-arg=ANSIBLE_GALAXY_CLI_COLLECTION_OPTS=--no-deps
+EE_PLATFORM_ARGS = --extra-build-cli-args="$(if $(EE_CONTAINER_PLATFORM),--platform=$(EE_CONTAINER_PLATFORM) )$(EE_GALAXY_ARGS)"
 
 execution-environment-build:
 	uv sync --locked --all-extras --group development
@@ -62,6 +73,7 @@ execution-environment-build:
 			$(CONTAINER_TOOL) build \
 				--platform "$(EE_CONTAINER_PLATFORM)" \
 				--manifest "$(EE_LOCAL_TAG)" \
+				$(EE_GALAXY_ARGS) \
 				-f context/Containerfile context; \
 			;; \
 		*) \

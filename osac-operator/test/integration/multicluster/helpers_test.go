@@ -1408,20 +1408,33 @@ func TestHelperExportNonzeroExitNoOutput(t *testing.T) {
 }
 
 func TestHelperExportContainerRuntimeDetection(t *testing.T) {
+	// Use a deterministic fake PATH so the test does not
+	// depend on an ambient docker/podman daemon.
+	fakeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fakeDir, "docker"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeDir)
 	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "")
 	t.Setenv("CONTAINER_TOOL", "")
-	rt := detectContainerRuntime()
-	if rt != "docker" && rt != "podman" {
-		t.Errorf("unexpected runtime: %q", rt)
+	rt, err := detectContainerRuntime()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt != "docker" {
+		t.Errorf("expected docker from fake PATH, got %q", rt)
 	}
 
-	fakeDir := t.TempDir()
-	fakeP := filepath.Join(fakeDir, "podman")
-	_ = os.WriteFile(fakeP, []byte("#!/bin/sh\n"), 0755)
-	origPath := os.Getenv("PATH")
-	t.Setenv("PATH", fakeDir+":"+origPath)
+	if err := os.WriteFile(filepath.Join(fakeDir, "podman"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "podman")
-	rt = detectContainerRuntime()
+	rt, err = detectContainerRuntime()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if rt != "podman" {
 		t.Errorf("want podman via provider env, got %q", rt)
 	}
@@ -1447,21 +1460,23 @@ func TestHelperDetectRuntimeExplicitProviderMissing(
 ) {
 	fakeDir := t.TempDir()
 	fakeDocker := filepath.Join(fakeDir, "docker")
-	_ = os.WriteFile(fakeDocker,
-		[]byte("#!/bin/sh\nexit 0\n"), 0755)
+	if err := os.WriteFile(fakeDocker,
+		[]byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", fakeDir)
 	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "podman")
 	t.Setenv("CONTAINER_TOOL", "")
 
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for missing podman")
-		}
-		t.Logf("correctly failed closed (panic: %T)", r)
-	}()
-	_ = detectContainerRuntime()
-	t.Fatal("should not reach here")
+	_, err := detectContainerRuntime()
+	if err == nil {
+		t.Fatal("expected error for missing podman")
+	}
+	if !strings.Contains(err.Error(), "podman") ||
+		!strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should mention podman: %v", err)
+	}
+	t.Logf("correctly failed closed: %v", err)
 }
 
 func TestHelperDetectRuntimeExplicitProviderUnsupported(
@@ -1469,15 +1484,15 @@ func TestHelperDetectRuntimeExplicitProviderUnsupported(
 ) {
 	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "nerdctl")
 	t.Setenv("CONTAINER_TOOL", "")
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for unsupported")
-		}
-		t.Logf("correctly failed closed (panic: %T)", r)
-	}()
-	_ = detectContainerRuntime()
-	t.Fatal("should not reach here")
+
+	_, err := detectContainerRuntime()
+	if err == nil {
+		t.Fatal("expected error for unsupported provider")
+	}
+	if !strings.Contains(err.Error(), "nerdctl") {
+		t.Errorf("error should mention nerdctl: %v", err)
+	}
+	t.Logf("correctly failed closed: %v", err)
 }
 
 func TestHelperDetectRuntimeExplicitToolMissing(
@@ -1485,27 +1500,34 @@ func TestHelperDetectRuntimeExplicitToolMissing(
 ) {
 	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "")
 	t.Setenv("CONTAINER_TOOL", "/nonexistent/podman")
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for missing tool")
-		}
-		t.Logf("correctly failed closed (panic: %T)", r)
-	}()
-	_ = detectContainerRuntime()
-	t.Fatal("should not reach here")
+
+	_, err := detectContainerRuntime()
+	if err == nil {
+		t.Fatal("expected error for missing tool")
+	}
+	if !strings.Contains(err.Error(), "CONTAINER_TOOL") {
+		t.Errorf("error should mention CONTAINER_TOOL: %v",
+			err)
+	}
+	t.Logf("correctly failed closed: %v", err)
 }
 
 func TestHelperDetectRuntimeExplicitDockerExists(
 	t *testing.T,
 ) {
 	fakeDir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(fakeDir, "docker"),
-		[]byte("#!/bin/sh\nexit 0\n"), 0755)
+	if err := os.WriteFile(filepath.Join(fakeDir, "docker"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", fakeDir)
 	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "docker")
 	t.Setenv("CONTAINER_TOOL", "")
-	if rt := detectContainerRuntime(); rt != "docker" {
+	rt, err := detectContainerRuntime()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt != "docker" {
 		t.Errorf("want docker, got %q", rt)
 	}
 }
@@ -1514,14 +1536,179 @@ func TestHelperDetectRuntimeExplicitPodmanExists(
 	t *testing.T,
 ) {
 	fakeDir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(fakeDir, "podman"),
-		[]byte("#!/bin/sh\nexit 0\n"), 0755)
+	if err := os.WriteFile(filepath.Join(fakeDir, "podman"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", fakeDir)
 	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "podman")
 	t.Setenv("CONTAINER_TOOL", "")
-	if rt := detectContainerRuntime(); rt != "podman" {
+	rt, err := detectContainerRuntime()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt != "podman" {
 		t.Errorf("want podman, got %q", rt)
 	}
+}
+
+func TestHelperDetectRuntimeNoRuntimeAvailable(
+	t *testing.T,
+) {
+	// Empty PATH: neither docker nor podman available.
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir)
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "")
+	t.Setenv("CONTAINER_TOOL", "")
+
+	_, err := detectContainerRuntime()
+	if err == nil {
+		t.Fatal("expected error when no runtime in PATH")
+	}
+	if !strings.Contains(err.Error(),
+		"no container runtime") {
+		t.Errorf("error should mention missing runtime: %v",
+			err)
+	}
+}
+
+// TestHelperFailerPoisonRegression verifies that negative
+// detectContainerRuntime tests do NOT poison Ginkgo's
+// global.Failer and mask real BeforeSuite failures.
+//
+// Strategy: use os.Executable to get the already-compiled
+// test binary, run it in a subprocess with only the three
+// negative helper tests plus the Ginkgo suite, using a fake
+// PATH so BeforeSuite fails at a known sentinel step.
+// Assert the Ginkgo [FAILED] section reports the actual
+// sentinel error, not the stale provider message from the
+// negative helpers' t.Logf output.
+//
+// The -test.run regex excludes this test to prevent
+// recursion.
+func TestHelperFailerPoisonRegression(t *testing.T) {
+	testBin, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	// Create a fake PATH with docker and kind stubs.
+	fakeDir := t.TempDir()
+	for _, name := range []string{"docker", "kubectl"} {
+		if err := os.WriteFile(
+			filepath.Join(fakeDir, name),
+			[]byte("#!/bin/sh\nexit 0\n"),
+			0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// kind stub: exits 0 for cleanup commands, exits 1
+	// with a sentinel message for "create cluster" so
+	// BeforeSuite fails at a known point AFTER
+	// detectContainerRuntime succeeds.
+	kindScript := `#!/bin/sh
+case "$1" in
+  delete) exit 0 ;;
+  get)
+    case "$2" in
+      kubeconfig) echo "apiVersion: v1"; exit 0 ;;
+      nodes) echo "none"; exit 0 ;;
+    esac ;;
+  create)
+    echo "SENTINEL_KIND_CREATE_FAILURE" >&2
+    exit 1 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(
+		filepath.Join(fakeDir, "kind"),
+		[]byte(kindScript), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Select exactly the three negative tests plus the
+	// Ginkgo suite.  Exclude this regression test and all
+	// other helpers to prevent recursion and keep the
+	// subprocess fast.
+	run := "^(" +
+		"TestHelperDetectRuntimeExplicitProviderMissing|" +
+		"TestHelperDetectRuntimeExplicitProviderUnsupported|" +
+		"TestHelperDetectRuntimeExplicitToolMissing|" +
+		"TestMulticluster" +
+		")$"
+
+	cmd := exec.Command(testBin,
+		"-test.run", run,
+		"-test.v",
+		"-test.timeout", "60s",
+	)
+	cmd.Env = append(os.Environ(),
+		"PATH="+fakeDir,
+		"KIND_EXPERIMENTAL_PROVIDER=docker",
+		"CONTAINER_TOOL=",
+		"HOME="+t.TempDir(),
+		"KUBECONFIG="+filepath.Join(t.TempDir(), "kc"),
+	)
+	out, exitErr := cmd.CombinedOutput()
+	output := string(out)
+
+	// The subprocess MUST exit non-zero (BeforeSuite's
+	// kind-create fails).  A zero exit or timeout is wrong.
+	if exitErr == nil {
+		t.Fatalf("subprocess should have failed but "+
+			"exited 0:\n%s", truncateOutput(output, 2000))
+	}
+
+	// Verify each negative helper actually ran.
+	for _, name := range []string{
+		"TestHelperDetectRuntimeExplicitProviderMissing",
+		"TestHelperDetectRuntimeExplicitProviderUnsupported",
+		"TestHelperDetectRuntimeExplicitToolMissing",
+	} {
+		marker := "--- PASS: " + name
+		if !strings.Contains(output, marker) {
+			t.Errorf("negative helper %s did not run "+
+				"or did not pass; missing %q in output",
+				name, marker)
+		}
+	}
+
+	// Extract the Ginkgo [FAILED] section to check what
+	// BeforeSuite actually reported.  The section starts
+	// with "[FAILED]" and contains the failure message.
+	ginkgoFailed := ""
+	if idx := strings.Index(output, "[FAILED]"); idx >= 0 {
+		ginkgoFailed = output[idx:]
+	}
+
+	if ginkgoFailed == "" {
+		t.Errorf("no Ginkgo [FAILED] section in output:\n%s",
+			truncateOutput(output, 2000))
+	} else {
+		// The Ginkgo failure section must contain the
+		// actual sentinel, not the stale provider error.
+		if !strings.Contains(ginkgoFailed,
+			"SENTINEL_KIND_CREATE_FAILURE") {
+			t.Errorf("Ginkgo [FAILED] section does not "+
+				"contain the sentinel create error:\n%s",
+				truncateOutput(ginkgoFailed, 1500))
+		}
+		if strings.Contains(ginkgoFailed,
+			"binary not found in PATH") {
+			t.Errorf("Ginkgo [FAILED] section contains "+
+				"stale provider error (failer poison):\n%s",
+				truncateOutput(ginkgoFailed, 1500))
+		}
+	}
+}
+
+// truncateOutput returns at most n bytes of s for error
+// reporting without flooding test output.
+func truncateOutput(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "\n...(truncated)"
 }
 
 // ---------------------------------------------------------------------------
@@ -1700,7 +1887,10 @@ func TestHelperDetectRuntimeFullPathTool(t *testing.T) {
 	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "")
 	t.Setenv("CONTAINER_TOOL", fakePodman)
 
-	rt := detectContainerRuntime()
+	rt, err := detectContainerRuntime()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	// Must return the resolved full path, not just "podman".
 	if rt != fakePodman {
 		t.Errorf("want resolved path %q, got %q",

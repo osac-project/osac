@@ -204,7 +204,10 @@ var fulfillmentIssuerURL string
 
 var _ = BeforeSuite(func() {
 	By("detecting container runtime")
-	containerRuntime = detectContainerRuntime()
+	var rtErr error
+	containerRuntime, rtErr = detectContainerRuntime()
+	Expect(rtErr).NotTo(HaveOccurred(),
+		"detect container runtime")
 	_, _ = fmt.Fprintf(GinkgoWriter,
 		"container runtime: %s\n", containerRuntime)
 
@@ -493,30 +496,34 @@ func exportKindKubeconfig(clusterName string) ([]byte, error) {
 //  3. PATH probe: docker if present, else podman
 //
 // Explicit selection (env set) FAILS CLOSED: if the named
-// binary is missing or unsupported, the test suite aborts
+// binary is missing or unsupported, an error is returned
 // rather than silently falling through to a different daemon.
 // Inherited connection variables (CONTAINER_HOST,
 // CONTAINER_CONNECTION) are preserved unchanged.
 //
-// Returns a non-empty string or panics.
-func detectContainerRuntime() string {
+// Returns a non-empty string or a non-nil error.  Callers
+// that run inside a Ginkgo node should assert the error with
+// Expect; callers in plain Go tests should check err directly.
+// This avoids poisoning Ginkgo's global.Failer when the
+// function is called from TestXxx helpers that recover panics.
+func detectContainerRuntime() (string, error) {
 	// 1. KIND_EXPERIMENTAL_PROVIDER — explicit Makefile/user
 	//    selection.  Must be a supported provider with a
 	//    reachable binary; fail closed otherwise.
 	if v := os.Getenv("KIND_EXPERIMENTAL_PROVIDER"); v != "" {
 		if v != "docker" && v != "podman" {
-			Fail(fmt.Sprintf(
+			return "", fmt.Errorf(
 				"KIND_EXPERIMENTAL_PROVIDER=%q is not "+
 					"a supported provider "+
-					"(docker, podman)", v))
+					"(docker, podman)", v)
 		}
 		if _, err := exec.LookPath(v); err != nil {
-			Fail(fmt.Sprintf(
+			return "", fmt.Errorf(
 				"KIND_EXPERIMENTAL_PROVIDER=%q but "+
 					"%q binary not found in PATH",
-				v, v))
+				v, v)
 		}
-		return v
+		return v, nil
 	}
 	// 2. CONTAINER_TOOL — explicit tool selection.  May be a
 	//    full path; basename is checked for provider policy
@@ -526,29 +533,29 @@ func detectContainerRuntime() string {
 	if v := os.Getenv("CONTAINER_TOOL"); v != "" {
 		base := filepath.Base(v)
 		if base != "docker" && base != "podman" {
-			Fail(fmt.Sprintf(
+			return "", fmt.Errorf(
 				"CONTAINER_TOOL=%q (base %q) is not "+
 					"a supported container tool "+
-					"(docker, podman)", v, base))
+					"(docker, podman)", v, base)
 		}
 		resolved, err := exec.LookPath(v)
 		if err != nil {
-			Fail(fmt.Sprintf(
+			return "", fmt.Errorf(
 				"CONTAINER_TOOL=%q but binary not "+
 					"found: %s", v,
-				sanitizeErrorMessage(err)))
+				sanitizeErrorMessage(err))
 		}
-		return resolved
+		return resolved, nil
 	}
 	// 3. PATH probe — no explicit selection; auto-detect.
 	if _, err := exec.LookPath("docker"); err == nil {
-		return "docker"
+		return "docker", nil
 	}
 	if _, err := exec.LookPath("podman"); err == nil {
-		return "podman"
+		return "podman", nil
 	}
-	Fail("no container runtime (docker/podman) found in PATH")
-	return "" // unreachable
+	return "", fmt.Errorf(
+		"no container runtime (docker/podman) found in PATH")
 }
 
 // runContainer executes a container-tool command using the

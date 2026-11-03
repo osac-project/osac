@@ -121,7 +121,11 @@ func New(config Config) (*Client, error) {
 	configuration := netbox.NewConfiguration()
 	configuration.Servers[0].URL = endpoint
 	configuration.Debug = false
-	configuration.AddDefaultHeader("Authorization", "Token "+token)
+	authorizationScheme := "Token"
+	if strings.HasPrefix(token, "nbt_") {
+		authorizationScheme = "Bearer"
+	}
+	configuration.AddDefaultHeader("Authorization", authorizationScheme+" "+token)
 	configuration.HTTPClient = httpClient
 
 	return &Client{api: netbox.NewAPIClient(configuration)}, nil

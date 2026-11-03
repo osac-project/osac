@@ -13,7 +13,57 @@ language governing permissions and limitations under the License.
 
 package billing
 
-import "context"
+import (
+	"context"
+)
+
+// MaxListPages bounds how many pages of one provider list OSAC reads, whatever the caller: the correlation
+// resolver's uniqueness scans, billing-account discovery, and the M360 transport's own collection reads. Each
+// caller decides what happens at the bound; none of them keeps reading past it, so a provider that never
+// reports a last page cannot loop a caller forever.
+const MaxListPages = 50
+
+// ForEachAccount walks the provider accounts matching filter, starting from page, invoking fn for each account
+// in order. The walk ends when fn returns an error (returned to the caller unchanged), when the provider
+// reports the last page, or - after MaxListPages pages that all report a following page - with a MALFORMED
+// *Error: a provider that never ends a list is misbehaving, not merely large. It is the one owner of the
+// account-walk bound and its MALFORMED terminal, so the walkers over provider accounts cannot drift apart in
+// how they treat a provider that pages forever.
+func ForEachAccount(
+	ctx context.Context, adapter Adapter, filter AccountFilter, page Page, fn func(Account) error) error {
+	for range MaxListPages {
+		result, err := adapter.ListAccounts(ctx, filter, page)
+		if err != nil {
+			return err
+		}
+		for _, account := range result.Accounts {
+			if err := fn(account); err != nil {
+				return err
+			}
+		}
+		if result.Next == "" {
+			return nil
+		}
+		page.Token = result.Next
+	}
+	return NewError(ReasonMalformed, "ListAccounts", false, 0)
+}
+
+// CountAccountsWithExternalID counts provider accounts whose correlation value is exactly value, paging through
+// bounded results. It counts every match rather than stopping at two: a provider that never ends the match list
+// is MALFORMED, not merely ambiguous, and that verdict needs the walk to reach the bound. It fails with a
+// MALFORMED *Error once MaxListPages pages all report a following page.
+func CountAccountsWithExternalID(ctx context.Context, adapter Adapter, value string) (int, error) {
+	count := 0
+	err := ForEachAccount(ctx, adapter, AccountFilter{ExternalID: value}, Page{}, func(Account) error {
+		count++
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
 
 // Adapter is the only boundary through which OSAC talks to a billing provider. It exposes normalized values only.
 type Adapter interface {

@@ -67,6 +67,19 @@ var _ = Describe("render", func() {
 		Expect(output).To(ContainSubstring("acct-corr-1001"))
 	})
 
+	It("strips control characters from provider-supplied cells in table mode", func() {
+		dirty := publicv1.BillingAccount_builder{
+			Id: "ba-3", ProviderKey: "m360", DisplayName: "Acme\x1b]52;x;wg\x07",
+			State:         publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+			CorrelationId: "corr\t\n1001",
+		}.Build()
+		output := run("table", listWith(dirty))
+		Expect(output).ToNot(ContainSubstring("\x1b"), "a terminal escape must not reach the console")
+		Expect(output).ToNot(ContainSubstring("\x07"))
+		Expect(output).To(ContainSubstring("Acme]52;x;wg"))
+		Expect(output).To(ContainSubstring("corr1001"))
+	})
+
 	It("says so when there are no accounts, in table mode", func() {
 		output := run("table", listWith())
 		Expect(output).To(ContainSubstring("No billing accounts found"))

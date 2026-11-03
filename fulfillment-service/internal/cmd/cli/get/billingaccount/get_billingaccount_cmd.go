@@ -15,24 +15,18 @@ package billingaccount
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
-	"google.golang.org/protobuf/encoding/protojson"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/output"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
-)
-
-const (
-	formatTable = "table"
-	formatJson  = "json"
-	formatYaml  = "yaml"
 )
 
 // Cmd creates the command that lists discovered billing accounts.
@@ -47,7 +41,7 @@ func Cmd() *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE:    runner.run,
 	}
-	result.Flags().StringVarP(&runner.format, "output", "o", formatTable, outputFlagHelp)
+	result.Flags().StringVarP(&runner.format, "output", "o", output.Table, output.FlagHelp)
 	return result
 }
 
@@ -55,11 +49,11 @@ type runnerContext struct {
 	format string
 }
 
+// run validates the output format, connects using the configured login, and renders the listed billing accounts.
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-	if c.format != formatTable && c.format != formatJson && c.format != formatYaml {
-		return fmt.Errorf("unknown output format '%s', should be '%s', '%s' or '%s'",
-			c.format, formatTable, formatJson, formatYaml)
+	if err := output.Validate(c.format); err != nil {
+		return err
 	}
 	cfg := config.SettingsFromContext(ctx)
 	if !cfg.Armed() {
@@ -78,31 +72,21 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return render(ctx, terminal.ConsoleFromContext(ctx), c.format, response)
 }
 
+// render writes response as a table, JSON, or YAML depending on format.
 func render(ctx context.Context, console *terminal.Console, format string,
 	response *publicv1.BillingAccountsListResponse) error {
-	if format == formatTable {
+	if format == output.Table {
 		renderTable(ctx, console, response.GetItems())
 		return nil
 	}
-	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(response)
-	if err != nil {
-		return fmt.Errorf("failed to encode billing accounts: %w", err)
-	}
-	var value any
-	if err := json.Unmarshal(data, &value); err != nil {
-		return fmt.Errorf("failed to encode billing accounts: %w", err)
-	}
-	if format == formatJson {
-		console.RenderJson(ctx, value)
-	} else {
-		console.RenderYaml(ctx, value)
-	}
-	return nil
+	return output.Render(ctx, console, format, "billing accounts", response)
 }
 
 // renderTable writes a compact table of discovered billing accounts. An empty currency and an unknown state are
 // rendered explicitly - "-" and "UNKNOWN" - rather than left blank, so a viewer can tell "not supplied" apart
-// from a rendering bug.
+// from a rendering bug. The display-name and correlation-id cells are provider-supplied text and are sanitized
+// on the way out - ingest already sanitizes stored display names, but correlation values are stored raw for
+// exact matching, and rows written before that are best not trusted either.
 func renderTable(ctx context.Context, console *terminal.Console, items []*publicv1.BillingAccount) {
 	if len(items) == 0 {
 		console.Infof(ctx, "No billing accounts found.\n")
@@ -120,17 +104,12 @@ func renderTable(ctx context.Context, console *terminal.Console, items []*public
 			state = "UNKNOWN"
 		}
 		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			item.GetId(), orDash(item.GetProviderKey()), orDash(item.GetDisplayName()),
-			orDash(item.GetBaseCurrency()), state, orDash(item.GetCorrelationId()), observed)
+			item.GetId(), output.OrDash(item.GetProviderKey()),
+			output.OrDash(billing.SanitizeProviderText(item.GetDisplayName())),
+			output.OrDash(item.GetBaseCurrency()), state,
+			output.OrDash(billing.SanitizeProviderText(item.GetCorrelationId())), observed)
 	}
 	writer.Flush()
-}
-
-func orDash(value string) string {
-	if value == "" {
-		return "-"
-	}
-	return value
 }
 
 const shortHelp = `List discovered billing accounts`
@@ -148,5 +127,3 @@ const example = `  # List discovered billing accounts
 
   # List as JSON
   osac get billingaccount -o json`
-
-const outputFlagHelp = `_FORMAT_ - Output format. Must be one of {{ bt }}table{{ bt }}, {{ bt }}json{{ bt }} or {{ bt }}yaml{{ bt }}.`

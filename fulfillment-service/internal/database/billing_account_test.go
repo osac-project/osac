@@ -15,6 +15,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -179,6 +180,17 @@ var _ = Describe("Billing accounts", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(items[0].State).To(Equal("ACTIVE"))
 		})
+
+		It("marks every account of the provider UNKNOWN when seenReferences is nil, like empty", func() {
+			upsert(BillingAccountUpsert{ProviderKey: "m360", ProviderAccountReference: "acct-1", State: "ACTIVE"})
+			// A nil slice must behave like an empty one: pgx would encode it as SQL NULL, and the sweep's
+			// not-in predicate would match no rows, silently skipping the vanished-account sweep.
+			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, time.Now().UTC())).To(Succeed())
+			items, total, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(1)), "the row must be retained, not deleted")
+			Expect(items[0].State).To(Equal("UNKNOWN"))
+		})
 	})
 
 	Describe("ListBillingAccounts", func() {
@@ -209,6 +221,15 @@ var _ = Describe("Billing accounts", func() {
 			Expect(total).To(Equal(int32(2)))
 			Expect(items).To(HaveLen(1))
 			Expect(items[0].DisplayName).To(Equal("Beta"))
+		})
+
+		It("rejects a negative limit or offset as an invalid query, not a SQL error", func() {
+			_, _, err := ListBillingAccounts(ctx, tx, 0, -1, "", "")
+			var invalid *ErrInvalidFlatTableQuery
+			Expect(errors.As(err, &invalid)).To(BeTrue(),
+				"a negative limit must reach the caller as INVALID_ARGUMENT, not an opaque INTERNAL")
+			_, _, err = ListBillingAccounts(ctx, tx, -1, 0, "", "")
+			Expect(errors.As(err, &invalid)).To(BeTrue())
 		})
 
 		It("rejects a filter outside the supported grammar", func() {

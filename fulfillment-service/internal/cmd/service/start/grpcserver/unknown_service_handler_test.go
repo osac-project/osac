@@ -211,9 +211,9 @@ var _ = Describe("buildDisabledServiceMap", func() {
 	It("only includes disabled groups for partial disable", func() {
 		m := buildDisabledServiceMap(&services.Flags{CaaS: true, VMaaS: false, BMaaS: true, MaaS: false})
 		for prefix := range m {
-			Expect(m[prefix]).To(Equal("VMaaS"))
+			Expect(m[prefix]).To(BeElementOf("VMaaS", "MaaS"))
 		}
-		Expect(m).To(HaveLen(len(disabledServicePrefixes["VMaaS"])))
+		Expect(m).To(HaveLen(len(disabledServicePrefixes["VMaaS"]) + len(disabledServicePrefixes["MaaS"])))
 	})
 
 	It("keeps DiskImages enabled when either VMaaS or BMaaS is enabled", func() {

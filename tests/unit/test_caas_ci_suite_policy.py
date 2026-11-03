@@ -195,13 +195,21 @@ def test_filtered_tier_reaches_caas(matched: str, requested: str) -> None:
     )
 
 
-@pytest.mark.parametrize("response", ["valid", "stale", "missing", "api-error"])
+@pytest.mark.parametrize(
+    "response", ["valid", "stale", "missing", "api-error", "invalid-sha", "null-base", "invalid-json"]
+)
 def test_pr_base_read_fails_closed(tmp_path: Path, response: str) -> None:
     step = next(
         step for step in _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["labels"]["steps"] if step.get("id") == "base"
     )
-    pull = {"head": {"sha": PR_SHA if response == "valid" else "b" * 40}, "base": {"sha": "c" * 40}}
-    (tmp_path / "response").write_text(json.dumps(pull if response != "missing" else {}))
+    pull = {"head": {"sha": "b" * 40 if response == "stale" else PR_SHA}, "base": {"sha": "c" * 40}}
+    if response == "invalid-sha":
+        pull["base"]["sha"] = "not-a-sha"
+    if response == "null-base":
+        pull["base"] = None
+    (tmp_path / "response").write_text(
+        "{" if response == "invalid-json" else json.dumps(pull if response != "missing" else {})
+    )
     mock = tmp_path / "gh"
     mock.write_text("#!/bin/sh\n" + ("exit 1\n" if response == "api-error" else 'cat "$RESPONSE"\n'))
     mock.chmod(0o755)
@@ -232,6 +240,9 @@ def test_pr_base_read_fails_closed(tmp_path: Path, response: str) -> None:
         {"filename": SANITY, "status": "added"},
         {"filename": "tests/e2e/caas/regression-other/test.py", "status": "added"},
         {"filename": SANITY, "status": "base-only"},
+        {"filename": 'tests/e2e/caas/regression/$(touch injected); "quoted".py', "status": "added"},
+        {"filename": SANITY, "status": "git-error"},
+        {"filename": SANITY, "status": "filter-error"},
     ],
 )
 def test_pinned_paths_filter_on_pr_changes(tmp_path: Path, changed: dict) -> None:
@@ -283,7 +294,17 @@ def test_pinned_paths_filter_on_pr_changes(tmp_path: Path, changed: dict) -> Non
     output = tmp_path / "output"
     env = {**os.environ, "PR_BASE": base, "PR_SHA": head, "GITHUB_OUTPUT": str(output)}
     comparison = next(step for step in steps if step.get("id") == "comparison")
-    subprocess.run(["bash", "-c", comparison["run"]], cwd=tmp_path, env=env, check=True, capture_output=True)
+    if changed["status"] == "git-error":
+        git("remote", "remove", "origin")
+        env["PR_SHA"] = "f" * 40
+    compared = subprocess.run(
+        ["bash", "-c", comparison["run"]], cwd=tmp_path, env=env, check=False, capture_output=True
+    )
+    if changed["status"] == "git-error":
+        assert compared.returncode != 0
+        assert not output.exists()
+        return
+    assert compared.returncode == 0, compared.stderr
     comparison_sha = output.read_text().strip().removeprefix("sha=")
     output.write_text("")
     result = subprocess.run(
@@ -295,13 +316,21 @@ def test_pinned_paths_filter_on_pr_changes(tmp_path: Path, changed: dict) -> Non
             "GITHUB_REPOSITORY": "osac-project/osac",
             "INPUT_BASE": comparison_sha,
             "INPUT_REF": head,
-            "INPUT_FILTERS": str(ROOT / filtering["with"]["filters"]),
+            "INPUT_FILTERS": str(
+                tmp_path / "missing-filter.yml"
+                if changed["status"] == "filter-error"
+                else ROOT / filtering["with"]["filters"]
+            ),
             "INPUT_PREDICATE-QUANTIFIER": "every",
         },
         capture_output=True,
         text=True,
         check=False,
     )
+    if changed["status"] == "filter-error":
+        assert result.returncode != 0
+        assert "caas-regression<<" not in output.read_text()
+        return
     assert result.returncode == 0, result.stdout + result.stderr
     expected = any(
         path.startswith("tests/e2e/caas/regression/")
@@ -309,6 +338,7 @@ def test_pinned_paths_filter_on_pr_changes(tmp_path: Path, changed: dict) -> Non
     )
     assert re.search(rf"^caas-regression<<.*\n{str(expected).lower()}\n", output.read_text(), re.MULTILINE)
     assert git("rev-parse", "HEAD") == base, "path detection must not check out PR code"
+    assert not (tmp_path / "injected").exists()
 
 
 def test_pr_tier_resolution_preserves_trust_boundaries() -> None:

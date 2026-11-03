@@ -3,9 +3,60 @@ import { describe, expect, it } from 'vitest';
 
 import { BareMetalInstanceCatalogItemSchema } from '@osac/types';
 
-import { getBareMetalInstanceInitialValues } from './fields';
+import { createEmptyBareMetalInstanceValues, getBareMetalInstanceInitialValues } from './fields';
 
 describe('getBareMetalInstanceInitialValues', () => {
+  it('leaves the guest OS family undefined until the disk image field initializes it', () => {
+    expect(createEmptyBareMetalInstanceValues().spec.guestOsFamily).toBeUndefined();
+    expect(getBareMetalInstanceInitialValues().spec.guestOsFamily).toBeUndefined();
+  });
+
+  it('loads an editable user data source default', () => {
+    const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
+      id: 'catalog-bm-1',
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: {
+              defaultValue: {
+                source: { case: 'secret', value: { name: 'catalog-user-data' } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const values = getBareMetalInstanceInitialValues(catalogItem);
+
+    expect(values.spec.userData).toEqual({
+      value: { source: 'secret', inline: '', secret: 'catalog-user-data' },
+      locked: false,
+    });
+  });
+
+  it('loads a locked inline user data source and prevents overrides', () => {
+    const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
+      id: 'catalog-bm-1',
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'locked',
+            value: { source: { case: 'inline', value: '#cloud-config' } },
+          },
+        },
+      },
+    });
+
+    const values = getBareMetalInstanceInitialValues(catalogItem);
+
+    expect(values.spec.userData).toEqual({
+      value: { source: 'inline', inline: '#cloud-config', secret: '' },
+      locked: true,
+    });
+  });
+
   it('loads a locked catalog disk image into the wizard', () => {
     const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
       id: 'catalog-bm-1',
@@ -42,6 +93,31 @@ describe('getBareMetalInstanceInitialValues', () => {
 
     expect(getBareMetalInstanceInitialValues(catalogItem).spec.diskImage).toEqual({
       value: { id: 'disk-image-fedora', name: 'fedora' },
+      locked: false,
+    });
+  });
+
+  it('loads an editable catalog user-data default into the wizard', () => {
+    const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
+      id: 'catalog-bm-1',
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: {
+              defaultValue: {
+                source: { case: 'inline', value: '#cloud-config\nruncmd: []' },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const values = getBareMetalInstanceInitialValues(catalogItem);
+
+    expect(values.spec.userData).toEqual({
+      value: { source: 'inline', inline: '#cloud-config\nruncmd: []', secret: '' },
       locked: false,
     });
   });

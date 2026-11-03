@@ -36,6 +36,10 @@ import (
 // NATGateway Create ExternalIPs are resolved by the handler, by ID or by name within
 // the NATGateway's tenant and project, after checking that only the system may create
 // a NATGateway for a tenant-default VirtualNetwork.
+// RoleBinding handlers validate service-account references in the request's
+// tenant scope.
+// BMI ssh_key references are resolved by the private handler using the same
+// tenant-scoped project selection as ComputeInstance; shared Secrets are rejected.
 // Other references continue through the interceptor's registered lookups.
 func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, registerer prometheus.Registerer) (*references.ReferenceValidator, error) {
 	validator, err := references.NewReferenceValidator().SetLogger(logger).SetMetricsRegisterer(registerer).
@@ -48,6 +52,8 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(serviceAccountControllerSecretReferenceMethods(),
 			"object.status.client_secret", "object.status.registration_secret").
 		SetExcludedReferencePaths(natGatewayCreationMethods(), "object.spec.external_ip").
+		SetExcludedReferencePaths(roleBindingServiceAccountMethods(), "object.spec.service_accounts").
+		SetExcludedReferencePaths(bareMetalInstanceSSHKeyMethods(), "object.spec.ssh_key").
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reference validator: %w", err)
@@ -76,10 +82,32 @@ func natGatewayCreationMethods() []string {
 	}
 }
 
+func roleBindingServiceAccountMethods() []string {
+	return []string{
+		publicv1.RoleBindings_Create_FullMethodName,
+		privatev1.RoleBindings_Create_FullMethodName,
+		publicv1.RoleBindings_Update_FullMethodName,
+		privatev1.RoleBindings_Update_FullMethodName,
+	}
+}
+
 func bareMetalInstanceCreationMethods() []string {
 	return []string{
 		publicv1.BareMetalInstances_Create_FullMethodName,
 		privatev1.BareMetalInstances_Create_FullMethodName,
+	}
+}
+
+// bareMetalInstanceSSHKeyMethods covers the request fields whose SSH-key Secret
+// references are resolved by the private handler under tenant-scoped project selection.
+// Updates are included so the handler's immutability check answers changes to
+// the immutable ssh_key field instead of an interceptor lookup.
+func bareMetalInstanceSSHKeyMethods() []string {
+	return []string{
+		publicv1.BareMetalInstances_Create_FullMethodName,
+		privatev1.BareMetalInstances_Create_FullMethodName,
+		publicv1.BareMetalInstances_Update_FullMethodName,
+		privatev1.BareMetalInstances_Update_FullMethodName,
 	}
 }
 

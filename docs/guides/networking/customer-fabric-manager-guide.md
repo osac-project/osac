@@ -386,7 +386,7 @@ Advertise the required EVPN routes.
 
 `cudn_evpn` sets exactly these route targets on the hub, whatever the hub nodes' BGP AS. OSAC passes no route target to your tasks.
 
-With any other route target, the hub and your fabric exchange no routes. VMs then get no connectivity while every task succeeds.
+With any other route target, the hub and your fabric exchange no routes. Routed VM traffic then fails while every task succeeds; same-Subnet traffic can still work, as on the Netris lab.
 
 #### Gateway
 

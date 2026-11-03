@@ -18,14 +18,13 @@ import {
 import type { Volume } from '@osac/types';
 import { VolumeState } from '@osac/types';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
-import { formatSizeGib } from '@osac/ui-components/components/Volume/utils';
 
 import { VOLUMES_LIST_PATH } from './values';
 import { VolumeAccessModeLabel } from './VolumeAccessModeLabel';
 import VolumeDeleteConfirmModal from './VolumeDeleteConfirmModal';
 import { VolumeStatusLabel } from './VolumeStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
-import { displayValue } from '../../utils/detailFormatters';
+import { displayValue, formatSizeGib } from '../../utils/detailFormatters';
 import { Timestamp } from '../Primitives/Timestamp';
 import { ResourceDetailHeader } from '../Resource/ResourceDetailHeader';
 
@@ -62,8 +61,7 @@ const VolumeDetails = ({ volume }: VolumeDetailsProps) => {
             >
               <FlexItem>
                 <ResourceDetailHeader
-                  parentTo={VOLUMES_LIST_PATH}
-                  parentLabel={t('Volumes')}
+                  parents={[{ to: VOLUMES_LIST_PATH, label: t('Volumes') }]}
                   resourceName={volume.metadata?.name ?? volume.id}
                   titleAddon={<VolumeStatusLabel state={volume.status?.state} />}
                 />

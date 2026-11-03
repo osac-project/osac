@@ -70,7 +70,7 @@ var _ = Describe("ComputeInstance InstanceType resize", func() {
 				Id:       requestedStorageBackendId,
 				Metadata: privatev1.Metadata_builder{Name: requestedStorageBackendId}.Build(),
 				Spec: privatev1.StorageBackendSpec_builder{
-					Provider:    "test",
+					Provider:    "vast",
 					Description: "Resize test backend",
 					Endpoint:    "https://test-backend.example.com",
 					Credentials: privatev1.StorageBackendCredentials_builder{

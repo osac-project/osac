@@ -39,15 +39,15 @@
         csi_driver_install_chart_registry: >-
           {{ lookup('env', 'CSI_DRIVER_INSTALL_TEST_REGISTRY') | default('oci://ghcr.io/osac-project/charts', true) }}
         csi_driver_install_enabled: true
-        # Test 3 and Test 5 test multi-vendor accumulation (pure) and missing-service fail-fast (trident)
+        # Test 3 and Test 5 exercise product-key routing to Pure and Trident.
         csi_driver_install_supported_vendors:
           - vast
+          - netapp
           - pure
-          - trident
         csi_driver_install_vendor_node_socket_paths:
           vast: /var/lib/kubelet/plugins/csi.vast.vastdata.com
+          netapp: /var/lib/kubelet/plugins/csi.trident.netapp.io
           pure: /var/lib/kubelet/plugins/csi.pure.purestorage.com
-          trident: /var/lib/kubelet/plugins/csi.trident.netapp.io
     - name: Uninstall any pre-existing csi-driver release
       kubernetes.core.helm:
         name: csi-driver
@@ -352,8 +352,8 @@
           converged={{ _csi_driver_install_converged | default('undefined') }}
         success_msg: "Identical re-dispatch correctly detected as converged -- install block short-circuited (no lock, no Helm upgrade)"
 
-# ── Test 3: A dispatch adding a second provider accumulates, does not clear the first ──
-- name: "CSI Driver Install - Third dispatch adds pure, vast wiring survives"
+# ── Test 3: A product route accumulates under its vendor driver without clearing VAST ──
+- name: "CSI Driver Install - Third dispatch adds Pure, vast wiring survives"
   hosts: localhost
   gather_facts: false
 
@@ -365,17 +365,17 @@
         provider: pure
 
   tasks:
-    - name: Call csi_driver_install role for a different provider (pure)
+    - name: Call csi_driver_install role for the Pure provider key
       ansible.builtin.include_role:
         name: osac.service.csi_driver_install
 
-    - name: Read installed csi-driver release after the pure dispatch
+    - name: Read installed csi-driver release after the Pure dispatch
       kubernetes.core.helm_info:
         name: csi-driver
         release_namespace: osac-csi
       register: _driver_release_after_pure
 
-    - name: Assert both vast (from the first dispatch) and pure (this dispatch) remain enabled
+    - name: Assert VAST and Pure remain enabled under their provider/product routes
       ansible.builtin.assert:
         that:
           - _driver_release_after_pure.status['values'].vendors.vast.enabled | bool
@@ -387,7 +387,9 @@
             ('pure=' in (_driver_release_after_pure.status['values'].controller.vendorControllers | default(''))) or
             ('pure=' in (_driver_release_after_pure.status['values'].controller.vendorSockets | default('')))
           - "'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock' in _driver_release_after_pure.status['values'].node.vendorSockets"
-          - "'pure=/var/lib/kubelet/plugins/csi.pure.purestorage.com/csi.sock' in _driver_release_after_pure.status['values'].node.vendorSockets"
+          - >-
+            'pure=/var/lib/kubelet/plugins/csi.pure.purestorage.com/csi.sock' in
+            _driver_release_after_pure.status['values'].node.vendorSockets
         fail_msg: "Dispatching a second provider did not retain the first provider's wiring in release values"
         success_msg: "vast wiring survived the pure dispatch; both vendors are enabled"
 
@@ -526,8 +528,8 @@
 # ── Test 5: A dispatched, chart-supported vendor with no live controller
 # Service on the hub -- fail-fast before the block (before any lock/Helm
 # call), proving a missing umbrella-owned Service never disturbs an already-installed
-# release from an earlier dispatch. trident is used here because it's chart-supported
-# but Setup only creates Service fixtures for vast/pure ──
+# release from an earlier dispatch. NetApp is mapped to the Trident service, which
+# Setup intentionally does not create ──
 - name: "CSI Driver Install - Dispatched vendor's controller Service is missing (should fail, existing release survives)"
   hosts: localhost
   gather_facts: false
@@ -536,7 +538,7 @@
     csi_driver_install_tiers:
       - name: default
         protocol: nfs
-        provider: trident
+        provider: netapp
 
   tasks:
     - name: Attempt dispatch for a vendor with no live controller Service (expected to fail)

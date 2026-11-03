@@ -72,7 +72,7 @@ describe('VmDetailsCard', () => {
     expect(screen.getByText('standard-4-8')).toBeInTheDocument();
     expect(screen.getByText('web-01')).toBeInTheDocument();
     expect(screen.getByText('tenant-ssh-key')).toBeInTheDocument();
-    expect(screen.getByText('40 GB, balanced')).toBeInTheDocument();
+    expect(screen.getByText('40 GiB, balanced')).toBeInTheDocument();
     expect(screen.queryByText('User Data')).not.toBeInTheDocument();
     expect(screen.queryByText('Run strategy')).not.toBeInTheDocument();
     expect(screen.queryByText('Tenants')).not.toBeInTheDocument();
@@ -118,11 +118,11 @@ describe('VmDetailsCard', () => {
 
     renderCard(vmWithAdditionalDisks);
 
-    expect(screen.getByText('40 GB, balanced')).toBeInTheDocument();
+    expect(screen.getByText('40 GiB, balanced')).toBeInTheDocument();
     expect(screen.getByText('Additional disk 1')).toBeInTheDocument();
-    expect(screen.getByText('100 GB, fast')).toBeInTheDocument();
+    expect(screen.getByText('100 GiB, fast')).toBeInTheDocument();
     expect(screen.getByText('Additional disk 2')).toBeInTheDocument();
-    expect(screen.getByText('20 GB, legacy-tier')).toBeInTheDocument();
+    expect(screen.getByText('20 GiB, legacy-tier')).toBeInTheDocument();
     expect(screen.queryAllByRole('combobox')).toHaveLength(0);
     expect(screen.getByRole('button', { name: 'Edit instance type' })).toBeInTheDocument();
   });

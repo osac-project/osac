@@ -287,6 +287,7 @@ fields; in YAML, write them as nested mappings.
 | `node_sets` | — | Policy for the complete node-set map, including sizes and BareMetalInstanceType references |
 | `network_attachment` | — | Subnet and security-group attachment |
 | `auto_external_ip_attachment` | — | Whether to provision external IP attachments automatically |
+| `add_on_operators` | `--add-on-operator` | Policy for the complete list of published add-on operators |
 
 **ComputeInstanceCatalogItem** policies:
 
@@ -381,6 +382,23 @@ fulfillment checks the effective types for fabric ports during cluster creation.
 
 When the user omits the map or supplies an empty one, the catalog's locked map or editable default
 is used. Without a catalog value, creation fails: cluster templates never supply node sets.
+
+Cluster add-on operator policies use the same complete-list semantics:
+
+```yaml
+fields:
+  add_on_operators:
+    locked:
+      items:
+        - name: cert-manager
+          shared: true
+```
+
+The referenced operators must be published platform operators. A locked list is applied when the
+cluster is created and rejects a user-supplied list. An editable default is used when the user omits
+`--add-on-operator`; a nonempty user list replaces the default rather than merging with it. Operator
+dependencies are resolved automatically. Installation progress is available in the cluster's
+`status.add_on_operators` field.
 
 ### Template parameter policies
 
@@ -564,10 +582,16 @@ osac get baremetalinstancecatalogitems --filter 'this.published'
 ### Inspect
 
 ```bash
+osac describe clustercatalogitem <id-or-name>
 osac get clustercatalogitems <id> -o yaml
 osac get computeinstancecatalogitems <id> -o yaml
 osac get baremetalinstancecatalogitems <id> -o yaml
 ```
+
+`describe clustercatalogitem` shows governed fields in a readable form, including the add-on
+operator names and whether the complete list is `LOCKED` or `EDITABLE`. For an editable list, it
+also shows the catalog default when one is configured. Use `get -o yaml` for the complete policy
+definition.
 
 ### Update
 

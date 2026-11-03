@@ -170,7 +170,7 @@ func TestOverflowingQuantityFailsTheRoundNamingTheResource(t *testing.T) {
 		t.Fatal(err)
 	}
 	progress := database.Progress{EventOffset: 1}
-	err = r.compare(ctx, store.Pool(), tenant, progress, base.Add(14*time.Hour))
+	err = r.compare(ctx, store.Pool(), tenant, progress, base.Add(14*time.Hour), "")
 	if err == nil {
 		ledger, ledgerErr := database.LedgerPiecesWhere(ctx, store.Pool(), tenant, "")
 		if ledgerErr != nil {

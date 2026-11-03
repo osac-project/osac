@@ -53,7 +53,13 @@ func startInProcessMCPServer(ctx context.Context, userAgent string) *httptest.Se
 
 func connectMCPCaller(ctx context.Context, endpoint, clientName, username string) *mcp.ClientSession {
 	tokenSource, err := tool.makeKeycloakTokenSource(ctx, username, usersPassword)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	ExpectWithOffset(2, err).ToNot(HaveOccurred())
+	return connectMCPCallerWithTokenSource(ctx, endpoint, clientName, tokenSource)
+}
+
+func connectMCPCallerWithTokenSource(
+	ctx context.Context, endpoint, clientName string, tokenSource auth.TokenSource,
+) *mcp.ClientSession {
 	httpClient := &http.Client{Transport: ghttp.RoundTripperFunc(func(
 		request *http.Request,
 	) (*http.Response, error) {
@@ -71,4 +77,16 @@ func connectMCPCaller(ctx context.Context, endpoint, clientName, username string
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 	DeferCleanup(func() { ExpectWithOffset(1, session.Close()).To(Succeed()) })
 	return session
+}
+
+func expectMCPSafeError(err error, category, grpcCode string, fragments ...string) {
+	GinkgoHelper()
+	ExpectWithOffset(1, err).To(HaveOccurred())
+	errorText := err.Error()
+	ExpectWithOffset(1, errorText).To(ContainSubstring(fmt.Sprintf(`"category":"%s"`, category)))
+	ExpectWithOffset(1, errorText).To(ContainSubstring(fmt.Sprintf(`"grpc_code":"%s"`, grpcCode)))
+	ExpectWithOffset(1, errorText).To(ContainSubstring(`"retryable":false`))
+	for _, fragment := range fragments {
+		ExpectWithOffset(1, errorText).To(ContainSubstring(fragment))
+	}
 }

@@ -18,8 +18,9 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"net/netip"
+	"time"
 
-	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -41,12 +42,14 @@ var _ = Describe("MCP network resources", func() {
 		virtualNetworkID string
 		subnetID         string
 		securityGroupID  string
+		networkClassID   string
 		mcpHTTPServer    *httptest.Server
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		virtualNetworkID, subnetID, securityGroupID = "", "", ""
+		networkClassID = ""
 		mcpHTTPServer = nil
 		adminConn := tool.InternalView().AdminConn()
 		networkClassesClient = privatev1.NewNetworkClassesClient(adminConn)
@@ -57,7 +60,7 @@ var _ = Describe("MCP network resources", func() {
 
 		networkClass, err := sharedNetworkClass(ctx, networkClassesClient)
 		Expect(err).ToNot(HaveOccurred())
-		networkClassID := networkClass.GetObject().GetId()
+		networkClassID = networkClass.GetObject().GetId()
 		waitForNetworkClassReady(ctx, networkClassesClient, networkClassID)
 		err = updateNetworkClassStatusWithRetry(ctx, networkClassesClient, networkClassID, privatev1.NetworkClassStatus_builder{
 			State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
@@ -79,6 +82,283 @@ var _ = Describe("MCP network resources", func() {
 				Expect(cleanupVirtualNetworkFixture(cleanupCtx, virtualNetworks, virtualNetworkID)).To(Succeed())
 			}
 		})
+	})
+
+	It("rejects missing prerequisites through MCP without mutation", Serial, func() {
+		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-network-missing", userUsername)
+
+		networkClassResponse, err := networkClassesClient.Get(ctx,
+			privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		originalNetworkClass := networkClassResponse.GetObject()
+		originalHub := originalNetworkClass.GetStatus().GetHub()
+		restoreNetworkClass := func(cleanupCtx context.Context) {
+			if singletonNetworkClassID(cleanupCtx, networkClassesClient) != "" {
+				return
+			}
+			restoredNetworkClass := privatev1.NetworkClass_builder{
+				Title:         originalNetworkClass.GetTitle(),
+				Description:   originalNetworkClass.GetDescription(),
+				FabricManager: originalNetworkClass.GetFabricManager(),
+				Spec:          proto.Clone(originalNetworkClass.GetSpec()).(*privatev1.NetworkClassSpec),
+			}
+			if originalNetworkClass.GetK8SManager() != "" {
+				restoredNetworkClass.K8SManager = proto.String(originalNetworkClass.GetK8SManager())
+			}
+			restored, createErr := networkClassesClient.Create(cleanupCtx,
+				privatev1.NetworkClassesCreateRequest_builder{Object: restoredNetworkClass.Build()}.Build())
+			Expect(createErr).ToNot(HaveOccurred())
+			restoredID := restored.GetObject().GetId()
+			Expect(updateNetworkClassStatusWithRetry(cleanupCtx, networkClassesClient, restoredID,
+				privatev1.NetworkClassStatus_builder{
+					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+					Hub:   originalHub,
+				}.Build(),
+				&fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.hub"}},
+			)).To(Succeed())
+			waitForNetworkClassReady(cleanupCtx, networkClassesClient, restoredID)
+			networkClassID = restoredID
+		}
+		DeferCleanup(restoreNetworkClass)
+
+		By("creating a VirtualNetwork while the deployment NetworkClass is absent")
+		_, err = networkClassesClient.Delete(ctx,
+			privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func(g Gomega) {
+			response, listErr := networkClassesClient.List(ctx,
+				privatev1.NetworkClassesListRequest_builder{}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			g.Expect(response.GetItems()).To(BeEmpty())
+		}, time.Minute, time.Second).Should(Succeed())
+
+		virtualNetworkName := ndUniqueName("mcp-vn-missing-class")
+		_, err = callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ResourceType: mcpserver.NetworkResourceTypeVirtualNetwork,
+				Name:         virtualNetworkName,
+				IPv4Cidr:     ndVirtualNetworkCIDR(),
+			},
+		)
+		expectMCPSafeError(err, "not_found", "NotFound", "NetworkClass", "is missing")
+		expectNoVirtualNetworkNamed(ctx, virtualNetworks, virtualNetworkName)
+
+		By("restoring the NetworkClass before testing absent parent references")
+		restoreNetworkClass(ctx)
+
+		By("creating a Subnet with a genuinely absent parent")
+		subnetName := ndUniqueName("mcp-subnet-missing-parent")
+		_, err = callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ResourceType:     mcpserver.NetworkResourceTypeSubnet,
+				Name:             subnetName,
+				VirtualNetworkID: "virtual-network-does-not-exist",
+				IPv4Cidr:         "10.150.1.0/24",
+			},
+		)
+		expectMCPSafeError(
+			err, "not_found", "NotFound", "VirtualNetwork virtual-network-does-not-exist is missing",
+		)
+		expectNoSubnetNamed(ctx, subnets, subnetName)
+
+		By("creating a SecurityGroup with a genuinely absent parent")
+		securityGroupName := ndUniqueName("mcp-sg-missing-parent")
+		_, err = callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ResourceType:     mcpserver.NetworkResourceTypeSecurityGroup,
+				Name:             securityGroupName,
+				VirtualNetworkID: "virtual-network-does-not-exist",
+			},
+		)
+		expectMCPSafeError(
+			err, "not_found", "NotFound", "VirtualNetwork virtual-network-does-not-exist is missing",
+		)
+		expectNoSecurityGroupNamed(ctx, securityGroups, securityGroupName)
+	})
+
+	It("enforces network mutation authorization through MCP", func() {
+		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-network-authz", userUsername)
+
+		virtualNetworkCIDR := ndVirtualNetworkCIDR()
+		virtualNetworkName := ndUniqueName("mcp-vn-authz")
+		createdVirtualNetwork, err := callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ResourceType: mcpserver.NetworkResourceTypeVirtualNetwork,
+				Name:         virtualNetworkName,
+				IPv4Cidr:     virtualNetworkCIDR,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		virtualNetworkID = createdVirtualNetwork.ID
+		setComputeInstanceFixtureVirtualNetworkReady(ctx, virtualNetworks, virtualNetworkID)
+
+		securityGroupName := ndUniqueName("mcp-sg-authz")
+		createdSecurityGroup, err := callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ResourceType:     mcpserver.NetworkResourceTypeSecurityGroup,
+				Name:             securityGroupName,
+				VirtualNetworkID: virtualNetworkID,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		securityGroupID = createdSecurityGroup.ID
+
+		By("creating a same-tenant service account without a RoleBinding")
+		serviceAccounts := publicv1.NewServiceAccountsClient(tool.InternalView().AdminConn())
+		createdAccount, err := serviceAccounts.Create(ctx,
+			serviceAccountRequest(usersGroup, ndUniqueName("mcp-network-unauthorized")))
+		Expect(err).ToNot(HaveOccurred())
+		accountID := createdAccount.GetObject().GetId()
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deleteServiceAccount(cleanupCtx, serviceAccounts, accountID)
+		})
+
+		var account *publicv1.ServiceAccount
+		Eventually(func(g Gomega) {
+			response, getErr := serviceAccounts.Get(ctx,
+				publicv1.ServiceAccountsGetRequest_builder{Id: accountID}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			account = response.GetObject()
+			g.Expect(account.GetStatus().GetClientSecret().GetId()).ToNot(BeEmpty())
+		}, 2*time.Minute, time.Second).Should(Succeed())
+		Expect(account.GetMetadata().GetTenant()).To(Equal(usersGroup))
+
+		secret, err := publicv1.NewSecretsClient(tool.InternalView().AdminConn()).Get(ctx,
+			publicv1.SecretsGetRequest_builder{Id: account.GetStatus().GetClientSecret().GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		clientID := string(secret.GetObject().GetData()["client_id"])
+		clientSecret := string(secret.GetObject().GetData()["client_secret"])
+		tokenSource, _ := serviceAccountTokenSource(ctx, clientID, clientSecret)
+		unauthorizedSession := connectMCPCallerWithTokenSource(
+			ctx, mcpHTTPServer.URL, "it-mcp-network-unauthorized", tokenSource,
+		)
+
+		By("rejecting same-tenant creates and deletes without a RoleBinding")
+		unauthorizedSubnetName := ndUniqueName("mcp-subnet-unauthorized")
+		_, err = callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, unauthorizedSession, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ResourceType:     mcpserver.NetworkResourceTypeSubnet,
+				Name:             unauthorizedSubnetName,
+				VirtualNetworkID: virtualNetworkID,
+				IPv4Cidr:         netip.PrefixFrom(netip.MustParsePrefix(virtualNetworkCIDR).Addr(), 24).String(),
+			},
+		)
+		expectMCPSafeError(err, "authorization", "PermissionDenied", "not authorized")
+		expectNoSubnetNamed(ctx, subnets, unauthorizedSubnetName)
+
+		_, err = callMCPTool[mcpserver.DeleteNetworkResourceOutput](
+			ctx, unauthorizedSession, "delete_network_resource", mcpserver.DeleteNetworkResourceInput{
+				ResourceType: mcpserver.NetworkResourceTypeSecurityGroup,
+				ID:           securityGroupID,
+			},
+		)
+		expectMCPSafeError(err, "authorization", "PermissionDenied", "not authorized")
+
+		By("rejecting cross-tenant SecurityGroup creates and deletes")
+		otherSession := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-other-sg", "ben")
+		crossTenantSecurityGroupName := ndUniqueName("mcp-other-sg")
+		_, err = callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, otherSession, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ResourceType:     mcpserver.NetworkResourceTypeSecurityGroup,
+				Name:             crossTenantSecurityGroupName,
+				VirtualNetworkID: virtualNetworkID,
+			},
+		)
+		expectMCPSafeError(
+			err, "not_found", "NotFound", fmt.Sprintf("VirtualNetwork %s is missing", virtualNetworkID),
+		)
+		expectNoSecurityGroupNamed(ctx, securityGroups, crossTenantSecurityGroupName)
+
+		_, err = callMCPTool[mcpserver.DeleteNetworkResourceOutput](
+			ctx, otherSession, "delete_network_resource", mcpserver.DeleteNetworkResourceInput{
+				ResourceType: mcpserver.NetworkResourceTypeSecurityGroup,
+				ID:           securityGroupID,
+			},
+		)
+		expectMCPSafeError(err, "not_found", "NotFound", "requested OSAC resource was not found")
+
+		securityGroupResponse, err := securityGroups.Get(ctx,
+			privatev1.SecurityGroupsGetRequest_builder{Id: securityGroupID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(securityGroupResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+	})
+
+	It("rejects deletion of ComputeInstance-referenced network resources through MCP", func() {
+		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-network-dependency", userUsername)
+
+		virtualNetworkCIDR := ndVirtualNetworkCIDR()
+		createdVirtualNetwork, err := callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ResourceType: mcpserver.NetworkResourceTypeVirtualNetwork,
+				Name:         ndUniqueName("mcp-vn-dependency"),
+				IPv4Cidr:     virtualNetworkCIDR,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		virtualNetworkID = createdVirtualNetwork.ID
+		setComputeInstanceFixtureVirtualNetworkReady(ctx, virtualNetworks, virtualNetworkID)
+
+		subnetCIDR := netip.PrefixFrom(netip.MustParsePrefix(virtualNetworkCIDR).Addr(), 24).String()
+		createdSubnet, err := callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ResourceType:     mcpserver.NetworkResourceTypeSubnet,
+				Name:             ndUniqueName("mcp-subnet-dependency"),
+				VirtualNetworkID: virtualNetworkID,
+				IPv4Cidr:         subnetCIDR,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		subnetID = createdSubnet.ID
+		setSubnetReady(ctx, subnets, subnetID)
+
+		createdSecurityGroup, err := callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ResourceType:     mcpserver.NetworkResourceTypeSecurityGroup,
+				Name:             ndUniqueName("mcp-sg-dependency"),
+				VirtualNetworkID: virtualNetworkID,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		securityGroupID = createdSecurityGroup.ID
+		setSecurityGroupReady(ctx, securityGroups, securityGroupID)
+
+		templateID := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
+		_, err = createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(),
+			publicv1.ComputeInstanceSpec_builder{
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+				NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+					publicv1.ComputeNetworkAttachment_builder{
+						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+						SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+							publicv1.SecurityGroupLocalReference_builder{Id: securityGroupID}.Build(),
+						},
+					}.Build(),
+				},
+			}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = callMCPTool[mcpserver.DeleteNetworkResourceOutput](
+			ctx, session, "delete_network_resource", mcpserver.DeleteNetworkResourceInput{
+				ResourceType: mcpserver.NetworkResourceTypeSubnet,
+				ID:           subnetID,
+			},
+		)
+		expectMCPSafeError(err, "conflict", "Aborted", "active dependencies")
+		subnetResponse, err := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(subnetResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+
+		_, err = callMCPTool[mcpserver.DeleteNetworkResourceOutput](
+			ctx, session, "delete_network_resource", mcpserver.DeleteNetworkResourceInput{
+				ResourceType: mcpserver.NetworkResourceTypeSecurityGroup,
+				ID:           securityGroupID,
+			},
+		)
+		expectMCPSafeError(err, "conflict", "Aborted", "active dependencies")
+		securityGroupResponse, err := securityGroups.Get(ctx,
+			privatev1.SecurityGroupsGetRequest_builder{Id: securityGroupID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(securityGroupResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
 	})
 
 	It("creates and deletes tenant network prerequisites through the public API", func() {

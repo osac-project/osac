@@ -318,7 +318,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 	)
 
 	DescribeTable("Maps a missing or unauthorized parent from the public Create error",
-		func(resourceType NetworkResourceType, grpcCode codes.Code, expectedCategory string) {
+		func(resourceType NetworkResourceType, grpcCode codes.Code, errorMessage, expectedCategory string) {
 			virtualNetworks := &mockVirtualNetworksClient{
 				getFunc: func(
 					_ context.Context, _ *publicv1.VirtualNetworksGetRequest, _ ...grpc.CallOption,
@@ -329,17 +329,16 @@ var _ = Describe("handleCreateNetworkResource", func() {
 			subnets := &mockSubnetsClient{
 				createFunc: func(context.Context, *publicv1.SubnetsCreateRequest, ...grpc.CallOption) (*publicv1.SubnetsCreateResponse, error) {
 					if grpcCode == codes.InvalidArgument {
-						return nil, status.Error(
-							grpcCode,
-							"reference validation failed: object.spec.virtual_network: "+
-								"VirtualNetwork \"virtual-network-1\" not found",
-						)
+						return nil, status.Error(grpcCode, errorMessage)
 					}
 					return nil, status.Error(grpcCode, "private upstream detail")
 				},
 			}
 			securityGroups := &mockSecurityGroupsClient{
 				createFunc: func(context.Context, *publicv1.SecurityGroupsCreateRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsCreateResponse, error) {
+					if grpcCode == codes.InvalidArgument {
+						return nil, status.Error(grpcCode, errorMessage)
+					}
 					return nil, status.Error(grpcCode, "private upstream detail")
 				},
 			}
@@ -359,10 +358,31 @@ var _ = Describe("handleCreateNetworkResource", func() {
 			Expect(envelope.Details).To(ContainElement(ContainSubstring("VirtualNetwork virtual-network-1")))
 			Expect(err.Error()).ToNot(ContainSubstring("private upstream detail"))
 		},
-		Entry("missing Subnet parent", NetworkResourceTypeSubnet, codes.NotFound, "not_found"),
-		Entry("missing locked Subnet parent", NetworkResourceTypeSubnet, codes.InvalidArgument, "not_found"),
-		Entry("unauthorized Subnet parent", NetworkResourceTypeSubnet, codes.PermissionDenied, "authorization"),
-		Entry("missing SecurityGroup parent", NetworkResourceTypeSecurityGroup, codes.NotFound, "not_found"),
+		Entry("missing Subnet parent", NetworkResourceTypeSubnet, codes.NotFound, "", "not_found"),
+		Entry(
+			"missing reference Subnet parent",
+			NetworkResourceTypeSubnet,
+			codes.InvalidArgument,
+			"reference validation failed: object.spec.virtual_network: "+
+				"VirtualNetwork \"virtual-network-1\" not found",
+			"not_found",
+		),
+		Entry(
+			"missing locked Subnet parent",
+			NetworkResourceTypeSubnet,
+			codes.InvalidArgument,
+			"parent VirtualNetwork 'virtual-network-1' does not exist",
+			"not_found",
+		),
+		Entry("unauthorized Subnet parent", NetworkResourceTypeSubnet, codes.PermissionDenied, "", "authorization"),
+		Entry("missing SecurityGroup parent", NetworkResourceTypeSecurityGroup, codes.NotFound, "", "not_found"),
+		Entry(
+			"missing locked SecurityGroup parent",
+			NetworkResourceTypeSecurityGroup,
+			codes.InvalidArgument,
+			"parent VirtualNetwork 'virtual-network-1' does not exist",
+			"not_found",
+		),
 	)
 
 	It("Names a missing provider-managed NetworkClass", func() {

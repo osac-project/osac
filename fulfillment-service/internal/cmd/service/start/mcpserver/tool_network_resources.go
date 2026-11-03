@@ -392,9 +392,12 @@ func safeDependentNetworkCreateError(parentID string, err error) error {
 }
 
 func isMissingVirtualNetworkParentError(message string) bool {
-	return strings.Contains(message, "object.spec.virtual_network") &&
+	referenceMissing := strings.Contains(message, "object.spec.virtual_network") &&
 		strings.Contains(message, "VirtualNetwork") &&
 		strings.Contains(message, "not found")
+	lockedMissing := strings.Contains(message, "parent VirtualNetwork") &&
+		strings.Contains(message, "does not exist")
+	return referenceMissing || lockedMissing
 }
 
 func safeVirtualNetworkCreateError(err error) error {

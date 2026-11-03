@@ -95,6 +95,7 @@ func handleCheckConnection(
 			tenants = tenants[:maxCheckConnectionTenants]
 		}
 		caller.Tenants = tenants
+		caller.TenantsTruncated = permissionsTruncated
 		permissionTenants := tenants
 		if len(permissionTenants) == 0 && !permissionsTruncated {
 			tenants = []string{""}

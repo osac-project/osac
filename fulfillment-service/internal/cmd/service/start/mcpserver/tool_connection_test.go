@@ -454,6 +454,7 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * len(checkConnectionMethods)))
 		Expect(output.PermissionsTruncated).To(BeTrue())
+		Expect(output.Caller.TenantsTruncated).To(BeTrue())
 	})
 
 	It("Preserves a retryable token exchange error", func() {

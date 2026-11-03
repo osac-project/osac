@@ -16,7 +16,8 @@
       "type": "string",
       "required": true,
       "description": "Deduplication key: lower-case hex SHA-256 of the tenant, resource type, resource id, meter, component, billing dimensions, interval start, interval end, and heartbeat time. It leaves out the quantity and the external billing account id, so a resend carries the same id.",
-      "unit": ""
+      "unit": "",
+      "pattern": "^[0-9a-f]{64}$"
     },
     {
       "name": "type",

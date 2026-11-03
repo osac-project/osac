@@ -83,9 +83,11 @@ var _ = Describe("The generated contract", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		shuffled := contract.Sources{
-			Resources: make([]metering.Resource, len(sources.Resources)),
-			Revision:  sources.Revision,
-			Versions:  slices.Clone(sources.Versions),
+			Resources:         make([]metering.Resource, len(sources.Resources)),
+			Revision:          sources.Revision,
+			Versions:          slices.Clone(sources.Versions),
+			HeartbeatInterval: sources.HeartbeatInterval,
+			TopicRetention:    sources.TopicRetention,
 		}
 		for i, resource := range sources.Resources {
 			fields := slices.Clone(resource.Fields)
@@ -139,7 +141,7 @@ var _ = Describe("The generated contract", func() {
 		for _, statement := range []string{
 			"Add every usage event for one resource, meter, component, and set of billing dimensions",
 			"A correction is a negative event",
-			"read each record with the schema version in effect when it was written",
+			"Replay decodes every retained record with the current payload shape",
 			"One usage topic per tenant, named `osac.metering.heartbeat.<tenant>`",
 			"Each usage topic has one partition",
 			"At least once",
@@ -148,6 +150,8 @@ var _ = Describe("The generated contract", func() {
 			"The reader owns its retries and its failed records",
 			"The CloudEvent `id` is the deduplication key",
 			"It leaves out the quantity",
+			"If metering is rolled back after a newer version has written records",
+			"treat it as a version you have not adopted",
 		} {
 			Expect(reference).To(ContainSubstring(statement))
 		}
@@ -293,21 +297,25 @@ var _ = Describe("The generated contract", func() {
 		versions[len(versions)-1] = last
 
 		reference, checkable = generated(contract.Sources{
-			Resources: sources.Resources,
-			Revision:  sources.Revision,
-			Versions:  versions,
+			Resources:         sources.Resources,
+			Revision:          sources.Revision,
+			Versions:          versions,
+			HeartbeatInterval: sources.HeartbeatInterval,
+			TopicRetention:    sources.TopicRetention,
 		})
 		Expect(reference).To(ContainSubstring(
-			"A usage event carries `external_billing_account_id` when the tenant has one",
+			"Schema version `v1` and later carry `external_billing_account_id`",
 		))
 		Expect(checkable).To(ContainSubstring(`"external_billing_account_id"`))
 	})
 
 	It("refuses a meter the field registry does not list", func() {
 		broken := contract.Sources{
-			Resources: sources.Resources,
-			Revision:  sources.Revision,
-			Versions:  sources.Versions,
+			Resources:         sources.Resources,
+			Revision:          sources.Revision,
+			Versions:          sources.Versions,
+			HeartbeatInterval: sources.HeartbeatInterval,
+			TopicRetention:    sources.TopicRetention,
 		}
 		broken.Resources = slices.Clone(sources.Resources)
 		broken.Resources = broken.Resources[1:]

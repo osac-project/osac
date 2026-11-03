@@ -14,7 +14,7 @@
       "x-osac-version": "v1",
       "x-osac-effective-at": "1970-01-01T00:00:00Z",
       "x-osac-source-file": "osac-metering/schema/versions/v1.json",
-      "x-osac-source-sha256": "1fdba0fac83947f54262f8df95692612c423cb6b66f08ac5e9d4aba5f2532527",
+      "x-osac-source-sha256": "7a28a18bdacf05b62b62ccdcbfbe68c662bbda17c8dee83154398db5aa9db1c5",
       "type": "object",
       "required": [
         "data",
@@ -138,6 +138,7 @@
         },
         "id": {
           "description": "Deduplication key: lower-case hex SHA-256 of the tenant, resource type, resource id, meter, component, billing dimensions, interval start, interval end, and heartbeat time. It leaves out the quantity and the external billing account id, so a resend carries the same id.",
+          "pattern": "^[0-9a-f]{64}$",
           "type": "string"
         },
         "osacresourceid": {

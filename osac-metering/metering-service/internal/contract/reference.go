@@ -54,10 +54,11 @@ func renderReference(sources Sources) ([]byte, error) {
 	var out strings.Builder
 	writeHeader(&out, sources, views)
 	writeReadingRule(&out)
-	writeLifecycle(&out)
-	writeTransport(&out)
+	writeLifecycle(&out, sources)
+	writeTransport(&out, sources)
 	writeDeduplication(&out)
 	writeSchemaVersions(&out, sources)
+	writeRollback(&out)
 	writeResources(&out, sources, views)
 	writeBillingAccount(&out, sources)
 	writeRegeneration(&out)
@@ -167,12 +168,12 @@ func writeReadingRule(out *strings.Builder) {
 	)
 }
 
-func writeLifecycle(out *strings.Builder) {
+func writeLifecycle(out *strings.Builder, sources Sources) {
 	fmt.Fprintf(out, "## Lifecycle\n\n")
 	fmt.Fprintf(out,
 		"A resource starts billing when a rule revision says its state is billable. Each "+
-			"minute metering sends the difference since the last event for the same usage.\n\n",
-	)
+			"round, by default every `%s`, metering sends the difference since the last "+
+			"event for the same usage.\n\n", sources.HeartbeatInterval)
 	fmt.Fprintf(out,
 		"A state or dimension change re-keys the usage: later events for the resource carry "+
 			"the new dimensions, and each key is summed on its own.\n\n",
@@ -182,13 +183,13 @@ func writeLifecycle(out *strings.Builder) {
 			"span it billed past the stop.\n\n",
 	)
 	fmt.Fprintf(out,
-		"To rebuild a billable quantity from retained records, read each record with the "+
-			"schema version in effect when it was written (see Schema versions) and add the "+
-			"records for the key. The total matches what the reader saw.\n\n",
+		"To rebuild a billable quantity from retained records, add the records for the key. "+
+			"See Schema versions for how replay reads a record. The total matches what the "+
+			"reader saw.\n\n",
 	)
 }
 
-func writeTransport(out *strings.Builder) {
+func writeTransport(out *strings.Builder, sources Sources) {
 	fmt.Fprintf(out, "## Transport\n\n")
 	fmt.Fprintf(out, "| Fact | The rule |\n|---|---|\n")
 	fmt.Fprintf(out, "| Topic naming | One usage topic per tenant, named `%s<tenant>` |\n",
@@ -198,9 +199,13 @@ func writeTransport(out *strings.Builder) {
 			"metering sent them |\n")
 	fmt.Fprintf(out,
 		"| Delivery | At least once. A repeat carries the same CloudEvent `id` |\n")
+	retention := "bounds the recovery window"
+	if sources.TopicRetention == "-1" {
+		retention = "keeps every record"
+	}
 	fmt.Fprintf(out,
-		"| Retention | Set per installation with `topics.retentionMs`; the default `-1` "+
-			"keeps every record |\n")
+		"| Retention | Set per installation with `topics.retentionMs`; the default `%s` "+
+			"%s |\n", sources.TopicRetention, retention)
 	fmt.Fprintf(out,
 		"| Compaction | None. Metering refuses a compacted usage topic and sets "+
 			"`cleanup.policy` to `delete` |\n")
@@ -208,8 +213,8 @@ func writeTransport(out *strings.Builder) {
 		"| Raw event log | Internal. Metering reads `%s<tenant>` and never publishes it |\n",
 		schema.EventsPrefix)
 	fmt.Fprintf(out,
-		"| Failed records | Internal. Rejected events land on `%s<tenant>` |\n",
-		schema.DeadLetterPrefix)
+		"| Failed records | Internal. OSAC's adapters write rejected events to "+
+			"`%s<tenant>` |\n", schema.DeadLetterPrefix)
 	fmt.Fprintf(out,
 		"| Retries | The reader owns its retries and its failed records. OSAC does not "+
 			"retry for a reader |\n\n")
@@ -244,11 +249,11 @@ func writeSchemaVersions(out *strings.Builder, sources Sources) {
 			"so the current shape must stay a superset of every published version; that is "+
 			"what lets one reader read records written under older versions.\n\n")
 	fmt.Fprintf(out,
-		"A version's effective date is the earliest date its events may carry it, and it "+
-			"must be no later than the release that ships the version. Metering writes its "+
-			"current version unconditionally and never selects a version by date, so a "+
-			"future date would let events carry a version whose effective date has not "+
-			"arrived.\n\n")
+		"A version's effective date is the earliest date its events may carry it. Metering "+
+			"writes its current version unconditionally and never selects a version by date, "+
+			"so the version must not take effect after the release that ships it. Metering "+
+			"refuses to load a current version whose effective date is in the future; an "+
+			"older, future-dated version may wait in the tree until its release.\n\n")
 	fmt.Fprintf(out,
 		"A published version stays readable for as long as its records are retained. "+
 			"Retention is indefinite by default, so no version has been retired.\n\n")
@@ -274,6 +279,25 @@ func writeSchemaVersions(out *strings.Builder, sources Sources) {
 		writeFieldTable(out, version.Data)
 		fmt.Fprintf(out, "\n")
 	}
+}
+
+// writeRollback documents what an operator sees after metering is rolled back behind the
+// schema version that wrote the records.
+func writeRollback(out *strings.Builder) {
+	fmt.Fprintf(out, "## Rollback\n\n")
+	fmt.Fprintf(out,
+		"A record names its schema version, and metering refuses a version it does not "+
+			"publish. If metering is rolled back after a newer version has written records, "+
+			"catch-up meets that newer type and stops the tenant's billing until the newer "+
+			"version is deployed again. The round reports:\n\n")
+	fmt.Fprintf(out,
+		"    decoding heartbeat at osac.metering.heartbeat.<tenant>/<offset>: no published "+
+			"schema version names event type \"osac.resource.heartbeat.<version>\"; treat "+
+			"it as a version you have not adopted\n\n")
+	fmt.Fprintf(out,
+		"The records are intact, so catch-up continues from the stored offset once the "+
+			"newer version runs again. Metering fails closed rather than decoding the "+
+			"records with the wrong shape.\n\n")
 }
 
 func writeFieldTable(out *strings.Builder, fields []schema.Field) {
@@ -311,8 +335,12 @@ func writeResources(out *strings.Builder, sources Sources, views []resourceView)
 	fmt.Fprintf(out,
 		"The default rule revision is revision `%s`, effective from %s. It is the newest "+
 			"revision the chart ships, and it is immutable: a rule change ships as the next "+
-			"revision.\n\n",
+			"revision. This reference documents the newest shipped revision only; earlier "+
+			"revisions stay in the chart and are immutable.\n\n",
 		sources.Revision.Number, sources.Revision.EffectiveAt.Format("2006-01-02T15:04:05Z"))
+	fmt.Fprintf(out,
+		"`Multiplier` names the tracked field metering has already multiplied into "+
+			"`usage.quantity`. A reader must not apply the multiplier again.\n\n")
 	writeIdentityDimensions(out)
 	for _, view := range views {
 		writeResource(out, view)
@@ -390,11 +418,12 @@ func writeResource(out *strings.Builder, view resourceView) {
 
 func writeBillingAccount(out *strings.Builder, sources Sources) {
 	fmt.Fprintf(out, "## Billing account id\n\n")
-	if versionHasField(sources.Versions, "external_billing_account_id") {
+	if first := firstVersionWithField(sources.Versions, "external_billing_account_id"); first != "" {
 		fmt.Fprintf(out,
-			"A usage event carries `external_billing_account_id` when the tenant has one. A "+
-				"tenant without one omits it. The id labels where the event is reported in "+
-				"the provider's billing system.\n\n")
+			"Schema version `%s` and later carry `external_billing_account_id` when the "+
+				"tenant has one; earlier versions do not carry it. A tenant without one "+
+				"omits it. The id labels where the event is reported in the provider's "+
+				"billing system.\n\n", first)
 		fmt.Fprintf(out,
 			"The id never correlates usage. Match a correction to the event it corrects by "+
 				"tenant, resource, meter, component, and billing dimensions. The id can change "+
@@ -416,16 +445,17 @@ func writeRegeneration(out *strings.Builder) {
 			"meter, or a schema file arrives with its regenerated reference.\n", SchemaName)
 }
 
-// versionHasField reports whether any published version declares a payload field.
-func versionHasField(versions []schema.Version, name string) bool {
+// firstVersionWithField returns the first version that declares a payload field, or an empty
+// string when no version does.
+func firstVersionWithField(versions []schema.Version, name string) string {
 	for _, version := range versions {
 		for _, field := range version.Data {
 			if field.Name == name {
-				return true
+				return version.Version
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 func requiredLabel(required bool) string {

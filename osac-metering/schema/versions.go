@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	pathpkg "path"
 	"reflect"
@@ -89,9 +90,11 @@ type Version struct {
 	// Version is the version name, for example v1.
 	Version string
 
-	// EffectiveAt is the earliest date a record may carry this version. It is advisory: the
-	// producer writes SchemaVersion unconditionally and never selects a version by date, so
-	// it must not be in the future when the release that ships the version goes out.
+	// EffectiveAt is the earliest date a record may carry this version. The producer writes
+	// SchemaVersion unconditionally and never selects a version by date, so a version must
+	// not take effect after the release that ships it. Load enforces this for the version
+	// the binary emits: a future-dated current version would write records that replay
+	// refuses.
 	EffectiveAt time.Time
 
 	// CloudEventType is the event type of the version, for example
@@ -114,17 +117,20 @@ type Version struct {
 }
 
 // PublishedVersions returns every published schema version, sorted by version number. It
-// fails when a file is invalid, when two files claim the same version or effective date, or
-// when the version metering sends does not match the heartbeat payload in this package:
-// editing a published file is not how a field changes, so the mismatch must stop the build.
+// fails when a file is invalid, when two files claim the same version or effective date, when
+// an older version is not a subset of the newest (versions are add-only), when the version
+// metering sends does not match the heartbeat payload in this package, or when that version
+// takes effect in the future. Editing a published file is not how a field changes, so each
+// mismatch must stop the build.
 func PublishedVersions() ([]Version, error) {
-	return loadVersions(versionFiles)
+	return loadVersions(versionFiles, time.Now().UTC())
 }
 
 // VersionInEffect returns the version in effect at a record's writing time: the latest
-// version whose effective date is at or before it. A reader uses it to check that the version
-// a record names had been published by then; a rebuild decodes the record with the version its
-// CloudEvent names.
+// version whose effective date is at or before it. This is reader API: a reader uses it to
+// check that the version a record names had been published by then. Metering's rebuild does
+// not call it; it decodes a record with the version its CloudEvent names and the current
+// add-only payload shape.
 func VersionInEffect(at time.Time) (Version, error) {
 	if at.IsZero() {
 		return Version{}, errors.New("no schema version is in effect at the zero time")
@@ -162,7 +168,12 @@ func selectVersion(versions []Version, at time.Time) (Version, error) {
 }
 
 // VersionForType returns the version a CloudEvent type names among the given published
-// versions. A reader that meets an unknown type treats it as a version it has not adopted.
+// versions. An unknown type is refused with this error, and a reader treats it as a version it
+// has not adopted. The refusal is also the rollback guard: after metering is rolled back, the
+// records a newer binary wrote name a version the older binary does not publish, so catch-up
+// fails with "no published schema version names event type" and the tenant stops billing until
+// the newer binary is deployed again. The records stay intact, so catch-up resumes from the
+// stored offset when it is.
 func VersionForType(versions []Version, cloudEventType string) (Version, error) {
 	for _, version := range versions {
 		if version.CloudEventType == cloudEventType {
@@ -200,8 +211,9 @@ type fieldFile struct {
 }
 
 // loadVersions parses and validates every version file in a filesystem. PublishedVersions
-// reads the embedded files; tests feed a synthetic filesystem.
-func loadVersions(fsys fs.FS) ([]Version, error) {
+// reads the embedded files with the wall clock; tests feed a synthetic filesystem and an
+// explicit now.
+func loadVersions(fsys fs.FS, now time.Time) ([]Version, error) {
 	paths, err := fs.Glob(fsys, versionDirectory+"/*.json")
 	if err != nil {
 		return nil, fmt.Errorf("listing schema versions: %w", err)
@@ -251,7 +263,10 @@ func loadVersions(fsys fs.FS) ([]Version, error) {
 		}
 	}
 
-	if err := checkCurrentPayload(versions); err != nil {
+	if err := checkCurrentPayload(versions, now); err != nil {
+		return nil, err
+	}
+	if err := checkVersionsAddOnly(versions); err != nil {
 		return nil, err
 	}
 	return versions, nil
@@ -266,6 +281,12 @@ func parseVersion(path string, content []byte) (Version, error) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&file); err != nil {
 		return Version{}, fmt.Errorf("%s is not a valid schema file: %w", path, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return Version{}, fmt.Errorf(
+			"%s has data after its version object; a schema file holds one JSON object", path,
+		)
 	}
 
 	digest := sha256.Sum256(content)
@@ -396,8 +417,10 @@ func parseFields(files []fieldFile, where string) ([]Field, error) {
 // checkCurrentPayload requires the published version named by HeartbeatType to describe
 // exactly the event this package sends: the CloudEvent attributes and the payload. A field
 // added without a new version would change a published schema's meaning while its records
-// still name the old version, so it fails here.
-func checkCurrentPayload(versions []Version) error {
+// still name the old version, so it fails here. It also refuses a current version whose
+// effective date is in the future: the producer writes it unconditionally, so its records
+// would be written before the date and replay would refuse them.
+func checkCurrentPayload(versions []Version, now time.Time) error {
 	var current *Version
 	for i := range versions {
 		if versions[i].CloudEventType == HeartbeatType {
@@ -422,10 +445,24 @@ func checkCurrentPayload(versions []Version) error {
 	if err := compareShape(current.Version, "HeartbeatData", expected, current.Data); err != nil {
 		return err
 	}
-	if err := checkOlderVersions(versions, current); err != nil {
-		return err
+	if current.EffectiveAt.After(now) {
+		return fmt.Errorf(
+			"schema version %s takes effect at %s, after now (%s): metering writes its "+
+				"current version unconditionally, so a release with a future effective date "+
+				"would write records that replay refuses; set effective_at no later than the "+
+				"release date",
+			current.Version, current.EffectiveAt.Format(time.RFC3339),
+			now.Format(time.RFC3339),
+		)
 	}
 	return nil
+}
+
+// checkVersionsAddOnly requires every older version to remain a subset of the newest version.
+// Versions are add-only: replay decodes older records with the current payload shape, so a
+// dropped or retyped field would change the meaning of retained usage.
+func checkVersionsAddOnly(versions []Version) error {
+	return checkOlderVersions(versions, &versions[len(versions)-1])
 }
 
 // checkOlderVersions requires every field of an earlier version to still exist in the
@@ -476,6 +513,31 @@ func checkSubset(olderVersion, currentVersion, typeName string, older, current [
 				currentVersion, old.Name, typeName, old.Values, got.Values,
 			)
 		}
+		if got.Const != old.Const && !versionDiscriminator(typeName, old.Name) {
+			// Every constant except the version discriminator is add-only.
+			return fmt.Errorf(
+				"schema version %s changes field %q of %s from value %q to %q; versions are add-only",
+				currentVersion, old.Name, typeName, old.Const, got.Const,
+			)
+		}
+		if got.Pattern != old.Pattern {
+			return fmt.Errorf(
+				"schema version %s changes the pattern of field %q of %s; versions are add-only",
+				currentVersion, old.Name, typeName,
+			)
+		}
+		if got.Format != old.Format {
+			return fmt.Errorf(
+				"schema version %s changes the format of field %q of %s; versions are add-only",
+				currentVersion, old.Name, typeName,
+			)
+		}
+		if got.Unit != old.Unit {
+			return fmt.Errorf(
+				"schema version %s changes the unit of field %q of %s from %q to %q; versions are add-only",
+				currentVersion, old.Name, typeName, old.Unit, got.Unit,
+			)
+		}
 		if len(old.Fields) > 0 || len(got.Fields) > 0 {
 			if err := checkSubset(olderVersion, currentVersion, typeName+"."+old.Name, old.Fields, got.Fields); err != nil {
 				return err
@@ -485,19 +547,28 @@ func checkSubset(olderVersion, currentVersion, typeName string, older, current [
 	return nil
 }
 
+// versionDiscriminator reports whether a field is the CloudEvent type, whose constant changes
+// with every version by design.
+func versionDiscriminator(typeName, field string) bool {
+	return typeName == "the CloudEvent envelope" && field == "type"
+}
+
 // currentEnvelope returns the CloudEvent attributes every heartbeat carries. The core
 // attributes are the ones the CloudEvents SDK writes for an event with JSON data; the
-// extensions are the ones heartbeat.New sets from the schema constants.
+// extensions are the ones heartbeat.New sets from the schema constants. The values are the
+// constants the producer sets, so a published envelope cannot disagree with them.
 func currentEnvelope() []Field {
-	names := []string{
-		"specversion", "id", "type", "source", "datacontenttype", "time",
-		ExtResourceID, ExtResourceType, ExtTenant,
+	return []Field{
+		{Name: "specversion", Type: FieldTypeString, Required: true, Const: "1.0"},
+		{Name: "id", Type: FieldTypeString, Required: true, Pattern: "^[0-9a-f]{64}$"},
+		{Name: "type", Type: FieldTypeString, Required: true, Const: HeartbeatType},
+		{Name: "source", Type: FieldTypeString, Required: true, Const: "osac-metering"},
+		{Name: "datacontenttype", Type: FieldTypeString, Required: true, Const: "application/json"},
+		{Name: "time", Type: FieldTypeString, Required: true, Format: "date-time"},
+		{Name: ExtResourceID, Type: FieldTypeString, Required: true},
+		{Name: ExtResourceType, Type: FieldTypeString, Required: true},
+		{Name: ExtTenant, Type: FieldTypeString, Required: true},
 	}
-	fields := make([]Field, 0, len(names))
-	for _, name := range names {
-		fields = append(fields, Field{Name: name, Type: FieldTypeString, Required: true})
-	}
-	return fields
 }
 
 // payloadShape derives the published fields of a Go payload type from its JSON tags. A field
@@ -582,6 +653,33 @@ func compareShape(version, typeName string, expected, published []Field) error {
 				version, want.Name, typeName, got.Values, want.Values,
 			)
 		}
+		// The Go payload knows the envelope's fixed values but not the contract's
+		// presentation choices for payload fields, so compare a value only when the code
+		// defines one. The add-only check compares every version's choices.
+		if want.Const != "" && got.Const != want.Const {
+			return fmt.Errorf(
+				"schema version %s declares field %q of %s as %q, want %q",
+				version, want.Name, typeName, got.Const, want.Const,
+			)
+		}
+		if want.Pattern != "" && got.Pattern != want.Pattern {
+			return fmt.Errorf(
+				"schema version %s declares pattern %q for field %q of %s, want %q",
+				version, got.Pattern, want.Name, typeName, want.Pattern,
+			)
+		}
+		if want.Format != "" && got.Format != want.Format {
+			return fmt.Errorf(
+				"schema version %s declares format %q for field %q of %s, want %q",
+				version, got.Format, want.Name, typeName, want.Format,
+			)
+		}
+		if want.Unit != "" && got.Unit != want.Unit {
+			return fmt.Errorf(
+				"schema version %s declares unit %q for field %q of %s, want %q",
+				version, got.Unit, want.Name, typeName, want.Unit,
+			)
+		}
 		if len(want.Fields) > 0 || len(got.Fields) > 0 {
 			if err := compareShape(version, typeName+"."+want.Name, want.Fields, got.Fields); err != nil {
 				return err
@@ -614,6 +712,50 @@ func requiredWord(required bool) string {
 		return "required"
 	}
 	return "optional"
+}
+
+// CheckRequiredPayload reports the first field the version requires that a record's payload
+// does not carry. Replay decodes every record with the current add-only payload shape, so it
+// checks the record against the shape the record's own version published.
+func (v Version) CheckRequiredPayload(data []byte) error {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("schema version %s: payload is not a JSON object: %w", v.Version, err)
+	}
+	return checkRequiredFields(v.Version, "", v.Data, payload)
+}
+
+// checkRequiredFields walks one level of a published payload and reports a required field the
+// record omits.
+func checkRequiredFields(
+	version, prefix string, fields []Field, values map[string]json.RawMessage,
+) error {
+	for _, field := range fields {
+		raw, found := values[field.Name]
+		if !field.Required {
+			continue
+		}
+		if !found || string(raw) == "null" {
+			return fmt.Errorf(
+				"record names schema version %s but is missing required field %q",
+				version, prefix+field.Name,
+			)
+		}
+		if len(field.Fields) == 0 {
+			continue
+		}
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &nested); err != nil {
+			return fmt.Errorf(
+				"record names schema version %s but field %q is not an object",
+				version, prefix+field.Name,
+			)
+		}
+		if err := checkRequiredFields(version, prefix+field.Name+".", field.Fields, nested); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // versionNumber returns the numeric part of a version name that already matched

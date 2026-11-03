@@ -12,13 +12,13 @@ Match a correction to the usage it corrects by tenant, resource, meter, componen
 
 ## Lifecycle
 
-A resource starts billing when a rule revision says its state is billable. Each minute metering sends the difference since the last event for the same usage.
+A resource starts billing when a rule revision says its state is billable. Each round, by default every `60s`, metering sends the difference since the last event for the same usage.
 
 A state or dimension change re-keys the usage: later events for the resource carry the new dimensions, and each key is summed on its own.
 
 When a resource stops being billable, metering sends a final correction for the span it billed past the stop.
 
-To rebuild a billable quantity from retained records, read each record with the schema version in effect when it was written (see Schema versions) and add the records for the key. The total matches what the reader saw.
+To rebuild a billable quantity from retained records, add the records for the key. See Schema versions for how replay reads a record. The total matches what the reader saw.
 
 ## Transport
 
@@ -30,7 +30,7 @@ To rebuild a billable quantity from retained records, read each record with the 
 | Retention | Set per installation with `topics.retentionMs`; the default `-1` keeps every record |
 | Compaction | None. Metering refuses a compacted usage topic and sets `cleanup.policy` to `delete` |
 | Raw event log | Internal. Metering reads `osac.events.<tenant>` and never publishes it |
-| Failed records | Internal. Rejected events land on `osac.metering.dlq.<tenant>` |
+| Failed records | Internal. OSAC's adapters write rejected events to `osac.metering.dlq.<tenant>` |
 | Retries | The reader owns its retries and its failed records. OSAC does not retry for a reader |
 
 ## Deduplication
@@ -47,13 +47,13 @@ A published schema never changes. A new field is a new version file with the nex
 
 Versions are add-only: a new field is added, and no field is removed or given a new type. Replay decodes every retained record with the current payload shape, so the current shape must stay a superset of every published version; that is what lets one reader read records written under older versions.
 
-A version's effective date is the earliest date its events may carry it, and it must be no later than the release that ships the version. Metering writes its current version unconditionally and never selects a version by date, so a future date would let events carry a version whose effective date has not arrived.
+A version's effective date is the earliest date its events may carry it. Metering writes its current version unconditionally and never selects a version by date, so the version must not take effect after the release that ships it. Metering refuses to load a current version whose effective date is in the future; an older, future-dated version may wait in the tree until its release.
 
 A published version stays readable for as long as its records are retained. Retention is indefinite by default, so no version has been retired.
 
 | Version | CloudEvent type | Effective from | Source file | SHA-256 |
 |---|---|---|---|---|
-| `v1` | `osac.resource.heartbeat.v1` | 1970-01-01T00:00:00Z | `osac-metering/schema/versions/v1.json` | `1fdba0fac83947f54262f8df95692612c423cb6b66f08ac5e9d4aba5f2532527` |
+| `v1` | `osac.resource.heartbeat.v1` | 1970-01-01T00:00:00Z | `osac-metering/schema/versions/v1.json` | `7a28a18bdacf05b62b62ccdcbfbe68c662bbda17c8dee83154398db5aa9db1c5` |
 
 A reader that meets a type it has not adopted alerts, keeps the event, and adds support before that version's effective date. OSAC's adapters forward the CloudEvent type unchanged; they never relabel an event as another version.
 
@@ -94,11 +94,21 @@ A reader that meets a type it has not adopted alerts, keeps the event, and adds 
 | `last_applied_offset` | integer | required | event-log offset | Position in the tenant's event topic the round had folded. |
 | `rules_revision` | string | required | - | Rule revision that produced the event, for example 0001. |
 
+## Rollback
+
+A record names its schema version, and metering refuses a version it does not publish. If metering is rolled back after a newer version has written records, catch-up meets that newer type and stops the tenant's billing until the newer version is deployed again. The round reports:
+
+    decoding heartbeat at osac.metering.heartbeat.<tenant>/<offset>: no published schema version names event type "osac.resource.heartbeat.<version>"; treat it as a version you have not adopted
+
+The records are intact, so catch-up continues from the stored offset once the newer version runs again. Metering fails closed rather than decoding the records with the wrong shape.
+
 ## Resources and meters
 
 The values below are the ones events carry in `resource_type`. A cluster appears as `cluster_order`.
 
-The default rule revision is revision `0001`, effective from 1970-01-01T00:00:00Z. It is the newest revision the chart ships, and it is immutable: a rule change ships as the next revision.
+The default rule revision is revision `0001`, effective from 1970-01-01T00:00:00Z. It is the newest revision the chart ships, and it is immutable: a rule change ships as the next revision. This reference documents the newest shipped revision only; earlier revisions stay in the chart and are immutable.
+
+`Multiplier` names the tracked field metering has already multiplied into `usage.quantity`. A reader must not apply the multiplier again.
 
 Every usage event also carries these identity dimensions in `billing_dimensions`, besides the meter's own dimensions:
 

@@ -396,12 +396,13 @@ func pieceRate(piece database.LedgerPiece) *big.Rat {
 }
 
 // decodeHeartbeat reads a heartbeat record from the topic. The record names its schema version
-// in its CloudEvent type. That version is validated, but the payload is decoded with the
-// current HeartbeatData, so this struct must stay a superset of every published version:
-// published versions are add-only, so no field is removed or given a new type. An unknown
-// version stops the rebuild, and so does a record written before its own version took effect.
-// A record written after a newer version took effect is fine, because a rolling deploy leaves
-// older pods writing the older version for a while.
+// in its CloudEvent type. That version is validated, and the record must carry the fields that
+// version requires. The payload is decoded with the current HeartbeatData, so this struct must
+// stay a superset of every published version: published versions are add-only, so no field is
+// removed or given a new type. An unknown version stops the rebuild, and so does a record
+// written before its own version took effect. A record written after a newer version took
+// effect is fine, because a rolling deploy leaves older pods writing the older version for a
+// while.
 func decodeHeartbeat(value []byte, versions []schema.Version) (caughtHeartbeat, error) {
 	event := cloudevents.Event{}
 	if err := event.UnmarshalJSON(value); err != nil {
@@ -409,6 +410,9 @@ func decodeHeartbeat(value []byte, versions []schema.Version) (caughtHeartbeat, 
 	}
 	published, err := schema.VersionForType(versions, event.Type())
 	if err != nil {
+		return caughtHeartbeat{}, err
+	}
+	if err := published.CheckRequiredPayload(event.Data()); err != nil {
 		return caughtHeartbeat{}, err
 	}
 	data, err := heartbeat.Data(event)

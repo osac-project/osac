@@ -8,9 +8,10 @@ in compliance with the License. You may obtain a copy of the License at
 */
 
 // Package contract generates the published metering contract: a reference a person reads and
-// a JSON Schema a tool checks. Both come from three inputs that already exist as data: the
-// metering field registry, the default rule revision the chart ships, and the published schema
-// files. Nothing is hand-written, so the reference cannot drift from the code.
+// a JSON Schema a tool checks. Both come from data that already exists: the metering field
+// registry, the default rule revision the chart ships, the published schema files, and the
+// chart defaults the reference quotes. The prose a reader sees is written here, but every
+// number and list it repeats comes from those inputs.
 package contract
 
 import (
@@ -19,6 +20,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/osac-project/osac/proto/metering"
 
@@ -39,13 +42,14 @@ const (
 
 	rulesDirectory  = "osac-metering/charts/osac-metering/rules"
 	rulesTemplate   = "osac-metering/charts/osac-metering/templates/rules.yaml"
+	chartValuesFile = "osac-metering/charts/osac-metering/values.yaml"
 	schemaDirectory = "osac-metering/schema"
 )
 
 // rulesFilePattern matches a shipped rule revision file, for example 0002-meters.yaml.
 var rulesFilePattern = regexp.MustCompile(`^([0-9]{4})-meters\.yaml$`)
 
-// Sources are the three inputs the contract is generated from.
+// Sources are the inputs the contract is generated from.
 type Sources struct {
 	// Resources is the field registry: every billable resource and the fields metering
 	// tracks on it.
@@ -57,9 +61,26 @@ type Sources struct {
 
 	// Versions are the published schema files, sorted by version.
 	Versions []schema.Version
+
+	// HeartbeatInterval is the chart's default round interval, quoted by the reference.
+	HeartbeatInterval string
+
+	// TopicRetention is the chart's default `topics.retentionMs`, quoted by the reference.
+	TopicRetention string
 }
 
-// LoadSources reads the three inputs from a repository checkout.
+// chartValues is the part of the chart values the reference quotes, so the prose follows the
+// chart instead of repeating its numbers.
+type chartValues struct {
+	Heartbeat struct {
+		Interval string `yaml:"interval"`
+	} `yaml:"heartbeat"`
+	Topics struct {
+		RetentionMs string `yaml:"retentionMs"`
+	} `yaml:"topics"`
+}
+
+// LoadSources reads the inputs from a repository checkout.
 func LoadSources(repoRoot string) (Sources, error) {
 	resources, err := metering.Resources()
 	if err != nil {
@@ -87,7 +108,38 @@ func LoadSources(repoRoot string) (Sources, error) {
 	if err != nil {
 		return Sources{}, fmt.Errorf("reading the published schema files: %w", err)
 	}
-	return Sources{Resources: resources, Revision: revision, Versions: versions}, nil
+
+	heartbeatInterval, topicRetention, err := loadChartDefaults(repoRoot)
+	if err != nil {
+		return Sources{}, err
+	}
+	return Sources{
+		Resources:         resources,
+		Revision:          revision,
+		Versions:          versions,
+		HeartbeatInterval: heartbeatInterval,
+		TopicRetention:    topicRetention,
+	}, nil
+}
+
+// loadChartDefaults reads the interval and retention the reference quotes from the chart
+// values, so a changed default changes the generated prose.
+func loadChartDefaults(repoRoot string) (interval, retention string, err error) {
+	content, err := os.ReadFile(filepath.Join(repoRoot, chartValuesFile))
+	if err != nil {
+		return "", "", fmt.Errorf("reading %s: %w", chartValuesFile, err)
+	}
+	var values chartValues
+	if err := yaml.Unmarshal(content, &values); err != nil {
+		return "", "", fmt.Errorf("parsing %s: %w", chartValuesFile, err)
+	}
+	if values.Heartbeat.Interval == "" {
+		return "", "", fmt.Errorf("%s has no heartbeat.interval", chartValuesFile)
+	}
+	if values.Topics.RetentionMs == "" {
+		return "", "", fmt.Errorf("%s has no topics.retentionMs", chartValuesFile)
+	}
+	return values.Heartbeat.Interval, values.Topics.RetentionMs, nil
 }
 
 // latestRevision returns the highest-numbered rule revision the chart ships and the path of

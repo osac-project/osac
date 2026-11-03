@@ -336,7 +336,7 @@ unit-tests-osac-metering:
 # matches no `code` filter, and the immutability scripts need the release tags, so the leg
 # checks out full history.
 metering-contract:
-  - '{osac-metering/docs/contract/**,osac-metering/schema/**,osac-metering/metering-service/**,osac-metering/charts/osac-metering/rules/**,osac-metering/charts/osac-metering/templates/rules.yaml,osac-metering/scripts/test-contract-schemas.sh,osac-metering/scripts/test-rules-unchanged.sh,osac-metering/Makefile,proto/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
+  - '{osac-metering/docs/contract/**,osac-metering/schema/**,osac-metering/metering-service/**,osac-metering/charts/osac-metering/rules/**,osac-metering/charts/osac-metering/values.yaml,osac-metering/charts/osac-metering/templates/rules.yaml,osac-metering/charts/osac-metering/templates/kafka-topics.yaml,osac-metering/scripts/test-contract-schemas.sh,osac-metering/scripts/test-rules-unchanged.sh,osac-metering/Makefile,proto/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-osac-metering-adapters:
   - '{osac-metering/adapters/**,osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-osac-metering-schema:

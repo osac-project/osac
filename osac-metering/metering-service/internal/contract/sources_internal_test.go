@@ -104,4 +104,10 @@ func TestReferenceDocumentsTheNewestShippedRevision(t *testing.T) {
 	if !strings.Contains(reference, "revision `"+number+"`") {
 		t.Fatalf("the reference does not name revision %s", number)
 	}
+	if !strings.Contains(reference, "`"+sources.HeartbeatInterval+"`") {
+		t.Fatalf("the reference does not quote the chart interval %s", sources.HeartbeatInterval)
+	}
+	if !strings.Contains(reference, "`"+sources.TopicRetention+"`") {
+		t.Fatalf("the reference does not quote the chart retention %s", sources.TopicRetention)
+	}
 }

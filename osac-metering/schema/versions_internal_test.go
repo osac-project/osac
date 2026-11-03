@@ -10,6 +10,7 @@ in compliance with the License. You may obtain a copy of the License at
 package schema
 
 import (
+	"encoding/json"
 	"io/fs"
 	"reflect"
 	"strings"
@@ -17,6 +18,10 @@ import (
 	"testing/fstest"
 	"time"
 )
+
+// testNow is the clock the load tests use. It is explicit so a fixture may carry a future
+// effective date without depending on the wall clock.
+var testNow = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // publishedFile returns the bytes of a real published schema file, so a test changes one
 // thing from a valid file rather than hand-writing the whole contract.
@@ -42,7 +47,7 @@ func laterVersion(t *testing.T) string {
 }
 
 func TestLoadVersionsReadsPublishedFiles(t *testing.T) {
-	versions, err := loadVersions(versionFiles)
+	versions, err := loadVersions(versionFiles, testNow)
 	if err != nil {
 		t.Fatalf("loading published schemas: %v", err)
 	}
@@ -64,7 +69,7 @@ func TestLoadVersionsRejectsReusedVersion(t *testing.T) {
 		versionDirectory + "/v1.json": {Data: []byte(publishedFile(t, "v1.json"))},
 		versionDirectory + "/v2.json": {Data: []byte(second)},
 	}
-	_, err := loadVersions(files)
+	_, err := loadVersions(files, testNow)
 	if err == nil || !strings.Contains(err.Error(), "reuses version v1") {
 		t.Fatalf("want a reused-version error, got %v", err)
 	}
@@ -76,7 +81,7 @@ func TestLoadVersionsRejectsChangedEffectiveDateOrder(t *testing.T) {
 		versionDirectory + "/v1.json": {Data: []byte(publishedFile(t, "v1.json"))},
 		versionDirectory + "/v2.json": {Data: []byte(earlier)},
 	}
-	_, err := loadVersions(files)
+	_, err := loadVersions(files, testNow)
 	if err == nil || !strings.Contains(err.Error(), "not after version v1") {
 		t.Fatalf("want an effective-date order error, got %v", err)
 	}
@@ -86,7 +91,7 @@ func TestLoadVersionsRejectsFileNameThatDoesNotMatchVersion(t *testing.T) {
 	files := fstest.MapFS{
 		versionDirectory + "/v2.json": {Data: []byte(publishedFile(t, "v1.json"))},
 	}
-	_, err := loadVersions(files)
+	_, err := loadVersions(files, testNow)
 	if err == nil || !strings.Contains(err.Error(), "the file must be named v1.json") {
 		t.Fatalf("want a file-name error, got %v", err)
 	}
@@ -98,7 +103,7 @@ func TestLoadVersionsRejectsEventTypeThatDoesNotNameTheVersion(t *testing.T) {
 	files := fstest.MapFS{
 		versionDirectory + "/v2.json": {Data: []byte(content)},
 	}
-	_, err := loadVersions(files)
+	_, err := loadVersions(files, testNow)
 	if err == nil || !strings.Contains(err.Error(), "the type suffix is the schema version") {
 		t.Fatalf("want an event-type error, got %v", err)
 	}
@@ -110,7 +115,7 @@ func TestLoadVersionsRejectsUnknownFieldKey(t *testing.T) {
 		`"name": "tenant_id", "unexpected": true,`, 1,
 	)
 	files := fstest.MapFS{versionDirectory + "/v1.json": {Data: []byte(content)}}
-	_, err := loadVersions(files)
+	_, err := loadVersions(files, testNow)
 	if err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("want an unknown-key error, got %v", err)
 	}
@@ -127,7 +132,7 @@ func TestLoadVersionsRejectsMissingRequiredMarker(t *testing.T) {
       "unit": ""`, 1,
 	)
 	files := fstest.MapFS{versionDirectory + "/v1.json": {Data: []byte(content)}}
-	_, err := loadVersions(files)
+	_, err := loadVersions(files, testNow)
 	if err == nil || !strings.Contains(err.Error(), "no required marker") {
 		t.Fatalf("want a required-marker error, got %v", err)
 	}
@@ -146,7 +151,7 @@ func TestLoadVersionsRequiresThePayloadShapeToMatchTheCode(t *testing.T) {
 `, "", 1,
 	)
 	files := fstest.MapFS{versionDirectory + "/v1.json": {Data: []byte(content)}}
-	_, err := loadVersions(files)
+	_, err := loadVersions(files, testNow)
 	if err == nil || !strings.Contains(err.Error(), `missing field "tenant_id"`) {
 		t.Fatalf("want a payload drift error, got %v", err)
 	}
@@ -157,7 +162,7 @@ func TestLoadVersionsRequiresTheEnvelopeToMatchTheEvent(t *testing.T) {
 		publishedFile(t, "v1.json"), `"name": "osactenant"`, `"name": "osactenantx"`, 1,
 	)
 	files := fstest.MapFS{versionDirectory + "/v1.json": {Data: []byte(content)}}
-	_, err := loadVersions(files)
+	_, err := loadVersions(files, testNow)
 	if err == nil || !strings.Contains(err.Error(), `missing field "osactenant"`) {
 		t.Fatalf("want an envelope drift error, got %v", err)
 	}
@@ -206,14 +211,14 @@ func TestLoadVersionsRejectsAnUnpaddedVersion(t *testing.T) {
 	content := strings.ReplaceAll(publishedFile(t, "v1.json"), `"v1"`, `"v01"`)
 	content = strings.ReplaceAll(content, "heartbeat.v1", "heartbeat.v01")
 	files := fstest.MapFS{versionDirectory + "/v01.json": {Data: []byte(content)}}
-	_, err := loadVersions(files)
+	_, err := loadVersions(files, testNow)
 	if err == nil || !strings.Contains(err.Error(), "want v<number>") {
 		t.Fatalf("want a version-format error, got %v", err)
 	}
 }
 
 func TestLoadVersionsHashFollowsTheFileContent(t *testing.T) {
-	original, err := loadVersions(versionFiles)
+	original, err := loadVersions(versionFiles, testNow)
 	if err != nil {
 		t.Fatalf("loading published schemas: %v", err)
 	}
@@ -221,7 +226,7 @@ func TestLoadVersionsHashFollowsTheFileContent(t *testing.T) {
 		publishedFile(t, "v1.json"), "Tenant the usage belongs to.", "Tenant the usage is billed to.", 1,
 	)
 	files := fstest.MapFS{versionDirectory + "/v1.json": {Data: []byte(changed)}}
-	modified, err := loadVersions(files)
+	modified, err := loadVersions(files, testNow)
 	if err != nil {
 		t.Fatalf("loading changed schema: %v", err)
 	}
@@ -235,7 +240,7 @@ func TestVersionInEffectSelectsByRecordTime(t *testing.T) {
 		versionDirectory + "/v1.json": {Data: []byte(publishedFile(t, "v1.json"))},
 		versionDirectory + "/v2.json": {Data: []byte(laterVersion(t))},
 	}
-	versions, err := loadVersions(files)
+	versions, err := loadVersions(files, testNow)
 	if err != nil {
 		t.Fatalf("loading synthetic schemas: %v", err)
 	}
@@ -322,5 +327,188 @@ func TestCheckSubsetAcceptsAnAddedField(t *testing.T) {
 	current := []Field{{Name: "kept", Type: FieldTypeString}, {Name: "added", Type: FieldTypeString}}
 	if err := checkSubset("v1", "v2", "HeartbeatData", older, current); err != nil {
 		t.Fatalf("adding a field was rejected: %v", err)
+	}
+}
+
+// versionDocument decodes a schema file so a test can change one field without matching
+// formatting byte for byte.
+func versionDocument(t *testing.T, content string) map[string]any {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal([]byte(content), &document); err != nil {
+		t.Fatalf("decoding the test schema file: %v", err)
+	}
+	return document
+}
+
+// writeVersionDocument encodes a test schema file.
+func writeVersionDocument(t *testing.T, document map[string]any) string {
+	t.Helper()
+	content, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("encoding the test schema file: %v", err)
+	}
+	return string(content)
+}
+
+// dropDataField removes a payload field from a test schema file.
+func dropDataField(t *testing.T, content, name string) string {
+	t.Helper()
+	document := versionDocument(t, content)
+	fields := document["data"].([]any)
+	kept := make([]any, 0, len(fields))
+	for _, field := range fields {
+		if field.(map[string]any)["name"] != name {
+			kept = append(kept, field)
+		}
+	}
+	document["data"] = kept
+	return writeVersionDocument(t, document)
+}
+
+// addDataField appends an optional payload field to a test schema file.
+func addDataField(t *testing.T, content, name string) string {
+	t.Helper()
+	document := versionDocument(t, content)
+	document["data"] = append(document["data"].([]any), map[string]any{
+		"name": name, "type": "string", "required": false,
+		"description": "Added by the next version.", "unit": "",
+	})
+	return writeVersionDocument(t, document)
+}
+
+// setDataField changes one attribute of a payload field in a test schema file, including a
+// nested field.
+func setDataField(t *testing.T, content, name, attribute, value string) string {
+	t.Helper()
+	document := versionDocument(t, content)
+	if !setFieldAttribute(document["data"].([]any), name, attribute, value) {
+		t.Fatalf("the test schema file has no field %q", name)
+	}
+	return writeVersionDocument(t, document)
+}
+
+func setFieldAttribute(fields []any, name, attribute, value string) bool {
+	for _, raw := range fields {
+		field := raw.(map[string]any)
+		if field["name"] == name {
+			field[attribute] = value
+			return true
+		}
+		nested, ok := field["fields"].([]any)
+		if ok && setFieldAttribute(nested, name, attribute, value) {
+			return true
+		}
+	}
+	return false
+}
+
+// twoVersions builds a v1 and a version-two file from the published file.
+func twoVersions(t *testing.T, second string) fstest.MapFS {
+	t.Helper()
+	return fstest.MapFS{
+		versionDirectory + "/v1.json": {Data: []byte(publishedFile(t, "v1.json"))},
+		versionDirectory + "/v2.json": {Data: []byte(second)},
+	}
+}
+
+// TestLoadVersionsRejectsAVersionThatDropsAField is the load-level add-only rule: replay
+// decodes older records with the newest shape, so a v2 that drops a v1 field must not load.
+func TestLoadVersionsRejectsAVersionThatDropsAField(t *testing.T) {
+	_, err := loadVersions(twoVersions(t, dropDataField(t, laterVersion(t), "rules_revision")), testNow)
+	if err == nil || !strings.Contains(err.Error(), `drops field "rules_revision"`) {
+		t.Fatalf("want a dropped-field error, got %v", err)
+	}
+}
+
+func TestLoadVersionsAcceptsAVersionThatOnlyAddsAField(t *testing.T) {
+	versions, err := loadVersions(
+		twoVersions(t, addDataField(t, laterVersion(t), "external_billing_account_id")), testNow,
+	)
+	if err != nil {
+		t.Fatalf("a version that only adds an optional field must load: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("want two loaded versions, got %d", len(versions))
+	}
+}
+
+func TestLoadVersionsRejectsAChangedPublishedPattern(t *testing.T) {
+	second := setDataField(t, laterVersion(t), "quantity", "pattern", `^-?[0-9]+$`)
+	_, err := loadVersions(twoVersions(t, second), testNow)
+	if err == nil || !strings.Contains(err.Error(), "changes the pattern") {
+		t.Fatalf("want a changed-pattern error, got %v", err)
+	}
+}
+
+// TestLoadVersionsRejectsAFutureDatedCurrentVersion pins the enforcement: the producer writes
+// its current version unconditionally, so a release may not ship a current version whose
+// effective date has not arrived.
+func TestLoadVersionsRejectsAFutureDatedCurrentVersion(t *testing.T) {
+	content := strings.Replace(
+		publishedFile(t, "v1.json"),
+		`"effective_at": "1970-01-01T00:00:00Z"`,
+		`"effective_at": "2028-01-01T00:00:00Z"`, 1,
+	)
+	files := fstest.MapFS{versionDirectory + "/v1.json": {Data: []byte(content)}}
+	_, err := loadVersions(files, testNow)
+	if err == nil || !strings.Contains(err.Error(), "after now") {
+		t.Fatalf("want a future-effective-date error, got %v", err)
+	}
+}
+
+func TestLoadVersionsRejectsDataAfterTheVersionObject(t *testing.T) {
+	content := publishedFile(t, "v1.json") + "\n{}\n"
+	files := fstest.MapFS{versionDirectory + "/v1.json": {Data: []byte(content)}}
+	_, err := loadVersions(files, testNow)
+	if err == nil || !strings.Contains(err.Error(), "data after its version object") {
+		t.Fatalf("want a trailing-data error, got %v", err)
+	}
+}
+
+func TestVersionCheckRequiredPayload(t *testing.T) {
+	versions, err := loadVersions(versionFiles, testNow)
+	if err != nil {
+		t.Fatalf("loading published schemas: %v", err)
+	}
+	version := versions[0]
+	payload := []byte(`{
+		"tenant_id": "acme", "resource_type": "compute_instance", "resource_id": "vm-1",
+		"meter": "compute", "component": "compute", "billing_dimensions": {"tenant": "acme"},
+		"usage": {
+			"semantics": "interval", "from": "2026-11-02T09:59:00Z",
+			"to": "2026-11-02T10:00:00Z", "quantity": "60.000000",
+			"unit": "second", "precision": "second"
+		},
+		"heartbeat_time": "2026-11-02T10:00:00Z", "last_applied_offset": 7,
+		"rules_revision": "0001"
+	}`)
+	if err := version.CheckRequiredPayload(payload); err != nil {
+		t.Fatalf("a complete payload was rejected: %v", err)
+	}
+
+	var complete map[string]any
+	if err := json.Unmarshal(payload, &complete); err != nil {
+		t.Fatalf("decoding the test payload: %v", err)
+	}
+	delete(complete["usage"].(map[string]any), "quantity")
+	broken, err := json.Marshal(complete)
+	if err != nil {
+		t.Fatalf("encoding the test payload: %v", err)
+	}
+	if err := version.CheckRequiredPayload(broken); err == nil ||
+		!strings.Contains(err.Error(), `missing required field "usage.quantity"`) {
+		t.Fatalf("want a missing nested field error, got %v", err)
+	}
+}
+
+func TestLoadVersionsRejectsAChangedEnvelopeConstant(t *testing.T) {
+	content := strings.Replace(
+		publishedFile(t, "v1.json"), `"const": "osac-metering"`, `"const": "someone-else"`, 1,
+	)
+	files := fstest.MapFS{versionDirectory + "/v1.json": {Data: []byte(content)}}
+	_, err := loadVersions(files, testNow)
+	if err == nil || !strings.Contains(err.Error(), `want "osac-metering"`) {
+		t.Fatalf("want an envelope constant error, got %v", err)
 	}
 }

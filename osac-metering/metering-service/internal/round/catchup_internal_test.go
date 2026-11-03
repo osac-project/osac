@@ -10,6 +10,7 @@ compliance with the License. You may obtain a copy of the License at
 package round
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -135,6 +136,22 @@ func TestDecodeHeartbeatReplaysARecordWithItsNamedVersion(t *testing.T) {
 	}
 	if caught.key != key {
 		t.Fatalf("key is %+v, want %+v", caught.key, key)
+	}
+
+	// A record that omits a required field of its own version is corruption, not a record
+	// the rebuild may bill.
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		t.Fatalf("decoding the record body: %v", err)
+	}
+	delete(body["data"].(map[string]any), "rules_revision")
+	broken, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("encoding the broken record: %v", err)
+	}
+	if _, err := decodeHeartbeat(broken, versions); err == nil ||
+		!strings.Contains(err.Error(), `missing required field "rules_revision"`) {
+		t.Fatalf("a record missing a required field must be refused, got %v", err)
 	}
 
 	unknown, err := heartbeat.New(

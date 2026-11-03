@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { access } from 'node:fs/promises';
 
 import { tenantNameOrSkip } from './test_data';
+import { deleteTenantSshKey } from '../../../../libs/osac-cli/src/secret';
 import { deleteTenantAdmin } from '../../../../libs/osac-cli/src/tenant_admin';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
@@ -53,6 +54,11 @@ test('deletes the requested tenant', async ({ page }) => {
     'tenant-delete',
     `Remove tenant-admin user and role binding for "${configuredTenantName}"`,
     () => deleteTenantAdmin(configuredTenantName, tenantCredentials.username),
+  );
+  await testStep(
+    'tenant-delete',
+    `Delete SSH public-key Secret for tenant "${configuredTenantName}"`,
+    () => deleteTenantSshKey(configuredTenantName),
   );
   await testStep('tenant-delete', `Delete tenant "${configuredTenantName}"`, () =>
     deleteTenant(page, configuredTenantName),

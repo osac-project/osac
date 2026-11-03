@@ -15,11 +15,13 @@ otherwise do by hand in a browser.
 - A Keycloak user on that deployment's realm to log in as. This package
   doesn't provision one — use an existing test account, or create one on the
   target environment first.
-- For the full VMaaS flow, a tenant-scoped SSH public-key Secret must exist in
-  the tenant's Default project. The VM wizard filters for
+- For a standalone VM launch run, a tenant-scoped SSH public-key Secret must
+  exist in the tenant's Default project. The VM wizard filters for
   `SECRET_TYPE_SSH_PUBLIC_KEY` with a `public_key` data entry; without one it
-  shows `No secret available` and the SSH-key step cannot complete. Create one
-  with the private OSAC CLI after selecting a non-sensitive public key file:
+  shows `No secret available` and the SSH-key step cannot complete. The full
+  VMaaS flow creates and removes this Secret automatically. For a standalone
+  run, create one with the private OSAC CLI using a non-sensitive public key
+  file:
 
   ```bash
   osac --tenant <tenant-name> create secret \
@@ -135,7 +137,8 @@ The `vmaas-full-flow-launch` project runs the complete journey in this order:
 2. Log in with the generated tenant break-glass credentials, set the
    replacement password from `tenant_password` (or the tenant name), grant
    the identity `tenant-admin` permissions through a private-API RoleBinding,
-   and log in again as the tenant admin.
+   log in again as the tenant admin, and create a tenant-scoped SSH public-key
+   Secret in the Default project.
 3. Open the published catalog item and exercise the VM wizard: catalog item,
    project and VM name, disk image, instance type, boot-disk size and storage
    tier, additional disks, default networking, auto external IP, SSH key,
@@ -147,9 +150,8 @@ The `vmaas-full-flow-launch` project runs the complete journey in this order:
 The `vmaas-full-flow-launch` project has a teardown chain. It first logs in as
 the tenant admin and deletes the VM, then logs in as the admin user to remove
 the catalog item, disk image, instance type, storage tier, tenant-admin
-RoleBinding and OSAC User, tenant, and generated credential file. The
-SSH-key Secret is a prerequisite supplied by the environment and is not
-created by this flow.
+RoleBinding and OSAC User, SSH public-key Secret, tenant, and generated
+credential file.
 
 Run the flow with:
 

@@ -91,10 +91,13 @@ jobs:
         if: inputs.kind == 'metering-contract'
         with:
           working-directory: osac-metering/metering-service
+      # The rule-render check renders the chart, so the leg needs Helm.
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        if: inputs.kind == 'metering-contract'
       - name: Check the metering contract and published schemas
         if: inputs.kind == 'metering-contract'
         working-directory: osac-metering
-        run: make contract-check schemas-unchanged-test rules-unchanged-test
+        run: make contract-check schemas-unchanged-test rules-render-test rules-unchanged-test
       # --- unit tests of osac-ui
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'ui-unit'

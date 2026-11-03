@@ -253,9 +253,16 @@ func writeSchemaVersions(out *strings.Builder, sources Sources) {
 			"so the version must not take effect after the release that ships it. Metering "+
 			"refuses to load a current version whose effective date is in the future; an "+
 			"older, future-dated version may wait in the tree until its release.\n\n")
-	fmt.Fprintf(out,
-		"A published version stays readable for as long as its records are retained. "+
-			"Retention is indefinite by default, so no version has been retired.\n\n")
+	if sources.TopicRetention == "-1" {
+		fmt.Fprintf(out,
+			"A published version stays readable for as long as its records are retained. "+
+				"Retention is indefinite by default, so no version has been retired.\n\n")
+	} else {
+		fmt.Fprintf(out,
+			"A published version stays readable for as long as its records are retained. "+
+				"Retention is bounded by `topics.retentionMs` (`%s`), so a version's "+
+				"records stay readable for that window.\n\n", sources.TopicRetention)
+	}
 	fmt.Fprintf(out, "| Version | CloudEvent type | Effective from | Source file | SHA-256 |\n")
 	fmt.Fprintf(out, "|---|---|---|---|---|\n")
 	for _, version := range sources.Versions {

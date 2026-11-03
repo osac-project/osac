@@ -10,12 +10,47 @@ in compliance with the License. You may obtain a copy of the License at
 package contract
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// commandTimeout bounds each git and script command, so a broken fixture cannot hang the
+// contract suite.
+const commandTimeout = 60 * time.Second
+
+// gitRepositoryVariables are the environment variables that tell git to use a repository
+// other than the one named by the working directory. The fixture clears them so it can never
+// act on the caller's checkout.
+var gitRepositoryVariables = map[string]bool{
+	"GIT_DIR":                          true,
+	"GIT_WORK_TREE":                    true,
+	"GIT_INDEX_FILE":                   true,
+	"GIT_OBJECT_DIRECTORY":             true,
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES": true,
+	"GIT_COMMON_DIR":                   true,
+	"GIT_NAMESPACE":                    true,
+	"GIT_PREFIX":                       true,
+	"GIT_CEILING_DIRECTORIES":          true,
+	"GIT_DISCOVERY_ACROSS_FILESYSTEM":  true,
+}
+
+// cleanEnvironment returns the process environment without git's repository-location
+// variables.
+func cleanEnvironment() []string {
+	environment := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if !gitRepositoryVariables[name] {
+			environment = append(environment, entry)
+		}
+	}
+	return environment
+}
 
 // TestTagGateAllowsANewVersionAndRejectsAnEditedOne proves the release gate does not deadlock:
 // after a tag ships v1 and the manifest, a pull request may add v2 next to its manifest entry
@@ -42,6 +77,10 @@ func TestTagGateAllowsANewVersionAndRejectsAnEditedOne(t *testing.T) {
 	runCommand(t, checkout, "git", "init", "--quiet")
 	runCommand(t, checkout, "git", "config", "user.email", "test@example.com")
 	runCommand(t, checkout, "git", "config", "user.name", "Test")
+	// The fixture must not inherit a caller's signing or hook configuration.
+	runCommand(t, checkout, "git", "config", "commit.gpgSign", "false")
+	runCommand(t, checkout, "git", "config", "tag.gpgSign", "false")
+	runCommand(t, checkout, "git", "config", "core.hooksPath", os.DevNull)
 	runCommand(t, checkout, "git", "add", "-A")
 	runCommand(t, checkout, "git", "commit", "--quiet", "-m", "release")
 	runCommand(t, checkout, "git", "tag", "osac-metering/v1.0.0")
@@ -100,11 +139,15 @@ func copyFile(t *testing.T, from, to string) {
 	}
 }
 
-// runCommand runs a command in a directory and fails the test when it fails.
+// runCommand runs a command in a directory with a clean git environment and fails the test
+// when it fails.
 func runCommand(t *testing.T, directory string, name string, args ...string) string {
 	t.Helper()
-	command := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = directory
+	command.Env = cleanEnvironment()
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, output)
@@ -112,9 +155,12 @@ func runCommand(t *testing.T, directory string, name string, args ...string) str
 	return string(output)
 }
 
-// runScript runs the release gate and returns its combined output.
+// runScript runs the release gate with a clean git environment and a bounded run time.
 func runScript(script string) (string, error) {
-	command := exec.Command("bash", script)
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, "bash", script)
+	command.Env = cleanEnvironment()
 	output, err := command.CombinedOutput()
 	return string(output), err
 }

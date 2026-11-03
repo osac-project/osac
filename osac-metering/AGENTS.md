@@ -18,7 +18,7 @@ respective areas.
 
 - Component setup: [`README.md`](README.md)
 - Event schema: `schema/`
-- Published contract and its generated files: `docs/contract/`, generated from the field registry, the default rule revision, and `schema/versions/`
+- Published contract and its generated files: `docs/contract/`, generated from the field registry, the default rule revision in `charts/osac-metering/rules/` and `charts/osac-metering/templates/rules.yaml`, the chart defaults in `charts/osac-metering/values.yaml`, and `schema/versions/`
 - Fold, rounds, relay, and rules: `metering-service/`
 - Adapter runner and contracts: `adapters/`
 - Deployment values and rule revisions: `charts/osac-metering/`

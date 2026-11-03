@@ -27,8 +27,8 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// These boundary checks need neither a database nor Kafka: committed outbox rows
-// must map to a typed private event before the reconciler can receive them.
+// TestFabricDomainEventDispatch checks typed outbox event conversion and public privacy boundaries
+// without a database or Kafka broker.
 func TestFabricDomainEventDispatch(t *testing.T) {
 	g := NewWithT(t)
 	publicStatusFields := (&publicv1.FabricDomainStatus{}).ProtoReflect().Descriptor().Fields()

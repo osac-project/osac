@@ -606,36 +606,28 @@ func compatibleToolSchema[T any]() json.RawMessage {
 }
 
 func resourceToolSchema[T any](supportedResourceTypes []ResourceType) json.RawMessage {
-	schema := compatibleToolSchema[T]()
-	var document map[string]any
-	if err := json.Unmarshal(schema, &document); err != nil {
-		panic(fmt.Errorf("decode resource tool schema: %w", err))
-	}
-	properties, ok := document["properties"].(map[string]any)
-	if !ok {
-		panic("resource tool schema has no properties")
-	}
-	resourceType, ok := properties["resource_type"].(map[string]any)
-	if !ok {
-		panic("resource tool schema has no resource_type property")
-	}
-	resourceTypes := make([]string, len(supportedResourceTypes))
-	for i, resourceType := range supportedResourceTypes {
-		resourceTypes[i] = string(resourceType)
-	}
-	resourceType["enum"] = resourceTypes
-	if offset, ok := properties["offset"].(map[string]any); ok {
-		offset["minimum"] = 0
-	}
-	if pageSize, ok := properties["page_size"].(map[string]any); ok {
-		pageSize["minimum"] = 0 // Zero selects the default page size.
-		pageSize["maximum"] = maxResourcePageSize
-	}
-	encoded, err := json.Marshal(document)
-	if err != nil {
-		panic(fmt.Errorf("encode resource tool schema: %w", err))
-	}
-	return encoded
+	return withToolSchemaProperties(
+		compatibleToolSchema[T](),
+		"resource",
+		func(properties map[string]any) {
+			resourceType, ok := properties["resource_type"].(map[string]any)
+			if !ok {
+				panic("resource tool schema has no resource_type property")
+			}
+			resourceTypes := make([]string, len(supportedResourceTypes))
+			for index, resourceType := range supportedResourceTypes {
+				resourceTypes[index] = string(resourceType)
+			}
+			resourceType["enum"] = resourceTypes
+			if offset, ok := properties["offset"].(map[string]any); ok {
+				offset["minimum"] = 0
+			}
+			if pageSize, ok := properties["page_size"].(map[string]any); ok {
+				pageSize["minimum"] = 0 // Zero selects the default page size.
+				pageSize["maximum"] = maxResourcePageSize
+			}
+		},
+	)
 }
 
 func computeInstanceUpdateToolSchema() json.RawMessage {

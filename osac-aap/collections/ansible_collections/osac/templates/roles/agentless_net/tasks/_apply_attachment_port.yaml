@@ -1,0 +1,83 @@
+---
+- name: Set or remove one saved AgentlessNet access port under the NVUE lock
+  ansible.builtin.raw: |
+    flock /tmp/nvue.lock sh -s -- {{ osac_job_vars.resource.id }} {{ _agentless_net_attachment_port.port_name }} {{ _agentless_net_attachment_target_vlan | default(0) }} {{ _agentless_net_attachment_port_action }} <<'SH'
+    set -eu
+    id="$1"
+    port="$2"
+    vlan="$3"
+    action="$4"
+    tombstone="/var/lib/osac/agentless-net-v1/tombstones/network-attachment-$id"
+    if [ "$action" != delete ] && [ -e "$tombstone" ]; then
+      exit 73
+    fi
+    case "$action" in
+      apply|delete) nv set interface "$port" bridge domain br_default access "$vlan" ;;
+      remove) nv unset interface "$port" bridge domain ;;
+      *) exit 64 ;;
+    esac
+    if diff="$(nv config diff --output commands)"; then
+      status=0
+    else
+      status=$?
+    fi
+    [ "$status" -le 1 ] || exit "$status"
+    if [ "$status" -eq 1 ] && [ -z "$diff" ]; then
+      exit 1
+    fi
+    if [ -n "$diff" ]; then
+      case "$diff" in
+        "nv set "*|"nv unset "*) nv config apply -y ;;
+        *) exit 1 ;;
+      esac
+    fi
+    SH
+  delegate_to: "{{ _agentless_net_attachment_port.switch_name }}"
+  become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_port | default(22) }}"
+    ansible_network_os: cumulus
+  changed_when: true
+  no_log: true
+
+- name: Read the access port after reconciliation
+  ansible.builtin.raw: "bridge -j vlan show dev {{ _agentless_net_attachment_port.port_name }}"
+  delegate_to: "{{ _agentless_net_attachment_port.switch_name }}"
+  become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_port | default(22) }}"
+    ansible_network_os: cumulus
+  register: _agentless_net_attachment_port_after
+  changed_when: false
+  until: >-
+    _agentless_net_attachment_port_after.rc == 0
+    and
+    ((_agentless_net_attachment_port_after.stdout | from_json
+      | selectattr('ifname', 'equalto', _agentless_net_attachment_port.port_name)
+      | map(attribute='vlans') | first | default([])
+      | map(attribute='vlan') | map('int') | unique | list)
+     == ([_agentless_net_attachment_target_vlan | int]
+         if _agentless_net_attachment_port_action in ['apply', 'delete'] else []))
+  retries: 30
+  delay: 2
+  no_log: true
+
+- name: Verify access-port PVID and untagged state
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_attachment_port_after.stdout | from_json | length == 1
+      - >-
+        _agentless_net_attachment_port_action == 'remove'
+        or 'PVID' in (((_agentless_net_attachment_port_after.stdout | from_json | first).vlans | first).flags | default([]))
+      - >-
+        _agentless_net_attachment_port_action == 'remove'
+        or 'Egress Untagged' in (((_agentless_net_attachment_port_after.stdout | from_json | first).vlans | first).flags | default([]))
+    fail_msg: AgentlessNet did not converge the switch port to the expected access state.
+  when: _agentless_net_attachment_port_action in ['apply', 'delete']
+  no_log: true

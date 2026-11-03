@@ -1,0 +1,20 @@
+---
+- name: Build a sanitized AgentlessNet task error
+  ansible.builtin.set_fact:
+    _agentless_net_error:
+      message: >-
+        AgentlessNet {{ osac_job_vars.task | default('network task') }} failed at
+        {{ ansible_failed_task.name | default('a task step') }}. Inspect the AAP
+        job log and correct the provider state before retrying.
+      retryable: "{{ ansible_failed_result.retryable | default(_agentless_net_failure_retryable | default(false)) | bool }}"
+
+- name: Report the error to OSAC
+  ansible.builtin.set_stats:
+    aggregate: false
+    per_host: false
+    data:
+      osac_error: "{{ _agentless_net_error }}"
+
+- name: Fail the AgentlessNet task with sanitized details
+  ansible.builtin.fail:
+    msg: "{{ _agentless_net_error.message }}"

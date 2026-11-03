@@ -17,7 +17,7 @@ description: Install Python, uv, and ruff
 runs:
   using: composite
   steps:
-  - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # v8.3.2
+  - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
   - shell: bash
     # actions/setup-python's version manifest only ships 3.14 builds
     # tagged for the "rhel" platform label, not "centos" -- a self-hosted

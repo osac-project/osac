@@ -91,8 +91,9 @@ var _ = Describe("Billing stub", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(next.Accounts).To(HaveLen(1))
 		Expect(next.Next).To(BeEmpty())
-		// The normalized state stays UNKNOWN until the status mapping rule is decided; the raw value is exposed.
-		Expect(next.Accounts[0].State).To(Equal(billing.AccountUnknown))
+		// A lone INACTIVE status (no ApprovalStatus) wins over the missing signal (OSAC-6883's mapState:
+		// either signal reporting INACTIVE wins over the other); the raw value is still exposed.
+		Expect(next.Accounts[0].State).To(Equal(billing.AccountInactive))
 		Expect(next.Accounts[0].RawStatus).To(Equal("Inactive"))
 
 		account, err := adapter.GetAccount(ctx, billing.NewAccountRef("a1"))

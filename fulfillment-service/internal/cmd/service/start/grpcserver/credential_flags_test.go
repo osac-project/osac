@@ -35,4 +35,9 @@ var _ = Describe("gRPC server command", func() {
 			Expect(command.Flags().Lookup(name)).To(BeNil())
 		}
 	})
+
+	It("exposes the Kubernetes JWKS origin allowlist flag", func() {
+		command := Cmd()
+		Expect(command.Flags().Lookup("grpc-authn-kubernetes-jwks-origins")).ToNot(BeNil())
+	})
 })

@@ -94,6 +94,11 @@ auth:
   # This defines the URL of the OAuth issuer used for authentication. This parameter is mandatory.
   issuerUrl:
 
+  # Exact HTTPS origins permitted for Kubernetes JWKS requests when discovery
+  # advertises a JWKS endpoint on a different origin than the service-account issuer.
+  # The projected service-account bearer token is sent to these origins.
+  kubernetesJWKSOrigins: []
+
   # List of sources for the OAuth client credentials used by the controller to authenticate to the fulfillment API.
   # The controller uses the OAuth client credentials flow with the issuer URL specified in `auth.issuerUrl`.
   #

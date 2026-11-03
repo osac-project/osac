@@ -22,14 +22,16 @@
       with an IPv4 address in status.inventory.interfaces.
   when: _nmstate_apply_mgmt_ip is none or _nmstate_apply_mgmt_ip == ""
 
-- name: "Build SSH proxy args for agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
+- name: Build SSH connection inputs for agent {{ _nmstate_apply_assignment.agent.metadata.name }}
   ansible.builtin.set_fact:
-    _nmstate_apply_ssh_proxy_args: >-
-      {% if nmstate_config_ssh_bastion_host | default('') | length > 0 %}
-      -o 'ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-      -o ConnectTimeout=30 -i {{ nmstate_config_ssh_bastion_key }} -W %h:%p
-      {{ nmstate_config_ssh_bastion_user }}@{{ nmstate_config_ssh_bastion_host }}'
-      {% endif %}
+    _nmstate_apply_ssh_connection:
+      host: "{{ _nmstate_apply_mgmt_ip }}"
+      user: "{{ nmstate_config_ssh_user }}"
+      key: "{{ nmstate_config_ssh_key }}"
+      bastion_host: "{{ nmstate_config_ssh_bastion_host | default('', true) }}"
+      bastion_user: "{{ nmstate_config_ssh_bastion_user | default('', true) }}"
+      bastion_key: "{{ nmstate_config_ssh_bastion_key | default('', true) }}"
+  no_log: true
 
 - name: "Calculate static IP for agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
   ansible.builtin.set_fact:
@@ -57,35 +59,28 @@
     mode: "0644"
 
 - name: "Disable rp_filter on agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
-  ansible.builtin.shell:
-    cmd: |
-      ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 \
-        {{ _nmstate_apply_ssh_proxy_args }} \
-        -i {{ nmstate_config_ssh_key }} \
-        {{ nmstate_config_ssh_user }}@{{ _nmstate_apply_mgmt_ip }} \
-        'sudo sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.{{ nmstate_config_mgmt_interface }}.rp_filter=0'
+  ansible.builtin.command:
+    argv: >-
+      {{ _nmstate_apply_ssh_connection
+         | osac.service.nmstate_ssh_argv('disable_rp_filter', nmstate_config_mgmt_interface) }}
   changed_when: false
   no_log: true
 
 - name: "Copy nmstate config to agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
-  ansible.builtin.shell:
-    cmd: |
-      scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 \
-        {{ _nmstate_apply_ssh_proxy_args }} \
-        -i {{ nmstate_config_ssh_key }} \
-        /tmp/nmstate-{{ _nmstate_apply_assignment.agent.metadata.name }}.yaml \
-        {{ nmstate_config_ssh_user }}@{{ _nmstate_apply_mgmt_ip }}:/tmp/nmstate-config.yaml
+  ansible.builtin.command:
+    argv: >-
+      {{ _nmstate_apply_ssh_connection
+         | osac.service.nmstate_scp_argv(
+             '/tmp/nmstate-' ~ _nmstate_apply_assignment.agent.metadata.name ~ '.yaml'
+           ) }}
   changed_when: true
   no_log: true
 
 - name: "Apply nmstate config on agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
-  ansible.builtin.shell:
-    cmd: |
-      ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 \
-        {{ _nmstate_apply_ssh_proxy_args }} \
-        -i {{ nmstate_config_ssh_key }} \
-        {{ nmstate_config_ssh_user }}@{{ _nmstate_apply_mgmt_ip }} \
-        'nohup sudo nmstatectl apply /tmp/nmstate-config.yaml > /tmp/nmstate-apply.log 2>&1 &'
+  ansible.builtin.command:
+    argv: >-
+      {{ _nmstate_apply_ssh_connection
+         | osac.service.nmstate_ssh_argv('apply_nmstate') }}
   changed_when: true
   no_log: true
 

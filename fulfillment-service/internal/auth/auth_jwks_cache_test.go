@@ -122,6 +122,36 @@ var _ = Describe("JSON web key set cache creation", func() {
 		Expect(cache).ToNot(BeNil())
 	})
 
+	It("Rejects Kubernetes JWKS origins unless the Kubernetes issuer is enabled", func() {
+		_, err := NewJwksCache().
+			SetLogger(logger).
+			AddIssuer("https://my-issuer.example.com").
+			AddKubernetesJWKSOrigins("https://kube-api.example.com:6443").
+			Build()
+		Expect(err).To(MatchError("kubernetes JWKS origins require the Kubernetes issuer to be enabled"))
+	})
+
+	It("Requires each Kubernetes JWKS allowlist entry to be an HTTPS origin", func() {
+		for _, value := range []string{
+			"",
+			"http://kube-api.example.com",
+			"https://user@kube-api.example.com",
+			"https://*.kube-api.example.com",
+			"https://kube-api.example.com/openid/v1/jwks",
+			"https://kube-api.example.com?query=1",
+			"https://kube-api.example.com#fragment",
+		} {
+			_, err := NewJwksCache().
+				SetLogger(logger).
+				AddIssuer("https://my-issuer.example.com").
+				AddKubernetesIssuer(true).
+				AddKubernetesJWKSOrigins(value).
+				Build()
+			Expect(err).To(HaveOccurred(), value)
+			Expect(err.Error()).To(ContainSubstring("invalid Kubernetes JWKS origin"), value)
+		}
+	})
+
 	It("Can be built with multiple issuers", func() {
 		cache, err := NewJwksCache().
 			SetLogger(logger).
@@ -264,6 +294,7 @@ var _ = Describe("JWKS cache behaviour with a working issuer server", func() {
 		_, err = cache.Get(ctx, "https://untrusted.example.com", "123")
 		Expect(err).To(HaveOccurred())
 		Expect(err).To(MatchError(ErrBadIssuer))
+		Expect(issuerServer.ReceivedRequests()).To(BeEmpty(), "untrusted issuers must be rejected before network access")
 	})
 
 	It("Returns error when key identifier is not found", func(ctx context.Context) {
@@ -913,5 +944,249 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 		key, err := cache.Get(ctx, issuerUrl, "123")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(key).ToNot(BeNil())
+	})
+
+	It("Sends the service-account token to an explicitly trusted cross-origin JWKS URL", func(ctx context.Context) {
+		issuerServer := ghttp.NewUnstartedServer()
+		issuerServer.Writer = GinkgoWriter
+		issuerServer.HTTPTestServer.EnableHTTP2 = true
+		issuerServer.HTTPTestServer.StartTLS()
+		DeferCleanup(issuerServer.Close)
+		issuerUrl := issuerServer.URL()
+
+		jwksServer := ghttp.NewUnstartedServer()
+		jwksServer.Writer = GinkgoWriter
+		jwksServer.HTTPTestServer.EnableHTTP2 = true
+		jwksServer.HTTPTestServer.StartTLS()
+		DeferCleanup(jwksServer.Close)
+
+		tmpDir, err := os.MkdirTemp("", "*.test")
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(os.RemoveAll(tmpDir)).To(Succeed())
+		})
+		token := MakeTokenString(issuerUrl, "Bearer", time.Minute)
+		tokenFile := filepath.Join(tmpDir, kubefiles.ServiceAccountToken)
+		Expect(os.MkdirAll(filepath.Dir(tokenFile), 0700)).To(Succeed())
+		Expect(os.WriteFile(tokenFile, []byte(token), 0600)).To(Succeed())
+
+		issuerServer.RouteToHandler(
+			http.MethodGet,
+			"/.well-known/openid-configuration",
+			ghttp.CombineHandlers(
+				ghttp.VerifyHeaderKV(Authorization, "Bearer "+token),
+				ghttp.RespondWithJSONEncoded(http.StatusOK, map[string]any{
+					"issuer":   issuerUrl,
+					"jwks_uri": jwksServer.URL() + "/jwks.json",
+				}),
+			),
+		)
+		jwksServer.RouteToHandler(
+			http.MethodGet,
+			"/jwks.json",
+			ghttp.CombineHandlers(
+				ghttp.VerifyHeaderKV(Authorization, "Bearer "+token),
+				ghttp.RespondWithJSONEncoded(http.StatusOK, MakeJwksObject()),
+			),
+		)
+
+		caPool := newTestCertPool(
+			issuerServer.HTTPTestServer.Certificate(),
+			jwksServer.HTTPTestServer.Certificate(),
+		)
+		cache, err := NewJwksCache().
+			SetLogger(logger).
+			SetRoot(tmpDir).
+			SetCaPool(caPool).
+			AddKubernetesIssuer(true).
+			AddKubernetesJWKSOrigins(jwksServer.URL()).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		key, err := cache.Get(ctx, issuerUrl, "123")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(key).ToNot(BeNil())
+		Expect(jwksServer.ReceivedRequests()).To(HaveLen(1))
+	})
+
+	It("Does not send the Kubernetes service account token to a cross-origin JWKS URL", func(ctx context.Context) {
+		issuerServer := ghttp.NewUnstartedServer()
+		issuerServer.Writer = GinkgoWriter
+		issuerServer.HTTPTestServer.EnableHTTP2 = true
+		issuerServer.HTTPTestServer.StartTLS()
+		DeferCleanup(issuerServer.Close)
+		issuerUrl := issuerServer.URL()
+
+		jwksServer := ghttp.NewUnstartedServer()
+		jwksServer.Writer = GinkgoWriter
+		jwksServer.HTTPTestServer.EnableHTTP2 = true
+		jwksServer.HTTPTestServer.StartTLS()
+		DeferCleanup(jwksServer.Close)
+		jwksServer.RouteToHandler(
+			http.MethodGet,
+			"/jwks.json",
+			ghttp.RespondWithJSONEncoded(http.StatusOK, MakeJwksObject()),
+		)
+
+		tmpDir, err := os.MkdirTemp("", "*.test")
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(os.RemoveAll(tmpDir)).To(Succeed())
+		})
+		token := MakeTokenString(issuerUrl, "Bearer", time.Minute)
+		tokenFile := filepath.Join(tmpDir, kubefiles.ServiceAccountToken)
+		Expect(os.MkdirAll(filepath.Dir(tokenFile), 0700)).To(Succeed())
+		Expect(os.WriteFile(tokenFile, []byte(token), 0600)).To(Succeed())
+
+		issuerServer.RouteToHandler(
+			http.MethodGet,
+			"/.well-known/openid-configuration",
+			ghttp.CombineHandlers(
+				ghttp.VerifyHeaderKV(Authorization, "Bearer "+token),
+				ghttp.RespondWithJSONEncoded(http.StatusOK, map[string]any{
+					"issuer":   issuerUrl,
+					"jwks_uri": jwksServer.URL() + "/jwks.json",
+				}),
+			),
+		)
+		caPool := newTestCertPool(
+			issuerServer.HTTPTestServer.Certificate(),
+			jwksServer.HTTPTestServer.Certificate(),
+		)
+		cache, err := NewJwksCache().
+			SetLogger(logger).
+			SetRoot(tmpDir).
+			SetCaPool(caPool).
+			AddKubernetesIssuer(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = cache.Get(ctx, issuerUrl, "123")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("trusted issuer origin"))
+		Expect(jwksServer.ReceivedRequests()).To(BeEmpty())
+	})
+
+	It("Does not follow an allowlisted JWKS origin's redirect to another origin", func(ctx context.Context) {
+		issuerServer := ghttp.NewUnstartedServer()
+		issuerServer.Writer = GinkgoWriter
+		issuerServer.HTTPTestServer.EnableHTTP2 = true
+		issuerServer.HTTPTestServer.StartTLS()
+		DeferCleanup(issuerServer.Close)
+		issuerUrl := issuerServer.URL()
+
+		jwksServer := ghttp.NewUnstartedServer()
+		jwksServer.Writer = GinkgoWriter
+		jwksServer.HTTPTestServer.EnableHTTP2 = true
+		jwksServer.HTTPTestServer.StartTLS()
+		DeferCleanup(jwksServer.Close)
+
+		redirectServer := ghttp.NewUnstartedServer()
+		redirectServer.Writer = GinkgoWriter
+		redirectServer.HTTPTestServer.EnableHTTP2 = true
+		redirectServer.HTTPTestServer.StartTLS()
+		DeferCleanup(redirectServer.Close)
+		redirectServer.RouteToHandler(
+			http.MethodGet,
+			"/jwks.json",
+			ghttp.RespondWithJSONEncoded(http.StatusOK, MakeJwksObject()),
+		)
+		jwksServer.RouteToHandler(
+			http.MethodGet,
+			"/jwks.json",
+			ghttp.RespondWith(http.StatusTemporaryRedirect, "", http.Header{
+				"Location": {redirectServer.URL() + "/jwks.json"},
+			}),
+		)
+
+		tmpDir, err := os.MkdirTemp("", "*.test")
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(os.RemoveAll(tmpDir)).To(Succeed())
+		})
+		token := MakeTokenString(issuerUrl, "Bearer", time.Minute)
+		tokenFile := filepath.Join(tmpDir, kubefiles.ServiceAccountToken)
+		Expect(os.MkdirAll(filepath.Dir(tokenFile), 0700)).To(Succeed())
+		Expect(os.WriteFile(tokenFile, []byte(token), 0600)).To(Succeed())
+		issuerServer.RouteToHandler(
+			http.MethodGet,
+			"/.well-known/openid-configuration",
+			ghttp.RespondWithJSONEncoded(http.StatusOK, map[string]any{
+				"issuer":   issuerUrl,
+				"jwks_uri": jwksServer.URL() + "/jwks.json",
+			}),
+		)
+
+		cache, err := NewJwksCache().
+			SetLogger(logger).
+			SetRoot(tmpDir).
+			SetCaPool(newTestCertPool(
+				issuerServer.HTTPTestServer.Certificate(),
+				jwksServer.HTTPTestServer.Certificate(),
+				redirectServer.HTTPTestServer.Certificate(),
+			)).
+			AddKubernetesIssuer(true).
+			AddKubernetesJWKSOrigins(jwksServer.URL()).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = cache.Get(ctx, issuerUrl, "123")
+		Expect(err).To(HaveOccurred())
+		Expect(redirectServer.ReceivedRequests()).To(BeEmpty())
+	})
+
+	It("Does not follow a Kubernetes discovery redirect to another origin", func(ctx context.Context) {
+		issuerServer := ghttp.NewUnstartedServer()
+		issuerServer.Writer = GinkgoWriter
+		issuerServer.HTTPTestServer.EnableHTTP2 = true
+		issuerServer.HTTPTestServer.StartTLS()
+		DeferCleanup(issuerServer.Close)
+		issuerUrl := issuerServer.URL()
+
+		redirectServer := ghttp.NewUnstartedServer()
+		redirectServer.Writer = GinkgoWriter
+		redirectServer.HTTPTestServer.EnableHTTP2 = true
+		redirectServer.HTTPTestServer.StartTLS()
+		DeferCleanup(redirectServer.Close)
+		redirectServer.RouteToHandler(
+			http.MethodGet,
+			"/discovery",
+			ghttp.RespondWithJSONEncoded(http.StatusOK, map[string]any{"jwks_uri": issuerUrl + "/keys"}),
+		)
+		token := MakeTokenString(issuerUrl, "Bearer", time.Minute)
+		issuerServer.RouteToHandler(
+			http.MethodGet,
+			"/.well-known/openid-configuration",
+			ghttp.CombineHandlers(
+				ghttp.VerifyHeaderKV(Authorization, "Bearer "+token),
+				ghttp.RespondWith(http.StatusTemporaryRedirect, "", http.Header{
+					"Location": {redirectServer.URL() + "/discovery"},
+				}),
+			),
+		)
+
+		tmpDir, err := os.MkdirTemp("", "*.test")
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(os.RemoveAll(tmpDir)).To(Succeed())
+		})
+		tokenFile := filepath.Join(tmpDir, kubefiles.ServiceAccountToken)
+		Expect(os.MkdirAll(filepath.Dir(tokenFile), 0700)).To(Succeed())
+		Expect(os.WriteFile(tokenFile, []byte(token), 0600)).To(Succeed())
+
+		cache, err := NewJwksCache().
+			SetLogger(logger).
+			SetRoot(tmpDir).
+			SetCaPool(newTestCertPool(
+				issuerServer.HTTPTestServer.Certificate(),
+				redirectServer.HTTPTestServer.Certificate(),
+			)).
+			AddKubernetesIssuer(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = cache.Get(ctx, issuerUrl, "123")
+		Expect(err).To(HaveOccurred())
+		Expect(redirectServer.ReceivedRequests()).To(BeEmpty())
 	})
 })

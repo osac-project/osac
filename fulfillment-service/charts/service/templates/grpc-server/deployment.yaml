@@ -238,6 +238,9 @@ spec:
         - --grpc-listener-tls-crt=/etc/fulfillment-grpc-server/tls/tls.crt
         - --grpc-listener-tls-key=/etc/fulfillment-grpc-server/tls/tls.key
         - --grpc-authn-trusted-token-issuers={{ tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) . }}
+        {{- if .Values.auth.kubernetesJWKSOrigins }}
+        - --grpc-authn-kubernetes-jwks-origins={{ join "," .Values.auth.kubernetesJWKSOrigins }}
+        {{- end }}
         - --emergency-service-accounts={{ join "," .Values.auth.emergencyServiceAccounts }}
         - --token-signer-crt=/etc/fulfillment-token-signer/tls.crt
         - --token-signer-key=/etc/fulfillment-token-signer/tls.key

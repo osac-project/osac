@@ -374,6 +374,25 @@ The fulfillment service maintains a single list of trusted token issuers, config
    in the `authn.trusted_token_issuers` field. Clients like `osac login` use this to auto-select
    which OAuth issuer to authenticate against, without requiring the user to specify one explicitly.
 
+#### Kubernetes service-account JWKS origins
+
+The service-account token file is sent to the Kubernetes issuer's discovery and JWKS endpoints.
+By default, the discovered `jwks_uri` must use the issuer's HTTPS origin. If Kubernetes discovery
+advertises JWKS on a separate API-server origin, configure that exact origin in the service chart
+or OSAC installer values:
+
+```yaml
+service:
+  auth:
+    kubernetesJWKSOrigins:
+      - https://api.cluster.example.com:6443
+```
+
+Use only origins controlled by the cluster operator. The value must contain only the HTTPS scheme,
+host, and optional port; paths, wildcards, and HTTP are rejected. Redirects to a different origin
+are not followed. The allowlist is process configuration and cannot be selected by an API caller.
+The same setting is used by the gRPC and MCP servers.
+
 ## User and Group Mapping
 
 The fulfillment service maps users and groups from Keycloak to its internal user

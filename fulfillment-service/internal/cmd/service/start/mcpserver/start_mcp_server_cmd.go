@@ -68,6 +68,12 @@ func Cmd() *cobra.Command {
 		trustedTokenIssuersFlagHelp,
 	)
 	flags.StringSliceVar(
+		&runner.args.kubernetesJWKSOrigins,
+		"grpc-authn-kubernetes-jwks-origins",
+		[]string{},
+		kubernetesJWKSOriginsFlagHelp,
+	)
+	flags.StringSliceVar(
 		&runner.args.caFiles,
 		"ca-file",
 		[]string{},
@@ -97,6 +103,7 @@ type runnerContext struct {
 	flags  *pflag.FlagSet
 	args   struct {
 		trustedTokenIssuers           []string
+		kubernetesJWKSOrigins         []string
 		caFiles                       []string
 		oauthAuthorizationServer      string
 		oauthResourceURL              string
@@ -208,6 +215,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 		SetCaPool(caPool).
 		AddIssuers(c.args.trustedTokenIssuers...).
 		AddKubernetesIssuer(true).
+		AddKubernetesJWKSOrigins(c.args.kubernetesJWKSOrigins...).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create JWKS cache: %w", err)
@@ -890,6 +898,12 @@ change without notice.
 
 const trustedTokenIssuersFlagHelp = `
 _ISSUERS_ - Comma separated list of token issuers that are trusted to authenticate callers.
+`
+
+const kubernetesJWKSOriginsFlagHelp = `
+_ORIGINS_ - Comma separated list of exact HTTPS origins allowed for Kubernetes
+JWKS requests on a different origin from the issuer. The projected service-account
+bearer token is sent to these origins; same-origin requests need no entry.
 `
 
 const caFileFlagHelp = `

@@ -95,6 +95,23 @@
           "additionalProperties": false
         }
       }
+    },
+    "auth": {
+      "type": "object",
+      "description": "Authentication configuration.",
+      "properties": {
+        "kubernetesJWKSOrigins": {
+          "type": "array",
+          "description": "Exact HTTPS origins trusted for Kubernetes JWKS requests when they differ from the service-account issuer origin. The projected service-account bearer token is sent to each configured origin.",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^https://[^/*@?#\\s]+/?$"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
     }
   }
 }

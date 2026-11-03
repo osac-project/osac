@@ -46,7 +46,7 @@ func main() {
 		BaseUIURL:             config.BaseUIURL,
 		FulfillmentAPIURL:     config.FulfillmentApiUrl,
 		FulfillmentHTTPClient: newHTTPClient(tlsConfig),
-		OIDCHTTPClient:        newHTTPClient(oidcTLSConfig),
+		OIDCHTTPClient:        auth.NewOIDCHTTPClient(oidcTLSConfig),
 	}
 
 	compressor := middleware.NewCompressor(5)
@@ -116,7 +116,7 @@ func main() {
 				config.OIDCIssuerURL,
 				config.OIDCServiceClientID,
 				config.OIDCServiceClientSecret,
-				newHTTPClient(oidcTLSConfig),
+				auth.NewOIDCHTTPClient(oidcTLSConfig),
 			)
 			if err != nil {
 				log.WithError(err).Fatal("Failed to fetch service account token for gRPC reflection")

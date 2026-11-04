@@ -1,5 +1,4 @@
 import { useParams } from 'react-router-dom';
-import { PageSection } from '@patternfly/react-core';
 
 import { ComputeInstances } from '@osac/types';
 
@@ -7,6 +6,8 @@ import VmConsoleTab from './console/VmConsoleTab';
 import { useGetResource } from '../../api/use-resource';
 import { useTranslation } from '../../hooks/useTranslation';
 import ResourceDetailsPage from '../Resource/ResourceDetailsPage';
+
+import './VmConsolePage.css';
 
 export const VmConsolePage = () => {
   const { t } = useTranslation();
@@ -20,21 +21,19 @@ export const VmConsolePage = () => {
   const vm = query.data?.object;
 
   return (
-    <ResourceDetailsPage
-      isLoading={query.isLoading}
-      error={query.error}
-      found={Boolean(vm)}
-      refetch={() => void query.refetch()}
-      parentTo="/vms"
-      parentLabel={t('Virtual machines')}
-      resourceLabel="virtual machine"
-    >
-      {vm ? (
-        <PageSection hasBodyWrapper={false} isFilled>
-          <VmConsoleTab vm={vm} />
-        </PageSection>
-      ) : null}
-    </ResourceDetailsPage>
+    <div className="vm-console-page">
+      <ResourceDetailsPage
+        isLoading={query.isLoading}
+        error={query.error}
+        found={Boolean(vm)}
+        refetch={() => void query.refetch()}
+        parentTo="/vms"
+        parentLabel={t('Virtual machines')}
+        resourceLabel="virtual machine"
+      >
+        {vm ? <VmConsoleTab vm={vm} /> : null}
+      </ResourceDetailsPage>
+    </div>
   );
 };
 

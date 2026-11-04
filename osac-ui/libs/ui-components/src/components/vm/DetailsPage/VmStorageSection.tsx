@@ -61,22 +61,22 @@ const VmStorageSection = ({ vm }: VmStorageSectionProps) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Additional disks')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {additionalDiskRows.length > 0 ? (
-                <Grid>
-                  <GridItem lg={6}>
+              <Grid>
+                <GridItem lg={6}>
+                  {additionalDiskRows.length > 0 ? (
                     <CatalogStorageTable
                       rows={additionalDiskRows}
                       emptyValue={EMPTY_VALUE}
                       className="osac-vm-storage-table"
                     />
-                  </GridItem>
-                  <GridItem>
-                    <Divider />
-                  </GridItem>
-                </Grid>
-              ) : (
-                EMPTY_VALUE
-              )}
+                  ) : (
+                    EMPTY_VALUE
+                  )}
+                </GridItem>
+                <GridItem>
+                  <Divider />
+                </GridItem>
+              </Grid>
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>

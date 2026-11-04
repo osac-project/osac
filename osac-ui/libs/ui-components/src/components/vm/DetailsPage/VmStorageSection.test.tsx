@@ -48,6 +48,7 @@ describe('VmStorageSection', () => {
 
     expect(within(additionalDisksRow).getByText('-')).toBeInTheDocument();
     expect(screen.queryByRole('grid', { name: 'Additional disks' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('separator')).toHaveLength(1);
   });
 
   it('renders VM conditions below the storage details', () => {

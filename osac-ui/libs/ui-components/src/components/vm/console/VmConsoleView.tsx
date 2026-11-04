@@ -1,13 +1,6 @@
 // @refresh reload — depends on useConsoleSession hook signature
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import {
-  Bullseye,
-  EmptyState,
-  EmptyStateBody,
-  Spinner,
-  Stack,
-  StackItem,
-} from '@patternfly/react-core';
+import { Bullseye, EmptyState, EmptyStateBody, PageSection, Spinner } from '@patternfly/react-core';
 
 import { ConsoleResourceType, ConsoleType } from '@osac/types';
 
@@ -15,7 +8,9 @@ import { useTranslation } from '../../../hooks/useTranslation';
 import {
   CONSOLE_CONNECTING_OVERLAY_CLASS_NAME,
   CONSOLE_STACK_CLASS_NAME,
+  CONSOLE_TOOLBAR_SECTION_CLASS_NAME,
   CONSOLE_VIEWPORT_HIDDEN_CLASS_NAME,
+  CONSOLE_VIEW_SECTION_CLASS_NAME,
 } from '../../Console/console-viewport';
 import type { ConsoleTransport } from '../../Console/console.types';
 import ConsoleToolbar from '../../Console/ConsoleToolbar';
@@ -175,19 +170,19 @@ const VmConsoleView = ({ resourceId, transport, onTransportChange }: Props) => {
   }
 
   return (
-    <Stack hasGutter className="vm-console-view">
-      <StackItem>
+    <>
+      <PageSection hasBodyWrapper={false} className={CONSOLE_TOOLBAR_SECTION_CLASS_NAME}>
         <ConsoleToolbar
           connectionState={connectionState}
           onPaste={() => void viewerRef.current?.pasteFromClipboard()}
           consoleTransport={transport}
           onConsoleTransportChange={onTransportChange}
         />
-      </StackItem>
-      <StackItem isFilled className={CONSOLE_STACK_CLASS_NAME}>
-        {viewport}
-      </StackItem>
-    </Stack>
+      </PageSection>
+      <PageSection hasBodyWrapper={false} isFilled className={CONSOLE_VIEW_SECTION_CLASS_NAME}>
+        <div className={CONSOLE_STACK_CLASS_NAME}>{viewport}</div>
+      </PageSection>
+    </>
   );
 };
 

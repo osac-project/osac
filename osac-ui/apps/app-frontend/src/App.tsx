@@ -9,6 +9,7 @@ import {
   Spinner,
 } from '@patternfly/react-core';
 
+import VmConsolePage from '@osac/ui-components/components/vm/VmConsolePage';
 import { SessionProvider, useSession } from '@osac/ui-components/hooks/use-session';
 
 import { useOIDCLogin } from './hooks/oidc-login';
@@ -50,6 +51,8 @@ const App = () => {
     <SessionProvider role={role} username={username} tenantId={tenantId}>
       <Routes>
         <Route path="/" element={<LoggedInHomeRedirect />} />
+
+        {role !== 'admin' && <Route path="/vms/:id/console" element={<VmConsolePage />} />}
 
         <Route path="/*" element={<AppShell logout={logout} />} />
       </Routes>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Bullseye, EmptyState, EmptyStateBody, Stack, StackItem } from '@patternfly/react-core';
+import { Bullseye, EmptyState, EmptyStateBody } from '@patternfly/react-core';
 
 import type { ComputeInstance } from '@osac/types';
 import { ComputeInstanceState } from '@osac/types';
@@ -34,19 +34,17 @@ const VmConsoleTab = ({ vm }: Props) => {
   }
 
   return (
-    <Stack hasGutter className="vm-console-tab">
-      <StackItem isFilled>
-        {/* Keyed by transport so switching remounts VmConsoleView, reusing
-            useConsoleSession's unmount cleanup to tear down the old session before the
-            new one connects. */}
-        <VmConsoleView
-          key={transport}
-          resourceId={vm.id}
-          transport={transport}
-          onTransportChange={setTransport}
-        />
-      </StackItem>
-    </Stack>
+    <div className="vm-console-tab">
+      {/* Keyed by transport so switching remounts VmConsoleView, reusing
+          useConsoleSession's unmount cleanup to tear down the old session before the
+          new one connects. */}
+      <VmConsoleView
+        key={transport}
+        resourceId={vm.id}
+        transport={transport}
+        onTransportChange={setTransport}
+      />
+    </div>
   );
 };
 

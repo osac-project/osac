@@ -1,6 +1,12 @@
 /** Shared viewport sizing for embedded serial/VNC console viewers. */
 export const CONSOLE_VIEWPORT_CLASS_NAME = 'vm-console-viewport';
 
+/** Section containing the console transport controls. */
+export const CONSOLE_TOOLBAR_SECTION_CLASS_NAME = 'vm-console-toolbar-section';
+
+/** Section that fills the remaining space with the active console viewer. */
+export const CONSOLE_VIEW_SECTION_CLASS_NAME = 'vm-console-view-section';
+
 /** Positions the connecting overlay on top of the (still initializing) viewer. */
 export const CONSOLE_STACK_CLASS_NAME = 'vm-console-stack';
 

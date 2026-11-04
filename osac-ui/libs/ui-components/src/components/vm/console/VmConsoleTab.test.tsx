@@ -248,6 +248,28 @@ describe('VmConsoleTab', () => {
     expect(screen.queryByRole('button', { name: 'Take over' })).not.toBeInTheDocument();
   });
 
+  it('renders the console controls and viewer in separate page sections', () => {
+    vi.mocked(useConsoleSession).mockReturnValue({
+      connectionState: 'connected',
+      connect: vi.fn(),
+      errorMessage: null,
+      errorKind: 'generic',
+      reportViewerError: vi.fn(),
+      takeOver: vi.fn(),
+      webSocket: {} as WebSocket,
+    });
+
+    renderTab(runningVm);
+
+    expect(document.querySelectorAll('.pf-v6-c-page__main-section')).toHaveLength(2);
+    expect(
+      screen.getByRole('button', { name: 'Select console type' }).closest('section'),
+    ).toHaveClass('vm-console-toolbar-section');
+    expect(screen.getByText('VNC viewer').closest('section')).toHaveClass(
+      'vm-console-view-section',
+    );
+  });
+
   it('keeps showing the connecting empty state until the viewer reports it has connected', () => {
     vi.mocked(useConsoleSession).mockReturnValue({
       connectionState: 'connected',
@@ -262,7 +284,7 @@ describe('VmConsoleTab', () => {
     renderTab(runningVm);
 
     expect(screen.getByText('Connecting')).toBeInTheDocument();
-    expect(screen.getByText('Connecting').closest('.pf-v6-l-stack__item')).toHaveClass('pf-m-fill');
+    expect(screen.getByText('Connecting').closest('section')).toHaveClass('pf-m-fill');
 
     act(() => {
       latestOnConnectedRef.current?.();

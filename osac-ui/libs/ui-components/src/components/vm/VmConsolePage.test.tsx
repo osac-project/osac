@@ -48,7 +48,7 @@ describe('VmConsolePage', () => {
     renderPage();
 
     expect(screen.getByText('Console for vm-1')).toBeInTheDocument();
-    expect(screen.getByText('Console for vm-1').closest('section')).toHaveClass('pf-m-fill');
+    expect(screen.getByText('Console for vm-1').closest('.vm-console-page')).toBeInTheDocument();
     expect(mocks.useGetResource).toHaveBeenCalledWith(
       ComputeInstances,
       { id: 'vm-1' },

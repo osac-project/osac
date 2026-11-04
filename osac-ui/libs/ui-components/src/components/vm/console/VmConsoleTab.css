@@ -1,21 +1,32 @@
-.vm-console-tab,
-.vm-console-view {
-  min-height: 0;
-}
-
 .vm-console-tab {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
   flex: 1 1 auto;
+  /* Keep noVNC measurable when the surrounding page does not provide a height. */
+  min-height: 50vh;
 }
 
-.vm-console-view {
-  height: 100%;
+.vm-console-toolbar-section {
+  flex: 0 0 auto;
+  margin-block-start: var(--pf-t--global--spacer--md);
+}
+
+.vm-console-view-section {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  height: 0;
+  min-height: 0;
 }
 
 .vm-console-stack {
   position: relative;
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   flex-direction: column;
+  height: 0;
   min-height: 0;
 }
 

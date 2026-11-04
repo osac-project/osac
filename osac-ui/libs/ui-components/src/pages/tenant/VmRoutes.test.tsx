@@ -23,14 +23,14 @@ vi.mock('./VmListPage', () => ({
 const { VmRoutes } = await import('./VmRoutes');
 
 describe('VmRoutes', () => {
-  it('registers the dedicated VM console route', () => {
+  it('registers the VM details route', () => {
     renderWithProviders(
       <Routes>
         <Route path="/vms/*" element={<VmRoutes />} />
       </Routes>,
-      { routerEntries: ['/vms/vm-1/console'] },
+      { routerEntries: ['/vms/vm-1'] },
     );
 
-    expect(screen.getByText('VM console route')).toBeInTheDocument();
+    expect(screen.getByText('VM details route')).toBeInTheDocument();
   });
 });

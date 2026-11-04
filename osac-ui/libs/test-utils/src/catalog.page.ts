@@ -44,9 +44,11 @@ export const expectCatalogItemListed = async (
       .filter({ hasText: label });
 
     await expect(resourceGroup).toHaveCount(1);
-    await expect(resourceGroup.locator(...CatalogMainPage.catalogItemResourceValue)).toHaveText(
-      value,
-    );
+    await expect(
+      resourceGroup
+        .locator(...CatalogMainPage.catalogItemResourceValue)
+        .getByText(value, { exact: true }),
+    ).toHaveText(value);
   }
 
   await expect(catalogItemCard.getByText('Storage', { exact: true })).toHaveCount(0);
@@ -56,4 +58,27 @@ export const expectCatalogItemListed = async (
 export const expectCatalogItemNotListed = async (page: Page, name: string): Promise<void> => {
   await expect(page.getByRole(...CatalogMainPage.catalogLoadingIndicator)).toHaveCount(0);
   await expect(getCatalogItemCard(page, name)).toHaveCount(0);
+};
+
+/** Open a published catalog item from the tenant Catalog page. */
+export const openCatalogItemDetails = async (page: Page, name: string): Promise<void> => {
+  const catalogItemCard = getCatalogItemCard(page, name);
+
+  await expect(catalogItemCard).toHaveCount(1);
+  await expect(catalogItemCard.getByRole('link', { name, exact: true })).toBeVisible();
+  await catalogItemCard.getByRole('link', { name, exact: true }).click();
+  await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
+};
+
+/** Launch the published VM catalog item from its details page. */
+export const launchCatalogItem = async (page: Page): Promise<void> => {
+  const launchButton = page.getByRole('button', { name: 'Launch instance', exact: true });
+
+  await expect(launchButton).toBeVisible();
+  await expect(launchButton).toBeEnabled();
+  await launchButton.click();
+  await expect(page).toHaveURL((url) => url.pathname.startsWith('/vms/create/'));
+  await expect(
+    page.getByRole('heading', { name: 'Create a virtual machine', exact: true }),
+  ).toBeVisible();
 };

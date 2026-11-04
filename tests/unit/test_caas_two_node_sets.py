@@ -106,7 +106,6 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     k8s.get_cluster_order_namespace.return_value = "osac"
     k8s.get_baremetal_instance_name.side_effect = lambda *, uuid, checked: f"{uuid}-cr"
     k8s.get_cluster_order_infra_env_name.return_value = "order-a-infraenv"
-    monkeypatch.delenv(regression.upgrade.UPGRADE_ENV_VAR, raising=False)
     k8s.is_absent.side_effect = [False, True, False, True]
     k8s.is_present.return_value = False
     monkeypatch.setattr(scenario, "wait_for_cluster_order_cr", Mock(return_value="order-a"))
@@ -165,22 +164,18 @@ def _run_scenario(clients: dict[str, Mock]) -> None:
             clients["events"] = events
 
 
-def test_two_node_set_scenario_can_disable_upgrade(
-    monkeypatch: pytest.MonkeyPatch, two_node_set_clients: dict[str, Mock]
-) -> None:
-    """Installation and stability monitoring can run without an upgrade request."""
-    monkeypatch.setenv(regression.upgrade.UPGRADE_ENV_VAR, "false")
-
+def test_two_node_set_scenario_always_runs_upgrade(two_node_set_clients: dict[str, Mock]) -> None:
+    """Installation, monitoring, and both upgrade stages always run."""
     _run_scenario(two_node_set_clients)
 
     regression.upgrade._cluster_references.assert_called_once()
     regression.upgrade._monitor_post_install_health.assert_called_once()
-    regression.upgrade._ready_baseline.assert_not_called()
-    regression.upgrade._catalog_version.assert_not_called()
-    regression.upgrade._upgrade_control_plane.assert_not_called()
-    regression.upgrade._upgrade_node_pool.assert_not_called()
-    two_node_set_clients["request"].getfixturevalue.assert_not_called()
-    two_node_set_clients["private_grpc"].delete_cluster_version.assert_not_called()
+    regression.upgrade._ready_baseline.assert_called_once()
+    regression.upgrade._catalog_version.assert_called_once()
+    regression.upgrade._upgrade_control_plane.assert_called_once()
+    regression.upgrade._upgrade_node_pool.assert_called_once()
+    two_node_set_clients["request"].getfixturevalue.assert_called_once_with("jwt_grpc_tenant1")
+    two_node_set_clients["private_grpc"].delete_cluster_version.assert_called_once_with(version_id="target-id")
     two_node_set_clients["cli"].delete_cluster.assert_called_once_with(uuid="cluster-id")
 
 
@@ -218,7 +213,7 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
     assert monitor_call.kwargs["grpc"] is two_node_set_clients["grpc"]
     assert monitor_call.kwargs["refs"] is regression.upgrade._upgrade_control_plane.call_args.kwargs["refs"]
     regression.upgrade._upgrade_control_plane.assert_called_once()
-    regression.upgrade._upgrade_node_pool.assert_not_called()
+    regression.upgrade._upgrade_node_pool.assert_called_once()
     assert two_node_set_clients["events"] == ["monitor", "upgrade"]
     two_node_set_clients["private_grpc"].delete_cluster_version.assert_called_once_with(version_id="target-id")
     two_node_set_clients["cli"].delete_cluster.assert_called_once_with(uuid="cluster-id")

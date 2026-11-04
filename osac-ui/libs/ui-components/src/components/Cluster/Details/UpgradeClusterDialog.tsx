@@ -189,7 +189,7 @@ const UpgradeClusterDialog = ({
                   !selectedTargetExists ||
                   (requiresDowntimeAcknowledgement && !values.acknowledgeDowntime)
                 }
-                isLoading={pending}
+                isLoading={pending || undefined}
               >
                 {t('Upgrade cluster')}
               </Button>

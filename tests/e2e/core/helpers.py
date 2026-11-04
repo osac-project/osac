@@ -31,9 +31,14 @@ _VIRTUAL_NETWORK_READY_STATE = "VIRTUAL_NETWORK_STATE_READY"
 _SECURITY_GROUP_READY_STATE = "SECURITY_GROUP_STATE_READY"
 _BMI_RUNNING_RETRIES = 180
 _BMI_RUNNING_DELAY = 10
-# Initial check plus ten retries: five minutes of scheduled waits after hub Ready.
-_WORKLOAD_HEALTH_RETRIES = 11
+# Initial check plus thirty retries: fifteen minutes of scheduled waits after
+# hub Ready. Guests settle slowly on shared lab hardware, and an operator that
+# degrades late (insights reports only after five failed uploads) must still be
+# attributed to the operator rather than to a generic timeout.
+_WORKLOAD_HEALTH_RETRIES = 31
 _WORKLOAD_HEALTH_DELAY = 30
+# Every ClusterOperator the guest reports must satisfy all of these.
+_CLUSTER_OPERATOR_CONDITIONS = {"Available": "True", "Progressing": "False", "Degraded": "False"}
 # Node provider IDs come from CAP-Agent, which sets them when the Agent finishes
 # installing, so they are observable before ClusterOperator health settles.
 _AGENT_PROVIDER_ID_PREFIX = "agent://"
@@ -792,26 +797,41 @@ def workload_cluster_provider_ids_assigned(*, nodes: list[dict[str, Any]], expec
     )
 
 
+def workload_cluster_unhealthy(
+    *, nodes: list[dict[str, Any]], operators: list[dict[str, Any]], expected_workers: int
+) -> list[str]:
+    """Describe why the guest cluster is not healthy; empty when every part is.
+
+    Returned instead of a bare boolean so a timeout can name the Node or
+    ClusterOperator that was not ready, which is otherwise only visible in the
+    cluster it is about to be torn down.
+    """
+    problems: list[str] = []
+    worker_nodes = _worker_nodes(nodes)
+    not_ready = sorted(
+        node.get("metadata", {}).get("name", "") for node in worker_nodes if _condition_status(node, "Ready") != "True"
+    )
+    if not_ready:
+        problems.append(f"worker nodes not Ready: {not_ready}")
+    if len(worker_nodes) < expected_workers:
+        problems.append(f"saw {len(worker_nodes)} worker node(s), expected {expected_workers}")
+    if not operators:
+        problems.append("no ClusterOperators reported")
+    for operator in operators:
+        unmet = [
+            f"{condition}={_condition_status(operator, condition) or 'missing'}"
+            for condition, expected in _CLUSTER_OPERATOR_CONDITIONS.items()
+            if _condition_status(operator, condition) != expected
+        ]
+        if unmet:
+            problems.append(f"ClusterOperator {operator.get('metadata', {}).get('name', '')}: {', '.join(unmet)}")
+    return problems
+
+
 def workload_cluster_health_ready(
     *, nodes: list[dict[str, Any]], operators: list[dict[str, Any]], expected_workers: int
 ) -> bool:
-    worker_nodes = _worker_nodes(nodes)
-    ready_workers = [node for node in worker_nodes if _condition_status(node, "Ready") == "True"]
-    if len(ready_workers) < expected_workers or len(ready_workers) != len(worker_nodes):
-        return False
-
-    if not operators:
-        return False
-
-    required_operator_conditions = {"Available": "True", "Progressing": "False", "Degraded": "False"}
-    for operator in operators:
-        if any(
-            _condition_status(operator, condition) != expected
-            for condition, expected in required_operator_conditions.items()
-        ):
-            return False
-
-    return True
+    return not workload_cluster_unhealthy(nodes=nodes, operators=operators, expected_workers=expected_workers)
 
 
 def wait_for_workload_node_provider_ids(*, k8s: K8sClient, expected_workers: int) -> None:
@@ -941,24 +961,30 @@ def wait_for_workload_cluster_health(*, k8s: K8sClient, cluster_name: str, expec
     # are observable before ClusterOperator health settles.
     wait_for_workload_node_provider_ids(k8s=k8s, expected_workers=expected_workers)
     attempts = 0
+    observed: list[str] = []
 
     def _check() -> bool:
         nonlocal attempts
         attempts += 1
         nodes = k8s.list_json(resource="nodes").get("items", [])
         operators = k8s.list_json(resource="clusteroperators.config.openshift.io").get("items", [])
-        return workload_cluster_health_ready(nodes=nodes, operators=operators, expected_workers=expected_workers)
+        observed[:] = workload_cluster_unhealthy(nodes=nodes, operators=operators, expected_workers=expected_workers)
+        return not observed
 
-    poll_until(
-        fn=_check,
-        until=lambda value: value is True,
-        retries=_WORKLOAD_HEALTH_RETRIES,
-        delay=_WORKLOAD_HEALTH_DELAY,
-        description="workload cluster worker and ClusterOperator health",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER,
-        resource_id=cluster_name,
-    )
+    try:
+        poll_until(
+            fn=_check,
+            until=lambda value: value is True,
+            retries=_WORKLOAD_HEALTH_RETRIES,
+            delay=_WORKLOAD_HEALTH_DELAY,
+            description="workload cluster worker and ClusterOperator health",
+            retry_on_error=True,
+            resource_kind=WaitResourceKind.CLUSTER,
+            resource_id=cluster_name,
+        )
+    except TimeoutError:
+        details = "; ".join(observed) or "no Nodes or ClusterOperators were readable"
+        raise AssertionError(f"guest cluster did not become healthy: {details}") from None
     if attempts > 1:
         logger.info("Guest health became ready after %d checks", attempts)
 

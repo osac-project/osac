@@ -30,10 +30,6 @@ const UserDataDetailValue = ({ userData, emptyValue }: UserDataDetailValueProps)
     return emptyValue;
   }
 
-  if (source.case !== 'inline' || !source.value.trim()) {
-    return emptyValue;
-  }
-
   return (
     <ExpandableSection
       isExpanded={isExpanded}

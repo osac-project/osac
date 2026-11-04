@@ -157,7 +157,7 @@ describe('useVmPowerAction', () => {
     await waitFor(() => expect(mockAddToast).toHaveBeenCalled());
     expect(request?.object?.id).toBe('vm-1');
     expect(request?.object?.status).toBeUndefined();
-    expect(request?.updateMask?.paths).toEqual(['id', 'spec.run_strategy']);
+    expect(request?.updateMask?.paths).toEqual(['spec.run_strategy']);
   });
 
   it('sends the generic update request for a start action', async () => {
@@ -175,7 +175,7 @@ describe('useVmPowerAction', () => {
     await waitFor(() => expect(mockAddToast).toHaveBeenCalled());
     expect(request?.object?.id).toBe('vm-1');
     expect(request?.object?.status).toBeUndefined();
-    expect(request?.updateMask?.paths).toEqual(['id', 'spec.run_strategy']);
+    expect(request?.updateMask?.paths).toEqual(['spec.run_strategy']);
   });
 
   it('sends the generic update request for a restart action', async () => {
@@ -193,7 +193,7 @@ describe('useVmPowerAction', () => {
     await waitFor(() => expect(mockAddToast).toHaveBeenCalled());
     expect(request?.object?.id).toBe('vm-1');
     expect(request?.object?.status).toBeUndefined();
-    expect(request?.updateMask?.paths).toEqual(['id', 'spec.restart_requested_at']);
+    expect(request?.updateMask?.paths).toEqual(['spec.restart_requested_at']);
   });
 
   it('shows a danger toast with instance name when a power action fails', async () => {

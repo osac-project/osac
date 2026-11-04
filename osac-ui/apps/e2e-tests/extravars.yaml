@@ -17,11 +17,11 @@ catalog:
   usage: 'Global public'
   fields:
     instance_type:
-      name: 'u1-medium'
+      name: 'instance-type-e2e'
     boot_disk:
       size_gib: 80
     disk_image:
-      name: 'fedora'
+      name: 'disk-image-e2e'
 
 instance_type:
   name: 'instance-type-e2e'

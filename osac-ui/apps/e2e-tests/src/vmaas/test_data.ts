@@ -301,6 +301,10 @@ const diskImageTestName = rawDiskImage.name
 const storageTierTestName = rawStorageTier.name
   ? `${rawStorageTier.name}-${storageTierTestRunId}`
   : undefined;
+const catalogDiskImageName =
+  diskImageTestName !== undefined && rawCatalog.fields.disk_image.name === rawDiskImage.name
+    ? diskImageTestName
+    : rawCatalog.fields.disk_image.name;
 
 export const tenantName: string | undefined = rawTenantName;
 export const tenantPassword: string | undefined = rawTenantPassword;
@@ -356,7 +360,7 @@ export const catalogTestData: CatalogTestData = {
       sizeGib: rawCatalog.fields.boot_disk.size_gib,
     },
     diskImage: {
-      name: rawCatalog.fields.disk_image.name,
+      name: catalogDiskImageName,
     },
   },
   name: catalogName,

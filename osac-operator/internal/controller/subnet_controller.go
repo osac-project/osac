@@ -113,8 +113,17 @@ func (r *SubnetReconciler) create(ctx context.Context, subnet *v1alpha1.Subnet) 
 		return ctrl.Result{}, nil
 	}
 	if !r.Engine.ProvisioningEnabled() {
+		// VMs use the cluster default pod network in this installation mode.
+		supported := true
+		subnet.Status.ComputeInstanceSupported = &supported
+		subnet.Status.ComputeInstanceUnsupportedReason = ""
 		networktask.SetProvisioningDisabled(subnet, networktask.CreateSubnet)
 		return ctrl.Result{}, store()
+	}
+	if !hasKubernetes(subnet) {
+		supported := false
+		subnet.Status.ComputeInstanceSupported = &supported
+		subnet.Status.ComputeInstanceUnsupportedReason = "NetworkClass has no Kubernetes manager for VM workloads"
 	}
 	slot := &networktask.SubnetSlot{VirtualNetworkID: subnet.Spec.VirtualNetwork}
 	networkType := r.networkType(subnet)
@@ -134,6 +143,9 @@ func (r *SubnetReconciler) create(ctx context.Context, subnet *v1alpha1.Subnet) 
 		func() (networktask.Request, bool) {
 			req := taskRequest(subnet, kindSubnet, networktask.CreateSubnet, v1alpha1.NetworkJobManagerKubernetes, r.kubernetesVars(subnet, input))
 			req.Slot = slot
+			req.Accept = func(_ context.Context, result networktask.Result) error {
+				return networktask.AcceptSubnetEligibility(subnet, result)
+			}
 			return req, hasKubernetes(subnet)
 		},
 	)

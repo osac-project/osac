@@ -20,6 +20,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
@@ -149,6 +150,39 @@ var _ = Describe("Subnets server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("roundtrips optional compute eligibility independently of readiness", func() {
+			for i, supported := range []*bool{nil, new(false), new(true)} {
+				created, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
+					Object: publicv1.Subnet_builder{
+						Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("eligibility-%d", i)}.Build(),
+						Spec: publicv1.SubnetSpec_builder{
+							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+							Ipv4Cidr:       new(fmt.Sprintf("10.0.%d.0/24", i+1)),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				_, err = server.delegate.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+					Object: privatev1.Subnet_builder{Id: created.GetObject().GetId(), Status: privatev1.SubnetStatus_builder{
+						State:                            privatev1.SubnetState_SUBNET_STATE_READY,
+						ComputeInstanceSupported:         supported,
+						ComputeInstanceUnsupportedReason: "eligibility explanation",
+					}.Build()}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status"}},
+				}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				got, err := server.Get(ctx, publicv1.SubnetsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				status := got.GetObject().GetStatus()
+				Expect(status.GetState()).To(Equal(publicv1.SubnetState_SUBNET_STATE_READY))
+				Expect(status.HasComputeInstanceSupported()).To(Equal(supported != nil))
+				if supported != nil {
+					Expect(status.GetComputeInstanceSupported()).To(Equal(*supported))
+				}
+				Expect(status.GetComputeInstanceUnsupportedReason()).To(Equal("eligibility explanation"))
+			}
 		})
 
 		It("Creates object", func() {

@@ -62,16 +62,16 @@ Grant or revoke a reader by applying the values again with the installer. The
 metering Deployment does not depend on these values, so nothing restarts. On
 revocation Strimzi deletes the user, its password Secret, and its ACLs; the
 running reader fails its next fetch rather than waiting to be told, and it loses
-access to every tenant at once. Offboarding a tenant deletes that tenant's
-heartbeat topics after the final invoice, so every reader loses that tenant
-while its credential still covers the remaining ones.
+access to every tenant at once. Offboarding a tenant stops new usage, but its
+heartbeat topics and retained records stay, so every reader can still read that
+tenant's history with the same credential.
 
 One credential reads every tenant, so a leaked reader Secret exposes all of
 them. The Secret exists once per reader, in the Kafka namespace, and is named
 after the reader. Hand its password, the shared OSAC CA, and the bootstrap
 address to the reader's owner out of band; the chart writes none of them into
-the repository. There is no per-tenant Secret and no per-tenant revocation: to
-stop one tenant, stop the reader or delete that tenant's heartbeat topics.
+the repository. There is no per-tenant Secret and no per-tenant revocation:
+stopping the reader stops every tenant.
 
 To see how far behind a consumer is, enable `kafka.exporter.enabled` in the
 `osac-infra` release. That value enables Strimzi's Kafka Exporter, its

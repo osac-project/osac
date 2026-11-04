@@ -99,8 +99,8 @@ class Cluster:
             time.sleep(min(1, max(0, deadline - time.monotonic())))
         raise AssertionError(f"timed out waiting for crd/{name} to become Established (60s)")
 
-    def apply(self, manifest: str) -> None:
-        self.kubectl("apply", "-f", "-", stdin=manifest)
+    def apply(self, manifest: str, *, timeout: float | None = None) -> None:
+        self.kubectl("apply", "-f", "-", stdin=manifest, timeout=timeout)
 
     def helm(self, *args: str, check: bool = False) -> subprocess.CompletedProcess[str]:
         return self.run("helm", "--kube-context", self.context, *args, check=check)
@@ -225,14 +225,15 @@ def create_prerequisites(c: Cluster) -> None:
     create_namespace_prerequisites(c)
 
 
-def create_namespace_prerequisites(c: Cluster, ns: str | None = None) -> None:
+def create_namespace_prerequisites(c: Cluster, ns: str | None = None, *, timeout: float | None = None) -> None:
     ns = ns or c.ns
     c.apply(
         f"apiVersion: v1\nkind: ConfigMap\nmetadata: {{name: ca-bundle, namespace: {ns}}}\ndata: {{bundle.pem: stub}}\n---\n"
         f"apiVersion: v1\nkind: Secret\nmetadata: {{name: fulfillment-controller-credentials, namespace: {ns}}}\n"
         "stringData: {client-id: id, client-secret: secret}\n---\n"
         f"apiVersion: v1\nkind: Secret\nmetadata: {{name: vault-credentials, namespace: {ns}}}\n"
-        "stringData: {client-secret: secret}\n"
+        "stringData: {client-secret: secret}\n",
+        timeout=timeout,
     )
 
 
@@ -258,9 +259,9 @@ def default_storageclass(c: Cluster) -> str:
     raise AssertionError("the Kind cluster has no default StorageClass")
 
 
-def set_default_storageclass(c: Cluster, name: str, value: str | None) -> None:
+def set_default_storageclass(c: Cluster, name: str, value: str | None, *, timeout: float | None = None) -> None:
     ann = "storageclass.kubernetes.io/is-default-class"
-    c.kubectl("annotate", "storageclass", name, f"{ann}={value}" if value else f"{ann}-", "--overwrite")
+    c.kubectl("annotate", "storageclass", name, f"{ann}={value}" if value else f"{ann}-", "--overwrite", timeout=timeout)
 
 
 # -------------------------------------------------------------------- cases
@@ -356,11 +357,12 @@ def case_fresh_install_lists_every_fault_once(c: Cluster) -> None:
         raise
     finally:
         errors = []
+        timeout = 60
         actions = (
-            lambda: c.kubectl("uncordon", node),
-            lambda: set_default_storageclass(c, sc, "true"),
-            lambda: create_namespace_prerequisites(c),
-            lambda: c.apply(CRD.format(**STUB_CRDS[0])),
+            lambda: c.kubectl("uncordon", node, timeout=timeout),
+            lambda: set_default_storageclass(c, sc, "true", timeout=timeout),
+            lambda: create_namespace_prerequisites(c, timeout=timeout),
+            lambda: c.apply(CRD.format(**STUB_CRDS[0]), timeout=timeout),
             lambda: c.wait_for_crd(CERT_MANAGER_CRD),
         )
         for label, action in zip(RESTORATION_LABELS, actions, strict=True):

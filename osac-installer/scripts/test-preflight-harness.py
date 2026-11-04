@@ -38,7 +38,7 @@ class CrdReadinessTests(unittest.TestCase):
         self.now = 0
         self.enterContext(patch.object(preflight.time, "monotonic", side_effect=lambda: self.now))
         self.enterContext(patch.object(preflight.time, "sleep", side_effect=self.advance))
-        self.run = self.enterContext(patch.object(preflight.subprocess, "run"))
+        self.subprocess_run = self.enterContext(patch.object(preflight.subprocess, "run"))
 
     def advance(self, seconds):
         self.now += seconds
@@ -66,7 +66,7 @@ class CrdReadinessTests(unittest.TestCase):
             observed = next(documents)
             return reply(observed)
 
-        self.run.side_effect = request
+        self.subprocess_run.side_effect = request
         self.cluster.wait_for_crd("test.example.com")
         self.assertEqual(observed, READY)
 
@@ -84,7 +84,7 @@ class CrdReadinessTests(unittest.TestCase):
                     self.advance(min(20, budget))
                     return reply(READY if late_ready and self.now >= 60 else {})
 
-                self.run.side_effect = request
+                self.subprocess_run.side_effect = request
                 with self.assertRaisesRegex(AssertionError, "timed out.*test.example.com"):
                     self.cluster.wait_for_crd("test.example.com")
                 self.assertEqual(self.now, 60)
@@ -96,14 +96,14 @@ class CrdReadinessTests(unittest.TestCase):
             (subprocess.CompletedProcess([], 0, "not JSON", ""), json.JSONDecodeError),
         ):
             with self.subTest(error=error):
-                self.run.reset_mock()
-                self.run.side_effect = [response]
+                self.subprocess_run.reset_mock()
+                self.subprocess_run.side_effect = [response]
                 with self.assertRaises(error) as caught:
                     self.cluster.wait_for_crd("test.example.com")
                 self.assertTrue(str(caught.exception))
                 if response.returncode:
                     self.assertIn("Forbidden", str(caught.exception))
-                self.run.assert_called_once()
+                self.subprocess_run.assert_called_once()
 
 
 class RestorationTests(unittest.TestCase):
@@ -133,7 +133,7 @@ class RestorationTests(unittest.TestCase):
 
                 cluster = Mock(spec=preflight.Cluster, ns="test")
                 cluster.kubectl.side_effect = kubectl
-                cluster.apply.side_effect = lambda manifest: restore("CRD apply")
+                cluster.apply.side_effect = lambda manifest, **kwargs: restore("CRD apply")
                 cluster.wait_for_crd.side_effect = lambda name: restore("CRD readiness")
                 output = io.StringIO()
                 with (
@@ -141,14 +141,14 @@ class RestorationTests(unittest.TestCase):
                     patch.object(
                         preflight,
                         "set_default_storageclass",
-                        side_effect=lambda cluster, sc, value: (
+                        side_effect=lambda cluster, sc, value, **kwargs: (
                             restore("StorageClass reset") if value else inject("annotation")
                         ),
                     ),
                     patch.object(
                         preflight,
                         "create_namespace_prerequisites",
-                        side_effect=lambda cluster: restore("prerequisite creation"),
+                        side_effect=lambda cluster, **kwargs: restore("prerequisite creation"),
                     ),
                     redirect_stdout(output),
                     self.assertRaises(Exception) as caught,
@@ -162,6 +162,45 @@ class RestorationTests(unittest.TestCase):
                     self.assertIsInstance(caught.exception.__cause__, ExceptionGroup)
                     self.assertIn("StorageClass reset", str(caught.exception.__cause__))
                     self.assertIn("StorageClass reset", output.getvalue())
+
+    def test_restoration_timeouts_preserve_original_failure(self):
+        """Bound actual helper commands and continue restoration after timeouts."""
+        cluster = object.__new__(preflight.Cluster)
+        cluster.context, cluster.ns = "kind-test", "test"
+        restoring = False
+        attempted = []
+
+        def run(cmd, **kwargs):
+            nonlocal restoring
+            if cmd[0] == "kubectl":
+                operation = cmd[3]
+                if restoring:
+                    attempted.append(operation)
+                    self.assertGreater(kwargs["timeout"], 0)
+                    self.assertLessEqual(kwargs["timeout"], 60)
+                    if operation != "get":
+                        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+                    return reply(READY)
+                if operation == "cordon":
+                    restoring = True
+                    raise ValueError("cordon injection failed")
+            return subprocess.CompletedProcess(cmd, 0, "node", "")
+
+        output = io.StringIO()
+        with (
+            patch.object(preflight, "default_storageclass", return_value="standard"),
+            patch.object(preflight.subprocess, "run", side_effect=run),
+            redirect_stdout(output),
+            self.assertRaisesRegex(ValueError, "cordon injection failed") as caught,
+        ):
+            preflight.case_fresh_install_lists_every_fault_once(cluster)
+        self.assertEqual(attempted, ["uncordon", "annotate", "apply", "apply", "get"])
+        cleanup = caught.exception.__cause__
+        self.assertIsInstance(cleanup, ExceptionGroup)
+        self.assertEqual([error.message for error in cleanup.exceptions], list(preflight.RESTORATION_LABELS[:-1]))
+        for error in cleanup.exceptions:
+            self.assertIsInstance(error.exceptions[0], subprocess.TimeoutExpired)
+            self.assertIn(error.message, output.getvalue())
 
 
 if __name__ == "__main__":

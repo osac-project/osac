@@ -121,6 +121,85 @@ The values below are the ones events carry in `resource_type`: `bare_metal_insta
 
 The default rule revision is revision `0001`, effective from 1970-01-01T00:00:00Z. It is the newest revision the chart ships, and it is immutable: a rule change ships as the next revision. This reference documents the newest shipped revision only; earlier revisions stay in the chart and are immutable.
 
+### Rule example
+
+This is the default revision `0001` that the chart ships, copied from its rule file. The key legend below explains each key.
+
+```yaml
+# Default meters, revision 0001. FAILED is never billable. Allocation meters
+# bill through DELETING until physical deletion. Volume capacity multiplies by
+# the provisioned GiB. Every meter also sends deployment, tenant, project,
+# catalog item, template, and meter type dimensions.
+- resource: ComputeInstance
+  meter: compute
+  unit: second
+  billable_when:
+    states: [RUNNING]
+  dimensions: [instance_type, image, boot_disk_size_gib]
+
+- resource: Cluster
+  meter: control_plane
+  unit: second
+  billable_when:
+    states: [PROGRESSING, READY]
+    turns_billable_once: [READY]
+  dimensions: [template, version]
+
+- resource: BareMetalInstance
+  meter: allocation
+  unit: second
+  billable_when:
+    states: [STARTING, RUNNING, STOPPING, STOPPED, DELETING]
+    turns_billable_once: [STARTING, RUNNING]
+  dimensions: [instance_type, cluster, node_set]
+
+- resource: BareMetalInstance
+  meter: consumption
+  unit: second
+  billable_when:
+    states: [RUNNING]
+  dimensions: [instance_type, cluster, node_set]
+
+- resource: Volume
+  meter: capacity
+  unit: gibibyte_second
+  billable_when:
+    states: [AVAILABLE, DELETING]
+    turns_billable_once: [AVAILABLE]
+    fields:
+      protocol: BLOCK
+      vendor_volume_id: set
+  multiplier: provisioned_size_gib
+  dimensions: [storage_tier]
+
+- resource: ExternalIP
+  meter: allocation
+  unit: second
+  billable_when:
+    states: [ALLOCATED, DELETING]
+    turns_billable_once: [ALLOCATED]
+  dimensions: [pool, ip_family, attached]
+
+- resource: NATGateway
+  meter: allocation
+  unit: second
+  billable_when:
+    states: [READY, DELETING]
+    turns_billable_once: [READY]
+  dimensions: [virtual_network, external_ip]
+```
+
+| Key | Meaning |
+|---|---|
+| `resource` | The resource type the rule bills. Events carry its `resource_type` value. |
+| `meter` | The meter name. Events carry it in `meter`. |
+| `unit` | What the meter measures. Events carry it in `usage.unit` and `billing_dimensions.meter_type`. |
+| `billable_when.states` | The resource states that bill. |
+| `turns_billable_once` | States that confirm a deferred billable span. A span that closes before one never bills. |
+| `billable_when.fields` | Conditions on fields fixed at creation: the expected text, or `set` for presence. |
+| `multiplier` | A tracked field the quantity is multiplied by. Omitted means 1. |
+| `dimensions` | Tracked fields the meter carries as billing dimensions. |
+
 A provider that needs different meters ships the next immutable revision with a later effective date; the chart ships revision `0001`. See [the metering chart rules](../../charts/osac-metering/rules/).
 
 `Multiplier` names the tracked field metering has already multiplied into `usage.quantity`, or `none`. A reader must not apply it again. In revision `0001`, only Volume `capacity` uses `provisioned_size_gib`: a 100 GiB volume's quantity is already multiplied by 100.

@@ -366,6 +366,7 @@ func writeResources(out *strings.Builder, sources Sources, views []resourceView)
 			"revision. This reference documents the newest shipped revision only; earlier "+
 			"revisions stay in the chart and are immutable.\n\n",
 		sources.Revision.Number, sources.Revision.EffectiveAt.Format("2006-01-02T15:04:05Z"))
+	writeRuleExample(out, sources)
 	fmt.Fprintf(out,
 		"A provider that needs different meters ships the next immutable revision with a "+
 			"later effective date; the chart ships revision `%s`. See [the metering chart "+
@@ -379,6 +380,36 @@ func writeResources(out *strings.Builder, sources Sources, views []resourceView)
 	for _, view := range views {
 		writeResource(out, view)
 	}
+}
+
+// writeRuleExample prints the default revision's YAML with a key legend. The rule file is
+// immutable once released, so the reference explains its keys here instead of changing its
+// bytes.
+func writeRuleExample(out *strings.Builder, sources Sources) {
+	fmt.Fprintf(out, "### Rule example\n\n")
+	fmt.Fprintf(out,
+		"This is the default revision `%s` that the chart ships, copied from its rule file. "+
+			"The key legend below explains each key.\n\n", sources.Revision.Number)
+	yaml := sources.Revision.MetersYAML
+	if !strings.HasSuffix(yaml, "\n") {
+		yaml += "\n"
+	}
+	fmt.Fprintf(out, "```yaml\n%s```\n\n", yaml)
+	fmt.Fprintf(out, "| Key | Meaning |\n|---|---|\n")
+	keys := [][2]string{
+		{"`resource`", "The resource type the rule bills. Events carry its `resource_type` value."},
+		{"`meter`", "The meter name. Events carry it in `meter`."},
+		{"`unit`", "What the meter measures. Events carry it in `usage.unit` and `billing_dimensions.meter_type`."},
+		{"`billable_when.states`", "The resource states that bill."},
+		{"`turns_billable_once`", "States that confirm a deferred billable span. A span that closes before one never bills."},
+		{"`billable_when.fields`", "Conditions on fields fixed at creation: the expected text, or `set` for presence."},
+		{"`multiplier`", "A tracked field the quantity is multiplied by. Omitted means 1."},
+		{"`dimensions`", "Tracked fields the meter carries as billing dimensions."},
+	}
+	for _, key := range keys {
+		fmt.Fprintf(out, "| %s | %s |\n", key[0], key[1])
+	}
+	fmt.Fprintf(out, "\n")
 }
 
 func writeIdentityDimensions(out *strings.Builder) {

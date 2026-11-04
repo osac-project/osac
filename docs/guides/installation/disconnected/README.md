@@ -129,7 +129,7 @@ Mirror VM disk images (containerdisks) for VMaaS:
 
 - Containerdisk `additionalImages` entries
 - ITMS configuration for tag-based image resolution
-- Each mirror-registry repository storing a VM containerdisk must allow anonymous CDI pulls; CDI receives no registry credentials for these imports (this does not apply to the upstream registry or unrelated repositories)
+- Qualify the actual CDI pod/node pull path separately; if that path supplies no registry credentials, the selected mirror repository must allow approved anonymous reads (not broad anonymous access)
 
 ### [Category D: Mirroring BMaaS Images](mirroring-bmaas.md)
 
@@ -216,6 +216,8 @@ flowchart TD
 Complete this checklist before entering `prereqs.md` §2 and the remaining Doc 2 preparation. A failed handoff check stops its dependent preparation and returns to the responsible mirror/access/trust owner. Category A's earlier named node-checkpoint call does not waive this checklist.
 
 - [ ] All three core package manifests are visible
+- [ ] Every entry in every generated ITMS document has `mirrorSourcePolicy: NeverContactSource` before apply and handoff, including Core-only scope; Category A's pre-apply check passes
+- [ ] If VMaaS is selected, selected upstream containerdisk repositories and exact tags are retained in existing records, and Category C's most-specific source coverage and exact mirror-tag checks pass; CDI import acceptance remains separate
 - [ ] If VMaaS is selected, all three VMaaS package manifests are visible
 - [ ] If BMaaS is selected, the MCE package manifest is visible
 - [ ] Representative selected-image pulls from the populated mirror succeed in the approved administration-host mirror-read client context, using read-only mirror credentials and direct mirror references; these are not the later original-reference node pull or actual CDI import tests

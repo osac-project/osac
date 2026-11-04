@@ -15,7 +15,9 @@ package mcpserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,9 +26,11 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
@@ -45,6 +49,11 @@ func (f TokenExchangerFunc) Exchange(ctx context.Context, subjectToken string, s
 }
 
 var errOAuthTokenExchangeUnavailable = errors.New("OAuth token exchange is unavailable")
+
+const (
+	apiTokenCacheTTL   = 30 * time.Second
+	maxCachedAPITokens = 1024
+)
 
 type oauthTokenExchanger struct {
 	endpoint     string
@@ -70,9 +79,22 @@ func newOAuthTokenExchanger(endpoint, clientID, clientSecret string, client *htt
 	return &oauthTokenExchanger{endpoint: endpoint, clientID: clientID, clientSecret: clientSecret, client: &safeClient, validator: validator}, nil
 }
 
-func (e *oauthTokenExchanger) Exchange(ctx context.Context, subjectToken string, subject *jwt.Token) (string, error) {
+type expiringTokenExchanger interface {
+	ExchangeWithExpiration(ctx context.Context, subjectToken string, subject *jwt.Token) (string, time.Time, error)
+}
+
+func (e *oauthTokenExchanger) Exchange(
+	ctx context.Context, subjectToken string, subject *jwt.Token,
+) (string, error) {
+	token, _, err := e.ExchangeWithExpiration(ctx, subjectToken, subject)
+	return token, err
+}
+
+func (e *oauthTokenExchanger) ExchangeWithExpiration(
+	ctx context.Context, subjectToken string, subject *jwt.Token,
+) (string, time.Time, error) {
 	if subjectToken == "" || subject == nil {
-		return "", errors.New("MCP caller token is missing")
+		return "", time.Time{}, errors.New("MCP caller token is missing")
 	}
 	form := url.Values{
 		"grant_type":           {"urn:ietf:params:oauth:grant-type:token-exchange"},
@@ -82,7 +104,7 @@ func (e *oauthTokenExchanger) Exchange(ctx context.Context, subjectToken string,
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, e.endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", errors.New("cannot prepare OAuth token exchange")
+		return "", time.Time{}, errors.New("cannot prepare OAuth token exchange")
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Accept", "application/json")
@@ -92,15 +114,12 @@ func (e *oauthTokenExchanger) Exchange(ctx context.Context, subjectToken string,
 	request.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(credentials)))
 	response, err := e.client.Do(request)
 	if err != nil {
-		return "", errOAuthTokenExchangeUnavailable
+		return "", time.Time{}, errOAuthTokenExchangeUnavailable
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		// Authorization server error bodies may contain tokens and identity data.
-		if response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError {
-			return "", fmt.Errorf("%w: authorization server returned HTTP %d", errOAuthTokenExchangeUnavailable, response.StatusCode)
-		}
-		return "", fmt.Errorf("OAuth token exchange failed with HTTP %d", response.StatusCode)
+		return "", time.Time{}, fmt.Errorf("OAuth token exchange failed with HTTP %d", response.StatusCode)
 	}
 	var result struct {
 		AccessToken     string `json:"access_token"`
@@ -111,16 +130,127 @@ func (e *oauthTokenExchanger) Exchange(ctx context.Context, subjectToken string,
 	if err != nil || len(body) > 64<<10 || json.Unmarshal(body, &result) != nil || result.AccessToken == "" ||
 		result.AccessToken == subjectToken ||
 		result.IssuedTokenType != "urn:ietf:params:oauth:token-type:access_token" || !strings.EqualFold(result.TokenType, "Bearer") {
-		return "", errors.New("OAuth token exchange returned an invalid access token response")
+		return "", time.Time{}, errors.New("OAuth token exchange returned an invalid access token response")
 	}
 	apiToken, err := e.validator.Validate(ctx, result.AccessToken)
 	if err != nil {
-		return "", errors.New("OAuth token exchange returned an invalid API token")
+		return "", time.Time{}, errors.New("OAuth token exchange returned an invalid API token")
 	}
 	if err := sameCaller(subject, apiToken); err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
-	return result.AccessToken, nil
+	expiration, err := apiToken.Claims.GetExpirationTime()
+	if err != nil || expiration == nil {
+		return "", time.Time{}, errors.New("OAuth token exchange returned an API token without expiration")
+	}
+	return result.AccessToken, expiration.Time, nil
+}
+
+type cachedAPIToken struct {
+	token     string
+	expiresAt time.Time
+}
+
+type cachingTokenExchanger struct {
+	delegate   expiringTokenExchanger
+	ttl        time.Duration
+	maxEntries int
+	now        func() time.Time
+	mutex      sync.Mutex
+	entries    map[string]cachedAPIToken
+	inflight   singleflight.Group
+}
+
+func newCachingTokenExchanger(delegate expiringTokenExchanger) TokenExchanger {
+	return &cachingTokenExchanger{
+		delegate:   delegate,
+		ttl:        apiTokenCacheTTL,
+		maxEntries: maxCachedAPITokens,
+		now:        time.Now,
+		entries:    make(map[string]cachedAPIToken),
+	}
+}
+
+func (e *cachingTokenExchanger) Exchange(
+	ctx context.Context, subjectToken string, subject *jwt.Token,
+) (string, error) {
+	digest := sha256.Sum256([]byte(subjectToken))
+	key := hex.EncodeToString(digest[:])
+	now := e.now()
+	if token, ok := e.cachedToken(key, now); ok {
+		return token, nil
+	}
+	resultCh := e.inflight.DoChan(key, func() (any, error) {
+		token, expiry, err := e.delegate.ExchangeWithExpiration(context.WithoutCancel(ctx), subjectToken, subject)
+		if err != nil {
+			return "", err
+		}
+		now := e.now()
+		subjectExpiration, err := subject.Claims.GetExpirationTime()
+		if err != nil || subjectExpiration == nil || !subjectExpiration.After(now) {
+			return "", errors.New("MCP caller token has no valid expiration")
+		}
+		expiresAt := subjectExpiration.Time
+		if !expiry.IsZero() && expiry.Before(expiresAt) {
+			expiresAt = expiry
+		}
+		if ttlExpiry := now.Add(e.ttl); ttlExpiry.Before(expiresAt) {
+			expiresAt = ttlExpiry
+		}
+		e.store(key, token, expiresAt, now)
+		return token, nil
+	})
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case result := <-resultCh:
+		if result.Err != nil {
+			return "", result.Err
+		}
+		token, _ := result.Val.(string)
+		return token, nil
+	}
+}
+
+func (e *cachingTokenExchanger) cachedToken(key string, now time.Time) (string, bool) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	entry, ok := e.entries[key]
+	if !ok {
+		return "", false
+	}
+	if !now.Before(entry.expiresAt) {
+		delete(e.entries, key)
+		return "", false
+	}
+	return entry.token, true
+}
+
+func (e *cachingTokenExchanger) store(key, token string, expiresAt, now time.Time) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	if len(e.entries) >= e.maxEntries {
+		for entryKey, entry := range e.entries {
+			if !now.Before(entry.expiresAt) {
+				delete(e.entries, entryKey)
+			}
+		}
+	}
+	if len(e.entries) >= e.maxEntries {
+		evictionKey := ""
+		evictionExpiry := time.Time{}
+		for entryKey, entry := range e.entries {
+			if evictionKey == "" || entry.expiresAt.Before(evictionExpiry) ||
+				(entry.expiresAt.Equal(evictionExpiry) && entryKey < evictionKey) {
+				evictionKey = entryKey
+				evictionExpiry = entry.expiresAt
+			}
+		}
+		if evictionKey != "" {
+			delete(e.entries, evictionKey)
+		}
+	}
+	e.entries[key] = cachedAPIToken{token: token, expiresAt: expiresAt}
 }
 
 func sameCaller(source, target *jwt.Token) error {

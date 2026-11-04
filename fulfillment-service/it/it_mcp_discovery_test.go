@@ -152,8 +152,9 @@ var _ = Describe("MCP authorized discovery", func() {
 			for _, item := range decoded.Items {
 				Expect(item).To(HaveKey("id"))
 				Expect(item).To(HaveKey("name"))
+				Expect(item).To(HaveKey("version"))
 				Expect(item).To(HaveKey("type"))
-				Expect(item).To(HaveLen(3))
+				Expect(item).To(HaveLen(4))
 			}
 		}
 

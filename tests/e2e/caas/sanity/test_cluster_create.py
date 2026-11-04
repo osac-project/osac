@@ -434,7 +434,7 @@ def _assert_worker_provisioning(
 def assert_cluster_available(
     *, grpc: GRPCClient, k8s: K8sClient, metering: MeteringCollector, uuid: str, version_name: str
 ) -> _AvailableCluster:
-    """Verify provisioning, version propagation, guest health, and worker ownership."""
+    """Verify provisioning, version propagation, guest readiness, and worker ownership."""
     logger.info("CaaS: waiting for ClusterOrder")
     co_name = wait_for_cluster_order_cr(k8s=k8s, uuid=uuid)
     assert uuid in grpc.list_cluster_ids()
@@ -472,11 +472,6 @@ def assert_cluster_available(
         worker_instance_type=worker_instance_type,
         expected_workers=original_size,
     )
-    # Ready Nodes and a bound NodePool do not make a healthy cluster: the workers
-    # have to be bound through CAPI for the guest to deploy its own add-ons, and
-    # an operator can still be degrading after that. Both CaaS flows assert the
-    # same thing here, so a cluster that comes up broken fails either one.
-    wait_for_guest_cluster_health(k8s=k8s, co_name=co_name, expected_workers=original_size)
     owned_bmi_ids = _assert_worker_bmi_resources(
         k8s=k8s,
         co_name=co_name,

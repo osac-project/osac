@@ -277,9 +277,10 @@ func writeSchemaVersions(out *strings.Builder, sources Sources) {
 			"what lets one reader read records written under older versions.\n\n")
 	fmt.Fprintf(out,
 		"A version's effective date is the earliest date its events may carry it, measured by "+
-			"`heartbeat_time`, the round time that wrote the record. A reader that filters on "+
-			"the CloudEvent `time` (the interval start) uses `heartbeat_time` for the version "+
-			"boundary. Metering writes its current version unconditionally and never selects "+
+			"`heartbeat_time`, the round time that wrote the record. A reader compares the "+
+			"version's `effective_at` to `heartbeat_time` for the version boundary. The "+
+			"CloudEvent `time` is the interval start, which can be earlier than the round. "+
+			"Metering writes its current version unconditionally and never selects "+
 			"a version by date, so the version must not take effect after the release that "+
 			"ships it. Metering refuses to load a current version whose effective date is in "+
 			"the future; an older, future-dated version may wait in the tree until its "+

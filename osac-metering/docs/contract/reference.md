@@ -65,7 +65,7 @@ A published schema never changes. A new field is a new version file with the nex
 
 Versions are add-only: a new field is added, and no field is removed or given a new type. Replay decodes every retained record with the current payload shape, so the current shape must stay a superset of every published version; that is what lets one reader read records written under older versions.
 
-A version's effective date is the earliest date its events may carry it, measured by `heartbeat_time`, the round time that wrote the record. A reader that filters on the CloudEvent `time` (the interval start) uses `heartbeat_time` for the version boundary. Metering writes its current version unconditionally and never selects a version by date, so the version must not take effect after the release that ships it. Metering refuses to load a current version whose effective date is in the future; an older, future-dated version may wait in the tree until its release.
+A version's effective date is the earliest date its events may carry it, measured by `heartbeat_time`, the round time that wrote the record. A reader compares the version's `effective_at` to `heartbeat_time` for the version boundary. The CloudEvent `time` is the interval start, which can be earlier than the round. Metering writes its current version unconditionally and never selects a version by date, so the version must not take effect after the release that ships it. Metering refuses to load a current version whose effective date is in the future; an older, future-dated version may wait in the tree until its release.
 
 A published version stays readable for as long as its records are retained. Retention is indefinite by default, so no version has been retired.
 

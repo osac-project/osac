@@ -9,6 +9,8 @@ in compliance with the License. You may obtain a copy of the License at
 
 package schema
 
+import "slices"
+
 // Resource type constants identify OSAC resource types in CloudEvent payloads.
 const (
 	ResourceTypeComputeInstance   = "compute_instance"
@@ -19,25 +21,22 @@ const (
 	ResourceTypeVolume            = "volume"
 )
 
+// resourceTypes lists the resource_type values events carry, sorted.
+var resourceTypes = []string{
+	ResourceTypeBareMetalInstance,
+	ResourceTypeClusterOrder,
+	ResourceTypeComputeInstance,
+	ResourceTypeExternalIP,
+	ResourceTypeNATGateway,
+	ResourceTypeVolume,
+}
+
 // ResourceTypes returns the resource_type values events carry, sorted.
 func ResourceTypes() []string {
-	return []string{
-		ResourceTypeBareMetalInstance,
-		ResourceTypeClusterOrder,
-		ResourceTypeComputeInstance,
-		ResourceTypeExternalIP,
-		ResourceTypeNATGateway,
-		ResourceTypeVolume,
-	}
+	return slices.Clone(resourceTypes)
 }
 
 // KnownResourceType reports whether value is a resource_type events carry.
 func KnownResourceType(value string) bool {
-	switch value {
-	case ResourceTypeBareMetalInstance, ResourceTypeClusterOrder,
-		ResourceTypeComputeInstance, ResourceTypeExternalIP,
-		ResourceTypeNATGateway, ResourceTypeVolume:
-		return true
-	}
-	return false
+	return slices.Contains(resourceTypes, value)
 }

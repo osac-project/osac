@@ -523,9 +523,10 @@ func (c *Reconciler[O]) getObject(ctx context.Context, id string) (result O, err
 // retry never replays an object that the reconciler function changed in place. Errors that carry a retry interval
 // (see RequeueAfter) are retried as requested. Optimistic-concurrency conflicts, reported by the server as an Aborted
 // status, are retried after one second with the same exponential backoff, because the retry reads the object again and
-// recomputes its changes. A failure made only of conflicts is logged at DEBUG, so ERROR based alerting excludes it,
-// until the retry backoff reaches its one minute cap. From then on it is logged at WARN, because the conflict is no
-// longer transient. A conflict joined with any other failure is logged at ERROR.
+// recomputes its changes. A failure made only of conflicts, with no retry interval of its own, is logged at DEBUG, so
+// ERROR based alerting excludes it, until the retry backoff reaches its one minute cap. From then on it is logged at
+// WARN, because the conflict is no longer transient. A conflict joined with any other failure is logged at ERROR, as
+// is a conflict that already carries its own retry interval.
 func (c *Reconciler[O]) Start(ctx context.Context) error {
 	defer c.stopRetries()
 
@@ -572,10 +573,15 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 			if err != nil {
 				conflict := !IsRequeueable(err) && IsConflict(err)
 				if conflict && isOnlyConflict(err) {
+					level := c.conflictLogLevel(snapshot.GetId())
+					message := "Reconciliation conflicted with a concurrent update, will retry"
+					if level >= slog.LevelWarn {
+						message = "Reconciliation keeps conflicting with concurrent updates, will retry"
+					}
 					c.logger.Log(
 						ctx,
-						c.conflictLogLevel(snapshot.GetId()),
-						"Reconciliation conflicted with a concurrent update, will retry",
+						level,
+						message,
 						slog.String("id", snapshot.GetId()),
 						slog.Any("error", err),
 					)

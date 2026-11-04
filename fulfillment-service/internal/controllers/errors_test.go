@@ -148,7 +148,7 @@ var _ = Describe("conflict classification", func() {
 			&unavailableWrapper{cause: aborted()}, true),
 		Entry("Aborted requeued with an explicit delay",
 			RequeueAfter(aborted(), time.Second), true),
-		Entry("Unavailable behind a node with a different status",
+		Entry("plain error behind a node with a different status",
 			&unavailableWrapper{cause: errors.New("x")}, false),
 	)
 
@@ -167,6 +167,8 @@ var _ = Describe("conflict classification", func() {
 			errors.Join(errors.New("x"), aborted()), false),
 		Entry("Aborted requeued with an explicit delay",
 			RequeueAfter(aborted(), time.Second), true),
+		Entry("Aborted behind a node with a different status",
+			&unavailableWrapper{cause: aborted()}, true),
 	)
 })
 

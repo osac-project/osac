@@ -2205,7 +2205,8 @@ var _ = Describe("finalizer removal conflict on delete", func() {
 		Expect(computeInstancesClient.updateRequests).To(HaveLen(2))
 		Expect(computeInstancesClient.updateRequests[0].GetLock()).To(BeTrue())
 		Expect(computeInstancesClient.updateRequests[1].GetUpdateMask().GetPaths()).To(Equal([]string{"metadata.finalizers"}))
-		Expect(computeInstancesClient.object.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		Expect(computeInstancesClient.updateRequests[1].GetObject().GetMetadata().GetFinalizers()).ToNot(
+			ContainElement(finalizers.Controller))
 
 		// Pass 2 starts from a fresh read, which has the version bumped by the registration update and the
 		// registration resolved with its Volume ID persisted:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import subprocess
 from collections.abc import Callable
@@ -604,9 +605,11 @@ def test_guest_k8s_client_does_not_impersonate_system_admin() -> None:
 
 def test_k8s_client_supports_explicit_namespaces_and_cluster_scoped_lists(monkeypatch: pytest.MonkeyPatch) -> None:
     commands: list[tuple[str, ...]] = []
+    timeouts: list[object] = []
 
-    def run(*args: str, **_kwargs: object) -> str:
+    def run(*args: str, **kwargs: object) -> str:
         commands.append(args)
+        timeouts.append(kwargs.get("timeout"))
         return '{"items": []}'
 
     monkeypatch.setattr(k8s_client_module, "run", run)
@@ -615,12 +618,17 @@ def test_k8s_client_supports_explicit_namespaces_and_cluster_scoped_lists(monkey
     client.get_json(resource="hostedcontrolplane", name="cluster", namespace="hcp")
     client.list_json(resource="nodes")
     client.list_json(resource="nodepools", namespace="hcp")
+    client.list_json(resource="pods", namespace="hcp", timeout=20)
 
     assert commands == [
         ("kubectl", "get", "hostedcontrolplane", "cluster", "-n", "hcp", "-o", "json"),
         ("kubectl", "get", "nodes", "-o", "json"),
         ("kubectl", "get", "nodepools", "-n", "hcp", "-o", "json"),
+        ("kubectl", "get", "pods", "-n", "hcp", "-o", "json"),
     ]
+    # A caller reading a guest that may be gone sets its own bound; the rest
+    # keep the command default.
+    assert timeouts == [300, 300, 300, 20]
 
 
 def test_workload_cluster_health_reports_what_it_found(
@@ -784,3 +792,199 @@ def test_wait_for_worker_aggregates_scrubs_a_credential_in_the_order_phase(
 
     messages = [record.getMessage() for record in caplog.records if record.name == helpers.logger.name]
     assert f"CaaS: workers desired 1, current 1, ready 1 (Retrying {_REDACTED_CREDENTIAL})" in messages
+
+
+def test_workload_cluster_unhealthy_names_why_the_operator_is_not_met() -> None:
+    operators = [
+        {
+            "metadata": {"name": "ingress"},
+            "status": {
+                "conditions": [
+                    {"type": "Available", "status": "True"},
+                    {"type": "Progressing", "status": "False"},
+                    {
+                        "type": "Degraded",
+                        "status": "True",
+                        "reason": "CanaryChecksSucceeding",
+                        "message": (
+                            "The canary route check failed:\n"
+                            '  Get "http://canary-openshift-ingress-canary.apps.order-a.hosted.example/"\n  503'
+                        ),
+                    },
+                ]
+            },
+        }
+    ]
+
+    problems = helpers.workload_cluster_unhealthy(
+        nodes=[_node(name="worker-0")], operators=operators, expected_workers=1
+    )
+
+    # The status names the operator; the reason and message say what is wrong with it.
+    assert problems == [
+        "ClusterOperator ingress: Degraded=True (CanaryChecksSucceeding: The canary route check failed: "
+        'Get "http://canary-openshift-ingress-canary.apps.order-a.hosted.example/" 503)'
+    ]
+
+
+def test_workload_cluster_unhealthy_scrubs_a_credential_the_operator_quotes() -> None:
+    operators = [
+        {
+            "metadata": {"name": "ingress"},
+            "status": {
+                "conditions": [
+                    {"type": "Available", "status": "True"},
+                    {"type": "Progressing", "status": "False"},
+                    {
+                        "type": "Degraded",
+                        "status": "True",
+                        "reason": "CanaryChecksSucceeding",
+                        "message": f"The canary route check failed: 503 after {_QUOTED_CREDENTIAL}",
+                    },
+                ]
+            },
+        }
+    ]
+
+    problems = helpers.workload_cluster_unhealthy(
+        nodes=[_node(name="worker-0")], operators=operators, expected_workers=1
+    )
+
+    # The message reaches the log and the failure it raises, so the credential
+    # quoted in it must not.
+    assert _QUOTED_CREDENTIAL not in problems[0]
+    assert _REDACTED_CREDENTIAL in problems[0]
+
+
+def test_wait_for_workload_cluster_health_keeps_the_guest_state_it_gave_up_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    router_pod = {
+        "metadata": {"name": "router-default-abc"},
+        "spec": {"nodeName": "worker-1"},
+        "status": {"hostIP": "10.0.0.2", "podIP": "10.128.0.5", "phase": "Running"},
+    }
+
+    def read(*, resource: str, namespace: str | None = None, **_kwargs: object) -> dict[str, object]:
+        if resource == "nodes":
+            return {"items": [_node(name="worker-0")]}
+        if resource == "pods":
+            return {"items": [router_pod]}
+        if resource == "clusteroperators.config.openshift.io":
+            return {
+                "items": [
+                    {
+                        "metadata": {"name": "ingress"},
+                        "status": {
+                            "conditions": [
+                                {"type": "Degraded", "status": "True", "reason": "CanaryFailed", "message": "503"}
+                            ]
+                        },
+                    }
+                ]
+            }
+        raise RuntimeError(f"no answer for {resource} in {namespace}")
+
+    k8s = Mock()
+    k8s.list_json.side_effect = read
+    k8s.get_json.side_effect = read
+    monkeypatch.setattr(helpers, "_GUEST_HEALTH_SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(helpers, "wait_for_workload_node_provider_ids", lambda **_kwargs: None)
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(AssertionError) as failure:
+        helpers.wait_for_workload_cluster_health(k8s=k8s, cluster_name="order-a", expected_workers=1)
+
+    snapshot = tmp_path / "order-a-guest-health.json"
+    # The cluster is deleted seconds later, so the failure has to point at the copy.
+    assert f"guest state kept in {snapshot}" in str(failure.value)
+    kept = json.loads(snapshot.read_text())
+    assert kept["nodes"] == [{"name": "worker-0", "ready": "True", "internalIP": ""}]
+    assert kept["routerPods"] == [
+        {
+            "name": "router-default-abc",
+            "node": "worker-1",
+            "hostIP": "10.0.0.2",
+            "podIP": "10.128.0.5",
+            "phase": "Running",
+        }
+    ]
+    assert kept["clusterOperators"]["ingress"]["Degraded"] == {
+        "status": "True",
+        "reason": "CanaryFailed",
+        "message": "503",
+    }
+    # A resource the guest cannot answer for is recorded, not raised.
+    assert kept["ingressController"].startswith("unreadable: RuntimeError")
+
+
+def test_guest_health_snapshot_stays_within_its_total_deadline(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    clock = [0.0]
+    timeouts: list[object] = []
+
+    def read(**kwargs: object) -> dict[str, object]:
+        timeouts.append(kwargs.get("timeout"))
+        clock[0] += 50  # a guest that answers slowly enough to eat the deadline
+        return {"items": []}
+
+    k8s = Mock()
+    k8s.list_json.side_effect = read
+    k8s.get_json.side_effect = read
+    monkeypatch.setattr(helpers.time, "monotonic", lambda: clock[0])
+    caplog.set_level("INFO", logger="tests.e2e.core.helpers")
+
+    snapshot = helpers._guest_health_snapshot(k8s=k8s)
+
+    # Seven reads at the 300s command default would add 35 minutes to a run that
+    # already failed. The first read gets its own 20s, the second only the 10s
+    # left before the deadline, and the rest are recorded without being tried.
+    assert timeouts == [20, 10]
+    assert snapshot["nodes"] == []
+    assert snapshot["ingressController"] == helpers._SNAPSHOT_INCOMPLETE
+    assert snapshot["ingressServices"] == helpers._SNAPSHOT_INCOMPLETE
+    messages = [record.getMessage() for record in caplog.records if record.name == helpers.logger.name]
+    assert (
+        "CaaS: guest health snapshot deadline of 60s reached, did not read ingressController, ingressConfig, "
+        "dnsOperator, routerPods, ingressServices" in messages
+    )
+
+
+def test_write_guest_health_snapshot_scrubs_credentials_before_writing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    def read(*, resource: str, **_kwargs: object) -> dict[str, object]:
+        if resource == "clusteroperators.config.openshift.io":
+            return {
+                "items": [
+                    {
+                        "metadata": {"name": "ingress"},
+                        "status": {
+                            "conditions": [
+                                {
+                                    "type": "Degraded",
+                                    "status": "True",
+                                    "reason": "CanaryFailed",
+                                    "message": f"503 after {_QUOTED_CREDENTIAL}",
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        raise RuntimeError(f"no answer for {resource}")
+
+    k8s = Mock()
+    k8s.list_json.side_effect = read
+    k8s.get_json.side_effect = read
+    monkeypatch.setattr(helpers, "_GUEST_HEALTH_SNAPSHOT_DIR", tmp_path)
+
+    snapshot = helpers.write_guest_health_snapshot(k8s=k8s, cluster_name="order-a")
+
+    assert snapshot is not None
+    written = snapshot.read_text()
+    # The file outlives the cluster it describes, so it must not outlive the
+    # credential with it.
+    assert _QUOTED_CREDENTIAL not in written
+    assert _REDACTED_CREDENTIAL in written

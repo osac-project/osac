@@ -68,16 +68,18 @@ class K8sClient:
 
     # Generic kubectl operations
 
-    def get_json(self, *, resource: str, name: str, namespace: str | None = None) -> dict[str, Any]:
+    def get_json(self, *, resource: str, name: str, namespace: str | None = None, timeout: int = 300) -> dict[str, Any]:
         target_namespace = self.namespace if namespace is None else namespace
-        return json.loads(run(*self._base(), "get", resource, name, "-n", target_namespace, "-o", "json"))
+        return json.loads(
+            run(*self._base(), "get", resource, name, "-n", target_namespace, "-o", "json", timeout=timeout)
+        )
 
-    def list_json(self, *, resource: str, namespace: str | None = None) -> dict[str, Any]:
+    def list_json(self, *, resource: str, namespace: str | None = None, timeout: int = 300) -> dict[str, Any]:
         args = [*self._base(), "get", resource]
         if namespace is not None:
             args.extend(["-n", namespace])
         args.extend(["-o", "json"])
-        return json.loads(run(*args))
+        return json.loads(run(*args, timeout=timeout))
 
     def get_operator_metrics(self) -> str:
         services = self.list_json(resource="services", namespace=self.namespace).get("items", [])
@@ -426,11 +428,7 @@ class K8sClient:
     # Storage tier resolution
 
     def get_storage_class_for_tier(
-        self,
-        *,
-        tier_name: str,
-        tenant_name: str | None = None,
-        storage_class_client: K8sClient | None = None,
+        self, *, tier_name: str, tenant_name: str | None = None, storage_class_client: K8sClient | None = None
     ) -> str:
         """Resolve StorageClass name from tier name via Tenant.status.storageClasses or labeled StorageClasses."""
         normalized_tier = tier_name.strip().lower()

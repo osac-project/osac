@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import ipaddress
+import json
 import logging
 import os
 import re
@@ -10,6 +11,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -20,7 +22,7 @@ from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import StuckState, poll_until, run_unchecked
-from tests.e2e.core.sanitize import sanitize_text
+from tests.e2e.core.sanitize import sanitize_obj, sanitize_text
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
 logger = logging.getLogger(__name__)
@@ -937,6 +939,28 @@ def _condition_status(resource: dict[str, Any], condition_type: str) -> str:
     return ""
 
 
+def _condition(resource: dict[str, Any], condition_type: str) -> dict[str, Any]:
+    conditions = resource.get("status", {}).get("conditions", [])
+    return next((condition for condition in conditions if condition.get("type") == condition_type), {})
+
+
+def _one_line(text: str, limit: int = 300) -> str:
+    """Flatten an operator's prose onto one log line without losing its point.
+
+    Scrubbed before it is flattened and truncated: an operator that quotes the
+    request it failed on can quote the Authorization header with it, and this
+    text reaches the log, the failure message and the snapshot.
+    """
+    return " ".join(sanitize_text(str(text)).split())[:limit]
+
+
+def _condition_detail(resource: dict[str, Any], condition_type: str) -> str:
+    """The reason and message a condition carries, which say why it is not met."""
+    condition = _condition(resource, condition_type)
+    parts = (condition.get("reason") or "", condition.get("message") or "")
+    return _one_line(": ".join(part for part in parts if part))
+
+
 def node_pool_ready_node_count(node_pool: dict[str, Any]) -> int:
     """Return the ready node count reported by a HyperShift NodePool."""
     node_versions = node_pool.get("status", {}).get("nodesInfo", {}).get("nodeVersions", [])
@@ -1000,11 +1024,16 @@ def workload_cluster_unhealthy(
     if not operators:
         problems.append("no ClusterOperators reported")
     for operator in operators:
-        unmet = [
-            f"{condition}={_condition_status(operator, condition) or 'missing'}"
-            for condition, expected in _CLUSTER_OPERATOR_CONDITIONS.items()
-            if _condition_status(operator, condition) != expected
-        ]
+        unmet = []
+        for condition, expected in _CLUSTER_OPERATOR_CONDITIONS.items():
+            status = _condition_status(operator, condition) or "missing"
+            if status == expected:
+                continue
+            # The status alone says which operator is the holdout; its reason and
+            # message say why, which is the whole diagnosis when the cluster is
+            # torn down a moment later.
+            detail = _condition_detail(operator, condition)
+            unmet.append(f"{condition}={status}" + (f" ({detail})" if detail else ""))
         if unmet:
             problems.append(f"ClusterOperator {operator.get('metadata', {}).get('name', '')}: {', '.join(unmet)}")
     return problems
@@ -1056,6 +1085,157 @@ def wait_for_workload_node_provider_ids(*, k8s: K8sClient, cluster_name: str, ex
 
 def _provider_id_summary(observed: dict[str, str]) -> str:
     return ", ".join(f"{name}={provider_id}" for name, provider_id in sorted(observed.items()))
+
+
+# Where the guest's own account of itself is kept when a health check gives up.
+# The cluster is deleted seconds later, so this file is the only surviving copy.
+_GUEST_HEALTH_SNAPSHOT_DIR = Path("/tmp/test-output")
+
+# The guest is unreachable by definition when a health check gives up, so a read
+# that hangs must not hold the failure -- and the teardown queued behind it --
+# for the default command timeout: seven reads at 300s each would add 35 minutes
+# to a run that already failed. Every read gets a short timeout of its own and
+# all of them share one deadline, which bounds the whole snapshot to a minute.
+_SNAPSHOT_READ_TIMEOUT = 20
+_SNAPSHOT_DEADLINE = 60
+_SNAPSHOT_INCOMPLETE = "not read: snapshot deadline reached"
+
+
+def _node_summary(node: dict[str, Any]) -> dict[str, Any]:
+    addresses = node.get("status", {}).get("addresses", [])
+    return {
+        "name": node.get("metadata", {}).get("name", ""),
+        "ready": _condition_status(node, "Ready"),
+        "internalIP": next((a.get("address") for a in addresses if a.get("type") == "InternalIP"), ""),
+    }
+
+
+def _conditions_summary(resource: dict[str, Any]) -> dict[str, dict[str, str]]:
+    return {
+        condition.get("type", ""): {
+            key: _one_line(condition.get(key, ""))
+            for key in ("status", "reason", "message", "lastTransitionTime")
+            if condition.get(key)
+        }
+        for condition in resource.get("status", {}).get("conditions", [])
+    }
+
+
+def _pod_summary(pod: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": pod.get("metadata", {}).get("name", ""),
+        "node": pod.get("spec", {}).get("nodeName", ""),
+        "hostIP": pod.get("status", {}).get("hostIP", ""),
+        "podIP": pod.get("status", {}).get("podIP", ""),
+        "phase": pod.get("status", {}).get("phase", ""),
+    }
+
+
+def _service_summary(service: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": service.get("metadata", {}).get("name", ""),
+        "type": service.get("spec", {}).get("type", ""),
+        "clusterIP": service.get("spec", {}).get("clusterIP", ""),
+        "loadBalancer": service.get("status", {}).get("loadBalancer", {}).get("ingress", []),
+    }
+
+
+def _guest_health_snapshot(*, k8s: K8sClient) -> dict[str, Any]:
+    """Read what the guest says about routing, DNS and its own operators.
+
+    A ClusterOperator that reports `Degraded=True` names the symptom; only the
+    ingress controller's conditions, the router pods' nodes and the services'
+    addresses show where apps traffic is actually published, which is what a
+    single-address DNS wildcard gets wrong.
+
+    The reads are cheap against a live guest and hopeless against an unreachable
+    one, so each is bounded by `_SNAPSHOT_READ_TIMEOUT` and the set by
+    `_SNAPSHOT_DEADLINE`; whatever the deadline cuts is recorded, not awaited.
+    """
+    snapshot: dict[str, Any] = {}
+    deadline = time.monotonic() + _SNAPSHOT_DEADLINE
+
+    def _read(key: str, read: Callable[[int], Any], summarize: Callable[[Any], Any] | None = None) -> None:
+        remaining = deadline - time.monotonic()
+        if remaining < 1:
+            snapshot[key] = _SNAPSHOT_INCOMPLETE
+            return
+        try:
+            value = read(int(min(_SNAPSHOT_READ_TIMEOUT, remaining)))
+            snapshot[key] = summarize(value) if summarize else value
+        except Exception as error:  # a broken guest must not break the dump
+            snapshot[key] = f"unreadable: {type(error).__name__}"
+
+    _read(
+        "nodes",
+        lambda timeout: k8s.list_json(resource="nodes", timeout=timeout),
+        lambda items: [_node_summary(node) for node in items.get("items", [])],
+    )
+    _read(
+        "clusterOperators",
+        lambda timeout: k8s.list_json(resource="clusteroperators.config.openshift.io", timeout=timeout),
+        lambda items: {
+            operator.get("metadata", {}).get("name", ""): _conditions_summary(operator)
+            for operator in items.get("items", [])
+        },
+    )
+    _read(
+        "ingressController",
+        lambda timeout: k8s.get_json(
+            resource="ingresscontroller.operator.openshift.io",
+            name="default",
+            namespace="openshift-ingress-operator",
+            timeout=timeout,
+        ),
+        lambda ic: {
+            "endpointPublishingStrategy": ic.get("spec", {}).get("endpointPublishingStrategy", {}),
+            "domain": ic.get("status", {}).get("domain", ""),
+            "conditions": _conditions_summary(ic),
+        },
+    )
+    _read(
+        "ingressConfig",
+        lambda timeout: k8s.get_json(resource="ingresses.config.openshift.io", name="cluster", timeout=timeout),
+        lambda ingress: ingress.get("spec", {}),
+    )
+    _read(
+        "dnsOperator",
+        lambda timeout: k8s.get_json(
+            resource="dnses.operator.openshift.io", name="default", namespace="openshift-dns-operator", timeout=timeout
+        ),
+        lambda dns: {"spec": dns.get("spec", {}), "conditions": _conditions_summary(dns)},
+    )
+    _read(
+        "routerPods",
+        lambda timeout: k8s.list_json(resource="pods", namespace="openshift-ingress", timeout=timeout),
+        lambda items: [_pod_summary(pod) for pod in items.get("items", [])],
+    )
+    _read(
+        "ingressServices",
+        lambda timeout: k8s.list_json(resource="services", namespace="openshift-ingress", timeout=timeout),
+        lambda items: [_service_summary(service) for service in items.get("items", [])],
+    )
+    unread = [key for key, value in snapshot.items() if value == _SNAPSHOT_INCOMPLETE]
+    if unread:
+        logger.info(
+            "CaaS: guest health snapshot deadline of %ds reached, did not read %s",
+            _SNAPSHOT_DEADLINE,
+            ", ".join(unread),
+        )
+    return snapshot
+
+
+def write_guest_health_snapshot(*, k8s: K8sClient, cluster_name: str = "") -> Path | None:
+    """Save the guest's account of itself before teardown deletes it."""
+    directory = _GUEST_HEALTH_SNAPSHOT_DIR if _GUEST_HEALTH_SNAPSHOT_DIR.is_dir() else Path(tempfile.gettempdir())
+    path = directory / f"{cluster_name or 'guest'}-guest-health.json"
+    try:
+        path.write_text(json.dumps(sanitize_obj(_guest_health_snapshot(k8s=k8s)), indent=2, default=str))
+    except Exception as error:  # diagnostics never fail the run they explain
+        logger.info("CaaS: could not write the guest health snapshot to %s (%s)", path, type(error).__name__)
+        return None
+    logger.info("CaaS: guest health snapshot written to %s", path)
+    return path
 
 
 def wait_for_hosted_cluster_reference(*, k8s: K8sClient, co_name: str) -> tuple[str, str]:
@@ -1187,7 +1367,9 @@ def wait_for_workload_cluster_health(*, k8s: K8sClient, cluster_name: str, expec
         )
     except TimeoutError:
         details = "; ".join(observed) or "no Nodes or ClusterOperators were readable"
-        raise AssertionError(f"guest cluster did not become healthy: {details}") from None
+        snapshot = write_guest_health_snapshot(k8s=k8s, cluster_name=cluster_name)
+        kept = f" (guest state kept in {snapshot})" if snapshot else ""
+        raise AssertionError(f"guest cluster did not become healthy: {details}{kept}") from None
     logger.info("CaaS phase: all ClusterOperators healthy")
     logger.info(
         "CaaS: guest cluster healthy: %d worker node(s) and %d ClusterOperators available, not progressing, "

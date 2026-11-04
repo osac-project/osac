@@ -5370,22 +5370,7 @@ var _ = Describe("Storage Controller", func() {
 			createLabeledStorageClass(ctx, "csp-gold-s2-sc", cspManagedTenantValue, "csp-gold-s2")
 			waitForStorageClassInCache("csp-gold-s2-sc")
 
-			vastSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      fmt.Sprintf("vast-tenant-config-%s", name),
-					Namespace: secretsNamespace,
-					Labels: map[string]string{
-						osacTenantKey:            name,
-						osacStorageProviderLabel: "vast",
-					},
-				},
-				StringData: map[string]string{"provider": "vast"},
-			}
-			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
-			waitForIndexedClientObject(vastSecret)
-			DeferCleanup(func() {
-				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
-			})
+			createHubSecretForBackend(ctx, name, "backend-vast", "vast", secretsNamespace)
 
 			var capturedTiers []provisioning.TierDefinition
 			var capturedConns map[string]provisioning.BackendConnection
@@ -5430,7 +5415,7 @@ var _ = Describe("Storage Controller", func() {
 				Name:     "backend-vast",
 				Provider: "vast",
 				Ready:    true,
-				Message:  fmt.Sprintf("Hub Secret for tenant %q exists", name),
+				Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) exists", "backend-vast", "vast", name),
 			}}))
 
 			clusterCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
@@ -5459,22 +5444,7 @@ var _ = Describe("Storage Controller", func() {
 			waitForStorageClassInCache("csp-gold-s3-sc")
 			waitForStorageClassInCache(name + "-osac-fast-sc")
 
-			vastSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      fmt.Sprintf("vast-tenant-config-%s", name),
-					Namespace: secretsNamespace,
-					Labels: map[string]string{
-						osacTenantKey:            name,
-						osacStorageProviderLabel: "vast",
-					},
-				},
-				StringData: map[string]string{"provider": "vast"},
-			}
-			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
-			waitForIndexedClientObject(vastSecret)
-			DeferCleanup(func() {
-				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
-			})
+			createHubSecretForBackend(ctx, name, "backend-vast", "vast", secretsNamespace)
 
 			clusterProvider := &mockProvisioningProvider{name: "cluster-mock"}
 			r := NewStorageReconciler(
@@ -5511,22 +5481,7 @@ var _ = Describe("Storage Controller", func() {
 			createLabeledStorageClass(ctx, "csp-gold-preprov-sc", cspManagedTenantValue, "csp-gold-preprov")
 			waitForStorageClassInCache("csp-gold-preprov-sc")
 
-			vastSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      fmt.Sprintf("vast-tenant-config-%s", name),
-					Namespace: secretsNamespace,
-					Labels: map[string]string{
-						osacTenantKey:            name,
-						osacStorageProviderLabel: "vast",
-					},
-				},
-				StringData: map[string]string{"provider": "vast"},
-			}
-			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
-			waitForIndexedClientObject(vastSecret)
-			DeferCleanup(func() {
-				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
-			})
+			createHubSecretForBackend(ctx, name, "backend-vast", "vast", secretsNamespace)
 
 			r := NewStorageReconciler(
 				testMcManager, testNamespace, mcmanager.LocalCluster,
@@ -5673,7 +5628,7 @@ var _ = Describe("Storage Controller", func() {
 		It("should leave StorageReady nil (and remove stale condition) in pure OSAC-managed mode", func() {
 			name := "pure-osac-removes-stale-csp-cond"
 			createReadyTenantForStorage(ctx, name, testNamespace)
-			createHubSecret(ctx, name, secretsNamespace)
+			createHubSecretForBackend(ctx, name, "backend-lvms", "lvms", secretsNamespace)
 			createLabeledStorageClass(ctx, name+"-lvms-sc", name, "local")
 			waitForStorageClassInCache(name + "-lvms-sc")
 
@@ -5725,20 +5680,18 @@ var _ = Describe("Storage Controller", func() {
 
 			vastSecret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      fmt.Sprintf("vast-tenant-config-%s", name),
+					Name:      fmt.Sprintf("vast-tenant-config-%s-backend-vast", name),
 					Namespace: secretsNamespace,
 					Labels: map[string]string{
-						osacTenantKey:            name,
-						osacStorageProviderLabel: "vast",
+						osacTenantKey:             name,
+						osacStorageProviderLabel:  "vast",
+						osacStorageBackendIDLabel: "backend-vast",
 					},
 				},
 				StringData: map[string]string{"provider": "vast"},
 			}
 			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
 			waitForIndexedClientObject(vastSecret)
-			DeferCleanup(func() {
-				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
-			})
 
 			r := NewStorageReconciler(
 				testMcManager, testNamespace, mcmanager.LocalCluster,

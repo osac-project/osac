@@ -67,7 +67,7 @@ func (c *fakeConsumer) ConsumePartition(
 // TestDrainEndsWhenTheChannelCloses checks that a partition consumer whose message channel
 // Kafka closed ends the drain instead of spinning on the closed channel.
 func TestDrainEndsWhenTheChannelCloses(t *testing.T) {
-	f, err := New(nil, nil, logr.Discard())
+	f, err := New(nil, nil, logr.Discard(), "")
 	if err != nil {
 		t.Fatalf("creating fold: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestOutOfRangeOffsetLogsTheSkippedRange(t *testing.T) {
 	}
 
 	core, logs := captured()
-	f, err := New(store, &fakeConsumer{}, core)
+	f, err := New(store, &fakeConsumer{}, core, "")
 	if err != nil {
 		t.Fatalf("creating fold: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestFreshFoldLogsTheRetentionGap(t *testing.T) {
 	// the oldest retained record directly, without an out-of-range error.
 
 	core, logs := captured()
-	f, err := New(store, &fakeConsumer{}, core)
+	f, err := New(store, &fakeConsumer{}, core, "")
 	if err != nil {
 		t.Fatalf("creating fold: %v", err)
 	}

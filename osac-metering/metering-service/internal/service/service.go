@@ -77,6 +77,11 @@ type Config struct {
 	// it serves for the first time. The retention is the recovery window, because
 	// metering rebuilds its database from the topics.
 	TopicRetentionMS string
+
+	// EventTopicPrefix is the prefix fulfillment prepends to a tenant name to form
+	// that tenant's event topic. Discovery, the fold, and the round all use it.
+	// Empty means the default osac.events. prefix.
+	EventTopicPrefix string
 }
 
 // Service runs the per-tenant loops.
@@ -308,7 +313,7 @@ func (s *Service) Run(ctx context.Context) error {
 	ticker := time.NewTicker(DiscoverInterval)
 	defer ticker.Stop()
 	for {
-		tenants, err := kafkaconn.ListEventTenants(ctx, s.cfg.Kafka)
+		tenants, err := kafkaconn.ListEventTenants(ctx, s.cfg.Kafka, s.cfg.EventTopicPrefix)
 		if err != nil {
 			// A failed listing must not stop the service: the next pass lists again.
 			s.cfg.Logger.Error(err, "listing tenant event topics; retrying on the next pass")
@@ -538,7 +543,7 @@ func (s *Service) deleteRows(tenant string, loops *tenantLoops) {
 func (s *Service) runTenantLoops(ctx context.Context, tenant string, loops *tenantLoops) {
 	defer close(loops.stopped)
 
-	foldLoop, err := fold.New(s.cfg.Store, s.consumer, s.cfg.Logger.WithValues("loop", "fold"))
+	foldLoop, err := fold.New(s.cfg.Store, s.consumer, s.cfg.Logger.WithValues("loop", "fold"), s.cfg.EventTopicPrefix)
 	if err != nil {
 		s.cfg.Logger.Error(err, "creating fold", "tenant", tenant)
 		loops.fail()
@@ -546,7 +551,7 @@ func (s *Service) runTenantLoops(ctx context.Context, tenant string, loops *tena
 	}
 	roundLoop, err := round.New(
 		s.cfg.Store, s.ruleset, s.client, s.consumer,
-		s.cfg.Logger.WithValues("loop", "round"), s.rulesGate,
+		s.cfg.Logger.WithValues("loop", "round"), s.rulesGate, s.cfg.EventTopicPrefix,
 	)
 	if err != nil {
 		s.cfg.Logger.Error(err, "creating round", "tenant", tenant)

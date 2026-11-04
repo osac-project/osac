@@ -195,6 +195,7 @@ spec:
         - --ca-file=/etc/fulfillment-grpc-server/tls/cas
         - --db-url-file=/etc/fulfillment-grpc-server/db
         - --kafka-properties-file=/etc/fulfillment-grpc-server/kafka
+        - --kafka-topic-prefix={{ .Values.global.eventTopicPrefix | default "osac.events." }}
         - --grpc-listener-address=0.0.0.0:8000
         - --grpc-listener-tls-crt=/etc/fulfillment-grpc-server/tls/tls.crt
         - --grpc-listener-tls-key=/etc/fulfillment-grpc-server/tls/tls.key

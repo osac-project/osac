@@ -98,6 +98,11 @@
           "type": "string",
           "description": "Required stable identity for this OSAC/fulfillment-service deployment"
         },
+        "eventTopicPrefix": {
+          "type": "string",
+          "description": "Prefix fulfillment prepends to a tenant name to form that tenant's event topic. Metering discovery and the event-topic Kafka permissions use the same value. Include the trailing dot.",
+          "default": "osac.events."
+        },
         "networking": {
           "$ref": "#/$defs/globalNetworking"
         }

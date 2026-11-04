@@ -433,10 +433,13 @@ the `osac` and `osac-devstack` releases plus `scripts/dev-full/`:
   its default VirtualNetwork + Subnet + SecurityGroup via tenant onboarding, so those are
   ready without manual seeding.
 
-The standard Kind profile sets `global.networking.provisioningEnabled: false`,
-so networking resources reconcile to READY without a real fabric. The `dev-full`
-profile enables provisioning so AAP can create each tenant's target namespace;
-Kind's CUDN API placeholder accepts those objects without an OVN dataplane.
+Both Kind profiles set `global.networking.provisioningEnabled: false`, so
+networking resources reconcile as `ProvisioningDisabled` without a fabric
+provider or Netris credentials. In this mode, KubeVirt VMs run in the Tenant
+namespace on Kind's default pod network with masquerade. The dev-full hook does
+not wait for provider-created Subnet namespaces or CUDNs. This supports local
+UI-to-VM development; fabric networking, ExternalIP routing, and NAT require a
+provider-enabled cluster and are not exercised by Kind dev-full.
 
 **Prerequisites** (beyond the base tools) — enforced by `scripts/dev-full/kind-runtime.sh check`:
 

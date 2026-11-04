@@ -324,7 +324,7 @@ func lockParentVirtualNetwork(ctx context.Context, guards *networkingGuards,
 	scoped *dao.GenericDAO[*privatev1.VirtualNetwork], id, name string, owner *privatev1.Metadata) (
 	*privatev1.VirtualNetwork, error) {
 	key := referenceIdentifier(id, name)
-	match, err := findInScope(ctx, scoped, owner.GetTenant(), owner.GetProject(), id, name)
+	match, err := findInScope(ctx, scoped, owner.GetTenant(), owner.GetProject(), "VirtualNetwork", id, name)
 	if err != nil {
 		return nil, err
 	}

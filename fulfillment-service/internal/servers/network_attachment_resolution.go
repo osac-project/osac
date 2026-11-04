@@ -161,7 +161,7 @@ func resolveAttachmentSubnet(ctx context.Context, guards *networkingGuards, requ
 		// Resolve the reference in the workload's tenant and project, or fall back to a tenant default,
 		// which is tenant-wide. The caller-scoped DAO finds the default because the tenant's default
 		// project is always visible for the tenant.
-		result.subnet, err = findInScope(ctx, request.subnetsDao, request.tenant, request.project,
+		result.subnet, err = findInScope(ctx, request.subnetsDao, request.tenant, request.project, "Subnet",
 			request.subnet.GetId(), request.subnet.GetName())
 		if err != nil {
 			return err
@@ -457,10 +457,10 @@ func findTenantDefault[O lifecycleResource](ctx context.Context, objectDao *dao.
 // findInScope finds a record of the tenant and project, or a tenant default of the tenant's default project, by ID
 // and optional name. It returns nil when there is none, also when the record belongs to another tenant or project or
 // the DAO doesn't let the caller see it.
-func findInScope[O referenceResource](ctx context.Context, objectDao *dao.GenericDAO[O], tenant, project,
+func findInScope[O referenceResource](ctx context.Context, objectDao *dao.GenericDAO[O], tenant, project, kind,
 	id, name string) (O, error) {
 	scope := referenceScope{tenant: tenant, project: project}
-	object, err := resolveResourceInScope(ctx, objectDao, scope, id, name, "VirtualNetwork", "",
+	object, err := resolveResourceInScope(ctx, objectDao, scope, id, name, kind, "",
 		grpccodes.NotFound)
 	if err == nil || grpcstatus.Code(err) != grpccodes.NotFound {
 		return object, err
@@ -477,7 +477,7 @@ func findInScope[O referenceResource](ctx context.Context, objectDao *dao.Generi
 	}
 	// A local reference may carry a name in its ID field; keep resolving that form by name.
 	if id != "" && name == "" {
-		object, err = resolveResourceInScope(ctx, objectDao, scope, "", id, "VirtualNetwork", "",
+		object, err = resolveResourceInScope(ctx, objectDao, scope, "", id, kind, "",
 			grpccodes.NotFound)
 		if err == nil || grpcstatus.Code(err) != grpccodes.NotFound {
 			return object, err

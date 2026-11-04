@@ -1506,7 +1506,7 @@ func (r *StorageReconciler) isPureCSPTenant(
 	if osacBackendRegistered {
 		return false, nil
 	}
-	hubSecretReady, err := r.hubSecretExists(ctx, tenant.GetName(), "")
+	hubSecretReady, err := r.hubSecretExists(ctx, tenant.GetName())
 	if err != nil {
 		return false, err
 	}
@@ -1542,7 +1542,7 @@ func (r *StorageReconciler) mayHaveOSACStorageFootprint(ctx context.Context, ten
 		found = append(found, "storage backend job history")
 	}
 
-	hubSecretReady, err := r.hubSecretExists(ctx, tenant.GetName(), "")
+	hubSecretReady, err := r.hubSecretExists(ctx, tenant.GetName())
 	if err != nil {
 		return nil, err
 	}

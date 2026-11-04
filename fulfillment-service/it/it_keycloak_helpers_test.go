@@ -19,7 +19,7 @@ func getOrCreateKeycloakTenantAdminRole(ctx context.Context) map[string]any {
 			"name": "tenant-admin",
 		})
 		Expect(createErr).ToNot(HaveOccurred())
-		Expect(code).To(Equal(http.StatusCreated))
+		Expect(code).To(BeElementOf(http.StatusCreated, http.StatusConflict))
 		roleStatus, body, err = tool.KeycloakAdminRequest(ctx, http.MethodGet, "/roles/tenant-admin", nil)
 		Expect(err).ToNot(HaveOccurred())
 	}

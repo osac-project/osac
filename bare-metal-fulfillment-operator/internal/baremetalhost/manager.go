@@ -305,18 +305,19 @@ func hardwareMACs(details *metal3api.HardwareDetails) []string {
 	return macs
 }
 
-// IsBMHReady checks whether the BMH has completed Metal3 registration and is
-// ready for power management. Returns true when the BMH provisioning state is
-// "available" and operational status is "OK". Returns false while the BMH is
-// in registering, inspecting, or preparing state. Returns an error if the BMH
+// IsBMHAvailable checks whether the BMH has completed Metal3 registration and
+// inspection and is available for allocation (not yet provisioned). Returns
+// true when the BMH provisioning state is "available" and operational status
+// is "OK". Returns false while the BMH is in registering, inspecting, or
+// preparing state, and once it is provisioned. Returns an error if the BMH
 // does not exist or has an error operational status. Callers distinguish
 // not-found from error-status via apierrors.IsNotFound(err).
-func (m *Manager) IsBMHReady(ctx context.Context, name string) (bool, error) {
+func (m *Manager) IsBMHAvailable(ctx context.Context, name string) (bool, error) {
 	log := ctrllog.FromContext(ctx)
 
 	bmh := &metal3api.BareMetalHost{}
 	if err := m.client.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: name}, bmh); err != nil {
-		// IsBMHReady runs right after CreateBMH, so a NotFound here is almost
+		// IsBMHAvailable runs right after CreateBMH, so a NotFound here is almost
 		// always the informer cache not having observed the just-created BMH yet.
 		// Treat it as "not ready" so the caller requeues rather than erroring.
 		// It's safe even if the BMH were genuinely absent: ensureBMHExists
@@ -336,7 +337,7 @@ func (m *Manager) IsBMHReady(ctx context.Context, name string) (bool, error) {
 	ready := bmh.Status.Provisioning.State == metal3api.StateAvailable &&
 		bmh.Status.OperationalStatus == metal3api.OperationalStatusOK
 
-	log.V(1).Info("BareMetalHost readiness check",
+	log.V(1).Info("BareMetalHost availability check",
 		"name", name,
 		"provisioningState", bmh.Status.Provisioning.State,
 		"operationalStatus", bmh.Status.OperationalStatus,

@@ -120,12 +120,9 @@ var _ = Describe("Version", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		object := response.GetObject()
-		DeferCleanup(func() {
-			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
-				Id: object.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
+		// Wait for the archive, so the networking fixture cleanup
+		// doesn't race a cluster that still references its Subnet/SecurityGroup.
+		deferClusterDeletion(object.GetId(), tool.ExternalView().UserConn())
 		return object
 	}
 

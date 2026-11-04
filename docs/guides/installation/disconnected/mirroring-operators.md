@@ -372,8 +372,9 @@ jq -se '
   else error("ITMS source fallback is not disabled") end
 ' "$policy_work/all.json" > "$policy_work/itms.json"
 
+itms_count=$(jq -er '.items | length' "$policy_work/itms.json")
 oc apply --server-side -f "$resource_dir/idms-oc-mirror.yaml"
-if jq -e '.items | length > 0' "$policy_work/itms.json" >/dev/null; then
+if ((itms_count > 0)); then
   oc apply --server-side -f "$policy_work/itms.json"
 fi
 oc apply --server-side -f "$resource_dir/cs-redhat-operator-index-v4-22.yaml"

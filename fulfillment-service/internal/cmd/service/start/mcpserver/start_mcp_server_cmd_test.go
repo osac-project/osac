@@ -102,7 +102,7 @@ var _ = Describe("newServer", func() {
 
 		response, err := clientSession.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(response.Tools).To(HaveLen(6))
+		Expect(response.Tools).To(HaveLen(9))
 
 		tools := make(map[string]*mcp.Tool, len(response.Tools))
 		for _, tool := range response.Tools {
@@ -119,11 +119,20 @@ var _ = Describe("newServer", func() {
 		))
 		Expect(tools).To(HaveKey("list_resources"))
 		Expect(tools).To(HaveKey("get_resource"))
+		Expect(tools).To(HaveKey("create_network_resource"))
+		Expect(tools).To(HaveKey("expose_network_resource"))
+		Expect(tools).To(HaveKey("delete_network_resource"))
 		Expect(tools).To(HaveKey("create_compute_instance"))
 		Expect(tools).To(HaveKey("update_compute_instance"))
 		Expect(tools).To(HaveKey("delete_compute_instance"))
 		Expect(tools["list_resources"].Description).To(ContainSubstring("Use this tool to discover"))
 		Expect(tools["get_resource"].Description).To(ContainSubstring("Use this tool to inspect"))
+		Expect(tools["create_network_resource"].Description).To(ContainSubstring("only after the user confirms"))
+		Expect(tools["create_network_resource"].Description).To(ContainSubstring("canonical IPv4"))
+		Expect(tools["expose_network_resource"].Description).To(ContainSubstring("only after the user confirms"))
+		Expect(tools["expose_network_resource"].Description).To(ContainSubstring("external_ip"))
+		Expect(tools["expose_network_resource"].Description).To(ContainSubstring("nat_gateway"))
+		Expect(tools["delete_network_resource"].Description).To(ContainSubstring("only when the user explicitly requests"))
 		Expect(tools["get_resource"].Description).To(ContainSubstring("Only resource types with Get support are accepted"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("only after the user confirms"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("get_resource"))
@@ -138,10 +147,18 @@ var _ = Describe("newServer", func() {
 		expectToolAnnotations(tools["check_connection"], "Check OSAC MCP connection", true, false, true, true)
 		expectToolAnnotations(tools["list_resources"], "List OSAC deployment resources", true, false, true, true)
 		expectToolAnnotations(tools["get_resource"], "Get OSAC deployment resource", true, false, true, true)
+		expectToolAnnotations(tools["create_network_resource"], "Create OSAC network resource", false, false, false, true)
+		expectToolAnnotations(tools["expose_network_resource"], "Expose OSAC network resource", false, true, false, true)
+		expectToolAnnotations(tools["delete_network_resource"], "Delete OSAC network resource", false, true, false, true)
 		expectToolAnnotations(tools["create_compute_instance"], "Create OSAC compute instance", false, false, false, true)
 		expectToolAnnotations(tools["update_compute_instance"], "Update OSAC compute instance", false, true, false, true)
 		expectToolAnnotations(tools["delete_compute_instance"], "Delete OSAC compute instance", false, true, false, true)
 		expectComputeInstanceCreateSchema(tools["create_compute_instance"].InputSchema)
+		expectTypedWriteSchema(tools["create_network_resource"].InputSchema, "resource_type", "name")
+		expectNetworkCreateSchema(tools["create_network_resource"].InputSchema)
+		expectTypedWriteSchema(tools["expose_network_resource"].InputSchema, "resource_type", "name")
+		expectTypedWriteSchema(tools["delete_network_resource"].InputSchema, "resource_type", "id")
+		expectNetworkDeleteSchema(tools["delete_network_resource"].InputSchema)
 		expectComputeInstanceUpdateSchema(tools["update_compute_instance"].InputSchema)
 		expectTypedWriteSchema(tools["create_compute_instance"].InputSchema, "name", "catalog_item")
 		expectTypedWriteSchema(tools["update_compute_instance"].InputSchema, "id", "version")
@@ -156,6 +173,9 @@ var _ = Describe("newServer", func() {
 			ResourceTypeVirtualNetwork,
 			ResourceTypeSubnet,
 			ResourceTypeSecurityGroup,
+			ResourceTypeExternalIP,
+			ResourceTypeExternalIPAttachment,
+			ResourceTypeNATGateway,
 			ResourceTypeComputeInstance,
 			ResourceTypeProject,
 			ResourceTypeSecretReference,
@@ -170,6 +190,9 @@ var _ = Describe("newServer", func() {
 			ResourceTypeVirtualNetwork,
 			ResourceTypeSubnet,
 			ResourceTypeSecurityGroup,
+			ResourceTypeExternalIP,
+			ResourceTypeExternalIPAttachment,
+			ResourceTypeNATGateway,
 			ResourceTypeComputeInstance,
 			ResourceTypeProject,
 		})
@@ -240,6 +263,9 @@ var _ = Describe("newServer", func() {
 			ResourceTypeVirtualNetwork,
 			ResourceTypeSubnet,
 			ResourceTypeSecurityGroup,
+			ResourceTypeExternalIP,
+			ResourceTypeExternalIPAttachment,
+			ResourceTypeNATGateway,
 			ResourceTypeComputeInstance,
 			ResourceTypeProject,
 		})
@@ -370,6 +396,30 @@ func expectResourcePaginationSchema(schema any) {
 	Expect(ok).To(BeTrue())
 	Expect(pageSize["minimum"]).To(BeNumerically("==", 0))
 	Expect(pageSize["maximum"]).To(BeNumerically("==", maxResourcePageSize))
+}
+
+func expectNetworkCreateSchema(schema any) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	for _, name := range []string{"ingress_rules", "egress_rules"} {
+		property, ok := properties[name].(map[string]any)
+		Expect(ok).To(BeTrue(), name)
+		Expect(property["maxItems"]).To(BeNumerically("==", maxNetworkSecurityRules), name)
+	}
+}
+
+func expectNetworkDeleteSchema(schema any) {
+	document, ok := schema.(map[string]any)
+	Expect(ok).To(BeTrue())
+	properties, ok := document["properties"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	resourceType, ok := properties["resource_type"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(resourceType["description"]).To(Equal(
+		"network resource type: virtual_network, subnet, security_group, external_ip, external_ip_attachment, or nat_gateway",
+	))
 }
 
 func expectComputeInstanceCreateSchema(schema any) {

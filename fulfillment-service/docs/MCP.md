@@ -1,4 +1,4 @@
-# MCP resource discovery
+# MCP tools
 
 The Fulfillment MCP server exposes bounded, typed resource discovery. It does
 not provide a generic RPC proxy, method-name dispatch, reflection, or direct
@@ -8,7 +8,7 @@ public Fulfillment API remains the authorization boundary.
 ## Supported resources
 
 `list_resources` supports the baseline compute and networking prerequisites,
-`project`, and `secret_reference`.
+public exposure resources, `project`, and `secret_reference`.
 
 `get_resource` accepts only:
 
@@ -21,6 +21,9 @@ public Fulfillment API remains the authorization boundary.
 - `virtual_network`
 - `subnet`
 - `security_group`
+- `external_ip`
+- `external_ip_attachment`
+- `nat_gateway`
 - `compute_instance`
 
 Secret references are list-only: MCP returns the reference's ID, name, and
@@ -30,6 +33,38 @@ underlying Secret object.
 List requests use the explicit `filter` field and bounded pagination. The
 default page size is 50, the maximum is 100, and negative offsets or invalid
 page sizes are rejected before a public API call.
+
+## Supported network writes
+
+`create_network_resource` creates exactly one `virtual_network`, `subnet`, or
+`security_group` through the existing public Create API as the MCP caller. It
+accepts only the typed fields for the selected resource, requires canonical
+IPv4 CIDRs, and rejects edit-shaped input containing an existing resource ID
+with `unsupported_in_place` before any public mutation. Subnet and
+SecurityGroup creation passes the named parent VirtualNetwork to the public
+Create call. A missing or inaccessible parent is rejected there and returns a
+named prerequisite error without creating a dependent resource. NetworkClass
+remains provider-managed and is never exposed
+as a tenant write. SecurityGroup creation accepts at most 100 rules in total
+across `ingress_rules` and `egress_rules`, with the same per-direction schema
+limit.
+
+`delete_network_resource` deletes exactly one explicitly named eligible
+network resource: VirtualNetwork, Subnet, SecurityGroup, ExternalIP,
+ExternalIPAttachment, or NATGateway. It does not cascade: a parent with active
+dependents returns a conflict, and callers must delete dependents first.
+
+`expose_network_resource` creates exactly one `external_ip`,
+`external_ip_attachment`, or `nat_gateway` through the existing public Create
+API as the MCP caller. ExternalIP allocation selects an existing
+provider-managed ExternalIPPool; MCP does not create or edit pools. An
+ExternalIPAttachment is inbound DNAT and requires one ComputeInstance, Cluster,
+or BareMetalInstance target, with `api` or `ingress` required for Cluster
+targets. A NATGateway is outbound SNAT and requires a VirtualNetwork and an
+ExternalIP. The typed input rejects edit-shaped IDs, ambiguous targets, and
+fields from another resource variant before dispatch. Missing or inaccessible
+dependencies return a named safe prerequisite error, and the public API remains
+the authorization and dependency boundary.
 
 ## Registry extension contract
 

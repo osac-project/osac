@@ -1005,3 +1005,13 @@ var _ = Describe("SecurityGroups server", func() {
 		})
 	})
 })
+
+var _ = Describe("SecurityGroup rule validation", func() {
+	It("does not duplicate the field and index in validation errors", func() {
+		err := validateSecurityRule(privatev1.SecurityRule_builder{}.Build(), "ingress", 0)
+
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("ingress[0]: protocol is required"))
+		Expect(err.Error()).ToNot(ContainSubstring("ingress rule at index 0"))
+	})
+})

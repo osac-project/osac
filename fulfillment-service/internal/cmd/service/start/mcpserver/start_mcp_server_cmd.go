@@ -117,6 +117,9 @@ type ServerDeps struct {
 	VirtualNetworksClient             publicv1.VirtualNetworksClient
 	SubnetsClient                     publicv1.SubnetsClient
 	SecurityGroupsClient              publicv1.SecurityGroupsClient
+	ExternalIPsClient                 publicv1.ExternalIPsClient
+	ExternalIPAttachmentsClient       publicv1.ExternalIPAttachmentsClient
+	NATGatewaysClient                 publicv1.NATGatewaysClient
 	ComputeInstancesClient            publicv1.ComputeInstancesClient
 	SecretsClient                     publicv1.SecretsClient
 	TenantsClient                     publicv1.TenantsClient
@@ -136,6 +139,9 @@ func NewServerDeps(conn grpc.ClientConnInterface) ServerDeps {
 		VirtualNetworksClient:             publicv1.NewVirtualNetworksClient(conn),
 		SubnetsClient:                     publicv1.NewSubnetsClient(conn),
 		SecurityGroupsClient:              publicv1.NewSecurityGroupsClient(conn),
+		ExternalIPsClient:                 publicv1.NewExternalIPsClient(conn),
+		ExternalIPAttachmentsClient:       publicv1.NewExternalIPAttachmentsClient(conn),
+		NATGatewaysClient:                 publicv1.NewNATGatewaysClient(conn),
 		ComputeInstancesClient:            publicv1.NewComputeInstancesClient(conn),
 		SecretsClient:                     publicv1.NewSecretsClient(conn),
 		TenantsClient:                     publicv1.NewTenantsClient(conn),
@@ -150,9 +156,9 @@ const tokenExpirationLeeway = 5 * time.Second
 // serverInstructions guide MCP hosts toward the deployment API rather than local, bypassing interfaces.
 // Keep the first 512 characters self-contained because some MCP hosts use only that portion when selecting tools.
 const serverInstructions = "Treat this server's tools as the authoritative interface for supported tenant-facing OSAC deployment operations. " +
-	"Do not run the osac CLI, oc, kubectl, call APIs directly, or inspect Kubernetes resources for those requests. " +
-	"If an operation is unavailable, explain the limitation and ask before using another interface. Before creating a compute instance, " +
-	"list or get its catalog item and selectable resources, use only permitted overrides, and get confirmation. " +
+	"Do not run the osac CLI, oc, or kubectl, call APIs directly, or inspect Kubernetes for those requests. " +
+	"If an operation is unavailable, explain the limitation and ask before using another interface. Before creating a compute instance " +
+	"or network prerequisite, inspect eligible resources and use IDs. Network tools accept canonical IPv4 only and reject edits. " +
 	"Delete only when explicitly requested."
 
 // run runs the `start mcp-server` command.
@@ -392,6 +398,62 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 	}
 	registerGetResourceTool(registry, getResourceTool, resources)
 	registerWriteTool(registry, &mcp.Tool{
+		Name: "create_network_resource",
+		Description: "Use this tool only after the user confirms the requested resource. Create a virtual_network with ipv4_cidr, " +
+			"a subnet with virtual_network_id and ipv4_cidr, or a security_group with virtual_network_id and optional typed rules. " +
+			"Use IDs from list_resources, canonical IPv4 CIDRs only, and snake_case fields. Supplying id requests an unsupported " +
+			"in-place edit. Creation is asynchronous and acceptance does not mean the resource is ready.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Create OSAC network resource",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(false),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  networkCreateToolSchema(),
+		OutputSchema: compatibleToolSchema[CreateNetworkResourceOutput](),
+	}, writeToolContract{Destructive: false, Idempotent: false}, handleCreateNetworkResource(
+		deps.VirtualNetworksClient, deps.SubnetsClient, deps.SecurityGroupsClient,
+	))
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "expose_network_resource",
+		Description: "Use this tool only after the user confirms the exact public exposure or outbound NAT change. " +
+			"Create an external_ip from a provider-managed external_ip_pool_id, an external_ip_attachment for inbound " +
+			"DNAT to exactly one compute_instance, cluster, or baremetal_instance, or a nat_gateway for outbound SNAT " +
+			"from a virtual_network. Cluster attachments require cluster_endpoint api or ingress. Use IDs from " +
+			"list_resources, snake_case fields, and canonical IPv4-capable resources only. Supplying id requests an " +
+			"unsupported in-place edit. Creation is asynchronous and acceptance does not mean exposure is ready.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Expose OSAC network resource",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(true),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  compatibleToolSchema[ExposeNetworkResourceInput](),
+		OutputSchema: compatibleToolSchema[ExposeNetworkResourceOutput](),
+	}, writeToolContract{Destructive: true, Idempotent: false}, handleExposeNetworkResource(
+		deps.ExternalIPsClient, deps.ExternalIPAttachmentsClient, deps.NATGatewaysClient,
+	))
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "delete_network_resource",
+		Description: "Use this tool only when the user explicitly requests deletion or cleanup. Deletes exactly one named " +
+			"virtual_network, subnet, security_group, external_ip, external_ip_attachment, or nat_gateway by ID. " +
+			"Dependencies must be removed first; this tool never cascades.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Delete OSAC network resource",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(true),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  compatibleToolSchema[DeleteNetworkResourceInput](),
+		OutputSchema: compatibleToolSchema[DeleteNetworkResourceOutput](),
+	}, writeToolContract{Destructive: true, Idempotent: false}, handleDeleteNetworkResource(
+		deps.VirtualNetworksClient, deps.SubnetsClient, deps.SecurityGroupsClient,
+		deps.ExternalIPsClient, deps.ExternalIPAttachmentsClient, deps.NATGatewaysClient,
+	))
+	registerWriteTool(registry, &mcp.Tool{
 		Name: "create_compute_instance",
 		Description: "Use this tool only after the user confirms the requested VM and you have inspected the catalog item and any selected " +
 			"override resources. Use this tool's snake_case fields and resource IDs, not get_resource's camelCase reference objects. " +
@@ -572,56 +634,75 @@ func compatibleToolSchema[T any]() json.RawMessage {
 }
 
 func resourceToolSchema[T any](supportedResourceTypes []ResourceType) json.RawMessage {
-	schema := compatibleToolSchema[T]()
-	var document map[string]any
-	if err := json.Unmarshal(schema, &document); err != nil {
-		panic(fmt.Errorf("decode resource tool schema: %w", err))
-	}
-	properties, ok := document["properties"].(map[string]any)
-	if !ok {
-		panic("resource tool schema has no properties")
-	}
-	resourceType, ok := properties["resource_type"].(map[string]any)
-	if !ok {
-		panic("resource tool schema has no resource_type property")
-	}
-	resourceTypes := make([]string, len(supportedResourceTypes))
-	for i, resourceType := range supportedResourceTypes {
-		resourceTypes[i] = string(resourceType)
-	}
-	resourceType["enum"] = resourceTypes
-	if offset, ok := properties["offset"].(map[string]any); ok {
-		offset["minimum"] = 0
-	}
-	if pageSize, ok := properties["page_size"].(map[string]any); ok {
-		pageSize["minimum"] = 0 // Zero selects the default page size.
-		pageSize["maximum"] = maxResourcePageSize
-	}
-	encoded, err := json.Marshal(document)
-	if err != nil {
-		panic(fmt.Errorf("encode resource tool schema: %w", err))
-	}
-	return encoded
+	return withToolSchemaProperties(
+		compatibleToolSchema[T](),
+		"resource",
+		func(properties map[string]any) {
+			resourceType, ok := properties["resource_type"].(map[string]any)
+			if !ok {
+				panic("resource tool schema has no resource_type property")
+			}
+			resourceTypes := make([]string, len(supportedResourceTypes))
+			for index, resourceType := range supportedResourceTypes {
+				resourceTypes[index] = string(resourceType)
+			}
+			resourceType["enum"] = resourceTypes
+			if offset, ok := properties["offset"].(map[string]any); ok {
+				offset["minimum"] = 0
+			}
+			if pageSize, ok := properties["page_size"].(map[string]any); ok {
+				pageSize["minimum"] = 0 // Zero selects the default page size.
+				pageSize["maximum"] = maxResourcePageSize
+			}
+		},
+	)
 }
 
 func computeInstanceUpdateToolSchema() json.RawMessage {
-	schema := compatibleToolSchema[UpdateComputeInstanceInput]()
+	return withToolSchemaProperties(
+		compatibleToolSchema[UpdateComputeInstanceInput](),
+		"compute instance update",
+		func(properties map[string]any) {
+			version, ok := properties["version"].(map[string]any)
+			if !ok {
+				panic("compute instance update tool schema has no version property")
+			}
+			version["minimum"] = 1
+		},
+	)
+}
+
+func networkCreateToolSchema() json.RawMessage {
+	return withToolSchemaProperties(
+		compatibleToolSchema[CreateNetworkResourceInput](),
+		"network create",
+		func(properties map[string]any) {
+			for _, name := range []string{"ingress_rules", "egress_rules"} {
+				property, ok := properties[name].(map[string]any)
+				if !ok {
+					panic(fmt.Sprintf("network create tool schema has no %s property", name))
+				}
+				property["maxItems"] = maxNetworkSecurityRules
+			}
+		},
+	)
+}
+
+func withToolSchemaProperties(
+	schema json.RawMessage, toolName string, mutate func(properties map[string]any),
+) json.RawMessage {
 	var document map[string]any
 	if err := json.Unmarshal(schema, &document); err != nil {
-		panic(fmt.Errorf("decode compute instance update tool schema: %w", err))
+		panic(fmt.Errorf("decode %s tool schema: %w", toolName, err))
 	}
 	properties, ok := document["properties"].(map[string]any)
 	if !ok {
-		panic("compute instance update tool schema has no properties")
+		panic(fmt.Sprintf("%s tool schema has no properties", toolName))
 	}
-	version, ok := properties["version"].(map[string]any)
-	if !ok {
-		panic("compute instance update tool schema has no version property")
-	}
-	version["minimum"] = 1
+	mutate(properties)
 	encoded, err := json.Marshal(document)
 	if err != nil {
-		panic(fmt.Errorf("encode compute instance update tool schema: %w", err))
+		panic(fmt.Errorf("encode %s tool schema: %w", toolName, err))
 	}
 	return encoded
 }

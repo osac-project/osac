@@ -16,6 +16,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -184,7 +185,9 @@ func (m *mockInstanceTypesClient) Get(
 
 type mockSubnetsClient struct {
 	publicv1.SubnetsClient
-	getFunc func(context.Context, *publicv1.SubnetsGetRequest, ...grpc.CallOption) (*publicv1.SubnetsGetResponse, error)
+	getFunc    func(context.Context, *publicv1.SubnetsGetRequest, ...grpc.CallOption) (*publicv1.SubnetsGetResponse, error)
+	createFunc func(context.Context, *publicv1.SubnetsCreateRequest, ...grpc.CallOption) (*publicv1.SubnetsCreateResponse, error)
+	deleteFunc func(context.Context, *publicv1.SubnetsDeleteRequest, ...grpc.CallOption) (*publicv1.SubnetsDeleteResponse, error)
 }
 
 func (m *mockSubnetsClient) Get(
@@ -193,15 +196,41 @@ func (m *mockSubnetsClient) Get(
 	return m.getFunc(ctx, request, options...)
 }
 
+func (m *mockSubnetsClient) Create(
+	ctx context.Context, request *publicv1.SubnetsCreateRequest, options ...grpc.CallOption,
+) (*publicv1.SubnetsCreateResponse, error) {
+	return m.createFunc(ctx, request, options...)
+}
+
+func (m *mockSubnetsClient) Delete(
+	ctx context.Context, request *publicv1.SubnetsDeleteRequest, options ...grpc.CallOption,
+) (*publicv1.SubnetsDeleteResponse, error) {
+	return m.deleteFunc(ctx, request, options...)
+}
+
 type mockSecurityGroupsClient struct {
 	publicv1.SecurityGroupsClient
-	listFunc func(context.Context, *publicv1.SecurityGroupsListRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsListResponse, error)
+	listFunc   func(context.Context, *publicv1.SecurityGroupsListRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsListResponse, error)
+	createFunc func(context.Context, *publicv1.SecurityGroupsCreateRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsCreateResponse, error)
+	deleteFunc func(context.Context, *publicv1.SecurityGroupsDeleteRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsDeleteResponse, error)
 }
 
 func (m *mockSecurityGroupsClient) List(
 	ctx context.Context, request *publicv1.SecurityGroupsListRequest, options ...grpc.CallOption,
 ) (*publicv1.SecurityGroupsListResponse, error) {
 	return m.listFunc(ctx, request, options...)
+}
+
+func (m *mockSecurityGroupsClient) Create(
+	ctx context.Context, request *publicv1.SecurityGroupsCreateRequest, options ...grpc.CallOption,
+) (*publicv1.SecurityGroupsCreateResponse, error) {
+	return m.createFunc(ctx, request, options...)
+}
+
+func (m *mockSecurityGroupsClient) Delete(
+	ctx context.Context, request *publicv1.SecurityGroupsDeleteRequest, options ...grpc.CallOption,
+) (*publicv1.SecurityGroupsDeleteResponse, error) {
+	return m.deleteFunc(ctx, request, options...)
 }
 
 func requestWithToken(rawToken string) *mcp.CallToolRequest {
@@ -285,6 +314,155 @@ var _ = Describe("handleListResources", func() {
 		Expect(capturedFilter).To(Equal(`this.id == "project-1"`))
 		Expect(capturedOffset).To(Equal(int32(4)))
 		Expect(capturedLimit).To(Equal(int32(25)))
+	})
+
+	It("Lists and gets public exposure resources through registered clients", func() {
+		capturedTokens := make(map[ResourceType]string)
+		capturedFilters := make(map[ResourceType]string)
+		capturedOffsets := make(map[ResourceType]int32)
+		capturedLimits := make(map[ResourceType]int32)
+		externalIPs := &mockExternalIPsClient{
+			listFunc: func(
+				ctx context.Context, request *publicv1.ExternalIPsListRequest, _ ...grpc.CallOption,
+			) (*publicv1.ExternalIPsListResponse, error) {
+				capturedTokens[ResourceTypeExternalIP] = forwardedToken(ctx)
+				capturedFilters[ResourceTypeExternalIP] = request.GetFilter()
+				capturedOffsets[ResourceTypeExternalIP] = request.GetOffset()
+				capturedLimits[ResourceTypeExternalIP] = request.GetLimit()
+				return publicv1.ExternalIPsListResponse_builder{
+					Size: 1, Total: 1,
+					Items: []*publicv1.ExternalIP{publicv1.ExternalIP_builder{
+						Id:       "external-ip-1",
+						Metadata: publicv1.Metadata_builder{Name: "address"}.Build(),
+						Status: publicv1.ExternalIPStatus_builder{
+							State: publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+						}.Build(),
+					}.Build()},
+				}.Build(), nil
+			},
+			getFunc: func(
+				ctx context.Context, request *publicv1.ExternalIPsGetRequest, _ ...grpc.CallOption,
+			) (*publicv1.ExternalIPsGetResponse, error) {
+				capturedTokens[ResourceTypeExternalIP] = forwardedToken(ctx)
+				Expect(request.GetId()).To(Equal("external-ip-1"))
+				return publicv1.ExternalIPsGetResponse_builder{
+					Object: publicv1.ExternalIP_builder{
+						Id:       "external-ip-1",
+						Metadata: publicv1.Metadata_builder{Name: "address"}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+		attachments := &mockExternalIPAttachmentsClient{
+			listFunc: func(
+				ctx context.Context, request *publicv1.ExternalIPAttachmentsListRequest, _ ...grpc.CallOption,
+			) (*publicv1.ExternalIPAttachmentsListResponse, error) {
+				capturedTokens[ResourceTypeExternalIPAttachment] = forwardedToken(ctx)
+				capturedFilters[ResourceTypeExternalIPAttachment] = request.GetFilter()
+				capturedOffsets[ResourceTypeExternalIPAttachment] = request.GetOffset()
+				capturedLimits[ResourceTypeExternalIPAttachment] = request.GetLimit()
+				return publicv1.ExternalIPAttachmentsListResponse_builder{
+					Size: 1, Total: 1,
+					Items: []*publicv1.ExternalIPAttachment{publicv1.ExternalIPAttachment_builder{
+						Id:       "external-ip-attachment-1",
+						Metadata: publicv1.Metadata_builder{Name: "attachment"}.Build(),
+						Status: publicv1.ExternalIPAttachmentStatus_builder{
+							State: publicv1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY,
+						}.Build(),
+					}.Build()},
+				}.Build(), nil
+			},
+			getFunc: func(
+				ctx context.Context, request *publicv1.ExternalIPAttachmentsGetRequest, _ ...grpc.CallOption,
+			) (*publicv1.ExternalIPAttachmentsGetResponse, error) {
+				capturedTokens[ResourceTypeExternalIPAttachment] = forwardedToken(ctx)
+				Expect(request.GetId()).To(Equal("external-ip-attachment-1"))
+				return publicv1.ExternalIPAttachmentsGetResponse_builder{
+					Object: publicv1.ExternalIPAttachment_builder{
+						Id:       "external-ip-attachment-1",
+						Metadata: publicv1.Metadata_builder{Name: "attachment"}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+		natGateways := &mockNATGatewaysClient{
+			listFunc: func(
+				ctx context.Context, request *publicv1.NATGatewaysListRequest, _ ...grpc.CallOption,
+			) (*publicv1.NATGatewaysListResponse, error) {
+				capturedTokens[ResourceTypeNATGateway] = forwardedToken(ctx)
+				capturedFilters[ResourceTypeNATGateway] = request.GetFilter()
+				capturedOffsets[ResourceTypeNATGateway] = request.GetOffset()
+				capturedLimits[ResourceTypeNATGateway] = request.GetLimit()
+				return publicv1.NATGatewaysListResponse_builder{
+					Size: 1, Total: 1,
+					Items: []*publicv1.NATGateway{publicv1.NATGateway_builder{
+						Id:       "nat-gateway-1",
+						Metadata: publicv1.Metadata_builder{Name: "egress"}.Build(),
+						Status: publicv1.NATGatewayStatus_builder{
+							State: publicv1.NATGatewayState_NAT_GATEWAY_STATE_READY,
+						}.Build(),
+					}.Build()},
+				}.Build(), nil
+			},
+			getFunc: func(
+				ctx context.Context, request *publicv1.NATGatewaysGetRequest, _ ...grpc.CallOption,
+			) (*publicv1.NATGatewaysGetResponse, error) {
+				capturedTokens[ResourceTypeNATGateway] = forwardedToken(ctx)
+				Expect(request.GetId()).To(Equal("nat-gateway-1"))
+				return publicv1.NATGatewaysGetResponse_builder{
+					Object: publicv1.NATGateway_builder{
+						Id:       "nat-gateway-1",
+						Metadata: publicv1.Metadata_builder{Name: "egress"}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+		deps := ServerDeps{
+			ExternalIPsClient:           externalIPs,
+			ExternalIPAttachmentsClient: attachments,
+			NATGatewaysClient:           natGateways,
+		}
+		testCases := []struct {
+			resourceType ResourceType
+			id           string
+			name         string
+			state        string
+		}{
+			{ResourceTypeExternalIP, "external-ip-1", "address", "EXTERNAL_IP_STATE_ALLOCATED"},
+			{ResourceTypeExternalIPAttachment, "external-ip-attachment-1", "attachment", "EXTERNAL_IP_ATTACHMENT_STATE_READY"},
+			{ResourceTypeNATGateway, "nat-gateway-1", "egress", "NAT_GATEWAY_STATE_READY"},
+		}
+
+		for _, testCase := range testCases {
+			By("listing " + string(testCase.resourceType))
+			_, list, err := handleListResources(newResourceRegistry(deps))(
+				context.Background(), requestWithToken("raw-bearer-value"), ListResourcesInput{
+					ResourceType: testCase.resourceType,
+					Filter:       fmt.Sprintf("this.id == %q", testCase.id),
+					Offset:       2,
+					PageSize:     20,
+				},
+			)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(list.Items).To(Equal([]ResourceSummary{{
+				ID: testCase.id, Name: testCase.name, State: testCase.state,
+			}}))
+			Expect(capturedTokens[testCase.resourceType]).To(Equal("Bearer api-for-raw-bearer-value"))
+			Expect(capturedFilters[testCase.resourceType]).To(Equal(fmt.Sprintf("this.id == %q", testCase.id)))
+			Expect(capturedOffsets[testCase.resourceType]).To(Equal(int32(2)))
+			Expect(capturedLimits[testCase.resourceType]).To(Equal(int32(20)))
+
+			By("getting " + string(testCase.resourceType))
+			_, output, err := handleGetResource(newResourceRegistry(deps))(
+				context.Background(), requestWithToken("raw-bearer-value"), GetResourceInput{
+					ResourceType: testCase.resourceType,
+					ID:           testCase.id,
+				},
+			)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(output.Resource).To(HaveKeyWithValue("id", testCase.id))
+			Expect(capturedTokens[testCase.resourceType]).To(Equal("Bearer api-for-raw-bearer-value"))
+		}
 	})
 
 	It("Lists Secret references only and never Secret bytes", func() {

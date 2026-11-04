@@ -213,7 +213,7 @@ func (c *NetBoxClient) netBoxHostFromDevice(namespace string, device netboxclien
 		HostClass:       c.hostClass,
 		ProvisionState:  shared.OsacDefaultProvisionStateValue,
 		ManagedBy:       shared.OsacDefaultManagedByValue,
-		Ready:           true,
+		Available:       true,
 	}
 }
 
@@ -344,7 +344,7 @@ func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connec
 	if err != nil {
 		return nil, fmt.Errorf("failed to check BareMetalHost availability for NetBox host: %w", err)
 	}
-	host.Ready = available
+	host.Available = available
 	return host, nil
 }
 

@@ -359,11 +359,11 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 	}
 
 	// The host is reserved but the inventory backend may report it as not yet
-	// ready for provisioning (e.g. underlying hardware still completing
+	// available for provisioning (e.g. underlying hardware still completing
 	// registration/inspection). Keep the instance in Allocating (don't set
-	// HostClass/Allocated yet) and requeue until the host reports Ready.
-	if !inventoryHost.Ready {
-		log.V(1).Info("Host reserved but not ready yet, requeuing",
+	// HostClass/Allocated yet) and requeue until the host reports Available.
+	if !inventoryHost.Available {
+		log.V(1).Info("Host reserved but not available yet, requeuing",
 			"InventoryHostID", bareMetalInstance.Spec.ExternalHostID)
 		return ctrl.Result{RequeueAfter: r.HostReadinessPollIntervalDuration}, nil
 	}

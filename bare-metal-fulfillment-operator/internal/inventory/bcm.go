@@ -358,7 +358,7 @@ func (c *BCMClient) AssignHost(ctx context.Context, inventoryHostID string, bare
 		return nil, err
 	}
 	host := c.buildHost(device)
-	host.Ready = available
+	host.Available = available
 	return host, nil
 }
 

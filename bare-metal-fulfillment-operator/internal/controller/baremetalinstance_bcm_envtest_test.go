@@ -270,7 +270,7 @@ func createBCMBMI(name, resourceClass string) {
 // finalizer → FindFreeHost → AssignHost(create BMH, not ready) and then, after
 // the BMH is marked ready, one more reconcile to reach HostClass/Progressing.
 func driveToAllocated(reconciler *BareMetalInstanceReconciler, bmiName, hostname string) {
-	// finalizer, FindFreeHost (sets ExternalHostID), AssignHost (creates BMH, Ready=false)
+	// finalizer, FindFreeHost (sets ExternalHostID), AssignHost (creates BMH, Available=false)
 	reconcileBCM(reconciler, bmiName, 3)
 	ExpectWithOffset(1, bmhExistsInNS(hostname)).To(BeTrue(), "AssignHost should have created the BMH")
 	markBMHReady(hostname)

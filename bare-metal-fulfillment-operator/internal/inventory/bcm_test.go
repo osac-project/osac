@@ -821,7 +821,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			host, err := client.AssignHost(ctx, bmhNamespace+"/node001", "bmi-123", nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).NotTo(BeNil())
-			Expect(host.Ready).To(BeFalse())
+			Expect(host.Available).To(BeFalse())
 		})
 
 		It("should return Host with Ready=true when the BareMetalHost is ready", func(ctx context.Context) {
@@ -835,7 +835,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			host, err := client.AssignHost(ctx, bmhNamespace+"/node001", "bmi-123", nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).NotTo(BeNil())
-			Expect(host.Ready).To(BeTrue())
+			Expect(host.Available).To(BeTrue())
 		})
 
 		It("should surface an error when the BareMetalHost is in an error state", func(ctx context.Context) {

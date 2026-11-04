@@ -234,7 +234,7 @@ func cleanupBCMBMI(name string) { cleanupBMIInNS(bcmTestNS, name) }
 
 func cleanupBCMBMH(name string) { cleanupBMHInNS(bcmTestNS, name) }
 
-// markBMHReady flips a BMH's status to available+OK so IsBMHReady returns true.
+// markBMHReady flips a BMH's status to available+OK so IsBMHAvailable returns true.
 // It stands in for the Metal3 baremetal-operator, which is not running in
 // envtest (mirrors the Metal3 suite's "simulate BMO reconciliation" step).
 func markBMHReady(name string) {
@@ -274,7 +274,7 @@ func driveToAllocated(reconciler *BareMetalInstanceReconciler, bmiName, hostname
 	reconcileBCM(reconciler, bmiName, 3)
 	ExpectWithOffset(1, bmhExistsInNS(hostname)).To(BeTrue(), "AssignHost should have created the BMH")
 	markBMHReady(hostname)
-	// AssignHost again: IsBMHReady=true → HostClass set → Progressing
+	// AssignHost again: IsBMHAvailable=true → HostClass set → Progressing
 	reconcileBCM(reconciler, bmiName, 1)
 }
 

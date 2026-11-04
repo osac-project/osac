@@ -409,7 +409,7 @@ func newTestNetBoxClient(api NetBoxAPI, resolver CredentialsReaderRepository) *N
 	manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
 	manager.EXPECT().EnsureBMCSecret(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	manager.EXPECT().CreateBMH(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	manager.EXPECT().IsBMHReady(gomock.Any(), gomock.Any()).Return(true, nil).AnyTimes()
+	manager.EXPECT().IsBMHAvailable(gomock.Any(), gomock.Any()).Return(true, nil).AnyTimes()
 	return newTestNetBoxClientWithManager(api, resolver, manager)
 }
 
@@ -619,12 +619,12 @@ var _ = Describe("NetBox assignment eligibility", func() {
 				bmhCreated = true
 				return nil
 			})
-		readinessCall := manager.EXPECT().IsBMHReady(gomock.Any(), "netbox-46").DoAndReturn(
+		availabilityCall := manager.EXPECT().IsBMHAvailable(gomock.Any(), "netbox-46").DoAndReturn(
 			func(context.Context, string) (bool, error) {
 				Expect(bmhCreated).To(BeTrue())
 				return true, nil
 			})
-		gomock.InOrder(ensureCall, createCall, readinessCall)
+		gomock.InOrder(ensureCall, createCall, availabilityCall)
 		client := newTestNetBoxClientWithManager(api, resolver, manager)
 
 		host, err := client.AssignHost(context.Background(), "metal3-system/netbox-46", "bmi-123", nil)
@@ -747,8 +747,8 @@ var _ = Describe("NetBox Metal3 preparation", func() {
 		manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
 		ensureCall := manager.EXPECT().EnsureBMCSecret(gomock.Any(), "netbox-46-bmc-secret", "bmc-user", "source-password").Return(nil)
 		createCall := manager.EXPECT().CreateBMH(gomock.Any(), gomock.Any()).Return(nil)
-		readinessCall := manager.EXPECT().IsBMHReady(gomock.Any(), "netbox-46").Return(false, nil)
-		gomock.InOrder(ensureCall, createCall, readinessCall)
+		availabilityCall := manager.EXPECT().IsBMHAvailable(gomock.Any(), "netbox-46").Return(false, nil)
+		gomock.InOrder(ensureCall, createCall, availabilityCall)
 		client := newTestNetBoxClientWithManager(api, &fakeCredentialsReaderRepository{credentials: testNetBoxCredentials()}, manager)
 
 		host, err := client.AssignHost(context.Background(), "metal3-system/netbox-46", "bmi-123", nil)
@@ -782,8 +782,8 @@ var _ = Describe("NetBox Metal3 preparation", func() {
 				} else {
 					createCall.Return(nil)
 					orderedCalls = append(orderedCalls, createCall)
-					readinessCall := manager.EXPECT().IsBMHReady(gomock.Any(), "netbox-46").Return(false, errors.New("readiness operation failed"))
-					orderedCalls = append(orderedCalls, readinessCall)
+					availabilityCall := manager.EXPECT().IsBMHAvailable(gomock.Any(), "netbox-46").Return(false, errors.New("availability check failed"))
+					orderedCalls = append(orderedCalls, availabilityCall)
 				}
 			}
 			orderedCallArgs := make([]any, len(orderedCalls))
@@ -806,7 +806,7 @@ var _ = Describe("NetBox Metal3 preparation", func() {
 		},
 		Entry("Secret failure", "secret", "failed to ensure BMC credentials Secret for NetBox host"),
 		Entry("BMH failure", "bmh", "failed to create BareMetalHost for NetBox host"),
-		Entry("readiness failure", "readiness", "failed to check BareMetalHost readiness for NetBox host"),
+		Entry("availability check failure", "readiness", "failed to check BareMetalHost availability for NetBox host"),
 	)
 
 	It("retries preparation for the persisted same-owner allocation without another claim PATCH", func() {
@@ -829,8 +829,8 @@ var _ = Describe("NetBox Metal3 preparation", func() {
 				return nil
 			}).Times(2)
 		createCall := manager.EXPECT().CreateBMH(gomock.Any(), gomock.Any()).Return(nil)
-		readinessCall := manager.EXPECT().IsBMHReady(gomock.Any(), "netbox-46").Return(true, nil)
-		gomock.InOrder(ensureCall, createCall, readinessCall)
+		availabilityCall := manager.EXPECT().IsBMHAvailable(gomock.Any(), "netbox-46").Return(true, nil)
+		gomock.InOrder(ensureCall, createCall, availabilityCall)
 		resolver := &fakeCredentialsReaderRepository{credentials: testNetBoxCredentials()}
 		client := newTestNetBoxClientWithManager(api, resolver, manager)
 

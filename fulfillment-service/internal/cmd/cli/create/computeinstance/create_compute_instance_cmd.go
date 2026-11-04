@@ -955,19 +955,22 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 //  1. Resolves the named ExternalIP by name or ID and fails early if it is
 //     not in ALLOCATED state (call resolveAttachableExternalIP before
 //     creating the instance).
-//  2. Polls until the ComputeInstance reaches RUNNING state.
+//  2. Polls until the ComputeInstance is ready for attachment.
 //  3. Creates an ExternalIPAttachment linking the two resources.
 func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *publicv1.ComputeInstance, eip *publicv1.ExternalIP) error {
 	if c.args.externalIP == "" {
 		return nil
 	}
 
-	// Step 3: poll until the ComputeInstance reaches RUNNING.
-	c.console.Infof(ctx, "Waiting for compute instance '%s' to reach RUNNING...\n", ci.GetMetadata().GetName())
+	// The attachment API wants the instance RUNNING, READY, and with
+	// a network address. RUNNING alone is not enough, the network
+	// can still be coming up.
+	c.console.Infof(ctx, "Waiting for compute instance '%s' to become ready for attachment...\n",
+		ci.GetMetadata().GetName())
 
-	// wait.Poll returns the zero value on error, so keep the created
-	// object for error reporting and the attachment reference.
-	running, err := wait.Poll(ctx, wait.Options[*publicv1.ComputeInstance]{
+	// wait.Poll gives back a zero object on error, keep the created
+	// one for error reporting.
+	ready, err := wait.Poll(ctx, wait.Options[*publicv1.ComputeInstance]{
 		Fetch: func(ctx context.Context) (*publicv1.ComputeInstance, error) {
 			resp, err := c.computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
 				Id: ci.GetId(),
@@ -978,9 +981,12 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 			return resp.GetObject(), nil
 		},
 		StateOf: func(r *publicv1.ComputeInstance) string {
+			if computeInstanceAttachable(r) {
+				return "ATTACHABLE"
+			}
 			return r.GetStatus().GetState().String()
 		},
-		TargetState: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING.String(),
+		TargetState: "ATTACHABLE",
 		FailureStates: []string{
 			publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED.String(),
 			publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING.String(),
@@ -992,15 +998,19 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("compute instance '%s' (ID: %s) did not reach RUNNING: %w",
+		return fmt.Errorf("compute instance '%s' (ID: %s) did not become ready for attachment: %w",
 			ci.GetMetadata().GetName(), ci.GetId(), err)
 	}
-	ci = running
+	ci = ready
 
-	// Step 4: create the attachment.
+	// The API requires a name, build one from the external IP.
+	attachName := eip.GetMetadata().GetName()
+	if attachName == "" {
+		attachName = fmt.Sprintf("eip-%s", eip.GetId())
+	}
 	attachResp, err := c.externalIPAttachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 		Object: publicv1.ExternalIPAttachment_builder{
-			Metadata: metautil.ForCreate(ctx, "").Build(),
+			Metadata: metautil.ForCreate(ctx, attachName+"-attachment").Build(),
 			Spec: publicv1.ExternalIPAttachmentSpec_builder{
 				ExternalIp:      &publicv1.ExternalIPLocalReference{Id: eip.GetId()},
 				ComputeInstance: &publicv1.ComputeInstanceLocalReference{Id: ci.GetId()},
@@ -1020,6 +1030,28 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 		ci.GetMetadata().GetName(), attachResp.GetObject().GetId(),
 	)
 	return nil
+}
+
+// computeInstanceAttachable: the attachment API refuses instances that
+// are not RUNNING and READY with a network address.
+func computeInstanceAttachable(ci *publicv1.ComputeInstance) bool {
+	if ci.GetStatus().GetState() != publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING {
+		return false
+	}
+	ready := false
+	for _, condition := range ci.GetStatus().GetConditions() {
+		if condition.GetType() == publicv1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_READY &&
+			condition.GetStatus() == publicv1.ConditionStatus_CONDITION_STATUS_TRUE {
+			ready = true
+			break
+		}
+	}
+	for _, status := range ci.GetStatus().GetComputeNetworkAttachmentStatuses() {
+		if status.GetIpAddress() != "" {
+			return ready
+		}
+	}
+	return false
 }
 
 // resolveAttachableExternalIP resolves the --externalip value by name or ID

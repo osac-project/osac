@@ -89,7 +89,7 @@ global:
 # Used by the validation and CA identity hook Jobs. With Netris CA validation
 # enabled the image must provide kubectl, sh, grep, mktemp, rm and openssl (the
 # hooks fail with ERROR: NETRIS_CA_* instead of skipping the checks).
-cliImage: quay.io/openshift/origin-cli:4.20.0
+cliImage: quay.io/openshift/origin-cli:4.22.0
 
 # Shared PostgreSQL host for the db-init hook.
 dbInit:

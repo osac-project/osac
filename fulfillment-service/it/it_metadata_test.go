@@ -305,11 +305,11 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 			name string
 			id   string
 		}{
-			{name: "DiskImages", id: createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName()).GetId()},
-			{name: "InstanceTypes", id: createCatalogItemComputeInstanceTypeFixture(ctx)},
+			{name: "DiskImages", id: createDiskImageFixture(ctx, "shared", resourceFixtureName()).GetId()},
+			{name: "InstanceTypes", id: createComputeInstanceTypeFixture(ctx)},
 			{name: "StorageTiers", id: createCatalogItemStorageTierFixture(ctx)},
 			{name: "ClusterTemplates", id: createCatalogItemClusterTemplateFixture(ctx, nil, nil)},
-			{name: "ComputeInstanceTemplates", id: createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)},
+			{name: "ComputeInstanceTemplates", id: createComputeInstanceTemplateFixture(ctx, nil, nil)},
 			{name: "BareMetalInstanceTemplates", id: createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)},
 			{name: "BareMetalInstanceTypes", id: createCatalogItemBareMetalInstanceTypeFixture(ctx, "")},
 			{name: "ClusterVersions", id: createCatalogItemClusterVersionFixture(ctx, "4.18.0")},
@@ -333,7 +333,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		membership, err := memberships.Create(ctx, privatev1.ProjectMembershipsCreateRequest_builder{
 			Object: privatev1.ProjectMembership_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name:    catalogItemFixtureName(),
+					Name:    resourceFixtureName(),
 					Tenant:  "users",
 					Project: projectName,
 				}.Build(),
@@ -356,7 +356,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		catalogAdmin := tool.ExternalView().AdminConn()
 		computeTemplateID := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		computeItem := createComputeInstanceCatalogItemFixture(ctx, catalogAdmin, publicv1.ComputeInstanceCatalogItem_builder{
-			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: "users"}.Build(),
+			Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: "users"}.Build(),
 			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: computeTemplateID}.Build(),
 			Published: true,
 			Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
@@ -372,7 +372,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 
 		clusterTemplateID := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 		clusterCatalogItem := createClusterCatalogItemFixture(ctx, catalogAdmin, publicv1.ClusterCatalogItem_builder{
-			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: "users"}.Build(),
+			Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: "users"}.Build(),
 			Template:  publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID}.Build(),
 			Title:     "Metadata integration cluster offering",
 			Published: true,
@@ -384,7 +384,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 
 		bareMetalTemplateID := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
 		bareMetalCatalogItem := createBareMetalInstanceCatalogItemFixture(ctx, catalogAdmin, publicv1.BareMetalInstanceCatalogItem_builder{
-			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: "users"}.Build(),
+			Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: "users"}.Build(),
 			Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: bareMetalTemplateID}.Build(),
 			Title:     "Metadata integration bare metal offering",
 			Published: true,
@@ -396,11 +396,11 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 
 		By("creating a halted bare-metal instance without invoking provider provisioning")
 		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
-		bareMetalImage := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+		bareMetalImage := createDiskImageFixture(ctx, "shared", resourceFixtureName())
 		bareMetalInstanceTypeID := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)
 		bareMetalInstanceTemplateID := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
 		haltedBareMetalItem := createBareMetalInstanceCatalogItemFixture(ctx, catalogAdmin, publicv1.BareMetalInstanceCatalogItem_builder{
-			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: "users"}.Build(),
+			Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: "users"}.Build(),
 			Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: bareMetalInstanceTemplateID}.Build(),
 			Published: true,
 			Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
@@ -424,7 +424,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		}{name: "BareMetalInstances", id: bareMetalInstance.GetId()})
 
 		By("creating an ephemeral tenant and exercising its private metadata maps")
-		tenantName := catalogItemFixtureName()
+		tenantName := resourceFixtureName()
 		tenantID := createTenant(ctx, privatev1.NewTenantsClient(tool.InternalView().AdminConn()), tenantName)
 		fixtures = append(fixtures, struct {
 			name string
@@ -437,7 +437,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		identityProviders := privatev1.NewIdentityProvidersClient(tool.InternalView().AdminConn())
 		identityProvider, err := identityProviders.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
 			Object: privatev1.IdentityProvider_builder{
-				Metadata: privatev1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: tenantName}.Build(),
+				Metadata: privatev1.Metadata_builder{Name: resourceFixtureName(), Tenant: tenantName}.Build(),
 				Spec: privatev1.IdentityProviderSpec_builder{
 					Title:   "Metadata integration identity provider",
 					Enabled: true,
@@ -464,7 +464,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		backends := privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
 		backend, err := backends.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
 			Object: privatev1.StorageBackend_builder{
-				Metadata: privatev1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+				Metadata: privatev1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 				Spec: privatev1.StorageBackendSpec_builder{
 					Provider:   "netapp",
 					Endpoint:   "https://storage.example.org",
@@ -489,7 +489,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		By("creating a role, user, and role binding")
 		userID := createMetadataUserFixture(ctx)
 		roles := privatev1.NewRolesClient(tool.InternalView().AdminConn())
-		roleName := catalogItemFixtureName()
+		roleName := resourceFixtureName()
 		role, err := roles.Create(ctx, privatev1.RolesCreateRequest_builder{
 			Object: privatev1.Role_builder{Metadata: privatev1.Metadata_builder{Name: roleName}.Build()}.Build(),
 		}.Build())
@@ -501,7 +501,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		roleBindings := privatev1.NewRoleBindingsClient(tool.InternalView().AdminConn())
 		binding, err := roleBindings.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
 			Object: privatev1.RoleBinding_builder{
-				Metadata: privatev1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+				Metadata: privatev1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
 					Role:  privatev1.RoleReference_builder{Name: roleName}.Build(),
 					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: userID}.Build()},

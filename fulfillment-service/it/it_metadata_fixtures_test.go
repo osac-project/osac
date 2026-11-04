@@ -637,7 +637,7 @@ func metadataIdentityForExistingUser(
 // cleanup so Ginkgo removes the dependent object first.
 func createMetadataUserFixture(ctx context.Context) string {
 	GinkgoHelper()
-	username := catalogItemFixtureName()
+	username := resourceFixtureName()
 	statusCode, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPost, "/users", map[string]any{
 		"username": username,
 		"enabled":  true,
@@ -699,11 +699,11 @@ func newComputeInstanceMetadataFixture(ctx context.Context, accounts metadataTes
 		return nil, fmt.Errorf("tenant administrator and tenant user must belong to the same tenant")
 	}
 
-	network := createCatalogItemNetworkFixture(ctx, accounts.tenantUser.TenantID, "")
+	network := createNetworkFixture(ctx, accounts.tenantUser.TenantID, "")
 	templateID := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 	catalogItem := createComputeInstanceCatalogItemFixture(ctx, accounts.tenantAdmin.Conn,
 		publicv1.ComputeInstanceCatalogItem_builder{
-			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+			Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
 			Published: true,
 			Fields: publicv1.ComputeInstanceCatalogItemFields_builder{

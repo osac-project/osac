@@ -269,7 +269,9 @@ These tests make no claim about physical disks, DataVolumes, CSI, Trident, FC,
 NetApp, actual VM execution, or storage-array cleanup. Registration fault
 recovery and OSAC-managed record behavior remain in the existing
 `it_compute_instance_volume_records_test.go` suite. The recorder's protocol
-contracts run with `python3 -m unittest discover -s fulfillment-service/it/testdata -p test_compute_storage_aap.py`.
+contracts run from `fulfillment-service/` with
+`go test -race ./it/testdata/computestorageaap`. The suite cross-compiles the Go
+recorder for its scheduled node and stages it in an unprivileged test Pod.
 
 Fulfillment registers the records before the operator checks classes. A missing
 or ambiguous mapping therefore retains those tracked records and blocks the

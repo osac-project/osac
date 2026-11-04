@@ -38,14 +38,14 @@ var _ = Describe("Version", func() {
 		templatesClient     privatev1.ClusterTemplatesClient
 		bmitName            string
 		templateId          string
-		network             catalogItemNetworkFixture
+		network             resourceNetworkFixture
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		// Version tests pin explicit ready networking so their metadata
 		// assertions survive the tenant default readiness changing to False.
-		network = createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network = createNetworkFixture(ctx, usersGroup, "")
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())

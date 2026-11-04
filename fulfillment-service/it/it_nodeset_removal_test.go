@@ -74,7 +74,7 @@ var _ = Describe("Node set removal", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+		deferResourceFixtureDeletion(func(ctx context.Context) error {
 			_, err := instanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{Id: workerBmitName}.Build())
 			return err
 		}, nil)
@@ -106,7 +106,7 @@ var _ = Describe("Node set removal", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+		deferResourceFixtureDeletion(func(ctx context.Context) error {
 			_, err := instanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{Id: storageBmitName}.Build())
 			return err
 		}, nil)
@@ -124,7 +124,7 @@ var _ = Describe("Node set removal", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+		deferResourceFixtureDeletion(func(ctx context.Context) error {
 			_, err := templatesClient.Delete(ctx, privatev1.ClusterTemplatesDeleteRequest_builder{Id: templateId}.Build())
 			return err
 		}, nil)

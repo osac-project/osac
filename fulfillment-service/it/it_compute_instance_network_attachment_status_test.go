@@ -33,7 +33,7 @@ var _ = Describe("Compute instance network attachment status", Label("compute-ne
 		publicClient := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 		created, err := publicClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 			Object: publicv1.ComputeInstance_builder{
-				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+				Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 				Spec: publicv1.ComputeInstanceSpec_builder{
 					Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},

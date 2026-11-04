@@ -300,6 +300,17 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	c.externalIPsClient = publicv1.NewExternalIPsClient(conn)
 	c.externalIPAttachmentsClient = publicv1.NewExternalIPAttachmentsClient(conn)
 
+	// Resolve the external IP for --externalip (if given) before
+	// creating anything, so a mistyped name, an ambiguous name, or an
+	// address that is not ALLOCATED fails before the instance exists.
+	var attachEIP *publicv1.ExternalIP
+	if c.args.externalIP != "" {
+		attachEIP, err = c.resolveAttachableExternalIP(ctx)
+		if err != nil {
+			return err
+		}
+	}
+
 	if c.args.catalogItem != "" {
 		// Catalog item path: resolve an ID or visible name, then skip template lookup (per D-04).
 		catalogItem, err := lookup.Find(c.args.catalogItem, "compute instance catalog item",
@@ -345,7 +356,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 		computeInstance = response.Object
 		c.console.Infof(ctx, "Created compute instance '%s'.\n", computeInstance.Id)
-		return c.maybeAttachExistingExternalIP(ctx, computeInstance)
+		return c.maybeAttachExistingExternalIP(ctx, computeInstance, attachEIP)
 	}
 
 	// Legacy template path (existing code continues below):
@@ -403,7 +414,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	computeInstance = response.Object
 	c.console.Infof(ctx, "Created compute instance '%s'.\n", computeInstance.Id)
 
-	return c.maybeAttachExistingExternalIP(ctx, computeInstance)
+	return c.maybeAttachExistingExternalIP(ctx, computeInstance, attachEIP)
 }
 
 func (c *runnerContext) sshKeyReference() (*publicv1.SecretReference, error) {
@@ -941,43 +952,22 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 }
 
 // maybeAttachExistingExternalIP is a no-op unless --externalip is provided. When set it:
-//  1. Resolves the named ExternalIP by name or ID.
-//  2. Fails early if the ExternalIP is not in ALLOCATED state.
-//  3. Polls until the ComputeInstance reaches RUNNING state.
-//  4. Creates an ExternalIPAttachment linking the two resources.
-func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *publicv1.ComputeInstance) error {
+//  1. Resolves the named ExternalIP by name or ID and fails early if it is
+//     not in ALLOCATED state (call resolveAttachableExternalIP before
+//     creating the instance).
+//  2. Polls until the ComputeInstance reaches RUNNING state.
+//  3. Creates an ExternalIPAttachment linking the two resources.
+func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *publicv1.ComputeInstance, eip *publicv1.ExternalIP) error {
 	if c.args.externalIP == "" {
 		return nil
-	}
-
-	// Step 1: resolve the ExternalIP by name or ID.
-	eip, err := lookup.Find(c.args.externalIP, "external IP", func(filter string, limit int32) ([]*publicv1.ExternalIP, error) {
-		resp, err := c.externalIPsClient.List(ctx, publicv1.ExternalIPsListRequest_builder{
-			Filter: proto.String(filter),
-			Limit:  proto.Int32(limit),
-		}.Build())
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve external IP %q: %w", c.args.externalIP, err)
-		}
-		return resp.GetItems(), nil
-	})
-	if err != nil {
-		return err
-	}
-
-	// Step 2: fail early if not ALLOCATED.
-	state := eip.GetStatus().GetState()
-	if state != publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED {
-		return fmt.Errorf(
-			"external IP %q is in state %s, must be ALLOCATED before attaching to a new compute instance",
-			eip.GetMetadata().GetName(), state.String(),
-		)
 	}
 
 	// Step 3: poll until the ComputeInstance reaches RUNNING.
 	c.console.Infof(ctx, "Waiting for compute instance '%s' to reach RUNNING...\n", ci.GetMetadata().GetName())
 
-	ci, err = wait.Poll(ctx, wait.Options[*publicv1.ComputeInstance]{
+	// wait.Poll returns the zero value on error, so keep the created
+	// object for error reporting and the attachment reference.
+	running, err := wait.Poll(ctx, wait.Options[*publicv1.ComputeInstance]{
 		Fetch: func(ctx context.Context) (*publicv1.ComputeInstance, error) {
 			resp, err := c.computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
 				Id: ci.GetId(),
@@ -1002,8 +992,10 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("compute instance '%s' did not reach RUNNING: %w", ci.GetMetadata().GetName(), err)
+		return fmt.Errorf("compute instance '%s' (ID: %s) did not reach RUNNING: %w",
+			ci.GetMetadata().GetName(), ci.GetId(), err)
 	}
+	ci = running
 
 	// Step 4: create the attachment.
 	attachResp, err := c.externalIPAttachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
@@ -1028,6 +1020,34 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 		ci.GetMetadata().GetName(), attachResp.GetObject().GetId(),
 	)
 	return nil
+}
+
+// resolveAttachableExternalIP resolves the --externalip value by name or ID
+// and verifies the address is ALLOCATED. Call it before creating the compute
+// instance so an unusable external IP fails before any resource exists.
+func (c *runnerContext) resolveAttachableExternalIP(ctx context.Context) (*publicv1.ExternalIP, error) {
+	eip, err := lookup.Find(c.args.externalIP, "external IP", func(filter string, limit int32) ([]*publicv1.ExternalIP, error) {
+		resp, err := c.externalIPsClient.List(ctx, publicv1.ExternalIPsListRequest_builder{
+			Filter: proto.String(filter),
+			Limit:  proto.Int32(limit),
+		}.Build())
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve external IP %q: %w", c.args.externalIP, err)
+		}
+		return resp.GetItems(), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	state := eip.GetStatus().GetState()
+	if state != publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED {
+		return nil, fmt.Errorf(
+			"external IP %q is in state %s, must be ALLOCATED before attaching to a new compute instance",
+			eip.GetMetadata().GetName(), state.String(),
+		)
+	}
+	return eip, nil
 }
 
 // parseAdditionalDisks parses disk specifications in key=value format:

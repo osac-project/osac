@@ -255,6 +255,34 @@ def test_cluster_references_satisfy_poll_until_contract() -> None:
     )
 
 
+def test_single_worker_upgrade_workaround_patches_expected_resources() -> None:
+    """The temporary OSAC-7087 workaround patches the exact drain gates."""
+    k8s = Mock()
+    workload_k8s = Mock()
+    k8s.patch.return_value = ("", 0)
+    workload_k8s.patch.return_value = ("", 0)
+    refs = scenario._ClusterRefs(
+        uuid="cluster-id",
+        co_name="order",
+        namespace="namespace",
+        hc_name="hosted",
+        pool_names={"compute": "compute-pool"},
+    )
+
+    scenario._apply_single_worker_upgrade_workaround(k8s=k8s, workload_k8s=workload_k8s, refs=refs, node_set="compute")
+
+    assert k8s.patch.call_args.kwargs == {
+        "resource": "nodepools.hypershift.openshift.io",
+        "name": "compute-pool",
+        "patch": '{"spec":{"management":{"inPlace":{"maxUnavailable":1}}}}',
+    }
+    assert workload_k8s.patch.call_args.kwargs == {
+        "resource": "poddisruptionbudgets.policy",
+        "name": "migrator",
+        "patch": '{"spec":{"maxUnavailable":null,"minAvailable":0}}',
+    }
+
+
 def test_node_pool_start_accepts_fresh_update_before_version_completes() -> None:
     """NodePool start does not wait for status.version to reach the target."""
     pool = {
@@ -507,6 +535,9 @@ def test_node_pool_poll_rejects_later_control_plane_degradation(monkeypatch: pyt
     degraded["hosted"]["status"]["conditions"][1]["status"] = "True"
     snapshot = Mock(side_effect=[healthy, degraded])
     monkeypatch.setattr(scenario, "_snapshot", snapshot)
+    monkeypatch.setattr(scenario, "wait_for_hosted_cluster_kubeconfig", Mock(return_value=b"kubeconfig"))
+    monkeypatch.setattr(scenario, "K8sClient", Mock(return_value=Mock()))
+    monkeypatch.setattr(scenario, "_apply_single_worker_upgrade_workaround", Mock())
 
     def observe_once(
         *, observe: Callable[[], tuple[dict[str, Any], dict[str, Any]]], **_kwargs: object

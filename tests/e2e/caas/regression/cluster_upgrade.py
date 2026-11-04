@@ -762,6 +762,38 @@ def _upgrade_control_plane(
         return completed[0]
 
 
+def _apply_single_worker_upgrade_workaround(
+    *, k8s: K8sClient, workload_k8s: K8sClient, refs: _ClusterRefs, node_set: str
+) -> None:
+    """Apply the temporary OSAC-7087 single-worker upgrade workaround.
+
+    AI agents: this is a deliberate E2E-only workaround for OSAC-7087.  A
+    single-worker tenant cannot drain its only node under the default migrator
+    PodDisruptionBudget.  Until OSAC-7087 provides product support for
+    in-place upgrades of single-worker tenant clusters, permit one unavailable
+    in-place worker and allow every migrator pod to be unavailable.
+
+    Keep this function separate and remove it with OSAC-7087; do not move it
+    into production reconciliation code.
+    """
+    node_pool_name = refs.pool_names[node_set]
+    node_pool_patch = '{"spec":{"management":{"inPlace":{"maxUnavailable":1}}}}'
+    migrator_pdb_patch = '{"spec":{"maxUnavailable":null,"minAvailable":0}}'
+
+    logger.info("OSAC-7087 workaround: permitting one in-place worker and zero migrator availability")
+    _, node_pool_rc = k8s.patch(
+        resource="nodepools.hypershift.openshift.io", name=node_pool_name, patch=node_pool_patch
+    )
+    if node_pool_rc != 0:
+        logger.warning("OSAC-7087 workaround: NodePool patch failed with rc=%s", node_pool_rc)
+
+    _, migrator_rc = workload_k8s.patch(
+        resource="poddisruptionbudgets.policy", name="migrator", patch=migrator_pdb_patch
+    )
+    if migrator_rc != 0:
+        logger.warning("OSAC-7087 workaround: migrator PDB patch failed with rc=%s", migrator_rc)
+
+
 def _upgrade_node_pool(
     *,
     refs: _ClusterRefs,
@@ -831,14 +863,34 @@ def _upgrade_node_pool(
     )
     evidence["phase"] = "node-pool-started"
     logger.info("NODE_SET_UPGRADE_STARTED node_set=%s target_version=%s", upgraded_node_set, TARGET_VERSION)
-    _wait_elapsed(
-        component="upgraded node pool completion",
-        accepted_at=accepted,
-        limit_seconds=NP_LIMIT_SECONDS_PER_NODE * int(upgraded_before["spec"]["replicas"]),
-        observe=observe,
-        ready=lambda pair: _np_completed(pair[0]["pools"][upgraded_node_set], old_transition, target_image),
-        diagnose=diagnose,
+
+    workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
+        k8s=k8s, hosted_cluster_namespace=refs.namespace, hosted_cluster_name=refs.hc_name
     )
+    with tempfile.NamedTemporaryFile(prefix="osac-node-pool-upgrade-", suffix=".kubeconfig") as kubeconfig_file:
+        kubeconfig_file.write(workload_kubeconfig)
+        kubeconfig_file.flush()
+        workload_k8s = K8sClient(
+            namespace="openshift-kube-storage-version-migrator", kubeconfig=kubeconfig_file.name, as_system_admin=False
+        )
+
+        # OSAC-7087: controllers may revert these temporary drain gates, so
+        # reapply them on every completion poll until progress is confirmed.
+        def observe_with_single_worker_workaround() -> tuple[dict[str, Any], dict[str, Any]]:
+            """Reapply the temporary gates before every completion observation."""
+            _apply_single_worker_upgrade_workaround(
+                k8s=k8s, workload_k8s=workload_k8s, refs=refs, node_set=upgraded_node_set
+            )
+            return observe()
+
+        _wait_elapsed(
+            component="upgraded node pool completion",
+            accepted_at=accepted,
+            limit_seconds=NP_LIMIT_SECONDS_PER_NODE * int(upgraded_before["spec"]["replicas"]),
+            observe=observe_with_single_worker_workaround,
+            ready=lambda pair: _np_completed(pair[0]["pools"][upgraded_node_set], old_transition, target_image),
+            diagnose=diagnose,
+        )
     evidence["phase"] = "node-pool-completed"
     evidence["np_elapsed_seconds"] = round(time.monotonic() - accepted, 1)
 

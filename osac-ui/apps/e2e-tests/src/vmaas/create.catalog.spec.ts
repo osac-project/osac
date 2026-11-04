@@ -7,8 +7,8 @@ import {
   expectCatalogItemListed,
   expectCatalogItemNotListed,
   openCreateCatalogItemPage,
-  selectCatalogOption,
 } from '../../../../libs/test-utils/src/catalog.page';
+import { selectOption } from '../../../../libs/test-utils/src/general/form_controls';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openCatalogPage } from '../../../../libs/test-utils/src/main.page';
@@ -57,7 +57,7 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
     await page.locator(...CatalogCreatePage.globalScope).click();
     await page.getByRole(...CatalogCreatePage.name).fill(catalogTestData.name);
     await page.getByRole(...CatalogCreatePage.description).fill(catalogTestData.description);
-    await selectCatalogOption(page, CatalogCreatePage.template, catalogTestData.template);
+    await selectOption(page, CatalogCreatePage.template, catalogTestData.template);
     await page.getByRole(...CatalogCreatePage.next).click();
   });
 
@@ -66,12 +66,8 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
     'Complete the catalog item Compute configuration step',
     async () => {
       await page.getByRole(...CatalogCreatePage.guestOsLinux).click();
-      await selectCatalogOption(
-        page,
-        CatalogCreatePage.diskImage,
-        catalogTestData.fields.diskImage.name,
-      );
-      await selectCatalogOption(
+      await selectOption(page, CatalogCreatePage.diskImage, catalogTestData.fields.diskImage.name);
+      await selectOption(
         page,
         CatalogCreatePage.instanceType,
         catalogTestData.fields.instanceType.name,

@@ -1,4 +1,4 @@
-import { type Page, expect, test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { access } from 'node:fs/promises';
 
 import {
@@ -13,6 +13,7 @@ import {
   launchCatalogItem,
   openCatalogItemDetails,
 } from '../../../../libs/test-utils/src/catalog.page';
+import { selectOption } from '../../../../libs/test-utils/src/general/form_controls';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openCatalogPage } from '../../../../libs/test-utils/src/main.page';
@@ -31,22 +32,6 @@ import {
 
 const vmName = vmTestName;
 const cloudInit = '#cloud-config\nruncmd:\n  - echo vm-e2e';
-
-const selectOption = async (
-  page: Page,
-  field: readonly [role: 'button', options: { readonly name: string; readonly exact: true }],
-  optionName: string | RegExp,
-  index = 0,
-): Promise<string> => {
-  const fieldLocator = page.getByRole(...field).nth(index);
-  await expect(fieldLocator).toBeVisible();
-  await fieldLocator.click();
-  const option = page.getByRole('option', { name: optionName }).first();
-  await expect(option).toBeVisible();
-  const selectedName = (await option.innerText()).trim();
-  await option.click();
-  return selectedName;
-};
 
 test('tenant creates a VM from the published catalog item', async ({ page }) => {
   test.setTimeout(300_000);

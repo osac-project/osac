@@ -1,5 +1,6 @@
 import { type Locator, type Page, expect } from '@playwright/test';
 
+import { confirmDetailDeletion } from './general/row_assertions';
 import { CatalogCreatePage, CatalogDeletePage, CatalogMainPage } from '../../locators/catalog';
 
 const getCatalogItemCard = (page: Page, name: string): Locator =>
@@ -11,25 +12,6 @@ export interface ExpectedCatalogItemResources {
   instanceType: string;
   diskImage: string;
 }
-
-type CatalogSelectField = readonly [
-  role: 'button',
-  options: { readonly name: string; readonly exact: true },
-];
-
-/** Select an option from a catalog authoring typeahead. */
-export const selectCatalogOption = async (
-  page: Page,
-  field: CatalogSelectField,
-  optionName: string | RegExp,
-): Promise<void> => {
-  const fieldLocator = page.getByRole(...field);
-  await expect(fieldLocator).toBeVisible();
-  await fieldLocator.click();
-  const option = page.getByRole('option', { name: optionName }).first();
-  await expect(option).toBeVisible();
-  await option.click();
-};
 
 /** Open the VM catalog item creation wizard. */
 export const openCreateCatalogItemPage = async (page: Page): Promise<void> => {
@@ -102,11 +84,13 @@ export const deleteCatalogItem = async (page: Page, name: string): Promise<void>
   await page.getByRole(...CatalogDeletePage.delete).click();
 
   const dialog = page.locator(...CatalogDeletePage.dialog);
-  await expect(dialog).toBeVisible();
-  await expect(dialog.locator(...CatalogDeletePage.dialogTitle)).toContainText(`Delete ${name}?`);
-  await expect(dialog.getByText(...CatalogDeletePage.warning)).toBeVisible();
-  await dialog.getByRole(...CatalogDeletePage.delete).click();
-  await expect(dialog).toBeHidden();
+  await confirmDetailDeletion(
+    dialog,
+    dialog.locator(...CatalogDeletePage.dialogTitle),
+    dialog.getByText(...CatalogDeletePage.warning),
+    dialog.getByRole(...CatalogDeletePage.delete),
+    name,
+  );
   await expect(page).toHaveURL((url) => url.pathname === '/catalog');
   await expect(page.getByRole(...CatalogMainPage.pageTitle)).toBeVisible();
 };

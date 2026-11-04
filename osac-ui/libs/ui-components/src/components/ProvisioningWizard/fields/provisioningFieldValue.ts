@@ -82,7 +82,7 @@ export const getUserDataSourcePayload = (
   const { source, inline, secret } = fields.value;
   const value = (source === 'secret' ? secret : inline).trim();
   if (!value) {
-    return source === 'inline' ? { source: { case: 'inline', value: '' } } : undefined;
+    return undefined;
   }
 
   return source === 'secret'

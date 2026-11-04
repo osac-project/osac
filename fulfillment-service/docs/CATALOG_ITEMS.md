@@ -310,7 +310,7 @@ fields; in YAML, write them as nested mappings.
 |-------|-------------|
 | `instance_type` | Local BareMetalInstanceType reference for host placement; separate from compute InstanceType |
 | `disk_image` | DiskImage reference |
-| `ssh_public_key` | SSH public key |
+| `ssh_key` | Immutable reference to a registered SSH public-key Secret |
 | `user_data_source` | Inline provisioning user data or a user data Secret reference |
 | `run_strategy` | Bare metal run strategy |
 | `network_attachments` | Policy for the complete list of network attachments |

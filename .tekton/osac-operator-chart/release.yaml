@@ -159,7 +159,7 @@ spec:
             git fetch --tags origin
             ALL_VERSIONS=$(git tag -l "$(params.tag-prefix)*" \
               | sed "s#^$(params.tag-prefix)##" \
-              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || true; })
+              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || true; })
             if [ -z "${ALL_VERSIONS}" ]; then
               echo "ERROR: no tag matching $(params.tag-prefix)* found" >&2
               exit 1

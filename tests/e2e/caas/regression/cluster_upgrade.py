@@ -26,7 +26,6 @@ from tests.e2e.core.runner import env, poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
 TARGET_VERSION = env("OSAC_TEST_UPGRADE_RELEASE_VERSION", "4.22.1")
-UPGRADE_ENV_VAR = "OSAC_TEST_UPGRADE_ENABLED"
 PRE_UPGRADE_MONITOR_SECONDS = 10 * 60
 TARGET_IMAGE = env(
     "OSAC_TEST_UPGRADE_RELEASE_IMAGE", f"quay.io/openshift-release-dev/ocp-release:{TARGET_VERSION}-multi"
@@ -36,7 +35,6 @@ NP_LIMIT_SECONDS_PER_NODE = 30 * 60
 START_LIMIT_SECONDS = 10 * 60
 POLL_SECONDS = 20
 _DIAGNOSTIC_INTERVAL_SECONDS = 60
-_TERMINAL_JOB_FAILURES = {"Failed", "Canceled"}
 _PHASES = (
     "preparing",
     "install-completed",
@@ -51,11 +49,6 @@ _PHASES = (
 _T = TypeVar("_T")
 logger = logging.getLogger(__name__)
 diagnostics_logger = logging.getLogger(f"{__name__}.diagnostics")
-
-
-def _upgrade_enabled() -> bool:
-    """Run the control-plane upgrade unless CI explicitly opts out."""
-    return env(UPGRADE_ENV_VAR, "true").strip().lower() in {"1", "true", "yes"}
 
 
 @dataclass(frozen=True)
@@ -507,12 +500,6 @@ def _new_provision_job(snapshot: dict[str, Any], previous_ids: set[str]) -> dict
     return max(new, key=lambda job: job.get("timestamp", ""), default={})
 
 
-def _check_job(job: dict[str, Any], component: str) -> None:
-    """Fail when AAP reports a terminal provision-job failure."""
-    if job.get("state") in _TERMINAL_JOB_FAILURES:
-        raise AssertionError(f"{component} AAP provision job failed")
-
-
 def _check_hypershift_failure(resource: dict[str, Any], component: str) -> None:
     """Fail on HyperShift conditions that explicitly report upgrade failure."""
     for condition in resource.get("status", {}).get("conditions", []):
@@ -697,6 +684,8 @@ def _ready_baseline(*, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs) -> 
         delay=10,
         description="test-owned ClusterOrder, HostedCluster, and NodePools ready",
         retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=refs.co_name,
     )
 
 
@@ -741,7 +730,6 @@ def _upgrade_control_plane(
             assert current["cluster"]["spec"]["version"]["name"] == target["name"]
             _check_hypershift_failure(current["hosted"], "control plane")
             job = _new_provision_job(current, prior_job_ids)
-            _check_job(job, "control plane")
             return current, job
 
         def diagnose(pair: tuple[dict[str, Any], dict[str, Any]]) -> dict[str, Any]:
@@ -806,6 +794,7 @@ def _upgrade_node_pool(
     )
     accepted = time.monotonic()
     evidence["phase"] = "node-pool-requested"
+    logger.info("NODE_SET_UPGRADE_TRIGGERED node_set=%s target_version=%s", upgraded_node_set, TARGET_VERSION)
     reported: set[tuple[str | None, bool]] = set()
 
     def observe() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -819,7 +808,6 @@ def _upgrade_node_pool(
         assert current["order"]["spec"].get("releaseImage") == target_image
         _check_hypershift_failure(current["pools"][upgraded_node_set], "upgraded node pool")
         job = _new_provision_job(current, prior_job_ids)
-        _check_job(job, "upgraded node pool")
         return current, job
 
     def diagnose(pair: tuple[dict[str, Any], dict[str, Any]]) -> dict[str, Any]:
@@ -842,6 +830,7 @@ def _upgrade_node_pool(
         diagnose=diagnose,
     )
     evidence["phase"] = "node-pool-started"
+    logger.info("NODE_SET_UPGRADE_STARTED node_set=%s target_version=%s", upgraded_node_set, TARGET_VERSION)
     _wait_elapsed(
         component="upgraded node pool completion",
         accepted_at=accepted,

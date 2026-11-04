@@ -38,7 +38,7 @@ def test_cluster_create_with_two_node_sets(
     ssh_public_key_path: str,
     metering: MeteringCollector,
 ) -> None:
-    """Verify installation, stability monitoring, and the control-plane upgrade journey."""
+    """Verify installation, stability monitoring, and sequential upgrade stages."""
 
     instance_types = INSTANCE_TYPES
     for instance_type in instance_types.values():
@@ -83,29 +83,37 @@ def test_cluster_create_with_two_node_sets(
         )
         evidence["phase"] = "post-install-monitored"
 
-        if upgrade._upgrade_enabled():
-            jwt_grpc_tenant1: GRPCClient = request.getfixturevalue("jwt_grpc_tenant1")
-            baseline = upgrade._ready_baseline(k8s=k8s_hub_client, grpc=grpc, refs=refs)
-            target_version, target_created = upgrade._catalog_version(
-                private_grpc=private_grpc,
-                version=upgrade.TARGET_VERSION,
-                image=upgrade.TARGET_IMAGE,
-                disk_image=disk_image,
-            )
-            if target_created:
-                created_version_ids.append(target_version["id"])
-            assert target_version["image"] != baseline["hosted"]["spec"]["release"]["image"], (
-                "Upgrade target release image must differ from the installed control-plane image"
-            )
-            upgrade._upgrade_control_plane(
-                refs=refs,
-                baseline=baseline,
-                target=target_version,
-                jwt_grpc_tenant1=jwt_grpc_tenant1,
-                grpc=grpc,
-                k8s=k8s_hub_client,
-                evidence=evidence,
-            )
+        jwt_grpc_tenant1: GRPCClient = request.getfixturevalue("jwt_grpc_tenant1")
+        baseline = upgrade._ready_baseline(k8s=k8s_hub_client, grpc=grpc, refs=refs)
+        target_version, target_created = upgrade._catalog_version(
+            private_grpc=private_grpc, version=upgrade.TARGET_VERSION, image=upgrade.TARGET_IMAGE, disk_image=disk_image
+        )
+        if target_created:
+            created_version_ids.append(target_version["id"])
+        assert target_version["image"] != baseline["hosted"]["spec"]["release"]["image"], (
+            "Upgrade target release image must differ from the installed control-plane image"
+        )
+        cp_snapshot = upgrade._upgrade_control_plane(
+            refs=refs,
+            baseline=baseline,
+            target=target_version,
+            jwt_grpc_tenant1=jwt_grpc_tenant1,
+            grpc=grpc,
+            k8s=k8s_hub_client,
+            evidence=evidence,
+        )
+        upgrade._upgrade_node_pool(
+            refs=refs,
+            baseline=baseline,
+            cp_snapshot=cp_snapshot,
+            target=target_version,
+            jwt_grpc_tenant1=jwt_grpc_tenant1,
+            grpc=grpc,
+            k8s=k8s_hub_client,
+            evidence=evidence,
+            upgraded_node_set=REGULAR_NODE_SET,
+            unchanged_node_set=GPU_NODE_SET,
+        )
         evidence["outcome"] = "succeeded"
         cli.delete_cluster(uuid=uuid)
         delete_cluster_requested = True

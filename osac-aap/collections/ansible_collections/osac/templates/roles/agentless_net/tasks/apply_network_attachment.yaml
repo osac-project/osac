@@ -1,0 +1,151 @@
+---
+- name: Apply AgentlessNet physical NetworkAttachment
+  block:
+    - name: Validate the NetworkAttachment task input
+      ansible.builtin.include_tasks: _validate_task_input.yaml
+      vars:
+        agentless_net_expected_kind: NetworkAttachment
+        agentless_net_expected_tasks: [apply_network_attachment]
+
+    - name: Require a physical BMI attachment and matching snapshots
+      ansible.builtin.assert:
+        that:
+          - osac_job_vars.target.kind == 'BareMetalInstance'
+          - osac_job_vars.target.id == osac_job_vars.resource.id
+          - osac_job_vars.network_attachment.subnet == osac_job_vars.subnet.id
+          - osac_job_vars.network_attachment.interface.type == 'physical'
+          - osac_job_vars.network_attachment.interface.name is string
+          - osac_job_vars.network_attachment.interface.mac_address is match('^[0-9a-f]{2}(:[0-9a-f]{2}){5}$')
+          - osac_job_vars.target.host_name is string
+          - osac_job_vars.target.host_name | length > 0
+          - osac_job_vars.ipam.physical_ipv4_cidrs | length > 0
+      no_log: true
+
+    - name: Classify provider operation failures as retryable
+      ansible.builtin.set_fact:
+        _agentless_net_failure_retryable: true
+
+    - name: Load and validate AgentlessNet physical host inventory
+      ansible.builtin.include_tasks: _resolve_attachment_configuration.yaml
+
+    - name: Read the Ready Subnet allocation by API ID
+      osac.templates.agentless_net_state:
+        action: get_subnet
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ osac_job_vars.subnet.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      register: _agentless_net_attachment_subnet
+      no_log: true
+
+    - name: Mark snapshot validation as final
+      ansible.builtin.set_fact:
+        _agentless_net_failure_retryable: false
+
+    - name: Require the saved Subnet IPAM and VLAN allocation
+      ansible.builtin.assert:
+        that:
+          - _agentless_net_attachment_subnet.found | bool
+          - _agentless_net_attachment_subnet.subnet.phase == 'ready'
+          - _agentless_net_attachment_subnet.subnet.virtual_network_uid == osac_job_vars.virtual_network.id
+          - _agentless_net_attachment_subnet.subnet.ipam == osac_job_vars.ipam
+      no_log: true
+
+    - name: Classify provider and switch failures as retryable
+      ansible.builtin.set_fact:
+        _agentless_net_failure_retryable: true
+
+    - name: Read an existing attachment reservation for retry recovery
+      osac.templates.agentless_net_state:
+        action: get_network_attachment
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ osac_job_vars.resource.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      register: _agentless_net_saved_attachment
+      no_log: true
+
+    - name: Initialize candidate switch ports for a new attachment
+      ansible.builtin.set_fact:
+        _agentless_net_attachment_ports: []
+        _agentless_net_subnet_vlan: "{{ _agentless_net_attachment_subnet.subnet.vlan_id | int }}"
+      when: not _agentless_net_saved_attachment.found | bool
+      no_log: true
+
+    - name: Inspect mapped host interfaces before reserving ports
+      ansible.builtin.include_tasks: _inspect_attachment_port.yaml
+      loop: "{{ _agentless_net_host_ports[host_name] | dict2items }}"
+      loop_control:
+        loop_var: _agentless_net_host_interface
+        label: "{{ host_name }}/{{ _agentless_net_host_interface.key }}"
+      when: not _agentless_net_saved_attachment.found | bool
+
+    - name: Reuse saved ports for an existing attachment
+      ansible.builtin.set_fact:
+        _agentless_net_attachment_ports: "{{ _agentless_net_saved_attachment.attachment.ports }}"
+        _agentless_net_subnet_vlan: "{{ _agentless_net_attachment_subnet.subnet.vlan_id | int }}"
+      when: _agentless_net_saved_attachment.found | bool
+      no_log: true
+
+    - name: Verify every saved switch port still matches provider inventory
+      ansible.builtin.assert:
+        that:
+          - >-
+            _agentless_net_host_port_inventory
+            | selectattr('switch_name', 'equalto', item.switch_name)
+            | selectattr('port_name', 'equalto', item.port_name)
+            | list | length == 1
+      loop: "{{ _agentless_net_attachment_ports }}"
+      when: _agentless_net_saved_attachment.found | bool
+      no_log: true
+
+    - name: Reserve the physical address and saved switch ports
+      osac.templates.agentless_net_state:
+        action: prepare_network_attachment
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ osac_job_vars.resource.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
+        virtual_network_uid: "{{ osac_job_vars.virtual_network.id }}"
+        subnet_uid: "{{ osac_job_vars.subnet.id }}"
+        host_name: "{{ osac_job_vars.target.host_name }}"
+        interface_name: "{{ osac_job_vars.network_attachment.interface.name }}"
+        mac_address: "{{ osac_job_vars.network_attachment.interface.mac_address | lower }}"
+        ports: "{{ _agentless_net_attachment_ports }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      register: _agentless_net_attachment_reservation
+      no_log: true
+
+    - name: Apply or remove each saved physical port
+      ansible.builtin.include_tasks: _apply_attachment_port.yaml
+      loop: "{{ _agentless_net_attachment_reservation.attachment.ports }}"
+      loop_control:
+        loop_var: _agentless_net_attachment_port
+        label: "{{ _agentless_net_attachment_port.switch_name }}/{{ _agentless_net_attachment_port.port_name }}"
+      vars:
+        _agentless_net_attachment_target_vlan: >-
+          {{ _agentless_net_subnet_vlan
+             if _agentless_net_attachment_port.selected
+             else _agentless_net_provisioning_network.vlan_id | int }}
+        _agentless_net_attachment_port_action: >-
+          {{ 'apply' if _agentless_net_attachment_port.selected
+             else 'remove' if _agentless_net_attachment_port.fabric else 'skip' }}
+      when: _agentless_net_attachment_port.selected or _agentless_net_attachment_port.fabric
+
+    - name: Mark the NetworkAttachment provider state Ready
+      osac.templates.agentless_net_state:
+        action: mark_network_attachment_ready
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ osac_job_vars.resource.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      no_log: true
+  rescue:
+    - name: Publish a sanitized NetworkAttachment apply error
+      ansible.builtin.include_tasks: _report_task_error.yaml
+  always:
+    - name: Remove temporary AgentlessNet SSH credentials
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

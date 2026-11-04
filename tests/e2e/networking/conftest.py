@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
 from pathlib import Path
 
 import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
+from tests.e2e.core.helpers import registered_ssh_key_secret
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
 from tests.e2e.networking.bmaas import bmi_ssh
 
@@ -136,3 +138,13 @@ def net_ssh_public_key() -> str:
     if pub.is_file():
         return pub.read_text().strip()
     return Path(env("OSAC_BMI_SSH_PUBLIC_KEY", "/root/.ssh/id_rsa.pub")).read_text().strip()
+
+
+@pytest.fixture(scope="session")
+def net_ssh_key_secret(cli: OsacCLI, net_ssh_public_key: str, net_test_run_id: str) -> Iterator[str]:
+    """Register the public key as the tenant Secret referenced by the suite's BMIs.
+
+    The CLI --ssh-key flag takes a registered SSH public-key Secret name.
+    """
+    with registered_ssh_key_secret(cli, net_ssh_public_key, f"e2e-bmaas-net-key-{net_test_run_id}") as name:
+        yield name

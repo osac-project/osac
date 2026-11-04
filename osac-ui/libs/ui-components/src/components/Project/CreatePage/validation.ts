@@ -9,5 +9,4 @@ export const getProjectValidationSchema = (t: TFunction) =>
       name: resourceNameSchema(t),
     }),
     title: Yup.string(),
-    description: Yup.string(),
   });

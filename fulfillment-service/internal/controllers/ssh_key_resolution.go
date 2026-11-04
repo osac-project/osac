@@ -69,7 +69,7 @@ func ResolveSSHKey(
 		resolutionErr := &SSHKeyResolutionError{Err: err}
 		switch status.Code(err) {
 		case codes.NotFound:
-			// NotFound may be temporary while the referenced Secret becomes visible.
+			resolutionErr.Permanent = true
 			resolutionErr.Reason = sshKeyResolutionReasonSecretNotFound
 		case codes.InvalidArgument:
 			resolutionErr.Permanent = true

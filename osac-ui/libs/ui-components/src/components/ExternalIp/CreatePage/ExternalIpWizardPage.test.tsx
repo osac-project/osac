@@ -73,8 +73,8 @@ const fillValidWizard = async (user: UserEvent) => {
     return toggle;
   });
   await user.click(projectToggle);
-  await user.click(screen.getByRole('option', { name: 'Default' }));
-  expect(projectToggle).toHaveTextContent('Default');
+  await user.click(screen.getByRole('option', { name: 'Root' }));
+  expect(projectToggle).toHaveTextContent('Root');
   expect(projectToggle).not.toHaveAttribute('aria-invalid', 'true');
   expect(screen.queryByText('Project is required')).not.toBeInTheDocument();
   await clickNext(user);

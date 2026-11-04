@@ -25,11 +25,15 @@ export const useCatalogItems = (
   vms: ComputeInstanceCatalogItem[];
   clusters: ClusterCatalogItem[];
   bms: BareMetalInstanceCatalogItem[];
-  typeCounts: Record<ServiceTier, number>;
-  unfilteredTotalItems: number;
+  typeCounts: Partial<Record<ServiceTier, number>>;
 } => {
-  const { enabledServices } = useSession();
-  const listFilter = buildCatalogListFilter(filterCriteria);
+  const { enabledServices, role } = useSession();
+  const visibilityCriteria: CatalogListFilterCriteria =
+    role === 'tenant-user' ? { published: 'published' } : {};
+  const listFilter = buildCatalogListFilter({
+    ...filterCriteria,
+    ...visibilityCriteria,
+  });
   const listParams = listFilter ? { filter: listFilter } : {};
 
   const shouldFetchKind = (kind: ServiceTier) =>
@@ -45,45 +49,28 @@ export const useCatalogItems = (
     enabled: shouldFetchKind(ServiceTier.BMAAS),
   });
 
-  const vmsTotalQuery = useListResource(
-    ComputeInstanceCatalogItems,
-    { limit: 0 },
-    { enabled: enabledServices.includes(ServiceTier.VMAAS) },
-  );
-  const clustersTotalQuery = useListResource(
-    ClusterCatalogItems,
-    { limit: 0 },
-    { enabled: enabledServices.includes(ServiceTier.CAAS) },
-  );
-  const bmsTotalQuery = useListResource(
-    BareMetalInstanceCatalogItems,
-    { limit: 0 },
-    { enabled: enabledServices.includes(ServiceTier.BMAAS) },
-  );
+  const isLoading = vmsQuery.isLoading || clustersQuery.isLoading || bmsQuery.isLoading;
 
-  const isLoading =
-    vmsQuery.isLoading ||
-    clustersQuery.isLoading ||
-    bmsQuery.isLoading ||
-    vmsTotalQuery.isLoading ||
-    clustersTotalQuery.isLoading ||
-    bmsTotalQuery.isLoading;
+  const fetchedQueries = [
+    { kind: ServiceTier.VMAAS, enabled: shouldFetchKind(ServiceTier.VMAAS), query: vmsQuery },
+    { kind: ServiceTier.CAAS, enabled: shouldFetchKind(ServiceTier.CAAS), query: clustersQuery },
+    { kind: ServiceTier.BMAAS, enabled: shouldFetchKind(ServiceTier.BMAAS), query: bmsQuery },
+  ].filter((entry) => entry.enabled);
 
-  const error =
-    vmsQuery.error ||
-    clustersQuery.error ||
-    bmsQuery.error ||
-    vmsTotalQuery.error ||
-    clustersTotalQuery.error ||
-    bmsTotalQuery.error;
+  const selectedQueries = fetchedQueries.filter((entry) => typeFilter.includes(entry.kind));
+  const statusQueries = selectedQueries.length > 0 ? selectedQueries : fetchedQueries;
+  const error = statusQueries.find(({ query }) => query.error)?.query.error;
 
-  const hasSuccessfulQuery = [vmsQuery, clustersQuery, bmsQuery].some(
-    (query) => !query.isLoading && !query.error,
-  );
+  // A kind that was never fetched (not enabled, or not in typeFilter) reports
+  // isLoading: false and error: null, which would otherwise count as a vacuous
+  // success below and enable search before the fetched kind actually resolves.
+  const hasSuccessfulQuery =
+    statusQueries.length === 0 ||
+    statusQueries.some(({ query }) => !query.isLoading && !query.error);
 
-  const totalVmsCount = vmsTotalQuery.data?.total ?? 0;
-  const totalBmsCount = bmsTotalQuery.data?.total ?? 0;
-  const totalClustersCount = clustersTotalQuery.data?.total ?? 0;
+  const totalVmsCount = vmsQuery.error ? undefined : vmsQuery.data?.total;
+  const totalBmsCount = bmsQuery.error ? undefined : bmsQuery.data?.total;
+  const totalClustersCount = clustersQuery.error ? undefined : clustersQuery.data?.total;
 
   return {
     error,
@@ -99,6 +86,5 @@ export const useCatalogItems = (
       [ServiceTier.UNSPECIFIED]: 0,
       [ServiceTier.MAAS]: 0,
     },
-    unfilteredTotalItems: totalVmsCount + totalClustersCount + totalBmsCount,
   };
 };

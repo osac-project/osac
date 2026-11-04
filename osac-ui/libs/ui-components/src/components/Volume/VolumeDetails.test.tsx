@@ -124,38 +124,39 @@ describe('VolumeDetails', () => {
     it('renders Delete without Edit when state is AVAILABLE', () => {
       renderDetails(makeVolume(VolumeState.AVAILABLE));
 
-      expect(getDeleteButton()).not.toBeDisabled();
+      expect(getDeleteButton()).not.toHaveAttribute('aria-disabled');
       expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
     });
 
     it('enables Delete when state is FAILED', () => {
       renderDetails(makeVolume(VolumeState.FAILED));
 
-      expect(getDeleteButton()).not.toBeDisabled();
+      expect(getDeleteButton()).not.toHaveAttribute('aria-disabled');
     });
 
     it('disables Delete when state is CREATING', () => {
       renderDetails(makeVolume(VolumeState.CREATING));
 
-      expect(getDeleteButton()).toBeDisabled();
+      expect(getDeleteButton()).toHaveAttribute('aria-disabled', 'true');
+      expect(getDeleteButton()).not.toBeDisabled();
     });
 
     it('disables Delete when state is DELETING', () => {
       renderDetails(makeVolume(VolumeState.DELETING));
 
-      expect(getDeleteButton()).toBeDisabled();
+      expect(getDeleteButton()).toHaveAttribute('aria-disabled', 'true');
     });
 
     it('disables Delete when state is DELETED', () => {
       renderDetails(makeVolume(VolumeState.DELETED));
 
-      expect(getDeleteButton()).toBeDisabled();
+      expect(getDeleteButton()).toHaveAttribute('aria-disabled', 'true');
     });
 
     it('disables Delete when state is UNSPECIFIED', () => {
       renderDetails(makeVolume(VolumeState.UNSPECIFIED));
 
-      expect(getDeleteButton()).toBeDisabled();
+      expect(getDeleteButton()).toHaveAttribute('aria-disabled', 'true');
     });
   });
 });

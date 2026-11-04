@@ -1,6 +1,4 @@
 import type {
-  BareMetalInstanceType,
-  BareMetalInstanceTypeReference,
   ClusterCatalogItem,
   ClusterCatalogItemFields,
   ClusterCatalogNodeSet,
@@ -91,54 +89,14 @@ export const formatClusterCatalogVersionLabel = (
   version: ClusterVersion | undefined,
   reference: ClusterVersionReference | undefined,
 ): string => {
-  const raw =
-    version?.spec?.version || version?.metadata?.name || reference?.name || reference?.id || '';
+  const raw = version?.spec?.version || version?.metadata?.name || reference?.name || '';
   if (!raw) {
-    return '—';
+    return '';
   }
   if (/^openshift\s/i.test(raw)) {
     return raw;
   }
   return `OpenShift ${raw}`;
-};
-
-export const findHostTypeForReference = (
-  hostTypes: BareMetalInstanceType[],
-  reference: BareMetalInstanceTypeReference | undefined,
-): BareMetalInstanceType | undefined => {
-  if (!reference) {
-    return undefined;
-  }
-  if (reference.id) {
-    const byId = hostTypes.find((hostType) => hostType.id === reference.id);
-    if (byId) {
-      return byId;
-    }
-  }
-  if (reference.name) {
-    return hostTypes.find(
-      (hostType) =>
-        hostType.metadata?.name === reference.name &&
-        hostType.metadata?.project === reference.project,
-    );
-  }
-  return undefined;
-};
-
-export const formatClusterCatalogHostTypeLabel = (
-  hostType: BareMetalInstanceType | undefined,
-  reference: BareMetalInstanceTypeReference | undefined,
-): string => {
-  if (hostType?.metadata?.name) {
-    return hostType.metadata.name;
-  }
-  if (reference?.name) {
-    return reference.name;
-  }
-  if (reference?.id) {
-    return reference.id;
-  }
-  return '—';
 };
 
 export const formatClusterCatalogVersionRow = (
@@ -167,24 +125,4 @@ export const formatClusterCatalogNodeSetRow = (
     return undefined;
   }
   return formatClusterCatalogNodeSetName(primaryNodeSet.key);
-};
-
-export const formatClusterCatalogHostTypeRow = (
-  nodeSetsPolicy: ClusterNodeSetMapPolicy | undefined,
-  primaryNodeSet: { key: string; nodeSet: ClusterCatalogNodeSet } | undefined,
-  hostType: BareMetalInstanceType | undefined,
-): string | undefined => {
-  if (!catalogFieldPolicyIsConfigured(nodeSetsPolicy)) {
-    return undefined;
-  }
-  if (!primaryNodeSet) {
-    return undefined;
-  }
-  const label = hostType
-    ? hostType.metadata?.name || ''
-    : formatClusterCatalogHostTypeLabel(hostType, primaryNodeSet.nodeSet.baremetalInstanceType);
-  if (!catalogResourceHasDisplayValue(label)) {
-    return undefined;
-  }
-  return label;
 };

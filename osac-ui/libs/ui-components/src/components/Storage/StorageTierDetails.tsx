@@ -65,8 +65,12 @@ export const StorageTierDetails = ({ tier }: StorageTierDetailsProps) => {
             >
               <FlexItem>
                 <ResourceDetailHeader
-                  parentTo={TIERS_LIST_PATH}
-                  parentLabel={t('Storage tiers')}
+                  parents={[
+                    {
+                      to: TIERS_LIST_PATH,
+                      label: t('Storage tiers'),
+                    },
+                  ]}
                   resourceName={tierName}
                   titleAddon={<StorageTierStatusLabel state={tier.status?.state} />}
                 />

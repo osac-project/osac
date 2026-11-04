@@ -74,6 +74,9 @@ const (
 	messageFailureNetworkHandoff    = "Network handoff (reboot) did not complete."
 	messageFailureIPDiscovery       = "IP address discovery did not complete."
 	messageFailureReadyTimeout      = "The instance did not reach its powered-on ready state."
+
+	// Controller-side failure that never reaches the operator's lifecycle.
+	messageFailureSSHKey = "The registered SSH-key Secret could not be resolved."
 )
 
 // FunctionBuilder contains the data and logic needed to build a function that reconciles bare metal instances.
@@ -100,6 +103,7 @@ type function struct {
 type task struct {
 	r                  *function
 	bareMetalInstance  *privatev1.BareMetalInstance
+	sshPublicKey       string
 	hubId              string
 	hubNamespace       string
 	hubClient          clnt.Client
@@ -180,7 +184,25 @@ func (r *function) run(ctx context.Context, bareMetalInstance *privatev1.BareMet
 		err = t.update(ctx)
 	}
 	var reconcileRetryErr error
-	if err != nil {
+	var secretErr *controllers.SSHKeyResolutionError
+	if errors.As(err, &secretErr) {
+		if !secretErr.Permanent {
+			return err
+		}
+		// Create validates the reference before persistence, but its data can
+		// become invalid before reconciliation. Do not persist partial changes
+		// from that failure; retain only the failure status below.
+		proto.Reset(bareMetalInstance)
+		proto.Merge(bareMetalInstance, oldBareMetalInstance)
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, nil)
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+			secretErr.Reason, messageFailureSSHKey)
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+	} else if err != nil {
 		handled, retry := controllers.HandleResourceNetworkingHubResolutionError(err, t.setPending, t.setFailed)
 		if !handled {
 			if !controllers.IsRequeueable(err) {
@@ -225,6 +247,9 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 	existingObject := object != nil
+	if err := t.resolveSSHKey(ctx, object); err != nil {
+		return fmt.Errorf("failed to resolve ssh key: %w", err)
+	}
 
 	if t.bareMetalInstance.GetSpec().GetUserDataSource() != nil {
 		t.userDataSecretName = fmt.Sprintf("%s%s", t.bareMetalInstance.GetId(), userDataSecretSuffix)
@@ -269,6 +294,40 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
+	return nil
+}
+
+func materializedBareMetalSSHKey(object *bmfov1alpha1.BareMetalInstance) string {
+	if object == nil || object.Spec.TemplateParameters == "" {
+		return ""
+	}
+	var params map[string]any
+	if err := json.Unmarshal([]byte(object.Spec.TemplateParameters), &params); err != nil {
+		return ""
+	}
+	value, _ := params["sshPublicKey"].(string)
+	return value
+}
+
+func (t *task) resolveSSHKey(ctx context.Context, object *bmfov1alpha1.BareMetalInstance) error {
+	if raw := t.bareMetalInstance.GetSpec().GetSshPublicKey(); raw != "" {
+		t.sshPublicKey = raw
+		return nil
+	}
+	ref := t.bareMetalInstance.GetSpec().GetSshKey()
+	if ref == nil {
+		t.sshPublicKey = ""
+		return nil
+	}
+	if materialized := materializedBareMetalSSHKey(object); materialized != "" {
+		t.sshPublicKey = materialized
+		return nil
+	}
+	key, err := controllers.ResolveSSHKey(ctx, t.r.secretsClient, ref)
+	if err != nil {
+		return err
+	}
+	t.sshPublicKey = key
 	return nil
 }
 
@@ -879,7 +938,9 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 		}
 	}
 
-	if t.bareMetalInstance.GetSpec().HasSshPublicKey() {
+	if t.sshPublicKey != "" {
+		params["sshPublicKey"] = t.sshPublicKey
+	} else if t.bareMetalInstance.GetSpec().HasSshPublicKey() {
 		params["sshPublicKey"] = t.bareMetalInstance.GetSpec().GetSshPublicKey()
 	}
 	if t.userDataSecretName != "" {

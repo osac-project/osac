@@ -30,14 +30,13 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/role_binding_type.proto.
  */
 export const file_osac_public_v1_role_binding_type: GenFile = /*@__PURE__*/
-  fileDesc("CiZvc2FjL3B1YmxpYy92MS9yb2xlX2JpbmRpbmdfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEirQEKC1JvbGVCaW5kaW5nEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESLQoEc3BlYxgDIAEoCzIfLm9zYWMucHVibGljLnYxLlJvbGVCaW5kaW5nU3BlYxI3CgZzdGF0dXMYBCABKAsyIS5vc2FjLnB1YmxpYy52MS5Sb2xlQmluZGluZ1N0YXR1c0IE4kEBAyJsCg9Sb2xlQmluZGluZ1NwZWMSKwoEcm9sZRgBIAEoCzIdLm9zYWMucHVibGljLnYxLlJvbGVSZWZlcmVuY2USLAoFdXNlcnMYAiADKAsyHS5vc2FjLnB1YmxpYy52MS5Vc2VyUmVmZXJlbmNlImYKEVJvbGVCaW5kaW5nU3RhdHVzEi8KBXN0YXRlGAEgASgOMiAub3NhYy5wdWJsaWMudjEuUm9sZUJpbmRpbmdTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQFCCgoIX21lc3NhZ2UqkwEKEFJvbGVCaW5kaW5nU3RhdGUSIgoeUk9MRV9CSU5ESU5HX1NUQVRFX1VOU1BFQ0lGSUVEEAASHgoaUk9MRV9CSU5ESU5HX1NUQVRFX1BFTkRJTkcQARIcChhST0xFX0JJTkRJTkdfU1RBVEVfUkVBRFkQAhIdChlST0xFX0JJTkRJTkdfU1RBVEVfRkFJTEVEEANiBnByb3RvMw", [file_google_api_field_behavior, file_osac_public_v1_metadata_type, file_osac_public_v1_role_type, file_osac_public_v1_user_type]);
+  fileDesc("CiZvc2FjL3B1YmxpYy92MS9yb2xlX2JpbmRpbmdfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEirQEKC1JvbGVCaW5kaW5nEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESLQoEc3BlYxgDIAEoCzIfLm9zYWMucHVibGljLnYxLlJvbGVCaW5kaW5nU3BlYxI3CgZzdGF0dXMYBCABKAsyIS5vc2FjLnB1YmxpYy52MS5Sb2xlQmluZGluZ1N0YXR1c0IE4kEBAyKvAQoPUm9sZUJpbmRpbmdTcGVjEisKBHJvbGUYASABKAsyHS5vc2FjLnB1YmxpYy52MS5Sb2xlUmVmZXJlbmNlEiwKBXVzZXJzGAIgAygLMh0ub3NhYy5wdWJsaWMudjEuVXNlclJlZmVyZW5jZRJBChBzZXJ2aWNlX2FjY291bnRzGAMgAygLMicub3NhYy5wdWJsaWMudjEuU2VydmljZUFjY291bnRSZWZlcmVuY2UiJQoXU2VydmljZUFjY291bnRSZWZlcmVuY2USCgoCaWQYASABKAkiZgoRUm9sZUJpbmRpbmdTdGF0dXMSLwoFc3RhdGUYASABKA4yIC5vc2FjLnB1YmxpYy52MS5Sb2xlQmluZGluZ1N0YXRlEhQKB21lc3NhZ2UYAiABKAlIAIgBAUIKCghfbWVzc2FnZSqTAQoQUm9sZUJpbmRpbmdTdGF0ZRIiCh5ST0xFX0JJTkRJTkdfU1RBVEVfVU5TUEVDSUZJRUQQABIeChpST0xFX0JJTkRJTkdfU1RBVEVfUEVORElORxABEhwKGFJPTEVfQklORElOR19TVEFURV9SRUFEWRACEh0KGVJPTEVfQklORElOR19TVEFURV9GQUlMRUQQA2IGcHJvdG8z", [file_google_api_field_behavior, file_osac_public_v1_metadata_type, file_osac_public_v1_role_type, file_osac_public_v1_user_type]);
 
 /**
- * Represents a binding between a role and a set of users.
+ * Represents a binding between a role and a set of subjects.
  *
- * A RoleBinding grants the permissions defined by its referenced role to the users listed in its spec. This is
- * the mechanism by which roles are assigned to users, enabling those users to perform the actions permitted by
- * the role.
+ * A RoleBinding grants the permissions defined by its referenced role to the users and service accounts listed in its
+ * spec.
  *
  * @generated from message osac.public.v1.RoleBinding
  */
@@ -86,7 +85,7 @@ export const RoleBindingSchema: GenMessage<RoleBinding> = /*@__PURE__*/
 export type RoleBindingSpec = Message<"osac.public.v1.RoleBindingSpec"> & {
   /**
    * Reference to the role that this binding refers to. This determines which permissions are granted to the
-   * users listed below.
+   * subjects listed below.
    *
    * @generated from field: osac.public.v1.RoleReference role = 1;
    */
@@ -102,6 +101,16 @@ export type RoleBindingSpec = Message<"osac.public.v1.RoleBindingSpec"> & {
    * @generated from field: repeated osac.public.v1.UserReference users = 2;
    */
   users: UserReference[];
+
+  /**
+   * References to the service accounts that are granted the permissions defined by the role.
+   *
+   * To grant a role to a service account, create a RoleBinding with the desired role and include the service account's
+   * ID in this list. Service account grants are evaluated by Fulfillment and are not synchronized to Keycloak roles.
+   *
+   * @generated from field: repeated osac.public.v1.ServiceAccountReference service_accounts = 3;
+   */
+  serviceAccounts: ServiceAccountReference[];
 };
 
 /**
@@ -110,6 +119,27 @@ export type RoleBindingSpec = Message<"osac.public.v1.RoleBindingSpec"> & {
  */
 export const RoleBindingSpecSchema: GenMessage<RoleBindingSpec> = /*@__PURE__*/
   messageDesc(file_osac_public_v1_role_binding_type, 1);
+
+/**
+ * Reference to a tenant-owned service account.
+ *
+ * @generated from message osac.public.v1.ServiceAccountReference
+ */
+export type ServiceAccountReference = Message<"osac.public.v1.ServiceAccountReference"> & {
+  /**
+   * Unique identifier assigned by the server.
+   *
+   * @generated from field: string id = 1;
+   */
+  id: string;
+};
+
+/**
+ * Describes the message osac.public.v1.ServiceAccountReference.
+ * Use `create(ServiceAccountReferenceSchema)` to create a new message.
+ */
+export const ServiceAccountReferenceSchema: GenMessage<ServiceAccountReference> = /*@__PURE__*/
+  messageDesc(file_osac_public_v1_role_binding_type, 2);
 
 /**
  * Current observed state of a role binding, reflecting its synchronization with the underlying authorization system.
@@ -138,7 +168,7 @@ export type RoleBindingStatus = Message<"osac.public.v1.RoleBindingStatus"> & {
  * Use `create(RoleBindingStatusSchema)` to create a new message.
  */
 export const RoleBindingStatusSchema: GenMessage<RoleBindingStatus> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_role_binding_type, 2);
+  messageDesc(file_osac_public_v1_role_binding_type, 3);
 
 /**
  * Synchronization states for RoleBinding objects with the underlying authorization system.

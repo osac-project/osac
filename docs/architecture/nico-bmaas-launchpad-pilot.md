@@ -138,8 +138,25 @@ installed-OS signal will count as success.
 
 ### Repeat redeploy on the existing VM
 
-Once the VM, Kind cluster, bindings, and AWX credentials are in place, refresh
-the pilot from its fork branch with one command **inside the VM**:
+The first redeploy needs a one-time bootstrap because an older VM checkout does
+not yet have the `redeploy-nico-pilot` Make target. Run these commands **inside
+the VM** and confirm the branch is `no-issue/nico-bmaas-integration-audit` with
+no changed or untracked files before the fast-forward:
+
+```bash
+cd "$HOME/src/osac"
+git status --short --branch
+git branch --show-current
+git fetch --no-tags https://github.com/vladikr/osac.git \
+  no-issue/nico-bmaas-integration-audit
+git merge --ff-only FETCH_HEAD
+git rev-parse --short HEAD
+```
+
+Stop if the branch differs, the tree is dirty, or the fast-forward fails;
+resolve that checkout state without discarding its changes. Once the VM, Kind
+cluster, bindings, and AWX credentials are in place, refresh the pilot from
+the now-updated checkout:
 
 ```bash
 export KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig"

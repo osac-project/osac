@@ -70,6 +70,23 @@ var _ = Describe("Subject inside context", func() {
 			Expect(IsControllerServiceAccount(ctx)).To(BeFalse())
 		})
 	})
+
+	Describe("tenant admin detection", func() {
+		It("recognizes the tenant-admin realm role", func() {
+			token := &jwt.Token{Claims: jwt.MapClaims{
+				"realm_access": map[string]any{"roles": []any{"tenant-admin"}},
+			}}
+			Expect(IsTenantAdmin(ContextWithToken(context.Background(), token))).To(BeTrue())
+		})
+
+		It("does not grant tenant-admin access to another role or missing token", func() {
+			token := &jwt.Token{Claims: jwt.MapClaims{
+				"realm_access": map[string]any{"roles": []any{"is_client"}},
+			}}
+			Expect(IsTenantAdmin(ContextWithToken(context.Background(), token))).To(BeFalse())
+			Expect(IsTenantAdmin(context.Background())).To(BeFalse())
+		})
+	})
 })
 
 var _ = Describe("Managed service-account JWT claims", func() {

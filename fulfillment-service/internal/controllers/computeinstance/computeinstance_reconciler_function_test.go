@@ -583,6 +583,190 @@ var _ = Describe("registered SSH key resolution", func() {
 		Expect(spec.SSHKey).To(Equal(publicKey))
 	})
 
+	It("keeps a running VM healthy when its registered Secret is gone", func() {
+		const (
+			instanceID   = "running-vm-with-deleted-key"
+			hubID        = "ssh-key-hub"
+			hubNamespace = "ssh-key-hub-ns"
+		)
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		existingCR := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: hubNamespace,
+				Name:      "running-vm",
+				Labels: map[string]string{
+					labels.ComputeInstanceUuid: instanceID,
+				},
+			},
+			Spec: osacv1alpha1.ComputeInstanceSpec{
+				TemplateID:  "osac.templates.ocp_virt_vm",
+				VCPUs:       2,
+				MemoryGiB:   4,
+				RunStrategy: osacv1alpha1.RunStrategyAlways,
+				SSHKey:      publicKey,
+			},
+		}
+		hubClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(existingCR).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: hubClient}, nil)
+		instanceTypesClient := NewMockInstanceTypesClient(ctrl)
+		instanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{Vcpus: 2, MemoryGib: 4}.Build(),
+				}.Build(),
+			}.Build(), nil)
+		secretsClient := NewMockSecretsClient(ctrl)
+		secretsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			AnyTimes().
+			Return(nil, status.Error(codes.NotFound, "Secret is gone"))
+		computeInstancesClient := NewMockComputeInstancesClient(ctrl)
+		computeInstancesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			AnyTimes().
+			DoAndReturn(func(_ context.Context, request *privatev1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
+				return privatev1.ComputeInstancesUpdateResponse_builder{Object: request.GetObject()}.Build(), nil
+			})
+
+		provisionedReason := "Provisioned"
+		provisionedMessage := "The instance is running."
+		computeInstance := privatev1.ComputeInstance_builder{
+			Id: instanceID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "tenant-a",
+			}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{
+				Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "osac.templates.ocp_virt_vm"}.Build(),
+				InstanceType: privatev1.InstanceTypeReference_builder{Id: "small"}.Build(),
+				RunStrategy:  privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+				SshKey:       privatev1.SecretReference_builder{Id: "deleted-secret", Name: "login"}.Build(),
+			}.Build(),
+			Status: privatev1.ComputeInstanceStatus_builder{
+				State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+				Hub:   hubID,
+				Conditions: []*privatev1.ComputeInstanceCondition{
+					privatev1.ComputeInstanceCondition_builder{
+						Type:    privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
+						Status:  privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+						Reason:  &provisionedReason,
+						Message: &provisionedMessage,
+					}.Build(),
+				},
+			}.Build(),
+		}.Build()
+		reconciler := &function{
+			logger:                 logger,
+			hubCache:               hubCache,
+			computeInstancesClient: computeInstancesClient,
+			instanceTypesClient:    instanceTypesClient,
+			secretsClient:          secretsClient,
+			maskCalculator:         masks.NewCalculator().Build(),
+		}
+
+		Expect(reconciler.run(ctx, computeInstance)).To(Succeed())
+		Expect(computeInstance.GetStatus().GetState()).To(
+			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+		provisioned := computeInstance.GetStatus().GetConditions()[0]
+		Expect(provisioned.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(provisioned.GetReason()).To(Equal(provisionedReason))
+
+		stored := &osacv1alpha1.ComputeInstance{}
+		Expect(hubClient.Get(ctx, clnt.ObjectKeyFromObject(existingCR), stored)).To(Succeed())
+		Expect(stored.Spec.SSHKey).To(Equal(publicKey))
+	})
+
+	It("marks initial reconciliation failed when the registered Secret is gone", func() {
+		const (
+			instanceID   = "new-vm-with-deleted-key"
+			hubID        = "initial-ssh-key-hub"
+			hubNamespace = "initial-ssh-key-hub-ns"
+		)
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		hubClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: hubClient}, nil)
+		instanceTypesClient := NewMockInstanceTypesClient(ctrl)
+		instanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{Vcpus: 2, MemoryGib: 4}.Build(),
+				}.Build(),
+			}.Build(), nil)
+		secretsClient := NewMockSecretsClient(ctrl)
+		secretsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.NotFound, "Secret is gone"))
+		computeInstancesClient := NewMockComputeInstancesClient(ctrl)
+		computeInstancesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, request *privatev1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
+				return privatev1.ComputeInstancesUpdateResponse_builder{Object: request.GetObject()}.Build(), nil
+			})
+
+		computeInstance := privatev1.ComputeInstance_builder{
+			Id: instanceID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "tenant-a",
+			}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{
+				Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "osac.templates.ocp_virt_vm"}.Build(),
+				InstanceType: privatev1.InstanceTypeReference_builder{Id: "small"}.Build(),
+				RunStrategy:  privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+				SshKey:       privatev1.SecretReference_builder{Id: "deleted-secret", Name: "login"}.Build(),
+			}.Build(),
+			Status: privatev1.ComputeInstanceStatus_builder{
+				State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+		reconciler := &function{
+			logger:                 logger,
+			hubCache:               hubCache,
+			computeInstancesClient: computeInstancesClient,
+			instanceTypesClient:    instanceTypesClient,
+			secretsClient:          secretsClient,
+			maskCalculator:         masks.NewCalculator().Build(),
+		}
+
+		err := reconciler.run(ctx, computeInstance)
+		Expect(err).To(MatchError(ContainSubstring("Secret is gone")))
+		Expect(computeInstance.GetStatus().GetState()).To(
+			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
+		var provisioned *privatev1.ComputeInstanceCondition
+		for _, condition := range computeInstance.GetStatus().GetConditions() {
+			if condition.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED {
+				provisioned = condition
+				break
+			}
+		}
+		Expect(provisioned).NotTo(BeNil())
+		Expect(provisioned.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(provisioned.GetReason()).To(Equal("SecretNotFound"))
+	})
+
 	DescribeTable("classifies SSH key lookup failures", func(code codes.Code, permanent bool, reason string) {
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
@@ -597,7 +781,7 @@ var _ = Describe("registered SSH key resolution", func() {
 		Expect(resolutionErr.Permanent).To(Equal(permanent))
 		Expect(resolutionErr.Reason).To(Equal(reason))
 	},
-		Entry("not found", codes.NotFound, false, "SecretNotFound"),
+		Entry("not found", codes.NotFound, true, "SecretNotFound"),
 		Entry("invalid", codes.InvalidArgument, true, "SecretInvalid"),
 		Entry("unavailable", codes.Unavailable, false, ""),
 		Entry("deadline", codes.DeadlineExceeded, false, ""),

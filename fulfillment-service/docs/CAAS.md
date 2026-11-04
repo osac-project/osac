@@ -34,6 +34,7 @@ osac get clustercatalogitems --filter 'this.published'
 Inspect a specific catalog item to see its fields and defaults:
 
 ```bash
+osac describe clustercatalogitem <catalog-item-id>
 osac get clustercatalogitems <catalog-item-id> -o yaml
 ```
 
@@ -42,6 +43,8 @@ Key fields in a catalog item:
 - **`title`**: Human-friendly short description of the offering.
 - **`description`**: Detailed Markdown description of what the catalog item provides.
 - **`fields`**: Typed locked or editable policies for cluster fields, with optional defaults.
+- **`fields.add_on_operators`**: The published add-on operators supplied by the offering and
+  whether the complete list is locked or editable.
 - **`template_parameters`**: Typed policies for parameters declared by the referenced Template.
 
 ## Manage Cluster Versions
@@ -119,6 +122,19 @@ osac create cluster \
 If `fields.version` is locked, omit `--version`: the catalog supplies its fixed version and rejects
 any explicitly supplied version, including the same one.
 
+For an ungoverned or editable add-on operator field, request published operators by repeating
+`--add-on-operator`:
+
+```bash
+osac create cluster --catalog-item hosted_cluster_offering \
+  --add-on-operator cert-manager \
+  --add-on-operator gpu-operator
+```
+
+If `fields.add_on_operators` is locked, omit the flag because the catalog supplies the complete
+operator list. Operator dependencies are added automatically, and installation progress is shown
+in `status.add_on_operators`.
+
 Optional flags:
 
 - `-n, --name <name>` - Human-readable name for the cluster
@@ -130,6 +146,8 @@ Optional flags:
   4. System default ClusterVersion (`is_default = true`).
 - `--node-set name=<group>,size=<positive-integer>,baremetal-instance-type=<name>` - Repeat for
   multiple worker groups. Omit only when the catalog item supplies a locked or default node-set map.
+- `--add-on-operator <name>` - Published add-on operator name. Repeat for multiple operators. Omit
+  when a locked catalog policy supplies the operator list.
 
 The command outputs the cluster ID upon successful creation.
 

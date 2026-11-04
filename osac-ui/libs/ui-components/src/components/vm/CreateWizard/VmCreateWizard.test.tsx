@@ -54,6 +54,13 @@ const vmCatalogItem = create(ComputeInstanceCatalogItemSchema, {
   },
 });
 
+const unpublishedVmCatalogItem = create(ComputeInstanceCatalogItemSchema, {
+  id: 'catalog-vm-draft',
+  metadata: { name: 'catalog-vm-draft' },
+  title: 'Draft VM offering',
+  published: false,
+});
+
 const renderWizard = (onClosed = vi.fn()) =>
   renderWithProviders(<VmCreateWizard onClosed={onClosed} />, {
     apiFixtures: { catalogItems: [vmCatalogItem] },
@@ -171,5 +178,17 @@ describe('VmCreateWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Next' }));
 
     expect(screen.getByText('Fix the highlighted errors before continuing.')).toBeInTheDocument();
+  });
+
+  it('hides unpublished catalog items from tenant users on the catalog step', async () => {
+    renderWithProviders(<VmCreateWizard onClosed={vi.fn()} />, {
+      apiFixtures: { catalogItems: [vmCatalogItem, unpublishedVmCatalogItem] },
+      session: { role: 'tenant-user' },
+    });
+
+    await screen.findByText(vmCatalogItem.metadata?.name ?? '');
+    expect(
+      screen.queryByText(unpublishedVmCatalogItem.metadata?.name ?? ''),
+    ).not.toBeInTheDocument();
   });
 });

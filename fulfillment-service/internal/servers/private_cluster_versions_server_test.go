@@ -20,6 +20,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -77,11 +78,21 @@ var _ = Describe("Private cluster versions server", func() {
 		BeforeEach(func() {
 			var err error
 
+			// ClusterVersions are platform-scoped. Exercise them with a caller whose
+			// default tenant is shared; the guard test below rejects explicit tenants.
+			sharedTenancy := auth.NewMockTenancyLogic(ctrl)
+			sharedTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+				Return(auth.AllTenants, nil).AnyTimes()
+			sharedTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+				Return(auth.SharedTenant, nil).AnyTimes()
+			sharedTenancy.EXPECT().DetermineVisibility(gomock.Any()).
+				Return(auth.TotalVisibility(), nil).AnyTimes()
+
 			// Create the server:
 			server, err = NewPrivateClusterVersionsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
+				SetTenancyLogic(sharedTenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -92,7 +103,7 @@ var _ = Describe("Private cluster versions server", func() {
 					Build()
 				Expect(err).ToNot(HaveOccurred())
 				response, err := diskImagesDao.Create().SetObject(privatev1.DiskImage_builder{
-					Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.DiskImageSpec_builder{
 						Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
 					}.Build(),
@@ -152,6 +163,19 @@ var _ = Describe("Private cluster versions server", func() {
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(ContainSubstring(substring))
 			}
+		})
+
+		It("Rejects creation outside the shared tenant", func() {
+			_, err := server.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+				Object: privatev1.ClusterVersion_builder{
+					Metadata: privatev1.Metadata_builder{Name: "tenant-version", Tenant: testTenant}.Build(),
+					Spec: privatev1.ClusterVersionSpec_builder{
+						Version: "4.17.0",
+						Image:   "quay.io/ocp:4.17.0",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
 		})
 
 		It("Creates object", func() {
@@ -1256,7 +1280,7 @@ var _ = Describe("Private cluster versions server", func() {
 					privatev1.DiskImage_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   name,
-							Tenant: testTenant,
+							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.DiskImageSpec_builder{
 							Lifecycle: lifecycle,
@@ -1272,7 +1296,7 @@ var _ = Describe("Private cluster versions server", func() {
 					func(lifecycle privatev1.DiskImageLifecycle, deleting bool, expectedCode grpccodes.Code) {
 						created, err := diskImagesDao.Create().SetObject(privatev1.DiskImage_builder{
 							Metadata: privatev1.Metadata_builder{
-								Name: "lifecycle-image", Tenant: testTenant, Finalizers: []string{"test"},
+								Name: "lifecycle-image", Tenant: auth.SharedTenant, Finalizers: []string{"test"},
 							}.Build(),
 							Spec: privatev1.DiskImageSpec_builder{Lifecycle: lifecycle}.Build(),
 						}.Build()).Do(ctx)
@@ -1396,12 +1420,12 @@ var _ = Describe("Private cluster versions server", func() {
 						Expect(err).ToNot(HaveOccurred())
 						assertReference(stored.GetObject().GetSpec().GetDiskImage())
 					},
-					Entry("allows an image owned by the assigned tenant", testTenant, &privatev1.DiskImageReference{Id: "local-image", Name: "rhcos"}, "local-image", grpccodes.OK),
-					Entry("allows a shared image", testTenant, &privatev1.DiskImageReference{Id: "shared-image", Name: "rhcos", Shared: true}, "shared-image", grpccodes.OK),
-					Entry("preserves a local project selector", testTenant, &privatev1.DiskImageReference{Id: "local-project-image", Name: "rhcos", Project: "images"}, "local-project-image", grpccodes.OK),
-					Entry("preserves shared and project selectors", testTenant, &privatev1.DiskImageReference{Id: "shared-project-image", Name: "rhcos", Shared: true, Project: "images"}, "shared-project-image", grpccodes.OK),
-					Entry("does not canonicalize omitted project and shared selectors", testTenant, &privatev1.DiskImageReference{Id: "shared-project-image", Name: "rhcos"}, "shared-project-image", grpccodes.OK),
-					Entry("rejects a foreign tenant even when visible", testTenant, &privatev1.DiskImageReference{Id: "foreign-image", Name: "rhcos"}, "", grpccodes.InvalidArgument),
+					Entry("rejects a tenant-private image from the shared owner", auth.SharedTenant, &privatev1.DiskImageReference{Id: "local-image", Name: "rhcos"}, "", grpccodes.InvalidArgument),
+					Entry("allows a shared image", auth.SharedTenant, &privatev1.DiskImageReference{Id: "shared-image", Name: "rhcos", Shared: true}, "shared-image", grpccodes.OK),
+					Entry("rejects a tenant-private project image from the shared owner", auth.SharedTenant, &privatev1.DiskImageReference{Id: "local-project-image", Name: "rhcos", Project: "images"}, "", grpccodes.InvalidArgument),
+					Entry("preserves shared and project selectors", auth.SharedTenant, &privatev1.DiskImageReference{Id: "shared-project-image", Name: "rhcos", Shared: true, Project: "images"}, "shared-project-image", grpccodes.OK),
+					Entry("does not canonicalize omitted project and shared selectors", auth.SharedTenant, &privatev1.DiskImageReference{Id: "shared-project-image", Name: "rhcos"}, "shared-project-image", grpccodes.OK),
+					Entry("rejects a foreign tenant even when visible", auth.SharedTenant, &privatev1.DiskImageReference{Id: "foreign-image", Name: "rhcos"}, "", grpccodes.InvalidArgument),
 					Entry("allows a shared owner to use a shared image", auth.SharedTenant, &privatev1.DiskImageReference{Id: "shared-image", Name: "rhcos", Shared: true}, "shared-image", grpccodes.OK),
 					Entry("rejects a shared owner referencing a tenant-private image", auth.SharedTenant, &privatev1.DiskImageReference{Id: "local-image", Name: "rhcos"}, "", grpccodes.InvalidArgument),
 				)

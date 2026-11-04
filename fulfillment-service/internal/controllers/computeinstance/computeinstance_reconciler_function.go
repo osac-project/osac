@@ -127,6 +127,7 @@ type task struct {
 	hubNamespace       string
 	hubClient          clnt.Client
 	userDataSecretName string
+	materializedSSHKey string
 }
 
 // NewFunction creates a new builder that can then be used to create a new compute instance reconciler function.
@@ -294,6 +295,11 @@ func (t *task) update(ctx context.Context) error {
 	object, err := t.getKubeObject(ctx)
 	if err != nil {
 		return err
+	}
+	if object != nil {
+		// SSH-key injection is initial-only. Preserve the key already materialized
+		// on the immutable CR instead of depending on the registry entry forever.
+		t.materializedSSHKey = object.Spec.SSHKey
 	}
 	ready, err := t.reconcileDiskRegistrationForWorkload(ctx, object == nil)
 	if err != nil {
@@ -962,11 +968,15 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 		}
 	}
 	if sshKeyRef := ciSpec.GetSshKey(); sshKeyRef != nil {
-		publicKey, err := controllers.ResolveSSHKey(ctx, t.r.secretsClient, sshKeyRef)
-		if err != nil {
-			return err
+		if t.materializedSSHKey != "" {
+			spec.SSHKey = t.materializedSSHKey
+		} else {
+			publicKey, err := controllers.ResolveSSHKey(ctx, t.r.secretsClient, sshKeyRef)
+			if err != nil {
+				return err
+			}
+			spec.SSHKey = publicKey
 		}
-		spec.SSHKey = publicKey
 	}
 	if t.userDataSecretName != "" {
 		spec.UserDataSecretRef = &corev1.LocalObjectReference{

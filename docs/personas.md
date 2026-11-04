@@ -27,7 +27,8 @@ workflows, rather than a different set of permissions.
 * sets quotas for tenant organizations
 * uses the OSAC interfaces to manage tenant organizations
 * uses the OSAC interfaces to manage resource allocation
-* can work across tenant organizations, with access limited by their assigned permissions
+* may belong to multiple tenant organizations and work across them, with access
+  limited by their assigned permissions
 * manages any global catalogs of templates (VM templates, cluster templates, etc)
 * ensures that all global templates work with the local infrastructure
 * works with internal infrastructure owners (Cloud Infrastructure Admins) as necessary
@@ -42,6 +43,7 @@ workflows, rather than a different set of permissions.
 ## Tenant Admin
 
 * works for the Tenant Organization
+* belongs to one tenant organization at a time
 * typically does not have any relationship to other tenants of the cloud provider
 * manages their organization's configuration in OSAC, including IDP
 * manages users within their organization
@@ -53,6 +55,7 @@ workflows, rather than a different set of permissions.
 ## Tenant User
 
 * works for the Tenant Organization
+* belongs to one tenant organization at a time
 * can utilize templates from global and organization-specific catalogs
 * self-service provisions cloud resources for use by themself or their team
 * manages the full lifecycle of cloud resourses

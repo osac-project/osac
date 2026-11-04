@@ -154,6 +154,17 @@
                 ({{ _ready.pending | join(', ') }}); OSAC retries the task.
               retryable: true
 
+    - name: Publish compute eligibility independently of Subnet readiness
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data:
+          osac_result:
+            compute_instance_supported: "{{ _cudn_evpn_assess.state != 'other' }}"
+            compute_instance_unsupported_reason: >-
+              {{ 'cudn_evpn supports VMs only on its VirtualNetwork owner Subnet'
+                 if _cudn_evpn_assess.state == 'other' else '' }}
+
   rescue:
     - name: Report the failure to OSAC
       ansible.builtin.include_tasks: _fail.yaml

@@ -42,7 +42,7 @@ describe('buildClusterCreatePayload', () => {
           {
             ...row,
             name: 'production',
-            hostType: 'acme_1tb',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
             size: '3',
           },
         ]),
@@ -107,11 +107,36 @@ describe('buildClusterCreatePayload', () => {
         pullSecretSecret: provisioningFieldValue('secret'),
         versionName: provisioningFieldValue('4-17-0'),
         nodeSetRows: provisioningFieldValue([
-          { ...row, name: 'empty-host-type', hostType: '', size: '3' },
-          { ...row, name: 'zero-size', hostType: 'acme_1tb', size: '0' },
-          { ...row, name: 'invalid-size', hostType: 'acme_2tb', size: 'not-a-number' },
-          { ...row, name: 'production', hostType: 'acme_1tb', size: '3' },
-          { ...row, name: 'development', hostType: 'acme_1tb', size: '2' },
+          {
+            ...row,
+            name: 'empty-host-type',
+            hostType: { id: '', name: '' },
+            size: '3',
+          },
+          {
+            ...row,
+            name: 'zero-size',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: '0',
+          },
+          {
+            ...row,
+            name: 'invalid-size',
+            hostType: { id: 'acme_2tb', name: 'acme_2tb' },
+            size: 'not-a-number',
+          },
+          {
+            ...row,
+            name: 'production',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: '3',
+          },
+          {
+            ...row,
+            name: 'development',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: '2',
+          },
         ]),
         network: { podCidr: provisioningFieldValue(''), serviceCidr: provisioningFieldValue('') },
       },
@@ -137,7 +162,7 @@ describe('buildClusterCreatePayload', () => {
           {
             ...createEmptyNodeSetRow(),
             name: '__proto__',
-            hostType: 'acme_1tb',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
             size: '3',
           },
         ]),
@@ -339,7 +364,7 @@ describe('buildClusterCreatePayload — locked catalog fields', () => {
             {
               ...createEmptyNodeSetRow(),
               name: 'workers',
-              hostType: 'bmit-worker',
+              hostType: { id: 'bmit-worker', name: 'worker' },
               size: '2',
             },
           ],

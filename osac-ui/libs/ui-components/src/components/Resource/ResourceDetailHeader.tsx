@@ -20,12 +20,14 @@ interface ResourceDetailHeaderProps {
   }[];
   resourceName: string;
   description?: string;
+  titlePrefix?: ReactNode;
   titleAddon?: ReactNode;
 }
 
 export const ResourceDetailHeader = ({
   resourceName,
   description,
+  titlePrefix,
   titleAddon,
   parents,
 }: ResourceDetailHeaderProps) => {
@@ -59,6 +61,7 @@ export const ResourceDetailHeader = ({
               spaceItems={{ default: 'spaceItemsMd' }}
               flexWrap={{ default: 'wrap' }}
             >
+              {titlePrefix ? <FlexItem>{titlePrefix}</FlexItem> : null}
               <FlexItem>
                 <Title headingLevel="h1" size="2xl">
                   {resourceName}

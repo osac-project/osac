@@ -118,6 +118,13 @@ spec:
           status:
             description: status defines the observed state of Subnet
             properties:
+              computeInstanceSupported:
+                description: |-
+                  Compute eligibility is independent of lifecycle readiness. An absent value
+                  means the Kubernetes manager has not reported eligibility.
+                type: boolean
+              computeInstanceUnsupportedReason:
+                type: string
               conditions:
                 description: Conditions holds the Ready condition of the Subnet.
                 items:

@@ -9,9 +9,15 @@ import { TenantsMainPage } from '../../locators/tenants';
 
 export type MainPageOption = Exclude<keyof typeof MainPage, 'navigation'>;
 
-type ExpandableMainPageOption = 'administration' | 'infrastructure' | 'networking' | 'storage';
+type ExpandableMainPageOption =
+  | 'administration'
+  | 'infrastructure'
+  | 'networking'
+  | 'services'
+  | 'storage';
 
 const parentByNestedOption: Partial<Record<MainPageOption, ExpandableMainPageOption>> = {
+  virtualMachines: 'services',
   tenants: 'administration',
   storageBackends: 'storage',
   storageTiers: 'storage',
@@ -43,6 +49,7 @@ export const openMainPageOption = async (page: Page, option: MainPageOption): Pr
     option === 'administration' ||
     option === 'infrastructure' ||
     option === 'networking' ||
+    option === 'services' ||
     option === 'storage'
   ) {
     await openSection(page, option);

@@ -4,8 +4,6 @@ import {
   ComputeInstanceWizardValues,
   VM_SSH_KEY_FORM_PATH,
   VM_USER_DATA_FORM_PATH,
-  VM_USER_DATA_SECRET_FORM_PATH,
-  VM_USER_DATA_SOURCE_FORM_PATH,
 } from './fields';
 import SshPublicKeySecretField from './fields/SshPublicKeySecretField';
 import OsacForm from '../../Form/OsacForm';
@@ -29,9 +27,7 @@ const VmAccessStep = () => {
       <ProvisioningField name={VM_USER_DATA_FORM_PATH}>
         {({ valueName, isDisabled }) => (
           <UserDataField
-            sourceName={`${VM_USER_DATA_SOURCE_FORM_PATH}.value`}
-            secretRefName={`${VM_USER_DATA_SECRET_FORM_PATH}.value`}
-            inlineName={valueName}
+            name={valueName}
             projectName={values.metadata.project}
             isDisabled={isDisabled}
           />

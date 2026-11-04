@@ -248,6 +248,7 @@ describe('useConfiguredClusterVersion', () => {
 
     await waitFor(() => expect(result.current.data?.id).toBe(configured.id));
     expect(capturedFilter).toContain('this.metadata.name in ["4-15-0"]');
+    expect(capturedFilter).toContain('this.metadata.project == ""');
     expect(capturedFilter).toContain('this.spec.state');
     expect(capturedFilter).toContain('this.spec.enabled');
     expect(capturedFilter).toContain(String(ClusterVersionState.OBSOLETE));
@@ -300,9 +301,15 @@ describe('useConfiguredClusterVersion', () => {
       metadata: { name: 'current', project: 'project-a', tenant: 'tenant-b' },
       spec: { version: '4.17.0', state: ClusterVersionState.ACTIVE, enabled: true },
     });
+    let capturedFilter: string | undefined;
     const transport = createMockConnectTransport(
       {},
-      { onClusterVersionList: () => ({ items: [otherVersion, ownVersion] }) },
+      {
+        onClusterVersionList: (request) => {
+          capturedFilter = request.filter;
+          return { items: [otherVersion, ownVersion] };
+        },
+      },
     );
     const { wrapper } = makeWrapper(transport);
     const reference = create(ClusterVersionReferenceSchema, {
@@ -314,6 +321,8 @@ describe('useConfiguredClusterVersion', () => {
     });
 
     await waitFor(() => expect(result.current.data?.id).toBe(ownVersion.id));
+    expect(capturedFilter).toContain('this.metadata.project == "project-a"');
+    expect(capturedFilter).toContain('this.metadata.tenant == "tenant-a"');
   });
 
   it('returns unresolved for an absent, missing, mismatched or ambiguous reference', async () => {
@@ -407,9 +416,15 @@ describe('useConfiguredClusterVersion', () => {
       metadata: { name: 'current', ...metadata },
       spec: { version: '4.15.0', state: ClusterVersionState.ACTIVE, enabled: true },
     });
+    let capturedFilter: string | undefined;
     const transport = createMockConnectTransport(
       {},
-      { onClusterVersionList: () => ({ items: [version] }) },
+      {
+        onClusterVersionList: (request) => {
+          capturedFilter = request.filter;
+          return { items: [version] };
+        },
+      },
     );
     const { wrapper } = makeWrapper(transport);
     const reference = create(ClusterVersionReferenceSchema, {
@@ -420,6 +435,10 @@ describe('useConfiguredClusterVersion', () => {
 
     await waitFor(() => expect(result.current.data?.id).toBe(version.id));
     expect(result.current.isError).toBe(false);
+    expect(capturedFilter).toContain(`this.metadata.project == "${reference.project}"`);
+    if (reference.shared) {
+      expect(capturedFilter).toContain('this.metadata.tenant == "shared"');
+    }
   });
 
   it('treats a NotFound response as unresolved and other transport errors as errors', async () => {

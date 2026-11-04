@@ -100,11 +100,23 @@ export const useConfiguredClusterVersion = (
   const id = reference?.id;
   const name = reference?.name.trim() || undefined;
   const byId = useClusterVersion(id);
-  const byName = useListAllResources(
-    ClusterVersions,
-    name ? clusterVersionNamesFilter([name]) : undefined,
-    { enabled: !id && Boolean(name) },
-  );
+  const nameFilter = name
+    ? cel<ClusterVersion>((filter) =>
+        filter.and(
+          clusterVersionNamesFilter([name]),
+          filter.field('metadata.project').equals(reference?.project ?? ''),
+          reference?.shared
+            ? filter.field('metadata.tenant').equals('shared')
+            : ownerTenant
+              ? filter.field('metadata.tenant').equals(ownerTenant)
+              : undefined,
+        ),
+      )
+    : undefined;
+  const byName = useListAllResources(ClusterVersions, nameFilter, {
+    enabled: !id && Boolean(name),
+    refetchInterval: false,
+  });
   const query = id ? byId : byName;
   const isLoading = query.isLoading || query.isPlaceholderData;
   const notFound = query.error instanceof ConnectError && query.error.code === Code.NotFound;

@@ -16,6 +16,7 @@ import {
 import {
   CLUSTER_VERSION_ACTIVE_LIST_FILTER,
   CLUSTER_VERSION_ALL_STATES_LIST_FILTER,
+  clusterUpgradeCatalogFilter,
   clusterVersionNamesFilter,
   useClusterVersion,
   useClusterVersions,
@@ -53,6 +54,13 @@ describe('cluster version list filters', () => {
     expect(CLUSTER_VERSION_ACTIVE_LIST_FILTER).toBe(
       `(this.spec.state == ${ClusterVersionState.ACTIVE} || this.spec.state == ${ClusterVersionState.DEPRECATED}) && this.spec.enabled == true`,
     );
+  });
+
+  it('scopes the upgrade catalog to the cluster tenant and shared versions', () => {
+    expect(clusterUpgradeCatalogFilter('tenant-a')).toBe(
+      `${CLUSTER_VERSION_ACTIVE_LIST_FILTER} && (this.metadata.tenant == "tenant-a" || this.metadata.tenant == "shared")`,
+    );
+    expect(clusterUpgradeCatalogFilter()).toBe(CLUSTER_VERSION_ACTIVE_LIST_FILTER);
   });
 
   it('references spec.state and spec.enabled so the all-states filter returns every state', () => {

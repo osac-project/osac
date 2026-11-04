@@ -26,6 +26,19 @@ export const CLUSTER_VERSION_ACTIVE_LIST_FILTER = cel<ClusterVersion>((filter) =
   ),
 );
 
+export const clusterUpgradeCatalogFilter = (tenant?: string) =>
+  cel<ClusterVersion>((filter) =>
+    filter.and(
+      CLUSTER_VERSION_ACTIVE_LIST_FILTER,
+      tenant
+        ? filter.or(
+            filter.field('metadata.tenant').equals(tenant),
+            filter.field('metadata.tenant').equals('shared'),
+          )
+        : undefined,
+    ),
+  );
+
 // References both spec.state and spec.enabled so the public List RPC returns
 // every version — including obsolete and disabled ones. The server injects
 // per-field default predicates (active/deprecated + enabled) only for fields the

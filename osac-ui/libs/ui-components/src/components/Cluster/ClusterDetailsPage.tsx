@@ -6,7 +6,7 @@ import { ClusterVersions } from '@osac/types';
 import { useListAllResources } from '../../api/use-resource';
 import { useCluster } from '../../api/v1/cluster';
 import {
-  CLUSTER_VERSION_ACTIVE_LIST_FILTER,
+  clusterUpgradeCatalogFilter,
   useConfiguredClusterVersion,
 } from '../../api/v1/cluster-versions';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -52,9 +52,14 @@ export const ClusterDetailsPage = () => {
     cluster?.spec?.version,
     cluster?.metadata?.tenant,
   );
-  const catalog = useListAllResources(ClusterVersions, CLUSTER_VERSION_ACTIVE_LIST_FILTER, {
-    enabled: Boolean(cluster),
-  });
+  const catalog = useListAllResources(
+    ClusterVersions,
+    clusterUpgradeCatalogFilter(cluster?.metadata?.tenant),
+    {
+      enabled: Boolean(cluster),
+      refetchInterval: false,
+    },
+  );
 
   if (isLoading) {
     return (

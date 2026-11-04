@@ -45,6 +45,7 @@ to it — records Kafka deleted cannot be replayed after a restore.
 | `metering-service/` | Fold, heartbeat rounds, relay, rule revisions, and usage evaluation |
 | `adapters/` | Provider adapter framework (`Runner`, Kafka consumer, dedup, retry, DLQ routing) and concrete adapters (`echo-adapter`, `m360-adapter`) |
 | `charts/osac-metering/` | Helm chart for the metering subsystem, including rule revision 0001 and the policy that protects it |
+| `docs/contract/` | Generated contract for outside readers: the reference and a checkable JSON Schema |
 
 ## Build and Test
 
@@ -72,6 +73,18 @@ need `podman` or `docker`. The M360 contract test additionally needs
 `M360_TEST_API_URL`, `M360_TEST_API_KEY`, and `M360_TEST_TENANT`, and skips
 itself without them. Deploying an M360 test tenant is outside this
 repository's scope.
+
+## Published contract
+
+[`docs/contract/reference.md`](docs/contract/reference.md) is the usage event contract for
+outside readers, with a checkable JSON Schema beside it. Both are generated from the metering
+field registry, rule revision 0001, and the schema files under `schema/versions/`. Run
+`make contract` after changing any of them; CI fails when the committed files are stale.
+
+`schema/versions/` holds one file per published schema version, each with its version and
+effective date. A published file never changes: a new field is a new file with the next
+version, and `scripts/test-contract-schemas.sh` fails the release on any edit, rename, or
+deletion of a released one.
 
 ## Adding a billable resource
 

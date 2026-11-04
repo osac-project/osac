@@ -16,7 +16,7 @@ import {
 } from '@patternfly/react-core';
 
 import { ComputeInstance, ComputeInstanceState, ComputeInstances } from '@osac/types';
-import { useComputeInstances } from '@osac/ui-components/api/v1/compute-instance';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import { useInstanceTypes } from '@osac/ui-components/api/v1/instance-types';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
@@ -29,11 +29,13 @@ import {
   useArrayPageFilter,
   usePageFilter,
 } from '@osac/ui-components/hooks/use-page-filter';
+import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
 type VmStatusFilter = 'running' | 'stopped';
 
+const EMPTY_VMS: ComputeInstance[] = [];
 const STATUS_FILTER_PARAM = 'status';
 
 const isVmStatusFilter = (value: string): value is VmStatusFilter =>
@@ -55,7 +57,15 @@ export const VmListPage = () => {
     isVmStatusFilter,
   );
 
-  const { data: vms = [], isLoading, error } = useComputeInstances();
+  const projectFilter = useProjectFilterQuery<ComputeInstance>();
+  const {
+    data: vmResponse,
+    isLoading,
+    error,
+  } = useListResource(ComputeInstances, {
+    filter: projectFilter,
+  });
+  const vms = vmResponse?.items ?? EMPTY_VMS;
   const {
     data: instanceTypes = [],
     isLoading: isInstanceTypesLoading,

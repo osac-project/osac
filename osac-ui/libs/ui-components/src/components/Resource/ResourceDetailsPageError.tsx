@@ -13,6 +13,7 @@ type ResourceDetailsPageErrorProps = {
   parentLabel: string;
   resourceLabel?: string;
   onRetry?: () => void;
+  sectionClassName?: string;
 } & ({ error: unknown; variant?: never } | { variant: 'not-found'; error?: never });
 
 const resolveVariant = (error: unknown): Exclude<ResourceDetailsPageErrorVariant, 'not-found'> =>
@@ -48,6 +49,7 @@ export const ResourceDetailsPageError = ({
   parentLabel,
   resourceLabel = 'resource',
   onRetry,
+  sectionClassName,
   ...props
 }: ResourceDetailsPageErrorProps) => {
   const navigate = useNavigate();
@@ -58,7 +60,7 @@ export const ResourceDetailsPageError = ({
   };
 
   if (variant === 'unauthorized') {
-    return <QueryErrorPage error={props.error} />;
+    return <QueryErrorPage error={props.error} sectionClassName={sectionClassName} />;
   }
 
   const { status, title, body, icon } = variantConfig(resourceLabel)[variant];
@@ -72,6 +74,7 @@ export const ResourceDetailsPageError = ({
       icon={icon}
       onRetry={variant === 'load-error' ? onRetry : undefined}
       secondaryAction={returnAction}
+      sectionClassName={sectionClassName}
     />
   );
 };

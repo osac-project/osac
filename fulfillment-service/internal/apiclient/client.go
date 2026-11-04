@@ -34,6 +34,19 @@ type APIError struct {
 	Body       string
 }
 
+// RequestError indicates that the HTTP client could not determine the request outcome.
+type RequestError struct {
+	Cause error
+}
+
+func (e *RequestError) Error() string {
+	return fmt.Sprintf("failed to send HTTP request: %v", e.Cause)
+}
+
+func (e *RequestError) Unwrap() error {
+	return e.Cause
+}
+
 // Error implements the error interface.
 func (e *APIError) Error() string {
 	return fmt.Sprintf("API error: status=%d body=%s", e.StatusCode, e.Body)
@@ -179,7 +192,7 @@ func (c *Client) DoRequest(ctx context.Context, method, path string, body any) (
 
 	response, err = c.httpClient.Do(request)
 	if err != nil {
-		err = fmt.Errorf("failed to send HTTP request: %w", err)
+		err = &RequestError{Cause: err}
 		return
 	}
 

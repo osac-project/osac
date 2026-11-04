@@ -542,6 +542,17 @@ The old expert NetworkClass block and `k8s_only` selection do not apply to
 `0.0.64`. Networking selection and the provider-provisioning switch are fixed
 at the first installation; a successful Helm render does not verify the fabric.
 
+For phase 2, use the complete
+[CUDN EVPN with Netris example](customer-install-guide.md#cudn-evpn-with-netris).
+It configures the Netris AAP backend, registers `cudn_evpn` with
+`capabilities: [ipv4]`, and enables the expert NetworkClass path with
+`global.expertOverrides.networkClass: true`. That path also requires
+`networkClass.enabled: true`, a nonempty title, and the Netris and EVPN
+manager names. The subchart has no built-in `cudn_evpn` registration defaults;
+enabling it alone creates an invalid registration with empty capabilities.
+The normal `global.networking.k8sManager` setting accepts only `""` or
+`k8s_only`, so it cannot select `cudn_evpn` directly.
+
 ### Adding CA roots to the shared bundle at runtime
 
 The `ca-bundle` trust-manager Bundle includes the `ca.crt` key from every
@@ -607,11 +618,12 @@ The phase-2 values that mount that Secret are in the
 
 **Workload cluster.** Point `KUBECONFIG` at the workload cluster. In
 `my-workload-infra-values.yaml`, enable `cnv`. Enable `lvms` if LVM Storage
-needs to be installed on that cluster. Keep `evpn.enabled: false` for this
-layout, which uses the default pod network. If administrators prepare EVPN
-host networking separately, use their environment's procedure;
-the [EVPN host networking procedure](#evpn-host-networking-vmaas) above is one
-example. This does not enable OSAC provider networking across clusters.
+needs to be installed on that cluster. Keep `evpn.enabled: false` when the
+workload cluster uses the default pod network. If it uses CUDN EVPN, enable
+`evpn` and configure phase 1b as described in
+[EVPN host networking (VMaaS)](#evpn-host-networking-vmaas). This configures
+host networking only; it does not enable OSAC provider networking across
+clusters.
 Disable the other phase-1 toggles. Set `certManager.enabled`,
 `trustManager.enabled`, and `caIssuer.enabled` to `false`; the latter two remain enabled by default even
 when `certManager` is disabled. Also disable `aapOperator`, `keycloak`,
@@ -649,70 +661,6 @@ StorageBackend, StorageTier, and tenant storage configuration; installing the
 LVM Storage Operator and its operand does not register an OSAC storage offering.
 The automatic local-storage registration hook is for development and CI only;
 see [Evaluation only](customer-install-guide.md#92-evaluation-only).
-
-For phase 2, use the complete
-[CUDN EVPN with Netris example](customer-install-guide.md#cudn-evpn-with-netris).
-It configures the Netris AAP backend, registers `cudn_evpn` with
-`capabilities: [ipv4]`, and enables the expert NetworkClass path with
-`global.expertOverrides.networkClass: true`. That path also requires
-`networkClass.enabled: true`, a nonempty title, and the Netris and EVPN
-manager names. The subchart has no built-in `cudn_evpn` registration defaults;
-enabling it alone creates an invalid registration with empty capabilities.
-The normal `global.networking.k8sManager` setting accepts only `""` or
-`k8s_only`, so it cannot select `cudn_evpn` directly.
-
-## Separate VMaaS workload cluster
-
-Run the OSAC management services on one OpenShift cluster and the virtual
-machines on another. Both clusters need `cluster-admin` access and different
-API server addresses. Disable CaaS and BMaaS. The operator refuses to start
-with a remote kubeconfig when either the cluster controller or the
-bare-metal-instance controller is enabled.
-
-Create the workload kubeconfig Secret on the management cluster before phase
-2. The Secret contents and the console-proxy label are described in
-[VMaaS dedicated cluster](../../../osac-operator/docs/vmaas-dedicated-cluster/README.md).
-The phase-2 values that mount that Secret are in the
-[customer install guide](customer-install-guide.md#64-installing-vmaas-on-a-separate-workload-cluster).
-
-**Workload cluster.** Point `KUBECONFIG` at the workload cluster. In
-`my-workload-infra-values.yaml`, enable `cnv` and `lvms`. Enable `evpn` when that
-cluster uses CUDN EVPN, as described in
-[EVPN host networking (VMaaS)](#evpn-host-networking-vmaas). Disable the other
-phase-1 toggles. Set `certManager.enabled`, `trustManager.enabled`, and
-`caIssuer.enabled` to `false`; the latter two remain enabled by default even
-when `certManager` is disabled. Also disable `aapOperator`, `keycloak`,
-`mce`, and `kafka`. Run
-[Phase 1a](#phase-1a-install-prerequisite-operators) and
-[Phase 1b](#phase-1b-install-shared-infrastructure) against that kubeconfig,
-replacing `-f my-infra-values.yaml` with `-f my-workload-infra-values.yaml`
-in both commands.
-Do not install the `osac` chart on this cluster.
-
-**Management cluster.** Point `KUBECONFIG` at the management cluster. Create
-a separate `my-management-infra-values.yaml` for its prerequisites. Keep the
-certificate stack enabled and OpenShift Virtualization and EVPN disabled:
-
-```yaml
-certManager:
-  enabled: true
-trustManager:
-  enabled: true
-caIssuer:
-  enabled: true
-cnv:
-  enabled: false
-evpn:
-  enabled: false
-```
-
-Run phase 1a and phase 1b, replacing `-f my-infra-values.yaml` with
-`-f my-management-infra-values.yaml` in both commands. Then run phase 2 with
-the remote kubeconfig values from the customer install guide. The Secret must
-exist in the OSAC namespace before `helm upgrade --install osac`. Keep
-`lvms.enabled: true` in the phase-2 `my-values.yaml` to register the workload
-cluster's local StorageBackend and StorageTier in fulfillment. Installing
-LVMS through phase 1 alone does not perform that registration.
 
 ## When Prerequisites Already Exist
 

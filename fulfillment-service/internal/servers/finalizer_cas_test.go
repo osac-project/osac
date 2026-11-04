@@ -14,6 +14,8 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"sort"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
@@ -31,6 +33,41 @@ var _ = Describe("finalizer CAS", func() {
 	finalizersMask := func() *fieldmaskpb.FieldMask {
 		return finalizerMaskOf("metadata.finalizers")
 	}
+
+	// The guard proves coverage of the RPCs at the level of the bare GenericServer, not of the production typed
+	// wrappers: a wrapper that rebuilds the request from the stored object without restoring the version of the
+	// client would defeat the compare-and-swap without failing these specs. DiskImage and InstanceType rebuild the
+	// request but restore the client version and drop the request finalizers, so they can't lose an update;
+	// BareMetalInstanceType applies the masks itself and has its own specs with the typed servers.
+	It("covers every finalizer-bearing private resource", func() {
+		covered := map[string]bool{}
+		for _, c := range finalizerCases() {
+			covered[c.service] = true
+		}
+		for service := range finalizerCaseSkips {
+			covered[service] = true
+		}
+		expected := map[string]bool{}
+		for _, service := range finalizerBearingServices() {
+			expected[service] = true
+		}
+
+		var missing, stale []string
+		for service := range expected {
+			if !covered[service] {
+				missing = append(missing, service)
+			}
+		}
+		for service := range covered {
+			if !expected[service] {
+				stale = append(stale, service)
+			}
+		}
+		sort.Strings(missing)
+		sort.Strings(stale)
+		Expect(missing).To(BeEmpty(), "services missing from the finalizer cases and from finalizerCaseSkips")
+		Expect(stale).To(BeEmpty(), "services in the finalizer cases or skips that have no finalizer-bearing Update")
+	})
 
 	DescribeTable("rejects a stale private finalizer write",
 		func(c finalizerCase) {

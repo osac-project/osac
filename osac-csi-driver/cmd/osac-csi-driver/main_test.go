@@ -654,17 +654,17 @@ func TestParseBackendMap(t *testing.T) {
 	})
 
 	t.Run("single pair", func(t *testing.T) {
-		m, err := parseBackendMap("ontap=/csi/trident/csi.sock")
+		m, err := parseBackendMap("netapp=/csi/trident/csi.sock")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if m["ontap"] != "/csi/trident/csi.sock" {
-			t.Fatalf("expected ontap=/csi/trident/csi.sock, got %v", m)
+		if m["netapp"] != "/csi/trident/csi.sock" {
+			t.Fatalf("expected netapp=/csi/trident/csi.sock, got %v", m)
 		}
 	})
 
 	t.Run("multiple pairs", func(t *testing.T) {
-		m, err := parseBackendMap("ontap=/csi/trident/csi.sock,lvms=none")
+		m, err := parseBackendMap("netapp=/csi/trident/csi.sock,lvms=none")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

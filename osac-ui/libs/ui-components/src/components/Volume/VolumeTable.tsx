@@ -4,11 +4,11 @@ import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import type { Volume } from '@osac/types';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
 
-import { formatSizeGib } from './utils';
 import { VolumeAccessModeLabel } from './VolumeAccessModeLabel';
 import VolumeActionsMenu from './VolumeActionsMenu';
 import { VolumeStatusLabel } from './VolumeStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
+import { formatSizeGib } from '../../utils/detailFormatters';
 import { Timestamp } from '../Primitives/Timestamp';
 
 interface VolumeTableProps {

@@ -7,7 +7,6 @@ import { CatalogItem } from '@osac/ui-components/components/catalog/catalogItemD
 import CatalogItemLaunchButton from '@osac/ui-components/components/catalog/CatalogItemLaunchButton';
 import CatalogItemTenant from '@osac/ui-components/components/catalog/CatalogItemTenant';
 import FieldSeparator from '@osac/ui-components/components/Primitives/FieldSeparator';
-import { Timestamp } from '@osac/ui-components/components/Primitives/Timestamp';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { UserRole } from '@osac/ui-components/shellTypes';
 
@@ -54,20 +53,6 @@ const CatalogItemCardFooter: FC<CatalogItemCardFooterProps> = ({
             </>
           ) : null}
           <FlexItem>{t('Admin-managed')}</FlexItem>
-        </Flex>
-      );
-    }
-
-    if (role === 'tenant-admin') {
-      return (
-        <Flex flexWrap={{ default: 'nowrap' }} spaceItems={{ default: 'spaceItemsXs' }}>
-          <FlexItem>{catalogItem.metadata?.creator || '-'}</FlexItem>
-          <FlexItem>
-            <FieldSeparator />
-          </FlexItem>
-          <FlexItem>
-            <Timestamp value={catalogItem.metadata?.creationTimestamp} format="Date" />
-          </FlexItem>
         </Flex>
       );
     }

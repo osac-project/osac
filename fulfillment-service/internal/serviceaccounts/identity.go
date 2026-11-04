@@ -28,6 +28,8 @@ const PendingClientSecretKey = "client_secret"
 const PendingClientSecretRefIDKey = "client_secret_ref_id"
 const PendingClientSecretRefNameKey = "client_secret_ref_name"
 const ManagedClientIDPrefix = "osac-sa-"
+const PendingRotationSecretKey = "rotation_client_secret"
+const PendingRotationGenerationKey = "rotation_generation"
 const clientSecretPrefix = "osac-service-account-"
 const registrationSecretPrefix = "osac-registration-"
 

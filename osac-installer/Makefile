@@ -13,7 +13,7 @@
 #   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|operator|bmf
+#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|compute-storage|operator|bmf
 #
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
 # control plane, then layers on the full local dev stack (KubeVirt/CDI/Multus, AWX,
@@ -147,10 +147,10 @@ endif
 SUITE_TARGETS := test
 ifneq ($(filter $(SUITE_TARGETS),$(MAKECMDGOALS)),)
 ifndef SUITE
-$(error SUITE is required (all|fulfillment|operator|bmf))
+$(error SUITE is required (all|fulfillment|compute-storage|operator|bmf))
 endif
-ifeq ($(filter $(SUITE),all fulfillment operator bmf),)
-$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, operator, or bmf)
+ifeq ($(filter $(SUITE),all fulfillment compute-storage operator bmf),)
+$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, compute-storage, operator, or bmf)
 endif
 ifeq ($(MCP_TEST_ENABLED),true)
 ifneq ($(PLATFORM),kind)
@@ -318,7 +318,7 @@ define kind-load-image
 	@if [ "$(KIND_RUNTIME_REQUIRED)" = "true" ]; then \
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
 		trap 'rm -f "$$tmpfile"' EXIT; \
-		$(KIND_RUNTIME_CMD) container save $(1) -o "$$tmpfile"; \
+		$(KIND_RUNTIME_CMD) container save $(1) > "$$tmpfile"; \
 		$(KIND_RUNTIME_CMD) load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
 	elif [ "$$(basename $(CONTAINER_TOOL))" = "podman" ]; then \
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
@@ -704,24 +704,27 @@ METERING_IT_IMAGE := localhost/metering-service:it
 METERING_IT_IMAGE_ARGS := --set metering.image.repository=localhost/metering-service --set metering.image.tag=it --set metering.image.pullPolicy=Never
 
 .PHONY: test
-test: ## Run integration tests (SUITE= required: all|fulfillment|operator|bmf)
+test: ## Run integration tests (SUITE= required: all|fulfillment|compute-storage|operator|bmf)
 ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=fulfillment
 	$(MAKE) test SUITE=operator
 	$(MAKE) test SUITE=bmf
 endif
-ifeq ($(SUITE),fulfillment)
+ifneq ($(filter $(SUITE),fulfillment compute-storage),)
 ifneq ($(strip $(FULFILLMENT_IT_REPORT_DIR)),)
 # A reused local output directory must not retain old reports for phases a failed run never reaches.
-	rm -f $(foreach phase,service-only networking-operator bmaas-disabled,"$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(phase).json)")
+	rm -f $(foreach phase,$(if $(filter fulfillment,$(SUITE)),service-only networking-operator bmaas-disabled) compute-storage,"$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(phase).json)")
 endif
 # Exercise event-driven reconciliation without full synchronization in every test phase.
+	python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
 	$(call kind-load-image,$(METERING_IT_IMAGE))
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
 	$(call kind-load-image,localhost/osac-operator:it)
+endif
+ifeq ($(SUITE),fulfillment)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=false --set global.networking.provisioningEnabled=false $(MCP_TEST_HELM_ARGS) $(METERING_IT_IMAGE_ARGS)"
 # OSAC and BMF CRDs come from the installed charts. Only HostedCluster is external.
@@ -730,13 +733,18 @@ endif
 # No operator runs in this phase: the specs report networking and tenant status
 # through the private API as the operator's feedback controllers would, so a
 # running operator would race them. The networking-operator phase covers it.
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run $(call fulfillment-json-report,service-only) --timeout 1h15m -v --skip 'Networking with operator' $(FULFILLMENT_GINKGO_ARGS) it
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run $(call fulfillment-json-report,service-only) --timeout 1h15m -v --skip 'Networking with operator|ComputeInstance storage handoff' $(FULFILLMENT_GINKGO_ARGS) it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=false --set operator.controllers.volume=false --set operator.controllers.networking=true --set operator.controllers.computeInstance=false --set operator.controllers.clusterOrder=false --set operator.networkManagers.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run $(call fulfillment-json-report,networking-operator) --timeout 30m -v --label-filter 'networking-operator' it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set global.services.bmaas.enabled=false --set operator.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=bmaas-disabled ginkgo run $(call fulfillment-json-report,bmaas-disabled) --timeout 1h -v --focus 'Service enablement' it
+endif
+ifneq ($(filter $(SUITE),fulfillment compute-storage),)
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
+		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=true --set operator.controllers.volume=false --set operator.controllers.networking=false --set operator.controllers.computeInstance=true --set operator.controllers.clusterOrder=false --set operator.networkManagers.enabled=false --set-string operator.aap.url=http://compute-storage-aap.$(NS).svc.cluster.local:8080/api --set operator.aap.statusPollInterval=1s --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=compute-storage ginkgo run $(call fulfillment-json-report,compute-storage) --timeout 30m -v --label-filter 'compute-storage' it
 endif
 ifeq ($(SUITE),operator)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
@@ -937,12 +945,16 @@ kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster clean
 bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret API Helm wiring
 	uv run --project .. python scripts/test-bmf-netbox-render.py
 
+.PHONY: netris-ca-lifecycle-test
+netris-ca-lifecycle-test: helm-deps ## Check Netris CA validation and protection
+	uv run --project .. python scripts/test-netris-ca-lifecycle.py
+
 .PHONY: chart-name-independence-render-test
 chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/cert names survive repackaging under a different Chart.yaml name
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test network-class-step-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

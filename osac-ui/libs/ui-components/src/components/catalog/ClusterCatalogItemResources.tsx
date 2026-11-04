@@ -20,8 +20,6 @@ import {
   clusterNodeSetMapPolicy,
   clusterVersionReference,
   findClusterVersionForReference,
-  findHostTypeForReference,
-  formatClusterCatalogHostTypeRow,
   formatClusterCatalogNodeSetRow,
   formatClusterCatalogVersionRow,
   primaryClusterCatalogNodeSet,
@@ -46,26 +44,17 @@ const ClusterCatalogItemResources = ({
   const versionPolicyBehavior = catalogFieldPolicyBehavior(fields?.version);
   const nodeSetsPolicyBehavior = catalogFieldPolicyBehavior(nodeSetsPolicy);
 
-  const { clusterVersions, bareMetalInstanceTypes } = resourceLookups;
+  const { clusterVersions } = resourceLookups;
 
   const clusterVersion = useMemo(
     () => findClusterVersionForReference(clusterVersions, versionReference),
     [clusterVersions, versionReference],
   );
 
-  const hostType = useMemo(
-    () =>
-      findHostTypeForReference(
-        bareMetalInstanceTypes,
-        primaryNodeSet?.nodeSet.baremetalInstanceType,
-      ),
-    [bareMetalInstanceTypes, primaryNodeSet?.nodeSet.baremetalInstanceType],
-  );
-
   const versionLabel = formatClusterCatalogVersionRow(fields, clusterVersion, versionReference);
   const showClusterVersionIcon = Boolean(versionReference || clusterVersion);
   const nodeSetLabel = formatClusterCatalogNodeSetRow(nodeSetsPolicy, primaryNodeSet);
-  const hostTypeLabel = formatClusterCatalogHostTypeRow(nodeSetsPolicy, primaryNodeSet, hostType);
+  const hostTypeLabel = primaryNodeSet?.nodeSet.baremetalInstanceType?.name;
 
   return (
     <DescriptionList isHorizontal isCompact>

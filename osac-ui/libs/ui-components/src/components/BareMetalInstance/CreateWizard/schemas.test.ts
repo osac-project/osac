@@ -32,7 +32,7 @@ const valuesWithAuth = (sshKey: string, userData: string): BareMetalInstanceWiza
   spec: {
     ...createEmptyBareMetalInstanceValues().spec,
     sshKey: { value: sshKey, locked: false },
-    userData: { value: userData, locked: false },
+    userData: { value: { source: 'inline', inline: userData, secret: '' }, locked: false },
   },
 });
 
@@ -59,8 +59,10 @@ describe('Bare Metal review validation', () => {
 
   it('accepts a USER_DATA Secret as the authentication method', async () => {
     const values = createEmptyBareMetalInstanceValues();
-    values.spec.userDataSource = { value: 'secret', locked: false };
-    values.spec.userDataSecret = { value: 'user-data-secret', locked: false };
+    values.spec.userData = {
+      value: { source: 'secret', inline: '', secret: 'user-data-secret' },
+      locked: false,
+    };
     await expect(validateReview(values)).resolves.toBeUndefined();
   });
 });

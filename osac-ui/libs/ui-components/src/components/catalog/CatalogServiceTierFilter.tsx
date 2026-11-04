@@ -7,15 +7,15 @@ import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface CatalogServiceTierFilterProps {
-  selectedTypeOptions: ServiceTier[];
-  typeCounts: Record<ServiceTier, number>;
-  toggleTypeFilter: (value: ServiceTier) => void;
+  selected: ServiceTier | undefined;
+  typeCounts: Partial<Record<ServiceTier, number>>;
+  onSelect: (value: ServiceTier) => void;
 }
 
 const CatalogServiceTierFilter = ({
-  selectedTypeOptions,
+  selected,
   typeCounts,
-  toggleTypeFilter,
+  onSelect,
 }: CatalogServiceTierFilterProps) => {
   const { t } = useTranslation();
   const { enabledServices } = useSession();
@@ -37,30 +37,30 @@ const CatalogServiceTierFilter = ({
 
   return (
     <ToggleGroup aria-label={t('Filter catalog by resource type')}>
-      {catalogTypeFilters
-        .filter(({ value }) => enabledServices.includes(value))
-        .map((option) => {
-          const count = typeCounts[option.value];
+      {catalogTypeFilters.map((option) => {
+        const count = typeCounts[option.value];
 
-          return (
-            <ToggleGroupItem
-              key={option.value}
-              text={
-                <Flex spaceItems={{ default: 'spaceItemsSm' }} flexWrap={{ default: 'nowrap' }}>
-                  <FlexItem>{option.label}</FlexItem>
+        return (
+          <ToggleGroupItem
+            key={option.value}
+            text={
+              <Flex spaceItems={{ default: 'spaceItemsSm' }} flexWrap={{ default: 'nowrap' }}>
+                <FlexItem>{option.label}</FlexItem>
+                {count !== undefined ? (
                   <FlexItem>
                     <Label isCompact>{count}</Label>
                   </FlexItem>
-                </Flex>
-              }
-              buttonId={`catalog-type-filter-${option.value}`}
-              isSelected={selectedTypeOptions.includes(option.value)}
-              onChange={() => {
-                toggleTypeFilter(option.value);
-              }}
-            />
-          );
-        })}
+                ) : null}
+              </Flex>
+            }
+            buttonId={`catalog-type-filter-${option.value}`}
+            isSelected={selected === option.value}
+            onChange={() => {
+              onSelect(option.value);
+            }}
+          />
+        );
+      })}
     </ToggleGroup>
   );
 };

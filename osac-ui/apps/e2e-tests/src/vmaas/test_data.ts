@@ -82,6 +82,7 @@ interface RawExtravars {
   storage_tier: RawStorageTier;
   lifecycle_actions: LifecycleAction[];
   tenant_name?: string;
+  tenant_password?: string;
 }
 
 export interface CatalogFieldsTestData {
@@ -258,6 +259,7 @@ const parseExtravars = (value: unknown): RawExtravars => {
       },
     },
     tenant_name: optionalString(root.tenant_name, 'tenant_name'),
+    tenant_password: optionalString(root.tenant_password, 'tenant_password'),
     instance_type: {
       name: optionalString(instanceType.name, 'instance_type.name'),
       description: requiredString(instanceType.description, 'instance_type.description'),
@@ -308,6 +310,7 @@ const {
   storage_tier: rawStorageTier,
   lifecycle_actions: rawLifecycleActions,
   tenant_name: rawTenantName,
+  tenant_password: rawTenantPassword,
 } = rawExtravars;
 const diskImageTestRunId = requiredString(
   process.env.OSAC_DISK_IMAGE_TEST_RUN_ID,
@@ -329,6 +332,7 @@ const storageTierTestName = rawStorageTier.name
   : undefined;
 
 export const tenantName: string | undefined = rawTenantName;
+export const tenantPassword: string | undefined = rawTenantPassword;
 
 export const tenantNameOrSkip = (): string | undefined => {
   if (tenantName !== undefined) {
@@ -401,6 +405,8 @@ const safeCatalogName = (name: string): string =>
 
 export const catalogOwnershipFilePath = (name: string): string =>
   path.join(tmpdir(), `osac-catalog-${safeCatalogName(name)}-${catalogTestRunId}.created`);
+
+export const vmTestName = `vm-e2e-${catalogTestRunId}`;
 
 export const instanceTypeTestData: InstanceTypeTestData = {
   name: rawInstanceType.name ?? '',

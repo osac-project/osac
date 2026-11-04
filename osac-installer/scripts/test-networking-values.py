@@ -448,6 +448,47 @@ class ManifestsTest(unittest.TestCase):
         names = {doc["metadata"]["name"] for doc in docs if doc["kind"] == "ConfigMap"}
         self.assertNotIn("osac-network-fabric-manager-netris", names)
 
+    def test_agentless_registration_is_contract_format_and_unique(self):
+        docs = render(
+            services(False, True, False),
+            networking(fabricManager="agentless_net", k8sManager=""),
+            {"operator": {"networkManagers": {"enabled": False}}},
+        )
+        registration = find(
+            docs, "ConfigMap", "osac-network-fabric-manager-agentless-net"
+        )
+        self.assertEqual(registration["metadata"]["namespace"], "osac")
+        self.assertEqual(
+            registration["metadata"]["labels"]["osac.openshift.io/network-fabric-manager"],
+            "true",
+        )
+        self.assertNotIn("osac.openshift.io/network-k8s-manager", registration["metadata"]["labels"])
+        self.assertIs(registration["immutable"], True)
+        self.assertEqual(
+            registration["data"],
+            {"name": "agentless_net", "ansible_role": "osac.templates.agentless_net"},
+        )
+        registrations = [
+            doc for doc in docs
+            if doc.get("kind") == "ConfigMap"
+            and (doc.get("data") or {}).get("name") == "agentless_net"
+        ]
+        self.assertEqual(len(registrations), 1)
+        self.assertFalse(
+            any(
+                doc.get("kind") == "ConfigMap"
+                and (doc.get("metadata", {}).get("labels") or {}).get(
+                    "osac.openshift.io/network-k8s-manager"
+                ) == "true"
+                for doc in docs
+            )
+        )
+
+    def test_no_agentless_registration_for_another_fabric_manager(self):
+        docs = render(networking(fabricManager="netris", k8sManager="cudn_evpn"))
+        names = {doc["metadata"]["name"] for doc in docs if doc.get("kind") == "ConfigMap"}
+        self.assertNotIn("osac-network-fabric-manager-agentless-net", names)
+
     def test_admission_policy(self):
         docs = render()
         policy = find(docs, "ValidatingAdmissionPolicy", "osac-osac-managed-resources")

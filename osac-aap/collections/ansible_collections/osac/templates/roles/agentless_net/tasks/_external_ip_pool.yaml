@@ -1,27 +1,46 @@
 ---
-- name: Apply AgentlessNet ExternalIPPool provider state
+- name: Apply AgentlessNet ExternalIPPool task
   block:
-    - name: Load the AgentlessNet provider inventory
+    - name: Validate the ExternalIPPool task input
+      ansible.builtin.include_tasks: _validate_task_input.yaml
+      vars:
+        agentless_net_expected_kind: ExternalIPPool
+        agentless_net_expected_tasks:
+          - create_external_ip_pool
+          - delete_external_ip_pool
+
+    - name: Require one IPv4 CIDR in the shared pool snapshot
+      ansible.builtin.assert:
+        that:
+          - osac_job_vars.resource.spec.cidrs is sequence
+          - osac_job_vars.resource.spec.cidrs is not string
+          - osac_job_vars.resource.spec.cidrs | length == 1
+      no_log: true
+
+    - name: Classify provider failures as retryable
+      ansible.builtin.set_fact:
+        _agentless_net_failure_retryable: true
+
+    - name: Load AgentlessNet provider inventory
       ansible.builtin.include_tasks: _load_network_node_inventory.yaml
       vars:
         agentless_net_require_switches: false
 
-    - name: Register or remove the ExternalIPPool in provider state
+    - name: Register or remove the global ExternalIPPool by API ID
       osac.templates.agentless_net_state:
         action: "{{ agentless_net_pool_action }}"
         state_file: "{{ agentless_net_network_state_file }}"
-        uid: "{{ external_ip_pool.metadata.uid | default('') }}"
-        fulfillment_id: >-
-          {{ (external_ip_pool.metadata.labels | default({}))
-             .get('osac.openshift.io/externalippool-uuid', '') }}
-        tenant_id: >-
-          {{ (external_ip_pool.metadata.annotations | default({}))
-             .get('osac.openshift.io/tenant', '') }}
-        ip_family: "{{ external_ip_pool.spec.ipFamily | default('') }}"
-        cidrs: "{{ external_ip_pool.spec.cidrs | default([]) }}"
+        uid: "{{ osac_job_vars.resource.id }}"
+        fulfillment_id: "{{ osac_job_vars.resource.id }}"
+        tenant_id: shared
+        ip_family: IPv4
+        cidrs: "{{ osac_job_vars.resource.spec.cidrs }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true
       no_log: true
+  rescue:
+    - name: Publish a sanitized ExternalIPPool error
+      ansible.builtin.include_tasks: _report_task_error.yaml
   always:
-    - name: Remove the temporary AgentlessNet SSH key file
+    - name: Remove temporary AgentlessNet SSH credentials
       ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

@@ -69,7 +69,20 @@ func TestContainerPortDiscoveryDeadline(t *testing.T) {
 }
 
 func TestContainerLaunchFailureCleanup(t *testing.T) {
-	tool := testContainerTool(t, "case \"$1\" in\nrun) exit 23 ;;\nport) exit 1 ;;\nesac\n")
+	stateDir := t.TempDir()
+	t.Setenv("FAKE_CONTAINER_STATE", stateDir)
+	tool := testContainerTool(t, `case "$1" in
+run)
+  touch "$FAKE_CONTAINER_STATE/container"
+  exit 23
+  ;;
+port) exit 1 ;;
+kill)
+  touch "$FAKE_CONTAINER_STATE/killed"
+  rm "$FAKE_CONTAINER_STATE/container"
+  ;;
+esac
+`)
 	container := testContainer(t, tool)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -91,6 +104,12 @@ func TestContainerLaunchFailureCleanup(t *testing.T) {
 	})
 	if _, err := os.Stat(configFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("configuration file should be removed after failed startup: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "killed")); err != nil {
+		t.Fatalf("cleanup did not kill the container after the run command failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "container")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("container remains after failed startup cleanup: %v", err)
 	}
 }
 

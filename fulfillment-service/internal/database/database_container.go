@@ -520,9 +520,13 @@ func (c *Container) Stop(ctx context.Context) error {
 	// Stop the database server and wait for the foreground run command to exit so that all remaining output is
 	// flushed through the writers.
 	if c.runDone != nil {
+		shouldKill := true
 		select {
 		case <-c.runDone:
+			shouldKill = c.runErr != nil
 		default:
+		}
+		if shouldKill {
 			killCmd := exec.CommandContext(ctx, c.tool, "kill", c.id)
 			killCmd.Stdout = c.outWriter
 			killCmd.Stderr = c.errWriter

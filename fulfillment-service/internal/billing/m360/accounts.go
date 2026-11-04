@@ -124,6 +124,12 @@ func (a *adapter) ListAccounts(ctx context.Context, filter billing.AccountFilter
 	if err := a.client.getDiscovery(ctx, op, "/accounts", query, &resp); err != nil {
 		return billing.AccountPage{}, err
 	}
+	// A native page larger than the effective size requested - after the clamp above - is a provider contract
+	// violation, rejected before any item is normalized or filtered: an oversized Content must not hide behind
+	// the exact-match filter, which could narrow it back under the size once OSAC has already buffered it.
+	if len(resp.Data.Content) > size {
+		return billing.AccountPage{}, &billing.Error{Reason: billing.ReasonMalformed, Op: op}
+	}
 	result := billing.AccountPage{Accounts: make([]billing.Account, 0, len(resp.Data.Content)), Next: resp.Data.next()}
 	for _, item := range resp.Data.Content {
 		acct, err := item.normalize(op)

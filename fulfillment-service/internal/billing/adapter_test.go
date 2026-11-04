@@ -109,6 +109,75 @@ var _ = Describe("ForEachAccount", func() {
 		Expect(errors.As(err, &providerErr)).To(BeTrue())
 		Expect(providerErr.Reason).To(Equal(billing.ReasonMalformed))
 	})
+
+	It("fails with a MALFORMED provider error when the first page is larger than the requested size", func() {
+		adapter := &pagedAdapter{pages: []billing.AccountPage{
+			{Accounts: []billing.Account{pagedAccount("acct-1", ""), pagedAccount("acct-2", ""),
+				pagedAccount("acct-3", "")}, Next: "page-2"},
+			{Accounts: []billing.Account{pagedAccount("acct-4", "")}},
+		}}
+		var visited int
+		err := billing.ForEachAccount(context.Background(), adapter, billing.AccountFilter{}, billing.Page{Size: 2},
+			func(billing.Account) error {
+				visited++
+				return nil
+			})
+		var providerErr *billing.Error
+		Expect(errors.As(err, &providerErr)).To(BeTrue())
+		Expect(providerErr.Reason).To(Equal(billing.ReasonMalformed))
+		Expect(visited).To(BeZero(), "an oversized page is rejected before any visitor runs")
+		Expect(adapter.served).To(Equal(1), "the walk must not read page 2 after an oversized page")
+	})
+
+	It("fails with a MALFORMED provider error when a later page is larger than the requested size", func() {
+		adapter := &pagedAdapter{pages: []billing.AccountPage{
+			{Accounts: []billing.Account{pagedAccount("acct-1", ""), pagedAccount("acct-2", "")}, Next: "page-2"},
+			{Accounts: []billing.Account{pagedAccount("acct-3", ""), pagedAccount("acct-4", ""),
+				pagedAccount("acct-5", "")}, Next: "page-3"},
+			{Accounts: []billing.Account{pagedAccount("acct-6", "")}},
+		}}
+		var ids []string
+		err := billing.ForEachAccount(context.Background(), adapter, billing.AccountFilter{}, billing.Page{Size: 2},
+			func(account billing.Account) error {
+				ids = append(ids, account.Ref.ID())
+				return nil
+			})
+		var providerErr *billing.Error
+		Expect(errors.As(err, &providerErr)).To(BeTrue())
+		Expect(providerErr.Reason).To(Equal(billing.ReasonMalformed))
+		Expect(ids).To(Equal([]string{"acct-1", "acct-2"}), "only the valid pages before the oversized one are visited")
+		Expect(adapter.served).To(Equal(2))
+	})
+
+	It("accepts pages that hold exactly the requested size", func() {
+		adapter := &pagedAdapter{pages: []billing.AccountPage{
+			{Accounts: []billing.Account{pagedAccount("acct-1", ""), pagedAccount("acct-2", "")}, Next: "page-2"},
+			{Accounts: []billing.Account{pagedAccount("acct-3", ""), pagedAccount("acct-4", "")}},
+		}}
+		var ids []string
+		err := billing.ForEachAccount(context.Background(), adapter, billing.AccountFilter{}, billing.Page{Size: 2},
+			func(account billing.Account) error {
+				ids = append(ids, account.Ref.ID())
+				return nil
+			})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(ids).To(Equal([]string{"acct-1", "acct-2", "acct-3", "acct-4"}))
+	})
+
+	It("keeps walking over the empty partial pages of a sized walk", func() {
+		adapter := &pagedAdapter{pages: []billing.AccountPage{
+			{Accounts: nil, Next: "page-2"},
+			{Accounts: []billing.Account{pagedAccount("acct-1", "")}},
+		}}
+		var ids []string
+		err := billing.ForEachAccount(context.Background(), adapter, billing.AccountFilter{}, billing.Page{Size: 2},
+			func(account billing.Account) error {
+				ids = append(ids, account.Ref.ID())
+				return nil
+			})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(ids).To(Equal([]string{"acct-1"}))
+	})
 })
 
 var _ = Describe("SanitizeProviderText", func() {

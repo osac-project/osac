@@ -58,6 +58,24 @@ var _ = Describe("Transactions interceptor", func() {
 	Describe("Behaviour", func() {
 		var interceptor *TxInterceptor
 
+		It("supplies only the manager for explicitly selected provider-backed RPCs", func() {
+			selected, err := NewTxInterceptor().SetLogger(logger).SetManager(manager).
+				AddManagerOnlyMethods("/billing/Resolve").Build()
+			Expect(err).ToNot(HaveOccurred())
+			parentTx := NewMockTx(ctrl)
+			_, err = selected.UnaryServer(TxIntoContext(ctx, parentTx), nil,
+				&grpc.UnaryServerInfo{FullMethod: "/billing/Resolve"}, func(ctx context.Context, _ any) (any, error) {
+					_, err := TxFromContext(ctx)
+					Expect(err).To(HaveOccurred())
+					got, err := TxManagerFromContext(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(got).To(BeIdenticalTo(manager))
+					return "done", nil
+				})
+			Expect(err).ToNot(HaveOccurred())
+			// Neither Begin nor End may be called (the mocks have no expectations).
+		})
+
 		BeforeEach(func() {
 			var err error
 			interceptor, err = NewTxInterceptor().

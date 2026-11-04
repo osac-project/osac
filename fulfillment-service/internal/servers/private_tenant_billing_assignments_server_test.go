@@ -16,9 +16,11 @@ package servers
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -49,12 +51,17 @@ func (a *hangingCorrelationAdapter) CorrelationValue(ctx context.Context, _ bill
 // eventually succeeds, so a concurrent assign has to fail fast instead of queueing behind it.
 type gatedCorrelationAdapter struct {
 	*billingfake.Fake
-	entered chan struct{}
-	release chan struct{}
+	entered    chan struct{}
+	release    chan struct{}
+	once       sync.Once
+	blockedRef string
 }
 
 func (a *gatedCorrelationAdapter) CorrelationValue(ctx context.Context, ref billing.AccountRef) (string, bool, error) {
-	close(a.entered)
+	if a.blockedRef != "" && ref != billing.NewAccountRef(a.blockedRef) {
+		return a.Fake.CorrelationValue(ctx, ref)
+	}
+	a.once.Do(func() { close(a.entered) })
 	select {
 	case <-a.release:
 		return a.Fake.CorrelationValue(ctx, ref)
@@ -63,8 +70,60 @@ func (a *gatedCorrelationAdapter) CorrelationValue(ctx context.Context, ref bill
 	}
 }
 
+// afterWriteAdapter pauses after the provider has accepted the write, exposing
+// the unavoidable non-atomic boundary between the remote write and local commit.
+type afterWriteAdapter struct {
+	*billingfake.Fake
+	entered chan struct{}
+	release chan struct{}
+}
+
+type gatedAccountScanAdapter struct {
+	*billingfake.Fake
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (a *gatedAccountScanAdapter) ListAccounts(ctx context.Context, filter billing.AccountFilter,
+	page billing.Page,
+) (billing.AccountPage, error) {
+	if filter.ExternalID != "" {
+		a.once.Do(func() { close(a.entered) })
+		select {
+		case <-a.release:
+		case <-ctx.Done():
+			return billing.AccountPage{}, ctx.Err()
+		}
+	}
+	return a.Fake.ListAccounts(ctx, filter, page)
+}
+
+func (a *afterWriteAdapter) SetCorrelationValue(ctx context.Context, ref billing.AccountRef, value string) error {
+	if err := a.Fake.SetCorrelationValue(ctx, ref, value); err != nil {
+		return err
+	}
+	close(a.entered)
+	select {
+	case <-a.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 var _ = Describe("Private tenant billing assignments server", func() {
 	const otherTenant = "other-tenant"
+
+	BeforeEach(func() {
+		// Commit the shared fixture's tenant. Provider-backed RPCs below use
+		// independent real transactions, not the suite's assertion transaction.
+		Expect(suiteTx.End(ctx)).To(Succeed())
+		var err error
+		suiteTx, err = tm.Begin(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		ctx = database.TxIntoContext(ctx, suiteTx)
+	})
 
 	build := func(p *billing.Provider) *PrivateTenantBillingAssignmentsServer {
 		server, err := NewPrivateTenantBillingAssignmentsServer().SetLogger(logger).SetProvider(p).Build()
@@ -73,17 +132,19 @@ var _ = Describe("Private tenant billing assignments server", func() {
 	}
 
 	adminCtx := func() context.Context {
-		return auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+		return auth.ContextWithSubject(database.TxManagerIntoContext(context.Background(), tm),
+			&auth.Subject{User: "admin", Tenants: auth.AllTenants})
 	}
 
 	// seedAccountRow inserts a billing_accounts row with a caller-chosen id, so it can line up with a
 	// billingfake.AccountSpec using the same id as its provider reference.
 	seedAccountRow := func(id, correlationID, state string) {
-		tx, err := database.TxFromContext(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		_, err = database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-			ID: id, ProviderKey: billingfake.Key, ProviderAccountReference: id,
-			CorrelationID: correlationID, State: state, StatusObservedAt: time.Now().UTC(),
+		err := tm.Run(ctx, func(tx database.Tx) error {
+			_, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
+				ID: id, ProviderKey: billingfake.Key, ProviderAccountReference: id,
+				CorrelationID: correlationID, State: state, StatusObservedAt: time.Now().UTC(),
+			})
+			return err
 		})
 		Expect(err).ToNot(HaveOccurred())
 	}
@@ -97,9 +158,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		return id
 	}
 	createOtherTenant := func() {
-		tx, err := database.TxFromContext(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		_, err = tx.Exec(ctx, `insert into tenants (id, name, tenant, creator, data) values ($1, $1, $1, 'system', '{}')
+		_, err := testPool.Exec(ctx, `insert into tenants (id, name, tenant, creator, data) values ($1, $1, $1, 'system', '{}')
 			on conflict do nothing`, otherTenant)
 		Expect(err).ToNot(HaveOccurred())
 	}
@@ -188,12 +247,10 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			// than TENANT_ALREADY_BOUND. Mark it deleted without removing its row: that is the OSAC-6886
 			// tombstone state, and it keeps the tenant FK satisfied — only the explicit liveness check in
 			// the shared assign tail can reject it.
-			tx, err := database.TxFromContext(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			_, err = tx.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)
+			_, err = testPool.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)
 				values ('dead-tenant', 'dead-tenant', 'dead-tenant', 'system', '{}') on conflict do nothing`)
 			Expect(err).ToNot(HaveOccurred())
-			_, err = tx.Exec(ctx, `update tenants set deletion_timestamp = now() where name = 'dead-tenant'`)
+			_, err = testPool.Exec(ctx, `update tenants set deletion_timestamp = now() where name = 'dead-tenant'`)
 			Expect(err).ToNot(HaveOccurred())
 
 			_, err = server.Create(adminCtx(), createRequest("dead-tenant", account2, "asg-2"))
@@ -204,7 +261,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 
 			// Update runs through the same shared tail, so reassigning a tenant that was deleted after its
 			// assignment exists is rejected the same way:
-			_, err = tx.Exec(ctx, `update tenants set deletion_timestamp = now() where name = $1`, testTenant)
+			_, err = testPool.Exec(ctx, `update tenants set deletion_timestamp = now() where name = $1`, testTenant)
 			Expect(err).ToNot(HaveOccurred())
 			_, err = server.Update(adminCtx(), updateRequest(created.GetObject().GetId(), testTenant, account2))
 			st, ok = status.FromError(err)
@@ -305,11 +362,10 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(total).To(BeZero())
 		})
 
-		It("counts a value another account gains from this assign's own write as ACCOUNT_AMBIGUOUS", func() {
+		It("rejects a foreign provider carrier before writing or creating an assignment", func() {
 			var accounts []billingfake.AccountSpec
-			// OSAC-only value: the resolver's pre-write scan finds exactly one other account already
-			// carrying it, the write then sets it on this account too, and the derived count of two must
-			// fail the assign rather than connect it.
+			// The target has no provider value, so even one pre-existing carrier
+			// is foreign. Reject before writing, not after creating a duplicate.
 			account := newAccount(&accounts, "", "osac-dup", "ACTIVE")
 			accounts = append(accounts, billingfake.AccountSpec{ID: "decoy", ExternalID: "osac-dup", State: billing.AccountActive})
 			fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
@@ -318,6 +374,10 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			_, err := server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
 			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 			Expect(reason(err)).To(Equal("ACCOUNT_AMBIGUOUS"))
+			Expect(fake.Count("SetCorrelationValue")).To(BeZero())
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
 		})
 
 		It("persists no assignment when the provider read fails", func() {
@@ -340,7 +400,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(total).To(BeZero())
 		})
 
-		It("fails as UNAVAILABLE/TIMEOUT rather than holding the account lock when the provider hangs", func() {
+		It("fails as UNAVAILABLE/TIMEOUT and releases its durable guard when the provider hangs", func() {
 			var accounts []billingfake.AccountSpec
 			account := newAccount(&accounts, "", "", "ACTIVE")
 			fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
@@ -356,9 +416,13 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Eventually(result, 5*time.Second).Should(Receive(&err))
 			Expect(status.Code(err)).To(Equal(codes.Unavailable))
 			Expect(reason(err)).To(Equal("TIMEOUT"))
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from billing_operation_leases`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
 		})
 
 		It("fails with RESOURCE_EXHAUSTED when the concurrent-assign window is full", func() {
+			createOtherTenant()
 			var accounts []billingfake.AccountSpec
 			blocked := newAccount(&accounts, "", "", "ACTIVE")
 			turnedAway := newAccount(&accounts, "", "", "ACTIVE")
@@ -381,7 +445,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Eventually(adapter.entered, 5*time.Second).Should(BeClosed(),
 				"the in-flight assign must reach the provider window")
 
-			_, err := server.Create(adminCtx(), createRequest(testTenant, turnedAway, "asg-2"))
+			_, err := server.Create(adminCtx(), createRequest(otherTenant, turnedAway, "asg-2"))
 			Expect(status.Code(err)).To(Equal(codes.ResourceExhausted))
 			Expect(err.Error()).To(ContainSubstring("too many concurrent billing assignment"))
 
@@ -457,6 +521,45 @@ var _ = Describe("Private tenant billing assignments server", func() {
 	})
 
 	Describe("Update", func() {
+		It("rejects a deleted tenant even when revalidating a CONNECTED same-account interval", func() {
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "connected", "connected", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			server := build(fake.Provider())
+			created, err := server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
+			Expect(err).ToNot(HaveOccurred())
+			_, err = testPool.Exec(ctx, `update tenants set deletion_timestamp = now() where name = $1`, testTenant)
+			Expect(err).ToNot(HaveOccurred())
+			reads := fake.Count("CorrelationValue")
+			_, err = server.Update(adminCtx(), updateRequest(created.GetObject().GetId(), testTenant, account))
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(fake.Count("CorrelationValue")).To(Equal(reads))
+		})
+
+		DescribeTable("fully revalidates a CONNECTED same-account interval",
+			func(externalID string, duplicate bool, expectedReason string) {
+				var accounts []billingfake.AccountSpec
+				account := newAccount(&accounts, "connected", "connected", "ACTIVE")
+				server := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
+				created, err := server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
+				Expect(err).ToNot(HaveOccurred())
+				accounts[0].ExternalID = externalID
+				if duplicate {
+					accounts = append(accounts, billingfake.AccountSpec{ID: "foreign", ExternalID: "connected", State: billing.AccountActive})
+				}
+				fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+				server = build(fake.Provider())
+				_, err = server.Update(adminCtx(), updateRequest(created.GetObject().GetId(), testTenant, account))
+				Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+				Expect(reason(err)).To(Equal(expectedReason))
+				Expect(fake.Count("SetCorrelationValue")).To(BeZero())
+				var count int
+				Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments where effective_to is null`).Scan(&count)).To(Succeed())
+				Expect(count).To(Equal(1))
+			},
+			Entry("detects provider mismatch", "changed", false, "BILLING_CORRELATION_ID_CONFLICT"),
+			Entry("detects duplicate foreign carrier", "connected", true, "ACCOUNT_AMBIGUOUS"),
+		)
 		It("closes the old interval and opens a new one atomically on reassignment", func() {
 			var accounts []billingfake.AccountSpec
 			account1 := newAccount(&accounts, "", "", "ACTIVE")
@@ -508,16 +611,17 @@ var _ = Describe("Private tenant billing assignments server", func() {
 
 			updated, err := server2.Update(adminCtx(), updateRequest(pendingID, testTenant, account))
 			Expect(err).ToNot(HaveOccurred())
-			Expect(updated.GetObject().GetId()).ToNot(Equal(pendingID))
+			Expect(updated.GetObject().GetId()).To(Equal(pendingID))
+			Expect(updated.GetObject().GetStatus().GetEffectiveFrom()).To(Equal(created.GetObject().GetStatus().GetEffectiveFrom()))
 			Expect(updated.GetObject().GetStatus().GetConnectionState()).To(Equal(
 				privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 
 			closedRow, getErr := database.GetTenantBillingAssignment(ctx, tx, pendingID)
 			Expect(getErr).ToNot(HaveOccurred())
-			Expect(closedRow.EffectiveTo).ToNot(BeNil())
+			Expect(closedRow.EffectiveTo).To(BeNil())
 		})
 
-		It("is a no-op for the same account on a CONNECTED assignment", func() {
+		It("revalidates the same account on a CONNECTED assignment without changing history", func() {
 			var accounts []billingfake.AccountSpec
 			account := newAccount(&accounts, "", "", "ACTIVE")
 			fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
@@ -525,10 +629,13 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			created, err := server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
 			Expect(err).ToNot(HaveOccurred())
 			connectedID := created.GetObject().GetId()
+			reads := fake.Count("CorrelationValue")
 
 			updated, err := server.Update(adminCtx(), updateRequest(connectedID, testTenant, account))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updated.GetObject().GetId()).To(Equal(connectedID), "no new interval must be created")
+			Expect(fake.Count("CorrelationValue")).To(BeNumerically(">", reads))
+			Expect(updated.GetObject().GetStatus().GetEffectiveFrom()).To(Equal(created.GetObject().GetStatus().GetEffectiveFrom()))
 
 			tx, txErr := database.TxFromContext(ctx)
 			Expect(txErr).ToNot(HaveOccurred())
@@ -593,6 +700,299 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		})
 	})
 
+	Describe("short transactions and durable guards", func() {
+		It("rolls back correlation and interval changes together if the final commit fails, not the provider write", func() {
+			var accounts []billingfake.AccountSpec
+			first := newAccount(&accounts, "", "", "ACTIVE")
+			second := newAccount(&accounts, "", "", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
+			server := build(fake.Provider())
+			created, err := server.Create(adminCtx(), createRequest(testTenant, first, "asg-1"))
+			Expect(err).ToNot(HaveOccurred())
+			_, err = testPool.Exec(ctx, `
+				create function reject_billing_assignment_commit() returns trigger language plpgsql as $$
+				begin raise exception 'injected billing commit failure'; end;
+				$$;
+				create constraint trigger reject_billing_assignment_commit
+				after insert on tenant_billing_assignments deferrable initially deferred
+				for each row execute function reject_billing_assignment_commit();`)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.Update(adminCtx(), updateRequest(created.GetObject().GetId(), testTenant, second))
+			Expect(status.Code(err)).To(Equal(codes.Internal))
+			Expect(err.Error()).ToNot(ContainSubstring("injected"))
+			var activeID string
+			Expect(testPool.QueryRow(ctx, `select id from tenant_billing_assignments where effective_to is null`).Scan(&activeID)).To(Succeed())
+			Expect(activeID).To(Equal(created.GetObject().GetId()))
+			var correlation string
+			Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, second).Scan(&correlation)).To(Succeed())
+			Expect(correlation).To(BeEmpty())
+			providerValue, present, err := fake.CorrelationValue(ctx, billing.NewAccountRef(second))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(present).To(BeTrue())
+			Expect(providerValue).ToNot(BeEmpty(), "remote writes are not rolled back by the database")
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(Equal(1))
+			Expect(testPool.QueryRow(ctx, `select count(*) from billing_operation_leases`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
+		})
+
+		It("reserves a correlation candidate before external work across different accounts and server instances", func() {
+			createOtherTenant()
+			var accounts []billingfake.AccountSpec
+			first := newAccount(&accounts, "shared-candidate", "", "ACTIVE")
+			second := newAccount(&accounts, "shared-candidate", "", "ACTIVE")
+			// Each provider view is individually consistent but stale relative to
+			// the other. The durable local reservation must still prevent double
+			// adoption while neither billing_accounts row has committed a value.
+			firstFake := billingfake.New(billingfake.Scenario{Accounts: accounts[:1]})
+			secondFake := billingfake.New(billingfake.Scenario{Accounts: accounts[1:]})
+			adapter := &gatedAccountScanAdapter{Fake: firstFake, entered: make(chan struct{}), release: make(chan struct{})}
+			server1 := build(billing.NewProvider(billingfake.Key, adapter, nil))
+			server2 := build(secondFake.Provider())
+			result := make(chan error, 1)
+			go func() { _, err := server1.Create(adminCtx(), createRequest(testTenant, first, "asg-1")); result <- err }()
+			DeferCleanup(func() {
+				select {
+				case <-adapter.release:
+				default:
+					close(adapter.release)
+				}
+			})
+			Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
+			var reserved bool
+			Expect(testPool.QueryRow(ctx, `select exists(select 1 from billing_operation_leases where operation_key = $1)`,
+				database.BillingOperationKey("correlation", "shared-candidate")).Scan(&reserved)).To(Succeed())
+			Expect(reserved).To(BeTrue())
+			_, err := server2.Create(adminCtx(), createRequest(otherTenant, second, "asg-2"))
+			Expect(status.Code(err)).To(Equal(codes.Aborted))
+			Expect(reason(err)).To(Equal("BILLING_OPERATION_RETRY"))
+			Expect(secondFake.Count("ListAccounts")).To(BeZero())
+			Expect(secondFake.Count("SetCorrelationValue")).To(BeZero())
+			close(adapter.release)
+			var firstErr error
+			Eventually(result, 5*time.Second).Should(Receive(&firstErr))
+			Expect(firstErr).ToNot(HaveOccurred())
+			_, err = server2.Create(adminCtx(), createRequest(otherTenant, second, "asg-2"))
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			Expect(reason(err)).To(Equal("ACCOUNT_CORRELATION_CONFLICT"))
+		})
+
+		DescribeTable("leaves a one-connection pool available throughout gated provider I/O", func(afterWrite bool) {
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "", "", "ACTIVE")
+			config := testPool.Config()
+			config.MaxConns = 1
+			config.MinConns = 0
+			pool, err := pgxpool.NewWithConfig(ctx, config)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(pool.Close)
+			manager, err := database.NewTxManager().SetLogger(logger).SetPool(pool).Build()
+			Expect(err).ToNot(HaveOccurred())
+			rpcCtx := auth.ContextWithSubject(database.TxManagerIntoContext(context.Background(), manager),
+				&auth.Subject{User: "admin", Tenants: auth.AllTenants})
+			fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
+			entered, release := make(chan struct{}), make(chan struct{})
+			var adapter billing.Adapter = &gatedCorrelationAdapter{Fake: fake, entered: entered, release: release}
+			if afterWrite {
+				adapter = &afterWriteAdapter{Fake: fake, entered: entered, release: release}
+			}
+			server := build(billing.NewProvider(billingfake.Key, adapter, nil))
+			result := make(chan error, 1)
+			go func() {
+				_, err := server.Create(rpcCtx, createRequest(testTenant, account, "asg-1"))
+				result <- err
+			}()
+			DeferCleanup(func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			})
+			Eventually(entered, 5*time.Second).Should(BeClosed())
+			readCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			var one int
+			Expect(pool.QueryRow(readCtx, `select 1`).Scan(&one)).To(Succeed())
+			Expect(one).To(Equal(1))
+			close(release)
+			var createErr error
+			Eventually(result, 5*time.Second).Should(Receive(&createErr))
+			Expect(createErr).ToNot(HaveOccurred())
+		},
+			Entry("during the first provider read", false),
+			Entry("after the correlation reservation and external write", true),
+		)
+
+		It("fails same-account and tenant contenders across server instances before provider capacity, allowing unrelated work", func() {
+			createOtherTenant()
+			var accounts []billingfake.AccountSpec
+			first := newAccount(&accounts, "", "", "ACTIVE")
+			second := newAccount(&accounts, "", "", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
+			adapter := &gatedCorrelationAdapter{Fake: fake, entered: make(chan struct{}), release: make(chan struct{}), blockedRef: first}
+			provider := billing.NewProvider(billingfake.Key, adapter, nil)
+			server1, server2 := build(provider), build(provider)
+			result := make(chan error, 1)
+			go func() {
+				_, err := server1.Create(adminCtx(), createRequest(testTenant, first, "asg-1"))
+				result <- err
+			}()
+			DeferCleanup(func() {
+				select {
+				case <-adapter.release:
+				default:
+					close(adapter.release)
+				}
+			})
+			Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
+			// Even a full provider window must not hide resource contention:
+			// account/tenant guards are tested before semaphore admission.
+			for range maxConcurrentAssigns {
+				server2.assignSem <- struct{}{}
+			}
+			for _, request := range []*privatev1.TenantBillingAssignmentsCreateRequest{
+				createRequest(otherTenant, first, "account-contender"),
+				createRequest(testTenant, second, "tenant-contender"),
+			} {
+				contender := make(chan error, 1)
+				go func() { _, err := server2.Create(adminCtx(), request); contender <- err }()
+				var err error
+				Eventually(contender, time.Second).Should(Receive(&err))
+				Expect(status.Code(err)).To(Equal(codes.Aborted))
+				Expect(reason(err)).To(Equal("BILLING_OPERATION_RETRY"))
+				Expect(server2.assignSem).To(HaveLen(maxConcurrentAssigns))
+			}
+			for range maxConcurrentAssigns {
+				<-server2.assignSem
+			}
+			_, err := server2.Create(adminCtx(), createRequest(otherTenant, second, "unrelated"))
+			Expect(err).ToNot(HaveOccurred())
+			close(adapter.release)
+			var firstErr error
+			Eventually(result, 5*time.Second).Should(Receive(&firstErr))
+			Expect(firstErr).ToNot(HaveOccurred())
+		})
+
+		It("rejects stale local finalization after provider acceptance and expired-guard takeover", func() {
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "", "", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
+			adapter := &afterWriteAdapter{Fake: fake, entered: make(chan struct{}), release: make(chan struct{})}
+			server := build(billing.NewProvider(billingfake.Key, adapter, nil))
+			result := make(chan error, 1)
+			go func() {
+				_, err := server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
+				result <- err
+			}()
+			DeferCleanup(func() {
+				select {
+				case <-adapter.release:
+				default:
+					close(adapter.release)
+				}
+			})
+			Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
+			_, err := testPool.Exec(ctx, `update billing_operation_leases set expires_at = clock_timestamp() - interval '1 second'`)
+			Expect(err).ToNot(HaveOccurred())
+			successor, err := database.AcquireBillingOperation(adminCtx(), time.Minute,
+				database.BillingOperationKey("account", account), database.BillingOperationKey("tenant", testTenant))
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func() { Expect(successor.Release(adminCtx())).To(Succeed()) })
+			close(adapter.release)
+			var staleErr error
+			Eventually(result, 5*time.Second).Should(Receive(&staleErr))
+			Expect(status.Code(staleErr)).To(Equal(codes.Aborted))
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
+			Expect(fake.Count("SetCorrelationValue")).To(Equal(1), "the provider write cannot be rolled back by Postgres")
+		})
+
+		DescribeTable("revalidates authoritative local state after provider I/O", func(changeSQL string, expected codes.Code) {
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "", "", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
+			adapter := &gatedCorrelationAdapter{Fake: fake, entered: make(chan struct{}), release: make(chan struct{})}
+			server := build(billing.NewProvider(billingfake.Key, adapter, nil))
+			result := make(chan error, 1)
+			go func() {
+				_, err := server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
+				result <- err
+			}()
+			DeferCleanup(func() {
+				select {
+				case <-adapter.release:
+				default:
+					close(adapter.release)
+				}
+			})
+			Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
+			_, err := testPool.Exec(ctx, changeSQL)
+			Expect(err).ToNot(HaveOccurred())
+			close(adapter.release)
+			var finalErr error
+			Eventually(result, 5*time.Second).Should(Receive(&finalErr))
+			Expect(status.Code(finalErr)).To(Equal(expected))
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
+		},
+			Entry("tenant deletion", `update tenants set deletion_timestamp = now() where name = 'test-tenant'`, codes.InvalidArgument),
+			Entry("account inactive", `update billing_accounts set state = 'INACTIVE'`, codes.FailedPrecondition),
+			Entry("provider reference changed", `update billing_accounts set provider_account_reference = 'changed'`, codes.Aborted),
+			Entry("correlation changed", `update billing_accounts set correlation_id = 'changed'`, codes.Aborted),
+		)
+	})
+
+	Describe("Signal", func() {
+		It("connects a PENDING current interval in place", func() {
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "", "", "ACTIVE")
+			server := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
+			created, err := server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
+			Expect(err).ToNot(HaveOccurred())
+			var correlation string
+			Expect(testPool.QueryRow(ctx, `select correlation_id from billing_accounts where id = $1`, account).Scan(&correlation)).To(Succeed())
+			accounts[0].ExternalID = correlation
+			server = build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
+			_, err = server.Signal(adminCtx(), privatev1.TenantBillingAssignmentsSignalRequest_builder{Id: created.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			var state, id string
+			var from time.Time
+			Expect(testPool.QueryRow(ctx, `select id, effective_from, connection_state from tenant_billing_assignments
+				where effective_to is null`).Scan(&id, &from, &state)).To(Succeed())
+			Expect(id).To(Equal(created.GetObject().GetId()))
+			Expect(from.Equal(created.GetObject().GetStatus().GetEffectiveFrom().AsTime())).To(BeTrue())
+			Expect(state).To(Equal(tbaStateConnected))
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(Equal(1))
+		})
+
+		It("rejects empty, unknown, historical and disabled requests", func() {
+			var accounts []billingfake.AccountSpec
+			first := newAccount(&accounts, "", "", "ACTIVE")
+			second := newAccount(&accounts, "", "", "ACTIVE")
+			server := build(billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts}).Provider())
+			_, err := server.Signal(adminCtx(), &privatev1.TenantBillingAssignmentsSignalRequest{})
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			_, err = server.Signal(adminCtx(), privatev1.TenantBillingAssignmentsSignalRequest_builder{Id: "unknown"}.Build())
+			Expect(status.Code(err)).To(Equal(codes.NotFound))
+			created, err := server.Create(adminCtx(), createRequest(testTenant, first, "asg-1"))
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.Update(adminCtx(), updateRequest(created.GetObject().GetId(), testTenant, second))
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.Signal(adminCtx(), privatev1.TenantBillingAssignmentsSignalRequest_builder{Id: created.GetObject().GetId()}.Build())
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			disabled := build(billing.NewProvider("", nil, nil))
+			_, err = disabled.Signal(adminCtx(), privatev1.TenantBillingAssignmentsSignalRequest_builder{Id: "any"}.Build())
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			Expect(reason(err)).To(Equal("BILLING_NOT_CONFIGURED"))
+		})
+	})
+
 	// Only Cloud Provider Admins ever reach List/Get in production (design.md §4.3/§4.7; enforced by authz.rego's
 	// is_admin catch-all, see authorization_evaluator_test.go's "tenant billing assignments authorization" table).
 	// There is no tenant self-service read path, so this package's tests - like
@@ -610,7 +1010,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			_, err = server.Create(adminCtx(), createRequest(otherTenant, account2, "asg-2"))
 			Expect(err).ToNot(HaveOccurred())
 
-			resp, err := server.List(adminCtx(), &privatev1.TenantBillingAssignmentsListRequest{})
+			resp, err := server.List(auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants}), &privatev1.TenantBillingAssignmentsListRequest{})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resp.GetTotal()).To(Equal(int32(2)))
 		})
@@ -623,19 +1023,16 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			created, err := server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
 			Expect(err).ToNot(HaveOccurred())
 
-			resp, err := server.Get(adminCtx(),
+			resp, err := server.Get(auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants}),
 				privatev1.TenantBillingAssignmentsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resp.GetObject().GetId()).To(Equal(created.GetObject().GetId()))
 		})
 	})
 
-	// mapTenantBillingAssignmentError is the fallback for a race the early rejectIfAlreadyBound checks cannot
-	// close: two concurrent requests can both pass those reads before either commits, then collide on the 1:1
-	// partial unique index at the final insert. This never happens in-process with the shared single-transaction
-	// test fixture above (every call here is sequential against one connection), so it is tested directly against
-	// the mapping function with a constructed constraint violation, the shape CloseAndInsertTenantBillingAssignment
-	// returns when that race occurs.
+	// The durable guard coordinates participating RPCs, while the final partial
+	// unique indexes remain the authoritative defense against any other writer.
+	// These cases test their error mapping; the real guard contention is above.
 	Describe("mapTenantBillingAssignmentError", func() {
 		var server *PrivateTenantBillingAssignmentsServer
 		BeforeEach(func() {

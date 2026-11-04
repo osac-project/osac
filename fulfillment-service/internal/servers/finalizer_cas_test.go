@@ -1,0 +1,268 @@
+/*
+Copyright (c) 2026 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
+License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific
+language governing permissions and limitations under the License.
+*/
+
+package servers
+
+import (
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+)
+
+// These specs reproduce OSAC-7221: a writer that holds a stale snapshot of an object must not be able to overwrite
+// the finalizers that another writer stored after the snapshot was taken. All the concurrency is logical: the
+// specs run in the suite transaction and order the writes explicitly.
+var _ = Describe("finalizer CAS", func() {
+	finalizersMask := func() *fieldmaskpb.FieldMask {
+		return finalizerMaskOf("metadata.finalizers")
+	}
+
+	DescribeTable("rejects a stale private finalizer write",
+		func(c finalizerCase) {
+			// The reconciler read the object while a hold was present:
+			t := c.target([]string{finalizerController, finalizerHold})
+			stale := t.get(ctx)
+
+			// Another writer released the hold after that read:
+			t.release(ctx, finalizerController)
+
+			// The reconciler writes back its stale view without the lock:
+			err := t.update(ctx, withFinalizers(stale, finalizerHold), finalizersMask(), false)
+
+			t.expectFinalizerConflict(ctx, err, finalizerController)
+		},
+		finalizerEntries(),
+	)
+
+	DescribeTable("keeps finalizers on a public nil-mask update",
+		func(c finalizerCase) {
+			// Public objects have no finalizers, so the object that a public server forwards has none:
+			t := c.target([]string{finalizerController, finalizerHold})
+			object := withFinalizers(t.get(ctx))
+
+			err := t.update(withPublicAPIView(ctx), object, nil, false)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold),
+				"a public update must not clear the finalizers")
+		},
+		finalizerEntries(),
+	)
+
+	DescribeTable("keeps a deleting object on a public nil-mask update",
+		func(c finalizerCase) {
+			t := c.target([]string{finalizerController, finalizerHold})
+
+			// The deletion only marks the object because it has finalizers:
+			Expect(t.ops.del(ctx, t.id)).To(Succeed())
+			object := withFinalizers(t.get(ctx))
+
+			err := t.update(withPublicAPIView(ctx), object, nil, false)
+			Expect(err).ToNot(HaveOccurred())
+
+			stored, err := t.ops.get(ctx, t.id)
+			Expect(err).ToNot(HaveOccurred(), "a public update must not archive an object with finalizers")
+			Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
+		},
+		finalizerEntries(),
+	)
+
+	Describe("controls", func() {
+		DescribeTable("accepts a finalizer change made from the current version",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController})
+
+				object := withFinalizers(t.get(ctx), finalizerController, finalizerHold)
+				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+
+				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
+			},
+			finalizerEntries(),
+		)
+
+		DescribeTable("accepts a stale update that doesn't change the finalizers",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController, finalizerHold})
+				stale := t.get(ctx)
+				t.bump(ctx)
+
+				object := withMetadata(stale, func(metadata *privatev1.Metadata) {
+					metadata.SetLabels(map[string]string{"x": "y"})
+				})
+				Expect(t.update(ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
+
+				stored := t.get(ctx)
+				Expect(finalizerMetadataOf(stored).GetLabels()).To(HaveKeyWithValue("x", "y"))
+				Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
+			},
+			finalizerEntries(),
+		)
+
+		DescribeTable("treats the same finalizers in another order, or repeated, as unchanged",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController, finalizerHold})
+				stale := t.get(ctx)
+				t.bump(ctx)
+
+				object := withFinalizers(stale, finalizerHold, finalizerController, finalizerHold)
+				snapshot := proto.Clone(object)
+				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+
+				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
+				Expect(proto.Equal(object, snapshot)).To(BeTrue(), "the request object must not be modified")
+			},
+			finalizerEntries(),
+		)
+
+		DescribeTable("treats a missing finalizer list and an empty one as the same",
+			func(c finalizerCase) {
+				t := c.target(nil)
+				stale := t.get(ctx)
+				t.bump(ctx)
+
+				object := withFinalizers(stale)
+				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+
+				Expect(t.finalizers(ctx)).To(BeEmpty())
+			},
+			finalizerEntries(),
+		)
+
+		DescribeTable("keeps a foreign finalizer when another one is removed from the current version",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController, finalizerHold, finalizerForeign})
+
+				object := withFinalizers(t.get(ctx), finalizerController, finalizerForeign)
+				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+
+				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerForeign))
+			},
+			finalizerEntries(),
+		)
+
+		DescribeTable("archives a deleting object when its last finalizer is removed from the current version",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController})
+				Expect(t.ops.del(ctx, t.id)).To(Succeed())
+
+				object := withFinalizers(t.get(ctx))
+				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+
+				_, err := t.ops.get(ctx, t.id)
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+			},
+			finalizerEntries(),
+		)
+
+		DescribeTable("still rejects a stale update that asks for the lock",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController, finalizerHold})
+				stale := t.get(ctx)
+				t.bump(ctx)
+
+				object := withMetadata(stale, func(metadata *privatev1.Metadata) {
+					metadata.SetLabels(map[string]string{"x": "y"})
+				})
+				err := t.update(ctx, object, finalizerMaskOf("metadata.labels"), true)
+
+				Expect(status.Code(err)).To(Equal(codes.Aborted))
+			},
+			finalizerEntries(),
+		)
+
+		DescribeTable("leaves the finalizers alone when the update mask is empty",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController, finalizerHold})
+				stale := t.get(ctx)
+				t.release(ctx, finalizerController)
+
+				// An empty mask is not the nil mask: nothing is applied.
+				object := withFinalizers(stale, finalizerHold)
+				Expect(t.update(ctx, object, &fieldmaskpb.FieldMask{}, false)).To(Succeed())
+
+				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController))
+			},
+			finalizerEntries(),
+		)
+	})
+
+	Describe("mask edges", func() {
+		// A stale writer that changes the finalizers must be rejected whichever way it selects them: a mask for the
+		// whole metadata, no mask at all, or the finalizers themselves.
+		DescribeTable("rejects a stale finalizer change",
+			func(c finalizerCase, mask *fieldmaskpb.FieldMask) {
+				t := c.target([]string{finalizerController, finalizerHold})
+				stale := t.get(ctx)
+				t.release(ctx, finalizerController)
+
+				err := t.update(ctx, withFinalizers(stale, finalizerHold), mask, false)
+
+				t.expectFinalizerConflict(ctx, err, finalizerController)
+			},
+			finalizerEntriesPerMask(),
+		)
+
+		// A private write without metadata can't prove which version it started from, so it is rejected whatever the
+		// stored version is.
+		DescribeTable("rejects a finalizer change that has no metadata",
+			func(c finalizerCase, bumpFirst bool) {
+				t := c.target([]string{finalizerController, finalizerHold})
+				if bumpFirst {
+					t.bump(ctx)
+				}
+
+				err := t.update(ctx, withoutMetadata(t.get(ctx)), finalizersMask(), false)
+
+				t.expectFinalizerConflict(ctx, err, finalizerController, finalizerHold)
+			},
+			finalizerEntriesPerVersion(),
+		)
+	})
+})
+
+// finalizerEntriesPerMask returns an entry for each resource and each way of selecting the finalizers.
+func finalizerEntriesPerMask() []TableEntry {
+	masks := []struct {
+		name string
+		mask *fieldmaskpb.FieldMask
+	}{
+		{"metadata mask", finalizerMaskOf("metadata")},
+		{"nil mask", nil},
+		{"metadata.finalizers mask", finalizerMaskOf("metadata.finalizers")},
+	}
+	var entries []TableEntry
+	for _, c := range finalizerCases() {
+		for _, m := range masks {
+			entries = append(entries, Entry(c.service+" with "+m.name, c, m.mask))
+		}
+	}
+	return entries
+}
+
+// finalizerEntriesPerVersion returns an entry for each resource, for an object at its creation version and for an
+// object that has been written since.
+func finalizerEntriesPerVersion() []TableEntry {
+	var entries []TableEntry
+	for _, c := range finalizerCases() {
+		entries = append(entries,
+			Entry(c.service+" at version 0", c, false),
+			Entry(c.service+" at a later version", c, true),
+		)
+	}
+	return entries
+}

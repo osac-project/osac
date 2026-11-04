@@ -32,8 +32,20 @@ const (
 // system and shared tenants, whose topics exist but whose usage is never billed.
 func Metered(tenant string) bool { return !schema.BuiltinTenant(tenant) }
 
-// Events returns the name of the tenant's event topic.
-func Events(tenant string) string { return EventsPrefix + tenant }
+// ResolvePrefix returns prefix, or the default events prefix when prefix is empty.
+// Fulfillment's publisher treats an empty --kafka-topic-prefix the same way.
+func ResolvePrefix(prefix string) string {
+	if prefix == "" {
+		return EventsPrefix
+	}
+	return prefix
+}
+
+// EventTopic returns the tenant's event topic for prefix. An empty prefix uses the default.
+func EventTopic(prefix, tenant string) string { return ResolvePrefix(prefix) + tenant }
+
+// Events returns the name of the tenant's event topic under the default prefix.
+func Events(tenant string) string { return EventTopic(EventsPrefix, tenant) }
 
 // Heartbeat returns the name of the tenant's heartbeat topic.
 func Heartbeat(tenant string) string { return HeartbeatPrefix + tenant }
@@ -41,10 +53,16 @@ func Heartbeat(tenant string) string { return HeartbeatPrefix + tenant }
 // DeadLetter returns the name of the tenant's dead-letter topic.
 func DeadLetter(tenant string) string { return DeadLetterPrefix + tenant }
 
-// TenantOfEvents returns the tenant that owns the event topic, and false when the topic is not
-// an event topic.
+// TenantOfEventTopic returns the tenant that owns the event topic, and false when the topic
+// does not carry prefix. An empty prefix uses the default.
+func TenantOfEventTopic(topic, prefix string) (string, bool) {
+	return schema.TenantOfTopic(topic, ResolvePrefix(prefix))
+}
+
+// TenantOfEvents returns the tenant that owns the event topic under the default prefix, and
+// false when the topic is not an event topic.
 func TenantOfEvents(topic string) (string, bool) {
-	return schema.TenantOfTopic(topic, EventsPrefix)
+	return TenantOfEventTopic(topic, EventsPrefix)
 }
 
 // TenantOfHeartbeat returns the tenant that owns the heartbeat topic, and false when the topic is

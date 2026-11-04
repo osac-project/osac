@@ -24,6 +24,9 @@ see the [external services support guide](guides/installation/external-services-
   inventory onboarding, membership changes, cleanup, and troubleshooting.
 - [Labels and annotations](guides/admin/metadata.md): reserved metadata,
   private/public API behavior, permissions, filters, and compatibility.
+- [Metering and billing](guides/admin/metering-and-billing.md): what metering
+  publishes, granting a billing reader, the reading rule, and billing
+  integration.
 - [Storage](storage/): concepts and configuration for tenant storage:
   StorageBackends, StorageTiers, ownership models, tenancy models, provider
   integrations, and tenant onboarding.

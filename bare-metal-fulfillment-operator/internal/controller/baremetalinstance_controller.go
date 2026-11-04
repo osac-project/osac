@@ -768,12 +768,14 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 		return r.failNetworkHandoff(bmi, message), nil
 	}
 
-	// Reboot already triggered (condition exists but is not True) — poll for completion
+	// Poll only after an operation has started. The condition reason is the
+	// durable state; messages can change without changing the handoff state.
 	if handoffCond != nil {
-		if handoffCond.Message == poweringOnMessage {
+		switch handoffCond.Reason {
+		case v1alpha1.HostConditionReasonNetworkHandoffPoweringOn:
 			powerStatus, err := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
 			if err != nil {
-				return r.failNetworkHandoff(bmi, err.Error()), nil
+				return ctrl.Result{}, err
 			}
 			if powerStatus == nil {
 				message := fmt.Sprintf("management backend returned nil power status for host %s", bmi.Spec.ExternalHostID)
@@ -785,27 +787,28 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 				return ctrl.Result{}, nil
 			}
 			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+		case v1alpha1.HostConditionReasonProgressing:
+			completed, err := r.ManagementClient.IsRestartComplete(ctx, bmi.Spec.ExternalHostID)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if completed {
+				// A reboot we previously triggered has finished.
+				bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+					metav1.ConditionTrue, "Succeeded", "Host rebooted onto the tenant network")
+				return ctrl.Result{}, nil
+			}
+			// Still rebooting, keep polling
+			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 		}
-		completed, err := r.ManagementClient.IsRestartComplete(ctx, bmi.Spec.ExternalHostID)
-		if err != nil {
-			return r.failNetworkHandoff(bmi, err.Error()), nil
-		}
-		if completed {
-			// A reboot we previously triggered has finished.
-			bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-				metav1.ConditionTrue, "Succeeded", "Host rebooted onto the tenant network")
-			return ctrl.Result{}, nil
-		}
-		// Still rebooting, keep polling
-		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 	}
 
-	// Condition doesn't exist yet — check power state before deciding to trigger.
+	// No operation is in progress — check power state before deciding to trigger.
 	// A reboot only helps an already-running OS re-DHCP; an off host will boot fresh
 	// on the tenant network when reconcilePower next powers it on, so no reboot is needed.
 	powerStatus, err := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
 	if err != nil {
-		return r.failNetworkHandoff(bmi, err.Error()), nil
+		return ctrl.Result{}, err
 	}
 	if powerStatus == nil {
 		message := fmt.Sprintf("management backend returned nil power status for host %s", bmi.Spec.ExternalHostID)
@@ -828,7 +831,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 			return r.failNetworkHandoff(bmi, err.Error()), nil
 		}
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-			metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonNetworkHandoffPoweringOn,
 			poweringOnMessage)
 		log.Info("Powered on host for network handoff", "host", bmi.Spec.ExternalHostID)
 		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil

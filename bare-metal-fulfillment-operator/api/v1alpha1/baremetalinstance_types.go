@@ -241,6 +241,10 @@ const (
 	// HostConditionReasonNetworkHandoffFailed indicates the network handoff reboot failed.
 	HostConditionReasonNetworkHandoffFailed = "NetworkHandoffFailed"
 
+	// HostConditionReasonNetworkHandoffPoweringOn indicates the host is being
+	// powered on to boot on the tenant network.
+	HostConditionReasonNetworkHandoffPoweringOn = "NetworkHandoffPoweringOn"
+
 	// HostConditionReasonIPDiscoveryFailed indicates the DHCP lease query failed.
 	HostConditionReasonIPDiscoveryFailed = "IPDiscoveryFailed"
 

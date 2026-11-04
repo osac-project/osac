@@ -2175,6 +2175,89 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			Expect(triggerRestartCallCount).To(Equal(1), "still only one reboot, fully idempotent")
 		})
 
+		It("retries an initial power-state read error before starting the handoff", func() {
+			reconciler.NetworkingNamespace = testNetworkingNS
+			getPowerStateCalls := 0
+			mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
+				getPowerStateCalls++
+				if getPowerStateCalls == 1 {
+					return nil, errors.New("temporary power-state read failure")
+				}
+				return &management.PowerStatus{State: management.PowerOn}, nil
+			}
+
+			result, err := reconciler.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
+			Expect(err).To(MatchError("temporary power-state read failure"))
+			Expect(result).To(Equal(ctrl.Result{}))
+			Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)).To(BeNil())
+			Expect(triggerRestartCallCount).To(Equal(0))
+
+			result, err = reconciler.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(5 * time.Second))
+			Expect(triggerRestartCallCount).To(Equal(1))
+			cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
+		})
+
+		It("does not mistake a failed handoff for an initiated reboot", func() {
+			reconciler.NetworkingNamespace = testNetworkingNS
+			bareMetalInstance.SetStatusCondition(
+				v1alpha1.HostConditionNetworkHandoffComplete,
+				metav1.ConditionFalse,
+				v1alpha1.HostConditionReasonNetworkHandoffFailed,
+				"power-state read failed before restart",
+			)
+			mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
+				return &management.PowerStatus{State: management.PowerOn}, nil
+			}
+			pollCalls := 0
+			mockMgmtClient.isRestartCompleteFunc = func(_ context.Context, _ string) (bool, error) {
+				pollCalls++
+				return true, nil
+			}
+
+			result, err := reconciler.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(5 * time.Second))
+			Expect(pollCalls).To(Equal(0), "a failed pre-trigger state must not be polled as a reboot")
+			Expect(triggerRestartCallCount).To(Equal(1))
+			cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
+		})
+
+		It("retries restart-status read errors without triggering a second reboot", func() {
+			reconciler.NetworkingNamespace = testNetworkingNS
+			mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
+				return &management.PowerStatus{State: management.PowerOn}, nil
+			}
+
+			result, err := reconciler.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(5 * time.Second))
+			Expect(triggerRestartCallCount).To(Equal(1))
+
+			mockMgmtClient.isRestartCompleteFunc = func(_ context.Context, _ string) (bool, error) {
+				return false, errors.New("temporary restart-status read failure")
+			}
+			result, err = reconciler.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
+			Expect(err).To(MatchError("temporary restart-status read failure"))
+			Expect(result).To(Equal(ctrl.Result{}))
+			Expect(bareMetalInstance.Status.Phase).NotTo(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+			cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
+			Expect(triggerRestartCallCount).To(Equal(1))
+
+			mockMgmtClient.isRestartCompleteFunc = func(_ context.Context, _ string) (bool, error) {
+				return true, nil
+			}
+			result, err = reconciler.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrl.Result{}))
+			Expect(triggerRestartCallCount).To(Equal(1))
+			Expect(bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionNetworkHandoffComplete)).To(BeTrue())
+		})
+
 		It("handles ErrTransitioning from TriggerRestart gracefully", func() {
 			reconciler.NetworkingNamespace = testNetworkingNS
 			// Mock power state as ON (so reboot can be attempted)
@@ -2227,7 +2310,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkHandoffPoweringOn))
 
 			result, err = reconciler.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
 			Expect(err).NotTo(HaveOccurred())

@@ -1292,26 +1292,6 @@
                   "type": "object",
                   "description": "Environment variables for the cluster-fulfillment instance group",
                   "properties": {
-                    "NETWORK_CLASS": {
-                      "type": "string",
-                      "description": "Supported values: netris, agentless_net, ci (CUDN CaaS only). Legacy backends (esi, nico) are removed from the standard schema.",
-                      "enum": [
-                        "",
-                        "netris",
-                        "agentless_net",
-                        "ci"
-                      ]
-                    },
-                    "NETWORK_STEPS_COLLECTION": {
-                      "type": "string",
-                      "description": "Supported values: netris.steps, ci.steps, agentless_net.steps. Legacy collections (nico.steps, osac.steps) are removed from the standard schema.",
-                      "enum": [
-                        "",
-                        "netris.steps",
-                        "ci.steps",
-                        "agentless_net.steps"
-                      ]
-                    },
                     "DNS_CLASS": {
                       "type": "string",
                       "description": "Fully-qualified Ansible role name of the DNS driver. dns.route53.dns manages Route 53 records; dns.noop.dns skips external DNS for environments that do not manage DNS records.",
@@ -1323,18 +1303,6 @@
                     "DNS_ZONE": {
                       "type": "string",
                       "description": "DNS zone to operate in (defaults to EXTERNAL_ACCESS_BASE_DOMAIN)"
-                    },
-                    "NETRIS_MGMT_VPC_ID": {
-                      "type": "string",
-                      "description": "Netris management VPC ID"
-                    },
-                    "NETRIS_MGMT_VPC_NAME": {
-                      "type": "string",
-                      "description": "Netris management VPC name"
-                    },
-                    "NETRIS_RESOURCE_CLASS_MAP": {
-                      "type": "string",
-                      "description": "JSON mapping of resource classes to Netris server labels"
                     },
                     "SERVER_SSH_BASTION_HOST": {
                       "type": "string",
@@ -1393,22 +1361,6 @@
                     "PARKING_VNET_NAME": {
                       "type": "string",
                       "description": "Name of the parking V-Net where idle CaaS agents sit before cluster assignment (effective default: idle-agents-network)"
-                    },
-                    "NETRIS_SITE_ID": {
-                      "type": "string",
-                      "description": "Netris site identifier"
-                    },
-                    "NETRIS_TENANT_ID": {
-                      "type": "string",
-                      "description": "Netris tenant identifier"
-                    },
-                    "NETRIS_TENANT_NAME": {
-                      "type": "string",
-                      "description": "Netris tenant display name"
-                    },
-                    "NETRIS_USERNAME": {
-                      "type": "string",
-                      "description": "Netris API username"
                     }
                   },
                   "additionalProperties": false
@@ -1417,10 +1369,6 @@
                   "type": "object",
                   "description": "Secret values for the cluster-fulfillment instance group",
                   "properties": {
-                    "NETRIS_PASSWORD": {
-                      "type": "string",
-                      "description": "Netris controller password for the CaaS Netris steps"
-                    },
                     "AWS_ACCESS_KEY_ID": {
                       "type": "string",
                       "description": "AWS access key for Route 53 DNS backend"

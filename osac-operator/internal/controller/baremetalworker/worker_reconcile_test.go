@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/assistedservice"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -670,8 +671,7 @@ func workerInfraEnvFixture(r *Reconciler, owner *v1alpha1.ClusterOrder, uid, ign
 // same-name object controlled by a different ClusterOrder can be forged.
 func namedWorkerInfraEnvFixture(r *Reconciler, owner *v1alpha1.ClusterOrder, name, uid, ignitionURL string) *unstructured.Unstructured {
 	GinkgoHelper()
-	infra := &unstructured.Unstructured{}
-	infra.SetGroupVersionKind(infraEnvGVK)
+	infra := assistedservice.NewInfraEnvObject()
 	infra.SetName(name)
 	infra.SetNamespace(owner.Namespace)
 	if uid != "" {
@@ -696,7 +696,7 @@ func createWorkerInfraEnv(r *Reconciler, infra *unstructured.Unstructured) {
 func r07InfraEnvObjects(r *Reconciler, co *v1alpha1.ClusterOrder) []unstructured.Unstructured {
 	GinkgoHelper()
 	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(infraEnvGVK)
+	list.SetGroupVersionKind(assistedservice.InfraEnvGroupVersionKind())
 	Expect(r.List(context.Background(), list, client.InNamespace(co.Namespace))).To(Succeed())
 	var found []unstructured.Unstructured
 	for i := range list.Items {
@@ -766,9 +766,8 @@ var _ = It("rejects an existing InfraEnv owned by another cluster", func() {
 	ctx := context.Background()
 	for name, build := range map[string]func(r *Reconciler, co *v1alpha1.ClusterOrder) *unstructured.Unstructured{
 		"ownerless": func(_ *Reconciler, co *v1alpha1.ClusterOrder) *unstructured.Unstructured {
-			infra := &unstructured.Unstructured{}
-			infra.SetGroupVersionKind(infraEnvGVK)
-			infra.SetName(co.Name + infraEnvNameSuffix)
+			infra := assistedservice.NewInfraEnvObject()
+			infra.SetName(assistedservice.InfraEnvName(co.Name))
 			infra.SetNamespace(co.Namespace)
 			infra.SetUID("foreign-uid")
 			return infra
@@ -806,9 +805,8 @@ var _ = It("rejects foreign InfraEnv owner references", func() {
 	order := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "ns", UID: "order-uid"}}
 	controller := true
 	infraEnv := func(kind, name string, uid types.UID, namespace string) *unstructured.Unstructured {
-		infra := &unstructured.Unstructured{}
-		infra.SetGroupVersionKind(infraEnvGVK)
-		infra.SetName(order.Name + infraEnvNameSuffix)
+		infra := assistedservice.NewInfraEnvObject()
+		infra.SetName(assistedservice.InfraEnvName(order.Name))
 		infra.SetNamespace(namespace)
 		if kind != "" {
 			infra.SetOwnerReferences([]metav1.OwnerReference{{

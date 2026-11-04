@@ -1,8 +1,0 @@
----
-- name: Publish external access endpoints
-  when: external_access_state == 'present'
-  ansible.builtin.include_tasks: create.yaml
-
-- name: Clear external access endpoints
-  when: external_access_state == 'absent'
-  ansible.builtin.include_tasks: delete.yaml

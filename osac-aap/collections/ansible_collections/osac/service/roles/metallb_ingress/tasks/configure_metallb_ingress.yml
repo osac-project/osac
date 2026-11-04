@@ -19,6 +19,7 @@
     - _konnectivity_check.resources[0].status.phase == "Running"
   retries: 60
   delay: 10
+  no_log: true
 
 - name: Create metallb namespace
   kubernetes.core.k8s:
@@ -33,6 +34,7 @@
           openshift.io/cluster-monitoring: "true"
         annotations:
           workload.openshift.io/allowed: management
+  no_log: true
 
 - name: Create metallb operator group
   kubernetes.core.k8s:
@@ -44,6 +46,7 @@
       metadata:
         name: metallb-operator-operatorgroup
         namespace: "{{ metallb_namespace }}"
+  no_log: true
 
 - name: Create metallb subscription
   kubernetes.core.k8s:
@@ -60,6 +63,7 @@
         name: metallb-operator
         source: redhat-operators
         sourceNamespace: openshift-marketplace
+  no_log: true
 
 - name: Create metallb instance
   kubernetes.core.k8s:
@@ -78,6 +82,7 @@
   until: metallb_ingress_instance is successful
   retries: 60
   delay: 10
+  no_log: true
 
 - name: Create metallb ip address pool
   kubernetes.core.k8s:
@@ -100,6 +105,7 @@
   until: metallb_ingress_ip_address_pool is successful
   retries: 60
   delay: 10
+  no_log: true
 
 - name: Create metallb l2advertisement
   kubernetes.core.k8s:
@@ -121,6 +127,7 @@
   until: metallb_ingress_l2advertisement is successful
   retries: 60
   delay: 10
+  no_log: true
   when: worker_bgp_params is not defined
 
 - name: Configure BGP
@@ -152,3 +159,4 @@
         selector:
           ingresscontroller.operator.openshift.io/deployment-ingresscontroller: default
         type: LoadBalancer
+  no_log: true

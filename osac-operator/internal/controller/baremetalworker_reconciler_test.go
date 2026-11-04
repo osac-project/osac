@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/assistedservice"
 	"github.com/osac-project/osac/osac-operator/internal/controller/baremetalworker"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -225,7 +226,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(err).ToNot(HaveOccurred())
 
 		list := &unstructured.UnstructuredList{}
-		list.SetGroupVersionKind(infraEnvGVK)
+		list.SetGroupVersionKind(assistedservice.InfraEnvGroupVersionKind())
 		Expect(k8sClient.List(ctx, list, client.InNamespace(testNamespace))).To(Succeed())
 		count := 0
 		for i := range list.Items {

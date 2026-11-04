@@ -1,6 +1,6 @@
 import { type Locator, type Page, expect } from '@playwright/test';
 
-import { CatalogMainPage } from '../../locators/catalog';
+import { CatalogCreatePage, CatalogDeletePage, CatalogMainPage } from '../../locators/catalog';
 
 const getCatalogItemCard = (page: Page, name: string): Locator =>
   page.locator(...CatalogMainPage.catalogItemCards).filter({
@@ -11,6 +11,32 @@ export interface ExpectedCatalogItemResources {
   instanceType: string;
   diskImage: string;
 }
+
+type CatalogSelectField = readonly [
+  role: 'button',
+  options: { readonly name: string; readonly exact: true },
+];
+
+/** Select an option from a catalog authoring typeahead. */
+export const selectCatalogOption = async (
+  page: Page,
+  field: CatalogSelectField,
+  optionName: string | RegExp,
+): Promise<void> => {
+  const fieldLocator = page.getByRole(...field);
+  await expect(fieldLocator).toBeVisible();
+  await fieldLocator.click();
+  const option = page.getByRole('option', { name: optionName }).first();
+  await expect(option).toBeVisible();
+  await option.click();
+};
+
+/** Open the VM catalog item creation wizard. */
+export const openCreateCatalogItemPage = async (page: Page): Promise<void> => {
+  await page.getByRole(...CatalogMainPage.createVmCatalogItem).click();
+  await expect(page).toHaveURL((url) => url.pathname === '/catalog/vm/create');
+  await expect(page.getByRole(...CatalogCreatePage.pageTitle)).toBeVisible();
+};
 
 /** Verify that a catalog item is shown with its expected card values. */
 export const expectCatalogItemListed = async (
@@ -68,6 +94,21 @@ export const openCatalogItemDetails = async (page: Page, name: string): Promise<
   await expect(catalogItemCard.getByRole('link', { name, exact: true })).toBeVisible();
   await catalogItemCard.getByRole('link', { name, exact: true }).click();
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
+};
+
+/** Delete a catalog item through its UI details page. */
+export const deleteCatalogItem = async (page: Page, name: string): Promise<void> => {
+  await openCatalogItemDetails(page, name);
+  await page.getByRole(...CatalogDeletePage.delete).click();
+
+  const dialog = page.locator(...CatalogDeletePage.dialog);
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(...CatalogDeletePage.dialogTitle)).toContainText(`Delete ${name}?`);
+  await expect(dialog.getByText(...CatalogDeletePage.warning)).toBeVisible();
+  await dialog.getByRole(...CatalogDeletePage.delete).click();
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL((url) => url.pathname === '/catalog');
+  await expect(page.getByRole(...CatalogMainPage.pageTitle)).toBeVisible();
 };
 
 /** Launch the published VM catalog item from its details page. */

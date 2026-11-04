@@ -351,42 +351,29 @@ pnpm --filter @osac/playwright exec playwright test \
   --project=vmaas-storage-tier --project=vmaas-instance-type-lifecycle
 ```
 
-### Catalog CLI flow tests
+### Catalog UI flow tests
 
-The catalog flow runs the `osac` CLI from Playwright, then opens the live UI,
-logs in, and verifies the created item on the Catalog page. Authenticate the
-CLI against the target environment before starting the test, for example with
-`osac login`. Set `OSAC_UI_BASE_URL`, `OSAC_ADMIN_USERNAME`, and `OSAC_ADMIN_PASSWORD` for
-the browser verification.
+The catalog flow uses the admin UI wizard to create and publish the catalog
+item, then verifies it on the Catalog page. Deletion opens the item details
+page and uses its confirmation dialog. Set `OSAC_UI_BASE_URL`,
+`OSAC_ADMIN_USERNAME`, and `OSAC_ADMIN_PASSWORD` before running the tests.
 
 The catalog configuration is in `apps/e2e-tests/extravars.yaml`:
 
-| Parameter                                 | Description                                                       |
-| ----------------------------------------- | ----------------------------------------------------------------- |
-| `catalog.name`                            | Unique catalog item name to create and delete                     |
-| `catalog.template`                        | Existing compute instance template referenced by the catalog item |
-| `catalog.title`                           | Catalog title                                                     |
-| `catalog.description`                     | Catalog description                                               |
-| `catalog.fields.instance_type.name`       | Existing instance type referenced by the catalog item             |
-| `catalog.fields.instance_type.vcpus`      | Expected vCPU value displayed for the referenced instance type    |
-| `catalog.fields.instance_type.memory_gib` | Expected memory value displayed for the referenced instance type  |
-| `catalog.fields.boot_disk.size_gib`       | Boot-disk storage value displayed for the catalog item            |
-| `catalog.fields.disk_image.name`          | Existing disk image referenced by the catalog item                |
-
-Optional variables:
-
-| Variable          | Description                                                                             |
-| ----------------- | --------------------------------------------------------------------------------------- |
-| `OSAC_CLI_PATH`   | Path to the `osac` executable; defaults to `osac` from `PATH`                           |
-| `OSAC_CLI_CONFIG` | CLI configuration directory; when unset, the CLI uses its normal configuration location |
+| Parameter                           | Description                                                       |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| `catalog.name`                      | Unique catalog item name to create and delete                     |
+| `catalog.template`                  | Existing compute instance template referenced by the catalog item |
+| `catalog.description`               | Catalog description                                               |
+| `catalog.fields.instance_type.name` | Existing instance type referenced by the catalog item             |
+| `catalog.fields.boot_disk.size_gib` | Boot-disk storage value displayed for the catalog item            |
+| `catalog.fields.disk_image.name`    | Existing disk image referenced by the catalog item                |
 
 Run creation and deletion together. The create project owns the delete project
-as teardown, and each CLI operation is followed by a JSON lookup and a browser
-check of the Catalog page:
+as teardown, and both operations verify the Catalog page:
 
 ```bash
 export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
-export OSAC_CLI_CONFIG="$HOME/.config/osac"
 
 pnpm --filter @osac/playwright exec playwright test \
   --project=vmaas-catalog

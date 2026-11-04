@@ -152,6 +152,59 @@ var _ = Describe("Poll", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(calls).To(BeNumerically(">=", 2))
 		})
+
+		It("returns context.Canceled when the caller cancels between fetches", func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			steady := func(c context.Context) (fakeResource, error) {
+				cancel()
+				return fakeResource{state: "PENDING"}, nil
+			}
+			opts := fastOpts(steady, "ALLOCATED")
+			_, err := wait.Poll(ctx, opts)
+			Expect(err).To(MatchError(context.Canceled))
+		})
+
+		It("returns ErrTimeout when Fetch fails with the deadline error", func() {
+			deadlineFetch := func(c context.Context) (fakeResource, error) {
+				<-c.Done()
+				return fakeResource{}, context.DeadlineExceeded
+			}
+			opts := fastOpts(deadlineFetch, "ALLOCATED")
+			_, err := wait.Poll(context.Background(), opts)
+			var toErr *wait.ErrTimeout
+			Expect(errors.As(err, &toErr)).To(BeTrue(),
+				"expected ErrTimeout, got %T: %v", err, err)
+		})
+
+		It("propagates unrelated fetch errors even when the context is done", func() {
+			sentinel := errors.New("connection refused")
+			errFetch := func(_ context.Context) (fakeResource, error) {
+				return fakeResource{}, sentinel
+			}
+			opts := fastOpts(errFetch, "ALLOCATED")
+			_, err := wait.Poll(context.Background(), opts)
+			Expect(errors.Is(err, sentinel)).To(BeTrue())
+		})
+
+		It("caps the initial interval at MaxInterval", func() {
+			// If the first delay ignored MaxInterval, this test
+			// would take ~50ms instead of ~10ms per poll cycle.
+			steady := func(_ context.Context) (fakeResource, error) {
+				return fakeResource{state: "PENDING"}, nil
+			}
+			opts := wait.Options[fakeResource]{
+				Fetch:       steady,
+				StateOf:     stateOf,
+				TargetState: "ALLOCATED",
+				Timeout:     40 * time.Millisecond,
+				Interval:    50 * time.Millisecond,
+				MaxInterval: 5 * time.Millisecond,
+			}
+			_, err := wait.Poll(context.Background(), opts)
+			var toErr *wait.ErrTimeout
+			Expect(errors.As(err, &toErr)).To(BeTrue(),
+				"expected ErrTimeout, got %T: %v", err, err)
+		})
 	})
 
 	Describe("OnProgress callback", func() {
@@ -169,7 +222,10 @@ var _ = Describe("Poll", func() {
 			opts.FailureStates = []string{"FAILED"}
 			var seen []string
 			opts.OnProgress = func(r fakeResource) { seen = append(seen, r.state) }
-			_, _ = wait.Poll(context.Background(), opts)
+			_, err := wait.Poll(context.Background(), opts)
+			var termErr *wait.ErrTerminalState
+			Expect(errors.As(err, &termErr)).To(BeTrue(),
+				"expected ErrTerminalState, got %T: %v", err, err)
 			Expect(seen).To(ContainElement("FAILED"))
 		})
 	})

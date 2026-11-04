@@ -884,7 +884,6 @@ var _ = Describe("NetBox GetHostNICs", func() {
 		ctx := context.Background()
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
-		manager.EXPECT().IsBMHReady(ctx, "netbox-42").Return(true, nil)
 		manager.EXPECT().GetHardwareNICs(ctx, "netbox-42").Return([]string{"AA:BB:CC:DD:EE:01"}, nil)
 		api := &selectorQueryTestAPI{}
 		got, err := NewNetBoxClient(api, manager, testNetBoxHostClass, nil).GetHostNICs(ctx, "baremetal/netbox-42")
@@ -893,21 +892,21 @@ var _ = Describe("NetBox GetHostNICs", func() {
 		Expect(api.deviceReadCalls).To(BeZero())
 	})
 
-	It("does not read NICs before the BMH is ready", func() {
-		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
-		manager.EXPECT().Namespace().Return("baremetal").Times(2)
-		manager.EXPECT().IsBMHReady(gomock.Any(), "netbox-42").Return(false, nil)
-		got, err := NewNetBoxClient(&selectorQueryTestAPI{}, manager, testNetBoxHostClass, nil).
-			GetHostNICs(context.Background(), "baremetal/netbox-42")
-		Expect(err).To(MatchError(ContainSubstring("not ready for NIC metadata")))
-		Expect(got).To(BeNil())
-	})
-
-	It("returns an empty NIC list after a ready BMH confirms no NICs", func() {
+	It("reads NICs from a provisioned BMH without requiring availability", func() {
 		ctx := context.Background()
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
-		manager.EXPECT().IsBMHReady(ctx, "netbox-42").Return(true, nil)
+		manager.EXPECT().GetHardwareNICs(ctx, "netbox-42").Return([]string{"AA:BB:CC:DD:EE:02"}, nil)
+		got, err := NewNetBoxClient(&selectorQueryTestAPI{}, manager, testNetBoxHostClass, nil).
+			GetHostNICs(ctx, "baremetal/netbox-42")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal([]HostNIC{{MAC: "aa:bb:cc:dd:ee:02"}}))
+	})
+
+	It("returns an empty NIC list when the BMH has no NIC data", func() {
+		ctx := context.Background()
+		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
+		manager.EXPECT().Namespace().Return("baremetal").Times(2)
 		manager.EXPECT().GetHardwareNICs(ctx, "netbox-42").Return(nil, nil)
 
 		got, err := NewNetBoxClient(&selectorQueryTestAPI{}, manager, testNetBoxHostClass, nil).
@@ -922,7 +921,6 @@ var _ = Describe("NetBox GetHostNICs", func() {
 		lookupErr := errors.New("BMH lookup failed")
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
-		manager.EXPECT().IsBMHReady(gomock.Any(), "netbox-42").Return(true, nil)
 		manager.EXPECT().GetHardwareNICs(gomock.Any(), "netbox-42").Return(nil, lookupErr)
 		api := &selectorQueryTestAPI{}
 		got, err := NewNetBoxClient(api, manager, testNetBoxHostClass, nil).

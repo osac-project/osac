@@ -580,12 +580,24 @@ oc rollout restart deployment/keycloak-service --namespace keycloak
 ## Separate VMaaS workload cluster
 
 Run the OSAC management services on one OpenShift cluster and the virtual
-machines on another. Both clusters need `cluster-admin` access and different
-API server addresses. Disable CaaS and BMaaS. The operator refuses to start
-with a remote kubeconfig when either the cluster controller or the
-bare-metal-instance controller is enabled. Keep
+machines on another. The clusters must have different API server addresses.
+The administrator installing phase 1 on each cluster and phase 2 on the
+management cluster needs `cluster-admin` access. Disable CaaS and BMaaS. The
+operator refuses to start with a remote kubeconfig when either the cluster
+controller or the bare-metal-instance controller is enabled. Keep
 `global.networking.provisioningEnabled: false` in the phase-2 values; provider
 networking with VMs on a separate cluster is not supported in this release.
+
+The remote workload kubeconfig is a separate credential from the account used
+to install the charts. Use a dedicated workload-cluster service account and
+grant the narrowest permissions validated for the enabled OSAC controllers
+and AAP VM workflows. The OSAC operator guide documents the remote Storage
+controller's cluster-scoped `get`, `list`, and `watch` permission on
+`storage.k8s.io/storageclasses`; it does not define a complete least-privilege
+role for every remote VM workflow. The kubeconfig is stored in a Secret on the
+management cluster and mounted into the operator and AAP; the console proxy
+also reads the labeled Secret. Restrict Secret access to the OSAC workloads
+and cluster administrators.
 
 Create the workload kubeconfig Secret on the management cluster before phase
 2. The Secret contents and the console-proxy label are described in

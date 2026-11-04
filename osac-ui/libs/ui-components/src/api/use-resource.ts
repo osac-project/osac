@@ -151,15 +151,10 @@ export const useListAllResources = <Input extends DescMessage, Output extends De
   });
 };
 
-export const useGetResource = <
-  Input extends DescMessage,
-  Output extends DescMessage,
-  SelectedData = MessageShape<Output>,
->(
+export const useGetResource = <Input extends DescMessage, Output extends DescMessage>(
   service: ResourceService<'get', Input, Output>,
   request: MessageInitShape<Input>,
-  options: ResourceQueryOptions<Output, SelectedData> = {},
-  select?: (data: MessageShape<Output>) => SelectedData,
+  options: ResourceQueryOptions<Output> = {},
 ) => {
   const client = useApiFetch(service);
 
@@ -167,7 +162,6 @@ export const useGetResource = <
     ...options,
     queryKey: [service.typeName, 'get', request],
     queryFn: () => client.get(request),
-    select,
   });
 };
 

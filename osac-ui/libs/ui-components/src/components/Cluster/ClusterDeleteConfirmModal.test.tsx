@@ -2,14 +2,16 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import ClusterDeleteConfirmModal from './ClusterDeleteConfirmModal';
-import * as clusterApi from '../../api/v1/cluster';
+import { Clusters } from '@osac/types';
 
-vi.mock('../../api/v1/cluster', async (importOriginal) => {
-  const actual = await importOriginal<typeof clusterApi>();
+import ClusterDeleteConfirmModal from './ClusterDeleteConfirmModal';
+import * as resourceApi from '../../api/use-resource';
+
+vi.mock('../../api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof resourceApi>();
   return {
     ...actual,
-    useDeleteCluster: vi.fn(),
+    useDeleteResource: vi.fn(),
   };
 });
 
@@ -40,9 +42,9 @@ describe('ClusterDeleteConfirmModal', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(clusterApi.useDeleteCluster).mockReturnValue(
+    vi.mocked(resourceApi.useDeleteResource).mockReturnValue(
       createMockMutation({ mutate, reset }) as unknown as ReturnType<
-        typeof clusterApi.useDeleteCluster
+        typeof resourceApi.useDeleteResource
       >,
     );
   });
@@ -57,6 +59,7 @@ describe('ClusterDeleteConfirmModal', () => {
     );
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(resourceApi.useDeleteResource).toHaveBeenCalledWith(Clusters, { retry: false });
     expect(
       screen.getByText(
         'This permanently deletes the cluster and all its resources. This action cannot be undone.',
@@ -93,9 +96,9 @@ describe('ClusterDeleteConfirmModal', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('calls delete mutation with cluster ID on Delete click', async () => {
+  it('calls delete mutation with the cluster ID request on Delete click', async () => {
     const user = userEvent.setup();
-    mutate.mockImplementation((_id: string, options?: { onSuccess?: () => void }) => {
+    mutate.mockImplementation((_request: { id: string }, options?: { onSuccess?: () => void }) => {
       options?.onSuccess?.();
       return Promise.resolve(undefined);
     });
@@ -112,9 +115,12 @@ describe('ClusterDeleteConfirmModal', () => {
     await user.click(screen.getByRole('button', { name: /^Delete$/i }));
 
     expect(reset).toHaveBeenCalled();
-    expect(mutate).toHaveBeenCalledWith('cluster-1', {
-      onSuccess: expect.any(Function) as unknown,
-    });
+    expect(mutate).toHaveBeenCalledWith(
+      { id: 'cluster-1' },
+      {
+        onSuccess: expect.any(Function) as unknown,
+      },
+    );
     expect(onSuccess).toHaveBeenCalled();
   });
 
@@ -137,12 +143,12 @@ describe('ClusterDeleteConfirmModal', () => {
   });
 
   it('shows error alert when mutation has an error', () => {
-    vi.mocked(clusterApi.useDeleteCluster).mockReturnValue(
+    vi.mocked(resourceApi.useDeleteResource).mockReturnValue(
       createMockMutation({
         mutate,
         reset,
         error: new Error('permission denied'),
-      }) as unknown as ReturnType<typeof clusterApi.useDeleteCluster>,
+      }) as unknown as ReturnType<typeof resourceApi.useDeleteResource>,
     );
 
     render(

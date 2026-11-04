@@ -1,4 +1,4 @@
-import { type SyntheticEvent, useEffect, useState } from 'react';
+import { type SyntheticEvent, useState } from 'react';
 import {
   Card,
   CardBody,
@@ -19,7 +19,7 @@ import {
 } from '@patternfly/react-core';
 
 import { ExternalIPAttachmentEndpoint } from '@osac/types';
-import type { Cluster, ClusterVersion, ExternalIPAttachment } from '@osac/types';
+import type { Cluster, ExternalIPAttachment } from '@osac/types';
 
 import AttachExternalIpModal from './AttachExternalIpModal';
 import ClusterDetailsActionButtons from './ClusterDetailsActionButtons';
@@ -28,10 +28,7 @@ import ClusterExternalIpCard from './ClusterExternalIpCard';
 import { ClusterNetworkingDetailsTab } from './ClusterNetworkingDetailsTab';
 import ClusterNodeSetsTab from './ClusterNetworkingTab';
 import { ClusterOverviewTab } from './ClusterOverviewTab';
-import ClusterVersionRail from './ClusterVersionRail';
-import type { UpgradeActionState } from './ClusterVersionRail';
 import DetachExternalIpModal from './DetachExternalIpModal';
-import UpgradeClusterDialog from './UpgradeClusterDialog';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceConditionsTable } from '../../Resource/ResourceConditionsTable';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
@@ -39,37 +36,15 @@ import { ClusterStatusLabel } from '../ClusterStatusLabel';
 
 interface ClusterDetailViewProps {
   cluster: Cluster;
-  upgrade?: {
-    action: UpgradeActionState;
-    eligibleVersions: ClusterVersion[];
-  };
 }
 
 const CLUSTER_DETAIL_OVERVIEW_TAB_ID = 'cluster-detail-overview';
 const CLUSTER_DETAIL_NETWORKING_TAB_ID = 'cluster-detail-networking';
 const CLUSTER_DETAIL_NODE_SETS_TAB_ID = 'cluster-detail-node-sets';
 
-const countCurrentWorkerNodes = (cluster: Cluster): number => {
-  const statusNodeSets = cluster.status?.nodeSets ?? {};
-  const specNodeSets = cluster.spec?.nodeSets ?? {};
-  const currentNodeSets = Object.keys(statusNodeSets).length ? statusNodeSets : specNodeSets;
-  return Object.entries(currentNodeSets).reduce(
-    (total, [name, nodeSet]) => total + (nodeSet.size ?? specNodeSets[name]?.size ?? 0),
-    0,
-  );
-};
-
-const ClusterDetailsPageContent = ({ cluster, upgrade }: ClusterDetailViewProps) => {
+const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
   const { t } = useTranslation();
   const [activeTabKey, setActiveTabKey] = useState(0);
-  const [upgradeDialogClusterId, setUpgradeDialogClusterId] = useState<string>();
-  useEffect(() => {
-    setUpgradeDialogClusterId(undefined);
-  }, [cluster.id]);
-  const upgradeAction: UpgradeActionState = upgrade?.action ?? {
-    kind: 'blocked',
-    reason: t('Upgrade eligibility is unavailable.'),
-  };
   const [attachEndpoint, setAttachEndpoint] = useState<ExternalIPAttachmentEndpoint | undefined>();
   const [detachAttachment, setDetachAttachment] = useState<ExternalIPAttachment>();
 
@@ -143,9 +118,10 @@ const ClusterDetailsPageContent = ({ cluster, upgrade }: ClusterDetailViewProps)
               id={CLUSTER_DETAIL_OVERVIEW_TAB_ID}
               activeKey={activeTabKey}
               hidden={0 !== activeTabKey}
+              className="pf-v6-u-h-100"
             >
-              <TabContentBody>
-                <ClusterOverviewTab cluster={cluster} />
+              <TabContentBody className="pf-v6-u-h-100">
+                {activeTabKey === 0 && <ClusterOverviewTab cluster={cluster} />}
               </TabContentBody>
             </TabContent>
             <TabContent
@@ -171,53 +147,29 @@ const ClusterDetailsPageContent = ({ cluster, upgrade }: ClusterDetailViewProps)
           </GridItem>
 
           <GridItem md={6}>
-            <Stack hasGutter>
-              {activeTabKey === 0 && (
-                <StackItem>
-                  <ClusterVersionRail
-                    currentVersion={cluster.status?.observedVersion}
-                    action={upgradeAction}
-                    onUpgrade={() => setUpgradeDialogClusterId(cluster.id)}
+            {activeTabKey === 0 && (
+              <Card isFullHeight>
+                <CardTitle>{t('Conditions')}</CardTitle>
+                <CardBody>
+                  <ResourceConditionsTable
+                    ariaLabel={t('Cluster conditions')}
+                    conditions={cluster.status?.conditions ?? []}
+                    conditionResourceKind="cluster"
                   />
-                </StackItem>
-              )}
-              {activeTabKey === 0 && (
-                <StackItem>
-                  <Card isFullHeight>
-                    <CardTitle>{t('Conditions')}</CardTitle>
-                    <CardBody>
-                      <ResourceConditionsTable
-                        ariaLabel={t('Cluster conditions')}
-                        conditions={cluster.status?.conditions ?? []}
-                        conditionResourceKind="cluster"
-                      />
-                    </CardBody>
-                  </Card>
-                </StackItem>
-              )}
-              {activeTabKey === 1 && (
-                <StackItem>
-                  <ClusterExternalIpCard
-                    cluster={cluster}
-                    onAttach={setAttachEndpoint}
-                    onDetach={setDetachAttachment}
-                  />
-                </StackItem>
-              )}
-            </Stack>
+                </CardBody>
+              </Card>
+            )}
+            {activeTabKey === 1 && (
+              <ClusterExternalIpCard
+                cluster={cluster}
+                onAttach={setAttachEndpoint}
+                onDetach={setDetachAttachment}
+              />
+            )}
           </GridItem>
         </Grid>
       </PageSection>
 
-      {upgradeDialogClusterId === cluster.id && upgrade && (
-        <UpgradeClusterDialog
-          clusterId={cluster.id}
-          currentVersion={cluster.status?.observedVersion}
-          eligibleVersions={upgrade.eligibleVersions}
-          workerNodeCount={countCurrentWorkerNodes(cluster)}
-          onClose={() => setUpgradeDialogClusterId(undefined)}
-        />
-      )}
       {attachEndpoint !== undefined && (
         <AttachExternalIpModal
           cluster={cluster}

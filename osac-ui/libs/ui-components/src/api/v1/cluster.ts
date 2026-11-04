@@ -1,41 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { type MessageInitShape } from '@bufbuild/protobuf';
-import { useMutation } from '@tanstack/react-query';
 
-import { Cluster, ClusterSchema, Clusters, Secrets } from '@osac/types';
-import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
+import { Secrets } from '@osac/types';
 
 import { useApiFetch } from '../api-context';
-import { useGetResource, useInvalidateServiceQueries, useListResource } from '../use-resource';
-
-export const useClusters = () => {
-  const filter = useProjectFilterQuery<Cluster>();
-  return useListResource(Clusters, { filter }, {}, (reply) => reply.items);
-};
-
-export const useCluster = (id: string) =>
-  useGetResource(Clusters, { id }, { enabled: Boolean(id) }, (reply) => reply.object);
-
-export const useDeleteCluster = () => {
-  const client = useApiFetch(Clusters);
-  const invalidateServiceQueries = useInvalidateServiceQueries();
-  return useMutation({
-    mutationFn: (id: string) => client.delete({ id }),
-    onSuccess: () => invalidateServiceQueries(Clusters),
-    retry: false,
-  });
-};
-
-export const useProvisionCluster = () => {
-  const client = useApiFetch(Clusters);
-  const invalidateServiceQueries = useInvalidateServiceQueries();
-  return useMutation({
-    mutationFn: (cluster: MessageInitShape<typeof ClusterSchema>) =>
-      client.create({ object: cluster }).then((r) => r.object),
-    onSuccess: () => invalidateServiceQueries(Clusters),
-    retry: false,
-  });
-};
 
 const triggerDownload = (content: string, filename: string) => {
   const blob = new Blob([content], { type: 'application/octet-stream' });

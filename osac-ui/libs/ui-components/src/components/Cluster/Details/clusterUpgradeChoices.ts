@@ -1,4 +1,4 @@
-import { type SemVer, compare, eq, gt, lt, parse } from 'semver';
+import { type SemVer, compare, eq, gt, parse } from 'semver';
 
 import { type Cluster, ClusterState, type ClusterVersion, ClusterVersionState } from '@osac/types';
 
@@ -14,34 +14,32 @@ export type ClusterUpgradeBlockedReason =
   | 'node-set-observation-unavailable'
   | 'components-not-converged'
   | 'no-eligible-target'
-  | 'node-set-ahead'
   | 'unsupported-skew';
-
-export interface ClusterUpgradeTargetRejection {
-  target: ClusterVersion;
-  reason: 'node-set-ahead' | 'unsupported-skew';
-}
 
 export interface ClusterUpgradeChoiceResult {
   eligibleTargets: ClusterVersion[];
-  rejectedTargets: ClusterUpgradeTargetRejection[];
   blockedReason?: ClusterUpgradeBlockedReason;
+  blockedNodeSetId?: string;
+  blockedObservedVersion?: string;
 }
 
-const SEMVER_2_FORMAT = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const MAX_MINOR_VERSION_SKEW = 3;
 
 const parseStrictSemVer = (version?: string): SemVer | null => {
-  if (!version || version !== version.trim() || !SEMVER_2_FORMAT.test(version)) {
+  if (!version) {
     return null;
   }
-  return parse(version);
+  const parsed = parse(version);
+  const canonical = parsed
+    ? `${parsed.version}${parsed.build.length ? `+${parsed.build.join('.')}` : ''}`
+    : undefined;
+  return canonical === version ? parsed : null;
 };
 
-const blocked = (blockedReason: ClusterUpgradeBlockedReason): ClusterUpgradeChoiceResult => ({
-  eligibleTargets: [],
-  rejectedTargets: [],
-  blockedReason,
-});
+const blocked = (
+  blockedReason: ClusterUpgradeBlockedReason,
+  details: Pick<ClusterUpgradeChoiceResult, 'blockedNodeSetId' | 'blockedObservedVersion'> = {},
+): ClusterUpgradeChoiceResult => ({ eligibleTargets: [], blockedReason, ...details });
 
 export const resolveClusterUpgradeChoices = (
   cluster: Cluster,
@@ -70,9 +68,13 @@ export const resolveClusterUpgradeChoices = (
     return blocked('configured-version-invalid');
   }
 
-  const controlPlane = parseStrictSemVer(cluster.status?.observedVersion);
+  const observedVersion = cluster.status?.observedVersion;
+  const controlPlane = parseStrictSemVer(observedVersion);
   if (!controlPlane) {
     return blocked('control-plane-observation-unavailable');
+  }
+  if (!eq(controlPlane, configured)) {
+    return blocked('components-not-converged', { blockedObservedVersion: observedVersion });
   }
 
   const observedNodeSets = cluster.status?.nodeSets ?? {};
@@ -80,17 +82,25 @@ export const resolveClusterUpgradeChoices = (
     ...Object.keys(cluster.spec?.nodeSets ?? {}),
     ...Object.keys(observedNodeSets),
   ]);
-  const nodeSetVersions: SemVer[] = [];
   for (const id of nodeSetIds) {
-    const observed = parseStrictSemVer(observedNodeSets[id]?.observedVersion);
+    const nodeSetVersion = observedNodeSets[id]?.observedVersion;
+    const observed = parseStrictSemVer(nodeSetVersion);
     if (!observed) {
-      return blocked('node-set-observation-unavailable');
+      return blocked('node-set-observation-unavailable', {
+        blockedNodeSetId: id,
+        blockedObservedVersion: nodeSetVersion,
+      });
     }
-    nodeSetVersions.push(observed);
+    if (!eq(observed, configured)) {
+      return blocked('components-not-converged', {
+        blockedNodeSetId: id,
+        blockedObservedVersion: nodeSetVersion,
+      });
+    }
   }
 
   const eligible: { target: ClusterVersion; version: SemVer }[] = [];
-  const rejectedTargets: ClusterUpgradeTargetRejection[] = [];
+  let skewRejected = false;
   for (const target of candidateCatalog) {
     const spec = target.spec;
     if (
@@ -103,41 +113,22 @@ export const resolveClusterUpgradeChoices = (
     if (!targetVersion || !gt(targetVersion, controlPlane)) {
       continue;
     }
-    if (nodeSetVersions.some((observed) => lt(targetVersion, observed))) {
-      rejectedTargets.push({ target, reason: 'node-set-ahead' });
-      continue;
-    }
     if (
-      nodeSetVersions.some(
-        (observed) =>
-          targetVersion.major !== observed.major || targetVersion.minor - observed.minor > 3,
-      )
+      targetVersion.major !== configured.major ||
+      targetVersion.minor - configured.minor > MAX_MINOR_VERSION_SKEW
     ) {
-      rejectedTargets.push({ target, reason: 'unsupported-skew' });
+      skewRejected = true;
       continue;
     }
     eligible.push({ target, version: targetVersion });
   }
 
-  const result: ClusterUpgradeChoiceResult = {
+  if (eligible.length === 0) {
+    return blocked(skewRejected ? 'unsupported-skew' : 'no-eligible-target');
+  }
+  return {
     eligibleTargets: eligible
       .sort((left, right) => compare(right.version, left.version))
       .map(({ target }) => target),
-    rejectedTargets,
   };
-
-  if (
-    !eq(controlPlane, configured) ||
-    nodeSetVersions.some((observed) => !eq(observed, configured))
-  ) {
-    return { ...result, blockedReason: 'components-not-converged' };
-  }
-  if (result.eligibleTargets.length > 0) {
-    return result;
-  }
-  const rejectedReasons = new Set(rejectedTargets.map(({ reason }) => reason));
-  if (rejectedReasons.size === 1) {
-    return { ...result, blockedReason: rejectedTargets[0].reason };
-  }
-  return { ...result, blockedReason: 'no-eligible-target' };
 };

@@ -8,6 +8,8 @@ import {
   type Cluster,
   ClusterSchema,
   ClusterState,
+  ClusterUpgradeHistoryEntrySchema,
+  ClusterUpgradeState,
   type ClusterVersion,
   ClusterVersionReferenceSchema,
   ClusterVersionSchema,
@@ -23,17 +25,17 @@ import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const currentVersion = create(ClusterVersionSchema, {
   id: 'current-version',
-  metadata: { name: 'ocp-4-17', project: 'project-a' },
+  metadata: { name: 'ocp-4-17', tenant: 'tenant-a', project: 'project-a' },
   spec: { version: '4.17.0', state: ClusterVersionState.ACTIVE, enabled: true },
 });
 const targetVersion = create(ClusterVersionSchema, {
   id: 'target-version',
-  metadata: { name: 'ocp-4-18', project: 'project-a' },
+  metadata: { name: 'ocp-4-18', tenant: 'tenant-a', project: 'project-a' },
   spec: { version: '4.18.0', state: ClusterVersionState.ACTIVE, enabled: true },
 });
 const readyCluster = create(ClusterSchema, {
   id: 'cluster-1',
-  metadata: { name: 'cluster-one', project: 'project-a' },
+  metadata: { name: 'cluster-one', tenant: 'tenant-a', project: 'project-a' },
   spec: {
     version: { id: currentVersion.id, name: currentVersion.metadata?.name, project: 'project-a' },
     nodeSets: { workers: { size: 2 } },
@@ -97,6 +99,29 @@ describe('ClusterDetailsPage upgrade availability', () => {
     );
   });
 
+  it.each([ClusterUpgradeState.PENDING, ClusterUpgradeState.PROGRESSING])(
+    'shows an ongoing upgrade for history state %s',
+    async (state) => {
+      const upgrading = clone(ClusterSchema, readyCluster);
+      if (!upgrading.spec || !upgrading.status) {
+        throw new Error('The cluster fixture needs spec and status');
+      }
+      upgrading.spec.version = create(ClusterVersionReferenceSchema, { id: targetVersion.id });
+      upgrading.status.state = ClusterState.PROGRESSING;
+      upgrading.status.upgradeHistory = [
+        create(ClusterUpgradeHistoryEntrySchema, {
+          state,
+          sourceVersion: '4.17.0',
+          targetVersion: '4.18.0',
+        }),
+      ];
+      renderPage(upgrading, [currentVersion, targetVersion]);
+
+      await waitFor(() => expect(screen.getByText('Upgrade in progress')).toBeInTheDocument());
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
+    },
+  );
+
   it('shows a disabled action when the version catalog request fails', async () => {
     renderPage(readyCluster, [currentVersion, targetVersion], {
       onClusterVersionList: () => {
@@ -111,28 +136,27 @@ describe('ClusterDetailsPage upgrade availability', () => {
     );
   });
 
-  it('resolves a name-only version and offers only owned or shared targets', async () => {
+  it('resolves by ID and offers tenant targets across projects and shared targets', async () => {
     const cluster = clone(ClusterSchema, readyCluster);
-    const configured = clone(ClusterVersionSchema, currentVersion);
     const foreignConfigured = clone(ClusterVersionSchema, currentVersion);
     const foreignTarget = clone(ClusterVersionSchema, targetVersion);
+    const crossProjectTarget = clone(ClusterVersionSchema, targetVersion);
     const sharedTarget = clone(ClusterVersionSchema, targetVersion);
     if (
-      !cluster.metadata ||
-      !cluster.spec?.version ||
-      !configured.metadata ||
       !foreignConfigured.metadata ||
       !foreignTarget.metadata ||
+      !foreignTarget.spec ||
+      !crossProjectTarget.metadata ||
       !sharedTarget.metadata
     ) {
       throw new Error('The fixtures need metadata');
     }
-    cluster.metadata.tenant = 'tenant-a';
-    cluster.spec.version.id = '';
-    configured.metadata.tenant = 'tenant-a';
     foreignConfigured.id = 'foreign-current-version';
     foreignConfigured.metadata.tenant = 'tenant-b';
     foreignTarget.metadata.tenant = 'tenant-b';
+    foreignTarget.spec.version = '4.20.0';
+    crossProjectTarget.id = 'cross-project-target-version';
+    crossProjectTarget.metadata.project = 'project-b';
     sharedTarget.id = 'shared-target-version';
     sharedTarget.metadata.tenant = 'shared';
     sharedTarget.metadata.name = 'ocp-4-19-shared';
@@ -140,21 +164,60 @@ describe('ClusterDetailsPage upgrade availability', () => {
       throw new Error('The shared version fixture needs a spec');
     }
     sharedTarget.spec.version = '4.19.0';
-    const { user } = renderPage(cluster, [
-      configured,
+    const versions = [
+      currentVersion,
       foreignConfigured,
       foreignTarget,
+      crossProjectTarget,
       sharedTarget,
-    ]);
+    ];
+    let catalogFilter = '';
+    const { user } = renderPage(cluster, versions, {
+      onClusterVersionList: (request) => {
+        catalogFilter = request.filter ?? '';
+        return {
+          items: versions.filter(
+            (version) =>
+              version.metadata?.tenant === cluster.metadata?.tenant ||
+              version.metadata?.tenant === 'shared',
+          ),
+        };
+      },
+    });
 
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
     );
+    expect(catalogFilter).toContain('this.metadata.tenant == "tenant-a"');
+    expect(catalogFilter).toContain('this.metadata.tenant == "shared"');
     await user.click(screen.getByRole('button', { name: 'Upgrade cluster' }));
     const dialog = screen.getByRole('dialog', { name: 'Upgrade cluster' });
     await user.click(within(dialog).getByLabelText(/^Target version/));
     expect(within(dialog).getByRole('option', { name: '4.19.0' })).toBeInTheDocument();
-    expect(within(dialog).queryByRole('option', { name: '4.18.0' })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('option', { name: '4.18.0' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('option', { name: '4.20.0' })).not.toBeInTheDocument();
+  });
+
+  it('does not use a configured version from another tenant', async () => {
+    const cluster = clone(ClusterSchema, readyCluster);
+    const foreignConfigured = clone(ClusterVersionSchema, currentVersion);
+    if (!cluster.spec || !foreignConfigured.metadata) {
+      throw new Error('The fixtures need spec and metadata');
+    }
+    foreignConfigured.id = 'foreign-current-version';
+    foreignConfigured.metadata.tenant = 'tenant-b';
+    cluster.spec.version = create(ClusterVersionReferenceSchema, {
+      id: foreignConfigured.id,
+      name: foreignConfigured.metadata.name,
+      project: foreignConfigured.metadata.project,
+    });
+    renderPage(cluster, [foreignConfigured, targetVersion]);
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
+        'The configured cluster version could not be found.',
+      ),
+    );
   });
 
   it('disables an open dialog when a refreshed cluster is no longer converged', async () => {
@@ -190,7 +253,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     expect(updateCalls).toBe(0);
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-      'Wait for the control plane and node sets to reach the desired version.',
+      'The control plane is at 4.16.0; wait for 4.17.0.',
     );
   });
 
@@ -234,7 +297,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     await waitFor(() => expect(getCalls).toBeGreaterThan(1));
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-        'Wait for the control plane and node sets to reach the desired version.',
+        'The control plane is at 4.17.0; wait for 4.18.0.',
       ),
     );
     expect(screen.queryByRole('dialog', { name: 'Upgrade cluster' })).not.toBeInTheDocument();

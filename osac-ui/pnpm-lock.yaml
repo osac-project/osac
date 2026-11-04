@@ -275,7 +275,7 @@ importers:
         specifier: ^7.0.0
         version: 7.14.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       semver:
-        specifier: 7.7.4
+        specifier: ^7.7.4
         version: 7.7.4
       yup:
         specifier: ^1.7.1
@@ -297,7 +297,7 @@ importers:
         specifier: ^19.2.3
         version: 19.3.0(@types/react@19.3.0)
       '@types/semver':
-        specifier: 7.8.0
+        specifier: ^7.8.0
         version: 7.8.0
       typescript:
         specifier: ~5.9.3

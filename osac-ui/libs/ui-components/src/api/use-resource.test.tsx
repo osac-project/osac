@@ -1,4 +1,4 @@
-import React, { type ReactNode, createElement } from 'react';
+import React, { type ReactNode, createElement, useState } from 'react';
 import { create } from '@bufbuild/protobuf';
 import { type Transport, createRouterTransport } from '@connectrpc/connect';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -55,6 +55,44 @@ describe('resource queries', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.items.map((tenant) => tenant.id)).toEqual(['tenant-1', 'tenant-2']);
+  });
+
+  it('keeps selected list items visible while a changed filter loads', async () => {
+    let releaseNext: (() => void) | undefined;
+    const nextGate = new Promise<void>((resolve) => {
+      releaseNext = resolve;
+    });
+    const transport = createRouterTransport((router) => {
+      router.service(Tenants, {
+        list: async ({ filter }) => {
+          if (filter === 'next') {
+            await nextGate;
+          }
+          const tenant = makeTenant(filter === 'next' ? 'next' : 'first');
+          return { items: [tenant], size: 1, total: 1 };
+        },
+      });
+    });
+    const { wrapper } = makeWrapper(transport);
+    const { result } = renderHook(
+      () => {
+        const [filter, setFilter] = useState('first');
+        return {
+          query: useListResource(Tenants, { filter }, {}, (reply) => reply.items),
+          setFilter,
+        };
+      },
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.query.data?.[0]?.id).toBe('first'));
+    act(() => result.current.setFilter('next'));
+
+    await waitFor(() => expect(result.current.query.isPlaceholderData).toBe(true));
+    expect(result.current.query.data?.[0]?.id).toBe('first');
+
+    act(() => releaseNext?.());
+    await waitFor(() => expect(result.current.query.data?.[0]?.id).toBe('next'));
   });
 
   it('fetches every page only when requested and keeps normal list queries separate', async () => {
@@ -180,23 +218,6 @@ describe('resource queries', () => {
     expect(firstSignal).toBeDefined();
     expect(secondSignal).toBe(firstSignal);
     expect(secondSignal?.aborted).toBe(true);
-  });
-
-  it('selects an unwrapped Get object for data and refetch results', async () => {
-    const transport = createMockConnectTransport({
-      identityProviders: [makeIdentityProvider('idp-1')],
-    });
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(
-      () => useGetResource(IdentityProviders, { id: 'idp-1' }, {}, (reply) => reply.object),
-      { wrapper },
-    );
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.id).toBe('idp-1');
-
-    const refreshed = await result.current.refetch();
-    expect(refreshed.data?.id).toBe('idp-1');
   });
 
   it('gets a resource with inferred request and response types', async () => {

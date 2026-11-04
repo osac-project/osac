@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   Alert,
   Button,
@@ -51,7 +50,6 @@ const UpgradeClusterDialog = ({
 }: UpgradeClusterDialogProps) => {
   const { t } = useTranslation();
   const updateCluster = useUpdateResource(Clusters, { retry: false });
-  const [submitError, setSubmitError] = useState<unknown>();
   const requiresDowntimeAcknowledgement = workerNodeCount === 1;
   const options = eligibleVersions.map((version) => {
     const label = versionDisplayName(version, version.id);
@@ -70,15 +68,15 @@ const UpgradeClusterDialog = ({
     ) {
       return;
     }
-    setSubmitError(undefined);
+    updateCluster.reset();
     try {
       await updateCluster.mutateAsync({
         object: { id: clusterId, spec: { version: { id: targetVersionId } } },
         updateMask: { paths: ['spec.version'] },
       });
       onClose();
-    } catch (error) {
-      setSubmitError(error);
+    } catch {
+      return;
     }
   };
 
@@ -106,9 +104,7 @@ const UpgradeClusterDialog = ({
               <DescriptionList isCompact>
                 <DescriptionListGroup>
                   <DescriptionListTerm>{t('Current version')}</DescriptionListTerm>
-                  <DescriptionListDescription>
-                    {currentVersion?.trim() || '—'}
-                  </DescriptionListDescription>
+                  <DescriptionListDescription>{currentVersion || '—'}</DescriptionListDescription>
                 </DescriptionListGroup>
               </DescriptionList>
               <OsacForm>
@@ -166,14 +162,14 @@ const UpgradeClusterDialog = ({
                 isInline
                 title={t('An accepted upgrade cannot be cancelled or rolled back.')}
               />
-              {submitError ? (
+              {updateCluster.error ? (
                 <Alert
                   variant="danger"
                   isInline
                   isLiveRegion
                   title={t('Could not request the cluster upgrade')}
                 >
-                  {getApiErrorMessage(submitError, t)}
+                  {getApiErrorMessage(updateCluster.error, t)}
                 </Alert>
               ) : null}
             </ModalBody>

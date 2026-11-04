@@ -77,7 +77,6 @@ describe('resolveClusterUpgradeChoices', () => {
       'minor-rc',
       'patch',
     ]);
-    expect(result.rejectedTargets).toEqual([]);
     expect(result.blockedReason).toBeUndefined();
   });
 
@@ -181,9 +180,11 @@ describe('resolveClusterUpgradeChoices', () => {
 
     cluster.status.observedVersion = '4.16.0';
     cluster.status.nodeSets.workers.observedVersion = '4.16.0 ';
-    expect(resolveClusterUpgradeChoices(cluster, configured, [nextVersion()]).blockedReason).toBe(
-      'node-set-observation-unavailable',
-    );
+    expect(resolveClusterUpgradeChoices(cluster, configured, [nextVersion()])).toMatchObject({
+      blockedReason: 'node-set-observation-unavailable',
+      blockedNodeSetId: 'workers',
+      blockedObservedVersion: '4.16.0 ',
+    });
 
     cluster.status.nodeSets.workers.observedVersion = '4.16.0';
     expect(
@@ -196,16 +197,19 @@ describe('resolveClusterUpgradeChoices', () => {
     const cluster = makeCluster();
     delete cluster.status.nodeSets.gpu;
 
-    expect(
-      resolveClusterUpgradeChoices(cluster, currentVersion(), [nextVersion()]).blockedReason,
-    ).toBe('node-set-observation-unavailable');
+    expect(resolveClusterUpgradeChoices(cluster, currentVersion(), [nextVersion()])).toMatchObject({
+      blockedReason: 'node-set-observation-unavailable',
+      blockedNodeSetId: 'gpu',
+    });
 
     cluster.status.nodeSets.gpu = create(ClusterNodeSetSchema, {
       observedVersion: 'invalid',
     });
-    expect(
-      resolveClusterUpgradeChoices(cluster, currentVersion(), [nextVersion()]).blockedReason,
-    ).toBe('node-set-observation-unavailable');
+    expect(resolveClusterUpgradeChoices(cluster, currentVersion(), [nextVersion()])).toMatchObject({
+      blockedReason: 'node-set-observation-unavailable',
+      blockedNodeSetId: 'gpu',
+      blockedObservedVersion: 'invalid',
+    });
 
     cluster.status.nodeSets.gpu.observedVersion = '4.16.0';
     cluster.status.nodeSets.extra = create(ClusterNodeSetSchema, {
@@ -228,15 +232,18 @@ describe('resolveClusterUpgradeChoices', () => {
     ).toBeUndefined();
 
     cluster.status.nodeSets.gpu.observedVersion = '4.15.9';
-    expect(resolveClusterUpgradeChoices(cluster, configured, [nextVersion()]).blockedReason).toBe(
-      'components-not-converged',
-    );
+    expect(resolveClusterUpgradeChoices(cluster, configured, [nextVersion()])).toMatchObject({
+      blockedReason: 'components-not-converged',
+      blockedNodeSetId: 'gpu',
+      blockedObservedVersion: '4.15.9',
+    });
 
     cluster.status.nodeSets.gpu.observedVersion = '4.16.0';
     cluster.status.observedVersion = '4.15.9';
-    expect(resolveClusterUpgradeChoices(cluster, configured, [nextVersion()]).blockedReason).toBe(
-      'components-not-converged',
-    );
+    expect(resolveClusterUpgradeChoices(cluster, configured, [nextVersion()])).toMatchObject({
+      blockedReason: 'components-not-converged',
+      blockedObservedVersion: '4.15.9',
+    });
   });
 
   it('does not block on PROGRESSING state alone', () => {
@@ -283,10 +290,6 @@ describe('resolveClusterUpgradeChoices', () => {
     const result = resolveClusterUpgradeChoices(makeCluster(), currentVersion(), catalog);
 
     expect(result.eligibleTargets.map((version) => version.id)).toEqual(['n-three']);
-    expect(result.rejectedTargets.map(({ target, reason }) => [target.id, reason])).toEqual([
-      ['n-four', 'unsupported-skew'],
-      ['next-major', 'unsupported-skew'],
-    ]);
     expect(result.blockedReason).toBeUndefined();
   });
 
@@ -296,21 +299,19 @@ describe('resolveClusterUpgradeChoices', () => {
     ]);
 
     expect(result.eligibleTargets).toEqual([]);
-    expect(result.rejectedTargets.map(({ target, reason }) => [target.id, reason])).toEqual([
-      ['n-four', 'unsupported-skew'],
-    ]);
     expect(result.blockedReason).toBe('unsupported-skew');
   });
 
-  it('rejects a target below an observed node set while reporting divergence', () => {
+  it('blocks a diverged node set before inspecting catalog targets', () => {
     const cluster = makeCluster();
     cluster.status.nodeSets.workers.observedVersion = '4.17.0';
     const target = makeVersion('below-workers', '4.16.1');
     const result = resolveClusterUpgradeChoices(cluster, currentVersion(), [target]);
 
     expect(result.eligibleTargets).toEqual([]);
-    expect(result.rejectedTargets).toEqual([{ target, reason: 'node-set-ahead' }]);
     expect(result.blockedReason).toBe('components-not-converged');
+    expect(result.blockedNodeSetId).toBe('workers');
+    expect(result.blockedObservedVersion).toBe('4.17.0');
   });
 
   it('reports no eligible target when the catalog has no usable newer entry', () => {
@@ -322,7 +323,6 @@ describe('resolveClusterUpgradeChoices', () => {
     const result = resolveClusterUpgradeChoices(makeCluster(), currentVersion(), catalog);
 
     expect(result.eligibleTargets).toEqual([]);
-    expect(result.rejectedTargets).toEqual([]);
     expect(result.blockedReason).toBe('no-eligible-target');
   });
 });

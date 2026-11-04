@@ -1,16 +1,8 @@
-import { Code, ConnectError } from '@connectrpc/connect';
-
-import {
-  type ClusterVersion,
-  type ClusterVersionReference,
-  ClusterVersionState,
-  ClusterVersions,
-} from '@osac/types';
+import { type ClusterVersion, ClusterVersionState, ClusterVersions } from '@osac/types';
 
 import { cel } from '../cel';
 import { type ListParams } from '../types';
-import { useGetResource, useListAllResources, useListResource } from '../use-resource';
-import { matchesClusterVersionReference } from './cluster-version-reference';
+import { useListResource } from '../use-resource';
 
 type ClusterVersionsQueryOptions = {
   enabled?: boolean;
@@ -26,16 +18,11 @@ export const CLUSTER_VERSION_ACTIVE_LIST_FILTER = cel<ClusterVersion>((filter) =
   ),
 );
 
-export const clusterUpgradeCatalogFilter = (tenant?: string) =>
+export const clusterUpgradeCatalogFilter = (tenant: string) =>
   cel<ClusterVersion>((filter) =>
-    filter.and(
-      CLUSTER_VERSION_ACTIVE_LIST_FILTER,
-      tenant
-        ? filter.or(
-            filter.field('metadata.tenant').equals(tenant),
-            filter.field('metadata.tenant').equals('shared'),
-          )
-        : undefined,
+    filter.or(
+      filter.field('metadata.tenant').equals(tenant),
+      filter.field('metadata.tenant').equals('shared'),
     ),
   );
 
@@ -84,58 +71,3 @@ export const useClusterVersions = (
     { enabled: options.enabled ?? true },
     (reply) => reply.items,
   );
-
-export const useClusterVersion = (id: string | undefined) =>
-  useGetResource(
-    ClusterVersions,
-    { id: id ?? '' },
-    { enabled: Boolean(id) },
-    (reply) => reply.object,
-  );
-
-export const useConfiguredClusterVersion = (
-  reference: ClusterVersionReference | undefined,
-  ownerTenant?: string,
-) => {
-  const id = reference?.id;
-  const name = reference?.name.trim() || undefined;
-  const byId = useClusterVersion(id);
-  const nameFilter = name
-    ? cel<ClusterVersion>((filter) =>
-        filter.and(
-          clusterVersionNamesFilter([name]),
-          filter.field('metadata.project').equals(reference?.project ?? ''),
-          reference?.shared
-            ? filter.field('metadata.tenant').equals('shared')
-            : ownerTenant
-              ? filter.field('metadata.tenant').equals(ownerTenant)
-              : undefined,
-        ),
-      )
-    : undefined;
-  const byName = useListAllResources(ClusterVersions, nameFilter, {
-    enabled: !id && Boolean(name),
-    refetchInterval: false,
-  });
-  const query = id ? byId : byName;
-  const isLoading = query.isLoading || query.isPlaceholderData;
-  const notFound = query.error instanceof ConnectError && query.error.code === Code.NotFound;
-  const isError = query.isError && !notFound;
-  const candidates = id ? (byId.data ? [byId.data] : []) : (byName.data ?? []);
-  const matches = reference
-    ? candidates.filter(
-        (version) =>
-          matchesClusterVersionReference(reference, version) &&
-          (ownerTenant === undefined ||
-            version.metadata?.tenant === ownerTenant ||
-            version.metadata?.tenant === 'shared'),
-      )
-    : [];
-
-  return {
-    data: query.isSuccess && !isLoading && matches.length === 1 ? matches[0] : undefined,
-    isLoading,
-    isError,
-    error: isError ? query.error : undefined,
-  };
-};

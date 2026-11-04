@@ -10,6 +10,8 @@ import {
 
 import type { Cluster } from '@osac/types';
 
+import ClusterVersionControls from './ClusterVersionControls';
+import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { Timestamp } from '../../Primitives/Timestamp';
 
@@ -18,6 +20,7 @@ interface ClusterConfigurationCardProps {
 }
 
 export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardProps) => {
+  const { t } = useTranslation();
   const catalogItem = cluster.spec?.catalogItem;
 
   return (
@@ -25,6 +28,12 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
       <CardTitle>Cluster configuration</CardTitle>
       <CardBody>
         <DescriptionList isCompact>
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Current version')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              <ClusterVersionControls key={cluster.id} cluster={cluster} />
+            </DescriptionListDescription>
+          </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>Catalog item</DescriptionListTerm>
             <DescriptionListDescription>

@@ -56,7 +56,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		instanceTypeId                      string
 		defaultDiskImageId                  string
 		defaultDiskImageName                string
-		defaultNetworkingFixture            catalogItemNetworkFixture
+		defaultNetworkingFixture            resourceNetworkFixture
 		tenantName                          string
 		tenantUsername                      string
 		tenantPassword                      string

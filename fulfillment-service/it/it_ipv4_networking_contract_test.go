@@ -973,7 +973,7 @@ var _ = Describe("IPv4-only controller endpoint gRPC contract", Label("ipv4-netw
 			for _, value := range invalidCreateValues {
 				object := privatev1.Cluster_builder{
 					Id:       uuid.New(),
-					Metadata: privatev1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "missing-template"}.Build(),
 					}.Build(),
@@ -997,7 +997,7 @@ var _ = Describe("IPv4-only controller endpoint gRPC contract", Label("ipv4-netw
 		By("creating a real cluster and accepting canonical IPv4 controller updates")
 		bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 		template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		cluster, err := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
 			Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 			NodeSets: map[string]*publicv1.ClusterNodeSet{

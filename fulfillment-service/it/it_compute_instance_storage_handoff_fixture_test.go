@@ -17,10 +17,13 @@ limitations under the License.
 package it
 
 import (
+	"bytes"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -41,9 +44,6 @@ import (
 )
 
 const computeStorageRecorderName = "compute-storage-aap"
-
-//go:embed testdata/compute_storage_aap.py
-var computeStorageRecorderScript string
 
 type computeStorageCapture struct {
 	ID       int    `json:"id"`
@@ -76,10 +76,6 @@ type computeStorageFixture struct {
 func installComputeStorageRecorder(ctx context.Context) {
 	GinkgoHelper()
 	objects := []crclient.Object{
-		&corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: computeStorageRecorderName, Namespace: hubNamespace},
-			Data:       map[string]string{"recorder.py": computeStorageRecorderScript},
-		},
 		&corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{Name: computeStorageRecorderName, Namespace: hubNamespace},
 			Spec: corev1.ServiceSpec{
@@ -96,14 +92,16 @@ func installComputeStorageRecorder(ctx context.Context) {
 				AutomountServiceAccountToken: new(false),
 				SecurityContext: &corev1.PodSecurityContext{
 					RunAsNonRoot: new(true), RunAsUser: new(int64(1000)),
+					FSGroup:        new(int64(1000)),
 					SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 				},
 				Containers: []corev1.Container{{
-					Name:         "recorder",
-					Image:        "registry.access.redhat.com/ubi9/python-312:latest",
-					Command:      []string{"python3", "-B", "/fixture/recorder.py"},
+					Name:  "recorder",
+					Image: "registry.access.redhat.com/ubi10-minimal:1791444565",
+					Command: []string{"/bin/sh", "-c",
+						"while [ ! -x /work/recorder ]; do sleep 0.1; done; exec /work/recorder"},
 					Ports:        []corev1.ContainerPort{{ContainerPort: 8080}},
-					VolumeMounts: []corev1.VolumeMount{{Name: "fixture", MountPath: "/fixture", ReadOnly: true}},
+					VolumeMounts: []corev1.VolumeMount{{Name: "fixture", MountPath: "/work"}},
 					SecurityContext: &corev1.SecurityContext{
 						AllowPrivilegeEscalation: new(false), ReadOnlyRootFilesystem: new(true),
 						Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
@@ -113,7 +111,7 @@ func installComputeStorageRecorder(ctx context.Context) {
 					}},
 				}},
 				Volumes: []corev1.Volume{{Name: "fixture", VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: computeStorageRecorderName}},
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
 				}}},
 			},
 		},
@@ -125,6 +123,32 @@ func installComputeStorageRecorder(ctx context.Context) {
 			Expect(err == nil || apierrors.IsNotFound(err)).To(BeTrue())
 		})
 	}
+	var nodeName string
+	Eventually(func(g Gomega) {
+		pod, err := tool.KubeClientSet().CoreV1().Pods(hubNamespace).Get(ctx, computeStorageRecorderName, metav1.GetOptions{})
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(pod.Status.Phase).To(Equal(corev1.PodRunning))
+		nodeName = pod.Spec.NodeName
+	}, opTimeout, time.Second).Should(Succeed())
+	node, err := tool.KubeClientSet().CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(node.Status.NodeInfo.Architecture).NotTo(BeEmpty())
+	buildCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	binaryPath := filepath.Join(GinkgoT().TempDir(), "recorder")
+	build := exec.CommandContext(buildCtx, "go", "build", "-o", binaryPath, "./it/testdata/computestorageaap")
+	build.Dir = tool.projectDir
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+node.Status.NodeInfo.Architecture)
+	output, err := build.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "build AAP recorder: %s", output)
+	binary, err := os.ReadFile(binaryPath)
+	Expect(err).NotTo(HaveOccurred())
+	stage := exec.CommandContext(buildCtx, "kubectl", "--kubeconfig", tool.kcFile,
+		"exec", "-i", "-n", hubNamespace, computeStorageRecorderName, "-c", "recorder", "--", "/bin/sh", "-c",
+		"cat > /work/recorder.tmp && chmod 0755 /work/recorder.tmp && mv /work/recorder.tmp /work/recorder")
+	stage.Stdin = bytes.NewReader(binary)
+	output, err = stage.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "stage AAP recorder: %s", output)
 	Eventually(func(g Gomega) {
 		_, err := tool.KubeClientSet().CoreV1().Services(hubNamespace).
 			ProxyGet("http", computeStorageRecorderName, "8080", "healthz", nil).DoRaw(ctx)
@@ -159,12 +183,12 @@ func newComputeStorageFixture(ctx context.Context) *computeStorageFixture {
 	backends := privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
 	backend, err := backends.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
 		Object: privatev1.StorageBackend_builder{
-			Metadata: catalogItemFixtureMetadata("shared", ""),
+			Metadata: resourceFixtureMetadata("shared", ""),
 			Spec:     privatev1.StorageBackendSpec_builder{Provider: "netapp", CspManaged: true}.Build(),
 		}.Build(),
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())
-	deferCatalogItemFixtureDeletion(func(cleanupCtx context.Context) error {
+	deferResourceFixtureDeletion(func(cleanupCtx context.Context) error {
 		_, err := backends.Delete(cleanupCtx, privatev1.StorageBackendsDeleteRequest_builder{Id: backend.GetObject().GetId()}.Build())
 		return err
 	}, nil)
@@ -172,7 +196,7 @@ func newComputeStorageFixture(ctx context.Context) *computeStorageFixture {
 	for range 2 {
 		response, createErr := tiers.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
 			Object: privatev1.StorageTier_builder{
-				Metadata: catalogItemFixtureMetadata("shared", ""),
+				Metadata: resourceFixtureMetadata("shared", ""),
 				Spec: privatev1.StorageTierSpec_builder{
 					Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 					Backends: []*privatev1.BackendAssociation{
@@ -185,15 +209,15 @@ func newComputeStorageFixture(ctx context.Context) *computeStorageFixture {
 		tier := response.GetObject()
 		f.tierIDs = append(f.tierIDs, tier.GetId())
 		f.tierNames = append(f.tierNames, tier.GetMetadata().GetName())
-		deferCatalogItemFixtureDeletion(func(cleanupCtx context.Context) error {
+		deferResourceFixtureDeletion(func(cleanupCtx context.Context) error {
 			_, err := tiers.Delete(cleanupCtx, privatev1.StorageTiersDeleteRequest_builder{Id: tier.GetId()}.Build())
 			return err
 		}, nil)
 	}
-	network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
-	instanceType := createCatalogItemComputeInstanceTypeFixture(ctx)
-	image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
-	template := createCatalogItemComputeInstanceTemplateFixture(ctx, privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+	network := createNetworkFixture(ctx, usersGroup, "")
+	instanceType := createComputeInstanceTypeFixture(ctx)
+	image := createDiskImageFixture(ctx, "shared", resourceFixtureName())
+	template := createComputeInstanceTemplateFixture(ctx, privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 		InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceType}.Build(),
 		DiskImage:    privatev1.DiskImageReference_builder{Id: image.GetId()}.Build(),
 		BootDisk: privatev1.ComputeInstanceDisk_builder{
@@ -234,7 +258,7 @@ func newComputeStorageFixture(ctx context.Context) *computeStorageFixture {
 func (f *computeStorageFixture) addClass(ctx context.Context, tier int) {
 	GinkgoHelper()
 	sc := &storagev1.StorageClass{
-		ObjectMeta: metav1.ObjectMeta{Name: catalogItemFixtureName(), Labels: map[string]string{
+		ObjectMeta: metav1.ObjectMeta{Name: resourceFixtureName(), Labels: map[string]string{
 			"osac.openshift.io/tenant": "csp-managed", "osac.openshift.io/storage-tier": f.tierNames[tier],
 		}},
 		Provisioner: "csi.trident.netapp.io",
@@ -266,7 +290,7 @@ func (f *computeStorageFixture) createInstance(ctx context.Context) *publicv1.Co
 	instances := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 	response, err := instances.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 		Object: publicv1.ComputeInstance_builder{
-			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(), Spec: f.spec,
+			Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(), Spec: f.spec,
 		}.Build(),
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())

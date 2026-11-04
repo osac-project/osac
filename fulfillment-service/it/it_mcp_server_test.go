@@ -672,7 +672,7 @@ var _ = Describe("MCP server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(rejectedResponse.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal(deprecatedInstanceTypeID))
 
-		otherNetwork := createCatalogItemNetworkInClassFixture(ctx, "development", "", networkClassID)
+		otherNetwork := createNetworkInClassFixture(ctx, "development", "", networkClassID)
 		otherSession := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-other-tenant", "ben")
 
 		otherCreated, err := callMCPTool[mcpserver.CreateComputeInstanceOutput](

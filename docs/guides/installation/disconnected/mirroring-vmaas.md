@@ -145,9 +145,10 @@ Run the canonical mirror command from
 Tagged containerdisk images require ITMS; digest-pinned images use IDMS.
 Do not apply raw generated files here. Follow Category A
 [Step 2d](mirroring-operators.md#2d-apply-generated-artifacts) to patch **all**
-generated ITMS entries to `NeverContactSource`, validate before apply/handoff,
-and apply the reviewed artifacts. Digest-pinned selections need a separate
-IDMS policy review; the ITMS check does not validate them.
+generated IDMS and ITMS entries to `NeverContactSource`, validate both kinds
+before any apply or handoff, and apply the reviewed artifacts. Digest-pinned
+selections need IDMS source/digest coverage review in addition to that shared
+all-entry policy gate; tag coverage remains the ITMS review below.
 
 #### Required coverage and exact-tag review
 
@@ -189,7 +190,13 @@ Examples for the manual review (all sources below are ordinary prefixes):
 | `quay.io/team/disk` | Safe `quay.io/team`, unsafe `quay.io/team/disk` | Reject: the more-specific rule wins |
 | `quay.io/team/disk` | Two entries for `quay.io/team/disk`, one unsafe | Reject: inspect all entries for the effective source |
 
-An exact-tag mirror read and ITMS review are not CDI import acceptance.
+For digest-pinned selections, apply the same most-specific upstream-source
+review to IDMS and read the exact selected mirror digest, using the
+[IDMS API semantics](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_digest_mirror_set.go#L44-L65).
+The joint policy gate does not establish selected tag or digest availability.
+
+An exact-tag or exact-digest mirror read and mirror-policy review are not CDI
+import acceptance.
 Complete the separate CDI gate in `installation.md` after product preparation.
 
 ## Consumer handoff constraints
@@ -214,7 +221,7 @@ DiskImage lifecycle in `installation.md`. If it supplies no registry
 credentials, the selected mirror repository must support approved anonymous
 reads; do not enable broad anonymous access or assume every CDI path is
 unauthenticated. A successful actual selected-image CDI import remains a
-separate acceptance gate, not a result of this ITMS check.
+separate acceptance gate, not a result of this IDMS/ITMS policy check.
 <!-- Moved to installation.md §Mirror-backed DiskImage preparation and replacement. See docs/guides/installation/disconnected/installation.md -->
 
 <!-- Moved to installation.md §CDI DataVolume import configuration. See docs/guides/installation/disconnected/installation.md -->

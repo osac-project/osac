@@ -112,9 +112,13 @@ OSAC automation must be mirrored separately:
 
 ### Step 2 — Verify IDMS includes AAP image references
 
-```bash
-oc get idms -o yaml | grep -i "ansible\|awx\|galaxy\|redis\|aap"
-```
+First complete Category A's
+[joint IDMS/ITMS policy gate](mirroring-operators.md#2d-apply-generated-artifacts)
+before any apply or handoff. Require `NeverContactSource` on every entry,
+including the digest-pinned AAP images, not only on tagged images. Then review
+the selected upstream references against their most-specific source mappings
+and exact mirror content. An image-name grep is not policy or content
+acceptance.
 
 ### Step 3 — Verify mirror inventory *(Doc 1 scope ends here)*
 

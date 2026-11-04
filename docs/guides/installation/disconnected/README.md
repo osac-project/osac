@@ -216,7 +216,7 @@ flowchart TD
 Complete this checklist before entering `prereqs.md` §2 and the remaining Doc 2 preparation. A failed handoff check stops its dependent preparation and returns to the responsible mirror/access/trust owner. Category A's earlier named node-checkpoint call does not waive this checklist.
 
 - [ ] All three core package manifests are visible
-- [ ] Every entry in every generated ITMS document has `mirrorSourcePolicy: NeverContactSource` before apply and handoff, including Core-only scope; Category A's pre-apply check passes
+- [ ] Every entry in every generated IDMS and ITMS document has `mirrorSourcePolicy: NeverContactSource` before apply and handoff, including Core-only scope; Category A's joint pre-apply check passes for both kinds before either is applied
 - [ ] If VMaaS is selected, selected upstream containerdisk repositories and exact tags are retained in existing records, and Category C's most-specific source coverage and exact mirror-tag checks pass; CDI import acceptance remains separate
 - [ ] If VMaaS is selected, all three VMaaS package manifests are visible
 - [ ] If BMaaS is selected, the MCE package manifest is visible

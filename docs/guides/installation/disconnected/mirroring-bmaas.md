@@ -123,17 +123,14 @@ typically referenced by digest and require an **ImageDigestMirrorSet**
 (IDMS).  If you added tagged `additionalImages` entries, also apply
 the generated **ImageTagMirrorSet** (ITMS):
 
-```bash
-oc apply -f oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml
-
-# Apply ITMS only when oc-mirror generated the optional file.
-itms_file=oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml
-if [ -f "$itms_file" ]; then
-  oc apply -f "$itms_file"
-else
-  echo "INFO: no generated ITMS file; no tagged additionalImages to apply"
-fi
-```
+Use Category A's canonical
+[Step 2d](mirroring-operators.md#2d-apply-generated-artifacts), not a direct
+apply of raw IDMS/ITMS files. Every entry in every generated document of both
+kinds must use `NeverContactSource` before apply or handoff, including an
+explicit `AllowContactingSource` replacement. Complete validation of both
+kinds before either is applied. An absent ITMS is legitimate only when the
+selected inventory needs no tag-based mappings; malformed or empty entry
+arrays in an existing document are not an optional-file skip.
 
 ### BMaaS inventory scope
 

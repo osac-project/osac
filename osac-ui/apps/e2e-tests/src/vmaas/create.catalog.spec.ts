@@ -65,7 +65,7 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
     'catalog-create',
     'Complete the catalog item Compute configuration step',
     async () => {
-      await page.getByRole(...CatalogCreatePage.guestOsLinux).click();
+      await page.locator(...CatalogCreatePage.guestOsLinuxCard).click();
       await selectOption(page, CatalogCreatePage.diskImage, catalogTestData.fields.diskImage.name);
       await selectOption(
         page,

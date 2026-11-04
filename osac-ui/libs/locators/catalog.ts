@@ -22,7 +22,7 @@ export const CatalogCreatePage = {
   name: ['textbox', { name: 'Name', exact: true }],
   description: ['textbox', { name: 'Description', exact: true }],
   template: ['button', { name: 'Provisioning template', exact: true }],
-  guestOsLinux: ['radio', { name: 'Linux', exact: true }],
+  guestOsLinuxCard: ['.pf-v6-c-card:has-text("Linux-based guest operating systems")'],
   diskImage: ['button', { name: 'Select the image reference', exact: true }],
   instanceType: ['button', { name: 'Instance type', exact: true }],
   bootDiskSize: ['spinbutton', { name: 'Boot disk size', exact: true }],

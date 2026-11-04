@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import pathlib
 import subprocess
 import traceback
 from collections.abc import Iterator
@@ -206,8 +207,9 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
     k8s.namespace = "osac"
     k8s._base.return_value = ["kubectl"]
     private.ensure_disk_image.return_value = "disk-id"
-    private.ensure_cluster_version.return_value = {"name": "version-name"}
+    private.ensure_cluster_version.return_value = {"id": "version-id", "name": "version-name"}
     cli.create_cluster.return_value = "cluster-id"
+    cli.create_cluster_with_catalog_item.return_value = "cluster-id"
     grpc.list_cluster_ids.return_value = ["cluster-id"]
     grpc.get_cluster.return_value = {
         "object": {
@@ -215,6 +217,11 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
             "spec": {
                 "version": {"name": "version-name"},
                 "nodeSets": {"workers": {"size": 1, "baremetalInstanceType": {"name": "ci-worker-bm"}}},
+                # The catalog offering, not caller input, materializes these.
+                "catalog_item": {"id": private.create_cluster_catalog_item.return_value},
+                "template": {"id": "template"},
+                "ssh_public_key": pathlib.Path("/tmp/test-key.pub").read_text().strip(),
+                "pull_secret_secret": {"name": "test-pull-secret"},
             },
         }
     }
@@ -232,18 +239,25 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
             },
         }
     }
-    k8s.get_json.side_effect = [
-        {"metadata": {"namespace": "osac", "annotations": {"osac.openshift.io/tenant": "tenant1"}}},
-        {
-            "metadata": {
-                "labels": {"osac.openshift.io/baremetalinstance-uuid": "bmi-id"},
-                "annotations": {
-                    "osac.openshift.io/tenant": "tenant1",
-                    "osac.openshift.io/owner-reference": "ClusterOrder/order-a",
-                },
-            }
-        },
-    ]
+    cluster_order = {
+        "metadata": {"namespace": "osac", "annotations": {"osac.openshift.io/tenant": "tenant1"}},
+        "spec": {"nodeRequests": [{"nodeSet": "workers", "numberOfNodes": 1}]},
+        "status": {"desiredWorkers": 1, "currentWorkers": 1, "readyWorkers": 1},
+    }
+    worker_bmi = {
+        "metadata": {
+            "labels": {"osac.openshift.io/baremetalinstance-uuid": "bmi-id"},
+            "annotations": {
+                "osac.openshift.io/tenant": "tenant1",
+                "osac.openshift.io/owner-reference": "ClusterOrder/order-a",
+            },
+        }
+    }
+    # The bring-up phases read the ClusterOrder repeatedly, so key the mock on the
+    # resource instead of handing out a fixed sequence.
+    k8s.get_json.side_effect = lambda *, resource, **_kwargs: (
+        cluster_order if resource == "clusterorder" else worker_bmi
+    )
     k8s.list_json.return_value = {
         "items": [
             {
@@ -252,7 +266,10 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
                     "namespace": "osac",
                     "labels": {"infraenvs.agent-install.openshift.io": "order-a-infraenv"},
                 },
-                "status": {"debugInfo": {"state": "installing-in-progress"}},
+                "status": {
+                    "debugInfo": {"state": "installed"},
+                    "conditions": [{"type": "Installed", "status": "True"}],
+                },
             }
         ]
     }
@@ -260,6 +277,8 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
         f'# TYPE {metric} gauge\n{metric}{{tenant="tenant1",worker_type="baremetal",instance_type="ci-worker-bm"}} 1'
         for metric in scenario._WORKER_LEVEL_METRICS
     )
+    # This scenario is about teardown waits, so the cluster is already Ready.
+    k8s.get_cluster_order_phase.return_value = "Ready"
     k8s.get_cluster_order_spec.return_value = {
         "releaseImage": "release-image",
         "nodeRequests": [{"bareMetal": {"instanceType": "ci-worker-bm"}, "numberOfNodes": 1}],

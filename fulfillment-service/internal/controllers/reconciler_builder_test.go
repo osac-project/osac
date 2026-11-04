@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -99,6 +100,25 @@ func TestRequeueDelayUsesExponentialBackoffWithOneMinuteCap(t *testing.T) {
 			Expect(requeueDelay(test.initial, test.attempt)).To(Equal(test.want))
 		})
 	}
+}
+
+func TestConflictLogLevelWarnsOnceBackoffReachesTheCap(t *testing.T) {
+	RegisterTestingT(t)
+
+	// With a one second initial delay the delays are 1, 2, 4, 8, 16, 32 and then the 60 second cap, so the retry
+	// that follows the seventh consecutive conflict is the first one at the cap.
+	reconciler := &Reconciler[*privatev1.VirtualNetwork]{retryAttempts: map[string]uint8{}}
+	for attempt := uint8(0); attempt < 6; attempt++ {
+		reconciler.retryAttempts["vn-1"] = attempt
+		Expect(reconciler.conflictLogLevel("vn-1")).To(Equal(slog.LevelDebug), "attempt %d", attempt)
+	}
+	for _, attempt := range []uint8{6, 7, 255} {
+		reconciler.retryAttempts["vn-1"] = attempt
+		Expect(reconciler.conflictLogLevel("vn-1")).To(Equal(slog.LevelWarn), "attempt %d", attempt)
+	}
+
+	// An object without retry state starts at DEBUG.
+	Expect(reconciler.conflictLogLevel("other")).To(Equal(slog.LevelDebug))
 }
 
 func TestReconcilerRequeuesRequestedErrorsOncePerObject(t *testing.T) {

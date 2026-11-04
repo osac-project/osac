@@ -68,7 +68,7 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "vast-tenant-config-test-tcs-tenant"
+            name: "vast-tenant-config-test-tcs-tenant-be-tcs-tenant"
             namespace: "osac-system"
           failed_when: false
 
@@ -77,7 +77,7 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "vast-csi-test-tcs-tenant"
+            name: "vast-csi-test-tcs-tenant-be-tcs-tenant"
             namespace: "osac-tenants"
           failed_when: false
 
@@ -104,7 +104,7 @@
           apiVersion: v1
           kind: Secret
           metadata:
-            name: "vast-tenant-config-test-tcs-tenant"
+            name: "vast-tenant-config-test-tcs-tenant-be-tcs-tenant"
             namespace: "osac-system"
             labels:
               app.kubernetes.io/managed-by: osac-aap
@@ -149,6 +149,7 @@
             - name: local
               protocol: block
               provider: lvms
+              backend_id: be-lvms-tcs-tenant
           storage_backend_connections:
             be-tcs-tenant:
               endpoint: "127.0.0.1:18443"
@@ -250,7 +251,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-csi-test-tcs-tenant"
+        name: "vast-csi-test-tcs-tenant-be-tcs-tenant"
         namespace: "osac-tenants"
       failed_when: false
 
@@ -259,7 +260,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-tcs-tenant"
+        name: "vast-tenant-config-test-tcs-tenant-be-tcs-tenant"
         namespace: "osac-system"
       failed_when: false
 
@@ -316,6 +317,7 @@
             - name: local
               protocol: block
               provider: lvms
+              backend_id: be-lvms-tcs-selector
           storage_backend_connections: {}
         _cluster_name: "test-cluster"
         csi_driver_install_override:
@@ -409,7 +411,7 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "vast-tenant-config-test-tcs-clusterorder"
+            name: "vast-tenant-config-test-tcs-clusterorder-be-tcs-clusterorder"
             namespace: "osac-system"
           failed_when: false
 
@@ -418,7 +420,7 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "vast-csi-test-tcs-clusterorder"
+            name: "vast-csi-test-tcs-clusterorder-be-tcs-clusterorder"
             namespace: "openshift-osac-storage"
           failed_when: false
 
@@ -437,7 +439,7 @@
           apiVersion: v1
           kind: Secret
           metadata:
-            name: "vast-tenant-config-test-tcs-clusterorder"
+            name: "vast-tenant-config-test-tcs-clusterorder-be-tcs-clusterorder"
             namespace: "osac-system"
             labels:
               app.kubernetes.io/managed-by: osac-aap
@@ -565,7 +567,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-csi-test-tcs-clusterorder"
+        name: "vast-csi-test-tcs-clusterorder-be-tcs-clusterorder"
         namespace: "openshift-osac-storage"
       failed_when: false
 
@@ -574,7 +576,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-tcs-clusterorder"
+        name: "vast-tenant-config-test-tcs-clusterorder-be-tcs-clusterorder"
         namespace: "osac-system"
       failed_when: false
 

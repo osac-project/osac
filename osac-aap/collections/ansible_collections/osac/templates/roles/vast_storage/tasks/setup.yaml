@@ -32,6 +32,9 @@
       _provider_tiers must be provided by the service role dispatcher.
       This role should not be called directly — use osac.service.storage_provider.
 
+- name: Resolve the backend_id this dispatch is scoped to
+  ansible.builtin.include_tasks: _resolve_backend_id.yaml
+
 - name: Validate tenant_name is a valid DNS label
   ansible.builtin.fail:
     msg: >-
@@ -327,11 +330,12 @@
               apiVersion: v1
               kind: Secret
               metadata:
-                name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+                name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}"
                 namespace: "{{ vast_storage_config_namespace }}"
                 labels:
                   app.kubernetes.io/managed-by: osac-aap
                   osac.openshift.io/storage-provider: vast
+                  osac.openshift.io/storage-backend-id: "{{ _vast_backend_id }}"
                   osac.openshift.io/tenant: "{{ tenant_name }}"
               type: Opaque
               stringData:
@@ -362,7 +366,7 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+            name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}"
             namespace: "{{ vast_storage_config_namespace }}"
           ignore_errors: true  # noqa: ignore-errors
 

@@ -163,6 +163,24 @@ func createHubSecret(ctx context.Context, tenantName, namespace string) {
 	waitForIndexedClientObject(secret)
 }
 
+func createHubSecretForBackend(ctx context.Context, tenantName, backendID, provider, namespace string) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-tenant-config-%s-%s", provider, tenantName, backendID),
+			Namespace: namespace,
+			Labels: map[string]string{
+				osacTenantKey:             tenantName,
+				osacStorageProviderLabel:  provider,
+				osacStorageBackendIDLabel: backendID,
+			},
+		},
+		StringData: map[string]string{
+			"provider": provider,
+		},
+	}
+	Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+}
+
 // createLabeledStorageClass creates a StorageClass labeled with the given
 // tenant and storage tier and registers a DeferCleanup hook to delete it.
 func createLabeledStorageClass(ctx context.Context, name, tenant, tier string) {
@@ -365,6 +383,34 @@ func configureTwoProviderReadinessClients(r *StorageReconciler, registeredBacken
 			case "backend-lvms":
 				return newTestStorageBackendGetResponse("lvms"), nil
 			case "backend-vast":
+				return newTestStorageBackendGetResponse("vast"), nil
+			default:
+				return nil, status.Error(codes.NotFound, "not found")
+			}
+		},
+	}
+}
+
+// configureTwoVastBackendsReadinessClients wires tier and backend API responses for
+// readiness tests that exercise two VAST backends with the same provider.
+func configureTwoVastBackendsReadinessClients(r *StorageReconciler, registeredBackendCount int32) {
+	r.TiersClient = &mockStorageTiersLister{
+		listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+			return privatev1.StorageTiersListResponse_builder{
+				Items: []*privatev1.StorageTier{
+					newTestStorageTier("local", "backend-vast-1"),
+					newTestStorageTier("block", "backend-vast-2"),
+				},
+			}.Build(), nil
+		},
+	}
+	r.BackendsClient = &mockStorageBackendsClient{
+		listFunc: registeredBackendsClient(registeredBackendCount).listFunc,
+		getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+			switch in.GetId() {
+			case "backend-vast-1":
+				return newTestStorageBackendGetResponse("vast"), nil
+			case "backend-vast-2":
 				return newTestStorageBackendGetResponse("vast"), nil
 			default:
 				return nil, status.Error(codes.NotFound, "not found")
@@ -2345,21 +2391,24 @@ var _ = Describe("Storage Controller", func() {
 		})
 	})
 
-	Context("hubSecretExists provider filtering", func() {
-		It("should filter by storage-provider label when provider is non-empty", func() {
-			name := "storage-test-provider-filter"
-			// Create a secret with the lvms storage-provider label
+	Context("hubSecretExists tenant scoping", func() {
+		It("should return true for the correct tenant and false for others", func() {
+			tenantA := "storage-test-tenant-a"
+			tenantB := "storage-test-tenant-b"
+
+			// Create a secret for tenant A
 			secret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      fmt.Sprintf("lvms-tenant-config-%s", name),
+					Name:      fmt.Sprintf("vast-tenant-config-%s-backend-123", tenantA),
 					Namespace: secretsNamespace,
 					Labels: map[string]string{
-						osacTenantKey:            name,
-						osacStorageProviderLabel: "lvms",
+						osacTenantKey:             tenantA,
+						osacStorageProviderLabel:  "vast",
+						osacStorageBackendIDLabel: "backend-123",
 					},
 				},
 				StringData: map[string]string{
-					"provider": "lvms",
+					"provider": "vast",
 				},
 			}
 			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
@@ -2374,20 +2423,15 @@ var _ = Describe("Storage Controller", func() {
 				provisioning.DefaultMaxJobHistory,
 			)
 
-			// provider="lvms" → should find the secret
-			found, err := r.hubSecretExists(ctx, name, "lvms")
+			// Tenant A should find its secret
+			found, err := r.hubSecretExists(ctx, tenantA)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(found).To(BeTrue(), "expected hub secret to be found when filtering by provider=lvms")
+			Expect(found).To(BeTrue(), "expected hub secret to be found for tenant A")
 
-			// provider="vast" → should NOT find the secret (wrong provider)
-			found, err = r.hubSecretExists(ctx, name, "vast")
+			// Tenant B should NOT find the secret (different tenant)
+			found, err = r.hubSecretExists(ctx, tenantB)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(found).To(BeFalse(), "expected hub secret NOT to be found when filtering by provider=vast")
-
-			// provider="" → should find the secret (backward compat, no provider filter)
-			found, err = r.hubSecretExists(ctx, name, "")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(found).To(BeTrue(), "expected hub secret to be found when provider is empty (backward compat)")
+			Expect(found).To(BeFalse(), "expected hub secret NOT to be found for tenant B")
 		})
 	})
 
@@ -2395,8 +2439,8 @@ var _ = Describe("Storage Controller", func() {
 		It("should not set StorageBackendReady=True when hub Secrets exist for only some dispatched providers", func() {
 			name := "storage-test-partial-provider-secrets"
 			createReadyTenantForStorage(ctx, name, testNamespace)
-			// createHubSecret creates only an lvms-provider Secret
-			createHubSecret(ctx, name, secretsNamespace)
+			// Create only an lvms-provider Secret with backend ID
+			createHubSecretForBackend(ctx, name, "backend-lvms", "lvms", secretsNamespace)
 
 			r := NewStorageReconciler(
 				testMcManager, testNamespace, mcmanager.LocalCluster,
@@ -2423,13 +2467,13 @@ var _ = Describe("Storage Controller", func() {
 					Name:     "backend-lvms",
 					Provider: "lvms",
 					Ready:    true,
-					Message:  fmt.Sprintf("Hub Secret for tenant %q exists", name),
+					Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) exists", "backend-lvms", "lvms", name),
 				},
 				v1alpha1.StorageBackendStatus{
 					Name:     "backend-vast",
 					Provider: "vast",
 					Ready:    false,
-					Message:  fmt.Sprintf("Hub Secret for tenant %q not found", name),
+					Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) not found", "backend-vast", "vast", name),
 				},
 			))
 		})
@@ -2462,13 +2506,13 @@ var _ = Describe("Storage Controller", func() {
 					Name:     "backend-lvms",
 					Provider: "lvms",
 					Ready:    false,
-					Message:  fmt.Sprintf("Hub Secret for tenant %q not found", name),
+					Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) not found", "backend-lvms", "lvms", name),
 				},
 				v1alpha1.StorageBackendStatus{
 					Name:     "backend-vast",
 					Provider: "vast",
 					Ready:    false,
-					Message:  fmt.Sprintf("Hub Secret for tenant %q not found", name),
+					Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) not found", "backend-vast", "vast", name),
 				},
 			))
 		})
@@ -2476,25 +2520,8 @@ var _ = Describe("Storage Controller", func() {
 		It("should set StorageBackendReady=True when hub Secrets exist for all dispatched providers", func() {
 			name := "storage-test-all-provider-secrets"
 			createReadyTenantForStorage(ctx, name, testNamespace)
-			createHubSecret(ctx, name, secretsNamespace) // lvms secret
-
-			// Create vast secret too
-			vastSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      fmt.Sprintf("vast-tenant-config-%s", name),
-					Namespace: secretsNamespace,
-					Labels: map[string]string{
-						osacTenantKey:            name,
-						osacStorageProviderLabel: "vast",
-					},
-				},
-				StringData: map[string]string{"provider": "vast"},
-			}
-			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
-			waitForIndexedClientObject(vastSecret)
-			DeferCleanup(func() {
-				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
-			})
+			createHubSecretForBackend(ctx, name, "backend-lvms", "lvms", secretsNamespace)
+			createHubSecretForBackend(ctx, name, "backend-vast", "vast", secretsNamespace)
 
 			r := NewStorageReconciler(
 				testMcManager, testNamespace, mcmanager.LocalCluster,
@@ -2521,13 +2548,13 @@ var _ = Describe("Storage Controller", func() {
 					Name:     "backend-lvms",
 					Provider: "lvms",
 					Ready:    true,
-					Message:  fmt.Sprintf("Hub Secret for tenant %q exists", name),
+					Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) exists", "backend-lvms", "lvms", name),
 				},
 				v1alpha1.StorageBackendStatus{
 					Name:     "backend-vast",
 					Provider: "vast",
 					Ready:    true,
-					Message:  fmt.Sprintf("Hub Secret for tenant %q exists", name),
+					Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) exists", "backend-vast", "vast", name),
 				},
 			))
 		})
@@ -2557,6 +2584,145 @@ var _ = Describe("Storage Controller", func() {
 				"should be True when any hub Secret exists and no tier definitions are available (backward compat)")
 			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonFound))
 			Expect(backendCond.Message).To(Equal("No storage backend entries are available to evaluate (ready: 0; not ready: 0); legacy tenant-wide Hub Secret check: found a Secret"))
+		})
+
+		It("marks only the backend that owns the Secret Ready when both use one provider", func() {
+			name := "storage-test-same-provider-backends"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			// Create Secret for only backend-vast-1, not backend-vast-2
+			createHubSecretForBackend(ctx, name, "backend-vast-1", "vast", secretsNamespace)
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			configureTwoVastBackendsReadinessClients(r, 0)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse),
+				"should not be True when only one of two same-provider backends has its Secret")
+			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonNoProvider))
+			Expect(tenant.Status.StorageBackends).To(ConsistOf(
+				v1alpha1.StorageBackendStatus{
+					Name:     "backend-vast-1",
+					Provider: "vast",
+					Ready:    true,
+					Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) exists", "backend-vast-1", "vast", name),
+				},
+				v1alpha1.StorageBackendStatus{
+					Name:     "backend-vast-2",
+					Provider: "vast",
+					Ready:    false,
+					Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) not found", "backend-vast-2", "vast", name),
+				},
+			))
+		})
+
+		It("reports all backend IDs Ready once each has its own Secret", func() {
+			name := "storage-test-all-same-provider-secrets"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createHubSecretForBackend(ctx, name, "backend-vast-1", "vast", secretsNamespace)
+			createHubSecretForBackend(ctx, name, "backend-vast-2", "vast", secretsNamespace)
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			configureTwoVastBackendsReadinessClients(r, 0)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionTrue),
+				"should be True when both same-provider backends have their Secrets")
+			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonFound))
+			Expect(tenant.Status.StorageBackends).To(ConsistOf(
+				v1alpha1.StorageBackendStatus{
+					Name:     "backend-vast-1",
+					Provider: "vast",
+					Ready:    true,
+					Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) exists", "backend-vast-1", "vast", name),
+				},
+				v1alpha1.StorageBackendStatus{
+					Name:     "backend-vast-2",
+					Provider: "vast",
+					Ready:    true,
+					Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) exists", "backend-vast-2", "vast", name),
+				},
+			))
+		})
+
+		It("ignores a Secret carrying this backend ID but another tenant's label", func() {
+			name := "storage-test-cross-tenant-isolation"
+			otherTenant := "other-tenant"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+
+			// Create a Secret with the correct backend ID but a different tenant label
+			crossTenantSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("vast-tenant-config-%s-backend-vast-1", otherTenant),
+					Namespace: secretsNamespace,
+					Labels: map[string]string{
+						osacTenantKey:             otherTenant, // different tenant!
+						osacStorageProviderLabel:  "vast",
+						osacStorageBackendIDLabel: "backend-vast-1",
+					},
+				},
+				StringData: map[string]string{"provider": "vast"},
+			}
+			Expect(k8sClient.Create(ctx, crossTenantSecret)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, crossTenantSecret))).To(Succeed())
+			})
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			configureTwoVastBackendsReadinessClients(r, 0)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse),
+				"should not be True when a cross-tenant Secret exists")
+			Expect(tenant.Status.StorageBackends).To(ConsistOf(
+				v1alpha1.StorageBackendStatus{
+					Name:     "backend-vast-1",
+					Provider: "vast",
+					Ready:    false,
+					Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) not found", "backend-vast-1", "vast", name),
+				},
+				v1alpha1.StorageBackendStatus{
+					Name:     "backend-vast-2",
+					Provider: "vast",
+					Ready:    false,
+					Message:  fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) not found", "backend-vast-2", "vast", name),
+				},
+			))
 		})
 	})
 
@@ -2652,7 +2818,7 @@ var _ = Describe("Storage Controller", func() {
 		It("should requeue without creating new jobs when failed job exists and hub Secret appears", func() {
 			name := "storage-test-failed-tier-retry"
 			createReadyTenantForStorage(ctx, name, testNamespace)
-			createHubSecret(ctx, name, secretsNamespace)
+			createHubSecretForBackend(ctx, name, "backend-lvms", "lvms", secretsNamespace)
 			createLabeledStorageClass(ctx, name+"-local-sc", name, "local")
 			waitForStorageClassInCache(name + "-local-sc")
 
@@ -2718,7 +2884,11 @@ var _ = Describe("Storage Controller", func() {
 			vastSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 				Name:      name + "-vast",
 				Namespace: secretsNamespace,
-				Labels:    map[string]string{osacTenantKey: name, osacStorageProviderLabel: "vast"},
+				Labels: map[string]string{
+					osacTenantKey:             name,
+					osacStorageProviderLabel:  "vast",
+					osacStorageBackendIDLabel: "backend-vast",
+				},
 			}}
 			Expect(k8sClient.Create(ctx, vastSecret)).To(Succeed())
 			waitForIndexedClientObject(vastSecret)

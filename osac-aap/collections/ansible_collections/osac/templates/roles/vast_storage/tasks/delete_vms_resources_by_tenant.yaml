@@ -9,8 +9,25 @@
 #   _vast_cleanup_auth_token      — Bearer token from admin auth
 #   _vast_cleanup_tenant_id       — VAST tenant ID to filter by
 #   _vast_cleanup_resource        — API resource name (e.g., "views", "quotas")
+#   tenant_name                   — Tenant name for checking other backends
+#   vast_storage_config_namespace — Namespace where hub Secrets are stored
+
+- name: Check if other backends exist for this tenant
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    namespace: "{{ vast_storage_config_namespace }}"
+    label_selectors:
+      - "osac.openshift.io/tenant={{ tenant_name }}"
+  register: _vast_tenant_secrets_check
+  ignore_errors: true
+
+- name: Set flag to skip tenant-wide delete if multiple backends exist
+  ansible.builtin.set_fact:
+    _vast_skip_tenant_delete: "{{ (_vast_tenant_secrets_check.resources | default([]) | length) > 1 }}"
 
 - name: "Query VAST {{ _vast_cleanup_resource }} by tenant_id"
+  when: not (_vast_skip_tenant_delete | default(false) | bool)
   ansible.builtin.uri:
     url: "https://{{ vast_endpoint }}/api/{{ _vast_cleanup_resource }}/?tenant_id={{ _vast_cleanup_tenant_id }}"
     method: GET
@@ -25,6 +42,7 @@
 
 - name: "Delete VAST {{ _vast_cleanup_resource }} by ID"
   when:
+    - not (_vast_skip_tenant_delete | default(false) | bool)
     - _vast_cleanup_query is not failed
     - _vast_cleanup_query.json | default([]) | length > 0
   ansible.builtin.uri:

@@ -1086,7 +1086,7 @@ func (r *StorageReconciler) handleBackendDeprovisioning(ctx context.Context, ten
 		return ctrl.Result{}, nil
 	}
 
-	hubSecretReady, err := r.hubSecretExists(ctx, tenant.GetName(), "")
+	hubSecretReady, err := r.hubSecretExists(ctx, tenant.GetName())
 	if err != nil {
 		log.Error(err, "failed to check hub Secret existence, requeueing")
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
@@ -1119,7 +1119,7 @@ func (r *StorageReconciler) storageBackendStatuses(ctx context.Context, tenantNa
 		}
 	}
 
-	providerSecrets, anySecret, err := r.hubSecretsByProvider(ctx, tenantName)
+	backendSecrets, anySecret, err := r.hubSecretsByBackendID(ctx, tenantName)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1137,11 +1137,11 @@ func (r *StorageReconciler) storageBackendStatuses(ctx context.Context, tenantNa
 	allReady := true
 	for _, backendID := range backendIDs {
 		provider := backendProviders[backendID]
-		ready := providerSecrets[provider]
+		ready := backendSecrets[backendID]
 
-		message := fmt.Sprintf("Hub Secret for tenant %q exists", tenantName)
+		message := fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) exists", backendID, provider, tenantName)
 		if !ready {
-			message = fmt.Sprintf("Hub Secret for tenant %q not found", tenantName)
+			message = fmt.Sprintf("Hub Secret for backend %q (provider %q, tenant %q) not found", backendID, provider, tenantName)
 			allReady = false
 		}
 		statuses = append(statuses, v1alpha1.StorageBackendStatus{
@@ -1195,9 +1195,9 @@ func formatStorageBackendReadinessMessage(statuses []v1alpha1.StorageBackendStat
 	return message
 }
 
-// hubSecretsByProvider lists a tenant's Hub Secrets and reports readiness by
-// provider together with whether any matching Secret exists.
-func (r *StorageReconciler) hubSecretsByProvider(ctx context.Context, tenantName string) (map[string]bool, bool, error) {
+// hubSecretsByBackendID lists a tenant's Hub Secrets and reports readiness by
+// backend ID together with whether any matching Secret exists.
+func (r *StorageReconciler) hubSecretsByBackendID(ctx context.Context, tenantName string) (map[string]bool, bool, error) {
 	labels := map[string]string{osacTenantKey: tenantName}
 	var secretList corev1.SecretList
 	if err := r.List(ctx, &secretList,
@@ -1207,20 +1207,17 @@ func (r *StorageReconciler) hubSecretsByProvider(ctx context.Context, tenantName
 		return nil, false, err
 	}
 
-	providers := make(map[string]bool)
+	backends := make(map[string]bool)
 	for _, secret := range secretList.Items {
-		if provider := secret.Labels[osacStorageProviderLabel]; provider != "" {
-			providers[provider] = true
+		if backendID := secret.Labels[osacStorageBackendIDLabel]; backendID != "" {
+			backends[backendID] = true
 		}
 	}
-	return providers, len(secretList.Items) > 0, nil
+	return backends, len(secretList.Items) > 0, nil
 }
 
-func (r *StorageReconciler) hubSecretExists(ctx context.Context, tenantName string, provider string) (bool, error) {
+func (r *StorageReconciler) hubSecretExists(ctx context.Context, tenantName string) (bool, error) {
 	labels := map[string]string{osacTenantKey: tenantName}
-	if provider != "" {
-		labels[osacStorageProviderLabel] = provider
-	}
 	var secretList corev1.SecretList
 	if err := r.List(ctx, &secretList,
 		client.InNamespace(storageConfigNamespace()),

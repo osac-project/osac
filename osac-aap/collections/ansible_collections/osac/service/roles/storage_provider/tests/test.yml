@@ -154,6 +154,7 @@
               - name: default
                 protocol: ftp
                 provider: vast
+                backend_id: be-test
             storage_provider_action: setup
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
@@ -179,14 +180,141 @@
               - osac_storage_provider_failures[0].reason == 'unsupported_protocol'
               - "'default' in osac_storage_provider_failures[0].tiers"
               - "'unsupported protocol' in (osac_storage_provider_failures[0].message | lower)"
-              - osac_storage_provider_failures[0].backend_ids == []
+              - osac_storage_provider_failures[0].backend_ids == ['be-test']
             fail_msg: >-
               osac_storage_provider_failures was not set as expected:
               {{ osac_storage_provider_failures | default('undefined') }}
             success_msg: "Structured failure artifact correctly recorded the unsupported protocol"
 
 # ──────────────────────────────────────────────────────────────
-# Test 5: Invalid provider -- error path
+# Test 5: Provider backend pairs derivation
+# Expected: role derives _provider_backend_pairs from tiers,
+#   normalizes provider names, deduplicates, and sorts;
+#   _unique_providers remains unaffected
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- provider backend pairs derivation
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run provider backend pairs derivation test
+      block:
+        - name: Include storage_provider with tiers for multiple backends
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: fast
+                protocol: nfs
+                provider: vast
+                backend_id: be-a
+              - name: slow
+                protocol: nfs
+                provider: vast
+                backend_id: be-b
+              - name: local
+                protocol: block
+                provider: lvms
+                backend_id: be-c
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached in unit test context
+          ansible.builtin.fail:
+            msg: "Role should have failed in unit test context (no provider role available)"
+
+      rescue:
+        - name: Verify _provider_backend_pairs was derived correctly
+          ansible.builtin.assert:
+            that:
+              - _provider_backend_pairs is defined
+              - _provider_backend_pairs | length == 3
+              - "{'provider': 'lvms', 'backend_id': 'be-c'} in _provider_backend_pairs"
+              - "{'provider': 'vast', 'backend_id': 'be-a'} in _provider_backend_pairs"
+              - "{'provider': 'vast', 'backend_id': 'be-b'} in _provider_backend_pairs"
+              - _unique_providers == ['lvms', 'vast']
+            fail_msg: >-
+              _provider_backend_pairs or _unique_providers not derived correctly.
+              _provider_backend_pairs: {{ _provider_backend_pairs | default('undefined') }}
+              _unique_providers: {{ _unique_providers | default('undefined') }}
+            success_msg: "_provider_backend_pairs and _unique_providers derived correctly"
+
+# ──────────────────────────────────────────────────────────────
+# Test 5b: Empty-string backend_id is rejected, not silently dropped
+# Expected: role fails validation before any dispatch, naming the offending
+#   tier, and emits the missing_backend_id structured failure artifact. A tier
+#   whose backend_id is '' previously got no dispatch, no Secret and no warning
+#   while _unique_providers still enabled that vendor's CSI controller.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- empty-string backend_id (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  pre_tasks:
+    - name: Clear any structured failure artifact from earlier scenarios
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: []
+
+  tasks:
+    - name: Run empty-backend_id rejection test
+      block:
+        - name: Attempt with a tier whose backend_id is an empty string (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: fast
+                protocol: nfs
+                provider: vast
+                backend_id: be-a
+              - name: broken
+                protocol: nfs
+                provider: vast
+                backend_id: ""
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected for an empty-string backend_id"
+
+      rescue:
+        - name: Verify the failure names the empty-backend_id tier
+          ansible.builtin.assert:
+            that:
+              - "'broken' in (ansible_failed_result.msg | default(''))"
+              - "'has no backend_id' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Expected a missing-backend_id failure naming tier 'broken', got:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Empty-string backend_id correctly rejected before dispatch"
+
+        - name: Verify no dispatch pair was derived for the empty-backend_id tier
+          ansible.builtin.assert:
+            that:
+              - _provider_backend_pairs is not defined
+                or _provider_backend_pairs | selectattr('backend_id', 'equalto', '') | list | length == 0
+            fail_msg: >-
+              An empty backend_id reached _provider_backend_pairs:
+              {{ _provider_backend_pairs | default('undefined') }}
+            success_msg: "No dispatch pair derived for the rejected tier"
+
+        - name: Verify structured failure artifact was emitted for the empty backend_id
+          ansible.builtin.assert:
+            that:
+              - osac_storage_provider_failures is defined
+              - osac_storage_provider_failures | length > 0
+              - osac_storage_provider_failures[0].reason == 'missing_backend_id'
+              - "'broken' in osac_storage_provider_failures[0].tiers"
+            fail_msg: >-
+              osac_storage_provider_failures was not set as expected:
+              {{ osac_storage_provider_failures | default('undefined') }}
+            success_msg: "Structured failure artifact correctly recorded the empty backend_id"
+
+# ──────────────────────────────────────────────────────────────
+# Test 6: Invalid provider -- error path
 # Expected: role fails at dispatch (provider role does not exist)
 # ──────────────────────────────────────────────────────────────
 - name: Test storage_provider -- invalid provider (should fail)
@@ -208,6 +336,7 @@
               - name: default
                 protocol: nfs
                 provider: unknown-provider
+                backend_id: be-unknown
             storage_provider_action: setup
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
@@ -577,9 +706,10 @@
       block:
         - name: Attempt with two VAST tiers pointing at different backend_ids (expected to fail)
           ansible.builtin.include_role:
-            name: osac.service.storage_provider
+            name: osac.templates.vast_storage
+            tasks_from: setup
           vars:
-            storage_provider_tiers:
+            _provider_tiers:
               - name: gold
                 protocol: nfs
                 provider: vast
@@ -588,7 +718,7 @@
                 protocol: nfs
                 provider: vast
                 backend_id: be-002
-            storage_provider_backend_connections:
+            _provider_backend_connections:
               be-001:
                 endpoint: vast-1.example.com
                 username: admin
@@ -597,7 +727,6 @@
                 endpoint: vast-2.example.com
                 username: admin
                 password: mock-backend-password
-            storage_provider_action: setup
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -896,6 +1025,7 @@
               - name: default
                 protocol: ftp
                 provider: vast
+                backend_id: be-test
             storage_provider_action: ensure_storage_class
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"

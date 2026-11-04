@@ -16,7 +16,7 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "vast-tenant-config-test-ensuresc"
+            name: "vast-tenant-config-test-ensuresc-be-test"
             namespace: "osac-system"
           failed_when: false
 
@@ -25,7 +25,7 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "vast-csi-test-ensuresc"
+            name: "vast-csi-test-ensuresc-be-test"
             namespace: "osac-system"
           failed_when: false
 
@@ -64,11 +64,13 @@
           apiVersion: v1
           kind: Secret
           metadata:
-            name: "vast-tenant-config-test-ensuresc"
+            name: "vast-tenant-config-test-ensuresc-be-test"
             namespace: "osac-system"
             labels:
               app.kubernetes.io/managed-by: osac-aap
               osac.openshift.io/tenant: "test-ensuresc"
+              osac.openshift.io/storage-provider: vast
+              osac.openshift.io/storage-backend-id: be-test
           type: Opaque
           stringData:
             tenant_uid_hash: "d0f7f176"
@@ -163,7 +165,7 @@
         that:
           - _sc_result.resources[0].parameters.vip_pool_name == "osac-test-pool"
           - _sc_result.resources[0].parameters.root_export == "/osac-test-ensuresc-d0f7f176/default"
-          - "_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-name'] == 'vast-csi-test-ensuresc'"
+          - "_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-name'] == 'vast-csi-test-ensuresc-be-test'"
           - "_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-namespace'] == 'osac-system'"
           - _sc_result.resources[0].parameters.view_policy == "osac-test-ensuresc-nfs"
           - _sc_result.resources[0].parameters.volumeNameFormat == "csi:{id}:{namespace}:{name}:test-cluster"
@@ -238,7 +240,7 @@
         that:
           - _block_sc_result.resources[0].parameters.vip_pool_name == "osac-test-pool"
           - _block_sc_result.resources[0].parameters.subsystem == "view-test-ensuresc-d0f7f176-block-tier"
-          - "_block_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-name'] == 'vast-csi-test-ensuresc'"
+          - "_block_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-name'] == 'vast-csi-test-ensuresc-be-test'"
           - "_block_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-namespace'] == 'osac-system'"
           - _block_sc_result.resources[0].parameters.volumeGroup == "test-cluster/{namespace}"
           - _block_sc_result.resources[0].parameters.storagePath is not defined
@@ -260,7 +262,7 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        name: "vast-csi-test-ensuresc"
+        name: "vast-csi-test-ensuresc-be-test"
         namespace: "osac-system"
       register: _csi_secret
 
@@ -268,7 +270,7 @@
       ansible.builtin.assert:
         that:
           - _csi_secret.resources | length == 1
-        fail_msg: "CSI Secret 'vast-csi-test-ensuresc' was not created"
+        fail_msg: "CSI Secret 'vast-csi-test-ensuresc-be-test' was not created"
         success_msg: "CSI Secret exists"
 
     - name: Assert CSI Secret uses tenant manager credentials (not admin creds)
@@ -323,7 +325,7 @@
         that:
           - _vsc_result.resources[0].driver == "csi.vastdata.com"
           - _vsc_result.resources[0].deletionPolicy == "Delete"
-          - "_vsc_result.resources[0].parameters['csi.storage.k8s.io/snapshotter-secret-name'] == 'vast-csi-test-ensuresc'"
+          - "_vsc_result.resources[0].parameters['csi.storage.k8s.io/snapshotter-secret-name'] == 'vast-csi-test-ensuresc-be-test'"
           - "_vsc_result.resources[0].parameters['csi.storage.k8s.io/snapshotter-secret-namespace'] == 'osac-system'"
         fail_msg: "VolumeSnapshotClass properties incorrect"
         success_msg: "VolumeSnapshotClass properties correct"
@@ -455,7 +457,7 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "vast-tenant-config-test-ensuresc-nosnap"
+            name: "vast-tenant-config-test-ensuresc-nosnap-be-test"
             namespace: "osac-system"
           failed_when: false
 
@@ -464,7 +466,7 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "vast-csi-test-ensuresc-nosnap"
+            name: "vast-csi-test-ensuresc-nosnap-be-test"
             namespace: "osac-system"
           failed_when: false
 
@@ -491,11 +493,13 @@
           apiVersion: v1
           kind: Secret
           metadata:
-            name: "vast-tenant-config-test-ensuresc-nosnap"
+            name: "vast-tenant-config-test-ensuresc-nosnap-be-test"
             namespace: "osac-system"
             labels:
               app.kubernetes.io/managed-by: osac-aap
               osac.openshift.io/tenant: "test-ensuresc-nosnap"
+              osac.openshift.io/storage-provider: vast
+              osac.openshift.io/storage-backend-id: be-test
           type: Opaque
           stringData:
             tenant_uid_hash: "e1a8c287"
@@ -609,7 +613,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-csi-test-ensuresc-nosnap"
+        name: "vast-csi-test-ensuresc-nosnap-be-test"
         namespace: "osac-system"
       failed_when: false
 
@@ -618,7 +622,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-ensuresc-nosnap"
+        name: "vast-tenant-config-test-ensuresc-nosnap-be-test"
         namespace: "osac-system"
       failed_when: false
 
@@ -665,7 +669,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-csi-test-ensuresc"
+        name: "vast-csi-test-ensuresc-be-test"
         namespace: "osac-system"
       failed_when: false
 
@@ -690,6 +694,285 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-ensuresc"
+        name: "vast-tenant-config-test-ensuresc-be-test"
         namespace: "osac-system"
+      failed_when: false
+
+# ══════════════════════════════════════════════════════════════
+# Multi-backend scenario (OSAC-6448): one tenant, two VAST backends.
+#
+# Proves the two claims the backend-ID contract rests on:
+#   1. Each dispatch reads ITS OWN hub Secret and writes ITS OWN CSI Secret.
+#   2. Each backend's StorageClasses reference that backend's CSI Secret.
+#
+# The two backends are two separate mock VAST arrays (ports 18443 and 18445),
+# as two real backends would be, so a dispatch that reused the previous
+# backend's resolved identity is visible as wrong credentials, a wrong
+# endpoint or a wrong VIP pool rather than silently passing.
+# ══════════════════════════════════════════════════════════════
+- name: "Storage Provider Ensure SC - Multi-backend setup fixtures"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Set per-backend mock manager credentials
+      ansible.builtin.set_fact:
+        mock_manager_password_one: "test-csi-password-one"
+        mock_manager_password_two: "test-csi-password-two"
+
+    - name: Delete any pre-existing multi-backend test resources (clean slate)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace | default(omit) }}"
+      loop:
+        - {api_version: v1, kind: Secret, name: "vast-tenant-config-test-escmulti-be-one", namespace: osac-system}
+        - {api_version: v1, kind: Secret, name: "vast-tenant-config-test-escmulti-be-two", namespace: osac-system}
+        - {api_version: v1, kind: Secret, name: "vast-csi-test-escmulti-be-one", namespace: osac-system}
+        - {api_version: v1, kind: Secret, name: "vast-csi-test-escmulti-be-two", namespace: osac-system}
+        - {api_version: storage.k8s.io/v1, kind: StorageClass, name: "vast-nfs-test-escmulti-tier-one"}
+        - {api_version: storage.k8s.io/v1, kind: StorageClass, name: "vast-nfs-test-escmulti-tier-two"}
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+      failed_when: false
+
+    - name: Create hub Secret fixture for backend be-one
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-tenant-config-test-escmulti-be-one"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-escmulti"
+              osac.openshift.io/storage-provider: vast
+              osac.openshift.io/storage-backend-id: be-one
+          type: Opaque
+          stringData:
+            tenant_uid_hash: "d0f7f176"
+            vast_tenant_id: "901"
+            vip_pool_name: "pool-array-one"
+            vast_endpoint: "127.0.0.1:18443"
+            storage_provider_type: "vast"
+            tenant_manager_name: "osac-test-escmulti-one"
+            tenant_manager_username: "osac-test-escmulti-one"
+            tenant_manager_password: "{{ mock_manager_password_one }}"
+            view_policy_name: "vp-array-one"
+
+    - name: Create hub Secret fixture for backend be-two
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-tenant-config-test-escmulti-be-two"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-escmulti"
+              osac.openshift.io/storage-provider: vast
+              osac.openshift.io/storage-backend-id: be-two
+          type: Opaque
+          stringData:
+            tenant_uid_hash: "d0f7f176"
+            vast_tenant_id: "902"
+            vip_pool_name: "pool-array-two"
+            vast_endpoint: "127.0.0.1:18445"
+            storage_provider_type: "vast"
+            tenant_manager_name: "osac-test-escmulti-two"
+            tenant_manager_username: "osac-test-escmulti-two"
+            tenant_manager_password: "{{ mock_manager_password_two }}"
+            view_policy_name: "vp-array-two"
+
+- name: "Storage Provider Ensure SC - Run ensure_storage_class for two backends"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-escmulti"
+    tenant_namespace: "osac-system"
+    _cluster_name: "test-cluster"
+    storage_provider_tiers:
+      - name: tier-one
+        protocol: nfs
+        provider: vast
+        backend_id: be-one
+      - name: tier-two
+        protocol: nfs
+        provider: vast
+        backend_id: be-two
+    storage_provider_backend_connections:
+      be-one:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "mock-admin-password"
+      be-two:
+        endpoint: "127.0.0.1:18445"
+        username: "admin"
+        password: "mock-admin-password"
+    storage_provider_action: ensure_storage_class
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Call storage_provider role with two VAST backends
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+
+- name: "Storage Provider Ensure SC - Verify per-backend isolation"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Read CSI Secret for backend be-one
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-escmulti-be-one"
+        namespace: "osac-system"
+      register: _csi_one
+
+    - name: Read CSI Secret for backend be-two
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-escmulti-be-two"
+        namespace: "osac-system"
+      register: _csi_two
+
+    - name: Assert both per-backend CSI Secrets were created
+      ansible.builtin.assert:
+        that:
+          - _csi_one.resources | length == 1
+          - _csi_two.resources | length == 1
+        fail_msg: >-
+          Expected one CSI Secret per backend. Found
+          {{ _csi_one.resources | length }} for be-one and
+          {{ _csi_two.resources | length }} for be-two — a dispatch that reused the
+          previous backend's id writes only one Secret.
+        success_msg: "Each backend got its own CSI Secret"
+
+    - name: Assert each CSI Secret carries its OWN backend's hub Secret contents
+      ansible.builtin.assert:
+        that:
+          - (_csi_one.resources[0].data.username | b64decode) == "osac-test-escmulti-one"
+          - (_csi_one.resources[0].data.password | b64decode) == mock_manager_password_one
+          - (_csi_one.resources[0].data.endpoint | b64decode) == "127.0.0.1:18443"
+          - (_csi_two.resources[0].data.username | b64decode) == "osac-test-escmulti-two"
+          - (_csi_two.resources[0].data.password | b64decode) == mock_manager_password_two
+          - (_csi_two.resources[0].data.endpoint | b64decode) == "127.0.0.1:18445"
+        fail_msg: >-
+          A CSI Secret does not match its own backend's hub Secret — the dispatch
+          read the wrong hub Secret.
+        success_msg: "Each dispatch read its own hub Secret and wrote its own CSI Secret"
+      no_log: true
+
+    - name: Read StorageClass for tier-one
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-escmulti-tier-one"
+      register: _sc_one
+
+    - name: Read StorageClass for tier-two
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-escmulti-tier-two"
+      register: _sc_two
+
+    - name: Assert both per-backend StorageClasses exist
+      ansible.builtin.assert:
+        that:
+          - _sc_one.resources | length == 1
+          - _sc_two.resources | length == 1
+        fail_msg: "Expected one StorageClass per tier across the two backends"
+        success_msg: "Both per-backend StorageClasses exist"
+
+    - name: Assert each StorageClass references its own backend's CSI Secret
+      ansible.builtin.assert:
+        that:
+          - "_sc_one.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-name'] == 'vast-csi-test-escmulti-be-one'"
+          - "_sc_one.resources[0].parameters['csi.storage.k8s.io/node-publish-secret-name'] == 'vast-csi-test-escmulti-be-one'"
+          - "_sc_two.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-name'] == 'vast-csi-test-escmulti-be-two'"
+          - "_sc_two.resources[0].parameters['csi.storage.k8s.io/node-publish-secret-name'] == 'vast-csi-test-escmulti-be-two'"
+        fail_msg: >-
+          A StorageClass points at the wrong backend's CSI Secret.
+          tier-one: {{ _sc_one.resources[0].parameters }}
+          tier-two: {{ _sc_two.resources[0].parameters }}
+        success_msg: "Each StorageClass references its own backend's CSI Secret"
+
+    - name: Assert each StorageClass carries its own backend's VIP pool
+      ansible.builtin.assert:
+        that:
+          - _sc_one.resources[0].parameters.vip_pool_name == "pool-array-one"
+          - _sc_two.resources[0].parameters.vip_pool_name == "pool-array-two"
+        fail_msg: >-
+          A StorageClass carries the other backend's VIP pool — the second dispatch
+          reused the first backend's hub Secret values.
+        success_msg: "Each StorageClass carries its own backend's VIP pool"
+
+    - name: Assert the dispatcher reported StorageClasses for both backends
+      ansible.builtin.assert:
+        that:
+          - storage_provider_storage_class_names is defined
+          - >-
+            storage_provider_storage_class_names | map(attribute='name') | list
+            is superset(['vast-nfs-test-escmulti-tier-one', 'vast-nfs-test-escmulti-tier-two'])
+        fail_msg: >-
+          storage_provider_storage_class_names did not accumulate both backends:
+          {{ storage_provider_storage_class_names | default('undefined') }}
+        success_msg: "storage_provider_storage_class_names accumulated both backends"
+
+- name: "Storage Provider Ensure SC - Multi-backend cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete multi-backend test resources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace | default(omit) }}"
+      loop:
+        - {api_version: storage.k8s.io/v1, kind: StorageClass, name: "vast-nfs-test-escmulti-tier-one"}
+        - {api_version: storage.k8s.io/v1, kind: StorageClass, name: "vast-nfs-test-escmulti-tier-two"}
+        - {api_version: v1, kind: Secret, name: "vast-csi-test-escmulti-be-one", namespace: osac-system}
+        - {api_version: v1, kind: Secret, name: "vast-csi-test-escmulti-be-two", namespace: osac-system}
+        - {api_version: v1, kind: Secret, name: "vast-tenant-config-test-escmulti-be-one", namespace: osac-system}
+        - {api_version: v1, kind: Secret, name: "vast-tenant-config-test-escmulti-be-two", namespace: osac-system}
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+      failed_when: false
+
+    - name: Check if VolumeSnapshotClass CRD exists for multi-backend cleanup
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: volumesnapshotclasses.snapshot.storage.k8s.io
+      register: _escmulti_cleanup_vsc_crd
+
+    - name: Delete multi-backend VolumeSnapshotClasses
+      when: _escmulti_cleanup_vsc_crd.resources | length > 0
+      kubernetes.core.k8s:
+        state: absent
+        api_version: snapshot.storage.k8s.io/v1
+        kind: VolumeSnapshotClass
+        name: "{{ item }}"
+      loop:
+        - "vast-snapshot-test-escmulti-tier-one"
+        - "vast-snapshot-test-escmulti-tier-two"
       failed_when: false

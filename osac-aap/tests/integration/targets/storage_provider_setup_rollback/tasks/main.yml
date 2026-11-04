@@ -16,7 +16,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-rollback"
+        name: "vast-tenant-config-test-rollback-be-test"
         namespace: "osac-system"
       failed_when: false
 
@@ -158,11 +158,16 @@
           Tenant DELETE paths: {{ _tenant_del_paths }}
         success_msg: "Correct: rollback tenant deletion uses force_remove"
 
-    - name: Verify hub Secret was NOT persisted (rollback should prevent it)
+    # NOTE: this scenario injects the failure on POST /api/managers/, which runs
+    # BEFORE setup persists the hub Secret, so this assertion only guards against
+    # the Secret being written early — it cannot detect a rollback that fails to
+    # delete it. The multi-backend scenario below covers the actual delete, by
+    # rolling back over a hub Secret that already exists.
+    - name: Verify hub Secret was NOT persisted (failure precedes persistence)
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-rollback"
+        name: "vast-tenant-config-test-rollback-be-test"
         namespace: "osac-system"
       register: _hub_secret_check
 
@@ -184,6 +189,255 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-rollback"
+        name: "vast-tenant-config-test-rollback-be-test"
         namespace: "osac-system"
+      failed_when: false
+
+# ══════════════════════════════════════════════════════════════
+# Multi-backend rollback scenario (OSAC-6448): one tenant, two VAST
+# backends on two separate arrays. The second backend's setup fails.
+#
+# Proves two things the single-backend scenario above cannot:
+#   1. Rollback actually DELETES the failing backend's hub Secret. The Secret
+#      is pre-created here, so its absence afterwards can only be the result of
+#      the rollback deleting it.
+#   2. Rollback stays scoped to the failing backend: the first backend's hub
+#      Secret and its array's VMS resources are left alone.
+#
+# The pre-created be-b hub Secret carries a manager username but an EMPTY
+# password — the "setup got part way and left an unusable Secret" state — so
+# create_tenant_manager.yaml does NOT take its idempotency short-circuit and
+# still reaches the injected manager-creation failure.
+# ══════════════════════════════════════════════════════════════
+- name: "Storage Provider Multi-Backend Rollback - Prepare"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete any pre-existing multi-backend rollback Secrets
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: "osac-system"
+      loop:
+        - "vast-tenant-config-test-rbmulti-be-a"
+        - "vast-tenant-config-test-rbmulti-be-b"
+      failed_when: false
+
+    - name: Pre-create a stale, credential-less hub Secret for backend be-b
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-tenant-config-test-rbmulti-be-b"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-rbmulti"
+              osac.openshift.io/storage-provider: vast
+              osac.openshift.io/storage-backend-id: be-b
+          type: Opaque
+          stringData:
+            tenant_uid_hash: "d0f7f176"
+            vast_tenant_id: "903"
+            vip_pool_name: "pool-array-two"
+            vast_endpoint: "127.0.0.1:18445"
+            storage_provider_type: "vast"
+            tenant_manager_name: "osac-test-rbmulti"
+            tenant_manager_username: "osac-test-rbmulti"
+            tenant_manager_password: ""
+
+    - name: Confirm the be-b hub Secret exists before the run (fixture precondition)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-rbmulti-be-b"
+        namespace: "osac-system"
+      register: _rbmulti_pre_secret
+
+    - name: Assert the be-b hub Secret precondition holds
+      ansible.builtin.assert:
+        that:
+          - _rbmulti_pre_secret.resources | length == 1
+        fail_msg: >-
+          The be-b hub Secret fixture was not created, so its later absence would
+          prove nothing about the rollback.
+        success_msg: "be-b hub Secret present before the failing run"
+
+    - name: Record call log mark on array one (port 18443)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _rbmulti_pre_calls_a
+
+    - name: Save array-one call log offset
+      ansible.builtin.set_fact:
+        _rbmulti_mark_a: "{{ _rbmulti_pre_calls_a.json | length }}"
+
+    - name: Inject manager-creation failure on array two only (port 18445)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18445/_inject_failure"
+        validate_certs: false
+        method: POST
+        body_format: json
+        body:
+          resource: managers
+          method: POST
+          status: 500
+          body:
+            error: "injected: simulating manager creation failure on backend be-b"
+
+- name: "Storage Provider Multi-Backend Rollback - Run setup (expect failure)"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-rbmulti"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-rbmulti"
+    # Dispatch order is sorted by (provider, backend_id), so be-a runs first and
+    # succeeds, then be-b runs and hits the injected failure.
+    storage_provider_tiers:
+      - name: tier-a
+        protocol: nfs
+        provider: vast
+        backend_id: be-a
+      - name: tier-b
+        protocol: nfs
+        provider: vast
+        backend_id: be-b
+    storage_provider_backend_connections:
+      be-a:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "mock-admin-password"
+      be-b:
+        endpoint: "127.0.0.1:18445"
+        username: "admin"
+        password: "mock-admin-password"
+    storage_provider_action: setup
+    storage_provider_provisioning_target: vmaas
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Run two-backend setup and capture the expected failure
+      block:
+        - name: Call storage_provider role with setup action (should fail on be-b)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+
+        - name: Fail test if setup unexpectedly succeeded
+          ansible.builtin.fail:
+            msg: "Setup should have failed for backend be-b but the whole run succeeded"
+
+      rescue:
+        - name: Record that setup failed as expected
+          ansible.builtin.debug:
+            msg: "Setup failed as expected: {{ ansible_failed_result.msg | default('') }}"
+
+- name: "Storage Provider Multi-Backend Rollback - Verify scoping"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Read the be-b hub Secret after rollback
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-rbmulti-be-b"
+        namespace: "osac-system"
+      register: _rbmulti_secret_b
+
+    - name: Assert rollback deleted the failing backend's hub Secret
+      ansible.builtin.assert:
+        that:
+          - _rbmulti_secret_b.resources | length == 0
+        fail_msg: >-
+          The be-b hub Secret existed before the run and still exists after it —
+          the setup rescue did not delete it.
+        success_msg: "Rollback deleted the failing backend's hub Secret"
+
+    - name: Read the be-a hub Secret after rollback
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-rbmulti-be-a"
+        namespace: "osac-system"
+      register: _rbmulti_secret_a
+
+    - name: Assert the surviving backend's hub Secret is untouched
+      ansible.builtin.assert:
+        that:
+          - _rbmulti_secret_a.resources | length == 1
+          - _rbmulti_secret_a.resources[0].metadata.labels['osac.openshift.io/storage-backend-id'] == 'be-a'
+          - (_rbmulti_secret_a.resources[0].data.tenant_manager_password | b64decode | length) > 0
+        fail_msg: >-
+          Backend be-a's hub Secret was removed or emptied by backend be-b's
+          rollback — rollback is not scoped to the failing backend.
+        success_msg: "Rollback left the surviving backend's hub Secret intact"
+
+    - name: Get array-two call log (the failing backend)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18445/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _rbmulti_calls_b
+
+    - name: Assert rollback cleaned up on the failing backend's array
+      ansible.builtin.assert:
+        that:
+          - _rbmulti_calls_b.json | selectattr('method', 'equalto', 'DELETE')
+            | map(attribute='path') | select('search', 'tenants/') | list | length > 0
+        fail_msg: "Rollback did not attempt tenant deletion on backend be-b's array"
+        success_msg: "Rollback cleaned up on the failing backend's array"
+
+    - name: Get array-one call log since the mark (the surviving backend)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _rbmulti_calls_a
+
+    - name: Assert no deletions were issued against the surviving backend's array
+      vars:
+        _rbmulti_a_window: "{{ _rbmulti_calls_a.json[_rbmulti_mark_a | int:] }}"
+      ansible.builtin.assert:
+        that:
+          - _rbmulti_a_window | selectattr('method', 'equalto', 'DELETE') | list | length == 0
+        fail_msg: >-
+          Backend be-b's rollback issued DELETE calls against backend be-a's array:
+          {{ _rbmulti_a_window | selectattr('method', 'equalto', 'DELETE')
+             | map(attribute='path') | list }}
+        success_msg: "No collateral deletions on the surviving backend's array"
+
+- name: "Storage Provider Multi-Backend Rollback - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete multi-backend rollback hub Secrets
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: "osac-system"
+      loop:
+        - "vast-tenant-config-test-rbmulti-be-a"
+        - "vast-tenant-config-test-rbmulti-be-b"
       failed_when: false

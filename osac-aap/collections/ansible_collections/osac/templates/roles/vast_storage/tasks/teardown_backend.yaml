@@ -1,7 +1,8 @@
 ---
 # VAST teardown_backend: remove backend resources and hub Secret only.
 # Deletes VAST VMS resources (views, quotas, policies, tenant, manager,
-# local provider) and the per-tenant hub Secret.
+# local provider) and the hub Secret of the backend this dispatch is scoped to
+# (`<prefix><tenant>-<backend-id>`), leaving the tenant's other backends alone.
 # Does NOT touch cluster-side K8s resources (StorageClasses, VolumeSnapshotClasses,
 # CSI Secret) — use cleanup action for those.
 
@@ -10,11 +11,14 @@
     msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
   when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
 
+- name: Resolve the backend_id this dispatch is scoped to
+  ansible.builtin.include_tasks: _resolve_backend_id.yaml
+
 - name: Read tenant config Secret from hub cluster
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Secret
-    name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+    name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}"
     namespace: "{{ vast_storage_config_namespace }}"
   register: _vast_teardown_config
   no_log: true
@@ -214,7 +218,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+        name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}"
         namespace: "{{ vast_storage_config_namespace }}"
       no_log: true
 

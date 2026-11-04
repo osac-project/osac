@@ -6,13 +6,13 @@
   ansible.builtin.set_fact:
     _all_sc_names: []
 
-- name: Dispatch ensure_storage_class to each provider
+- name: Dispatch ensure_storage_class to each provider backend pair
   block:
-    - name: Run ensure_storage_class per provider
+    - name: Run ensure_storage_class per provider backend pair
       ansible.builtin.include_tasks: _dispatch_provider.yaml
-      loop: "{{ _unique_providers }}"
+      loop: "{{ _provider_backend_pairs }}"
       loop_control:
-        loop_var: _current_provider
+        loop_var: _current_pair
 
     - name: Set StorageClass names output (list)
       ansible.builtin.set_fact:

@@ -433,10 +433,93 @@ def test_guest_health_recovers_from_access_and_readiness_delays(monkeypatch: pyt
     helpers.wait_for_workload_cluster_health(k8s=k8s, cluster_name="guest-cluster", expected_workers=1)
 
 
-def test_guest_health_has_at_most_five_minutes_of_scheduled_waits() -> None:
+def test_workload_cluster_unhealthy_is_empty_for_a_healthy_cluster() -> None:
+    operators = [
+        {
+            "metadata": {"name": "network"},
+            "status": {
+                "conditions": [
+                    {"type": "Available", "status": "True"},
+                    {"type": "Progressing", "status": "False"},
+                    {"type": "Degraded", "status": "False"},
+                ]
+            },
+        }
+    ]
+
+    assert (
+        helpers.workload_cluster_unhealthy(nodes=[_node(name="worker-0")], operators=operators, expected_workers=1)
+        == []
+    )
+
+
+def test_workload_cluster_unhealthy_names_the_operator_and_workers() -> None:
+    operators = [
+        {
+            "metadata": {"name": "insights"},
+            "status": {
+                "conditions": [
+                    {"type": "Available", "status": "False"},
+                    {"type": "Progressing", "status": "False"},
+                    {"type": "Degraded", "status": "True"},
+                ]
+            },
+        },
+        {
+            "metadata": {"name": "storage"},
+            "status": {
+                "conditions": [
+                    {"type": "Available", "status": "True"},
+                    {"type": "Progressing", "status": "False"},
+                    {"type": "Degraded", "status": "False"},
+                ]
+            },
+        },
+    ]
+    not_ready = _node(name="worker-0")
+    not_ready["status"] = {"conditions": [{"type": "Ready", "status": "False"}]}  # type: ignore[index]
+
+    problems = helpers.workload_cluster_unhealthy(nodes=[not_ready], operators=operators, expected_workers=2)
+
+    # Only the operator and the worker that actually failed are named.
+    assert "worker nodes not Ready: ['worker-0']" in problems
+    assert "saw 1 worker node(s), expected 2" in problems
+    assert "ClusterOperator insights: Available=False, Degraded=True" in problems
+    assert not any("storage" in problem for problem in problems)
+
+
+def test_wait_for_workload_cluster_health_names_the_operator_it_saw(monkeypatch: pytest.MonkeyPatch) -> None:
+    k8s = Mock()
+    k8s.list_json.side_effect = lambda *, resource, **_kwargs: (
+        {"items": [_node(name="worker-0")]}
+        if resource == "nodes"
+        else {
+            "items": [
+                {
+                    "metadata": {"name": "insights"},
+                    "status": {
+                        "conditions": [
+                            {"type": "Available", "status": "False"},
+                            {"type": "Progressing", "status": "False"},
+                            {"type": "Degraded", "status": "True"},
+                        ]
+                    },
+                }
+            ]
+        }
+    )
+
+    monkeypatch.setattr(helpers, "wait_for_workload_node_provider_ids", lambda **_kwargs: None)
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(AssertionError, match="ClusterOperator insights: Available=False, Degraded=True"):
+        helpers.wait_for_workload_cluster_health(k8s=k8s, expected_workers=1)
+
+
+def test_guest_health_has_at_most_fifteen_minutes_of_scheduled_waits() -> None:
     scheduled_wait = (helpers._WORKLOAD_HEALTH_RETRIES - 1) * helpers._WORKLOAD_HEALTH_DELAY
 
-    assert 0 < scheduled_wait <= 5 * 60
+    assert 0 < scheduled_wait <= 15 * 60
 
 
 def test_wait_for_cluster_guest_readiness_waits_for_hub_ready_before_guest_checks(

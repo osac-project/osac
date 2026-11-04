@@ -15,3 +15,39 @@ reviews:
     ignore_usernames:
       - "dependabot[bot]"
       - "red-hat-konflux-kflux-prd-rh02[bot]"
+  pre_merge_checks:
+    custom_checks:
+      - name: "no-hardcoded-secrets"
+        instructions: |
+          Flag hardcoded secrets: API keys, tokens, passwords, private
+          keys, credentials. Also flag base64 strings >32 chars in config,
+          URLs with embedded credentials, variables named api_key/secret/
+          token/password assigned string literals.
+
+          EXCEPTION: Do NOT flag package manager integrity hashes in
+          dependency lockfiles (for example, `resolution: {integrity:
+          sha512-...}` in pnpm-lock.yaml). These hashes verify downloaded packages;
+          they are not credentials.
+
+          EXCEPTION: Do NOT flag default admin/admin credentials in
+          developer setup or maintenance scripts (e.g., Keycloak token
+          requests with username=admin, password=admin). These are
+          standard defaults for local development environments.
+
+          Do NOT flag a credential-shaped literal in a unit test file
+          when ALL three hold: (1) the file matches a conventional
+          unit-test naming pattern (e.g. *_test.go, *_test.py,
+          test_*.py, *.test.{js,ts}, *.spec.{js,ts}, *_test.rb,
+          *Test.java); (2) the identifier holding the literal (const,
+          var, or local variable — not the struct/field name it's
+          assigned into) is named with a test/fixture/mock/fake
+          prefix or suffix (e.g. testBackendPassword, fixtureAPIKey,
+          mockToken); and (3) the value does not itself match any
+          real-secret shape this check already looks for (no
+          recognizable API-key/token format, no private-key material,
+          no base64/hex blob >32 chars, no URL with embedded
+          credentials, no match to a real vendor's credential
+          pattern). All three conditions must hold — a test-file path
+          alone, or a plausible-looking value alone, is not
+          sufficient.
+        mode: "error"

@@ -15,7 +15,7 @@ import {
   Title,
 } from '@patternfly/react-core';
 
-import type { ComputeInstanceCatalogItem, StorageTierReference } from '@osac/types';
+import type { ComputeInstanceCatalogItem, StorageTierReference, UserDataSource } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
 import CatalogFieldEditabilityLabel from '../../catalog/CatalogFieldEditabilityLabel';
@@ -30,9 +30,9 @@ import {
   computeInstanceTypeReferenceFromPolicy,
   int32ValueFromPolicy,
 } from '../../catalog/computeCatalogItemResourceDisplay';
-import AdditionalDisksTable from '../../CatalogItem/Details/AdditionalDisksTable';
-import CatalogUserDataDetailValue from '../../CatalogItem/Details/CatalogUserDataDetailValue';
 import { Timestamp } from '../../Primitives/Timestamp';
+import AdditionalDisksTable from '../../shared/AdditionalDisksTable';
+import UserDataDetailValue from '../../UserData/UserDataDetailValue';
 
 interface VMCatalogItemDetailContentProps {
   item: ComputeInstanceCatalogItem;
@@ -139,7 +139,12 @@ const VMCatalogItemDetailContent = ({ item }: VMCatalogItemDetailContentProps) =
         <DetailSection title={t('Access & Initial run')}>
           <DetailRow label={t('Cloud-init')}>
             <GovernedDetailValue
-              value={<CatalogUserDataDetailValue policy={fields?.userDataSource} />}
+              value={
+                <UserDataDetailValue
+                  userData={catalogFieldPolicyValue<UserDataSource>(fields?.userDataSource)}
+                  emptyValue={t('Not set')}
+                />
+              }
               policy={fields?.userDataSource}
             />
           </DetailRow>

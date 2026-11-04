@@ -9,9 +9,12 @@ import {
   bareMetalInstanceTypeReferenceFromPolicy,
   formatBareMetalCatalogDiskImage,
 } from '../../catalog/bareMetalCatalogItemResourceDisplay';
-import { catalogFieldPolicyIsConfigured } from '../../catalog/catalogFieldPolicyDisplay';
+import {
+  catalogFieldPolicyIsConfigured,
+  catalogFieldPolicyValue,
+} from '../../catalog/catalogFieldPolicyDisplay';
 import { CatalogConfigurationRow } from '../../CatalogItem/Details/CatalogConfigurationRow';
-import CatalogUserDataDetailValue from '../../CatalogItem/Details/CatalogUserDataDetailValue';
+import UserDataDetailValue from '../../UserData/UserDataDetailValue';
 
 interface BareMetalInstanceCatalogItemConfigurationProps {
   item: BareMetalInstanceCatalogItem;
@@ -46,7 +49,12 @@ const BareMetalInstanceCatalogItemConfiguration = ({
       />
       <CatalogConfigurationRow
         label={t('User data')}
-        value={<CatalogUserDataDetailValue policy={fields?.userDataSource} />}
+        value={
+          <UserDataDetailValue
+            userData={catalogFieldPolicyValue(fields?.userDataSource)}
+            emptyValue={t('Not set')}
+          />
+        }
         policy={fields?.userDataSource}
       />
     </DescriptionList>

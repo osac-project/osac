@@ -1,5 +1,5 @@
 import { create } from '@bufbuild/protobuf';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -7,33 +7,24 @@ import {
   ComputeInstanceCatalogItemReferenceSchema,
   ComputeInstanceState,
   ComputeInstanceTemplateReferenceSchema,
+  GuestOSFamily,
+  InstanceType,
   InstanceTypeReferenceSchema,
-  SecretReferenceSchema,
-  StorageTierReferenceSchema,
+  SecretLocalReferenceSchema,
 } from '@osac/types';
+import type { DiskImage } from '@osac/types';
 
 import VmDetailsCard from './VmDetailsCard';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
-const catalogVm: ComputeInstance = {
+const vm = {
   $typeName: 'osac.public.v1.ComputeInstance',
   id: 'vm-1',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: 'web-01',
-    creator: 'alice',
-    creationTimestamp: {
-      $typeName: 'google.protobuf.Timestamp',
-      seconds: 1767225600n,
-      nanos: 0,
-    },
-    annotations: {},
-    labels: {},
-    project: 'foo',
-    tenant: 'foo',
-    version: 1,
+    project: 'tenant-project',
+    creationTimestamp: { seconds: 1767225600n, nanos: 0 },
   },
   spec: {
     $typeName: 'osac.public.v1.ComputeInstanceSpec',
@@ -41,90 +32,114 @@ const catalogVm: ComputeInstance = {
       id: 'catalog-rhel-9',
       name: 'RHEL 9 catalog',
     }),
-    sshKey: create(SecretReferenceSchema, { name: 'tenant-ssh-key' }),
+    diskImage: { id: 'disk-image-rhel', name: 'RHEL 9.4' },
+    sshKey: create(SecretLocalReferenceSchema, { id: 'secret-1', name: 'tenant-ssh-key' }),
     instanceType: create(InstanceTypeReferenceSchema, { id: 'standard-4-8' }),
-    bootDisk: {
-      $typeName: 'osac.public.v1.ComputeInstanceDisk',
-      sizeGib: 40,
-      storageTier: create(StorageTierReferenceSchema, { name: 'balanced' }),
-    },
-    //userData: '#cloud-config',
-    additionalDisks: {
-      $typeName: 'osac.public.v1.ComputeInstanceDiskList',
-      items: [],
-    },
-    networkAttachments: [],
+    userDataSource: { source: { case: 'inline', value: '#cloud-config' } },
     template: create(ComputeInstanceTemplateReferenceSchema, { id: '' }),
-    templateParameters: {},
-    autoExternalIpAttachment: false,
   },
-};
+  status: { state: ComputeInstanceState.RUNNING },
+} as unknown as ComputeInstance;
 
-const renderCard = (vm: ComputeInstance = catalogVm) =>
-  renderWithProviders(<VmDetailsCard vm={vm} />);
+const instanceType = {
+  id: 'standard-4-8',
+  metadata: { name: 'Standard 4 vCPU / 8 GiB' },
+  spec: {
+    vcpus: 4,
+    memoryGib: 8,
+    gpu: { count: 1, resourceName: 'nvidia.com/gpu' },
+  },
+} as unknown as InstanceType;
+
+const renderCard = (cardVm: ComputeInstance = vm) =>
+  renderWithProviders(<VmDetailsCard vm={cardVm} />);
 
 describe('VmDetailsCard', () => {
-  it('shows catalog fields with the SSH Secret reference', () => {
-    renderCard();
+  it('renders overview, configuration, and access fields without a card wrapper', () => {
+    const { container } = renderWithProviders(
+      <VmDetailsCard
+        vm={vm}
+        instanceType={instanceType}
+        isInstanceTypeLoading={false}
+        diskImage={
+          {
+            spec: { guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX },
+          } as unknown as DiskImage
+        }
+      />,
+    );
 
-    expect(screen.getByText('Details')).toBeInTheDocument();
-    expect(screen.getByText('RHEL 9 catalog')).toBeInTheDocument();
-    expect(screen.getByText('standard-4-8')).toBeInTheDocument();
-    expect(screen.getByText('web-01')).toBeInTheDocument();
-    expect(screen.getByText('tenant-ssh-key')).toBeInTheDocument();
-    expect(screen.getByText('40 GiB, balanced')).toBeInTheDocument();
-    expect(screen.queryByText('User Data')).not.toBeInTheDocument();
-    expect(screen.queryByText('Run strategy')).not.toBeInTheDocument();
-    expect(screen.queryByText('Tenants')).not.toBeInTheDocument();
-    expect(screen.queryByText('Version')).not.toBeInTheDocument();
-    expect(screen.queryByText('Creator')).not.toBeInTheDocument();
-  });
-
-  it('still shows spec fields when catalog item is missing', () => {
-    renderCard({
-      id: 'vm-2',
-      metadata: { name: 'legacy-vm' },
-      spec: { sshKey: { name: 'legacy-key' } },
-    } as ComputeInstance);
+    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Configuration' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Access & Initial run' })).toBeInTheDocument();
+    const externalIpTerm = screen.getByText('External IP');
+    const sshTerm = screen.getByText('SSH public key');
     expect(
-      screen.queryByText('Catalog configuration is unavailable for this virtual machine.'),
-    ).not.toBeInTheDocument();
-    expect(screen.getByText('legacy-vm')).toBeInTheDocument();
-    expect(screen.getByText('legacy-key')).toBeInTheDocument();
-    expect(screen.getByText('SSH public key')).toBeInTheDocument();
+      externalIpTerm.compareDocumentPosition(sshTerm) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByText('tenant-project')).toBeInTheDocument();
+    expect(screen.getByText('RHEL 9 catalog')).toBeInTheDocument();
+    expect(screen.getByText('Linux')).toBeInTheDocument();
+    expect(screen.getByText('RHEL 9.4')).toBeInTheDocument();
+    expect(screen.getByText('Standard 4 vCPU / 8 GiB')).toBeInTheDocument();
+    expect(screen.getByText('4')).toBeInTheDocument();
+    expect(screen.getByText('8 GiB')).toBeInTheDocument();
+    expect(screen.getByText('nvidia.com/gpu')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'tenant-ssh-key' })).toHaveAttribute(
+      'href',
+      '/secrets/secret-1',
+    );
+    expect(screen.getByText('Configured')).toBeInTheDocument();
+    expect(container.querySelector('.pf-v6-c-card')).toBeNull();
   });
 
-  it('lists each additional disk with its resolved tier and exposes no edit control', () => {
-    const vmWithAdditionalDisks = {
-      ...catalogVm,
+  it('uses a hyphen for unresolved VM user data', () => {
+    renderWithProviders(
+      <VmDetailsCard
+        vm={{ id: 'vm-2', metadata: { name: 'legacy-vm' }, spec: {} } as ComputeInstance}
+        isInstanceTypeLoading={false}
+      />,
+    );
+
+    const cloudInitRow = screen.getByText('Cloud-init').closest('div') as HTMLElement;
+    expect(within(cloudInitRow).getByText('-')).toBeInTheDocument();
+  });
+
+  it('uses hyphens instead of Not set for unset VM details', () => {
+    renderWithProviders(
+      <VmDetailsCard
+        vm={{ id: 'vm-2', metadata: { name: 'legacy-vm' }, spec: {} } as ComputeInstance}
+        isInstanceTypeLoading={false}
+      />,
+    );
+
+    expect(screen.queryByText('Not set')).not.toBeInTheDocument();
+    expect(screen.getAllByText('-').length).toBeGreaterThan(0);
+  });
+
+  it('expands inline user data from the Cloud-init row', async () => {
+    const { user } = renderCard();
+
+    await user.click(screen.getByRole('button', { name: 'Expand user data' }));
+
+    expect(screen.getByText('#cloud-config')).toBeVisible();
+  });
+
+  it('links Secret-backed user data to the Secret resource', () => {
+    renderCard({
+      ...vm,
       spec: {
-        ...catalogVm.spec,
-        additionalDisks: {
-          items: [
-            {
-              $typeName: 'osac.public.v1.ComputeInstanceDisk',
-              sizeGib: 100,
-              storageTier: create(StorageTierReferenceSchema, { name: 'fast' }),
-            },
-            {
-              $typeName: 'osac.public.v1.ComputeInstanceDisk',
-              sizeGib: 20,
-              storageTier: create(StorageTierReferenceSchema, { name: 'legacy-tier' }),
-            },
-          ],
+        ...vm.spec,
+        userDataSource: {
+          source: { case: 'secret', value: { id: 'user-data-secret', name: 'cloud-init-secret' } },
         },
       },
-    } as ComputeInstance;
+    } as ComputeInstance);
 
-    renderCard(vmWithAdditionalDisks);
-
-    expect(screen.getByText('40 GiB, balanced')).toBeInTheDocument();
-    expect(screen.getByText('Additional disk 1')).toBeInTheDocument();
-    expect(screen.getByText('100 GiB, fast')).toBeInTheDocument();
-    expect(screen.getByText('Additional disk 2')).toBeInTheDocument();
-    expect(screen.getByText('20 GiB, legacy-tier')).toBeInTheDocument();
-    expect(screen.queryAllByRole('combobox')).toHaveLength(0);
-    expect(screen.getByRole('button', { name: 'Edit instance type' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'cloud-init-secret' })).toHaveAttribute(
+      'href',
+      '/secrets/user-data-secret',
+    );
   });
 
   it.each([
@@ -132,14 +147,14 @@ describe('VmDetailsCard', () => {
     ComputeInstanceState.PAUSED,
     ComputeInstanceState.STOPPED,
   ])('enables the instance type pencil when the VM is %s', (state) => {
-    renderCard({ ...catalogVm, status: { state } } as ComputeInstance);
+    renderCard({ ...vm, status: { state } } as ComputeInstance);
 
     expect(screen.getByRole('button', { name: 'Edit instance type' })).toBeEnabled();
   });
 
   it('disables the pencil while the VM is starting', async () => {
     const { user } = renderCard({
-      ...catalogVm,
+      ...vm,
       status: { state: ComputeInstanceState.STARTING },
     } as ComputeInstance);
 
@@ -154,10 +169,7 @@ describe('VmDetailsCard', () => {
   });
 
   it('opens the edit instance type modal from the pencil', async () => {
-    const { user } = renderCard({
-      ...catalogVm,
-      status: { state: ComputeInstanceState.RUNNING },
-    } as ComputeInstance);
+    const { user } = renderCard();
 
     await user.click(screen.getByRole('button', { name: 'Edit instance type' }));
 
@@ -166,7 +178,7 @@ describe('VmDetailsCard', () => {
 
   it('explains that a deleting VM cannot be edited', async () => {
     const { user } = renderCard({
-      ...catalogVm,
+      ...vm,
       status: { state: ComputeInstanceState.DELETING },
     } as ComputeInstance);
 

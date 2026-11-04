@@ -408,7 +408,7 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `evpn.enabled` | Configures OpenShift host networking for VMaaS CUDN EVPN; requires OpenShift 4.22 or later. Leave disabled on Kind. | `false` |
 | `lvms.enabled` | Creates the LVM Storage `Subscription` and worker-scoped `LVMCluster`, using the configured `optionalPaths`. It does not create those devices. | `false` |
 | `lvms.channel` | Update channel for LVM Storage. Set it to `stable-<cluster_minor>` at installation. | `stable-4.22` |
-| `lvms.deviceSelector.optionalPaths` | Explicit worker-device allowlist. The chart default is a development placeholder; `vmaas-ci` overrides it with its preconfigured `/dev/sdb`. | `[/dev/sample-osac-disk]` |
+| `lvms.deviceSelector.optionalPaths` | Explicit worker-device allowlist. The chart default is a development placeholder; `vmaas-ci`, `bmaas-ci`, and `caas-ci` use `/dev/sdb`, while the Netris `full-ci` profile uses `/dev/vdb`. | `[/dev/sample-osac-disk]` |
 | `metallb.enabled` | Creates the MetalLB `Subscription`, the `caas-address-pool` `IPAddressPool`, and the `L2Advertisement`. | `false` |
 | `metallb.channel` | Update channel for MetalLB. | `stable` |
 | `mce.enabled` | Creates the standalone multicluster engine `Subscription`, agent configuration, and temporary Assisted image bridge. Enable it for CaaS unless RHACM or an existing MCE installation provides it. | `false` |
@@ -582,10 +582,11 @@ mce:          { enabled: false }
   Disabling `lvms.enabled` skips an `LVMCluster` custom resource that uses
   device class `vg1`, thin pool size 90 percent, and overprovision ratio 10.
   The chart-managed `vg1` uses worker-node selection and the configured
-  `optionalPaths`; no device setup is included. The default is a placeholder,
-  while `vmaas-ci` sets `/dev/sdb`. If no listed path exists on a selected
-  worker, LVMS may remain degraded and storage provisioning unavailable rather
-  than discover other disks.
+  `optionalPaths`; no device setup is included. The default is a placeholder.
+  The `vmaas-ci`, `bmaas-ci`, and `caas-ci` profiles set `/dev/sdb`; Netris
+  `full-ci` sets `/dev/vdb` for its OCP VM. If no listed path exists on a
+  selected worker, LVMS may remain degraded and storage provisioning
+  unavailable rather than discover other disks.
   Disabling `metallb.enabled` skips an `IPAddressPool` custom resource named
   `caas-address-pool` with the fixed range `192.168.100.240` to
   `192.168.100.250`. If you already run the Operator, keep the toggle `false`

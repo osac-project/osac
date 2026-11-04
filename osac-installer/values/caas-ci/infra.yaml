@@ -11,6 +11,10 @@ aapOperator:
   enabled: true
 lvms:
   enabled: true
+  # CaaS CI boots the same sno-4-22 cluster flavor as vmaas-ci.
+  deviceSelector:
+    optionalPaths:
+      - /dev/sdb
 metallb:
   enabled: true
 cnv:

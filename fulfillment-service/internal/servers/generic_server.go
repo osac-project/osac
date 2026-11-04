@@ -35,6 +35,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -947,32 +948,14 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 	}
 
 	if prepareCandidate != nil {
-		preparedID := tmpObject.GetId()
-		preparedMetadata := proto.Clone(s.getMetadata(tmpObject)).(metadataIface)
-		if err = prepareCandidate(ctx, proto.Clone(currentObject).(O), tmpObject); err != nil {
+		err = s.prepareUpdateCandidate(ctx, currentObject, tmpObject, prepareCandidate)
+		if err != nil {
+			// The callback may have written to the database before failing, so mark the transaction for
+			// rollback instead of relying on the caller to do it.
+			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
+				tx.ReportError(&err)
+			}
 			return err
-		}
-		s.restoreProtectedMetadataForPublicAPIView(ctx, currentObject, tmpObject)
-		if err = s.validatePreparedCandidate(ctx, tmpObject, preparedID, preparedMetadata); err != nil {
-			return err
-		}
-
-		// Candidate preparation must not change finalizers: the compare-and-swap above only covers the
-		// finalizers requested by the caller, so the written object must carry exactly those.
-		if !sameFinalizers(
-			metadataFinalizers(s.getMetadata(tmpObject)),
-			preparedMetadata.GetFinalizers(),
-		) {
-			s.logger.ErrorContext(
-				ctx,
-				"Candidate preparation changed finalizers",
-				slog.String("id", requestId),
-			)
-			return grpcstatus.Errorf(
-				grpccodes.Internal,
-				"candidate preparation cannot change finalizers of object with identifier '%s'",
-				requestId,
-			)
 		}
 	}
 
@@ -998,6 +981,43 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 	responseMsg.SetObject(responseObject)
 	s.setPointer(response, responseMsg)
 
+	return nil
+}
+
+// prepareUpdateCandidate runs the candidate preparation callback on the merged object, restores the
+// metadata that public API callers cannot change, and validates the result. Candidate preparation must
+// not change finalizers: the compare-and-swap only covers the finalizers requested by the caller, so
+// the object that gets written must carry exactly those.
+func (s *GenericServer[O]) prepareUpdateCandidate(
+	ctx context.Context,
+	currentObject O,
+	tmpObject O,
+	prepareCandidate PrepareCandidateFunc[O],
+) error {
+	objectId := tmpObject.GetId()
+	preparedMetadata := proto.Clone(s.getMetadata(tmpObject)).(metadataIface)
+	if err := prepareCandidate(ctx, proto.Clone(currentObject).(O), tmpObject); err != nil {
+		return err
+	}
+	s.restoreProtectedMetadataForPublicAPIView(ctx, currentObject, tmpObject)
+	if err := s.validatePreparedCandidate(ctx, tmpObject, objectId, preparedMetadata); err != nil {
+		return err
+	}
+	if !sameFinalizers(
+		metadataFinalizers(s.getMetadata(tmpObject)),
+		preparedMetadata.GetFinalizers(),
+	) {
+		s.logger.ErrorContext(
+			ctx,
+			"Candidate preparation changed finalizers",
+			slog.String("id", objectId),
+		)
+		return grpcstatus.Errorf(
+			grpccodes.Internal,
+			"candidate preparation cannot change finalizers of object with identifier '%s'",
+			objectId,
+		)
+	}
 	return nil
 }
 

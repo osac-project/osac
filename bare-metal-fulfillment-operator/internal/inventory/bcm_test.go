@@ -1199,7 +1199,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			Expect(err).To(HaveOccurred())
 		})
 
-		It("returns nil,nil when BMH has no hardware details", func() {
+		It("errors when BMH has no hardware details, matching metal3", func() {
 			scheme := newTestScheme()
 			bmh := &metal3api.BareMetalHost{
 				ObjectMeta: metav1.ObjectMeta{Name: "node001", Namespace: bmhNamespace},
@@ -1207,16 +1207,14 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bmh).Build()
 			mgr := baremetalhost.NewManager(k8sClient, k8sClient, bmhNamespace)
 			client := NewBCMClient(mockAPI, mgr, "bcm")
-			nics, err := client.GetHostNICs(ctx, "osac-baremetal/node001")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(nics).To(BeNil())
+			_, err := client.GetHostNICs(ctx, "osac-baremetal/node001")
+			Expect(err).To(MatchError(ContainSubstring("node001 has no NIC inventory")))
 		})
 
-		It("returns nil,nil when BMH hardware.nics is empty", func() {
+		It("errors when BMH hardware.nics is empty, matching metal3", func() {
 			client := newClientWithNICs("node001") // no MACs
-			nics, err := client.GetHostNICs(ctx, "osac-baremetal/node001")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(nics).To(BeNil())
+			_, err := client.GetHostNICs(ctx, "osac-baremetal/node001")
+			Expect(err).To(MatchError(ContainSubstring("node001 has no NIC inventory")))
 		})
 
 		It("filters out NICs with empty MAC addresses", func() {

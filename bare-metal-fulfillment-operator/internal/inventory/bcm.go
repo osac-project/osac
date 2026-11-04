@@ -738,7 +738,6 @@ func (c *BCMClient) clearBCMAssignment(ctx context.Context, hostname, bareMetalI
 // GetHostNICs reads all NIC MAC addresses from the BareMetalHost CR hardware inspection data.
 // inventoryHostID must be in namespace/hostname format where hostname is the BMH name.
 // Reading from the BMH CR avoids a costly GetDevices round-trip to the BCM API.
-// Returns nil, nil when the BMH has no hardware inspection data (caller treats this as "NIC data unavailable").
 func (c *BCMClient) GetHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error) {
 	_, bmhName, err := ParseHostID(inventoryHostID)
 	if err != nil {
@@ -750,7 +749,7 @@ func (c *BCMClient) GetHostNICs(ctx context.Context, inventoryHostID string) ([]
 		return nil, fmt.Errorf("GetHostNICs: failed to get BMH %s: %w", bmhName, err)
 	}
 	if len(macs) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("BareMetalHost %s has no NIC inventory despite being allocated", bmhName)
 	}
 	nics := make([]HostNIC, 0, len(macs))
 	for _, mac := range macs {

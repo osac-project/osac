@@ -152,8 +152,9 @@ var _ = Describe("MCP authorized discovery", func() {
 			for _, item := range decoded.Items {
 				Expect(item).To(HaveKey("id"))
 				Expect(item).To(HaveKey("name"))
+				Expect(item).To(HaveKey("version"))
 				Expect(item).To(HaveKey("type"))
-				Expect(item).To(HaveLen(3))
+				Expect(item).To(HaveLen(4))
 			}
 		}
 
@@ -210,21 +211,7 @@ var _ = Describe("MCP authorized discovery", func() {
 func grantMCPDiscoveryTenantAdmin(ctx context.Context, username string) func(context.Context) {
 	GinkgoHelper()
 
-	roleStatus, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet, "/roles/tenant-admin", nil)
-	Expect(err).ToNot(HaveOccurred())
-	if roleStatus == http.StatusNotFound {
-		code, _, createErr := tool.KeycloakAdminRequest(
-			ctx, http.MethodPost, "/roles", map[string]any{"name": "tenant-admin"},
-		)
-		Expect(createErr).ToNot(HaveOccurred())
-		Expect(code).To(Equal(http.StatusCreated))
-		roleStatus, body, err = tool.KeycloakAdminRequest(ctx, http.MethodGet, "/roles/tenant-admin", nil)
-		Expect(err).ToNot(HaveOccurred())
-	}
-	Expect(roleStatus).To(Equal(http.StatusOK))
-
-	var role map[string]any
-	Expect(json.Unmarshal(body, &role)).To(Succeed())
+	role := getOrCreateKeycloakTenantAdminRole(ctx)
 	roleID, ok := role["id"].(string)
 	Expect(ok).To(BeTrue())
 	Expect(roleID).ToNot(BeEmpty())

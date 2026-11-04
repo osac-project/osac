@@ -10,7 +10,6 @@ import {
 export interface CatalogUserDataValue {
   source: 'inline' | 'secret';
   value: string;
-  secretId?: string;
 }
 
 export interface CatalogUserDataFormValues {
@@ -42,7 +41,6 @@ const readCatalogUserDataValue = (value: UserDataSource | undefined): CatalogUse
     return {
       source: 'secret',
       value: source.value?.name || '',
-      secretId: source.value?.id || undefined,
     };
   }
 

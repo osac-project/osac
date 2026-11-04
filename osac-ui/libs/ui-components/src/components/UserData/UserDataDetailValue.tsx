@@ -2,41 +2,32 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { CodeBlock, CodeBlockCode, ExpandableSection } from '@patternfly/react-core';
 
+import type { UserDataSource } from '@osac/types';
+
 import { useTranslation } from '../../hooks/useTranslation';
 import ResourceLink from '../Resource/ResourceLink';
 
-interface UserDataValue {
-  source: 'inline' | 'secret';
-  value: string;
-  secretId?: string;
-}
-
 interface UserDataDetailValueProps {
-  userData?: UserDataValue;
+  userData?: UserDataSource;
   emptyValue: ReactNode;
 }
 
 const UserDataDetailValue = ({ userData, emptyValue }: UserDataDetailValueProps) => {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
-  const hasValue = userData
-    ? userData.source === 'secret'
-      ? Boolean(userData.value.trim() || userData.secretId)
-      : Boolean(userData.value.trim())
-    : false;
+  const source = userData?.source;
+  if (source?.case === 'secret' && typeof source.value === 'object' && source.value) {
+    const secretLabel = source.value.name;
 
-  if (!userData || !hasValue) {
-    return emptyValue;
-  }
-
-  if (userData.source === 'secret') {
-    const secretLabel = userData.value.trim() || userData.secretId || t('Configured');
-
-    return userData.secretId ? (
-      <ResourceLink basePath="/secrets" id={userData.secretId} name={secretLabel} />
+    return source.value.id ? (
+      <ResourceLink basePath="/secrets" id={source.value.id} name={secretLabel} />
     ) : (
       secretLabel
     );
+  }
+
+  if (source?.case !== 'inline' || typeof source.value !== 'string' || !source.value.trim()) {
+    return emptyValue;
   }
 
   return (
@@ -47,7 +38,7 @@ const UserDataDetailValue = ({ userData, emptyValue }: UserDataDetailValueProps)
       toggleAriaLabel={isExpanded ? t('Collapse user data') : t('Expand user data')}
     >
       <CodeBlock>
-        <CodeBlockCode>{userData.value}</CodeBlockCode>
+        <CodeBlockCode>{source.value}</CodeBlockCode>
       </CodeBlock>
     </ExpandableSection>
   );

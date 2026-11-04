@@ -1,5 +1,8 @@
+import { create } from '@bufbuild/protobuf';
 import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+
+import { SecretLocalReferenceSchema, UserDataSourceSchema } from '@osac/types';
 
 import UserDataDetailValue from './UserDataDetailValue';
 import { renderWithProviders } from '../../test-utils/TestProviders';
@@ -14,7 +17,10 @@ describe('UserDataDetailValue', () => {
   it('expands inline user data and preserves whitespace', async () => {
     const userData = '  #cloud-config\nusers: []\n';
     const { user } = renderWithProviders(
-      <UserDataDetailValue userData={{ source: 'inline', value: userData }} emptyValue="—" />,
+      <UserDataDetailValue
+        userData={create(UserDataSourceSchema, { source: { case: 'inline', value: userData } })}
+        emptyValue="—"
+      />,
     );
 
     expect(screen.getByRole('button', { name: 'Expand user data' })).toHaveAttribute(
@@ -35,7 +41,15 @@ describe('UserDataDetailValue', () => {
   it('links Secret-backed user data to the Secret resource', () => {
     renderWithProviders(
       <UserDataDetailValue
-        userData={{ source: 'secret', value: 'cloud-init-secret', secretId: 'secret-1' }}
+        userData={create(UserDataSourceSchema, {
+          source: {
+            case: 'secret',
+            value: create(SecretLocalReferenceSchema, {
+              id: 'secret-1',
+              name: 'cloud-init-secret',
+            }),
+          },
+        })}
         emptyValue="—"
       />,
     );
@@ -50,7 +64,12 @@ describe('UserDataDetailValue', () => {
   it('shows a Secret name without a link when its ID is unavailable', () => {
     renderWithProviders(
       <UserDataDetailValue
-        userData={{ source: 'secret', value: 'cloud-init-secret' }}
+        userData={create(UserDataSourceSchema, {
+          source: {
+            case: 'secret',
+            value: create(SecretLocalReferenceSchema, { name: 'cloud-init-secret' }),
+          },
+        })}
         emptyValue="—"
       />,
     );

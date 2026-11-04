@@ -101,17 +101,6 @@ const VmDetailsCard = ({
   const memoryGib = instanceType?.spec?.memoryGib;
   const gpu = instanceType?.spec?.gpu;
   const hasWindowsGuest = guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_WINDOWS;
-  const userDataSource = vm.spec?.userDataSource?.source;
-  const userData =
-    userDataSource?.case === 'inline'
-      ? { source: 'inline' as const, value: userDataSource.value }
-      : userDataSource?.case === 'secret'
-        ? {
-            source: 'secret' as const,
-            value: userDataSource.value.name || '',
-            secretId: userDataSource.value.id || undefined,
-          }
-        : undefined;
   const canEdit = canEditInstanceType(vm);
   const editButton = (
     <Button
@@ -219,7 +208,10 @@ const VmDetailsCard = ({
                       )}
                     </DetailRow>
                     <DetailRow label={t('Cloud-init')}>
-                      <UserDataDetailValue userData={userData} emptyValue={EMPTY_VALUE} />
+                      <UserDataDetailValue
+                        userData={vm.spec?.userDataSource}
+                        emptyValue={EMPTY_VALUE}
+                      />
                     </DetailRow>
                   </>
                 )}

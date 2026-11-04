@@ -43,14 +43,15 @@ _NODE_PROVIDER_ID_DELAY = 30
 # install as failing and progressing, so allow it to settle before asserting.
 _HOSTED_CLUSTER_VERSION_RETRIES = 21
 _HOSTED_CLUSTER_VERSION_DELAY = 30
-# CVO's own view of the install, as HyperShift copies it onto the HostedCluster:
-# Succeeding/Available True and neither Failing nor Progressing.
+# CVO's own view of the install, as HyperShift splits it across two resources:
+# the HostedCluster gains Succeeding but never records Failing, which only the
+# HostedControlPlane publishes. Both are read, since neither alone is complete.
 _HOSTED_CLUSTER_VERSION_CONDITIONS = {
     "ClusterVersionSucceeding": "True",
     "ClusterVersionAvailable": "True",
-    "ClusterVersionFailing": "False",
     "ClusterVersionProgressing": "False",
 }
+_HOSTED_CONTROL_PLANE_VERSION_CONDITIONS = {"ClusterVersionFailing": "False"}
 
 
 def unique_name(prefix: str) -> str:
@@ -863,26 +864,42 @@ def wait_for_hosted_cluster_reference(*, k8s: K8sClient, co_name: str) -> tuple[
     )
 
 
+def _version_conditions(resource: dict[str, Any], expected: dict[str, str]) -> dict[str, str]:
+    return {condition_type: _condition_status(resource, condition_type) for condition_type in expected}
+
+
 def hosted_cluster_version_conditions(hosted_cluster: dict[str, Any]) -> dict[str, str]:
-    return {
-        condition_type: _condition_status(hosted_cluster, condition_type)
-        for condition_type in _HOSTED_CLUSTER_VERSION_CONDITIONS
-    }
+    """The CVO conditions HyperShift publishes on the HostedCluster."""
+    return _version_conditions(hosted_cluster, _HOSTED_CLUSTER_VERSION_CONDITIONS)
 
 
-def hosted_cluster_version_conditions_settled(hosted_cluster: dict[str, Any]) -> bool:
-    return hosted_cluster_version_conditions(hosted_cluster) == _HOSTED_CLUSTER_VERSION_CONDITIONS
+def hosted_control_plane_version_conditions(hosted_control_plane: dict[str, Any]) -> dict[str, str]:
+    """The CVO conditions HyperShift publishes only on the HostedControlPlane."""
+    return _version_conditions(hosted_control_plane, _HOSTED_CONTROL_PLANE_VERSION_CONDITIONS)
+
+
+def hosted_cluster_version_conditions_settled(
+    hosted_cluster: dict[str, Any], hosted_control_plane: dict[str, Any]
+) -> bool:
+    return (
+        hosted_cluster_version_conditions(hosted_cluster) == _HOSTED_CLUSTER_VERSION_CONDITIONS
+        and hosted_control_plane_version_conditions(hosted_control_plane) == _HOSTED_CONTROL_PLANE_VERSION_CONDITIONS
+    )
 
 
 def wait_for_hosted_cluster_version_health(*, k8s: K8sClient, name: str, namespace: str) -> None:
     """Require CVO's install conditions, bubbled up by HyperShift, to be healthy."""
+    control_plane_namespace = f"{namespace}-{name}"
+    want = _HOSTED_CLUSTER_VERSION_CONDITIONS | _HOSTED_CONTROL_PLANE_VERSION_CONDITIONS
     observed: dict[str, str] = {}
 
     def _check() -> bool:
         hosted_cluster = k8s.get_json(resource="hostedcluster", name=name, namespace=namespace)
+        hosted_control_plane = k8s.get_json(resource="hostedcontrolplane", name=name, namespace=control_plane_namespace)
         observed.clear()
         observed.update(hosted_cluster_version_conditions(hosted_cluster))
-        return observed == _HOSTED_CLUSTER_VERSION_CONDITIONS
+        observed.update(hosted_control_plane_version_conditions(hosted_control_plane))
+        return hosted_cluster_version_conditions_settled(hosted_cluster, hosted_control_plane)
 
     try:
         poll_until(
@@ -890,15 +907,16 @@ def wait_for_hosted_cluster_version_health(*, k8s: K8sClient, name: str, namespa
             until=lambda settled: settled is True,
             retries=_HOSTED_CLUSTER_VERSION_RETRIES,
             delay=_HOSTED_CLUSTER_VERSION_DELAY,
-            description=f"{name} HostedCluster ClusterVersion conditions",
+            description=f"{name} ClusterVersion conditions",
             retry_on_error=True,
             resource_kind=WaitResourceKind.HOSTED_CONTROL_PLANE,
             resource_id=name,
         )
     except TimeoutError:
         raise AssertionError(
-            f"{name} HostedCluster ClusterVersion conditions did not settle: "
-            f"observed {observed}, want {_HOSTED_CLUSTER_VERSION_CONDITIONS}"
+            f"{name} ClusterVersion conditions did not settle: observed {observed}, want {want} "
+            f"(Succeeding/Available/Progressing from the HostedCluster, Failing from the "
+            f"HostedControlPlane in {control_plane_namespace})"
         ) from None
 
 

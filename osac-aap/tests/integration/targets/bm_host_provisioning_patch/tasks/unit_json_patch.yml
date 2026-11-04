@@ -1,4 +1,8 @@
 ---
+# Self-test of the test-only kubernetes.core.k8s_json_patch fixture, not of
+# the role: removing a JSON pointer that does not exist must fail, the way
+# the real API server rejects it (RFC 6902). The pointer targets a synthetic
+# annotation key so it can never collide with a path the role really manages.
 - name: Exercise the fake kubernetes.core.k8s_json_patch boundary
   hosts: localhost
   gather_facts: false
@@ -13,4 +17,4 @@
         name: test-bmh
         patch:
           - op: remove
-            path: /spec/rootDeviceHints
+            path: /metadata/annotations/osac.test~1never-present

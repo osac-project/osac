@@ -256,6 +256,10 @@ def test_delete_clears_generated_root_device_hint(tmp_path):
 
 
 def test_json_patch_rejects_remove_on_missing_path(tmp_path):
+    # unit_json_patch.yml calls the fake module directly, with no role tasks:
+    # it proves the fixture rejects a remove on an absent pointer the way the
+    # real API server does, so a lenient fake can never silently accept an
+    # invalid role patch.
     result, _ = run_role(
         tmp_path,
         "unit_json_patch.yml",

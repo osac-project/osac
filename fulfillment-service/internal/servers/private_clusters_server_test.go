@@ -5728,6 +5728,33 @@ var _ = Describe("Private clusters server", func() {
 				Expect(updated.GetStatus().GetNodeSets()["compute"].GetObservedVersion()).To(Equal("4.17.0"))
 			})
 
+			It("persists independent observed-version feedback without changing upgrade intent or history", func() {
+				cluster := createCluster()
+				initialSpec := proto.Clone(cluster.GetSpec())
+				initialHistory := proto.Clone(cluster.GetStatus()).(*privatev1.ClusterStatus).GetUpgradeHistory()
+				incomingStatus := proto.Clone(cluster.GetStatus()).(*privatev1.ClusterStatus)
+				incomingStatus.SetObservedVersion("4.17.1")
+				for _, nodeSet := range incomingStatus.GetNodeSets() {
+					nodeSet.SetObservedVersion("4.17.1")
+				}
+				updated, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{Id: cluster.GetId(), Status: incomingStatus}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+						"status.observed_version", "status.node_sets",
+					}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updated.GetObject().GetStatus().GetObservedVersion()).To(Equal("4.17.1"))
+				for _, nodeSet := range updated.GetObject().GetStatus().GetNodeSets() {
+					Expect(nodeSet.GetObservedVersion()).To(Equal("4.17.1"))
+				}
+				stored, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(stored.GetObject().GetSpec(), initialSpec)).To(BeTrue())
+				Expect(stored.GetObject().GetStatus().GetUpgradeHistory()).To(Equal(initialHistory))
+				Expect(stored.GetObject().GetStatus().GetState()).To(Equal(cluster.GetStatus().GetState()))
+			})
+
 			It("keeps independent component IDs and newest-first history", func() {
 				cluster := createCluster()
 				seedNextVersion()

@@ -1,21 +1,17 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from typing import Any
 
 import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
-from tests.e2e.core.helpers import (
-    assert_grpc_rejected,
-    unique_name,
-    wait_for_cr,
-    wait_for_deletion,
-    wait_for_grpc_removal,
-    wait_for_provision,
-)
+from tests.e2e.core.helpers import assert_grpc_rejected, unique_name, wait_for_cr, wait_for_deletion, wait_for_provision
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
+from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.regression
 
@@ -167,7 +163,25 @@ def test_compute_instance_multiple_disks_different_tiers(
         if ci_name is not None:
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
 
-    wait_for_grpc_removal(grpc=grpc, uuid=uuid)
+    def instance_is_absent() -> bool:
+        try:
+            grpc.get_compute_instance(ci_id=uuid)
+        except subprocess.CalledProcessError as exc:
+            output = (exc.stderr or "") + "\n" + (exc.stdout or "")
+            if re.search(r"(?m)^[ \t]*Code:[ \t]*NotFound[ \t]*$", output):
+                return True
+            raise
+        return False
+
+    poll_until(
+        fn=instance_is_absent,
+        until=lambda gone: gone is True,
+        retries=30,
+        delay=2,
+        description=f"ComputeInstance {uuid} API deletion",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=uuid,
+    )
     for volume_id in volume_ids.values():
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
             private_grpc.call(service=f"{PRIVATE_API}.Volumes/Get", data={"id": volume_id})

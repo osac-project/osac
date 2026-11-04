@@ -27,6 +27,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -398,42 +399,15 @@ func validateSecurityRule(rule *privatev1.SecurityRule, ruleType string, index i
 			"%s rule at index %d is nil", ruleType, index)
 	}
 
-	switch rule.GetProtocol() {
-	case privatev1.Protocol_PROTOCOL_TCP, privatev1.Protocol_PROTOCOL_UDP:
-		if !rule.HasPortFrom() || !rule.HasPortTo() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%s rule at index %d: tcp and udp rules require port_from and port_to", ruleType, index)
-		}
-		portFrom := rule.GetPortFrom()
-		portTo := rule.GetPortTo()
-		if portFrom < 1 || portFrom > 65535 {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%s rule at index %d: port_from must be between 1 and 65535", ruleType, index)
-		}
-		if portTo < 1 || portTo > 65535 {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%s rule at index %d: port_to must be between 1 and 65535", ruleType, index)
-		}
-		if portFrom > portTo {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%s rule at index %d: port_from (%d) cannot be greater than port_to (%d)",
-				ruleType, index, portFrom, portTo)
-		}
-	case privatev1.Protocol_PROTOCOL_ICMP, privatev1.Protocol_PROTOCOL_ALL:
-		if rule.HasPortFrom() || rule.HasPortTo() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%s rule at index %d: icmp and all rules must not set port_from or port_to", ruleType, index)
-		}
-	default:
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"%s rule at index %d: protocol is required", ruleType, index)
-	}
-
-	if rule.GetIpv4Cidr() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"%s rule at index %d: ipv4_cidr is required and must be a canonical IPv4 CIDR", ruleType, index)
-	}
-	if _, err := parseAndValidateCanonicalCIDR(rule.GetIpv4Cidr(), cidrIPv4); err != nil {
+	err := validation.ValidateSecurityRule(validation.SecurityRule{
+		Protocol:    validation.SecurityRuleProtocol(rule.GetProtocol()),
+		PortFrom:    rule.GetPortFrom(),
+		PortTo:      rule.GetPortTo(),
+		HasPortFrom: rule.HasPortFrom(),
+		HasPortTo:   rule.HasPortTo(),
+		IPv4CIDR:    rule.GetIpv4Cidr(),
+	}, ruleType, index)
+	if err != nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"%s rule at index %d: %v", ruleType, index, err)
 	}

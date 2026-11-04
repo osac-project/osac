@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 )
 
 // NetworkingSettings holds the installation settings that the networking and workload servers check. The values come
@@ -49,8 +51,8 @@ func ParseExcludedIPv4CIDRs(values []string) (result []netip.Prefix, err error) 
 		if value == "" {
 			continue
 		}
-		prefix, parseErr := netip.ParsePrefix(value)
-		if parseErr != nil || !prefix.Addr().Is4() || prefix.Masked() != prefix || prefix.String() != value {
+		prefix, parseErr := validation.ParseCanonicalIPv4CIDR(value)
+		if parseErr != nil {
 			err = fmt.Errorf("excludedIpv4Cidrs value '%s' is not a canonical IPv4 CIDR", value)
 			return
 		}

@@ -31,14 +31,13 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/role_binding_type.proto.
  */
 export const file_osac_private_v1_role_binding_type: GenFile = /*@__PURE__*/
-  fileDesc("Cidvc2FjL3ByaXZhdGUvdjEvcm9sZV9iaW5kaW5nX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKwAQoLUm9sZUJpbmRpbmcSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESLgoEc3BlYxgDIAEoCzIgLm9zYWMucHJpdmF0ZS52MS5Sb2xlQmluZGluZ1NwZWMSOAoGc3RhdHVzGAQgASgLMiIub3NhYy5wcml2YXRlLnYxLlJvbGVCaW5kaW5nU3RhdHVzQgTiQQEDIm4KD1JvbGVCaW5kaW5nU3BlYxIsCgRyb2xlGAEgASgLMh4ub3NhYy5wcml2YXRlLnYxLlJvbGVSZWZlcmVuY2USLQoFdXNlcnMYAiADKAsyHi5vc2FjLnByaXZhdGUudjEuVXNlclJlZmVyZW5jZSKeAQoRUm9sZUJpbmRpbmdTdGF0dXMSMAoFc3RhdGUYASABKA4yIS5vc2FjLnByaXZhdGUudjEuUm9sZUJpbmRpbmdTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQESNQoFdXNlcnMYAyADKAsyHi5vc2FjLnByaXZhdGUudjEuVXNlclJlZmVyZW5jZUIGirUYAggBQgoKCF9tZXNzYWdlKpMBChBSb2xlQmluZGluZ1N0YXRlEiIKHlJPTEVfQklORElOR19TVEFURV9VTlNQRUNJRklFRBAAEh4KGlJPTEVfQklORElOR19TVEFURV9QRU5ESU5HEAESHAoYUk9MRV9CSU5ESU5HX1NUQVRFX1JFQURZEAISHQoZUk9MRV9CSU5ESU5HX1NUQVRFX0ZBSUxFRBADQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_role_type, file_osac_private_v1_user_type]);
+  fileDesc("Cidvc2FjL3ByaXZhdGUvdjEvcm9sZV9iaW5kaW5nX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKwAQoLUm9sZUJpbmRpbmcSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESLgoEc3BlYxgDIAEoCzIgLm9zYWMucHJpdmF0ZS52MS5Sb2xlQmluZGluZ1NwZWMSOAoGc3RhdHVzGAQgASgLMiIub3NhYy5wcml2YXRlLnYxLlJvbGVCaW5kaW5nU3RhdHVzQgTiQQEDIrIBCg9Sb2xlQmluZGluZ1NwZWMSLAoEcm9sZRgBIAEoCzIeLm9zYWMucHJpdmF0ZS52MS5Sb2xlUmVmZXJlbmNlEi0KBXVzZXJzGAIgAygLMh4ub3NhYy5wcml2YXRlLnYxLlVzZXJSZWZlcmVuY2USQgoQc2VydmljZV9hY2NvdW50cxgDIAMoCzIoLm9zYWMucHJpdmF0ZS52MS5TZXJ2aWNlQWNjb3VudFJlZmVyZW5jZSIlChdTZXJ2aWNlQWNjb3VudFJlZmVyZW5jZRIKCgJpZBgBIAEoCSKeAQoRUm9sZUJpbmRpbmdTdGF0dXMSMAoFc3RhdGUYASABKA4yIS5vc2FjLnByaXZhdGUudjEuUm9sZUJpbmRpbmdTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQESNQoFdXNlcnMYAyADKAsyHi5vc2FjLnByaXZhdGUudjEuVXNlclJlZmVyZW5jZUIGirUYAggBQgoKCF9tZXNzYWdlKpMBChBSb2xlQmluZGluZ1N0YXRlEiIKHlJPTEVfQklORElOR19TVEFURV9VTlNQRUNJRklFRBAAEh4KGlJPTEVfQklORElOR19TVEFURV9QRU5ESU5HEAESHAoYUk9MRV9CSU5ESU5HX1NUQVRFX1JFQURZEAISHQoZUk9MRV9CSU5ESU5HX1NUQVRFX0ZBSUxFRBADQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_role_type, file_osac_private_v1_user_type]);
 
 /**
- * Represents a binding between a role and a set of users.
+ * Represents a binding between a role and a set of subjects.
  *
- * A RoleBinding grants the permissions defined by its referenced role to the users listed in its spec. This is
- * the mechanism by which roles are assigned to users, enabling those users to perform the actions permitted by
- * the role.
+ * A RoleBinding grants the permissions defined by its referenced role to the users and service accounts listed in its
+ * spec.
  *
  * @generated from message osac.private.v1.RoleBinding
  */
@@ -87,7 +86,7 @@ export const RoleBindingSchema: GenMessage<RoleBinding> = /*@__PURE__*/
 export type RoleBindingSpec = Message<"osac.private.v1.RoleBindingSpec"> & {
   /**
    * Reference to the role that this binding refers to. This determines which permissions are granted to the
-   * users listed below.
+   * subjects listed below.
    *
    * @generated from field: osac.private.v1.RoleReference role = 1;
    */
@@ -103,6 +102,16 @@ export type RoleBindingSpec = Message<"osac.private.v1.RoleBindingSpec"> & {
    * @generated from field: repeated osac.private.v1.UserReference users = 2;
    */
   users: UserReference[];
+
+  /**
+   * References to the service accounts that are granted the permissions defined by the role.
+   *
+   * To grant a role to a service account, create a RoleBinding with the desired role and include the service account's
+   * ID in this list. Service account grants are evaluated by Fulfillment and are not synchronized to Keycloak roles.
+   *
+   * @generated from field: repeated osac.private.v1.ServiceAccountReference service_accounts = 3;
+   */
+  serviceAccounts: ServiceAccountReference[];
 };
 
 /**
@@ -111,6 +120,27 @@ export type RoleBindingSpec = Message<"osac.private.v1.RoleBindingSpec"> & {
  */
 export const RoleBindingSpecSchema: GenMessage<RoleBindingSpec> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_role_binding_type, 1);
+
+/**
+ * Reference to a tenant-owned service account.
+ *
+ * @generated from message osac.private.v1.ServiceAccountReference
+ */
+export type ServiceAccountReference = Message<"osac.private.v1.ServiceAccountReference"> & {
+  /**
+   * Unique identifier assigned by the server.
+   *
+   * @generated from field: string id = 1;
+   */
+  id: string;
+};
+
+/**
+ * Describes the message osac.private.v1.ServiceAccountReference.
+ * Use `create(ServiceAccountReferenceSchema)` to create a new message.
+ */
+export const ServiceAccountReferenceSchema: GenMessage<ServiceAccountReference> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_role_binding_type, 2);
 
 /**
  * Current observed state of a role binding, reflecting its synchronization with the underlying authorization system.
@@ -148,7 +178,7 @@ export type RoleBindingStatus = Message<"osac.private.v1.RoleBindingStatus"> & {
  * Use `create(RoleBindingStatusSchema)` to create a new message.
  */
 export const RoleBindingStatusSchema: GenMessage<RoleBindingStatus> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_role_binding_type, 2);
+  messageDesc(file_osac_private_v1_role_binding_type, 3);
 
 /**
  * Synchronization states for RoleBinding objects with the underlying authorization system.

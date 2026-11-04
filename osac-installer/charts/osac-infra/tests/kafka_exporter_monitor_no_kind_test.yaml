@@ -1,0 +1,13 @@
+suite: kafka exporter PodMonitor with only the monitoring API group
+templates:
+  - templates/kafka-exporter-monitor.yaml
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1
+tests:
+  - it: renders nothing when the PodMonitor kind is absent
+    set:
+      kafka.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0

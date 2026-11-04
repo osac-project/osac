@@ -6,9 +6,10 @@ revoked as chart values.
 The user reads the heartbeat topic prefix osac.metering.heartbeat. and one
 consumer group named after the reader. The prefix covers every tenant,
 including tenants created after the grant, so onboarding a tenant needs no
-chart change. It gets no write ACL and no access to the raw event log or the
-dead-letter topics. The group name is the reader name, so the lag Strimzi's
-Kafka exporter reports maps to the reader.
+chart change. Deny ACLs take back the system and shared tenants, whose topics
+exist but whose usage is never billed. It gets no write ACL and no access to
+the raw event log or the dead-letter topics. The group name is the reader name,
+so the lag Strimzi's Kafka exporter reports maps to the reader.
 
 Names are rejected when they repeat, are not a lowercase DNS name, or collide
 with a KafkaUser OSAC owns. A collision would let a reader replace an OSAC
@@ -59,6 +60,22 @@ spec:
           - Read
           - Describe
         host: "*"
+      {{- /*
+      The system and shared tenants are platform-internal and never billed.
+      Kafka denies a matching resource even when a prefix allow covers it, so
+      these two entries keep the reader inside the billing boundary.
+      */}}
+      {{- range list "system" "shared" }}
+      - resource:
+          type: topic
+          name: {{ printf "osac.metering.heartbeat.%s" . }}
+          patternType: literal
+        operations:
+          - Read
+          - Describe
+        type: deny
+        host: "*"
+      {{- end }}
       - resource:
           type: group
           name: {{ $name }}

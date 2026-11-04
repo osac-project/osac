@@ -12,9 +12,9 @@ compliance with the License. You may obtain a copy of the License at
 // quantity per tenant, and prints the totals. It is the worked example from
 // the metering event contract, not a production adapter.
 //
-// It stops with a non-zero exit when it cannot read an event. The unread event
-// stays uncommitted, so the reader sees it again on the next run rather than
-// dropping it.
+// It stops with a non-zero exit when it cannot read an event. Nothing is
+// committed before the bill prints, so a failed run leaves every event it read
+// uncommitted and the next run reads them again rather than dropping them.
 //
 // The reader lists the heartbeat topics once at startup. A tenant created
 // after it starts is read on the next restart, not during this run.
@@ -40,6 +40,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -78,9 +79,9 @@ func main() {
 		log.Fatalf("%v", err)
 	}
 	config.Consumer.Offsets.Initial = startOffset
-	// Marks are set only after a successful sum, so auto-commit never moves
-	// past an event this reader could not read.
-	config.Consumer.Offsets.AutoCommit.Enable = true
+	// Auto-commit stays off. The handler marks each event after a successful
+	// sum and commits the marks only after the bill prints, so a run that fails
+	// never moves the group past usage it did not print.
 
 	client, err := sarama.NewClient(kafka.SplitAndTrimBrokers(brokers, ","), config)
 	if err != nil {
@@ -116,10 +117,12 @@ func main() {
 	defer cancel()
 
 	handler := &consumer{
-		totals: NewTotals(),
-		idle:   idleTimeout,
-		cancel: cancel,
-		logger: logger,
+		totals:     NewTotals(),
+		idle:       idleTimeout,
+		cancel:     cancel,
+		runContext: runCtx,
+		output:     os.Stdout,
+		logger:     logger,
 	}
 
 	// The consumer group reports fetch and authorization failures here when
@@ -145,18 +148,15 @@ func main() {
 		}
 	}
 
-	// A failed run must not look like a completed bill: print the totals only
-	// after a clean stop. The counts go to the log for diagnosis.
+	// A failed run must not look like a completed bill. The bill prints from
+	// Cleanup, where the offsets are still open for commit.
 	if err := handler.firstError(); err != nil {
 		accepted, repeats := handler.totals.Counts()
 		logger.Printf("summed %d events, dropped %d repeats before the error", accepted, repeats)
 		log.Fatalf("reader stopped: %v", err)
 	}
-
-	accepted, repeats := handler.totals.Counts()
-	logger.Printf("summed %d events, dropped %d repeats", accepted, repeats)
-	if err := handler.totals.Print(os.Stdout); err != nil {
-		log.Fatalf("printing totals: %v", err)
+	if !handler.printed {
+		log.Fatalf("reader stopped without printing a bill")
 	}
 }
 
@@ -178,10 +178,13 @@ func initialOffset(value string) (int64, error) {
 // heartbeat topics, so the idle timer is shared and reset by any message, and
 // the totals and first error are mutex-guarded.
 type consumer struct {
-	totals *Totals
-	idle   time.Duration
-	cancel context.CancelFunc
-	logger *log.Logger
+	totals     *Totals
+	idle       time.Duration
+	cancel     context.CancelFunc
+	runContext context.Context
+	output     io.Writer
+	logger     *log.Logger
+	printed    bool
 
 	timerMu sync.Mutex
 	timer   *time.Timer
@@ -197,12 +200,29 @@ func (c *consumer) Setup(sarama.ConsumerGroupSession) error {
 	return nil
 }
 
-func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error {
+// Cleanup prints the bill and commits the offsets it covers. Sarama commits
+// only inside a session, so this is the one place both can happen in order.
+// A rebalance also calls Cleanup, and there the run continues: the totals stay,
+// the offsets stay uncommitted, and the next session reads the same events
+// again and drops them as repeats.
+func (c *consumer) Cleanup(session sarama.ConsumerGroupSession) error {
 	c.timerMu.Lock()
 	if c.timer != nil {
 		c.timer.Stop()
 	}
 	c.timerMu.Unlock()
+
+	if c.runContext.Err() == nil || c.firstError() != nil {
+		return nil
+	}
+
+	accepted, repeats := c.totals.Counts()
+	c.logger.Printf("summed %d events, dropped %d repeats", accepted, repeats)
+	if err := c.totals.Print(c.output); err != nil {
+		return fmt.Errorf("printing totals: %w", err)
+	}
+	c.printed = true
+	session.Commit()
 	return nil
 }
 

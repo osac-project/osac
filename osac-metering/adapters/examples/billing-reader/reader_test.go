@@ -11,7 +11,11 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"io"
+	"log"
 	"sync"
 	"time"
 
@@ -291,5 +295,101 @@ var _ = Describe("initialOffset", func() {
 	It("rejects anything else", func() {
 		_, err := initialOffset("beginning")
 		Expect(err).To(MatchError(ContainSubstring(`invalid READER_START_OFFSET "beginning"`)))
+	})
+})
+
+// fakeSession records whether Cleanup committed, and whether the bill had
+// already reached the output at that moment.
+type fakeSession struct {
+	ctx             context.Context
+	output          *bytes.Buffer
+	committed       bool
+	printedAtCommit bool
+}
+
+func (s *fakeSession) Claims() map[string][]int32                  { return nil }
+func (s *fakeSession) MemberID() string                            { return "" }
+func (s *fakeSession) GenerationID() int32                         { return 0 }
+func (s *fakeSession) MarkOffset(string, int32, int64, string)     {}
+func (s *fakeSession) ResetOffset(string, int32, int64, string)    {}
+func (s *fakeSession) MarkMessage(*sarama.ConsumerMessage, string) {}
+func (s *fakeSession) Context() context.Context                    { return s.ctx }
+
+func (s *fakeSession) Commit() {
+	s.committed = true
+	s.printedAtCommit = s.output.Len() > 0
+}
+
+// failingWriter fails every write, like a closed stdout.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
+func newTestConsumer(runContext context.Context, output io.Writer) *consumer {
+	return &consumer{
+		totals:     NewTotals(),
+		idle:       time.Minute,
+		cancel:     func() {},
+		runContext: runContext,
+		output:     output,
+		logger:     log.New(io.Discard, "", 0),
+	}
+}
+
+var _ = Describe("consumer Cleanup", func() {
+	It("prints the bill before it commits the offsets", func() {
+		runContext, cancel := context.WithCancel(context.Background())
+		cancel()
+		var output bytes.Buffer
+		handler := newTestConsumer(runContext, &output)
+		_, err := handler.totals.Add(heartbeat("event-1", "60.000000", smallDimensions))
+		Expect(err).NotTo(HaveOccurred())
+		session := &fakeSession{ctx: runContext, output: &output}
+
+		Expect(handler.Cleanup(session)).To(Succeed())
+		Expect(output.String()).To(ContainSubstring("BILLABLE TOTAL acme: 60.000000 second"))
+		Expect(session.committed).To(BeTrue())
+		Expect(session.printedAtCommit).To(BeTrue())
+		Expect(handler.printed).To(BeTrue())
+	})
+
+	It("keeps the offsets open while a rebalance leaves the run going", func() {
+		var output bytes.Buffer
+		handler := newTestConsumer(context.Background(), &output)
+		_, err := handler.totals.Add(heartbeat("event-1", "60.000000", smallDimensions))
+		Expect(err).NotTo(HaveOccurred())
+		session := &fakeSession{ctx: context.Background(), output: &output}
+
+		Expect(handler.Cleanup(session)).To(Succeed())
+		Expect(output.Len()).To(BeZero())
+		Expect(session.committed).To(BeFalse())
+		Expect(handler.printed).To(BeFalse())
+	})
+
+	It("prints and commits nothing after a failed run", func() {
+		runContext, cancel := context.WithCancel(context.Background())
+		cancel()
+		var output bytes.Buffer
+		handler := newTestConsumer(runContext, &output)
+		handler.recordError(errors.New("decoding message"))
+		session := &fakeSession{ctx: runContext, output: &output}
+
+		Expect(handler.Cleanup(session)).To(Succeed())
+		Expect(output.Len()).To(BeZero())
+		Expect(session.committed).To(BeFalse())
+	})
+
+	It("does not commit when the bill cannot be printed", func() {
+		runContext, cancel := context.WithCancel(context.Background())
+		cancel()
+		handler := newTestConsumer(runContext, failingWriter{})
+		_, err := handler.totals.Add(heartbeat("event-1", "60.000000", smallDimensions))
+		Expect(err).NotTo(HaveOccurred())
+		session := &fakeSession{ctx: runContext, output: &bytes.Buffer{}}
+
+		Expect(handler.Cleanup(session)).To(MatchError(ContainSubstring("write failed")))
+		Expect(session.committed).To(BeFalse())
 	})
 })

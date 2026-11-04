@@ -29,6 +29,18 @@ tests:
             - Describe
       - equal:
           path: spec.authorization.acls[1].resource.name
+          value: osac.metering.heartbeat.system
+      - equal:
+          path: spec.authorization.acls[1].type
+          value: deny
+      - equal:
+          path: spec.authorization.acls[2].resource.name
+          value: osac.metering.heartbeat.shared
+      - equal:
+          path: spec.authorization.acls[2].type
+          value: deny
+      - equal:
+          path: spec.authorization.acls[3].resource.name
           value: billing-reader
 
   - it: rejects a tenant field, because one reader covers every tenant

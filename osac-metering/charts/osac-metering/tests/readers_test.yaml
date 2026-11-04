@@ -34,8 +34,9 @@ tests:
       - equal:
           path: spec.authorization.type
           value: simple
-      # Exactly two ACLs: read and describe on the heartbeat topic prefix, and
-      # read on the reader's consumer group. No write, no other topic.
+      # Exactly four ACLs: read and describe on the heartbeat topic prefix,
+      # deny on the two built-in tenant topics, and read on the consumer
+      # group. No write, no other topic.
       - equal:
           path: spec.authorization.acls
           value:
@@ -46,6 +47,24 @@ tests:
               operations:
                 - Read
                 - Describe
+              host: "*"
+            - resource:
+                type: topic
+                name: osac.metering.heartbeat.system
+                patternType: literal
+              operations:
+                - Read
+                - Describe
+              type: deny
+              host: "*"
+            - resource:
+                type: topic
+                name: osac.metering.heartbeat.shared
+                patternType: literal
+              operations:
+                - Read
+                - Describe
+              type: deny
               host: "*"
             - resource:
                 type: group
@@ -76,7 +95,7 @@ tests:
           value: prefix
         documentIndex: 0
       - equal:
-          path: spec.authorization.acls[1].resource.name
+          path: spec.authorization.acls[3].resource.name
           value: billing-reader
         documentIndex: 0
       - equal:
@@ -88,7 +107,7 @@ tests:
           value: osac.metering.heartbeat.
         documentIndex: 1
       - equal:
-          path: spec.authorization.acls[1].resource.name
+          path: spec.authorization.acls[3].resource.name
           value: audit-reader
         documentIndex: 1
 

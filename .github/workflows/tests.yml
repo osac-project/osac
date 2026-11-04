@@ -579,6 +579,12 @@ jobs:
           mkdir -p "${plugin_dir}"
           tar -xzf "${archive}" -C "${plugin_dir}"
           helm unittest charts/osac
+          # The metering chart's reader grants are values an admin sets on the
+          # umbrella chart, and the infra chart owns the Kafka exporter the
+          # reader lag alert reads, so both suites run here too.
+          helm unittest ../osac-metering/charts/osac-metering
+          ../osac-metering/scripts/test-readers-render.sh
+          helm unittest charts/osac-infra
       - name: Test preflight rendering
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer

@@ -2,12 +2,7 @@ import { create } from '@bufbuild/protobuf';
 import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type {
-  ComputeInstance,
-  ExternalIP,
-  ExternalIPAttachmentsCreateRequest,
-  ExternalIPAttachmentsCreateResponse,
-} from '@osac/types';
+import type { ComputeInstance, ExternalIP, ExternalIPAttachmentsCreateRequest } from '@osac/types';
 import { ExternalIPAttachmentsCreateResponseSchema, ExternalIPState } from '@osac/types';
 
 import AttachExternalIpModal from './AttachExternalIpModal';
@@ -29,20 +24,15 @@ const eligibleIp = {
 
 const renderModal = ({
   onClose = vi.fn(),
-  onPendingChange = vi.fn(),
   transportOverrides,
 }: {
   onClose?: () => void;
-  onPendingChange?: (isPending: boolean) => void;
   transportOverrides?: MockTransportOverrides;
 } = {}) =>
-  renderWithProviders(
-    <AttachExternalIpModal vm={vm} onClose={onClose} onPendingChange={onPendingChange} />,
-    {
-      apiFixtures: { externalIps: [eligibleIp] },
-      transportOverrides,
-    },
-  );
+  renderWithProviders(<AttachExternalIpModal vm={vm} onClose={onClose} />, {
+    apiFixtures: { externalIps: [eligibleIp] },
+    transportOverrides,
+  });
 
 describe('AttachExternalIpModal', () => {
   it('submits an attachment for the auto-selected unattached IP', async () => {
@@ -77,32 +67,5 @@ describe('AttachExternalIpModal', () => {
     await waitFor(() => {
       expect(onClose).toHaveBeenCalled();
     });
-  });
-
-  it('reports attachment creation while the request is pending', async () => {
-    const onPendingChange = vi.fn();
-    let resolveCreate: (response: ExternalIPAttachmentsCreateResponse) => void = () => undefined;
-    const createPromise = new Promise<ExternalIPAttachmentsCreateResponse>((resolve) => {
-      resolveCreate = resolve;
-    });
-    const { user } = renderModal({
-      onPendingChange,
-      transportOverrides: {
-        onExternalIpAttachmentCreate: () => createPromise,
-      },
-    });
-
-    await waitFor(() => {
-      expect(getResourceSelectCombobox(/^External IP/)).toHaveValue('edge-ip');
-    });
-    await user.click(screen.getByRole('button', { name: /^Attach$/ }));
-
-    await waitFor(() => expect(onPendingChange).toHaveBeenLastCalledWith(true));
-    resolveCreate(
-      create(ExternalIPAttachmentsCreateResponseSchema, {
-        object: { id: 'attachment-1' },
-      }),
-    );
-    await waitFor(() => expect(onPendingChange).toHaveBeenLastCalledWith(false));
   });
 });

@@ -32,7 +32,6 @@ const EMPTY_VALUE = '-';
 const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
   const { t } = useTranslation();
   const [attachOpen, setAttachOpen] = useState(false);
-  const [isAttachPending, setIsAttachPending] = useState(false);
   const [detachOpen, setDetachOpen] = useState(false);
   const {
     data: attachmentResponse,
@@ -60,21 +59,14 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
     typeof attachment?.status?.message === 'string'
       ? attachment.status.message
       : t('The external IP attachment could not be provisioned.');
-  const actionDisabled = isLoading || isAttachPending || Boolean(error) || attachmentMissing;
+  const actionDisabled = isLoading || Boolean(error) || attachmentMissing;
   const closeAttach = () => {
     setAttachOpen(false);
-    setIsAttachPending(false);
   };
 
   return (
     <>
-      {attachOpen ? (
-        <AttachExternalIpModal
-          vm={vm}
-          onClose={closeAttach}
-          onPendingChange={setIsAttachPending}
-        />
-      ) : null}
+      {attachOpen ? <AttachExternalIpModal vm={vm} onClose={closeAttach} /> : null}
       {detachOpen && attachment ? (
         <DetachExternalIpModal attachment={attachment} onClose={() => setDetachOpen(false)} />
       ) : null}
@@ -109,7 +101,7 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
                   <Button
                     variant="secondary"
                     isDisabled={actionDisabled || !canAttach}
-                    isLoading={isLoading || isAttachPending}
+                    isLoading={isLoading}
                     onClick={() => setAttachOpen(true)}
                   >
                     {t('Attach external IP')}

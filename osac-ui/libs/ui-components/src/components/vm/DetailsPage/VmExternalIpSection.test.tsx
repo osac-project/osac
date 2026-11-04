@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -18,11 +18,7 @@ vi.mock('../../../api/use-resource', async (importOriginal) => {
 });
 
 vi.mock('./AttachExternalIpModal', () => ({
-  default: ({ onPendingChange }: { onPendingChange: (isPending: boolean) => void }) => (
-    <button type="button" onClick={() => onPendingChange(true)}>
-      Start attachment
-    </button>
-  ),
+  default: () => <div>Attach external IP modal</div>,
 }));
 
 const vm = {
@@ -105,27 +101,6 @@ describe('VmExternalIpSection', () => {
 
     expect(screen.getByRole('button', { name: 'Attach external IP' })).toBeInTheDocument();
     expect(screen.queryByText('Attaching external IP...')).not.toBeInTheDocument();
-  });
-
-  it('disables Attach while attachment creation is pending', async () => {
-    setAttachment([]);
-
-    const { user } = renderWithProviders(
-      <VmExternalIpSection
-        vm={
-          {
-            ...vm,
-            status: { state: ComputeInstanceState.RUNNING, externalIpAddress: '' },
-          } as unknown as ComputeInstance
-        }
-      />,
-    );
-
-    const attachButton = screen.getByRole('button', { name: 'Attach external IP' });
-    await user.click(attachButton);
-    await user.click(screen.getByRole('button', { name: 'Start attachment' }));
-
-    await waitFor(() => expect(attachButton).toBeDisabled());
   });
 
   it('shows pending lifecycle feedback while an attachment is provisioning', () => {

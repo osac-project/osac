@@ -17,8 +17,35 @@ jobs:
       contents: read
       actions: write
 
+  # The pull request of the entry, for the ci-observe capture. A merge_group event carries no pull request number: the
+  # only place GitHub exposes it is the temporary branch it creates for the entry,
+  # "gh-readonly-queue/<base>/pr-<N>-<sha>" (the monitoring backfill of the CI dashboard reads the number from the same
+  # branch). The suites get it as `pr-number`, so a queue attempt is captured as "pull request N" (`caas-pr<N>-...`,
+  # with osac.ci.pr=<N> on every signal) and the Pull requests dashboard can link the attempt to that capture.
+  entry:
+    runs-on: ubuntu-latest
+    outputs:
+      pr-number: ${{ steps.derive.outputs.number }}
+    steps:
+      - name: Derive the pull request number from the queue branch
+        id: derive
+        # Telemetry never decides whether the entry passes: a number this step cannot read leaves the suites running,
+        # with a capture named as it is on main, instead of stopping the required E2E check.
+        continue-on-error: true
+        env:
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          # <base> may contain "/" itself (release/4.20), so match the anchored pr-<N>-<sha> suffix and not one path
+          # segment. No match leaves the number empty: the suite then runs as it does on main, under no pull request.
+          if [[ "${HEAD_REF}" =~ ^gh-readonly-queue/.+/pr-([0-9]+)-[0-9a-f]+$ ]]; then
+            echo "number=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=" >> "$GITHUB_OUTPUT"
+            echo "::warning::no pull request number in the queue branch '${HEAD_REF}'; the capture will be named main"
+          fi
+
   vmaas:
-    needs: plan
+    needs: [plan, entry]
     if: contains(needs.plan.outputs.suites, '"vmaas"')
     permissions:
       contents: read
@@ -27,9 +54,15 @@ jobs:
     with:
       repo: ${{ github.repository }}
       sha: ${{ github.event.merge_group.head_sha }}
+      pr-number: ${{ needs.entry.outputs.pr-number }}
+      # This workflow runs for a queue entry only, so telemetry is always on here: every attempt leaves a capture the
+      # Pull requests dashboard can link to. The suite is called once, so no capture runs twice.
+      ci-observe: true
+    secrets:
+      CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
 
   caas:
-    needs: plan
+    needs: [plan, entry]
     if: contains(needs.plan.outputs.suites, '"caas"')
     permissions:
       contents: read
@@ -38,9 +71,14 @@ jobs:
     with:
       repo: ${{ github.repository }}
       sha: ${{ github.event.merge_group.head_sha }}
+      pr-number: ${{ needs.entry.outputs.pr-number }}
+      # Always on here: this workflow runs for a queue entry only (see the vmaas job).
+      ci-observe: true
+    secrets:
+      CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
 
   bmaas:
-    needs: plan
+    needs: [plan, entry]
     if: contains(needs.plan.outputs.suites, '"bmaas"')
     permissions:
       contents: read
@@ -49,6 +87,11 @@ jobs:
     with:
       repo: ${{ github.repository }}
       sha: ${{ github.event.merge_group.head_sha }}
+      pr-number: ${{ needs.entry.outputs.pr-number }}
+      # Always on here: this workflow runs for a queue entry only (see the vmaas job).
+      ci-observe: true
+    secrets:
+      CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
 
   # One job that looks after the queue entry: it watches the suites and the other required checks of the commit (the
   # unit and integration tests of CI, the Jira check), writes the required E2E check at once when one of them fails, and

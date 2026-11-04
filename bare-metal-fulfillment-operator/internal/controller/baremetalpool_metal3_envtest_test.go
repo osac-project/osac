@@ -95,6 +95,12 @@ var _ = Describe("BareMetalPool Metal3 Integration", func() {
 		Expect(instance.Spec.ExternalHostID).To(Equal(metal3TestNS + "/" + bmhName))
 		Expect(instance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseReady))
 
+		// The instance's ExternalHostID is its own view of the allocation;
+		// the BMH's ConsumerRef is the host's view. Both must agree.
+		updatedBMH := getBMH(bmhName)
+		Expect(updatedBMH.Spec.ConsumerRef).NotTo(BeNil())
+		Expect(updatedBMH.Spec.ConsumerRef.Name).To(Equal(string(instance.UID)))
+
 		result, err = poolReconciler.Reconcile(ctx, poolRequest)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.IsZero()).To(BeTrue())

@@ -15,10 +15,13 @@ package billingstub_test
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"sync"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -48,7 +51,8 @@ func start(s billingfake.Scenario) (*billingstub.Stub, billing.Adapter) {
 	stub := billingstub.New(s)
 	ExpectWithOffset(1, stub.Start("127.0.0.1:0")).To(Succeed())
 	DeferCleanup(stub.Close)
-	adapter, err := m360.New(billing.Config{BaseURL: stub.URL(), APIVersion: "v2", Credential: "tok"}).Build()
+	adapter, err := m360.New(billing.Config{BaseURL: stub.URL() + "/api/v2/external", Credential: "tok", RetryCount: 3,
+		BreakerThreshold: 5, BreakerWindow: 30 * time.Second, BreakerOpen: 30 * time.Second}).Build()
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 	return stub, adapter
 }
@@ -176,6 +180,40 @@ var _ = Describe("Billing stub", func() {
 		}
 		Expect(stub.Writes()).To(HaveLen(4))
 	})
+
+	It("records the Authorization header of each request", func() {
+		stub, _ := start(load(fixture))
+
+		request, err := http.NewRequest(http.MethodGet, stub.URL()+"/api/v2/external/accounts?size=1", nil)
+		Expect(err).ToNot(HaveOccurred())
+		request.Header.Set("Authorization", "Bearer sent")
+		response, err := http.DefaultClient.Do(request)
+		Expect(err).ToNot(HaveOccurred())
+		_ = response.Body.Close()
+		Expect(stub.Requests()).To(ConsistOf(HaveField("Authorization", "Bearer sent")))
+	})
+
+	DescribeTable("serves TLS for the host with a certificate signed by the returned CA",
+		func(host string) {
+			stub := billingstub.New(load(fixture))
+			caPEM, err := stub.StartTLS("127.0.0.1:0", host)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(stub.Close)
+			roots := x509.NewCertPool()
+			Expect(roots.AppendCertsFromPEM(caPEM)).To(BeTrue())
+			// Only the returned CA is trusted, and ServerName makes the client check the SAN for host.
+			client := &http.Client{Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: host}}}
+
+			response, err := client.Get(stub.URL() + "/api/v2/external/accounts?size=1")
+			Expect(err).ToNot(HaveOccurred())
+			_ = response.Body.Close()
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+			Expect(stub.Succeeded("HealthCheck")).To(Equal(1))
+		},
+		Entry("an IP address", "127.0.0.1"),
+		Entry("a DNS name", "localhost"),
+	)
 
 	It("records no request when nothing calls it", func() {
 		stub, _ := start(load(fixture))

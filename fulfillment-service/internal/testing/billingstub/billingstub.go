@@ -18,7 +18,15 @@ language governing permissions and limitations under the License.
 package billingstub
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +36,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
@@ -36,11 +45,12 @@ import (
 // Request is one recorded request. Op is the adapter method name that scripts its failures, empty for a request
 // the stub does not serve. Failed is true when the stub answered with an error status.
 type Request struct {
-	Method string
-	Path   string
-	Query  string
-	Op     string
-	Failed bool
+	Method        string
+	Path          string
+	Query         string
+	Authorization string
+	Op            string
+	Failed        bool
 }
 
 // Stub is a scripted M360 server that records its requests.
@@ -57,19 +67,80 @@ func New(s billingfake.Scenario) *Stub {
 	return &Stub{scenario: s, failed: map[string]int{}}
 }
 
-// Start serves the stub on addr, such as 127.0.0.1:0 for a free local port or 0.0.0.0:8080 for a deployed suite.
+// Start serves the stub over plain HTTP on addr, such as 127.0.0.1:0 for a free local port.
 func (s *Stub) Start(addr string) error {
+	return s.start(addr, nil)
+}
+
+// StartTLS serves the stub over TLS on addr, such as 0.0.0.0:8443 for a deployed suite. The certificate names host,
+// an IP address or a DNS name as the client sees it, and is signed by a CA generated here. It returns that CA in
+// PEM for the client to trust.
+func (s *Stub) StartTLS(addr, host string) ([]byte, error) {
+	caPEM, certificate, err := issue(host)
+	if err != nil {
+		return nil, err
+	}
+	return caPEM, s.start(addr, &tls.Config{Certificates: []tls.Certificate{certificate}})
+}
+
+// start listens on addr and serves plain HTTP, or TLS when config is set.
+func (s *Stub) start(addr string, config *tls.Config) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
 	s.server = httptest.NewUnstartedServer(s)
 	s.server.Listener = listener
-	s.server.Start()
+	if config == nil {
+		s.server.Start()
+		return nil
+	}
+	s.server.TLS = config
+	s.server.StartTLS()
 	return nil
 }
 
-// URL is the base URL to configure as OSAC_BILLING_BASE_URL, valid after Start.
+// issue generates a CA and a certificate for host signed by it, both valid for a day around now. It returns the CA
+// in PEM and the certificate with its signer.
+func issue(host string) ([]byte, tls.Certificate, error) {
+	notBefore, notAfter := time.Now().Add(-time.Hour), time.Now().Add(23*time.Hour)
+	caSigner, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, tls.Certificate{}, err
+	}
+	caTemplate := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "billing stub CA"},
+		NotBefore: notBefore, NotAfter: notAfter, IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caSigner.PublicKey, caSigner)
+	if err != nil {
+		return nil, tls.Certificate{}, err
+	}
+	ca, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		return nil, tls.Certificate{}, err
+	}
+	leafSigner, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, tls.Certificate{}, err
+	}
+	leafTemplate := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: host},
+		NotBefore: notBefore, NotAfter: notAfter, KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	if ip := net.ParseIP(host); ip != nil {
+		leafTemplate.IPAddresses = []net.IP{ip}
+	} else {
+		leafTemplate.DNSNames = []string{host}
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca, &leafSigner.PublicKey, caSigner)
+	if err != nil {
+		return nil, tls.Certificate{}, err
+	}
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	return caPEM, tls.Certificate{Certificate: [][]byte{leafDER}, PrivateKey: leafSigner}, nil
+}
+
+// URL is the server origin, valid after Start. Append the provider API path, for example /api/v1/external, when
+// configuring it as OSAC_BILLING_BASE_URL.
 func (s *Stub) URL() string { return s.server.URL }
 
 // Close stops the server; it is a no-op before Start.
@@ -128,7 +199,8 @@ var (
 func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	request := Request{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery}
+	request := Request{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery,
+		Authorization: r.Header.Get("Authorization")}
 	status, body := http.StatusMethodNotAllowed, any(nil)
 	if r.Method == http.MethodGet {
 		status, body = s.route(&request, r)

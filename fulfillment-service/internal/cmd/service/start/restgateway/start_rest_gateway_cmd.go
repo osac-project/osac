@@ -331,7 +331,6 @@ func buildHandlerList() []handlerRegistrar {
 		publicv1.RegisterSelfSubjectAccessReviewsHandler,
 		// Shared private API:
 		privatev1.RegisterCapabilitiesHandler,
-		privatev1.RegisterBillingProviderStatusesHandler,
 		privatev1.RegisterEventsHandler,
 		privatev1.RegisterHubsHandler,
 		privatev1.RegisterNetworkClassesHandler,

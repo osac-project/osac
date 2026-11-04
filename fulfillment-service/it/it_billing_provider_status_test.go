@@ -15,7 +15,10 @@ package it
 
 import (
 	"context"
+	"encoding/json"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -60,22 +63,30 @@ var _ = Describe("Billing provider status", Label("billing"), func() {
 })
 
 // These specs point the deployed grpc-server at a deterministic stub M360 server through the real M360 settings
-// (OSAC_BILLING_PROVIDER=m360), so they exercise the real adapter. The stub runs in this test process; the cluster
-// must reach it, which depends on the environment, so the specs are skipped unless both variables are set:
+// (OSAC_BILLING_PROVIDER=m360), mounted at the chart's paths, so they exercise the real adapter. The stub runs in this
+// test process and serves TLS with a certificate for the host of its URL, signed by a test CA that the specs mount as
+// OSAC_BILLING_CA_FILE. The cluster must reach the stub, which depends on the environment, so the specs are skipped
+// unless both variables are set:
 //
-//	OSAC_IT_BILLING_STUB_LISTEN  address to bind, such as 0.0.0.0:18080
-//	OSAC_IT_BILLING_STUB_URL     URL of that listener as seen from the cluster, such as http://172.18.0.1:18080
+//	OSAC_IT_BILLING_STUB_LISTEN  address to bind, such as 0.0.0.0:18443
+//	OSAC_IT_BILLING_STUB_URL     URL of that listener as seen from the cluster, such as https://172.18.0.1:18443
 //
 // They restart the shared grpc-server, so they must not overlap other specs.
 var _ = Describe("Billing provider status with a stub M360", Label("billing"), Serial, func() {
 	const (
-		namespace  = "osac"
-		deployment = "fulfillment-grpc-server"
-		container  = "grpc-server"
-		secretName = "billing-stub-credential"
+		namespace      = "osac"
+		deployment     = "fulfillment-grpc-server"
+		container      = "grpc-server"
+		secretName     = "billing-stub-credential"
+		caSecretName   = "billing-stub-ca"
+		credentialFile = "/etc/fulfillment-grpc-server/billing/credential"
+		stubCredential = "stub-token"
 	)
 
-	var stub *billingstub.Stub
+	var (
+		stub    *billingstub.Stub
+		stubURL string
+	)
 
 	// rollout waits until the deployment's current generation is fully rolled out.
 	rollout := func(ctx context.Context) {
@@ -91,32 +102,74 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing"), S
 		}, 3*time.Minute, time.Second).Should(Succeed())
 	}
 
-	statusState := func(ctx context.Context) (publicv1.BillingProviderState, error) {
+	status := func(ctx context.Context) (*publicv1.BillingProviderStatus, error) {
 		client := publicv1.NewBillingProviderStatusesClient(tool.ExternalView().AdminConn())
 		response, err := client.Get(ctx, publicv1.BillingProviderStatusesGetRequest_builder{}.Build())
-		if err != nil {
-			return publicv1.BillingProviderState_BILLING_PROVIDER_STATE_UNSPECIFIED, err
+		return response.GetObject(), err
+	}
+
+	// expectCleanLog checks the grpc-server log of every current pod: the provider was configured, and neither the
+	// credential, the base URL nor the credential path leaked into it.
+	expectCleanLog := func(ctx context.Context) {
+		GinkgoHelper()
+		current := &appsv1.Deployment{}
+		Expect(tool.KubeClient().Get(ctx, crclient.ObjectKey{Namespace: namespace, Name: deployment},
+			current)).To(Succeed())
+		pods := &corev1.PodList{}
+		Expect(tool.KubeClient().List(ctx, pods, crclient.InNamespace(namespace),
+			crclient.MatchingLabels(current.Spec.Selector.MatchLabels))).To(Succeed())
+		checked := 0
+		for _, pod := range pods.Items {
+			// A pod of the previous revision can still be terminating after the rollout.
+			if pod.DeletionTimestamp != nil {
+				continue
+			}
+			raw, err := tool.KubeClientSet().CoreV1().Pods(namespace).GetLogs(pod.Name,
+				&corev1.PodLogOptions{Container: container}).DoRaw(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			var entries []map[string]any
+			for _, line := range strings.Split(string(raw), "\n") {
+				var entry map[string]any
+				if json.Unmarshal([]byte(line), &entry) == nil {
+					entries = append(entries, entry)
+				}
+			}
+			Expect(entries).To(ContainElement(SatisfyAll(HaveKeyWithValue("msg", "Billing provider configured"),
+				HaveKeyWithValue("provider", "m360"))), "pod %s", pod.Name)
+			for _, absent := range []string{"configured but unusable", "failed to build", stubCredential, stubURL,
+				credentialFile} {
+				Expect(string(raw)).ToNot(ContainSubstring(absent), "pod %s", pod.Name)
+			}
+			checked++
 		}
-		return response.GetObject().GetState(), nil
+		Expect(checked).To(BeNumerically(">", 0))
 	}
 
 	BeforeEach(func(ctx context.Context) {
-		listen, stubURL := os.Getenv("OSAC_IT_BILLING_STUB_LISTEN"), os.Getenv("OSAC_IT_BILLING_STUB_URL")
+		listen := os.Getenv("OSAC_IT_BILLING_STUB_LISTEN")
+		stubURL = os.Getenv("OSAC_IT_BILLING_STUB_URL")
 		if listen == "" || stubURL == "" {
 			Skip("OSAC_IT_BILLING_STUB_LISTEN and OSAC_IT_BILLING_STUB_URL are not set")
 		}
+		parsed, err := url.Parse(stubURL)
+		Expect(err).ToNot(HaveOccurred())
 		kube := tool.KubeClient()
 		stub = billingstub.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
 			{ID: "a1", Name: "stub account", State: billing.AccountActive, RawStatus: "Active"}}})
-		Expect(stub.Start(listen)).To(Succeed())
+		caPEM, err := stub.StartTLS(listen, parsed.Hostname())
+		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(stub.Close)
 
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: secretName},
-			StringData: map[string]string{"token": "stub-token"},
+		// createSecret creates a Secret that is deleted on cleanup.
+		createSecret := func(name string, data map[string][]byte) {
+			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}, Data: data}
+			Expect(kube.Create(ctx, secret)).To(Succeed())
+			DeferCleanup(func(ctx context.Context) {
+				Expect(crclient.IgnoreNotFound(kube.Delete(ctx, secret))).To(Succeed())
+			})
 		}
-		Expect(kube.Create(ctx, secret)).To(Succeed())
-		DeferCleanup(func(ctx context.Context) { Expect(crclient.IgnoreNotFound(kube.Delete(ctx, secret))).To(Succeed()) })
+		createSecret(secretName, map[string][]byte{"token": []byte(stubCredential)})
+		createSecret(caSecretName, map[string][]byte{"ca.crt": caPEM})
 
 		key := crclient.ObjectKey{Namespace: namespace, Name: deployment}
 		current := &appsv1.Deployment{}
@@ -131,21 +184,34 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing"), S
 			rollout(ctx)
 		})
 
+		// Hand-patched copies of the chart's mount paths and file names: this mirrors the chart and does not verify it.
 		podSpec := &current.Spec.Template.Spec
-		podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{Name: "billing-credential",
-			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secretName}}})
+		podSpec.Volumes = append(podSpec.Volumes,
+			corev1.Volume{Name: "billing-credential", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: secretName, Items: []corev1.KeyToPath{{Key: "token", Path: "credential"}}}}},
+			corev1.Volume{Name: "billing-ca", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: caSecretName}}})
 		for i := range podSpec.Containers {
 			c := &podSpec.Containers[i]
 			if c.Name != container {
 				continue
 			}
-			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "billing-credential",
-				MountPath: "/run/billing", ReadOnly: true})
+			c.VolumeMounts = append(c.VolumeMounts,
+				corev1.VolumeMount{Name: "billing-credential", MountPath: "/etc/fulfillment-grpc-server/billing",
+					ReadOnly: true},
+				corev1.VolumeMount{Name: "billing-ca", MountPath: "/etc/fulfillment-grpc-server/billing-ca",
+					ReadOnly: true})
 			c.Env = append(c.Env,
 				corev1.EnvVar{Name: "OSAC_BILLING_PROVIDER", Value: "m360"},
-				corev1.EnvVar{Name: "OSAC_BILLING_BASE_URL", Value: stubURL},
-				corev1.EnvVar{Name: "OSAC_BILLING_API_VERSION", Value: "v2"},
-				corev1.EnvVar{Name: "OSAC_BILLING_CREDENTIAL_FILE", Value: "/run/billing/token"},
+				// The base URL carries the whole path to the provider API; the stub speaks the M360 one.
+				corev1.EnvVar{Name: "OSAC_BILLING_BASE_URL", Value: stubURL + "/api/v1/external"},
+				corev1.EnvVar{Name: "OSAC_BILLING_CREDENTIAL_FILE", Value: credentialFile},
+				corev1.EnvVar{Name: "OSAC_BILLING_CA_FILE", Value: "/etc/fulfillment-grpc-server/billing-ca/ca.crt"},
+				// The chart's tuning defaults, which it always renders with a provider.
+				corev1.EnvVar{Name: "OSAC_BILLING_RETRY_COUNT", Value: "3"},
+				corev1.EnvVar{Name: "OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD", Value: "5"},
+				corev1.EnvVar{Name: "OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS", Value: "30"},
+				corev1.EnvVar{Name: "OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS", Value: "30"},
 			)
 		}
 		Expect(kube.Update(ctx, current)).To(Succeed())
@@ -154,22 +220,31 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing"), S
 
 	It("is AVAILABLE when the stub provider answers, using reads only", func(ctx context.Context) {
 		Eventually(ctx, func(g Gomega) {
-			state, err := statusState(ctx)
+			object, err := status(ctx)
 			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(state).To(Equal(publicv1.BillingProviderState_BILLING_PROVIDER_STATE_AVAILABLE))
+			g.Expect(object.GetState()).To(Equal(publicv1.BillingProviderState_BILLING_PROVIDER_STATE_AVAILABLE))
 		}, time.Minute, time.Second).Should(Succeed())
 		Expect(stub.Succeeded("HealthCheck")).To(BeNumerically(">", 0))
+		// The pod sends the mounted credential to the configured API path.
+		Expect(stub.Requests()).To(ContainElement(SatisfyAll(HaveField("Op", "HealthCheck"),
+			HaveField("Path", HavePrefix("/api/v1/external/")), HaveField("Authorization", "Bearer "+stubCredential))))
 		Expect(stub.Writes()).To(BeEmpty())
+		expectCleanLog(ctx)
 	})
 
-	It("is UNAVAILABLE when the stub provider fails", func(ctx context.Context) {
+	It("is UNAVAILABLE when the stub provider fails its health check", func(ctx context.Context) {
 		stub.SetScenario(billingfake.Scenario{Failures: map[string]billingfake.Failure{
-			"ListAccounts": {Reason: billing.ReasonUnavailable, Status: 503}}})
+			"HealthCheck": {Reason: billing.ReasonUnavailable, Status: 503}}})
 		Eventually(ctx, func(g Gomega) {
-			state, err := statusState(ctx)
+			object, err := status(ctx)
 			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(state).To(Equal(publicv1.BillingProviderState_BILLING_PROVIDER_STATE_UNAVAILABLE))
+			g.Expect(object.GetState()).To(Equal(publicv1.BillingProviderState_BILLING_PROVIDER_STATE_UNAVAILABLE))
+			g.Expect(object.GetMessage()).To(Equal("billing provider account API is unavailable"))
 		}, time.Minute, time.Second).Should(Succeed())
+		// A failed HealthCheck the stub served proves the probe reached it, not a config or TLS rejection.
+		Expect(stub.Requests()).To(ContainElement(SatisfyAll(HaveField("Op", "HealthCheck"),
+			HaveField("Failed", true))))
 		Expect(stub.Writes()).To(BeEmpty())
+		expectCleanLog(ctx)
 	})
 })

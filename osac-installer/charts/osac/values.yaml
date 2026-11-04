@@ -28,15 +28,11 @@ global:
     # Example:
     #   provider:
     #     key: m360
-    #     baseUrl: https://billing.example.com/api
-    #     apiVersion: v1
+    #     baseUrl: https://billing.example.com/api/v1/external
     #     credentialSecret: {name: billing-token, key: api-token}
+    #     # Optional: extra CA bundle the service trusts for the provider.
+    #     caSecret: {name: billing-ca, key: ca-bundle}
     tuning:
-      itemTimeoutSeconds: 2
-      listDeadlineSeconds: 5
-      cacheFreshTtlSeconds: 300
-      cacheStaleTtlSeconds: 3600
-      cacheMaxEntries: 10000
       retryCount: 3
       pricingBreaker:
         failureThreshold: 5

@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -85,7 +86,8 @@ func seededM360() (*m360Server, billing.Adapter) {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
-	adapter, err := m360.New(billing.Config{BaseURL: fake.URL, APIVersion: "v1", Credential: testContractToken}).
+	adapter, err := m360.New(billing.Config{BaseURL: fake.URL + "/api/v1/external", Credential: testContractToken,
+		RetryCount: 3, BreakerThreshold: 5, BreakerWindow: 30 * time.Second, BreakerOpen: 30 * time.Second}).
 		SetLogger(logger).Build()
 	Expect(err).ToNot(HaveOccurred())
 	return fake, adapter

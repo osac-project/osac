@@ -14,16 +14,19 @@ specific language governing permissions and limitations under the License.
 package billing_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
+	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 var _ = Describe("Error", func() {
@@ -49,14 +52,16 @@ var _ = Describe("Error", func() {
 var _ = Describe("Opaque refs", func() {
 	const native = "native-id-12345"
 
-	DescribeTable("never leak the provider id through formatting or logging",
+	DescribeTable("never leak the provider id through formatting, logging or JSON",
 		func(ref any) {
 			var buf strings.Builder
 			l := slog.New(slog.NewTextHandler(&buf, nil))
 			l.Info("x", "ref", ref)
+			marshalled, err := json.Marshal(ref)
+			Expect(err).ToNot(HaveOccurred())
 			for _, s := range []string{
 				fmt.Sprint(ref), fmt.Sprintf("%v", ref), fmt.Sprintf("%+v", ref),
-				fmt.Sprintf("%#v", ref), fmt.Sprintf("%s", ref), buf.String(),
+				fmt.Sprintf("%#v", ref), fmt.Sprintf("%s", ref), buf.String(), string(marshalled),
 			} {
 				Expect(s).ToNot(ContainSubstring(native))
 			}
@@ -70,6 +75,18 @@ var _ = Describe("Opaque refs", func() {
 	It("round-trips the id for the adapter that issued it", func() {
 		Expect(billing.NewAccountRef(native).ID()).To(Equal(native))
 		Expect(billing.NewServiceRef(native).ID()).To(Equal(native))
+	})
+
+	It("stays redacted through the production logger and the logr bridge", func() {
+		var buf strings.Builder
+		logger, err := logging.NewLogger().SetWriter(&buf).SetRedact(true).Build()
+		Expect(err).ToNot(HaveOccurred())
+		logger.Info("x", "cfg", billing.Config{Credential: native})
+		// logr never renders values itself: FromSlogHandler forwards them to the
+		// slog handler, whose LogValuer resolution does the redaction.
+		logr.FromSlogHandler(logger.Handler()).Info("x", "ref", billing.NewAccountRef(native))
+		Expect(buf.String()).To(ContainSubstring("[redacted]"))
+		Expect(buf.String()).ToNot(ContainSubstring(native))
 	})
 })
 
@@ -85,9 +102,8 @@ var _ = Describe("Config", func() {
 			Expect(errors.As(err, &e)).To(BeTrue())
 			Expect(e.Reason).To(Equal(billing.ReasonNotConfigured))
 		},
-		Entry("complete", billing.Config{BaseURL: "https://x", APIVersion: "v1", Credential: "t"}, true),
-		Entry("missing url", billing.Config{APIVersion: "v1", Credential: "t"}, false),
-		Entry("missing version", billing.Config{BaseURL: "https://x", Credential: "t"}, false),
-		Entry("missing credential", billing.Config{BaseURL: "https://x", APIVersion: "v1"}, false),
+		Entry("complete", billing.Config{BaseURL: "https://x", Credential: "t"}, true),
+		Entry("missing url", billing.Config{Credential: "t"}, false),
+		Entry("missing credential", billing.Config{BaseURL: "https://x"}, false),
 	)
 })

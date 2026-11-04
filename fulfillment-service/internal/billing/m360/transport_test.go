@@ -28,6 +28,8 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingstub"
 )
 
 const testToken = "super-secret-token"
@@ -58,9 +60,11 @@ func (f *fakeServer) expectOnlyGET() {
 	}
 }
 
-// testClient builds a client against url with millisecond backoff.
+// testClient builds a client against the /api/v1/external prefix of url, with the chart's retry and breaker
+// defaults and millisecond backoff.
 func testClient(url string) *client {
-	c := newClient(billing.Config{BaseURL: url, APIVersion: "v1", Credential: testToken}, logger)
+	c := newClient(billing.Config{BaseURL: url + "/api/v1/external", Credential: testToken, RetryCount: 3,
+		BreakerThreshold: 5, BreakerWindow: 30 * time.Second, BreakerOpen: 30 * time.Second}, logger)
 	c.backoffBase = time.Millisecond
 	c.backoffMax = 2 * time.Millisecond
 	return c
@@ -124,6 +128,14 @@ var _ = Describe("M360 transport", func() {
 		Expect(fake.hits.Load()).To(Equal(int32(3)))
 	})
 
+	It("makes exactly one attempt when the retry count is zero", func() {
+		fake = newFakeServer(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) })
+		c := testClient(fake.URL)
+		c.cfg.RetryCount = 0
+		Expect(reasonOf(c.get(context.Background(), "op", "/x", nil, nil))).To(Equal(billing.ReasonUnavailable))
+		Expect(fake.hits.Load()).To(Equal(int32(1)))
+	})
+
 	It("times out a slow attempt and retries it", func() {
 		fake = newFakeServer(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
 		c := testClient(fake.URL)
@@ -169,6 +181,17 @@ var _ = Describe("M360 transport", func() {
 		Entry("old Items shape", `{"Items":[{"Id":"a1"}],"NextPage":"2"}`),
 	)
 
+	DescribeTable("accepts a successful 2xx body even when it carries a null error",
+		func(body string) {
+			fake = newFakeServer(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) })
+			var out envelope[pageData[account]]
+			Expect(testClient(fake.URL).get(context.Background(), "op", "/x", nil, &out)).To(Succeed())
+			Expect(out.Data).ToNot(BeNil())
+			Expect(out.Data.Content).To(BeEmpty())
+		},
+		Entry("error null", `{"success":true,"errors":[],"error":null,"data":{"content":[],"number":0,"last":true}}`),
+	)
+
 	It("does not follow redirects, so the token never leaves for another path", func() {
 		var elsewhere atomic.Int32
 		fake = newFakeServer(func(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +213,7 @@ var _ = Describe("M360 transport", func() {
 	})
 
 	Describe("pricing breaker", func() {
-		It("opens after 5 consecutive exhausted failures, then probes and recovers", func() {
+		It("opens after 5 exhausted failures inside the window, then probes and recovers", func() {
 			var fail atomic.Bool
 			fail.Store(true)
 			fake = newFakeServer(func(w http.ResponseWriter, _ *http.Request) {
@@ -253,6 +276,75 @@ var _ = Describe("M360 transport", func() {
 		})
 	})
 })
+
+var _ = Describe("M360 backoff", func() {
+	It("doubles from 100ms up to the 1s cap and never overflows below it", func() {
+		c := newClient(billing.Config{}, logger)
+		for attempt, want := range map[int]time.Duration{1: 100 * time.Millisecond, 2: 200 * time.Millisecond,
+			3: 400 * time.Millisecond, 4: 800 * time.Millisecond, 5: time.Second} {
+			Expect(c.backoff(attempt)).To(Equal(want), "attempt %d", attempt)
+		}
+		for _, attempt := range []int{38, 63, 64, 1000} {
+			Expect(c.backoff(attempt)).To(Equal(time.Second), "attempt %d", attempt)
+		}
+	})
+})
+
+var _ = Describe("M360 TLS", func() {
+	var (
+		ca, otherCA []byte
+		stub        *billingstub.Stub
+	)
+
+	// startTLS serves an empty scenario over TLS for 127.0.0.1 and returns the stub with the CA that signed it.
+	startTLS := func() (*billingstub.Stub, []byte) {
+		s := billingstub.New(billingfake.Scenario{})
+		caPEM, err := s.StartTLS("127.0.0.1:0", "127.0.0.1")
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(s.Close)
+		return s, caPEM
+	}
+
+	BeforeEach(func() {
+		stub, ca = startTLS()
+		_, otherCA = startTLS()
+	})
+
+	It("reaches a provider whose certificate chains to the configured CA", func() {
+		Expect(tlsAdapter(stub.URL(), ca).HealthCheck(context.Background())).To(Succeed())
+		Expect(stub.Requests()).To(ConsistOf(SatisfyAll(
+			HaveField("Authorization", "Bearer "+testToken),
+			HaveField("Path", "/api/v1/external/accounts"),
+		)))
+	})
+
+	It("reports a certificate the configured CA did not sign as UNAVAILABLE", func() {
+		err := tlsAdapter(stub.URL(), otherCA).HealthCheck(context.Background())
+		Expect(reasonOf(err)).To(Equal(billing.ReasonUnavailable))
+		Expect(stub.Requests()).To(BeEmpty(), "the credential must not reach an untrusted server")
+	})
+})
+
+// tlsAdapter builds the adapter the way startup does, trusting the PEM roots in ca.
+func tlsAdapter(url string, ca []byte) billing.Adapter {
+	env := map[string]string{
+		"OSAC_BILLING_PROVIDER":                               billing.KeyM360,
+		"OSAC_BILLING_BASE_URL":                               url + "/api/v1/external",
+		"OSAC_BILLING_CREDENTIAL_FILE":                        "/billing/credential",
+		"OSAC_BILLING_CA_FILE":                                "/billing/ca.pem",
+		"OSAC_BILLING_RETRY_COUNT":                            "0",
+		"OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD":      "5",
+		"OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS": "30",
+		"OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS":           "30",
+	}
+	files := map[string][]byte{"/billing/credential": []byte(testToken), "/billing/ca.pem": ca}
+	cfg, err := billing.LoadConfig(func(k string) string { return env[k] },
+		func(p string) ([]byte, error) { return files[p], nil })
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	adapter, err := New(cfg).SetLogger(logger).Build()
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	return adapter
+}
 
 var _ = Describe("M360 redaction", func() {
 	It("keeps bodies, tokens and ids out of errors and logs", func() {

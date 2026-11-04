@@ -41,7 +41,8 @@ var _ = Describe("M360 accounts", func() {
 			h(w, r)
 		})
 		var err error
-		adapter, err = New(billing.Config{BaseURL: fake.URL, APIVersion: "v1", Credential: testToken}).
+		adapter, err = New(billing.Config{BaseURL: fake.URL + "/api/v1/external", Credential: testToken, RetryCount: 3,
+			BreakerThreshold: 5, BreakerWindow: 30 * time.Second, BreakerOpen: 30 * time.Second}).
 			SetLogger(logger).Build()
 		Expect(err).ToNot(HaveOccurred())
 	}

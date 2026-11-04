@@ -44,5 +44,12 @@ func newBillingProvider(getenv func(string) string, readFile func(string) ([]byt
 		return billing.NewProvider(key, nil, err)
 	}
 	adapter, err := m360.New(cfg).SetLogger(logger).Build()
+	if err != nil {
+		// LoadConfig only succeeds for the known key, so the key is safe to log here.
+		logger.Warn("Billing provider adapter failed to build", slog.String("provider", key),
+			slog.String("error", err.Error()))
+	} else {
+		logger.Info("Billing provider configured", slog.String("provider", key))
+	}
 	return billing.NewProvider(key, adapter, err)
 }

@@ -38,13 +38,18 @@
                 },
                 "baseUrl": {
                   "type": "string",
-                  "description": "Provider base URL, http or https, without query or fragment",
-                  "pattern": "^https?://[^/?#\\s]+(/[^?#\\s]*)?$"
-                },
-                "apiVersion": {
-                  "type": "string",
-                  "description": "Provider API version",
-                  "minLength": 1
+                  "format": "uri",
+                  "description": "Provider base URL including the whole path to the provider API, for example https://billing.example.com/api/v1/external; the adapter appends only the endpoint paths. No query, fragment, URL credentials or percent escapes in the host; well-formed percent escapes are allowed in the path. HTTPS for any host, HTTP only for a loopback host (localhost, 127.0.0.0/8, [::1]).",
+                  "anyOf": [
+                    {
+                      "description": "https to any host, with an optional numeric port and API path",
+                      "pattern": "^https://(\\[[0-9a-fA-F:.]+\\]|[^/?#\\s@:%\\[\\]\\\\|\\x00-\\x1F\\x7F]+)(:[0-9]+)?(/([^%?#\\s\\x00-\\x1F\\x7F]|%[0-9a-fA-F]{2})*)?$"
+                    },
+                    {
+                      "description": "http to a loopback host only, like billing.Config.Validate",
+                      "pattern": "^http://(localhost|127(\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}|\\[::1\\])(:[0-9]+)?(/([^%?#\\s\\x00-\\x1F\\x7F]|%[0-9a-fA-F]{2})*)?$"
+                    }
+                  ]
                 },
                 "credentialSecret": {
                   "type": "object",
@@ -61,50 +66,35 @@
                   },
                   "required": ["name", "key"],
                   "additionalProperties": false
+                },
+                "caSecret": {
+                  "type": "object",
+                  "description": "Optional existing Secret holding a PEM CA bundle that the fulfillment service trusts in addition to the system roots when it calls the provider. Mounted only when set.",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "key": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["name", "key"],
+                  "additionalProperties": false
                 }
               },
-              "required": ["key", "baseUrl", "apiVersion", "credentialSecret"],
+              "required": ["key", "baseUrl", "credentialSecret"],
               "additionalProperties": false
             },
             "tuning": {
               "type": "object",
               "description": "Catalog-pricing tuning consumed by the fulfillment service when a provider is configured",
               "properties": {
-                "itemTimeoutSeconds": {
-                  "type": "integer",
-                  "description": "Per-item provider call timeout",
-                  "minimum": 1,
-                  "default": 2
-                },
-                "listDeadlineSeconds": {
-                  "type": "integer",
-                  "description": "Deadline for pricing a whole catalog list; must not be shorter than itemTimeoutSeconds",
-                  "minimum": 1,
-                  "default": 5
-                },
-                "cacheFreshTtlSeconds": {
-                  "type": "integer",
-                  "description": "How long a cached price is fresh",
-                  "minimum": 1,
-                  "default": 300
-                },
-                "cacheStaleTtlSeconds": {
-                  "type": "integer",
-                  "description": "How long a cached price is retained and may be served as STALE; must not be shorter than cacheFreshTtlSeconds",
-                  "minimum": 1,
-                  "default": 3600
-                },
-                "cacheMaxEntries": {
-                  "type": "integer",
-                  "description": "Maximum number of cached prices",
-                  "minimum": 1,
-                  "default": 10000
-                },
                 "retryCount": {
                   "type": "integer",
                   "description": "Provider retries after the first attempt (default 3 means four attempts in total)",
                   "minimum": 0,
-                  "maximum": 3,
                   "default": 3
                 },
                 "pricingBreaker": {
@@ -121,12 +111,14 @@
                       "type": "integer",
                       "description": "Window in which failed pricing requests are counted toward failureThreshold",
                       "minimum": 1,
+                      "maximum": 9223372036,
                       "default": 30
                     },
                     "openSeconds": {
                       "type": "integer",
                       "description": "Time the circuit stays open before one probe is allowed",
                       "minimum": 1,
+                      "maximum": 9223372036,
                       "default": 30
                     }
                   },

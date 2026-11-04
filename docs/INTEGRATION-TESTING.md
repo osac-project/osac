@@ -324,8 +324,9 @@ unknown fields):
   `retryable`, `status` and `times` (first N calls fail, 0 means always),
   which scripts timeouts, 5xx and retry scenarios.
 - Recording: `Calls()`, `Count(op)` and `Succeeded(op)`. A retried write that
-  failed once has `Count` 2 and `Succeeded` 1; a write-unsupported fake still
-  records an attempted `SetCorrelationValue`, so assert `Count` is 0.
+  failed once has `Count` 2 and `Succeeded` 1, because `Count` includes failed
+  attempts; a write-unsupported fake still records an attempted
+  `SetCorrelationValue`, so assert `Succeeded` is 0.
 
 #### Deployed stub M360 server
 
@@ -336,7 +337,8 @@ deployment. The deployed `it/` suite instead uses
 (`/api/<version>/accounts`, `/accounts/{id}`, `/services?q=`,
 `/services/{id}/priceable-attributes`, `/services/{id}/rate-cards/{currency}`,
 errors as a flat body with `status`, `error`, `message` and `path`), so a real
-M360 configuration (`OSAC_BILLING_PROVIDER=m360`, base URL, API version,
+M360 configuration (`OSAC_BILLING_PROVIDER=m360`, base URL including the
+full `/api/v1/external` path,
 credential file) runs the real adapter against it.
 
 - Same fixture: the stub is driven by `billingfake.Scenario` (the JSON above,
@@ -583,31 +585,70 @@ the certificate. The Kind
 to the profile's configured CA and enabled services.
 
 The `make billing-render-test` Helm contract renders the umbrella chart with
-and without `global.billing.provider`. It asserts the credential Secret is
-mounted only when configured, that no credential value is rendered, and that
-the schema and template checks reject partial, second-provider, out-of-range
-and inverted tuning values. It checks rendered manifests only; it does not
-install against a provider (the fulfillment install test is design-doc
-Story 1.05; no Jira ticket exists yet) and does not cover how metering
-consumes the block; no Jira ticket exists yet for that gap.
+and without `global.billing.provider`, and the fulfillment-service subchart on
+its own. It asserts that nothing billing-related renders in the gRPC server
+Deployment without a provider; that a configured provider renders the
+`OSAC_BILLING_*` environment variables and mounts the credential Secret by
+name and key; that `caSecret` adds a read-only CA Secret mount and
+`OSAC_BILLING_CA_FILE` only when it is set; that the standalone subchart falls
+back to its own retry and breaker defaults and keeps a zero instead of
+replacing it; and that the schema rejects a missing provider field, a second
+provider, an inline credential key, an invalid `baseUrl` (a non-http scheme,
+http on a non-loopback host, URL credentials, a nonnumeric port, or a query),
+a `caSecret` without
+`name` or `key`, a negative or non-integer retry count, or an out-of-range breaker value. The chart
+takes only a Secret reference, and the script does not scan the manifests for
+credential text. It checks rendered manifests only: it does not check that a
+referenced Secret exists or that a running pod can read it, does not install
+against a provider (the fulfillment install test is design-doc Story 1.05; no
+Jira ticket exists yet) and does not cover how metering consumes the block; no
+Jira ticket exists yet for that gap. CI runs it in the `helm-lint-installer`
+job.
 
-The new `global.billing` block extends `values.schema.json`, which the
-Enclave Wizard pipeline renders automatically. Verify that the consuming
-Enclave plugin version picks up the changed schema and that the Wizard
-renders and validates the billing fields before declaring the feature
-available there; that pipeline is outside this repository's chart-render
-tests and is not verified by them; no Jira ticket exists yet for that gap.
+Not proven by this contract or by any suite that runs in CI today, each
+unresolved with no owning ticket:
+
+- A deployed `fulfillment-grpc-server` reaching `AVAILABLE` over TLS. The
+  deployed stub-based `AVAILABLE` and `UNAVAILABLE` cases in
+  `fulfillment-service/it/it_billing_provider_status_test.go` skip unless
+  `OSAC_IT_BILLING_STUB_LISTEN` and `OSAC_IT_BILLING_STUB_URL` are set, and no
+  CI job sets them.
+- The `Authorization` header and the request paths as sent by a running pod.
+  Only the `m360` and `billingstub` unit specs cover them.
+- The mounted CA Secret reaching the process, in CI. The render test asserts
+  the volume, mount and variable only. The env-gated deployed `AVAILABLE` case
+  above covers it through a hand-patched mount, but no CI job runs it.
+
+The new `global.billing` block is validated by both the umbrella and standalone
+Fulfillment chart schemas; the umbrella `values.schema.json` is also rendered by
+the Enclave Wizard pipeline. Verify that the consuming Enclave plugin version
+picks up the changed schema and that the Wizard renders and validates the
+billing fields before declaring the feature available there; that pipeline is
+outside this repository's chart-render tests and is not verified by them; no
+Jira ticket exists yet for that gap.
 
 The chart hands the block to the fulfillment gRPC server as `OSAC_BILLING_*`
-environment variables. `OSAC_BILLING_PROVIDER`, `_BASE_URL`, `_API_VERSION`
-and `_CREDENTIAL_FILE` are consumed by the fulfillment loader
-`billing.LoadConfig`. The tuning variables `_ITEM_TIMEOUT_SECONDS`,
-`_LIST_DEADLINE_SECONDS`, `_CACHE_FRESH_TTL_SECONDS`,
-`_CACHE_STALE_TTL_SECONDS`, `_CACHE_MAX_ENTRIES`, `_RETRY_COUNT`,
+environment variables. `OSAC_BILLING_PROVIDER`, `_BASE_URL`,
+`_CREDENTIAL_FILE`, the optional `_CA_FILE`, `_RETRY_COUNT` and
 `_PRICING_BREAKER_FAILURE_THRESHOLD`, `_PRICING_BREAKER_FAILURE_WINDOW_SECONDS`
-and `_PRICING_BREAKER_OPEN_SECONDS` have no Go consumer yet; design-doc
-stories 5.02 and 7.01 will consume them, and no Jira tickets exist for
-them yet. Renaming a variable breaks that contract on both sides.
+and `_PRICING_BREAKER_OPEN_SECONDS` are consumed by the fulfillment loader
+`billing.LoadConfig`. `OSAC_BILLING_BASE_URL` carries the whole path to the
+provider API, for example `https://billing.example.com/api/v1/external`; the
+adapter appends only the endpoint paths. It requires HTTPS except for loopback
+HTTP, has no userinfo, query or fragment, forbids percent escapes in the host,
+and permits only well-formed percent escapes in the path. `retryCount` is
+nonnegative, `failureThreshold` is positive, and `failureWindowSeconds` and
+`openSeconds` are each in `1..9223372036` so they fit in a Go `time.Duration`.
+The chart schemas enforce these bounds; the loader additionally requires every
+tuning value to fit in the deployment architecture's Go `int`. Oversized counter
+values remain a schema/runtime validation gap. The per-item timeout, list
+deadline and cache settings are not
+chart values: [OSAC-6894](https://redhat.atlassian.net/browse/OSAC-6894)
+(`[DEV] Catalog pricing timeout, cache, and freshness`, In Progress) adds them
+together with their consumers. [OSAC-6899](https://redhat.atlassian.net/browse/OSAC-6899)
+(`[DEV] Pricing availability classification, retries, and circuit breaker`,
+New) owns the breaker and retry classification. Renaming a variable breaks
+that contract on both sides.
 
 ### Install preflight (OSAC-6561)
 

@@ -11,10 +11,6 @@ export const getExternalIpPoolSchema = (t: TFunction) =>
   Yup.object({
     metadata: Yup.object({
       name: resourceNameSchema(t),
-      tenant: Yup.object({
-        id: Yup.string().required(t('Tenant is required')),
-        name: Yup.string(),
-      }),
     }),
     cidrs: Yup.array()
       .of(buildCidrSchema(t, 'ipv4').required(t('CIDR is required')))
@@ -29,8 +25,6 @@ export const externalIpPoolStepHasErrors = (
   switch (stepId) {
     case 'pool':
       return Boolean(poolErrors.metadata?.name || poolErrors.cidrs);
-    case 'tenant':
-      return Boolean(poolErrors.metadata?.tenant);
     default:
       return false;
   }

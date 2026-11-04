@@ -243,7 +243,7 @@ var _ = Describe("Public external IPs server", func() {
 			poolsServer, err := NewPrivateExternalIPPoolsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
+				SetTenancyLogic(newAdminTenancy()).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			privateServer, err := NewPrivateExternalIPsServer().

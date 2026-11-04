@@ -24,7 +24,7 @@ const PoolStep = () => {
       <StackItem>
         <Content component="p">
           {t(
-            'Define routable addresses for tenant edge exposure. You will assign this pool to a tenant in the next step.',
+            'Define routable addresses for tenant edge exposure. The pool is shared by all tenants.',
           )}
         </Content>
       </StackItem>

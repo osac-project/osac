@@ -903,7 +903,7 @@ var _ = Describe("NetBox GetHostNICs", func() {
 		Expect(got).To(Equal([]HostNIC{{MAC: "aa:bb:cc:dd:ee:02"}}))
 	})
 
-	It("returns an empty NIC list when the BMH has no NIC data", func() {
+	It("errors when the BMH has no NIC inventory, matching metal3", func() {
 		ctx := context.Background()
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
@@ -912,9 +912,8 @@ var _ = Describe("NetBox GetHostNICs", func() {
 		got, err := NewNetBoxClient(&selectorQueryTestAPI{}, manager, testNetBoxHostClass, nil).
 			GetHostNICs(ctx, "baremetal/netbox-42")
 
-		Expect(err).NotTo(HaveOccurred())
-		Expect(got).NotTo(BeNil())
-		Expect(got).To(BeEmpty())
+		Expect(err).To(MatchError(ContainSubstring("netbox-42 has no NIC inventory")))
+		Expect(got).To(BeNil())
 	})
 
 	It("propagates BMH errors without querying NetBox", func() {

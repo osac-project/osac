@@ -596,6 +596,9 @@ func (c *NetBoxClient) GetHostNICs(ctx context.Context, inventoryHostID string) 
 	if err != nil {
 		return nil, err
 	}
+	if len(macs) == 0 {
+		return nil, fmt.Errorf("BareMetalHost %s has no NIC inventory despite being allocated", bmhName)
+	}
 	nics := make([]HostNIC, len(macs))
 	for i, mac := range macs {
 		nics[i] = HostNIC{MAC: strings.ToLower(mac)}

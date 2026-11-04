@@ -120,7 +120,7 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
               </Flex>
             </FlexItem>
           </Flex>
-          {error && hasExternalIp ? (
+          {error ? (
             <Alert variant="danger" isInline title={t('Failed to load external IP attachment')}>
               {getErrorMessage(error)}
             </Alert>

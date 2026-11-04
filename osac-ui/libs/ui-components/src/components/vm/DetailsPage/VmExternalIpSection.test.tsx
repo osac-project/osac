@@ -35,13 +35,13 @@ const attachment = (state: ExternalIPAttachmentState, message?: string) =>
 
 const setAttachment = (
   items: ExternalIPAttachment[],
-  queryState: { isLoading?: boolean; isFetching?: boolean } = {},
+  queryState: { error?: Error | null; isLoading?: boolean; isFetching?: boolean } = {},
 ) => {
   vi.mocked(resourceModule.useListResource).mockReturnValue({
     data: { items } as ExternalIPAttachmentsListResponse,
     isLoading: queryState.isLoading ?? false,
     isFetching: queryState.isFetching ?? false,
-    error: null,
+    error: queryState.error ?? null,
   } as unknown as ReturnType<typeof resourceModule.useListResource>);
 };
 
@@ -83,6 +83,24 @@ describe('VmExternalIpSection', () => {
     const attachButton = screen.getByRole('button', { name: 'Attach external IP' });
     expect(attachButton).toBeEnabled();
     expect(attachButton).toHaveClass('pf-m-secondary');
+  });
+
+  it('shows attachment load errors when the VM has no external IP', () => {
+    setAttachment([], { error: new Error('attachment lookup failed') });
+
+    renderWithProviders(
+      <VmExternalIpSection
+        vm={
+          {
+            ...vm,
+            status: { state: ComputeInstanceState.RUNNING, externalIpAddress: '' },
+          } as unknown as ComputeInstance
+        }
+      />,
+    );
+
+    expect(screen.getByText('Failed to load external IP attachment')).toBeInTheDocument();
+    expect(screen.getByText('attachment lookup failed')).toBeInTheDocument();
   });
 
   it('keeps Attach visible during a background attachment refresh', () => {

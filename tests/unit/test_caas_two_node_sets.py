@@ -61,7 +61,11 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         labels = {**selector, "osac.openshift.io/instance_type": instance_type}
         agents.append(
             {
-                "metadata": {"name": f"{bmi_id}-agent", "namespace": "osac", "labels": labels},
+                "metadata": {
+                    "name": f"{bmi_id}-agent",
+                    "namespace": "osac",
+                    "labels": {**labels, "infraenvs.agent-install.openshift.io": "order-a-infraenv"},
+                },
                 "status": {"conditions": [{"type": "Installed", "status": "True"}]},
             }
         )

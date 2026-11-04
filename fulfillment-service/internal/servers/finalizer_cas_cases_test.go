@@ -339,7 +339,10 @@ func finalizerTenantCases() []finalizerCase {
 				templateID := fmt.Sprintf("finalizer_cas_%s", uuid.NewString()[:8])
 				ExpectWithOffset(1, seedComputeCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
 				return privatev1.ComputeInstanceCatalogItem_builder{
-					Metadata:    privatev1.Metadata_builder{Name: finalizerName("ci-item")}.Build(),
+					Metadata: privatev1.Metadata_builder{
+						Name:   finalizerName("ci-item"),
+						Labels: map[string]string{"fixture": "catalog"},
+					}.Build(),
 					Title:       "My CI catalog item",
 					Description: "My description.",
 					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
@@ -355,7 +358,10 @@ func finalizerTenantCases() []finalizerCase {
 				templateID := fmt.Sprintf("finalizer_cas_%s", uuid.NewString()[:8])
 				ExpectWithOffset(1, seedClusterCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
 				return privatev1.ClusterCatalogItem_builder{
-					Metadata:    privatev1.Metadata_builder{Name: finalizerName("cluster-item")}.Build(),
+					Metadata: privatev1.Metadata_builder{
+						Name:   finalizerName("cluster-item"),
+						Labels: map[string]string{"fixture": "catalog"},
+					}.Build(),
 					Title:       "My cluster catalog item",
 					Description: "My description.",
 					Template:    privatev1.ClusterTemplateReference_builder{Id: templateID}.Build(),
@@ -371,7 +377,10 @@ func finalizerTenantCases() []finalizerCase {
 				templateID := fmt.Sprintf("finalizer_cas_%s", uuid.NewString()[:8])
 				ExpectWithOffset(1, seedBareMetalCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
 				return privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata:    privatev1.Metadata_builder{Name: finalizerName("bmi-item")}.Build(),
+					Metadata: privatev1.Metadata_builder{
+						Name:   finalizerName("bmi-item"),
+						Labels: map[string]string{"fixture": "catalog"},
+					}.Build(),
 					Title:       "My catalog item",
 					Description: "A test catalog item.",
 					Template:    privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),

@@ -288,10 +288,11 @@ var _ = Describe("typed finalizer updates", func() {
 	})
 
 	Describe("public servers that send a nil update mask", func() {
-		// The public API has no finalizers, so what these servers forward has none, or has the ones that they read
-		// from the private server before taking the row lock. DiskImages and InstanceTypes read the stored object
-		// and map the request over it, so their private paths drop request finalizers: they are guards that have to
-		// stay green.
+		// The public API has no finalizers. Most of these servers map the public object into an empty private one,
+		// so what they forward has none. DiskImages and InstanceTypes map it over the stored object that they read
+		// from the private server: the forwarded object already carries the stored finalizers, the masked paths of
+		// their private servers ignore metadata.finalizers, and the nil-mask path merges the request over the stored
+		// object, which unions the request finalizers with the stored ones.
 		DescribeTable("keeps the finalizers of the object",
 			func(c publicFinalizerCase) {
 				t := finalizerCaseFor(c.service).target([]string{finalizerController, finalizerHold})
@@ -363,6 +364,25 @@ var _ = Describe("typed finalizer updates", func() {
 
 			expectStaleTypedWriteRejected(t, update)
 		})
+
+		// This server takes the version of the request from its metadata and puts it in the merged object that it
+		// forwards. Without metadata the version is zero, and the mask application clears the finalizers because the
+		// request has none.
+		DescribeTable("rejects a finalizer change that has no metadata",
+			func(bumpFirst bool) {
+				t := finalizerCaseFor(privatev1.BareMetalInstanceTypes_ServiceDesc.ServiceName).
+					target([]string{finalizerController, finalizerHold})
+				if bumpFirst {
+					t.bump(ctx)
+				}
+
+				err := update(ctx, withoutMetadata(t.get(ctx)), finalizerMaskOf("metadata.finalizers"))
+
+				t.expectFinalizerConflict(ctx, err, finalizerController, finalizerHold)
+			},
+			Entry("at version 0", false),
+			Entry("at a later version", true),
+		)
 	})
 
 	Describe("public servers that read the object before the update", func() {
@@ -423,6 +443,7 @@ var _ = Describe("typed finalizer updates", func() {
 			finalizers, version, updates := t.committedState("volumes")
 			Expect(status.Code(result.writerErr)).To(Equal(codes.Aborted),
 				"the stale write returned %v and the stored finalizers are %v", result.writerErr, finalizers)
+			expectConflictMessage(result.writerErr, t.id)
 			Expect(finalizers).To(ConsistOf(finalizerController))
 			Expect(version).To(Equal(result.releasedVersion), "the rejected write must not bump the version")
 			Expect(updates).To(Equal(1), "only the release may have written a change record")
@@ -430,8 +451,9 @@ var _ = Describe("typed finalizer updates", func() {
 	})
 
 	Describe("catalog items, whose public servers keep their own copy of the finalizers", func() {
-		// The three public catalog-items servers restore the stored metadata themselves when they get a nil mask.
-		// The central fix has to leave them working, so these controls pass before and after it.
+		// The three public catalog-items servers copy the stored finalizers into the private object themselves when
+		// they get a nil mask, and the stored metadata as a whole when the request has none. These controls pin that
+		// behaviour.
 		DescribeTable("keeps the finalizers and the metadata",
 			func(c publicFinalizerCase, variant string) {
 				t := finalizerCaseFor(c.service).target([]string{finalizerController, finalizerHold})
@@ -454,6 +476,7 @@ var _ = Describe("typed finalizer updates", func() {
 				Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
 				Expect(finalizerMetadataOf(stored).GetName()).To(Equal(finalizerMetadataOf(before).GetName()))
 				if variant == "without metadata" {
+					Expect(finalizerMetadataOf(before).GetLabels()).ToNot(BeEmpty(), "the fixture must have labels")
 					Expect(finalizerMetadataOf(stored).GetLabels()).To(Equal(finalizerMetadataOf(before).GetLabels()))
 				}
 			},

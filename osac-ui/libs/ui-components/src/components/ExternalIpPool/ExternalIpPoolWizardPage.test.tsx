@@ -7,17 +7,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type ExternalIPPoolsCreateRequest,
   ExternalIPPoolsCreateResponseSchema,
-  type Tenant,
-  TenantState,
 } from '@osac/types/private';
 
 import { ExternalIpPoolWizardPage } from './ExternalIpPoolWizardPage';
 import type { MockTransportOverrides } from '../../test-utils/createMockConnectTransport';
-import {
-  expectResourceSelectDisabled,
-  expectResourceSelectEnabled,
-  getResourceSelectCombobox,
-} from '../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const LIST_PATH = '/admin/infrastructure/external-ip-pools';
@@ -35,20 +28,9 @@ vi.mock('react-router-dom', async (importOriginal) => {
   };
 });
 
-const makeTenant = (id: string, name: string): Tenant =>
-  ({
-    id,
-    metadata: { name },
-    spec: { domains: [`${name}.example.com`] },
-    status: { state: TenantState.SYNCED },
-  }) as Tenant;
-
-const defaultTenants = [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')];
-
-const renderCreatePage = (overrides?: MockTransportOverrides, tenants: Tenant[] = defaultTenants) =>
+const renderCreatePage = (overrides?: MockTransportOverrides) =>
   renderWithProviders(<ExternalIpPoolWizardPage />, {
     transportOverrides: overrides,
-    apiFixtures: { tenants },
   });
 
 const clickNext = async (user: UserEvent) => {
@@ -61,19 +43,8 @@ const fillPoolStep = async (user: UserEvent, name: string, cidr: string) => {
   await user.type(screen.getByRole('textbox', { name: 'CIDR 1' }), cidr);
 };
 
-const fillTenantStep = async (user: UserEvent, tenantName: string) => {
-  await screen.findByRole('heading', { name: 'Tenant' });
-  await waitFor(() => {
-    expectResourceSelectEnabled(/^Tenant/);
-  });
-  await user.click(screen.getByLabelText(/^Tenant/));
-  await user.click(screen.getByRole('option', { name: tenantName }));
-};
-
 const fillValidWizard = async (user: UserEvent) => {
   await fillPoolStep(user, 'prod-v4', '192.168.1.0/24');
-  await clickNext(user);
-  await fillTenantStep(user, 'acme');
   await clickNext(user);
   await screen.findByRole('heading', { name: 'Review' });
 };
@@ -96,7 +67,18 @@ describe('ExternalIpPoolWizardPage', () => {
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
     });
 
-    it('advances through tenant and review, then submits the expected payload', async () => {
+    it('has no Tenant step, because pools are shared by all tenants', () => {
+      renderCreatePage();
+
+      expect(
+        screen.getByText('The pool is shared by all tenants.', { exact: false }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'External IP pool' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Review' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Tenant' })).not.toBeInTheDocument();
+    });
+
+    it('advances from the pool step to review, then submits the expected payload', async () => {
       let capturedRequest: ExternalIPPoolsCreateRequest | undefined;
       const { user } = renderCreatePage({
         onExternalIPPoolCreate: (req) => {
@@ -111,7 +93,7 @@ describe('ExternalIpPoolWizardPage', () => {
 
       expect(screen.getByText('prod-v4')).toBeInTheDocument();
       expect(screen.getByText('192.168.1.0/24')).toBeInTheDocument();
-      expect(screen.getByText('acme')).toBeInTheDocument();
+      expect(screen.queryByText('Tenant')).not.toBeInTheDocument();
 
       await user.click(screen.getByRole('button', { name: 'Create' }));
 
@@ -120,24 +102,10 @@ describe('ExternalIpPoolWizardPage', () => {
       });
 
       expect(capturedRequest?.object?.metadata?.name).toBe('prod-v4');
-      expect(capturedRequest?.object?.metadata?.tenant).toBe('t-1');
+      // The server places the pool in the shared tenant, so the request names none.
+      expect(capturedRequest?.object?.metadata?.tenant).toBe('');
       expect(capturedRequest?.object?.spec?.cidrs).toEqual(['192.168.1.0/24']);
     }, 15000);
-
-    it('shows the auto-selected tenant name on Review when only one tenant exists', async () => {
-      const { user } = renderCreatePage(undefined, [makeTenant('t-1', 'acme')]);
-
-      await fillPoolStep(user, 'prod-v4', '192.168.1.0/24');
-      await clickNext(user);
-      await screen.findByRole('heading', { name: 'Tenant' });
-      await waitFor(() => {
-        expect(getResourceSelectCombobox(/^Tenant/)).toHaveValue('acme');
-      });
-      await clickNext(user);
-
-      expect(await screen.findByRole('heading', { name: 'Review' })).toBeInTheDocument();
-      expect(screen.getByText('acme')).toBeInTheDocument();
-    });
 
     it('trims CIDR values in the create payload', async () => {
       let capturedRequest: ExternalIPPoolsCreateRequest | undefined;
@@ -151,8 +119,6 @@ describe('ExternalIpPoolWizardPage', () => {
       });
 
       await fillPoolStep(user, 'prod-v4', '  192.168.1.0/24  ');
-      await clickNext(user);
-      await fillTenantStep(user, 'acme');
       await clickNext(user);
       await screen.findByRole('heading', { name: 'Review' });
       await user.click(screen.getByRole('button', { name: 'Create' }));
@@ -204,48 +170,6 @@ describe('ExternalIpPoolWizardPage', () => {
 
       expect(await screen.findByText('Invalid IPv4 CIDR notation')).toBeInTheDocument();
       expect(onExternalIPPoolCreate).not.toHaveBeenCalled();
-    });
-
-    it('blocks advancing past Tenant when no tenant is selected', async () => {
-      const onExternalIPPoolCreate = vi.fn();
-      const { user } = renderCreatePage({ onExternalIPPoolCreate });
-
-      await fillPoolStep(user, 'prod-v4', '192.168.1.0/24');
-      await clickNext(user);
-      await screen.findByRole('heading', { name: 'Tenant' });
-      await clickNext(user);
-
-      expect(await screen.findByText('Tenant is required')).toBeInTheDocument();
-      expect(onExternalIPPoolCreate).not.toHaveBeenCalled();
-    });
-
-    it('warns when there are no registered tenants', async () => {
-      const { user } = renderCreatePage(undefined, []);
-
-      await fillPoolStep(user, 'prod-v4', '192.168.1.0/24');
-      await clickNext(user);
-
-      expect(await screen.findByText('No registered tenants')).toBeInTheDocument();
-      expect(
-        screen.getByText('Register a tenant before creating and assigning an external IP pool.'),
-      ).toBeInTheDocument();
-      expectResourceSelectDisabled(/^Tenant/);
-    });
-
-    it('shows a fetch error instead of the empty-tenant warning when listing tenants fails', async () => {
-      const { user } = renderCreatePage({
-        onTenantList: () => {
-          throw new ConnectError('tenants unavailable', Code.Unavailable);
-        },
-      });
-
-      await fillPoolStep(user, 'prod-v4', '192.168.1.0/24');
-      await clickNext(user);
-
-      expect(await screen.findByText('Failed to fetch tenants')).toBeInTheDocument();
-      expect(screen.getByText('tenants unavailable')).toBeInTheDocument();
-      expect(screen.queryByText('No registered tenants')).not.toBeInTheDocument();
-      expectResourceSelectDisabled(/^Tenant/);
     });
 
     it('shows a form-level error and does not navigate when the name already exists', async () => {

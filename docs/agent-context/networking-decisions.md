@@ -189,6 +189,12 @@ as follows:
   internet needs no DNS reachability. The settings `CUDN_EVPN_DNS_RESOLVERS`,
   `NETRIS_DNS_RESOLVERS`, `NETRIS_DNS_SNAT_CIDR` and the Netris per-VN DNS SNAT
   are removed.
+- **ExternalIPPool tenant:** as the unified design says, every ExternalIPPool
+  is shared by all tenants and lives in the `shared` tenant. A create that
+  omits the tenant gets `shared`; a create or update that names another tenant
+  is rejected with `PERMISSION_DENIED`. Automatic ExternalIP pool selection
+  does not check the pool's tenant, so it relies on this rule. Pools stored in
+  a tenant before this rule keep it, because the tenant is immutable.
 - **NetworkClass and NetworkAttachment CRDs:** the fulfillment reconciler
   creates the single NetworkClass CR, which resolves its managers from the
   registrations. BMaaS (BMF) and VMaaS create a NetworkAttachment per

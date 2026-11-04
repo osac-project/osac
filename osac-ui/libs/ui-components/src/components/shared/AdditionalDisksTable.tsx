@@ -2,17 +2,18 @@ import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import type { ComputeInstanceDisk } from '@osac/types';
 
-import { useTranslation } from '../../../hooks/useTranslation';
+import { useTranslation } from '../../hooks/useTranslation';
 
 interface AdditionalDisksTableProps {
   disks: ComputeInstanceDisk[];
+  className?: string;
 }
 
-const AdditionalDisksTable = ({ disks }: AdditionalDisksTableProps) => {
+const AdditionalDisksTable = ({ disks, className }: AdditionalDisksTableProps) => {
   const { t } = useTranslation();
 
   return (
-    <Table aria-label={t('Additional disks')} variant="compact">
+    <Table aria-label={t('Additional disks')} variant="compact" className={className}>
       <Thead>
         <Tr>
           <Th>{t('Size')}</Th>

@@ -14,10 +14,8 @@ import {
 import type { ComputeInstance } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
-import CatalogStorageTable, {
-  type CatalogStorageTableRow,
-} from '../../catalog/details/CatalogStorageTable';
 import { ResourceConditionsTable } from '../../Resource/ResourceConditionsTable';
+import AdditionalDisksTable from '../../shared/AdditionalDisksTable';
 
 import './VmStorageSection.css';
 
@@ -31,11 +29,6 @@ const VmStorageSection = ({ vm }: VmStorageSectionProps) => {
   const { t } = useTranslation();
   const bootDisk = vm.spec?.bootDisk;
   const additionalDisks = vm.spec?.additionalDisks?.items ?? [];
-  const additionalDiskRows: CatalogStorageTableRow[] = additionalDisks.map((disk, index) => ({
-    id: `additional-disk-${index}`,
-    size: disk.sizeGib === undefined ? EMPTY_VALUE : `${disk.sizeGib} GB`,
-    storageTier: disk.storageTier?.name || disk.storageTier?.id || EMPTY_VALUE,
-  }));
 
   return (
     <Stack hasGutter>
@@ -63,10 +56,9 @@ const VmStorageSection = ({ vm }: VmStorageSectionProps) => {
             <DescriptionListDescription>
               <Grid>
                 <GridItem lg={6}>
-                  {additionalDiskRows.length > 0 ? (
-                    <CatalogStorageTable
-                      rows={additionalDiskRows}
-                      emptyValue={EMPTY_VALUE}
+                  {additionalDisks.length > 0 ? (
+                    <AdditionalDisksTable
+                      disks={additionalDisks}
                       className="osac-vm-storage-table"
                     />
                   ) : (

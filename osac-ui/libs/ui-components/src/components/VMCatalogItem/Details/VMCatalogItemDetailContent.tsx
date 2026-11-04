@@ -30,8 +30,8 @@ import {
   computeInstanceTypeReferenceFromPolicy,
   int32ValueFromPolicy,
 } from '../../catalog/computeCatalogItemResourceDisplay';
-import AdditionalDisksTable from '../../CatalogItem/Details/AdditionalDisksTable';
 import { Timestamp } from '../../Primitives/Timestamp';
+import AdditionalDisksTable from '../../shared/AdditionalDisksTable';
 import UserDataDetailValue from '../../UserData/UserDataDetailValue';
 
 interface VMCatalogItemDetailContentProps {

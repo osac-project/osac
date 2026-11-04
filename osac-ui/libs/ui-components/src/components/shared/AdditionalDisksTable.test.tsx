@@ -1,13 +1,23 @@
+import { create } from '@bufbuild/protobuf';
 import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import CatalogStorageTable from './CatalogStorageTable';
-import { renderWithProviders } from '../../../test-utils/TestProviders';
+import { ComputeInstanceDiskSchema } from '@osac/types';
 
-describe('CatalogStorageTable', () => {
+import AdditionalDisksTable from './AdditionalDisksTable';
+import { renderWithProviders } from '../../test-utils/TestProviders';
+
+describe('AdditionalDisksTable', () => {
   it('renders compact additional disk rows', () => {
     renderWithProviders(
-      <CatalogStorageTable rows={[{ id: 'disk-1', size: '100 GiB', storageTier: 'fast' }]} />,
+      <AdditionalDisksTable
+        disks={[
+          create(ComputeInstanceDiskSchema, {
+            sizeGib: 100,
+            storageTier: { id: 'tier-1', name: 'fast' },
+          }),
+        ]}
+      />,
     );
 
     expect(screen.getByRole('columnheader', { name: 'Size' })).toBeInTheDocument();
@@ -17,7 +27,7 @@ describe('CatalogStorageTable', () => {
   });
 
   it('renders Not set when there are no additional disks', () => {
-    renderWithProviders(<CatalogStorageTable rows={[]} />);
+    renderWithProviders(<AdditionalDisksTable disks={[]} />);
 
     expect(screen.getByRole('cell', { name: 'Not set' })).toBeInTheDocument();
   });

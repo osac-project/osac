@@ -27,7 +27,7 @@ describe('VmStorageSection', () => {
     expect(screen.getByText('balanced')).toBeInTheDocument();
     const additionalDisksTable = screen.getByRole('grid', { name: 'Additional disks' });
     expect(additionalDisksTable).toHaveClass('osac-vm-storage-table');
-    expect(screen.getByRole('cell', { name: '100 GB' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: '100 GiB' })).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: 'fast' })).toBeInTheDocument();
     expect(screen.getAllByRole('separator')).toHaveLength(1);
     expect(container.querySelector('.pf-v6-c-card')).toBeNull();

@@ -89,13 +89,69 @@ Doc 1 owns one ISC and workspace lineage, registry population, and generated-res
 | Handoff item | OSAC-specific requirement |
 | --- | --- |
 | `idms-oc-mirror.yaml` | Generated ImageDigestMirrorSet names and exact source-to-mirror rules |
-| `itms-oc-mirror.yaml` | Generated ImageTagMirrorSet names and exact tag rules; required by this handoff |
+| Generated ITMS documents | Every generated ImageTagMirrorSet identity and exact tag rule, across all files/documents, with NCS enforced on every entry before apply/handoff; required by this handoff |
 | `cs-redhat-operator-index-v4-22.yaml` | CatalogSource `redhat-operators` in `openshift-marketplace`; exact generated mirror image |
 | `cc-redhat-operator-index-v4-22.yaml` | Generated ClusterCatalog identities; use these objects, not any catalog on the cluster |
 | `signature-configmap.yaml` | Generated signature identity and Doc 1 managed-signature evidence |
 | ISC and workspace | Original configuration, selected inventory, generated files, and incremental lineage |
 | Affected pools | Explicit pool names and expected current generations from the change owner |
-| VMaaS source selection (when `enable_vmaas=true`) | Nonempty `selected-diskimage-sources.json` with exact selected upstream references and tags; omit for `enable_vmaas=false` |
+| VMaaS source selection (when `enable_vmaas=true`) | Selected upstream containerdisk repositories and exact tags, intended mirror references and coverage/exact-tag review in the organization's existing records; no mandated filename, serialization or export; omit for `enable_vmaas=false` |
+
+**Core prerequisite — all ITMS entries must disable source fallback.** This
+is independent of VMaaS selection. The mirror owner must patch every entry
+in every generated ITMS document to `mirrorSourcePolicy: NeverContactSource`
+**before apply or handoff**, including replacing an explicit
+`AllowContactingSource`. The
+[4.22 generator](https://github.com/openshift/oc-mirror/blob/7860a5e7f0707a3d8d8729586e8313a41983008d/internal/pkg/clusterresources/clusterresources.go#L126-L153)
+does not set this field; the
+[API default](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_tag_mirror_set.go#L119-L127)
+permits source fallback. Missing or unsafe policy returns to the mirror owner,
+not an in-place repair in this prerequisite guide.
+
+Run this standalone Bash check with jq against the live handoff state before
+dependent installation. It rejects failed reads, malformed/empty data,
+missing/empty rule lists and mirror lists, and any policy other than NCS:
+
+```bash
+set -euo pipefail
+ITMS_JSON=$(oc get imagetagmirrorsets.config.openshift.io -o json) || exit 1
+printf '%s\n' "$ITMS_JSON" | jq -se '
+  def nonempty_string: type == "string" and length > 0;
+  length == 1 and (.[0] |
+    (.items | type == "array" and length > 0) and
+    all(.items[];
+      .kind == "ImageTagMirrorSet" and
+      (.spec.imageTagMirrors | type == "array" and length > 0) and
+      all(.spec.imageTagMirrors[];
+        (.source | nonempty_string) and
+        (.mirrors | type == "array" and length > 0) and
+        all(.mirrors[]; nonempty_string) and
+        .mirrorSourcePolicy == "NeverContactSource")))
+' >/dev/null || exit 1
+printf '%s\n' 'PASS: every live ITMS entry has NeverContactSource'
+```
+
+This checks policy only, not selected-image coverage or availability. For
+VMaaS, manually match each selected **upstream** repository against `source`
+(not mirror destinations) using exact or `/`-boundary prefixes and the
+**most-specific** source across all ITMS objects. Evaluate wildcard-host rules
+using the [API semantics](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_tag_mirror_set.go#L44-L65).
+Review all entries for the effective source, including merged destinations;
+a safe parent cannot hide an unsafe or empty child. For example,
+`quay.io/team/disk` does not cover `quay.io/team/disk-evil`.
+Replace the matched source prefix with the mirror prefix, preserve the
+repository suffix and **exact selected tag**, and verify that tag's manifest
+and expected image/platform content with the approved mirror-read client.
+A namespace or `/v2/` response alone is insufficient. Missing mappings or
+tags block handoff. Review digest selections separately against IDMS.
+
+The platform/network prerequisites are assumed to provide approved egress
+restrictions; network-egress testing is outside this workflow. NCS is a
+matching-image fallback policy, **not a firewall**. Do not replace it with
+`blockedRegistries`: [MCO](https://github.com/openshift/machine-config-operator/blob/6ee7ec8468a63d46e5fecb4a60244357b1b2a6ad/pkg/controller/container-runtime-config/helpers.go#L760-L815)
+maintains both transport and image-policy blocking, which can reject the
+logical source reference even with mirrors configured. ITMS does not prove
+CDI import routing; retain `installation.md`'s separate CDI acceptance gate.
 
 Check default-source isolation:
 
@@ -109,7 +165,7 @@ Review the handed-off resource identities and record the adjacent observations s
 
 Retain both generated mirror-set types and the generated signature handoff. For the corresponding dependent steps, require the exact CatalogSource name/namespace/image and its `READY` state, and each generated ClusterCatalog's `Serving=True` condition with reason `Available`, using separate resource checks. OLM Classic PackageManifest visibility does not prove ClusterCatalog readiness or vice versa. These observations do not produce a combined Doc 1 identity/content/policy/lineage certificate.
 
-**Regenerated mirror policies — Doc1 change owner:** regeneration of `idms-oc-mirror.yaml` or `itms-oc-mirror.yaml` is not itself an instruction to change live cluster configuration. Before applying regenerated output, the mirror/change owner compares the intended generated object identities and source-to-mirror rules with the approved live configuration.
+**Regenerated mirror policies — Doc1 change owner:** first enforce NCS on every generated ITMS entry as required above. Regeneration of `idms-oc-mirror.yaml` or `itms-oc-mirror.yaml` is not itself an instruction to change live cluster configuration. Before applying regenerated output, the mirror/change owner compares the intended patched object identities, source-to-mirror rules and policies with the approved live configuration. An existing `AllowContactingSource` or absent live policy does not satisfy this handoff.
 
 - **Application is required before dependent use** when an intended generated object/rule is missing or the approved selected references require a new or changed mapping, destination or policy.
 - **Do not introduce a policy change merely because output was regenerated.** If the intended generated identities and effective rules already match the approved live state for all selected consumers, retain the fresh artifacts and the owner's no-change review.

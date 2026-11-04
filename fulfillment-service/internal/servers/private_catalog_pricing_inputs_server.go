@@ -138,7 +138,10 @@ func (s *PrivateCatalogPricingInputsServer) List(ctx context.Context,
 	}
 
 	total := len(all)
-	page := paginate(all, request.GetOffset(), request.GetLimit())
+	page, err := paginate(all, request.GetOffset(), request.GetLimit(), request.HasLimit())
+	if err != nil {
+		return nil, err
+	}
 
 	return privatev1.CatalogPricingInputsListResponse_builder{
 		Size:  int32(len(page)), // #nosec G115 -- bounded by catalog size

@@ -60,6 +60,23 @@ var _ = Describe("Resolver.ListServiceRateCardItems", func() {
 			[]pricing.RateCondition{{Dimension: "instance_type", Operator: pricing.OperatorEquals, Value: "small"}}))
 	})
 
+	It("omits and counts a row with an empty EQUALS value", func() {
+		scenario := baseScenario()
+		scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{Rows: []billing.RateRow{
+			{DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.25"},
+			{
+				DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.5",
+				AttributeValues: []billing.AttributeValue{{Name: "region", Value: ""}},
+			},
+		}}
+		resolver := pricing.NewResolver(billingfake.New(scenario))
+		items, skipped, err := resolver.ListServiceRateCardItems(ctx, "compute_instance", "USD")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(items).To(HaveLen(1))
+		Expect(items[0].Amount.String()).To(Equal("0.25"))
+		Expect(skipped).To(Equal(map[string]int{pricing.SkipConditionValueEmpty: 1}))
+	})
+
 	DescribeTable("omits an unsupported row shape and counts it (AC3)",
 		func(row billing.RateRow) {
 			scenario := baseScenario()

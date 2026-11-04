@@ -20,6 +20,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/output"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -40,11 +41,19 @@ func Cmd() *cobra.Command {
 		RunE:    runner.run,
 	}
 	result.Flags().StringVarP(&runner.format, "output", "o", output.Table, outputFlagHelp)
+	result.Flags().StringVar(&runner.filter, "filter", "", filterFlagHelp)
+	result.Flags().StringVar(&runner.order, "order", "", orderFlagHelp)
+	result.Flags().Int32Var(&runner.offset, "offset", 0, offsetFlagHelp)
+	result.Flags().Int32Var(&runner.limit, "limit", 0, limitFlagHelp)
 	return result
 }
 
 type runnerContext struct {
 	format string
+	filter string
+	order  string
+	offset int32
+	limit  int32
 }
 
 // run fetches the inventory over gRPC and renders it in the requested format.
@@ -62,12 +71,51 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
 	defer conn.Close()
-	response, err := publicv1.NewCatalogPricingInputsClient(conn).List(
-		ctx, publicv1.CatalogPricingInputsListRequest_builder{}.Build())
+	items, err := c.list(ctx, publicv1.NewCatalogPricingInputsClient(conn), cmd.Flags().Changed("limit"))
 	if err != nil {
-		return fmt.Errorf("failed to list catalog pricing inputs: %w", err)
+		return err
 	}
-	return render(ctx, terminal.ConsoleFromContext(ctx), c.format, response.GetItems())
+	return render(ctx, terminal.ConsoleFromContext(ctx), c.format, items)
+}
+
+// list collects the inventory rows over gRPC. Without an explicit --limit the server returns pages of its default
+// size, so every page is fetched until the inventory is exhausted and the output is never silently truncated. An
+// explicit --limit is sent once and verbatim, preserving the server's count-only response for --limit 0. The
+// starting offset is clamped the same way the server clamps it, so the next-page arithmetic stays correct when
+// paging from a negative offset.
+func (c *runnerContext) list(ctx context.Context, client publicv1.CatalogPricingInputsClient,
+	explicitLimit bool) ([]*publicv1.CatalogPricingInput, error) {
+	offset := c.offset
+	if offset < 0 {
+		offset = 0
+	}
+	var items []*publicv1.CatalogPricingInput
+	for {
+		builder := publicv1.CatalogPricingInputsListRequest_builder{
+			Offset: proto.Int32(offset),
+		}
+		if c.filter != "" {
+			builder.Filter = proto.String(c.filter)
+		}
+		if c.order != "" {
+			builder.Order = proto.String(c.order)
+		}
+		if explicitLimit {
+			builder.Limit = proto.Int32(c.limit)
+		}
+		response, err := client.List(ctx, builder.Build())
+		if err != nil {
+			return nil, fmt.Errorf("failed to list catalog pricing inputs: %w", err)
+		}
+		items = append(items, response.GetItems()...)
+		if explicitLimit {
+			return items, nil
+		}
+		offset += response.GetSize()
+		if response.GetSize() == 0 || offset >= response.GetTotal() {
+			return items, nil
+		}
+	}
 }
 
 // render writes the inventory as a table, JSON or YAML; the JSON and YAML encoding is shared in the output package.
@@ -116,6 +164,22 @@ const example = `  # Show the inventory
   osac get catalogpricinginput
 
   # Show the inventory as JSON
-  osac get catalogpricinginput -o json`
+  osac get catalogpricinginput -o json
+
+  # Show only the rows of one service
+  osac get catalogpricinginput --filter "this.service == 'cluster'"
+
+  # Show only the first 20 rows
+  osac get catalogpricinginput --limit 20`
 
 const outputFlagHelp = `_FORMAT_ - Output format. Must be one of {{ bt }}table{{ bt }}, {{ bt }}json{{ bt }} or {{ bt }}yaml{{ bt }}.`
+
+const filterFlagHelp = `_EXPRESSION_ - CEL expression used for filtering results. The expression is evaluated against each row and only those for
+which it returns true are included in the output.`
+
+const orderFlagHelp = `_ORDER_ - Sort order of the results. Not implemented by the server yet; accepted for parity with other list commands.`
+
+const offsetFlagHelp = `_INDEX_ - Index of the first result to return. Defaults to zero. Negative values are treated as zero by the server.`
+
+const limitFlagHelp = `_COUNT_ - Maximum number of results to return. Zero returns only the total count and the server caps the value at 1000.
+When not set every result is fetched, so the output is never truncated.`

@@ -84,13 +84,15 @@ func (s *ProviderRateCardItemsServer) List(ctx context.Context,
 	request *publicv1.ProviderRateCardItemsListRequest) (*publicv1.ProviderRateCardItemsListResponse, error) {
 	privateRequest := privatev1.ProviderRateCardItemsListRequest_builder{
 		Offset:       proto.Int32(request.GetOffset()),
-		Limit:        proto.Int32(request.GetLimit()),
 		Filter:       proto.String(request.GetFilter()),
 		Order:        proto.String(request.GetOrder()),
 		TenantId:     proto.String(request.GetTenantId()),
 		Service:      proto.String(request.GetService()),
 		CurrencyCode: proto.String(request.GetCurrencyCode()),
 	}.Build()
+	if request.HasLimit() {
+		privateRequest.SetLimit(request.GetLimit())
+	}
 	privateResponse, err := s.private.List(ctx, privateRequest)
 	if err != nil {
 		return nil, err

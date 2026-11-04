@@ -14,10 +14,14 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -26,12 +30,13 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/billing/pricing"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
+	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// widgetScenario scripts a service that is never compute_instance, so List exercises row mapping without ever
-// touching the compute instance catalog item DAO (that path is covered separately, further down).
+// widgetScenario scripts a service outside the built-in mappings, exercising exact-name selection and row mapping.
+// Catalog cross-reference against the mapped VMaaS/CaaS services is covered separately, further down.
 func widgetScenario() billingfake.Scenario {
 	return billingfake.Scenario{
 		Services: []billingfake.ServiceSpec{{
@@ -76,14 +81,31 @@ var _ = Describe("Provider rate card items server", func() {
 		Expect(fake.Calls()).To(BeEmpty())
 	})
 
-	It("requires currency_code when no tenant-resolved currency is available", func() {
+	DescribeTable("validates currency_code before calling the provider", func(currency *string, want codes.Code) {
 		fake := billingfake.New(widgetScenario())
 		server := build(fake.Provider(), prometheus.NewRegistry())
-		_, err := server.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{Service: proto.String("widget_service")}.Build())
-		st, ok := status.FromError(err)
-		Expect(ok).To(BeTrue())
-		Expect(st.Code()).To(Equal(codes.InvalidArgument))
-	})
+		interceptor, err := validation.NewProtovalidateInterceptor().SetLogger(logger).Build()
+		Expect(err).ToNot(HaveOccurred())
+		request := publicv1.ProviderRateCardItemsListRequest_builder{
+			Service: proto.String("widget_service"), CurrencyCode: currency,
+		}.Build()
+		_, err = interceptor.UnaryServer(ctx, request, &grpc.UnaryServerInfo{},
+			func(ctx context.Context, request any) (any, error) {
+				return server.List(ctx, request.(*publicv1.ProviderRateCardItemsListRequest))
+			})
+		Expect(status.Code(err)).To(Equal(want))
+		if want == codes.InvalidArgument {
+			Expect(err.Error()).To(ContainSubstring("currency_code"))
+			Expect(fake.Calls()).To(BeEmpty())
+		}
+	},
+		Entry("omitted", nil, codes.InvalidArgument),
+		Entry("empty", proto.String(""), codes.InvalidArgument),
+		Entry("too short", proto.String("US"), codes.InvalidArgument),
+		Entry("too long", proto.String("USDX"), codes.InvalidArgument),
+		Entry("three characters", proto.String("USD"), codes.OK),
+		Entry("no invented uppercase constraint", proto.String("usd"), codes.OK),
+	)
 
 	It("returns only the documented fields and omits an unsupported row, counting it by reason", func() {
 		fake := billingfake.New(widgetScenario())
@@ -162,45 +184,69 @@ var _ = Describe("Provider rate card items server", func() {
 		}
 	})
 
-	It("rejects an unknown tenant_id as a validation error", func() {
-		fake := billingfake.New(widgetScenario())
-		server := build(fake.Provider(), prometheus.NewRegistry())
-		_, err := server.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
-			Service: proto.String("widget_service"), CurrencyCode: proto.String("USD"), TenantId: proto.String("no-such-tenant"),
-		}.Build())
-		st, ok := status.FromError(err)
-		Expect(ok).To(BeTrue())
-		Expect(st.Code()).To(Equal(codes.InvalidArgument))
-	})
+	DescribeTable("rejects every nonempty tenant_id as unsupported before any provider call",
+		func(tenantID string, state billing.AccountState, configured bool) {
+			scenario := widgetScenario()
+			scenario.Accounts = []billingfake.AccountSpec{{ID: "acct-1", ExternalID: "tenant-a", State: state}}
+			fake := billingfake.New(scenario)
+			provider := fake.Provider()
+			if !configured {
+				provider = billing.NewProvider("", fake, nil)
+			}
+			server := build(provider, prometheus.NewRegistry())
+			_, err := server.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
+				Service: proto.String("widget_service"), CurrencyCode: proto.String("USD"), TenantId: proto.String(tenantID),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.Unimplemented))
+			Expect(fake.Calls()).To(BeEmpty())
+		},
+		Entry("unknown tenant", "no-such-tenant", billing.AccountActive, true),
+		Entry("inactive provider account", "tenant-a", billing.AccountInactive, true),
+		Entry("active provider account", "tenant-a", billing.AccountActive, true),
+		Entry("whitespace is still nonempty", " ", billing.AccountUnknown, true),
+		Entry("billing disabled", "tenant-a", billing.AccountActive, false),
+	)
 
-	It("rejects an inactive tenant's account as a validation error", func() {
-		scenario := widgetScenario()
-		scenario.Accounts = []billingfake.AccountSpec{{ID: "acct-1", ExternalID: "tenant-a", State: billing.AccountInactive}}
-		fake := billingfake.New(scenario)
-		server := build(fake.Provider(), prometheus.NewRegistry())
-		_, err := server.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
-			Service: proto.String("widget_service"), CurrencyCode: proto.String("USD"), TenantId: proto.String("tenant-a"),
-		}.Build())
-		st, ok := status.FromError(err)
-		Expect(ok).To(BeTrue())
-		Expect(st.Code()).To(Equal(codes.InvalidArgument))
-	})
-
-	It("lists the same rows for an active tenant as for no tenant (no separate override tier)", func() {
-		scenario := widgetScenario()
-		scenario.Accounts = []billingfake.AccountSpec{{ID: "acct-1", ExternalID: "tenant-a", State: billing.AccountActive}}
-		fake := billingfake.New(scenario)
-		server := build(fake.Provider(), prometheus.NewRegistry())
-		withTenant, err := server.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
-			Service: proto.String("widget_service"), CurrencyCode: proto.String("USD"), TenantId: proto.String("tenant-a"),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		withoutTenant, err := server.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
-			Service: proto.String("widget_service"), CurrencyCode: proto.String("USD"),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(proto.Equal(withTenant, withoutTenant)).To(BeTrue())
-	})
+	DescribeTable("lists every mapped service when service is omitted, independently of catalog inventory",
+		func(inventoryServices []string) {
+			scenario := billingfake.Scenario{}
+			for _, service := range []string{serviceComputeInstance, serviceCluster} {
+				spec := widgetScenario().Services[0]
+				spec.ID = "svc-" + service
+				spec.Name = service
+				scenario.Services = append(scenario.Services, spec)
+			}
+			fake := billingfake.New(scenario)
+			server := build(fake.Provider(), prometheus.NewRegistry())
+			if inventoryServices != nil {
+				_, err := server.private.inventoryCache.get(ctx, catalogInventoryKey{},
+					func(context.Context) ([]*privatev1.CatalogPricingInput, error) {
+						var inventory []*privatev1.CatalogPricingInput
+						for _, service := range inventoryServices {
+							inventory = append(inventory, privatev1.CatalogPricingInput_builder{
+								Service: service, Dimension: "widget_size", Value: "large",
+							}.Build())
+						}
+						return inventory, nil
+					})
+				Expect(err).ToNot(HaveOccurred())
+			}
+			response, err := server.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
+				CurrencyCode: proto.String("USD"), TenantId: proto.String(""),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			var services []string
+			for _, item := range response.GetItems() {
+				services = append(services, item.GetService())
+			}
+			Expect(services).To(ConsistOf(serviceComputeInstance, serviceCluster))
+			Expect(fake.Count("GetServiceRateCard")).To(Equal(2))
+			Expect(fake.Count("ListAccounts")).To(BeZero())
+		},
+		Entry("empty inventory from both catalog DAOs", nil),
+		Entry("inventory with only compute instances", []string{serviceComputeInstance}),
+		Entry("inventory with both services", []string{serviceComputeInstance, serviceCluster}),
+	)
 
 	It("returns an empty list for a service with no matching provider name", func() {
 		fake := billingfake.New(widgetScenario())
@@ -248,6 +294,45 @@ var _ = Describe("Provider rate card items server", func() {
 		Expect(response.GetItems()).To(HaveLen(1))
 		Expect(response.GetItems()[0].GetRate().GetAmount()).To(Equal("2"))
 	})
+
+	DescribeTable("preserves the platform pagination contract through the public wrapper",
+		func(offset int32, limit *int32, wantSize int, wantCode codes.Code) {
+			const total = 1205
+			rows := make([]billing.RateRow, total)
+			for i := range rows {
+				rows[i] = billing.RateRow{
+					DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "1",
+					AttributeValues: []billing.AttributeValue{{Name: "widget_size", Value: fmt.Sprint(i)}},
+				}
+			}
+			scenario := widgetScenario()
+			scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{Rows: rows}
+			fake := billingfake.New(scenario)
+			server := build(fake.Provider(), prometheus.NewRegistry())
+			response, err := server.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
+				Service: proto.String("widget_service"), CurrencyCode: proto.String("USD"),
+				Offset: proto.Int32(offset), Limit: limit,
+			}.Build())
+			Expect(status.Code(err)).To(Equal(wantCode))
+			if wantCode != codes.OK {
+				Expect(response).To(BeNil())
+				return
+			}
+			Expect(response.GetTotal()).To(Equal(int32(total)))
+			Expect(response.GetSize()).To(Equal(int32(wantSize)))
+			Expect(response.GetItems()).To(HaveLen(wantSize))
+			if wantSize > 0 {
+				Expect(response.GetItems()[0].GetResourceConditions()[0].GetValue()).To(Equal(fmt.Sprint(max(offset, 0))))
+			}
+		},
+		Entry("omitted limit defaults to 100", int32(0), nil, 100, codes.OK),
+		Entry("explicit zero is count-only", int32(0), proto.Int32(0), 0, codes.OK),
+		Entry("negative limit is invalid", int32(0), proto.Int32(-1), 0, codes.InvalidArgument),
+		Entry("negative offset clamps to zero", int32(-1), proto.Int32(2), 2, codes.OK),
+		Entry("limit capped at 1000", int32(0), proto.Int32(2147483647), 1000, codes.OK),
+		Entry("offset and large limit do not overflow", int32(1200), proto.Int32(2147483647), 5, codes.OK),
+		Entry("offset past end is empty", int32(2147483647), nil, 0, codes.OK),
+	)
 
 	It("applies the CEL filter to the rows, before pagination", func() {
 		scenario := widgetScenario()

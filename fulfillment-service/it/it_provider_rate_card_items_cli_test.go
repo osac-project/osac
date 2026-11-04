@@ -22,7 +22,8 @@ import (
 )
 
 // The dev deployment configures no billing provider, so this spec exercises the disabled mode end to end: the CLI
-// reaches the deployed server and surfaces its FAILED_PRECONDITION/BILLING_NOT_CONFIGURED rejection.
+// reaches the deployed server and surfaces its FAILED_PRECONDITION/BILLING_NOT_CONFIGURED rejection. The currency
+// filter is mandatory on this command, so a valid value must be supplied for the request to reach the server at all.
 var _ = Describe("Provider rate card items CLI", Label("billing"), func() {
 	It("fails with billing not configured over the CLI when no provider is configured", func(ctx context.Context) {
 		homeDir, err := tool.NewCLIHomeDir()
@@ -31,7 +32,7 @@ var _ = Describe("Provider rate card items CLI", Label("billing"), func() {
 		_, _, exitCode := tool.LoginCLI(ctx, homeDir, adminUsername, adminsPassword)
 		Expect(exitCode).To(Equal(0), "login should succeed")
 
-		stdout, stderr, exitCode := tool.RunCLI(ctx, homeDir, "get", "providerratecarditem")
+		stdout, stderr, exitCode := tool.RunCLI(ctx, homeDir, "get", "providerratecarditem", "--currency-code", "USD")
 		Expect(exitCode).ToNot(Equal(0))
 		Expect(stdout + stderr).To(ContainSubstring("billing is not configured"))
 	})

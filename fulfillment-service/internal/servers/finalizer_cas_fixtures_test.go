@@ -35,7 +35,7 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// Fixtures for the finalizer compare-and-swap specs (OSAC-7221). Every private resource that can carry finalizers has
+// Fixtures for the finalizer compare-and-swap specs. Every private resource that can carry finalizers has
 // one finalizerCase. The specs run each scenario against the bare GenericServer of the resource, which is the single
 // choke point that all private Update RPCs go through.
 
@@ -53,13 +53,6 @@ const (
 // finalizerCaseSkips lists the resources that the specs can't cover, by fully qualified service name, with the reason
 // and the location of the constraint that blocks seeding. It is empty when every resource is covered.
 var finalizerCaseSkips = map[string]string{}
-
-// finalizerRequiresMetadata lists the services whose object type requires metadata in its protovalidate rules, so that
-// a whole-object write without metadata fails validation: osac.private.v1.ServiceAccount in
-// proto/private/osac/private/v1/service_account_type.proto.
-var finalizerRequiresMetadata = map[string]bool{
-	privatev1.ServiceAccounts_ServiceDesc.ServiceName: true,
-}
 
 // finalizerBearingServices returns the fully qualified names of the private services that have an Update method whose
 // object has metadata with finalizers. Services without Update are read-only and are excluded by construction.
@@ -177,6 +170,7 @@ func newFinalizerCase[O finalizerObject](desc grpc.ServiceDesc, build func() O,
 	return finalizerCase{
 		service: desc.ServiceName,
 		target: func(finalizers []string) finalizerTarget {
+			GinkgoHelper()
 			builder := NewGenericServer[O]().
 				SetLogger(logger).
 				SetService(desc.ServiceName).
@@ -186,7 +180,7 @@ func newFinalizerCase[O finalizerObject](desc grpc.ServiceDesc, build func() O,
 				option(builder)
 			}
 			server, err := builder.Build()
-			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+			Expect(err).ToNot(HaveOccurred())
 
 			// The DAO doesn't assign a tenant, the server does, so default it as the server would:
 			object := build()
@@ -197,8 +191,8 @@ func newFinalizerCase[O finalizerObject](desc grpc.ServiceDesc, build func() O,
 				object.GetMetadata().SetFinalizers(finalizers)
 			}
 			created, err := fixtureDAO[O]().Create().SetObject(object).Do(ctx)
-			ExpectWithOffset(1, err).ToNot(HaveOccurred(), "fixture for %s must be creatable", desc.ServiceName)
-			ExpectWithOffset(1, protovalidate.Validate(created.GetObject())).To(Succeed(),
+			Expect(err).ToNot(HaveOccurred(), "fixture for %s must be creatable", desc.ServiceName)
+			Expect(protovalidate.Validate(created.GetObject())).To(Succeed(),
 				"fixture for %s must pass protovalidate, because Update validates the merged object", desc.ServiceName)
 			return finalizerTarget{
 				ops: &genericFinalizerOps[O]{server: server},
@@ -213,6 +207,7 @@ func newFinalizerCase[O finalizerObject](desc grpc.ServiceDesc, build func() O,
 func (c finalizerCase) afterCreate(hook func(id string)) finalizerCase {
 	inner := c.target
 	c.target = func(finalizers []string) finalizerTarget {
+		GinkgoHelper()
 		result := inner(finalizers)
 		hook(result.id)
 		return result
@@ -365,13 +360,15 @@ func withoutMetadata(object proto.Message) proto.Message {
 
 // get returns the stored object, failing the spec if it can't be read.
 func (t finalizerTarget) get(ctx context.Context) proto.Message {
+	GinkgoHelper()
 	object, err := t.ops.get(ctx, t.id)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	Expect(err).ToNot(HaveOccurred())
 	return object
 }
 
 // finalizers returns the stored finalizers.
 func (t finalizerTarget) finalizers(ctx context.Context) []string {
+	GinkgoHelper()
 	return finalizersOf(t.get(ctx))
 }
 
@@ -384,22 +381,25 @@ func (t finalizerTarget) update(ctx context.Context, object proto.Message, mask 
 // release replaces the finalizers as a concurrent writer would: from a fresh read, with the lock, and so with the
 // current version. It fails the spec if the update doesn't succeed.
 func (t finalizerTarget) release(ctx context.Context, finalizers ...string) {
+	GinkgoHelper()
 	err := t.ops.update(ctx, withFinalizers(t.get(ctx), finalizers...), finalizerMaskOf("metadata.finalizers"), true)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred(), "the concurrent finalizer write must succeed")
+	Expect(err).ToNot(HaveOccurred(), "the concurrent finalizer write must succeed")
 }
 
 // bump changes a label as a concurrent writer that doesn't touch finalizers would, which increases the version.
 func (t finalizerTarget) bump(ctx context.Context) {
+	GinkgoHelper()
 	object := withMetadata(t.get(ctx), func(metadata *privatev1.Metadata) {
 		metadata.SetLabels(map[string]string{"bump": uuid.NewString()[:8]})
 	})
 	err := t.ops.update(ctx, object, finalizerMaskOf("metadata.labels"), true)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred(), "the concurrent label write must succeed")
+	Expect(err).ToNot(HaveOccurred(), "the concurrent label write must succeed")
 }
 
 // expectFinalizerConflict checks that the update was rejected as a conflict and that the stored finalizers are exactly
 // the expected ones, which means that the rejected write wasn't applied.
 func (t finalizerTarget) expectFinalizerConflict(ctx context.Context, err error, want ...string) {
+	GinkgoHelper()
 	stored, getErr := t.ops.get(ctx, t.id)
 	var got []string
 	state := fmt.Sprintf("unreadable (%v)", getErr)
@@ -408,19 +408,20 @@ func (t finalizerTarget) expectFinalizerConflict(ctx context.Context, err error,
 		sort.Strings(got)
 		state = fmt.Sprintf("%v", got)
 	}
-	ExpectWithOffset(1, status.Code(err)).To(Equal(codes.Aborted),
+	Expect(status.Code(err)).To(Equal(codes.Aborted),
 		"a stale finalizer write must be rejected as a conflict, but the update returned %v and the stored "+
 			"finalizers are now %v", err, state)
-	ExpectWithOffset(1, getErr).ToNot(HaveOccurred(), "the object must still exist")
-	ExpectWithOffset(1, got).To(ConsistOf(want))
+	Expect(getErr).ToNot(HaveOccurred(), "the object must still exist")
+	Expect(got).To(ConsistOf(want))
 	expectConflictMessage(err, t.id)
 }
 
 // expectConflictMessage checks that the message of a conflict names the object and doesn't reveal finalizer names,
 // which belong to the controllers. It doesn't check the exact wording.
 func expectConflictMessage(err error, id string) {
+	GinkgoHelper()
 	message := status.Convert(err).Message()
-	ExpectWithOffset(2, message).To(ContainSubstring(id))
-	ExpectWithOffset(2, message).ToNot(ContainSubstring(finalizerHold))
-	ExpectWithOffset(2, message).ToNot(ContainSubstring(finalizerController))
+	Expect(message).To(ContainSubstring(id))
+	Expect(message).ToNot(ContainSubstring(finalizerHold))
+	Expect(message).ToNot(ContainSubstring(finalizerController))
 }

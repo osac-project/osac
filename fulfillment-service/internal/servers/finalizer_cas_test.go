@@ -14,6 +14,8 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
+	"errors"
 	"sort"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -23,12 +25,14 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// These specs reproduce OSAC-7221: a writer that holds a stale snapshot of an object must not be able to overwrite
-// the finalizers that another writer stored after the snapshot was taken. All the concurrency is logical: the
-// specs run in the suite transaction and order the writes explicitly.
+// These specs check that a writer that holds a stale snapshot of an object can't overwrite the finalizers that
+// another writer stored after the snapshot was taken. The concurrency is logical: the specs run in the suite
+// transaction and order the writes explicitly, except where they say otherwise.
 var _ = Describe("finalizer CAS", func() {
 	finalizersMask := func() *fieldmaskpb.FieldMask {
 		return finalizerMaskOf("metadata.finalizers")
@@ -141,6 +145,141 @@ var _ = Describe("finalizer CAS", func() {
 		finalizerEntries(),
 	)
 
+	// A public request can also arrive without any metadata. The server then has no metadata to restore the stored
+	// finalizers into, so it creates it. The merged object may still be rejected afterwards, for example by its
+	// validation or by the database, but never for its finalizers, and a rejected update must not write anything.
+	DescribeTable("keeps finalizers on a public nil-mask update that has no metadata",
+		func(c finalizerCase, deleting bool) {
+			t := c.target([]string{finalizerController, finalizerHold})
+			if deleting {
+				Expect(t.ops.del(ctx, t.id)).To(Succeed())
+			}
+			before := t.get(ctx)
+
+			// A database rejection aborts the transaction, so the update runs in a savepoint that is rolled back
+			// when it fails, as the transaction of a real request would be:
+			var err error
+			savepointErr := suiteTx.Savepoint(ctx, func(ctx context.Context) error {
+				err = t.update(withPublicAPIView(ctx), withoutMetadata(before), nil, false)
+				return err
+			})
+			if err == nil {
+				Expect(savepointErr).ToNot(HaveOccurred())
+			}
+
+			Expect(status.Code(err)).ToNot(Equal(codes.Aborted),
+				"a public request must not be rejected for its finalizers, but the update returned %v", err)
+			stored, getErr := t.ops.get(ctx, t.id)
+			Expect(getErr).ToNot(HaveOccurred(), "a public update must not archive an object with finalizers")
+			Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold),
+				"a public update must not clear the finalizers")
+			if err != nil {
+				Expect(proto.Equal(stored, before)).To(BeTrue(), "a rejected update must not write anything")
+			}
+		},
+		finalizerEntriesPerLifecycle(),
+	)
+
+	// Candidate preparation callbacks run after the finalizer check, so they must not change the finalizers that it
+	// accepted. The Hub resource has no preparation of its own, so the specs add one and run it through both entry
+	// points. They use real transactions to see that a rejected update undoes what its callback wrote.
+	Describe("candidate preparation", func() {
+		const preparedFinalizer = "test.osac.io/prepared"
+
+		type entryPoint func(server *GenericServer[*privatev1.Hub], ctx context.Context, request proto.Message,
+			prepare PrepareCandidateFunc[*privatev1.Hub]) error
+		withCandidatePreparation := func(server *GenericServer[*privatev1.Hub], ctx context.Context,
+			request proto.Message, prepare PrepareCandidateFunc[*privatev1.Hub]) error {
+			var response proto.Message
+			return server.UpdateWithCandidatePreparation(ctx, request, &response, prepare)
+		}
+		withValidation := func(server *GenericServer[*privatev1.Hub], ctx context.Context,
+			request proto.Message, prepare PrepareCandidateFunc[*privatev1.Hub]) error {
+			var response proto.Message
+			return server.UpdateWithValidation(ctx, request, &response,
+				func(ctx context.Context, candidate, current *privatev1.Hub) error {
+					return prepare(ctx, current, candidate)
+				})
+		}
+
+		// freshContext returns a context with a new transaction, which is ended when the spec finishes.
+		freshContext := func() context.Context {
+			GinkgoHelper()
+			tx, err := tm.Begin(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func() {
+				_ = tx.End(context.Background())
+			})
+			return database.TxIntoContext(context.Background(), tx)
+		}
+
+		DescribeTable("changes the finalizers only when the callback leaves them alone",
+			func(call entryPoint, addFinalizer bool) {
+				t := finalizerCaseFor(privatev1.Hubs_ServiceDesc.ServiceName).target([]string{finalizerController})
+				server := t.ops.(*genericFinalizerOps[*privatev1.Hub]).server
+				object := withFinalizers(t.get(ctx), finalizerController, finalizerHold).(*privatev1.Hub)
+
+				// The callback writes another object in the transaction of the request, and optionally adds a
+				// finalizer to the candidate:
+				var sideID string
+				prepare := func(ctx context.Context, current, candidate *privatev1.Hub) error {
+					side, err := fixtureDAO[*privatev1.Hub]().Create().SetObject(privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   finalizerName("side"),
+							Tenant: testTenant,
+						}.Build(),
+						Spec: privatev1.HubSpec_builder{Kubeconfig: []byte("my_config"), Namespace: "my_ns"}.Build(),
+					}.Build()).Do(ctx)
+					if err != nil {
+						return err
+					}
+					sideID = side.GetObject().GetId()
+					if addFinalizer {
+						candidate.GetMetadata().SetFinalizers(append(candidate.GetMetadata().GetFinalizers(),
+							preparedFinalizer))
+					}
+					return nil
+				}
+
+				// Commit the fixture, and send the request in a transaction of its own:
+				Expect(suiteTx.End(ctx)).To(Succeed())
+				suiteTx = nil
+				tx, err := tm.Begin(context.Background())
+				Expect(err).ToNot(HaveOccurred())
+				request := proto.Clone(server.updateRequest).(finalizerUpdateRequest[*privatev1.Hub])
+				request.SetObject(object)
+				request.SetUpdateMask(finalizersMask())
+				updateErr := call(server, database.TxIntoContext(context.Background(), tx), request, prepare)
+				Expect(tx.End(context.Background())).To(Succeed())
+
+				fresh := freshContext()
+				stored, err := t.ops.get(fresh, t.id)
+				Expect(err).ToNot(HaveOccurred())
+				_, sideErr := fixtureDAO[*privatev1.Hub]().Get().SetId(sideID).Do(fresh)
+				if addFinalizer {
+					Expect(status.Code(updateErr)).To(Equal(codes.Internal),
+						"a callback that changes the finalizers must be rejected, but the update returned %v", updateErr)
+					Expect(finalizersOf(stored)).To(ConsistOf(finalizerController))
+					var notFound *dao.ErrNotFound
+					Expect(errors.As(sideErr, &notFound)).To(BeTrue(),
+						"what the rejected callback wrote must be rolled back, but reading it returned %v", sideErr)
+				} else {
+					Expect(updateErr).ToNot(HaveOccurred())
+					Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
+					Expect(sideErr).ToNot(HaveOccurred(), "what the callback wrote must be committed")
+				}
+			},
+			Entry("with UpdateWithCandidatePreparation and a callback that adds a finalizer",
+				entryPoint(withCandidatePreparation), true),
+			Entry("with UpdateWithValidation and a callback that adds a finalizer",
+				entryPoint(withValidation), true),
+			Entry("with UpdateWithCandidatePreparation and a callback that leaves the finalizers alone",
+				entryPoint(withCandidatePreparation), false),
+			Entry("with UpdateWithValidation and a callback that leaves the finalizers alone",
+				entryPoint(withValidation), false),
+		)
+	})
+
 	Describe("controls", func() {
 		DescribeTable("accepts a finalizer change made from the current version",
 			func(c finalizerCase) {
@@ -180,18 +319,15 @@ var _ = Describe("finalizer CAS", func() {
 
 				object := withFinalizers(stale, finalizerHold, finalizerController, finalizerHold)
 				snapshot := proto.Clone(object)
-				stored := t.get(ctx)
-				storedSnapshot := proto.Clone(stored)
 				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
 
 				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
 				Expect(proto.Equal(object, snapshot)).To(BeTrue(), "the request object must not be modified")
-				Expect(proto.Equal(stored, storedSnapshot)).To(BeTrue(), "the stored snapshot must not be modified")
 			},
 			finalizerEntries(),
 		)
 
-		DescribeTable("treats a missing finalizer list and an empty one as the same",
+		DescribeTable("accepts a stale finalizer write that leaves an object without finalizers as it is",
 			func(c finalizerCase) {
 				t := c.target(nil)
 				stale := t.get(ctx)
@@ -294,7 +430,8 @@ var _ = Describe("finalizer CAS", func() {
 		)
 
 		// A private write without metadata can't prove which version it started from, so it is rejected whatever the
-		// stored version is, and whether it selects the finalizers with a mask or replaces the whole object.
+		// stored version is, and whether it selects the finalizers with a mask or replaces the whole object. The
+		// finalizer check runs before the validation of the object, so every resource gets the conflict.
 		DescribeTable("rejects a finalizer change that has no metadata",
 			func(c finalizerCase, bumpFirst bool, mask *fieldmaskpb.FieldMask) {
 				t := c.target([]string{finalizerController, finalizerHold})
@@ -304,20 +441,24 @@ var _ = Describe("finalizer CAS", func() {
 
 				err := t.update(ctx, withoutMetadata(t.get(ctx)), mask, false)
 
-				if mask == nil && finalizerRequiresMetadata[c.service] {
-					// The validation of the object rejects a whole-object write without metadata, so nothing is
-					// written. That is as safe as the conflict, whichever check runs first.
-					Expect(status.Code(err)).To(BeElementOf(codes.InvalidArgument, codes.Aborted),
-						"the write without metadata returned %v", err)
-					Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
-					return
-				}
 				t.expectFinalizerConflict(ctx, err, finalizerController, finalizerHold)
 			},
 			finalizerEntriesPerVersion(),
 		)
 	})
 })
+
+// finalizerEntriesPerLifecycle returns an entry for each resource, for a live object and for one that is being deleted.
+func finalizerEntriesPerLifecycle() []TableEntry {
+	var entries []TableEntry
+	for _, c := range finalizerCases() {
+		entries = append(entries,
+			Entry(c.service+" live", c, false),
+			Entry(c.service+" deleting", c, true),
+		)
+	}
+	return entries
+}
 
 // finalizerEntriesPerMask returns an entry for each resource and each way of selecting the finalizers.
 func finalizerEntriesPerMask() []TableEntry {

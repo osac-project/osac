@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -259,6 +260,42 @@ var _ = Describe("Reconciler", func() {
 			errors.Join(status.Error(codes.Unavailable, "hub down"), status.Error(codes.Aborted, "modified"))),
 	)
 
+	// A failure made only of conflicts is expected under contention and is retried, so it is logged quietly. Any other
+	// failure, including a conflict that comes with another error, is logged as an error.
+	const (
+		conflictMessage = "Reconciliation conflicted with a concurrent update, will retry"
+		failureMessage  = "Reconciliation failed"
+	)
+	DescribeTable("Logs a failed reconciliation at the level that matches its cause",
+		func(firstErr error, wantMessage string, wantLevel slog.Level, otherMessage string) {
+			logs := &recordingLogHandler{}
+			builder.SetLogger(slog.New(logs))
+			objects, _ := recordCalls(func(call int32, _ *privatev1.Tenant) error {
+				if call == 1 {
+					return firstErr
+				}
+				return nil
+			})
+			start()
+			pushTenantEvent("t1")
+			Eventually(objects, 5*time.Second).Should(Receive())
+
+			Eventually(func() []slog.Level { return logs.levels(wantMessage) }, 5*time.Second).Should(
+				ConsistOf(wantLevel))
+			Expect(logs.levels(otherMessage)).To(BeEmpty())
+		},
+		Entry("bare Aborted",
+			status.Error(codes.Aborted, "object has been modified"), conflictMessage, slog.LevelDebug, failureMessage),
+		Entry("wrapped Aborted",
+			fmt.Errorf("update volume: %w", status.Error(codes.Aborted, "modified")),
+			conflictMessage, slog.LevelDebug, failureMessage),
+		Entry("Aborted joined behind another gRPC error",
+			errors.Join(status.Error(codes.Unavailable, "hub down"), status.Error(codes.Aborted, "modified")),
+			failureMessage, slog.LevelError, conflictMessage),
+		Entry("an error that is not a conflict",
+			status.Error(codes.Internal, "boom"), failureMessage, slog.LevelError, conflictMessage),
+	)
+
 	It("does not retry non-conflict errors", func() {
 		objects, calls := recordCalls(func(int32, *privatev1.Tenant) error {
 			return status.Error(codes.Internal, "boom")
@@ -361,6 +398,49 @@ var _ = Describe("Reconciler", func() {
 		Expect(third.at.Sub(second.at)).To(BeNumerically("<", 1900*time.Millisecond))
 	})
 })
+
+// recordingLogHandler is a log handler that keeps the level and message of every record, at any level.
+type recordingLogHandler struct {
+	mu      sync.Mutex
+	records []recordedLog
+}
+
+type recordedLog struct {
+	level   slog.Level
+	message string
+}
+
+func (h *recordingLogHandler) Enabled(context.Context, slog.Level) bool {
+	return true
+}
+
+func (h *recordingLogHandler) Handle(_ context.Context, record slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, recordedLog{level: record.Level, message: record.Message})
+	return nil
+}
+
+func (h *recordingLogHandler) WithAttrs([]slog.Attr) slog.Handler {
+	return h
+}
+
+func (h *recordingLogHandler) WithGroup(string) slog.Handler {
+	return h
+}
+
+// levels returns the level of each record that has the given message.
+func (h *recordingLogHandler) levels(message string) []slog.Level {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var result []slog.Level
+	for _, record := range h.records {
+		if record.message == message {
+			result = append(result, record.level)
+		}
+	}
+	return result
+}
 
 type reconcilerTestServer struct {
 	privatev1.UnimplementedTenantsServer

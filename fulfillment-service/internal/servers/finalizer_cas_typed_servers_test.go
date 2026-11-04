@@ -30,9 +30,30 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// These specs run the OSAC-7221 scenarios through the real typed servers, not only through the bare generic server:
+// These specs run the finalizer scenarios through the real typed servers, not only through the bare generic server:
 // the private wrappers that rebuild the request before calling the generic update, and the public servers that map
 // objects without finalizers into private ones.
+
+// finalizerTierResolver resolves every storage tier to a block-protocol test provider.
+func finalizerTierResolver(_ context.Context, _ string) (*TierResolution, error) {
+	return &TierResolution{
+		Provider: "test-provider",
+		Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+	}, nil
+}
+
+// newFinalizerPrivateVolumesServer returns the private Volumes server with the test tier resolver.
+func newFinalizerPrivateVolumesServer() *PrivateVolumesServer {
+	GinkgoHelper()
+	server, err := NewPrivateVolumesServer().
+		SetLogger(logger).
+		SetAttributionLogic(attribution).
+		SetTenancyLogic(tenancy).
+		SetTierResolver(finalizerTierResolver).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+	return server
+}
 
 // finalizerCaseFor returns the case of a resource by its fully qualified service name.
 func finalizerCaseFor(service string) finalizerCase {
@@ -102,25 +123,63 @@ func withPublicDescriptionAndNoMetadata(object proto.Message) proto.Message {
 	return result
 }
 
+// newInstanceTypesUpdater returns an updater that sends requests through the private InstanceTypes server.
+func newInstanceTypesUpdater() typedUpdater {
+	GinkgoHelper()
+	server, err := NewPrivateInstanceTypesServer().
+		SetLogger(logger).
+		SetAttributionLogic(attribution).
+		SetTenancyLogic(tenancy).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+	return func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error {
+		_, err := server.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
+			Object:     object.(*privatev1.InstanceType),
+			UpdateMask: mask,
+		}.Build())
+		return err
+	}
+}
+
+// newDiskImagesUpdater returns an updater that sends requests through the private DiskImages server.
+func newDiskImagesUpdater() typedUpdater {
+	GinkgoHelper()
+	server, err := NewPrivateDiskImagesServer().
+		SetLogger(logger).
+		SetAttributionLogic(attribution).
+		SetTenancyLogic(tenancy).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+	return func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error {
+		_, err := server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+			Object:     object.(*privatev1.DiskImage),
+			UpdateMask: mask,
+		}.Build())
+		return err
+	}
+}
+
 // finalizerRaceResult is the outcome of a write that raced against the release of a finalizer.
 type finalizerRaceResult struct {
 	writerErr       error
 	releasedVersion int32
 }
 
-// raceAgainstRelease commits the fixture and then plays the interleaving behind OSAC-7221 with two real transactions:
-// one writer releases the hold with the lock and doesn't commit, a second writer starts and blocks on the row lock,
-// and then the first one commits. The second writer has read the object before the commit, so what it writes is based
-// on a stale view. The table is the one of the resource, used to see when the second writer is blocked.
+// raceAgainstRelease commits the fixture and then plays a release of a finalizer against a second writer with two
+// real transactions: one writer releases the hold with the lock and doesn't commit, a second writer starts and blocks
+// on the row lock, and then the first one commits. The second writer has read the object before the commit, so what
+// it writes is based on a stale view. The table is the one of the resource, used to see when the second writer is
+// blocked.
 func (t finalizerTarget) raceAgainstRelease(table string, writer func(ctx context.Context) error) finalizerRaceResult {
+	GinkgoHelper()
 	var result finalizerRaceResult
 
 	// Commit the fixture so that two independent database transactions can write the object:
-	ExpectWithOffset(1, suiteTx.End(ctx)).To(Succeed())
+	Expect(suiteTx.End(ctx)).To(Succeed())
 	suiteTx = nil
 
 	releaseTx, err := tm.Begin(context.Background())
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	Expect(err).ToNot(HaveOccurred())
 	releaseCtx := database.TxIntoContext(context.Background(), releaseTx)
 	var writerTx database.Tx
 	var writerDone chan error
@@ -147,7 +206,7 @@ func (t finalizerTarget) raceAgainstRelease(table string, writer func(ctx contex
 
 	// The second writer starts, and has to wait for the row lock of the first one:
 	writerTx, err = tm.Begin(context.Background())
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	Expect(err).ToNot(HaveOccurred())
 	writerCtx, cancel := context.WithTimeout(database.TxIntoContext(context.Background(), writerTx), 10*time.Second)
 	defer cancel()
 	writerDone = make(chan error, 1)
@@ -157,7 +216,7 @@ func (t finalizerTarget) raceAgainstRelease(table string, writer func(ctx contex
 	}()
 
 	// Wait until PostgreSQL reports that the second writer is blocked by the first one:
-	EventuallyWithOffset(1, func() (bool, error) {
+	Eventually(func() (bool, error) {
 		var waiting bool
 		err := testPool.QueryRow(context.Background(), `
 			select exists (
@@ -175,11 +234,11 @@ func (t finalizerTarget) raceAgainstRelease(table string, writer func(ctx contex
 	}, 5*time.Second, 10*time.Millisecond).Should(BeTrue())
 
 	// Commit the first writer, which lets the second one go on:
-	ExpectWithOffset(1, releaseTx.End(context.Background())).To(Succeed())
+	Expect(releaseTx.End(context.Background())).To(Succeed())
 	releaseTx = nil
 	result.writerErr = <-writerDone
 	writerDone = nil
-	ExpectWithOffset(1, writerTx.End(context.Background())).To(Succeed())
+	Expect(writerTx.End(context.Background())).To(Succeed())
 	writerTx = nil
 	return result
 }
@@ -187,10 +246,12 @@ func (t finalizerTarget) raceAgainstRelease(table string, writer func(ctx contex
 // committedState reads, from a new transaction, the finalizers and the version that are stored, and the number of
 // update records that the database kept for the object.
 func (t finalizerTarget) committedState(table string) (finalizers []string, version int32, updates int) {
+	GinkgoHelper()
 	tx, err := tm.Begin(context.Background())
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	Expect(err).ToNot(HaveOccurred())
 	defer func() {
-		ExpectWithOffset(1, tx.End(context.Background())).To(Succeed())
+		GinkgoHelper()
+		Expect(tx.End(context.Background())).To(Succeed())
 	}()
 	freshCtx := database.TxIntoContext(context.Background(), tx)
 	stored := t.get(freshCtx)
@@ -199,11 +260,11 @@ func (t finalizerTarget) committedState(table string) (finalizers []string, vers
 		from changes
 		where "table" = $1 and op = 'UPDATE' and data->>'id' = $2
 	`, table, t.id).Scan(&updates)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	Expect(err).ToNot(HaveOccurred())
 	return finalizersOf(stored), finalizerMetadataOf(stored).GetVersion(), updates
 }
 
-// expectStaleTypedWriteRejected runs the sequence behind OSAC-7221 through a typed server: the writer reads the
+// expectStaleTypedWriteRejected runs a stale finalizer write through a typed server: the writer reads the
 // object while the hold is present, another writer releases it, and then the first one writes back its stale view.
 func expectStaleTypedWriteRejected(t finalizerTarget, update typedUpdater) {
 	stale := t.get(ctx)
@@ -219,18 +280,7 @@ var _ = Describe("typed finalizer updates", func() {
 		// Volume reads the stored object, merges the request and checks immutable fields before calling the generic
 		// update. It ignores the metadata paths when merging, so a metadata.finalizers mask is safe.
 		It("rejects a stale finalizer write through the Volumes server", func() {
-			server, err := NewPrivateVolumesServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				SetTierResolver(func(_ context.Context, _ string) (*TierResolution, error) {
-					return &TierResolution{
-						Provider: "test-provider",
-						Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
-					}, nil
-				}).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
+			server := newFinalizerPrivateVolumesServer()
 			t := finalizerCaseFor(privatev1.Volumes_ServiceDesc.ServiceName).
 				target([]string{finalizerController, finalizerHold})
 
@@ -385,10 +435,38 @@ var _ = Describe("typed finalizer updates", func() {
 		)
 	})
 
+	Describe("private wrappers that merge the request into the stored object", func() {
+		// InstanceType and DiskImage ignore metadata.finalizers when they merge the request, so the object that they
+		// forward to the generic update carries the stored finalizers whatever the request holds. A request without
+		// metadata therefore doesn't change them, and is accepted at any stored version.
+		DescribeTable("keeps the finalizers when the request has no metadata",
+			func(service string, newUpdate func() typedUpdater, bumpFirst bool) {
+				update := newUpdate()
+				t := finalizerCaseFor(service).target([]string{finalizerController, finalizerHold})
+				if bumpFirst {
+					t.bump(ctx)
+				}
+
+				err := update(ctx, withoutMetadata(t.get(ctx)), finalizerMaskOf("metadata.finalizers"))
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
+			},
+			Entry("InstanceTypes at version 0", privatev1.InstanceTypes_ServiceDesc.ServiceName,
+				newInstanceTypesUpdater, false),
+			Entry("InstanceTypes at a later version", privatev1.InstanceTypes_ServiceDesc.ServiceName,
+				newInstanceTypesUpdater, true),
+			Entry("DiskImages at version 0", privatev1.DiskImages_ServiceDesc.ServiceName,
+				newDiskImagesUpdater, false),
+			Entry("DiskImages at a later version", privatev1.DiskImages_ServiceDesc.ServiceName,
+				newDiskImagesUpdater, true),
+		)
+	})
+
 	Describe("public servers that read the object before the update", func() {
 		// On a nil mask these servers do their own unlocked read of the private object and forward its finalizers.
 		// The window is between that read and the locked read of the generic server, so a sequential spec can't
-		// reproduce it: the other writer has to commit while the public update waits for the row lock.
+		// cover it: the other writer has to commit while the public update waits for the row lock.
 		DescribeTable("does not restore a finalizer that was released while waiting for the row lock",
 			func(service, table string, newOps func() publicFinalizerOps) {
 				t := finalizerCaseFor(service).target([]string{finalizerController, finalizerHold})
@@ -416,18 +494,7 @@ var _ = Describe("typed finalizer updates", func() {
 
 	Describe("two transactions", func() {
 		It("rejects a stale finalizer write that waited for the row lock and leaves no trace of it", func() {
-			server, err := NewPrivateVolumesServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				SetTierResolver(func(_ context.Context, _ string) (*TierResolution, error) {
-					return &TierResolution{
-						Provider: "test-provider",
-						Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
-					}, nil
-				}).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
+			server := newFinalizerPrivateVolumesServer()
 			t := finalizerCaseFor(privatev1.Volumes_ServiceDesc.ServiceName).
 				target([]string{finalizerController, finalizerHold})
 			stale := withFinalizers(t.get(ctx), finalizerHold)
@@ -718,12 +785,7 @@ func newPublicVolumesOps() publicFinalizerOps {
 		SetLogger(logger).
 		SetAttributionLogic(attribution).
 		SetTenancyLogic(tenancy).
-		SetTierResolver(func(_ context.Context, _ string) (*TierResolution, error) {
-			return &TierResolution{
-				Provider: "test-provider",
-				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
-			}, nil
-		}).
+		SetTierResolver(finalizerTierResolver).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
 	return newPublicFinalizerOps(

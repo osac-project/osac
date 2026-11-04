@@ -1481,6 +1481,97 @@ var _ = Describe("Reference validator", func() {
 			Expect(capturedTenant).To(Equal("shared"))
 		})
 
+		It("Uses the explicit tenant for ID-based full reference lookups", func() {
+			var capturedTenant string
+			validator.Register("osac.private.v1.DiskImageReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				capturedTenant = tenant
+				return &ResolvedRef{ID: "image-1", Tenant: tenant, Project: project, Name: name}, nil
+			})
+
+			request := privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: "tenant-a"}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						DiskImage: privatev1.DiskImageReference_builder{
+							Id: "image-1", Tenant: "tenant-b",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.ComputeInstances/Create"},
+				func(ctx context.Context, req any) (any, error) { return "response", nil },
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capturedTenant).To(Equal("tenant-b"))
+			Expect(request.GetObject().GetSpec().GetDiskImage().GetName()).To(Equal(""))
+		})
+
+		It("rejects an ID that resolves outside its explicit tenant", func() {
+			validator.Register("osac.private.v1.DiskImageReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				return &ResolvedRef{ID: id, Tenant: "tenant-a", Name: "disk-image"}, nil
+			})
+
+			request := privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: "tenant-a"}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						DiskImage: privatev1.DiskImageReference_builder{
+							Id: "image-1", Tenant: "tenant-b",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.ComputeInstances/Create"},
+				func(ctx context.Context, req any) (any, error) { return "response", nil },
+			)
+
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		})
+
+		It("rejects conflicting tenant and legacy shared selectors before lookup", func() {
+			lookupCalls := 0
+			validator.Register("osac.private.v1.DiskImageReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				lookupCalls++
+				return &ResolvedRef{ID: id, Tenant: tenant, Project: project, Name: name}, nil
+			})
+
+			request := privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: "tenant-a"}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						DiskImage: privatev1.DiskImageReference_builder{
+							Name: "image", Tenant: "tenant-b", Shared: true,
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.ComputeInstances/Create"},
+				func(ctx context.Context, req any) (any, error) { return "response", nil },
+			)
+
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(lookupCalls).To(BeZero())
+		})
+
 		// OSAC-6381 regression: a global reference with an empty
 		// project from an owner in a named project must select
 		// the tenant's default/root project, not inherit the

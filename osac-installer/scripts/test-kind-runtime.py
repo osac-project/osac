@@ -630,7 +630,7 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
         (module / "it").mkdir(parents=True)
         shutil.copy(INSTALLER / "Makefile", installer / "Makefile")
         env = {key: value for key, value in self.env.items() if key != "FULFILLMENT_IT_REPORT_DIR"}
-        phases = ["service-only", "networking-operator", "bmaas-disabled"]
+        phases = ["service-only", "networking-operator", "bmaas-disabled", "compute-storage"]
         cases = [("default", None), ("disabled", ""), ("relative", "../local-reports"),
                  ("absolute", str(module / "logs/timings"))]
         for name, directory in cases:
@@ -685,7 +685,37 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
             helm = [word.split("=", 1)[1] for word in words if word.startswith("EXTRA_HELM_ARGS=")][0].split()
             enabled.append([value for value in helm if value.startswith("operator.enabled=")])
         self.assertEqual(enabled, [["operator.enabled=false"], ["operator.enabled=true"],
-                                   ["operator.enabled=false"]])
+                                   ["operator.enabled=false"], ["operator.enabled=true"]])
+
+    def test_compute_storage_phase_uses_real_services_and_only_the_aap_recorder(self):
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",
+             "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=compute-storage", "MAKE=true"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assert_success(result)
+        self.assertIn("fulfillment-service:it", result.stdout)
+        self.assertIn('container save localhost/fulfillment-service:it > "$tmpfile"', result.stdout)
+        self.assertIn("osac-operator:it", result.stdout)
+        self.assertIn("operator.controllers.computeInstance=true", result.stdout)
+        self.assertIn("operator.controllers.storage=true", result.stdout)
+        self.assertIn("operator.controllers.volume=false", result.stdout)
+        self.assertIn("operator.controllers.tenant=false", result.stdout)
+        self.assertIn("operator.aap.url=http://compute-storage-aap.osac.svc.cluster.local:8080/api", result.stdout)
+        self.assertIn("IT_TEST_SUITE=compute-storage", result.stdout)
+        self.assertIn("-p test_compute_storage_aap.py", result.stdout)
+        self.assertIn("--label-filter 'compute-storage'", result.stdout)
+        self.assertNotIn("service.enabled=false", result.stdout)
+
+    def test_service_only_phase_excludes_compute_storage_specs(self):
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",
+             "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=fulfillment", "MAKE=true"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assert_success(result)
+        service_only = next(line for line in result.stdout.splitlines() if "--skip " in line)
+        self.assertIn("ComputeInstance storage handoff", service_only)
 
     def prepare_helm_dependencies(self):
         installer = self.directory / "installer"
@@ -776,8 +806,9 @@ fi
                         env=self.env, text=True, capture_output=True, timeout=15,
                     )
                     self.assert_success(result)
-                    commands = [shlex.split(line) for line in result.stdout.replace("\\\n", " ").splitlines()
-                                if line.startswith("helm upgrade --install ")]
+                    command_text = result.stdout.replace("\\\n", " ")
+                    commands = [shlex.split("helm upgrade --install " + line)
+                                for line in command_text.split("helm upgrade --install ")[1:]]
                     self.assertEqual(len(commands), 1, result.stdout)
                     args = commands[0]
                     self.assertEqual(args[3], release)

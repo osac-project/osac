@@ -238,6 +238,45 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 | Component integration ([DEV] OSAC-6307) | `internal/servers` and `internal/database/migrations/126_hold_external_ip_capacity_until_archive_test.go`; from `fulfillment-service/`, run `go test ./internal/servers ./internal/database/migrations -timeout 20m` | Fulfillment server logic and PostgreSQL test container, including archive-time capacity and exclusivity for terminating consumers | Kubernetes and provider cleanup are not run; release completion is exercised by operator tests with provider fixtures. |
 | E2E | `../tests/e2e/` | Cross-component OSAC user journeys | Depends on the deployed test environment and its configured providers. |
 
+### ComputeInstance disk handoff (OSAC-6685)
+
+After installing the Kind infrastructure, run this component-integration phase
+from the repository root:
+
+```bash
+make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage
+```
+
+`SUITE=fulfillment` also includes this phase. The specs are labelled
+`compute-storage` in `fulfillment-service/it/it_compute_instance_storage_handoff_test.go`.
+They exercise the public ComputeInstance API, real Volume records in PostgreSQL,
+Fulfillment reconciliation, installed storage and ComputeInstance operator
+controllers, and StorageClass lookup against the Kind API server. The target
+and hub are the same disposable cluster; remote-target routing is not covered.
+
+The cases check distinct boot/additional-disk Volume IDs and their tenant,
+project, tier and size; persistence in parent status and the managed CR; the
+same IDs and class mappings in the operator's AAP HTTP request; stable IDs on
+re-observation; no VM launch while a requested class is missing or ambiguous;
+recovery after correcting the classes; and Volume record cleanup after a
+simulated successful VM teardown. CSP-managed classes must remain unchanged.
+
+The fixture supplies tenant compute readiness and disables network provisioning.
+Only the AAP HTTP job endpoint is a recording double, with completion controlled
+by the test. It rejects unexpected operations and executes no playbooks. The
+operator's Volume controller is disabled to prevent provider provisioning.
+These tests make no claim about physical disks, DataVolumes, CSI, Trident, FC,
+NetApp, actual VM execution, or storage-array cleanup. Registration fault
+recovery and OSAC-managed record behavior remain in the existing
+`it_compute_instance_volume_records_test.go` suite. The recorder's protocol
+contracts run with `python3 -m unittest discover -s fulfillment-service/it/testdata -p test_compute_storage_aap.py`.
+
+Fulfillment registers the records before the operator checks classes. A missing
+or ambiguous mapping therefore retains those tracked records and blocks the
+VM job; it does not imply that no Volume record was created. Parent correlation
+uses `ComputeInstance.status.volumes`, CR `spec.diskVolumeIDs`, and stable disk
+record names, rather than a reverse attachment field on Volume.
+
 ### Fulfillment integration timings
 
 The `SUITE=fulfillment` installer target uses Ginkgo's native `--json-report`
@@ -250,10 +289,12 @@ make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment 
 
 Relative directories resolve from `osac-installer/`. CI sets an absolute
 `FULFILLMENT_IT_REPORT_DIR` under `fulfillment-service/logs/timings/`, which its
-existing `logs` artifact includes. The three phases write `service-only.json`,
-`networking-operator.json`, and `bmaas-disabled.json`. Only the
-networking-operator phase deploys the OSAC Operator.
-When reporting is enabled, those three prior files are cleared before the run
+existing `logs` artifact includes. The four phases write `service-only.json`,
+`networking-operator.json`, `bmaas-disabled.json`, and `compute-storage.json`.
+The networking-operator and compute-storage phases deploy the OSAC Operator.
+`SUITE=compute-storage` runs only the compute-storage phase and writes only
+`compute-storage.json`. When reporting is enabled, the report files for the
+selected suite's phases are cleared before the run
 so a reused local directory cannot retain stale reports for unreached phases.
 A missing report does not imply a passing phase. Use the originating Actions
 run to identify the tested revision.
@@ -548,6 +589,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 | Component integration | `test/integration/`; deploy the current operator into Kind, then `make integration-tests` | Installed operator, Kubernetes API, CRDs, controller-manager, console proxy, networking, worker service-account authorization and startup without LVMS/TopoLVM | AAP/provider provisioning and external infrastructure are not real; some existing tests remove finalizers to bypass external-provider boundaries. |
 | ComputeInstance disk Volume ID handoff ([DEV] OSAC-6612) | `internal/controller/computeinstance_envtest_test.go`, `pkg/provisioning/aap_provider_test.go`, and `test/integration/computeinstance_disk_volume_ids_test.go`; `make test` and `make integration-tests` | Envtest retains `diskVolumeIDs`, the provider test checks the serialized map after a failed launch and retry, and the Kind suite round-trips the optional map through the installed CRD | Fulfillment status is test-controlled. This does not exercise the AAP task or Volume API/database recovery; dispatch readiness belongs to [OSAC-6613](https://redhat.atlassian.net/browse/OSAC-6613), and deployed cross-component coverage belongs to [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614). |
 | Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator` (repository root) | Thin Kind deployment with the Fulfillment client disabled | Same external-provider limitations as the local Kind suite; installation-setting verification needs a separate deployed test. |
+| Combined ComputeInstance disk handoff ([DEV] OSAC-6685) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage` | Real Fulfillment APIs/PostgreSQL, installed storage and ComputeInstance controllers, CR/status persistence, target StorageClass lookup and AAP HTTP requests | AAP is a recording double; tenant compute readiness is supplied by the fixture. No provider or VM execution; see [coverage details](#computeinstance-disk-handoff-osac-6685). |
 | Contract | `test/contract/`; included by `make test` | Helm chart RBAC templates against the operator permission contract | No deployed operator or external provider. |
 | E2E | `../tests/e2e/` | Cross-component fulfillment journeys | Depends on the deployed environment and configured providers. |
 

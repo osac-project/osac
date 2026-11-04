@@ -63,7 +63,7 @@ ROLE_TESTS=(
   "finalizer"
   "fulfillment_trust_sync"
   "lease"
-  "bm_host_provisioning_patch"
+  "bmaas_metal3"
   "agentless_net_stub"
   "agentless_net_external_ip_pool"
   "agentless_net_external_ip"
@@ -88,7 +88,7 @@ ROLE_SCENARIO_TESTS=(
   "compute_instance_create:volume_id_annotations"
   "compute_instance_create:storage_tier_mapping"
   "compute_instance_create:csp_storage_tiers"
-  "bm_host_provisioning_patch:metal3_lifecycle"
+  "bmaas_metal3:lifecycle"
 )
 
 echo "=== Running Workflow Integration Tests ==="

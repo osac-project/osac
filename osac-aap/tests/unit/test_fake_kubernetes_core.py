@@ -16,7 +16,7 @@ import pytest
 
 MODULES_DIR = (
     Path(__file__).resolve().parents[1]
-    / "integration/targets/bm_host_provisioning_patch"
+    / "integration/targets/bmaas_metal3"
     / "test_collections/ansible_collections/kubernetes/core/plugins/modules"
 )
 

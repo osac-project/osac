@@ -7,7 +7,7 @@ from pathlib import Path
 OSAC_AAP_ROOT = Path(__file__).resolve().parents[2]
 TARGET_ROOT = (
     OSAC_AAP_ROOT
-    / "tests/integration/targets/bm_host_provisioning_patch"
+    / "tests/integration/targets/bmaas_metal3"
 )
 TASK_ROOT = TARGET_ROOT / "tasks"
 FAKE_COLLECTIONS = TARGET_ROOT / "test_collections"

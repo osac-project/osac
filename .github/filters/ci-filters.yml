@@ -345,7 +345,7 @@ unit-tests-osac-metering-schema:
 # chart's reader-grant suites and the infra chart's Kafka exporter suites. Preflight rendering also covers the
 # osac-aap and osac-csi-driver hook Jobs.
 unit-tests-osac-installer:
-  - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/test-preflight-render.py,osac-installer/scripts/test-kind-runtime.py,osac-installer/scripts/dev-full/**,osac-aap/charts/**,osac-csi-driver/charts/**,osac-metering/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
+  - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/test-preflight-render.py,osac-installer/scripts/test-kind-runtime.py,osac-installer/scripts/dev-full/**,osac-installer/scripts/lib.sh,osac-aap/charts/**,osac-csi-driver/charts/**,osac-metering/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
 
 # Integration test legs. osac-installer/** is included on the
 # first three: their jobs all run setup/tests via `make -C osac-installer

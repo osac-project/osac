@@ -27,6 +27,16 @@ The OSAC platform provides:
 This installer uses Helm to manage deployments via an umbrella chart (`charts/osac/`)
 with per-environment values files under `values/`.
 
+### Podman Kind node PID limits
+
+On creation and reuse, the installer raises configured Podman node PID limits
+below `65536` to `65536`, preserving higher and unlimited settings on every node.
+It verifies updates before installing infrastructure and stops on runtime errors.
+Plain `dev` honors `KIND_EXPERIMENTAL_PROVIDER`; when unset, it selects Podman if
+available, using the invoking user's existing connection. The dev-full/Mac wrapper
+retains its existing runtime and connection handling. Docker and other providers
+receive no PID-limit changes. Host and ancestor cgroup limits are not checked.
+
 ## OSAC Components
 
 The OSAC platform relies on five core components to deliver governed self-service:

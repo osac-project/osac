@@ -50,6 +50,11 @@ var _ = Describe("Service-account Keycloak client", func() {
 	var lookupFailureStatus int
 	var response string
 	var dropRegistrationResponse bool
+	var dropRotationResponse bool
+	var rotationResponse string
+	var updatedRepresentation map[string]json.RawMessage
+	var rotationClientUUID string
+	var rotationClientID string
 
 	BeforeEach(func() {
 		calls = nil
@@ -62,6 +67,11 @@ var _ = Describe("Service-account Keycloak client", func() {
 		lookupFailureStatus = 0
 		response = ""
 		dropRegistrationResponse = false
+		dropRotationResponse = false
+		rotationResponse = ""
+		updatedRepresentation = nil
+		rotationClientUUID = clientUUID
+		rotationClientID = clientID
 		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			call := r.Method + " " + r.URL.Path
 			calls = append(calls, call)
@@ -109,6 +119,40 @@ var _ = Describe("Service-account Keycloak client", func() {
 					return
 				}
 				w.WriteHeader(http.StatusOK)
+			case "GET " + registrationPath + "/" + clientID:
+				Expect(r.Header.Get("Authorization")).To(Equal("Bearer " + registrationToken))
+				if call == failure {
+					w.WriteHeader(failureStatus)
+					_, _ = fmt.Fprint(w, credential+" "+registrationToken)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				Expect(json.NewEncoder(w).Encode(map[string]any{
+					"id": rotationClientUUID, "clientId": rotationClientID, "secret": "old-client-secret",
+					"registrationAccessToken": registrationToken, "enabled": true,
+				})).To(Succeed())
+			case "PUT " + registrationPath + "/" + clientID:
+				Expect(r.Header.Get("Authorization")).To(Equal("Bearer " + registrationToken))
+				Expect(json.NewDecoder(r.Body).Decode(&updatedRepresentation)).To(Succeed())
+				if call == failure {
+					w.WriteHeader(failureStatus)
+					_, _ = fmt.Fprint(w, credential+" "+registrationToken)
+					return
+				}
+				if dropRotationResponse {
+					connection, _, err := w.(http.Hijacker).Hijack()
+					Expect(err).ToNot(HaveOccurred())
+					Expect(connection.Close()).To(Succeed())
+					return
+				}
+				if rotationResponse != "" {
+					_, _ = fmt.Fprint(w, rotationResponse)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				Expect(json.NewEncoder(w).Encode(map[string]string{
+					"id": clientUUID, "clientId": clientID, "registrationAccessToken": "rotated-registration-token",
+				})).To(Succeed())
 			case "GET /admin/realms/osac/clients":
 				Expect(r.Header.Get("Authorization")).To(Equal("Bearer test-token"))
 				Expect(r.URL.Query().Get("clientId")).To(Equal(clientID))
@@ -271,6 +315,126 @@ var _ = Describe("Service-account Keycloak client", func() {
 	It("deletes only the named client with its registration token", func() {
 		Expect(client.DeleteServiceAccountClient(context.Background(), clientID, clientUUID, registrationToken)).To(Succeed())
 		Expect(calls).To(Equal([]string{"DELETE " + registrationPath + "/" + clientID}))
+	})
+
+	It("rotates the secret with the per-client registration token and preserves client settings", func() {
+		secret := "pre-staged-client-secret"
+		updatedToken, err := client.RotateServiceAccountClientSecret(
+			context.Background(), clientID, clientUUID, registrationToken, secret)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updatedToken).To(Equal("rotated-registration-token"))
+		Expect(calls).To(Equal([]string{
+			"GET " + registrationPath + "/" + clientID,
+			"PUT " + registrationPath + "/" + clientID,
+		}))
+		Expect(updatedRepresentation).To(HaveKey("secret"))
+		Expect(updatedRepresentation).ToNot(HaveKey("registrationAccessToken"))
+		Expect(updatedRepresentation).To(HaveKey("enabled"))
+		var sentSecret string
+		Expect(json.Unmarshal(updatedRepresentation["secret"], &sentSecret)).To(Succeed())
+		Expect(sentSecret).To(Equal(secret))
+	})
+
+	It("classifies a failed preflight lookup as safe for the existing credential", func() {
+		failure = "GET " + registrationPath + "/" + clientID
+		failureStatus = http.StatusInternalServerError
+
+		_, err := client.RotateServiceAccountClientSecret(
+			context.Background(), clientID, clientUUID, registrationToken, "pre-staged-client-secret")
+		var rotationErr *ServiceAccountClientRotationError
+		Expect(errors.As(err, &rotationErr)).To(BeTrue())
+		Expect(rotationErr.CredentialMayBeUnusable).To(BeFalse())
+		Expect(err.Error()).ToNot(ContainSubstring(registrationToken))
+		Expect(err.Error()).ToNot(ContainSubstring(credential))
+		Expect(calls).To(Equal([]string{"GET " + registrationPath + "/" + clientID}))
+	})
+
+	It("marks a missing client as unusable even when rotation has not started", func() {
+		failure = "GET " + registrationPath + "/" + clientID
+		failureStatus = http.StatusNotFound
+
+		_, err := client.RotateServiceAccountClientSecret(
+			context.Background(), clientID, clientUUID, registrationToken, "pre-staged-client-secret")
+		var rotationErr *ServiceAccountClientRotationError
+		Expect(errors.As(err, &rotationErr)).To(BeTrue())
+		Expect(rotationErr.CredentialMayBeUnusable).To(BeTrue())
+		Expect(calls).To(Equal([]string{"GET " + registrationPath + "/" + clientID}))
+	})
+
+	DescribeTable("classifies rotation update errors",
+		func(statusCode int, mayHaveApplied bool) {
+			failure = "PUT " + registrationPath + "/" + clientID
+			failureStatus = statusCode
+
+			_, err := client.RotateServiceAccountClientSecret(
+				context.Background(), clientID, clientUUID, registrationToken, "pre-staged-client-secret")
+			var rotationErr *ServiceAccountClientRotationError
+			Expect(errors.As(err, &rotationErr)).To(BeTrue())
+			Expect(rotationErr.CredentialMayBeUnusable).To(Equal(mayHaveApplied))
+			Expect(err.Error()).ToNot(ContainSubstring(registrationToken))
+			Expect(err.Error()).ToNot(ContainSubstring(credential))
+			Expect(calls).To(Equal([]string{
+				"GET " + registrationPath + "/" + clientID,
+				"PUT " + registrationPath + "/" + clientID,
+			}))
+		},
+		Entry("definite rejection", http.StatusUnauthorized, false),
+		Entry("missing client", http.StatusNotFound, true),
+		Entry("server error", http.StatusInternalServerError, true),
+	)
+
+	It("treats a lost update response as ambiguous", func() {
+		dropRotationResponse = true
+
+		_, err := client.RotateServiceAccountClientSecret(
+			context.Background(), clientID, clientUUID, registrationToken, "pre-staged-client-secret")
+		var rotationErr *ServiceAccountClientRotationError
+		Expect(errors.As(err, &rotationErr)).To(BeTrue())
+		Expect(rotationErr.CredentialMayBeUnusable).To(BeTrue())
+		Expect(err.Error()).ToNot(ContainSubstring(registrationToken))
+		Expect(calls).To(Equal([]string{
+			"GET " + registrationPath + "/" + clientID,
+			"PUT " + registrationPath + "/" + clientID,
+		}))
+	})
+
+	It("treats an invalid successful update response as ambiguous", func() {
+		rotationResponse = `{}`
+
+		_, err := client.RotateServiceAccountClientSecret(
+			context.Background(), clientID, clientUUID, registrationToken, "pre-staged-client-secret")
+		var rotationErr *ServiceAccountClientRotationError
+		Expect(errors.As(err, &rotationErr)).To(BeTrue())
+		Expect(rotationErr.CredentialMayBeUnusable).To(BeTrue())
+		Expect(calls).To(Equal([]string{
+			"GET " + registrationPath + "/" + clientID,
+			"PUT " + registrationPath + "/" + clientID,
+		}))
+	})
+
+	It("does not update a client when its registration token resolves to another identity", func() {
+		rotationClientUUID = "00000000-0000-0000-0000-000000000000"
+		_, err := client.RotateServiceAccountClientSecret(
+			context.Background(), clientID, clientUUID, registrationToken, "pre-staged-client-secret")
+		Expect(err).To(HaveOccurred())
+		Expect(calls).To(Equal([]string{"GET " + registrationPath + "/" + clientID}))
+	})
+
+	It("rejects invalid rotation credentials before calling Keycloak", func() {
+		for _, test := range []struct {
+			clientID   string
+			clientUUID string
+			token      string
+		}{
+			{clientID: "../other", clientUUID: clientUUID, token: registrationToken},
+			{clientID: clientID, clientUUID: "invalid", token: registrationToken},
+			{clientID: clientID, clientUUID: clientUUID},
+		} {
+			_, err := client.RotateServiceAccountClientSecret(context.Background(),
+				test.clientID, test.clientUUID, test.token, "pre-staged-client-secret")
+			Expect(err).To(HaveOccurred())
+		}
+		Expect(calls).To(BeEmpty())
 	})
 
 	It("treats an absent client as already cleaned up", func() {

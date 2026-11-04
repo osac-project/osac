@@ -39,6 +39,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
 )
@@ -276,7 +277,7 @@ func (t *Tool) EnsureKCTrustsClusterCA(ctx context.Context) error {
 	err := t.kubeClient.Get(ctx, crclient.ObjectKey{Namespace: kcNamespace, Name: cmName}, existing)
 	if err == nil {
 		t.logger.InfoContext(ctx, "Keycloak cluster-CA ConfigMap already present; skipping KC patch")
-		return nil
+		return t.waitForKeycloakDiscovery(ctx)
 	}
 	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("check existing cluster-ca configmap: %w", err)
@@ -329,7 +330,74 @@ func (t *Tool) EnsureKCTrustsClusterCA(ctx context.Context) error {
 	}
 
 	t.logger.InfoContext(ctx, "Patched Keycloak deployment with cluster CA; waiting for rollout")
-	return t.waitForKCRollout(ctx, kcNamespace, kcDeployment)
+	if err := t.waitForKCRollout(ctx, kcNamespace, kcDeployment); err != nil {
+		return err
+	}
+	return t.waitForKeycloakDiscovery(ctx)
+}
+
+func (t *Tool) waitForKeycloakDiscovery(ctx context.Context) error {
+	const (
+		issuerReadyTimeout   = time.Minute
+		issuerPollInterval   = time.Second
+		issuerRequestTimeout = 5 * time.Second
+	)
+	issuer := fmt.Sprintf("https://%s/realms/master", keycloakAddr)
+	endpoint := issuer + "/.well-known/openid-configuration"
+	tlsConfig := tlsconfig.NewClientTLSConfig()
+	tlsConfig.RootCAs = t.caPool.Pool()
+	client := &http.Client{
+		Transport: &http.Transport{TLSClientConfig: tlsConfig},
+		Timeout:   issuerRequestTimeout,
+	}
+	defer client.CloseIdleConnections()
+
+	readyCtx, cancel := context.WithTimeout(ctx, issuerReadyTimeout)
+	defer cancel()
+	if err := waitForOIDCIssuer(readyCtx, client, endpoint, issuer, issuerPollInterval); err != nil {
+		return fmt.Errorf("keycloak discovery endpoint did not become ready: %w", err)
+	}
+	t.logger.InfoContext(ctx, "Keycloak discovery endpoint is ready", "issuer", issuer)
+	return nil
+}
+
+func waitForOIDCIssuer(ctx context.Context, client *http.Client, endpoint, expectedIssuer string,
+	pollInterval time.Duration) error {
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return fmt.Errorf("create discovery request: %w", err)
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			lastErr = err
+		} else {
+			var discovery struct {
+				Issuer string `json:"issuer"`
+			}
+			if response.StatusCode != http.StatusOK {
+				lastErr = fmt.Errorf("discovery endpoint returned HTTP %d", response.StatusCode)
+			} else if err := json.NewDecoder(response.Body).Decode(&discovery); err != nil {
+				lastErr = fmt.Errorf("decode discovery response: %w", err)
+			} else if discovery.Issuer != expectedIssuer {
+				lastErr = fmt.Errorf("discovery issuer %q does not match %q", discovery.Issuer, expectedIssuer)
+			} else {
+				response.Body.Close()
+				return nil
+			}
+			response.Body.Close()
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("issuer %q was not ready; last attempt: %w: %w", expectedIssuer, lastErr, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // waitForKCRollout polls until the named Deployment has fully rolled out all replicas.

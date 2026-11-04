@@ -67,14 +67,25 @@ var _ = Describe("ServiceAccount API contract", func() {
 	})
 
 	It("keeps internal status fields and Signal private", func() {
-		Expect((&publicv1.ServiceAccountStatus{}).ProtoReflect().Descriptor().Fields().ByName("keycloak_client_uuid")).To(BeNil())
-		Expect((&privatev1.ServiceAccountStatus{}).ProtoReflect().Descriptor().Fields().ByName("keycloak_client_uuid").Number()).To(Equal(protoreflect.FieldNumber(4)))
+		publicStatus := (&publicv1.ServiceAccountStatus{}).ProtoReflect().Descriptor().Fields()
+		privateStatus := (&privatev1.ServiceAccountStatus{}).ProtoReflect().Descriptor().Fields()
+		Expect(publicStatus.ByName("keycloak_client_uuid")).To(BeNil())
+		Expect(privateStatus.ByName("keycloak_client_uuid").Number()).To(Equal(protoreflect.FieldNumber(5)))
+		Expect(privateStatus.ByName("registration_secret").Number()).To(Equal(protoreflect.FieldNumber(6)))
+		Expect(privateStatus.ByName("secret_rotation_generation").Number()).To(Equal(protoreflect.FieldNumber(7)))
 		state := (&publicv1.ServiceAccountStatus{}).ProtoReflect().Descriptor().Fields().ByName("state")
 		Expect(state).ToNot(BeNil())
 		Expect(state.Number()).To(Equal(protoreflect.FieldNumber(2)))
-		Expect((&publicv1.ServiceAccountStatus{}).ProtoReflect().Descriptor().Fields().ByName("message")).ToNot(BeNil())
-		Expect((&publicv1.ServiceAccountStatus{}).ProtoReflect().Descriptor().Fields().ByName("registration_secret")).To(BeNil())
-		Expect((&publicv1.ServiceAccountStatus{}).ProtoReflect().Descriptor().Fields().ByName("provisioning_error")).To(BeNil())
+		Expect(publicStatus.ByName("message")).ToNot(BeNil())
+		Expect(publicStatus.ByName("secret_rotation_state")).To(BeNil())
+		Expect(privateStatus.ByName("secret_rotation_state").Number()).To(Equal(protoreflect.FieldNumber(4)))
+		Expect(publicv1.File_osac_public_v1_service_account_type_proto.Enums().ByName(
+			"ServiceAccountSecretRotationState")).To(BeNil())
+		Expect(publicStatus.ByName("secret_rotation_error")).To(BeNil())
+		Expect(publicStatus.ByName("registration_secret")).To(BeNil())
+		Expect(publicStatus.ByName("provisioning_error")).To(BeNil())
+		responseFields := (&publicv1.ServiceAccountsRegenerateSecretResponse{}).ProtoReflect().Descriptor().Fields()
+		Expect(responseFields.Len()).To(BeZero())
 		Expect(publicv1.File_osac_public_v1_service_accounts_service_proto.Services().ByName("ServiceAccounts").Methods().ByName("Signal")).To(BeNil())
 		Expect(privatev1.File_osac_private_v1_service_accounts_service_proto.Services().ByName("ServiceAccounts").Methods().ByName("Signal")).ToNot(BeNil())
 	})
@@ -101,7 +112,7 @@ var _ = Describe("ServiceAccount API contract", func() {
 		Expect(field.Message().FullName()).To(Equal(protoreflect.FullName("osac.private.v1.ServiceAccount")))
 	})
 
-	It("returns standard create responses and omits the unimplemented rotation action", func() {
+	It("returns standard create responses and exposes asynchronous rotation", func() {
 		for _, file := range []protoreflect.FileDescriptor{
 			privatev1.File_osac_private_v1_service_accounts_service_proto,
 			publicv1.File_osac_public_v1_service_accounts_service_proto,
@@ -117,7 +128,11 @@ var _ = Describe("ServiceAccount API contract", func() {
 			Expect(rule.GetBody()).To(Equal("object"))
 			Expect(rule.GetResponseBody()).To(BeEmpty())
 			Expect(create.Output().Fields().ByName("client_secret")).To(BeNil())
-			Expect(service.Methods().ByName("RegenerateSecret")).To(BeNil())
+			regenerate := service.Methods().ByName("RegenerateSecret")
+			Expect(regenerate).ToNot(BeNil())
+			regenerateRule := proto.GetExtension(regenerate.Options(), annotations.E_Http).(*annotations.HttpRule)
+			Expect(regenerateRule.GetPost()).To(Equal(prefix + "/{id}/regenerate_secret"))
+			Expect(regenerateRule.GetBody()).To(Equal("*"))
 		}
 	})
 })

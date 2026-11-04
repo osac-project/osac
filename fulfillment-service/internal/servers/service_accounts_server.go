@@ -305,3 +305,13 @@ func (s *ServiceAccountsServer) Delete(ctx context.Context,
 	response = &publicv1.ServiceAccountsDeleteResponse{}
 	return
 }
+
+func (s *ServiceAccountsServer) RegenerateSecret(ctx context.Context,
+	request *publicv1.ServiceAccountsRegenerateSecretRequest) (*publicv1.ServiceAccountsRegenerateSecretResponse, error) {
+	_, err := s.delegate.RegenerateSecret(ctx,
+		privatev1.ServiceAccountsRegenerateSecretRequest_builder{Id: request.GetId()}.Build())
+	if err != nil {
+		return nil, err
+	}
+	return &publicv1.ServiceAccountsRegenerateSecretResponse{}, nil
+}

@@ -581,6 +581,21 @@ func (mr *MockClientInterfaceMockRecorder) RemoveUserFromGroup(ctx, tenantName, 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveUserFromGroup", reflect.TypeOf((*MockClientInterface)(nil).RemoveUserFromGroup), ctx, tenantName, idpUserID, groupID)
 }
 
+// RotateServiceAccountClientSecret mocks base method.
+func (m *MockClientInterface) RotateServiceAccountClientSecret(ctx context.Context, clientID, clientUUID, registrationAccessToken, clientSecret string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RotateServiceAccountClientSecret", ctx, clientID, clientUUID, registrationAccessToken, clientSecret)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RotateServiceAccountClientSecret indicates an expected call of RotateServiceAccountClientSecret.
+func (mr *MockClientInterfaceMockRecorder) RotateServiceAccountClientSecret(ctx, clientID, clientUUID, registrationAccessToken, clientSecret any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RotateServiceAccountClientSecret", reflect.TypeOf((*MockClientInterface)(nil).RotateServiceAccountClientSecret), ctx, clientID, clientUUID, registrationAccessToken, clientSecret)
+}
+
 // UpdateIdentityProvider mocks base method.
 func (m *MockClientInterface) UpdateIdentityProvider(ctx context.Context, tenantName string, idpProvider *IdentityProvider) (*IdentityProvider, error) {
 	m.ctrl.T.Helper()

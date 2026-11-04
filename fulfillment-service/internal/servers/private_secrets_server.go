@@ -16,11 +16,13 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -139,6 +141,18 @@ func (b *PrivateSecretsServerBuilder) Build() (result *PrivateSecretsServer, err
 // to fetch individual secrets with populated data.
 func (s *PrivateSecretsServer) List(ctx context.Context,
 	request *privatev1.SecretsListRequest) (response *privatev1.SecretsListResponse, err error) {
+	canReadCredentials, err := s.canReadServiceAccountCredentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !canReadCredentials {
+		request = proto.Clone(request).(*privatev1.SecretsListRequest)
+		credentialFilter := fmt.Sprintf("this.type != %d", privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL)
+		if filter := request.GetFilter(); filter != "" {
+			credentialFilter = fmt.Sprintf("(%s) && (%s)", filter, credentialFilter)
+		}
+		request.SetFilter(credentialFilter)
+	}
 	err = s.generic.List(ctx, request, &response)
 	return
 }
@@ -152,6 +166,9 @@ func (s *PrivateSecretsServer) Get(ctx context.Context,
 
 	obj := response.GetObject()
 	if err = s.authorizePlatformSecretManagement(ctx, obj); err != nil {
+		return
+	}
+	if err = s.authorizeServiceAccountCredential(ctx, obj, false); err != nil {
 		return
 	}
 	if obj.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
@@ -197,6 +214,9 @@ func (s *PrivateSecretsServer) Create(ctx context.Context,
 
 	err = s.validateSecretCreate(secret)
 	if err != nil {
+		return
+	}
+	if err = s.authorizeServiceAccountCredential(ctx, secret, true); err != nil {
 		return
 	}
 
@@ -279,6 +299,9 @@ func (s *PrivateSecretsServer) Update(ctx context.Context,
 	if err = s.authorizePlatformSecretManagement(ctx, existingSecret); err != nil {
 		return
 	}
+	if err = s.authorizeServiceAccountCredential(ctx, existingSecret, true); err != nil {
+		return
+	}
 
 	err = s.validateSecretUpdate(ctx, request.GetObject(), request.GetUpdateMask(), existingSecret)
 	if err != nil {
@@ -336,6 +359,9 @@ func (s *PrivateSecretsServer) Delete(ctx context.Context,
 	if err = s.authorizePlatformSecretManagement(ctx, obj); err != nil {
 		return
 	}
+	if err = s.authorizeServiceAccountCredential(ctx, obj, true); err != nil {
+		return
+	}
 
 	err = s.generic.Delete(ctx, request, &response)
 	if err != nil {
@@ -389,6 +415,44 @@ func (s *PrivateSecretsServer) canManagePlatformSecrets(ctx context.Context) (bo
 	return assignable.Universal(), nil
 }
 
+func (s *PrivateSecretsServer) canReadServiceAccountCredentials(ctx context.Context) (bool, error) {
+	if auth.IsTenantAdmin(ctx) || auth.IsControllerServiceAccount(ctx) {
+		return true, nil
+	}
+	return s.canManagePlatformSecrets(ctx)
+}
+
+func (s *PrivateSecretsServer) authorizeServiceAccountCredential(ctx context.Context,
+	secret *privatev1.Secret, mutate bool) error {
+	if secret == nil || secret.GetType() != privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL {
+		return nil
+	}
+	if !mutate {
+		allowed, err := s.canReadServiceAccountCredentials(ctx)
+		if err != nil {
+			return err
+		}
+		if allowed {
+			return nil
+		}
+		return grpcstatus.Error(grpccodes.PermissionDenied,
+			"service-account credential Secrets can only be read by tenant admins and managed by platform administrators or controllers")
+	}
+	if auth.IsControllerServiceAccount(ctx) {
+		return nil
+	}
+
+	allowed, err := s.canManagePlatformSecrets(ctx)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return grpcstatus.Error(grpccodes.PermissionDenied,
+			"service-account credential Secrets can only be read by tenant admins and managed by platform administrators or controllers")
+	}
+	return nil
+}
+
 func (s *PrivateSecretsServer) withSavepoint(ctx context.Context, operation func(context.Context) error) error {
 	tx, err := database.TxFromContext(ctx)
 	if err != nil {
@@ -406,6 +470,9 @@ func (s *PrivateSecretsServer) Signal(ctx context.Context,
 		return
 	}
 	if err = s.authorizePlatformSecretManagement(ctx, getResponse.GetObject()); err != nil {
+		return
+	}
+	if err = s.authorizeServiceAccountCredential(ctx, getResponse.GetObject(), true); err != nil {
 		return
 	}
 	err = s.generic.Signal(ctx, request, &response)
@@ -503,6 +570,8 @@ func validateSecretData(secretType privatev1.SecretType, data map[string][]byte)
 		key = "value"
 	case privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY:
 		key = "public_key"
+	case privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL:
+		key = "client_secret"
 	default:
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'type' has unknown value %d", secretType)
 	}

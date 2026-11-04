@@ -37,8 +37,10 @@ var _ = Describe("finalizer CAS", func() {
 	// The guard proves coverage of the RPCs at the level of the bare GenericServer, not of the production typed
 	// wrappers: a wrapper that rebuilds the request from the stored object without restoring the version of the
 	// client would defeat the compare-and-swap without failing these specs. DiskImage and InstanceType rebuild the
-	// request but restore the client version and drop the request finalizers, so they can't lose an update;
-	// BareMetalInstanceType applies the masks itself and has its own specs with the typed servers.
+	// request from the stored object: their masked paths ignore metadata.finalizers, and their nil-mask path merges
+	// the request over the stored object, which unions the request finalizers with the stored ones, and the object
+	// that the public servers forward already carries the stored finalizers. BareMetalInstanceType applies the masks
+	// itself and has its own specs with the typed servers.
 	It("covers every finalizer-bearing private resource", func() {
 		covered := map[string]bool{}
 		for _, c := range finalizerCases() {
@@ -65,8 +67,10 @@ var _ = Describe("finalizer CAS", func() {
 		}
 		sort.Strings(missing)
 		sort.Strings(stale)
-		Expect(missing).To(BeEmpty(), "services missing from the finalizer cases and from finalizerCaseSkips")
-		Expect(stale).To(BeEmpty(), "services in the finalizer cases or skips that have no finalizer-bearing Update")
+		Expect(len(missing)+len(stale)).To(BeZero(),
+			"services missing from the finalizer cases and from finalizerCaseSkips: %v\n"+
+				"services in the finalizer cases or skips that have no finalizer-bearing Update: %v",
+			missing, stale)
 	})
 
 	DescribeTable("rejects a stale private finalizer write",
@@ -97,6 +101,24 @@ var _ = Describe("finalizer CAS", func() {
 
 			Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold),
 				"a public update must not clear the finalizers")
+		},
+		finalizerEntries(),
+	)
+
+	// A public request has no finalizers and no way to prove a version for them, so the server restores the stored
+	// ones before it checks anything else. A stale public request therefore succeeds and never gets the Aborted
+	// error that private finalizer changes get.
+	DescribeTable("keeps finalizers on a stale public nil-mask update",
+		func(c finalizerCase) {
+			t := c.target([]string{finalizerController, finalizerHold})
+			stale := t.get(ctx)
+			t.bump(ctx)
+
+			err := t.update(withPublicAPIView(ctx), withFinalizers(stale), nil, false)
+			Expect(err).ToNot(HaveOccurred(), "a public request must not be rejected for its finalizers")
+
+			Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold),
+				"a stale public update must not clear the finalizers")
 		},
 		finalizerEntries(),
 	)
@@ -158,10 +180,13 @@ var _ = Describe("finalizer CAS", func() {
 
 				object := withFinalizers(stale, finalizerHold, finalizerController, finalizerHold)
 				snapshot := proto.Clone(object)
+				stored := t.get(ctx)
+				storedSnapshot := proto.Clone(stored)
 				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
 
 				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
 				Expect(proto.Equal(object, snapshot)).To(BeTrue(), "the request object must not be modified")
+				Expect(proto.Equal(stored, storedSnapshot)).To(BeTrue(), "the stored snapshot must not be modified")
 			},
 			finalizerEntries(),
 		)
@@ -222,6 +247,20 @@ var _ = Describe("finalizer CAS", func() {
 			finalizerEntries(),
 		)
 
+		DescribeTable("accepts an update without metadata that doesn't change the finalizers",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController, finalizerHold})
+				t.bump(ctx)
+
+				// The mask selects the labels, so the finalizers of the stored object are untouched:
+				object := withoutMetadata(t.get(ctx))
+				Expect(t.update(ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
+
+				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
+			},
+			finalizerEntries(),
+		)
+
 		DescribeTable("leaves the finalizers alone when the update mask is empty",
 			func(c finalizerCase) {
 				t := c.target([]string{finalizerController, finalizerHold})
@@ -255,16 +294,24 @@ var _ = Describe("finalizer CAS", func() {
 		)
 
 		// A private write without metadata can't prove which version it started from, so it is rejected whatever the
-		// stored version is.
+		// stored version is, and whether it selects the finalizers with a mask or replaces the whole object.
 		DescribeTable("rejects a finalizer change that has no metadata",
-			func(c finalizerCase, bumpFirst bool) {
+			func(c finalizerCase, bumpFirst bool, mask *fieldmaskpb.FieldMask) {
 				t := c.target([]string{finalizerController, finalizerHold})
 				if bumpFirst {
 					t.bump(ctx)
 				}
 
-				err := t.update(ctx, withoutMetadata(t.get(ctx)), finalizersMask(), false)
+				err := t.update(ctx, withoutMetadata(t.get(ctx)), mask, false)
 
+				if mask == nil && finalizerRequiresMetadata[c.service] {
+					// The validation of the object rejects a whole-object write without metadata, so nothing is
+					// written. That is as safe as the conflict, whichever check runs first.
+					Expect(status.Code(err)).To(BeElementOf(codes.InvalidArgument, codes.Aborted),
+						"the write without metadata returned %v", err)
+					Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
+					return
+				}
 				t.expectFinalizerConflict(ctx, err, finalizerController, finalizerHold)
 			},
 			finalizerEntriesPerVersion(),
@@ -292,13 +339,16 @@ func finalizerEntriesPerMask() []TableEntry {
 }
 
 // finalizerEntriesPerVersion returns an entry for each resource, for an object at its creation version and for an
-// object that has been written since.
+// object that has been written since, and for a mask on the finalizers and no mask at all.
 func finalizerEntriesPerVersion() []TableEntry {
 	var entries []TableEntry
 	for _, c := range finalizerCases() {
 		entries = append(entries,
-			Entry(c.service+" at version 0", c, false),
-			Entry(c.service+" at a later version", c, true),
+			Entry(c.service+" at version 0 with metadata.finalizers mask", c, false, finalizerMaskOf("metadata.finalizers")),
+			Entry(c.service+" at a later version with metadata.finalizers mask", c, true,
+				finalizerMaskOf("metadata.finalizers")),
+			Entry(c.service+" at version 0 with nil mask", c, false, (*fieldmaskpb.FieldMask)(nil)),
+			Entry(c.service+" at a later version with nil mask", c, true, (*fieldmaskpb.FieldMask)(nil)),
 		)
 	}
 	return entries

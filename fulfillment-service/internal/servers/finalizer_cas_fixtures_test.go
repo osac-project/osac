@@ -54,6 +54,13 @@ const (
 // and the location of the constraint that blocks seeding. It is empty when every resource is covered.
 var finalizerCaseSkips = map[string]string{}
 
+// finalizerRequiresMetadata lists the services whose object type requires metadata in its protovalidate rules, so that
+// a whole-object write without metadata fails validation: osac.private.v1.ServiceAccount in
+// proto/private/osac/private/v1/service_account_type.proto.
+var finalizerRequiresMetadata = map[string]bool{
+	privatev1.ServiceAccounts_ServiceDesc.ServiceName: true,
+}
+
 // finalizerBearingServices returns the fully qualified names of the private services that have an Update method whose
 // object has metadata with finalizers. Services without Update are read-only and are excluded by construction.
 func finalizerBearingServices() []string {
@@ -394,11 +401,26 @@ func (t finalizerTarget) bump(ctx context.Context) {
 // the expected ones, which means that the rejected write wasn't applied.
 func (t finalizerTarget) expectFinalizerConflict(ctx context.Context, err error, want ...string) {
 	stored, getErr := t.ops.get(ctx, t.id)
-	ExpectWithOffset(1, getErr).ToNot(HaveOccurred(), "the object must still exist")
-	got := finalizersOf(stored)
-	sort.Strings(got)
+	var got []string
+	state := fmt.Sprintf("unreadable (%v)", getErr)
+	if getErr == nil {
+		got = finalizersOf(stored)
+		sort.Strings(got)
+		state = fmt.Sprintf("%v", got)
+	}
 	ExpectWithOffset(1, status.Code(err)).To(Equal(codes.Aborted),
 		"a stale finalizer write must be rejected as a conflict, but the update returned %v and the stored "+
-			"finalizers are now %v", err, got)
+			"finalizers are now %v", err, state)
+	ExpectWithOffset(1, getErr).ToNot(HaveOccurred(), "the object must still exist")
 	ExpectWithOffset(1, got).To(ConsistOf(want))
+	expectConflictMessage(err, t.id)
+}
+
+// expectConflictMessage checks that the message of a conflict names the object and doesn't reveal finalizer names,
+// which belong to the controllers. It doesn't check the exact wording.
+func expectConflictMessage(err error, id string) {
+	message := status.Convert(err).Message()
+	ExpectWithOffset(2, message).To(ContainSubstring(id))
+	ExpectWithOffset(2, message).ToNot(ContainSubstring(finalizerHold))
+	ExpectWithOffset(2, message).ToNot(ContainSubstring(finalizerController))
 }

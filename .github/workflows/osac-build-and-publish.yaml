@@ -1686,8 +1686,20 @@ jobs:
   # -------------------------------------------------------------------
   create-component-releases:
     name: Create GitHub Release (${{ matrix.component }})
-    needs: [prepare, tag]
-    if: always() && inputs.mode == 'release' && needs.tag.result == 'success'
+    # Gated on the real image staging release succeeding (not just tag),
+    # so a GitHub Release page is never created for a version that never
+    # actually reached registry.stage.redhat.io -- see
+    # rollback-tags-on-failure below for the tag side of this same fix.
+    # Deliberately does NOT also require trigger-konflux-chart-staging-release
+    # to succeed: that job already runs continue-on-error (charts are
+    # lenient/best-effort, see its own comment) and its job `result` is
+    # therefore always 'success' regardless of the real outcome -- adding
+    # it here would be a no-op gate, not a real one.
+    needs: [prepare, tag, trigger-konflux-staging-release]
+    if: |
+      always() && inputs.mode == 'release' &&
+      needs.tag.result == 'success' &&
+      needs.trigger-konflux-staging-release.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -1742,9 +1754,12 @@ jobs:
   # -------------------------------------------------------------------
   publish-fulfillment-service-binaries:
     name: Publish binaries (fulfillment-service)
-    needs: [prepare, tag]
+    # Gated on real image staging success -- see create-component-releases'
+    # own comment above for why.
+    needs: [prepare, tag, trigger-konflux-staging-release]
     if: >-
       always() && inputs.mode == 'release' && needs.tag.result == 'success'
+      && needs.trigger-konflux-staging-release.result == 'success'
       && contains(fromJSON(needs.prepare.outputs.components-to-tag), 'fulfillment-service')
     permissions:
       contents: write
@@ -1757,9 +1772,12 @@ jobs:
 
   publish-fulfillment-service-proto:
     name: Publish proto (fulfillment-service)
-    needs: [prepare, tag]
+    # Gated on real image staging success -- see create-component-releases'
+    # own comment above for why.
+    needs: [prepare, tag, trigger-konflux-staging-release]
     if: >-
       always() && inputs.mode == 'release' && needs.tag.result == 'success'
+      && needs.trigger-konflux-staging-release.result == 'success'
       && contains(fromJSON(needs.prepare.outputs.components-to-tag), 'fulfillment-service')
     permissions:
       contents: read
@@ -1778,9 +1796,17 @@ jobs:
   # -------------------------------------------------------------------
   create-umbrella-release:
     name: Create GitHub Release (OSAC platform chart)
+    # Gated directly on trigger-konflux-staging-release too, not just
+    # inherited via create-component-releases'/the publish-fulfillment-
+    # service-*'s own 'skipped' pass-through -- that pass-through exists
+    # for the unrelated "component wasn't bumped this release" case, and
+    # would otherwise also let this job proceed when staging itself never
+    # succeeded. See create-component-releases' own comment for the full
+    # reasoning.
     needs:
       - prepare
       - tag
+      - trigger-konflux-staging-release
       - create-component-releases
       - publish-fulfillment-service-binaries
       - publish-fulfillment-service-proto
@@ -1788,6 +1814,7 @@ jobs:
       always() && !cancelled() &&
       inputs.mode == 'release' &&
       needs.tag.result == 'success' &&
+      needs.trigger-konflux-staging-release.result == 'success' &&
       contains(fromJSON('["success", "skipped"]'), needs.create-component-releases.result) &&
       contains(fromJSON('["success", "skipped"]'), needs.publish-fulfillment-service-binaries.result) &&
       contains(fromJSON('["success", "skipped"]'), needs.publish-fulfillment-service-proto.result)
@@ -2963,6 +2990,105 @@ jobs:
         PYEOF
 
   # -------------------------------------------------------------------
+  # Roll back every tag this run created if the run won't go on to create
+  # a GitHub Release for it either (gated identically to
+  # create-component-releases/create-umbrella-release above) -- a tag
+  # existing with nothing real behind it (no image ever reached
+  # registry.stage.redhat.io) is exactly the "ghost tag" failure mode a
+  # cancelled or failed release used to leave behind, needing manual
+  # cleanup (deleting the tag, any GitHub Release, and confirming no
+  # Konflux artifact was ever built) to recover from. Deliberately does
+  # NOT also require trigger-konflux-chart-staging-release to succeed --
+  # same reasoning as create-component-releases' own comment (that job's
+  # continue-on-error makes its result meaningless as a gate).
+  #
+  # Must be in cleanup's own needs: below so cleanup can never delete the
+  # temp branch this job still needs to check out first -- they'd
+  # otherwise run concurrently as dependency-graph siblings (both only
+  # directly need trigger-konflux-staging-release).
+  # -------------------------------------------------------------------
+  rollback-tags-on-failure:
+    name: Roll back tags (staging release did not succeed)
+    needs: [prepare, tag, trigger-konflux-staging-release]
+    if: |
+      always() && inputs.mode == 'release' &&
+      needs.tag.result == 'success' &&
+      needs.trigger-konflux-staging-release.result != 'success'
+    runs-on: osac-ci
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
+      COMPONENTS_TO_TAG: ${{ needs.prepare.outputs.components-to-tag }}
+
+    steps:
+    - name: Generate osac-ci app token
+      id: app-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+      with:
+        app-id: "4966101"
+        private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+
+    - name: Checkout repository
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        ref: ${{ needs.prepare.outputs.temp-branch }}
+        fetch-depth: 0
+        # Same reasoning as the tag job's own checkout: pushes tag
+        # deletions, so needs the app token rather than the default
+        # read-only GITHUB_TOKEN.
+        token: ${{ steps.app-token.outputs.token }}
+
+    - name: Delete every tag this run created
+      run: |
+        set -euo pipefail
+
+        # Same mapping tag's own "Create chart release tags" step uses --
+        # kept in step with it if the real component/chart list ever changes.
+        declare -A COMPONENT_CHARTS=(
+          ["osac-operator"]="osac-operator-chart osac-operator-crds-chart"
+          ["fulfillment-service"]="fulfillment-service-chart"
+          ["osac-aap"]="osac-aap-chart"
+          ["bare-metal-fulfillment-operator"]="bare-metal-fulfillment-operator-chart bare-metal-fulfillment-operator-crds-chart"
+          ["osac-metering"]="osac-metering-chart"
+          ["osac-csi-driver"]="osac-csi-driver-chart osac-csi-backends-chart"
+          ["osac-ui"]="osac-ui-chart"
+        )
+
+        COMMIT_SHA=$(git rev-parse HEAD)
+
+        delete_tag_if_ours() {
+          local TAG="$1"
+          if ! git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
+            echo "Tag ${TAG} doesn't exist -- nothing to roll back"
+            return 0
+          fi
+          local EXISTING_SHA
+          EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
+          if [[ "${EXISTING_SHA}" != "${COMMIT_SHA}" ]]; then
+            echo "::warning::Tag ${TAG} exists but points at ${EXISTING_SHA}, not this run's ${COMMIT_SHA} -- leaving it alone, not ours to delete"
+            return 0
+          fi
+          git push origin --delete "refs/tags/${TAG}"
+          echo "Rolled back: ${TAG}"
+        }
+
+        delete_tag_if_ours "osac/v${VERSION}"
+        delete_tag_if_ours "osac-release/v${VERSION}"
+        delete_tag_if_ours "osac-chart-v${VERSION}"
+
+        for COMPONENT in $(jq -r '.[]' <<<"${COMPONENTS_TO_TAG}"); do
+          COMPONENT_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k]' <<<"${COMPONENT_VERSIONS}")
+          delete_tag_if_ours "${COMPONENT}/v${COMPONENT_VERSION}"
+          # Intentional word splitting: some entries list multiple charts.
+          for CHART_COMPONENT in ${COMPONENT_CHARTS[$COMPONENT]:-}; do
+            delete_tag_if_ours "${CHART_COMPONENT}-v${COMPONENT_VERSION}"
+          done
+        done
+
+  # -------------------------------------------------------------------
   # Stamp charts with their real, now-confirmed-released images, then
   # trigger the chart release -- gated on trigger-konflux-staging-release
   # succeeding so a chart can never reference an image that doesn't exist
@@ -3658,18 +3784,24 @@ jobs:
 
   cleanup:
     name: Cleanup temp branch
-    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release, notify-failure, wait-for-konflux-build, trigger-konflux-staging-release, stamp-and-release-charts, wait-for-konflux-chart-build, trigger-konflux-chart-staging-release, notify-konflux]
+    # rollback-tags-on-failure must be in this list (not just implied via
+    # trigger-konflux-staging-release) -- it checks out the temp branch
+    # this job deletes, and without a direct needs: entry they'd run as
+    # concurrent dependency-graph siblings (both only directly need
+    # trigger-konflux-staging-release) instead of rollback finishing first.
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release, notify-failure, wait-for-konflux-build, trigger-konflux-staging-release, rollback-tags-on-failure, stamp-and-release-charts, wait-for-konflux-chart-build, trigger-konflux-chart-staging-release, notify-konflux]
     runs-on: ubuntu-latest
     # notify-failure (and now notify-release, create-component-releases,
-    # publish-fulfillment-service-binaries/-proto) are routinely skipped
-    # whenever nothing fails or nightly mode doesn't run them, and GitHub
-    # skip-cascades a job whose needs include a skipped job regardless of a
-    # custom `if:` unless the expression includes always() -- so always() is
-    # required here even though this job only wants to act on real success.
-    # tag succeeding is sufficient proof the whole pipeline (build, every
-    # test box, promote/publish) already succeeded, since it's gated on
-    # that -- the rest of needs above exists only to order this job after
-    # every other consumer of the temp branch, not to gate on their result.
+    # publish-fulfillment-service-binaries/-proto, rollback-tags-on-failure)
+    # are routinely skipped whenever nothing fails or nightly mode doesn't
+    # run them, and GitHub skip-cascades a job whose needs include a
+    # skipped job regardless of a custom `if:` unless the expression
+    # includes always() -- so always() is required here even though this
+    # job only wants to act on real success. tag succeeding is sufficient
+    # proof the whole pipeline (build, every test box, promote/publish)
+    # already succeeded, since it's gated on that -- the rest of needs
+    # above exists only to order this job after every other consumer of
+    # the temp branch, not to gate on their result.
     if: always() && needs.tag.result == 'success'
     permissions:
       contents: write

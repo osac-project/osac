@@ -162,14 +162,15 @@ func writeTerms(out *strings.Builder) {
 		{"Resource", "The billable object the usage is about, named by `resource_type` and `resource_id`."},
 		{"Metering field registry", "The fields metering tracks on each resource, declared by annotations on the private protos in `proto/metering` and kept in sync with fulfillment's database triggers by drift tests."},
 		{"Meter", "What is measured on a resource, for example a running VM's seconds."},
-		{"Component", "The billable line a meter feeds. It is the meter name unless a rule revision sets another."},
+		{"Component", "The billable line a meter feeds. It is the meter name unless a rule revision sets another. For example, the `compute` meter feeds the `compute` component; it names the billable line, not the running seconds."},
 		{"Billing dimensions", "Name and value pairs that identify the priced variant of the usage, such as an instance type. A change re-keys the usage."},
 		{"Interval", "One span of time: `from` inclusive, `to` exclusive, in UTC with whole seconds."},
 		{"Correction", "A usage event with a negative quantity for the same resource, meter, component, and billing dimensions; it takes back usage already sent."},
 		{"Reader", "The provider's system that reads usage events."},
+		{"Rule", "A meter definition in a rule revision: the states that bill, the dimensions the meter carries, and the multiplier."},
 		{"Rule revision", "An immutable set of meter rules with an effective date. The chart ships the default revision."},
 		{"Schema version", "The published shape of a usage event, named by the suffix of its CloudEvent type, for example `v1`."},
-		{"External billing account id", "The tenant's id in the provider's billing system, carried by usage events when the tenant has one."},
+		{"External billing account id", "The tenant's id in the provider's billing system, carried by usage events when the tenant has one. OSAC does not verify it, and it is not the M360 account id; M360 keeps its own mapping."},
 	}
 	for _, term := range terms {
 		fmt.Fprintf(out, "| %s | %s |\n", term[0], term[1])
@@ -458,8 +459,9 @@ func writeBillingAccount(out *strings.Builder, sources Sources) {
 		}
 		fmt.Fprintf(out,
 			"Schema version `%s` and later carry `external_billing_account_id` when the "+
-				"tenant has one%s. A tenant without one omits it. The id labels where the "+
-				"event is reported in the provider's billing system.\n\n", first, earlier)
+				"tenant has one%s. A tenant without one omits it. The field is optional and "+
+				"unverified, and the provider must ensure it matches the account in their "+
+				"billing system.\n\n", first, earlier)
 		fmt.Fprintf(out,
 			"The id never correlates usage. Match a correction to the event it corrects by "+
 				"tenant, resource, meter, component, and billing dimensions. The id can change "+

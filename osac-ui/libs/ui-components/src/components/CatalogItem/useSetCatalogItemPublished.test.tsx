@@ -93,7 +93,7 @@ describe('useSetCatalogItemPublished', () => {
     await waitFor(() => expect(update).toHaveBeenCalled());
     const request = update.mock.calls[0][0];
     expect(request.object).toMatchObject({ id: 'catalog-1', published: true });
-    expect(request.updateMask?.paths).toEqual(['id', 'published']);
+    expect(request.updateMask?.paths).toEqual(['published']);
   });
 
   it('sends only id and published to the cluster catalog item service', async () => {
@@ -112,7 +112,7 @@ describe('useSetCatalogItemPublished', () => {
     await waitFor(() => expect(update).toHaveBeenCalled());
     const request = update.mock.calls[0][0];
     expect(request.object).toMatchObject({ id: 'catalog-2', published: false });
-    expect(request.updateMask?.paths).toEqual(['id', 'published']);
+    expect(request.updateMask?.paths).toEqual(['published']);
   });
 
   it('sends only id and published to the bare metal catalog item service', async () => {
@@ -131,7 +131,7 @@ describe('useSetCatalogItemPublished', () => {
     await waitFor(() => expect(update).toHaveBeenCalled());
     const request = update.mock.calls[0][0];
     expect(request.object).toMatchObject({ id: 'catalog-3', published: true });
-    expect(request.updateMask?.paths).toEqual(['id', 'published']);
+    expect(request.updateMask?.paths).toEqual(['published']);
   });
 
   it('shows a danger toast and keeps the item unchanged when the update fails', async () => {

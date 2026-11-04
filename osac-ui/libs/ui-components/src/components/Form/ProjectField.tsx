@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Alert, FormGroup } from '@patternfly/react-core';
 import { useField } from 'formik';
 
@@ -16,11 +17,16 @@ interface ProjectFieldProps {
   label?: string;
   onSelect?: (value: string | number) => void;
   isDisabled?: boolean;
+  /**
+   * Restricts the project list to one tenant. Cloud provider admins select the
+   * tenant explicitly; tenant users inherit it from their session.
+   */
+  tenant?: string;
 }
 
 const fieldId = 'metadata.project';
 
-const ProjectField = ({ label, onSelect: onSelectProp, isDisabled }: ProjectFieldProps) => {
+const ProjectField = ({ label, onSelect: onSelectProp, isDisabled, tenant }: ProjectFieldProps) => {
   const { t } = useTranslation();
   const [field, meta, helpers] = useField<string>('metadata.project');
 
@@ -29,14 +35,26 @@ const ProjectField = ({ label, onSelect: onSelectProp, isDisabled }: ProjectFiel
 
   const fieldLabel = label || t('Project');
   const helperDescribedBy = getFormFieldHelperDescribedBy(fieldId, fieldError);
-  const {
-    data: projects = [],
-    isLoading,
-    error: loadError,
-  } = useListAllResources(
-    Projects,
-    cel<Project>((builder) => builder.field('metadata.tenant').notEquals('shared')),
+  const filter = useMemo(
+    () =>
+      cel<Project>((builder) =>
+        builder.and(
+          builder.field('metadata.tenant').notEquals('shared'),
+          tenant ? builder.field('metadata.tenant').equals(tenant) : undefined,
+        ),
+      ),
+    [tenant],
   );
+  const {
+    data = [],
+    isLoading: isListLoading,
+    isPlaceholderData,
+    error: loadError,
+  } = useListAllResources(Projects, filter, { enabled: tenant !== '' });
+  // After a tenant change, the previous tenant's list stays as placeholder data
+  // until the new one arrives; never offer those projects.
+  const projects = isPlaceholderData ? [] : data;
+  const isLoading = isListLoading || isPlaceholderData;
 
   return (
     <>

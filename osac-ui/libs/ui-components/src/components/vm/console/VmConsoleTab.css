@@ -2,10 +2,9 @@
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 100%;
-  flex: 1 1 auto;
-  /* Keep noVNC measurable when the surrounding page does not provide a height. */
-  min-height: 50vh;
+  flex: 1 1 0;
+  height: 0;
+  min-height: 0;
 }
 
 .vm-console-toolbar-section {

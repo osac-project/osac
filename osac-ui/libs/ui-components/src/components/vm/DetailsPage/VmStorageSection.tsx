@@ -42,7 +42,7 @@ const VmStorageSection = ({ vm }: VmStorageSectionProps) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Boot disk size')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {bootDisk?.sizeGib === undefined ? EMPTY_VALUE : `${bootDisk.sizeGib} GB`}
+              {bootDisk?.sizeGib === undefined ? EMPTY_VALUE : `${bootDisk.sizeGib} GiB`}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

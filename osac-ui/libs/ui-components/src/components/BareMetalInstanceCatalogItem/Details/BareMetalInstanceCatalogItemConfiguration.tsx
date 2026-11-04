@@ -1,6 +1,6 @@
 import { Content, DescriptionList } from '@patternfly/react-core';
 
-import type { BareMetalInstanceCatalogItem, UserDataSource } from '@osac/types';
+import type { BareMetalInstanceCatalogItem } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
 import {
@@ -51,7 +51,7 @@ const BareMetalInstanceCatalogItemConfiguration = ({
         label={t('User data')}
         value={
           <UserDataDetailValue
-            userData={catalogFieldPolicyValue<UserDataSource>(fields?.userDataSource)}
+            userData={catalogFieldPolicyValue(fields?.userDataSource)}
             emptyValue={t('Not set')}
           />
         }

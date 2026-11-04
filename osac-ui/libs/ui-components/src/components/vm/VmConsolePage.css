@@ -7,13 +7,7 @@
   overflow: hidden;
 }
 
-.vm-console-page > .vm-console-tab {
-  flex: 1 1 0;
-  height: 0;
-  min-height: 0;
-}
-
-.vm-console-page > .pf-v6-c-page__main-section {
+.vm-console-fallback-section {
   flex: 1 1 0;
   height: 0;
   min-height: 0;

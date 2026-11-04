@@ -46,13 +46,14 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
   const externalIp = vm.status?.externalIpAddress?.trim();
   const hasExternalIp = Boolean(externalIp);
   const state = vm.status?.state;
-  const canAttach = state === ComputeInstanceState.RUNNING && !hasExternalIp;
   const isAttaching =
     attachment?.status?.state === ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_PENDING;
   const isDetaching =
     attachment?.status?.state === ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_DELETING;
   const isFailed =
     attachment?.status?.state === ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_FAILED;
+  const canCreateAttachment =
+    state === ComputeInstanceState.RUNNING && !hasExternalIp && (!attachment || isFailed);
   const showDetach = Boolean(attachment) && (hasExternalIp || isFailed);
   const attachmentMissing = hasExternalIp && !isLoading && !error && !attachment;
   const attachmentMessage =
@@ -82,7 +83,7 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
                     <Button
                       variant="link"
                       isInline
-                      isDisabled={actionDisabled}
+                      isDisabled={actionDisabled || !canCreateAttachment}
                       onClick={() => setAttachOpen(true)}
                     >
                       {t('Retry')}
@@ -90,7 +91,7 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
                     <Button
                       variant="link"
                       isInline
-                      isDisabled={actionDisabled}
+                      isDisabled={actionDisabled || !canCreateAttachment}
                       onClick={() => setAttachOpen(true)}
                     >
                       {t('Choose another')}
@@ -100,7 +101,7 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
                 {!showDetach && !isAttaching && !isFailed ? (
                   <Button
                     variant="secondary"
-                    isDisabled={actionDisabled || !canAttach}
+                    isDisabled={actionDisabled || !canCreateAttachment}
                     isLoading={isLoading}
                     onClick={() => setAttachOpen(true)}
                   >
@@ -138,7 +139,7 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
             </Alert>
           ) : null}
           {isAttaching ? <div>{t('Attaching external IP...')}</div> : null}
-          {isDetaching ? <div>{t('Detaching external IP')}</div> : null}
+          {isDetaching ? <div>{t('Detaching external IP...')}</div> : null}
         </DescriptionListDescription>
       </DescriptionListGroup>
     </>

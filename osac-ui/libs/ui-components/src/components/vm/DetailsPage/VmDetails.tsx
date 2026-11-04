@@ -30,7 +30,11 @@ const VmDetails = ({ vm }: Props) => {
     isLoading: isInstanceTypeLoading,
     error: instanceTypeError,
   } = useInstanceType(vm.spec?.instanceType?.id);
-  const { data: diskImage, isLoading: isDiskImageLoading } = useDiskImage(vm.spec?.diskImage?.id);
+  const {
+    data: diskImage,
+    isLoading: isDiskImageLoading,
+    error: diskImageError,
+  } = useDiskImage(vm.spec?.diskImage?.id);
   const openConsole = () => {
     window.open(`/vms/${encodeURIComponent(vm.id)}/console`, '_blank', 'noopener,noreferrer');
   };
@@ -43,6 +47,13 @@ const VmDetails = ({ vm }: Props) => {
             <StackItem>
               <Alert variant="danger" title={t('Could not load instance types')} isInline>
                 {getErrorMessage(instanceTypeError)}
+              </Alert>
+            </StackItem>
+          ) : null}
+          {diskImageError ? (
+            <StackItem>
+              <Alert variant="danger" title={t('Could not load disk image')} isInline>
+                {getErrorMessage(diskImageError)}
               </Alert>
             </StackItem>
           ) : null}

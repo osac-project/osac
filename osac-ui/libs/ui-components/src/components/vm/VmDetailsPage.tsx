@@ -9,13 +9,8 @@ import ResourceDetailsPage from '../Resource/ResourceDetailsPage';
 
 export const VmDetailsPage = () => {
   const { t } = useTranslation();
-  const { id } = useParams() as { id: string };
-  const trimmedId = id?.trim() ?? '';
-  const query = useGetResource(
-    ComputeInstances,
-    { id: trimmedId },
-    { enabled: Boolean(trimmedId) },
-  );
+  const { id = '' } = useParams<{ id: string }>();
+  const query = useGetResource(ComputeInstances, { id }, { enabled: Boolean(id) });
   const vm = query.data?.object;
 
   return (

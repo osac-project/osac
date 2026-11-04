@@ -6,7 +6,6 @@ import { ComputeInstanceRunStrategy, ComputeInstanceSchema, ComputeInstances } f
 import { getPowerActionErrorTitle, getPowerActionSuccessTitle } from './powerActionErrorTitle';
 import { useUpdateResource } from '../../api/use-resource';
 import type { ComputeInstancePowerAction } from '../../api/v1/compute-instance';
-import { buildUpdateMaskPaths } from '../../api/v1/update-mask';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import { useToast } from '../Toast/useToast';
@@ -43,9 +42,6 @@ export const useVmPowerAction = () => {
     updateVm.mutate(
       {
         object: { id: vmId, ...body },
-        // The ID identifies the PATCH resource and status is output-only; only
-        // fields in the writable action body belong in the update mask.
-        updateMask: { paths: buildUpdateMaskPaths(body as Record<string, unknown>) },
       },
       {
         onSuccess: () => {

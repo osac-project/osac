@@ -60,8 +60,8 @@ describe('VmExternalIpSection', () => {
     expect(screen.getByText('203.0.113.1')).toBeInTheDocument();
     expect(screen.getByText('External IP attachment failed')).toBeInTheDocument();
     expect(screen.getByText('external IP binding failed')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Choose another' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Choose another' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Detach' })).toBeEnabled();
   });
 
@@ -168,6 +168,43 @@ describe('VmExternalIpSection', () => {
     );
 
     expect(screen.getByRole('button', { name: 'Detach' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Choose another' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Attach external IP' })).not.toBeInTheDocument();
+  });
+
+  it('disables Attach when an attachment already exists without an external IP', () => {
+    setAttachment([attachment(ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_READY)]);
+
+    renderWithProviders(
+      <VmExternalIpSection
+        vm={
+          {
+            ...vm,
+            status: { state: ComputeInstanceState.RUNNING, externalIpAddress: '' },
+          } as unknown as ComputeInstance
+        }
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Attach external IP' })).toBeDisabled();
+  });
+
+  it('disables failed-attachment recovery when the VM is not running', () => {
+    setAttachment([attachment(ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_FAILED)]);
+
+    renderWithProviders(
+      <VmExternalIpSection
+        vm={
+          {
+            ...vm,
+            status: { state: ComputeInstanceState.STOPPED, externalIpAddress: '' },
+          } as unknown as ComputeInstance
+        }
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Choose another' })).toBeDisabled();
   });
 });

@@ -11,13 +11,8 @@ import './VmConsolePage.css';
 
 export const VmConsolePage = () => {
   const { t } = useTranslation();
-  const { id } = useParams() as { id: string };
-  const trimmedId = id?.trim() ?? '';
-  const query = useGetResource(
-    ComputeInstances,
-    { id: trimmedId },
-    { enabled: Boolean(trimmedId) },
-  );
+  const { id = '' } = useParams<{ id: string }>();
+  const query = useGetResource(ComputeInstances, { id }, { enabled: Boolean(id) });
   const vm = query.data?.object;
 
   return (
@@ -30,6 +25,7 @@ export const VmConsolePage = () => {
         parentTo="/vms"
         parentLabel={t('Virtual machines')}
         resourceLabel="virtual machine"
+        sectionClassName="vm-console-fallback-section"
       >
         {vm ? <VmConsoleTab vm={vm} /> : null}
       </ResourceDetailsPage>

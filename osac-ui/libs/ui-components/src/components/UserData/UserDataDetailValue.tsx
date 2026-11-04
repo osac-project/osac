@@ -16,7 +16,7 @@ const UserDataDetailValue = ({ userData, emptyValue }: UserDataDetailValueProps)
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
   const source = userData?.source;
-  if (source?.case === 'secret' && typeof source.value === 'object' && source.value) {
+  if (source?.case === 'secret' && source.value) {
     const secretLabel = source.value.name;
 
     return source.value.id ? (
@@ -26,7 +26,11 @@ const UserDataDetailValue = ({ userData, emptyValue }: UserDataDetailValueProps)
     );
   }
 
-  if (source?.case !== 'inline' || typeof source.value !== 'string' || !source.value.trim()) {
+  if (!source?.value) {
+    return emptyValue;
+  }
+
+  if (source.case !== 'inline' || !source.value.trim()) {
     return emptyValue;
   }
 

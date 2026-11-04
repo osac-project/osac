@@ -22,7 +22,7 @@ describe('VmStorageSection', () => {
 
     expect(screen.getByRole('heading', { name: 'Storage' })).toBeInTheDocument();
     expect(screen.getByText('Boot disk size')).toBeInTheDocument();
-    expect(screen.getByText('40 GB')).toBeInTheDocument();
+    expect(screen.getByText('40 GiB')).toBeInTheDocument();
     expect(screen.getByText('Boot storage tier')).toBeInTheDocument();
     expect(screen.getByText('balanced')).toBeInTheDocument();
     const additionalDisksTable = screen.getByRole('grid', { name: 'Additional disks' });

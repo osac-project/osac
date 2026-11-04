@@ -112,4 +112,19 @@ describe('VmDetails', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('VM detail sections')).toBeInTheDocument();
   });
+
+  it('shows an alert and still renders the page when disk image lookup fails', () => {
+    vi.mocked(useDiskImage).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('Disk image unavailable'),
+    } as ReturnType<typeof useDiskImage>);
+
+    renderDetails();
+
+    expect(screen.getByText('Could not load disk image')).toBeInTheDocument();
+    expect(screen.getByText('Disk image unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'web-01' })).toBeInTheDocument();
+    expect(screen.getByText('VM detail sections')).toBeInTheDocument();
+  });
 });

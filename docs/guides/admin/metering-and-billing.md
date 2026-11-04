@@ -90,13 +90,15 @@ Audit who holds it. A reader keeps tenants apart by `tenant_id` and by
 
 ### Watch the reader's lag
 
-Lag is the number of records a reader has not read yet. Enable
-`prometheusRule.enabled` on the metering chart. Strimzi's Kafka Exporter reports
-lag per heartbeat topic, and the `MeteringReaderLag` alert fires when the group
-is more than `prometheusRule.readerLagThreshold` records behind for 15 minutes.
-Growing lag on one topic shows which tenant is behind. A reader that has never
-consumed has no group and no lag series, so check that the group exists after
-the first run.
+Lag is the number of records a consumer still has to read. Enable
+`kafka.exporter.enabled` on the `osac-infra` release. That value enables
+Strimzi's Kafka Exporter, its PodMonitor, and the `MeteringConsumerLag` alert.
+The alert fires when a consumer group reading a heartbeat topic is more than
+`kafka.exporter.lagThreshold` records behind for 15 minutes and its lag has not
+fallen. The series names the group and the topic, so growing lag on one topic
+shows which tenant is behind. The alert covers the metering adapters as well as
+the external readers. A consumer that has never consumed has no group and no
+lag series, so check that the group exists after the first run.
 
 ## Read the events
 

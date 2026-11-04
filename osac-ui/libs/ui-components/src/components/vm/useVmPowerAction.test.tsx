@@ -75,7 +75,7 @@ describe('useVmPowerAction', () => {
         { transport } as React.ComponentProps<typeof ApiProvider>,
         createElement(QueryClientProvider, { client: queryClient }, children),
       );
-    return renderHook(() => useVmPowerAction(), { wrapper });
+    return { ...renderHook(() => useVmPowerAction(), { wrapper }), queryClient };
   };
 
   beforeEach(() => {
@@ -128,6 +128,18 @@ describe('useVmPowerAction', () => {
         title: expect.stringContaining('my-vm'),
       }),
     );
+  });
+
+  it('invalidates the VM list after a successful power action', async () => {
+    const { result, queryClient } = renderWithTransport(createSuccessTransport());
+    const listKey = [ComputeInstances.typeName, 'list', {}] as const;
+    queryClient.setQueryData(listKey, []);
+
+    act(() => {
+      result.current.runPowerAction('vm-1', 'my-vm', 'start');
+    });
+
+    await waitFor(() => expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true));
   });
 
   it('sends the generic update request for a stop action', async () => {

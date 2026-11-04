@@ -129,4 +129,27 @@ describe('VmExternalIpSection', () => {
     const detachButton = screen.getByRole('button', { name: 'Detach' });
     expect(detachButton).toHaveClass('pf-m-secondary');
   });
+
+  it('renders Detach for a failed attachment without a VM external IP', () => {
+    setAttachment([
+      attachment(
+        ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_FAILED,
+        'external IP binding failed',
+      ),
+    ]);
+
+    renderWithProviders(
+      <VmExternalIpSection
+        vm={
+          {
+            ...vm,
+            status: { state: ComputeInstanceState.RUNNING, externalIpAddress: '' },
+          } as unknown as ComputeInstance
+        }
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Detach' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Attach external IP' })).not.toBeInTheDocument();
+  });
 });

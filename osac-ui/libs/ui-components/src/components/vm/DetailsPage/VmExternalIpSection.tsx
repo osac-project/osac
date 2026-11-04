@@ -53,7 +53,7 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
     attachment?.status?.state === ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_DELETING;
   const isFailed =
     attachment?.status?.state === ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_FAILED;
-  const showDetach = Boolean(attachment) && hasExternalIp;
+  const showDetach = Boolean(attachment) && (hasExternalIp || isFailed);
   const attachmentMissing = hasExternalIp && !isLoading && !error && !attachment;
   const attachmentMessage =
     typeof attachment?.status?.message === 'string'
@@ -110,11 +110,11 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
                 {showDetach && !isDetaching ? (
                   <Button
                     variant="secondary"
-                    isDisabled={actionDisabled || isDetaching}
+                    isDisabled={actionDisabled}
                     isLoading={isLoading}
                     onClick={() => setDetachOpen(true)}
                   >
-                    {isDetaching ? t('Detaching external IP') : t('Detach')}
+                    {t('Detach')}
                   </Button>
                 ) : null}
               </Flex>

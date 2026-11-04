@@ -17,6 +17,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -184,9 +185,10 @@ func finalizerPlatformCases() []finalizerCase {
 		),
 		newFinalizerCase(privatev1.StorageTiers_ServiceDesc,
 			func() *privatev1.StorageTier {
+				GinkgoHelper()
 				backend, err := fixtureDAO[*privatev1.StorageBackend]().Create().
 					SetObject(withDefaultTenant(finalizerStorageBackend())).Do(ctx)
-				ExpectWithOffset(1, err).ToNot(HaveOccurred())
+				Expect(err).ToNot(HaveOccurred())
 				return privatev1.StorageTier_builder{
 					Metadata: privatev1.Metadata_builder{Name: finalizerName("tier")}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
@@ -268,10 +270,11 @@ func finalizerTenantCases() []finalizerCase {
 		).afterCreate(func(id string) {
 			// The database creates a default project for every tenant, and the foreign key from that project
 			// makes it impossible to archive the tenant, which the specs on deleting objects need to do:
+			GinkgoHelper()
 			tx, err := database.TxFromContext(ctx)
-			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+			Expect(err).ToNot(HaveOccurred())
 			_, err = tx.Exec(ctx, `delete from projects where tenant = $1`, id)
-			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+			Expect(err).ToNot(HaveOccurred())
 		}),
 		newFinalizerCase(privatev1.Projects_ServiceDesc,
 			func() *privatev1.Project {
@@ -336,8 +339,9 @@ func finalizerTenantCases() []finalizerCase {
 		),
 		newFinalizerCase(privatev1.ComputeInstanceCatalogItems_ServiceDesc,
 			func() *privatev1.ComputeInstanceCatalogItem {
+				GinkgoHelper()
 				templateID := fmt.Sprintf("finalizer_cas_%s", uuid.NewString()[:8])
-				ExpectWithOffset(1, seedComputeCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
+				Expect(seedComputeCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
 				return privatev1.ComputeInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   finalizerName("ci-item"),
@@ -355,8 +359,9 @@ func finalizerTenantCases() []finalizerCase {
 		),
 		newFinalizerCase(privatev1.ClusterCatalogItems_ServiceDesc,
 			func() *privatev1.ClusterCatalogItem {
+				GinkgoHelper()
 				templateID := fmt.Sprintf("finalizer_cas_%s", uuid.NewString()[:8])
-				ExpectWithOffset(1, seedClusterCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
+				Expect(seedClusterCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
 				return privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   finalizerName("cluster-item"),
@@ -374,8 +379,9 @@ func finalizerTenantCases() []finalizerCase {
 		),
 		newFinalizerCase(privatev1.BareMetalInstanceCatalogItems_ServiceDesc,
 			func() *privatev1.BareMetalInstanceCatalogItem {
+				GinkgoHelper()
 				templateID := fmt.Sprintf("finalizer_cas_%s", uuid.NewString()[:8])
-				ExpectWithOffset(1, seedBareMetalCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
+				Expect(seedBareMetalCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
 				return privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   finalizerName("bmi-item"),
@@ -406,8 +412,9 @@ func finalizerTenantCases() []finalizerCase {
 		),
 		newFinalizerCase(privatev1.Clusters_ServiceDesc,
 			func() *privatev1.Cluster {
+				GinkgoHelper()
 				templateID := fmt.Sprintf("finalizer_cas_%s", uuid.NewString()[:8])
-				ExpectWithOffset(1, seedClusterCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
+				Expect(seedClusterCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
 				return privatev1.Cluster_builder{
 					Metadata: privatev1.Metadata_builder{Name: finalizerName("cluster")}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
@@ -418,8 +425,9 @@ func finalizerTenantCases() []finalizerCase {
 		),
 		newFinalizerCase(privatev1.BareMetalInstances_ServiceDesc,
 			func() *privatev1.BareMetalInstance {
+				GinkgoHelper()
 				templateID := fmt.Sprintf("finalizer_cas_%s", uuid.NewString()[:8])
-				ExpectWithOffset(1, seedBareMetalCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
+				Expect(seedBareMetalCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
 				return privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: finalizerName("bmi")}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
@@ -504,11 +512,12 @@ func finalizerNetworkingCases() []finalizerCase {
 		newFinalizerCase(privatev1.ExternalIPs_ServiceDesc,
 			func() *privatev1.ExternalIP {
 				// Archiving an ExternalIP returns its address to the pool, so the pool has to count it as allocated:
+				GinkgoHelper()
 				pool := seedExternalIPPool("203.0.113.0/24", 10)
 				pool.GetStatus().SetAllocated(1)
 				pool.GetStatus().SetAvailable(9)
 				_, err := fixtureDAO[*privatev1.ExternalIPPool]().Update().SetObject(pool).Do(ctx)
-				ExpectWithOffset(1, err).ToNot(HaveOccurred())
+				Expect(err).ToNot(HaveOccurred())
 				return privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Name: finalizerName("eip")}.Build(),
 					Spec: privatev1.ExternalIPSpec_builder{
@@ -524,6 +533,7 @@ func finalizerNetworkingCases() []finalizerCase {
 		),
 		newFinalizerCase(privatev1.NATGateways_ServiceDesc,
 			func() *privatev1.NATGateway {
+				GinkgoHelper()
 				vn := virtualNetwork()
 				pool := seedExternalIPPool("198.18.0.0/30", 0)
 				eip, err := fixtureDAO[*privatev1.ExternalIP]().Create().SetObject(privatev1.ExternalIP_builder{
@@ -537,7 +547,7 @@ func finalizerNetworkingCases() []finalizerCase {
 						Hub:     "network-hub-a",
 					}.Build(),
 				}.Build()).Do(ctx)
-				ExpectWithOffset(1, err).ToNot(HaveOccurred())
+				Expect(err).ToNot(HaveOccurred())
 				return privatev1.NATGateway_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:        finalizerName("nat"),
@@ -556,6 +566,7 @@ func finalizerNetworkingCases() []finalizerCase {
 		),
 		newFinalizerCase(privatev1.ExternalIPAttachments_ServiceDesc,
 			func() *privatev1.ExternalIPAttachment {
+				GinkgoHelper()
 				pool := seedExternalIPPool("203.0.113.0/24", 10)
 				eip, err := fixtureDAO[*privatev1.ExternalIP]().Create().SetObject(privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Name: finalizerName("eip"), Tenant: testTenant}.Build(),
@@ -568,7 +579,7 @@ func finalizerNetworkingCases() []finalizerCase {
 						Hub:     "network-hub-a",
 					}.Build(),
 				}.Build()).Do(ctx)
-				ExpectWithOffset(1, err).ToNot(HaveOccurred())
+				Expect(err).ToNot(HaveOccurred())
 				instance, err := fixtureDAO[*privatev1.ComputeInstance]().Create().SetObject(
 					privatev1.ComputeInstance_builder{
 						Metadata: privatev1.Metadata_builder{Name: finalizerName("ci"), Tenant: testTenant}.Build(),
@@ -576,7 +587,7 @@ func finalizerNetworkingCases() []finalizerCase {
 							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 						}.Build(),
 					}.Build()).Do(ctx)
-				ExpectWithOffset(1, err).ToNot(HaveOccurred())
+				Expect(err).ToNot(HaveOccurred())
 				return privatev1.ExternalIPAttachment_builder{
 					Metadata: privatev1.Metadata_builder{Name: finalizerName("attachment")}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{

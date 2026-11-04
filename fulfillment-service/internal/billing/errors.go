@@ -27,7 +27,9 @@ const (
 	ReasonConflict      Reason = "CONFLICT"
 	ReasonUnsupported   Reason = "UNSUPPORTED"
 	ReasonAmbiguous     Reason = "AMBIGUOUS"
-	ReasonNotFound      Reason = "NOT_FOUND" // the addressed provider resource does not exist
+	// ReasonCurrencyMismatch reports that the provider rate card is denominated in a currency other than the one requested.
+	ReasonCurrencyMismatch Reason = "BILLING_CURRENCY_MISMATCH"
+	ReasonNotFound         Reason = "NOT_FOUND" // the addressed provider resource does not exist
 )
 
 // Error is a classified adapter failure. It deliberately carries no provider body or native identifier.

@@ -15,6 +15,7 @@ package m360
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -243,7 +244,7 @@ var _ = Describe("M360 services", func() {
 			}))
 		})
 
-		It("rejects the whole card as unavailable when a tiered row has no unit rate", func() {
+		It("passes through a tiered row with no unit rate without inferring tiers", func() {
 			build(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = w.Write([]byte(`{"currency":"USD","rows":[
 					{"priceDimId":"d1","priceMethod":"QUANTITY","unitRate":1},
@@ -251,19 +252,58 @@ var _ = Describe("M360 services", func() {
 					 "rateCardTiers":[{"tierNum":1,"tierMinVal":0,"tierMaxVal":10,"tierUnitRate":0.1}]}]}`))
 			})
 			card, err := adapter.GetServiceRateCard(context.Background(), billing.NewServiceRef("s1"), "USD")
-			Expect(reasonOf(err)).To(Equal(billing.ReasonUnavailable))
-			Expect(card.Rows).To(BeNil())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(card).To(Equal(billing.RateCard{
+				Currency: "USD",
+				Rows: []billing.RateRow{
+					{DimensionID: "d1", PriceMethod: "QUANTITY", UnitRate: "1"},
+					{DimensionID: "d2", PriceMethod: "TIERED"},
+				},
+			}))
 		})
 
-		It("rejects the whole card as unavailable when a no-price row has no unit rate", func() {
+		It("returns a no-price row without a unit rate instead of rejecting the whole card", func() {
 			build(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = w.Write([]byte(`{"currency":"USD","rows":[
 					{"priceDimId":"d1","priceMethod":"QUANTITY","unitRate":1},
 					{"priceDimId":"d3","priceMethod":"NO_PRICE"}]}`))
 			})
 			card, err := adapter.GetServiceRateCard(context.Background(), billing.NewServiceRef("s1"), "USD")
-			Expect(reasonOf(err)).To(Equal(billing.ReasonUnavailable))
-			Expect(card.Rows).To(BeNil())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(card).To(Equal(billing.RateCard{
+				Currency: "USD",
+				Rows: []billing.RateRow{
+					{DimensionID: "d1", PriceMethod: "QUANTITY", UnitRate: "1"},
+					{DimensionID: "d3", PriceMethod: "NO_PRICE"},
+				},
+			}))
+		})
+
+		It("preserves mixed valid and incomplete rows in provider order", func() {
+			build(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"currency":"USD","rows":[
+					{"priceDimId":"d1","priceMethod":"QUANTITY","unitRate":1.25,
+					 "attributeValues":[{"attributeName":"gpu_model","attributeValue":"H100"},
+					                   {"attributeName":"region","attributeValue":"us-east-1"}]},
+					{"priceDimId":"d2","priceMethod":"NO_PRICE",
+					 "attributeValues":[{"attributeName":"included","attributeValue":"true"}]},
+					{"priceMethod":"QUANTITY","unitRate":0.5}]}`))
+			})
+			card, err := adapter.GetServiceRateCard(context.Background(), billing.NewServiceRef("s1"), "USD")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(card).To(Equal(billing.RateCard{
+				Currency: "USD",
+				Rows: []billing.RateRow{
+					{DimensionID: "d1", PriceMethod: "QUANTITY", UnitRate: "1.25",
+						AttributeValues: []billing.AttributeValue{
+							{Name: "gpu_model", Value: "H100"},
+							{Name: "region", Value: "us-east-1"},
+						}},
+					{DimensionID: "d2", PriceMethod: "NO_PRICE",
+						AttributeValues: []billing.AttributeValue{{Name: "included", Value: "true"}}},
+					{PriceMethod: "QUANTITY", UnitRate: "0.5"},
+				},
+			}))
 		})
 
 		It("reports a missing card as not-found, never as a zero amount", func() {
@@ -279,30 +319,48 @@ var _ = Describe("M360 services", func() {
 			Expect(err).To(MatchError(billing.ErrRateCardNotFound))
 		})
 
-		It("rejects a row without a price method", func() {
+		It("returns a row without a price method", func() {
 			build(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = w.Write([]byte(`{"currency":"USD","rows":[{"priceDimId":"d1","unitRate":1}]}`))
 			})
-			_, err := adapter.GetServiceRateCard(context.Background(), billing.NewServiceRef("s1"), "USD")
-			Expect(reasonOf(err)).To(Equal(billing.ReasonMalformed))
+			card, err := adapter.GetServiceRateCard(context.Background(), billing.NewServiceRef("s1"), "USD")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(card).To(Equal(billing.RateCard{
+				Currency: "USD",
+				Rows:     []billing.RateRow{{DimensionID: "d1", UnitRate: "1"}},
+			}))
 		})
 
-		It("rejects a row without a price dimension id", func() {
+		It("returns a row without a price dimension id", func() {
 			build(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = w.Write([]byte(`{"currency":"USD","rows":[
 					{"priceDimId":"d1","priceMethod":"QUANTITY","unitRate":1},
 					{"priceMethod":"TIERED"}]}`))
 			})
-			_, err := adapter.GetServiceRateCard(context.Background(), billing.NewServiceRef("s1"), "USD")
-			Expect(reasonOf(err)).To(Equal(billing.ReasonMalformed))
+			card, err := adapter.GetServiceRateCard(context.Background(), billing.NewServiceRef("s1"), "USD")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(card).To(Equal(billing.RateCard{
+				Currency: "USD",
+				Rows: []billing.RateRow{
+					{DimensionID: "d1", PriceMethod: "QUANTITY", UnitRate: "1"},
+					{PriceMethod: "TIERED"},
+				},
+			}))
 		})
 
 		It("rejects a card in a different currency than requested", func() {
 			build(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = w.Write([]byte(`{"currency":"EUR","rows":[{"priceDimId":"d","priceMethod":"QUANTITY","unitRate":1}]}`))
 			})
-			_, err := adapter.GetServiceRateCard(context.Background(), billing.NewServiceRef("s1"), "USD")
-			Expect(reasonOf(err)).To(Equal(billing.ReasonMalformed))
+			card, err := adapter.GetServiceRateCard(context.Background(), billing.NewServiceRef("s1"), "USD")
+			Expect(err).To(HaveOccurred())
+			Expect(billing.ReasonCurrencyMismatch).To(
+				Equal(billing.Reason("BILLING_CURRENCY_MISMATCH")))
+			Expect(reasonOf(err)).To(Equal(billing.ReasonCurrencyMismatch))
+			var billingErr *billing.Error
+			Expect(errors.As(err, &billingErr)).To(BeTrue())
+			Expect(billingErr.Retryable).To(BeFalse())
+			Expect(card).To(Equal(billing.RateCard{}))
 		})
 
 		It("rejects a card without a currency", func() {
@@ -313,13 +371,18 @@ var _ = Describe("M360 services", func() {
 			Expect(reasonOf(err)).To(Equal(billing.ReasonMalformed))
 		})
 
-		It("rejects the old Dimension/Amount shape instead of returning rows without prices", func() {
+		// encoding/json matches Currency and Rows case-insensitively, but Dimension and
+		// Amount are not rate-row fields.
+		It("returns USD with one empty row for the old Dimension/Amount shape", func() {
 			build(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = w.Write([]byte(`{"Currency":"USD","Rows":[{"Dimension":"gpu_hours","Amount":"0.25"}]}`))
 			})
-			_, err := adapter.GetServiceRateCard(context.Background(), billing.NewServiceRef("s1"), "USD")
-			Expect(err).To(HaveOccurred())
-			Expect(err).ToNot(MatchError(billing.ErrRateCardNotFound))
+			card, err := adapter.GetServiceRateCard(context.Background(), billing.NewServiceRef("s1"), "USD")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(card).To(Equal(billing.RateCard{
+				Currency: "USD",
+				Rows:     []billing.RateRow{{}},
+			}))
 		})
 
 		It("rejects an empty currency without contacting the provider", func() {

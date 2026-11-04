@@ -104,21 +104,19 @@ func (a *adapter) GetServiceRateCard(ctx context.Context, svc billing.ServiceRef
 		}
 		return billing.RateCard{}, err
 	}
-	if !strings.EqualFold(raw.Currency, currency) {
+	if raw.Currency == "" {
 		return billing.RateCard{}, &billing.Error{Reason: billing.ReasonMalformed, Op: op}
+	}
+	if !strings.EqualFold(raw.Currency, currency) {
+		return billing.RateCard{}, &billing.Error{Reason: billing.ReasonCurrencyMismatch, Op: op}
 	}
 	if len(raw.Rows) == 0 {
 		return billing.RateCard{}, billing.ErrRateCardNotFound
 	}
 	card := billing.RateCard{Currency: currency, Rows: make([]billing.RateRow, 0, len(raw.Rows))}
+	// Rows are mapped faithfully as the provider sent them, including empties and unparsed numeric text;
+	// downstream owns deciding which row shapes it can price.
 	for _, row := range raw.Rows {
-		if row.PriceDimID == "" || row.PriceMethod == "" {
-			return billing.RateCard{}, &billing.Error{Reason: billing.ReasonMalformed, Op: op}
-		}
-		// A row without a unit rate (tiered or unpriced) is a shape this adapter does not price, so no price is guessed.
-		if row.UnitRate == "" {
-			return billing.RateCard{}, &billing.Error{Reason: billing.ReasonUnavailable, Op: op}
-		}
 		out := billing.RateRow{DimensionID: row.PriceDimID, PriceMethod: row.PriceMethod, UnitRate: row.UnitRate.String()}
 		for _, v := range row.AttributeValues {
 			out.AttributeValues = append(out.AttributeValues, billing.AttributeValue{Name: v.Name, Value: v.Value})

@@ -113,13 +113,65 @@ var _ = Describe("Billing stub", func() {
 		Expect(stub.Writes()).To(BeEmpty())
 	})
 
-	It("scripts a rate card currency mismatch like the fake", func() {
-		_, adapter := start(billingfake.Scenario{Services: []billingfake.ServiceSpec{{ID: "s", Name: "n",
+	It("delivers mixed incomplete rate rows through the real M360 adapter", func() {
+		stub, adapter := start(billingfake.Scenario{
+			Services: []billingfake.ServiceSpec{{
+				ID:   "s",
+				Name: "n",
+				Rates: map[string]billingfake.RateCardSpec{
+					"USD": {Rows: []billing.RateRow{
+						{DimensionID: "d1", PriceMethod: "QUANTITY", UnitRate: "0.1000000000000000055",
+							AttributeValues: []billing.AttributeValue{
+								{Name: "gpu_model", Value: "H100"},
+								{Name: "region", Value: "us-east-1"},
+							}},
+						{DimensionID: "d2", PriceMethod: "NO_PRICE",
+							AttributeValues: []billing.AttributeValue{{Name: "included", Value: "true"}}},
+						{DimensionID: "d3", PriceMethod: "TIERED",
+							AttributeValues: []billing.AttributeValue{{Name: "billing_mode", Value: "tiered"}}},
+						{UnitRate: "9.9E-9",
+							AttributeValues: []billing.AttributeValue{{Name: "unclassified", Value: "kept"}}},
+					}},
+				},
+			}},
+		})
+
+		ref, err := adapter.FindServiceByName(ctx, "n")
+		Expect(err).ToNot(HaveOccurred())
+		card, err := adapter.GetServiceRateCard(ctx, ref, "USD")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(card).To(Equal(billing.RateCard{
+			Currency: "USD",
+			Rows: []billing.RateRow{
+				{DimensionID: "d1", PriceMethod: "QUANTITY", UnitRate: "0.1000000000000000055",
+					AttributeValues: []billing.AttributeValue{
+						{Name: "gpu_model", Value: "H100"},
+						{Name: "region", Value: "us-east-1"},
+					}},
+				{DimensionID: "d2", PriceMethod: "NO_PRICE",
+					AttributeValues: []billing.AttributeValue{{Name: "included", Value: "true"}}},
+				{DimensionID: "d3", PriceMethod: "TIERED",
+					AttributeValues: []billing.AttributeValue{{Name: "billing_mode", Value: "tiered"}}},
+				{UnitRate: "9.9E-9",
+					AttributeValues: []billing.AttributeValue{{Name: "unclassified", Value: "kept"}}},
+			},
+		}))
+		Expect(stub.Writes()).To(BeEmpty())
+	})
+
+	It("returns no card for a currency mismatch with a stable non-retryable reason", func() {
+		stub, adapter := start(billingfake.Scenario{Services: []billingfake.ServiceSpec{{ID: "s", Name: "n",
 			Rates: map[string]billingfake.RateCardSpec{"USD": {Currency: "EUR", Rows: []billing.RateRow{
 				{DimensionID: "d", PriceMethod: "QUANTITY", UnitRate: "1"}}}}}}})
-		ref, _ := adapter.FindServiceByName(ctx, "n")
-		_, err := adapter.GetServiceRateCard(ctx, ref, "USD")
-		Expect(reasonOf(err)).To(Equal(billing.ReasonMalformed))
+		ref, err := adapter.FindServiceByName(ctx, "n")
+		Expect(err).ToNot(HaveOccurred())
+		card, err := adapter.GetServiceRateCard(ctx, ref, "USD")
+		Expect(reasonOf(err)).To(Equal(billing.ReasonCurrencyMismatch))
+		Expect(card).To(Equal(billing.RateCard{}))
+		var billingErr *billing.Error
+		Expect(errors.As(err, &billingErr)).To(BeTrue())
+		Expect(billingErr.Retryable).To(BeFalse())
+		Expect(stub.Count("GetServiceRateCard")).To(Equal(1))
 	})
 
 	It("scripts a 5xx that the adapter retries, and records every attempt", func() {

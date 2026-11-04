@@ -36,8 +36,11 @@ jobs:
           HEAD_REF: ${{ github.event.merge_group.head_ref }}
         run: |
           # <base> may contain "/" itself (release/4.20), so match the anchored pr-<N>-<sha> suffix and not one path
-          # segment. No match leaves the number empty: the suite then runs as it does on main, under no pull request.
-          if [[ "${HEAD_REF}" =~ ^gh-readonly-queue/.+/pr-([0-9]+)-[0-9a-f]+$ ]]; then
+          # segment. `merge_group.head_ref` arrives as a branch name but can carry the refs/heads/ prefix; strip it
+          # first so both forms match. No match leaves the number empty: the suite then runs as it does on main, under
+          # no pull request.
+          ref="${HEAD_REF#refs/heads/}"
+          if [[ "${ref}" =~ ^gh-readonly-queue/.+/pr-([0-9]+)-[0-9a-f]+$ ]]; then
             echo "number=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
           else
             echo "number=" >> "$GITHUB_OUTPUT"
@@ -46,7 +49,9 @@ jobs:
 
   vmaas:
     needs: [plan, entry]
-    if: contains(needs.plan.outputs.suites, '"vmaas"')
+    # always() keeps the suite running when `entry` failed (a runner/network failure must not skip the
+    # required check); the plan result still gates it, and telemetry stays non-gating.
+    if: ${{ always() && needs.plan.result == 'success' && contains(needs.plan.outputs.suites, '"vmaas"') }}
     permissions:
       contents: read
       id-token: write
@@ -63,7 +68,9 @@ jobs:
 
   caas:
     needs: [plan, entry]
-    if: contains(needs.plan.outputs.suites, '"caas"')
+    # always() keeps the suite running when `entry` failed (a runner/network failure must not skip the
+    # required check); the plan result still gates it, and telemetry stays non-gating.
+    if: ${{ always() && needs.plan.result == 'success' && contains(needs.plan.outputs.suites, '"caas"') }}
     permissions:
       contents: read
       id-token: write
@@ -79,7 +86,9 @@ jobs:
 
   bmaas:
     needs: [plan, entry]
-    if: contains(needs.plan.outputs.suites, '"bmaas"')
+    # always() keeps the suite running when `entry` failed (a runner/network failure must not skip the
+    # required check); the plan result still gates it, and telemetry stays non-gating.
+    if: ${{ always() && needs.plan.result == 'success' && contains(needs.plan.outputs.suites, '"bmaas"') }}
     permissions:
       contents: read
       id-token: write

@@ -84,6 +84,8 @@ def test_the_queue_derives_the_pull_request_number_from_the_queue_branch(tmp_pat
     assert derive("gh-readonly-queue/main/pr-42-abc123") == "42"
     # A base branch that contains "/" must not shift the match: the suffix is anchored, not one path segment.
     assert derive("gh-readonly-queue/release/4.20/pr-7-deadbeef") == "7"
+    # `merge_group.head_ref` can carry the refs/heads/ prefix; both forms must work.
+    assert derive("refs/heads/gh-readonly-queue/main/pr-42-abc123") == "42"
     assert derive("refs/heads/main") == ""
 
 
@@ -95,6 +97,9 @@ def test_every_suite_carries_the_pull_request_number_and_runs_one_capture() -> N
     for name in ("vmaas", "caas", "bmaas"):
         job = queue[name]
         assert job["needs"] == ["plan", "entry"]
+        assert "always()" in job["if"], "an entry runner failure must not skip the suite"
+        assert "needs.plan.result == 'success'" in job["if"]
+        assert "needs.entry.result == 'success'" not in job["if"]
         assert job["with"]["pr-number"] == "${{ needs.entry.outputs.pr-number }}"
         assert job["with"]["ci-observe"] is True
         assert job["secrets"] == {"CI_OBSERVE_OTLP_PASSWORD": "${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}"}

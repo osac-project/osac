@@ -1,7 +1,7 @@
-import type { ComputeInstance } from '@osac/types';
+import { type ComputeInstance, ComputeInstances } from '@osac/types';
 import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal.tsx';
 
-import { useDeleteComputeInstance } from '../../../api/v1/compute-instance';
+import { useDeleteResource } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
 
 interface VmDeleteConfirmModalProps {
@@ -12,7 +12,7 @@ interface VmDeleteConfirmModalProps {
 
 const VmDeleteConfirmModal = ({ vm, onClose, onSuccess }: VmDeleteConfirmModalProps) => {
   const { t } = useTranslation();
-  const deleteVm = useDeleteComputeInstance();
+  const deleteVm = useDeleteResource(ComputeInstances);
   const name = vm.metadata?.name ?? vm.id;
 
   return (
@@ -23,7 +23,7 @@ const VmDeleteConfirmModal = ({ vm, onClose, onSuccess }: VmDeleteConfirmModalPr
       onClose={onClose}
       onSuccess={onSuccess}
       mutation={deleteVm}
-      variables={vm.id}
+      variables={{ id: vm.id }}
     />
   );
 };

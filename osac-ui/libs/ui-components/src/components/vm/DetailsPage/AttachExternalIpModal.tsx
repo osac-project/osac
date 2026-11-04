@@ -8,9 +8,10 @@ import ExternalIpAttachModal from '../../ExternalIp/AttachExternalIpModal';
 interface AttachExternalIpModalProps {
   vm: ComputeInstance;
   onClose: () => void;
+  onPendingChange: (isPending: boolean) => void;
 }
 
-const AttachExternalIpModal = ({ vm, onClose }: AttachExternalIpModalProps) => {
+const AttachExternalIpModal = ({ vm, onClose, onPendingChange }: AttachExternalIpModalProps) => {
   const { t } = useTranslation();
   const invalidateService = useInvalidateServiceQueries();
   const createAttachment = useCreateResource(ExternalIPAttachments, {
@@ -23,20 +24,25 @@ const AttachExternalIpModal = ({ vm, onClose }: AttachExternalIpModalProps) => {
       title={t('Attach external IP')}
       emptyDescription={t('Create an external IP first, then attach it to this virtual machine.')}
       project={project}
-      onAttach={(externalIpId) =>
-        createAttachment.mutateAsync({
-          object: {
-            metadata: {
-              name: `eipa-${crypto.randomUUID()}`,
-              project,
+      onAttach={async (externalIpId) => {
+        onPendingChange(true);
+        try {
+          await createAttachment.mutateAsync({
+            object: {
+              metadata: {
+                name: `eipa-${crypto.randomUUID()}`,
+                project,
+              },
+              spec: {
+                externalIp: { id: externalIpId },
+                target: { case: 'computeInstance', value: { id: vm.id } },
+              },
             },
-            spec: {
-              externalIp: { id: externalIpId },
-              target: { case: 'computeInstance', value: { id: vm.id } },
-            },
-          },
-        })
-      }
+          });
+        } finally {
+          onPendingChange(false);
+        }
+      }}
       onClose={onClose}
     />
   );

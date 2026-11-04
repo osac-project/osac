@@ -20,13 +20,6 @@ export type ResourceService<
   method: Record<Operation, DescMethodUnary<Input, Output>>;
 };
 
-export type ResourceQueryClient = {
-  invalidateQueries: (queryKey: readonly unknown[]) => Promise<void>;
-  getQueriesData: <Data>(
-    queryKey: readonly unknown[],
-  ) => Array<[readonly unknown[], Data | undefined]>;
-};
-
 type ResourceQueryOptions<Data extends DescMessage, SelectedData = MessageShape<Data>> = Omit<
   UseQueryOptions<MessageShape<Data>, unknown, SelectedData>,
   'queryFn' | 'queryKey' | 'select' | 'placeholderData'
@@ -154,16 +147,6 @@ export const useListAllResources = <Input extends DescMessage, Output extends De
       (response as MessageShape<Output> & { items: PaginatedListItems<Output> }).items,
     placeholderData: keepPreviousData,
   });
-};
-
-export const useResourceQueryClient = (): ResourceQueryClient => {
-  const queryClient = useQueryClient();
-
-  return {
-    invalidateQueries: (queryKey) => queryClient.invalidateQueries({ queryKey }),
-    getQueriesData: <Data>(queryKey: readonly unknown[]) =>
-      queryClient.getQueriesData<Data>({ queryKey }),
-  };
 };
 
 export const useGetResource = <Input extends DescMessage, Output extends DescMessage>(

@@ -24,7 +24,7 @@
 
 - name: Set flag to skip tenant-wide delete if multiple backends exist
   ansible.builtin.set_fact:
-    _vast_skip_tenant_delete: "{{ (_vast_tenant_secrets_check.resources | default([]) | length) > 1 }}"
+    _vast_skip_tenant_delete: "{{ _vast_tenant_secrets_check is failed or (_vast_tenant_secrets_check.resources | default([]) | length) > 1 }}"
 
 - name: "Query VAST {{ _vast_cleanup_resource }} by tenant_id"
   when: not (_vast_skip_tenant_delete | default(false) | bool)

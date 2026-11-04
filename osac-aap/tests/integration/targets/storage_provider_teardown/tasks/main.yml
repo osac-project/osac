@@ -481,6 +481,7 @@
         label: "{{ item.resource }}/{{ item.body.name | default(item.body.username | default('?')) }}"
 
     - name: Create hub Secret for backend A (will be deleted before teardown)
+      no_log: true
       kubernetes.core.k8s:
         state: present
         definition:
@@ -508,6 +509,7 @@
             tenant_role_id: "8"
 
     - name: Create hub Secret for backend B (will remain until teardown runs)
+      no_log: true
       kubernetes.core.k8s:
         state: present
         definition:
@@ -535,6 +537,7 @@
             tenant_role_id: "8"
 
     - name: Create CSI Secret for backend A
+      no_log: true
       kubernetes.core.k8s:
         state: present
         definition:
@@ -554,6 +557,7 @@
             tenant: "test-td-2be"
 
     - name: Create CSI Secret for backend B
+      no_log: true
       kubernetes.core.k8s:
         state: present
         definition:

@@ -116,6 +116,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     ):
         monkeypatch.setattr(scenario, name, Mock())
     monkeypatch.setattr(scenario, "snapshot_cluster_deletion", Mock(return_value=[]))
+    monkeypatch.setattr(scenario, "wait_for_guest_cluster_health", Mock())
     monkeypatch.setattr(runner.time, "sleep", Mock())
     monkeypatch.setattr(
         helpers,
@@ -160,6 +161,14 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
     two_node_set_clients["cli"].delete_cluster.assert_has_calls([call(uuid="cluster-id"), call(uuid="cluster-id")])
     for name in ("patch", "apply", "delete"):
         getattr(two_node_set_clients["k8s_hub_client"], name).assert_not_called()
+
+
+def test_two_node_set_scenario_checks_guest_health_for_every_worker(two_node_set_clients: dict[str, Mock]) -> None:
+    _run_scenario(two_node_set_clients)
+
+    scenario.wait_for_guest_cluster_health.assert_called_once_with(
+        k8s=two_node_set_clients["k8s_hub_client"], co_name="order-a", expected_workers=2
+    )
 
 
 def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_set_clients: dict[str, Mock]) -> None:

@@ -13,6 +13,32 @@ from tests.e2e.core import k8s_client as k8s_client_module
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
+_AGENT_PROVIDER_ID = "agent://osac-order-agent/6b0b0c1e-0000-4000-8000-000000000000"
+
+
+def _node(*, name: str, provider_id: str = _AGENT_PROVIDER_ID) -> dict[str, object]:
+    spec: dict[str, str] = {"providerID": provider_id} if provider_id else {}
+    return {
+        "metadata": {"name": name, "labels": {"node-role.kubernetes.io/worker": ""}},
+        "spec": spec,
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+
+
+def _hosted_cluster(
+    *, succeeding: str = "True", available: str = "True", failing: str = "False", progressing: str = "False"
+) -> dict[str, object]:
+    return {
+        "status": {
+            "conditions": [
+                {"type": "ClusterVersionSucceeding", "status": succeeding},
+                {"type": "ClusterVersionAvailable", "status": available},
+                {"type": "ClusterVersionFailing", "status": failing},
+                {"type": "ClusterVersionProgressing", "status": progressing},
+            ]
+        }
+    }
+
 
 def test_wait_for_cluster_ready_fails_immediately_on_failed_order(monkeypatch: pytest.MonkeyPatch) -> None:
     k8s = Mock()
@@ -280,20 +306,95 @@ def test_workload_cluster_health_waits_for_degraded_operator_to_clear() -> None:
     assert helpers.workload_cluster_health_ready(nodes=nodes, operators=operators, expected_workers=1) is False
 
 
+def test_workload_provider_ids_assigned_for_agent_bound_workers() -> None:
+    nodes = [_node(name="worker-0")]
+
+    assert helpers.workload_cluster_provider_ids_assigned(nodes=nodes, expected_workers=1) is True
+
+
+def test_workload_provider_ids_reject_an_unbound_worker() -> None:
+    nodes = [_node(name="worker-0"), _node(name="worker-1", provider_id="")]
+
+    assert helpers.workload_cluster_provider_ids_assigned(nodes=nodes, expected_workers=2) is False
+
+
+def test_workload_provider_ids_reject_a_foreign_scheme() -> None:
+    nodes = [_node(name="worker-0", provider_id="aws:///eu-west-1a/i-0123456789")]
+
+    assert helpers.workload_cluster_provider_ids_assigned(nodes=nodes, expected_workers=1) is False
+
+
+def test_workload_provider_ids_reject_a_bare_scheme() -> None:
+    nodes = [_node(name="worker-0", provider_id="agent://")]
+
+    assert helpers.workload_cluster_provider_ids_assigned(nodes=nodes, expected_workers=1) is False
+
+
+def test_workload_provider_ids_require_every_expected_worker() -> None:
+    nodes = [_node(name="worker-0")]
+
+    assert helpers.workload_cluster_provider_ids_assigned(nodes=nodes, expected_workers=2) is False
+
+
+def test_wait_for_workload_node_provider_ids_reports_the_unbound_node(monkeypatch: pytest.MonkeyPatch) -> None:
+    k8s = Mock()
+    k8s.list_json.return_value = {"items": [_node(name="worker-0"), _node(name="worker-1", provider_id="")]}
+
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(AssertionError, match=r"missing on \['worker-1'\]"):
+        helpers.wait_for_workload_node_provider_ids(k8s=k8s, expected_workers=2)
+
+
+def test_workload_cluster_health_checks_provider_ids_before_operators(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+
+    monkeypatch.setattr(helpers, "wait_for_workload_node_provider_ids", lambda **_kwargs: events.append("provider-id"))
+    monkeypatch.setattr(helpers, "poll_until", lambda **_kwargs: events.append("operators"))
+
+    helpers.wait_for_workload_cluster_health(k8s=Mock(), expected_workers=1)
+
+    assert events == ["provider-id", "operators"]
+
+
+def test_hosted_cluster_version_conditions_settled_when_cvo_is_healthy() -> None:
+    assert helpers.hosted_cluster_version_conditions_settled(_hosted_cluster()) is True
+
+
+@pytest.mark.parametrize(
+    "unhealthy", [{"succeeding": "False"}, {"available": "False"}, {"failing": "True"}, {"progressing": "True"}]
+)
+def test_hosted_cluster_version_conditions_reject_an_installing_cvo(unhealthy: dict[str, str]) -> None:
+    assert helpers.hosted_cluster_version_conditions_settled(_hosted_cluster(**unhealthy)) is False
+
+
+def test_hosted_cluster_version_conditions_reject_a_missing_condition() -> None:
+    assert helpers.hosted_cluster_version_conditions_settled({"status": {"conditions": []}}) is False
+
+
+def test_wait_for_hosted_cluster_version_health_reports_unsettled_conditions(monkeypatch: pytest.MonkeyPatch) -> None:
+    k8s = Mock()
+    k8s.get_json.return_value = _hosted_cluster(failing="True")
+
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(AssertionError, match=r"'ClusterVersionFailing': 'True'"):
+        helpers.wait_for_hosted_cluster_version_health(k8s=k8s, name="order-test", namespace="osac-order-test")
+
+    assert k8s.get_json.call_args.kwargs == {
+        "resource": "hostedcluster",
+        "name": "order-test",
+        "namespace": "osac-order-test",
+    }
+
+
 def test_guest_health_recovers_from_access_and_readiness_delays(monkeypatch: pytest.MonkeyPatch) -> None:
     k8s = Mock()
     k8s.list_json.side_effect = [
         subprocess.CalledProcessError(1, ["kubectl"], stderr="Forbidden"),
         {"items": []},
-        {"items": []},
-        {
-            "items": [
-                {
-                    "metadata": {"name": "worker-0", "labels": {"node-role.kubernetes.io/worker": ""}},
-                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
-                }
-            ]
-        },
+        {"items": [_node(name="worker-0")]},
+        {"items": [_node(name="worker-0")]},
         {
             "items": [
                 {
@@ -330,6 +431,7 @@ def test_wait_for_cluster_guest_readiness_waits_for_hub_ready_before_guest_check
 
     monkeypatch.setattr(helpers, "wait_for_workload_cluster_health", lambda **_kwargs: events.append("guest"))
     monkeypatch.setattr(helpers, "wait_for_cluster_ready", lambda **_kwargs: events.append("ready"))
+    monkeypatch.setattr(helpers, "wait_for_hosted_cluster_version_health", lambda **_kwargs: events.append("version"))
 
     def run_once(
         *,
@@ -356,13 +458,40 @@ def test_wait_for_cluster_guest_readiness_waits_for_hub_ready_before_guest_check
         expected_ready_nodes=1,
         node_pool_description="order-test NodePool",
         node_pool_id="nodepool-guest-cluster-worker-node-set",
+        hosted_cluster_namespace="osac-order-test",
     )
 
-    assert events == ["ready", "guest", "nodepool"]
+    assert events == ["ready", "guest", "nodepool", "version"]
     assert poll_identity == {
         "resource_kind": WaitResourceKind.NODE_POOL,
         "resource_id": "nodepool-guest-cluster-worker-node-set",
     }
+
+
+def test_guest_health_checks_the_guest_before_the_hosted_cluster_conditions(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    guest = Mock()
+
+    monkeypatch.setattr(
+        helpers, "wait_for_hosted_cluster_reference", lambda **_kwargs: ("order-test", "osac-order-test")
+    )
+    monkeypatch.setattr(helpers, "wait_for_hosted_cluster_kubeconfig", lambda **_kwargs: b"apiVersion: v1\n")
+    monkeypatch.setattr(helpers, "K8sClient", lambda **_kwargs: guest)
+    monkeypatch.setattr(
+        helpers,
+        "wait_for_workload_cluster_health",
+        lambda **kwargs: events.append(f"guest:{kwargs['k8s'] is guest}:{kwargs['expected_workers']}"),
+    )
+    monkeypatch.setattr(
+        helpers,
+        "wait_for_hosted_cluster_version_health",
+        lambda **kwargs: events.append(f"version:{kwargs['name']}/{kwargs['namespace']}"),
+    )
+
+    helpers.wait_for_guest_cluster_health(k8s=Mock(), co_name="order-test", expected_workers=2)
+
+    assert events == ["guest:True:2", "version:order-test/osac-order-test"]
+
 
 
 def test_guest_k8s_client_does_not_impersonate_system_admin() -> None:

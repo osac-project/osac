@@ -26,6 +26,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -47,6 +49,42 @@ const (
 	// finalizerForeign stands for a finalizer owned by a writer that the test doesn't control.
 	finalizerForeign = "test.osac.io/foreign"
 )
+
+// finalizerCaseSkips lists the resources that the specs can't cover, by fully qualified service name, with the reason
+// and the location of the constraint that blocks seeding. It is empty when every resource is covered.
+var finalizerCaseSkips = map[string]string{}
+
+// finalizerBearingServices returns the fully qualified names of the private services that have an Update method whose
+// object has metadata with finalizers. Services without Update are read-only and are excluded by construction.
+func finalizerBearingServices() []string {
+	var result []string
+	packageName := (privatev1.EventType)(0).Descriptor().FullName().Parent()
+	protoregistry.GlobalFiles.RangeFilesByPackage(packageName, func(file protoreflect.FileDescriptor) bool {
+		services := file.Services()
+		for i := range services.Len() {
+			service := services.Get(i)
+			update := service.Methods().ByName("Update")
+			if update == nil {
+				continue
+			}
+			object := update.Input().Fields().ByName("object")
+			if object == nil || object.Message() == nil {
+				continue
+			}
+			metadata := object.Message().Fields().ByName("metadata")
+			if metadata == nil || metadata.Message() == nil {
+				continue
+			}
+			if metadata.Message().Fields().ByName("finalizers") == nil {
+				continue
+			}
+			result = append(result, string(service.FullName()))
+		}
+		return true
+	})
+	sort.Strings(result)
+	return result
+}
 
 // finalizerObject is the constraint satisfied by every private object that has metadata.
 type finalizerObject interface {
@@ -163,14 +201,27 @@ func newFinalizerCase[O finalizerObject](desc grpc.ServiceDesc, build func() O,
 	}
 }
 
+// afterCreate returns a copy of the case that runs the given function with the identifier of the object after it has
+// been stored. Use it for state that the database adds around the object and that the specs need to remove.
+func (c finalizerCase) afterCreate(hook func(id string)) finalizerCase {
+	inner := c.target
+	c.target = func(finalizers []string) finalizerTarget {
+		result := inner(finalizers)
+		hook(result.id)
+		return result
+	}
+	return c
+}
+
 // finalizerName returns a unique name for a fixture.
 func finalizerName(prefix string) string {
 	return fmt.Sprintf("%s-%s", prefix, uuid.NewString()[:8])
 }
 
-// finalizerCases returns the cases for all the resources that the specs cover.
+// finalizerCases returns the cases for all the resources that the specs cover. The leaf resources come first: they
+// need no parent objects. The rest are in the groups below.
 func finalizerCases() []finalizerCase {
-	return []finalizerCase{
+	return append(append(append([]finalizerCase{
 		newFinalizerCase(privatev1.BareMetalInstanceTemplates_ServiceDesc,
 			func() *privatev1.BareMetalInstanceTemplate {
 				return privatev1.BareMetalInstanceTemplate_builder{
@@ -248,7 +299,7 @@ func finalizerCases() []finalizerCase {
 				b.AddAllowedTenants(auth.SharedTenant)
 			},
 		),
-	}
+	}, finalizerPlatformCases()...), finalizerTenantCases()...), finalizerNetworkingCases()...)
 }
 
 // finalizerEntries returns one table entry per case, followed by the extra parameters.

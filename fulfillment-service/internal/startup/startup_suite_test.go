@@ -49,10 +49,10 @@ var _ = BeforeSuite(func() {
 		SetLogger(logger).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
-	Expect(server.Start(ctx)).To(Succeed())
 	DeferCleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		Expect(server.Stop(ctx)).To(Succeed())
 	})
+	Expect(server.Start(ctx)).To(Succeed())
 })

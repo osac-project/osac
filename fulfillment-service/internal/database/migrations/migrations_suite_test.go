@@ -63,12 +63,12 @@ var _ = BeforeSuite(func(ctx context.Context) {
 		SetLogger(logger).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
-	err = server.Start(ctx)
-	Expect(err).ToNot(HaveOccurred())
-	DeferCleanup(func() {
+	DeferCleanup(func(ctx context.Context) {
 		err = server.Stop(ctx)
 		Expect(err).ToNot(HaveOccurred())
 	})
+	err = server.Start(ctx)
+	Expect(err).ToNot(HaveOccurred())
 })
 
 // DescribeMigration is a testing utility to test database migrations. It creates a database and applies all the

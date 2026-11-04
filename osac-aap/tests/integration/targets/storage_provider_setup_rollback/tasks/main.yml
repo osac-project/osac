@@ -280,6 +280,18 @@
       ansible.builtin.set_fact:
         _rbmulti_mark_a: "{{ _rbmulti_pre_calls_a.json | length }}"
 
+    - name: Record call log mark on array two (port 18445)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18445/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _rbmulti_pre_calls_b
+
+    - name: Save array-two call log offset
+      ansible.builtin.set_fact:
+        _rbmulti_mark_b: "{{ _rbmulti_pre_calls_b.json | length }}"
+
     - name: Inject manager-creation failure on array two only (port 18445)
       ansible.builtin.uri:
         url: "https://127.0.0.1:18445/_inject_failure"
@@ -400,7 +412,7 @@
     - name: Assert rollback cleaned up on the failing backend's array
       ansible.builtin.assert:
         that:
-          - _rbmulti_calls_b.json | selectattr('method', 'equalto', 'DELETE')
+          - _rbmulti_calls_b.json[_rbmulti_mark_b | int:] | selectattr('method', 'equalto', 'DELETE')
             | map(attribute='path') | select('search', 'tenants/') | list | length > 0
         fail_msg: "Rollback did not attempt tenant deletion on backend be-b's array"
         success_msg: "Rollback cleaned up on the failing backend's array"

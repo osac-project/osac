@@ -30,6 +30,7 @@
               - name: default
                 protocol: nfs
                 provider: vast
+                backend_id: "test-backend"
             storage_provider_action: setup
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
@@ -612,6 +613,7 @@
               - name: "acme-tier"
                 protocol: nfs
                 provider: vast
+                backend_id: "acme-backend"
                 qos_policy: "Invalid Policy!"
                 qos_limits:
                   static_limits:
@@ -635,6 +637,8 @@
                 'invalid qos_policy' not in (ansible_failed_result.msg | default(''))
               - >-
                 'Invalid Policy' not in (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' '))
+              - >-
+                'has no backend_id' not in (ansible_failed_result.msg | default(''))
             fail_msg: >-
               Role failed on the caller's supplied qos_policy instead of discarding it: {{ ansible_failed_result.msg | default('unknown error') }}
             success_msg: "Role correctly discarded the caller's invalid qos_policy and derived its own"
@@ -664,6 +668,7 @@
               - name: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 protocol: nfs
                 provider: vast
+                backend_id: "acme-backend"
                 qos_policy: "Invalid Policy!"
             storage_provider_action: setup
             tenant_name: "tenant-acme"
@@ -680,6 +685,8 @@
               - >-
                 'invalid qos_policy' not in (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' '))
                 and 'invalid qos_policy' not in (ansible_failed_result.msg | default(''))
+              - >-
+                'has no backend_id' not in (ansible_failed_result.msg | default(''))
             fail_msg: >-
               Expected no qos_policy validation failure for a tier with no qos_limits, even
               though the caller supplied a deliberately invalid qos_policy.
@@ -1423,8 +1430,10 @@
     _storage_provider_tiers:
       - name: netapp-tier
         provider: netapp
+        backend_id: "netapp-backend-1"
       - name: pure-tier
         provider: pure
+        backend_id: "pure-backend-1"
     storage_provider_backend_connections: {}
     tenant_name: provider-routing-test
     _all_tenant_configs: {}
@@ -1434,13 +1443,15 @@
     - name: Dispatch CSI-managed providers through their shared storage role
       ansible.builtin.include_tasks: ../tasks/_dispatch_provider.yaml
       loop:
-        - netapp
-        - pure
+        - provider: netapp
+          backend_id: "netapp-backend-1"
+        - provider: pure
+          backend_id: "pure-backend-1"
       loop_control:
-        loop_var: _current_provider
+        loop_var: _current_pair
 
     - name: Verify the shared CSI role preserves each provider identity
       ansible.builtin.assert:
         that:
-          - _all_tenant_configs['netapp'].provider == 'netapp'
-          - _all_tenant_configs['pure'].provider == 'pure'
+          - _all_tenant_configs['netapp-backend-1'].provider == 'netapp'
+          - _all_tenant_configs['pure-backend-1'].provider == 'pure'

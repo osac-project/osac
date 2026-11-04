@@ -179,6 +179,7 @@ func createHubSecretForBackend(ctx context.Context, tenantName, backendID, provi
 		},
 	}
 	Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+	waitForIndexedClientObject(secret)
 }
 
 // createLabeledStorageClass creates a StorageClass labeled with the given

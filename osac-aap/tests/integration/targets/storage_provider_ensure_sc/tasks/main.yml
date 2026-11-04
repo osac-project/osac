@@ -876,7 +876,6 @@
           A CSI Secret does not match its own backend's hub Secret — the dispatch
           read the wrong hub Secret.
         success_msg: "Each dispatch read its own hub Secret and wrote its own CSI Secret"
-      no_log: true
 
     - name: Read StorageClass for tier-one
       kubernetes.core.k8s_info:

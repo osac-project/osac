@@ -123,6 +123,7 @@
     # now-unreferenced local provider.
 
     - name: Delete VAST tenant (retry for async view cleanup)
+      when: not (_vast_skip_tenant_delete | default(false) | bool)
       vastdata.vms.tenants:
         vms: "{{ _vast_vms_conn }}"
         name: "{{ tenant_name }}"
@@ -137,6 +138,7 @@
 
     - name: Delete local provider
       when:
+        - not (_vast_skip_tenant_delete | default(false) | bool)
         - _vast_teardown_auth is defined
         - _vast_teardown_auth is not failed
       block:

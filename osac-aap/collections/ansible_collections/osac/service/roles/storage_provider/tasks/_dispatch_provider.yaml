@@ -27,36 +27,46 @@
 - name: "Extract provider and backend_id from current pair"
   ansible.builtin.set_fact:
     _current_provider: "{{ _current_pair.provider }}"
-    _current_backend_id: "{{ _current_pair.backend_id }}"
+    _current_backend_id: "{{ _current_pair.backend_id | string }}"
 
 - name: "Compute filtered tiers for current provider and backend_id"
   ansible.builtin.set_fact:
-    _computed_provider_tiers: >-
+    _computed_provider_tiers: []
+
+- name: "Build filtered tier list with backend_id normalization"
+  ansible.builtin.set_fact:
+    _computed_provider_tiers: "{{ _computed_provider_tiers + [item] }}"
+  when:
+    - item.provider in [_current_provider, _current_provider | replace('_', '-')]
+    - item.backend_id is defined
+    - item.backend_id | string == _current_backend_id
+  loop: "{{ _storage_provider_tiers }}"
+  loop_control:
+    label: "{{ item.name | default('tier') }}"
+
+- name: "Build backend connection list for comparison"
+  ansible.builtin.set_fact:
+    _tier_backend_ids: >-
       {{
-        _storage_provider_tiers
-        | selectattr('provider', 'in', [_current_provider, _current_provider | replace('_', '-')])
+        _computed_provider_tiers
         | selectattr('backend_id', 'defined')
-        | selectattr('backend_id', 'equalto', _current_backend_id)
+        | map(attribute='backend_id')
         | list
       }}
 
-- name: "Compute filtered backend connections for current provider's dispatched tiers"
+- name: "Filter backend connections for current provider's dispatched tiers"
+  ansible.builtin.set_fact:
+    _computed_provider_backend_connections: {}
+  no_log: true
+
+- name: "Add matching backend connections with normalized keys"
   ansible.builtin.set_fact:
     _computed_provider_backend_connections: >-
-      {{
-        storage_provider_backend_connections
-        | default({})
-        | dict2items
-        | selectattr(
-            'key',
-            'in',
-            (_computed_provider_tiers
-             | selectattr('backend_id', 'defined')
-             | map(attribute='backend_id')
-             | list)
-          )
-        | items2dict
-      }}
+      {{ _computed_provider_backend_connections | combine({item.key | string: item.value}) }}
+  when: item.key | string in _tier_backend_ids
+  loop: "{{ storage_provider_backend_connections | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
   no_log: true
 
 - name: "Dispatch provider storage action with remote kubeconfig routing"

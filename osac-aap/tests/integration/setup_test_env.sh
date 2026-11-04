@@ -206,7 +206,10 @@ CSIEOF
 
   SERVER_READY_B=0
   for i in $(seq 1 10); do
-    if curl -sk https://127.0.0.1:18445/api > /dev/null 2>&1; then
+    # Check that port 18445 is owned by our mock process and responds successfully
+    PORT_OWNER=$(lsof -ti :18445 2>/dev/null || true)
+    if [ "${PORT_OWNER}" = "${MOCK_VMS_PID_B}" ] && \
+       curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:18445/api 2>/dev/null | grep -q '^2'; then
       echo "Second mock VMS server ready on port 18445 (PID: ${MOCK_VMS_PID_B})"
       SERVER_READY_B=1
       break

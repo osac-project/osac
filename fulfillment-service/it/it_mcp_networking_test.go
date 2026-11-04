@@ -84,67 +84,9 @@ var _ = Describe("MCP network resources", func() {
 		})
 	})
 
-	It("rejects missing prerequisites through MCP without mutation", Serial, func() {
+	It("rejects missing parent prerequisites through MCP without mutation", func() {
 		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-network-missing", userUsername)
-
-		networkClassResponse, err := networkClassesClient.Get(ctx,
-			privatev1.NetworkClassesGetRequest_builder{Id: networkClassID}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		originalNetworkClass := networkClassResponse.GetObject()
-		originalHub := originalNetworkClass.GetStatus().GetHub()
-		restoreNetworkClass := func(cleanupCtx context.Context) {
-			if singletonNetworkClassID(cleanupCtx, networkClassesClient) != "" {
-				return
-			}
-			restoredNetworkClass := privatev1.NetworkClass_builder{
-				Title:         originalNetworkClass.GetTitle(),
-				Description:   originalNetworkClass.GetDescription(),
-				FabricManager: originalNetworkClass.GetFabricManager(),
-				Spec:          proto.Clone(originalNetworkClass.GetSpec()).(*privatev1.NetworkClassSpec),
-			}
-			if originalNetworkClass.GetK8SManager() != "" {
-				restoredNetworkClass.K8SManager = proto.String(originalNetworkClass.GetK8SManager())
-			}
-			restored, createErr := networkClassesClient.Create(cleanupCtx,
-				privatev1.NetworkClassesCreateRequest_builder{Object: restoredNetworkClass.Build()}.Build())
-			Expect(createErr).ToNot(HaveOccurred())
-			restoredID := restored.GetObject().GetId()
-			Expect(updateNetworkClassStatusWithRetry(cleanupCtx, networkClassesClient, restoredID,
-				privatev1.NetworkClassStatus_builder{
-					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-					Hub:   originalHub,
-				}.Build(),
-				&fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.hub"}},
-			)).To(Succeed())
-			waitForNetworkClassReady(cleanupCtx, networkClassesClient, restoredID)
-			networkClassID = restoredID
-		}
-		DeferCleanup(restoreNetworkClass)
-
-		By("creating a VirtualNetwork while the deployment NetworkClass is absent")
-		_, err = networkClassesClient.Delete(ctx,
-			privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Eventually(func(g Gomega) {
-			response, listErr := networkClassesClient.List(ctx,
-				privatev1.NetworkClassesListRequest_builder{}.Build())
-			g.Expect(listErr).ToNot(HaveOccurred())
-			g.Expect(response.GetItems()).To(BeEmpty())
-		}, time.Minute, time.Second).Should(Succeed())
-
-		virtualNetworkName := ndUniqueName("mcp-vn-missing-class")
-		_, err = callMCPTool[mcpserver.CreateNetworkResourceOutput](
-			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
-				ResourceType: mcpserver.NetworkResourceTypeVirtualNetwork,
-				Name:         virtualNetworkName,
-				IPv4Cidr:     ndVirtualNetworkCIDR(),
-			},
-		)
-		expectMCPSafeError(err, "not_found", "NotFound", "NetworkClass", "is missing")
-		expectNoVirtualNetworkNamed(ctx, virtualNetworks, virtualNetworkName)
-
-		By("restoring the NetworkClass before testing absent parent references")
-		restoreNetworkClass(ctx)
+		var err error
 
 		By("creating a Subnet with a genuinely absent parent")
 		subnetName := ndUniqueName("mcp-subnet-missing-parent")

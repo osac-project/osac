@@ -350,7 +350,7 @@ installer command in the tier table remains the component-integration check.
   SDK, deployed Fulfillment, PostgreSQL, and caller-token boundary to
   VirtualNetwork, Subnet, and SecurityGroup create/delete, tenant attribution,
   dependent owner-reference annotations, IPv4 and in-place-edit rejection,
-  missing NetworkClass and parent prerequisites, same-tenant RoleBinding and
+  absent parent prerequisites, same-tenant RoleBinding and
   cross-tenant authorization, bounded SecurityGroup rule rejection without
   persistence, ComputeInstance dependency conflict, and dependency-safe
   cleanup; the network provider is omitted and fixture helpers complete

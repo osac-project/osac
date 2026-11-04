@@ -15,6 +15,8 @@ package controllers_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
@@ -192,6 +195,170 @@ var _ = Describe("Reconciler", func() {
 		builder.SetSync(false).SetSyncInterval(0)
 		start()
 		Consistently(service.listCalls.Load, 100*time.Millisecond).Should(BeZero())
+	})
+
+	// received is what the reconciler function saw on one call. The object is a clone taken on entry, so later
+	// in-place changes made by the function don't affect what the test inspects.
+	type received struct {
+		object *privatev1.Tenant
+		at     time.Time
+	}
+
+	// recordCalls installs a reconciler function that records every call on the returned channel and counter, and
+	// that returns whatever result decides for the call number (1 for the first call).
+	recordCalls := func(result func(call int32, object *privatev1.Tenant) error) (chan received, *atomic.Int32) {
+		objects := make(chan received, 10)
+		var calls atomic.Int32
+		builder.SetSync(false).SetFunction(func(_ context.Context, object *privatev1.Tenant) error {
+			call := calls.Add(1)
+			objects <- received{object: proto.Clone(object).(*privatev1.Tenant), at: time.Now()}
+			return result(call, object)
+		})
+		return objects, &calls
+	}
+
+	pushTenantEvent := func(id string) {
+		service.events <- privatev1.Event_builder{
+			Tenant: privatev1.Tenant_builder{Id: id}.Build(),
+		}.Build()
+	}
+
+	DescribeTable("Retries conflicting reconciliations with a fresh read",
+		func(firstErr error) {
+			// Each read returns a different version, so a retry that reuses the queued snapshot instead of
+			// reading again can be told apart.
+			service.get = func(req *privatev1.TenantsGetRequest) (*privatev1.TenantsGetResponse, error) {
+				return privatev1.TenantsGetResponse_builder{
+					Object: privatev1.Tenant_builder{
+						Id:       req.GetId(),
+						Metadata: privatev1.Metadata_builder{Version: service.getCalls.Load()}.Build(),
+					}.Build(),
+				}.Build(), nil
+			}
+			objects, _ := recordCalls(func(call int32, _ *privatev1.Tenant) error {
+				if call == 1 {
+					return firstErr
+				}
+				return nil
+			})
+			start()
+			pushTenantEvent("t1")
+
+			var first, second received
+			Eventually(objects, 5*time.Second).Should(Receive(&first))
+			Eventually(objects, 5*time.Second).Should(Receive(&second))
+			Expect(second.object.GetMetadata().GetVersion()).To(BeNumerically(">", first.object.GetMetadata().GetVersion()))
+			Expect(service.getCalls.Load()).To(BeNumerically(">=", 2))
+			Expect(second.at.Sub(first.at)).To(BeNumerically(">=", 900*time.Millisecond))
+		},
+		Entry("bare Aborted",
+			status.Error(codes.Aborted, "object has been modified")),
+		Entry("wrapped Aborted",
+			fmt.Errorf("update volume: %w", status.Error(codes.Aborted, "modified"))),
+		Entry("Aborted joined behind another gRPC error",
+			errors.Join(status.Error(codes.Unavailable, "hub down"), status.Error(codes.Aborted, "modified"))),
+	)
+
+	It("does not retry non-conflict errors", func() {
+		objects, calls := recordCalls(func(int32, *privatev1.Tenant) error {
+			return status.Error(codes.Internal, "boom")
+		})
+		start()
+		pushTenantEvent("t1")
+		Eventually(objects, 5*time.Second).Should(Receive())
+
+		// Longer than the one second conflict delay, so a wrongly classified retry would be observed.
+		Consistently(calls.Load, 2*time.Second).Should(Equal(int32(1)))
+	})
+
+	It("keeps the explicit delay of requeueable errors", func() {
+		objects, calls := recordCalls(func(call int32, _ *privatev1.Tenant) error {
+			if call == 1 {
+				return controllers.RequeueAfter(status.Error(codes.Aborted, "x"), 3*time.Second)
+			}
+			return nil
+		})
+		start()
+		pushTenantEvent("t1")
+		Eventually(objects, 5*time.Second).Should(Receive())
+
+		Consistently(calls.Load, 2*time.Second).Should(Equal(int32(1)))
+		Eventually(calls.Load, 5*time.Second).Should(Equal(int32(2)))
+	})
+
+	// replaysUnmutated checks that the retry of a failed first attempt replays the object as it was read, even when
+	// the function changed it in place and the refresh read of the retry fails.
+	replaysUnmutated := func(firstErr error) {
+		const controller = "fulfillment-controller"
+		const hold = "test.osac.io/hold"
+		service.get = func(*privatev1.TenantsGetRequest) (*privatev1.TenantsGetResponse, error) {
+			if service.getCalls.Load() == 2 {
+				return nil, status.Error(codes.Unavailable, "refresh failed")
+			}
+			return privatev1.TenantsGetResponse_builder{
+				Object: privatev1.Tenant_builder{
+					Id:       "t1",
+					Metadata: privatev1.Metadata_builder{Finalizers: []string{controller, hold}}.Build(),
+				}.Build(),
+			}.Build(), nil
+		}
+		objects, _ := recordCalls(func(call int32, object *privatev1.Tenant) error {
+			if call == 1 {
+				// Remove the finalizer in place, as the Volume reconciler does.
+				object.GetMetadata().SetFinalizers([]string{hold})
+				return firstErr
+			}
+			return nil
+		})
+		start()
+		pushTenantEvent("t1")
+
+		var first, second received
+		Eventually(objects, 5*time.Second).Should(Receive(&first))
+		Eventually(objects, 5*time.Second).Should(Receive(&second))
+		Expect(first.object.GetMetadata().GetFinalizers()).To(ConsistOf(controller, hold))
+		Expect(second.object.GetMetadata().GetFinalizers()).To(ConsistOf(controller, hold))
+	}
+
+	It("replays an unmutated object when the fresh read fails", func() {
+		replaysUnmutated(status.Error(codes.Aborted, "modified"))
+	})
+
+	It("replays an unmutated object when the fresh read fails (requeueable)", func() {
+		replaysUnmutated(controllers.RequeueAfter(errors.New("x"), time.Second))
+	})
+
+	It("clears retry state when the object disappears", func() {
+		service.get = func(req *privatev1.TenantsGetRequest) (*privatev1.TenantsGetResponse, error) {
+			if service.getCalls.Load() == 2 {
+				return nil, status.Error(codes.NotFound, "archived")
+			}
+			return privatev1.TenantsGetResponse_builder{
+				Object: privatev1.Tenant_builder{Id: req.GetId()}.Build(),
+			}.Build(), nil
+		}
+		objects, _ := recordCalls(func(call int32, _ *privatev1.Tenant) error {
+			if call <= 2 {
+				return status.Error(codes.Aborted, "modified")
+			}
+			return nil
+		})
+		start()
+		pushTenantEvent("t1")
+		Eventually(objects, 5*time.Second).Should(Receive())
+
+		// The retry of the first attempt reads the object again and finds it gone. Wait for that read before
+		// sending the next event, otherwise the event could consume the NotFound response, and no new retry is
+		// scheduled while one is pending.
+		Eventually(service.getCalls.Load, 5*time.Second).Should(Equal(int32(2)))
+
+		// A new attempt for the same ID starts from the initial delay of one second. If the attempt counter had
+		// survived the NotFound the backoff would give two seconds.
+		pushTenantEvent("t1")
+		var second, third received
+		Eventually(objects, 5*time.Second).Should(Receive(&second))
+		Eventually(objects, 5*time.Second).Should(Receive(&third))
+		Expect(third.at.Sub(second.at)).To(BeNumerically("<", 1900*time.Millisecond))
 	})
 })
 

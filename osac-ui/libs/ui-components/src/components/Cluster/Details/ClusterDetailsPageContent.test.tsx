@@ -66,7 +66,7 @@ interface WorkerCountCase {
 }
 
 describe('ClusterDetailsPageContent', () => {
-  it('shows the observed version rail on every tab with a safe unavailable reason', async () => {
+  it('shows the observed version rail only on Overview with a safe unavailable reason', async () => {
     const { user } = renderWithProviders(<ClusterDetailsPageContent cluster={cluster} />, {
       apiFixtures: { externalIpAttachments: [] },
     });
@@ -78,8 +78,10 @@ describe('ClusterDetailsPageContent', () => {
     expect(upgradeButton).toHaveAccessibleDescription('Upgrade eligibility is unavailable.');
 
     await user.click(screen.getByRole('tab', { name: 'Networking' }));
-    expect(screen.getByText('Cluster version')).toBeInTheDocument();
+    expect(screen.queryByText('Cluster version')).not.toBeInTheDocument();
     await user.click(screen.getByRole('tab', { name: 'Node sets' }));
+    expect(screen.queryByText('Cluster version')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Overview' }));
     expect(screen.getByText('Cluster version')).toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
   });

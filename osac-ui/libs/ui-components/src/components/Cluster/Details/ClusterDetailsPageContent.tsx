@@ -172,13 +172,15 @@ const ClusterDetailsPageContent = ({ cluster, upgrade }: ClusterDetailViewProps)
 
           <GridItem md={6}>
             <Stack hasGutter>
-              <StackItem>
-                <ClusterVersionRail
-                  currentVersion={cluster.status?.observedVersion}
-                  action={upgradeAction}
-                  onUpgrade={() => setUpgradeDialogClusterId(cluster.id)}
-                />
-              </StackItem>
+              {activeTabKey === 0 && (
+                <StackItem>
+                  <ClusterVersionRail
+                    currentVersion={cluster.status?.observedVersion}
+                    action={upgradeAction}
+                    onUpgrade={() => setUpgradeDialogClusterId(cluster.id)}
+                  />
+                </StackItem>
+              )}
               {activeTabKey === 0 && (
                 <StackItem>
                   <Card isFullHeight>

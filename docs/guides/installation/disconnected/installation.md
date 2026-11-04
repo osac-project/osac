@@ -162,6 +162,17 @@ The source runtime wiring clause is received here once: selected mirror-backed s
 
 ### 6.1.2 CDI consumer contract and configuration decision
 
+Do not infer CDI registry-import routing from ITMS alone. The
+[CDI API](https://github.com/kubevirt/containerized-data-importer/blob/15b1fc5958919ae6f50d7165b1ce14a9ce3c8167/staging/src/kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1/types.go#L197-L218)
+distinguishes `pullMethod: pod` (default importer-client path) and
+`pullMethod: node` (node-cache path). In the
+[node implementation](https://github.com/kubevirt/containerized-data-importer/blob/15b1fc5958919ae6f50d7165b1ce14a9ce3c8167/pkg/controller/import-controller.go#L1161-L1188),
+the selected registry image is a Pod container image. Inspect the installed
+release's actual DataVolume source, effective pull method, Pod images and
+importer configuration; do not claim every CDI import bypasses node mirrors.
+An ITMS policy check or exact-tag mirror lookup does not waive the actual
+selected-image CDI import acceptance in Section 7.1.
+
 Before the selected VM acceptance, consume the release-qualified node-pull versus CDI-importer trust/authentication contract from the prerequisite and Virtualization owners. Identify the exact consumer, registry authority/CA binding, supported owner-controlled configuration surface and intended CDI/HCO objects. Existing node transport or CatalogSource readiness does not establish the importer client's CA/authentication behavior.
 
 **Open decision — do not execute a configuration change:** the supported CRI-O/CDI trust mechanism and whether direct mutation of the HCO-managed CDI CR is permitted are unresolved. Do not choose an interim proxy-only/image-config-only mechanism, insecure registry fallback or ownership force to make the test proceed. An unresolved selected consumer contract is pending qualification, not service acceptance. Resolve this with the service/product owners before using a mutation procedure.

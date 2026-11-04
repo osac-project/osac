@@ -1,0 +1,17 @@
+---
+- name: Reject unsupported AgentlessNet FabricDomain create
+  block:
+    - name: Validate the FabricDomain task input
+      ansible.builtin.include_tasks: _validate_task_input.yaml
+      vars:
+        agentless_net_expected_kind: FabricDomain
+        agentless_net_expected_tasks: [create_fabric_domain]
+    - name: Mark unsupported FabricDomain creation as final
+      ansible.builtin.set_fact:
+        _agentless_net_failure_retryable: false
+    - name: Fail because AgentlessNet does not provide east-west Ethernet
+      ansible.builtin.fail:
+        msg: AgentlessNet does not support FabricDomain provisioning.
+  rescue:
+    - name: Publish a sanitized FabricDomain error
+      ansible.builtin.include_tasks: _report_task_error.yaml

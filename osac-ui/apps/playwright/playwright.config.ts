@@ -5,6 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { AUTH_FILE } from './src/auth-file';
+import {
+  readVmaasFullFlowRunState,
+  writeVmaasFullFlowRunState,
+} from '../e2e-tests/src/vmaas/run_state';
 
 const baseURL = process.env.OSAC_UI_BASE_URL;
 if (!baseURL) {
@@ -29,9 +33,23 @@ if (parsedBaseURL.username || parsedBaseURL.password) {
   throw invalidBaseURLError;
 }
 
-// Share one unique ID across Playwright projects so teardown only targets this run's image.
+const flowMode = process.env.OSAC_VM_FLOW_MODE ?? 'full';
+if (flowMode !== 'create' && flowMode !== 'delete' && flowMode !== 'full') {
+  throw new Error('OSAC_VM_FLOW_MODE must be create, delete, or full.');
+}
+
+const hasExplicitRunState =
+  Boolean(process.env.OSAC_CATALOG_TEST_RUN_ID) &&
+  Boolean(process.env.OSAC_DISK_IMAGE_TEST_RUN_ID) &&
+  Boolean(process.env.OSAC_STORAGE_TIER_TEST_RUN_ID);
+const persistedRunState =
+  flowMode === 'delete' && !hasExplicitRunState ? readVmaasFullFlowRunState() : undefined;
+
+// Share one unique ID across Playwright projects so deletion only targets this run's image.
 const diskImageTestRunId =
-  process.env.OSAC_DISK_IMAGE_TEST_RUN_ID ?? randomUUID().replace(/-/g, '').slice(0, 12);
+  process.env.OSAC_DISK_IMAGE_TEST_RUN_ID ??
+  persistedRunState?.diskImageTestRunId ??
+  randomUUID().replace(/-/g, '').slice(0, 12);
 if (!/^[a-z0-9]{1,32}$/i.test(diskImageTestRunId)) {
   throw new Error('OSAC_DISK_IMAGE_TEST_RUN_ID must contain 1-32 letters or digits.');
 }
@@ -39,7 +57,9 @@ process.env.OSAC_DISK_IMAGE_TEST_RUN_ID = diskImageTestRunId.toLowerCase();
 
 // Share a unique ID across Storage tier projects so teardown only targets this run's tier.
 const storageTierTestRunId =
-  process.env.OSAC_STORAGE_TIER_TEST_RUN_ID ?? randomUUID().replace(/-/g, '').slice(0, 12);
+  process.env.OSAC_STORAGE_TIER_TEST_RUN_ID ??
+  persistedRunState?.storageTierTestRunId ??
+  randomUUID().replace(/-/g, '').slice(0, 12);
 if (!/^[a-z0-9]{1,32}$/i.test(storageTierTestRunId)) {
   throw new Error('OSAC_STORAGE_TIER_TEST_RUN_ID must contain 1-32 letters or digits.');
 }
@@ -47,11 +67,24 @@ process.env.OSAC_STORAGE_TIER_TEST_RUN_ID = storageTierTestRunId.toLowerCase();
 
 // Share a unique ID across catalog projects so teardown only targets this run's item.
 const catalogTestRunId =
-  process.env.OSAC_CATALOG_TEST_RUN_ID ?? randomUUID().replace(/-/g, '').slice(0, 12);
+  process.env.OSAC_CATALOG_TEST_RUN_ID ??
+  persistedRunState?.catalogTestRunId ??
+  randomUUID().replace(/-/g, '').slice(0, 12);
 if (!/^[a-z0-9]{1,32}$/i.test(catalogTestRunId)) {
   throw new Error('OSAC_CATALOG_TEST_RUN_ID must contain 1-32 letters or digits.');
 }
 process.env.OSAC_CATALOG_TEST_RUN_ID = catalogTestRunId.toLowerCase();
+
+const fullFlowProjectRequested = process.argv.some((argument) =>
+  argument.includes('vmaas-full-flow'),
+);
+if (flowMode !== 'delete' && fullFlowProjectRequested && !process.argv.includes('--list')) {
+  writeVmaasFullFlowRunState({
+    catalogTestRunId: catalogTestRunId.toLowerCase(),
+    diskImageTestRunId: diskImageTestRunId.toLowerCase(),
+    storageTierTestRunId: storageTierTestRunId.toLowerCase(),
+  });
+}
 
 // Ad hoc specs (typically written by an AI agent to manually verify a change)
 // live in this gitignored scratch directory, never under src/ — that keeps
@@ -73,6 +106,9 @@ const slowMo = Number(process.env.PW_SLOW_MO) || 0;
 export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
+  // These tests mutate shared live resources. Stop after the first failure so
+  // duplicate-resource failures do not allow the rest of the flow to proceed.
+  maxFailures: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: 'html',
   expect: {
@@ -117,6 +153,38 @@ export default defineConfig({
       testDir: vmaasDir,
       testMatch: /create\.tenant\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+    },
+    {
+      name: 'vmaas-full-flow-resources',
+      testDir: vmaasDir,
+      testMatch: /create\.(instance_type|disk_images|storage_tier|catalog|tenant)\.spec\.ts/,
+      fullyParallel: false,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+    },
+    {
+      name: 'vmaas-full-flow',
+      testDir: vmaasDir,
+      testMatch: /create\.vm\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-full-flow-resources'],
+    },
+    {
+      name: 'vmaas-full-flow-vm-delete',
+      testDir: vmaasDir,
+      testMatch: /delete\.vm\.spec\.ts/,
+      fullyParallel: false,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      // In delete mode this is the first cleanup project. In full mode it
+      // follows the complete creation chain before deleting the VM.
+      dependencies: flowMode === 'full' ? ['vmaas-full-flow'] : [],
+    },
+    {
+      name: 'vmaas-full-flow-delete',
+      testDir: vmaasDir,
+      testMatch: /delete\.(catalog|disk_images|instance_type|storage_tier|tenant)\.spec\.ts/,
+      fullyParallel: false,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-full-flow-vm-delete'],
     },
     {
       name: 'vmaas-storage-tier',

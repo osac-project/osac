@@ -1,10 +1,8 @@
 ---
-# AgentlessNet SecurityGroups are no-ops: no backend resources were
-# created, so deletion succeeds immediately with nothing to clean up.
-
-- name: Log no-op SecurityGroup deletion for AgentlessNet
-  ansible.builtin.debug:
-    msg: >-
-      Deleting SecurityGroup {{ security_group_name | default('unknown') }}
-      is a no-op for the AgentlessNet network class:
-      no backend resources to remove.
+# No policy object was created by AgentlessNet, so cleanup is an idempotent
+# no-op and emits no task result.
+- name: Validate the AgentlessNet SecurityGroup delete task
+  ansible.builtin.include_tasks: _validate_task_input.yaml
+  vars:
+    agentless_net_expected_kind: SecurityGroup
+    agentless_net_expected_tasks: [delete_security_group]

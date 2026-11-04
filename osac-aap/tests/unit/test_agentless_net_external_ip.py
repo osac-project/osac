@@ -38,7 +38,7 @@ def attachment_state():
         "phase": "provisioning",
         "context": {
             "external_ip": {"address": EXTERNAL_IP},
-            "target": {"ip_address": TARGET_IP},
+            "destination": {"address": TARGET_IP},
         },
         "provider": {
             "namespace_name": "osacvn-test",

@@ -426,6 +426,13 @@
             ce_subnet_id: "{{ ce_id.s1 }}"
             sft_job: "{{ ce_subnet_job }}"
 
+        - name: Assert the owner reports VM eligibility
+          ansible.builtin.assert:
+            that:
+              - sft_last.result.compute_instance_supported is sameas true
+              - sft_last.result.compute_instance_unsupported_reason == ''
+            quiet: true
+
         - name: Read the hub network
           ansible.builtin.include_tasks: read.yaml
           vars: {ce_api: k8s.ovn.org/v1, ce_kind: ClusterUserDefinedNetwork, ce_name: "{{ ce_hub }}"}
@@ -484,6 +491,13 @@
             ce_octet: 2
             ce_l2: 10200
             sft_job: "{{ ce_subnet_job }}"
+
+        - name: Assert the sibling reports unsupported VM placement
+          ansible.builtin.assert:
+            that:
+              - sft_last.result.compute_instance_supported is sameas false
+              - sft_last.result.compute_instance_unsupported_reason | length > 0
+            quiet: true
 
         - name: Read the hub network after the reruns
           ansible.builtin.include_tasks: read.yaml

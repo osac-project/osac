@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Stateful fake SSH endpoint for AgentlessNet Cumulus task integration."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shlex
+import sys
+from pathlib import Path
+
+
+state_path = Path(os.environ["OSAC_AGENTLESS_SWITCH_STATE_FILE"])
+marker_path = Path(os.environ["OSAC_AGENTLESS_SWITCH_FAIL_MARKER"])
+args = sys.argv[1:]
+remote = args[-1] if args else ""
+
+
+def read_state():
+    return json.loads(state_path.read_text())
+
+
+def write_state(value):
+    state_path.write_text(json.dumps(value, sort_keys=True))
+
+
+def port_output(port, vlans):
+    rows = []
+    for vlan in vlans:
+        rows.append({"vlan": vlan, "flags": ["PVID", "Egress Untagged"]})
+    return [{"ifname": port, "vlans": rows}]
+
+
+if "bridge -j vlan show dev " in remote:
+    port = remote.rsplit(" ", 1)[-1]
+    state = read_state()
+    print(json.dumps(port_output(port, state["ports"].get(port, []))))
+    raise SystemExit(0)
+
+if "flock /tmp/nvue.lock sh -s --" in remote:
+    match = re.search(r"sh\s+-s\s+--\s+([0-9a-f-]{36})(.*)$", remote, re.S)
+    if match is None:
+        print(f"invalid fake NVUE invocation: {remote}", file=sys.stderr)
+        raise SystemExit(64)
+    resource_id = match.group(1)
+    operation = shlex.split(match.group(2).split("<<", 1)[0])
+    state = read_state()
+    tombstones = state.setdefault("tombstones", [])
+
+    if len(operation) == 0:
+        if resource_id not in tombstones:
+            tombstones.append(resource_id)
+            write_state(state)
+        raise SystemExit(0)
+
+    if len(operation) != 3:
+        print("invalid fake switch port operation", file=sys.stderr)
+        raise SystemExit(64)
+    port, vlan_text, action = operation
+    if resource_id in tombstones and action != "delete":
+        raise SystemExit(73)
+    fail_once = os.environ.get("OSAC_AGENTLESS_SWITCH_FAIL_ONCE", "")
+    if fail_once == f"{action}:{port}" and not marker_path.exists():
+        marker_path.write_text("failed once\n")
+        raise SystemExit(1)
+
+    if action in {"apply", "delete"}:
+        state["ports"][port] = [int(vlan_text)]
+    elif action == "remove":
+        state["ports"][port] = []
+    else:
+        print("invalid fake switch action", file=sys.stderr)
+        raise SystemExit(64)
+    write_state(state)
+    raise SystemExit(0)
+
+print("unsupported fake SSH command", file=sys.stderr)
+raise SystemExit(64)

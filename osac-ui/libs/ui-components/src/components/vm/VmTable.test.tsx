@@ -73,6 +73,7 @@ const runningVm: ComputeInstance = {
     internalIpAddress: '10.0.0.5',
     externalIpAddress: '203.0.113.1',
     computeNetworkAttachmentStatuses: [],
+    volumes: [],
   },
 };
 

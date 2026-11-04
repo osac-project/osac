@@ -148,18 +148,6 @@ networkManagers:
         which delegates overlay work here. Capabilities: ipv4 only.
       capabilities:
       - ipv4
-    agentless_net:
-      enabled: false
-      externalIPContractVersion: v1
-      externalIPAttachmentContractVersion: v1
-      description: >-
-        AgentlessNet VirtualNetwork and Subnet baseline. Implements UID-keyed
-        namespaces, /31 transit links, Cumulus trunk VLANs, Subnet gateways,
-        per-VirtualNetwork DHCP, and UID-owned IPv4 ExternalIP allocation and
-        release. Supports BMaaS ExternalIPAttachment DNAT and NATGateway SNAT
-        with explicit external source addresses. SecurityGroups remain unsupported.
-      capabilities:
-      - ipv4
   k8sManagers:
     k8s_only:
       enabled: false

@@ -1,60 +1,64 @@
 ---
-- name: Deprovision AgentlessNet Subnet VLAN and DHCP state
+- name: Delete AgentlessNet Subnet
   block:
-    - name: Load the AgentlessNet node and required Cumulus switch inventory
+    - name: Validate the Subnet delete input
+      ansible.builtin.include_tasks: _validate_task_input.yaml
+      vars:
+        agentless_net_expected_kind: Subnet
+        agentless_net_expected_tasks: [delete_subnet]
+
+    - name: Require the stored parent snapshot
+      ansible.builtin.assert:
+        that:
+          - osac_job_vars.virtual_network is mapping
+          - osac_job_vars.virtual_network.id is match('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+      no_log: true
+
+    - name: Classify provider cleanup failures as retryable
+      ansible.builtin.set_fact:
+        _agentless_net_failure_retryable: true
+
+    - name: Load the AgentlessNet node and Cumulus switch inventory
       ansible.builtin.include_tasks: _load_network_node_inventory.yaml
       vars:
         agentless_net_require_switches: true
 
-    - name: Read Subnet UID and tenant for saved-state deletion
-      ansible.builtin.set_fact:
-        _agentless_net_subnet_uid: "{{ subnet.metadata.uid | default('') }}"
-        _agentless_net_subnet_tenant_id: >-
-          {{ subnet.metadata.annotations.get('osac.openshift.io/tenant', '') }}
-      no_log: true
-
-    - name: Validate AgentlessNet Subnet deletion identity
-      ansible.builtin.assert:
-        that:
-          - _agentless_net_subnet_uid is string
-          - _agentless_net_subnet_uid | length > 0
-          - _agentless_net_subnet_tenant_id is string
-          - _agentless_net_subnet_tenant_id | length > 0
-        fail_msg: AgentlessNet Subnet deletion requires its Kubernetes UID and tenant annotation.
-      no_log: true
-
-    - name: Withdraw the saved DHCP scope and local VLAN interface
+    - name: Mark the Subnet deleting and prepare its saved VLAN cleanup
       osac.templates.agentless_net_state:
         action: prepare_delete_subnet
         state_file: "{{ agentless_net_network_state_file }}"
-        uid: "{{ _agentless_net_subnet_uid }}"
-        tenant_id: "{{ _agentless_net_subnet_tenant_id }}"
+        uid: "{{ osac_job_vars.resource.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
+        virtual_network_uid: "{{ osac_job_vars.virtual_network.id }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true
       register: _agentless_net_subnet_deletion
       no_log: true
 
-    - name: Remove and verify the saved VLAN on each configured switch
+    - name: Remove and verify the saved VLAN from each declared switch
       ansible.builtin.include_tasks: _reconcile_subnet_switch.yaml
       loop: "{{ groups['agentless_net_subnet_switches'] }}"
       loop_control:
         loop_var: _agentless_net_switch_name
         label: "{{ _agentless_net_switch_name }}"
       vars:
-        _agentless_net_subnet: "{{ _agentless_net_subnet_deletion.subnet | default({}) }}"
+        _agentless_net_subnet: "{{ _agentless_net_subnet_deletion.subnet }}"
         _agentless_net_subnet_action: delete
       when: _agentless_net_subnet_deletion.found | bool
 
-    - name: Release the VLAN reservation after verified switch cleanup
+    - name: Release the VLAN after verified switch cleanup
       osac.templates.agentless_net_state:
         action: release_subnet
         state_file: "{{ agentless_net_network_state_file }}"
-        uid: "{{ _agentless_net_subnet_uid }}"
-        tenant_id: "{{ _agentless_net_subnet_tenant_id }}"
+        uid: "{{ osac_job_vars.resource.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true
       when: _agentless_net_subnet_deletion.found | bool
       no_log: true
+  rescue:
+    - name: Publish a sanitized Subnet delete error
+      ansible.builtin.include_tasks: _report_task_error.yaml
   always:
-    - name: Remove the temporary AgentlessNet SSH key file
+    - name: Remove temporary AgentlessNet SSH credentials
       ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

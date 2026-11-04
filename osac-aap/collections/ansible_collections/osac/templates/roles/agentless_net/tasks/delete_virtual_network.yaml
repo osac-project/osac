@@ -1,32 +1,31 @@
 ---
-- name: Deprovision the AgentlessNet VirtualNetwork provider state
+- name: Delete AgentlessNet VirtualNetwork
   block:
-    - name: Load the AgentlessNet provider inventory
+    - name: Validate the VirtualNetwork task input
+      ansible.builtin.include_tasks: _validate_task_input.yaml
+      vars:
+        agentless_net_expected_kind: VirtualNetwork
+        agentless_net_expected_tasks: [delete_virtual_network]
+
+    - name: Classify provider cleanup failures as retryable
+      ansible.builtin.set_fact:
+        _agentless_net_failure_retryable: true
+
+    - name: Load the AgentlessNet network-node inventory
       ansible.builtin.include_tasks: _load_network_node_inventory.yaml
 
-    - name: Read VirtualNetwork ownership settings
-      ansible.builtin.set_fact:
-        agentless_net_vn_uid: "{{ virtual_network.metadata.uid | default('') }}"
-        agentless_net_vn_tenant_id: "{{ virtual_network.metadata.annotations['osac.openshift.io/tenant'] | default('') }}"
-      no_log: true
-
-    - name: Validate VirtualNetwork deletion input
-      ansible.builtin.assert:
-        that:
-          - agentless_net_vn_uid | length > 0
-          - agentless_net_vn_tenant_id | length > 0
-        fail_msg: AgentlessNet VirtualNetwork deletion requires its UID and tenant annotation.
-      no_log: true
-
-    - name: Remove the VirtualNetwork namespace and release its saved transit state
+    - name: Delete VirtualNetwork state by API ID
       osac.templates.agentless_net_state:
         action: delete_virtual_network
         state_file: "{{ agentless_net_network_state_file }}"
-        uid: "{{ agentless_net_vn_uid }}"
-        tenant_id: "{{ agentless_net_vn_tenant_id }}"
+        uid: "{{ osac_job_vars.resource.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true
       no_log: true
+  rescue:
+    - name: Publish a sanitized VirtualNetwork delete error
+      ansible.builtin.include_tasks: _report_task_error.yaml
   always:
-    - name: Remove the temporary AgentlessNet SSH key file
+    - name: Remove temporary AgentlessNet SSH credentials
       ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

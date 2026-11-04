@@ -1,8 +1,6 @@
-# AgentlessNet overlay: layer on a profile without VMaaS (for example
-# bmaas-ci) to select the AgentlessNet Fabric Manager. Not deployable until
-# AgentlessNet adopts the network manager contract: no registration is
-# rendered, so a NetworkClass cannot select it. AgentlessNet declares no
-# network_types, so no Kubernetes Manager can pair with it.
+# AgentlessNet overlay: select the fabric-only BMaaS profile and suppress the
+# operator chart's legacy AgentlessNet stub registration. The umbrella chart
+# renders the contract-format immutable Fabric Manager registration.
 global:
   networking:
     provisioningEnabled: true

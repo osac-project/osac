@@ -3,9 +3,12 @@
   hosts: localhost
   gather_facts: false
   vars:
-    host_name: host-a
-    network_attachment:
-      logical_interface_name: eth0
+    osac_job_vars:
+      target:
+        host_name: host-a
+      network_attachment:
+        interface:
+          name: eth0
   tasks:
     - name: Resolve and validate the AgentlessNet host-port mapping
       ansible.builtin.include_role:

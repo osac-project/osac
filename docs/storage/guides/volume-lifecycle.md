@@ -1,8 +1,5 @@
 # ComputeInstance volume lifecycle
 
-> **Status: Dev Preview.** The volume tracking described here is under
-> development and lands as part of the Dev Preview.
-
 ComputeInstance disks are tracked as Volume records in the Storage API:
 
 - **Creation:** a Volume record is created for each requested disk (boot and
@@ -12,12 +9,11 @@ ComputeInstance disks are tracked as Volume records in the Storage API:
   with the volume identifier.
 - **Reporting:** each disk's volume is visible on the ComputeInstance as a
   read-only correlation.
-- **Deletion:** Volume records are removed with their ComputeInstance, and
-  deletion completes only after the records are cleaned up. A disk attached
-  to a ComputeInstance cannot be deleted independently.
-
-Until the volume tracking lands, disks are provisioned directly as KubeVirt
-DataVolumes from the tier's resolved StorageClass, with no Volume records.
+- **Deletion:** the VM and its DataVolumes are removed first; the Volume
+  records are then deleted, and ComputeInstance deletion completes only
+  after the records are cleaned up. Disks are managed as part of their
+  ComputeInstance: there is no per-disk delete operation, and a disk is
+  removed only with its ComputeInstance.
 
 The flow from a tenant's tier selection to a running disk:
 
@@ -35,7 +31,9 @@ that class, annotated with the
 volume identifier
         ▼
 ComputeInstance deletion removes the
-Volume records, then the DataVolumes
+DataVolumes with the VM, then the
+Volume records; deletion completes
+when the records are gone
 ```
 
 Not supported in this phase:

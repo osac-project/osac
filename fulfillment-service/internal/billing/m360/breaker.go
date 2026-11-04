@@ -14,72 +14,87 @@ language governing permissions and limitations under the License.
 package m360
 
 import (
+	"slices"
 	"sync"
 	"time"
 )
 
-// breaker opens after threshold consecutive failures and lets a single probe through once the cooldown elapses.
+// breaker opens for cooldown once threshold calls have failed within window, then lets a single probe through whose
+// verdict closes or reopens it. Each call reports whether it was the probe, so a call admitted before the breaker
+// opened cannot close it.
 // It is provider-agnostic: promote it to a shared package when a second billing provider needs one.
 type breaker struct {
 	mu        sync.Mutex
 	threshold int
+	window    time.Duration
 	cooldown  time.Duration
 	now       func() time.Time
-	failures  int
+	failures  []time.Time // inside the window, oldest first, never threshold long
 	openUntil time.Time
 	probing   bool
 }
 
-// newBreaker opens after threshold consecutive failures for cooldown.
-func newBreaker(threshold int, cooldown time.Duration) *breaker {
-	return &breaker{threshold: threshold, cooldown: cooldown, now: time.Now}
+// newBreaker opens for cooldown after threshold failures within window.
+func newBreaker(threshold int, window, cooldown time.Duration) *breaker {
+	return &breaker{threshold: threshold, window: window, cooldown: cooldown, now: time.Now}
 }
 
+// allow reports whether a call may proceed and whether it is the half-open probe.
 // A nil breaker is a pass-through for calls that must not be guarded.
-func (b *breaker) allow() bool {
+func (b *breaker) allow() (ok, probe bool) {
 	if b == nil {
-		return true
+		return true, false
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.openUntil.IsZero() {
-		return true
+		return true, false
 	}
 	if b.now().Before(b.openUntil) || b.probing {
-		return false
+		return false, false
 	}
 	b.probing = true
-	return true
+	return true, true
 }
 
-// success records a healthy verdict and resets the failure count.
-func (b *breaker) success() {
+// success records a healthy verdict: it forgets the failures and closes the breaker, unless the breaker is open and
+// the call was not its probe.
+func (b *breaker) success(probe bool) {
 	if b == nil {
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.failures, b.openUntil, b.probing = 0, time.Time{}, false
+	if !b.openUntil.IsZero() && !probe {
+		return
+	}
+	b.failures, b.openUntil, b.probing = nil, time.Time{}, false
 }
 
-// failure records a failed call and opens the breaker once failures reach the
-// threshold.
-func (b *breaker) failure() {
+// failure records a failed call. A failed probe reopens the breaker whatever the window holds; a closed breaker opens
+// once the failures inside the window reach the threshold; a call admitted before the breaker opened adds nothing.
+func (b *breaker) failure(probe bool) {
 	if b == nil {
 		return
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.probing = false
-	b.failures++
-	if b.failures >= b.threshold {
-		b.openUntil = b.now().Add(b.cooldown)
+	now := b.now()
+	switch {
+	case probe:
+		b.probing, b.openUntil = false, now.Add(b.cooldown)
+	case b.openUntil.IsZero():
+		cutoff := now.Add(-b.window)
+		b.failures = append(slices.DeleteFunc(b.failures, func(t time.Time) bool { return !t.After(cutoff) }), now)
+		if len(b.failures) >= b.threshold {
+			b.failures, b.openUntil = nil, now.Add(b.cooldown)
+		}
 	}
 }
 
 // abort releases a half-open probe that ended without a verdict, such as a caller cancellation.
-func (b *breaker) abort() {
-	if b == nil {
+func (b *breaker) abort(probe bool) {
+	if b == nil || !probe {
 		return
 	}
 	b.mu.Lock()

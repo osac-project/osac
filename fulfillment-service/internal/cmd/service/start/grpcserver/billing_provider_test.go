@@ -38,10 +38,13 @@ var _ = Describe("newBillingProvider", func() {
 
 	BeforeEach(func() {
 		env = map[string]string{
-			"OSAC_BILLING_PROVIDER":        "m360",
-			"OSAC_BILLING_BASE_URL":        "https://revos.example.com",
-			"OSAC_BILLING_API_VERSION":     "v1",
-			"OSAC_BILLING_CREDENTIAL_FILE": "/var/run/billing/credential",
+			"OSAC_BILLING_PROVIDER":                               "m360",
+			"OSAC_BILLING_BASE_URL":                               "https://revos.example.com/api/v1/external",
+			"OSAC_BILLING_CREDENTIAL_FILE":                        "/var/run/billing/credential",
+			"OSAC_BILLING_RETRY_COUNT":                            "3",
+			"OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD":      "5",
+			"OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS": "30",
+			"OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS":           "30",
 		}
 	})
 
@@ -60,6 +63,12 @@ var _ = Describe("newBillingProvider", func() {
 		adapter, err := p.Adapter()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(adapter).ToNot(BeNil())
+	})
+
+	It("logs one info line naming only the provider when the adapter builds", func() {
+		var buffer bytes.Buffer
+		newBillingProvider(getenv, readOK, slog.New(slog.NewTextHandler(&buffer, nil)))
+		Expect(buffer.String()).To(ContainSubstring(`level=INFO msg="Billing provider configured" provider=m360` + "\n"))
 	})
 
 	It("stays configured but unusable when the credential file is unreadable", func() {
@@ -93,5 +102,17 @@ var _ = Describe("newBillingProvider", func() {
 		Expect(p.IsConfigured()).To(BeTrue())
 		_, err := p.Adapter()
 		Expect(err).To(HaveOccurred())
+	})
+
+	It("logs the build error and stays configured but unusable when the base URL is insecure", func() {
+		var buffer bytes.Buffer
+		env["OSAC_BILLING_BASE_URL"] = "http://revos.example.com"
+		p := newBillingProvider(getenv, readOK, slog.New(slog.NewTextHandler(&buffer, nil)))
+		Expect(p.IsConfigured()).To(BeTrue())
+		_, err := p.Adapter()
+		Expect(err).To(HaveOccurred())
+		Expect(buffer.String()).To(ContainSubstring("Billing provider adapter failed to build"))
+		Expect(buffer.String()).ToNot(ContainSubstring("Billing provider configured"))
+		Expect(buffer.String()).To(ContainSubstring("provider=m360"))
 	})
 })

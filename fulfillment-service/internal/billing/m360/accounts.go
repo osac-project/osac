@@ -56,7 +56,7 @@ func (a account) normalize(op string) (billing.Account, error) {
 		Ref:            billing.NewAccountRef(a.ID),
 		Name:           a.Name,
 		ExternalID:     a.ExternalID,
-		State:          billing.AccountUnknown, // the status mapping rule is an open design point
+		State:          billing.AccountUnknown, // the mapping in README.md lands with account discovery (OSAC-6883)
 		RawStatus:      a.StatusRef.name(),
 		ApprovalStatus: a.ApprovalStatusRef.name(),
 	}, nil

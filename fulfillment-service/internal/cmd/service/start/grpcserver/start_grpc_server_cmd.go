@@ -709,7 +709,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err != nil {
 		return fmt.Errorf("failed to create private billing provider statuses server: %w", err)
 	}
-	// The public server wraps the same private instance so both share the last successful check:
+	// The public server delegates to the private one, which is not registered as a service of its own:
 	billingProviderStatusesServer, err := servers.NewBillingProviderStatusesServer().
 		SetLogger(c.logger).
 		SetDelegate(privateBillingProviderStatusesServer).
@@ -719,8 +719,6 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	// filterable-resource-exempt: singleton status read, no List RPC or CEL filter field
 	publicv1.RegisterBillingProviderStatusesServer(grpcServer, billingProviderStatusesServer)
-	// filterable-resource-exempt: singleton status read, no List RPC or CEL filter field
-	privatev1.RegisterBillingProviderStatusesServer(grpcServer, privateBillingProviderStatusesServer)
 
 	// Create the capabilities servers:
 	c.logger.InfoContext(ctx, "Creating capabilities servers")

@@ -24,9 +24,15 @@ specific language governing permissions and limitations under the License.
 {{- $billingProvider := index $billing "provider" }}
 {{- $billingTuning := index $billing "tuning" | default dict }}
 {{- $billingBreaker := index $billingTuning "pricingBreaker" | default dict }}
-{{- /* Defaults mirror the umbrella chart values: a standalone subchart render has none. retryCount may be 0, which `default` would replace. */}}
+{{- /* Defaults mirror the umbrella chart values: a standalone subchart render has none. A value may be 0, which `default` would replace. A values-file integer is a float64: `int64` keeps it from rendering as 1e+06. */}}
 {{- $billingRetry := 3 }}
 {{- if hasKey $billingTuning "retryCount" }}{{- $billingRetry = $billingTuning.retryCount }}{{- end }}
+{{- $billingThreshold := 5 }}
+{{- if hasKey $billingBreaker "failureThreshold" }}{{- $billingThreshold = $billingBreaker.failureThreshold }}{{- end }}
+{{- $billingWindow := 30 }}
+{{- if hasKey $billingBreaker "failureWindowSeconds" }}{{- $billingWindow = $billingBreaker.failureWindowSeconds }}{{- end }}
+{{- $billingOpen := 30 }}
+{{- if hasKey $billingBreaker "openSeconds" }}{{- $billingOpen = $billingBreaker.openSeconds }}{{- end }}
 
 apiVersion: apps/v1
 kind: Deployment
@@ -148,6 +154,14 @@ spec:
           items:
           - key: {{ $billingProvider.credentialSecret.key }}
             path: credential
+      {{- if $billingProvider.caSecret }}
+      - name: billing-ca
+        secret:
+          secretName: {{ $billingProvider.caSecret.name }}
+          items:
+          - key: {{ $billingProvider.caSecret.key }}
+            path: ca.crt
+      {{- end }}
       {{- end }}
       securityContext:
         runAsNonRoot: true
@@ -184,6 +198,11 @@ spec:
         - name: billing
           mountPath: /etc/fulfillment-grpc-server/billing
           readOnly: true
+        {{- if $billingProvider.caSecret }}
+        - name: billing-ca
+          mountPath: /etc/fulfillment-grpc-server/billing-ca
+          readOnly: true
+        {{- end }}
         {{- end }}
         - name: tls
           mountPath: /etc/fulfillment-grpc-server/tls
@@ -246,28 +265,20 @@ spec:
           value: {{ $billingProvider.key | quote }}
         - name: OSAC_BILLING_BASE_URL
           value: {{ $billingProvider.baseUrl | quote }}
-        - name: OSAC_BILLING_API_VERSION
-          value: {{ $billingProvider.apiVersion | quote }}
         - name: OSAC_BILLING_CREDENTIAL_FILE
           value: /etc/fulfillment-grpc-server/billing/credential
-        - name: OSAC_BILLING_ITEM_TIMEOUT_SECONDS
-          value: {{ $billingTuning.itemTimeoutSeconds | default 2 | quote }}
-        - name: OSAC_BILLING_LIST_DEADLINE_SECONDS
-          value: {{ $billingTuning.listDeadlineSeconds | default 5 | quote }}
-        - name: OSAC_BILLING_CACHE_FRESH_TTL_SECONDS
-          value: {{ $billingTuning.cacheFreshTtlSeconds | default 300 | quote }}
-        - name: OSAC_BILLING_CACHE_STALE_TTL_SECONDS
-          value: {{ $billingTuning.cacheStaleTtlSeconds | default 3600 | quote }}
-        - name: OSAC_BILLING_CACHE_MAX_ENTRIES
-          value: {{ $billingTuning.cacheMaxEntries | default 10000 | quote }}
+        {{- if $billingProvider.caSecret }}
+        - name: OSAC_BILLING_CA_FILE
+          value: /etc/fulfillment-grpc-server/billing-ca/ca.crt
+        {{- end }}
         - name: OSAC_BILLING_RETRY_COUNT
-          value: {{ $billingRetry | quote }}
+          value: {{ $billingRetry | int64 | quote }}
         - name: OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD
-          value: {{ $billingBreaker.failureThreshold | default 5 | quote }}
+          value: {{ $billingThreshold | int64 | quote }}
         - name: OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS
-          value: {{ $billingBreaker.failureWindowSeconds | default 30 | quote }}
+          value: {{ $billingWindow | int64 | quote }}
         - name: OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS
-          value: {{ $billingBreaker.openSeconds | default 30 | quote }}
+          value: {{ $billingOpen | int64 | quote }}
         {{- end }}
         ports:
         - name: grpc

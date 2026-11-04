@@ -17,8 +17,9 @@ import "log/slog"
 
 const redacted = "[redacted]"
 
-// opaque hides a value in every default rendering: String, GoString (%#v) and structured logging. Types holding
-// provider ids or credentials embed it so that adding a type cannot silently leave one rendering unredacted.
+// opaque hides a value in every default rendering: String, GoString (%#v), structured logging and
+// JSON. Types holding provider ids or credentials embed it so that adding a type cannot silently
+// leave one rendering unredacted.
 type opaque struct{}
 
 // String redacts the value in string renderings.
@@ -29,6 +30,10 @@ func (opaque) GoString() string { return redacted }
 
 // LogValue redacts the value in structured logs.
 func (opaque) LogValue() slog.Value { return slog.StringValue(redacted) }
+
+// MarshalJSON redacts the value in JSON, so marshalling an embedding type cannot serialize the
+// credential or provider id it holds.
+func (opaque) MarshalJSON() ([]byte, error) { return []byte(`"` + redacted + `"`), nil }
 
 // AccountRef identifies a provider account. The native id is only reachable through ID so that accidental
 // formatting or logging cannot leak it.
@@ -64,8 +69,8 @@ const (
 )
 
 // Account keeps the raw provider status values next to the normalized state. Its correlation value is
-// ExternalID, which must never reach logs or formatted output. Adapters leave State UNKNOWN until the status
-// mapping rule is defined.
+// ExternalID, which must never reach logs or formatted output. Adapters leave State UNKNOWN until their status
+// mapping is implemented; the M360 rule is in the m360 package README.
 type Account struct {
 	opaque
 	Ref            AccountRef

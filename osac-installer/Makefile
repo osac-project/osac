@@ -989,7 +989,7 @@ event-publisher-render-test: helm-deps ## Check the event publisher and metering
 	python3 scripts/test-event-publisher-render.py
 
 .PHONY: billing-render-test
-billing-render-test: helm-deps ## Check billing provider config renders and validates
+billing-render-test: helm-osac-deps ## Check billing provider config renders and validates
 	python3 scripts/test-billing-render.py
 
 .PHONY: mce-render-test

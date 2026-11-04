@@ -15,6 +15,7 @@ package m360
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -29,10 +30,7 @@ import (
 )
 
 const (
-	maxRetries         = 3
 	maxResponseBytes   = 4 << 20
-	breakerThreshold   = 5
-	breakerCooldown    = 30 * time.Second
 	defaultAttemptTime = 10 * time.Second
 
 	maxPageSize = 20 // the largest size M360 honours
@@ -51,14 +49,20 @@ type client struct {
 	backoffMax     time.Duration
 }
 
-// newClient builds a client with the default retry, breaker and backoff settings.
+// newClient builds a client with the configured retry, breaker and trust settings and the default backoff.
 func newClient(cfg billing.Config, logger *slog.Logger) *client {
+	// The clone keeps the default proxy and timeouts; nil RootCAs means the system roots.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: cfg.RootCAs}
 	return &client{
 		cfg: cfg,
-		// A redirect would carry the bearer token to wherever the provider points; surface it as a failure instead.
-		http:           &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		http: &http.Client{
+			Transport: transport,
+			// A redirect would carry the bearer token to wherever the provider points; surface it as a failure instead.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		logger:         logger,
-		breaker:        newBreaker(breakerThreshold, breakerCooldown),
+		breaker:        newBreaker(cfg.BreakerThreshold, cfg.BreakerWindow, cfg.BreakerOpen),
 		attemptTimeout: defaultAttemptTime,
 		backoffBase:    100 * time.Millisecond,
 		backoffMax:     time.Second,
@@ -78,35 +82,36 @@ func (c *client) getDiscovery(ctx context.Context, op, path string, query url.Va
 }
 
 // do sends one request through breaker b, retrying retryable failures with
-// backoff up to maxRetries. A definitive answer — success or a non-retryable
-// error — resets the breaker; exhausted retries trip it. Caller cancellation
-// aborts without a verdict.
+// backoff up to the configured retry count. A definitive answer — success or a
+// non-retryable error — resets the breaker; exhausted retries count as one
+// failure. Caller cancellation aborts without a verdict.
 func (c *client) do(ctx context.Context, b *breaker, op, path string, query url.Values, out any) error {
-	if !b.allow() {
+	ok, probe := b.allow()
+	if !ok {
 		return &billing.Error{Reason: billing.ReasonUnavailable, Op: op, Retryable: true}
 	}
 	var err *billing.Error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	for attempt := 0; attempt <= c.cfg.RetryCount; attempt++ {
 		if attempt > 0 && !c.sleep(ctx, c.backoff(attempt)) {
-			b.abort()
+			b.abort(probe)
 			return ctxError(op, ctx)
 		}
 		err = c.attempt(ctx, op, path, query, out)
 		if err == nil {
-			b.success()
+			b.success(probe)
 			return nil
 		}
 		c.logger.DebugContext(ctx, "billing request failed", "op", op, "reason", err.Reason, "attempt", attempt+1)
 		if ctx.Err() != nil {
-			b.abort()
+			b.abort(probe)
 			return ctxError(op, ctx)
 		}
 		if !err.Retryable {
-			b.success()
+			b.success(probe)
 			return err
 		}
 	}
-	b.failure()
+	b.failure(probe)
 	return err
 }
 
@@ -116,7 +121,7 @@ func (c *client) attempt(ctx context.Context, op, path string, query url.Values,
 	ctx, cancel := context.WithTimeout(ctx, c.attemptTimeout)
 	defer cancel()
 
-	u := strings.TrimSuffix(c.cfg.BaseURL, "/") + "/api/" + c.cfg.APIVersion + "/external" + path
+	u := strings.TrimSuffix(c.cfg.BaseURL, "/") + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
@@ -143,8 +148,9 @@ func (c *client) attempt(ctx context.Context, op, path string, query url.Values,
 	if err != nil {
 		return billing.NewError(billing.ReasonUnavailable, op, true, resp.StatusCode)
 	}
+	// Error is any, not json.RawMessage, so a JSON null decodes to nil and counts as no error.
 	var probe struct {
-		Error json.RawMessage `json:"error"`
+		Error any `json:"error"`
 	}
 	if json.Unmarshal(body, &probe) != nil || probe.Error != nil {
 		return billing.NewError(billing.ReasonMalformed, op, false, resp.StatusCode)
@@ -217,7 +223,7 @@ func isNotFound(err error) bool {
 }
 
 // notFoundOn404 reclassifies a 404 as NOT_FOUND. Only reads of a resource addressed by id call it: a 404 on a
-// collection route means a wrong base URL or API version and stays MALFORMED.
+// collection route means a wrong base URL and stays MALFORMED.
 func notFoundOn404(op string, err error) error {
 	if !isNotFound(err) {
 		return err
@@ -254,7 +260,8 @@ func ctxError(op string, ctx context.Context) *billing.Error {
 // backoff is the exponential wait before retry number attempt, capped at
 // backoffMax.
 func (c *client) backoff(attempt int) time.Duration {
-	return min(c.backoffBase<<(attempt-1), c.backoffMax)
+	// The retry count has no upper bound: clamping the shift keeps a large attempt from overflowing past the cap.
+	return min(c.backoffBase<<min(attempt-1, 30), c.backoffMax)
 }
 
 // sleep waits for d unless ctx is done first, reporting whether the wait

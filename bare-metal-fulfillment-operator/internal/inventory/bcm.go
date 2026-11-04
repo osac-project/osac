@@ -353,12 +353,12 @@ func (c *BCMClient) AssignHost(ctx context.Context, inventoryHostID string, bare
 	if err := c.ensureBMHExists(ctx, device, bareMetalInstanceID); err != nil {
 		return nil, err
 	}
-	ready, err := c.bmhManager.IsBMHReady(ctx, device.Hostname)
+	available, err := c.bmhManager.IsBMHAvailable(ctx, device.Hostname)
 	if err != nil {
 		return nil, err
 	}
 	host := c.buildHost(device)
-	host.Ready = ready
+	host.Available = available
 	return host, nil
 }
 

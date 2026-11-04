@@ -702,13 +702,16 @@ func (c *Calculator) piece(
 	pending bool,
 ) (Piece, error) {
 	dimensions := map[string]string{
-		"deployment": c.deploymentID,
-		"tenant":     tenant,
-		"meter_type": meter.Unit,
+		rules.IdentityDeployment: c.deploymentID,
+		rules.IdentityTenant:     tenant,
+		rules.IdentityMeterType:  meter.Unit,
 	}
-	for _, field := range rules.IdentityFields {
-		if value, known := timelines[field].valueAt(start); known && value != "" {
-			dimensions[dimensionNameOf(field)] = value
+	for _, identity := range rules.IdentityDimensions {
+		if identity.Field == "" {
+			continue
+		}
+		if value, known := timelines[identity.Field].valueAt(start); known && value != "" {
+			dimensions[identity.Name] = value
 		}
 	}
 	for _, dimension := range meter.Dimensions {
@@ -777,20 +780,6 @@ func ipFamilyOf(address string) string {
 		return "ipv6"
 	}
 	return "ipv4"
-}
-
-// dimensionNameOf maps an identity field to its dimension name.
-func dimensionNameOf(field string) string {
-	switch field {
-	case "metadata.project":
-		return "project"
-	case "spec.catalog_item":
-		return "catalog"
-	case "spec.template":
-		return "template"
-	default:
-		return field
-	}
 }
 
 // parseMicro parses a decimal number into micro units. It fails when the number needs more

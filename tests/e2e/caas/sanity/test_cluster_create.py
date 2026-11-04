@@ -639,6 +639,9 @@ def _assert_cluster_deleted(
         retries=480,
         delay=5,
         description=f"{co_name} CaaS worker BMI removal",
+        # A transient grpcurl transport/DNS failure must not abort the
+        # remaining budget: retry it like the other CaaS poll sites.
+        retry_on_error=True,
         resource_kind=WaitResourceKind.CLUSTER_ORDER,
         resource_id=co_name,
     )

@@ -1,0 +1,11 @@
+suite: kafka exporter consumer lag rule without the monitoring CRD
+templates:
+  - templates/kafka-exporter-rule.yaml
+tests:
+  - it: renders nothing when the PrometheusRule CRD is absent
+    set:
+      kafka.enabled: true
+      kafka.exporter.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0

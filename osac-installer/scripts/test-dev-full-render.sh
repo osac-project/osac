@@ -42,6 +42,11 @@ if ! awk 'BEGIN { RS = "---" } /metering-service:latest/ && /imagePullPolicy: If
   echo "Kind dev-full must use the locally loaded metering image without pulling it" >&2
   exit 1
 fi
+if ! awk '/name: OSAC_AAP_ORGANIZATION/ { getline; if ($0 ~ /value: "Default"/) found = 1 } END { exit !found }' \
+  <<<"$osac_render"; then
+  echo "dev-full must use the AWX Default organization that configure-awx.sh assigns OSAC resources to" >&2
+  exit 1
+fi
 if ! awk '/name: OSAC_ENABLE_NETWORKING_PROVISIONING/ { getline; if ($0 ~ /value: "true"/) found = 1 } END { exit !found }' \
   <<<"$osac_render"; then
   echo "Kind dev-full must enable provider networking so AAP creates each tenant's target namespace" >&2

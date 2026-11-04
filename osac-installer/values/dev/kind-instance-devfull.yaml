@@ -10,6 +10,9 @@ global:
 # tenant's target namespace. The Kind-only CUDN API accepts the resulting
 # networking objects without providing an OVN dataplane.
 operator:
+  aap:
+    # configure-awx.sh creates OSAC resources in AWX organization ID 1 (Default).
+    organization: "Default"
   image:
     pullPolicy: IfNotPresent
   controllers:

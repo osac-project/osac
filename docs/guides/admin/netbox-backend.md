@@ -27,13 +27,19 @@ For a NetBox device with numeric ID `42`, BMF uses `netbox-42` as its BMH name,
 
 ## Prerequisites
 
+NetBox 4.6 or later is required. Versions before 4.6 lack the
+ETag/`If-Match` conditional updates BMF requires and are unsupported. Starting
+with 4.6, BMF sends conditional updates when claiming and releasing devices.
+If a device changes after BMF reads it, NetBox rejects the stale update and
+reconciliation retries without overwriting that change ([OSAC-1610 NetBox
+inventory design](https://github.com/osac-project/enhancement-proposals/pull/289),
+[NetBox 4.6 release notes](https://netbox.readthedocs.io/en/stable/release-notes/version-4.6/)).
+
 NetBox mode requires `inventory.hostClass: metal3` and
 `management.type: metal3`. Choose NetBox as the BMF inventory backend by
 setting `bmf.netbox.enabled: true`; it cannot be enabled alongside the BMF
 Metal3 or BCM inventory backend. Point `bmf.netbox.bmhNamespace` at the
 namespace where BMO watches OSAC-managed BMHs.
-
-Use NetBox 4.6 or later. BMF uses ETag/`If-Match` conditional updates to protect device claims and releases from overwriting concurrent changes; NetBox added this API behavior in 4.6 ([release notes](https://netbox.readthedocs.io/en/stable/release-notes/version-4.6/)).
 
 ## Preparing the NetBox device pool
 

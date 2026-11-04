@@ -343,10 +343,10 @@ var _ = BeforeSuite(func() {
 	fulfillmentIssuerURL = discoverFulfillmentIssuerURL(operatorNamespace)
 
 	By("updating AWX project to use current branch code")
-	updateAWXProjectToCurrentSHA()
+	projectSync := updateAWXProjectToCurrentSHA()
 
 	By("waiting for AWX project sync and job templates to be ready")
-	waitForAWXProjectAndTemplates()
+	waitForAWXProjectAndTemplates(projectSync)
 
 	By("configuring AWX to mount the remote cluster kubeconfig in job pods")
 	configureAWXRemoteKubeconfig()
@@ -790,52 +790,22 @@ func verifyKubeconfigReachesWorkload(
 			"server URL is routing to the hub API")
 }
 
-// updateAWXProjectToCurrentSHA patches the AWX project so it syncs the
-// code from the current PR (or branch push) rather than main.
-//
-// The devstack configure-awx.sh hook creates the project pointing at
-// "main", so Ansible changes on a feature branch never reach AWX jobs.
-//
-// In GitHub Actions PR checkouts the working tree is a depth-1 shallow
-// clone of a synthetic merge commit (refs/pull/<N>/merge) whose SHA
-// does not exist on any remote branch and whose parents are not fetched
-// either (--depth 1).  Walking the Git graph (HEAD^2) therefore fails.
-//
-// Instead we read the authoritative GITHUB_REF environment variable
-// (e.g. "refs/pull/1565/merge") and derive the fetchable PR head ref
-// "refs/pull/1565/head".  AWX gets an scm_refspec to fetch that ref
-// and scm_branch "pr-head" to check it out.
-func updateAWXProjectToCurrentSHA() {
+func updateAWXProjectToCurrentSHA() awxProjectSync {
+	directory, err := utils.GetProjectDir()
+	Expect(err).NotTo(HaveOccurred(), "locate Git checkout")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	selection, err := resolveAWXSCM(ctx, directory, os.Getenv)
+	Expect(err).NotTo(HaveOccurred(), "resolve exact AWX SCM source and revision")
+	fetchedRevision, err := verifyAWXSCM(ctx, selection)
+	Expect(err).NotTo(HaveOccurred(), "preflight AWX SCM fetch and exact checkout")
+	Expect(fetchedRevision).To(Equal(selection.Revision), "preflight must check out the intended commit")
+	payload, err := selection.payload()
+	Expect(err).NotTo(HaveOccurred(), "encode AWX SCM selection")
 	awxAPI, awxToken := awxEndpoint()
-
-	// Determine the SCM branch and optional refspec from the CI
-	// environment.  Prefer GITHUB_REF (authoritative, works with
-	// shallow/depth-1 clones) over local Git inspection.
-	var branch, refspec string
-
-	githubRef := os.Getenv("GITHUB_REF")
-	if m := regexp.MustCompile(
-		`^refs/pull/(\d+)/`).FindStringSubmatch(
-		githubRef); len(m) > 1 {
-		// PR checkout — fetch the PR head ref into a local name
-		// that scm_branch can reference.
-		prNumber := m[1]
-		refspec = fmt.Sprintf(
-			"+refs/pull/%s/head:refs/remotes/origin/pr-head",
-			prNumber)
-		branch = "pr-head"
-	} else {
-		// Branch push or local run — HEAD is on a real branch
-		// that the upstream repo already has.
-		headOut, err := runShell("git", "rev-parse", "HEAD")
-		Expect(err).NotTo(HaveOccurred(), "resolve HEAD SHA")
-		branch = strings.TrimSpace(string(headOut))
-	}
-
 	_, _ = fmt.Fprintf(GinkgoWriter,
-		"updating AWX project: scm_branch=%s refspec=%q "+
-			"(GITHUB_REF=%s)\n",
-		branch, refspec, githubRef)
+		"updating AWX project: scm_branch=%s refspec=%q\n",
+		selection.Revision, selection.Refspec)
 
 	// Look up the project ID.
 	out, err := runAWXGet(awxToken,
@@ -853,26 +823,27 @@ func updateAWXProjectToCurrentSHA() {
 		"AWX project osac-aap must exist")
 	projectID := projResp.Results[0].ID
 
-	// Patch scm_branch (and scm_refspec for PR checkouts).
-	patchPayload := fmt.Sprintf(
-		`{"scm_branch":"%s","scm_refspec":"%s",`+
-			`"scm_delete_on_update":true}`,
-		branch, refspec)
 	_, err = runAWXPatch(awxToken,
 		fmt.Sprintf("%s/projects/%d/", awxAPI, projectID),
-		patchPayload, operatorNamespace)
+		string(payload), operatorNamespace)
 	Expect(err).NotTo(HaveOccurred(),
 		"patch AWX project branch")
 
 	// Trigger a project update (re-sync from Git at the new ref).
-	_, err = runAWXPost(awxToken,
+	updateOutput, err := runAWXPost(awxToken,
 		fmt.Sprintf("%s/projects/%d/update/",
 			awxAPI, projectID),
 		"", operatorNamespace)
 	Expect(err).NotTo(HaveOccurred(),
 		"trigger AWX project re-sync")
+	var update struct {
+		ID int `json:"id"`
+	}
+	Expect(json.Unmarshal(updateOutput, &update)).To(Succeed(), "decode triggered AWX update")
+	Expect(update.ID).To(BeNumerically(">", 0), "AWX must return the triggered project update ID")
 	_, _ = fmt.Fprintf(GinkgoWriter,
-		"triggered AWX project re-sync (branch=%s)\n", branch)
+		"triggered AWX project update %d (revision=%s)\n", update.ID, selection.Revision)
+	return awxProjectSync{ID: update.ID, Revision: selection.Revision}
 }
 
 // verifyAWXReachable confirms that the AWX service is accessible from the hub
@@ -901,82 +872,27 @@ func verifyAWXReachable() {
 // hook creates the project and templates, but template creation fails silently
 // when the project hasn't synced yet (AWX validates playbook paths against the
 // project content). This function polls until both preconditions are met.
-func waitForAWXProjectAndTemplates() {
+func waitForAWXProjectAndTemplates(projectSync awxProjectSync) {
 	awxAPI, awxToken := awxEndpoint()
 
-	// Wait for at least one AWX project to reach "successful" status.
-	// Track whether we already triggered a re-sync so we don't queue
-	// repeated /update/ POSTs while the previous one is still running
-	// (which keeps the project stuck in "running" indefinitely).
-	resyncAttempted := false
-	stdoutFetched := false
 	Eventually(func() error {
 		out, err := runAWXGet(awxToken,
-			fmt.Sprintf("%s/projects/?name=osac-aap", awxAPI),
+			fmt.Sprintf("%s/project_updates/%d/", awxAPI, projectSync.ID),
 			operatorNamespace)
 		if err != nil {
-			return fmt.Errorf("list AWX projects: %w", err)
+			return fmt.Errorf("get triggered AWX project update: %w", err)
 		}
-		var resp struct {
-			Results []struct {
-				ID     int    `json:"id"`
-				Status string `json:"status"`
-			} `json:"results"`
+		complete, err := awxProjectSyncComplete(out, projectSync)
+		if err != nil {
+			dumpProjectUpdateStdout(awxAPI, awxToken, projectSync.ID, "sync verification failed")
+			StopTrying(err.Error()).Now()
 		}
-		if err := json.Unmarshal(out, &resp); err != nil {
-			return fmt.Errorf("parse project list: %w", err)
+		if !complete {
+			return fmt.Errorf("AWX project update %d is not complete", projectSync.ID)
 		}
-		if len(resp.Results) == 0 {
-			return fmt.Errorf("no AWX project named osac-aap found")
-		}
-		status := resp.Results[0].Status
-		if status == "successful" {
-			return nil
-		}
-		if status == "failed" || status == "error" ||
-			status == "canceled" {
-			projID := resp.Results[0].ID
-
-			// Fetch update metadata for diagnostics.
-			diagOut, _ := runAWXGet(awxToken,
-				fmt.Sprintf(
-					"%s/project_updates/"+
-						"?project=%d&order_by=-id"+
-						"&page_size=1",
-					awxAPI, projID),
-				operatorNamespace)
-			_, _ = fmt.Fprintf(GinkgoWriter,
-				"AWX project update diag: %s\n",
-				diagOut)
-
-			// Fetch the actual stdout from the failed
-			// project update (once) — the Git/SCM error
-			// message that explains the failure.
-			if !stdoutFetched {
-				stdoutFetched = true
-				dumpFailedProjectUpdateStdout(
-					awxAPI, awxToken, projID)
-			}
-
-			if !resyncAttempted {
-				resyncAttempted = true
-				_, _ = runAWXPost(awxToken,
-					fmt.Sprintf(
-						"%s/projects/%d/update/",
-						awxAPI, projID),
-					"", operatorNamespace)
-				return fmt.Errorf(
-					"AWX project status is %q; "+
-						"triggered re-sync",
-					status)
-			}
-		}
-		return fmt.Errorf(
-			"AWX project status is %q "+
-				"(waiting for successful)",
-			status)
+		return nil
 	}, 5*time.Minute, 10*time.Second).Should(Succeed(),
-		"AWX project must sync successfully before templates can be created")
+		"triggered AWX project update must sync the intended revision before templates can be created")
 
 	// Ensure compute-instance job templates exist. The devstack
 	// configure-awx.sh hook creates them, but template creation fails
@@ -1843,7 +1759,10 @@ func dumpFailedProjectUpdateStdout(
 
 	updateID := updates.Results[0].ID
 	updateStatus := updates.Results[0].Status
+	dumpProjectUpdateStdout(awxAPI, awxToken, updateID, updateStatus)
+}
 
+func dumpProjectUpdateStdout(awxAPI, awxToken string, updateID int, updateStatus string) {
 	// Fetch the stdout (the actual Git error output).
 	stdoutOut, err := runAWXGet(awxToken,
 		fmt.Sprintf(

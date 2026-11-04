@@ -3060,7 +3060,11 @@ jobs:
 
     - name: Delete every tag this run created
       run: |
-        set -euo pipefail
+        set -uo pipefail
+        # Deliberately no -e: delete_tag_if_ours below handles every real
+        # failure itself (records it in FAILED, keeps going) so one tag's
+        # problem never aborts the attempt on the rest -- see its own
+        # comment for why a plain `set -e` would be wrong here.
 
         # Same mapping tag's own "Create chart release tags" step uses --
         # kept in step with it if the real component/chart list ever changes.
@@ -3075,20 +3079,43 @@ jobs:
         )
 
         COMMIT_SHA=$(git rev-parse HEAD)
+        FAILED=0
 
+        # Distinguishes "this tag was never created" (expected -- e.g. a
+        # component components-to-tag doesn't include) from a real lookup
+        # failure (auth, network, rate limit, ...): both make `git fetch`
+        # exit the same non-zero code, but only the former's stderr says
+        # "couldn't find remote ref" -- confirmed against real git output
+        # for both cases before relying on it. A real failure here is
+        # recorded (FAILED=1) and reported, never silently treated as
+        # "nothing to roll back" -- that would be worse than doing
+        # nothing, since it would look like a clean rollback happened when
+        # the tag is actually still there.
         delete_tag_if_ours() {
-          local TAG="$1"
-          if ! git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
-            echo "Tag ${TAG} doesn't exist -- nothing to roll back"
+          local TAG="$1" fetch_err push_err EXISTING_SHA
+          if ! fetch_err=$(git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>&1); then
+            if [[ "${fetch_err}" == *"couldn't find remote ref"* ]]; then
+              echo "Tag ${TAG} doesn't exist -- nothing to roll back"
+            else
+              echo "::error::Failed to look up tag ${TAG}: ${fetch_err}" >&2
+              FAILED=1
+            fi
             return 0
           fi
-          local EXISTING_SHA
-          EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
+          if ! EXISTING_SHA=$(git rev-parse "${TAG}^{commit}" 2>&1); then
+            echo "::error::Fetched tag ${TAG} but failed to resolve it to a commit: ${EXISTING_SHA}" >&2
+            FAILED=1
+            return 0
+          fi
           if [[ "${EXISTING_SHA}" != "${COMMIT_SHA}" ]]; then
             echo "::warning::Tag ${TAG} exists but points at ${EXISTING_SHA}, not this run's ${COMMIT_SHA} -- leaving it alone, not ours to delete"
             return 0
           fi
-          git push origin --delete "refs/tags/${TAG}"
+          if ! push_err=$(git push origin --delete "refs/tags/${TAG}" 2>&1); then
+            echo "::error::Failed to delete tag ${TAG}: ${push_err}" >&2
+            FAILED=1
+            return 0
+          fi
           echo "Rolled back: ${TAG}"
         }
 
@@ -3104,6 +3131,11 @@ jobs:
             delete_tag_if_ours "${CHART_COMPONENT}-v${COMPONENT_VERSION}"
           done
         done
+
+        if [[ "${FAILED}" == "1" ]]; then
+          echo "::error::One or more tags failed to roll back -- see the errors above, clean up manually" >&2
+          exit 1
+        fi
 
   # -------------------------------------------------------------------
   # Stamp charts with their real, now-confirmed-released images, then

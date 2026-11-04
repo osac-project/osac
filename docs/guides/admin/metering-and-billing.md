@@ -11,11 +11,16 @@ Kafka settings metering needs, see the
 
 ## What metering publishes
 
-By default, metering sends one usage event for each billable meter every 60 seconds. A meter
-is what metering measures, such as a running VM's seconds or a volume's
-provisioned capacity. Metering covers six resource types with seven meters. Each
-event covers one interval and carries one signed quantity: positive for usage
-that happened, negative for a correction that takes usage back.
+Metering runs a round every 60 seconds by default. In each round it sends one
+usage event for each billable resource and meter, with the quantity since the
+previous event. A meter is what metering measures, such as a running VM's
+seconds or a volume's provisioned capacity. Metering covers six resource types
+with seven meters. A running VM sends one `compute` event; a bare-metal host can
+send `allocation` and `consumption`. A resource outside a billable state sends
+nothing.
+
+Each event covers one interval and carries one signed quantity: positive for
+usage that happened, negative for a correction that takes usage back.
 
 Events go to the tenant's topic. A topic is a named, append-only log in Kafka.
 The topic is `osac.metering.heartbeat.<tenant>`. Each event is a CloudEvent, a
@@ -36,8 +41,10 @@ metering's own components read them.
 ## Grant a reader
 
 A reader is an outside system with its own Kafka credentials and read-only
-access to every billable tenant's heartbeat events. One reader covers every
-tenant. Add its name to the `metering.readers` list in the values file for the `osac` release, the installer values:
+access to every billable tenant's heartbeat events. Each entry in
+`metering.readers` is one reader, and one reader covers every billable tenant. A
+second billing system is a second entry. Add its name to the list in the values
+file for the `osac` release, the installer values:
 
 ```yaml
 metering:
@@ -49,9 +56,9 @@ The entry has one field, `name`. The grant covers the whole topic prefix, so a
 new tenant needs no chart change. Apply the values with the installer; see the
 [Helm deployment guide](../installation/helm-deployment-guide.md).
 
-The chart, the Helm package that installs OSAC, creates one Strimzi `KafkaUser`.
-Strimzi runs Kafka, and a `KafkaUser` is one Kafka account with its own
-credentials. It gets this access:
+The chart, the Helm package that installs OSAC, creates one Strimzi `KafkaUser`
+for each entry. Strimzi runs Kafka, and a `KafkaUser` is one Kafka account with
+its own credentials. Each user gets this access:
 
 | Access | Scope |
 |---|---|
@@ -59,10 +66,10 @@ credentials. It gets this access:
 | Read | Consumer group named after the reader (`billing-reader` in the example) |
 | Denied | `osac.metering.heartbeat.system` and `osac.metering.heartbeat.shared` |
 
-A consumer group is a named bookmark in a topic. Kafka records how far the
-reader has read at that bookmark, and calls the position the group's offset. One
-grant gives one credential and one group, named after the reader. The credential
-is read-only.
+A consumer group stores how far a reader has read for each topic partition.
+Kafka calls that position the group's offset. Each heartbeat topic has one
+partition, so the group stores one position per tenant. One grant gives one
+credential and one group, named after the reader. The credential is read-only.
 
 The reader finds tenants by listing topics with the prefix, or by subscribing to
 the regular expression `^osac\.metering\.heartbeat\..*`. A subscriber skips the
@@ -96,9 +103,11 @@ tenant at once.
 
 One credential reads every billable tenant's heartbeat events, so a leaked
 credential exposes every tenant's usage. The platform tenants `system` and
-`shared` and the shared inference topic are outside the grant.
+`shared` and the shared MaaS inference topic `osac.metering.inference` are
+outside the grant.
 
-To cut off one tenant, stop the reader or offboard the tenant after its final invoice.
+Offboarding a tenant after its final invoice deletes its topics and the usage
+records retained in them. Stopping the reader cuts off every tenant.
 
 Keep the password in the reader's own secret store. Restrict the network path to
 the broker. To rotate the password, revoke the reader and grant it again. Audit
@@ -111,26 +120,32 @@ Enable `kafka.exporter.enabled` in the `osac-infra` release. The setting enables
 Strimzi's Kafka Exporter, a PodMonitor that tells Prometheus where to scrape it,
 and the `MeteringConsumerLag` alert.
 
-The alert fires when a consumer group reading a heartbeat topic stays more than
-`kafka.exporter.lagThreshold` records behind for 15 minutes. A consumer that is
-catching up stays quiet: the alert also checks that lag has not fallen in that
-time. The series names the group and the topic, so growing lag on one topic
-shows which tenant is behind.
+The rule checks two things: lag above `kafka.exporter.lagThreshold` (default 15
+records) and a 15-minute change that has not fallen. That condition must hold
+for another 15 minutes, so a stalled consumer shows up in about half an hour. A
+consumer that is catching up stays quiet, even while it is far behind. The
+series names the group and the topic, so growing lag on one topic shows which
+tenant is behind.
 
 The alert covers the external readers and the metering adapters, the OSAC
-programs that deliver events to billing systems. A consumer that has never
-consumed has no group and no lag series. Check that the group exists after the
-first run. The PodMonitor and the alert need the Prometheus operator CRDs.
+programs that deliver events to billing systems. It covers heartbeat topics
+only; `osac.metering.inference` is outside it. A consumer that never connected
+has no lag series, so this alert cannot detect it. Check that the group exists
+after the first run. The PodMonitor and the alert need the Prometheus operator
+CRDs.
 
 ## Read the events
 
-Sum every usage event that shares one key: tenant, resource, meter, component,
-and billing dimensions. A correction is one of those events with a negative
-quantity, so the sum is the billable total.
+Sum every usage event that shares one key: `tenant_id`, `resource_type`,
+`resource_id`, meter, component, and billing dimensions. Resource is the type
+and id together; dropping either merges different objects. The component is the
+billable line the meter feeds, and it stays in the key even when it equals the
+meter name.
 
-Match a correction to the usage it corrects by the same key. A correction is
-built in a later round, so it has its own id. The quantity, id, and interval can
-differ from the event it corrects.
+A correction is one of those events with a negative quantity, so the sum is the
+billable total. Match a correction to the usage it corrects by the same key. A
+correction is built in a later round, so it has its own id. The quantity, id,
+and interval can differ from the event it corrects.
 
 | Property | What it means for a reader |
 |---|---|
@@ -142,15 +157,16 @@ differ from the event it corrects.
 | Compaction | Kafka keeps only the latest record for each key. Off; metering refuses a compacted topic |
 | Retries and failures | The reader retries and handles failures |
 
-Retention also sets metering's recovery window. With indefinite retention, a new
-reader that starts at the beginning sees the tenant's whole history. A database
-restore can re-read the same records. A finite retention bounds how far back a
-restore can go.
+Retention also sets metering's recovery window. A database restore can re-read
+the records Kafka still holds. A finite retention bounds how far back a restore
+can go.
 
 Each event states its schema version, the version of the field layout it uses. A
 published version never changes. A new field becomes a new version with its own
 effective date. The reference lists every version. When a reader meets an
-unknown CloudEvent type, it should alert and keep the event.
+unknown CloudEvent type, it should alert and keep the event in the topic. The
+example stops with an error and leaves the event uncommitted, so the next run
+reads it again.
 
 ## Billing integration
 
@@ -160,10 +176,14 @@ billing system.
 
 Two paths connect them:
 
-- Use the M360 adapter when your billing system is M360.
-  [OSAC-3784](https://redhat.atlassian.net/browse/OSAC-3784) tracks the billing
-  work: the adapter path, pricing plans, cost models, and draft invoices. The
-  metering chart ships the M360 adapter.
+- Use the M360 adapter when your billing system is M360. Set
+  `metering.m360Adapter.enabled` to `true` and configure its API URL and key
+  Secret; the chart ships the adapter and keeps it off until you enable it. It
+  reads the heartbeat topics and the shared MaaS inference topic
+  `osac.metering.inference`, so it bills both. A reader built from
+  `metering.readers` covers heartbeat topics only.
+  [OSAC-3784](https://redhat.atlassian.net/browse/OSAC-3784) tracks the rest of
+  the billing work: pricing plans, cost models, and draft invoices.
 - Build your own reader when you need another billing system. Start from the
   worked example below.
 
@@ -171,12 +191,14 @@ Two paths connect them:
 
 A tenant can carry its account id from your billing system. Set it on the tenant
 as `spec.external_billing_id` through the Fulfillment API, OSAC's management
-API. The field takes at most 256 characters. Only cloud provider admins read it.
+API. The field takes at most 256 characters. The Fulfillment API shows it to
+cloud provider admins; tenant users do not see it.
 
 Metering copies the current value onto each new usage event as
-`external_billing_account_id`. The field is absent when the tenant has no id.
-Treat the value as a routing label, a value the billing system uses to route the charge. Events already published keep
-the value they carried.
+`external_billing_account_id`. Any reader granted the heartbeat topics can read
+the copied value. The field is absent when the tenant has no id. Treat the value
+as a routing label, a value the billing system uses to route the charge. Events
+already published keep the value they carried.
 
 ## Worked example
 
@@ -191,7 +213,14 @@ To run it:
 1. Add `billing-reader` to `metering.readers` and apply the installer values.
 2. Copy the `ca-bundle` ConfigMap into the Kafka namespace, build the example
    image, and apply its Job there.
-3. Read the Job log. It prints the totals the cluster has published.
+3. Read the Job log. The log is a delta, not a lifetime total. A first run with
+   no committed offset prints all retained history; later runs print only the
+   records after the committed offset. Do not add logs together or invoice one
+   log as a lifetime total.
+
+Any principal with `pods/log` access in the Kafka namespace can read the log.
+Restrict that access, or send the totals to a controlled billing destination in
+a production reader.
 
 The example's unit tests use a fixture that totals 110 seconds of `compute` for
 `vm-7`.

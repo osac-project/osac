@@ -8,6 +8,11 @@
 global:
   # Required stable identity for this OSAC/fulfillment-service deployment.
   osacDeploymentId: ""
+  # Prefix fulfillment prepends to a tenant name to form that tenant's event
+  # topic (osac.events.acme by default). Metering discovers tenants by this
+  # prefix, and the Kafka ACLs for event topics use it too. Include the
+  # trailing dot. Empty leaves every side on osac.events.
+  eventTopicPrefix: "osac.events."
   # [REQUIRED on OpenShift, via --set global.clusterDomain=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')]
   # Backs the tpl-templated defaults below (service.auth.issuerUrl,
   # service.idp.url, service.vault.keycloakIssuerUrl) so they automatically

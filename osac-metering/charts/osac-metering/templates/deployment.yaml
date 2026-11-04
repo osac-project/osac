@@ -75,6 +75,8 @@ spec:
               value: {{ .Values.topics.retentionMs | default "-1" | quote }}
             - name: KAFKA_BROKERS
               value: {{ include "osac-metering.kafkaBrokers" . | quote }}
+            - name: KAFKA_EVENT_TOPIC_PREFIX
+              value: {{ .Values.global.eventTopicPrefix | default "osac.events." | quote }}
             - name: KAFKA_TLS_CA_CERT
               value: /etc/ca-bundle/bundle.pem
             - name: KAFKA_SASL_USERNAME

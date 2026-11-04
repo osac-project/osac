@@ -96,6 +96,10 @@ type Round struct {
 	// catchUpBatch bounds one catch-up pass; tests shrink it.
 	catchUpBatch int
 
+	// eventPrefix is fulfillment's event-topic prefix. The round reads that topic's end
+	// to decide whether the fold has caught up.
+	eventPrefix string
+
 	// crashAfterGroups, when nonzero, stops catch-up with ErrCrashed after that many round
 	// groups have committed, as a pod kill would. For tests only.
 	crashAfterGroups int
@@ -103,7 +107,8 @@ type Round struct {
 
 // New creates a round runner. The client reads topic watermarks; the consumer reads the
 // heartbeat topic during catch-up. The rulesGate's read side brackets every tick; the
-// service's rules check holds the write side.
+// service's rules check holds the write side. eventPrefix is fulfillment's event-topic
+// prefix; empty uses the default.
 func New(
 	store *database.Store,
 	calculator Calculator,
@@ -111,10 +116,12 @@ func New(
 	consumer sarama.Consumer,
 	logger logr.Logger,
 	rulesGate *sync.RWMutex,
+	eventPrefix string,
 ) (*Round, error) {
 	return &Round{
 		store: store, calculator: calculator, client: client, consumer: consumer, logger: logger,
 		rulesGate: rulesGate, eventTarget: map[string]int64{}, catchUpBatch: CatchUpBatch,
+		eventPrefix: topics.ResolvePrefix(eventPrefix),
 	}, nil
 }
 
@@ -258,7 +265,7 @@ func (r *Round) Once(ctx context.Context, tenant string, roundTime time.Time) er
 // and the tenant would never bill. Once the fold reaches the target the round proceeds, even
 // though newer events exist; the next round captures a fresh target.
 func (r *Round) eventsFolded(ctx context.Context, tenant string, offset int64) (bool, error) {
-	high, err := r.client.GetOffset(topics.Events(tenant), 0, sarama.OffsetNewest)
+	high, err := r.client.GetOffset(r.eventPrefix+tenant, 0, sarama.OffsetNewest)
 	if err != nil {
 		return false, fmt.Errorf("reading the event topic end: %w", err)
 	}

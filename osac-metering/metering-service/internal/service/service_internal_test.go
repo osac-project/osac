@@ -26,6 +26,7 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/go-logr/logr"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/heartbeat"
@@ -1014,5 +1015,68 @@ func TestCheckRulesRetriesListingFailures(t *testing.T) {
 	}
 	if got := len(svc.ruleset.Revisions()); got != 1 {
 		t.Fatalf("the calculator serves %d revisions after a failed listing, want 1", got)
+	}
+}
+
+// TestCustomPrefixDiscoversAndFolds checks that a configured event-topic prefix selects
+// the topics fulfillment published under that prefix, and the fold reads those topics.
+// A topic that still uses the default prefix is not a tenant.
+func TestCustomPrefixDiscoversAndFolds(t *testing.T) {
+	const prefix = "custom.events."
+	served := strings.ToLower(t.Name()) + "served"
+	ignored := strings.ToLower(t.Name()) + "ignored"
+	ctx := context.Background()
+
+	producePrefixedEvent(t, prefix+served, served)
+	testenv.ProduceEvents(t, ignored, []*privatev1.Event{
+		testenv.VMEvent("seed", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			time.Now().UTC(), time.Now().UTC(), "seed", "RUNNING",
+			time.Now().UTC(), "small", time.Now().UTC()),
+	})
+
+	cfg := kafka.ConnectionConfig{Brokers: testenv.Broker(t)}
+	found, err := kafka.ListEventTenants(ctx, cfg, prefix)
+	if err != nil {
+		t.Fatalf("listing event tenants: %v", err)
+	}
+	if len(found) != 1 || found[0] != served {
+		t.Fatalf("discovery with prefix %q = %v, want [%s]", prefix, found, served)
+	}
+
+	s := newTestService(t)
+	s.cfg.EventTopicPrefix = prefix
+	s.syncTenants(ctx, found)
+	waitUntil(t, func() bool {
+		progress, err := s.cfg.Store.GetTenantProgress(ctx, served)
+		return err == nil && progress.EventOffset >= 1
+	}, "the fold must consume "+prefix+served)
+
+	s.lock.Lock()
+	_, ignoredRunning := s.tenants[ignored]
+	s.lock.Unlock()
+	if ignoredRunning {
+		t.Fatalf("tenant %s uses the default prefix and must not be served", ignored)
+	}
+}
+
+// producePrefixedEvent writes one event to topic, which is prefix plus tenant.
+func producePrefixedEvent(t *testing.T, topic, tenant string) {
+	t.Helper()
+	if err := testenv.Kafka(t).CreateTopic(topic); err != nil {
+		t.Fatalf("creating topic %s: %v", topic, err)
+	}
+	event := testenv.VMEvent("seed", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+		time.Now().UTC(), time.Now().UTC(), "seed", "RUNNING",
+		time.Now().UTC(), "small", time.Now().UTC())
+	testenv.StampTenant(event, tenant)
+	value, err := proto.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshaling event: %v", err)
+	}
+	_, _, err = testenv.NewProducer(t).SendMessage(&sarama.ProducerMessage{
+		Topic: topic, Key: sarama.StringEncoder(event.GetId()), Value: sarama.ByteEncoder(value),
+	})
+	if err != nil {
+		t.Fatalf("producing event to %s: %v", topic, err)
 	}
 }

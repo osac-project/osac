@@ -1,4 +1,5 @@
 {{- if .Values.lvms.enabled }}
+{{- $optionalPaths := required "lvms.deviceSelector.optionalPaths must be set when LVMS is enabled" .Values.lvms.deviceSelector.optionalPaths }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -27,7 +28,7 @@ data:
                       operator: Exists
             deviceSelector:
               optionalPaths:
-                - /dev/sample-osac-disk
+{{ toYaml $optionalPaths | indent 16 }}
             thinPoolConfig:
               name: thin-pool-1
               sizePercent: 90

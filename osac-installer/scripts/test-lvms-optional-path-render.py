@@ -15,7 +15,8 @@ INSTALLER = pathlib.Path(__file__).resolve().parents[1]
 INFRA_CHART = INSTALLER / "charts/osac-infra"
 ENABLED_VALUES = INSTALLER / "values/vmaas-ci/infra.yaml"
 LVMS_CONFIG = ("ConfigMap", "osac-infra-lvms-config")
-EXPECTED_DEVICE_PATH = "/dev/sample-osac-disk"
+DEFAULT_DEVICE_PATH = "/dev/sample-osac-disk"
+CI_DEVICE_PATH = "/dev/sdb"
 WORKER_LABEL = "node-role.kubernetes.io/worker"
 
 
@@ -57,21 +58,25 @@ def main() -> None:
             for doc in disabled
         ), "LVMS configuration must remain disabled by default"
 
-        enabled = render(chart, "--values", str(ENABLED_VALUES))
-        config_map = find_resource(enabled, *LVMS_CONFIG)
-        lvm_cluster = yaml.safe_load(config_map["data"]["config.yaml"])
-        device_classes = lvm_cluster["spec"]["storage"]["deviceClasses"]
-        assert len(device_classes) == 1 and device_classes[0]["name"] == "vg1"
+        for values_args, expected_path in (
+            (("--set", "lvms.enabled=true"), DEFAULT_DEVICE_PATH),
+            (("--values", str(ENABLED_VALUES)), CI_DEVICE_PATH),
+        ):
+            enabled = render(chart, *values_args)
+            config_map = find_resource(enabled, *LVMS_CONFIG)
+            lvm_cluster = yaml.safe_load(config_map["data"]["config.yaml"])
+            device_classes = lvm_cluster["spec"]["storage"]["deviceClasses"]
+            assert len(device_classes) == 1 and device_classes[0]["name"] == "vg1"
 
-        device_class = device_classes[0]
-        assert device_class["nodeSelector"] == {
-            "nodeSelectorTerms": [
-                {"matchExpressions": [{"key": WORKER_LABEL, "operator": "Exists"}]}
-            ]
-        }
-        assert device_class["deviceSelector"] == {
-            "optionalPaths": [EXPECTED_DEVICE_PATH]
-        }, "LVMS must use only the explicit optional path, not dynamic discovery"
+            device_class = device_classes[0]
+            assert device_class["nodeSelector"] == {
+                "nodeSelectorTerms": [
+                    {"matchExpressions": [{"key": WORKER_LABEL, "operator": "Exists"}]}
+                ]
+            }
+            assert device_class["deviceSelector"] == {
+                "optionalPaths": [expected_path]
+            }, f"LVMS must use only the explicit optional path {expected_path}"
     print("LVMS optional-path render checks passed.")
 
 

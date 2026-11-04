@@ -1888,7 +1888,7 @@
         },
         "prometheusRule": {
           "type": "object",
-          "description": "PrometheusRule with alert rules over the metering metrics: stalled rounds, round failures, outbox backlog, skipped events, dead-letter depth, and reader lag",
+          "description": "PrometheusRule with alert rules over the metering metrics: stalled rounds, round failures, outbox backlog, skipped events, and dead-letter depth",
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -1899,12 +1899,6 @@
               "type": "object",
               "description": "Extra labels for Prometheus instances that select rules by label",
               "additionalProperties": { "type": "string" }
-            },
-            "readerLagThreshold": {
-              "type": "integer",
-              "description": "Records a reader may fall behind before MeteringReaderLag fires. A small tenant grows lag by about one record per minute, so the default catches a stalled single-VM tenant in about 30 minutes including the alert's 15-minute for",
-              "minimum": 1,
-              "default": 15
             }
           },
           "additionalProperties": false

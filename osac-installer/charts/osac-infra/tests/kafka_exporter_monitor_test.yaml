@@ -8,6 +8,7 @@ tests:
   - it: scrapes the exporter on its Prometheus port
     set:
       kafka.enabled: true
+      kafka.exporter.enabled: true
     asserts:
       - hasDocuments:
           count: 1
@@ -32,6 +33,7 @@ tests:
   - it: merges configured PodMonitor labels
     set:
       kafka.enabled: true
+      kafka.exporter.enabled: true
       kafka.exporter.podMonitor.labels:
         release: kube-prometheus-stack
         team: metering
@@ -46,6 +48,14 @@ tests:
   - it: renders no PodMonitor when Kafka is disabled
     set:
       kafka.enabled: false
+      kafka.exporter.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no PodMonitor when lag monitoring is off
+    set:
+      kafka.enabled: true
     asserts:
       - hasDocuments:
           count: 0

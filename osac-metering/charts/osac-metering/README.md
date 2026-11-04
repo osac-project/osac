@@ -73,21 +73,24 @@ address to the reader's owner out of band; the chart writes none of them into
 the repository. There is no per-tenant Secret and no per-tenant revocation: to
 stop one tenant, stop the reader or delete that tenant's heartbeat topics.
 
-To see how far behind a reader is, enable `prometheusRule.enabled`: the
-`MeteringReaderLag` alert fires when a reader group is more than
-`prometheusRule.readerLagThreshold` records behind for 15 minutes (default 15).
+To see how far behind a consumer is, enable `kafka.exporter.enabled` in the
+`osac-infra` release. That value enables Strimzi's Kafka Exporter, its
+PodMonitor, and the `MeteringConsumerLag` alert. The alert fires when any
+consumer group reading a heartbeat topic is more than
+`kafka.exporter.lagThreshold` records behind for 15 minutes (default 15) and
+its lag has not fallen in that time. It covers the external readers and the
+metering adapters, because all of them read the heartbeat topics.
+
 The exporter reports one lag series per heartbeat topic under the group, so the
-alert names the topic that is behind. A metered resource sends about one
-heartbeat per minute, so a single-VM tenant grows lag by about one record per
-minute: the default catches a stalled reader in about half an hour. Busy
-tenants cross it sooner. Raise the threshold if a reader may fall further
-behind, or lower it for a small tenant. A reader that has never consumed has no
-consumer group and no lag series, so this alert cannot fire for it; check that
-the group exists before relying on the alert. Strimzi's Kafka Exporter, enabled
-on the installer's Kafka resource and scraped by a PodMonitor, supplies
-`kafka_consumergroup_lag`. The chart renders one rule per reader in the Kafka
-namespace, where the exporter series live, because user workload monitoring
-evaluates a rule against its own namespace.
+alert names the group and the topic that are behind. A metered resource sends
+about one heartbeat per minute, so a single-VM tenant grows lag by about one
+record per minute: the default catches a stalled consumer in about half an
+hour. Busy tenants cross it sooner. Raise the threshold if a consumer may fall
+further behind, or lower it for a small tenant. A consumer that has never
+consumed has no consumer group and no lag series, so this alert cannot fire for
+it; check that the group exists before relying on the alert. The rule lives in
+the Kafka namespace, where the exporter series live, because user workload
+monitoring evaluates a rule against its own namespace.
 
 ## Rule revisions
 

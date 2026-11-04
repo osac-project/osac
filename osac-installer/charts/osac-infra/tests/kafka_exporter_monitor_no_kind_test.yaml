@@ -8,6 +8,7 @@ tests:
   - it: renders nothing when the PodMonitor kind is absent
     set:
       kafka.enabled: true
+      kafka.exporter.enabled: true
     asserts:
       - hasDocuments:
           count: 0

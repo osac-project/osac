@@ -73,7 +73,8 @@ func IsConflict(err error) bool {
 }
 
 // isOnlyConflict reports whether err contains an Aborted status and every leaf error of the tree is an Aborted
-// status, so that there is no independent failure hidden behind the conflict.
+// status, so that there is no independent failure hidden behind the conflict. Only leaves are classified: a wrapper
+// that reports its own non-Aborted status but wraps an Aborted error does not count as an independent failure.
 func isOnlyConflict(err error) bool {
 	found, other := scanConflicts(err)
 	return found && !other

@@ -9,7 +9,8 @@ tenant_name: 'tenant1'
 
 catalog:
   name: 'catalog-item-e2e'
-  template: 'osac.templates.ocp_virt_vm'
+  # The UI displays the template metadata.name, not its resource ID.
+  template: 'ocp-virt-vm'
   description: 'Catalog item created through the UI for E2E testing.'
   type: 'Virtual Machine'
   status: 'Live'

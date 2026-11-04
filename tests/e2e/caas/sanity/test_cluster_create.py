@@ -30,7 +30,9 @@ from tests.e2e.core.helpers import (
     wait_for_cluster_order_cr,
     wait_for_cluster_progressing,
     wait_for_cluster_ready,
+    wait_for_guest_cluster_health,
     wait_for_hosted_cluster_kubeconfig,
+    wait_for_hosted_cluster_reference,
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
@@ -265,19 +267,8 @@ def _assert_cluster_version_propagated(
     co_release_image = cluster_order_spec.get("releaseImage", "")
     assert co_release_image, "ClusterOrder should have a resolved releaseImage"
 
-    hosted_cluster_name, hosted_cluster_ns = poll_until(
-        fn=lambda: (
-            k8s.get_cluster_order_hosted_cluster_name(name=co_name),
-            k8s.get_cluster_order_namespace(name=co_name),
-        ),
-        until=lambda reference: all(reference),
-        retries=30,
-        delay=5,
-        description=f"{co_name} HostedCluster reference",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
+    hosted_cluster_name, hosted_cluster_ns = wait_for_hosted_cluster_reference(k8s=k8s, co_name=co_name)
+
     hosted_cluster_image = run(
         *k8s._base(),
         "get",
@@ -355,6 +346,7 @@ def _assert_guest_workers_ready(
             # nodepool_prefix + '-' + node_set with prefix
             # "nodepool-{hosted_cluster_name}" -- not the NodeSet label.
             node_pool_id=f"nodepool-{hosted_cluster_name}-{worker_node_set}",
+            hosted_cluster_namespace=hosted_cluster_ns,
         )
     assert node_pool is not None, f"No NodePool found for NodeSet {worker_node_set!r}"
     assert node_pool.get("metadata", {}).get("name") == f"nodepool-{hosted_cluster_name}-{worker_node_set}"
@@ -931,6 +923,9 @@ def assert_cluster_with_two_node_sets_available(
         expected_replicas=expected_replicas,
         instance_types=instance_types,
     )
+    # Both node sets' workers must be bound through CAP-Agent and healthy in the
+    # guest cluster, not just counted as ready Nodes by their NodePools.
+    wait_for_guest_cluster_health(k8s=k8s, co_name=co_name, expected_workers=sum(expected_replicas.values()))
 
     # The cluster was created without a project, so its heartbeats must carry
     # no project dimension: the engine emits only the facts a resource carries.

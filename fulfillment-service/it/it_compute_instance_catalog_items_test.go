@@ -1353,7 +1353,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			created, err := templates.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.ComputeInstanceTemplate_builder{
 					Id:       name,
-					Metadata: catalogItemFixtureMetadata(otherTenant, ""),
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: otherTenant}.Build(),
 					Title:    "Template in an explicitly selected tenant",
 				}.Build(),
 			}.Build())
@@ -1366,19 +1366,17 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				return err
 			}, nil)
 
-			client := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
-			item, err := client.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
-				Object: publicv1.ComputeInstanceCatalogItem_builder{
+			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(),
+				publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: catalogItemMetadata(usersGroup),
 					Template: publicv1.ComputeInstanceTemplateReference_builder{
 						Name: name, Tenant: otherTenant,
 					}.Build(),
 				}.Build(),
-			}.Build())
-			Expect(err).NotTo(HaveOccurred())
-			Expect(item.GetObject().GetTemplate().GetId()).To(Equal(templateID))
-			Expect(item.GetObject().GetTemplate().GetTenant()).To(Equal(otherTenant))
-			Expect(item.GetObject().GetTemplate().GetShared()).To(BeFalse())
+			)
+			Expect(item.GetTemplate().GetId()).To(Equal(templateID))
+			Expect(item.GetTemplate().GetTenant()).To(Equal(otherTenant))
+			Expect(item.GetTemplate().GetShared()).To(BeFalse())
 		})
 
 		It("resolves a Template by ID in an explicitly selected visible tenant", func(ctx context.Context) {
@@ -1387,7 +1385,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			created, err := templates.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.ComputeInstanceTemplate_builder{
 					Id:       name,
-					Metadata: catalogItemFixtureMetadata(otherTenant, ""),
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: otherTenant}.Build(),
 					Title:    "Template in an explicitly selected tenant",
 				}.Build(),
 			}.Build())
@@ -1400,19 +1398,17 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				return err
 			}, nil)
 
-			client := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
-			item, err := client.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
-				Object: publicv1.ComputeInstanceCatalogItem_builder{
+			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(),
+				publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: catalogItemMetadata(usersGroup),
 					Template: publicv1.ComputeInstanceTemplateReference_builder{
 						Id: templateID, Tenant: otherTenant,
 					}.Build(),
 				}.Build(),
-			}.Build())
-			Expect(err).NotTo(HaveOccurred())
-			Expect(item.GetObject().GetTemplate().GetId()).To(Equal(templateID))
-			Expect(item.GetObject().GetTemplate().GetTenant()).To(Equal(otherTenant))
-			Expect(item.GetObject().GetTemplate().GetShared()).To(BeFalse())
+			)
+			Expect(item.GetTemplate().GetId()).To(Equal(templateID))
+			Expect(item.GetTemplate().GetTenant()).To(Equal(otherTenant))
+			Expect(item.GetTemplate().GetShared()).To(BeFalse())
 		})
 
 		It("denies a caller a full reference to a tenant they cannot see", func(ctx context.Context) {

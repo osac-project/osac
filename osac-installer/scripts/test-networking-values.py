@@ -466,7 +466,11 @@ class ManifestsTest(unittest.TestCase):
         self.assertIs(registration["immutable"], True)
         self.assertEqual(
             registration["data"],
-            {"name": "agentless_net", "ansible_role": "osac.templates.agentless_net"},
+            {
+                "name": "agentless_net",
+                "ansible_role": "osac.templates.agentless_net",
+                "capabilities": "security_group_icmp",
+            },
         )
         registrations = [
             doc for doc in docs

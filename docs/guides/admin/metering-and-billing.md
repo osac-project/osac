@@ -6,8 +6,8 @@ system.
 OSAC measures tenant usage and publishes it to Kafka, the message log that
 carries the events. A tenant is one customer's isolated part of OSAC. Your
 billing system reads the events, applies prices, and issues invoices. For the
-Kafka settings metering needs, see the
-[Kafka configuration](../installation/kafka-configuration.md) guide.
+Kafka settings metering needs, see the [Kafka
+configuration](../installation/kafka-configuration.md) guide.
 
 ## What metering publishes
 
@@ -24,7 +24,7 @@ usage that happened, negative for a correction that takes usage back.
 
 Events go to the tenant's topic. A topic is a named, append-only log in Kafka.
 The topic is `osac.metering.heartbeat.<tenant>`. Each event is a CloudEvent, a
-standard wrapper with headers, a JSON body, and a unique `id`.
+standard wrapper with headers, a JSON body, and an `id` that a resend repeats.
 
 The contract reference lists every resource type, meter, unit, billable state,
 billing dimension, and event field. It also states the reading rule. A billing
@@ -52,9 +52,9 @@ metering:
     - name: billing-reader
 ```
 
-The entry has one field, `name`. The grant covers the whole topic prefix, so a
-new tenant needs no chart change. Apply the values with the installer; see the
-[Helm deployment guide](../installation/helm-deployment-guide.md).
+The grant covers the whole topic prefix, so a new tenant needs no chart change.
+Apply the values with the installer; see the [Helm deployment
+guide](../installation/helm-deployment-guide.md).
 
 The chart, the Helm package that installs OSAC, creates one Strimzi `KafkaUser`
 for each entry. Strimzi runs Kafka, and a `KafkaUser` is one Kafka account with
@@ -79,8 +79,8 @@ Reader names are unique lowercase DNS names of at most 253 characters. OSAC
 reserves the `osac-` and `osac.` prefixes, and the `fulfillment-service`
 KafkaUser name.
 
-For every chart value, see the
-[metering chart README](../../../osac-metering/charts/osac-metering/README.md).
+For every chart value, see the [metering chart
+README](../../../osac-metering/charts/osac-metering/README.md).
 
 Hand the reader three values separately: the broker's bootstrap address, the
 shared OSAC CA certificate, and its password. The bootstrap address is the host
@@ -106,12 +106,14 @@ credential exposes every tenant's usage. The platform tenants `system` and
 `shared` and the shared MaaS inference topic `osac.metering.inference` are
 outside the grant.
 
-Offboarding stops new usage, and the tenant's heartbeat topics and retained
+Offboarding stops new usage. Deleting its resources publishes a final correction
+after the delete, so read it before the final invoice. Its heartbeat topic and
 records stay readable. There is no per-tenant revoke. Stopping the reader cuts
 off every tenant.
 
 Keep the password in the reader's own secret store. Restrict the network path to
-the broker. To rotate the password, revoke the reader and grant it again. Audit
+the broker. To rotate the password, revoke the reader and grant it again. The
+consumer group and its offset stay, so the next run reads the increment. Audit
 who holds it.
 
 ### Watch the consumer's lag
@@ -132,8 +134,7 @@ The alert covers the external readers and the metering adapters, the OSAC
 programs that deliver events to billing systems. It covers heartbeat topics
 only; `osac.metering.inference` is outside it. A consumer that never connected
 has no lag series, so this alert cannot detect it. Check that the group exists
-after the first run. The PodMonitor and the alert need the Prometheus operator
-CRDs.
+after the first run.
 
 ## Read the events
 
@@ -181,9 +182,9 @@ Two paths connect them:
   `metering.m360Adapter.enabled` to `true` and configure its API URL and key
   Secret. It forwards the heartbeat topics and the shared MaaS inference topic
   `osac.metering.inference` to the M360 Usage API. A reader built from
-  `metering.readers` reads heartbeat topics only.
-  [OSAC-3784](https://redhat.atlassian.net/browse/OSAC-3784) tracks the rest of
-  the billing work: pricing plans, cost models, and draft invoices.
+  `metering.readers` reads heartbeat topics only. [OSAC-3784](https://redhat.atlassian.net/browse/OSAC-3784)
+  tracks the rest of the billing work: pricing plans, cost models, and draft
+  invoices.
 - Build your own reader when you need another billing system. Start from the
   worked example below.
 
@@ -217,10 +218,6 @@ To run it:
    history. Later runs print only records after the committed offset; the
    running total is the first log plus each later log. A run that errors before
    it commits leaves the offset unchanged, so the next run repeats the range.
-
-Any principal with `pods/log` access in the Kafka namespace can read the log.
-Restrict that access, or send the totals to a controlled billing destination in
-a production reader.
 
 The example's unit tests use a fixture that totals 110 seconds of `compute` for
 `vm-7`.

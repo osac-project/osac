@@ -748,7 +748,10 @@ ifeq ($(SUITE),operator)
 	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration
 	policy_file=$$(mktemp); trap 'rm -f "$$policy_file"' EXIT; \
 	  helm template osac charts/osac/ --namespace "$(NS)" --values charts/osac/ci/default-values.yaml \
-	    --set service.enabled=true --show-only templates/networking/admission-policy.yaml > "$$policy_file"; \
+	    --set service.enabled=true --set global.services.bmaas.enabled=true \
+	    --set global.networking.provisioningEnabled=true \
+	    --show-only templates/networking/admission-policy.yaml \
+	    --show-only templates/networking/bmf-networkattachment-policy.yaml > "$$policy_file"; \
 	  cd ../osac-operator && OSAC_IT_ADMISSION_POLICY="$$policy_file" \
 	    ginkgo run --timeout 10m -v \
 	      --focus='limits BMF NetworkAttachment patches to removing its finalizer after cleanup' \

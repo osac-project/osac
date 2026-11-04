@@ -1,0 +1,55 @@
+{{- if and .Values.global.services.bmaas.enabled .Values.global.networking.provisioningEnabled }}
+{{- $ns := .Release.Namespace }}
+{{- $bmfIdentity := printf "system:serviceaccount:%s:%s" $ns (include "osac.bmfServiceAccountName" .) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $ns }}-bmf-networkattachment-finalizer
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["osac.openshift.io"]
+      apiVersions: ["*"]
+      operations: ["UPDATE"]
+      resources: ["networkattachments"]
+  variables:
+  - name: bmfIdentity
+    expression: {{ printf "request.userInfo.username == %q" $bmfIdentity | quote }}
+  - name: bmfFinalizerRemoval
+    expression: >-
+      request.operation == "UPDATE" &&
+      oldObject != null &&
+      oldObject.metadata.deletionTimestamp != null &&
+      has(oldObject.metadata.finalizers) &&
+      oldObject.metadata.finalizers.size() == 1 &&
+      oldObject.metadata.finalizers[0] == "osac.openshift.io/baremetalinstance-networking" &&
+      (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
+      object.spec == oldObject.spec &&
+      (has(object.metadata.annotations) ? object.metadata.annotations : {}) ==
+      (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}) &&
+      (has(object.metadata.labels) ? object.metadata.labels : {}) ==
+      (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}) &&
+      (has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []) ==
+      (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])
+  validations:
+  - expression: "!variables.bmfIdentity || variables.bmfFinalizerRemoval"
+    message: "BMF may only remove its own finalizer after NetworkAttachment cleanup"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $ns }}-bmf-networkattachment-finalizer
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $ns }}-bmf-networkattachment-finalizer
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ $ns }}
+{{- end }}

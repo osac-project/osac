@@ -232,6 +232,11 @@ Install one OSAC release per cluster: cluster-scoped OSAC resources match every
 release's policy. `helm uninstall` removes the policy first;
 `scripts/teardown.sh` deletes it before deleting OSAC CRs.
 
+When BMaaS and provider networking are enabled, the chart also creates
+`<namespace>-bmf-networkattachment-finalizer` and its binding, including when
+the fulfillment service is disabled. It limits BMF's NetworkAttachment patch
+permission to removing its own networking finalizer after cleanup.
+
 ## CI profiles
 
 | Profile | Provider networking | `fabricManager` | `k8sManager` |

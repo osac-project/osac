@@ -371,7 +371,10 @@ class DefaultsTest(RenderFailureCase):
         self.assertEqual(step_input(render(config)), step_input(render()))
 
     def test_step_absent_without_fulfillment(self):
-        docs = render({"service": {"enabled": False}})
+        docs = render(
+            {"service": {"enabled": False}},
+            {"global": {"services": {"bmaas": {"enabled": False}}}},
+        )
         kinds = {(d["kind"], d["metadata"]["name"]) for d in docs}
         self.assertNotIn(("Job", "create-network-class"), kinds)
         self.assertNotIn(("ValidatingAdmissionPolicy", "osac-osac-managed-resources"), kinds)
@@ -505,6 +508,82 @@ class ManifestsTest(unittest.TestCase):
         ]
         self.assertIn('"system:serviceaccount:osac:custom-operator"', identities)
         self.assertIn('"system:serviceaccount:osac:custom-bmf"', identities)
+        bmf_identity = find(
+            docs, "ValidatingAdmissionPolicy", "osac-bmf-networkattachment-finalizer"
+        )["spec"]["variables"][0]["expression"]
+        self.assertIn('"system:serviceaccount:osac:custom-bmf"', bmf_identity)
+
+    def test_admission_policy_is_rendered_for_bmaas_only_networking(self):
+        docs = render(
+            {"service": {"enabled": False}},
+            {"global": {"services": {"bmaas": {"enabled": True}}}},
+            networking(provisioningEnabled=True),
+        )
+        policy = find(docs, "ValidatingAdmissionPolicy", "osac-bmf-networkattachment-finalizer")
+        binding = find(docs, "ValidatingAdmissionPolicyBinding", "osac-bmf-networkattachment-finalizer")
+        self.assertNotIn(
+            ("ValidatingAdmissionPolicy", "osac-osac-managed-resources"),
+            {(doc["kind"], doc["metadata"]["name"]) for doc in docs},
+        )
+        bmf_role = next(
+            doc
+            for doc in docs
+            if doc["kind"] == "Role"
+            and (doc.get("metadata", {}).get("labels") or {}).get("app.kubernetes.io/name") == "bmf"
+            and any(
+                "networkattachments" in rule.get("resources", []) and "patch" in rule.get("verbs", [])
+                for rule in doc.get("rules", [])
+            )
+        )
+        bmf_networking_rule = next(
+            rule
+            for rule in bmf_role["rules"]
+            if "networkattachments" in rule.get("resources", []) and "patch" in rule.get("verbs", [])
+        )
+        self.assertIn("networkattachments", bmf_networking_rule["resources"])
+        self.assertIn("patch", bmf_networking_rule["verbs"])
+        self.assertEqual(
+            policy["spec"]["matchConstraints"]["resourceRules"],
+            [
+                {
+                    "apiGroups": ["osac.openshift.io"],
+                    "apiVersions": ["*"],
+                    "operations": ["UPDATE"],
+                    "resources": ["networkattachments"],
+                }
+            ],
+        )
+        self.assertEqual(
+            policy["spec"]["validations"][0]["message"],
+            "BMF may only remove its own finalizer after NetworkAttachment cleanup",
+        )
+        self.assertEqual(binding["spec"]["policyName"], policy["metadata"]["name"])
+        self.assertEqual(binding["spec"]["validationActions"], ["Deny"])
+        self.assertEqual(
+            binding["spec"]["matchResources"]["namespaceSelector"]["matchLabels"],
+            {"kubernetes.io/metadata.name": "osac"},
+        )
+
+        docs = render(
+            {"service": {"enabled": False}},
+            {"global": {"services": {"bmaas": {"enabled": True}}}},
+            networking(provisioningEnabled=False),
+        )
+        kinds = {(doc["kind"], doc["metadata"]["name"]) for doc in docs}
+        self.assertNotIn(("ValidatingAdmissionPolicy", "osac-bmf-networkattachment-finalizer"), kinds)
+        self.assertNotIn(("ValidatingAdmissionPolicyBinding", "osac-bmf-networkattachment-finalizer"), kinds)
+        self.assertFalse(
+            any(
+                doc["kind"] == "Role"
+                and (doc.get("metadata", {}).get("labels") or {}).get("app.kubernetes.io/name") == "bmf"
+                and any(
+                    "networkattachments" in rule.get("resources", []) and "patch" in rule.get("verbs", [])
+                    for rule in doc.get("rules", [])
+                )
+                for doc in docs
+            ),
+            "BMF must not have NetworkAttachment patch permission when provisioning is disabled",
+        )
 
     def test_hub_access_can_manage_network_classes(self):
         docs = render({"hubAccess": {"enabled": True}})

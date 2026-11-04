@@ -407,6 +407,55 @@ def check_admission_policy(c: Checks, ns: str) -> None:
     selector = binding.get("matchResources", {}).get("namespaceSelector", {}).get("matchLabels", {})
     c.check(f"binding {name} selects namespace {ns}", selector == {"kubernetes.io/metadata.name": ns}, str(selector))
 
+    bmf_policy_name = f"{ns}-bmf-networkattachment-finalizer"
+    proc = run(["kubectl", "get", "validatingadmissionpolicy", bmf_policy_name, "-o", "json"], check=False)
+    if proc.returncode == 0:
+        bmf_spec = json.loads(proc.stdout).get("spec", {})
+        bmf_rules = bmf_spec.get("matchConstraints", {}).get("resourceRules", [])
+        c.check(
+            f"ValidatingAdmissionPolicy {bmf_policy_name} fails closed",
+            bmf_spec.get("failurePolicy") == "Fail",
+            str(bmf_spec.get("failurePolicy")),
+        )
+        c.check(
+            f"ValidatingAdmissionPolicy {bmf_policy_name} matches NetworkAttachment updates",
+            any(
+                "UPDATE" in rule.get("operations", []) and "networkattachments" in rule.get("resources", [])
+                for rule in bmf_rules
+            ),
+            f"rules={short(bmf_rules)}",
+        )
+        c.check(
+            f"ValidatingAdmissionPolicy {bmf_policy_name} constrains BMF finalizer patches",
+            any(
+                validation.get("message") == "BMF may only remove its own finalizer after NetworkAttachment cleanup"
+                for validation in bmf_spec.get("validations", [])
+            ),
+            short(bmf_spec.get("validations", [])),
+        )
+        proc = run(
+            ["kubectl", "get", "validatingadmissionpolicybinding", bmf_policy_name, "-o", "json"], check=False
+        )
+        if c.check(
+            f"ValidatingAdmissionPolicyBinding {bmf_policy_name} exists",
+            proc.returncode == 0,
+            proc.stderr.strip(),
+        ):
+            bmf_binding = json.loads(proc.stdout).get("spec", {})
+            bmf_selector = bmf_binding.get("matchResources", {}).get("namespaceSelector", {}).get("matchLabels", {})
+            c.check(
+                f"binding {bmf_policy_name} uses policy {bmf_policy_name}",
+                bmf_binding.get("policyName") == bmf_policy_name,
+                str(bmf_binding.get("policyName")),
+            )
+            c.check(
+                f"binding {bmf_policy_name} selects namespace {ns}",
+                bmf_selector == {"kubernetes.io/metadata.name": ns},
+                str(bmf_selector),
+            )
+    else:
+        c.info(f"BMF NetworkAttachment finalizer policy {bmf_policy_name} is absent")
+
     user = f"it-networking-checks-{uuid.uuid4().hex[:6]}"
     role = f"{user}-writer"
     rbac = [

@@ -7,7 +7,8 @@ controllers (hub-access), the OSAC operator, BMF, and the AAP job pods
 allowed so cascades of an OSAC delete still work. Helm deletes the policy and
 binding first on uninstall (unknown kinds go first). One OSAC release per
 cluster: the binding matches the release namespace, but cluster-scoped OSAC
-resources are matched in every namespace.
+resources are matched in every namespace. BMF's NetworkAttachment finalizer
+updates are additionally constrained by the BMF-specific admission policy.
 */}}
 {{- $ns := .Release.Namespace }}
 {{- $bmfIdentity := printf "system:serviceaccount:%s:%s" $ns (include "osac.bmfServiceAccountName" .) }}
@@ -40,31 +41,9 @@ spec:
     expression: {{ printf "request.userInfo.username in %s" (toJson $allowed) | quote }}
   - name: networking
     expression: {{ printf "request.resource.resource in %s" (toJson $networking) | quote }}
-  - name: bmfIdentity
-    expression: {{ printf "request.userInfo.username == %q" $bmfIdentity | quote }}
-  - name: bmfFinalizerRemoval
-    expression: >-
-      request.operation == "UPDATE" &&
-      request.resource.resource == "networkattachments" &&
-      oldObject != null &&
-      oldObject.metadata.deletionTimestamp != null &&
-      has(oldObject.metadata.finalizers) &&
-      oldObject.metadata.finalizers.size() == 1 &&
-      oldObject.metadata.finalizers[0] == "osac.openshift.io/baremetalinstance-networking" &&
-      (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0) &&
-      object.spec == oldObject.spec &&
-      (has(object.metadata.annotations) ? object.metadata.annotations : {}) ==
-      (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}) &&
-      (has(object.metadata.labels) ? object.metadata.labels : {}) ==
-      (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}) &&
-      (has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []) ==
-      (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])
   validations:
   - expression: "variables.osacIdentity || !variables.networking"
     message: "OSAC manages this resource; change it through the fulfillment API"
-    reason: Forbidden
-  - expression: "!variables.bmfIdentity || request.resource.resource != 'networkattachments' || request.operation != 'UPDATE' || variables.bmfFinalizerRemoval"
-    message: "BMF may only remove its own finalizer after NetworkAttachment cleanup"
     reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1

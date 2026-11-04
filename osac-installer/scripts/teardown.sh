@@ -111,6 +111,8 @@ done
 echo "Removing the OSAC admission policy..."
 timeout 30 oc delete validatingadmissionpolicybinding "${INSTALLER_NAMESPACE}-osac-managed-resources" --ignore-not-found
 timeout 30 oc delete validatingadmissionpolicy "${INSTALLER_NAMESPACE}-osac-managed-resources" --ignore-not-found
+timeout 30 oc delete validatingadmissionpolicybinding "${INSTALLER_NAMESPACE}-bmf-networkattachment-finalizer" --ignore-not-found
+timeout 30 oc delete validatingadmissionpolicy "${INSTALLER_NAMESPACE}-bmf-networkattachment-finalizer" --ignore-not-found
 # Phase 1: Delete OSAC CRs while the operator is still running
 #
 # The operator must be alive to process finalizers on its CRs.

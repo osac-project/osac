@@ -62,7 +62,7 @@ GODEBUG ?= http2client=0
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
+ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images redeploy-nico-pilot test
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -323,6 +323,27 @@ kind-load-images: ## Load previously built dev-full images into Kind (PLATFORM=k
 	$(MAKE) -C ../osac-operator kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 	$(MAKE) -C ../osac-aap kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 	$(call kind-load-ui-image,$(KIND_UI_IMAGE))
+
+# This is a development-only shortcut for the existing Launchpad pilot VM.
+# It updates the Kind control plane; it never installs into the NICo hub.
+NICO_PILOT_GITHUB_REPO ?= vladikr/osac
+NICO_PILOT_BRANCH ?= no-issue/nico-bmaas-integration-audit
+NICO_PILOT_CONTAINER_TOOL ?= docker
+
+.PHONY: redeploy-nico-pilot
+redeploy-nico-pilot: ## Refresh NICo BMaaS AAP/BMF on the existing dev-full Kind cluster
+	@if [ "$(PLATFORM)/$(PROFILE)" != "kind/dev-full" ]; then \
+		echo "ERROR: redeploy-nico-pilot requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1; \
+	fi
+	@NS="$(NS)" KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" \
+		NICO_PILOT_GITHUB_REPO="$(NICO_PILOT_GITHUB_REPO)" \
+		NICO_PILOT_BRANCH="$(NICO_PILOT_BRANCH)" \
+		NICO_PILOT_CONTAINER_TOOL="$(NICO_PILOT_CONTAINER_TOOL)" \
+		bash scripts/dev-full/redeploy-nico-pilot.sh
+
+.PHONY: nico-pilot-redeploy-test
+nico-pilot-redeploy-test: ## Test the NICo pilot redeploy guards and command wiring
+	python3 scripts/dev-full/test-redeploy-nico-pilot.py
 ##@ Entity: Infra
 
 .PHONY: install-infra

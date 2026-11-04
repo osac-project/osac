@@ -16,17 +16,44 @@ path; it did not install an operating system or test tenant networking.
   Both routes were verified with the hub ingress CA. A `404` from the NICo
   REST root path confirms connectivity, not API authorization.
 - The VM has an `osac` checkout on the fork branch
-  `no-issue/nico-bmaas-integration-audit`. The AWX `osac-aap` project was
-  manually switched to that branch at revision
-  `301eba88a44ba006f28b317e1f8fddbbd11557fd`. The BMI create/delete
-  templates were manually set to prompt for credentials. The pilot values
-  overlay now expresses those settings for a fresh devstack install.
+  `no-issue/nico-bmaas-integration-audit`. The initial AWX `osac-aap` project
+  was manually switched to that branch at revision `301eba88a`. Later
+  redeployments must verify the actual AWX revision and execution-environment
+  image. The pilot values overlay configures the BMI credential prompts.
 
 The hub and the VM are different Kubernetes clusters. Set `KUBECONFIG` to the
 Kind kubeconfig before running any installer or `kubectl` command below. Do
 not install the pilot chart into the hub cluster.
 
 ## Hardware and NICo preflight
+
+**Current priority: DPU-backed FNN BMaaS.** The GB300 onboarding notes report
+BlueField-3 DPUs and their hosts reaching NICo `Ready`, with an FNN tenant VPC
+and VPC Prefix used to install hosted-cluster workers. The reported BMC, DPU
+management, and host overlay IPs are useful for diagnostics, but they are not
+NICo Machine IDs or evidence that either tray is now free. Do not copy those
+site-specific addresses or boot URLs into this repository. Confirm current
+Instance assignment through NICo before creating an OSAC BMI.
+
+For this pilot, configure the scoped AWX credential with
+`NICO_BMAAS_NETWORK_VIRTUALIZATION_TYPE=FNN`, an approved
+`NICO_BMAAS_VPC_ID` and `NICO_BMAAS_VPC_PREFIX_ID`, and no NICo Subnet ID or
+Flat CIDR. The bound OSAC Subnet must represent the same tenant IPv4 range as
+the NICo VPC Prefix; the seeded dev-full Subnet is not a verified match. The
+NICo role sends one physical interface referencing the VPC Prefix. Validate
+the actual Ready Instance GET response and installed OS connectivity on this
+site before treating BMI `Ready` as a completed BMaaS test.
+
+The onboarding example explicitly targets a `machineId`. The current OSAC
+module instead requires an Instance Type ID and lets NICo choose a Machine.
+Use an approved, isolated Instance Type allocation for the first test, or add
+and verify Machine targeting before creating an Instance. Obtain a standalone
+ARM64 OS/boot artifact for BMaaS; the InfraEnv iPXE script in the onboarding
+notes installs hosted-cluster workers. Keep the site/DPU onboarding and switch
+configuration under the NICo site owner's control.
+
+The Flat-network guidance below records an alternative zero-DPU path; it is
+not the current Launchpad pilot target.
 
 An earlier provisioning recording appears to show zero-DPU GB300 trays on a
 Flat VPC and a site `HostInband` network. Treat this as a hypothesis for the
@@ -91,6 +118,31 @@ For a standalone BMaaS pilot, agree on the OS or iPXE artifact and on what
 installed-OS signal will count as success.
 
 ## Replay the OSAC control plane
+
+### Repeat redeploy on the existing VM
+
+Once the VM, Kind cluster, bindings, and AWX credentials are in place, refresh
+the pilot from its fork branch with one command **inside the VM**:
+
+```bash
+export KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig"
+make -C "$HOME/src/osac/osac-installer" redeploy-nico-pilot \
+  PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+The target checks the Kind context and existing pilot resources, requires a
+clean checkout on the configured branch, fetches and fast-forwards that branch,
+builds and loads commit-tagged AAP and BMF images, then upgrades the devstack
+and OSAC Helm releases. It passes the same commit to the AWX project catalog
+URL and restarts BMF so it reads the rotated AWX token, including when the
+same commit is redeployed. It does not provision NICo hardware. Override
+`NICO_PILOT_GITHUB_REPO`, `NICO_PILOT_BRANCH`, or
+`NICO_PILOT_CONTAINER_TOOL` when using another fork, branch, or container
+runtime. Verify the AWX project revision, image, BMI credential prompts, and
+BMF rollout before a hardware request.
+
+The steps below are retained for initial setup and for changes in components
+outside this target's AAP/BMF scope.
 
 Build from one reviewed `osac` commit and record that commit and all built
 image digests with the run. On the VM, from `~/src/osac/osac-installer`:

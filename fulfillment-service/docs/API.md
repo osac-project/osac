@@ -500,6 +500,11 @@ appear in the public API.
 |----------|------------------------------------------------------------------|
 | `Signal` | Notifies the controller that the object may need reconciliation. |
 
+`TenantBillingAssignments.Signal` is a private, synchronous exception: it revalidates the current assignment
+through the same path as re-submitting `Update`, without creating another history interval. Closed intervals
+are rejected. Its flat table has no generic change trigger or billing controller, so it emits no outbox
+signal and starts no background reconciliation. Only global administrators/controllers may call it.
+
 In general, services should not have any additional ad-hoc methods beyond those listed above. There
 are some existing exceptions, and the project will work to remove them over time.
 

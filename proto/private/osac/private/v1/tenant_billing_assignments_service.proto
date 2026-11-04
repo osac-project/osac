@@ -88,6 +88,15 @@ message TenantBillingAssignmentsUpdateResponse {
   TenantBillingAssignment object = 1;
 }
 
+message TenantBillingAssignmentsSignalRequest {
+  option (cleanapi.message).private = true;
+  string id = 1;
+}
+
+message TenantBillingAssignmentsSignalResponse {
+  option (cleanapi.message).private = true;
+}
+
 // Reads or changes a tenant's time-versioned billing-account assignment. Billing disabled fails every method with
 // FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Only Cloud Provider Admins may call any
 // method on this service; there is no tenant self-service read path. Create and Update resolve
@@ -127,5 +136,13 @@ service TenantBillingAssignments {
       body: "object"
       response_body: "object"
     };
+  }
+
+  // Synchronously revalidates the current assignment interval, running the same correlation and
+  // account-match validation as Update. An id naming a closed historical interval is rejected. There is
+  // no continuous reconciliation of assignments: revalidation runs only on Create, Update, or this
+  // explicit signal. Controller or global administrator use only; never part of the public API.
+  rpc Signal(TenantBillingAssignmentsSignalRequest) returns (TenantBillingAssignmentsSignalResponse) {
+    option (cleanapi.method).private = true;
   }
 }

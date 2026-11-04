@@ -23,7 +23,7 @@ from test_agentless_network_state import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-SECRET = "sensitive-provider-password-sentinel"
+TEST_REDACTION_SENTINEL = "sensitive-provider-password-sentinel"
 ANSIBLE_PLAYBOOK = Path(sys.executable).parent / "ansible-playbook"
 GENERIC = (
     "AgentlessNet network task failed. Inspect the AAP job log and correct "
@@ -37,6 +37,7 @@ MISSING_INVENTORY = (
 
 @pytest.mark.parametrize("check_mode", [False, True])
 def test_real_pool_exhaustion_is_public_and_final(tmp_path, check_mode):
+    """Exhaustion stays public and final without depending on write mode."""
     state = importlib.import_module("agentless_net_state")
     store = store_for(tmp_path)
     register_external_ip_pool(store, cidr="198.51.100.0/30")
@@ -57,13 +58,14 @@ def test_real_pool_exhaustion_is_public_and_final(tmp_path, check_mode):
         ("PublicStateError", "pool_not_registered", False, True),
         ("PublicRetryableStateError", "attachment_conflict", True, True),
         ("StateError", "ExternalIPPool has no available addresses", False, False),
-        ("StateError", SECRET, False, False),
-        ("RetryableStateError", SECRET, True, False),
-        ("SubnetProviderError", SECRET, True, False),
+        ("StateError", TEST_REDACTION_SENTINEL, False, False),
+        ("RetryableStateError", TEST_REDACTION_SENTINEL, True, False),
+        ("SubnetProviderError", TEST_REDACTION_SENTINEL, True, False),
         ("RuntimeError", "ExternalIPPool has no available addresses", False, False),
     ],
 )
 def test_module_only_exports_explicit_public_errors(monkeypatch, kind, code, retryable, public):
+    """Only authored exception provenance can export a public diagnostic."""
     module = importlib.import_module(
         "ansible_collections.osac.templates.plugins.modules.agentless_net_state"
     )
@@ -83,7 +85,7 @@ def test_module_only_exports_explicit_public_errors(monkeypatch, kind, code, ret
     )
     error = error_class(code)
     if not public:
-        error.public_message = SECRET
+        error.public_message = TEST_REDACTION_SENTINEL
     store = SimpleNamespace(ensure_and_reconcile_virtual_network=Mock(side_effect=error))
     monkeypatch.setattr(module, "AnsibleModule", lambda **kwargs: module_object)
     monkeypatch.setattr(module, "StateStore", lambda path: store)
@@ -96,7 +98,7 @@ def test_module_only_exports_explicit_public_errors(monkeypatch, kind, code, ret
     result = module_object.fail_json.call_args.kwargs
     assert result["retryable"] is retryable
     assert ("public_message" in result) is public
-    assert SECRET not in json.dumps(result)
+    assert TEST_REDACTION_SENTINEL not in json.dumps(result)
 
 
 @pytest.mark.parametrize(
@@ -104,16 +106,17 @@ def test_module_only_exports_explicit_public_errors(monkeypatch, kind, code, ret
     [
         ("osac.templates.agentless_net_state", {"public_message": "ExternalIPPool has no available addresses", "retryable": False}, True, "ExternalIPPool has no available addresses"),
         ("osac.templates.agentless_net_state", {"public_message": "physical address or switch port was reserved concurrently", "retryable": True}, False, "physical address or switch port was reserved concurrently"),
-        ("osac.templates.agentless_net_state", {"msg": SECRET, "retryable": False}, True, "AgentlessNet network task failed."),
-        ("ansible.builtin.command", {"msg": SECRET, "public_message": SECRET}, True, "AgentlessNet network task failed."),
-        ("ansible.builtin.assert", {"msg": SECRET}, False, "AgentlessNet network task failed."),
+        ("osac.templates.agentless_net_state", {"msg": TEST_REDACTION_SENTINEL, "retryable": False}, True, "AgentlessNet network task failed."),
+        ("ansible.builtin.command", {"msg": TEST_REDACTION_SENTINEL, "public_message": TEST_REDACTION_SENTINEL}, True, "AgentlessNet network task failed."),
+        ("ansible.builtin.assert", {"msg": TEST_REDACTION_SENTINEL}, False, "AgentlessNet network task failed."),
         ("osac.templates.agentless_net_state", {"msg": "ExternalIPPool has no available addresses"}, False, "AgentlessNet network task failed."),
     ],
 )
 def test_real_ansible_reporter_sanitizes_untrusted_results(tmp_path, action, result, retryable, expected):
+    """Require real reporter failure and safe emitted stats for each provenance."""
     tasks = [
         {"name": "Supply a failed result", "ansible.builtin.set_fact": {
-            "ansible_failed_task": {"action": action, "name": SECRET},
+            "ansible_failed_task": {"action": action, "name": TEST_REDACTION_SENTINEL},
             "ansible_failed_result": result,
             "_agentless_net_failure_retryable": retryable,
         }, "no_log": True},
@@ -126,6 +129,7 @@ def test_real_ansible_reporter_sanitizes_untrusted_results(tmp_path, action, res
 
 
 def capture_reporter():
+    """Capture the reporter's terminal failure without exposing its inputs."""
     return {
         "name": "Capture reported failure",
         "block": [{
@@ -145,22 +149,25 @@ def capture_reporter():
     }
 
 
-def run_play(tmp_path, tasks, expected):
-    tasks.append({
-        "name": "Require the reporter to have failed with the expected artifact",
-        "ansible.builtin.assert": {"that": [
-            "_reporter_failure_captured | default(false)",
-            "_reporter_failure_message == expected_error.message",
-            "_agentless_net_error == expected_error",
-        ]},
-        "vars": {"expected_error": expected},
-    })
+def run_play(tmp_path, tasks, expected, inventory=None):
+    """Run local Ansible and verify failure capture, redaction and actual stats."""
+    if expected is not None:
+        tasks.append({
+            "name": "Require the reporter to have failed with the expected artifact",
+            "ansible.builtin.assert": {"that": [
+                "_reporter_failure_captured | default(false)",
+                "_reporter_failure_message == expected_error.message",
+                "_agentless_net_error == expected_error",
+            ]},
+            "vars": {"expected_error": expected},
+        })
     play = tmp_path / "errors.json"
     play.write_text(json.dumps([{"hosts": "localhost", "gather_facts": False, "tasks": tasks}]))
     completed = subprocess.run(
         [str(ANSIBLE_PLAYBOOK), "-i", "localhost,", "-c", "local", str(play)],
         cwd=ROOT, env={
-            **os.environ, "AGENTLESS_NET_VN_INVENTORY": "", "ANSIBLE_NOCOLOR": "1",
+            **os.environ, "AGENTLESS_NET_VN_INVENTORY": json.dumps(inventory) if inventory else "",
+            "AGENTLESS_NET_SSH_PRIVATE_KEY": "", "ANSIBLE_NOCOLOR": "1",
             "ANSIBLE_STDOUT_CALLBACK": "ansible.posix.json",
             "ANSIBLE_SHOW_CUSTOM_STATS": "true",
             "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
@@ -168,12 +175,13 @@ def run_play(tmp_path, tasks, expected):
         text=True, capture_output=True, timeout=60,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert SECRET not in completed.stdout + completed.stderr
+    assert TEST_REDACTION_SENTINEL not in completed.stdout + completed.stderr
     output = json.loads(completed.stdout[completed.stdout.index("{"):])
-    assert output["global_custom_stats"] == {"osac_error": expected}
+    assert output["global_custom_stats"] == ({"osac_error": expected} if expected else {})
 
 
 def test_real_missing_inventory_reports_setting_despite_no_log(tmp_path):
+    """Missing inventory must fail validation and report a final setting error."""
     run_play(tmp_path, [
         {"name": "Set provider phase", "ansible.builtin.set_fact": {"_agentless_net_failure_retryable": True}},
         {"name": "Validate real inventory", "block": [
@@ -194,6 +202,7 @@ def test_real_missing_inventory_reports_setting_despite_no_log(tmp_path):
 
 @pytest.mark.parametrize("check_mode", [False, True])
 def test_real_state_module_to_role_exhaustion_artifact(tmp_path, check_mode):
+    """Trace real SQLite exhaustion through a censored module into public stats."""
     store = store_for(tmp_path)
     register_external_ip_pool(store, cidr="198.51.100.0/30")
     reserve_external_address(store, UID_ONE, POOL_UID, pool_cidr="198.51.100.0/30")
@@ -213,3 +222,80 @@ def test_real_state_module_to_role_exhaustion_artifact(tmp_path, check_mode):
         }],
         "rescue": [capture_reporter()],
     }], {"message": "ExternalIPPool has no available addresses", "retryable": False})
+
+
+@pytest.mark.parametrize("check_mode", [False, True])
+@pytest.mark.parametrize("pool_case", ["missing", "mismatched"])
+def test_existing_database_pool_errors_preserve_identity(tmp_path, pool_case, check_mode):
+    """Distinguish absent pools from identity conflicts without changing state."""
+    state = importlib.import_module("agentless_net_state")
+    store = store_for(tmp_path)
+    store.ensure_external_ip_pool(
+        UID_THREE if pool_case == "missing" else POOL_UID,
+        UID_THREE if pool_case == "missing" else POOL_FULFILLMENT_ID,
+        "shared", "IPv4", ["198.51.100.0/30"],
+    )
+    before = store.path.read_bytes()
+    requested_cidr = "198.51.100.0/30" if pool_case == "missing" else "198.51.100.4/30"
+    with pytest.raises(state.StateError) as caught:
+        reserve_external_address(
+            store, UID_ONE, UID_ONE, pool_cidr=requested_cidr, check_mode=check_mode,
+        )
+    if pool_case == "missing":
+        assert isinstance(caught.value, state.PublicStateError)
+        assert caught.value.public_message == "ExternalIPPool is not registered"
+    else:
+        assert not isinstance(caught.value, state.PublicStateError)
+        assert str(caught.value) == "ExternalIPPool identity does not match saved state"
+    assert caught.value.retryable is False
+    assert store.path.read_bytes() == before
+    run_play(tmp_path, [{
+        "name": "Reserve against missing or mismatched pool",
+        "block": [{
+            "name": "Allocate through the real state module",
+            "osac.templates.agentless_net_state": {
+                "action": "reserve_external_ip", "state_file": str(store.path),
+                "uid": UID_ONE, "fulfillment_id": UID_ONE, "tenant_id": TENANT_ONE,
+                "pool_uid": POOL_UID, "pool_fulfillment_id": POOL_FULFILLMENT_ID,
+                "pool_tenant_id": "shared", "pool_cidr": requested_cidr,
+            },
+            "check_mode": check_mode, "no_log": True,
+        }],
+        "rescue": [capture_reporter()],
+    }], {"message": "ExternalIPPool is not registered" if pool_case == "missing" else GENERIC,
+         "retryable": False})
+    assert store.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("invalid_field", ["ansible_host", "ansible_port", None])
+def test_real_inventory_connection_validation_is_final(tmp_path, invalid_field):
+    """Invalid connections are final under no_log; valid inventory still loads."""
+    connection = {"ansible_host": "192.0.2.10", "ansible_user": TEST_REDACTION_SENTINEL}
+    if invalid_field == "ansible_host":
+        del connection["ansible_host"]
+    elif invalid_field == "ansible_port":
+        connection["ansible_port"] = TEST_REDACTION_SENTINEL
+    inventory = {"all": {"children": {"net_nodes": {"hosts": {"test-node": connection}}}}}
+    tasks = [
+        {"name": "Set retryable provider phase", "ansible.builtin.set_fact": {
+            "_agentless_net_failure_retryable": True,
+        }},
+        {"name": "Load real inventory", "block": [{
+            "name": "Validate connection", "ansible.builtin.include_role": {
+                "name": "osac.templates.agentless_net", "tasks_from": "_load_network_node_inventory",
+            },
+        }], "rescue": [capture_reporter()]},
+    ]
+    if invalid_field is None:
+        tasks.append({"name": "Require valid inventory success", "ansible.builtin.assert": {
+            "that": ["not (_reporter_failure_captured | default(false))",
+                     "'test-node' in groups['agentless_net_vn_network_node']"],
+        }})
+        expected = None
+    else:
+        expected = {
+            "message": "AgentlessNet network-node inventory requires ansible_host, ansible_user, "
+                       "a valid optional ansible_port, and text SSH arguments.",
+            "retryable": False,
+        }
+    run_play(tmp_path, tasks, expected, inventory=inventory)

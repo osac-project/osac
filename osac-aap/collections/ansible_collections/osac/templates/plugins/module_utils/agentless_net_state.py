@@ -3577,6 +3577,8 @@ class StateStore:
                     connection.execute("BEGIN IMMEDIATE")
                 try:
                     saved_pool = self._external_ip_pool_for_uid(connection, pool_uid)
+                    if saved_pool is None:
+                        raise PublicStateError("pool_not_registered")
                     if saved_pool != pool:
                         raise StateError("ExternalIPPool identity does not match saved state")
 

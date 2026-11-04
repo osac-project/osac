@@ -50,10 +50,11 @@ func resolveAWXSCM(ctx context.Context, directory string, getenv func(string) st
 	}
 	source := getenv("OSAC_TEST_AWX_SCM_URL")
 	if source == "" {
-		source, err = scmGit(ctx, directory, "config", "--get", "remote."+remote+".url")
+		source, err = scmGit(ctx, directory, "config", "--null", "--get-all", "remote."+remote+".url")
 		if err != nil {
 			return awxSCMSelection{}, fmt.Errorf("no usable Git remote; set OSAC_TEST_AWX_SCM_URL to a public GitHub repository")
 		}
+		source = strings.Split(source, "\x00")[0]
 	}
 	return newAWXSCMSelection(ctx, directory, source, revision, ref)
 }

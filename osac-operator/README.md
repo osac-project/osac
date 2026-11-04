@@ -341,6 +341,8 @@ AWX must be able to clone a **public GitHub repository without credentials**.
 For local runs, push the exact local `HEAD` before running the suite. The
 default source is the current branch's tracking remote and merge ref, or
 `origin` and `refs/heads/<local-branch>` when no tracking configuration exists.
+For remotes with multiple URLs, the first fetch URL is used, as in Git;
+push-only URLs do not select the AWX source.
 GitHub SSH remote URLs are converted to public HTTPS; local paths, private
 repositories, credential-bearing URLs, and other hosts are not supported.
 

@@ -77,6 +77,13 @@ func TestAWXSCMPRPinsEventHead(t *testing.T) {
 		selection.Refspec != "+refs/pull/1565/head:refs/remotes/origin/osac-test" {
 		t.Fatalf("must pin event head, not checkout merge or moving PR alias: %+v", selection)
 	}
+	withoutCheckout, err := resolveAWXSCM(context.Background(), filepath.Join(t.TempDir(), "no-checkout"),
+		scmTestEnvironment(map[string]string{
+			"GITHUB_REF": "refs/pull/1565/head", "GITHUB_EVENT_PATH": event,
+		}))
+	if err != nil || withoutCheckout != selection {
+		t.Fatalf("PR selection must not require a local merge commit or its parents: %+v, %v", withoutCheckout, err)
+	}
 }
 
 func TestAWXSCMTrackingAndOverrides(t *testing.T) {
@@ -97,6 +104,16 @@ func TestAWXSCMTrackingAndOverrides(t *testing.T) {
 	if err != nil || selection.URL != "https://github.com/example/override.git" ||
 		selection.Revision != revision || selection.Refspec != "+refs/tags/published:refs/remotes/origin/osac-test" {
 		t.Fatalf("detached overrides must retain HEAD: %+v, %v", selection, err)
+	}
+}
+
+func TestAWXSCMUsesFirstFetchURL(t *testing.T) {
+	directory, revision := scmTestRepository(t)
+	scmTestGit(t, directory, "config", "--add", "remote.origin.url", "https://github.com/example/secondary.git")
+	scmTestGit(t, directory, "config", "remote.origin.pushurl", "https://github.com/example/push-only.git")
+	selection, err := resolveAWXSCM(context.Background(), directory, scmTestEnvironment(nil))
+	if err != nil || selection.URL != "https://github.com/example/fork.git" || selection.Revision != revision {
+		t.Fatalf("must use Git's first fetch URL, not the last URL or push URL: %+v, %v", selection, err)
 	}
 }
 
@@ -174,8 +191,14 @@ func TestAWXSCMRealFetchContract(t *testing.T) {
 	scmTestGit(t, directory, "push", upstream, "HEAD:refs/pull/1565/head")
 	clone := filepath.Join(t.TempDir(), "ordinary-clone")
 	scmTestGit(t, directory, "clone", "--no-local", upstream, clone)
+	scmTestGit(t, clone, "checkout", "--force", base)
+	probe := exec.Command("git", "-C", clone, "cat-file", "-e", intended+"^{tree}")
+	if err := probe.Run(); err == nil {
+		t.Fatal("ordinary clone unexpectedly contains the intended commit tree")
+	}
 	command := exec.Command("git", "-C", clone, "checkout", "--force", intended)
-	if err := command.Run(); err == nil {
+	_, err := command.CombinedOutput()
+	if err == nil {
 		t.Fatal("ordinary upstream clone unexpectedly supplied a commit reachable only through a PR ref")
 	}
 	for _, test := range []struct {
@@ -200,16 +223,31 @@ func TestAWXSCMRealFetchContract(t *testing.T) {
 			if !test.wantError && actual != test.revision {
 				t.Fatalf("checked out %s instead of intended %s", actual, test.revision)
 			}
+			if !test.wantError {
+				awxClone := filepath.Join(t.TempDir(), "awx-clone")
+				scmTestGit(t, directory, "clone", "--no-local", test.source, awxClone)
+				scmTestGit(t, awxClone, "fetch", "origin", "+"+test.ref+":refs/remotes/origin/osac-test")
+				scmTestGit(t, awxClone, "checkout", "--force", test.revision)
+				if checkedOut := scmTestGit(t, awxClone, "rev-parse", "HEAD"); checkedOut != actual {
+					t.Fatalf("AWX clone/fetch contract checked out %s, preflight checked out %s", checkedOut, actual)
+				}
+			}
 		})
 	}
 	scmTestGit(t, directory, "-c", "user.name=SCM Test", "-c", "user.email=scm@example.invalid",
 		"-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "unpublished")
 	unpublished := scmTestGit(t, directory, "rev-parse", "HEAD")
-	_, err := verifyAWXSCM(context.Background(), awxSCMSelection{
+	_, err = verifyAWXSCM(context.Background(), awxSCMSelection{
 		URL: fork, Revision: unpublished, Refspec: "+refs/heads/feature:refs/remotes/origin/osac-test",
 	})
 	if err == nil || !strings.Contains(err.Error(), "push that commit") {
 		t.Fatalf("unpublished commit needs actionable error, not fallback: %v", err)
+	}
+	scmTestGit(t, directory, "push", upstream, "+"+base+":refs/pull/1565/head")
+	if _, err := verifyAWXSCM(context.Background(), awxSCMSelection{
+		URL: upstream, Revision: intended, Refspec: "+refs/pull/1565/head:refs/remotes/origin/osac-test",
+	}); err == nil {
+		t.Fatal("rewritten PR ref must not silently replace the event's intended commit")
 	}
 }
 

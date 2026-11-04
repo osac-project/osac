@@ -428,6 +428,9 @@ check_prerequisites() {
   for cmd in kind helm kubectl jq curl openssl python3; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
+  if [[ "${KIND_REQUIRE_UV:-false}" == "true" ]]; then
+    command -v uv >/dev/null 2>&1 || missing+=("uv")
+  fi
   if [[ "$KIND_PROVIDER" == "docker" ]]; then
     command -v docker >/dev/null 2>&1 || missing+=("docker")
   else

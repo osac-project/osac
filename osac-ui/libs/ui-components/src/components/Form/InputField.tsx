@@ -13,6 +13,7 @@ import { useField } from 'formik';
 import { getVisibleFieldError } from './fieldError';
 import { useShowFieldValidationErrors } from './FieldValidationContext';
 import { FormFieldHelper, getFormFieldHelperDescribedBy } from './FormFieldHelper';
+import { useTrimmedInput } from './useTrimmedInput';
 
 interface InputFieldProps {
   name: string;
@@ -27,7 +28,6 @@ interface InputFieldProps {
   helperText?: string;
   placeholder?: string;
   labelInfo?: ReactNode;
-  onBlur?: () => void;
   inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'];
   min?: number;
   max?: number;
@@ -48,7 +48,6 @@ export const InputField = ({
   helperText,
   placeholder,
   labelInfo,
-  onBlur,
   inputMode,
   min,
   max,
@@ -61,22 +60,16 @@ export const InputField = ({
   const error = getVisibleFieldError(meta, showValidationErrors);
   const validated = error ? 'error' : 'default';
   const helperDescribedBy = getFormFieldHelperDescribedBy(fieldId, error, helperText);
-  const shouldTrimOnBlur = type === 'text' && !multiline;
+  const trimmedInput = useTrimmedInput(field.value, helpers.setValue);
   const emptyNumberInputOnBlur = useRef(false);
 
   const handleBlur = (event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     field.onBlur(event);
-    if (shouldTrimOnBlur) {
-      const trimmed = (field.value ?? '').trim();
-      if (trimmed !== field.value) {
-        void helpers.setValue(trimmed);
-      }
-    }
-    onBlur?.();
+    trimmedInput.onBlur();
   };
 
   const handleNumberChange = (event: React.FormEvent<HTMLInputElement>) => {
-    const value = event.currentTarget.value;
+    const value = event.currentTarget.value.trim();
     if (emptyNumberInputOnBlur.current && value === '0') {
       emptyNumberInputOnBlur.current = false;
       return;
@@ -88,7 +81,6 @@ export const InputField = ({
   const handleNumberBlurCapture = (event: React.FocusEvent<HTMLInputElement>) => {
     emptyNumberInputOnBlur.current = event.currentTarget.value === '';
     field.onBlur(event);
-    onBlur?.();
   };
 
   const adjustNumber = (direction: -1 | 1) => {
@@ -113,14 +105,12 @@ export const InputField = ({
         <TextArea
           id={fieldId}
           name={name}
-          value={field.value ?? ''}
+          value={trimmedInput.value}
           placeholder={placeholder}
           rows={rows}
           resizeOrientation={resizeOrientation}
           aria-label={label}
-          onChange={(_event, value) => {
-            void field.onChange({ target: { name, value } });
-          }}
+          onChange={(_event, value) => trimmedInput.onChange(value)}
           onBlur={handleBlur}
           isDisabled={isDisabled}
           validated={validated}
@@ -160,14 +150,12 @@ export const InputField = ({
                 name={name}
                 type={type}
                 inputMode={inputMode}
-                value={field.value ?? ''}
+                value={trimmedInput.value}
                 placeholder={placeholder}
                 min={min}
                 max={max}
                 step={step}
-                onChange={(_event, value) => {
-                  void field.onChange({ target: { name, value } });
-                }}
+                onChange={(_event, value) => trimmedInput.onChange(value)}
                 onBlur={handleBlur}
                 isDisabled={isDisabled}
                 validated={validated}

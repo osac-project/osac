@@ -51,6 +51,12 @@ var _ = Describe("CEL filter utilities", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("must be a boolean"))
 		})
+
+		It("rejects a non-boolean filter when there are no items", func() {
+			_, err := filterItems(env, []*privatev1.CatalogPricingInput{}, `this.service`)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("must be a boolean"))
+		})
 	})
 
 	Describe("validateCELSyntax", func() {

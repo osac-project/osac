@@ -14,9 +14,14 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -134,4 +139,45 @@ var _ = Describe("Catalog pricing inputs server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response.GetItems()).To(BeEmpty())
 	})
+
+	DescribeTable("preserves the platform pagination contract through the public wrapper",
+		func(offset int32, limit *int32, wantSize int, wantCode codes.Code) {
+			const total = 1205
+			server := build()
+			// Seed the cache, not 1205 database objects: this pins the public/private presence boundary and the
+			// real handler's pagination while the existing DAO-backed specs cover inventory construction.
+			_, err := server.private.inventoryCache.get(ctx, catalogInventoryKey{},
+				func(context.Context) ([]*privatev1.CatalogPricingInput, error) {
+					items := make([]*privatev1.CatalogPricingInput, total)
+					for i := range items {
+						items[i] = privatev1.CatalogPricingInput_builder{
+							Service: serviceComputeInstance, Dimension: dimensionInstanceType, Value: fmt.Sprint(i),
+						}.Build()
+					}
+					return items, nil
+				})
+			Expect(err).ToNot(HaveOccurred())
+			response, err := server.List(ctx, publicv1.CatalogPricingInputsListRequest_builder{
+				Offset: proto.Int32(offset), Limit: limit,
+			}.Build())
+			Expect(status.Code(err)).To(Equal(wantCode))
+			if wantCode != codes.OK {
+				Expect(response).To(BeNil())
+				return
+			}
+			Expect(response.GetTotal()).To(Equal(int32(total)))
+			Expect(response.GetSize()).To(Equal(int32(wantSize)))
+			Expect(response.GetItems()).To(HaveLen(wantSize))
+			if wantSize > 0 {
+				Expect(response.GetItems()[0].GetValue()).To(Equal(fmt.Sprint(max(offset, 0))))
+			}
+		},
+		Entry("omitted limit defaults to 100", int32(0), nil, 100, codes.OK),
+		Entry("explicit zero is count-only", int32(0), proto.Int32(0), 0, codes.OK),
+		Entry("negative limit is invalid", int32(0), proto.Int32(-1), 0, codes.InvalidArgument),
+		Entry("negative offset clamps to zero", int32(-1), proto.Int32(2), 2, codes.OK),
+		Entry("limit capped at 1000", int32(0), proto.Int32(2147483647), 1000, codes.OK),
+		Entry("offset and large limit do not overflow", int32(1200), proto.Int32(2147483647), 5, codes.OK),
+		Entry("offset past end is empty", int32(2147483647), nil, 0, codes.OK),
+	)
 })

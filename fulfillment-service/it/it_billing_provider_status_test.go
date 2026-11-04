@@ -16,6 +16,7 @@ package it
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -31,6 +32,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingstub"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -228,6 +230,67 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing"), S
 		// The pod sends the mounted credential to the configured API path.
 		Expect(stub.Requests()).To(ContainElement(SatisfyAll(HaveField("Op", "HealthCheck"),
 			HaveField("Path", HavePrefix("/api/v1/external/")), HaveField("Authorization", "Bearer "+testStubCredential))))
+		Expect(stub.Writes()).To(BeEmpty())
+		expectCleanLog(ctx)
+	})
+
+	It("lists provider rate-card items through the deployed M360 adapter", func(ctx context.Context) {
+		By("seeding a catalog item locked to a known instance type before the first rate-card read")
+		instanceTypeID := createCatalogItemComputeInstanceTypeFixture(ctx)
+		instanceType, err := privatev1.NewInstanceTypesClient(tool.InternalView().AdminConn()).Get(ctx,
+			privatev1.InstanceTypesGetRequest_builder{Id: instanceTypeID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		instanceTypeName := instanceType.GetObject().GetMetadata().GetName()
+		Expect(instanceTypeName).ToNot(BeEmpty())
+		template := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
+		item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(),
+			publicv1.ComputeInstanceCatalogItem_builder{
+				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: "shared"}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Published: true,
+				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
+					InstanceType: publicv1.InstanceTypeReferenceFieldPolicy_builder{
+						Locked: publicv1.InstanceTypeReference_builder{Name: instanceTypeName, Shared: true}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+		stub.SetScenario(billingRateCardScenario(instanceTypeName))
+
+		By("reading the public API through the real provider configuration, TLS and normalization path")
+		client := publicv1.NewProviderRateCardItemsClient(tool.ExternalView().AdminConn())
+		var response *publicv1.ProviderRateCardItemsListResponse
+		Eventually(ctx, func(g Gomega) {
+			var err error
+			response, err = client.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
+				Service: new("compute_instance"), CurrencyCode: new("USD"),
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+		}, time.Minute, time.Second).Should(Succeed())
+		Expect(response.GetTotal()).To(Equal(int32(1)))
+		Expect(response.GetItems()).To(HaveLen(1))
+		row := response.GetItems()[0]
+		Expect(row.GetService()).To(Equal("compute_instance"))
+		Expect(row.GetCurrencyCode()).To(Equal("USD"))
+		Expect(row.GetRate().GetAmount()).To(Equal("0.00125"))
+		Expect(row.GetRate().GetUnit()).To(Equal("second"))
+		Expect(row.GetResourceConditions()).To(HaveLen(1))
+		condition := row.GetResourceConditions()[0]
+		Expect(condition.GetDimension()).To(Equal("instance_type"))
+		Expect(condition.GetOperator()).To(Equal(publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_EQUALS))
+		Expect(condition.GetValue()).To(Equal(instanceTypeName))
+		Expect(row.GetCatalogItemMatches()).To(ContainElement(item.GetMetadata().GetName()))
+
+		By("proving the pod made only the three expected provider GETs, never writes")
+		Expect(stub.Requests()).To(ConsistOf(
+			SatisfyAll(HaveField("Op", "FindServiceByName"),
+				HaveField("Path", "/api/v1/external/services")),
+			SatisfyAll(HaveField("Op", "ListPriceableAttributes"),
+				HaveField("Path", "/api/v1/external/services/billing-it-compute/priceable-attributes")),
+			SatisfyAll(HaveField("Op", "GetServiceRateCard"),
+				HaveField("Path", "/api/v1/external/services/billing-it-compute/rate-cards/USD")),
+		))
+		Expect(stub.Requests()).To(HaveEach(SatisfyAll(HaveField("Method", http.MethodGet),
+			HaveField("Failed", false), HaveField("Authorization", "Bearer "+testStubCredential))))
 		Expect(stub.Writes()).To(BeEmpty())
 		expectCleanLog(ctx)
 	})

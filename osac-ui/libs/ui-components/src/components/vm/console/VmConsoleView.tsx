@@ -1,22 +1,16 @@
 // @refresh reload — depends on useConsoleSession hook signature
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
-import {
-  Bullseye,
-  EmptyState,
-  EmptyStateBody,
-  Spinner,
-  Stack,
-  StackItem,
-} from '@patternfly/react-core';
+import { Bullseye, EmptyState, EmptyStateBody, PageSection, Spinner } from '@patternfly/react-core';
 
 import { ConsoleResourceType, ConsoleType } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
 import {
   CONSOLE_CONNECTING_OVERLAY_CLASS_NAME,
-  CONSOLE_FULLSCREEN_STACK_CLASS_NAME,
   CONSOLE_STACK_CLASS_NAME,
+  CONSOLE_TOOLBAR_SECTION_CLASS_NAME,
   CONSOLE_VIEWPORT_HIDDEN_CLASS_NAME,
+  CONSOLE_VIEW_SECTION_CLASS_NAME,
 } from '../../Console/console-viewport';
 import type { ConsoleTransport } from '../../Console/console.types';
 import ConsoleToolbar from '../../Console/ConsoleToolbar';
@@ -39,8 +33,6 @@ interface Props {
   resourceId: string;
   transport: ConsoleTransport;
   onTransportChange: (transport: ConsoleTransport) => void;
-  isFullscreen: boolean;
-  onToggleFullscreen: () => void;
 }
 
 /**
@@ -50,13 +42,7 @@ interface Props {
  * lock) instead of teaching the hook to reconnect with a different type. Only rendered
  * while the VM is running, so the session always starts (isRunning is a constant true).
  */
-const VmConsoleView = ({
-  resourceId,
-  transport,
-  onTransportChange,
-  isFullscreen,
-  onToggleFullscreen,
-}: Props) => {
+const VmConsoleView = ({ resourceId, transport, onTransportChange }: Props) => {
   const { t } = useTranslation();
   const isSerial = transport === 'serial';
   const {
@@ -124,14 +110,13 @@ const VmConsoleView = ({
     };
   }, [connect, isSerial, reportViewerError]);
 
-  // Restore keyboard focus after connect and after entering fullscreen (the Full screen
-  // button otherwise keeps focus, so typing would not reach the guest).
+  // Restore keyboard focus after the viewer connects so typing reaches the guest.
   useEffect(() => {
     if (!isViewerConnected) {
       return;
     }
     viewerRef.current?.focus();
-  }, [isFullscreen, isViewerConnected]);
+  }, [isViewerConnected]);
 
   const connecting = (
     <Bullseye className={CONSOLE_CONNECTING_OVERLAY_CLASS_NAME}>
@@ -185,21 +170,19 @@ const VmConsoleView = ({
   }
 
   return (
-    <Stack hasGutter className={CONSOLE_FULLSCREEN_STACK_CLASS_NAME}>
-      <StackItem>
+    <>
+      <PageSection hasBodyWrapper={false} className={CONSOLE_TOOLBAR_SECTION_CLASS_NAME}>
         <ConsoleToolbar
           connectionState={connectionState}
-          isFullscreen={isFullscreen}
           onPaste={() => void viewerRef.current?.pasteFromClipboard()}
-          onToggleFullscreen={onToggleFullscreen}
           consoleTransport={transport}
           onConsoleTransportChange={onTransportChange}
         />
-      </StackItem>
-      <StackItem isFilled className={CONSOLE_STACK_CLASS_NAME}>
-        {viewport}
-      </StackItem>
-    </Stack>
+      </PageSection>
+      <PageSection hasBodyWrapper={false} isFilled className={CONSOLE_VIEW_SECTION_CLASS_NAME}>
+        <div className={CONSOLE_STACK_CLASS_NAME}>{viewport}</div>
+      </PageSection>
+    </>
   );
 };
 

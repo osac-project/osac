@@ -33,13 +33,21 @@ const makeVm = (id: string, state: ComputeInstanceState) => ({
   spec: {},
 });
 
+type CapturedUpdateRequest = {
+  object?: { id?: string; status?: unknown };
+  updateMask?: { paths?: string[] };
+};
+
 describe('useVmPowerAction', () => {
-  const createSuccessTransport = () =>
+  const createSuccessTransport = (onUpdate?: (request: unknown) => void) =>
     createRouterTransport((router) => {
       router.service(ComputeInstances, {
         list: () => ({ items: [makeVm('vm-1', ComputeInstanceState.RUNNING)] }),
         get: () => ({ object: makeVm('vm-1', ComputeInstanceState.RUNNING) }),
-        update: () => ({ object: makeVm('vm-1', ComputeInstanceState.STOPPING) }),
+        update: (request) => {
+          onUpdate?.(request);
+          return { object: makeVm('vm-1', ComputeInstanceState.STOPPING) };
+        },
       });
     });
 
@@ -67,7 +75,7 @@ describe('useVmPowerAction', () => {
         { transport } as React.ComponentProps<typeof ApiProvider>,
         createElement(QueryClientProvider, { client: queryClient }, children),
       );
-    return renderHook(() => useVmPowerAction(), { wrapper });
+    return { ...renderHook(() => useVmPowerAction(), { wrapper }), queryClient };
   };
 
   beforeEach(() => {
@@ -120,6 +128,72 @@ describe('useVmPowerAction', () => {
         title: expect.stringContaining('my-vm'),
       }),
     );
+  });
+
+  it('invalidates the VM list after a successful power action', async () => {
+    const { result, queryClient } = renderWithTransport(createSuccessTransport());
+    const listKey = [ComputeInstances.typeName, 'list', {}] as const;
+    queryClient.setQueryData(listKey, []);
+
+    act(() => {
+      result.current.runPowerAction('vm-1', 'my-vm', 'start');
+    });
+
+    await waitFor(() => expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true));
+  });
+
+  it('sends the generic update request for a stop action', async () => {
+    let request: CapturedUpdateRequest | undefined;
+    const { result } = renderWithTransport(
+      createSuccessTransport((captured) => {
+        request = captured as CapturedUpdateRequest;
+      }),
+    );
+
+    act(() => {
+      result.current.runPowerAction('vm-1', 'my-vm', 'stop');
+    });
+
+    await waitFor(() => expect(mockAddToast).toHaveBeenCalled());
+    expect(request?.object?.id).toBe('vm-1');
+    expect(request?.object?.status).toBeUndefined();
+    expect(request?.updateMask?.paths).toEqual(['spec.run_strategy']);
+  });
+
+  it('sends the generic update request for a start action', async () => {
+    let request: CapturedUpdateRequest | undefined;
+    const { result } = renderWithTransport(
+      createSuccessTransport((captured) => {
+        request = captured as CapturedUpdateRequest;
+      }),
+    );
+
+    act(() => {
+      result.current.runPowerAction('vm-1', 'my-vm', 'start');
+    });
+
+    await waitFor(() => expect(mockAddToast).toHaveBeenCalled());
+    expect(request?.object?.id).toBe('vm-1');
+    expect(request?.object?.status).toBeUndefined();
+    expect(request?.updateMask?.paths).toEqual(['spec.run_strategy']);
+  });
+
+  it('sends the generic update request for a restart action', async () => {
+    let request: CapturedUpdateRequest | undefined;
+    const { result } = renderWithTransport(
+      createSuccessTransport((captured) => {
+        request = captured as CapturedUpdateRequest;
+      }),
+    );
+
+    act(() => {
+      result.current.runPowerAction('vm-1', 'my-vm', 'restart');
+    });
+
+    await waitFor(() => expect(mockAddToast).toHaveBeenCalled());
+    expect(request?.object?.id).toBe('vm-1');
+    expect(request?.object?.status).toBeUndefined();
+    expect(request?.updateMask?.paths).toEqual(['spec.restart_requested_at']);
   });
 
   it('shows a danger toast with instance name when a power action fails', async () => {

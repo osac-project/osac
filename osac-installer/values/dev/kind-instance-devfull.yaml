@@ -16,6 +16,10 @@ operator:
     storage: true
     volume: true
 
+metering:
+  image:
+    pullPolicy: IfNotPresent
+
 # Reuse the local storage registration hook so tenant onboarding provisions a
 # tenant-labeled TopoLVM StorageClass for the existing "local" storage tier.
 lvms:

@@ -37,6 +37,11 @@ osac_render=$(helm template osac charts/osac --namespace osac \
   --values values/dev/kind-instance.yaml \
   --values values/dev/kind-instance-devfull.yaml \
   --set-string global.osacDeploymentId=osac/osac)
+if ! awk 'BEGIN { RS = "---" } /metering-service:latest/ && /imagePullPolicy: IfNotPresent/ { found = 1 } END { exit !found }' \
+  <<<"$osac_render"; then
+  echo "Kind dev-full must use the locally loaded metering image without pulling it" >&2
+  exit 1
+fi
 if ! awk '/name: OSAC_ENABLE_NETWORKING_PROVISIONING/ { getline; if ($0 ~ /value: "true"/) found = 1 } END { exit !found }' \
   <<<"$osac_render"; then
   echo "Kind dev-full must enable provider networking so AAP creates each tenant's target namespace" >&2

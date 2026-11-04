@@ -1387,10 +1387,10 @@ an upgrade rejects changes to the existing NetworkClass spec. The provider
 provisioning switch is also fixed at installation.
 
 Normal deployments configure `global.networking`; Helm derives the AAP
-backend, manager registrations, and NetworkClass from it. The top-level
-`networkClass` block is a legacy expert override and is ignored unless
-`global.expertOverrides.networkClass: true`. CUDN EVPN uses that expert path
-as shown in [Section 6.1](#cudn-evpn-with-netris).
+backend, manager registrations, and NetworkClass from it. Chart `0.0.65`
+configures CUDN EVPN through `global.networking`, as shown in
+[Section 6.1](#cudn-evpn-with-netris). The legacy top-level `networkClass` and
+`global.expertOverrides` paths are not part of the `0.0.65` chart schema.
 
 | Parameter | Source | Description | Default |
 |---|---|---|---|
@@ -2520,11 +2520,13 @@ StorageTier, and tenant storage configuration as described in
 
 - OSAC networking in air-gapped or disconnected deployments, and IPv6 or
   dual-stack networking.
-- Provider networking for VMs in a cluster other than the hub. EVPN host
-  networking can be configured on a separate workload cluster
-  (`make prepare-remote-cluster ... EVPN_VALUES=...`), but OSAC provider
-  networking with VMs on a separate cluster is not supported in this release.
-  VMaaS with provider networking disabled is supported as described in
+- Provider networking for VMs in a cluster other than the hub. Platform
+  administrators can prepare EVPN host networking on a separate workload
+  cluster using the Helm Phase 1b EVPN procedure in the [Helm Deployment
+  Guide](helm-deployment-guide.md#evpn-host-networking-vmaas). This configures
+  host networking only; OSAC provider networking with VMs on a separate
+  cluster is not supported in this release. VMaaS with provider
+  networking disabled is supported as described in
   [Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster).
 - Provider networking for CaaS and BMaaS. Coming with CaaS networking and
   with BMaaS networking in a later release.

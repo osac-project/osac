@@ -373,9 +373,17 @@ helm upgrade --install osac ./charts/osac \
     --set global.clusterDomain="$DOMAIN" \
     --set service.externalHostname="fulfillment-api-$NS.$DOMAIN" \
     --set service.internalHostname="fulfillment-internal-api-$NS.$DOMAIN" \
-    --set-string ui.auth.oidcIssuerURL="https://keycloak-keycloak.$DOMAIN/realms/osac" \
     --wait --timeout 40m
 ```
+
+When the web console is enabled (the default), set `ui.auth.oidcIssuerURL`
+in `my-values.yaml` to the same fully resolved URL as
+`service.auth.issuerUrl`. The UI chart requires this explicit URL; it
+does not inherit the service value or expand templates. For bundled Keycloak,
+use `https://keycloak-keycloak.<cluster-domain>/realms/osac`, replacing
+`<cluster-domain>` with the actual cluster domain. For external Keycloak, use
+the realm issuer URL configured in `service.auth.issuerUrl`. See the
+[customer install guide](customer-install-guide.md#42-configuring-the-helm-values).
 
 With Helm 4, add `--force-conflicts` if an AAP field ownership conflict occurs.
 Helm 3 does not support this option.
@@ -541,17 +549,6 @@ Configure Netris coordinates and credentials in
 The old expert NetworkClass block and `k8s_only` selection do not apply to
 `0.0.65`. Networking selection and the provider-provisioning switch are fixed
 at the first installation; a successful Helm render does not verify the fabric.
-
-For phase 2, use the complete
-[CUDN EVPN with Netris example](customer-install-guide.md#cudn-evpn-with-netris).
-It configures the Netris AAP backend, registers `cudn_evpn` with
-`capabilities: [ipv4]`, and enables the expert NetworkClass path with
-`global.expertOverrides.networkClass: true`. That path also requires
-`networkClass.enabled: true`, a nonempty title, and the Netris and EVPN
-manager names. The subchart has no built-in `cudn_evpn` registration defaults;
-enabling it alone creates an invalid registration with empty capabilities.
-The normal `global.networking.k8sManager` setting accepts only `""` or
-`k8s_only`, so it cannot select `cudn_evpn` directly.
 
 ### Adding CA roots to the shared bundle at runtime
 

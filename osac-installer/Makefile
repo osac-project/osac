@@ -329,9 +329,10 @@ kind-load-images: ## Load previously built dev-full images into Kind (PLATFORM=k
 NICO_PILOT_GITHUB_REPO ?= vladikr/osac
 NICO_PILOT_BRANCH ?= no-issue/nico-bmaas-integration-audit
 NICO_PILOT_CONTAINER_TOOL ?= docker
+NICO_PILOT_ENABLE_BMF ?= no
 
 .PHONY: redeploy-nico-pilot
-redeploy-nico-pilot: ## Refresh NICo BMaaS AAP/BMF on the existing dev-full Kind cluster
+redeploy-nico-pilot: ## Stage NICo pilot code; set NICO_PILOT_ENABLE_BMF=yes after binding setup
 	@if [ "$(PLATFORM)/$(PROFILE)" != "kind/dev-full" ]; then \
 		echo "ERROR: redeploy-nico-pilot requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1; \
 	fi
@@ -339,6 +340,7 @@ redeploy-nico-pilot: ## Refresh NICo BMaaS AAP/BMF on the existing dev-full Kind
 		NICO_PILOT_GITHUB_REPO="$(NICO_PILOT_GITHUB_REPO)" \
 		NICO_PILOT_BRANCH="$(NICO_PILOT_BRANCH)" \
 		NICO_PILOT_CONTAINER_TOOL="$(NICO_PILOT_CONTAINER_TOOL)" \
+		NICO_PILOT_ENABLE_BMF="$(NICO_PILOT_ENABLE_BMF)" \
 		bash scripts/dev-full/redeploy-nico-pilot.sh
 
 .PHONY: nico-pilot-redeploy-test

@@ -136,7 +136,7 @@ installed-OS signal will count as success.
 
 ## Replay the OSAC control plane
 
-### Repeat redeploy on the existing VM
+### Stage the changed code on the existing VM
 
 The first redeploy needs a one-time bootstrap because an older VM checkout does
 not yet have the `redeploy-nico-pilot` Make target. Run these commands **inside
@@ -154,9 +154,9 @@ git rev-parse --short HEAD
 ```
 
 Stop if the branch differs, the tree is dirty, or the fast-forward fails;
-resolve that checkout state without discarding its changes. Once the VM, Kind
-cluster, bindings, and AWX credentials are in place, refresh the pilot from
-the now-updated checkout:
+resolve that checkout state without discarding its changes. Stage the changed
+Fulfillment Service, OSAC operator, AAP, and BMF images on the VM **before**
+creating the NICo tenant binding or boot artifact:
 
 ```bash
 export KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig"
@@ -164,19 +164,24 @@ make -C "$HOME/src/osac/osac-installer" redeploy-nico-pilot \
   PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
-The target checks the Kind context and existing pilot resources, requires a
+The target checks the Kind context and existing local deployments, requires a
 clean checkout on the configured branch, fetches and fast-forwards that branch,
-builds and loads commit-tagged AAP and BMF images, then upgrades the devstack
-and OSAC Helm releases. It passes the same commit to the AWX project catalog
-URL and restarts BMF so it reads the rotated AWX token, including when the
-same commit is redeployed. It does not provision NICo hardware. Override
+builds and loads commit-tagged Fulfillment Service, OSAC operator, AAP, and BMF
+images, then upgrades the devstack and OSAC Helm releases. It passes the same
+commit to the AWX project catalog URL and pins all four images in Helm.
+The default stage keeps BMF at zero replicas and does not require the pilot
+Secrets, NICo binding, or AWX NICo credential. It does not provision NICo
+hardware. Override
 `NICO_PILOT_GITHUB_REPO`, `NICO_PILOT_BRANCH`, or
 `NICO_PILOT_CONTAINER_TOOL` when using another fork, branch, or container
-runtime. Verify the AWX project revision, image, BMI credential prompts, and
-BMF rollout before a hardware request.
+runtime. Verify the AWX project revision, image, BMI credential prompts,
+Fulfillment Service and operator rollouts, and BMF's zero replica count before
+configuring the tenant binding. The OSAC Helm release should advance from its
+previous revision; `osac whoami` requires the separate OSAC CLI binary on the
+VM and is not a deployment check.
 
 The steps below are retained for initial setup and for changes in components
-outside this target's AAP/BMF scope.
+outside this target's Fulfillment Service/operator/AAP/BMF scope.
 
 Build from one reviewed `osac` commit and record that commit and all built
 image digests with the run. On the VM, from `~/src/osac/osac-installer`:
@@ -253,11 +258,13 @@ for Machine/health cleanup checks, and the trusted hub ingress CA inside the
 execution environment. AWX custom credentials can inject a temporary CA file
 and point `SSL_CERT_FILE` to it; see [AWX credential file injectors](https://docs.ansible.com/projects/awx/en/24.6.1/userguide/credential_types.html).
 
-After these inputs are present, enable BMF with a second OSAC chart upgrade:
+After these inputs are present, enable BMF with the same reviewed source
+revision. This reruns the image builds, refreshes AWX, applies the pilot BMF
+configuration, and waits for BMF rollout:
 
 ```bash
-make install-osac PLATFORM=kind PROFILE=dev-full NS=osac \
-  INSTANCE_VALUES_EXTRA='-f values/dev/kind-instance-devfull.yaml -f values/dev/kind-instance-nico-pilot.yaml'
+make -C "$HOME/src/osac/osac-installer" redeploy-nico-pilot \
+  PLATFORM=kind PROFILE=dev-full NS=osac NICO_PILOT_ENABLE_BMF=yes
 kubectl -n osac get deployments
 ```
 

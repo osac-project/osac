@@ -37,8 +37,8 @@ echo "kubectl $*" >> "$CALLS"
 if [ "$1" = config ]; then echo "$FAKE_CONTEXT"; exit 0; fi
 if [ "$FAIL_BINDING" = yes ] && [ "$4" = configmap ]; then exit 1; fi
 case "$*" in
-  *'get deployments -l app.kubernetes.io/name=bare-metal-fulfillment-operator -o name'*)
-    echo deployment.apps/osac-bare-metal-fulfillment-operator-controller-manager ;;
+  *'get deployment bmf-operator-controller-manager -o jsonpath={.spec.replicas}'*)
+    echo "$FAKE_BMF_REPLICAS" ;;
 esac
 """,
             "helm": "#!/bin/sh\necho \"helm $*\" >> \"$CALLS\"\n",
@@ -60,7 +60,9 @@ esac
             NICO_PILOT_GITHUB_REPO="vladikr/osac",
             NICO_PILOT_BRANCH="no-issue/nico-bmaas-integration-audit",
             NICO_PILOT_CONTAINER_TOOL="docker",
+            NICO_PILOT_ENABLE_BMF="no",
             FAKE_CONTEXT="kind-osac-dev",
+            FAKE_BMF_REPLICAS="0",
             FAIL_BINDING="no",
         )
 
@@ -85,6 +87,7 @@ esac
         self.assertNotIn("make -C", self.calls_text())
 
     def test_missing_binding_stops_before_fetch_or_deploy(self):
+        self.env["NICO_PILOT_ENABLE_BMF"] = "yes"
         self.env["FAIL_BINDING"] = "yes"
         result = self.run_script()
         self.assertNotEqual(result.returncode, 0)
@@ -92,19 +95,44 @@ esac
         self.assertNotIn("git -C", self.calls_text())
         self.assertNotIn("make -C", self.calls_text())
 
-    def test_builds_commit_tagged_images_and_updates_both_releases(self):
+    def test_stage_refuses_to_disable_active_bmf(self):
+        self.env["FAKE_BMF_REPLICAS"] = "1"
+        result = self.run_script()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("BMF is already enabled", result.stderr)
+        self.assertNotIn("git -C", self.calls_text())
+        self.assertNotIn("make -C", self.calls_text())
+
+    def test_stages_all_changed_images_without_binding(self):
+        self.env["FAIL_BINDING"] = "yes"
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls_text()
-        self.assertEqual(calls.count("make -C"), 6, calls)
+        self.assertEqual(calls.count("make -C"), 10, calls)
+        self.assertIn("fulfillment-service:0123456789ab", calls)
+        self.assertIn("osac-operator:0123456789ab", calls)
         self.assertIn("execution-environment-build IMG=ghcr.io/osac-project/osac-aap:0123456789ab", calls)
         self.assertIn("image-build IMG=ghcr.io/osac-project/bare-metal-fulfillment-operator:0123456789ab", calls)
         self.assertIn("install-devstack PLATFORM=kind PROFILE=dev-full", calls)
         self.assertIn("awx.project.controllerVarsUrl=https://raw.githubusercontent.com/vladikr/osac/" + REVISION, calls)
         self.assertIn("install-osac PLATFORM=kind PROFILE=dev-full", calls)
+        self.assertIn("service.images.service.tag=0123456789ab", calls)
+        self.assertIn("operator.image.tag=0123456789ab", calls)
         self.assertIn("bmf.image.tag=0123456789ab", calls)
-        self.assertIn("rollout restart deployment.apps/osac-bare-metal-fulfillment-operator-controller-manager", calls)
-        self.assertIn("rollout status deployment.apps/osac-bare-metal-fulfillment-operator-controller-manager", calls)
+        self.assertIn("bmf.replicaCount=0", calls)
+        self.assertIn("get deployment bmf-operator-controller-manager -o jsonpath={.spec.replicas}", calls)
+        self.assertNotIn("get configmap osac-nico-tenant-bindings", calls)
+        self.assertNotIn("rollout restart", calls)
+
+    def test_activates_bmf_after_binding_exists(self):
+        self.env["NICO_PILOT_ENABLE_BMF"] = "yes"
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls_text()
+        self.assertIn("get configmap osac-nico-tenant-bindings", calls)
+        self.assertIn("bmf.replicaCount=1", calls)
+        self.assertIn("rollout restart deployment bmf-operator-controller-manager", calls)
+        self.assertIn("rollout status deployment bmf-operator-controller-manager", calls)
 
 
 if __name__ == "__main__":

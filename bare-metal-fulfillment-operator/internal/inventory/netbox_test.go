@@ -463,7 +463,7 @@ var _ = Describe("NetBox selector query", func() {
 				HostClass:       testNetBoxHostClass,
 				ProvisionState:  shared.OsacDefaultProvisionStateValue,
 				ManagedBy:       shared.OsacDefaultManagedByValue,
-				Ready:           true,
+				Available:       true,
 			}))
 			Expect(api.customFieldReads).To(BeZero())
 			Expect(api.deviceQueries).To(Equal(1))
@@ -641,7 +641,7 @@ var _ = Describe("NetBox assignment eligibility", func() {
 		Expect(api.patch.CustomFields).NotTo(HaveKey("username"))
 		Expect(api.patch.CustomFields).NotTo(HaveKey("password"))
 		Expect(resolver.calls).To(Equal(1))
-		Expect(host.Ready).To(BeTrue())
+		Expect(host.Available).To(BeTrue())
 	})
 
 	It("returns an existing assignment without patching the device", func() {
@@ -755,7 +755,7 @@ var _ = Describe("NetBox Metal3 preparation", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(host).NotTo(BeNil())
-		Expect(host.Ready).To(BeFalse())
+		Expect(host.Available).To(BeFalse())
 		Expect(api.patchCalls).To(BeZero())
 	})
 
@@ -870,7 +870,7 @@ func expectedTestNetBoxAssignedHost(instanceID string) *Host {
 		HostClass:           testNetBoxHostClass,
 		ProvisionState:      shared.OsacDefaultProvisionStateValue,
 		ManagedBy:           shared.OsacDefaultManagedByValue,
-		Ready:               true,
+		Available:           true,
 		BareMetalInstanceID: instanceID,
 	}
 }
@@ -1241,7 +1241,7 @@ var _ = Describe("NetBox assignment credential checks", func() {
 		Expect(host.BareMetalInstanceID).To(Equal("bmi-123"))
 		Expect(resolver.calls).To(Equal(1))
 		Expect(api.patchCalls).To(BeZero())
-		Expect(host.Ready).To(BeTrue())
+		Expect(host.Available).To(BeTrue())
 	})
 
 	It("does not resolve credentials for a device assigned to another instance", func() {

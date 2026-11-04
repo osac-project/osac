@@ -476,7 +476,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					return &inventory.Host{
 						InventoryHostID: inventoryHostID,
 						HostClass:       hostClass,
-						Ready:           true,
+						Available:       true,
 					}, nil
 				}
 			})
@@ -500,7 +500,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					return &inventory.Host{
 						InventoryHostID: inventoryHostID,
 						HostClass:       hostClass,
-						Ready:           false,
+						Available:       false,
 					}, nil
 				}
 				// When the host is not ready the controller must requeue *before*
@@ -654,7 +654,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					return &inventory.Host{
 						InventoryHostID: "existing-host-123",
 						HostClass:       hostClass,
-						Ready:           true,
+						Available:       true,
 					}, nil
 				}
 			})

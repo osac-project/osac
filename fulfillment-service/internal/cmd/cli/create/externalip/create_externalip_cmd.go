@@ -149,17 +149,6 @@ func (c *runnerContext) createExternalIP(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-
-		// The attachment contract requires the target instance to be
-		// RUNNING. Best effort: the instance could still stop before
-		// the attach runs.
-		ciState := ci.GetStatus().GetState()
-		if ciState != publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING {
-			return fmt.Errorf(
-				"compute instance %q is in state %s, must be RUNNING before attaching an external IP",
-				ci.GetMetadata().GetName(), ciState.String(),
-			)
-		}
 	}
 
 	createResp, err := c.eipsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
@@ -220,10 +209,25 @@ func (c *runnerContext) createExternalIP(ctx context.Context) error {
 	}
 	eip = allocated
 
-	// Step 4: create the attachment.
+	// Step 3: the attachment API requires the target instance to be
+	// RUNNING, READY, and to have a network attachment address. The
+	// instance may reach RUNNING before its network is up, so wait
+	// for full readiness before creating the attachment.
+	ci, err = c.waitForComputeInstanceReady(ctx, ci)
+	if err != nil {
+		return err
+	}
+
+	// Step 4: create the attachment. The attachment name is required
+	// by the API; derive a stable, descriptive name from the
+	// external IP.
+	attachName := eip.GetMetadata().GetName()
+	if attachName == "" {
+		attachName = fmt.Sprintf("eip-%s", eip.GetId())
+	}
 	attachResp, err := c.attachClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 		Object: publicv1.ExternalIPAttachment_builder{
-			Metadata: metautil.ForCreate(ctx, "").Build(),
+			Metadata: metautil.ForCreate(ctx, attachName+"-attachment").Build(),
 			Spec: publicv1.ExternalIPAttachmentSpec_builder{
 				ExternalIp:      &publicv1.ExternalIPLocalReference{Id: eip.GetId()},
 				ComputeInstance: &publicv1.ComputeInstanceLocalReference{Id: ci.GetId()},
@@ -245,6 +249,70 @@ func (c *runnerContext) createExternalIP(ctx context.Context) error {
 	return nil
 }
 
+// waitForComputeInstanceReady polls until the compute instance satisfies
+// the attachment API's preconditions: RUNNING state, READY condition, and
+// a reported network attachment address. RUNNING can precede network
+// readiness, so waiting here avoids allocating an external IP that cannot
+// be attached yet.
+func (c *runnerContext) waitForComputeInstanceReady(ctx context.Context, ci *publicv1.ComputeInstance) (*publicv1.ComputeInstance, error) {
+	ready, err := wait.Poll(ctx, wait.Options[*publicv1.ComputeInstance]{
+		Fetch: func(ctx context.Context) (*publicv1.ComputeInstance, error) {
+			resp, err := c.ciClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: ci.GetId(),
+			}.Build())
+			if err != nil {
+				return nil, fmt.Errorf("failed to poll compute instance: %w", err)
+			}
+			return resp.GetObject(), nil
+		},
+		StateOf: func(r *publicv1.ComputeInstance) string {
+			if computeInstanceAttachable(r) {
+				return "ATTACHABLE"
+			}
+			return r.GetStatus().GetState().String()
+		},
+		TargetState: "ATTACHABLE",
+		FailureStates: []string{
+			publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED.String(),
+			publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING.String(),
+			publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED.String(),
+		},
+		Timeout: c.args.timeout,
+		OnProgress: func(r *publicv1.ComputeInstance) {
+			c.console.Infof(ctx, "  compute instance '%s': %s\n",
+				r.GetMetadata().GetName(), r.GetStatus().GetState().String())
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("compute instance '%s' (ID: %s) did not become ready for attachment: %w",
+			ci.GetMetadata().GetName(), ci.GetId(), err)
+	}
+	return ready, nil
+}
+
+// computeInstanceAttachable reports whether the instance satisfies the
+// attachment API's preconditions: RUNNING state, READY condition set to
+// TRUE, and at least one reported network attachment address.
+func computeInstanceAttachable(ci *publicv1.ComputeInstance) bool {
+	if ci.GetStatus().GetState() != publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING {
+		return false
+	}
+	ready := false
+	for _, condition := range ci.GetStatus().GetConditions() {
+		if condition.GetType() == publicv1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_READY &&
+			condition.GetStatus() == publicv1.ConditionStatus_CONDITION_STATUS_TRUE {
+			ready = true
+			break
+		}
+	}
+	for _, status := range ci.GetStatus().GetComputeNetworkAttachmentStatuses() {
+		if status.GetIpAddress() != "" {
+			return ready
+		}
+	}
+	return false
+}
+
 const shortHelp = `Create an external IP`
 
 const longHelp = `
@@ -253,10 +321,12 @@ Allocate an external IP address from an ExternalIPPool.
 The {{ bt }}--pool{{ bt }} flag is required and specifies the ExternalIPPool to allocate from.
 
 When {{ bt }}--compute-instance{{ bt }} is provided, the command performs a one-shot attach:
-  1. Creates the ExternalIP.
-  2. Waits for it to reach ALLOCATED state.
-  3. Resolves the compute instance by name or ID.
-  4. Creates an ExternalIPAttachment linking the two resources.
+  1. Resolves the compute instance by name or ID.
+  2. Creates the ExternalIP.
+  3. Waits for it to reach ALLOCATED state.
+  4. Waits for the compute instance to be RUNNING, READY, and to have
+     a network attachment address.
+  5. Creates an ExternalIPAttachment linking the two resources.
 
 Examples:
 

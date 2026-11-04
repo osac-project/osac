@@ -21,6 +21,8 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 var _ = Describe("Batched attachment SecurityGroup resolution", func() {
@@ -164,6 +166,26 @@ var _ = Describe("Batched attachment SecurityGroup resolution", func() {
 })
 
 var _ = Describe("Network attachment Subnet resolution", func() {
+	It("reports a deleting tenant default referenced from another project", func() {
+		virtualNetwork := seedVirtualNetwork(testTenant, "10.20.0.0/16",
+			privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, nil)
+		subnet := seedSubnet(virtualNetwork, "default-ipv4", "10.20.1.0/24",
+			privatev1.SubnetState_SUBNET_STATE_READY, map[string]string{defaultLabel: "true"})
+		subnets := fixtureDAO[*privatev1.Subnet]()
+		subnet.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+		_, err := subnets.Update().SetObject(subnet).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = subnets.Delete().SetId(subnet.GetId()).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		owner := privatev1.Metadata_builder{Tenant: testTenant, Project: "another-project"}.Build()
+		reference := privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build()
+		_, err = resolveNetworkingReference(ctx, subnets, owner, reference, "Subnet",
+			grpccodes.InvalidArgument, true)
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("has been deleted"))
+	})
+
 	It("rejects a reference whose ID and name identify different Subnets", func() {
 		virtualNetwork := seedVirtualNetwork(testTenant, "10.20.0.0/16",
 			privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, nil)

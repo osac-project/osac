@@ -41,9 +41,9 @@ const (
 	// DefaultProvisionPollIntervalDuration is the default interval to poll provisioning job status
 	DefaultProvisionPollIntervalDuration = provisioning.DefaultStatusPollInterval
 
-	// DefaultHostReadinessPollIntervalDuration is the default interval to poll a reserved
-	// inventory host's readiness for provisioning (see inventory.Host.Available).
-	DefaultHostReadinessPollIntervalDuration = 30 * time.Second
+	// DefaultHostAvailabilityPollIntervalDuration is the default interval to poll a reserved
+	// inventory host's availability for provisioning (see inventory.Host.Available).
+	DefaultHostAvailabilityPollIntervalDuration = 30 * time.Second
 )
 
 var (

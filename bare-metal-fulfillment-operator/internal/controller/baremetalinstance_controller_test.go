@@ -248,7 +248,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(reconciler.TryLockFailPollIntervalDuration).To(Equal(DefaultTryLockFailPollIntervalDuration))
 				Expect(reconciler.ManagementRecheckIntervalDuration).To(Equal(DefaultManagementRecheckIntervalDuration))
 				Expect(reconciler.ProvisionPollIntervalDuration).To(Equal(DefaultProvisionPollIntervalDuration))
-				Expect(reconciler.HostReadinessPollIntervalDuration).To(Equal(DefaultHostReadinessPollIntervalDuration))
+				Expect(reconciler.HostAvailabilityPollIntervalDuration).To(Equal(DefaultHostAvailabilityPollIntervalDuration))
 			})
 		})
 
@@ -274,7 +274,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(customReconciler.TryLockFailPollIntervalDuration).To(Equal(2 * time.Second))
 				Expect(customReconciler.ManagementRecheckIntervalDuration).To(Equal(15 * time.Second))
 				Expect(customReconciler.ProvisionPollIntervalDuration).To(Equal(60 * time.Second))
-				Expect(customReconciler.HostReadinessPollIntervalDuration).To(Equal(90 * time.Second))
+				Expect(customReconciler.HostAvailabilityPollIntervalDuration).To(Equal(90 * time.Second))
 			})
 		})
 	})
@@ -513,7 +513,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				result, err := reconciler.reconcileInventory(ctx, bareMetalInstance)
 
 				Expect(err).NotTo(HaveOccurred())
-				Expect(result.RequeueAfter).To(Equal(reconciler.HostReadinessPollIntervalDuration))
+				Expect(result.RequeueAfter).To(Equal(reconciler.HostAvailabilityPollIntervalDuration))
 			})
 		})
 

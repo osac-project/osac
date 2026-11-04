@@ -366,7 +366,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 			// Poll while not ready: HostClass stays empty and reconcile requeues
 			result := reconcileBCM(reconciler, bmiName, 1)
 			Expect(getBCMBMI(bmiName).Spec.HostClass).To(BeEmpty())
-			Expect(result.RequeueAfter).To(Equal(DefaultHostReadinessPollIntervalDuration))
+			Expect(result.RequeueAfter).To(Equal(DefaultHostAvailabilityPollIntervalDuration))
 
 			// Transition the BMH to ready → allocation completes
 			markBMHReady(hostname)

@@ -78,13 +78,13 @@ const (
 	envProfileConfigPath    = "OSAC_PROFILE_CONFIG_PATH"
 	envMaxJobHistory        = "OSAC_MAX_JOB_HISTORY"
 
-	envHostReadyPollInterval     = "OSAC_HOST_READY_POLL_INTERVAL"
-	envHostDeletionPollInterval  = "OSAC_HOST_DELETION_POLL_INTERVAL"
-	envNoFreeHostsPollInterval   = "OSAC_NO_FREE_HOSTS_POLL_INTERVAL"
-	envTryLockFailPollInterval   = "OSAC_TRY_LOCK_FAIL_POLL_INTERVAL"
-	envManagementRecheckInterval = "OSAC_MANAGEMENT_RECHECK_INTERVAL"
-	envProvisionPollInterval     = "OSAC_PROVISION_POLL_INTERVAL"
-	envHostReadinessPollInterval = "OSAC_HOST_READINESS_POLL_INTERVAL"
+	envHostReadyPollInterval        = "OSAC_HOST_READY_POLL_INTERVAL"
+	envHostDeletionPollInterval     = "OSAC_HOST_DELETION_POLL_INTERVAL"
+	envNoFreeHostsPollInterval      = "OSAC_NO_FREE_HOSTS_POLL_INTERVAL"
+	envTryLockFailPollInterval      = "OSAC_TRY_LOCK_FAIL_POLL_INTERVAL"
+	envManagementRecheckInterval    = "OSAC_MANAGEMENT_RECHECK_INTERVAL"
+	envProvisionPollInterval        = "OSAC_PROVISION_POLL_INTERVAL"
+	envHostAvailabilityPollInterval = "OSAC_HOST_AVAILABILITY_POLL_INTERVAL"
 
 	envAAPURL                       = "OSAC_AAP_URL"
 	envAAPToken                     = "OSAC_AAP_TOKEN"
@@ -509,9 +509,9 @@ func setupBareMetalInstanceController(
 		envProvisionPollInterval,
 		controller.DefaultProvisionPollIntervalDuration,
 	)
-	hostReadinessPollInterval := helpers.GetEnvWithDefault(
-		envHostReadinessPollInterval,
-		controller.DefaultHostReadinessPollIntervalDuration,
+	hostAvailabilityPollInterval := helpers.GetEnvWithDefault(
+		envHostAvailabilityPollInterval,
+		controller.DefaultHostAvailabilityPollIntervalDuration,
 	)
 	maxConcurrentReconciles := helpers.GetEnvWithDefault(
 		envBareMetalInstanceMaxConcurrentReconcile,
@@ -532,7 +532,7 @@ func setupBareMetalInstanceController(
 		tryLockFailPollInterval,
 		managementRecheckInterval,
 		provisionPollInterval,
-		hostReadinessPollInterval,
+		hostAvailabilityPollInterval,
 	).SetupWithManager(mgr, maxConcurrentReconciles); err != nil {
 		return fmt.Errorf("baremetalinstance controller: %w", err)
 	}

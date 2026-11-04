@@ -84,6 +84,9 @@ def test_baseline_waits_for_hypershift_readiness(monkeypatch: pytest.MonkeyPatch
 
     assert scenario._ready_baseline(k8s=Mock(), grpc=Mock(), refs=refs) == ready
     assert accepted == [False] * 7 + [True]
+    assert captured_kwargs["retries"] == scenario.READY_BASELINE_RETRIES
+    assert captured_kwargs["delay"] == scenario.READY_BASELINE_DELAY_SECONDS
+    assert scenario.READY_BASELINE_RETRIES * scenario.READY_BASELINE_DELAY_SECONDS == 10 * 60
     assert captured_kwargs["retry_on_error"] is True
 
 

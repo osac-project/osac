@@ -26,10 +26,12 @@ from tests.e2e.core.runner import env, poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
 TARGET_VERSION = env("OSAC_TEST_UPGRADE_RELEASE_VERSION", "4.22.1")
-PRE_UPGRADE_MONITOR_SECONDS = 10 * 60
 TARGET_IMAGE = env(
     "OSAC_TEST_UPGRADE_RELEASE_IMAGE", f"quay.io/openshift-release-dev/ocp-release:{TARGET_VERSION}-multi"
 )
+READY_BASELINE_LIMIT_SECONDS = 10 * 60
+READY_BASELINE_DELAY_SECONDS = 10
+READY_BASELINE_RETRIES = READY_BASELINE_LIMIT_SECONDS // READY_BASELINE_DELAY_SECONDS
 CP_LIMIT_SECONDS = 60 * 60
 NP_LIMIT_SECONDS_PER_NODE = 30 * 60
 START_LIMIT_SECONDS = 10 * 60
@@ -38,7 +40,7 @@ _DIAGNOSTIC_INTERVAL_SECONDS = 60
 _PHASES = (
     "preparing",
     "install-completed",
-    "post-install-monitored",
+    "ready-baseline",
     "control-plane-requested",
     "control-plane-started",
     "control-plane-completed",
@@ -243,98 +245,6 @@ def _post_install_diagnostics(snapshot: dict[str, Any]) -> dict[str, Any]:
         "cluster_operator_count": len(operators),
         "cluster_operators": operators,
     }
-
-
-def _post_install_snapshot(
-    *, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs, workload_k8s: K8sClient
-) -> dict[str, Any]:
-    """Read the health resources needed for post-install monitoring."""
-    return _snapshot(k8s=k8s, grpc=grpc, refs=refs, workload_k8s=workload_k8s)
-
-
-def _assert_post_install_healthy(snapshot: dict[str, Any]) -> None:
-    """Require the installed HyperShift cluster and guest operators to stay healthy."""
-    cluster_state = _mapping(snapshot.get("cluster", {})).get("status", {}).get("state", "")
-    order_phase = _mapping(snapshot.get("order", {})).get("status", {}).get("phase", "")
-    hosted = _mapping(snapshot.get("hosted", {}))
-    assert cluster_state == "CLUSTER_STATE_READY", "OSAC Cluster became unhealthy after installation"
-    assert order_phase == "Ready", "ClusterOrder became unhealthy after installation"
-    assert _hosted_ready(hosted), "HostedCluster became unhealthy after installation"
-    assert _condition(hosted, "ClusterVersionProgressing").get("status") != "True", (
-        "HostedCluster kept progressing after installation"
-    )
-
-    for node_set, pool in _mapping(snapshot.get("pools", {})).items():
-        assert _mapping(pool).get("status", {}).get("version", "") != "", f"{node_set} NodePool lost its version"
-        assert _condition(pool, "Ready").get("status") == "True", f"{node_set} NodePool became unhealthy"
-        assert _condition(pool, "AllMachinesReady").get("status") == "True", (
-            f"{node_set} NodePool machines became unhealthy"
-        )
-        assert _condition(pool, "UpdatingVersion").get("status") != "True", f"{node_set} NodePool kept updating"
-
-    operators = _sequence(snapshot.get("cluster_operators", []))
-    assert operators, "Guest ClusterOperator diagnostics became unavailable"
-    for operator in operators:
-        name = _mapping(_mapping(operator).get("metadata", {})).get("name", "")
-        assert _condition(operator, "Available").get("status") == "True", f"{name} ClusterOperator became unavailable"
-        assert _condition(operator, "Progressing").get("status") == "False", f"{name} ClusterOperator kept progressing"
-        assert _condition(operator, "Degraded").get("status") == "False", f"{name} ClusterOperator became degraded"
-
-
-def _monitor_post_install_health(*, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs) -> float:
-    """Monitor the installed cluster for the configured stability window."""
-    started = time.monotonic()
-    workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
-        k8s=k8s, hosted_cluster_namespace=refs.namespace, hosted_cluster_name=refs.hc_name
-    )
-    with tempfile.NamedTemporaryFile(prefix="osac-post-install-", suffix=".kubeconfig") as kubeconfig_file:
-        kubeconfig_file.write(workload_kubeconfig)
-        kubeconfig_file.flush()
-        workload_k8s = K8sClient(namespace=refs.namespace, kubeconfig=kubeconfig_file.name, as_system_admin=False)
-        successful = False
-        last_attempt_successful = False
-        final_data: dict[str, Any] | None = None
-        while True:
-            try:
-                snapshot = _post_install_snapshot(k8s=k8s, grpc=grpc, refs=refs, workload_k8s=workload_k8s)
-                final_data = _post_install_diagnostics(snapshot)
-                successful = True
-                last_attempt_successful = True
-                _log_diagnostics(
-                    component="post-install health", data=final_data, elapsed_seconds=time.monotonic() - started
-                )
-                _assert_post_install_healthy(snapshot)
-            except AssertionError:
-                if final_data is not None:
-                    _log_diagnostics(
-                        component="post-install health",
-                        data=final_data,
-                        elapsed_seconds=time.monotonic() - started,
-                        final=True,
-                    )
-                raise
-            except Exception:
-                last_attempt_successful = False
-                _log_diagnostics(
-                    component="post-install health",
-                    data={"diagnostics_error": "lookup_failed"},
-                    elapsed_seconds=time.monotonic() - started,
-                )
-            remaining = started + PRE_UPGRADE_MONITOR_SECONDS - time.monotonic()
-            if remaining <= 0:
-                if not successful:
-                    raise AssertionError("Post-install health diagnostics could not be collected")
-                if not last_attempt_successful:
-                    raise AssertionError("Post-install health diagnostics were unavailable at the window end")
-                if final_data is not None:
-                    _log_diagnostics(
-                        component="post-install health",
-                        data=final_data,
-                        elapsed_seconds=time.monotonic() - started,
-                        final=True,
-                    )
-                return time.monotonic() - started
-            time.sleep(min(_DIAGNOSTIC_INTERVAL_SECONDS, remaining))
 
 
 def _deletion_diagnostics(*, k8s: K8sClient, grpc: GRPCClient, uuid: str | None, co_name: str | None) -> dict[str, Any]:
@@ -680,8 +590,8 @@ def _ready_baseline(*, k8s: K8sClient, grpc: GRPCClient, refs: _ClusterRefs) -> 
     return poll_until(
         fn=lambda: _snapshot(k8s=k8s, grpc=grpc, refs=refs),
         until=ready,
-        retries=60,
-        delay=10,
+        retries=READY_BASELINE_RETRIES,
+        delay=READY_BASELINE_DELAY_SECONDS,
         description="test-owned ClusterOrder, HostedCluster, and NodePools ready",
         retry_on_error=True,
         resource_kind=WaitResourceKind.CLUSTER_ORDER,
@@ -907,7 +817,7 @@ def _safe_evidence(evidence: dict[str, Any], *, source_version: str) -> dict[str
         "source_release_version": source_version,
         "target_release_version": TARGET_VERSION,
     }
-    for field in ("monitor_elapsed_seconds", "cp_elapsed_seconds", "np_elapsed_seconds"):
+    for field in ("cp_elapsed_seconds", "np_elapsed_seconds"):
         elapsed = evidence.get(field)
         if isinstance(elapsed, float) and math.isfinite(elapsed) and 0 <= elapsed <= 24 * 60 * 60:
             safe[field] = elapsed

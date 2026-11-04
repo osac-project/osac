@@ -78,13 +78,9 @@ def test_cluster_create_with_two_node_sets(
         refs = upgrade._cluster_references(
             k8s=k8s_hub_client, uuid=uuid, co_name=co_name, expected_node_sets=set(instance_types)
         )
-        evidence["monitor_elapsed_seconds"] = round(
-            upgrade._monitor_post_install_health(k8s=k8s_hub_client, grpc=grpc, refs=refs), 1
-        )
-        evidence["phase"] = "post-install-monitored"
-
         jwt_grpc_tenant1: GRPCClient = request.getfixturevalue("jwt_grpc_tenant1")
         baseline = upgrade._ready_baseline(k8s=k8s_hub_client, grpc=grpc, refs=refs)
+        evidence["phase"] = "ready-baseline"
         target_version, target_created = upgrade._catalog_version(
             private_grpc=private_grpc, version=upgrade.TARGET_VERSION, image=upgrade.TARGET_IMAGE, disk_image=disk_image
         )

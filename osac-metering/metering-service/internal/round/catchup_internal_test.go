@@ -192,6 +192,65 @@ func TestDecodeHeartbeatReplaysARecordWithItsNamedVersion(t *testing.T) {
 	}
 }
 
+// TestDecodeHeartbeatRejectsRecordsTheSchemaRejects exercises the payload checks replay
+// applies on top of the required-field check.
+func TestDecodeHeartbeatRejectsRecordsTheSchemaRejects(t *testing.T) {
+	versions, err := schema.PublishedVersions()
+	if err != nil {
+		t.Fatalf("loading the published schema versions: %v", err)
+	}
+	written := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	event, err := heartbeat.New(
+		"acme", mergeKey(), written.Add(-time.Minute), written, 60_000_000, "second",
+		written, 7, "0001", "",
+	)
+	if err != nil {
+		t.Fatalf("building the heartbeat: %v", err)
+	}
+	valid, err := event.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshaling the heartbeat: %v", err)
+	}
+	if _, err := decodeHeartbeat(valid, versions); err != nil {
+		t.Fatalf("the valid record must pass: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		field string
+		value string
+		want  string
+	}{
+		{"unknown resource type", "resource_type", "unknown", "unknown resource_type"},
+		{"wrong semantics", "semantics", "cumulative", "usage.semantics"},
+		{"wrong precision", "precision", "minute", "usage.precision"},
+		{"short quantity", "quantity", "60.0", "six-decimal"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var body map[string]any
+			if err := json.Unmarshal(valid, &body); err != nil {
+				t.Fatalf("decoding the record body: %v", err)
+			}
+			data := body["data"].(map[string]any)
+			switch test.field {
+			case "semantics", "precision", "quantity":
+				data["usage"].(map[string]any)[test.field] = test.value
+			default:
+				data[test.field] = test.value
+			}
+			broken, err := json.Marshal(body)
+			if err != nil {
+				t.Fatalf("encoding the broken record: %v", err)
+			}
+			if _, err := decodeHeartbeat(broken, versions); err == nil ||
+				!strings.Contains(err.Error(), test.want) {
+				t.Fatalf("want an error mentioning %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
 // TestDecodeHeartbeatAcceptsAV1RecordInsideAV2Window pins the rolling-deploy case: once v2 is
 // published, older pods keep writing v1 records, and a rebuild must still accept them.
 func TestDecodeHeartbeatAcceptsAV1RecordInsideAV2Window(t *testing.T) {

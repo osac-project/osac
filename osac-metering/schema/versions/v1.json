@@ -199,7 +199,7 @@
       "name": "external_billing_account_id",
       "type": "string",
       "required": false,
-      "description": "Tenant's external billing account id, when the tenant has one. The event omits it otherwise.",
+      "description": "Tenant's external billing account id, when the tenant has one. The provider supplies it; OSAC copies it as given. M360 keeps its own mapping. The event omits it otherwise.",
       "unit": ""
     }
   ]

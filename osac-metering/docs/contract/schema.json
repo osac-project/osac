@@ -14,7 +14,7 @@
       "x-osac-version": "v1",
       "x-osac-effective-at": "1970-01-01T00:00:00Z",
       "x-osac-source-file": "osac-metering/schema/versions/v1.json",
-      "x-osac-source-sha256": "4414c0cdb75a21169c9636d3fa3a454149c8e1944cc3cc8d9abe86a4a9465917",
+      "x-osac-source-sha256": "6f691f271e178162b4b5c0ad4e0049ac69d68214951bb812b723ac2ec5602988",
       "type": "object",
       "required": [
         "data",
@@ -44,7 +44,7 @@
               "type": "string"
             },
             "external_billing_account_id": {
-              "description": "Tenant's external billing account id, when the tenant has one. The event omits it otherwise.",
+              "description": "Tenant's external billing account id, when the tenant has one. The provider supplies it; OSAC copies it as given. M360 keeps its own mapping. The event omits it otherwise.",
               "type": "string"
             },
             "heartbeat_time": {
@@ -66,6 +66,14 @@
             },
             "resource_type": {
               "description": "Resource type value the usage belongs to, for example cluster_order. The resources section lists every value.",
+              "enum": [
+                "bare_metal_instance",
+                "cluster_order",
+                "compute_instance",
+                "external_ip",
+                "nat_gateway",
+                "volume"
+              ],
               "type": "string"
             },
             "rules_revision": {
@@ -151,6 +159,14 @@
         },
         "osacresourcetype": {
           "description": "Resource type value the usage belongs to. Equal to data.resource_type.",
+          "enum": [
+            "bare_metal_instance",
+            "cluster_order",
+            "compute_instance",
+            "external_ip",
+            "nat_gateway",
+            "volume"
+          ],
           "type": "string"
         },
         "osactenant": {

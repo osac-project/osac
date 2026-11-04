@@ -18,3 +18,26 @@ const (
 	ResourceTypeBareMetalInstance = "bare_metal_instance"
 	ResourceTypeVolume            = "volume"
 )
+
+// ResourceTypes returns the resource_type values events carry, sorted.
+func ResourceTypes() []string {
+	return []string{
+		ResourceTypeBareMetalInstance,
+		ResourceTypeClusterOrder,
+		ResourceTypeComputeInstance,
+		ResourceTypeExternalIP,
+		ResourceTypeNATGateway,
+		ResourceTypeVolume,
+	}
+}
+
+// KnownResourceType reports whether value is a resource_type events carry.
+func KnownResourceType(value string) bool {
+	switch value {
+	case ResourceTypeBareMetalInstance, ResourceTypeClusterOrder,
+		ResourceTypeComputeInstance, ResourceTypeExternalIP,
+		ResourceTypeNATGateway, ResourceTypeVolume:
+		return true
+	}
+	return false
+}

@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/osac-project/osac/proto/metering"
+
 	"github.com/osac-project/osac-metering/schema"
 )
 
@@ -44,6 +46,7 @@ type versionJSONSchema struct {
 
 // renderSchema builds the JSON Schema.
 func renderSchema(sources Sources) ([]byte, error) {
+	resourceTypes := resourceTypeValues(sources.Resources)
 	doc := jsonSchema{
 		Schema: "https://json-schema.org/draft/2020-12/schema",
 		ID:     "https://osac-project.org/metering/usage-event.schema.json",
@@ -59,11 +62,17 @@ func renderSchema(sources Sources) ([]byte, error) {
 		required := make([]string, 0, len(version.Envelope)+1)
 		for _, field := range version.Envelope {
 			properties[field.Name] = fieldJSONSchema(field)
+			if field.Name == "osacresourcetype" {
+				setEnum(properties, field.Name, resourceTypes)
+			}
 			if field.Required {
 				required = append(required, field.Name)
 			}
 		}
 		payload := objectJSONSchema(version.Data)
+		if fields, ok := payload["properties"].(map[string]any); ok {
+			setEnum(fields, "resource_type", resourceTypes)
+		}
 		properties["data"] = payload
 		required = append(required, "data")
 		sort.Strings(required)
@@ -87,6 +96,32 @@ func renderSchema(sources Sources) ([]byte, error) {
 		return nil, fmt.Errorf("encoding the generated schema: %w", err)
 	}
 	return append(content, '\n'), nil
+}
+
+// resourceTypeValues returns the resource_type values events carry, derived from the field
+// registry and sorted.
+func resourceTypeValues(resources []metering.Resource) []string {
+	seen := map[string]bool{}
+	values := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		value := schema.ProtoResourceTypeToSchema(metering.ShortName(string(resource.Message)))
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return values
+}
+
+// setEnum adds an enum to one property when the property exists.
+func setEnum(properties map[string]any, name string, values []string) {
+	field, ok := properties[name].(map[string]any)
+	if !ok {
+		return
+	}
+	field["enum"] = values
 }
 
 // objectJSONSchema describes an object with a fixed set of fields.

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -419,6 +420,24 @@ func decodeHeartbeat(value []byte, versions []schema.Version) (caughtHeartbeat, 
 	if err != nil {
 		return caughtHeartbeat{}, err
 	}
+	if !schema.KnownResourceType(data.ResourceType) {
+		return caughtHeartbeat{}, fmt.Errorf(
+			"record names unknown resource_type %q; events carry one of %s",
+			data.ResourceType, strings.Join(schema.ResourceTypes(), ", "),
+		)
+	}
+	if data.Usage.Semantics != schema.UsageSemanticsInterval {
+		return caughtHeartbeat{}, fmt.Errorf(
+			"record has usage.semantics %q, want %q",
+			data.Usage.Semantics, schema.UsageSemanticsInterval,
+		)
+	}
+	if data.Usage.Precision != schema.UsagePrecisionSecond {
+		return caughtHeartbeat{}, fmt.Errorf(
+			"record has usage.precision %q, want %q",
+			data.Usage.Precision, schema.UsagePrecisionSecond,
+		)
+	}
 	roundTime, err := heartbeat.HeartbeatTime(data)
 	if err != nil {
 		return caughtHeartbeat{}, err
@@ -438,6 +457,12 @@ func decodeHeartbeat(value []byte, versions []schema.Version) (caughtHeartbeat, 
 	quantity, err := heartbeat.ParseMicro(data.Usage.Quantity)
 	if err != nil {
 		return caughtHeartbeat{}, err
+	}
+	if heartbeat.FormatMicro(quantity) != data.Usage.Quantity {
+		return caughtHeartbeat{}, fmt.Errorf(
+			"record has usage.quantity %q, want six-decimal fixed point",
+			data.Usage.Quantity,
+		)
 	}
 	dimensions, err := json.Marshal(data.BillingDimensions)
 	if err != nil {

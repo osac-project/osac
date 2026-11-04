@@ -152,7 +152,7 @@ var _ = Describe("The generated contract", func() {
 			"The CloudEvent `id` is the deduplication key",
 			"It leaves out the quantity",
 			"ships the next immutable revision with a later effective date",
-			"a 100 GiB volume's quantity is already multiplied by 100",
+			"A 100 GiB volume's quantity is already multiplied by 100",
 		} {
 			Expect(reference).To(ContainSubstring(statement))
 		}
@@ -210,6 +210,32 @@ var _ = Describe("The generated contract", func() {
 			Expect(definition.SourceSHA256).To(Equal(version.SourceSHA256))
 			Expect(definition.Properties["type"].Const).To(Equal(version.CloudEventType))
 		}
+	})
+
+	It("enumerates the resource types in the checkable schema", func() {
+		_, checkable := generated(sources)
+
+		type fieldSchema struct {
+			Enum []string `json:"enum"`
+		}
+		var published struct {
+			Definitions map[string]struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"$defs"`
+		}
+		Expect(json.Unmarshal([]byte(checkable), &published)).To(Succeed())
+		definition := published.Definitions[schema.SchemaVersion]
+
+		var envelope fieldSchema
+		Expect(json.Unmarshal(definition.Properties["osacresourcetype"], &envelope)).
+			To(Succeed())
+		Expect(envelope.Enum).To(ConsistOf(schema.ResourceTypes()))
+
+		var payload struct {
+			Properties map[string]fieldSchema `json:"properties"`
+		}
+		Expect(json.Unmarshal(definition.Properties["data"], &payload)).To(Succeed())
+		Expect(payload.Properties["resource_type"].Enum).To(ConsistOf(schema.ResourceTypes()))
 	})
 
 	It("accepts a real heartbeat and refuses a version it has not published", func() {

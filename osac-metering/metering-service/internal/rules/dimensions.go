@@ -102,11 +102,11 @@ var IdentityDimensions = []IdentityDimension{
 	},
 	{
 		Name: "catalog", Field: "spec.catalog_item",
-		Description: "Value of the resource's `spec.catalog_item`",
+		Description: "The `spec.catalog_item` reference's `name` when set, else its `id`",
 	},
 	{
 		Name: "template", Field: "spec.template",
-		Description: "Value of the resource's `spec.template`",
+		Description: "The `spec.template` reference's `name` when set, else its `id`",
 	},
 }
 

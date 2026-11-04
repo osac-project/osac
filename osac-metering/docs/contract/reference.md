@@ -65,13 +65,13 @@ A published schema never changes. A new field is a new version file with the nex
 
 Versions are add-only: a new field is added, and no field is removed or given a new type. Replay decodes every retained record with the current payload shape, so the current shape must stay a superset of every published version; that is what lets one reader read records written under older versions.
 
-A version's effective date is the earliest date its events may carry it. Metering writes its current version unconditionally and never selects a version by date, so the version must not take effect after the release that ships it. Metering refuses to load a current version whose effective date is in the future; an older, future-dated version may wait in the tree until its release.
+A version's effective date is the earliest date its events may carry it, measured by `heartbeat_time`, the round time that wrote the record. A reader that filters on the CloudEvent `time` (the interval start) uses `heartbeat_time` for the version boundary. Metering writes its current version unconditionally and never selects a version by date, so the version must not take effect after the release that ships it. Metering refuses to load a current version whose effective date is in the future; an older, future-dated version may wait in the tree until its release.
 
 A published version stays readable for as long as its records are retained. Retention is indefinite by default, so no version has been retired.
 
 | Version | CloudEvent type | Effective from | Source file | SHA-256 |
 |---|---|---|---|---|
-| `v1` | `osac.resource.heartbeat.v1` | 1970-01-01T00:00:00Z | `osac-metering/schema/versions/v1.json` | `4414c0cdb75a21169c9636d3fa3a454149c8e1944cc3cc8d9abe86a4a9465917` |
+| `v1` | `osac.resource.heartbeat.v1` | 1970-01-01T00:00:00Z | `osac-metering/schema/versions/v1.json` | `6f691f271e178162b4b5c0ad4e0049ac69d68214951bb812b723ac2ec5602988` |
 
 A reader that meets a type it has not adopted alerts, keeps the event, and adds support before that version's effective date. OSAC's adapters forward the CloudEvent type unchanged; they never relabel an event as another version.
 
@@ -111,7 +111,7 @@ A reader that meets a type it has not adopted alerts, keeps the event, and adds 
 | `heartbeat_time` | string | required | UTC, whole seconds | Round time that produced the event. It is part of the deduplication key. |
 | `last_applied_offset` | integer | required | event-log offset | Position in the tenant's event topic the round had folded. |
 | `rules_revision` | string | required | - | Rule revision that produced the event, for example 0001. |
-| `external_billing_account_id` | string | optional | - | Tenant's external billing account id, when the tenant has one. The event omits it otherwise. |
+| `external_billing_account_id` | string | optional | - | Tenant's external billing account id, when the tenant has one. The provider supplies it; OSAC copies it as given. M360 keeps its own mapping. The event omits it otherwise. |
 
 The billable line that `component` names is listed in the Component column of each resource table below.
 
@@ -123,7 +123,7 @@ The default rule revision is revision `0001`, effective from 1970-01-01T00:00:00
 
 ### Rule example
 
-This is the default revision `0001` that the chart ships, copied from its rule file. The key legend below explains each key.
+This is the default revision `0001` that the chart ships, copied from its rule file. The table and key legend below explain the values.
 
 ```yaml
 # Default meters, revision 0001. FAILED is never billable. Allocation meters
@@ -189,20 +189,31 @@ This is the default revision `0001` that the chart ships, copied from its rule f
   dimensions: [virtual_network, external_ip]
 ```
 
+The rule file names each resource by its proto message; events carry the wire value:
+
+| Rule file `resource` | Event `resource_type` |
+|---|---|
+| `BareMetalInstance` | `bare_metal_instance` |
+| `Cluster` | `cluster_order` |
+| `ComputeInstance` | `compute_instance` |
+| `ExternalIP` | `external_ip` |
+| `NATGateway` | `nat_gateway` |
+| `Volume` | `volume` |
+
 | Key | Meaning |
 |---|---|
-| `resource` | The resource type the rule bills. Events carry its `resource_type` value. |
+| `resource` | The resource type the rule bills, by proto message name. The table above maps it to the event value. |
 | `meter` | The meter name. Events carry it in `meter`. |
 | `unit` | What the meter measures. Events carry it in `usage.unit` and `billing_dimensions.meter_type`. |
 | `billable_when.states` | The resource states that bill. |
 | `turns_billable_once` | States that confirm a deferred billable span. A span that closes before one never bills. |
 | `billable_when.fields` | Conditions on fields fixed at creation: the expected text, or `set` for presence. |
 | `multiplier` | A tracked field the quantity is multiplied by. Omitted means 1. |
-| `dimensions` | Tracked fields the meter carries as billing dimensions. |
+| `dimensions` | The YAML entries are keys in `billing_dimensions`; each resource section lists the tracked field the value comes from. |
 
 A provider that needs different meters ships the next immutable revision with a later effective date; the chart ships revision `0001`. See [the metering chart rules](../../charts/osac-metering/rules/).
 
-`Multiplier` names the tracked field metering has already multiplied into `usage.quantity`, or `none`. A reader must not apply it again. In revision `0001`, only Volume `capacity` uses `provisioned_size_gib`: a 100 GiB volume's quantity is already multiplied by 100.
+`Multiplier` names the tracked field metering has already multiplied into `usage.quantity`, or `none`. A reader must not apply it again. In revision `0001`, these meters use a multiplier: Volume `capacity` by `provisioned_size_gib`. A 100 GiB volume's quantity is already multiplied by 100.
 
 Every usage event also carries these identity dimensions in `billing_dimensions`, besides the meter's own dimensions:
 
@@ -212,10 +223,10 @@ Every usage event also carries these identity dimensions in `billing_dimensions`
 | `tenant` | Tenant the usage belongs to |
 | `meter_type` | The meter's unit |
 | `project` | Value of the resource's `metadata.project` |
-| `catalog` | Value of the resource's `spec.catalog_item` |
-| `template` | Value of the resource's `spec.template` |
+| `catalog` | The `spec.catalog_item` reference's `name` when set, else its `id` |
+| `template` | The `spec.template` reference's `name` when set, else its `id` |
 
-A dimension with no value for the interval is omitted from `billing_dimensions`; do not read a missing dimension as an empty string.
+A boolean dimension such as `attached` carries `true` or `false`. A dimension with no value for the interval is omitted from `billing_dimensions`; do not read a missing dimension as an empty string.
 
 ### Bare metal instance (`bare_metal_instance`)
 
@@ -370,7 +381,7 @@ Tracked fields:
 
 ## Billing account id
 
-Schema version `v1` and later carry `external_billing_account_id` when the tenant has one. A tenant without one omits it. The field is optional. The provider supplies it and ensures it matches the account in their billing system.
+Schema version `v1` and later carry `external_billing_account_id` when the tenant has one. A tenant without one omits it. The field is optional. The provider supplies it and ensures it matches the account in their billing system; OSAC copies it as given. M360 keeps its own mapping.
 
 The id never correlates usage. Match a correction to the event it corrects by tenant, resource, meter, component, and billing dimensions. The id can change while usage is in flight: metering stamps each event with the id current when its round builds it and never rewrites published events.
 

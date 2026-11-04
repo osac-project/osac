@@ -276,11 +276,14 @@ func writeSchemaVersions(out *strings.Builder, sources Sources) {
 			"so the current shape must stay a superset of every published version; that is "+
 			"what lets one reader read records written under older versions.\n\n")
 	fmt.Fprintf(out,
-		"A version's effective date is the earliest date its events may carry it. Metering "+
-			"writes its current version unconditionally and never selects a version by date, "+
-			"so the version must not take effect after the release that ships it. Metering "+
-			"refuses to load a current version whose effective date is in the future; an "+
-			"older, future-dated version may wait in the tree until its release.\n\n")
+		"A version's effective date is the earliest date its events may carry it, measured by "+
+			"`heartbeat_time`, the round time that wrote the record. A reader that filters on "+
+			"the CloudEvent `time` (the interval start) uses `heartbeat_time` for the version "+
+			"boundary. Metering writes its current version unconditionally and never selects "+
+			"a version by date, so the version must not take effect after the release that "+
+			"ships it. Metering refuses to load a current version whose effective date is in "+
+			"the future; an older, future-dated version may wait in the tree until its "+
+			"release.\n\n")
 	if sources.TopicRetention == "-1" {
 		fmt.Fprintf(out,
 			"A published version stays readable for as long as its records are retained. "+
@@ -366,16 +369,28 @@ func writeResources(out *strings.Builder, sources Sources, views []resourceView)
 			"revision. This reference documents the newest shipped revision only; earlier "+
 			"revisions stay in the chart and are immutable.\n\n",
 		sources.Revision.Number, sources.Revision.EffectiveAt.Format("2006-01-02T15:04:05Z"))
-	writeRuleExample(out, sources)
+	writeRuleExample(out, sources, views)
 	fmt.Fprintf(out,
 		"A provider that needs different meters ships the next immutable revision with a "+
 			"later effective date; the chart ships revision `%s`. See [the metering chart "+
 			"rules](../../charts/osac-metering/rules/).\n\n", sources.Revision.Number)
-	fmt.Fprintf(out,
-		"`Multiplier` names the tracked field metering has already multiplied into "+
-			"`usage.quantity`, or `none`. A reader must not apply it again. In revision "+
-			"`%s`, only Volume `capacity` uses `provisioned_size_gib`: a 100 GiB volume's "+
-			"quantity is already multiplied by 100.\n\n", sources.Revision.Number)
+	multipliers := multiplierMeters(views)
+	if len(multipliers) == 0 {
+		fmt.Fprintf(out,
+			"`Multiplier` names the tracked field metering has already multiplied into "+
+				"`usage.quantity`, or `none`. A reader must not apply it again. No meter in "+
+				"revision `%s` uses a multiplier.\n\n", sources.Revision.Number)
+	} else {
+		fmt.Fprintf(out,
+			"`Multiplier` names the tracked field metering has already multiplied into "+
+				"`usage.quantity`, or `none`. A reader must not apply it again. In revision "+
+				"`%s`, these meters use a multiplier: %s.", sources.Revision.Number,
+			strings.Join(multipliers, "; "))
+		if volumeCapacityMultiplier(views) {
+			fmt.Fprintf(out, " A 100 GiB volume's quantity is already multiplied by 100.")
+		}
+		fmt.Fprintf(out, "\n\n")
+	}
 	writeIdentityDimensions(out)
 	for _, view := range views {
 		writeResource(out, view)
@@ -385,31 +400,70 @@ func writeResources(out *strings.Builder, sources Sources, views []resourceView)
 // writeRuleExample prints the default revision's YAML with a key legend. The rule file is
 // immutable once released, so the reference explains its keys here instead of changing its
 // bytes.
-func writeRuleExample(out *strings.Builder, sources Sources) {
+func writeRuleExample(out *strings.Builder, sources Sources, views []resourceView) {
 	fmt.Fprintf(out, "### Rule example\n\n")
 	fmt.Fprintf(out,
 		"This is the default revision `%s` that the chart ships, copied from its rule file. "+
-			"The key legend below explains each key.\n\n", sources.Revision.Number)
+			"The table and key legend below explain the values.\n\n", sources.Revision.Number)
 	yaml := sources.Revision.MetersYAML
 	if !strings.HasSuffix(yaml, "\n") {
 		yaml += "\n"
 	}
 	fmt.Fprintf(out, "```yaml\n%s```\n\n", yaml)
+	fmt.Fprintf(out,
+		"The rule file names each resource by its proto message; events carry the wire value:\n\n")
+	fmt.Fprintf(out, "| Rule file `resource` | Event `resource_type` |\n|---|---|\n")
+	for _, view := range views {
+		fmt.Fprintf(out, "| `%s` | `%s` |\n", view.Message, view.Type)
+	}
+	fmt.Fprintf(out, "\n")
 	fmt.Fprintf(out, "| Key | Meaning |\n|---|---|\n")
 	keys := [][2]string{
-		{"`resource`", "The resource type the rule bills. Events carry its `resource_type` value."},
+		{"`resource`", "The resource type the rule bills, by proto message name. The table above maps it to the event value."},
 		{"`meter`", "The meter name. Events carry it in `meter`."},
 		{"`unit`", "What the meter measures. Events carry it in `usage.unit` and `billing_dimensions.meter_type`."},
 		{"`billable_when.states`", "The resource states that bill."},
 		{"`turns_billable_once`", "States that confirm a deferred billable span. A span that closes before one never bills."},
 		{"`billable_when.fields`", "Conditions on fields fixed at creation: the expected text, or `set` for presence."},
 		{"`multiplier`", "A tracked field the quantity is multiplied by. Omitted means 1."},
-		{"`dimensions`", "Tracked fields the meter carries as billing dimensions."},
+		{"`dimensions`", "The YAML entries are keys in `billing_dimensions`; each resource section lists the tracked field the value comes from."},
 	}
 	for _, key := range keys {
 		fmt.Fprintf(out, "| %s | %s |\n", key[0], key[1])
 	}
 	fmt.Fprintf(out, "\n")
+}
+
+// multiplierMeters lists the meters of the shipped revision that scale their quantity.
+func multiplierMeters(views []resourceView) []string {
+	var result []string
+	for _, view := range views {
+		for _, meter := range view.Meters {
+			if meter.Meter.Multiplier == "" {
+				continue
+			}
+			result = append(result, fmt.Sprintf(
+				"%s `%s` by `%s`", displayName(view.Type), meter.Meter.Meter, meter.Meter.Multiplier,
+			))
+		}
+	}
+	return result
+}
+
+// volumeCapacityMultiplier reports whether the revision scales Volume capacity by its
+// provisioned size, which the reference's 100 GiB example explains.
+func volumeCapacityMultiplier(views []resourceView) bool {
+	for _, view := range views {
+		if view.Type != schema.ResourceTypeVolume {
+			continue
+		}
+		for _, meter := range view.Meters {
+			if meter.Meter.Meter == "capacity" && meter.Meter.Multiplier == "provisioned_size_gib" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func writeIdentityDimensions(out *strings.Builder) {
@@ -421,8 +475,9 @@ func writeIdentityDimensions(out *strings.Builder) {
 		fmt.Fprintf(out, "| `%s` | %s |\n", identity.Name, identity.Description)
 	}
 	fmt.Fprintf(out,
-		"\nA dimension with no value for the interval is omitted from `billing_dimensions`; "+
-			"do not read a missing dimension as an empty string.\n\n")
+		"\nA boolean dimension such as `attached` carries `true` or `false`. A dimension "+
+			"with no value for the interval is omitted from `billing_dimensions`; do not read "+
+			"a missing dimension as an empty string.\n\n")
 }
 
 func writeResource(out *strings.Builder, view resourceView) {
@@ -492,7 +547,8 @@ func writeBillingAccount(out *strings.Builder, sources Sources) {
 			"Schema version `%s` and later carry `external_billing_account_id` when the "+
 				"tenant has one%s. A tenant without one omits it. The field is optional. The "+
 				"provider supplies it and ensures it matches the account in their billing "+
-				"system.\n\n", first, earlier)
+				"system; OSAC copies it as given. M360 keeps its own mapping.\n\n",
+			first, earlier)
 		fmt.Fprintf(out,
 			"The id never correlates usage. Match a correction to the event it corrects by "+
 				"tenant, resource, meter, component, and billing dimensions. The id can change "+

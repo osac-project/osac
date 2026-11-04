@@ -185,9 +185,12 @@ var _ = Describe("createExternalIP", func() {
 		pool := eipMakePool("pool-1", "pool-abc")
 		createdEIP := eipMakeEIP("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 		failedEIP := eipMakeEIP("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
+		ci := eipMakeCI("ci-001", "my-vm", publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
 
 		f.poolMock.EXPECT().List(gomock.Any(), gomock.Any()).Return(
 			publicv1.ExternalIPPoolsListResponse_builder{Items: []*publicv1.ExternalIPPool{pool}}.Build(), nil)
+		f.ciMock.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			publicv1.ComputeInstancesListResponse_builder{Items: []*publicv1.ComputeInstance{ci}}.Build(), nil)
 		f.eipMock.EXPECT().Create(gomock.Any(), gomock.Any()).Return(
 			publicv1.ExternalIPsCreateResponse_builder{Object: createdEIP}.Build(), nil)
 		f.eipMock.EXPECT().Get(gomock.Any(), gomock.Any()).Return(
@@ -202,21 +205,31 @@ var _ = Describe("createExternalIP", func() {
 		f.runner.args.computeInstance = "missing-vm"
 
 		pool := eipMakePool("pool-1", "pool-abc")
-		createdEIP := eipMakeEIP("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
-		allocatedEIP := eipMakeEIP("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
 
 		f.poolMock.EXPECT().List(gomock.Any(), gomock.Any()).Return(
 			publicv1.ExternalIPPoolsListResponse_builder{Items: []*publicv1.ExternalIPPool{pool}}.Build(), nil)
-		f.eipMock.EXPECT().Create(gomock.Any(), gomock.Any()).Return(
-			publicv1.ExternalIPsCreateResponse_builder{Object: createdEIP}.Build(), nil)
-		f.eipMock.EXPECT().Get(gomock.Any(), gomock.Any()).Return(
-			publicv1.ExternalIPsGetResponse_builder{Object: allocatedEIP}.Build(), nil)
-		// CI list returns empty.
+		// CI list returns empty; no EIP should be created.
 		f.ciMock.EXPECT().List(gomock.Any(), gomock.Any()).Return(
 			publicv1.ComputeInstancesListResponse_builder{Items: []*publicv1.ComputeInstance{}}.Build(), nil)
 
 		err := f.runner.createExternalIP(f.ctx)
 		Expect(err).To(HaveOccurred())
+	})
+
+	It("should return error before creating the EIP when the CI is not RUNNING", func() {
+		f.runner.args.computeInstance = "stopped-vm"
+
+		pool := eipMakePool("pool-1", "pool-abc")
+		ci := eipMakeCI("ci-001", "stopped-vm", publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED)
+
+		f.poolMock.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			publicv1.ExternalIPPoolsListResponse_builder{Items: []*publicv1.ExternalIPPool{pool}}.Build(), nil)
+		f.ciMock.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			publicv1.ComputeInstancesListResponse_builder{Items: []*publicv1.ComputeInstance{ci}}.Build(), nil)
+
+		err := f.runner.createExternalIP(f.ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("must be RUNNING"))
 	})
 
 	It("should return error when attachment creation fails", func() {

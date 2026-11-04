@@ -131,6 +131,37 @@ func (c *runnerContext) createExternalIP(ctx context.Context) error {
 		return err
 	}
 
+	// Resolve the target compute instance (if any) before creating
+	// anything, so a mistyped name or an unusable instance fails
+	// before an address is allocated from the pool.
+	var ci *publicv1.ComputeInstance
+	if c.args.computeInstance != "" {
+		ci, err = lookup.Find(c.args.computeInstance, "compute instance", func(filter string, limit int32) ([]*publicv1.ComputeInstance, error) {
+			resp, err := c.ciClient.List(ctx, publicv1.ComputeInstancesListRequest_builder{
+				Filter: proto.String(filter),
+				Limit:  proto.Int32(limit),
+			}.Build())
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve compute instance %q: %w", c.args.computeInstance, err)
+			}
+			return resp.GetItems(), nil
+		})
+		if err != nil {
+			return err
+		}
+
+		// The attachment contract requires the target instance to be
+		// RUNNING. Best effort: the instance could still stop before
+		// the attach runs.
+		ciState := ci.GetStatus().GetState()
+		if ciState != publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING {
+			return fmt.Errorf(
+				"compute instance %q is in state %s, must be RUNNING before attaching an external IP",
+				ci.GetMetadata().GetName(), ciState.String(),
+			)
+		}
+	}
+
 	createResp, err := c.eipsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 		Object: publicv1.ExternalIP_builder{
 			Metadata: metautil.ForCreate(ctx, c.args.name).Build(),
@@ -157,7 +188,9 @@ func (c *runnerContext) createExternalIP(ctx context.Context) error {
 	c.console.Infof(ctx, "Created external IP '%s' (ID: %s). Waiting for ALLOCATED...\n",
 		eip.GetMetadata().GetName(), eip.GetId())
 
-	eip, err = wait.Poll(ctx, wait.Options[*publicv1.ExternalIP]{
+	// wait.Poll returns the zero value on error, so keep the
+	// created object for error reporting instead of overwriting it.
+	allocated, err := wait.Poll(ctx, wait.Options[*publicv1.ExternalIP]{
 		Fetch: func(ctx context.Context) (*publicv1.ExternalIP, error) {
 			resp, err := c.eipsClient.Get(ctx, publicv1.ExternalIPsGetRequest_builder{
 				Id: eip.GetId(),
@@ -182,23 +215,10 @@ func (c *runnerContext) createExternalIP(ctx context.Context) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("external IP '%s' did not reach ALLOCATED: %w", eip.GetMetadata().GetName(), err)
+		return fmt.Errorf("external IP '%s' (ID: %s) did not reach ALLOCATED: %w",
+			eip.GetMetadata().GetName(), eip.GetId(), err)
 	}
-
-	// Step 3: resolve compute instance.
-	ci, err := lookup.Find(c.args.computeInstance, "compute instance", func(filter string, limit int32) ([]*publicv1.ComputeInstance, error) {
-		resp, err := c.ciClient.List(ctx, publicv1.ComputeInstancesListRequest_builder{
-			Filter: proto.String(filter),
-			Limit:  proto.Int32(limit),
-		}.Build())
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve compute instance %q: %w", c.args.computeInstance, err)
-		}
-		return resp.GetItems(), nil
-	})
-	if err != nil {
-		return err
-	}
+	eip = allocated
 
 	// Step 4: create the attachment.
 	attachResp, err := c.attachClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{

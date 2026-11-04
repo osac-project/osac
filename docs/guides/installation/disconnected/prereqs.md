@@ -88,7 +88,7 @@ Doc 1 owns one ISC and workspace lineage, registry population, and generated-res
 
 | Handoff item | OSAC-specific requirement |
 | --- | --- |
-| `idms-oc-mirror.yaml` | Generated ImageDigestMirrorSet names and exact source-to-mirror rules |
+| Generated IDMS documents | Every generated ImageDigestMirrorSet identity and exact digest rule, across all files/documents, with NCS enforced on every entry before apply/handoff; same policy quality required as ITMS |
 | Generated ITMS documents | Every generated ImageTagMirrorSet identity and exact tag rule, across all files/documents, with NCS enforced on every entry before apply/handoff; required by this handoff |
 | `cs-redhat-operator-index-v4-22.yaml` | CatalogSource `redhat-operators` in `openshift-marketplace`; exact generated mirror image |
 | `cc-redhat-operator-index-v4-22.yaml` | Generated ClusterCatalog identities; use these objects, not any catalog on the cluster |
@@ -97,38 +97,57 @@ Doc 1 owns one ISC and workspace lineage, registry population, and generated-res
 | Affected pools | Explicit pool names and expected current generations from the change owner |
 | VMaaS source selection (when `enable_vmaas=true`) | Selected upstream containerdisk repositories and exact tags, intended mirror references and coverage/exact-tag review in the organization's existing records; no mandated filename, serialization or export; omit for `enable_vmaas=false` |
 
-**Core prerequisite — all ITMS entries must disable source fallback.** This
-is independent of VMaaS selection. The mirror owner must patch every entry
-in every generated ITMS document to `mirrorSourcePolicy: NeverContactSource`
-**before apply or handoff**, including replacing an explicit
-`AllowContactingSource`. The
-[4.22 generator](https://github.com/openshift/oc-mirror/blob/7860a5e7f0707a3d8d8729586e8313a41983008d/internal/pkg/clusterresources/clusterresources.go#L126-L153)
-does not set this field; the
-[API default](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_tag_mirror_set.go#L119-L127)
-permits source fallback. Missing or unsafe policy returns to the mirror owner,
+**Core prerequisite — all IDMS and ITMS entries must disable source fallback.**
+This is independent of VMaaS selection. The mirror owner must patch every
+entry in every generated document of **both** kinds to
+`mirrorSourcePolicy: NeverContactSource` **before apply or handoff**, including
+replacing an explicit `AllowContactingSource`. Both kinds must pass validation
+before **either** is applied; a failure in one is not permission to apply the
+other. The oc-mirror 4.22
+[IDMS generator](https://github.com/openshift/oc-mirror/blob/7860a5e7f0707a3d8d8729586e8313a41983008d/internal/pkg/clusterresources/clusterresources.go#L498-L525)
+and [ITMS generator](https://github.com/openshift/oc-mirror/blob/7860a5e7f0707a3d8d8729586e8313a41983008d/internal/pkg/clusterresources/clusterresources.go#L126-L153)
+do not set this field. The
+[IDMS API default](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_digest_mirror_set.go#L136-L140)
+and [ITMS API default](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_tag_mirror_set.go#L119-L127)
+permit source fallback. Missing or unsafe policy returns to the mirror owner,
 not an in-place repair in this prerequisite guide.
 
 Run this standalone Bash check with jq against the live handoff state before
-dependent installation. It rejects failed reads, malformed/empty data,
-missing/empty rule lists and mirror lists, and any policy other than NCS:
+dependent installation. The handoff requires nonempty installed IDMS and ITMS
+lists. Reject failed reads, malformed/empty data, missing or empty entry arrays
+or mirror lists, and any policy other than NCS. Emit PASS only after **both**
+kinds succeed; no partial result certifies the handoff:
 
 ```bash
 set -euo pipefail
-ITMS_JSON=$(oc get imagetagmirrorsets.config.openshift.io -o json) || exit 1
-printf '%s\n' "$ITMS_JSON" | jq -se '
-  def nonempty_string: type == "string" and length > 0;
-  length == 1 and (.[0] |
-    (.items | type == "array" and length > 0) and
-    all(.items[];
-      .kind == "ImageTagMirrorSet" and
-      (.spec.imageTagMirrors | type == "array" and length > 0) and
-      all(.spec.imageTagMirrors[];
-        (.source | nonempty_string) and
-        (.mirrors | type == "array" and length > 0) and
-        all(.mirrors[]; nonempty_string) and
-        .mirrorSourcePolicy == "NeverContactSource")))
-' >/dev/null || exit 1
-printf '%s\n' 'PASS: every live ITMS entry has NeverContactSource'
+for resource in imagedigestmirrorsets.config.openshift.io \
+  imagetagmirrorsets.config.openshift.io; do
+  case "$resource" in
+    imagedigestmirrorsets.config.openshift.io)
+      kind=ImageDigestMirrorSet
+      field=imageDigestMirrors
+      ;;
+    imagetagmirrorsets.config.openshift.io)
+      kind=ImageTagMirrorSet
+      field=imageTagMirrors
+      ;;
+  esac
+  MIRROR_JSON=$(oc get "$resource" -o json) || exit 1
+  printf '%s\n' "$MIRROR_JSON" | jq -se --arg kind "$kind" --arg field "$field" '
+    def nonempty_string: type == "string" and length > 0;
+    length == 1 and (.[0] |
+      (.items | type == "array" and length > 0) and
+      all(.items[];
+        .kind == $kind and
+        (.spec[$field] | type == "array" and length > 0) and
+        all(.spec[$field][];
+          (.source | nonempty_string) and
+          (.mirrors | type == "array" and length > 0) and
+          all(.mirrors[]; nonempty_string) and
+          .mirrorSourcePolicy == "NeverContactSource")))
+  ' >/dev/null || exit 1
+done
+printf '%s\n' 'PASS: every live IDMS and ITMS entry has NeverContactSource'
 ```
 
 This checks policy only, not selected-image coverage or availability. For
@@ -143,14 +162,17 @@ Replace the matched source prefix with the mirror prefix, preserve the
 repository suffix and **exact selected tag**, and verify that tag's manifest
 and expected image/platform content with the approved mirror-read client.
 A namespace or `/v2/` response alone is insufficient. Missing mappings or
-tags block handoff. Review digest selections separately against IDMS.
+tags block handoff. Apply the same most-specific source review to digest
+selections against IDMS and read the exact selected mirror digest, using the
+[IDMS semantics](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_digest_mirror_set.go#L44-L65).
+Neither all-entry policy check proves selected tag or digest availability.
 
 The platform/network prerequisites are assumed to provide approved egress
 restrictions; network-egress testing is outside this workflow. NCS is a
 matching-image fallback policy, **not a firewall**. Do not replace it with
 `blockedRegistries`: [MCO](https://github.com/openshift/machine-config-operator/blob/6ee7ec8468a63d46e5fecb4a60244357b1b2a6ad/pkg/controller/container-runtime-config/helpers.go#L760-L815)
 maintains both transport and image-policy blocking, which can reject the
-logical source reference even with mirrors configured. ITMS does not prove
+logical source reference even with mirrors configured. IDMS/ITMS policy does not prove
 CDI import routing; retain `installation.md`'s separate CDI acceptance gate.
 
 Check default-source isolation:
@@ -165,7 +187,7 @@ Review the handed-off resource identities and record the adjacent observations s
 
 Retain both generated mirror-set types and the generated signature handoff. For the corresponding dependent steps, require the exact CatalogSource name/namespace/image and its `READY` state, and each generated ClusterCatalog's `Serving=True` condition with reason `Available`, using separate resource checks. OLM Classic PackageManifest visibility does not prove ClusterCatalog readiness or vice versa. These observations do not produce a combined Doc 1 identity/content/policy/lineage certificate.
 
-**Regenerated mirror policies — Doc1 change owner:** first enforce NCS on every generated ITMS entry as required above. Regeneration of `idms-oc-mirror.yaml` or `itms-oc-mirror.yaml` is not itself an instruction to change live cluster configuration. Before applying regenerated output, the mirror/change owner compares the intended patched object identities, source-to-mirror rules and policies with the approved live configuration. An existing `AllowContactingSource` or absent live policy does not satisfy this handoff.
+**Regenerated mirror policies — Doc1 change owner:** first enforce NCS on every generated IDMS and ITMS entry and validate both kinds before any apply, as required above. Regeneration of `idms-oc-mirror.yaml` or `itms-oc-mirror.yaml` is not itself an instruction to change live cluster configuration. Before applying regenerated output, the mirror/change owner compares the intended patched object identities, source-to-mirror rules and policies with the approved live configuration. An existing `AllowContactingSource` or absent live policy does not satisfy this handoff.
 
 - **Application is required before dependent use** when an intended generated object/rule is missing or the approved selected references require a new or changed mapping, destination or policy.
 - **Do not introduce a policy change merely because output was regenerated.** If the intended generated identities and effective rules already match the approved live state for all selected consumers, retain the fresh artifacts and the owner's no-change review.
@@ -362,7 +384,7 @@ helm template osac ./osac --namespace "$OSAC_NAMESPACE" --values "$VALUES_FILE" 
 
 Expected: protected nonempty render. Do not require global server-side dry-run: operator APIs/webhooks do not yet exist, and Phase 2 installs additional CRDs.
 
-Review the rendered consumers against the selected services and approved values, including unresolved placeholders and embedded credentials, and record those observations separately. Review normal containers, sidecars and init containers; retain the separate selected-bundle/CSV image review in §2, because the OSAC render and a `RELATED_IMAGE` environment-variable listing do not by themselves enumerate every operator deployment image. Stop the dependent step on an unresolved placeholder, embedded credential or selected-consumer mismatch. Use Doc 1's selected inventory, intended tag/ITMS or digest/IDMS mappings and exact mirror references when reviewing each image. Return an observed missing image, mapping discrepancy or unavailable destination to the mirror owner with the exact reference; a render or registry-prefix observation does not certify exhaustive inventory, policy specificity, availability or provenance. Retain the selected VMaaS `NeverContactSource` requirement; the separate CDI import path remains a later VMaaS acceptance gate. Record each direct-mirror override, including CLI, with its approved original and mirror references in the private inputs. These narrower observations do not waive approved image/source provenance or mirror-only requirements.
+Review the rendered consumers against the selected services and approved values, including unresolved placeholders and embedded credentials, and record those observations separately. Review normal containers, sidecars and init containers; retain the separate selected-bundle/CSV image review in §2, because the OSAC render and a `RELATED_IMAGE` environment-variable listing do not by themselves enumerate every operator deployment image. Stop the dependent step on an unresolved placeholder, embedded credential or selected-consumer mismatch. Use Doc 1's selected inventory, intended tag/ITMS or digest/IDMS mappings and exact mirror references when reviewing each image. Return an observed missing image, mapping discrepancy or unavailable destination to the mirror owner with the exact reference; a render or registry-prefix observation does not certify exhaustive inventory, policy specificity, availability or provenance. Retain the Core-wide IDMS and ITMS `NeverContactSource` requirement regardless of VMaaS; the separate CDI import path remains a later VMaaS acceptance gate. Record each direct-mirror override, including CLI, with its approved original and mirror references in the private inputs. These narrower observations do not waive approved image/source provenance or mirror-only requirements.
 
 ## 6. Handoff and worked flow
 

@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/netboxclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
@@ -43,8 +44,8 @@ import (
 
 const testNetBoxHostClass = "metal3"
 
-func testNetBoxCredentials() *BMCCredentials {
-	return &BMCCredentials{
+func testNetBoxCredentials() *credentials.BMC {
+	return &credentials.BMC{
 		Username: []byte("bmc-user"),
 		Password: []byte("source-password"),
 	}
@@ -383,14 +384,14 @@ func (a *selectorQueryTestAPI) PatchDevice(
 }
 
 type fakeCredentialsReaderRepository struct {
-	credentials *BMCCredentials
+	credentials *credentials.BMC
 	err         error
 	calls       int
 	hostID      string
 	onResolve   func()
 }
 
-func (r *fakeCredentialsReaderRepository) GetCredentials(_ context.Context, hostID string) (*BMCCredentials, error) {
+func (r *fakeCredentialsReaderRepository) GetCredentials(_ context.Context, hostID string) (*credentials.BMC, error) {
 	r.calls++
 	r.hostID = hostID
 	if r.onResolve != nil {
@@ -403,7 +404,7 @@ func (*fakeCredentialsReaderRepository) Close() error {
 	return nil
 }
 
-func newTestNetBoxClient(api NetBoxAPI, resolver CredentialsReaderRepository) *NetBoxClient {
+func newTestNetBoxClient(api NetBoxAPI, resolver credentials.Reader) *NetBoxClient {
 	ctrl := gomock.NewController(GinkgoT())
 	manager := baremetalhost.NewMockBMHLifecycleManager(ctrl)
 	manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
@@ -413,13 +414,13 @@ func newTestNetBoxClient(api NetBoxAPI, resolver CredentialsReaderRepository) *N
 	return newTestNetBoxClientWithManager(api, resolver, manager)
 }
 
-func newTestNetBoxClientWithManager(api NetBoxAPI, resolver CredentialsReaderRepository, manager baremetalhost.BMHLifecycleManager) *NetBoxClient {
+func newTestNetBoxClientWithManager(api NetBoxAPI, resolver credentials.Reader, manager baremetalhost.BMHLifecycleManager) *NetBoxClient {
 	return NewNetBoxClient(api, manager, testNetBoxHostClass, resolver)
 }
 
 func newTestNetBoxClientWithCredentials(api NetBoxAPI) *NetBoxClient {
 	return newTestNetBoxClient(api, &fakeCredentialsReaderRepository{
-		credentials: &BMCCredentials{
+		credentials: &credentials.BMC{
 			Username: []byte("user"),
 			Password: []byte("pass"),
 		},
@@ -1360,7 +1361,7 @@ var _ = Describe("NetBox credential resolver", func() {
 		got, err := resolver.GetCredentials(context.Background(), "42")
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(got).To(Equal(&BMCCredentials{
+		Expect(got).To(Equal(&credentials.BMC{
 			Username: []byte("bmc-user"),
 			Password: []byte("bmc-password"),
 		}))

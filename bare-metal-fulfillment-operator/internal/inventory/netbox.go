@@ -29,6 +29,7 @@ import (
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bmcdiscovery"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/netboxclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
@@ -83,12 +84,6 @@ type SecretAPIClient interface {
 	Close() error
 }
 
-// CredentialsReaderRepository returns BMC credentials for a NetBox device.
-type CredentialsReaderRepository interface {
-	GetCredentials(ctx context.Context, hostID string) (*BMCCredentials, error)
-	Close() error
-}
-
 // NetBoxClientConfig contains the mounted-file and endpoint settings for NetBox.
 type NetBoxClientConfig struct {
 	URL               string `json:"url"`
@@ -128,7 +123,7 @@ type NetBoxClient struct {
 	api               NetBoxAPI
 	bmhManager        baremetalhost.BMHLifecycleManager
 	hostClass         string
-	credentialsReader CredentialsReaderRepository
+	credentialsReader credentials.Reader
 }
 
 var (
@@ -158,7 +153,7 @@ func NewNetBoxAPI(config *Config) (NetBoxAPI, error) {
 }
 
 // NewNetBoxClient creates a NetBox inventory client with injected dependencies.
-func NewNetBoxClient(api NetBoxAPI, bmhManager baremetalhost.BMHLifecycleManager, hostClass string, credentialsReader CredentialsReaderRepository) *NetBoxClient {
+func NewNetBoxClient(api NetBoxAPI, bmhManager baremetalhost.BMHLifecycleManager, hostClass string, credentialsReader credentials.Reader) *NetBoxClient {
 	return &NetBoxClient{
 		api:               api,
 		bmhManager:        bmhManager,
@@ -314,7 +309,7 @@ func (c *NetBoxClient) assignNetBoxDevice(ctx context.Context, namespace, device
 	}
 }
 
-func (c *NetBoxClient) resolveNetBoxHostAccess(ctx context.Context, device netboxclient.Device) (*netBoxConnectionData, *BMCCredentials, error) {
+func (c *NetBoxClient) resolveNetBoxHostAccess(ctx context.Context, device netboxclient.Device) (*netBoxConnectionData, *credentials.BMC, error) {
 	connection, err := netBoxConnection(device.CustomFields)
 	if err != nil {
 		return nil, nil, credentialResolutionFailure(err)
@@ -329,7 +324,7 @@ func (c *NetBoxClient) resolveNetBoxHostAccess(ctx context.Context, device netbo
 	return connection, credentials, nil
 }
 
-func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connection *netBoxConnectionData, credentials *BMCCredentials, bareMetalInstanceID string) (*Host, error) {
+func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connection *netBoxConnectionData, credentials *credentials.BMC, bareMetalInstanceID string) (*Host, error) {
 	secretName := host.Name + bmcSecretSuffix
 	if err := c.bmhManager.EnsureBMCSecret(ctx, secretName, string(credentials.Username), string(credentials.Password)); err != nil {
 		return nil, fmt.Errorf("failed to ensure BMC credentials Secret for NetBox host: %w", err)
@@ -692,18 +687,12 @@ type netBoxConnectionData struct {
 	BootMACAddress string
 }
 
-// BMCCredentials contains the credentials used to connect to a BMC.
-type BMCCredentials struct {
-	Username []byte
-	Password []byte
-}
-
 // NetBoxCredentialResolver finds the system Secret associated with a NetBox device.
 type NetBoxCredentialResolver struct {
 	secrets SecretAPIClient
 }
 
-var _ CredentialsReaderRepository = (*NetBoxCredentialResolver)(nil)
+var _ credentials.Reader = (*NetBoxCredentialResolver)(nil)
 
 // NewNetBoxCredentialResolver creates the NetBox-specific Secret resolver.
 func NewNetBoxCredentialResolver(secrets SecretAPIClient) *NetBoxCredentialResolver {
@@ -711,7 +700,7 @@ func NewNetBoxCredentialResolver(secrets SecretAPIClient) *NetBoxCredentialResol
 }
 
 // GetCredentials resolves the unique system Secret associated with a NetBox host.
-func (r *NetBoxCredentialResolver) GetCredentials(ctx context.Context, hostID string) (*BMCCredentials, error) {
+func (r *NetBoxCredentialResolver) GetCredentials(ctx context.Context, hostID string) (*credentials.BMC, error) {
 	if r == nil || r.secrets == nil {
 		return nil, errors.New("OSAC Secret API client is not configured")
 	}
@@ -724,7 +713,7 @@ func (r *NetBoxCredentialResolver) GetCredentials(ctx context.Context, hostID st
 	if err != nil {
 		return nil, credentialResolutionFailure(err)
 	}
-	return &BMCCredentials{Username: username, Password: password}, nil
+	return &credentials.BMC{Username: username, Password: password}, nil
 }
 
 // Close releases resources owned by the Secret API client.

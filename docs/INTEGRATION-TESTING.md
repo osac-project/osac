@@ -234,9 +234,48 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 |---|---|---|---|
 | Unit | `internal/`; `ginkgo run -r internal` | Fulfillment logic and adapters covered by package tests | External services are mocked where the package tests use mocks. |
 | Component integration | `it/`; `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` | Deployed Fulfillment Service, its database, and the CLI binary built from this checkout. The specs labelled `networking-operator` run in a second phase with the local OSAC Operator image deployed and `global.networking.provisioningEnabled=false`; the first phase excludes them. | CaaS, VMaaS, BMaaS, and external provider workflows unless a specific test exercises them. |
-| Component integration ([DEV] OSAC-6553, OSAC-6554) | `it/it_service_accounts*.go`, `it/it_managed_service_account_authorization_test.go`; focused commands in [service-account coverage](#coverage-notes) | Deployed Fulfillment API, PostgreSQL, Keycloak, and the configured runtime IDP principal for CRUD, tenant isolation, PENDING-to-READY credential Secret provisioning with client ID and secret retrieval, client lifecycle, and managed-token role authorization | Failure tests run the service and reconciler in process and inject Keycloak transport failures; external provider provisioning is out of scope. |
+| Component integration ([DEV] OSAC-6553, OSAC-6554, OSAC-6555) | `it/it_service_accounts*.go`, `it/it_managed_service_account_authorization_test.go`; focused commands in [service-account coverage](#coverage-notes) | Deployed Fulfillment API, PostgreSQL, Keycloak, the controller's IDP management principal, and the configured runtime IDP principal for CRUD, tenant isolation, PENDING-to-READY credential Secret provisioning with client ID and secret retrieval, rotation, client lifecycle, and managed-token role authorization | Failure tests run the service and reconciler in process against PostgreSQL and Keycloak, injecting Keycloak transport and persistence failures; external provider provisioning is out of scope. |
 | Component integration ([DEV] OSAC-6307) | `internal/servers` and `internal/database/migrations/126_hold_external_ip_capacity_until_archive_test.go`; from `fulfillment-service/`, run `go test ./internal/servers ./internal/database/migrations -timeout 20m` | Fulfillment server logic and PostgreSQL test container, including archive-time capacity and exclusivity for terminating consumers | Kubernetes and provider cleanup are not run; release completion is exercised by operator tests with provider fixtures. |
 | E2E | `../tests/e2e/` | Cross-component OSAC user journeys | Depends on the deployed test environment and its configured providers. |
+
+### ComputeInstance disk handoff (OSAC-6685)
+
+After installing the Kind infrastructure, run this component-integration phase
+from the repository root:
+
+```bash
+make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage
+```
+
+`SUITE=fulfillment` also includes this phase. The specs are labelled
+`compute-storage` in `fulfillment-service/it/it_compute_instance_storage_handoff_test.go`.
+They exercise the public ComputeInstance API, real Volume records in PostgreSQL,
+Fulfillment reconciliation, installed storage and ComputeInstance operator
+controllers, and StorageClass lookup against the Kind API server. The target
+and hub are the same disposable cluster; remote-target routing is not covered.
+
+The cases check distinct boot/additional-disk Volume IDs and their tenant,
+project, tier and size; persistence in parent status and the managed CR; the
+same IDs and class mappings in the operator's AAP HTTP request; stable IDs on
+re-observation; no VM launch while a requested class is missing or ambiguous;
+recovery after correcting the classes; and Volume record cleanup after a
+simulated successful VM teardown. CSP-managed classes must remain unchanged.
+
+The fixture supplies tenant compute readiness and disables network provisioning.
+Only the AAP HTTP job endpoint is a recording double, with completion controlled
+by the test. It rejects unexpected operations and executes no playbooks. The
+operator's Volume controller is disabled to prevent provider provisioning.
+These tests make no claim about physical disks, DataVolumes, CSI, Trident, FC,
+NetApp, actual VM execution, or storage-array cleanup. Registration fault
+recovery and OSAC-managed record behavior remain in the existing
+`it_compute_instance_volume_records_test.go` suite. The recorder's protocol
+contracts run with `python3 -m unittest discover -s fulfillment-service/it/testdata -p test_compute_storage_aap.py`.
+
+Fulfillment registers the records before the operator checks classes. A missing
+or ambiguous mapping therefore retains those tracked records and blocks the
+VM job; it does not imply that no Volume record was created. Parent correlation
+uses `ComputeInstance.status.volumes`, CR `spec.diskVolumeIDs`, and stable disk
+record names, rather than a reverse attachment field on Volume.
 
 ### Fulfillment integration timings
 
@@ -250,10 +289,12 @@ make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment 
 
 Relative directories resolve from `osac-installer/`. CI sets an absolute
 `FULFILLMENT_IT_REPORT_DIR` under `fulfillment-service/logs/timings/`, which its
-existing `logs` artifact includes. The three phases write `service-only.json`,
-`networking-operator.json`, and `bmaas-disabled.json`. Only the
-networking-operator phase deploys the OSAC Operator.
-When reporting is enabled, those three prior files are cleared before the run
+existing `logs` artifact includes. The four phases write `service-only.json`,
+`networking-operator.json`, `bmaas-disabled.json`, and `compute-storage.json`.
+The networking-operator and compute-storage phases deploy the OSAC Operator.
+`SUITE=compute-storage` runs only the compute-storage phase and writes only
+`compute-storage.json`. When reporting is enabled, the report files for the
+selected suite's phases are cleared before the run
 so a reused local directory cannot retain stale reports for unreached phases.
 A missing report does not imply a passing phase. Use the originating Actions
 run to identify the tested revision.
@@ -294,7 +335,7 @@ installer command in the tier table remains the component-integration check.
 - **StorageBackend ownership ([DEV] [OSAC-6868](https://redhat.atlassian.net/browse/OSAC-6868)):** `internal/validation/storage_backend_ownership_test.go` covers explicit and omitted ownership through the real validation interceptor. `internal/servers/private_storage_backends_server_test.go` combines that interceptor with the real private server and PostgreSQL, then reads in a separate transaction to verify rejection leaves no backend and supported configurations persist. Run `go test ./internal/validation -count=1` and `go test ./internal/servers -count=1 -timeout=10m -ginkgo.focus='Storage backend ownership|Private storage backends server'` from `fulfillment-service/`. Tenancy and attribution are suite doubles; these tests do not exercise a deployed service. `it/it_storage_backend_ownership_test.go` covers the deployed private API/CLI and database boundary through the Fulfillment installer target above. No operator, AAP, or storage-array provisioning is exercised.
 
 - **Tenant storage onboarding projection ([OSAC-6575](https://redhat.atlassian.net/browse/OSAC-6575), DEV):** `internal/controllers/tenant/tenant_storage_onboarding_test.go` covers exact operator condition projection, missing/unknown evidence, source isolation, timestamps, and unchanged observations through the reconciler with mocked hub and Kubernetes clients. `it/it_tenant_storage_onboarding_test.go` exercises operator Tenant CR status to explicit private Tenant `Signal` to persisted private API status using real Kubernetes, the deployed Fulfillment controller/API, and PostgreSQL. [OSAC-6684](https://redhat.atlassian.net/browse/OSAC-6684) adds repeated reads and signals with unchanged storage evidence; a changed compute-readiness reason in the same response confirms the later hub observation occurred. Run the Fulfillment installer target above, or `ginkgo run --timeout 20m --focus 'Tenant storage onboarding feedback' it` against a compatible deployed environment. The fixture supplies the operator condition; it does not prove automatic feedback-watch delivery, storage readiness calculation ([OSAC-6447](https://redhat.atlassian.net/browse/OSAC-6447)), AAP execution, remote cluster access, real storage-provider behavior, or VM consumption ([OSAC-6596](https://redhat.atlassian.net/browse/OSAC-6596)).
-- **Service-account API and Keycloak lifecycle ([DEV] OSAC-6553):** `it_service_accounts_test.go` covers the deployed gRPC and REST APIs, tenant-admin authorization and tenant isolation, dry-run behavior, maximum tenant/client-ID lengths, the PENDING-to-READY transition, credential Secret retrieval of both client ID and secret, and deletion finalizer/retry behavior. Service-account creation does not assign roles; support for service-account subjects in RoleBindings is tracked by [OSAC-6554](https://redhat.atlassian.net/browse/OSAC-6554). The suite uses the deployed Fulfillment API, PostgreSQL, Keycloak, and the runtime principal mounted for the gRPC server. `it_service_accounts_failures_test.go` runs the service and reconciler in process against real PostgreSQL and Keycloak. It injects failures in the client-registration POST to `/clients-registrations/default` and registration DELETE; its `commit` case uses a deferred PostgreSQL constraint trigger to reject persistence. These failure cases run the reconciler directly rather than through the deployed controller loop. From `fulfillment-service/`, after deploying a compatible image and configuring the required Kind service hostnames and trusted TLS bundle, run `GOTOOLCHAIN=go1.26.3 go test ./it -timeout 75m -run '^TestIntegration$' -args -ginkgo.focus='Service-account infrastructure' -ginkgo.v -ginkgo.no-color`. The suite does not cover secret rotation ([OSAC-6555](https://redhat.atlassian.net/browse/OSAC-6555)) or deployed cross-component journeys ([OSAC-6557](https://redhat.atlassian.net/browse/OSAC-6557)).
+- **Service-account API and Keycloak lifecycle ([DEV] OSAC-6553, OSAC-6555):** `it_service_accounts_test.go` covers the deployed gRPC and REST APIs, tenant-admin authorization and tenant isolation, dry-run behavior, maximum tenant/client-ID lengths, the PENDING-to-READY transition, credential Secret retrieval of both client ID and secret, secret rotation, and deletion finalizer/retry behavior. The rotation case verifies that the typed tenant-owned Secret is updated in place and the refreshed registration token still permits client cleanup. Service-account creation does not assign roles; support for service-account subjects in RoleBindings is tracked by [OSAC-6554](https://redhat.atlassian.net/browse/OSAC-6554). The suite uses the deployed Fulfillment API, PostgreSQL, Keycloak, and the controller's IDP management credentials. `it_service_accounts_failures_test.go` runs the service and reconciler in process against real PostgreSQL and Keycloak, using the system-scoped registration Secret API. It injects failures in the client-registration POST to `/clients-registrations/default` and registration DELETE; its `commit` case uses a deferred PostgreSQL constraint trigger to reject persistence. These failure cases run the reconciler directly rather than through the deployed controller loop. From `fulfillment-service/`, after deploying a compatible image and configuring the required Kind service hostnames and trusted TLS bundle, run `GOTOOLCHAIN=go1.26.3 go test ./it -timeout 75m -run '^TestIntegration$' -args -ginkgo.focus='Service-account infrastructure' -ginkgo.v -ginkgo.no-color`. The suite does not cover deployed cross-component journeys ([OSAC-6557](https://redhat.atlassian.net/browse/OSAC-6557)).
 - **BareMetalInstanceType architecture:** Unit validation is in `internal/validation/baremetal_hardware_spec_contract_test.go`. PostgreSQL component-integration tests cover Create validation/persistence in `internal/servers/baremetal_instance_type_architecture_test.go` and canonicalization, preservation, idempotence and rollback in `internal/database/migrations/125_canonicalize_bare_metal_type_architectures_test.go`. Create tests use in-process handlers with mocked tenancy/attribution.
 - **ComputeInstance disk status ([OSAC-6608](https://redhat.atlassian.net/browse/OSAC-6608), DEV):** `internal/controllers/computeinstance/computeinstance_reconciler_function_test.go` verifies ordinary reconciliation and deletion-finalizer updates preserve both status lists in the request while omitting them from the calculated mask. Run `go test ./internal/controllers/computeinstance` from `fulfillment-service/`; these unit tests use controlled Kubernetes and Fulfillment clients. `internal/servers/private_compute_instances_server_test.go` covers empty, partial, and complete correlation lists; all four registration outcomes; a single masked update that commits an ID and its resolved state together; missing fields in a legacy JSONB row; and two independent PostgreSQL writers preserving both status lists. `internal/servers/compute_instances_server_test.go` covers public update rejection and maskless preservation, public JSON/log projection, and owning, project-limited same-tenant, and foreign-tenant Get/List. Run `ginkgo run --timeout 10m internal/servers` from `fulfillment-service/`. This suite runs the in-process Fulfillment servers against real PostgreSQL in a test container; tenancy and external APIs are controlled, and no Volume API, AAP, operator, or provider is started. These tests verify Unit and server/PostgreSQL behavior, not deployed service behavior or Volume creation/recovery.
 - **ComputeInstance disk Volume ID handoff ([OSAC-6612](https://redhat.atlassian.net/browse/OSAC-6612), DEV):** `internal/controllers/computeinstance/computeinstance_reconciler_function_test.go` verifies that the managed CR builder copies only durable `status.volumes` IDs into optional `spec.diskVolumeIDs`, including a partial map. Run `ginkgo run --timeout 20m ./internal/controllers/computeinstance` from `fulfillment-service/`. The test uses controlled clients; it does not exercise Volume API/database recovery, AAP, or a provider. Readiness before AAP dispatch belongs to [OSAC-6613](https://redhat.atlassian.net/browse/OSAC-6613).
@@ -548,6 +589,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 | Component integration | `test/integration/`; deploy the current operator into Kind, then `make integration-tests` | Installed operator, Kubernetes API, CRDs, controller-manager, console proxy, networking, worker service-account authorization and startup without LVMS/TopoLVM | AAP/provider provisioning and external infrastructure are not real; some existing tests remove finalizers to bypass external-provider boundaries. |
 | ComputeInstance disk Volume ID handoff ([DEV] OSAC-6612) | `internal/controller/computeinstance_envtest_test.go`, `pkg/provisioning/aap_provider_test.go`, and `test/integration/computeinstance_disk_volume_ids_test.go`; `make test` and `make integration-tests` | Envtest retains `diskVolumeIDs`, the provider test checks the serialized map after a failed launch and retry, and the Kind suite round-trips the optional map through the installed CRD | Fulfillment status is test-controlled. This does not exercise the AAP task or Volume API/database recovery; dispatch readiness belongs to [OSAC-6613](https://redhat.atlassian.net/browse/OSAC-6613), and deployed cross-component coverage belongs to [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614). |
 | Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator` (repository root) | Thin Kind deployment with the Fulfillment client disabled | Same external-provider limitations as the local Kind suite; installation-setting verification needs a separate deployed test. |
+| Combined ComputeInstance disk handoff ([DEV] OSAC-6685) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage` | Real Fulfillment APIs/PostgreSQL, installed storage and ComputeInstance controllers, CR/status persistence, target StorageClass lookup and AAP HTTP requests | AAP is a recording double; tenant compute readiness is supplied by the fixture. No provider or VM execution; see [coverage details](#computeinstance-disk-handoff-osac-6685). |
 | Contract | `test/contract/`; included by `make test` | Helm chart RBAC templates against the operator permission contract | No deployed operator or external provider. |
 | E2E | `../tests/e2e/` | Cross-component fulfillment journeys | Depends on the deployed environment and configured providers. |
 
@@ -1065,3 +1107,14 @@ See [Multi-branch test isolation](MULTI-BRANCH-ISOLATION.md) for detailed
 guidance on running integration tests from multiple checkouts simultaneously,
 including Kind cluster naming, namespace parameters, port isolation, database
 and Kafka separation, cleanup procedures, and a quick-reference checklist.
+
+Subnet compute eligibility is covered by `networktask/result_test.go` (typed
+manager result validation), the Subnet cases in
+`osac-operator/internal/controller/networking_resources_test.go` (Envtest with
+fake AAP, including API feedback), and
+`fulfillment-service/internal/servers/subnets_server_test.go` (PostgreSQL-backed
+public API status mapping). The `cudn_evpn` component integration target checks
+that the real manager task reports owner/sibling eligibility through its job
+artifacts against Kind. These checks do not establish live OVN readiness or
+packet continuity; deployed provider coverage remains under
+[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).

@@ -1,0 +1,3 @@
+.osac-vm-storage-table > tbody > tr:last-child {
+  border-block-end: 0;
+}

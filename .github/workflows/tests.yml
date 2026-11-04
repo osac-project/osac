@@ -532,6 +532,10 @@ jobs:
           version: v3.22.0
       - uses: ./.github/actions/setup-python
         if: inputs.kind == 'helm-unit'
+      - name: Test Kind runtime and suite runner
+        if: inputs.kind == 'helm-unit'
+        working-directory: osac-installer
+        run: make kind-runtime-test
       - name: Build chart dependencies
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer

@@ -602,8 +602,8 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(status.Message()).To(ContainSubstring("does-not-exist"))
 		})
 
-		It("Rejects an instance type reference without shared=true", func() {
-			// BareMetalInstanceType is platform-scoped, so callers must set shared=true.
+		It("Rejects an instance type reference without a shared tenant selector", func() {
+			// BareMetalInstanceType is platform-scoped, so callers must select the shared tenant.
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -621,7 +621,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("shared=true"))
+			Expect(status.Message()).To(ContainSubstring("select the shared tenant"))
 		})
 
 		It("Rejects an instance type reference that sets project", func() {

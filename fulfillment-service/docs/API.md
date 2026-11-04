@@ -760,8 +760,8 @@ There are two kinds of references:
 
 ### Full references
 
-Full references can point to objects in a different project or in the shared tenant. They have
-four fields:
+Full references can point to objects in another project or a caller-visible tenant. During the
+compatibility period they contain both the new `tenant` selector and the legacy `shared` selector:
 
 ```protobuf
 message ClusterTemplateReference {
@@ -769,6 +769,7 @@ message ClusterTemplateReference {
   string name = 2;
   string project = 3;
   bool shared = 4;
+  string tenant = 5;
 }
 ```
 
@@ -776,8 +777,9 @@ message ClusterTemplateReference {
 |-----------|-------------|
 | `id`      | Unique identifier of the referenced object. |
 | `name`    | Human-readable name of the referenced object. |
-| `project` | Project where the referenced object lives. Defaults to the caller's project when omitted. |
-| `shared`  | When `true`, the lookup targets the `shared` tenant (overrides the caller's tenant). |
+| `project` | Project used for name lookups. When omitted, the tenant's default project is used. |
+| `shared`  | Legacy selector. When `tenant` is empty, `true` selects `shared` for name lookups. ID lookups retain their existing owner/shared validation during the compatibility period. |
+| `tenant`  | Tenant where the referenced object lives. When non-empty, ID and name lookups require that tenant. When omitted, legacy scope rules apply. The caller must be allowed to see the selected tenant. |
 
 Callers may supply `id`, `name`, or both. When both are provided they must refer to the same
 object; otherwise the server returns `InvalidArgument`. The server auto-populates whichever field
@@ -785,6 +787,8 @@ is missing after a successful lookup.
 
 Full references are used when the target object may live outside the caller's project — for
 example, cluster templates, catalog items, host types, instance types, IP pools, roles, and users.
+Public responses retain the reference field for system-tenant objects but omit its `id`, `name`,
+`project`, `tenant`, and `shared` values.
 
 ### Local references
 
@@ -824,7 +828,7 @@ In the JSON representation used by the REST gateway, reference fields are nested
 }
 ```
 
-For local references the format is identical but without `project` and `shared`:
+For local references the format is identical but without `project`, `tenant`, and `shared`:
 
 ```json
 {
@@ -858,24 +862,38 @@ To reference an object by name in a different project within the same tenant, se
 }
 ```
 
-To reference an object by name in the shared tenant (e.g., a globally available template), set
-`shared` to `true`:
+To reference an object by name in another caller-visible tenant, set `tenant`. For example:
 
 ```json
 {
   "spec": {
-    "template": { "name": "sandbox", "shared": true }
+    "template": { "name": "tenant-template", "tenant": "development", "project": "templates" }
   }
 }
 ```
+
+To reference an object in the shared tenant, set `tenant` to `shared`:
+
+```json
+{
+  "spec": {
+    "template": { "name": "sandbox", "tenant": "shared" }
+  }
+}
+```
+
+During the compatibility period, `shared: true` remains accepted when `tenant` is empty. If both
+selectors are set, `shared: true` is valid only with `tenant: "shared"`.
 
 ### Server-side validation and resolution
 
 The server validates references on `Create` and `Update`. A gRPC interceptor handles most
 reference fields. For each field it handles, the interceptor:
 
-1. Determines the lookup scope from the object's tenant and project. For a full reference by
-   name, the `project` and `shared` fields can select another scope.
+1. Determines the lookup scope from the reference and its owner. A non-empty `tenant` selects the
+   target tenant for both ID and name lookups. Without it, name lookups use the owner tenant unless
+   the legacy `shared` selector is true; ID lookups retain their existing owner/shared checks. For
+   name lookups, `project` selects the target project.
 2. Looks up the referenced object by `id` or `name`.
 3. If both `id` and `name` are provided, verifies they refer to the same object.
 4. Fills in whichever of `id` or `name` the caller omitted.

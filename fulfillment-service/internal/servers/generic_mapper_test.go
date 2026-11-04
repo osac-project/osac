@@ -561,4 +561,80 @@ var _ = Describe("Generic mapper", func() {
 		Expect(publicObject.GetMetadata().GetLabels()).To(Equal(map[string]string{"ordinary": "visible"}))
 		Expect(privateObject.GetMetadata().GetLabels()).To(HaveKeyWithValue("admin.osac.openshift.io/review", "private"))
 	})
+
+	It("redacts system-tenant full references in public projections", func() {
+		privateObject := privatev1.Cluster_builder{
+			Spec: privatev1.ClusterSpec_builder{
+				Template: privatev1.ClusterTemplateReference_builder{
+					Id: "system-template-id", Name: "system-template", Project: "internal",
+					Tenant: "system",
+				}.Build(),
+				AddOnOperators: []*privatev1.AddOnOperatorReference{
+					privatev1.AddOnOperatorReference_builder{
+						Id: "system-addon-id", Name: "system-addon", Project: "internal",
+						Tenant: "system",
+					}.Build(),
+					privatev1.AddOnOperatorReference_builder{
+						Id: "shared-addon-id", Name: "shared-addon", Tenant: "shared", Shared: true,
+					}.Build(),
+				},
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"system-node": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+							Id: "system-instance-type-id", Name: "system-instance-type", Tenant: "system",
+						}.Build(),
+					}.Build(),
+				},
+			}.Build(),
+		}.Build()
+		original := proto.Clone(privateObject)
+
+		mapper, err := NewGenericMapper[*privatev1.Cluster, *publicv1.Cluster]().
+			SetLogger(logger).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		publicObject := &publicv1.Cluster{}
+		Expect(mapper.Copy(ctx, privateObject, publicObject)).To(Succeed())
+
+		template := publicObject.GetSpec().GetTemplate()
+		Expect(template).ToNot(BeNil())
+		Expect(template.GetId()).To(BeEmpty())
+		Expect(template.GetName()).To(BeEmpty())
+		Expect(template.GetProject()).To(BeEmpty())
+		Expect(template.GetTenant()).To(BeEmpty())
+		Expect(template.GetShared()).To(BeFalse())
+
+		operators := publicObject.GetSpec().GetAddOnOperators()
+		Expect(operators).To(HaveLen(2))
+		Expect(operators[0].GetId()).To(BeEmpty())
+		Expect(operators[0].GetTenant()).To(BeEmpty())
+		Expect(operators[1].GetId()).To(Equal("shared-addon-id"))
+		Expect(operators[1].GetTenant()).To(Equal("shared"))
+		Expect(operators[1].GetShared()).To(BeTrue())
+		nodeSetRef := publicObject.GetSpec().GetNodeSets()["system-node"].GetBaremetalInstanceType()
+		Expect(nodeSetRef.GetId()).To(BeEmpty())
+		Expect(nodeSetRef.GetTenant()).To(BeEmpty())
+		Expect(proto.Equal(privateObject, original)).To(BeTrue())
+	})
+
+	It("preserves system-tenant full references in private mappings", func() {
+		publicObject := publicv1.Cluster_builder{
+			Spec: publicv1.ClusterSpec_builder{
+				Template: publicv1.ClusterTemplateReference_builder{
+					Id: "system-template-id", Name: "system-template", Tenant: "system",
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		mapper, err := NewGenericMapper[*publicv1.Cluster, *privatev1.Cluster]().
+			SetLogger(logger).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		privateObject := &privatev1.Cluster{}
+		Expect(mapper.Copy(ctx, publicObject, privateObject)).To(Succeed())
+		Expect(privateObject.GetSpec().GetTemplate().GetId()).To(Equal("system-template-id"))
+		Expect(privateObject.GetSpec().GetTemplate().GetTenant()).To(Equal("system"))
+	})
 })

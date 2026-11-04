@@ -135,6 +135,7 @@ func (m *GenericMapper[From, To]) Copy(ctx context.Context, from From, to To) er
 	}
 	if toReflect.Descriptor().ParentFile().Package() == "osac.public.v1" {
 		filterReservedMetadata(toReflect)
+		filterSystemTenantReferences(toReflect)
 	}
 	return nil
 }
@@ -314,6 +315,83 @@ func filterReservedMetadata(message protoreflect.Message) {
 		}
 		return nil
 	})
+}
+
+// filterSystemTenantReferences removes identifiers for system-tenant resources from public
+// references while retaining the reference messages in their original positions.
+func filterSystemTenantReferences(message protoreflect.Message) {
+	if !message.IsValid() {
+		return
+	}
+	if isFullResourceReference(message.Descriptor()) {
+		tenantField := message.Descriptor().Fields().ByName("tenant")
+		if message.Get(tenantField).String() == "system" {
+			for _, name := range []protoreflect.Name{"id", "name", "project", "tenant", "shared"} {
+				if field := message.Descriptor().Fields().ByName(name); field != nil {
+					message.Clear(field)
+				}
+			}
+			return
+		}
+	}
+
+	fields := message.Descriptor().Fields()
+	for i := range fields.Len() {
+		field := fields.Get(i)
+		if !message.Has(field) {
+			continue
+		}
+		if field.IsList() {
+			if field.Message() == nil {
+				continue
+			}
+			list := message.Mutable(field).List()
+			for j := range list.Len() {
+				cloned := proto.Clone(list.Get(j).Message().Interface())
+				filterSystemTenantReferences(cloned.ProtoReflect())
+				list.Set(j, protoreflect.ValueOfMessage(cloned.ProtoReflect()))
+			}
+			continue
+		}
+		if field.IsMap() {
+			if field.MapValue().Message() == nil {
+				continue
+			}
+			values := message.Mutable(field).Map()
+			type mapMessage struct {
+				key   protoreflect.MapKey
+				value proto.Message
+			}
+			var entries []mapMessage
+			values.Range(func(key protoreflect.MapKey, value protoreflect.Value) bool {
+				cloned := proto.Clone(value.Message().Interface())
+				filterSystemTenantReferences(cloned.ProtoReflect())
+				entries = append(entries, mapMessage{key: key, value: cloned})
+				return true
+			})
+			for _, entry := range entries {
+				values.Set(entry.key, protoreflect.ValueOfMessage(entry.value.ProtoReflect()))
+			}
+			continue
+		}
+		if field.Message() != nil {
+			filterSystemTenantReferences(message.Mutable(field).Message())
+		}
+	}
+}
+
+func isFullResourceReference(descriptor protoreflect.MessageDescriptor) bool {
+	name := string(descriptor.Name())
+	if !strings.HasSuffix(name, "Reference") || strings.HasSuffix(name, "LocalReference") {
+		return false
+	}
+	for _, name := range []protoreflect.Name{"id", "name", "project", "tenant"} {
+		field := descriptor.Fields().ByName(name)
+		if field == nil || field.Kind() != protoreflect.StringKind {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *GenericMapper[From, To]) copyMessage(from, to protoreflect.Message) error {

@@ -136,12 +136,15 @@ message BareMetalAcceleratorSpec {
 // Reference to a BareMetalInstanceType resource.
 //
 // BareMetalInstanceType is platform-scoped and always lives in the shared tenant, so callers
-// must set shared = true and must not set project; the server rejects any other combination.
+// must select the shared tenant and must not set project; the server rejects any other combination.
 message BareMetalInstanceTypeReference {
   string id = 1;
   string name = 2;
   string project = 3;
   bool shared = 4;
+  // Tenant where the referenced object lives. If omitted, the owner tenant is used;
+  // the legacy shared selector can select the shared tenant.
+  string tenant = 5;
 }
 
 // Describes a network port in a bare metal instance type.

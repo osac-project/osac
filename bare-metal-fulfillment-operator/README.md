@@ -211,6 +211,16 @@ identity is shared across tenant credentials. A production design needs a scoped
 provider read identity and separately managed rotation; the ConfigMap is not a
 secret store or an authorization boundary for administrators who can edit AWX.
 
+The NICo credential also selects the VPC network type. The default
+`NICO_BMAAS_NETWORK_VIRTUALIZATION_TYPE=ETHERNET_VIRTUALIZER` requires
+`NICO_BMAAS_SUBNET_ID`; `FNN` requires `NICO_BMAAS_VPC_PREFIX_ID`.
+For `FLAT`, both IDs must be empty and `NICO_BMAAS_FLAT_IPV4_CIDR` must be
+the administrator-verified IPv4 CIDR of the bound OSAC Subnet and NICo
+HostInband range. The role verifies the NICo VPC type and selects exactly one
+assigned IP in that range. Flat NICo readiness does not establish traffic
+reachability or SecurityGroup enforcement. See the
+[NICo networking plan](../docs/architecture/nico-bmaas-networking-plan.md).
+
 Provision the ConfigMap and AWX credentials before enabling NICo BMaaS. If the
 binding is absent or malformed, the operator does not authorize a create and
 retains an existing BMI's cleanup finalizer. Keep a tenant/Subnet binding to

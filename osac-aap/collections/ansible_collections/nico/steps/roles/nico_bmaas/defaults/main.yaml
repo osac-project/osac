@@ -16,6 +16,10 @@ nico_bmaas_vpc_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_VPC_ID') }}"
 nico_bmaas_instance_type_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_INSTANCE_TYPE_ID') }}"
 nico_bmaas_subnet_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_SUBNET_ID') }}"
 nico_bmaas_vpc_prefix_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_VPC_PREFIX_ID') }}"
+# FLAT uses autoNetwork and no NICo Subnet/Prefix. Its expected CIDR must
+# match the bound OSAC Subnet and the site's HostInband address range.
+nico_bmaas_network_virtualization_type: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_NETWORK_VIRTUALIZATION_TYPE') | default('ETHERNET_VIRTUALIZER', true) }}"
+nico_bmaas_flat_ipv4_cidr: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_FLAT_IPV4_CIDR') }}"
 nico_bmaas_operating_system_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_OPERATING_SYSTEM_ID') }}"
 nico_bmaas_ipxe_script: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_IPXE_SCRIPT') }}"
 nico_bmaas_tenant_auth:

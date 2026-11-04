@@ -51,13 +51,16 @@ recorded site network.
 Confirm the boot method: a NICo Operating System ID or a real iPXE script with
 reachable artifacts. An iPXE script that exits proves only NICo allocation.
 
-**Flat-network code gap:** `nico.steps.bare_metal_instance` currently requires
-exactly one NICo `subnet_id` or `vpc_prefix_id`, sends a physical `interfaces`
-entry, and reads the assigned IP from that entry. NICo requires
-`autoNetwork: true` and no request interfaces for a zero-DPU Flat Instance;
-its resolved IP appears in `status.network.interfaces`. Extend and test this
-mode, including an unambiguous mapping back to the single OSAC attachment,
-before creating an OSAC BMI on these trays. See NVIDIA's
+**Flat-network pilot mode:** `nico.steps.bare_metal_instance` now accepts
+`NICO_BMAAS_NETWORK_VIRTUALIZATION_TYPE=FLAT` with no NICo Subnet or VPC
+Prefix ID. It sends `autoNetwork: true` without request interfaces and
+requires one assigned IPv4 address within `NICO_BMAAS_FLAT_IPV4_CIDR`.
+Set that CIDR to the administrator-verified OSAC Subnet CIDR representing
+the approved HostInband segment. These request and response guards have unit
+coverage, but no zero-DPU hardware or packet-path validation yet. Capture a
+sanitized GET response from this NICo site to confirm its resolved-interface
+representation before an OSAC BMI create. See the
+[networking plan](nico-bmaas-networking-plan.md) and NVIDIA's
 [Flat VPC guide](https://docs.nvidia.com/infra-controller/documentation/operations-day-2/managing-vp-cs/flat-vp-cs-and-zero-dpu-hosts)
 and [Instance create API](https://docs.nvidia.com/infra-controller/rest-api-reference/api-reference/instance/create-instance).
 

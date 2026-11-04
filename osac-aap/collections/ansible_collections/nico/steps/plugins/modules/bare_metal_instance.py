@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import time
+from ipaddress import IPv4Address, ip_address, ip_network
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -78,6 +79,15 @@ options:
     type: str
   vpc_prefix_id:
     type: str
+  network_virtualization_type:
+    choices: [ETHERNET_VIRTUALIZER, FNN, FLAT]
+    default: ETHERNET_VIRTUALIZER
+    type: str
+  flat_ipv4_cidr:
+    type: str
+    description:
+      - Expected OSAC Subnet CIDR for the one Flat network attachment.
+      - The assigned NICo HostInband address must fall within this range.
   operating_system_id:
     type: str
   ipxe_script:
@@ -224,15 +234,71 @@ def wait_for_instance(client, instance_id, timeout, interval):
         time.sleep(interval)
 
 
+def validate_network_configuration(params):
+    mode = params["network_virtualization_type"]
+    subnet_id, prefix_id = params["subnet_id"], params["vpc_prefix_id"]
+    flat_cidr = params["flat_ipv4_cidr"]
+    if mode == "FLAT":
+        if subnet_id or prefix_id:
+            raise NicoError("FLAT requires no NICo Subnet or VPC Prefix ID")
+        if not flat_cidr:
+            raise NicoError("FLAT requires the expected OSAC Subnet IPv4 CIDR")
+        try:
+            network = ip_network(flat_cidr, strict=True)
+        except ValueError as exc:
+            raise NicoError("FLAT expected IPv4 CIDR is invalid") from exc
+        if network.version != 4:
+            raise NicoError("FLAT expected CIDR must be IPv4")
+    elif mode == "ETHERNET_VIRTUALIZER":
+        if not subnet_id or prefix_id or flat_cidr:
+            raise NicoError("ETHERNET_VIRTUALIZER requires only a NICo Subnet ID")
+    elif mode == "FNN":
+        if not prefix_id or subnet_id or flat_cidr:
+            raise NicoError("FNN requires only a NICo VPC Prefix ID")
+    else:
+        raise NicoError("unsupported NICo VPC network virtualization type")
+
+
+def assigned_ip(instance, params):
+    if params["network_virtualization_type"] == "FLAT":
+        if instance.get("autoNetwork") is not True:
+            raise NicoError("Ready FLAT Instance does not report autoNetwork true")
+        expected = ip_network(params["flat_ipv4_cidr"])
+        matching = []
+        for interface in instance.get("interfaces") or []:
+            for value in interface.get("ipAddresses") or []:
+                try:
+                    address = ip_address(value)
+                except ValueError as exc:
+                    raise NicoError("Ready FLAT Instance reports an invalid IP address") from exc
+                if isinstance(address, IPv4Address) and address in expected:
+                    matching.append(value)
+        if len(matching) != 1:
+            raise NicoError("Ready FLAT Instance has no unique address in the bound OSAC Subnet CIDR")
+        return matching[0]
+
+    network_key = "subnetId" if params["network_virtualization_type"] == "ETHERNET_VIRTUALIZER" else "vpcPrefixId"
+    network_id = params["subnet_id"] or params["vpc_prefix_id"]
+    matching = [interface for interface in instance.get("interfaces") or []
+                if interface.get(network_key) == network_id]
+    if len(matching) != 1 or not matching[0].get("ipAddresses"):
+        raise NicoError("Ready Instance has no unique configured interface with an assigned IP address")
+    return matching[0]["ipAddresses"][0]
+
+
 def ensure_present(client):
     params = client.params
     for key in ("name", "vpc_id", "instance_type_id"):
         if not params[key]:
             raise NicoError(f"{key} is required for Instance create")
-    if bool(params["subnet_id"]) == bool(params["vpc_prefix_id"]):
-        raise NicoError("exactly one of subnet_id or vpc_prefix_id is required")
+    validate_network_configuration(params)
     if not params["operating_system_id"] and not params["ipxe_script"]:
         raise NicoError("operating_system_id or ipxe_script is required")
+    vpc = get_or_none(client, "tenant", "vpc/" + quote(params["vpc_id"], safe=""))
+    if vpc is None or vpc.get("tenantId") != params["tenant_id"]:
+        raise NicoError("configured NICo VPC is absent or belongs to another tenant")
+    if vpc.get("networkVirtualizationType") != params["network_virtualization_type"]:
+        raise NicoError("configured NICo VPC network type differs from BMI backend mode")
 
     if params["instance_id"]:
         instance = get_or_none(client, "tenant", instance_path(params["instance_id"]))
@@ -254,12 +320,16 @@ def ensure_present(client):
         else:
             if not params["create_allowed"]:
                 raise NicoError("Instance not found; create intent must be durably authorized before POST")
-            interface = {"isPhysical": True}
-            interface["subnetId" if params["subnet_id"] else "vpcPrefixId"] = params["subnet_id"] or params["vpc_prefix_id"]
             body = {"name": params["name"], "tenantId": params["tenant_id"],
                     "vpcId": params["vpc_id"], "instanceTypeId": params["instance_type_id"],
-                    "interfaces": [interface], "labels": {"osacBmiUid": params["bmi_uid"]},
+                    "labels": {"osacBmiUid": params["bmi_uid"]},
                     "phoneHomeEnabled": False}
+            if params["network_virtualization_type"] == "FLAT":
+                body["autoNetwork"] = True
+            else:
+                interface = {"isPhysical": True}
+                interface["subnetId" if params["subnet_id"] else "vpcPrefixId"] = params["subnet_id"] or params["vpc_prefix_id"]
+                body["interfaces"] = [interface]
             if params["operating_system_id"]:
                 body["operatingSystemId"] = params["operating_system_id"]
             if params["ipxe_script"]:
@@ -276,18 +346,12 @@ def ensure_present(client):
     assert_owned(instance, params, params["machine_id"])
     if instance.get("vpcId") != params["vpc_id"] or instance.get("instanceTypeId") != params["instance_type_id"]:
         raise NicoError("Ready Instance VPC or Instance Type differs from the configured BMI backend")
-    interfaces = instance.get("interfaces") or []
-    network_key = "subnetId" if params["subnet_id"] else "vpcPrefixId"
-    network_id = params["subnet_id"] or params["vpc_prefix_id"]
-    matching = [interface for interface in interfaces if interface.get(network_key) == network_id]
-    if len(matching) != 1 or not matching[0].get("ipAddresses"):
-        raise NicoError("Ready Instance has no unique configured interface with an assigned IP address")
-    ip_address = matching[0]["ipAddresses"][0]
+    address = assigned_ip(instance, params)
     machine_id = instance.get("machineId")
     if not machine_id:
         raise NicoError("Ready NICo Instance has no Machine ID")
     return {"changed": changed, "instance_id": instance_id, "machine_id": machine_id,
-            "ip_address": ip_address,
+            "ip_address": address,
             "status": instance["status"]}
 
 
@@ -333,6 +397,9 @@ def main():
         create_allowed=dict(type="bool", default=False), name=dict(type="str", default=""),
         vpc_id=dict(type="str", default=""), instance_type_id=dict(type="str", default=""),
         subnet_id=dict(type="str", default=""), vpc_prefix_id=dict(type="str", default=""),
+        network_virtualization_type=dict(type="str", default="ETHERNET_VIRTUALIZER",
+                                         choices=["ETHERNET_VIRTUALIZER", "FNN", "FLAT"]),
+        flat_ipv4_cidr=dict(type="str", default=""),
         operating_system_id=dict(type="str", default=""), ipxe_script=dict(type="str", default=""),
         timeout=dict(type="int", default=1200), poll_interval=dict(type="int", default=10),
     ), supports_check_mode=False)

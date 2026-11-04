@@ -13,6 +13,7 @@
       - nico_bmaas_provider_org | length > 0
       - nico_bmaas_api_url | length > 0
       - nico_bmaas_token_url | length > 0
+      - nico_bmaas_network_virtualization_type in ['ETHERNET_VIRTUALIZER', 'FNN', 'FLAT']
     fail_msg: BMI identity, OSAC tenant/subnet mapping, or NICo endpoint is missing or mismatched
 
 - name: Validate NICo credentials are injected by the AAP environment

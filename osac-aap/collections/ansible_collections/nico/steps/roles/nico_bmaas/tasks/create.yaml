@@ -23,6 +23,8 @@
     instance_type_id: "{{ nico_bmaas_instance_type_id }}"
     subnet_id: "{{ nico_bmaas_subnet_id }}"
     vpc_prefix_id: "{{ nico_bmaas_vpc_prefix_id }}"
+    network_virtualization_type: "{{ nico_bmaas_network_virtualization_type }}"
+    flat_ipv4_cidr: "{{ nico_bmaas_flat_ipv4_cidr }}"
     operating_system_id: "{{ nico_bmaas_operating_system_id }}"
     ipxe_script: "{{ nico_bmaas_ipxe_script }}"
     timeout: "{{ nico_bmaas_timeout }}"

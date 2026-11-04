@@ -9,6 +9,9 @@ aapOperator:
   enabled: true
 lvms:
   enabled: true
+  deviceSelector:
+    optionalPaths:
+      - /dev/sdb
 metallb:
   enabled: true
 cnv:

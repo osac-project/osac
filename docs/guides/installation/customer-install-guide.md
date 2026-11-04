@@ -338,8 +338,8 @@ Notes on individual components:
   Virtualization (CNV).
 - **LVM Storage** uses a channel that tracks the OpenShift Container Platform
   minor version; the installation sets it. The OSAC-managed LVMS path is for
-  development and CI and allowlists `/dev/sample-osac-disk` without creating
-  that device. In production, disable `lvms.enabled` and configure the
+  development and CI and uses an explicit `optionalPaths` allowlist; it does
+  not create devices. In production, disable `lvms.enabled` and configure the
   customer-managed LVMS operator and its `LVMCluster` selector yourself; do not
   rely on dynamic device discovery.
 - **MetalLB Operator** provides a `LoadBalancer`-class implementation. CaaS

@@ -15,6 +15,20 @@ otherwise do by hand in a browser.
 - A Keycloak user on that deployment's realm to log in as. This package
   doesn't provision one — use an existing test account, or create one on the
   target environment first.
+- For a standalone VM launch run, a tenant-scoped SSH public-key Secret must
+  exist in the tenant's Default project. The VM wizard filters for
+  `SECRET_TYPE_SSH_PUBLIC_KEY` with a `public_key` data entry; without one it
+  shows `No secret available` and the SSH-key step cannot complete. The full
+  VMaaS flow creates and removes this Secret automatically. For a standalone
+  run, create one with the private OSAC CLI using a non-sensitive public key
+  file:
+
+  ```bash
+  osac --tenant <tenant-name> create secret \
+    --name <ssh-secret-name> --type ssh-public-key \
+    --from-file=public_key=<path-to-public-key>
+  ```
+
 - Playwright's browser binaries installed once per machine (see Setup below).
 
 ## Setup
@@ -31,10 +45,10 @@ pnpm --filter @osac/playwright exec playwright install chromium
 
 Environment variables:
 
-| Variable           | Description                                                                                       |
-| ------------------ | ------------------------------------------------------------------------------------------------- |
-| `OSAC_UI_BASE_URL` | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
-| `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                              |
+| Variable              | Description                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------- |
+| `OSAC_UI_BASE_URL`    | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
+| `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                               |
 | `OSAC_ADMIN_PASSWORD` | Password for the admin test user                                                                  |
 
 ```bash
@@ -69,15 +83,24 @@ has no specs, Playwright reports that no tests were found.
 
 ### Tenant flow tests
 
-The tenant specs read `tenant_name` from `apps/e2e-tests/extravars.yaml`.
+The tenant specs read `tenant_name` and the optional break-glass replacement
+password from `apps/e2e-tests/extravars.yaml`.
+Set `tenant_password` to the password used after the generated break-glass user
+completes its first login. When it is omitted, the tenant name is used. The
+create flow logs in with the generated break-glass identity, which JIT-creates
+the OSAC User, then uses the private admin CLI to grant that user
+`tenant-admin` through a RoleBinding and waits for `READY`. The same credentials
+are reused for the VM and delete flows.
+The CLI must be authenticated as a private API administrator before running the
+full flow (for example, with `osac login --private`).
 Before running, set it to a tenant that does not already exist. The tenant
 create flow requires that the configured tenant does not already exist; the
 delete flow requires that it exists. All VMaaS specs skip before browser
-actions when `tenant_name` is unset or empty. These flows always authenticate
-with the admin test user. The create flow saves the generated tenant
-break-glass credentials in `/tmp` using a filename containing the tenant name,
-logs in with those credentials as the tenant, and the delete flow removes the
-file after the tenant is deleted.
+actions when `tenant_name` is unset or empty. The setup operations use the
+admin test user. The create flow saves the generated break-glass credentials in
+`/tmp`, updates the password after first login, and grants that identity
+tenant-admin permissions. The delete flow removes the RoleBinding, OSAC User,
+tenant, and credential file.
 
 Set the deployment and admin login variables from the [Running](#running) section,
 then run the flows:
@@ -103,6 +126,78 @@ pnpm --filter @osac/playwright exec playwright test \
 
 pnpm --filter @osac/playwright exec playwright test \
   delete.tenant.spec.ts --project=vmaas-delete --no-deps
+```
+
+### Full VMaaS setup flow
+
+The creation and VM portion of the full-flow journey runs in this order:
+
+1. Create and verify the instance type, disk image, storage tier and its
+   storage-backend readiness, catalog item, and tenant.
+2. Log in with the generated tenant break-glass credentials, set the
+   replacement password from `tenant_password` (or the tenant name), grant
+   the identity `tenant-admin` permissions through a private-API RoleBinding,
+   log in again as the tenant admin, and create a tenant-scoped SSH public-key
+   Secret in the Default project.
+3. Open the published catalog item and exercise the VM wizard: catalog item,
+   project and VM name, disk image, instance type, boot-disk size and storage
+   tier, additional disks, default networking, auto external IP, SSH key,
+   cloud-init/user-data, and the review page.
+4. Submit the wizard and verify navigation to `/vms/<id>`, the
+   `ComputeInstance` reaches `Running`, and the VM appears in both the tenant
+   VM list and its details page.
+
+The full-flow projects run in this order:
+
+1. `vmaas-full-flow-resources` creates the infrastructure resources and tenant.
+2. `vmaas-full-flow` creates and verifies the VM.
+3. `vmaas-full-flow-vm-delete` deletes the VM as the tenant admin.
+4. `vmaas-full-flow-delete` removes the catalog item, disk image, instance
+   type, storage tier, tenant-admin RoleBinding and OSAC User, SSH public-key
+   Secret, tenant, and generated credential file as the admin user.
+
+Run the complete creation flow, including VM creation, with:
+
+```bash
+OSAC_VM_FLOW_MODE=create pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-full-flow
+```
+
+Run the complete deletion flow for an existing creation run with:
+
+```bash
+OSAC_VM_FLOW_MODE=delete pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-full-flow-delete
+```
+
+The creation command stores the non-secret run IDs in
+`/tmp/osac-vmaas-full-flow-state.json`. The deletion-only command reuses those
+IDs and must run on the same host. They expect the VM, generated tenant
+credentials, and full-flow resources to already exist. If the creation run
+failed, the state file remains available for cleanup. VM deletion is
+idempotent when the tenant VM list is already empty; a different VM in the
+list is reported as a run-state mismatch instead of being deleted.
+
+The deletion target includes VM deletion first. In `full` mode, its dependency
+chain also runs the complete creation flow before cleanup.
+
+Run the complete creation and deletion flow with:
+
+```bash
+OSAC_VM_FLOW_MODE=full pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-full-flow-delete
+```
+
+The flow uses the same values from `apps/e2e-tests/extravars.yaml` as the
+individual create projects. The catalog item therefore continues to use the
+configured existing template, instance type, and disk image references. The
+runner stops after the first failure, including a preflight failure because a
+resource already exists, so the remaining flow steps are not started. Use
+`--headed` when a graphical display is available:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-full-flow --headed
 ```
 
 ### Storage tier flow tests
@@ -194,6 +289,7 @@ Each run appends a unique suffix to `disk_image.name`, and the full name appears
 in the test title. To clean up an interrupted run, set
 `OSAC_DISK_IMAGE_TEST_RUN_ID` to that run's suffix when invoking the delete
 project.
+
 ### Instance type flow tests
 
 The instance type tests read their hard-coded test data from

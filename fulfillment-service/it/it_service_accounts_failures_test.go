@@ -224,7 +224,8 @@ var _ = Describe("Service-account infrastructure failure boundaries", Serial, fu
 		Expect(err).ToNot(HaveOccurred())
 		keys, err := auth.NewJwksCache().SetLogger(capture).SetCaPool(tool.CaPool()).AddIssuer(issuer).SetRoot(GinkgoT().TempDir()).Build()
 		Expect(err).ToNot(HaveOccurred())
-		jwtValidator, err := auth.NewJwtValidator().SetLogger(capture).SetJwksCache(keys).Build()
+		jwtValidator, err := auth.NewJwtValidator().SetLogger(capture).SetJwksCache(keys).
+			SetExpirationLeeway(5 * time.Second).Build()
 		Expect(err).ToNot(HaveOccurred())
 		authenticate, err := auth.NewGrpcAuthnInterceptor().SetLogger(capture).SetJwtValidator(jwtValidator).Build()
 		Expect(err).ToNot(HaveOccurred())

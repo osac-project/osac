@@ -2,9 +2,11 @@
 
 ## Overview
 
-The OSAC NICo integration enables cluster-as-a-service provisioning on bare metal infrastructure managed by NVIDIA NICo (Bare Metal Manager). NICo is a pluggable backend — no separate template is required. Existing cluster templates work with NICo by setting `NETWORK_STEPS_COLLECTION=nico.steps` in the AAP environment.
+The OSAC NICo integration enables cluster-as-a-service provisioning on bare metal infrastructure managed by NVIDIA NICo (Bare Metal Manager). Select the `ocp_4_20_small_nico` template for NICo clusters.
 
-The integration uses the pluggable backend architecture via the `network_steps_collection` variable, which routes `cluster_infra` and `external_access` operations to the NICo backend collection (`nico.steps`).
+The NICo template routes external-access create and delete tasks directly to
+`nico.steps.external_access`. It does not use a provider step-collection
+environment variable.
 
 ## Environment Variables
 
@@ -14,7 +16,6 @@ All NICo configuration is provided via environment variables injected into AAP f
 
 | Variable | Description |
 |----------|-------------|
-| `NETWORK_STEPS_COLLECTION` | Set to `nico.steps` to select the NICo backend |
 | `NVIDIA_BMM_API_URL` | NICo API endpoint (e.g., `https://nico.example.com`) |
 | `NVIDIA_BMM_CLIENT_ID` | OAuth2 client ID for authentication |
 | `NVIDIA_BMM_CLIENT_SECRET` | OAuth2 client secret for authentication |
@@ -49,10 +50,8 @@ metadata:
   namespace: aap
 type: Opaque
 stringData:
-  NETWORK_STEPS_COLLECTION: "nico.steps"
   NVIDIA_BMM_API_URL: "https://nico.example.com"
-  NVIDIA_BMM_CLIENT_ID: "my-client-id"
-  NVIDIA_BMM_CLIENT_SECRET: "my-client-secret"
+  NVIDIA_BMM_CLIENT_ID: "<inject-from-secret-management>"
   NVIDIA_BMM_SSA_TOKEN_URL: "https://auth.example.com/oauth/token"
   NVIDIA_BMM_ORG: "org-id-here"
   NVIDIA_BMM_SITE_ID: "site-uuid-here"
@@ -64,16 +63,23 @@ stringData:
   NVIDIA_BMM_DEFAULT_OAUTH_SCOPE: "my-scope"
 ```
 
+The client ID above is a placeholder. Inject `NVIDIA_BMM_CLIENT_SECRET` through
+the deployment's secret-management process; do not put its value in this
+manifest or commit it to source control.
+
 ## Template Parameters
 
-ClusterOrder resources provide these in `spec.templateParameters`. The same template works for both ESI and NICo — the backend is selected by the environment, not the template.
+ClusterOrder resources provide these in `spec.templateParameters`. The explicit
+ClusterOrder field `spec.releaseImage` takes precedence over the
+`release_image` template parameter. The NICo template uses explicit NICo task
+overrides; provider selection is part of the template.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `pull_secret` | Yes | OpenShift pull secret (JSON object, not a string) |
-| `ssh_public_key` | Yes | SSH public key for cluster node access |
+| `pull_secret` | No | Optional OpenShift pull-secret JSON for legacy template parameters. Prefer `spec.pullSecret`, submitted through an authenticated API request; it takes precedence when both are set. Otherwise the provider default is used. Never put real pull-secret data in a checked-in file. |
+| `ssh_public_key` | No | Optional SSH public key for cluster node access; `spec.sshPublicKey` takes precedence when both are set, then the provider default Secret is used |
 | `ip_block_id` | Yes | NICo IP block ID for VPC prefix allocation |
-| `ocp_release_image` | No | Override OCP release image |
+| `release_image` | No | OCP release image override; `spec.releaseImage` takes precedence |
 | `vpc_id` | No | Use an existing VPC instead of creating a new one |
 | `vpc_prefix_id` | No | Use an existing VPC prefix instead of creating a new one |
 | `ssh_key_group_id` | No | Override SSH key group for this cluster |
@@ -82,10 +88,9 @@ ClusterOrder resources provide these in `spec.templateParameters`. The same temp
 
 Before submitting a ClusterOrder, ensure:
 
-1. `NETWORK_STEPS_COLLECTION=nico.steps` is set in the AAP environment
-2. A **Tenant CR** exists with the `osac.openshift.io/bgp-asn` annotation set to the local BGP ASN
-3. The ClusterOrder has the `osac.openshift.io/tenant` annotation pointing to the Tenant name
-4. An **InfraEnv** resource named `hardware-inventory` exists in the `hardware-inventory` namespace
+1. A **Tenant CR** exists with the `osac.openshift.io/bgp-asn` annotation set to the local BGP ASN
+2. The ClusterOrder has the `osac.openshift.io/tenant` annotation pointing to the Tenant name
+3. An **InfraEnv** resource named `hardware-inventory` exists in the `hardware-inventory` namespace
 
 ### Example ClusterOrder
 
@@ -98,26 +103,32 @@ metadata:
   annotations:
     osac.openshift.io/tenant: "osac-devel"
 spec:
-  templateName: ocp_4_20_small_nico
+  templateID: osac.templates.ocp_4_20_small_nico
   nodeRequests:
-    - numberOfNodes: 2
+    - nodeSet: compute
+      numberOfNodes: 2
       bareMetal:
         instanceType: my-instance-type
-  templateParameters:
-    pull_secret:
-      auths:
-        quay.io:
-          auth: "<base64-encoded-credentials>"
-          email: "user@example.com"
-        registry.redhat.io:
-          auth: "<base64-encoded-credentials>"
-          email: "user@example.com"
-    ssh_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."
-    ip_block_id: "ip-block-uuid-here"
+  templateParameters: >-
+    {"ssh_public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...","ip_block_id":"ip-block-uuid-here"}
 ```
 
-The requested `bareMetal.instanceType` must match a NICo instance type name
-at the configured site exactly. No manual mapping is needed.
+This example omits pull-secret contents. If the cluster needs non-default
+registry credentials, provide them through `spec.pullSecret` in the authenticated
+ClusterOrder request or use the provider's default pull secret.
+
+The requested `bareMetal.instanceType` must name an OSAC
+`BareMetalInstanceType` and exactly match a NICo instance type name at the
+configured site. The operator resolves the OSAC type, and the NICo integration
+passes that same name directly without mapping it. The `nodeSet` value is the
+logical node-set key for this request; choose it and the template ID from the
+site's Fulfillment configuration.
+
+## Legacy Collection Lifecycle Reference
+
+The following role details document the legacy NICo collection behavior. The
+current `ocp_4_20_small_nico` template statically selects the NICo
+`external_access` role; it does not use generic step-collection dispatch.
 
 ## Cluster Lifecycle Flows
 
@@ -279,15 +290,10 @@ The `nico-infra` ConfigMap is written immediately after VPC/prefix creation (bef
 
 ### Backend Routing
 
-The NICo backend is selected by setting the `NETWORK_STEPS_COLLECTION` environment variable to `nico.steps`. No template changes are needed. The shared orchestration layer delegates to the backend via:
-
-```yaml
-ansible.builtin.include_role:
-  name: "{{ network_steps_collection }}.cluster_infra"
-  tasks_from: create.yaml
-```
-
-This pattern allows multiple backends to coexist (ESI via `osac.steps`, NICo via `nico.steps`, Netris via `netris.steps`).
+The `ocp_4_20_small_nico` wrapper statically selects the NICo external-access
+create and delete roles. This keeps the NICo-specific endpoint and BGP
+lifecycle in `nico.steps` while CaaS networking resources are managed through
+the OSAC Networking API.
 
 ### Collection Structure
 

@@ -14,18 +14,18 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/assistedservice"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const (
-	infraEnvNameSuffix   = "-infraenv"
+	infraEnvNameSuffix   = assistedservice.InfraEnvNameSuffix
 	pullSecretNameSuffix = "-pull-secret"
 	// ignitionSizeWarningThreshold is 75% of the 64 KiB BMI user data limit; above it the controller
 	// warns that discovery ignition is approaching that ceiling.
@@ -41,8 +41,6 @@ const (
 	reasonStaleIgnitionWorkersMarked = "StaleIgnitionWorkersMarked"
 	sshKeyResolutionRetry            = time.Minute
 )
-
-var infraEnvGVK = schema.GroupVersionKind{Group: "agent-install.openshift.io", Version: agentInstallAPIVersion, Kind: "InfraEnv"}
 
 // infraEnvEvidence is the invocation-local result of the single InfraEnv
 // observation. object is nil only when absence was authoritative (an uncached
@@ -104,9 +102,8 @@ func (r *Reconciler) observeInfraEnvEvidence(
 // a present object must be controlled by this ClusterOrder before its UID or boot
 // artifacts are consumed as evidence.
 func (r *Reconciler) observeInfraEnvObject(ctx context.Context, co *v1alpha1.ClusterOrder) (*unstructured.Unstructured, error) {
-	key := client.ObjectKey{Name: co.Name + infraEnvNameSuffix, Namespace: co.Namespace}
-	cached := &unstructured.Unstructured{}
-	cached.SetGroupVersionKind(infraEnvGVK)
+	key := client.ObjectKey{Name: assistedservice.InfraEnvName(co.Name), Namespace: co.Namespace}
+	cached := assistedservice.NewInfraEnvObject()
 	err := r.Get(ctx, key, cached)
 	if err == nil {
 		return cached, validateInfraEnvOwner(co, cached)
@@ -120,8 +117,7 @@ func (r *Reconciler) observeInfraEnvObject(ctx context.Context, co *v1alpha1.Clu
 	if reader == nil {
 		reader = r.Client
 	}
-	current := &unstructured.Unstructured{}
-	current.SetGroupVersionKind(infraEnvGVK)
+	current := assistedservice.NewInfraEnvObject()
 	switch err := reader.Get(ctx, key, current); {
 	case err == nil:
 		return current, validateInfraEnvOwner(co, current)
@@ -163,7 +159,7 @@ func (r *Reconciler) deriveInfraEnvPending(
 	ctx context.Context, co *v1alpha1.ClusterOrder, infraEnv *unstructured.Unstructured,
 ) error {
 	key := client.ObjectKeyFromObject(infraEnv)
-	ignitionURL, _, err := unstructured.NestedString(infraEnv.Object, "status", "bootArtifacts", "discoveryIgnitionURL")
+	ignitionURL, _, err := assistedservice.DiscoveryIgnitionURL(infraEnv)
 	if err != nil {
 		return fmt.Errorf("reading infraenv %s ignition URL: %w", key, err)
 	}
@@ -190,7 +186,7 @@ func (r *Reconciler) deriveInfraEnvPending(
 func (r *Reconciler) createMissingInfraEnv(
 	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 ) (infraEnvEvidence, ctrl.Result, bool, error) {
-	key := client.ObjectKey{Name: co.Name + infraEnvNameSuffix, Namespace: co.Namespace}
+	key := client.ObjectKey{Name: assistedservice.InfraEnvName(co.Name), Namespace: co.Namespace}
 	if apimeta.IsStatusConditionTrue(co.Status.Conditions, v1alpha1.ConditionInfraEnvReady) {
 		ctrllog.FromContext(ctx).Info("InfraEnv deleted while InfraEnvReady=True, resetting condition", "infraenv", key)
 		if err := r.setInfraEnvReady(ctx, co, metav1.ConditionFalse, reasonInfraEnvRecreated,
@@ -242,7 +238,7 @@ func (r *Reconciler) fetchDiscoveryIgnition(
 	ctx context.Context, co *v1alpha1.ClusterOrder, infraEnv *unstructured.Unstructured,
 ) ([]byte, ctrl.Result, error) {
 	key := client.ObjectKeyFromObject(infraEnv)
-	ignitionURL, _, err := unstructured.NestedString(infraEnv.Object, "status", "bootArtifacts", "discoveryIgnitionURL")
+	ignitionURL, _, err := assistedservice.DiscoveryIgnitionURL(infraEnv)
 	if err != nil {
 		return nil, ctrl.Result{}, fmt.Errorf("reading infraenv %s ignition URL: %w", key, err)
 	}
@@ -355,8 +351,7 @@ func (r *Reconciler) resolveClusterSSHAuthorizedKey(
 // buildInfraEnv constructs the (unstructured) InfraEnv object: late binding (no clusterRef),
 // owned by the ClusterOrder, referencing the cluster pull secret and SSH key.
 func (r *Reconciler) buildInfraEnv(co *v1alpha1.ClusterOrder, name, sshAuthorizedKey string) (*unstructured.Unstructured, error) {
-	infraEnv := &unstructured.Unstructured{}
-	infraEnv.SetGroupVersionKind(infraEnvGVK)
+	infraEnv := assistedservice.NewInfraEnvObject()
 	infraEnv.SetName(name)
 	infraEnv.SetNamespace(co.Namespace)
 

@@ -86,12 +86,13 @@ Networking controllers launch one job template per network manager task:
 - `OSAC_IGNITION_TRUST_INGRESS_CA` — when `true`, load
   `openshift-config-managed/default-ingress-cert` (`ca-bundle.crt`) at startup
   and add its certificates to the system trust store for discovery ignition
-  downloads. The Helm value `ignition.trustIngressCA` enables this and grants
-  read-only access to that ConfigMap. Use it on OpenShift clusters whose
-  Assisted Service HTTPS Route uses the cluster-generated ingress CA; leave it
-  disabled elsewhere. Missing or invalid bundles prevent controller startup
-  rather than disabling TLS verification. Restart the operator after an ingress
-  CA rotation so it loads the new bundle.
+  downloads. The Helm value `ignition.trustIngressCA` enables this for discovery
+  ignition. ClusterOrder management Route probes load the same CA independently
+  of this flag when the ConfigMap exists; otherwise they verify against system
+  roots. The operator's RBAC grants read-only access to only that ConfigMap.
+  When discovery ignition trust is enabled, a missing or invalid bundle prevents
+  controller startup rather than disabling TLS verification. Restart the
+  operator after an ingress CA rotation so it loads the new bundle.
 
 ### Namespaces
 

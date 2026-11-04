@@ -3,8 +3,9 @@
 # run the task, check its outcome, the writes it sent and the error text.
 # _nf_case: label, task, job (name of a job variable), evpn, merge (keys to
 #   change in the job), iface, env, playbook, steps, expect, search, result,
-#   writes (the exact nf_write_kinds of the run, when given), vnets_left (the
-#   IDs of the V-Nets the fake must still hold).
+#   writes (the exact nf_write_kinds of the run, when given), no_auth (assert
+#   an existing session skips login), vnets_left (the IDs of the V-Nets the
+#   fake must still hold).
 - name: "Prepare the fake Netris - {{ _nf_case.label }}"
   ansible.builtin.include_tasks: admin.yaml
   vars:
@@ -33,11 +34,26 @@
     fail_msg: "{{ _nf_case.label }}: the task wrote {{ nf_write_kinds }}"
     quiet: true
 
+- name: "Check an existing session skipped login - {{ _nf_case.label }}"
+  when: _nf_case.no_auth | default(false) | bool
+  ansible.builtin.assert:
+    that: >-
+      nf_calls | map('join', ' ') | select('search', 'POST /api/auth') | list | length == 0
+    fail_msg: "{{ _nf_case.label }}: the task logged in despite an existing session"
+    quiet: true
+
 - name: "Check the V-Nets left - {{ _nf_case.label }}"
   when: _nf_case.vnets_left is defined
   ansible.builtin.assert:
     that: nf_state.vnets | map(attribute='id') | list == _nf_case.vnets_left
     fail_msg: "{{ _nf_case.label }}: the fake holds {{ nf_state.vnets }}"
+    quiet: true
+
+- name: "Check the IPAM records left - {{ _nf_case.label }}"
+  when: _nf_case.ipam_left is defined
+  ansible.builtin.assert:
+    that: nf_state.ipam_subnets | map(attribute='name') | list == _nf_case.ipam_left
+    fail_msg: "{{ _nf_case.label }}: the fake holds {{ nf_state.ipam_subnets }}"
     quiet: true
 
 - name: "Check the error carries no response body or secret - {{ _nf_case.label }}"

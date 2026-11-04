@@ -26,7 +26,7 @@ Admin endpoints (not part of the Netris API) let a test inspect and steer the
 fake while it runs as a background process:
 
   GET  /__admin/state          all objects, counters and pending faults
-  GET  /__admin/calls          the request log [method, path, body]
+  GET  /__admin/calls          the request log [method, path, body]; auth bodies are redacted
   POST /__admin/calls/clear    empty the request log
   POST /__admin/reset          back to the empty state
   POST /__admin/seed           {"collection", "objects": [...]} add objects
@@ -59,7 +59,10 @@ from __future__ import annotations
 import argparse
 import copy
 import fnmatch
+import hmac
 import json
+import os
+import secrets
 import socket
 import struct
 import sys
@@ -68,7 +71,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-COOKIE = "fake-session"
+COOKIE = os.environ.get("NF_SESSION_COOKIE") or secrets.token_urlsafe(32)
 
 # Collection name -> (list paths, item prefix, id counter key)
 COLLECTIONS = {
@@ -86,6 +89,7 @@ VNI_FIELDS = {"vpcs": ("vni", "vpc"), "vnets": ("vxlanID", "vnet")}
 
 
 def empty_state() -> dict:
+    """Create the initial mutable state used by the fake Netris server."""
     return {
         "vpcs": [], "allocations": [], "ipam_subnets": [], "vnets": [], "nats": [], "clusters": [],
         "servers": [], "server_ports": {}, "ipam_hosts": {},
@@ -102,6 +106,7 @@ class Handler(BaseHTTPRequestHandler):
     # -- plumbing ----------------------------------------------------------
 
     def _body(self) -> dict:
+        """Read and decode a JSON object from the request body."""
         size = int(self.headers.get("Content-Length", "0"))
         try:
             value = json.loads(self.rfile.read(size) or b"{}")
@@ -110,6 +115,7 @@ class Handler(BaseHTTPRequestHandler):
         return value if isinstance(value, dict) else {}
 
     def _send(self, status: int, payload: object, cookie: bool = False) -> None:
+        """Send a JSON response and optionally issue the session cookie."""
         body = b"" if status == 304 else json.dumps(payload).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -129,16 +135,21 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def log_message(self, *args) -> None:
+        """Suppress per-request logs from the HTTP test server."""
         pass
 
     def _logged_in(self) -> bool:
         """True when the Cookie header carries connect.sid with exactly the issued value."""
         pairs = [part.strip() for part in (self.headers.get("Cookie") or "").split(";")]
-        return f"connect.sid={COOKIE}" in pairs
+        expected = f"connect.sid={COOKIE}".encode()
+        return any(
+            hmac.compare_digest(pair.encode(), expected) for pair in pairs
+        )
 
     # -- request entry -----------------------------------------------------
 
     def _handle(self) -> None:
+        """Authenticate and dispatch one HTTP request under the state lock."""
         parts = urlsplit(self.path)
         path = parts.path
         query = parse_qs(parts.query)
@@ -151,7 +162,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/__admin/shutdown":
                     threading.Thread(target=srv.shutdown, daemon=True).start()
                 return
-            srv.calls.append([self.command, path, body])
+            srv.calls.append([self.command, path, self._logged_body(path, body)])
             if path != "/api/auth" and not self._logged_in():
                 self._send(401, {"message": "not logged in"})
                 return
@@ -169,7 +180,15 @@ class Handler(BaseHTTPRequestHandler):
 
     do_GET = do_POST = do_PUT = do_DELETE = _handle  # noqa: N815
 
+    @staticmethod
+    def _logged_body(path: str, body: dict) -> dict:
+        """Redact credentials from the authentication request log entry."""
+        if path == "/api/auth":
+            return {"redacted": True}
+        return body
+
     def _take_fault(self, path: str) -> dict | None:
+        """Return the matching configured fault, preserving sticky faults."""
         faults = self.server.state["faults"]
         key = f"{self.command} {path}"
         for fault in faults:
@@ -182,6 +201,7 @@ class Handler(BaseHTTPRequestHandler):
     # -- the Netris API ----------------------------------------------------
 
     def _dispatch(self, path: str, query: dict, body: dict) -> tuple[int, object, bool]:
+        """Route a request to a fake Netris resource or collection handler."""
         st = self.server.state
         cmd = self.command
         if path == "/api/auth":
@@ -205,6 +225,7 @@ class Handler(BaseHTTPRequestHandler):
         return 404, {"message": "unexpected fake request"}, False
 
     def _list(self, coll: str) -> tuple[int, object, bool]:
+        """Build a collection response with configured omissions and races."""
         st = self.server.state
         omit = st["list_omit"]  # {object id: [keys the list response leaves out]}
         rows = [{k: v for k, v in o.items() if k not in omit.get(str(o["id"]), [])} for o in st[coll]]
@@ -215,6 +236,7 @@ class Handler(BaseHTTPRequestHandler):
         return 200, {"data": rows}, False
 
     def _next_vni(self, kind: str) -> int:
+        """Return the next available VNI for the requested resource type."""
         counter = self.server.state["vni"][kind]
         if counter["free"]:
             counter["free"].sort()
@@ -223,7 +245,20 @@ class Handler(BaseHTTPRequestHandler):
         return counter["next"] - 1
 
     def _create(self, coll: str, body: dict) -> tuple[int, object, bool]:
+        """Create a collection record while modeling provider allocation rules."""
         st = self.server.state
+        if coll == "ipam_subnets":
+            # Netris documents IPAM subnet prefixes as unique and tracks them
+            # per VPC: https://docs.netris.io/en/latest/ipam.html
+            # Keep this check inside the request lock to model that invariant
+            # under concurrent POSTs.
+            vpc_id = (body.get("vpc") or {}).get("id")
+            if any(
+                record.get("prefix") == body.get("prefix")
+                and (record.get("vpc") or {}).get("id") == vpc_id
+                for record in st[coll]
+            ):
+                return 409, {"message": "subnet prefix already exists in VPC"}, False
         key = COLLECTIONS[coll][2]
         new_id = st["next_id"][key]
         st["next_id"][key] += 1
@@ -239,6 +274,7 @@ class Handler(BaseHTTPRequestHandler):
         return 201, {"data": {"id": new_id}}, False
 
     def _item(self, coll: str, item_id: str, body: dict) -> tuple[int, object, bool]:
+        """Read, update, or delete one collection record by its provider ID."""
         st = self.server.state
         rows = st[coll]
         found = next((o for o in rows if str(o["id"]) == item_id), None)
@@ -258,6 +294,7 @@ class Handler(BaseHTTPRequestHandler):
     # -- admin -------------------------------------------------------------
 
     def _admin(self, path: str, body: dict) -> tuple[int, object]:
+        """Handle test-only state, seeding, fault, and shutdown requests."""
         srv = self.server
         st = srv.state
         action = path[len("/__admin/"):]
@@ -312,6 +349,7 @@ class Netris(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, port: int = 0, state_file: str | None = None) -> None:
+        """Initialize the HTTP server, request lock, and provider state."""
         super().__init__(("127.0.0.1", port), Handler)
         self.lock = threading.RLock()
         self.state = empty_state()
@@ -319,11 +357,13 @@ class Netris(ThreadingHTTPServer):
         self.state_file = state_file
 
     def dump(self) -> None:
+        """Write the current provider state to the optional snapshot file."""
         if self.state_file:
             Path(self.state_file).write_text(json.dumps(self.state, indent=1, sort_keys=True))
 
 
 def main() -> int:
+    """Run the fake Netris server using the requested port and state files."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--port-file", required=True, help="file that receives the listening port")
     parser.add_argument("--state-file", help="file that receives a JSON snapshot of the state after each write")

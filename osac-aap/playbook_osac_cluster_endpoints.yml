@@ -1,0 +1,42 @@
+---
+- name: Run one ClusterOrder endpoint task
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    cluster_order: "{{ osac_job_vars.cluster_order }}"
+    external_ip: "{{ osac_job_vars.external_ip | default({}) }}"
+    hosted_cluster_base_domain: >-
+      {{ osac_job_vars.hosted_cluster_base_domain
+         | default(external_access_base_domain | default('')) }}
+    hosted_control_plane_namespace: "{{ osac_job_vars.hosted_control_plane_namespace | default('') }}"
+    ingress_allocated_address: "{{ osac_job_vars.ingress_allocated_address | default('') }}"
+
+  pre_tasks:
+    - name: Check the endpoint task input
+      ansible.builtin.assert:
+        that:
+          - osac_job_vars is mapping
+          - osac_job_vars.task | default('') in cluster_endpoint_tasks
+        fail_msg: "osac_job_vars.task must name a supported ClusterOrder endpoint task"
+      vars:
+        cluster_endpoint_tasks:
+          - configure_guest_ingress
+          - publish_public_dns_api
+          - remove_public_dns_api
+          - publish_public_dns_ingress
+          - remove_public_dns_ingress
+
+    - name: Reject unapproved extra variables
+      ansible.builtin.assert:
+        that:
+          - >-
+            (query('osac.service.launch_extra_vars')
+             | reject('match', '^(osac_job_vars$|awx_|tower_)') | list | length) == 0
+        fail_msg: "ClusterOrder endpoint jobs accept only osac_job_vars"
+
+  tasks:
+    - name: Run the endpoint task
+      ansible.builtin.include_role:
+        name: osac.service.cluster_endpoints
+        tasks_from: main.yaml

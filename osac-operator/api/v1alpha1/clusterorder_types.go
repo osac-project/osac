@@ -20,6 +20,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const (
@@ -283,6 +284,10 @@ const (
 	ClusterOrderConditionAddOnOperatorsReady ClusterOrderConditionType = "AddOnOperatorsReady"
 	// ClusterOrderConditionFulfillmentTrustReady indicates whether fulfillment trust is synchronized.
 	ClusterOrderConditionFulfillmentTrustReady ClusterOrderConditionType = "FulfillmentTrustReady"
+	// ClusterOrderConditionManagementPublicationReady indicates the management API endpoint is ready.
+	ClusterOrderConditionManagementPublicationReady ClusterOrderConditionType = "ManagementPublicationReady"
+	// ClusterOrderConditionEndpointsReady indicates the requested external endpoints and DNS are ready.
+	ClusterOrderConditionEndpointsReady ClusterOrderConditionType = "EndpointsReady"
 )
 
 // ClusterOrderClusterReferenceType contains a reference to the namespace created by this ClusterOrder
@@ -362,15 +367,41 @@ type ClusterOrderStatus struct {
 	// +kubebuilder:validation:Optional
 	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
 
-	// ApiEndpoint is the internal API server VIP allocated by MetalLB.
-	// Written by the CaaS template after VIP discovery.
+	// ApiEndpoint is the management API VIP reported by the HostedControlPlane Service.
 	// +kubebuilder:validation:Optional
 	ApiEndpoint string `json:"apiEndpoint,omitempty"`
 
-	// IngressEndpoint is the internal ingress VIP allocated by MetalLB.
-	// Written by the CaaS template after VIP discovery.
+	// IngressEndpoint is the guest ingress Service address reported by the cluster.
 	// +kubebuilder:validation:Optional
 	IngressEndpoint string `json:"ingressEndpoint,omitempty"`
+
+	// APIURL is the public API URL after the API ExternalIP and DNS record are ready.
+	// +kubebuilder:validation:Optional
+	APIURL string `json:"apiURL,omitempty"`
+
+	// ConsoleURL is the public console URL after ingress is ready.
+	// +kubebuilder:validation:Optional
+	ConsoleURL string `json:"consoleURL,omitempty"`
+
+	// APIDNSRecordsPublishedTime records when the API DNS records were last published.
+	// +kubebuilder:validation:Optional
+	APIDNSRecordsPublishedTime *metav1.Time `json:"apiDNSRecordsPublishedTime,omitempty"`
+
+	// IngressAllocatedAddress is the Fabric Manager-reserved guest ingress address.
+	// +kubebuilder:validation:Optional
+	IngressAllocatedAddress string `json:"ingressAllocatedAddress,omitempty"`
+
+	// TaskInput is the persisted input used to release the Fabric Manager ingress reservation.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	TaskInput *runtime.RawExtension `json:"taskInput,omitempty"`
+
+	// Jobs tracks ClusterOrder Fabric Manager and guest endpoint tasks.
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=task
+	// +listMapKey=manager
+	Jobs []NetworkJobStatus `json:"jobs,omitempty"`
 
 	// DesiredWorkers is the sum of the positive numberOfNodes values of the
 	// requested bare-metal node sets. It reports the requested capacity even before

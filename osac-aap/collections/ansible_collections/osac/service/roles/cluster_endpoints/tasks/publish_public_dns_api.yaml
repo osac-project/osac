@@ -1,0 +1,67 @@
+---
+- name: Set API DNS publication inputs
+  ansible.builtin.set_fact:
+    _cluster_endpoint_dns_domain: "{{ hosted_cluster_base_domain }}"
+    _cluster_endpoint_dns_supported_domains: "{{ external_access_supported_base_domains | default([]) }}"
+    _cluster_endpoint_dns_zone: "{{ dns_zone | default(hosted_cluster_base_domain) }}"
+    _cluster_endpoint_api_records:
+      - "api.{{ cluster_order.metadata.name }}.{{ hosted_cluster_base_domain }}"
+      - "api-int.{{ cluster_order.metadata.name }}.{{ hosted_cluster_base_domain }}"
+  no_log: true
+
+- name: Require an API ExternalIP address when this domain is managed here
+  when: _cluster_endpoint_dns_domain in _cluster_endpoint_dns_supported_domains
+  ansible.builtin.assert:
+    that:
+      - external_ip.address is defined
+      - external_ip.address | ansible.utils.ipaddr('ipv4')
+
+- name: Publish API DNS records
+  when: _cluster_endpoint_dns_domain in _cluster_endpoint_dns_supported_domains
+  ansible.builtin.include_role:
+    name: "{{ dns_class }}"
+    tasks_from: create
+  vars:
+    dns_zone: "{{ _cluster_endpoint_dns_zone }}"
+    dns_record_name: "{{ item }}"
+    dns_record_type: A
+    dns_record_ttl: "{{ external_access_dns_ttl | default(1800) }}"
+    dns_record_value: "{{ external_ip.address }}"
+    dns_record_overwrite: true
+  loop: "{{ _cluster_endpoint_api_records }}"
+  loop_control:
+    label: api-dns-record
+  no_log: true
+
+- name: Resolve authoritative nameserver for the API DNS zone
+  ansible.builtin.command: >-
+    dig +short NS {{ _cluster_endpoint_dns_zone }}
+  register: _cluster_endpoint_zone_ns
+  changed_when: false
+  failed_when: false
+  no_log: true
+  when: >-
+    _cluster_endpoint_dns_domain in _cluster_endpoint_dns_supported_domains
+    and external_access_dns_wait_use_authoritative | default(false) | bool
+    and (dns_server | default('') | length == 0)
+
+- name: Wait for API DNS records
+  when: _cluster_endpoint_dns_domain in _cluster_endpoint_dns_supported_domains
+  ansible.builtin.include_role:
+    name: osac.service.wait_for
+    tasks_from: wait_for_dns
+  vars:
+    wait_for_dns_record: "{{ item }}"
+    wait_for_dns_expected_value: "{{ external_ip.address }}"
+    wait_for_dns_server: >-
+      {{
+        dns_server if (dns_server | default('') | length > 0)
+        else (
+          (_cluster_endpoint_zone_ns.stdout_lines | default([]))
+          | first | default('') | regex_replace('\\.$', '')
+        )
+      }}
+  loop: "{{ _cluster_endpoint_api_records }}"
+  loop_control:
+    label: api-dns-wait
+  no_log: true

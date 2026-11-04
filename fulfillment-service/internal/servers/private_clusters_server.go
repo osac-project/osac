@@ -329,7 +329,8 @@ func (s *PrivateClustersServer) Create(ctx context.Context, request *privatev1.C
 	if err != nil {
 		return
 	}
-	if !isDryRun(ctx) && response.GetObject().GetSpec().GetAutoExternalIpAttachment() {
+	if !isDryRun(ctx) && s.settings.ProvisioningEnabled &&
+		response.GetObject().GetSpec().GetAutoExternalIpAttachment() {
 		err = s.autoProvisionExternalIPs(ctx, response.GetObject())
 		if err != nil {
 			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
@@ -366,6 +367,16 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	clusterVersion, err := s.applyClusterTemplate(ctx, candidate, template)
 	if err != nil {
 		return
+	}
+	if template.GetCapabilities()[supportsAutomaticCAASEndpointsCapability] {
+		if spec := candidate.GetSpec(); spec.HasAutoExternalIpAttachment() && !spec.GetAutoExternalIpAttachment() {
+			return grpcstatus.Error(grpccodes.InvalidArgument,
+				"spec.auto_external_ip_attachment must be omitted or true for templates that support automatic CaaS endpoints")
+		}
+		// The template declares that the cluster uses the automatic CaaS
+		// endpoint lifecycle. Persist that contract so the ClusterOrder
+		// reconciler creates both endpoints when provider networking is enabled.
+		candidate.GetSpec().SetAutoExternalIpAttachment(true)
 	}
 	if err := s.validateCreatedNodeSetVersions(ctx, candidate); err != nil {
 		return err
@@ -415,6 +426,8 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 
 	return
 }
+
+const supportsAutomaticCAASEndpointsCapability = "supports_automatic_caas_endpoints"
 
 // resolveCreationSource accepts exactly one provisioning source: spec.catalog_item or
 // spec.template. For a Catalog Item it finds the item's Template and applies its field rules;

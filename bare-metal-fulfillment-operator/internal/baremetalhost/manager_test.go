@@ -278,7 +278,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 		})
 	})
 
-	Describe("IsBMHReady", func() {
+	Describe("IsBMHAvailable", func() {
 		It("should return true when available and OK", func() {
 			bmh := &metal3api.BareMetalHost{
 				ObjectMeta: metav1.ObjectMeta{
@@ -294,7 +294,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}
 			mgr := newTestManager(bmh)
 
-			ready, err := mgr.IsBMHReady(ctx, "node001")
+			ready, err := mgr.IsBMHAvailable(ctx, "node001")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeTrue())
 		})
@@ -314,7 +314,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}
 			mgr := newTestManager(bmh)
 
-			ready, err := mgr.IsBMHReady(ctx, "node001")
+			ready, err := mgr.IsBMHAvailable(ctx, "node001")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeFalse())
 		})
@@ -334,7 +334,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}
 			mgr := newTestManager(bmh)
 
-			ready, err := mgr.IsBMHReady(ctx, "node001")
+			ready, err := mgr.IsBMHAvailable(ctx, "node001")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeFalse())
 		})
@@ -354,7 +354,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}
 			mgr := newTestManager(bmh)
 
-			ready, err := mgr.IsBMHReady(ctx, "node001")
+			ready, err := mgr.IsBMHAvailable(ctx, "node001")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeFalse())
 		})
@@ -375,7 +375,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}
 			mgr := newTestManager(bmh)
 
-			_, err := mgr.IsBMHReady(ctx, "node001")
+			_, err := mgr.IsBMHAvailable(ctx, "node001")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("error status"))
 		})
@@ -385,7 +385,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			// instead of erroring on a just-created BMH the cache hasn't seen yet.
 			mgr := newTestManager()
 
-			ready, err := mgr.IsBMHReady(ctx, "nonexistent")
+			ready, err := mgr.IsBMHAvailable(ctx, "nonexistent")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeFalse())
 		})

@@ -126,19 +126,19 @@ func (mr *MockBMHLifecycleManagerMockRecorder) GetHardwareNICs(ctx, name any) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHardwareNICs", reflect.TypeOf((*MockBMHLifecycleManager)(nil).GetHardwareNICs), ctx, name)
 }
 
-// IsBMHReady mocks base method.
-func (m *MockBMHLifecycleManager) IsBMHReady(ctx context.Context, name string) (bool, error) {
+// IsBMHAvailable mocks base method.
+func (m *MockBMHLifecycleManager) IsBMHAvailable(ctx context.Context, name string) (bool, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IsBMHReady", ctx, name)
+	ret := m.ctrl.Call(m, "IsBMHAvailable", ctx, name)
 	ret0, _ := ret[0].(bool)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// IsBMHReady indicates an expected call of IsBMHReady.
-func (mr *MockBMHLifecycleManagerMockRecorder) IsBMHReady(ctx, name any) *gomock.Call {
+// IsBMHAvailable indicates an expected call of IsBMHAvailable.
+func (mr *MockBMHLifecycleManagerMockRecorder) IsBMHAvailable(ctx, name any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsBMHReady", reflect.TypeOf((*MockBMHLifecycleManager)(nil).IsBMHReady), ctx, name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsBMHAvailable", reflect.TypeOf((*MockBMHLifecycleManager)(nil).IsBMHAvailable), ctx, name)
 }
 
 // Namespace mocks base method.

@@ -96,7 +96,7 @@ describe('StorageBackendDetailsPage', () => {
     renderPage();
 
     expect(screen.getByRole('heading', { name: 'vast-prod' })).toBeInTheDocument();
-    expect(screen.getByText('vast')).toBeInTheDocument();
+    expect(screen.getByText('VAST Data')).toBeInTheDocument();
     expect(screen.getByText('Ownership mode')).toBeInTheDocument();
     expect(screen.getByText('OSAC-managed')).toBeInTheDocument();
     expect(screen.getByText('vast.example.com:443')).toBeInTheDocument();
@@ -117,7 +117,7 @@ describe('StorageBackendDetailsPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('netapp')).toBeInTheDocument();
+    expect(screen.getByText('NetApp ONTAP')).toBeInTheDocument();
     expect(screen.getByText('CSP-managed')).toBeInTheDocument();
   });
 

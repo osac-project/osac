@@ -5,13 +5,17 @@
 #
 #   http://www.apache.org/licenses/LICENSE-2.0
 
-.PHONY: all clean helm-lint test lint rules-render-test rules-unchanged-test \
-	contract contract-check schemas-unchanged-test
+.PHONY: all clean helm-lint helm-test test lint rules-render-test rules-unchanged-test \
+	readers-render-test contract contract-check schemas-unchanged-test
 
 all: test lint
 
 helm-lint:
 	helm lint charts/osac-metering/
+
+# Chart render tests. Requires the helm-unittest plugin (CI pins v1.2.1).
+helm-test:
+	helm unittest charts/osac-metering
 
 test:
 	$(MAKE) -C schema test
@@ -20,6 +24,12 @@ test:
 	$(MAKE) rules-render-test
 	$(MAKE) rules-unchanged-test
 	$(MAKE) schemas-unchanged-test
+	$(MAKE) readers-render-test
+
+# Granting or revoking a reader must not change the metering Deployment, and a
+# removed reader's KafkaUser must disappear; see scripts/test-readers-render.sh.
+readers-render-test:
+	./scripts/test-readers-render.sh
 
 # The revision ConfigMap is immutable, so its render must not change across
 # chart versions; see scripts/test-rules-render.sh.

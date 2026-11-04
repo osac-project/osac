@@ -48,6 +48,8 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-met
 | Generated contract or published schema files | Unit plus the contract check and the release gate | `make -C osac-metering contract-check schemas-unchanged-test` (the CI leg runs with full git history so the release-tag comparison can run) |
 | Kafka producer/consumer, CloudEvents transport, offsets, retries, or DLQ | Component integration | `make test` |
 | Provider adapters | Unit plus component/E2E coverage for the provider boundary | `make test` and the qualifying provider suite |
+| Reader grants (one reader, all tenants), ACLs, and grant/revoke render stability | Chart render unit | `make helm-test` and `make readers-render-test` (helm-unittest plugin for the first; CI pins v1.2.1) |
+| Worked example reader (`adapters/examples/billing-reader`) | Unit; component integration against a real Kafka topic is a gap | `make -C adapters test` |
 | Billing provider contract | Contract test against a real M360 tenant | `M360_TEST_API_URL`/`M360_TEST_API_KEY`/`M360_TEST_TENANT` gate `adapters/m360/contract_test.go` |
 
 Do not skip the real PostgreSQL and Kafka suites when validating database,
@@ -68,6 +70,7 @@ From `osac-metering/`:
 make test                  # schema, metering-service, and adapters
 make lint
 make helm-lint
+make helm-test             # chart render tests; needs the helm-unittest plugin
 ```
 
 For isolated changes, run `make test` and `make lint` in the changed module

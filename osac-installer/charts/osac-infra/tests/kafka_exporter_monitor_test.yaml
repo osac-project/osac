@@ -1,0 +1,61 @@
+suite: kafka exporter PodMonitor
+templates:
+  - templates/kafka-exporter-monitor.yaml
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1/PodMonitor
+tests:
+  - it: scrapes the exporter on its Prometheus port
+    set:
+      kafka.enabled: true
+      kafka.exporter.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PodMonitor
+      - equal:
+          path: metadata.name
+          value: osac-kafka-exporter
+      - equal:
+          path: metadata.namespace
+          value: osac-kafka
+      - equal:
+          path: spec.selector.matchLabels["strimzi.io/name"]
+          value: osac-kafka-kafka-exporter
+      - equal:
+          path: spec.podMetricsEndpoints[0].port
+          value: tcp-prometheus
+      - equal:
+          path: spec.podMetricsEndpoints[0].path
+          value: /metrics
+
+  - it: merges configured PodMonitor labels
+    set:
+      kafka.enabled: true
+      kafka.exporter.enabled: true
+      kafka.exporter.podMonitor.labels:
+        release: kube-prometheus-stack
+        team: metering
+    asserts:
+      - equal:
+          path: metadata.labels.release
+          value: kube-prometheus-stack
+      - equal:
+          path: metadata.labels.team
+          value: metering
+
+  - it: renders no PodMonitor when Kafka is disabled
+    set:
+      kafka.enabled: false
+      kafka.exporter.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no PodMonitor when lag monitoring is off
+    set:
+      kafka.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0

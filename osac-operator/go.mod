@@ -9,8 +9,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
-	github.com/openshift/api v0.0.0-20260925090845-44bef346c3f0
-	github.com/openshift/hypershift/api v0.0.0-20250331235933-616a2fae81ae
+	github.com/openshift/api v0.0.0-20261028163820-1f109e9eefc7
+	github.com/openshift/hypershift/api v0.0.0-20261103133301-adc46abba51c
 	github.com/osac-project/osac/bare-metal-fulfillment-operator v0.0.0-00010101000000-000000000000
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/osac-project/osac/proto v0.0.0

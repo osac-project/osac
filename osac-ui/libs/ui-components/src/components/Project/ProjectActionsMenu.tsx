@@ -49,6 +49,10 @@ const ProjectActionsMenu = ({ project }: ProjectActionsMenuProps) => {
               setDeleteOpen(true);
               setOpen(false);
             }}
+            canDelete={project.metadata?.name !== ''}
+            disabledReason={
+              project.metadata?.name === '' ? t('Root project cannot be deleted.') : undefined
+            }
           />
         </DropdownList>
       </Dropdown>

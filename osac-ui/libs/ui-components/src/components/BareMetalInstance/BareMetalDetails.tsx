@@ -52,8 +52,12 @@ const BareMetalDetails = ({ instance }: Props) => {
             >
               <FlexItem>
                 <ResourceDetailHeader
-                  parentTo="/bare-metal"
-                  parentLabel={t('Bare Metal')}
+                  parents={[
+                    {
+                      to: '/bare-metal',
+                      label: t('Bare Metal'),
+                    },
+                  ]}
                   resourceName={instance.metadata?.name ?? instance.id}
                   titleAddon={<BareMetalStatusLabel state={instance.status?.state} />}
                 />

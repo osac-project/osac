@@ -10,7 +10,6 @@ instance_type dimension, so attribution holds on each meter separately.
 from __future__ import annotations
 
 import contextlib
-import itertools
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -28,10 +27,10 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import (
     HEARTBEAT_TYPE,
     MeteringCollector,
+    assert_contiguous_exact_seconds,
     assert_exact_contiguous_life,
-    interval_seconds,
+    delete_recording_timestamp,
     parse_time,
-    usage_interval,
 )
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
@@ -55,22 +54,6 @@ def _wait_for_meter(metering: MeteringCollector, bmi_id: str, meter: str, instan
     )[0]
 
 
-def _assert_contiguous_exact_seconds(events: list[dict[str, Any]], meter: str) -> None:
-    """Every heartbeat bills exactly its interval; consecutive intervals touch."""
-    assert events, f"no typed {meter} heartbeats to assert arithmetic on"
-    for event in events:
-        start, end, quantity = usage_interval(event)
-        assert quantity == interval_seconds(start, end), (
-            f"{meter} quantity {quantity} is not the exact length of its interval ({start}..{end})"
-        )
-    for previous, following in itertools.pairwise(events):
-        previous_end = parse_time(previous["data"]["usage"]["to"])
-        following_start = parse_time(following["data"]["usage"]["from"])
-        assert following_start == previous_end, (
-            f"{meter} billed intervals are not contiguous: {previous_end} then {following_start}"
-        )
-
-
 def test_baremetal_instance_bills_allocation_and_consumption(
     jwt_cli_user: OsacCLI,
     jwt_grpc_tenant1: GRPCClient,
@@ -79,14 +62,14 @@ def test_baremetal_instance_bills_allocation_and_consumption(
     catalog_item: str,
     bmi_instance_type: str,
     bmi_disk_image: str,
-    ssh_public_key: str,
+    ssh_key_secret: str,
     test_run_id: str,
 ) -> None:
     """Both meters bill a running instance and stop after its deletion, each
     ending at the recorded deletion with its final partial interval billed."""
     name = f"e2e-bmi-metering-{test_run_id}"
     bmi_id, _ = jwt_cli_user.create_baremetal_instance(
-        name=name, catalog_item=catalog_item, ssh_key=ssh_public_key, disk_image=bmi_disk_image
+        name=name, catalog_item=catalog_item, ssh_key=ssh_key_secret, disk_image=bmi_disk_image
     )
     bmi_cr_name: str | None = None
 
@@ -122,7 +105,7 @@ def test_baremetal_instance_bills_allocation_and_consumption(
                 resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
                 resource_id=bmi_id,
             )
-            _assert_contiguous_exact_seconds(
+            assert_contiguous_exact_seconds(
                 metering.typed_heartbeats(bmi_id, meter=meter, dimension="instance_type"), meter
             )
 
@@ -169,10 +152,7 @@ def test_baremetal_instance_bills_allocation_and_consumption(
 def _delete_bmi(cli: OsacCLI, grpc: GRPCClient, k8s: K8sClient, *, uuid: str, cr_name: str | None) -> datetime | None:
     """Delete the instance and return the deletion time the API server recorded.
 
-    The deletion timestamp is read through a watch established before the
-    delete request: the watch always delivers the modification that stamps
-    it, where a plain get can arrive after the object is already gone. None
-    when the instance never had a CR to watch: the cleanup path after a
+    None when the instance never had a CR to watch: the cleanup path after a
     failed setup.
     """
     deletion_recorded: datetime | None = None
@@ -180,28 +160,13 @@ def _delete_bmi(cli: OsacCLI, grpc: GRPCClient, k8s: K8sClient, *, uuid: str, cr
         with contextlib.suppress(Exception):
             cli.delete_baremetal_instance(uuid=uuid)
     else:
-        try:
-            with k8s.watch_deletion_timestamp(resource="baremetalinstance", name=cr_name) as deletion_stamp:
-                with contextlib.suppress(Exception):
-                    cli.delete_baremetal_instance(uuid=uuid)
-                with contextlib.suppress(Exception):
-                    deletion_recorded = parse_time(
-                        poll_until(
-                            fn=deletion_stamp,
-                            until=lambda stamp: bool(stamp),
-                            retries=30,
-                            delay=2,
-                            description=f"deletion timestamp of {cr_name}",
-                            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
-                            resource_id=cr_name,
-                        )
-                    )
-        except Exception:
-            # A watch that never started must not leak the instance: the
-            # delete above never ran, so issue it now, then fail loudly.
-            with contextlib.suppress(Exception):
-                cli.delete_baremetal_instance(uuid=uuid)
-            raise
+        deletion_recorded = delete_recording_timestamp(
+            k8s,
+            resource="baremetalinstance",
+            cr_name=cr_name,
+            delete=lambda: cli.delete_baremetal_instance(uuid=uuid),
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+        )
         with contextlib.suppress(Exception):
             wait_for_bmi_deletion(k8s=k8s, name=cr_name)
     with contextlib.suppress(Exception):

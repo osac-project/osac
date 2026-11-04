@@ -154,6 +154,12 @@ func Cmd() *cobra.Command {
 		nil,
 		nodeSetFlagHelp,
 	)
+	flags.StringArrayVar(
+		&runner.args.addOnOperators,
+		"add-on-operator",
+		nil,
+		addOnOperatorFlagHelp,
+	)
 	result.MarkFlagsMutuallyExclusive("catalog-item", "template")
 	result.MarkFlagsOneRequired("catalog-item", "template")
 	return result
@@ -175,6 +181,7 @@ type runnerContext struct {
 		serviceCIDR             string
 		networkAttachment       string
 		nodeSets                []string
+		addOnOperators          []string
 		externalIPAttachment    bool
 	}
 	logger                *slog.Logger
@@ -393,6 +400,16 @@ func (c *runnerContext) applyOptionalSpecFields(
 				return err
 			}
 			specBuilder.NodeSets[name] = ns
+		}
+	}
+	if len(c.args.addOnOperators) > 0 {
+		for _, operatorName := range c.args.addOnOperators {
+			operatorName = strings.TrimSpace(operatorName)
+			if operatorName == "" {
+				return fmt.Errorf("empty --add-on-operator value")
+			}
+			specBuilder.AddOnOperators = append(specBuilder.AddOnOperators,
+				publicv1.AddOnOperatorReference_builder{Name: operatorName}.Build())
 		}
 	}
 	return nil
@@ -1013,6 +1030,14 @@ The {{ bt }}name{{ bt }} key is required.
 Can be specified multiple times for multiple worker pools.
 Example:
   {{ bt }}--node-set name=workers,size=2,baremetal-instance-type=ci-worker-bm{{ bt }}
+`
+
+const addOnOperatorFlagHelp = `
+_NAME_ - Add-on operator name. The operator must be published to install it on the cluster.
+Can be specified multiple times for multiple operators. Operator dependencies
+are added automatically by the service.
+Example:
+  {{ bt }}--add-on-operator cert-manager{{ bt }}
 `
 
 const shortHelp = `Create a cluster`

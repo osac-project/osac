@@ -183,6 +183,83 @@ def _validate_parent(parent: dict[str, Any]) -> tuple[str, str]:
     return uid, namespace
 
 
+def normalize_subnet_ipam(
+    value: Any,
+    subnet: ipaddress.IPv4Network,
+    *,
+    error_type: type[Exception],
+) -> dict[str, Any]:
+    expected = {
+        "gateway_ipv4",
+        "overlay_ipv4_cidrs",
+        "physical_ipv4_cidrs",
+        "lb_vip_ipv4_cidrs",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        raise error_type("Subnet IPAM must contain the gateway and all three IPv4 ranges")
+    try:
+        gateway = ipaddress.IPv4Address(value["gateway_ipv4"])
+    except (TypeError, ValueError) as error:
+        raise error_type("Subnet IPAM gateway must be a canonical IPv4 address") from error
+    if str(gateway) != value["gateway_ipv4"] or gateway != subnet.network_address + 1:
+        raise error_type("Subnet IPAM gateway does not match the Subnet address plan")
+
+    normalized: dict[str, Any] = {"gateway_ipv4": str(gateway)}
+    ranges: list[ipaddress.IPv4Network] = []
+    for key in ("overlay_ipv4_cidrs", "physical_ipv4_cidrs", "lb_vip_ipv4_cidrs"):
+        values = value[key]
+        if not isinstance(values, list):
+            raise error_type(f"Subnet IPAM {key} must be a list")
+        cidrs: list[str] = []
+        for raw in values:
+            try:
+                block = network.parse_canonical_ipv4_network(raw, context=f"Subnet IPAM {key}")
+            except (TypeError, ValueError) as error:
+                raise error_type(f"Subnet IPAM {key} contains an invalid IPv4 CIDR") from error
+            if not block.subnet_of(subnet):
+                raise error_type(f"Subnet IPAM {key} is outside the Subnet")
+            if any(block.overlaps(previous) for previous in ranges):
+                raise error_type("Subnet IPAM ranges overlap")
+            ranges.append(block)
+            cidrs.append(str(block))
+        normalized[key] = cidrs
+    return normalized
+
+
+def validate_physical_attachment_address(
+    subnet: dict[str, Any],
+    value: Any,
+    *,
+    error_type: type[Exception],
+    context: str = "NetworkAttachment",
+) -> ipaddress.IPv4Address:
+    try:
+        address = ipaddress.IPv4Address(value)
+    except (TypeError, ValueError) as error:
+        raise error_type(f"{context} address is invalid") from error
+    if str(address) != value:
+        raise error_type(f"{context} address is invalid")
+
+    network_cidr = ipaddress.ip_network(subnet["ipv4_cidr"], strict=True)
+    physical_ranges = [
+        ipaddress.ip_network(cidr, strict=True)
+        for cidr in subnet["ipam"]["physical_ipv4_cidrs"]
+    ]
+    if not any(address in block for block in physical_ranges):
+        raise error_type(f"{context} address is outside physical IPv4 ranges")
+    if (
+        address in {network_cidr.network_address, network_cidr.broadcast_address}
+        or str(address) == subnet["ipam"]["gateway_ipv4"]
+    ):
+        raise error_type(f"{context} address is reserved by the Subnet")
+    if any(
+        address in {block.network_address, block.broadcast_address}
+        for block in physical_ranges
+    ):
+        raise error_type(f"{context} address is a physical CIDR network or broadcast address")
+    return address
+
+
 def _validate_subnet(entry: dict[str, Any]) -> tuple[str, str, int, str]:
     uid = entry.get("uid")
     interface = entry.get("vlan_interface")
@@ -201,20 +278,18 @@ def _validate_subnet(entry: dict[str, Any]) -> tuple[str, str, int, str]:
         raise SubnetProviderError("saved Subnet VLAN ID is invalid")
     try:
         subnet = ipaddress.ip_network(entry.get("ipv4_cidr"), strict=True)
-        gateway = ipaddress.IPv4Address(entry.get("gateway_ipv4"))
-        dhcp_start = ipaddress.IPv4Address(entry.get("dhcp_range_start"))
-        dhcp_end = ipaddress.IPv4Address(entry.get("dhcp_range_end"))
     except (TypeError, ValueError) as error:
-        raise SubnetProviderError("saved Subnet address state is invalid") from error
-    if (
-        not isinstance(subnet, ipaddress.IPv4Network)
-        or subnet.prefixlen > 30
-        or gateway != subnet.network_address + 1
-        or dhcp_start != subnet.network_address + 2
-        or dhcp_start > dhcp_end
-        or dhcp_end >= subnet.broadcast_address
-    ):
-        raise SubnetProviderError("saved Subnet gateway or DHCP range is invalid")
+        raise SubnetProviderError("saved Subnet address plan is invalid") from error
+    if not isinstance(subnet, ipaddress.IPv4Network) or subnet.prefixlen > 28:
+        raise SubnetProviderError("saved Subnet CIDR is too small for its address plan")
+    try:
+        ipam = normalize_subnet_ipam(
+            entry.get("ipam"), subnet, error_type=SubnetProviderError
+        )
+    except SubnetProviderError as error:
+        raise SubnetProviderError("saved Subnet address plan is invalid") from error
+    if ipam != entry.get("ipam"):
+        raise SubnetProviderError("saved Subnet IPAM is not canonical")
     return uid, interface, vlan_id, trunk
 
 
@@ -299,7 +374,7 @@ def _ensure_subnet_interface(namespace: str, entry: dict[str, Any]) -> bool:
         _run(["ip", "netns", "exec", namespace, "ip", "link", "set", "dev", interface, "up"])
         changed = True
     prefix = ipaddress.ip_network(entry["ipv4_cidr"]).prefixlen
-    gateway = f"{entry['gateway_ipv4']}/{prefix}"
+    gateway = f"{entry['ipam']['gateway_ipv4']}/{prefix}"
     if not network._address_present(namespace, interface, gateway):
         _run(
             [
@@ -337,7 +412,7 @@ def verify_subnet_interface(namespace: str, entry: dict[str, Any]) -> None:
         raise SubnetProviderError(f"Subnet VLAN interface {interface} is not up")
     prefix = ipaddress.ip_network(entry["ipv4_cidr"]).prefixlen
     if not network._address_present(
-        namespace, interface, f"{entry['gateway_ipv4']}/{prefix}"
+        namespace, interface, f"{entry['ipam']['gateway_ipv4']}/{prefix}"
     ):
         raise SubnetProviderError("Subnet gateway address did not converge")
 
@@ -665,6 +740,7 @@ def find_active_dhcp_lease(
     contents: bytes,
     subnet: dict[str, Any],
     mac_address: str,
+    expected_address: str,
     *,
     now: int | None = None,
 ) -> dict[str, str] | None:
@@ -678,8 +754,12 @@ def find_active_dhcp_lease(
         raise SubnetProviderError("DHCP lease query time is invalid")
 
     expected_mac = mac_address.lower()
-    range_start = ipaddress.IPv4Address(subnet["dhcp_range_start"])
-    range_end = ipaddress.IPv4Address(subnet["dhcp_range_end"])
+    reserved = validate_physical_attachment_address(
+        subnet,
+        expected_address,
+        error_type=SubnetProviderError,
+        context="saved NetworkAttachment",
+    )
     matches: list[dict[str, str]] = []
     for line in contents.decode("ascii").splitlines():
         expiry_text, lease_mac, address_text, _hostname, _client_id = line.split()
@@ -688,35 +768,41 @@ def find_active_dhcp_lease(
         address = ipaddress.IPv4Address(address_text)
         if lease_mac != expected_mac or (expiry != 0 and expiry <= current_time):
             continue
-        if range_start <= address <= range_end:
+        if address == reserved:
             matches.append({"ip_address": str(address), "mac_address": lease_mac})
     if len(matches) > 1:
         raise SubnetProviderError("multiple active DHCP leases match the requested NIC MAC and Subnet")
     return matches[0] if matches else None
 
 
-def _retain_active_subnet_leases(contents: bytes, entries: list[dict[str, Any]]) -> bytes:
-    """Keep lease records only while their addresses remain in active DHCP ranges."""
+def _retain_active_subnet_leases(
+    contents: bytes,
+    entries: list[dict[str, Any]],
+    attachments: list[dict[str, Any]],
+) -> bytes:
+    """Keep leases only for current MAC-to-address reservations."""
     _validate_lease_file(contents)
-    ranges = []
-    for entry in entries:
-        _validate_subnet(entry)
-        ranges.append(
-            (
-                ipaddress.IPv4Address(entry["dhcp_range_start"]),
-                ipaddress.IPv4Address(entry["dhcp_range_end"]),
-            )
-        )
+    active_subnets = {entry["uid"] for entry in entries if entry["phase"] != "deleting"}
+    reservations = {
+        (entry["mac_address"].lower(), entry["address"])
+        for entry in attachments
+        if entry["phase"] != "deleting" and entry["subnet_uid"] in active_subnets
+    }
     retained = []
     for line in contents.splitlines(keepends=True):
-        address = ipaddress.IPv4Address(line.split()[2].decode("ascii"))
-        if any(start <= address <= end for start, end in ranges):
+        fields = line.split()
+        mac = fields[1].decode("ascii").lower()
+        address = fields[2].decode("ascii")
+        if (mac, address) in reservations:
             retained.append(line)
     return b"".join(retained)
 
 
 def _render_dhcp_config(
-    parent: dict[str, Any], entries: list[dict[str, Any]], paths: dict[str, Path]
+    parent: dict[str, Any],
+    entries: list[dict[str, Any]],
+    attachments: list[dict[str, Any]],
+    paths: dict[str, Path],
 ) -> bytes:
     _, namespace = _validate_parent(parent)
     del namespace
@@ -726,23 +812,34 @@ def _render_dhcp_config(
         "no-resolv",
         "bind-interfaces",
         "dhcp-authoritative",
+        "dhcp-ignore=tag:!known",
         "user=root",
         "log-facility=-",
         "dhcp-option=option:dns-server",
         f"dhcp-leasefile={paths['leases']}",
         f"pid-file={paths['pid']}",
     ]
+    attachments_by_subnet: dict[str, list[dict[str, Any]]] = {}
+    for attachment in sorted(attachments, key=lambda value: value["uid"]):
+        if attachment["phase"] != "deleting":
+            attachments_by_subnet.setdefault(attachment["subnet_uid"], []).append(attachment)
+
     for entry in sorted(entries, key=lambda value: value["uid"]):
         _validate_subnet(entry)
         subnet = ipaddress.ip_network(entry["ipv4_cidr"])
         tag = entry["vlan_interface"]
-        lines.extend(
-            [
-                f"interface={tag}",
-                f"dhcp-range=set:{tag},{entry['dhcp_range_start']},{entry['dhcp_range_end']},{subnet.netmask},12h",
-                f"dhcp-option=tag:{tag},option:router,{entry['gateway_ipv4']}",
-            ]
-        )
+        physical_ranges = entry["ipam"]["physical_ipv4_cidrs"]
+        if not physical_ranges:
+            continue
+        lines.extend([
+            f"interface={tag}",
+            f"dhcp-range=set:{tag},{subnet.network_address},static,{subnet.netmask},12h",
+            f"dhcp-option=tag:{tag},option:router,{entry['ipam']['gateway_ipv4']}",
+        ])
+        for attachment in attachments_by_subnet.get(entry["uid"], []):
+            lines.append(
+                f"dhcp-host=tag:{tag},{attachment['mac_address']},id:*,{attachment['address']},12h"
+            )
     return ("\n".join(lines) + "\n").encode("ascii")
 
 
@@ -965,6 +1062,7 @@ def _recover_dhcp_service(
 def _ensure_dhcp_service(
     parent: dict[str, Any],
     entries: list[dict[str, Any]],
+    attachments: list[dict[str, Any]],
     dhcp_supervisor: str,
     paths: dict[str, Path],
     *,
@@ -991,7 +1089,7 @@ def _ensure_dhcp_service(
 
     for entry in entries:
         verify_subnet_interface(namespace, entry)
-    desired_config = _render_dhcp_config(parent, entries, paths)
+    desired_config = _render_dhcp_config(parent, entries, attachments, paths)
     config_unchanged = _managed_file_matches(paths["config"], desired_config)
     lease_file_exists = _path_present(paths["leases"])
     marker_exists = _path_present(paths["marker"])
@@ -1083,7 +1181,9 @@ def _ensure_dhcp_service(
         if recovery_snapshot is not None:
             _, lease_mode = recovery_snapshot[paths["leases"]]
             recovery_snapshot[paths["leases"]] = (lease_bytes, lease_mode)
-        desired_leases = _retain_active_subnet_leases(lease_bytes, entries)
+        desired_leases = _retain_active_subnet_leases(
+            lease_bytes, entries, attachments
+        )
         files_may_have_changed = recovery_required
         config_changed = _install_validated_config(
             paths["config"], candidate, desired_config
@@ -1248,13 +1348,17 @@ def cleanup_virtual_network_dhcp(
 
 def _reconcile_dhcp(
     parent: dict[str, Any], entries: list[dict[str, Any]], dhcp_supervisor: str | None,
+    attachments: list[dict[str, Any]],
     *, interface_changed: bool,
 ) -> bool:
     uid, _ = _validate_parent(parent)
     if dhcp_supervisor is None:
         dhcp_supervisor = resolve_dhcp_supervisor(uid)
     paths = _state_paths(uid)
-    if not entries:
+    dhcp_entries = [
+        entry for entry in entries if entry["ipam"]["physical_ipv4_cidrs"]
+    ]
+    if not dhcp_entries:
         return cleanup_virtual_network_dhcp(
             uid,
             parent["namespace_name"],
@@ -1263,7 +1367,8 @@ def _reconcile_dhcp(
         )
     return _ensure_dhcp_service(
         parent,
-        entries,
+        dhcp_entries,
+        attachments,
         dhcp_supervisor,
         paths,
         interface_changed=interface_changed,
@@ -1271,11 +1376,19 @@ def _reconcile_dhcp(
 
 
 def ensure_subnet_data_plane(
-    parent: dict[str, Any], entries: list[dict[str, Any]], dhcp_supervisor: str | None = None
+    parent: dict[str, Any],
+    entries: list[dict[str, Any]],
+    attachments: list[dict[str, Any]] | str | None = None,
+    dhcp_supervisor: str | None = None,
 ) -> bool:
+    if isinstance(attachments, str) and dhcp_supervisor is None:
+        dhcp_supervisor = attachments
+        attachments = []
+    if attachments is None:
+        attachments = []
     changed = _ensure_subnet_interfaces(parent, entries)
     return _reconcile_dhcp(
-        parent, entries, dhcp_supervisor, interface_changed=changed
+        parent, entries, dhcp_supervisor, attachments, interface_changed=changed
     ) or changed
 
 
@@ -1283,11 +1396,33 @@ def prepare_subnet_delete_data_plane(
     parent: dict[str, Any],
     target: dict[str, Any],
     remaining: list[dict[str, Any]],
+    attachments: list[dict[str, Any]] | str | None = None,
     dhcp_supervisor: str | None = None,
 ) -> bool:
+    if isinstance(attachments, str) and dhcp_supervisor is None:
+        dhcp_supervisor = attachments
+        attachments = []
+    if attachments is None:
+        attachments = []
     changed = _ensure_subnet_interfaces(parent, remaining)
     changed = _reconcile_dhcp(
-        parent, remaining, dhcp_supervisor, interface_changed=changed
+        parent, remaining, dhcp_supervisor, attachments, interface_changed=changed
     ) or changed
     _, namespace = _validate_parent(parent)
     return remove_subnet_interface(namespace, target) or changed
+
+
+def reconcile_virtual_network_dhcp(
+    parent: dict[str, Any],
+    entries: list[dict[str, Any]],
+    attachments: list[dict[str, Any]],
+    dhcp_supervisor: str | None = None,
+) -> bool:
+    """Reconcile only DHCP reservations without changing Subnet interfaces."""
+    return _reconcile_dhcp(
+        parent,
+        entries,
+        dhcp_supervisor,
+        attachments,
+        interface_changed=False,
+    )

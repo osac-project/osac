@@ -243,6 +243,7 @@ class OsacCLI:
         ssh_public_key_file: str | None = None,
         version: str | None = None,
         node_sets: dict[str, dict[str, Any]] | list[str] | None = None,
+        add_on_operators: list[str] | None = None,
         template_parameters: dict[str, str] | None = None,
         template_parameter_files: dict[str, str] | None = None,
     ) -> str:
@@ -255,6 +256,9 @@ class OsacCLI:
             args.extend(["--ssh-public-key-file", ssh_public_key_file])
         if version is not None:
             args.extend(["--version", version])
+        if add_on_operators is not None:
+            for operator in add_on_operators:
+                args.extend(["--add-on-operator", operator])
         if node_sets is not None:
             if isinstance(node_sets, dict):
                 for key, val in node_sets.items():
@@ -307,6 +311,7 @@ class OsacCLI:
         version: str | None = None,
         pull_secret: str | None = None,
         ssh_public_key_file: str | None = None,
+        add_on_operators: list[str] | None = None,
     ) -> str:
         args = ["create", "cluster", "--catalog-item", catalog_item, "--name", name]
         if version is not None:
@@ -315,6 +320,9 @@ class OsacCLI:
             args.extend(["--pull-secret", pull_secret])
         if ssh_public_key_file is not None:
             args.extend(["--ssh-public-key-file", ssh_public_key_file])
+        if add_on_operators is not None:
+            for operator in add_on_operators:
+                args.extend(["--add-on-operator", operator])
         return self._parse_uuid(self._run(*args))
 
     def create_compute_instance_with_catalog_item(

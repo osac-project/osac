@@ -27,6 +27,7 @@ import "osac/public/v1/cluster_type.proto";
 import "osac/public/v1/condition_status_type.proto";
 import "osac/public/v1/disk_image_type.proto";
 import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/secret_type.proto";
 import "osac/public/v1/user_data_source_type.proto";
 
 // Contains the details of a bare metal instance.
@@ -60,7 +61,13 @@ message BareMetalInstanceSpec {
   // SSH public key injected into the OS at provisioning time. Immutable after creation.
   // Must be a valid SSH public key in OpenSSH format (ssh-rsa, ssh-ed25519, etc.).
   // Invalid keys are rejected at create time with a 400 error.
-  optional string ssh_public_key = 2 [(google.api.field_behavior) = IMMUTABLE];
+  //
+  // Deprecated: use `ssh_key` with a registered SSH public-key Secret instead.
+  // Mutually exclusive with `ssh_key`.
+  optional string ssh_public_key = 2 [
+    (google.api.field_behavior) = IMMUTABLE,
+    deprecated = true
+  ];
 
   reserved 3;
   reserved "user_data";
@@ -153,6 +160,13 @@ message BareMetalInstanceSpec {
   // User data passed to the OS at first boot, limited to 64 KiB.
   // Immutable after creation, except that inline content may be migrated to a Secret.
   UserDataSource user_data_source = 14;
+
+  // Reference to a tenant-scoped Secret containing an OpenSSH public key for bare metal access.
+  // The Secret must have type SECRET_TYPE_SSH_PUBLIC_KEY and a non-empty data["public_key"] entry.
+  // The reference is resolved to its canonical ID, name, and project during creation and cannot be changed afterwards.
+  //
+  // Mutually exclusive with `ssh_public_key`.
+  SecretReference ssh_key = 15 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // The status contains the details of the bare metal instance provided by the system.

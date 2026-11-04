@@ -26,6 +26,7 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -33,6 +34,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -979,7 +981,282 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("Rejects create when neither ssh_public_key nor user_data_source.inline is provided", func() {
+		It("creates with a registered SSH key and persists only its canonical reference", func() {
+			secret, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("bmaas-ssh-key-%s", uuid.NewString()[:8]),
+					Tenant: testTenant,
+				}.Build(),
+				Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data: map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						DiskImage:   privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						SshKey:      privatev1.SecretReference_builder{Name: secret.GetObject().GetMetadata().GetName()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetSshKey().GetId()).To(Equal(secret.GetObject().GetId()))
+			Expect(response.GetObject().GetSpec().GetSshKey().GetName()).To(Equal(secret.GetObject().GetMetadata().GetName()))
+			Expect(response.GetObject().GetSpec().GetSshKey().GetProject()).To(BeEmpty())
+			Expect(response.GetObject().GetSpec().GetSshKey().GetShared()).To(BeFalse())
+			encoded, err := protojson.Marshal(response.GetObject())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(encoded)).NotTo(ContainSubstring(testSSHPublicKey))
+		})
+
+		It("fetches Vault-backed registered SSH keys before persistence", func() {
+			secret, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("bmaas-vault-ssh-key-%s", uuid.NewString()[:8]),
+					Tenant: testTenant,
+				}.Build(),
+				Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
+				Type:    privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			ctrl := gomock.NewController(GinkgoT())
+			store := vault.NewMockSecretStore(ctrl)
+			store.EXPECT().Fetch(gomock.Any(), testTenant, "", secret.GetObject().GetMetadata().GetName()).
+				Return(map[string][]byte{"public_key": []byte(testSSHPublicKey)}, nil)
+			vaultServer, err := NewPrivateBareMetalInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetSecretStore(store).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := vaultServer.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						DiskImage:   privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						SshKey:      privatev1.SecretReference_builder{Name: secret.GetObject().GetMetadata().GetName()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetSshKey().GetId()).To(Equal(secret.GetObject().GetId()))
+		})
+
+		It("resolves BMaaS SSH-key references from any tenant project", func() {
+			projects, err := dao.NewGenericDAO[*privatev1.Project]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			for _, project := range []string{"bmaas-key-project", "unrelated-project"} {
+				_, err = projects.Create().SetObject(privatev1.Project_builder{
+					Id:       project,
+					Metadata: privatev1.Metadata_builder{Name: project, Tenant: testTenant}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+
+			createKey := func(tenant, project, name string) string {
+				secret, createErr := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: tenant, Project: project}.Build(),
+					Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					Data:     map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				}.Build()).Do(ctx)
+				Expect(createErr).ToNot(HaveOccurred())
+				return secret.GetObject().GetId()
+			}
+			rootID := createKey(testTenant, "", "same-name")
+			projectID := createKey(testTenant, "bmaas-key-project", "same-name")
+			otherID := createKey(testTenant, "unrelated-project", "same-name")
+			sharedID := createKey(auth.SharedTenant, "", "same-name")
+
+			bmi := privatev1.BareMetalInstance_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: testTenant, Project: "bmaas-key-project"}.Build(),
+				Spec:     privatev1.BareMetalInstanceSpec_builder{SshKey: privatev1.SecretReference_builder{Name: "same-name"}.Build()}.Build(),
+			}.Build()
+			Expect(server.validateAndResolveSshKey(ctx, bmi)).To(Succeed())
+			Expect(bmi.GetSpec().GetSshKey().GetId()).To(Equal(rootID), "empty project must select the tenant default project")
+			Expect(bmi.GetSpec().GetSshKey().GetProject()).To(BeEmpty())
+			Expect(bmi.GetSpec().GetSshKey().GetShared()).To(BeFalse())
+
+			bmi.GetSpec().SetSshKey(privatev1.SecretReference_builder{Name: "same-name", Project: "bmaas-key-project"}.Build())
+			Expect(server.validateAndResolveSshKey(ctx, bmi)).To(Succeed())
+			Expect(bmi.GetSpec().GetSshKey().GetId()).To(Equal(projectID))
+			Expect(bmi.GetSpec().GetSshKey().GetProject()).To(Equal("bmaas-key-project"))
+			Expect(bmi.GetSpec().GetSshKey().GetShared()).To(BeFalse())
+
+			bmi.GetSpec().SetSshKey(privatev1.SecretReference_builder{Name: "same-name", Project: "unrelated-project"}.Build())
+			Expect(server.validateAndResolveSshKey(ctx, bmi)).To(Succeed(),
+				"an explicit project may differ from the instance project")
+			Expect(bmi.GetSpec().GetSshKey().GetId()).To(Equal(otherID))
+			Expect(bmi.GetSpec().GetSshKey().GetProject()).To(Equal("unrelated-project"))
+
+			bmi.GetSpec().SetSshKey(privatev1.SecretReference_builder{Name: "same-name", Shared: true}.Build())
+			err = server.validateAndResolveSshKey(ctx, bmi)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("must be tenant-scoped"))
+
+			bmi.GetSpec().SetSshKey(privatev1.SecretReference_builder{Id: projectID}.Build())
+			err = server.validateAndResolveSshKey(ctx, bmi)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound), "ID without project must only select default-project secrets")
+
+			bmi.GetSpec().SetSshKey(privatev1.SecretReference_builder{Id: rootID, Project: "bmaas-key-project"}.Build())
+			err = server.validateAndResolveSshKey(ctx, bmi)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound), "explicit project must only select secrets in that project")
+
+			bmi.GetSpec().SetSshKey(privatev1.SecretReference_builder{Id: sharedID}.Build())
+			err = server.validateAndResolveSshKey(ctx, bmi)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound),
+				"a caller-supplied ID must not select secrets outside the instance tenant")
+
+			Expect(sharedID).ToNot(BeEmpty(), "shared secret fixture is created for the rejection paths above")
+		})
+
+		It("resolves a BMaaS SSH-key Secret from another project for a root-project instance", func() {
+			projects, err := dao.NewGenericDAO[*privatev1.Project]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = projects.Create().SetObject(privatev1.Project_builder{
+				Id:       "bmaas-key-root-project",
+				Metadata: privatev1.Metadata_builder{Name: "bmaas-key-root-project", Tenant: testTenant}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			secret, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "same-name",
+					Tenant:  testTenant,
+					Project: "bmaas-key-root-project",
+				}.Build(),
+				Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data: map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			bmi := privatev1.BareMetalInstance_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+				Spec:     privatev1.BareMetalInstanceSpec_builder{SshKey: privatev1.SecretReference_builder{Name: "same-name", Project: "bmaas-key-root-project"}.Build()}.Build(),
+			}.Build()
+			Expect(server.validateAndResolveSshKey(ctx, bmi)).To(Succeed(),
+				"the reference project does not have to match the instance project")
+			Expect(bmi.GetSpec().GetSshKey().GetId()).To(Equal(secret.GetObject().GetId()))
+			Expect(bmi.GetSpec().GetSshKey().GetProject()).To(Equal("bmaas-key-root-project"))
+		})
+
+		It("does not disclose an SSH-key Secret from an inaccessible project", func() {
+			projects, err := dao.NewGenericDAO[*privatev1.Project]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = projects.Create().SetObject(privatev1.Project_builder{
+				Id:       "bmaas-hidden-project",
+				Metadata: privatev1.Metadata_builder{Name: "bmaas-hidden-project", Tenant: testTenant}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			createKey := func(project, name string) string {
+				secret, createErr := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant, Project: project}.Build(),
+					Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					Data:     map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				}.Build()).Do(ctx)
+				Expect(createErr).ToNot(HaveOccurred())
+				return secret.GetObject().GetId()
+			}
+			rootID := createKey("", "visible-key")
+			hiddenID := createKey("bmaas-hidden-project", "hidden-key")
+
+			// A caller with visibility of the tenant's default project only:
+			visibility, err := auth.NewVisibility().AddVisibleTenant(testTenant).Build()
+			Expect(err).ToNot(HaveOccurred())
+			restrictedTenancy := auth.NewMockTenancyLogic(ctrl)
+			restrictedTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).Return(auth.AllTenants, nil).AnyTimes()
+			restrictedTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).Return(testTenant, nil).AnyTimes()
+			restrictedTenancy.EXPECT().DetermineVisibility(gomock.Any()).Return(visibility, nil).AnyTimes()
+			restrictedServer, err := NewPrivateBareMetalInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(restrictedTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Control: default-project keys stay resolvable for the same caller.
+			bmi := privatev1.BareMetalInstance_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+				Spec:     privatev1.BareMetalInstanceSpec_builder{SshKey: privatev1.SecretReference_builder{Name: "visible-key"}.Build()}.Build(),
+			}.Build()
+			Expect(restrictedServer.validateAndResolveSshKey(ctx, bmi)).To(Succeed())
+			Expect(bmi.GetSpec().GetSshKey().GetId()).To(Equal(rootID))
+
+			// By name and project: the scoped lookup applies caller visibility.
+			bmi.GetSpec().SetSshKey(privatev1.SecretReference_builder{Name: "hidden-key", Project: "bmaas-hidden-project"}.Build())
+			err = restrictedServer.validateAndResolveSshKey(ctx, bmi)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound),
+				"a Secret name from a project the caller cannot see must not resolve")
+
+			// By ID: the direct load applies caller visibility too.
+			bmi.GetSpec().SetSshKey(privatev1.SecretReference_builder{Id: hiddenID, Project: "bmaas-hidden-project"}.Build())
+			err = restrictedServer.validateAndResolveSshKey(ctx, bmi)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound),
+				"a Secret ID from a project the caller cannot see must not resolve")
+		})
+
+		DescribeTable("rejects unusable registered SSH keys", func(secretType privatev1.SecretType, data map[string][]byte) {
+			secret, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("bmaas-invalid-ssh-key-%s", uuid.NewString()[:8]),
+					Tenant: testTenant,
+				}.Build(),
+				Type: secretType,
+				Data: data,
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						DiskImage:   privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						SshKey:      privatev1.SecretReference_builder{Id: secret.GetObject().GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		},
+			Entry("wrong type", privatev1.SecretType_SECRET_TYPE_USER_DATA, map[string][]byte{"userdata": []byte("#cloud-config")}),
+			Entry("empty public key", privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY, nil),
+		)
+
+		It("Rejects create when both ssh_public_key and ssh_key are set", func() {
+			secret, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("bmaas-both-keys-%s", uuid.NewString()[:8]),
+					Tenant: testTenant,
+				}.Build(),
+				Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data: map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+						SshKey:       privatev1.SecretReference_builder{Id: secret.GetObject().GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("spec.ssh_public_key and spec.ssh_key are mutually exclusive"))
+		})
+
+		It("Rejects create when no SSH key or user_data_source is provided", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -1247,6 +1524,45 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("ssh_public_key is immutable"))
+		})
+
+		It("Rejects PATCH that changes the registered SSH-key Secret", func() {
+			createSecret := func(name string) *privatev1.Secret {
+				secret, createErr := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
+					Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					Data:     map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				}.Build()).Do(ctx)
+				Expect(createErr).ToNot(HaveOccurred())
+				return secret.GetObject()
+			}
+			original := createSecret("immutable-registered-key")
+			replacement := createSecret("replacement-registered-key")
+
+			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-registered-key-immutable"}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:   privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						SshKey:      privatev1.SecretReference_builder{Name: original.GetMetadata().GetName()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Id: createResponse.GetObject().GetId(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						SshKey:      privatev1.SecretReference_builder{Id: replacement.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.ssh_key"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("ssh_key is immutable"))
 		})
 
 		It("Rejects PATCH that changes user_data_source.inline", func() {
@@ -1737,8 +2053,61 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(st.Message()).To(ContainSubstring("not editable"))
 		})
 
+		It("Rejects a raw ssh_public_key combined with a catalog ssh_key default", func() {
+			createTemplate("raw-plus-registered-template", nil)
+			secret, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("bmaas-catalog-default-key-%s", uuid.NewString()[:8]),
+					Tenant: testTenant,
+				}.Build(),
+				Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data: map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			catResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Title:     "Raw key plus registered default",
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "raw-plus-registered-template"}.Build(),
+					Published: true,
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
+							Locked: privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						}.Build(),
+						SshKey: privatev1.FullSecretReferenceFieldPolicy_builder{
+							Editable: privatev1.EditableFullSecretReferenceField_builder{
+								DefaultValue: privatev1.SecretReference_builder{
+									Id: secret.GetObject().GetId(),
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			catID := catResp.GetObject().GetId()
+
+			_, err = server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("spec.ssh_public_key and spec.ssh_key are mutually exclusive"))
+		})
+
 		It("Accepts editable field policy alongside template_parameters", func() {
 			createTemplate("editable-combo-template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
+
 				{Name: "os_version", Required: true, Type: "type.googleapis.com/google.protobuf.StringValue"},
 			})
 

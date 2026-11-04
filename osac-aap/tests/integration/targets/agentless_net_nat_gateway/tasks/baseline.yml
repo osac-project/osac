@@ -6,10 +6,10 @@
     tenant_id: agentless-natgw-test
     nat_gateway_id: "10000000-0000-4000-8000-000000000010"
     nat_gateway_uid: "10000000-0000-4000-8000-000000000011"
-    virtual_network_id: "10000000-0000-4000-8000-000000000002"
-    virtual_network_uid: "10000000-0000-4000-8000-000000000003"
-    external_ip_id: "10000000-0000-4000-8000-000000000006"
-    external_ip_uid: "10000000-0000-4000-8000-000000000005"
+    virtual_network_id: "10000000-0000-4000-8000-000000000020"
+    virtual_network_uid: "10000000-0000-4000-8000-000000000021"
+    external_ip_id: "10000000-0000-4000-8000-000000000030"
+    external_ip_uid: "10000000-0000-4000-8000-000000000031"
     agentless_natgw_inventory:
       all:
         children:
@@ -128,7 +128,7 @@
               - python
               - "{{ playbook_dir }}/../files/inspect_state.py"
               - "{{ agentless_natgw_state_file }}"
-              - "{{ nat_gateway_uid }}"
+              - "{{ nat_gateway_id }}"
           args:
             chdir: "{{ playbook_dir }}/../../../../../"
           register: agentless_natgw_ensured_state
@@ -165,7 +165,7 @@
               - python
               - "{{ playbook_dir }}/../files/inspect_state.py"
               - "{{ agentless_natgw_state_file }}"
-              - "{{ nat_gateway_uid }}"
+              - "{{ nat_gateway_id }}"
           args:
             chdir: "{{ playbook_dir }}/../../../../../"
           register: agentless_natgw_retried_state
@@ -193,7 +193,7 @@
               - python
               - "{{ playbook_dir }}/../files/inspect_state.py"
               - "{{ agentless_natgw_state_file }}"
-              - "{{ nat_gateway_uid }}"
+              - "{{ nat_gateway_id }}"
           args:
             chdir: "{{ playbook_dir }}/../../../../../"
           register: agentless_natgw_failed_delete_state
@@ -204,7 +204,7 @@
             that:
               - (agentless_natgw_failed_delete_state.stdout | from_json).present
               - (agentless_natgw_failed_delete_state.stdout | from_json).phase == 'deleting'
-              - (agentless_natgw_failed_delete_state.stdout | from_json).nat_gateway.external_ip_uid == external_ip_uid
+              - (agentless_natgw_failed_delete_state.stdout | from_json).nat_gateway.external_ip_uid == external_ip_id
 
         - name: Retry cleanup after provider withdrawal recovers
           ansible.builtin.set_fact:
@@ -222,7 +222,7 @@
               - python
               - "{{ playbook_dir }}/../files/inspect_state.py"
               - "{{ agentless_natgw_state_file }}"
-              - "{{ nat_gateway_uid }}"
+              - "{{ nat_gateway_id }}"
           args:
             chdir: "{{ playbook_dir }}/../../../../../"
           register: agentless_natgw_deleted_state

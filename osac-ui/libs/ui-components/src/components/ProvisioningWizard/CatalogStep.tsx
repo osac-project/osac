@@ -17,6 +17,8 @@ import {
 import { useFormikContext } from 'formik';
 
 import { type ResourceService, useListResource } from '../../api/use-resource';
+import { buildCatalogListFilter } from '../../api/v1/catalog-item-list-filter';
+import { useSession } from '../../hooks/use-session';
 import { useTranslation } from '../../hooks/useTranslation';
 import CatalogItemCard from '../catalog/CatalogItemCard';
 import { CatalogItem, filterCatalogItemsBySearch } from '../catalog/catalogItemDisplay';
@@ -28,6 +30,9 @@ import { FormFieldHelper } from '../Form/FormFieldHelper';
 interface CatalogFormValues {
   catalogItemReference: { id?: string; name?: string };
 }
+
+const isCatalogItemList = <T extends CatalogItem>(value: unknown): value is { items: T[] } =>
+  value !== null && typeof value === 'object' && 'items' in value && Array.isArray(value.items);
 
 interface Props<T extends CatalogItem, V extends CatalogFormValues> {
   catalogService: ResourceService<'list', DescMessage, DescMessage>;
@@ -43,14 +48,17 @@ export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>(
   onCatalogItemSelected,
 }: Props<T, V>) => {
   const { t } = useTranslation();
+  const { role } = useSession();
   const [search, setSearch] = useState('');
   const formik = useFormikContext<V>();
   const { values } = formik;
+  const catalogFilter =
+    role === 'tenant-user' ? buildCatalogListFilter({ published: 'published' }) : undefined;
   const catalogQuery = useListResource<DescMessage, DescMessage, T[]>(
     catalogService,
+    catalogFilter ? { filter: catalogFilter } : {},
     {},
-    {},
-    (data) => data.items,
+    (data) => (isCatalogItemList<T>(data) ? data.items : []),
   );
   const loading = isInitializing || catalogQuery.isPending;
   const error = catalogQuery.isError;

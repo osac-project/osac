@@ -94,43 +94,14 @@ var _ = Describe("Role binding authorization", func() {
 		}
 		Expect(adminsGroupID).ToNot(BeEmpty(), "Keycloak realm must contain the admins group")
 
-		// Create a dedicated Keycloak user and give it the same tenant membership
-		// as the suite's regular user so its token has a tenant organization claim.
-		userCode, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPost, "/users", map[string]any{
-			"username":  username,
-			"enabled":   true,
-			"firstName": username,
-			"lastName":  "Test",
-		})
+		userMetadata := privatev1.Metadata_builder{
+			Name:   username,
+			Tenant: usersGroup,
+		}.Build()
+		userID, createdKeycloakUserID := createRoleBindingTestUser(ctx, usersClient, username, userMetadata)
+		keycloakUserID, err := tool.keycloakEnsureUserReady(ctx, username)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(userCode).To(Equal(http.StatusCreated))
-
-		var keycloakUserID string
-		findKeycloakUserID := func(requestCtx context.Context) string {
-			_, body, err := tool.KeycloakAdminRequest(
-				requestCtx, http.MethodGet, fmt.Sprintf("/users?username=%s&exact=true", username), nil,
-			)
-			Expect(err).ToNot(HaveOccurred())
-			var users []struct {
-				ID string `json:"id"`
-			}
-			Expect(json.Unmarshal(body, &users)).To(Succeed())
-			Expect(users).To(HaveLen(1))
-			return users[0].ID
-		}
-		DeferCleanup(func(cleanupCtx context.Context) {
-			if keycloakUserID == "" {
-				keycloakUserID = findKeycloakUserID(cleanupCtx)
-			}
-			code, _, cleanupErr := tool.KeycloakAdminRequest(
-				cleanupCtx, http.MethodDelete, fmt.Sprintf("/users/%s", keycloakUserID), nil,
-			)
-			Expect(cleanupErr).ToNot(HaveOccurred())
-			Expect(code).To(Or(Equal(http.StatusNoContent), Equal(http.StatusNotFound)))
-		})
-		keycloakUserID, err = tool.keycloakEnsureUserReady(ctx, username)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(keycloakUserID).ToNot(BeEmpty())
+		Expect(keycloakUserID).To(Equal(createdKeycloakUserID))
 		Expect(tool.ensureUserInOrg(ctx, username, usersGroup)).To(Succeed())
 
 		realmRoleMappingPresent := func() bool {
@@ -166,35 +137,6 @@ var _ = Describe("Role binding authorization", func() {
 			return false
 		}
 		Expect(adminsGroupMembershipPresent()).To(BeFalse())
-
-		userResponse, err := usersClient.Create(ctx, privatev1.UsersCreateRequest_builder{
-			Object: privatev1.User_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   username,
-					Tenant: usersGroup,
-				}.Build(),
-				Status: privatev1.UserStatus_builder{
-					KeycloakUserId: keycloakUserID,
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		userID := userResponse.GetObject().GetId()
-		DeferCleanup(func(cleanupCtx context.Context) {
-			_, cleanupErr := usersClient.Delete(cleanupCtx, privatev1.UsersDeleteRequest_builder{
-				Id: userID,
-			}.Build())
-			if cleanupErr != nil && grpcstatus.Code(cleanupErr) != grpccodes.NotFound {
-				Expect(cleanupErr).ToNot(HaveOccurred())
-			}
-			Eventually(func(g Gomega) {
-				_, getErr := usersClient.Get(cleanupCtx, privatev1.UsersGetRequest_builder{
-					Id: userID,
-				}.Build())
-				g.Expect(getErr).To(HaveOccurred())
-				g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
-			}, time.Minute, time.Second).Should(Succeed())
-		})
 
 		// A new token source for each phase forces a fresh login after role or
 		// group changes; an existing token keeps its old authorization claims.

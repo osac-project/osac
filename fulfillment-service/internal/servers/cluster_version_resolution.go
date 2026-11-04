@@ -54,6 +54,22 @@ func lookupClusterVersionByName(
 	return response.GetItems()[0], nil
 }
 
+// getClusterVersionByID loads a stored ClusterVersion by its canonical ID.
+func getClusterVersionByID(
+	ctx context.Context,
+	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion],
+	id string,
+) (*privatev1.ClusterVersion, error) {
+	version, err := getReferenceResource(ctx, clusterVersionsDao, id)
+	if err != nil {
+		return nil, resourceLookupError(err, "cluster version", id, "", grpccodes.InvalidArgument)
+	}
+	if err := validateResourceNotDeleted("cluster version", id, "", version.GetMetadata()); err != nil {
+		return nil, err
+	}
+	return version, nil
+}
+
 // validateResolvedClusterVersion validates that a resolved ClusterVersion can be used.
 func validateResolvedClusterVersion(cv *privatev1.ClusterVersion, identifier, source string) error {
 	if err := validateResourceNotDeleted("cluster version", identifier, source, cv.GetMetadata()); err != nil {

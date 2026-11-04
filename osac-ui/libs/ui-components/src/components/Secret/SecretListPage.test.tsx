@@ -114,7 +114,7 @@ describe('SecretListPage', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('textbox', { name: 'Search secrets' })).toHaveValue('no-such-secret');
-      expect(screen.getByRole('button', { name: 'my-project' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Project:\s*my-project/ })).toBeInTheDocument();
     });
 
     const clearFiltersButtons = await screen.findAllByRole('button', { name: 'Clear all filters' });
@@ -127,6 +127,6 @@ describe('SecretListPage', () => {
       expect(getListFilter()).toBeUndefined();
     });
 
-    expect(screen.getByRole('button', { name: 'All projects' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Project:\s*All projects/ })).toBeInTheDocument();
   });
 });

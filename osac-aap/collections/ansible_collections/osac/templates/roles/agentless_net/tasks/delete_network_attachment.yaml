@@ -1,0 +1,97 @@
+---
+- name: Delete AgentlessNet physical NetworkAttachment
+  block:
+    - name: Validate the NetworkAttachment delete input
+      ansible.builtin.include_tasks: _validate_task_input.yaml
+      vars:
+        agentless_net_expected_kind: NetworkAttachment
+        agentless_net_expected_tasks: [delete_network_attachment]
+
+    - name: Require the recorded parent snapshot
+      ansible.builtin.assert:
+        that:
+          - osac_job_vars.target.kind == 'BareMetalInstance'
+          - osac_job_vars.target.id == osac_job_vars.resource.id
+          - osac_job_vars.network_attachment.interface.type == 'physical'
+          - osac_job_vars.virtual_network.id is string
+      no_log: true
+
+    - name: Classify provider cleanup failures as retryable
+      ansible.builtin.set_fact:
+        _agentless_net_failure_retryable: true
+
+    - name: Load AgentlessNet network-node inventory
+      ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+      vars:
+        agentless_net_require_switches: false
+
+    - name: Read the provisioning network from provider inventory
+      ansible.builtin.set_fact:
+        _agentless_net_provisioning_network: >-
+          {{ _agentless_net_inventory_vars.get('agentless_net_provisioning_network', {}) }}
+      no_log: true
+
+    - name: Mark the attachment deleting by API ID
+      osac.templates.agentless_net_state:
+        action: begin_delete_network_attachment
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ osac_job_vars.resource.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
+        virtual_network_uid: "{{ osac_job_vars.virtual_network.id }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      register: _agentless_net_attachment_deletion
+      no_log: true
+
+    - name: Load switches only when saved attachment ports need cleanup
+      ansible.builtin.include_tasks: _load_subnet_switches.yaml
+      when: _agentless_net_attachment_deletion.found | bool
+
+    - name: Validate the provisioning VLAN before restoring switch ports
+      ansible.builtin.assert:
+        that:
+          - _agentless_net_provisioning_network is mapping
+          - _agentless_net_provisioning_network.get('vlan_id') is integer
+          - _agentless_net_provisioning_network.vlan_id | int >= 1
+          - _agentless_net_provisioning_network.vlan_id | int <= 4094
+        fail_msg: AgentlessNet could not validate the provisioning VLAN for attachment cleanup.
+      when: _agentless_net_attachment_deletion.found | bool
+      no_log: true
+
+    - name: Mark each owned switch so late apply jobs cannot restore ports
+      ansible.builtin.include_tasks: _mark_attachment_deleted_on_switch.yaml
+      loop: >-
+        {{ _agentless_net_attachment_deletion.attachment.ports
+           | default([]) | map(attribute='switch_name') | unique | list }}
+      loop_control:
+        loop_var: _agentless_net_switch_name
+        label: "{{ _agentless_net_switch_name }}"
+      when: _agentless_net_attachment_deletion.found | bool
+
+    - name: Restore saved fabric ports to the provisioning VLAN
+      ansible.builtin.include_tasks: _apply_attachment_port.yaml
+      loop: "{{ _agentless_net_attachment_deletion.attachment.ports | default([]) }}"
+      loop_control:
+        loop_var: _agentless_net_attachment_port
+        label: "{{ _agentless_net_attachment_port.switch_name }}/{{ _agentless_net_attachment_port.port_name }}"
+      vars:
+        _agentless_net_attachment_port_action: delete
+        _agentless_net_attachment_target_vlan: "{{ _agentless_net_provisioning_network.vlan_id | int }}"
+      when: _agentless_net_attachment_deletion.found | bool and _agentless_net_attachment_port.fabric
+
+    - name: Release the DHCP reservation after port restoration
+      osac.templates.agentless_net_state:
+        action: finish_delete_network_attachment
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ osac_job_vars.resource.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      when: _agentless_net_attachment_deletion.found | bool
+      no_log: true
+  rescue:
+    - name: Publish a sanitized NetworkAttachment delete error
+      ansible.builtin.include_tasks: _report_task_error.yaml
+  always:
+    - name: Remove temporary AgentlessNet SSH credentials
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

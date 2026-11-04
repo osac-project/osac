@@ -356,7 +356,7 @@ def test_workload_cluster_health_checks_provider_ids_before_operators(monkeypatc
     monkeypatch.setattr(helpers, "wait_for_workload_node_provider_ids", lambda **_kwargs: events.append("provider-id"))
     monkeypatch.setattr(helpers, "poll_until", lambda **_kwargs: events.append("operators"))
 
-    helpers.wait_for_workload_cluster_health(k8s=Mock(), expected_workers=1)
+    helpers.wait_for_workload_cluster_health(k8s=Mock(), cluster_name="guest-cluster", expected_workers=1)
 
     assert events == ["provider-id", "operators"]
 
@@ -513,7 +513,7 @@ def test_wait_for_workload_cluster_health_names_the_operator_it_saw(monkeypatch:
     monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
 
     with pytest.raises(AssertionError, match="ClusterOperator insights: Available=False, Degraded=True"):
-        helpers.wait_for_workload_cluster_health(k8s=k8s, expected_workers=1)
+        helpers.wait_for_workload_cluster_health(k8s=k8s, cluster_name="guest-cluster", expected_workers=1)
 
 
 def test_guest_health_has_at_most_fifteen_minutes_of_scheduled_waits() -> None:
@@ -618,3 +618,48 @@ def test_k8s_client_supports_explicit_namespaces_and_cluster_scoped_lists(monkey
         ("kubectl", "get", "nodes", "-o", "json"),
         ("kubectl", "get", "nodepools", "-n", "hcp", "-o", "json"),
     ]
+
+
+def test_workload_cluster_health_reports_what_it_found(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A run has to be able to show that the guest really was inspected: the
+    # provider ID behind each worker, the operators that were holding it up, and
+    # a tally once they all cleared.
+    healthy_operator = {
+        "metadata": {"name": "network"},
+        "status": {
+            "conditions": [
+                {"type": "Available", "status": "True"},
+                {"type": "Progressing", "status": "False"},
+                {"type": "Degraded", "status": "False"},
+            ]
+        },
+    }
+    degraded_operator = {
+        "metadata": {"name": "insights"},
+        "status": {
+            "conditions": [
+                {"type": "Available", "status": "False"},
+                {"type": "Progressing", "status": "False"},
+                {"type": "Degraded", "status": "True"},
+            ]
+        },
+    }
+    # The operator stays degraded for two checks and clears on the third, so the
+    # log has to show the holdout once and not repeat it.
+    operators = iter([[healthy_operator, degraded_operator], [healthy_operator, degraded_operator], [healthy_operator]])
+    k8s = Mock()
+    k8s.list_json.side_effect = lambda *, resource, **_kwargs: (
+        {"items": [_node(name="worker-0")]} if resource == "nodes" else {"items": next(operators)}
+    )
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+    caplog.set_level("INFO", logger="tests.e2e.core.helpers")
+
+    helpers.wait_for_workload_cluster_health(k8s=k8s, cluster_name="guest-cluster", expected_workers=1)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert f"worker provider IDs: worker-0={_AGENT_PROVIDER_ID}" in messages
+    assert "guest cluster not healthy yet: ClusterOperator insights: Available=False, Degraded=True" in messages
+    healthy = "guest cluster healthy: 1 worker node(s) and 1 ClusterOperators available"
+    assert any(message.startswith(healthy) and message.endswith("(3 check(s))") for message in messages)

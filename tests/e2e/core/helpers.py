@@ -865,6 +865,11 @@ def wait_for_workload_node_provider_ids(*, k8s: K8sClient, expected_workers: int
             f"saw {len(observed)} worker node(s), expected {expected_workers}, missing on {missing}, "
             f"observed {observed}"
         ) from None
+    logger.info("worker provider IDs: %s", _provider_id_summary(observed))
+
+
+def _provider_id_summary(observed: dict[str, str]) -> str:
+    return ", ".join(f"{name}={provider_id}" for name, provider_id in sorted(observed.items()))
 
 
 def wait_for_hosted_cluster_reference(*, k8s: K8sClient, co_name: str) -> tuple[str, str]:
@@ -962,13 +967,21 @@ def wait_for_workload_cluster_health(*, k8s: K8sClient, cluster_name: str, expec
     wait_for_workload_node_provider_ids(k8s=k8s, expected_workers=expected_workers)
     attempts = 0
     observed: list[str] = []
+    last_reported: list[str] = []
+    counts = {"nodes": 0, "operators": 0}
 
     def _check() -> bool:
-        nonlocal attempts
+        nonlocal attempts, last_reported
         attempts += 1
         nodes = k8s.list_json(resource="nodes").get("items", [])
         operators = k8s.list_json(resource="clusteroperators.config.openshift.io").get("items", [])
+        counts["nodes"], counts["operators"] = len(nodes), len(operators)
         observed[:] = workload_cluster_unhealthy(nodes=nodes, operators=operators, expected_workers=expected_workers)
+        # The timeout names these too, but only once it gives up: reporting each
+        # change while waiting shows which operator is the holdout.
+        if observed and observed != last_reported:
+            logger.info("guest cluster not healthy yet: %s", "; ".join(observed))
+            last_reported = list(observed)
         return not observed
 
     try:
@@ -985,8 +998,13 @@ def wait_for_workload_cluster_health(*, k8s: K8sClient, cluster_name: str, expec
     except TimeoutError:
         details = "; ".join(observed) or "no Nodes or ClusterOperators were readable"
         raise AssertionError(f"guest cluster did not become healthy: {details}") from None
-    if attempts > 1:
-        logger.info("Guest health became ready after %d checks", attempts)
+    logger.info(
+        "guest cluster healthy: %d worker node(s) and %d ClusterOperators available, not progressing, "
+        "not degraded (%d check(s))",
+        counts["nodes"],
+        counts["operators"],
+        attempts,
+    )
 
 
 def wait_for_cluster_guest_readiness(

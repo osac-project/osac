@@ -72,8 +72,8 @@ partition, so the group stores one position per tenant. One grant gives one
 credential and one group, named after the reader. The credential is read-only.
 
 The reader finds tenants by listing topics with the prefix, or by subscribing to
-the regular expression `^osac\.metering\.heartbeat\..*`. A subscriber skips the
-two platform topics.
+`^osac\.metering\.heartbeat\..*` and filtering `system` and `shared`. The deny
+ACLs keep those two platform topics out of the grant.
 
 Reader names are unique lowercase DNS names of at most 253 characters. OSAC
 reserves the `osac-` and `osac.` prefixes, and the `fulfillment-service`
@@ -106,12 +106,13 @@ credential exposes every tenant's usage. The platform tenants `system` and
 `shared` and the shared MaaS inference topic `osac.metering.inference` are
 outside the grant.
 
-Offboarding a tenant after its final invoice deletes its topics and the usage
-records retained in them. Stopping the reader cuts off every tenant.
+Offboarding stops new usage, and the tenant's heartbeat topics and retained
+records stay readable. There is no per-tenant revoke. Stopping the reader cuts
+off every tenant.
 
 Keep the password in the reader's own secret store. Restrict the network path to
 the broker. To rotate the password, revoke the reader and grant it again. Audit
-who holds it. A reader groups usage by `tenant_id`.
+who holds it.
 
 ### Watch the consumer's lag
 
@@ -155,7 +156,7 @@ and interval can differ from the event it corrects.
 | Deduplication | Drop an `id` you have already seen; a repeat carries the same id |
 | Retention | How long Kafka keeps records. `topics.retentionMs`, a metering chart value, defaults to `-1`, which keeps every record |
 | Compaction | Kafka keeps only the latest record for each key. Off; metering refuses a compacted topic |
-| Retries and failures | The reader retries and handles failures |
+| Retries and failures | The reader must implement retries and failure handling |
 
 Retention also sets metering's recovery window. A database restore can re-read
 the records Kafka still holds. A finite retention bounds how far back a restore
@@ -178,10 +179,9 @@ Two paths connect them:
 
 - Use the M360 adapter when your billing system is M360. Set
   `metering.m360Adapter.enabled` to `true` and configure its API URL and key
-  Secret; the chart ships the adapter and keeps it off until you enable it. It
-  reads the heartbeat topics and the shared MaaS inference topic
-  `osac.metering.inference`, so it bills both. A reader built from
-  `metering.readers` covers heartbeat topics only.
+  Secret. It forwards the heartbeat topics and the shared MaaS inference topic
+  `osac.metering.inference` to the M360 Usage API. A reader built from
+  `metering.readers` reads heartbeat topics only.
   [OSAC-3784](https://redhat.atlassian.net/browse/OSAC-3784) tracks the rest of
   the billing work: pricing plans, cost models, and draft invoices.
 - Build your own reader when you need another billing system. Start from the
@@ -213,10 +213,10 @@ To run it:
 1. Add `billing-reader` to `metering.readers` and apply the installer values.
 2. Copy the `ca-bundle` ConfigMap into the Kafka namespace, build the example
    image, and apply its Job there.
-3. Read the Job log. The log is a delta, not a lifetime total. A first run with
-   no committed offset prints all retained history; later runs print only the
-   records after the committed offset. Do not add logs together or invoice one
-   log as a lifetime total.
+3. Read the Job log. A first run with no committed offset prints all retained
+   history. Later runs print only records after the committed offset; the
+   running total is the first log plus each later log. A run that errors before
+   it commits leaves the offset unchanged, so the next run repeats the range.
 
 Any principal with `pods/log` access in the Kafka namespace can read the log.
 Restrict that access, or send the totals to a controlled billing destination in

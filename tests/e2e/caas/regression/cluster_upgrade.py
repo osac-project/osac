@@ -22,7 +22,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import env, poll_until
+from tests.e2e.core.runner import StuckState, _summarize, env, poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
 TARGET_VERSION = env("OSAC_TEST_UPGRADE_RELEASE_VERSION", "4.22.1")
@@ -106,7 +106,11 @@ def _wait_elapsed(
         _log_diagnostics(
             component=component, data=diagnose(last_value), elapsed_seconds=time.monotonic() - accepted_at, final=True
         )
-    raise TimeoutError(f"{component} timed out after {limit_seconds} elapsed seconds")
+    raise StuckState(
+        f"{component} ready",
+        _summarize(last_value) if last_value is not None else "<no successful observation>",
+        time.monotonic() - accepted_at,
+    )
 
 
 def _catalog_version(
@@ -689,9 +693,14 @@ def _apply_single_worker_upgrade_workaround(
     node_pool_name = refs.pool_names[node_set]
     node_pool_patch = '{"spec":{"management":{"inPlace":{"maxUnavailable":1}}}}'
     migrator_pdb_patch = '{"spec":{"maxUnavailable":null,"minAvailable":0}}'
+    node_pool_k8s = (
+        k8s
+        if k8s.namespace == refs.namespace
+        else K8sClient(namespace=refs.namespace, kubeconfig=k8s.kubeconfig, as_system_admin=k8s.as_system_admin)
+    )
 
     logger.info("OSAC-7087 workaround: permitting one in-place worker and zero migrator availability")
-    _, node_pool_rc = k8s.patch(
+    _, node_pool_rc = node_pool_k8s.patch(
         resource="nodepools.hypershift.openshift.io", name=node_pool_name, patch=node_pool_patch
     )
     if node_pool_rc != 0:

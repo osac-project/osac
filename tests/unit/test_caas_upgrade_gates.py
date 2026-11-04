@@ -258,12 +258,17 @@ def test_cluster_references_satisfy_poll_until_contract() -> None:
     )
 
 
-def test_single_worker_upgrade_workaround_patches_expected_resources() -> None:
+def test_single_worker_upgrade_workaround_patches_expected_resources(monkeypatch: pytest.MonkeyPatch) -> None:
     """The temporary OSAC-7087 workaround patches the exact drain gates."""
     k8s = Mock()
+    scoped_k8s = Mock()
     workload_k8s = Mock()
-    k8s.patch.return_value = ("", 0)
+    k8s.namespace = "hub-default"
+    k8s.kubeconfig = "/tmp/hub-kubeconfig"
+    k8s.as_system_admin = True
+    scoped_k8s.patch.return_value = ("", 0)
     workload_k8s.patch.return_value = ("", 0)
+    monkeypatch.setattr(scenario, "K8sClient", Mock(return_value=scoped_k8s))
     refs = scenario._ClusterRefs(
         uuid="cluster-id",
         co_name="order",
@@ -274,7 +279,11 @@ def test_single_worker_upgrade_workaround_patches_expected_resources() -> None:
 
     scenario._apply_single_worker_upgrade_workaround(k8s=k8s, workload_k8s=workload_k8s, refs=refs, node_set="compute")
 
-    assert k8s.patch.call_args.kwargs == {
+    scenario.K8sClient.assert_called_once_with(
+        namespace="namespace", kubeconfig="/tmp/hub-kubeconfig", as_system_admin=True
+    )
+    k8s.patch.assert_not_called()
+    assert scoped_k8s.patch.call_args.kwargs == {
         "resource": "nodepools.hypershift.openshift.io",
         "name": "compute-pool",
         "patch": '{"spec":{"management":{"inPlace":{"maxUnavailable":1}}}}',

@@ -200,13 +200,13 @@ def test_wait_elapsed_logs_initial_and_final_diagnostics(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A timeout leaves a final redacted snapshot, not only a generic message."""
-    times = iter([0.0, 0.0, 1.0, 1.0, 1.0])
+    times = iter([0.0, 0.0, 1.0, 1.0, 1.0, 1.0])
     monkeypatch.setattr(scenario.time, "monotonic", lambda: next(times))
     monkeypatch.setattr(scenario.time, "sleep", lambda _seconds: None)
 
     with (
         caplog.at_level(logging.INFO, logger=scenario.diagnostics_logger.name),
-        pytest.raises(TimeoutError, match="timed out after 1 elapsed second"),
+        pytest.raises(TimeoutError, match="ready not reached after 1s"),
     ):
         scenario._wait_elapsed(
             component="test component",
@@ -229,14 +229,14 @@ def test_wait_elapsed_skips_sleep_after_diagnostics_cross_deadline(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A diagnostic that crosses the deadline must not cause a negative sleep."""
-    times = iter([0.0, 0.0, 2.0, 2.0])
+    times = iter([0.0, 0.0, 2.0, 2.0, 2.0])
     sleeps: list[float] = []
     monkeypatch.setattr(scenario.time, "monotonic", lambda: next(times))
     monkeypatch.setattr(scenario.time, "sleep", lambda seconds: sleeps.append(seconds))
 
     with (
         caplog.at_level(logging.INFO, logger=scenario.diagnostics_logger.name),
-        pytest.raises(TimeoutError, match="timed out after 1 elapsed second"),
+        pytest.raises(TimeoutError, match="ready not reached after 2s"),
     ):
         scenario._wait_elapsed(
             component="diagnostic deadline",
@@ -283,7 +283,7 @@ def test_wait_elapsed_retries_transient_subprocess_failures(
 
 def test_wait_elapsed_bounds_transient_retry_sleep_to_remaining_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     """A retry sleep cannot outlive the original observation deadline."""
-    times = iter([0.0, 0.9, 1.0])
+    times = iter([0.0, 0.9, 1.0, 1.0])
     sleeps: list[float] = []
     monkeypatch.setattr(scenario.time, "monotonic", lambda: next(times))
     monkeypatch.setattr(scenario.time, "sleep", lambda seconds: sleeps.append(seconds))
@@ -291,7 +291,7 @@ def test_wait_elapsed_bounds_transient_retry_sleep_to_remaining_deadline(monkeyp
     def observe() -> str:
         raise subprocess.CalledProcessError(1, ["kubectl"])
 
-    with pytest.raises(TimeoutError, match="timed out after 1 elapsed second"):
+    with pytest.raises(TimeoutError, match="ready not reached after 1s"):
         scenario._wait_elapsed(
             component="bounded retry", accepted_at=0.0, limit_seconds=1, observe=observe, ready=lambda _value: False
         )

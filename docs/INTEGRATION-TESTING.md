@@ -957,11 +957,10 @@ scenario. Run that [QE] E2E with
 `uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets`;
 it requires the same source-pinned environment described below and enough
 available BMHs for both worker sets.
-After the existing install checks, the regression monitors the healthy
-HostedCluster, its NodePools, and guest ClusterOperators for 10 minutes, then
-upgrades only the control plane through ClusterOrder/AAP and HyperShift. The
-upgrade is enabled by default; set `OSAC_TEST_UPGRADE_ENABLED=false` to skip
-it. Set `OSAC_TEST_UPGRADE_RELEASE_VERSION` and
+After the existing install checks, the regression waits up to 10 minutes for
+the ClusterOrder, HostedCluster, and both NodePools to become ready. It always
+upgrades the control plane and then the compute NodePool, and verifies the gpu
+NodePool remains unchanged. Set `OSAC_TEST_UPGRADE_RELEASE_VERSION` and
 `OSAC_TEST_UPGRADE_RELEASE_IMAGE` for a compatible target (defaults 4.22.1
 and its multi-arch image).
 

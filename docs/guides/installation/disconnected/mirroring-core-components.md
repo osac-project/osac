@@ -170,11 +170,11 @@ then run the canonical mirror command from
 
 ### Step 2 — Apply IDMS/ITMS (disconnected cluster)
 
-```bash
-# Apply or update the ImageDigestMirrorSet and ImageTagMirrorSet
-oc apply -f oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml
-oc apply -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml
-```
+Do not apply the raw generated files here. Run Category A's canonical
+[Step 2d](mirroring-operators.md#2d-apply-generated-artifacts) to set
+`NeverContactSource` on every entry in every generated IDMS and ITMS document,
+validate **both** kinds before **any** apply, and apply the reviewed artifacts.
+This policy requirement is unconditional for Core, not gated on VMaaS.
 
 Image resolution is handled transparently by the kubelet/CRI-O layer
 using the IDMS and ITMS resources.  Pods reference upstream image names;

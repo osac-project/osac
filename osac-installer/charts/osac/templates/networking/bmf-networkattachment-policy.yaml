@@ -13,7 +13,7 @@ spec:
     resourceRules:
     - apiGroups: ["osac.openshift.io"]
       apiVersions: ["*"]
-      operations: ["UPDATE"]
+      operations: ["CREATE", "UPDATE", "DELETE"]
       resources: ["networkattachments"]
   variables:
   - name: bmfIdentity
@@ -22,6 +22,12 @@ spec:
     expression: >-
       request.operation == "UPDATE" &&
       oldObject != null &&
+      oldObject.spec.target.kind == "BareMetalInstance" &&
+      oldObject.spec.interface.type == "physical" &&
+      oldObject.metadata.name == "baremetalinstance-" + oldObject.spec.target.id &&
+      has(oldObject.metadata.annotations) &&
+      ("osac.openshift.io/tenant" in oldObject.metadata.annotations) &&
+      oldObject.metadata.annotations["osac.openshift.io/tenant"] != "" &&
       oldObject.metadata.deletionTimestamp != null &&
       has(oldObject.metadata.finalizers) &&
       oldObject.metadata.finalizers.size() == 1 &&
@@ -34,8 +40,45 @@ spec:
       (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}) &&
       (has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []) ==
       (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])
+  - name: bmfCreateNetworkAttachment
+    expression: >-
+      request.operation == "CREATE" &&
+      object != null &&
+      object.spec.target.kind == "BareMetalInstance" &&
+      object.spec.interface.type == "physical" &&
+      object.metadata.name == "baremetalinstance-" + object.spec.target.id &&
+      has(object.metadata.annotations) &&
+      ("osac.openshift.io/tenant" in object.metadata.annotations) &&
+      object.metadata.annotations["osac.openshift.io/tenant"] != "" &&
+      has(object.metadata.finalizers) &&
+      object.metadata.finalizers.size() == 1 &&
+      object.metadata.finalizers[0] == "osac.openshift.io/baremetalinstance-networking"
+  - name: bmfDeleteNetworkAttachment
+    expression: >-
+      request.operation == "DELETE" &&
+      oldObject != null &&
+      oldObject.spec.target.kind == "BareMetalInstance" &&
+      oldObject.spec.interface.type == "physical" &&
+      oldObject.metadata.name == "baremetalinstance-" + oldObject.spec.target.id &&
+      has(oldObject.metadata.annotations) &&
+      ("osac.openshift.io/tenant" in oldObject.metadata.annotations) &&
+      oldObject.metadata.annotations["osac.openshift.io/tenant"] != "" &&
+      has(oldObject.metadata.finalizers) &&
+      "osac.openshift.io/baremetalinstance-networking" in oldObject.metadata.finalizers
   validations:
-  - expression: "!variables.bmfIdentity || variables.bmfFinalizerRemoval"
+  - expression: >-
+      !variables.bmfIdentity || request.operation != "CREATE" ||
+      variables.bmfCreateNetworkAttachment
+    message: "BMF may only create physical BareMetalInstance NetworkAttachments"
+    reason: Forbidden
+  - expression: >-
+      !variables.bmfIdentity || request.operation != "DELETE" ||
+      variables.bmfDeleteNetworkAttachment
+    message: "BMF may only delete its physical BareMetalInstance NetworkAttachments"
+    reason: Forbidden
+  - expression: >-
+      !variables.bmfIdentity || request.operation != "UPDATE" ||
+      variables.bmfFinalizerRemoval
     message: "BMF may only remove its own finalizer after NetworkAttachment cleanup"
     reason: Forbidden
 ---

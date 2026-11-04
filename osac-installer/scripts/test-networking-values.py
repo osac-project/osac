@@ -548,14 +548,18 @@ class ManifestsTest(unittest.TestCase):
                 {
                     "apiGroups": ["osac.openshift.io"],
                     "apiVersions": ["*"],
-                    "operations": ["UPDATE"],
+                    "operations": ["CREATE", "UPDATE", "DELETE"],
                     "resources": ["networkattachments"],
                 }
             ],
         )
         self.assertEqual(
-            policy["spec"]["validations"][0]["message"],
-            "BMF may only remove its own finalizer after NetworkAttachment cleanup",
+            [validation["message"] for validation in policy["spec"]["validations"]],
+            [
+                "BMF may only create physical BareMetalInstance NetworkAttachments",
+                "BMF may only delete its physical BareMetalInstance NetworkAttachments",
+                "BMF may only remove its own finalizer after NetworkAttachment cleanup",
+            ],
         )
         self.assertEqual(binding["spec"]["policyName"], policy["metadata"]["name"])
         self.assertEqual(binding["spec"]["validationActions"], ["Deny"])

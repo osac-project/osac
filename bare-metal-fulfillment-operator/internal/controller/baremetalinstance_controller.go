@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -55,7 +54,7 @@ type BareMetalInstanceReconciler struct {
 	InventoryClient                   inventory.Client
 	ManagementClient                  management.Client
 	ProvisioningProvider              provisioning.ProvisioningProvider
-	NetworkingNamespace               string
+	NetworkingProvisioningEnabled     bool
 	Recorder                          recorder.EventRecorder
 	NoFreeHostsPollIntervalDuration   time.Duration
 	TryLockFailPollIntervalDuration   time.Duration
@@ -72,7 +71,7 @@ func NewBareMetalInstanceReconciler(
 	inventoryClient inventory.Client,
 	managementClient management.Client,
 	provisioningProvider provisioning.ProvisioningProvider,
-	networkingNamespace string,
+	networkingProvisioningEnabled bool,
 	noFreeHostsPollIntervalDuration time.Duration,
 	tryLockFailPollIntervalDuration time.Duration,
 	managementRecheckIntervalDuration time.Duration,
@@ -107,7 +106,7 @@ func NewBareMetalInstanceReconciler(
 		TryLockFailPollIntervalDuration:   tryLockFailPollIntervalDuration,
 		ManagementClient:                  managementClient,
 		ProvisioningProvider:              provisioningProvider,
-		NetworkingNamespace:               networkingNamespace,
+		NetworkingProvisioningEnabled:     networkingProvisioningEnabled,
 		ManagementRecheckIntervalDuration: managementRecheckIntervalDuration,
 		ProvisionPollIntervalDuration:     provisionPollIntervalDuration,
 		HostReadinessPollIntervalDuration: hostReadinessPollIntervalDuration,
@@ -570,100 +569,6 @@ func markProvisionRetrying(bareMetalInstance *v1alpha1.BareMetalInstance, backen
 	)
 }
 
-func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
-	// 1) Provisioning runs FIRST, while the server is still on the provisioning
-	//    network segment (the initial provisioning-network attach done at bootstrap). Networking must
-	//    NOT run before provisioning — the tenant must not reach a half-built host.
-	//
-	//    NOTE: The handoff (provision → move → reboot → discovery) protects INITIAL
-	//    provisioning only. NetworkHandoffComplete is never reset, so an in-place
-	//    re-provision after Ready (if the provisioning config-version changes) would
-	//    run over the tenant network. This is a known short-term limitation; re-provision
-	//    handoff-reset is deferred to the long-term design.
-	if bareMetalInstance.Spec.TemplateID != "" && bareMetalInstance.Spec.TemplateID != shared.OsacNoopTemplate {
-		result, provErr := r.reconcileProvisioning(ctx, bareMetalInstance)
-		if provErr != nil {
-			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-			return result, provErr
-		}
-		if !result.IsZero() {
-			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
-			return result, nil
-		}
-		provisionCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
-		if provisionCond != nil && provisionCond.Status != metav1.ConditionTrue {
-			if v1alpha1.IsProvisionRetrying(provisionCond) {
-				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
-				return ctrl.Result{}, nil
-			}
-			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-			return ctrl.Result{}, nil
-		}
-	}
-
-	if len(bareMetalInstance.Spec.NetworkAttachments) == 0 {
-		return ctrl.Result{}, nil
-	}
-
-	// 2) Move the fabric port provisioning network -> tenant network (post-provision).
-	result, netErr := r.reconcileNetworking(ctx, bareMetalInstance)
-	if netErr != nil {
-		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-		return result, netErr
-	}
-	if !result.IsZero() {
-		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
-		return result, nil
-	}
-	netCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-	if netCond == nil || netCond.Status != metav1.ConditionTrue {
-		if netCond != nil && netCond.Reason == v1alpha1.HostConditionReasonTemplateFailed {
-			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-			return ctrl.Result{}, nil
-		}
-		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
-		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
-	}
-
-	// 3) Reboot so the OS re-DHCPs on the tenant network (single default route).
-	result, rbErr := r.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
-	if rbErr != nil {
-		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-		return result, rbErr
-	}
-	if bareMetalInstance.Status.Phase == v1alpha1.BareMetalInstancePhaseFailed {
-		return ctrl.Result{}, nil
-	}
-	if !result.IsZero() {
-		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
-		return result, nil
-	}
-
-	// 4) Discover the tenant-network DHCP lease (only after handoff reboot).
-	result, ipErr := r.reconcileIPDiscovery(ctx, bareMetalInstance)
-	if ipErr != nil {
-		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-		return result, ipErr
-	}
-	if !result.IsZero() {
-		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
-		return result, nil
-	}
-	ipCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-	if ipCond == nil || ipCond.Status != metav1.ConditionTrue {
-		if ipCond != nil && ipCond.Reason == v1alpha1.HostConditionReasonTemplateFailed {
-			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-			return ctrl.Result{}, nil
-		}
-		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
-		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
-	}
-	log.Info("Network handoff and IP discovery complete", "bmi", bareMetalInstance.Name)
-	return ctrl.Result{}, nil
-}
-
 func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
 	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
 		ExternalHostID            string
@@ -739,138 +644,6 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 	}
 
 	return result, nil
-}
-
-// reconcileNetworkHandoffReboot reboots the host once after its fabric port has
-// been moved to the tenant network, so the OS re-DHCPs on the tenant network. It is
-// idempotent: it runs only until HostConditionNetworkHandoffComplete is True.
-func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
-	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
-) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-	const poweringOnMessage = "Powering on host onto the tenant network"
-
-	if !r.providerNetworkingEnabled() {
-		log.Info("Provider networking disabled, skipping network-handoff reboot")
-		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-			metav1.ConditionTrue, "Skipped", "Networking provider not configured")
-		return ctrl.Result{}, nil
-	}
-
-	handoffCond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
-
-	// Already complete — no-op
-	if handoffCond != nil && handoffCond.Status == metav1.ConditionTrue {
-		return ctrl.Result{}, nil
-	}
-	if networkHandoffDeadlineExceeded(bmi, time.Now()) {
-		message := fmt.Sprintf("network handoff was not confirmed within %s", NetworkHandoffDeadline)
-		return r.failNetworkHandoff(bmi, message), nil
-	}
-
-	// Poll only after an operation has started. The condition reason is the
-	// durable state; messages can change without changing the handoff state.
-	if handoffCond != nil {
-		switch handoffCond.Reason {
-		case v1alpha1.HostConditionReasonNetworkHandoffPoweringOn:
-			powerStatus, err := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-			if powerStatus == nil {
-				message := fmt.Sprintf("management backend returned nil power status for host %s", bmi.Spec.ExternalHostID)
-				return r.failNetworkHandoff(bmi, message), nil
-			}
-			if powerStatus.State == management.PowerOn && !powerStatus.IsTransitioning {
-				bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-					metav1.ConditionTrue, "Succeeded", "Host powered on onto the tenant network")
-				return ctrl.Result{}, nil
-			}
-			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
-		case v1alpha1.HostConditionReasonProgressing:
-			completed, err := r.ManagementClient.IsRestartComplete(ctx, bmi.Spec.ExternalHostID)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-			if completed {
-				// A reboot we previously triggered has finished.
-				bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-					metav1.ConditionTrue, "Succeeded", "Host rebooted onto the tenant network")
-				return ctrl.Result{}, nil
-			}
-			// Still rebooting, keep polling
-			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
-		}
-	}
-
-	// No operation is in progress — check power state before deciding to trigger.
-	// A reboot only helps an already-running OS re-DHCP; an off host will boot fresh
-	// on the tenant network when reconcilePower next powers it on, so no reboot is needed.
-	powerStatus, err := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if powerStatus == nil {
-		message := fmt.Sprintf("management backend returned nil power status for host %s", bmi.Spec.ExternalHostID)
-		return r.failNetworkHandoff(bmi, message), nil
-	}
-
-	if powerStatus.IsTransitioning {
-		// Power state is transitioning, requeue without triggering
-		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
-	}
-
-	if powerStatus.State == management.PowerOff {
-		// The lease query depends on the host booting on the tenant network, even
-		// when its requested RunStrategy is Halted. Power it on here; the regular
-		// power reconciler applies RunStrategy after IP discovery completes.
-		if err := r.ManagementClient.SetPowerState(ctx, bmi.Spec.ExternalHostID, management.PowerOn); err != nil {
-			if errors.Is(err, management.ErrTransitioning) {
-				return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
-			}
-			return r.failNetworkHandoff(bmi, err.Error()), nil
-		}
-		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-			metav1.ConditionFalse, v1alpha1.HostConditionReasonNetworkHandoffPoweringOn,
-			poweringOnMessage)
-		log.Info("Powered on host for network handoff", "host", bmi.Spec.ExternalHostID)
-		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
-	}
-
-	// Host is powered on — trigger the handoff reboot (exactly once)
-	if err := r.ManagementClient.TriggerRestart(ctx, bmi.Spec.ExternalHostID); err != nil {
-		if errors.Is(err, management.ErrTransitioning) {
-			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
-		}
-		return r.failNetworkHandoff(bmi, err.Error()), nil
-	}
-	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-		metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
-		"Rebooting host onto the tenant network")
-	log.Info("Triggered network-handoff reboot", "host", bmi.Spec.ExternalHostID)
-	return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
-}
-
-func networkHandoffDeadlineExceeded(bmi *v1alpha1.BareMetalInstance, now time.Time) bool {
-	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-	return ready != nil && ready.Status == metav1.ConditionTrue &&
-		!ready.LastTransitionTime.IsZero() && now.Sub(ready.LastTransitionTime.Time) >= NetworkHandoffDeadline
-}
-
-func (r *BareMetalInstanceReconciler) failNetworkHandoff(
-	bmi *v1alpha1.BareMetalInstance, message string,
-) ctrl.Result {
-	r.setNetworkCondition(
-		bmi,
-		v1alpha1.HostConditionNetworkHandoffComplete,
-		metav1.ConditionFalse,
-		v1alpha1.HostConditionReasonNetworkHandoffFailed,
-		message,
-		corev1.EventTypeWarning,
-		v1alpha1.HostConditionReasonNetworkHandoffFailed,
-	)
-	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-	return ctrl.Result{}
 }
 
 // reconcileNetworkOffboardShutdown powers off the host during deletion BEFORE

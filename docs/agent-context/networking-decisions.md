@@ -193,6 +193,14 @@ as follows:
   creates the single NetworkClass CR, which resolves its managers from the
   registrations. BMaaS (BMF) and VMaaS create a NetworkAttachment per
   workload attachment; the operator networking controller runs its tasks.
+- **BMaaS handoff:** BMF reads, creates, and deletes its NetworkAttachment in
+  the BareMetalInstance namespace. After the attachment is Ready, BMF confirms
+  a host power-off followed by a power-on through the existing management
+  power-state API, then queries the tenant DHCP lease by the selected NIC MAC.
+  Transient management errors are retried until the handoff deadline. This
+  controller behavior follows the newer review decision and supersedes the
+  Metal3 handoff-annotation path in the accepted OSAC-1437 design; that design
+  still needs an amendment.
 - **Status:** networking CRs have no `status.phase`. They report the `Ready`
   condition (reasons `Progressing`, `Succeeded`, `Failed`, `Updating`,
   `ProvisioningDisabled`), one `status.jobs` entry per task run (manager,

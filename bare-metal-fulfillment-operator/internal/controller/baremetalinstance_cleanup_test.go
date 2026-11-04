@@ -201,7 +201,7 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 		}
 		reconciler = NewBareMetalInstanceReconciler(
 			k8sClient, k8sClient.Scheme(), reconciler.InventoryClient, reconciler.ManagementClient,
-			provider, "", time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
+			provider, false, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
 		)
 
 		key := client.ObjectKeyFromObject(bmi)
@@ -267,7 +267,7 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 
 		restartedReconciler := NewBareMetalInstanceReconciler(
 			k8sClient, k8sClient.Scheme(), reconciler.InventoryClient, reconciler.ManagementClient,
-			provider, "", time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
+			provider, false, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
 		)
 		result, err = restartedReconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())

@@ -49,8 +49,10 @@ func (h *netHarness) allocatedIP(id, poolID, address string) *v1alpha1.ExternalI
 // computeInstance creates a ComputeInstance with an API ID on Subnet subnetID.
 func (h *netHarness) computeInstance(id, subnetID, address string) *v1alpha1.ComputeInstance {
 	ci := &v1alpha1.ComputeInstance{
-		ObjectMeta: metav1.ObjectMeta{Name: crdTestName("ci"), Namespace: h.ns, Labels: map[string]string{osacComputeInstanceIDLabel: id}},
-		Spec:       newTestComputeInstanceSpec("tpl"),
+		ObjectMeta: metav1.ObjectMeta{Name: crdTestName("ci"), Namespace: h.ns,
+			Labels:      map[string]string{osacComputeInstanceIDLabel: id},
+			Annotations: map[string]string{networktask.TenantAnnotation: "tenant-a"}},
+		Spec: newTestComputeInstanceSpec("tpl"),
 	}
 	ci.Spec.NetworkAttachments = []v1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetID, SecurityGroupRefs: []string{"sg-1"}}}
 	Expect(k8sClient.Create(ctx, ci)).To(Succeed())
@@ -67,7 +69,9 @@ func (h *netHarness) setVMAddress(ci *v1alpha1.ComputeInstance, subnetID, addres
 
 func (h *netHarness) bareMetalInstance(id, hostName string) *bmfov1alpha1.BareMetalInstance {
 	bmi := &bmfov1alpha1.BareMetalInstance{
-		ObjectMeta: metav1.ObjectMeta{Name: crdTestName("bmi"), Namespace: h.ns, Labels: map[string]string{osacBareMetalInstanceIDLabel: id}},
+		ObjectMeta: metav1.ObjectMeta{Name: crdTestName("bmi"), Namespace: h.ns,
+			Labels:      map[string]string{osacBareMetalInstanceIDLabel: id},
+			Annotations: map[string]string{networktask.TenantAnnotation: "tenant-a"}},
 		Spec: bmfov1alpha1.BareMetalInstanceSpec{
 			ExternalHostID: "host-1", ExternalHostName: hostName, TemplateID: "tpl",
 			Selector: bmfov1alpha1.HostSelectorSpec{HostSelector: map[string]string{"pool": "a"}},
@@ -588,6 +592,20 @@ var _ = Describe("NetworkAttachment controller", func() {
 		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
 		expectReady(na, metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
 		Expect(na.Status.DHCPLease).To(BeNil())
+	})
+
+	It("rejects a bare-metal attachment whose tenant differs from its target", func() {
+		h.readySubnet("sn-1", "vn-1", true, testPlan)
+		h.bareMetalInstance(bmiID, "rack1-node3")
+		na := physical(bmiID)
+		na.Annotations[networktask.TenantAnnotation] = "tenant-b"
+		Expect(k8sClient.Update(ctx, na)).To(Succeed())
+
+		reconcileNet(r, na)
+
+		condition := expectReady(na, metav1.ConditionFalse, v1alpha1.ReasonFailed)
+		Expect(condition.Message).To(ContainSubstring("does not match target tenant"))
+		Expect(h.aap.tasks(bmiID)).To(BeEmpty(), "tenant mismatch must fail before launching a manager task")
 	})
 
 	// deletingBareMetalInstance sets the BMI's deletionTimestamp; a test

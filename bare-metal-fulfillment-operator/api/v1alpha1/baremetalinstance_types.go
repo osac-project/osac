@@ -181,7 +181,7 @@ const (
 	HostConditionIPDiscoveryComplete BareMetalInstanceConditionType = "IPDiscoveryComplete"
 
 	// HostConditionNetworkHandoffComplete is set True once the fabric port has been
-	// moved to the tenant network AND the post-provision reboot has completed, so the
+	// moved to the tenant network AND the host power cycle has completed, so the
 	// OS has re-DHCPed on the tenant network. IP discovery and Ready gate on this.
 	HostConditionNetworkHandoffComplete BareMetalInstanceConditionType = "NetworkHandoffComplete"
 
@@ -229,21 +229,25 @@ const (
 	// HostConditionReasonInvalidSelector indicates the host selector is missing or empty.
 	HostConditionReasonInvalidSelector = "InvalidSelector"
 
-	// HostConditionReasonProvisioningDisabled indicates provider networking is disabled.
-	HostConditionReasonProvisioningDisabled = "ProvisioningDisabled"
+	// HostConditionReasonNetworkProvisioningDisabled indicates networking is disabled.
+	HostConditionReasonNetworkProvisioningDisabled = "ProvisioningDisabled"
 
 	// HostConditionReasonNetworkAttachmentFailed indicates the hub NetworkAttachment failed.
 	HostConditionReasonNetworkAttachmentFailed = "NetworkAttachmentFailed"
 
-	// HostConditionReasonDetaching indicates the hub NetworkAttachment is being deleted.
-	HostConditionReasonDetaching = "Detaching"
+	// HostConditionReasonNetworkDetaching indicates the hub NetworkAttachment is being deleted.
+	HostConditionReasonNetworkDetaching = "NetworkDetaching"
 
-	// HostConditionReasonNetworkHandoffFailed indicates the network handoff reboot failed.
+	// HostConditionReasonNetworkHandoffFailed indicates the network handoff deadline expired.
 	HostConditionReasonNetworkHandoffFailed = "NetworkHandoffFailed"
+
+	// HostConditionReasonNetworkHandoffPoweringOff indicates the host is being
+	// powered off before it boots on the tenant network.
+	HostConditionReasonNetworkHandoffPoweringOff = "PoweringOff"
 
 	// HostConditionReasonNetworkHandoffPoweringOn indicates the host is being
 	// powered on to boot on the tenant network.
-	HostConditionReasonNetworkHandoffPoweringOn = "NetworkHandoffPoweringOn"
+	HostConditionReasonNetworkHandoffPoweringOn = "PoweringOn"
 
 	// HostConditionReasonIPDiscoveryFailed indicates the DHCP lease query failed.
 	HostConditionReasonIPDiscoveryFailed = "IPDiscoveryFailed"

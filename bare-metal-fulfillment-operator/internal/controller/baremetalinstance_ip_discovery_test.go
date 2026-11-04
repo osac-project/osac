@@ -43,7 +43,7 @@ var _ = Describe("BareMetalInstance IP Discovery (NetworkAttachment lease mirror
 		return &v1alpha1.BareMetalInstance{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "test-bmi-lease-",
-				Namespace:    "default",
+				Namespace:    testNetworkingNS,
 				Labels:       map[string]string{BareMetalInstanceUUIDLabel: apiID},
 			},
 			Spec: v1alpha1.BareMetalInstanceSpec{
@@ -126,10 +126,10 @@ var _ = Describe("BareMetalInstance IP Discovery (NetworkAttachment lease mirror
 			bmi = bmiForLeaseMirror(nil)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 			reconciler = &BareMetalInstanceReconciler{
-				Client:              k8sClient,
-				Scheme:              k8sClient.Scheme(),
-				NetworkingNamespace: testNetworkingNS,
-				Recorder:            recorder,
+				Client:                        k8sClient,
+				Scheme:                        k8sClient.Scheme(),
+				NetworkingProvisioningEnabled: true,
+				Recorder:                      recorder,
 			}
 
 			result, err := reconciler.reconcileIPDiscovery(ctx, bmi)
@@ -142,16 +142,16 @@ var _ = Describe("BareMetalInstance IP Discovery (NetworkAttachment lease mirror
 			Expect(cond.Reason).To(Equal("Skipped"))
 		})
 
-		It("sets ProvisioningDisabled when NetworkingNamespace is empty", func() {
+		It("sets ProvisioningDisabled when networking is disabled", func() {
 			bmi = bmiForLeaseMirror([]v1alpha1.BareMetalNetworkAttachment{
 				{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
 			})
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 			reconciler = &BareMetalInstanceReconciler{
-				Client:              k8sClient,
-				Scheme:              k8sClient.Scheme(),
-				NetworkingNamespace: "",
-				Recorder:            recorder,
+				Client:                        k8sClient,
+				Scheme:                        k8sClient.Scheme(),
+				NetworkingProvisioningEnabled: false,
+				Recorder:                      recorder,
 			}
 
 			result, err := reconciler.reconcileIPDiscovery(ctx, bmi)
@@ -161,7 +161,7 @@ var _ = Describe("BareMetalInstance IP Discovery (NetworkAttachment lease mirror
 			cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProvisioningDisabled))
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkProvisioningDisabled))
 		})
 
 		It("requeues before handoff completes", func() {
@@ -172,7 +172,7 @@ var _ = Describe("BareMetalInstance IP Discovery (NetworkAttachment lease mirror
 			reconciler = &BareMetalInstanceReconciler{
 				Client:                        k8sClient,
 				Scheme:                        k8sClient.Scheme(),
-				NetworkingNamespace:           testNetworkingNS,
+				NetworkingProvisioningEnabled: true,
 				ProvisionPollIntervalDuration: time.Second,
 				Recorder:                      recorder,
 			}
@@ -204,7 +204,7 @@ var _ = Describe("BareMetalInstance IP Discovery (NetworkAttachment lease mirror
 			reconciler = &BareMetalInstanceReconciler{
 				Client:                        k8sClient,
 				Scheme:                        k8sClient.Scheme(),
-				NetworkingNamespace:           testNetworkingNS,
+				NetworkingProvisioningEnabled: true,
 				ProvisionPollIntervalDuration: time.Second,
 				Recorder:                      recorder,
 			}
@@ -241,7 +241,7 @@ var _ = Describe("BareMetalInstance IP Discovery (NetworkAttachment lease mirror
 			reconciler = &BareMetalInstanceReconciler{
 				Client:                        k8sClient,
 				Scheme:                        k8sClient.Scheme(),
-				NetworkingNamespace:           testNetworkingNS,
+				NetworkingProvisioningEnabled: true,
 				ProvisionPollIntervalDuration: time.Second,
 				Recorder:                      recorder,
 			}
@@ -284,7 +284,7 @@ var _ = Describe("BareMetalInstance IP Discovery (NetworkAttachment lease mirror
 			reconciler = &BareMetalInstanceReconciler{
 				Client:                        k8sClient,
 				Scheme:                        k8sClient.Scheme(),
-				NetworkingNamespace:           testNetworkingNS,
+				NetworkingProvisioningEnabled: true,
 				ProvisionPollIntervalDuration: time.Second,
 				Recorder:                      recorder,
 			}
@@ -320,7 +320,7 @@ var _ = Describe("BareMetalInstance IP Discovery (NetworkAttachment lease mirror
 			reconciler = &BareMetalInstanceReconciler{
 				Client:                        k8sClient,
 				Scheme:                        k8sClient.Scheme(),
-				NetworkingNamespace:           testNetworkingNS,
+				NetworkingProvisioningEnabled: true,
 				ProvisionPollIntervalDuration: time.Second,
 				Recorder:                      recorder,
 			}

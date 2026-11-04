@@ -121,6 +121,12 @@ func (r *NetworkAttachmentReconciler) create(ctx context.Context, na *v1alpha1.N
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	if workload.ci != nil || workload.bmi != nil {
+		if err := networkAttachmentTenantError(na, subnet, workload); err != nil {
+			networktask.SetFailed(na, err.Error())
+			return ctrl.Result{}, nil
+		}
+	}
 	physical := na.Spec.Interface.Type == v1alpha1.NetworkInterfacePhysical
 	if na.Status.TaskInput == nil {
 		copyManagers(na, subnet.Status.NetworkManagers, false)
@@ -146,6 +152,34 @@ func (r *NetworkAttachmentReconciler) create(ctx context.Context, na *v1alpha1.N
 		return r.applyPhysical(ctx, na, subnet, workload, input, store)
 	}
 	return r.applyOverlay(ctx, na, subnet, workload, input, store)
+}
+
+func networkAttachmentTenantError(
+	na *v1alpha1.NetworkAttachment,
+	subnet *v1alpha1.Subnet,
+	workload attachmentWorkload,
+) error {
+	tenant := na.Annotations[networktask.TenantAnnotation]
+	if tenant == "" {
+		return fmt.Errorf("NetworkAttachment %s has no tenant annotation", na.Name)
+	}
+
+	var workloadTenant string
+	switch {
+	case workload.ci != nil:
+		workloadTenant = workload.ci.Annotations[networktask.TenantAnnotation]
+	case workload.bmi != nil:
+		workloadTenant = workload.bmi.Annotations[networktask.TenantAnnotation]
+	}
+	if workloadTenant != tenant {
+		return fmt.Errorf("NetworkAttachment %s tenant %q does not match target tenant %q",
+			na.Name, tenant, workloadTenant)
+	}
+	if subnet.Annotations[networktask.TenantAnnotation] != tenant {
+		return fmt.Errorf("NetworkAttachment %s tenant %q does not match Subnet %s tenant %q",
+			na.Name, tenant, subnet.Name, subnet.Annotations[networktask.TenantAnnotation])
+	}
+	return nil
 }
 
 // buildInput builds the attachment inputs (contract §4.10).

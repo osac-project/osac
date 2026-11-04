@@ -101,12 +101,6 @@ spec:
           {{- end }}
           - name: OSAC_ENABLE_NETWORKING_PROVISIONING
             value: {{ .Values.global.networking.provisioningEnabled | quote }}
-          {{- if .Values.global.networking.provisioningEnabled }}
-          - name: OSAC_NETWORKING_NAMESPACE
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.namespace
-          {{- end }}
           - name: OSAC_INSTALLATION_API_URL
             value: {{ .Values.secretAPI.url | quote }}
           - name: OSAC_INSTALLATION_API_ISSUER_URL

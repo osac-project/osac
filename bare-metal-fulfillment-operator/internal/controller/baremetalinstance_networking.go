@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -32,6 +33,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
@@ -43,11 +46,209 @@ const (
 	eventReasonLeaseNotFound = "LeaseNotFound"
 )
 
-// providerNetworkingEnabled reports whether hub NetworkAttachment create/delete
-// is configured. An empty NetworkingNamespace means provider networking is
-// disabled (Design §Provider networking disabled).
+// providerNetworkingEnabled reports whether provider networking is configured.
 func (r *BareMetalInstanceReconciler) providerNetworkingEnabled() bool {
-	return r.NetworkingNamespace != ""
+	return r.NetworkingProvisioningEnabled
+}
+
+func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(
+	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if bmi.Spec.TemplateID != "" && bmi.Spec.TemplateID != shared.OsacNoopTemplate {
+		result, err := r.reconcileProvisioning(ctx, bmi)
+		if err != nil {
+			bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			return result, err
+		}
+		if !result.IsZero() {
+			bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+			return result, nil
+		}
+		provisionCond := bmi.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
+		if provisionCond != nil && provisionCond.Status != metav1.ConditionTrue {
+			if v1alpha1.IsProvisionRetrying(provisionCond) {
+				bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+				return ctrl.Result{}, nil
+			}
+			bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			return ctrl.Result{}, nil
+		}
+	}
+
+	if len(bmi.Spec.NetworkAttachments) == 0 {
+		return ctrl.Result{}, nil
+	}
+
+	result, err := r.reconcileNetworking(ctx, bmi)
+	if err != nil {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		return result, err
+	}
+	if !result.IsZero() {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+		return result, nil
+	}
+	networkCond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+	if networkCond == nil || networkCond.Status != metav1.ConditionTrue {
+		if networkCond != nil && networkCond.Reason == v1alpha1.HostConditionReasonTemplateFailed {
+			bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			return ctrl.Result{}, nil
+		}
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+	}
+
+	result, err = r.reconcileNetworkHandoffPowerCycle(ctx, bmi)
+	if err != nil {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		return result, err
+	}
+	if bmi.Status.Phase == v1alpha1.BareMetalInstancePhaseFailed {
+		return ctrl.Result{}, nil
+	}
+	if !result.IsZero() {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+		return result, nil
+	}
+
+	result, err = r.reconcileIPDiscovery(ctx, bmi)
+	if err != nil {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		return result, err
+	}
+	if !result.IsZero() {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+		return result, nil
+	}
+	ipCond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
+	if ipCond == nil || ipCond.Status != metav1.ConditionTrue {
+		if ipCond != nil && ipCond.Reason == v1alpha1.HostConditionReasonTemplateFailed {
+			bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			return ctrl.Result{}, nil
+		}
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+	}
+	log.Info("Network handoff and IP discovery complete", "bmi", bmi.Name)
+	return ctrl.Result{}, nil
+}
+
+// reconcileNetworkHandoffPowerCycle moves a host through an observed
+// power-off and power-on so its OS acquires a lease on the tenant network.
+func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
+	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
+) (ctrl.Result, error) {
+	if !r.providerNetworkingEnabled() {
+		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+			metav1.ConditionTrue, "Skipped", "Networking provider not configured")
+		return ctrl.Result{}, nil
+	}
+
+	condition := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+	if condition != nil {
+		if condition.Status == metav1.ConditionTrue {
+			return ctrl.Result{}, nil
+		}
+		if condition.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed {
+			if networkHandoffDeadlineExceeded(bmi, time.Now()) {
+				return ctrl.Result{}, nil
+			}
+			condition = nil
+		}
+	}
+
+	state, err := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
+	if err != nil {
+		if networkHandoffDeadlineExceeded(bmi, time.Now()) {
+			return r.failNetworkHandoff(bmi, fmt.Sprintf("network handoff was not confirmed within %s", NetworkHandoffDeadline)), nil
+		}
+		return r.retryNetworkHandoff(bmi, handoffReason(condition), fmt.Sprintf("reading host power state: %v", err)), nil
+	}
+	if state == nil {
+		return r.retryNetworkHandoff(bmi, handoffReason(condition), "management backend returned no host power state"), nil
+	}
+
+	if condition != nil && condition.Reason == v1alpha1.HostConditionReasonNetworkHandoffPoweringOn &&
+		state.State == management.PowerOn && !state.IsTransitioning {
+		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+			metav1.ConditionTrue, "Succeeded", "Host powered on onto the tenant network")
+		return ctrl.Result{}, nil
+	}
+
+	if networkHandoffDeadlineExceeded(bmi, time.Now()) {
+		return r.failNetworkHandoff(bmi, fmt.Sprintf("network handoff was not confirmed within %s", NetworkHandoffDeadline)), nil
+	}
+	if state.IsTransitioning {
+		return r.retryNetworkHandoff(bmi, handoffReason(condition), "waiting for host power transition"), nil
+	}
+
+	var target management.PowerState
+	var nextReason, message string
+	switch state.State {
+	case management.PowerOff:
+		target = management.PowerOn
+		nextReason = v1alpha1.HostConditionReasonNetworkHandoffPoweringOn
+		message = "Powering on host onto the tenant network"
+	case management.PowerOn:
+		target = management.PowerOff
+		nextReason = v1alpha1.HostConditionReasonNetworkHandoffPoweringOff
+		message = "Powering off host before tenant-network boot"
+	default:
+		return r.retryNetworkHandoff(bmi, handoffReason(condition), fmt.Sprintf("unrecognized host power state %q", state.State)), nil
+	}
+
+	if err := r.ManagementClient.SetPowerState(ctx, bmi.Spec.ExternalHostID, target); err != nil {
+		return r.retryNetworkHandoff(bmi, nextReason, fmt.Sprintf("requesting host power state %q: %v", target, err)), nil
+	}
+	return r.retryNetworkHandoff(bmi, nextReason, message), nil
+}
+
+func handoffReason(condition *metav1.Condition) string {
+	if condition == nil {
+		return v1alpha1.HostConditionReasonProgressing
+	}
+	return condition.Reason
+}
+
+func (r *BareMetalInstanceReconciler) retryNetworkHandoff(
+	bmi *v1alpha1.BareMetalInstance, reason, message string,
+) ctrl.Result {
+	if reason != v1alpha1.HostConditionReasonNetworkHandoffPoweringOff &&
+		reason != v1alpha1.HostConditionReasonNetworkHandoffPoweringOn {
+		reason = v1alpha1.HostConditionReasonProgressing
+	}
+	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+		metav1.ConditionFalse, reason, message)
+	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+	interval := r.ManagementRecheckIntervalDuration
+	if interval <= 0 {
+		interval = DefaultManagementRecheckIntervalDuration
+	}
+	return ctrl.Result{RequeueAfter: interval}
+}
+
+func networkHandoffDeadlineExceeded(bmi *v1alpha1.BareMetalInstance, now time.Time) bool {
+	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+	return ready != nil && ready.Status == metav1.ConditionTrue &&
+		!ready.LastTransitionTime.IsZero() && now.Sub(ready.LastTransitionTime.Time) >= NetworkHandoffDeadline
+}
+
+func (r *BareMetalInstanceReconciler) failNetworkHandoff(
+	bmi *v1alpha1.BareMetalInstance, message string,
+) ctrl.Result {
+	r.setNetworkCondition(
+		bmi,
+		v1alpha1.HostConditionNetworkHandoffComplete,
+		metav1.ConditionFalse,
+		v1alpha1.HostConditionReasonNetworkHandoffFailed,
+		message,
+		corev1.EventTypeWarning,
+		v1alpha1.HostConditionReasonNetworkHandoffFailed,
+	)
+	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+	return ctrl.Result{}
 }
 
 func (r *BareMetalInstanceReconciler) reconcileNetworking(
@@ -85,7 +286,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionNetworkAttachmentsReady,
 			metav1.ConditionTrue,
-			v1alpha1.HostConditionReasonProvisioningDisabled,
+			v1alpha1.HostConditionReasonNetworkProvisioningDisabled,
 			"Provider networking disabled; skipped NetworkAttachment create",
 		)
 		return ctrl.Result{}, nil
@@ -118,7 +319,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 
 	name := opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID)
 	na := &opv1alpha1.NetworkAttachment{}
-	err := r.apiReaderOrClient().Get(ctx, client.ObjectKey{Namespace: r.NetworkingNamespace, Name: name}, na)
+	err := r.apiReaderOrClient().Get(ctx, client.ObjectKey{Namespace: bareMetalInstance.Namespace, Name: name}, na)
 	if apierrors.IsNotFound(err) {
 		na, err = r.buildBareMetalNetworkAttachment(bareMetalInstance, apiID, name)
 		if err != nil {
@@ -251,11 +452,7 @@ func (r *BareMetalInstanceReconciler) buildBareMetalNetworkAttachment(
 		return nil, fmt.Errorf("network attachment MAC is not recorded")
 	}
 	mac := bmi.Status.NetworkAttachmentStatuses[0].MACAddress
-	iface := attachment.Interface
-	if iface == "" {
-		iface = bmi.Status.NetworkAttachmentStatuses[0].Interface
-	}
-	if iface == "" {
+	if attachment.Interface == "" {
 		return nil, fmt.Errorf("network attachment has no interface name")
 	}
 
@@ -268,7 +465,7 @@ func (r *BareMetalInstanceReconciler) buildBareMetalNetworkAttachment(
 	return &opv1alpha1.NetworkAttachment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       name,
-			Namespace:  r.NetworkingNamespace,
+			Namespace:  bmi.Namespace,
 			Finalizers: []string{BareMetalInstanceNetworkingFinalizer},
 			Annotations: map[string]string{
 				BareMetalInstanceTenantAnnotation: tenant,
@@ -282,7 +479,7 @@ func (r *BareMetalInstanceReconciler) buildBareMetalNetworkAttachment(
 			Subnet: attachment.SubnetRef,
 			Interface: opv1alpha1.NetworkAttachmentInterface{
 				Type:       opv1alpha1.NetworkInterfacePhysical,
-				Name:       iface,
+				Name:       attachment.Interface,
 				MACAddress: mac,
 			},
 			SecurityGroups: attachment.SecurityGroupRefs,
@@ -298,7 +495,7 @@ func (r *BareMetalInstanceReconciler) mirrorNetworkAttachmentReady(
 		bmi.SetStatusCondition(
 			v1alpha1.HostConditionNetworkAttachmentsReady,
 			metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonDetaching,
+			v1alpha1.HostConditionReasonNetworkDetaching,
 			networkAttachmentConditionMessage(na, "NetworkAttachment is deleting"),
 		)
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}
@@ -405,27 +602,22 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 
 	apiID := bareMetalInstance.Labels[BareMetalInstanceUUIDLabel]
 	if apiID == "" {
-		// Without an API ID there is no deterministic NetworkAttachment name;
-		// drop the finalizer so deletion can proceed.
-		log.Info("Removing networking finalizer; BMI has no API ID label")
-		controllerutil.RemoveFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)
-		if err := r.Update(ctx, bareMetalInstance); err != nil {
-			return ctrl.Result{}, false, err
-		}
-		return ctrl.Result{}, true, nil
+		return ctrl.Result{}, false, fmt.Errorf(
+			"BareMetalInstance %s is missing required %s label; retaining networking finalizer until attachment cleanup is verified",
+			bareMetalInstance.Name, BareMetalInstanceUUIDLabel,
+		)
 	}
 
-	gone, err := r.deleteBareMetalNetworkAttachment(ctx, apiID)
+	na, gone, err := r.deleteBareMetalNetworkAttachment(ctx, bareMetalInstance.Namespace, apiID)
 	if err != nil {
 		return ctrl.Result{}, false, err
 	}
 	if !gone {
-		message := r.networkAttachmentDeleteMessage(ctx, apiID)
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionNetworkAttachmentsReady,
 			metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonDetaching,
-			message,
+			v1alpha1.HostConditionReasonNetworkDetaching,
+			networkAttachmentDeleteMessage(na),
 		)
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, false, nil
 	}
@@ -439,47 +631,43 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 }
 
 // deleteBareMetalNetworkAttachment deletes the hub NetworkAttachment and removes
-// the BMF finalizer from it once only that finalizer remains (Design Delete
-// steps 5–6). It reads the API server, not the cache. It returns true when the
-// NetworkAttachment is gone.
+// the BMF finalizer from it once only that finalizer remains. It reads the API
+// server, not the cache. It returns the current
+// NetworkAttachment while deletion is pending, or gone=true when it is absent.
 func (r *BareMetalInstanceReconciler) deleteBareMetalNetworkAttachment(
 	ctx context.Context,
+	namespace string,
 	apiID string,
-) (bool, error) {
+) (*opv1alpha1.NetworkAttachment, bool, error) {
 	key := client.ObjectKey{
-		Namespace: r.NetworkingNamespace,
+		Namespace: namespace,
 		Name:      opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID),
 	}
 	na := &opv1alpha1.NetworkAttachment{}
 	if err := r.apiReaderOrClient().Get(ctx, key, na); err != nil {
 		if apierrors.IsNotFound(err) {
-			return true, nil
+			return nil, true, nil
 		}
-		return false, err
+		return nil, false, err
 	}
 	if na.DeletionTimestamp.IsZero() {
 		if err := r.Delete(ctx, na); err != nil && !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("delete NetworkAttachment %s: %w", key.Name, err)
+			return nil, false, fmt.Errorf("delete NetworkAttachment %s: %w", key.Name, err)
 		}
-		return false, nil
+		return na, false, nil
 	}
 	if len(na.Finalizers) == 1 && na.Finalizers[0] == BareMetalInstanceNetworkingFinalizer {
 		base := na.DeepCopy()
 		controllerutil.RemoveFinalizer(na, BareMetalInstanceNetworkingFinalizer)
 		if err := r.Patch(ctx, na, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsNotFound(err) {
-			return false, err
+			return nil, false, err
 		}
 	}
-	return false, nil
+	return na, false, nil
 }
 
-func (r *BareMetalInstanceReconciler) networkAttachmentDeleteMessage(ctx context.Context, apiID string) string {
-	key := client.ObjectKey{
-		Namespace: r.NetworkingNamespace,
-		Name:      opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID),
-	}
-	na := &opv1alpha1.NetworkAttachment{}
-	if err := r.apiReaderOrClient().Get(ctx, key, na); err == nil {
+func networkAttachmentDeleteMessage(na *opv1alpha1.NetworkAttachment) string {
+	if na != nil {
 		if job := latestNetworkAttachmentJob(na, networkAttachmentDeleteTask); job != nil && job.Message != "" {
 			return job.Message
 		}

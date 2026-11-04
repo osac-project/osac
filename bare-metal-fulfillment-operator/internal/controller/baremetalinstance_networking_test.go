@@ -93,7 +93,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 		return &v1alpha1.BareMetalInstance{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "test-bmi-net-",
-				Namespace:    "default",
+				Namespace:    testNetworkingNS,
 				Labels: map[string]string{
 					BareMetalInstanceUUIDLabel: id,
 				},
@@ -130,10 +130,10 @@ var _ = Describe("BareMetalInstance Networking", func() {
 				bmi = bmiWithAttachments(apiID, nil)
 				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 				reconciler = &BareMetalInstanceReconciler{
-					Client:              k8sClient,
-					Scheme:              k8sClient.Scheme(),
-					InventoryClient:     invClient,
-					NetworkingNamespace: testNetworkingNS,
+					Client:                        k8sClient,
+					Scheme:                        k8sClient.Scheme(),
+					InventoryClient:               invClient,
+					NetworkingProvisioningEnabled: true,
 				}
 			})
 
@@ -153,7 +153,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			})
 		})
 
-		Context("when NetworkingNamespace is empty", func() {
+		Context("when networking provisioning is disabled", func() {
 			BeforeEach(func() {
 				apiID = "bmi-api-disabled"
 				bmi = bmiWithAttachments(apiID, []v1alpha1.BareMetalNetworkAttachment{
@@ -161,10 +161,10 @@ var _ = Describe("BareMetalInstance Networking", func() {
 				})
 				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 				reconciler = &BareMetalInstanceReconciler{
-					Client:              k8sClient,
-					Scheme:              k8sClient.Scheme(),
-					InventoryClient:     invClient,
-					NetworkingNamespace: "",
+					Client:                        k8sClient,
+					Scheme:                        k8sClient.Scheme(),
+					InventoryClient:               invClient,
+					NetworkingProvisioningEnabled: false,
 				}
 			})
 
@@ -172,7 +172,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 				Expect(k8sClient.Delete(ctx, bmi)).To(Succeed())
 			})
 
-			It("should set ProvisioningDisabled without a networking namespace", func() {
+			It("should set ProvisioningDisabled when networking is disabled", func() {
 				result, err := reconciler.reconcileNetworking(ctx, bmi)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.RequeueAfter).To(BeZero())
@@ -180,11 +180,11 @@ var _ = Describe("BareMetalInstance Networking", func() {
 				cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 				Expect(cond).NotTo(BeNil())
 				Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-				Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProvisioningDisabled))
+				Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkProvisioningDisabled))
 			})
 		})
 
-		Context("when network attachments are configured with NetworkingNamespace", func() {
+		Context("when networking is enabled", func() {
 			BeforeEach(func() {
 				apiID = "bmi-api-" + metav1.Now().Format("150405.000")
 				bmi = bmiWithAttachments(apiID, []v1alpha1.BareMetalNetworkAttachment{
@@ -201,7 +201,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 					Client:                        k8sClient,
 					Scheme:                        k8sClient.Scheme(),
 					InventoryClient:               invClient,
-					NetworkingNamespace:           testNetworkingNS,
+					NetworkingProvisioningEnabled: true,
 					ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
 				}
 			})
@@ -420,16 +420,16 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			})
 		})
 
-		Context("when networking finalizer is present but NetworkingNamespace is empty", func() {
+		Context("when networking finalizer is present but networking is disabled", func() {
 			BeforeEach(func() {
 				apiID = "bmi-api-del-disabled"
 				bmi = bmiWithAttachments(apiID, nil)
 				controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
 				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 				reconciler = &BareMetalInstanceReconciler{
-					Client:              k8sClient,
-					Scheme:              k8sClient.Scheme(),
-					NetworkingNamespace: "",
+					Client:                        k8sClient,
+					Scheme:                        k8sClient.Scheme(),
+					NetworkingProvisioningEnabled: false,
 				}
 			})
 
@@ -490,7 +490,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 					Client:                        k8sClient,
 					APIReader:                     k8sClient,
 					Scheme:                        k8sClient.Scheme(),
-					NetworkingNamespace:           testNetworkingNS,
+					NetworkingProvisioningEnabled: true,
 					ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
 				}
 			})
@@ -501,12 +501,31 @@ var _ = Describe("BareMetalInstance Networking", func() {
 				_ = k8sClient.Delete(ctx, bmi)
 			})
 
+			It("retains the networking finalizer when the API ID is missing", func() {
+				delete(bmi.Labels, BareMetalInstanceUUIDLabel)
+				Expect(k8sClient.Update(ctx, bmi)).To(Succeed())
+
+				_, done, err := reconciler.reconcileNetworkingDeletion(ctx, bmi)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring(BareMetalInstanceUUIDLabel))
+				Expect(done).To(BeFalse())
+
+				fresh := &v1alpha1.BareMetalInstance{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), fresh)).To(Succeed())
+				Expect(controllerutil.ContainsFinalizer(fresh, BareMetalInstanceNetworkingFinalizer)).To(BeTrue())
+
+				na := &opv1alpha1.NetworkAttachment{}
+				naName := opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID)
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNetworkingNS, Name: naName}, na)).To(Succeed())
+				Expect(na.DeletionTimestamp.IsZero()).To(BeTrue())
+			})
+
 			It("should delete the NetworkAttachment, clear its finalizer, and remove the BMI finalizer", func() {
 				_, done, err := reconciler.reconcileNetworkingDeletion(ctx, bmi)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(done).To(BeFalse())
 				Expect(bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady).Reason).
-					To(Equal(v1alpha1.HostConditionReasonDetaching))
+					To(Equal(v1alpha1.HostConditionReasonNetworkDetaching))
 
 				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
 				Eventually(func(g Gomega) {
@@ -541,7 +560,7 @@ var _ = Describe("BareMetalInstance network/provision ordering", func() {
 		bmi = &v1alpha1.BareMetalInstance{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "test-bmi-order-",
-				Namespace:    "default",
+				Namespace:    testNetworkingNS,
 				Labels: map[string]string{
 					BareMetalInstanceUUIDLabel: "bmi-order-id",
 				},
@@ -597,7 +616,7 @@ var _ = Describe("BareMetalInstance network/provision ordering", func() {
 				},
 			},
 			ProvisioningProvider:          prov,
-			NetworkingNamespace:           testNetworkingNS,
+			NetworkingProvisioningEnabled: true,
 			ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
 		}
 

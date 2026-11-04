@@ -95,8 +95,8 @@ func newMetal3Reconciler() *BareMetalInstanceReconciler {
 		k8sClient.Scheme(),
 		invClient,
 		mgmtClient,
-		nil, // provisioning provider
-		"",  // networking namespace
+		nil,   // provisioning provider
+		false, // networking provisioning
 		0, 0, 0, 0, 0,
 	)
 }
@@ -563,7 +563,7 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 				k8sClient.Scheme(),
 				inventory.NewMetal3ClientForTest(k8sClient, metal3TestNS, metal3HostClass),
 				management.NewMetal3ClientForTest(k8sClient, metal3TestNS),
-				nil, "",
+				nil, false,
 				0, 0, 0, 0, 0,
 			)
 

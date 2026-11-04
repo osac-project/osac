@@ -55,14 +55,14 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionIPDiscoveryComplete,
 			metav1.ConditionTrue,
-			v1alpha1.HostConditionReasonProvisioningDisabled,
+			v1alpha1.HostConditionReasonNetworkProvisioningDisabled,
 			"Provider networking disabled; skipped DHCP lease discovery",
 		)
 		return ctrl.Result{}, nil
 	}
 
 	// Lease mirroring runs only after the fabric port moved and the handoff
-	// reboot completed; otherwise we would expose a provisioning-network lease.
+	// power cycle completed; otherwise we could expose a provisioning-network lease.
 	if !bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionNetworkHandoffComplete) {
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
@@ -75,7 +75,7 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 
 	na := &opv1alpha1.NetworkAttachment{}
 	key := types.NamespacedName{
-		Namespace: r.NetworkingNamespace,
+		Namespace: bareMetalInstance.Namespace,
 		Name:      opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID),
 	}
 	if err := r.apiReaderOrClient().Get(ctx, key, na); err != nil {
@@ -140,7 +140,11 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 	if msg == "" {
 		msg = "waiting for NetworkAttachment DHCP lease"
 	}
-	if warningPrefix := r.maybeEmitLeaseNotFound(ctx, bareMetalInstance); warningPrefix != "" {
+	if leaseNotFoundWarningDue(bareMetalInstance, time.Now()) {
+		warningPrefix := leaseNotFoundWarningPrefix()
+		if !leaseNotFoundWarningEmitted(bareMetalInstance, warningPrefix) {
+			r.emitLeaseNotFound(ctx, bareMetalInstance, warningPrefix)
+		}
 		msg = warningPrefix + "; latest query: " + msg
 	}
 	r.setLeasePending(bareMetalInstance, msg)
@@ -157,29 +161,31 @@ func (r *BareMetalInstanceReconciler) setLeasePending(bmi *v1alpha1.BareMetalIns
 	)
 }
 
-// maybeEmitLeaseNotFound emits Warning LeaseNotFound once after the design 10m
-// window. The condition message remains the newest DHCP-query job message.
-func (r *BareMetalInstanceReconciler) maybeEmitLeaseNotFound(
-	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
-) string {
+func leaseNotFoundWarningDue(bmi *v1alpha1.BareMetalInstance, now time.Time) bool {
 	handoff := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
 	if handoff == nil || handoff.Status != metav1.ConditionTrue || handoff.LastTransitionTime.IsZero() {
-		return ""
+		return false
 	}
-	if time.Since(handoff.LastTransitionTime.Time) < LeaseNotFoundWarningAfter {
-		return ""
-	}
-	warningPrefix := fmt.Sprintf("No tenant DHCP lease after %s since network handoff", LeaseNotFoundWarningAfter)
+	return now.Sub(handoff.LastTransitionTime.Time) >= LeaseNotFoundWarningAfter
+}
+
+func leaseNotFoundWarningPrefix() string {
+	return fmt.Sprintf("No tenant DHCP lease after %s since network handoff", LeaseNotFoundWarningAfter)
+}
+
+func leaseNotFoundWarningEmitted(bmi *v1alpha1.BareMetalInstance, warningPrefix string) bool {
 	pending := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-	alreadyWarned := pending != nil && strings.HasPrefix(pending.Message, warningPrefix)
-	if !alreadyWarned {
-		logf.FromContext(ctx).Info(warningPrefix)
-		if r.Recorder != nil {
-			r.Recorder.Eventf(bmi, nil, corev1.EventTypeWarning,
-				eventReasonLeaseNotFound, "Reconcile", "%s", warningPrefix)
-		}
+	return pending != nil && strings.HasPrefix(pending.Message, warningPrefix)
+}
+
+func (r *BareMetalInstanceReconciler) emitLeaseNotFound(
+	ctx context.Context, bmi *v1alpha1.BareMetalInstance, warningPrefix string,
+) {
+	logf.FromContext(ctx).Info(warningPrefix)
+	if r.Recorder != nil {
+		r.Recorder.Eventf(bmi, nil, corev1.EventTypeWarning,
+			eventReasonLeaseNotFound, "Reconcile", "%s", warningPrefix)
 	}
-	return warningPrefix
 }
 
 func latestNetworkAttachmentQueryMessage(job *opv1alpha1.NetworkJobStatus) string {

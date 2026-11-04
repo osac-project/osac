@@ -93,7 +93,6 @@ const (
 	envAAPInsecureSkipVerify        = "OSAC_AAP_INSECURE_SKIP_VERIFY"
 	envAAPTemplatePrefix            = "OSAC_AAP_TEMPLATE_PREFIX"
 	envEnableNetworkingProvisioning = "OSAC_ENABLE_NETWORKING_PROVISIONING"
-	envNetworkingNamespace          = "OSAC_NETWORKING_NAMESPACE"
 
 	envSecretAPIURL              = "OSAC_SECRET_API_URL"
 	envSecretAPIIssuerURL        = "OSAC_SECRET_API_ISSUER_URL"
@@ -320,18 +319,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	networkingNamespace := ""
-	if networkingProvisioningEnabled {
-		networkingNamespace = os.Getenv(envNetworkingNamespace)
-		if networkingNamespace == "" {
-			setupLog.Error(nil,
-				"networking namespace environment variable must be set when networking provisioning is enabled",
-				"environmentVariable", envNetworkingNamespace,
-			)
-			os.Exit(1)
-		}
-	}
-	if err := setupBareMetalInstanceController(ctx, mgr, provisioningProvider, networkingNamespace); err != nil {
+	if err := setupBareMetalInstanceController(ctx, mgr, provisioningProvider, networkingProvisioningEnabled); err != nil {
 		setupLog.Error(err, "unable to setup controller", "controller", "BareMetalInstance")
 		os.Exit(1)
 	}
@@ -436,7 +424,7 @@ func setupBareMetalInstanceController(
 	ctx context.Context,
 	mgr ctrl.Manager,
 	provisioningProvider provisioning.ProvisioningProvider,
-	networkingNamespace string,
+	networkingProvisioningEnabled bool,
 ) error {
 	// Read and parse inventory configuration
 	inventoryConfigPath := helpers.GetEnvWithDefault(envInventoryConfigPath, "/etc/osac/inventory/inventory.yaml")
@@ -514,7 +502,7 @@ func setupBareMetalInstanceController(
 		inventoryClient,
 		managementClient,
 		provisioningProvider,
-		networkingNamespace,
+		networkingProvisioningEnabled,
 		noFreeHostsPollInterval,
 		tryLockFailPollInterval,
 		managementRecheckInterval,

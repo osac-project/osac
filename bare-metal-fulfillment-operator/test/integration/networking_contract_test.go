@@ -46,10 +46,7 @@ var _ = Describe("BMaaS networking deployment contract", func() {
 			env[variable.Name] = variable
 		}
 		Expect(env["OSAC_ENABLE_NETWORKING_PROVISIONING"].Value).To(Equal("true"))
-		networkingNamespace := env["OSAC_NETWORKING_NAMESPACE"]
-		Expect(networkingNamespace.ValueFrom).NotTo(BeNil())
-		Expect(networkingNamespace.ValueFrom.FieldRef).NotTo(BeNil())
-		Expect(networkingNamespace.ValueFrom.FieldRef.FieldPath).To(Equal("metadata.namespace"))
+		Expect(env).NotTo(HaveKey("OSAC_NETWORKING_NAMESPACE"))
 
 		serviceAccount := fmt.Sprintf("system:serviceaccount:%s:%s", namespace, serviceAccountName)
 		for _, verb := range []string{"create", "get", "patch", "delete"} {

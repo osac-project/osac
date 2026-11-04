@@ -38,6 +38,8 @@ import (
 const admissionPolicyEnv = "OSAC_IT_ADMISSION_POLICY"
 
 const bmfNetworkingFinalizer = "osac.openshift.io/baremetalinstance-networking"
+const bmfCreateDeniedMessage = "BMF may only create physical BareMetalInstance NetworkAttachments"
+const bmfDeleteDeniedMessage = "BMF may only delete its physical BareMetalInstance NetworkAttachments"
 
 // networkingKinds are the kinds the policy protects for every write.
 var networkingKinds = []string{
@@ -84,9 +86,9 @@ func expectAllowed(output string, err error, what string) {
 	Expect(err).NotTo(HaveOccurred(), "the admission policy must allow %s: %s", what, output)
 }
 
-func bmfIdentity() string {
-	// The umbrella chart defaults the BMF ServiceAccount name to bmf-operator.
-	return fmt.Sprintf("system:serviceaccount:%s:bmf-operator", operatorNamespace)
+func expectBMFDenied(output string, err error, message string) {
+	Expect(err).To(HaveOccurred())
+	Expect(output).To(ContainSubstring(message))
 }
 
 var _ = Describe("Installer ValidatingAdmissionPolicy "+
@@ -283,7 +285,8 @@ subjects:
 	})
 
 	It("limits BMF NetworkAttachment patches to removing its finalizer after cleanup", func() {
-		bmf := bmfIdentity()
+		// The umbrella chart defaults the BMF ServiceAccount name to bmf-operator.
+		bmf := fmt.Sprintf("system:serviceaccount:%s:bmf-operator", operatorNamespace)
 		bmfRole := "osac-it-bmf-finalizer-" + sfx
 		rbac := fmt.Sprintf(`apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -293,7 +296,7 @@ metadata:
 rules:
 - apiGroups: ["osac.openshift.io"]
   resources: ["networkattachments"]
-  verbs: ["get", "patch"]
+  verbs: ["create", "delete", "get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -315,18 +318,85 @@ subjects:
 			_, _ = kubectl(rbac, "delete", "-f", "-", "--ignore-not-found")
 		})
 
-		for _, verb := range []string{"get", "patch"} {
+		for _, verb := range []string{"create", "delete", "get", "patch"} {
 			allowed, reason := subjectAccessReview(bmf, operatorNamespace,
 				"osac.openshift.io", "networkattachments", "", verb)
 			Expect(allowed).To(BeTrue(), "RBAC must allow %s to %s NetworkAttachments: %s", bmf, verb, reason)
 		}
 
-		name := "vap-bmf-finalizer-" + sfx
-		na := newObject("NetworkAttachment", name, sampleSpec("NetworkAttachment"))
+		By("denying BMF creation of a ComputeInstance overlay attachment")
+		computeID := "vap-bmf-compute-" + sfx
+		computeSpec := validNetworkAttachmentSpec("ComputeInstance", "overlay")
+		computeSpec["target"].(map[string]any)["id"] = computeID
+		computeNA := newObject("NetworkAttachment", "computeinstance-"+computeID, computeSpec)
+		output, err = createAs(bmf, computeNA)
+		expectBMFDenied(output, err, bmfCreateDeniedMessage)
+
+		By("denying BMF deletion of a ComputeInstance attachment")
+		deleteID := "vap-bmf-delete-" + sfx
+		deleteNAName := "computeinstance-" + deleteID
+		deleteSpec := validNetworkAttachmentSpec("ComputeInstance", "overlay")
+		deleteSpec["target"].(map[string]any)["id"] = deleteID
+		deleteNA := unmanaged(newObject("NetworkAttachment", deleteNAName, deleteSpec))
+		output, err = createAs(operator, deleteNA)
+		expectAllowed(output, err, "the operator creating a NetworkAttachment used for the BMF delete check")
+		DeferCleanup(func() {
+			_, _ = kubectl("", "delete", resourceOf("NetworkAttachment"), deleteNAName,
+				"-n", operatorNamespace, "--ignore-not-found", "--wait=false", "--as="+operator)
+		})
+		output, err = kubectl("", "delete", resourceOf("NetworkAttachment"), deleteNAName,
+			"-n", operatorNamespace, "--ignore-not-found", "--wait=false", "--as="+bmf)
+		expectBMFDenied(output, err, bmfDeleteDeniedMessage)
+		_, err = getObject("NetworkAttachment", deleteNAName)
+		Expect(err).NotTo(HaveOccurred(), "a denied BMF delete must leave the attachment in place")
+
+		By("denying BMF deletion of a physical attachment without its finalizer")
+		unownedID := "vap-bmf-unowned-" + sfx
+		unownedName := "baremetalinstance-" + unownedID
+		unownedSpec := validNetworkAttachmentSpec("BareMetalInstance", "physical")
+		unownedSpec["target"].(map[string]any)["id"] = unownedID
+		unownedNA := unmanaged(newObject("NetworkAttachment", unownedName, unownedSpec))
+		output, err = createAs(operator, unownedNA)
+		expectAllowed(output, err, "the operator creating an unmanaged physical attachment")
+		DeferCleanup(func() {
+			_, _ = kubectl("", "delete", resourceOf("NetworkAttachment"), unownedName,
+				"-n", operatorNamespace, "--ignore-not-found", "--wait=false", "--as="+operator)
+		})
+		output, err = kubectl("", "delete", resourceOf("NetworkAttachment"), unownedName,
+			"-n", operatorNamespace, "--ignore-not-found", "--wait=false", "--as="+bmf)
+		expectBMFDenied(output, err, bmfDeleteDeniedMessage)
+		_, err = getObject("NetworkAttachment", unownedName)
+		Expect(err).NotTo(HaveOccurred(), "BMF must not delete an attachment it does not own")
+
+		By("allowing BMF deletion of a physical attachment with its finalizer")
+		ownedDeleteID := "vap-bmf-owned-delete-" + sfx
+		ownedDeleteName := "baremetalinstance-" + ownedDeleteID
+		ownedDeleteSpec := validNetworkAttachmentSpec("BareMetalInstance", "physical")
+		ownedDeleteSpec["target"].(map[string]any)["id"] = ownedDeleteID
+		ownedDeleteNA := unmanaged(newObject("NetworkAttachment", ownedDeleteName, ownedDeleteSpec))
+		ownedDeleteNA.SetFinalizers([]string{bmfNetworkingFinalizer})
+		output, err = createAs(bmf, ownedDeleteNA)
+		expectAllowed(output, err, "BMF creating an attachment it owns")
+		DeferCleanup(func() {
+			_, _ = patchAs(operator, "NetworkAttachment", ownedDeleteName, "merge",
+				`{"metadata":{"finalizers":[]}}`, "")
+			_, _ = kubectl("", "delete", resourceOf("NetworkAttachment"), ownedDeleteName,
+				"-n", operatorNamespace, "--ignore-not-found", "--wait=false", "--as="+operator)
+		})
+		output, err = kubectl("", "delete", resourceOf("NetworkAttachment"), ownedDeleteName,
+			"-n", operatorNamespace, "--ignore-not-found", "--wait=false", "--as="+bmf)
+		expectAllowed(output, err, "BMF deleting an attachment with its finalizer")
+
+		By("allowing BMF to create a physical BareMetalInstance attachment")
+		bmiID := "vap-bmf-finalizer-" + sfx
+		name := "baremetalinstance-" + bmiID
+		bmiSpec := validNetworkAttachmentSpec("BareMetalInstance", "physical")
+		bmiSpec["target"].(map[string]any)["id"] = bmiID
+		na := newObject("NetworkAttachment", name, bmiSpec)
 		na.SetAnnotations(map[string]string{"osac.openshift.io/tenant": "networking-it"})
-		na.SetFinalizers([]string{bmfNetworkingFinalizer, networkCleanupTestFinalizer})
-		output, err = createAs(operator, na)
-		expectAllowed(output, err, "the operator creating a NetworkAttachment with the BMF finalizer")
+		na.SetFinalizers([]string{bmfNetworkingFinalizer})
+		output, err = createAs(bmf, na)
+		expectAllowed(output, err, "BMF creating a physical BareMetalInstance NetworkAttachment")
 		DeferCleanup(func() {
 			_, _ = patchAs(operator, "NetworkAttachment", name, "merge",
 				`{"metadata":{"finalizers":[]}}`, "")
@@ -338,6 +408,10 @@ subjects:
 			g.Expect(getErr).NotTo(HaveOccurred())
 			g.Expect(current.GetFinalizers()).To(ContainElement(finalizerNetworkAttachment))
 		}, readyTimeout, time.Second).Should(Succeed())
+		output, err = patchAs(operator, "NetworkAttachment", name, "merge",
+			fmt.Sprintf(`{"metadata":{"finalizers":[%q,%q,%q]}}`, finalizerNetworkAttachment,
+				bmfNetworkingFinalizer, networkCleanupTestFinalizer), "")
+		expectAllowed(output, err, "the operator adding the test cleanup finalizer")
 
 		By("denying BMF metadata changes even though RBAC grants patch")
 		output, err = patchAs(bmf, "NetworkAttachment", name, "merge",

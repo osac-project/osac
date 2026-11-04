@@ -45,12 +45,12 @@ const (
 	// inventory host's readiness for provisioning (see inventory.Host.Ready).
 	DefaultHostReadinessPollIntervalDuration = 30 * time.Second
 
-	// NetworkHandoffDeadline is the maximum time from NetworkAttachmentsReady=True
-	// until NetworkHandoffComplete must be confirmed (design Create step 6).
+	// NetworkHandoffDeadline is the maximum time to confirm NetworkHandoffComplete
+	// after NetworkAttachmentsReady becomes True.
 	NetworkHandoffDeadline = 15 * time.Minute
 
-	// LeaseNotFoundWarningAfter is how long after NetworkHandoffComplete=True
-	// BMF waits before emitting Warning LeaseNotFound (design Create step 7 / NFR-2).
+	// LeaseNotFoundWarningAfter is how long BMF waits after NetworkHandoffComplete
+	// becomes True before emitting Warning LeaseNotFound.
 	LeaseNotFoundWarningAfter = 10 * time.Minute
 )
 

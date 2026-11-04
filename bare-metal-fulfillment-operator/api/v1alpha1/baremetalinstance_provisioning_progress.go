@@ -98,7 +98,7 @@ const (
 	FailureProvisionJob FailureClassification = "ProvisionJobFailed"
 	// FailureNetworkAttachment means network attachment failed (PROVISIONED axis).
 	FailureNetworkAttachment FailureClassification = "NetworkAttachmentFailed"
-	// FailureNetworkHandoff means the network handoff reboot failed (PROVISIONED axis).
+	// FailureNetworkHandoff means the network handoff failed (PROVISIONED axis).
 	FailureNetworkHandoff FailureClassification = "NetworkHandoffFailed"
 	// FailureIPDiscovery means DHCP lease discovery failed (PROVISIONED axis).
 	FailureIPDiscovery FailureClassification = "IPDiscoveryFailed"
@@ -156,8 +156,8 @@ type ProvisioningProgress struct {
 // detection takes the earliest hard failure — so failures on the PROVISIONED axis
 // (the first five) win over a READY-axis failure (PowerSynced), then stage order.
 //
-// NetworkHandoffComplete precedes IPDiscoveryComplete because the tenant-network
-// reboot must finish before DHCP lease discovery can run.
+// NetworkHandoffComplete precedes IPDiscoveryComplete because the host must
+// complete its tenant-network power cycle before DHCP lease discovery can run.
 var hostConditionStageOrder = []BareMetalInstanceConditionType{
 	HostConditionAllocated,
 	HostConditionProvisionTemplateComplete,

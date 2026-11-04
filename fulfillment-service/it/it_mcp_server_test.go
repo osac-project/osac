@@ -795,10 +795,11 @@ var _ = Describe("MCP server", func() {
 		dispatchName := fmt.Sprintf("mcp-dispatch-compute-%s", uuid.New()[24:32])
 		_, err = callMCPTool[mcpserver.CreateComputeInstanceOutput](
 			ctx, session, "create_compute_instance", map[string]any{
-				"service": "osac.public.v1.ComputeInstances",
-				"method":  "Delete",
-				"payload": map[string]any{"id": computeInstanceID},
-				"name":    dispatchName,
+				"service":      "osac.public.v1.ComputeInstances",
+				"method":       "Delete",
+				"payload":      map[string]any{"id": computeInstanceID},
+				"name":         dispatchName,
+				"catalog_item": catalogItemID,
 			},
 		)
 		Expect(err).To(HaveOccurred())

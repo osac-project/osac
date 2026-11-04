@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"time"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -32,6 +33,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	testutils "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Cmd", func() {
@@ -735,9 +737,15 @@ var _ = Describe("NewHandler", func() {
 
 	It("Rejects malformed OAuth authorization-server issuer URLs", func() {
 		validator := auth.NewMockJwtValidator(ctrl)
+		authorizationServerWithUserInfo := (&url.URL{
+			Scheme: "https",
+			Host:   "keycloak.example.com",
+			Path:   "/realms/osac",
+			User:   url.UserPassword("test-user", uuid.New()),
+		}).String()
 		for _, authorizationServer := range []string{
 			"http://keycloak.example.com/realms/osac",
-			"https://user:secret@keycloak.example.com/realms/osac",
+			authorizationServerWithUserInfo,
 			"https://keycloak.example.com/realms/osac?tenant=one",
 			"https://keycloak.example.com/realms/osac#fragment",
 		} {

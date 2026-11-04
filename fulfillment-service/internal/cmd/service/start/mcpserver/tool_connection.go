@@ -91,7 +91,7 @@ func handleCheckConnection(
 		})
 		permissionsTruncated := int64(tenantResponse.GetTotal()) > int64(len(visibleTenants)) ||
 			len(tenants) > maxCheckConnectionTenants
-		if permissionsTruncated {
+		if len(tenants) > maxCheckConnectionTenants {
 			tenants = tenants[:maxCheckConnectionTenants]
 		}
 		caller.Tenants = tenants

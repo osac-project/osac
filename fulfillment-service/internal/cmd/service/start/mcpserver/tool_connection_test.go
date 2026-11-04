@@ -571,6 +571,46 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(output.Permissions).To(HaveLen(maxCheckConnectionTenants * 3))
 	})
 
+	DescribeTable("Handles short public tenant pages with a larger total",
+		func(names, expectedTenants []string, total int32) {
+			tenantClient := &mockTenantsClient{
+				listFunc: func(
+					context.Context, *publicv1.TenantsListRequest, ...grpc.CallOption,
+				) (*publicv1.TenantsListResponse, error) {
+					return tenantListResponse(total, names...), nil
+				},
+			}
+			var reviewCount atomic.Int32
+			reviews := &mockSelfSubjectAccessReviewsClient{
+				createFunc: func(
+					context.Context, *publicv1.SelfSubjectAccessReviewsCreateRequest, ...grpc.CallOption,
+				) (*publicv1.SelfSubjectAccessReviewsCreateResponse, error) {
+					reviewCount.Add(1)
+					return publicv1.SelfSubjectAccessReviewsCreateResponse_builder{}.Build(), nil
+				},
+			}
+			handler := handleCheckConnection(
+				"https://mcp.example.com/", newResourceRegistry(ServerDeps{}), checkConnectionToolRegistry(),
+				tenantClient, reviews,
+			)
+			_, output, err := handler(context.Background(), requestWithCaller("raw-bearer-value", safeCallerContext{
+				Subject: "user-1",
+			}), CheckConnectionInput{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(output.PermissionsTruncated).To(BeTrue())
+			Expect(output.Caller.TenantsTruncated).To(BeTrue())
+			Expect(output.Caller.Tenants).To(ConsistOf(expectedTenants))
+			Expect(output.Permissions).To(HaveLen(len(expectedTenants) * 3))
+			Expect(reviewCount.Load()).To(Equal(int32(len(expectedTenants) * 3)))
+			for _, permission := range output.Permissions {
+				Expect(expectedTenants).To(ContainElement(permission.Tenant))
+			}
+		},
+		Entry("fewer than ten tenants", []string{"tenant-1", "tenant-2"}, []string{"tenant-1", "tenant-2"}, int32(5)),
+		Entry("no returned tenants", []string{}, []string{}, int32(1)),
+		Entry("only the shared tenant", []string{"shared"}, []string{}, int32(2)),
+	)
+
 	It("Uses only the bounded public tenant list for permission checks", func() {
 		names := []string{
 			"tenant-10", "tenant-09", "tenant-08", "tenant-07", "tenant-06", "tenant-05",

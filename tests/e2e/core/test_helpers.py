@@ -4,7 +4,7 @@ import base64
 import logging
 import subprocess
 from collections.abc import Callable
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -26,18 +26,22 @@ def _node(*, name: str, provider_id: str = _AGENT_PROVIDER_ID) -> dict[str, obje
 
 
 def _hosted_cluster(
-    *, succeeding: str = "True", available: str = "True", failing: str = "False", progressing: str = "False"
+    *, succeeding: str = "True", available: str = "True", progressing: str = "False"
 ) -> dict[str, object]:
+    # HyperShift does not copy ClusterVersionFailing onto the HostedCluster.
     return {
         "status": {
             "conditions": [
                 {"type": "ClusterVersionSucceeding", "status": succeeding},
                 {"type": "ClusterVersionAvailable", "status": available},
-                {"type": "ClusterVersionFailing", "status": failing},
                 {"type": "ClusterVersionProgressing", "status": progressing},
             ]
         }
     }
+
+
+def _hosted_control_plane(*, failing: str = "False") -> dict[str, object]:
+    return {"status": {"conditions": [{"type": "ClusterVersionFailing", "status": failing}]}}
 
 
 def test_wait_for_cluster_ready_fails_immediately_on_failed_order(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -358,34 +362,47 @@ def test_workload_cluster_health_checks_provider_ids_before_operators(monkeypatc
 
 
 def test_hosted_cluster_version_conditions_settled_when_cvo_is_healthy() -> None:
-    assert helpers.hosted_cluster_version_conditions_settled(_hosted_cluster()) is True
+    assert helpers.hosted_cluster_version_conditions_settled(_hosted_cluster(), _hosted_control_plane()) is True
 
 
-@pytest.mark.parametrize(
-    "unhealthy", [{"succeeding": "False"}, {"available": "False"}, {"failing": "True"}, {"progressing": "True"}]
-)
+@pytest.mark.parametrize("unhealthy", [{"succeeding": "False"}, {"available": "False"}, {"progressing": "True"}])
 def test_hosted_cluster_version_conditions_reject_an_installing_cvo(unhealthy: dict[str, str]) -> None:
-    assert helpers.hosted_cluster_version_conditions_settled(_hosted_cluster(**unhealthy)) is False
+    assert (
+        helpers.hosted_cluster_version_conditions_settled(_hosted_cluster(**unhealthy), _hosted_control_plane())
+        is False
+    )
+
+
+def test_hosted_cluster_version_conditions_reject_a_failing_control_plane() -> None:
+    assert (
+        helpers.hosted_cluster_version_conditions_settled(_hosted_cluster(), _hosted_control_plane(failing="True"))
+        is False
+    )
 
 
 def test_hosted_cluster_version_conditions_reject_a_missing_condition() -> None:
-    assert helpers.hosted_cluster_version_conditions_settled({"status": {"conditions": []}}) is False
+    empty: dict[str, object] = {"status": {"conditions": []}}
+
+    assert helpers.hosted_cluster_version_conditions_settled(empty, _hosted_control_plane()) is False
+    assert helpers.hosted_cluster_version_conditions_settled(_hosted_cluster(), empty) is False
 
 
 def test_wait_for_hosted_cluster_version_health_reports_unsettled_conditions(monkeypatch: pytest.MonkeyPatch) -> None:
     k8s = Mock()
-    k8s.get_json.return_value = _hosted_cluster(failing="True")
+    k8s.get_json.side_effect = lambda *, resource, **_kwargs: (
+        _hosted_control_plane(failing="True") if resource == "hostedcontrolplane" else _hosted_cluster()
+    )
 
     monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
 
     with pytest.raises(AssertionError, match=r"'ClusterVersionFailing': 'True'"):
         helpers.wait_for_hosted_cluster_version_health(k8s=k8s, name="order-test", namespace="osac-order-test")
 
-    assert k8s.get_json.call_args.kwargs == {
-        "resource": "hostedcluster",
-        "name": "order-test",
-        "namespace": "osac-order-test",
-    }
+    # Retried until the budget runs out, so each iteration reads both resources.
+    assert k8s.get_json.call_args_list[:2] == [
+        call(resource="hostedcluster", name="order-test", namespace="osac-order-test"),
+        call(resource="hostedcontrolplane", name="order-test", namespace="osac-order-test-order-test"),
+    ]
 
 
 def test_guest_health_recovers_from_access_and_readiness_delays(monkeypatch: pytest.MonkeyPatch) -> None:

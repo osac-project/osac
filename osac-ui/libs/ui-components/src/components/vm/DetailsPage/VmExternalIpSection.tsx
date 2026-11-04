@@ -53,7 +53,7 @@ const VmExternalIpSection = ({ vm }: VmExternalIpSectionProps) => {
     attachment?.status?.state === ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_DELETING;
   const isFailed =
     attachment?.status?.state === ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_FAILED;
-  const showDetach = Boolean(attachment) && hasExternalIp && !isFailed;
+  const showDetach = Boolean(attachment) && hasExternalIp;
   const attachmentMissing = hasExternalIp && !isLoading && !error && !attachment;
   const attachmentMessage =
     typeof attachment?.status?.message === 'string'

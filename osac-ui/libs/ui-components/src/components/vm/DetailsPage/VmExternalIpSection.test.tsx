@@ -58,7 +58,7 @@ describe('VmExternalIpSection', () => {
     expect(screen.getByText('external IP binding failed')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Choose another' })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: 'Detach' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Detach' })).toBeEnabled();
   });
 
   it('renders Attach when the running VM has no external IP', () => {

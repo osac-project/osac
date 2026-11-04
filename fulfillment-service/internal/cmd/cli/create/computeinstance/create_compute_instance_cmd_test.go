@@ -506,7 +506,7 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 
 	It("should be a no-op when --externalip is not set", func() {
 		runner.args.externalIP = ""
-		Expect(runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"))).To(Succeed())
+		Expect(runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"), nil)).To(Succeed())
 	})
 
 	It("should resolve EIP, wait for RUNNING, and create attachment on happy path", func() {
@@ -521,10 +521,6 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 			}.Build(),
 		}.Build()
 
-		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			publicv1.ExternalIPsListResponse_builder{
-				Items: []*publicv1.ExternalIP{allocatedEIP},
-			}.Build(), nil)
 		mockCIs.EXPECT().Get(gomock.Any(), gomock.Any()).Return(
 			publicv1.ComputeInstancesGetResponse_builder{Object: runningCIStatus}.Build(), nil)
 		mockAtts.EXPECT().Create(gomock.Any(), gomock.Any()).Return(
@@ -532,7 +528,7 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 				Object: attachment("att-1"),
 			}.Build(), nil)
 
-		Expect(runner.maybeAttachExistingExternalIP(ctx, runningCI)).To(Succeed())
+		Expect(runner.maybeAttachExistingExternalIP(ctx, runningCI, allocatedEIP)).To(Succeed())
 	})
 
 	It("should fail early when EIP is not ALLOCATED", func() {
@@ -544,7 +540,7 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 				Items: []*publicv1.ExternalIP{pendingEIP},
 			}.Build(), nil)
 
-		err := runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"))
+		_, err := runner.resolveAttachableExternalIP(ctx)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("ALLOCATED"))
 		Expect(err.Error()).To(ContainSubstring("my-ip"))
@@ -556,7 +552,7 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
 			publicv1.ExternalIPsListResponse_builder{Items: nil}.Build(), nil)
 
-		err := runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"))
+		_, err := runner.resolveAttachableExternalIP(ctx)
 		Expect(err).To(HaveOccurred())
 	})
 
@@ -565,7 +561,7 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 
 		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(nil, errors.New("rpc error"))
 
-		err := runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"))
+		_, err := runner.resolveAttachableExternalIP(ctx)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("rpc error"))
 	})
@@ -581,14 +577,13 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 			}.Build(),
 		}.Build()
 
-		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			publicv1.ExternalIPsListResponse_builder{Items: []*publicv1.ExternalIP{allocatedEIP}}.Build(), nil)
 		mockCIs.EXPECT().Get(gomock.Any(), gomock.Any()).Return(
 			publicv1.ComputeInstancesGetResponse_builder{Object: failedCI}.Build(), nil)
 
-		err := runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"))
+		err := runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"), allocatedEIP)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("RUNNING"))
+		Expect(err.Error()).To(ContainSubstring("my-vm"))
 	})
 
 	It("should return error when attachment creation fails", func() {
@@ -602,13 +597,11 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 			}.Build(),
 		}.Build()
 
-		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			publicv1.ExternalIPsListResponse_builder{Items: []*publicv1.ExternalIP{allocatedEIP}}.Build(), nil)
 		mockCIs.EXPECT().Get(gomock.Any(), gomock.Any()).Return(
 			publicv1.ComputeInstancesGetResponse_builder{Object: runningCIStatus}.Build(), nil)
 		mockAtts.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil, errors.New("attach failed"))
 
-		err := runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"))
+		err := runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"), allocatedEIP)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("attach failed"))
 	})
@@ -625,13 +618,13 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 			}.Build(),
 		}.Build()
 
-		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			publicv1.ExternalIPsListResponse_builder{Items: []*publicv1.ExternalIP{allocatedEIP}}.Build(), nil)
 		mockCIs.EXPECT().Get(gomock.Any(), gomock.Any()).AnyTimes().Return(
 			publicv1.ComputeInstancesGetResponse_builder{Object: pendingCI}.Build(), nil)
 
-		err := runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"))
+		err := runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"), allocatedEIP)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("RUNNING"))
+		Expect(err.Error()).To(ContainSubstring("my-vm"))
+		Expect(err.Error()).To(ContainSubstring("ci-1"))
 	})
 })

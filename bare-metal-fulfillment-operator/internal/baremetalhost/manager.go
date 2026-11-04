@@ -199,7 +199,7 @@ func (m *Manager) checkBMCSecretOwner(ctx context.Context, secret *corev1.Secret
 		return nil
 	}
 	if secret.Labels[bmcSecretManagedByLabel] != bmcSecretManagedByValue {
-		return fmt.Errorf("BMC credentials Secret %s/%s already exists and is not operator-managed; refusing to overwrite", m.namespace, secret.Name)
+		return fmt.Errorf("BMC credentials Secret %s/%s is not operator-managed; refusing to modify or delete it", m.namespace, secret.Name)
 	}
 	owner := secret.Labels[bmcSecretOwnerLabel]
 	if owner == ownerUID {

@@ -71,8 +71,12 @@ export const StorageBackendDetailsPage = () => {
             <Flex justifyContent={{ default: 'justifyContentSpaceBetween' }}>
               <FlexItem>
                 <ResourceDetailHeader
-                  parentTo={BACKENDS_LIST_PATH}
-                  parentLabel={t('Storage Backends')}
+                  parents={[
+                    {
+                      to: BACKENDS_LIST_PATH,
+                      label: t('Storage backends'),
+                    },
+                  ]}
                   resourceName={backend.metadata?.name || backend.id}
                   titleAddon={<StorageBackendStatusLabel state={backend.status?.state} />}
                 />

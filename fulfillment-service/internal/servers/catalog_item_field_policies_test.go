@@ -307,6 +307,33 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(suppliedBareMetal.GetDiskImage()).To(BeIdenticalTo(suppliedBareMetalImage))
 	})
 
+	It("applies BMaaS SSH-key policies without dropping SecretReference scope", func() {
+		defaultReference := privatev1.SecretReference_builder{
+			Name:    "default-key",
+			Project: "",
+			Shared:  true,
+		}.Build()
+		fields := privatev1.BareMetalInstanceCatalogItemFields_builder{
+			SshKey: privatev1.FullSecretReferenceFieldPolicy_builder{
+				Editable: privatev1.EditableFullSecretReferenceField_builder{DefaultValue: defaultReference}.Build(),
+			}.Build(),
+		}.Build()
+
+		spec := &privatev1.BareMetalInstanceSpec{}
+		Expect(applyBareMetalInstanceCatalogItemPolicies(spec, fields)).To(Succeed())
+		Expect(spec.GetSshKey()).To(Equal(defaultReference))
+		Expect(spec.GetSshKey().GetProject()).To(BeEmpty())
+		Expect(spec.GetSshKey().GetShared()).To(BeTrue())
+
+		namedReference := privatev1.SecretReference_builder{Name: "project-key", Project: "project-a"}.Build()
+		lockedFields := privatev1.BareMetalInstanceCatalogItemFields_builder{
+			SshKey: privatev1.FullSecretReferenceFieldPolicy_builder{Locked: namedReference}.Build(),
+		}.Build()
+		lockedSpec := &privatev1.BareMetalInstanceSpec{}
+		Expect(applyBareMetalInstanceCatalogItemPolicies(lockedSpec, lockedFields)).To(Succeed())
+		Expect(lockedSpec.GetSshKey()).To(Equal(namedReference))
+	})
+
 	It("rejects nil message payloads without mutating the target", func() {
 		malformed := &privatev1.DiskImageReferenceFieldPolicy{
 			Behavior: &privatev1.DiskImageReferenceFieldPolicy_Locked{},

@@ -3,8 +3,8 @@
 Every wait must declare the single resource it observes, so a wait span in
 Grafana links to that resource. The values match the CR/API kind spelling
 the wait_for_* helpers already used, keeping the span attribute values
-stable. External systems a wait observes (a Keycloak realm) name their own
-kind.
+stable. External systems a wait observes (a Keycloak realm, a metering
+heartbeat) name their own kind.
 """
 
 from __future__ import annotations
@@ -42,3 +42,4 @@ class WaitResourceKind(StrEnum):
     VOLUME = "Volume"
     KEYCLOAK_REALM = "KeycloakRealm"
     KEYCLOAK_ORGANIZATION = "KeycloakOrganization"
+    HEARTBEAT = "Heartbeat"

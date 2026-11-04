@@ -1,5 +1,5 @@
-import { Project } from '@osac/types';
-import { useDeleteProject } from '@osac/ui-components/api/v1/project';
+import { Project, Projects } from '@osac/types';
+import { useDeleteResource } from '@osac/ui-components/api/use-resource';
 
 import { getProjectName } from './utils';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -15,7 +15,7 @@ const ProjectDeleteModal = ({
   onSuccess: VoidFunction;
 }) => {
   const { t } = useTranslation();
-  const deleteProject = useDeleteProject();
+  const deleteProject = useDeleteResource(Projects);
 
   return (
     <DeleteResourceModal
@@ -25,7 +25,7 @@ const ProjectDeleteModal = ({
       onClose={onClose}
       onSuccess={onSuccess}
       mutation={deleteProject}
-      variables={project.id}
+      variables={{ id: project.id }}
     />
   );
 };

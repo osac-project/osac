@@ -189,6 +189,35 @@ func AcceptNoOutput(_ context.Context, result Result) error {
 	return result.checkKeys(nil)
 }
 
+// AcceptSubnetEligibility records the optional Kubernetes create_subnet eligibility
+// result. Older managers with no output support VM attachments by default; the
+// attachment task remains authoritative before any VM resources are created.
+func AcceptSubnetEligibility(subnet *v1alpha1.Subnet, result Result) error {
+	if err := result.checkKeys([]string{"compute_instance_supported", "compute_instance_unsupported_reason"}); err != nil {
+		return err
+	}
+	supported := true
+	if raw, ok := result["compute_instance_supported"]; ok {
+		if err := strictUnmarshal(raw, &supported); err != nil {
+			return Reject("compute_instance_supported must be a boolean")
+		}
+	}
+	reason := ""
+	if raw, ok := result["compute_instance_unsupported_reason"]; ok {
+		var err error
+		reason, err = stringField(raw, "compute_instance_unsupported_reason")
+		if err != nil {
+			return err
+		}
+	}
+	if supported && reason != "" {
+		return Reject("supported Subnet cannot have an unsupported reason")
+	}
+	subnet.Status.ComputeInstanceSupported = &supported
+	subnet.Status.ComputeInstanceUnsupportedReason = reason
+	return nil
+}
+
 // ParseBackendID reads the optional backend_id of create_fabric_domain.
 func ParseBackendID(result Result) (string, error) {
 	if err := result.checkKeys([]string{"backend_id"}); err != nil {

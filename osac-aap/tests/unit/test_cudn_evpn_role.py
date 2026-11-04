@@ -156,11 +156,16 @@ def test_every_task_rescues_into_osac_error(task: str) -> None:
 
 
 @pytest.mark.parametrize("task", ce.TASKS)
-def test_only_apply_publishes_a_result(task: str) -> None:
+def test_only_apply_and_subnet_create_publish_results(task: str) -> None:
     stats = [t for t in _tasks(ROLE / f"tasks/{task}.yaml") if "ansible.builtin.set_stats" in t]
     if task == "apply_network_attachment":
         assert len(stats) == 1
         assert stats[0]["ansible.builtin.set_stats"]["data"] == {"osac_result": "{{ cudn_evpn.result }}"}
+    elif task == "create_subnet":
+        assert len(stats) == 1
+        assert set(stats[0]["ansible.builtin.set_stats"]["data"]["osac_result"]) == {
+            "compute_instance_supported", "compute_instance_unsupported_reason",
+        }
     else:
         assert stats == []
 

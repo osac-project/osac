@@ -196,32 +196,37 @@
   tasks:
     - name: Run invalid-provider failure test
       block:
-        - name: Attempt with invalid provider 'netapp' (expected to fail)
+        - name: Reset invalid-provider dispatch sentinel
+          ansible.builtin.set_fact:
+            _invalid_provider_dispatch_returned: false
+
+        - name: Attempt with invalid provider 'unknown-provider' (expected to fail)
           ansible.builtin.include_role:
             name: osac.service.storage_provider
           vars:
             storage_provider_tiers:
               - name: default
                 protocol: nfs
-                provider: netapp
+                provider: unknown-provider
             storage_provider_action: setup
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
+
+        - name: Mark successful invalid-provider dispatch
+          ansible.builtin.set_fact:
+            _invalid_provider_dispatch_returned: true
 
         - name: This task should not be reached -- role should have failed
           ansible.builtin.fail:
             msg: "Role did not fail as expected when provider is invalid"
 
       rescue:
-        # ansible_failed_result is NOT refreshed for this kind of failure: a genuinely-missing
-        # role name is a runner-level ERROR! raised during dynamic role resolution, not a normal
-        # task failure, so it never repopulates the rescue block's ansible_failed_result -- it
-        # would still hold whatever an earlier, unrelated task last set it to. There is nothing
-        # reliable to assert about the failure's content from inside the playbook; reaching this
-        # rescue at all already proves the role failed to load for the invalid provider name.
-        - name: Verify role failed for invalid provider
-          ansible.builtin.debug:
-            msg: "Role correctly rejected invalid provider (rescue reached after role-resolution failure)"
+        - name: Verify invalid provider did not dispatch successfully
+          ansible.builtin.assert:
+            that:
+              - not (_invalid_provider_dispatch_returned | default(false) | bool)
+            fail_msg: "Dispatcher accepted an invalid provider and returned successfully"
+            success_msg: "Dispatcher rejected the provider because no matching role exists"
 
 # ──────────────────────────────────────────────────────────────
 # Test 6: Invalid action -- error path
@@ -1250,3 +1255,62 @@
               Null backend_id was not caught by validation (OSAC-4956 regression):
               {{ ansible_failed_result.msg | default('unknown error') }}
             success_msg: "Null backend_id correctly rejected by validation"
+
+# ──────────────────────────────────────────────────────────────
+# Test 29: Product routing keys resolve to their CSI backend vendors
+# Expected: NetApp maps to Trident and Pure maps to Pure.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- product routing aliases resolve to CSI backend vendors
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Set provider keys for routing alias test
+      ansible.builtin.set_fact:
+        _unique_providers:
+          - vast
+          - netapp
+          - pure
+          - lvms
+          - unknown
+
+    - name: Resolve CSI backend vendors from product keys
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+        tasks_from: resolve_csi_backend_vendors.yaml
+
+    - name: Assert product keys map to supported vendor controller names
+      ansible.builtin.assert:
+        that:
+          - _this_tenant_vendors == ['vast', 'trident', 'pure']
+        fail_msg: "Unexpected CSI backend vendor mapping: {{ _this_tenant_vendors }}"
+        success_msg: "Product routing keys resolve to their CSI backend vendor names"
+
+- name: Test storage_provider -- CSI products dispatch to the shared CSI storage role
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _storage_provider_tiers:
+      - name: netapp-tier
+        provider: netapp
+      - name: pure-tier
+        provider: pure
+    storage_provider_backend_connections: {}
+    tenant_name: provider-routing-test
+    _all_tenant_configs: {}
+    _dispatch_action: setup
+
+  tasks:
+    - name: Dispatch CSI-managed providers through their shared storage role
+      ansible.builtin.include_tasks: ../tasks/_dispatch_provider.yaml
+      loop:
+        - netapp
+        - pure
+      loop_control:
+        loop_var: _current_provider
+
+    - name: Verify the shared CSI role preserves each provider identity
+      ansible.builtin.assert:
+        that:
+          - _all_tenant_configs['netapp'].provider == 'netapp'
+          - _all_tenant_configs['pure'].provider == 'pure'

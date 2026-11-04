@@ -702,6 +702,7 @@ make install-osac  PLATFORM=... PROFILE=... NS=...  # OSAC application only
 make kind-load-images PLATFORM=kind PROFILE=dev-full NS=... # Load existing images
 make uninstall     PLATFORM=... PROFILE=... NS=...  # Full uninstall
 make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration tests
+make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage # API/operator disk handoff
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
 make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
@@ -710,6 +711,13 @@ make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm d
 ```
 
 ### Monitor Progress
+
+`SUITE=compute-storage` builds and deploys the current Fulfillment and operator
+images against an existing Kind infrastructure install. It checks disk Volume
+IDs and StorageClass mappings through the API, database, real controllers and
+an AAP HTTP recorder. It runs no playbooks or storage provisioning. This phase
+also runs as part of `SUITE=fulfillment`; see the
+[coverage and prerequisites](../docs/INTEGRATION-TESTING.md#computeinstance-disk-handoff-osac-6685).
 
 ```bash
 # Monitor pod creation and startup

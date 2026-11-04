@@ -10,6 +10,8 @@ const ClusterPodCidrField = ({
   name,
   fieldId = 'cluster-pod-cidr',
   isDisabled = false,
+  isRequired = false,
+  labelInfo,
 }: ClusterPodCidrFieldProps) => {
   const { t } = useTranslation();
 
@@ -19,6 +21,8 @@ const ClusterPodCidrField = ({
       label={t('Pod CIDR')}
       fieldId={fieldId}
       isDisabled={isDisabled}
+      isRequired={isRequired}
+      labelInfo={labelInfo}
       helperText={t('Use IPv4 CIDR notation (for example 10.128.0.0/14).')}
     />
   );

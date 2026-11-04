@@ -67,8 +67,12 @@ const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
             >
               <FlexItem>
                 <ResourceDetailHeader
-                  parentTo="/clusters"
-                  parentLabel={t('Clusters')}
+                  parents={[
+                    {
+                      to: '/clusters',
+                      label: t('Clusters'),
+                    },
+                  ]}
                   resourceName={cluster.metadata?.name ?? cluster.id}
                   titleAddon={<ClusterStatusLabel state={cluster.status?.state} />}
                 />

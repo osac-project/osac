@@ -575,7 +575,7 @@ var _ = Describe("Private storage backends server", func() {
 					Object: privatev1.StorageBackend_builder{
 						Id: created.GetId(),
 						Spec: privatev1.StorageBackendSpec_builder{
-							Provider: "ceph",
+							Provider: "netapp",
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.provider"}},
@@ -646,7 +646,7 @@ var _ = Describe("Private storage backends server", func() {
 							Name: "unique-name",
 						}.Build(),
 						Spec: privatev1.StorageBackendSpec_builder{
-							Provider: "ceph",
+							Provider: "vast",
 							Endpoint: "https://other.example.com:8443",
 							Credentials: privatev1.StorageBackendCredentials_builder{
 								Username: "admin",

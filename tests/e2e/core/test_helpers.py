@@ -593,7 +593,6 @@ def test_guest_health_checks_the_guest_before_the_hosted_cluster_conditions(monk
     assert events == ["guest:True:2", "version:order-test/osac-order-test"]
 
 
-
 def test_guest_k8s_client_does_not_impersonate_system_admin() -> None:
     client = K8sClient(namespace="guest", kubeconfig="guest.kubeconfig", as_system_admin=False)
 

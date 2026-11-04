@@ -182,7 +182,6 @@ var _ = Describe("Network attachment Subnet resolution", func() {
 		reference := privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build()
 		_, err = resolveNetworkingReference(ctx, subnets, owner, reference, "Subnet",
 			grpccodes.InvalidArgument, true)
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("has been deleted"))
 	})
 

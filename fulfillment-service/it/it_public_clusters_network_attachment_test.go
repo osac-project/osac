@@ -241,7 +241,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 			created, err := tenants.Create(ctx, privatev1.TenantsCreateRequest_builder{
 				Object: privatev1.Tenant_builder{
 					Metadata: metadata,
-					// Hold onboarding and establish readiness together, before the reconciler sees this Tenant.
+					// Start with a ready condition; the controller may refresh it during setup.
 					Status: privatev1.TenantStatus_builder{
 						State: privatev1.TenantState_TENANT_STATE_FAILED,
 						Conditions: []*privatev1.TenantCondition{
@@ -259,6 +259,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				deleteTenant(cleanupCtx, tenants, privatev1.NewProjectsClient(tool.InternalView().AdminConn()),
 					tenant, metadata.GetName())
 			})
+			Expect(setTenantDefaultNetworkingCondition(ctx, tenant, true)).To(Succeed())
 			clustersClient = publicv1.NewClustersClient(tool.ExternalView().AdminConn())
 		})
 
@@ -546,8 +547,22 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				Expect(cleanupClusterFixture(cleanupCtx, clustersClient, privateClustersClient, clusterId)).To(Succeed())
 			})
 
-			createResponse, err := clustersClient.Create(ctx, newProjectClusterRequest(project, clusterId))
-			Expect(err).ToNot(HaveOccurred())
+			var createResponse *publicv1.ClustersCreateResponse
+			Eventually(func() error {
+				if err := setTenantDefaultNetworkingCondition(ctx, tenant, true); err != nil {
+					if grpcstatus.Code(err) != grpccodes.Aborted {
+						return StopTrying("could not set Tenant networking readiness").Wrap(err)
+					}
+					return err
+				}
+				var err error
+				createResponse, err = clustersClient.Create(ctx, newProjectClusterRequest(project, clusterId))
+				if err != nil && (grpcstatus.Code(err) != grpccodes.FailedPrecondition ||
+					grpcstatus.Convert(err).Message() != "tenant default networking is not ready") {
+					return StopTrying("Cluster Create failed for a reason other than Tenant readiness").Wrap(err)
+				}
+				return err
+			}, time.Minute, time.Second).Should(Succeed())
 			object := createResponse.GetObject()
 
 			spec := object.GetSpec()

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-import json
 import os
 import re
 import shutil
@@ -49,119 +48,51 @@ def _vlan_id(value: Any, context: str) -> int:
     return value
 
 
-def _nvue_variants(value: Any, context: str) -> dict[str, Any]:
-    if isinstance(value, dict):
-        if not value or not set(value).issubset({"operational", "applied"}):
-            raise SubnetProviderError(f"Cumulus {context} JSON is malformed")
-        return value
-    return {"value": value}
+def _vlan_id_list(value: Any, context: str) -> set[int]:
+    if not isinstance(value, (list, tuple)):
+        raise SubnetProviderError(f"switch {context} must be a list of VLAN IDs")
+    vlan_ids = set()
+    for item in value:
+        vlan_id = _vlan_id(item, f"switch {context} entry")
+        if vlan_id in vlan_ids:
+            raise SubnetProviderError(f"switch {context} repeats VLAN ID {vlan_id}")
+        vlan_ids.add(vlan_id)
+    return vlan_ids
 
 
-def _parse_vlan_range(value: Any, context: str) -> tuple[int, int]:
-    if isinstance(value, int) and not isinstance(value, bool):
-        first = last = _vlan_id(value, context)
-        return first, last
-    if not isinstance(value, str):
-        raise SubnetProviderError(f"Cumulus {context} range is malformed")
-    value = value.strip()
-    match = re.fullmatch(r"([0-9]+)-([0-9]+)", value)
-    if match is None:
-        raise SubnetProviderError(f"Cumulus {context} range is malformed")
-    first = _vlan_id(int(match.group(1)), context)
-    last = _vlan_id(int(match.group(2)), context)
-    if first > last:
-        raise SubnetProviderError(f"Cumulus {context} range is reversed")
-    return first, last
+def parse_switch_vlan_exclusions(switch_state: Any) -> set[int]:
+    """Return the VLAN IDs a switch reports as used or reserved.
 
-
-def _parse_switchd_internal_vlan_range(value: Any) -> tuple[int, int]:
-    if not isinstance(value, str) or not value.strip():
-        raise SubnetProviderError("Cumulus switchd internal reserved VLAN range is missing")
-    match = re.fullmatch(r"resv_vlan_range\s*=\s*([0-9]+-[0-9]+)", value.strip())
-    if match is None:
-        raise SubnetProviderError("Cumulus switchd internal reserved VLAN range is malformed")
-    return _parse_vlan_range(match.group(1), "internal reserved VLAN")
-
-
-def parse_switch_vlan_exclusions(
-    bridge_vlan_output: str,
-    reserved_vlan_output: str,
-    switchd_reserved_vlan_output: str | None = None,
-) -> set[int]:
-    """Parse VLAN memberships and reserved ranges from Cumulus switch output."""
-    try:
-        interfaces = json.loads(bridge_vlan_output)
-        reserved = json.loads(reserved_vlan_output)
-    except (TypeError, json.JSONDecodeError) as error:
-        raise SubnetProviderError("Cumulus VLAN discovery returned invalid JSON") from error
-    if not isinstance(interfaces, list) or not interfaces:
-        raise SubnetProviderError("Cumulus VLAN discovery returned no interfaces")
-    excluded: set[int] = set()
+    ``switch_state`` is the normalized ``list_vlans`` result of the network
+    runner: interface memberships, the VLAN IDs in use and the VLAN IDs the
+    device reserves. Provider command output never reaches this function.
+    """
+    if not isinstance(switch_state, dict):
+        raise SubnetProviderError("switch VLAN discovery result is malformed")
+    interfaces = switch_state.get("interfaces")
+    if not isinstance(interfaces, (list, tuple)) or not interfaces:
+        raise SubnetProviderError("switch VLAN discovery returned no interfaces")
+    observed: set[int] = set()
     seen_interfaces: set[str] = set()
     for interface in interfaces:
         if not isinstance(interface, dict):
-            raise SubnetProviderError("Cumulus VLAN interface entry is malformed")
-        name = interface.get("ifname")
-        memberships = interface.get("vlans")
+            raise SubnetProviderError("switch VLAN discovery interface is malformed")
+        name = interface.get("name")
         if (
             not isinstance(name, str)
             or not name
             or name in seen_interfaces
-            or not isinstance(memberships, list)
         ):
-            raise SubnetProviderError("Cumulus VLAN interface entry is malformed")
+            raise SubnetProviderError("switch VLAN discovery interface is malformed")
         seen_interfaces.add(name)
-        for membership in memberships:
-            if not isinstance(membership, dict):
-                raise SubnetProviderError("Cumulus VLAN membership entry is malformed")
-            first = _vlan_id(membership.get("vlan"), "Cumulus VLAN membership")
-            last = _vlan_id(membership.get("vlanEnd", first), "Cumulus VLAN range end")
-            flags = membership.get("flags", [])
-            if first > last or not isinstance(flags, list) or any(
-                not isinstance(flag, str) for flag in flags
-            ):
-                raise SubnetProviderError("Cumulus VLAN membership entry is malformed")
-            # bridge -j vlan show includes native/PVID memberships as VLAN entries.
-            excluded.update(range(first, last + 1))
-
-    if not isinstance(reserved, dict):
-        raise SubnetProviderError("Cumulus reserved VLAN JSON is malformed")
-    internal = reserved.get("internal", {})
-    l3_vni = reserved.get("l3-vni-vlan")
-    if not isinstance(internal, dict):
-        raise SubnetProviderError("Cumulus internal reserved VLAN JSON is malformed")
-    if not isinstance(l3_vni, dict) or "begin" not in l3_vni or "end" not in l3_vni:
-        raise SubnetProviderError("Cumulus L3-VNI reserved VLAN range is missing")
-
-    if "range" in internal:
-        internal_ranges = _nvue_variants(internal["range"], "internal reserved VLAN").values()
-        parsed_ranges = [
-            _parse_vlan_range(value, "internal reserved VLAN") for value in internal_ranges
-        ]
-    else:
-        if switchd_reserved_vlan_output is None:
-            raise SubnetProviderError(
-                "Cumulus internal reserved VLAN range is missing from NVUE and switchd.conf"
-            )
-        parsed_ranges = [_parse_switchd_internal_vlan_range(switchd_reserved_vlan_output)]
-
-    for first, last in parsed_ranges:
-        excluded.update(range(first, last + 1))
-
-    begins = _nvue_variants(l3_vni["begin"], "L3-VNI reserved VLAN begin")
-    ends = _nvue_variants(l3_vni["end"], "L3-VNI reserved VLAN end")
-    variant_names = set(begins) | set(ends)
-    for name in variant_names:
-        begin_value = begins.get(name, begins.get("value"))
-        end_value = ends.get(name, ends.get("value"))
-        if begin_value is None or end_value is None:
-            raise SubnetProviderError("Cumulus L3-VNI reserved VLAN range is incomplete")
-        first = _vlan_id(begin_value, "Cumulus L3-VNI reserved VLAN begin")
-        last = _vlan_id(end_value, "Cumulus L3-VNI reserved VLAN end")
-        if first > last:
-            raise SubnetProviderError("Cumulus L3-VNI reserved VLAN range is reversed")
-        excluded.update(range(first, last + 1))
-    return excluded
+        observed.update(_vlan_id_list(interface.get("vlan_ids"), f"VLAN membership of {name}"))
+    used = _vlan_id_list(switch_state.get("used_vlan_ids"), "used VLANs")
+    reserved = _vlan_id_list(switch_state.get("reserved_vlan_ids"), "reserved VLANs")
+    if used != observed:
+        raise SubnetProviderError(
+            "switch VLAN discovery used VLANs do not match its interface memberships"
+        )
+    return used | reserved
 
 
 def _run(command: list[str], check: bool = True):

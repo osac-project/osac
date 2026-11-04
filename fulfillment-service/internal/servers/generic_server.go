@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
@@ -56,10 +57,44 @@ func isPublicAPIView(ctx context.Context) bool {
 	return isPublic
 }
 
-func restoreReservedMetadataForPublicAPIView(ctx context.Context, current, candidate proto.Message) {
-	if isPublicAPIView(ctx) {
-		restoreReservedMetadata(current, candidate)
+// restoreProtectedMetadataForPublicAPIView restores the metadata that public API callers can never
+// change: reserved labels and annotations, and finalizers. The public metadata type has no
+// finalizers field, so the candidate built from a public request never carries them. The stored
+// finalizers always replace the candidate's, even when the stored list is empty, which prevents a
+// public update from clearing finalizers and, for an object that is being deleted, from
+// triggering its archival. It does nothing for private API requests.
+func (s *GenericServer[O]) restoreProtectedMetadataForPublicAPIView(ctx context.Context, current, candidate O) {
+	if !isPublicAPIView(ctx) {
+		return
 	}
+	restoreReservedMetadata(current, candidate)
+
+	var stored []string
+	if currentMetadata := s.getMetadata(current); currentMetadata != nil {
+		stored = slices.Clone(currentMetadata.GetFinalizers())
+	}
+	candidateMetadata := s.getMetadata(candidate)
+	if candidateMetadata == nil {
+		if len(stored) == 0 {
+			return
+		}
+		candidateMetadata = candidate.ProtoReflect().Mutable(s.metadataField).Message().Interface().(metadataIface)
+	}
+	candidateMetadata.SetFinalizers(stored)
+}
+
+// metadataFinalizers returns the finalizers of the given metadata, or nil if there is no metadata.
+func metadataFinalizers(metadata metadataIface) []string {
+	if metadata == nil {
+		return nil
+	}
+	return metadata.GetFinalizers()
+}
+
+// sameFinalizers checks if two finalizer lists contain the same finalizers. Order and duplicates are
+// ignored, and a nil list is the same as an empty one. This matches how the DAO stores finalizers.
+func sameFinalizers(a, b []string) bool {
+	return collections.NewSet(a...).Equal(collections.NewSet(b...))
 }
 
 // GenericServerBuilder contains the data and logic needed to create new generic servers.
@@ -124,6 +159,8 @@ type metadataIface interface {
 	GetProject() string
 	SetProject(string)
 	GetVersion() int32
+	GetFinalizers() []string
+	SetFinalizers([]string)
 }
 
 // NewGenericServer creates a builder that can then be used to configure and create a new generic server.
@@ -706,7 +743,7 @@ func (s *GenericServer[O]) applyMaskAndRestoreProtectedFields(
 	}
 
 	// Restore protected fields based on API type
-	restoreReservedMetadataForPublicAPIView(ctx, currentObject, tmpObject)
+	s.restoreProtectedMetadataForPublicAPIView(ctx, currentObject, tmpObject)
 
 	// Restore controller-managed status from the stored object. Status fields are OUTPUT_ONLY
 	// and should never be modified by user input. This provides defense-in-depth protection.
@@ -734,6 +771,45 @@ func (s *GenericServer[O]) UpdateWithCandidatePreparation(
 	prepareCandidate PrepareCandidateFunc[O],
 ) error {
 	return s.updateWithCandidatePreparation(ctx, request, response, prepareCandidate, false)
+}
+
+// checkFinalizerChange enforces the finalizer compare-and-swap contract of updates: a request that
+// changes the finalizers of an object, whether explicitly or by omitting them from a whole-object
+// write, is only accepted if it carries the current version of the stored object, regardless of the
+// lock flag. A request without metadata cannot carry a version, so it is rejected whenever it would
+// change finalizers. Finalizers are compared as sets, ignoring order and duplicates, and a nil list
+// is the same as an empty one. Requests that leave the finalizers as they are, such as status or
+// label updates, are not affected. The error reports only the identifier and versions of the
+// object.
+//
+// The merged object is the one that will be written, so changes made by the update mask and by
+// public API restoration are accounted for. Candidate preparation callbacks run later and are not
+// allowed to change finalizers, so the check holds for the written object.
+func (s *GenericServer[O]) checkFinalizerChange(requestObject, currentObject, mergedObject O) error {
+	currentMetadata := s.getMetadata(currentObject)
+	if sameFinalizers(metadataFinalizers(s.getMetadata(mergedObject)), metadataFinalizers(currentMetadata)) {
+		return nil
+	}
+	requestId := requestObject.GetId()
+	currentVersion := currentMetadata.GetVersion()
+	requestMetadata := s.getMetadata(requestObject)
+	if requestMetadata == nil {
+		return grpcstatus.Errorf(
+			grpccodes.Aborted,
+			"object with identifier '%s' has been modified: finalizers can only be changed from the "+
+				"current version, but the request has no version and the current version is %d",
+			requestId, currentVersion,
+		)
+	}
+	if requestMetadata.GetVersion() != currentVersion {
+		return grpcstatus.Errorf(
+			grpccodes.Aborted,
+			"object with identifier '%s' has been modified: finalizers can only be changed from the "+
+				"current version, requested version is %d but current version is %d",
+			requestId, requestMetadata.GetVersion(), currentVersion,
+		)
+	}
+	return nil
 }
 
 func (s *GenericServer[O]) updateWithCandidatePreparation(
@@ -825,6 +901,13 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		return err
 	}
 
+	// Finalizer compare-and-swap, computed on the merged object so that it covers the nil mask and
+	// every mask form. Unlike the lock check above, it reads the version from the original request
+	// object and does not skip requests without metadata.
+	if err = s.checkFinalizerChange(requestObject, currentObject, tmpObject); err != nil {
+		return err
+	}
+
 	if !prepareBeforeValidation {
 		// Validate the merged object using protovalidate.
 		// This ensures all validation constraints are checked after applying the update mask,
@@ -869,9 +952,27 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		if err = prepareCandidate(ctx, proto.Clone(currentObject).(O), tmpObject); err != nil {
 			return err
 		}
-		restoreReservedMetadataForPublicAPIView(ctx, currentObject, tmpObject)
+		s.restoreProtectedMetadataForPublicAPIView(ctx, currentObject, tmpObject)
 		if err = s.validatePreparedCandidate(ctx, tmpObject, preparedID, preparedMetadata); err != nil {
 			return err
+		}
+
+		// Candidate preparation must not change finalizers: the compare-and-swap above only covers the
+		// finalizers requested by the caller, so the written object must carry exactly those.
+		if !sameFinalizers(
+			metadataFinalizers(s.getMetadata(tmpObject)),
+			preparedMetadata.GetFinalizers(),
+		) {
+			s.logger.ErrorContext(
+				ctx,
+				"Candidate preparation changed finalizers",
+				slog.String("id", requestId),
+			)
+			return grpcstatus.Errorf(
+				grpccodes.Internal,
+				"candidate preparation cannot change finalizers of object with identifier '%s'",
+				requestId,
+			)
 		}
 	}
 

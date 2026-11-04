@@ -68,6 +68,9 @@ func filterItems[T proto.Message](env *cel.Env, items []T, filter string) ([]T, 
 	if issues != nil && issues.Err() != nil {
 		return nil, issues.Err()
 	}
+	if !tree.OutputType().IsExactType(cel.BoolType) {
+		return nil, fmt.Errorf("filter result must be a boolean, but it is of type '%v'", tree.OutputType())
+	}
 	program, err := env.Program(tree)
 	if err != nil {
 		return nil, err

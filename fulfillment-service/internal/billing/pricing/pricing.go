@@ -351,11 +351,10 @@ func attributeID(attrs []billing.PriceableAttribute, name string) (string, bool)
 	return "", false
 }
 
-// matchRow finds the rate row that prices attrID and matches values under the ANY/EQUALS predicate implemented
-// here in OSAC (design/implementation guidance): a row with no AttributeValues entry for a given name is
-// unconstrained on it (ANY); an entry present must equal the configured value (EQUALS). Specificity is the
-// number of constraints a row carries; among matching rows, only the most specific ones compete, and more than
-// one at that specificity is AMBIGUOUS rather than an arbitrary pick.
+// matchRow finds the rate row that prices attrID under the ANY/EQUALS predicate: a row with no AttributeValues
+// entry for a name is unconstrained on it (ANY), while a present entry must equal the configured value (EQUALS).
+// Per task OSAC-6890, a more-specific matching row wins over less-specific rows; two or more matching rows tied at
+// the highest specificity are AMBIGUOUS.
 func matchRow(rows []billing.RateRow, attrID string, values map[string]string) (billing.RateRow, State, string) {
 	var best []billing.RateRow
 	bestSpecificity := -1
@@ -384,7 +383,8 @@ func matchRow(rows []billing.RateRow, attrID string, values map[string]string) (
 
 func rowMatches(row billing.RateRow, values map[string]string) bool {
 	for _, av := range row.AttributeValues {
-		if values[av.Name] != av.Value {
+		value, ok := values[av.Name]
+		if !ok || value != av.Value {
 			return false
 		}
 	}

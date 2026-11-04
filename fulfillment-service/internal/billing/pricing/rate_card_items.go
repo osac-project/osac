@@ -38,6 +38,8 @@ const (
 	// SkipDimensionUnmapped is a row whose priced attribute id does not match any of the service's priceable
 	// attributes, so the row cannot be named in resource_conditions.
 	SkipDimensionUnmapped = "BILLING_RATE_DIMENSION_UNMAPPED"
+	// SkipConditionValueEmpty is an EQUALS condition with an empty value, which is reserved for ANY.
+	SkipConditionValueEmpty = "BILLING_RATE_CONDITION_VALUE_EMPTY"
 )
 
 // RateCondition is one normalized match condition of a RateCardItem.
@@ -117,7 +119,8 @@ func (r *Resolver) ListServiceRateCardItems(ctx context.Context, service, curren
 // inference matches the Jira implementation guidance for this story: a row's AttributeValues being empty makes its
 // one priced dimension ANY (the row matches every value, i.e. "no conditions"); a non-empty AttributeValues list
 // produces one EQUALS condition per entry, using the attribute Name each entry already carries (the same shape
-// matchRow/rowMatches use for request-side matching).
+// matchRow/rowMatches use for request-side matching). Empty EQUALS values are invalid because empty is reserved for
+// ANY; those rows are rejected so the caller can skip and count them.
 func normalizeRateRow(row billing.RateRow, names map[string]string, cardCurrency string) (
 	item RateCardItem, skipReason string, ok bool) {
 	name, known := names[row.DimensionID]
@@ -135,6 +138,9 @@ func normalizeRateRow(row billing.RateRow, names map[string]string, cardCurrency
 	} else {
 		conditions = make([]RateCondition, 0, len(row.AttributeValues))
 		for _, av := range row.AttributeValues {
+			if av.Value == "" {
+				return RateCardItem{}, SkipConditionValueEmpty, false
+			}
 			conditions = append(conditions, RateCondition{Dimension: av.Name, Operator: OperatorEquals, Value: av.Value})
 		}
 	}

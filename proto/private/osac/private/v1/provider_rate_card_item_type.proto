@@ -17,6 +17,7 @@ package osac.private.v1;
 
 option (cleanapi.file).package = "osac.public.v1";
 
+import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 
 // How a resource condition's value compares against a configuration. UNSPECIFIED is never reported by the server.
@@ -33,9 +34,9 @@ enum BillingRateMatchOperator {
 // One match condition on a provider rate-card row.
 message ProviderRateCardItemResourceCondition {
   // Metered dimension name, using the same names as CatalogPricingInputs (for example `instance_type`).
-  string dimension = 1;
+  string dimension = 1 [(buf.validate.field).string.min_len = 1];
 
-  BillingRateMatchOperator operator = 2;
+  BillingRateMatchOperator operator = 2 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];
 
   // Comparison value for EQUALS; empty for ANY.
   string value = 3;
@@ -55,10 +56,10 @@ message ProviderRateCardItemRate {
 // native account id or raw provider payload.
 message ProviderRateCardItem {
   // OSAC service this provider rule prices, such as `compute_instance`.
-  string service = 1;
+  string service = 1 [(buf.validate.field).string.min_len = 1];
 
   // ISO-4217 currency of rate.amount.
-  string currency_code = 2;
+  string currency_code = 2 [(buf.validate.field).string.len = 3];
 
   // Match conditions for this rate; all conditions on a row apply together. Empty means the row matches every
   // configuration of the service.

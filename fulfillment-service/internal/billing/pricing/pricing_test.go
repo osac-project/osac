@@ -15,6 +15,7 @@ package pricing_test
 
 import (
 	"context"
+	"strconv"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
@@ -68,6 +69,36 @@ var _ = Describe("Resolver", func() {
 		Expect(result.PerSecond.Equal(decimal.RequireFromString("0.25"))).To(BeTrue())
 		Expect(result.PerHour.Equal(decimal.RequireFromString("900"))).To(BeTrue())
 		Expect(result.PerMonth.Equal(decimal.RequireFromString("657000"))).To(BeTrue())
+	})
+
+	DescribeTable("parses rate text and derives exact decimal rollups",
+		func(rate, wantPerSecond, wantPerHour, wantPerMonth string) {
+			scenario := baseScenario()
+			scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{
+				Rows: []billing.RateRow{{DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: rate}},
+			}
+			result := resolveOne(scenario, "USD", baseComponent())
+			Expect(result.State).To(Equal(pricing.StateCovered))
+			Expect(result.PerSecond.String()).To(Equal(wantPerSecond))
+			Expect(result.PerHour.String()).To(Equal(wantPerHour))
+			Expect(result.PerMonth.String()).To(Equal(wantPerMonth))
+		},
+		Entry("canonical 0.00125 per second", "0.00125", "0.00125", "4.5", "3285"),
+		Entry("fractional rollup", "0.000123", "0.000123", "0.4428", "323.244"),
+		Entry("scientific notation", "9.9E-9", "0.0000000099", "0.00003564", "0.0260172"),
+	)
+
+	It("rejects rates above decimal's configured exponent decode limit", func() {
+		scenario := baseScenario()
+		scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{
+			Rows: []billing.RateRow{{
+				DimensionID: "dim-1", PriceMethod: "QUANTITY",
+				UnitRate: "1e" + strconv.Itoa(decimal.MaxDecodeExponent+1),
+			}},
+		}
+		result := resolveOne(scenario, "USD", baseComponent())
+		Expect(result.State).To(Equal(pricing.StateUnavailable))
+		Expect(result.Reason).To(Equal(pricing.ReasonRateShapeUnsupported))
 	})
 
 	It("treats a zero rate as covered, not as a missing rate", func() {
@@ -135,6 +166,17 @@ var _ = Describe("Resolver", func() {
 		result := resolveOne(scenario, "USD", component)
 		Expect(result.State).To(Equal(pricing.StateAmbiguous))
 		Expect(result.Reason).To(Equal(pricing.ReasonRateAmbiguous))
+	})
+
+	It("does not match an empty EQUALS value against a missing configuration dimension", func() {
+		scenario := baseScenario()
+		scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{Rows: []billing.RateRow{{
+			DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.25",
+			AttributeValues: []billing.AttributeValue{{Name: "region", Value: ""}},
+		}}}
+		result := resolveOne(scenario, "USD", baseComponent())
+		Expect(result.State).To(Equal(pricing.StateGap))
+		Expect(result.Reason).To(Equal(pricing.ReasonCoverageGap))
 	})
 
 	It("prefers the more specific of two non-conflicting rows over the unconstrained one", func() {
@@ -241,11 +283,22 @@ var _ = Describe("Resolver", func() {
 
 	It("aggregates UNAVAILABLE even when another component is only a gap", func() {
 		scenario := baseScenario()
+		scenario.Failures = map[string]billingfake.Failure{
+			"GetServiceRateCard": {Reason: billing.ReasonTimeout, Retryable: true},
+		}
 		resolver := pricing.NewResolver(billingfake.New(scenario))
 		gapComponent := pricing.ComponentRequest{Service: "no_such_service", Dimension: "cpu_hours", Values: map[string]string{"cpu_hours": "4"}}
-		req := pricing.Request{Account: billing.NewAccountRef("acct-1"), Components: []pricing.ComponentRequest{baseComponent(), gapComponent}} // no currency: unavailable
+		req := pricing.Request{
+			Account: billing.NewAccountRef("acct-1"), Currency: "USD",
+			Components: []pricing.ComponentRequest{gapComponent, baseComponent()},
+		}
 		result, err := resolver.Resolve(ctx, req)
 		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Components).To(HaveLen(2))
+		Expect(result.Components[0].State).To(Equal(pricing.StateGap))
+		Expect(result.Components[0].Reason).To(Equal(pricing.ReasonCoverageGap))
+		Expect(result.Components[1].State).To(Equal(pricing.StateUnavailable))
+		Expect(result.Components[1].Reason).To(Equal(string(billing.ReasonTimeout)))
 		Expect(result.Aggregate).To(Equal(pricing.AggregateUnavailable))
 	})
 })

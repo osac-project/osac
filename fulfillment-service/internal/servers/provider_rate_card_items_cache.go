@@ -21,9 +21,8 @@ import (
 )
 
 // rateCardCacheTTL is how long one successful provider read of a service's rate card is reused before the next List
-// re-reads it. It matches the chart's documented global.billing.tuning.cacheFreshTtlSeconds default; reading that
-// value (and the other cache tuning env vars) from the environment is deliberately left to OSAC-6894, which owns
-// the tuning knobs, so this stays a constant here.
+// re-reads it. This is a local server constant; no chart value or environment variable configures it today.
+// Configurable cache tuning is follow-up work under OSAC-6894.
 const rateCardCacheTTL = 5 * time.Minute
 
 // rateCardCacheMaxEntries bounds the cache. Keys come from request parameters (service, currency), so without a

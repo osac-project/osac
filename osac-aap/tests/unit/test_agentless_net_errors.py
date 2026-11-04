@@ -149,7 +149,7 @@ def capture_reporter():
     }
 
 
-def run_play(tmp_path, tasks, expected, inventory=None):
+def run_play(tmp_path, tasks, expected, inventory=None, check_mode=False):
     """Run local Ansible and verify failure capture, redaction and actual stats."""
     if expected is not None:
         tasks.append({
@@ -164,7 +164,8 @@ def run_play(tmp_path, tasks, expected, inventory=None):
     play = tmp_path / "errors.json"
     play.write_text(json.dumps([{"hosts": "localhost", "gather_facts": False, "tasks": tasks}]))
     completed = subprocess.run(
-        [str(ANSIBLE_PLAYBOOK), "-i", "localhost,", "-c", "local", str(play)],
+        [str(ANSIBLE_PLAYBOOK), "-i", "localhost,", "-c", "local", str(play)]
+        + (["--check"] if check_mode else []),
         cwd=ROOT, env={
             **os.environ, "AGENTLESS_NET_VN_INVENTORY": json.dumps(inventory) if inventory else "",
             "AGENTLESS_NET_SSH_PRIVATE_KEY": "", "ANSIBLE_NOCOLOR": "1",
@@ -180,10 +181,14 @@ def run_play(tmp_path, tasks, expected, inventory=None):
     assert output["global_custom_stats"] == ({"osac_error": expected} if expected else {})
 
 
-def test_real_missing_inventory_reports_setting_despite_no_log(tmp_path):
-    """Missing inventory must fail validation and report a final setting error."""
+@pytest.mark.parametrize("check_mode", [False, True])
+@pytest.mark.parametrize("provider_retryable", [False, True])
+def test_real_missing_inventory_reports_setting_despite_no_log(tmp_path, check_mode, provider_retryable):
+    """Missing settings remain repairable regardless of provider phase or mode."""
     run_play(tmp_path, [
-        {"name": "Set provider phase", "ansible.builtin.set_fact": {"_agentless_net_failure_retryable": True}},
+        {"name": "Set provider phase", "ansible.builtin.set_fact": {
+            "_agentless_net_failure_retryable": provider_retryable,
+        }},
         {"name": "Validate real inventory", "block": [
             {"name": "Load inventory", "ansible.builtin.include_role": {
                 "name": "osac.templates.agentless_net", "tasks_from": "_load_network_node_inventory",
@@ -197,7 +202,7 @@ def test_real_missing_inventory_reports_setting_despite_no_log(tmp_path):
         {"name": "Require inventory validation failure", "ansible.builtin.assert": {
             "that": ["_inventory_failure_captured | default(false)"],
         }},
-    ], {"message": MISSING_INVENTORY, "retryable": False})
+    ], {"message": MISSING_INVENTORY, "retryable": True}, check_mode=check_mode)
 
 
 @pytest.mark.parametrize("check_mode", [False, True])
@@ -268,8 +273,10 @@ def test_existing_database_pool_errors_preserve_identity(tmp_path, pool_case, ch
 
 
 @pytest.mark.parametrize("invalid_field", ["ansible_host", "ansible_port", None])
-def test_real_inventory_connection_validation_is_final(tmp_path, invalid_field):
-    """Invalid connections are final under no_log; valid inventory still loads."""
+@pytest.mark.parametrize("check_mode", [False, True])
+@pytest.mark.parametrize("provider_retryable", [False, True])
+def test_real_inventory_connection_validation_is_retryable(tmp_path, invalid_field, check_mode, provider_retryable):
+    """Repairable connections retry under no_log; valid inventory still loads."""
     connection = {"ansible_host": "192.0.2.10", "ansible_user": TEST_REDACTION_SENTINEL}
     if invalid_field == "ansible_host":
         del connection["ansible_host"]
@@ -278,7 +285,7 @@ def test_real_inventory_connection_validation_is_final(tmp_path, invalid_field):
     inventory = {"all": {"children": {"net_nodes": {"hosts": {"test-node": connection}}}}}
     tasks = [
         {"name": "Set retryable provider phase", "ansible.builtin.set_fact": {
-            "_agentless_net_failure_retryable": True,
+            "_agentless_net_failure_retryable": provider_retryable,
         }},
         {"name": "Load real inventory", "block": [{
             "name": "Validate connection", "ansible.builtin.include_role": {
@@ -296,6 +303,58 @@ def test_real_inventory_connection_validation_is_final(tmp_path, invalid_field):
         expected = {
             "message": "AgentlessNet network-node inventory requires ansible_host, ansible_user, "
                        "a valid optional ansible_port, and text SSH arguments.",
-            "retryable": False,
+            "retryable": True,
         }
-    run_play(tmp_path, tasks, expected, inventory=inventory)
+    run_play(tmp_path, tasks, expected, inventory=inventory, check_mode=check_mode)
+
+
+@pytest.mark.parametrize("check_mode", [False, True])
+@pytest.mark.parametrize("provider_retryable", [False, True])
+@pytest.mark.parametrize("inventory", [
+    [TEST_REDACTION_SENTINEL],
+    {"all": {"children": {"net_nodes": {"hosts": {"first": {}, "second": {}}}}}},
+])
+def test_real_inventory_shape_is_repairable(tmp_path, check_mode, provider_retryable, inventory):
+    """Malformed shape and multiple nodes emit a retryable authored artifact."""
+    run_play(tmp_path, [
+        {"name": "Set provider phase", "ansible.builtin.set_fact": {
+            "_agentless_net_failure_retryable": provider_retryable,
+        }},
+        {"name": "Validate real inventory", "block": [{
+            "name": "Load inventory", "ansible.builtin.include_role": {
+                "name": "osac.templates.agentless_net", "tasks_from": "_load_network_node_inventory",
+            },
+        }], "rescue": [capture_reporter()]},
+    ], {
+        "message": "AgentlessNet VirtualNetwork operations require exactly one host under "
+                   "all.children.net_nodes.hosts in the provider inventory.",
+        "retryable": True,
+    }, inventory=inventory, check_mode=check_mode)
+
+
+@pytest.mark.parametrize("check_mode", [False, True])
+@pytest.mark.parametrize("provider_retryable", [False, True])
+def test_real_invalid_manager_input_stays_final(tmp_path, check_mode, provider_retryable):
+    """Invalid frozen task input stays final even with a retryable provider default."""
+    run_play(tmp_path, [{
+        "name": "Reject real invalid manager input", "block": [{
+            "name": "Validate frozen input", "ansible.builtin.include_role": {
+                "name": "osac.templates.agentless_net", "tasks_from": "_validate_task_input",
+            },
+            "vars": {"osac_job_vars": {"manager": {"name": TEST_REDACTION_SENTINEL}}},
+        }], "rescue": [
+            {"name": "Set provider default before reporting", "ansible.builtin.set_fact": {
+                "_agentless_net_failure_retryable": provider_retryable,
+            }},
+            capture_reporter(),
+        ],
+    }], {
+        "message": "AgentlessNet received an invalid or unsupported network-manager task input.",
+        "retryable": False,
+    }, check_mode=check_mode)
+
+
+def test_inventory_repair_is_read_by_next_job(tmp_path):
+    """A new local job rereads repaired settings instead of retaining the failure."""
+    test_real_missing_inventory_reports_setting_despite_no_log(tmp_path, False, False)
+    test_real_inventory_connection_validation_is_retryable(tmp_path, None, False, False)

@@ -129,6 +129,13 @@ the database alone loses ownership/allocation records and can orphan VLANs,
 namespaces and dnsmasq processes; a fresh allocator may then reuse live IDs.
 This is a manual, lab-only reset procedure, not an in-place upgrade path.
 
+Existing labs must also plan a coordinated registration/NetworkClass replacement
+or reinstall to pick up `security_group_icmp`: the AgentlessNet registration
+ConfigMap is immutable, and the operator derives capabilities only until the
+NetworkClass first becomes READY. A Helm upgrade alone cannot refresh this
+capability on an existing READY class; respect dependency guards and the manual
+cleanup above rather than deleting live resources indiscriminately.
+
 AgentlessNet ExternalIPPool and ExternalIP jobs use the same inventory and
 state-file settings as VirtualNetwork jobs. Inventory describes exactly one
 network node; pool registration and address reservation do not require switch

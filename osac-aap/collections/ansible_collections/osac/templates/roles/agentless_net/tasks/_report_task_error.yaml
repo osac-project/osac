@@ -24,7 +24,8 @@
                if ansible_failed_task.action == 'osac.templates.agentless_net_state' else '')
            or 'AgentlessNet network task failed. Inspect the AAP job log and correct the provider state before retrying.' }}
       retryable: >-
-        {{ false if _agentless_net_validation_error else
+        {{ (ansible_failed_task.name != 'Validate AgentlessNet manager contract input')
+           if _agentless_net_validation_error else
            ansible_failed_result.retryable | default(_agentless_net_failure_retryable | default(false)) | bool }}
 
 - name: Report the error to OSAC

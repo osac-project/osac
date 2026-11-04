@@ -304,15 +304,93 @@ After the full mirror contains the approved direct-mirror debug image, invoke on
 
 #### 2d. Apply generated artifacts
 
+Before **any apply or handoff**, set `mirrorSourcePolicy: NeverContactSource`
+on **every** `spec.imageTagMirrors` entry in **every** generated ITMS document,
+including operator, core and optional-service images. Repeat after every
+regeneration, overwriting an explicit `AllowContactingSource` as well as an
+absent policy. This is mandatory even for Core-only installations.
+
+The [oc-mirror 4.22 generator](https://github.com/openshift/oc-mirror/blob/7860a5e7f0707a3d8d8729586e8313a41983008d/internal/pkg/clusterresources/clusterresources.go#L126-L153)
+sets `Source` and `Mirrors`, but not the policy. The
+[ITMS API](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_tag_mirror_set.go#L119-L127)
+allows fallback to the original source when the policy is unset.
+
+Run the following as a standalone **Bash** script with **Mike Farah yq v4**
+and **jq**. It handles multiple files and YAML documents, preserves non-ITMS
+documents semantically, validates input before mutation, then checks all
+patched artifacts before applying anything. Retain the patched files for
+handoff, not the temporary JSON list. Empty/malformed documents, missing or
+empty ITMS entries, and empty mirror lists stop the procedure. A digest-only
+inventory can legitimately produce no ITMS; selected tagged images still
+require coverage, as reviewed in Category C.
+
 ```bash
-oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml || exit 1
-if [ -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml ]; then
-  oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml || exit 1
+set -euo pipefail
+resource_dir=oc-mirror-workspace/working-dir/cluster-resources
+test -d "$resource_dir" || exit 1
+shopt -s nullglob globstar
+resource_files=("$resource_dir"/**/*.yaml "$resource_dir"/**/*.yml)
+((${#resource_files[@]} > 0)) || exit 1
+policy_work=$(mktemp -d) || exit 1
+trap 'rm -rf "$policy_work"' EXIT
+
+validate_documents() {
+  jq -se '
+    def nonempty_string: type == "string" and length > 0;
+    length > 0 and all(.[];
+      type == "object" and (.kind | nonempty_string) and
+      (if .kind == "ImageTagMirrorSet" then
+        (.spec.imageTagMirrors | type == "array" and length > 0) and
+        all(.spec.imageTagMirrors[];
+          (.source | nonempty_string) and
+          (.mirrors | type == "array" and length > 0) and
+          all(.mirrors[]; nonempty_string))
+      else true end))
+  ' "$1" >/dev/null
+}
+
+for resource_file in "${resource_files[@]}"; do
+  yq -o=json -I=0 '.' "$resource_file" > "$policy_work/documents.json"
+  validate_documents "$policy_work/documents.json"
+done
+for resource_file in "${resource_files[@]}"; do
+  yq -i '(select(.kind == "ImageTagMirrorSet") |
+    .spec.imageTagMirrors[].mirrorSourcePolicy) = "NeverContactSource"'     "$resource_file"
+done
+
+: > "$policy_work/all.json"
+for resource_file in "${resource_files[@]}"; do
+  yq -o=json -I=0 '.' "$resource_file" > "$policy_work/documents.json"
+  validate_documents "$policy_work/documents.json"
+  cat "$policy_work/documents.json" >> "$policy_work/all.json"
+done
+jq -se '
+  [.[] | select(.kind == "ImageTagMirrorSet")] as $sets |
+  if all($sets[].spec.imageTagMirrors[];
+    .mirrorSourcePolicy == "NeverContactSource")
+  then {apiVersion: "v1", kind: "List", items: $sets}
+  else error("ITMS source fallback is not disabled") end
+' "$policy_work/all.json" > "$policy_work/itms.json"
+
+oc apply --server-side -f "$resource_dir/idms-oc-mirror.yaml"
+if jq -e '.items | length > 0' "$policy_work/itms.json" >/dev/null; then
+  oc apply --server-side -f "$policy_work/itms.json"
 fi
-oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/cs-redhat-operator-index-v4-22.yaml
-oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/cc-redhat-operator-index-v4-22.yaml
-oc apply --server-side -f oc-mirror-workspace/working-dir/cluster-resources/signature-configmap.yaml
+oc apply --server-side -f "$resource_dir/cs-redhat-operator-index-v4-22.yaml"
+oc apply --server-side -f "$resource_dir/cc-redhat-operator-index-v4-22.yaml"
+oc apply --server-side -f "$resource_dir/signature-configmap.yaml"
 ```
+
+Do not apply a partially patched workspace after a failure. Correct it and
+rerun the whole block; a failed `oc` command stops subsequent applies.
+This gate covers ITMS policy, not IDMS policy or completeness of mirror content.
+The platform/network prerequisites must already provide the site's approved
+egress restrictions. `NeverContactSource` controls source fallback for matching
+image pulls; it is **not a firewall**, and network-egress testing is outside
+this guide. Do not substitute `blockedRegistries`: the
+[MCO implementation](https://github.com/openshift/machine-config-operator/blob/6ee7ec8468a63d46e5fecb4a60244357b1b2a6ad/pkg/controller/container-runtime-config/helpers.go#L760-L815)
+maintains both registry transport blocking and image-policy blocking, which
+can reject the logical source reference even when a mirror exists.
 
 #### 2e. Wait for MCPs to converge
 

@@ -11,7 +11,7 @@
     - [Step 1 — Add containerdisk images to the ImageSetConfiguration](#step-1--add-containerdisk-images-to-the-imagesetconfiguration)
     - [Step 2 — Run oc-mirror (connected bastion)](#step-2--run-oc-mirror-connected-bastion)
     - [Step 3 — Apply updated ITMS (disconnected cluster)](#step-3--apply-updated-itms-disconnected-cluster)
-      - [Enforce NeverContactSource (recommended)](#enforce-nevercontactsource-recommended)
+      - [Required coverage and exact-tag review](#required-coverage-and-exact-tag-review)
   - [Consumer handoff constraints](#consumer-handoff-constraints)
   - [Mirroring artifact checks (`oc`)](#mirroring-artifact-checks-oc)
   - [Known Gaps / Limitations](#known-gaps--limitations)
@@ -102,8 +102,9 @@ upstream-backed catalog or the approved deployment configuration. A fresh
 installation does not require a running OSAC API. A catalog already using
 mirror URLs is not an upstream inventory: retain the original upstream
 references alongside their mirror destinations. Add every selected
-upstream reference to `additionalImages` and archive this inventory with
-the ISC and workspace as `selected-diskimage-images.txt`.
+upstream reference to `additionalImages` and retain the selected repositories,
+exact tags (or digests), and intended mirror references with the ISC and
+workspace in the organization's existing records.
 
 <!-- Moved to operators.md §Selected DiskImage inventory export. See docs/guides/installation/disconnected/operators.md -->
 
@@ -141,166 +142,79 @@ Run the canonical mirror command from
 > converge after applying
 > (`oc wait mcp --all --for=condition=Updated --timeout=30m`).
 
-Tagged containerdisk images require an **ImageTagMirrorSet** (ITMS), while
-digest-pinned images use IDMS. The generated ITMS file may be absent for a
-digest-only inventory:
+Tagged containerdisk images require ITMS; digest-pinned images use IDMS.
+Do not apply raw generated files here. Follow Category A
+[Step 2d](mirroring-operators.md#2d-apply-generated-artifacts) to patch **all**
+generated ITMS entries to `NeverContactSource`, validate before apply/handoff,
+and apply the reviewed artifacts. Digest-pinned selections need a separate
+IDMS policy review; the ITMS check does not validate them.
 
-```bash
-oc apply -f \
-  oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml || exit 1
-if [ -f oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml ]; then
-  oc apply -f \
-    oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml || exit 1
-fi
-```
+#### Required coverage and exact-tag review
 
-Verify the ITMS includes containerdisk entries:
+Keep the selected **upstream containerdisk repositories and exact tags**,
+their intended mirror references, and the review results in your organization's
+existing records. No particular filename, JSON serialization or OSAC export
+is required; a first mirror needs neither a running OSAC API nor installed CDI.
+Preserve original upstream references even when the runtime catalog uses
+mirror URLs. Do not infer the selection from a live mirror-only catalog.
 
-```bash
-oc get itms -o yaml | grep -A2 "containerdisk\|rhel-guest"
-```
+For **each** selected tagged repository, manually review the complete generated
+and live ITMS rules using the
+[API matching semantics](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_tag_mirror_set.go#L44-L65):
 
-#### Enforce NeverContactSource (recommended)
+1. Match against `source`, not against mirror destinations. For an ordinary
+   host/repository prefix, require an exact match or a `/` boundary. If a
+   wildcard-host source is present, evaluate it using the API's documented
+   wildcard semantics; do not treat `*` as a literal repository prefix.
+2. Use only the **most-specific matching source**. A safe parent rule does
+   not rescue an unsafe or empty more-specific rule. Review every object
+   defining the same effective source; mirrors for that source can merge.
+3. Require nonempty mirror destinations and `NeverContactSource` on every
+   applicable entry. Also retain Category A's all-entry gate, not just this
+   selected-image review. Missing coverage blocks handoff.
+4. Derive each mirror repository by replacing the matched source prefix
+   with the mirror prefix and preserving the remaining repository suffix.
+   Retain the **exact selected tag**. Read that exact manifest using the
+   approved mirror-read client and credentials; verify the expected image
+   content and required platform are available. Registry/namespace/repository
+   existence or a successful `/v2/` response does **not** prove tag availability.
+   Do not accept a failed or ambiguous manifest lookup as coverage.
 
-Use `selected-diskimage-images.txt` from the approved upstream inventory:
-one full tagged or digest-pinned image reference per line, not mirror
-destinations. Derive the tag-only repository input below for ITMS policy
-enforcement. Digest-pinned entries are checked against IDMS separately;
-ensure their generated IDMS entries also use `NeverContactSource` before
-applying them through Category A's mirror-resource application step.
-A first mirror does not require a running OSAC API or installed CDI.
+Examples for the manual review (all sources below are ordinary prefixes):
 
-<!-- Moved to operators.md §Selected DiskImage inventory export. See docs/guides/installation/disconnected/operators.md -->
+| Selected repository | Rules | Result |
+| --- | --- | --- |
+| `quay.io/team/disk` | Safe `quay.io/team` to `mirror.example/team` | Applicable; check `mirror.example/team/disk:<selected-tag>` |
+| `quay.io/team/disk-evil` | Only safe `quay.io/team/disk` | No coverage: prefix boundary does not match |
+| `quay.io/team/disk` | Safe `quay.io/team`, unsafe `quay.io/team/disk` | Reject: the more-specific rule wins |
+| `quay.io/team/disk` | Two entries for `quay.io/team/disk`, one unsafe | Reject: inspect all entries for the effective source |
 
-```bash
-
-grep -q '[^[:space:]]' selected-diskimage-images.txt || {
-  echo "ERROR: no selected registry DiskImage sources found" >&2
-  exit 1
-}
-
-sed 's|^docker://||; /@/d; s/:[^/:]*$//' selected-diskimage-images.txt | \
-  sort -u > selected-diskimage-sources.txt
-
-jq -Rn '[inputs] | map(select(length > 0))' \
-  < selected-diskimage-sources.txt > selected-diskimage-sources.json
-
-for itms_name in $(oc get itms -o json | \
-  jq -r --slurpfile selected selected-diskimage-sources.json \
-  '$selected[0] as $sel | [.items[] | select(any(.spec.imageTagMirrors[]?; .source as $src | (.mirrors // []) as $mirs | any($sel[]; . as $s | $s == $src or startswith($src + "/") or any($mirs[]; . as $m | $s == $m or ($s | startswith($m + "/"))))))] | unique_by(.metadata.name)[] | .metadata.name'); do
-
-  oc get itms "$itms_name" -o json | \
-    jq -c --slurpfile selected selected-diskimage-sources.json \
-    '$selected[0] as $sel | .spec.imageTagMirrors |= map(.source as $src | (.mirrors // []) as $mirs | if any($sel[]; . as $s | $s == $src or startswith($src + "/") or any($mirs[]; . as $m | $s == $m or ($s | startswith($m + "/")))) then . + {mirrorSourcePolicy: "NeverContactSource"} else . end)' | \
-    oc apply -f -
-
-done
-```
-
-Verify every selected source exists and is fail-closed:
-
-```bash
-# ----- ITMS/IDMS NeverContactSource enforcement -----
-#
-# Intentionally stricter than prefix matching — avoids false positives:
-#   Negative fixture 1: source "quay.io/team/disk" must NOT cover
-#     "quay.io/team/disk-evil" (prefix overlap, different repo)
-#   Negative fixture 2: a safe broad parent must NOT hide an unsafe
-#     more-specific child rule
-
-grep -q '[^[:space:]]' selected-diskimage-images.txt || {
-  echo "ERROR: no selected registry DiskImage sources found" >&2
-  exit 1
-}
-
-ITMS_JSON=$(oc get itms -o json) || {
-  echo "ERROR: cannot retrieve ImageTagMirrorSet resources" >&2
-  exit 1
-}
-IDMS_JSON=$(oc get idms -o json) || {
-  echo "ERROR: cannot retrieve ImageDigestMirrorSet resources" >&2
-  exit 1
-}
-
-fail=0
-while IFS= read -r image_ref || [ -n "$image_ref" ]; do
-  [ -n "$image_ref" ] || continue
-  image_ref=${image_ref#docker://}
-  if [[ "$image_ref" == *@* ]]; then
-    img=${image_ref%@*}
-    img=$(printf '%s\n' "$img" | sed 's/:[^/:]*$//')
-    policy_kind=IDMS
-    policy_field=imageDigestMirrors
-    policy_json=$IDMS_JSON
-  else
-    img=${image_ref%:*}
-    policy_kind=ITMS
-    policy_field=imageTagMirrors
-    policy_json=$ITMS_JSON
-  fi
-
-  # Require at least one EXACT source match (not prefix)
-  exact_count=$(echo "$policy_json" | jq -r \
-    --arg img "$img" --arg field "$policy_field" \
-    '[.items[].spec[$field][]? | select(.source == $img)] | length') || {
-    echo "ERROR: cannot inspect $policy_kind entries for $img" >&2
-    exit 1
-  }
-  if [ "$exact_count" -eq 0 ]; then
-    echo "FAIL: no exact $policy_kind entry for $img" >&2
-    fail=1
-    continue
-  fi
-
-  # ALL exact-match entries must have NeverContactSource and
-  # non-empty mirrors — a safe broad parent cannot hide an unsafe
-  # more-specific child rule
-  unsafe=$(echo "$policy_json" | jq -r \
-    --arg img "$img" --arg field "$policy_field" \
-    '[.items[].spec[$field][]? |
-      select(.source == $img) |
-      select(.mirrorSourcePolicy != "NeverContactSource" or
-             ((.mirrors // []) | length) == 0)] | length') || {
-    echo "ERROR: cannot inspect $policy_kind safety for $img" >&2
-    exit 1
-  }
-  if [ "$unsafe" -ne 0 ]; then
-    echo "FAIL: $img has $unsafe $policy_kind entries without" \
-      "NeverContactSource or with empty mirrors" >&2
-    fail=1
-  fi
-done < selected-diskimage-images.txt
-
-if [ "$fail" -ne 0 ]; then
-  exit 1
-fi
-echo "PASS: all selected sources have enforced ITMS/IDMS NeverContactSource"
-```
+An exact-tag mirror read and ITMS review are not CDI import acceptance.
+Complete the separate CDI gate in `installation.md` after product preparation.
 
 ## Consumer handoff constraints
 
-Two distinct image-pull paths exist for VMaaS:
+Distinguish node image pulls from CDI registry imports. ITMS/IDMS govern
+matching kubelet/CRI-O image pulls, including Pod images such as
+`virt-launcher`, but their presence alone does not establish CDI routing.
 
-1. **CRI-O / kubelet pulls** — Pod images (e.g. `virt-launcher`)
-   are resolved automatically via ITMS/IDMS.  No extra configuration
-   is needed beyond the cluster-wide mirror sets applied in Step 3.
+CDI's [registry API](https://github.com/kubevirt/containerized-data-importer/blob/15b1fc5958919ae6f50d7165b1ce14a9ce3c8167/staging/src/kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1/types.go#L197-L218)
+distinguishes `pullMethod: pod` (default import) from `pullMethod: node`
+(node-cache import). The pod path uses an importer registry client; the
+[node path](https://github.com/kubevirt/containerized-data-importer/blob/15b1fc5958919ae6f50d7165b1ce14a9ce3c8167/pkg/controller/import-controller.go#L1161-L1188)
+uses the selected registry image as a Pod container image. Do not claim that
+all CDI imports bypass node mirror configuration, or that ITMS alone proves
+an importer registry client's routing.
 
-2. **CDI registry imports** — When a `DataVolume` imports a
-   containerdisk from a registry, CDI pulls it with its own
-   registry client inside the importer pod, which does **not**
-   honour ITMS/IDMS.  OSAC creates the `DataVolume` without a
-   `pullMethod` and without a registry `secretRef`, and CDI
-   leaves `pullMethod` unset, so the importer performs the pull
-   itself rather than letting the kubelet pull the containerdisk
-   as a pod image.  Neither the OSAC API nor the `osac` CLI
-   exposes a way to change this, so the CDI import can be neither
-   redirected through ITMS nor authenticated with registry
-   credentials.
-
-- **Public containerdisk repository** — ensure the repository
-  holding each mirrored containerdisk is public and allows
-  anonymous pulls; the CDI importer performs the registry pull
-  itself and is given no credentials.
+For the installed release, inspect the actual DataVolume source, effective
+pull method, generated Pod images and importer configuration. Qualify its
+source, mirror routing, trust and authentication separately. Where the
+supported client path requires a direct mirror URL, use the supported
+DiskImage lifecycle in `installation.md`. If it supplies no registry
+credentials, the selected mirror repository must support approved anonymous
+reads; do not enable broad anonymous access or assume every CDI path is
+unauthenticated. A successful actual selected-image CDI import remains a
+separate acceptance gate, not a result of this ITMS check.
 <!-- Moved to installation.md §Mirror-backed DiskImage preparation and replacement. See docs/guides/installation/disconnected/installation.md -->
 
 <!-- Moved to installation.md §CDI DataVolume import configuration. See docs/guides/installation/disconnected/installation.md -->
@@ -315,18 +229,9 @@ Two distinct image-pull paths exist for VMaaS:
 
 ## Mirroring artifact checks (`oc`)
 
-Check the generated mirroring-policy resources directly:
-
-```bash
-# ITMS includes containerdisk entries
-oc get itms -o yaml | grep -B5 -A5 "containerdisk"
-
-# NeverContactSource is set on containerdisk ITMS entries
-oc get itms -o json | \
-  jq '[.items[].spec.imageTagMirrors[] |
-    select(.source | test("containerdisk|rhel-guest")) |
-    {source, mirrorSourcePolicy}]'
-```
+Use Category A's all-entry pre-apply check and the required coverage and
+exact-tag review above. A name-pattern search for `containerdisk` or
+`rhel-guest` cannot establish coverage of the selected image inventory.
 
 <!-- Moved to installation.md §CDI health and configuration diagnostics. See docs/guides/installation/disconnected/installation.md -->
 
@@ -342,13 +247,10 @@ oc get itms -o json | \
 
 ## Known Gaps / Limitations
 
-1. **`pullMethod` not settable through OSAC** — The CDI `pullMethod`
-   setting is per-`DataVolume`, not a global CDI config.  OSAC
-   creates the `DataVolume` without it and CDI keeps it unset, so
-   the importer pulls the containerdisk itself; neither the OSAC
-   API nor the `osac` CLI exposes a way to change it, so CDI
-   registry imports always bypass ITMS/IDMS and run
-   unauthenticated.
+1. **Release-specific CDI path** — Qualify the installed release's effective
+   registry pull method and supported OSAC source/authentication settings.
+   Do not assume a global CDI option changes every DataVolume's import path,
+   or that a node image pull proves importer-client mirror routing.
 
 <!-- Moved to installation.md §Mirror-backed DiskImage preparation. See docs/guides/installation/disconnected/installation.md -->
 

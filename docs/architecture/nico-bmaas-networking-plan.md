@@ -15,13 +15,13 @@ before general tenant use.
 - Keep the current administrator-owned binding file for the first hardware
   test. Its key is `(OSAC tenant ID, OSAC Subnet ID)` and its value is the
   complete AWX credential ID set. The NICo credential holds the NICo tenant
-  org/ID, VPC, Instance Type, boot source, and scoped REST identities. The
-  AAP role checks the OSAC IDs again before NICo calls. This is *manual*
-  onboarding, not automatic Tenant creation in NICo.
+  org/ID, VPC, Instance Type or target Machine, boot source, and scoped REST
+  identities. The AAP role checks the OSAC IDs again before NICo calls. This
+  is *manual* onboarding, not automatic Tenant creation in NICo.
 - Make NICo's network virtualization type explicit in the credential. The
   standalone BMI module accepts `FLAT`, `ETHERNET_VIRTUALIZER`, or `FNN`.
   Delete and cleanup-to-Ready remain the same for all three types.
-- For the Launchpad Flat pilot, an admin must confirm that the OSAC Subnet
+- For an optional Flat pilot, an admin must confirm that the OSAC Subnet
   CIDR represents the site's HostInband range and set
   `NICO_BMAAS_FLAT_IPV4_CIDR` to that exact CIDR. The module requires one
   unique assigned IPv4 address in it. This is a guard against reporting an
@@ -35,7 +35,7 @@ before general tenant use.
 | Site preparation | NICo/site operator | Expected Machines, DPU policy, HostInband or DPU fabric, IP/VNI pools, eligible Instance Types; Machines reach `Ready`. |
 | Provider onboarding | Cloud Provider Admin | OSAC Tenant identity; NICo org/Tenant Account; compute and any required network allocations; approved NICo Site, VPC, and boot artifact. NICo Tenant Account acceptance and IdP membership may require coordination. |
 | Pilot binding | Cloud Infrastructure Admin | The BMF ConfigMap maps OSAC tenant + OSAC Subnet IDs to AWX credential IDs. AWX stores NICo IDs, network mode, and credentials. The binding must survive until all associated BMIs are deleted. |
-| Proposed automated binding | Provider-only reconciler | A durable `NicoTenantBinding` admin resource, keyed by OSAC Tenant and network identity, references a secret/credential by name and records the approved NICo Site, Tenant, VPC, network mode, network resource, and Instance Type mapping. It validates readiness and publishes a condition before a BMI can use it. Exact CRD versus private API placement needs design review. |
+| Proposed automated binding | Provider-only reconciler | A durable `NicoTenantBinding` admin resource, keyed by OSAC Tenant and network identity, references a secret/credential by name and records the approved NICo Site, Tenant, VPC, network mode, network resource, and Instance Type or target Machine mapping. It validates readiness and publishes a condition before a BMI can use it. Exact CRD versus private API placement needs design review. |
 
 The proposed binding is an **administrative** input. The OSAC public tenant
 API cannot infer a NICo IdP org, Site, capacity allocation, VPC, or permitted
@@ -58,8 +58,10 @@ tenant identity used for existing BMIs and keep deletion possible.
    credentials. Missing or mismatched bindings fail before a NICo POST.
 3. AAP checks the configured NICo VPC belongs to the expected NICo Tenant and
    has the configured network virtualization type. It creates or adopts one
-   Instance identified by the BMI UID label. NICo selects an eligible Machine
-   from the approved Instance Type allocation.
+   Instance identified by the BMI UID label. In a pool, NICo selects an eligible
+   Machine from the approved Instance Type allocation. For a one-tray pilot,
+   AAP requests the administrator-approved target Machine ID; NICo requires
+   effective targeted Instance creation capability for that Site.
 4. AAP observes the Instance, reports its Instance ID, Machine ID, and one
    unambiguous assigned IP. BMF persists the IDs and reports BMI progress.
    NICo `Ready` alone does not prove that a guest OS installed or that packets
@@ -129,11 +131,12 @@ needs design review before declaring general BMaaS networking parity.
    from the configured OSAC Subnet CIDR. Unit-test Flat, ETV, and FNN bodies
    and fail-closed cases. Machine-a-Tron has DPU-backed hosts and cannot
    validate the zero-DPU data path.
-2. Launchpad preflight: confirm an approved zero-DPU pool, current NICo
-   Tenant/org, compute allocation, Flat VPC, HostInband binding, OSAC Subnet
-   CIDR, REST credentials/CA, and real boot artifact. Capture a sanitized
-   Flat Instance GET response to verify where this site exposes resolved
-   interfaces before an OSAC BMI create.
+2. Launchpad FNN preflight: confirm the approved DPU-backed Machine is
+   unassigned `Ready`, the NICo Tenant Account permits targeted creation at
+   the Site, the compute and IP Block allocations are registered, and the
+   FNN VPC and VPC Prefix are Ready. Verify the OSAC Subnet represents the
+   same IPv4 range, REST credentials/CA work, and a real ARM64 boot artifact
+   is available before an OSAC BMI create.
 3. Run one real BMI create/status/delete. Verify installed-OS/packet behavior
    separately from NICo Instance `Ready`; verify the exact original Machine
    returns to unassigned `Ready` before OSAC removes the BMI.

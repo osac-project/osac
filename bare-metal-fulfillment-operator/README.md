@@ -214,6 +214,13 @@ secret store or an authorization boundary for administrators who can edit AWX.
 The NICo credential also selects the VPC network type. The default
 `NICO_BMAAS_NETWORK_VIRTUALIZATION_TYPE=ETHERNET_VIRTUALIZER` requires
 `NICO_BMAAS_SUBNET_ID`; `FNN` requires `NICO_BMAAS_VPC_PREFIX_ID`.
+For placement, set exactly one of `NICO_BMAAS_INSTANCE_TYPE_ID` or
+`NICO_BMAAS_TARGET_MACHINE_ID`. The latter pins creation to one
+administrator-approved Machine and requires the NICo tenant account's
+`targetedInstanceCreation` capability at the VPC's Site. The role checks that
+the Machine is unassigned `Ready` at that Site before POST and confirms the
+returned Instance uses the same Machine. The readiness check does not reserve
+the Machine; a competing allocation can still cause the create to fail.
 For `FLAT`, both IDs must be empty and `NICO_BMAAS_FLAT_IPV4_CIDR` must be
 the administrator-verified IPv4 CIDR of the bound OSAC Subnet and NICo
 HostInband range. The role verifies the NICo VPC type and selects exactly one

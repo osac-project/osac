@@ -44,13 +44,31 @@ NICo role sends one physical interface referencing the VPC Prefix. Validate
 the actual Ready Instance GET response and installed OS connectivity on this
 site before treating BMI `Ready` as a completed BMaaS test.
 
-The onboarding example explicitly targets a `machineId`. The current OSAC
-module instead requires an Instance Type ID and lets NICo choose a Machine.
-Use an approved, isolated Instance Type allocation for the first test, or add
-and verify Machine targeting before creating an Instance. Obtain a standalone
-ARM64 OS/boot artifact for BMaaS; the InfraEnv iPXE script in the onboarding
-notes installs hosted-cluster workers. Keep the site/DPU onboarding and switch
-configuration under the NICo site owner's control.
+List OSAC Subnets from the **VM's Kind context**. The `subnet-uuid` label is
+the public Subnet ID used in the BMI attachment and tenant binding; the
+Kubernetes object name is a separate generated name:
+
+```bash
+kubectl get subnets.osac.openshift.io -A -o json |
+  jq -r '.items[] | [.metadata.labels["osac.openshift.io/subnet-uuid"],
+    .metadata.annotations["osac.openshift.io/tenant"], .spec.ipv4Cidr,
+    .status.phase] | @tsv'
+```
+
+Verify that the intended tenant has a `Ready` Subnet matching the approved NICo
+VPC Prefix CIDR. If none exists, provision one through the OSAC tenant network
+workflow before adding its public ID to the binding.
+
+The first hardware test targets one approved tray. Set
+`NICO_BMAAS_TARGET_MACHINE_ID` in its administrator-owned AWX credential and
+leave `NICO_BMAAS_INSTANCE_TYPE_ID` empty. Verify that the tenant account is
+`Ready` with effective `targetedInstanceCreation` for the VPC's Site, and
+that the selected host Machine is unassigned `Ready` with its expected DPU.
+The module checks the Machine and VPC Site before POST and verifies the
+returned Machine ID. This check does not reserve the Machine. Obtain a
+standalone ARM64 OS/boot artifact for BMaaS; the InfraEnv iPXE script in the
+onboarding notes installs hosted-cluster workers. Keep the site/DPU onboarding
+and switch configuration under the NICo site owner's control.
 
 The Flat-network guidance below records an alternative zero-DPU path; it is
 not the current Launchpad pilot target.
@@ -91,13 +109,12 @@ representation before an OSAC BMI create. See the
 [Flat VPC guide](https://docs.nvidia.com/infra-controller/documentation/operations-day-2/managing-vp-cs/flat-vp-cs-and-zero-dpu-hosts)
 and [Instance create API](https://docs.nvidia.com/infra-controller/rest-api-reference/api-reference/instance/create-instance).
 
-The current NICo module requests an Instance Type; it does not request a
-Machine ID. NICo chooses an eligible Machine and the module records its ID
-after creation. Use an isolated eligible pool for a first hardware test, or
-add and verify explicit Machine targeting before issuing a create. Check the
-approved Machine's NICo state and assignment through NICo, not with ICMP.
-One tray failed ping from the VM while another answered; these results do not
-establish either Machine's NICo allocation state.
+For later pool-based tests, set `NICO_BMAAS_INSTANCE_TYPE_ID` and leave the
+target Machine ID empty. NICo then chooses an eligible Machine and the module
+records its ID after creation. Check an approved Machine's NICo state and
+assignment through NICo, not with ICMP. One tray failed ping from the VM
+while another answered; these results do not establish either Machine's NICo
+allocation state.
 
 NICo's [Instance create API](https://docs.nvidia.com/infra-controller/rest-api-reference/api-reference/instance/create-instance)
 supports `machineId` only when the tenant has Targeted Instance Creation
@@ -245,6 +262,6 @@ versions/digests in a private deployment inventory. Define a repeatable,
 secret-safe AWX credential and ConfigMap provisioning procedure for each
 OSAC-to-NICo tenant/Subnet binding. Numeric AWX credential IDs must be
 rediscovered if AWX is recreated. The live NVIDIA hardware flow remains
-untested until the site owner designates a safe pool and supplies tenant and
-boot inputs. If the hub uses Flat VPCs, the NICo module and OSAC network
-binding also need the Flat-mode work described above before a BMI create.
+untested until the standalone BMaaS boot source and OSAC tenant/Subnet binding
+are verified. A later Flat VPC pilot needs a zero-DPU pool and a verified
+HostInband-to-OSAC Subnet mapping.

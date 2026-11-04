@@ -21,6 +21,7 @@
     name: "osac-{{ bare_metal_instance.metadata.uid }}"
     vpc_id: "{{ nico_bmaas_vpc_id }}"
     instance_type_id: "{{ nico_bmaas_instance_type_id }}"
+    target_machine_id: "{{ nico_bmaas_target_machine_id }}"
     subnet_id: "{{ nico_bmaas_subnet_id }}"
     vpc_prefix_id: "{{ nico_bmaas_vpc_prefix_id }}"
     network_virtualization_type: "{{ nico_bmaas_network_virtualization_type }}"

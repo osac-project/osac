@@ -14,6 +14,8 @@ nico_bmaas_osac_tenant_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_OSAC_TE
 nico_bmaas_osac_subnet_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_OSAC_SUBNET_ID') }}"
 nico_bmaas_vpc_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_VPC_ID') }}"
 nico_bmaas_instance_type_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_INSTANCE_TYPE_ID') }}"
+# Pin a pilot to one approved Machine instead of using an Instance Type pool.
+nico_bmaas_target_machine_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_TARGET_MACHINE_ID') }}"
 nico_bmaas_subnet_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_SUBNET_ID') }}"
 nico_bmaas_vpc_prefix_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_VPC_PREFIX_ID') }}"
 # FLAT uses autoNetwork and no NICo Subnet/Prefix. Its expected CIDR must

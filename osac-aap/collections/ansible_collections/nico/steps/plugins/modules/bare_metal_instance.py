@@ -75,6 +75,11 @@ options:
     type: str
   instance_type_id:
     type: str
+  target_machine_id:
+    type: str
+    description:
+      - Administrator-selected Machine for targeted creation. Use instead of instance_type_id.
+      - The NICo tenant account must permit targeted Instance creation at the VPC's Site.
   subnet_id:
     type: str
   vpc_prefix_id:
@@ -288,9 +293,12 @@ def assigned_ip(instance, params):
 
 def ensure_present(client):
     params = client.params
-    for key in ("name", "vpc_id", "instance_type_id"):
+    for key in ("name", "vpc_id"):
         if not params[key]:
             raise NicoError(f"{key} is required for Instance create")
+    target_machine_id = params["target_machine_id"]
+    if bool(params["instance_type_id"]) == bool(target_machine_id):
+        raise NicoError("configure exactly one of instance_type_id or target_machine_id")
     validate_network_configuration(params)
     if not params["operating_system_id"] and not params["ipxe_script"]:
         raise NicoError("operating_system_id or ipxe_script is required")
@@ -320,10 +328,19 @@ def ensure_present(client):
         else:
             if not params["create_allowed"]:
                 raise NicoError("Instance not found; create intent must be durably authorized before POST")
+            if target_machine_id:
+                machine = get_or_none(client, "provider", machine_path(target_machine_id))
+                if machine is None:
+                    raise NicoError("target Machine is absent from provider inventory")
+                if not vpc.get("siteId") or machine.get("siteId") != vpc["siteId"]:
+                    raise NicoError("target Machine and configured VPC are not at the same Site")
+                if machine.get("status") != "Ready" or machine.get("instanceId") is not None:
+                    raise NicoError("target Machine is not unassigned Ready")
             body = {"name": params["name"], "tenantId": params["tenant_id"],
-                    "vpcId": params["vpc_id"], "instanceTypeId": params["instance_type_id"],
+                    "vpcId": params["vpc_id"],
                     "labels": {"osacBmiUid": params["bmi_uid"]},
                     "phoneHomeEnabled": False}
+            body["machineId" if target_machine_id else "instanceTypeId"] = target_machine_id or params["instance_type_id"]
             if params["network_virtualization_type"] == "FLAT":
                 body["autoNetwork"] = True
             else:
@@ -344,8 +361,13 @@ def ensure_present(client):
         raise NicoError("NICo Instance response has no ID; verify Site allocation before retrying")
     instance = wait_for_instance(client, instance_id, params["timeout"], params["poll_interval"])
     assert_owned(instance, params, params["machine_id"])
-    if instance.get("vpcId") != params["vpc_id"] or instance.get("instanceTypeId") != params["instance_type_id"]:
-        raise NicoError("Ready Instance VPC or Instance Type differs from the configured BMI backend")
+    if instance.get("vpcId") != params["vpc_id"]:
+        raise NicoError("Ready Instance VPC differs from the configured BMI backend")
+    if target_machine_id:
+        if instance.get("machineId") != target_machine_id:
+            raise NicoError("Ready Instance Machine differs from the configured target Machine")
+    elif instance.get("instanceTypeId") != params["instance_type_id"]:
+        raise NicoError("Ready Instance Type differs from the configured BMI backend")
     address = assigned_ip(instance, params)
     machine_id = instance.get("machineId")
     if not machine_id:
@@ -396,6 +418,7 @@ def main():
         instance_id=dict(type="str", default=""), machine_id=dict(type="str", default=""),
         create_allowed=dict(type="bool", default=False), name=dict(type="str", default=""),
         vpc_id=dict(type="str", default=""), instance_type_id=dict(type="str", default=""),
+        target_machine_id=dict(type="str", default=""),
         subnet_id=dict(type="str", default=""), vpc_prefix_id=dict(type="str", default=""),
         network_virtualization_type=dict(type="str", default="ETHERNET_VIRTUALIZER",
                                          choices=["ETHERNET_VIRTUALIZER", "FNN", "FLAT"]),

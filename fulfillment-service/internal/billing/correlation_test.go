@@ -56,6 +56,26 @@ func (a *endlessPagesAdapter) ListAccounts(ctx context.Context, filter billing.A
 	return result, nil
 }
 
+// foreignCarrierAdapter wraps a fake so every exact-value uniqueness scan reports one extra foreign account
+// carrying the scanned value. A generated candidate is unknowable in advance, so this is how a test scripts
+// "some other provider account already holds the fresh value" for the generate branch.
+type foreignCarrierAdapter struct {
+	*billingfake.Fake
+}
+
+func (a *foreignCarrierAdapter) ListAccounts(ctx context.Context, filter billing.AccountFilter, page billing.Page) (billing.AccountPage, error) {
+	result, err := a.Fake.ListAccounts(ctx, filter, page)
+	if err != nil {
+		return result, err
+	}
+	if filter.ExternalID != "" {
+		result.Accounts = append(result.Accounts, billing.Account{
+			Ref: billing.NewAccountRef("acct-foreign"), ExternalID: filter.ExternalID, State: billing.AccountActive,
+		})
+	}
+	return result, nil
+}
+
 var _ = Describe("ResolveAccountCorrelationID", func() {
 	ctx := context.Background()
 	const acctID = "ba-1"
@@ -285,6 +305,42 @@ var _ = Describe("ResolveAccountCorrelationID", func() {
 		Expect(errors.As(err, &correlationErr)).To(BeTrue())
 		Expect(correlationErr.Reason).To(Equal(billing.ReasonAccountAmbiguous))
 		Expect(fake.Count("SetCorrelationValue")).To(Equal(0), "must not write before the uniqueness check passes")
+	})
+
+	DescribeTable("rejects a single foreign carrier before any provider write when adopting an OSAC-only value",
+		func(correlationWrite bool) {
+			fake := billingfake.New(billingfake.Scenario{
+				CorrelationWrite: correlationWrite,
+				Accounts: []billingfake.AccountSpec{
+					{ID: providerAcctID}, // the assigned account: no correlation value yet
+					{ID: "acct-2", ExternalID: "osac-1"},
+				},
+			})
+			res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
+				Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "osac-1", LocalDuplicate: noDuplicate,
+			})
+			Expect(res).To(Equal(billing.Resolution{}))
+			var correlationErr *billing.CorrelationResolutionError
+			Expect(errors.As(err, &correlationErr)).To(BeTrue())
+			Expect(correlationErr.Reason).To(Equal(billing.ReasonAccountAmbiguous))
+			// The write-capable entry is the orphaned-write regression: the value must never reach the
+			// provider when a foreign account already carries it.
+			Expect(fake.Count("SetCorrelationValue")).To(Equal(0), "must not write before rejecting the foreign carrier")
+		},
+		Entry("read-only adapter (M360)", false),
+		Entry("write-capable adapter", true),
+	)
+
+	It("rejects a single foreign carrier of a freshly generated value before any provider write", func() {
+		fake := &foreignCarrierAdapter{Fake: newFake(true, "")}
+		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
+			Adapter: fake, AccountID: acctID, Ref: ref, LocalDuplicate: noDuplicate,
+		})
+		Expect(res).To(Equal(billing.Resolution{}))
+		var correlationErr *billing.CorrelationResolutionError
+		Expect(errors.As(err, &correlationErr)).To(BeTrue())
+		Expect(correlationErr.Reason).To(Equal(billing.ReasonAccountAmbiguous))
+		Expect(fake.Count("SetCorrelationValue")).To(Equal(0), "must not write before rejecting the foreign carrier")
 	})
 
 	It("is idempotent: a second call after a successful write adopts the now-consistent value without writing again", func() {

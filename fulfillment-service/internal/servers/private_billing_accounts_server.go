@@ -43,7 +43,7 @@ const billingAccountsDiscoverFreshness = 30 * time.Second
 // defaultDiscoverDeadline bounds one discovery walk. The M360 transport's own retry budget already cuts off a
 // hanging provider on the first page (four 10-second attempts plus backoff, about 42 seconds); the deadline
 // bounds the remaining case, a slow-but-succeeding provider whose up-to-billing.MaxListPages pages could
-// otherwise stretch the walk - and the request transaction it pins - for many minutes. Two minutes fits a full
+// otherwise stretch the walk - and the List call waiting on it - for many minutes. Two minutes fits a full
 // healthy 50-page walk with margin. It is a per-process default: OSAC-6894 owns wiring the chart's
 // OSAC_BILLING_* tuning to it.
 const defaultDiscoverDeadline = 2 * time.Minute
@@ -56,8 +56,7 @@ const defaultDiscoverDeadline = 2 * time.Minute
 const defaultDiscoverFailureBackoff = 10 * time.Second
 
 // errDiscoveryInProgress reports that another List's discovery walk is still running: this List fails fast as
-// UNAVAILABLE rather than queue its request transaction - and the pool connection that transaction pins -
-// behind the in-flight walk.
+// UNAVAILABLE rather than stack a second walk behind the in-flight one.
 var errDiscoveryInProgress = errors.New("billing account discovery is already in progress")
 
 // errDiscoveryBackoff reports that a recent discovery attempt failed and the failure backoff window is still
@@ -134,32 +133,36 @@ func (b *PrivateBillingAccountsServerBuilder) Build() (result *PrivateBillingAcc
 // the whole call with UNAVAILABLE: this method never falls back to serving the stored record unmarked as current
 // - only a successful discovery opens a freshness window, and a failed one is retried once the failure backoff
 // has elapsed, so a polling client cannot stack one full walk per List. At most one walk runs at a time: a List
-// that arrives while another's walk is still running fails fast the same way rather than queue its request
-// transaction - and the pool connection that transaction pins - behind it. A discovery that exceeds
-// s.discoverDeadline fails the same way rather than pinning the request's transaction indefinitely.
+// that arrives while another's walk is still running fails fast the same way rather than queue behind it. A
+// discovery that exceeds s.discoverDeadline fails the same way rather than hanging the List indefinitely.
+//
+// This handler owns its transaction scopes instead of running in the interceptor's per-request transaction
+// (BillingAccounts/List is a manager-only method, see database_tx_interceptor.go): the discovery walk holds no
+// database transaction - and pins no pool connection - while reading the provider, the walk's results are
+// stored by one short independent transaction that commits everything or nothing, and the page read runs in its
+// own short transaction that observes only durably committed discovery results.
 func (s *PrivateBillingAccountsServer) List(ctx context.Context,
 	request *privatev1.BillingAccountsListRequest) (response *privatev1.BillingAccountsListResponse, err error) {
 	if _, err = requireAdapter(s.provider); err != nil {
 		return nil, err
 	}
 
-	tx, err := database.TxFromContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// Report every error below to the transaction: a handler's returned error does not by itself roll back the
-	// per-request transaction (see database_tx_interceptor.go), so without this a discovery failure partway
-	// through pagination would still commit whatever accounts were upserted before the failure.
-	defer tx.ReportError(&err)
-
-	if err = s.discoverSync(ctx, tx); err != nil {
+	if err = s.discoverSync(ctx); err != nil {
 		s.logger.WarnContext(ctx, "Billing account discovery failed", slog.Any("error", err))
 		return nil, mapBillingDiscoveryError(err)
 	}
 
-	// An unset limit serves the DAO's default page; an explicit one is clamped to its maximum.
-	rows, total, err := database.ListBillingAccounts(
-		ctx, tx, request.GetOffset(), request.GetLimit(), request.GetFilter(), request.GetOrder())
+	// An unset limit serves the DAO's default page; an explicit one is clamped to its maximum. The read runs in
+	// its own short transaction so it observes only committed discovery results, never uncommitted state.
+	page, err := database.WithNewTx(ctx, func(ctx context.Context) (billingAccountsPage, error) {
+		tx, txErr := database.TxFromContext(ctx)
+		if txErr != nil {
+			return billingAccountsPage{}, txErr
+		}
+		rows, total, listErr := database.ListBillingAccounts(
+			ctx, tx, request.GetOffset(), request.GetLimit(), request.GetFilter(), request.GetOrder())
+		return billingAccountsPage{rows: rows, total: total}, listErr
+	})
 	if err != nil {
 		var invalid *database.ErrInvalidFlatTableQuery
 		if errors.As(err, &invalid) {
@@ -169,25 +172,33 @@ func (s *PrivateBillingAccountsServer) List(ctx context.Context,
 		return nil, status.Errorf(codes.Internal, "failed to list billing accounts")
 	}
 
-	items := make([]*privatev1.BillingAccount, 0, len(rows))
-	for _, row := range rows {
+	items := make([]*privatev1.BillingAccount, 0, len(page.rows))
+	for _, row := range page.rows {
 		items = append(items, toPrivateBillingAccount(row))
 	}
 	response = privatev1.BillingAccountsListResponse_builder{
 		Size:  int32(len(items)), // #nosec G115 -- bounded by page size
-		Total: total,
+		Total: page.total,
 		Items: items,
 	}.Build()
 	return response, nil
 }
 
+// billingAccountsPage carries one List read's rows and total out of the short transaction
+// database.WithNewTx runs it in.
+type billingAccountsPage struct {
+	rows  []database.BillingAccountRow
+	total int32
+}
+
 // discoverSync refreshes the stored account page when it is stale. At most one walk runs at a time: a List that
-// arrives while another's walk is running fails fast with errDiscoveryInProgress rather than queue its request
-// transaction behind the walk. A failed walk records when it ended and opens the failure backoff window: Lists
-// inside that window fail fast with errDiscoveryBackoff, again never serving the stored record unmarked as
-// current. Only a successful walk opens the freshness window. All timestamps and the in-flight flag are guarded
-// by discoverMu; the walk itself runs with the mutex released.
-func (s *PrivateBillingAccountsServer) discoverSync(ctx context.Context, tx database.Tx) error {
+// arrives while another's walk is running fails fast with errDiscoveryInProgress rather than stack a second
+// walk behind it. A failed walk records when it ended and opens the failure backoff window: Lists inside that
+// window fail fast with errDiscoveryBackoff, again never serving the stored record unmarked as current. Only a
+// walk whose store transaction committed durably opens the freshness window: lastDiscovery is set after
+// discoverFresh returns nil, which is after database.WithNewTx has committed the walk's writes. All timestamps
+// and the in-flight flag are guarded by discoverMu; the walk itself runs with the mutex released.
+func (s *PrivateBillingAccountsServer) discoverSync(ctx context.Context) error {
 	s.discoverMu.Lock()
 	if time.Since(s.lastDiscovery) < billingAccountsDiscoverFreshness {
 		s.discoverMu.Unlock()
@@ -209,7 +220,7 @@ func (s *PrivateBillingAccountsServer) discoverSync(ctx context.Context, tx data
 		s.discoverMu.Unlock()
 	}()
 
-	err := s.discoverFresh(ctx, tx)
+	err := s.discoverFresh(ctx)
 	if err != nil {
 		s.discoverMu.Lock()
 		s.lastDiscoveryFailure = time.Now()
@@ -222,18 +233,26 @@ func (s *PrivateBillingAccountsServer) discoverSync(ctx context.Context, tx data
 	return nil
 }
 
-// discoverFresh builds the provider adapter and runs one discovery walk under s.discoverDeadline. The deadline
-// covers the walk's provider reads and its upserts alike: discovery runs inside the caller's request
-// transaction, so an unbounded walk would pin that transaction's pool connection for as long as the provider
-// cares to stretch it.
-func (s *PrivateBillingAccountsServer) discoverFresh(ctx context.Context, tx database.Tx) error {
+// discoverFresh builds the provider adapter and runs one discovery walk under s.discoverDeadline. The walk has
+// two phases. fetch reads every provider page into memory under the deadline with no database transaction
+// open, so no pool connection is pinned while the provider answers. store then applies the fetched accounts in
+// one short independent transaction (database.WithNewTx) that commits the whole walk - upserts and unobserved
+// sweep together - or rolls back entirely. The deadline covers both phases: a provider that stretches the
+// fetch, or a store that cannot finish, both cut off rather than hang the List.
+func (s *PrivateBillingAccountsServer) discoverFresh(ctx context.Context) error {
 	adapter, err := s.provider.Adapter()
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.discoverDeadline)
 	defer cancel()
-	return s.discover(ctx, tx, adapter)
+	// The observation timestamp marks when this walk read the provider, not when its rows are stored.
+	observedAt := time.Now().UTC()
+	accounts, err := s.fetchAccounts(ctx, adapter)
+	if err != nil {
+		return err
+	}
+	return s.storeAccounts(ctx, accounts, observedAt)
 }
 
 // mapBillingDiscoveryError classifies a discovery failure: an unavailable or timed-out provider is
@@ -275,40 +294,66 @@ func mapBillingAccountState(state string) privatev1.BillingAccountState {
 	}
 }
 
-// discover pages through every provider account (page size capped at billingAccountsDiscoverPageSize), upserting
-// one billing_accounts row per account, then marks UNKNOWN any previously known account under this provider that
-// the provider no longer returned - it retains the row rather than deleting it. The paging bound and its
-// MALFORMED terminal are billing.ForEachAccount's. seen starts as an empty, never nil, slice: a provider whose
-// list has become empty must still mark every previously known account UNKNOWN, and pgx encodes a nil slice as
-// SQL NULL, which the sweep's not-in predicate would never match.
-func (s *PrivateBillingAccountsServer) discover(ctx context.Context, tx database.Tx, adapter billing.Adapter) error {
-	providerKey := s.provider.Key()
-	observedAt := time.Now().UTC()
-	seen := []string{}
-	upsert := func(account billing.Account) error {
-		seen = append(seen, account.Ref.ID())
-		_, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-			ID:                       uuid.New(),
-			ProviderKey:              providerKey,
-			ProviderAccountReference: account.Ref.ID(),
-			// The display name is provider-supplied free text and is stored sanitized; the correlation
-			// value is stored raw because the resolver must compare it exactly against the provider's
-			// live value - the CLI sanitizes it for display instead.
-			DisplayName:      billing.SanitizeProviderText(account.Name),
-			BaseCurrency:     validCurrency(account.BaseCurrency),
-			CorrelationID:    account.ExternalID,
-			State:            string(account.State),
-			StatusObservedAt: observedAt,
-		})
-		return err
-	}
+// fetchAccounts reads the provider's full account list into memory. No database transaction - and no pool
+// connection - is held while the provider answers: interleaving provider reads with upserts on one long
+// transaction would pin that transaction's connection for the whole walk. Memory stays bounded because the
+// walk itself is bounded: at most billing.MaxListPages pages of at most billingAccountsDiscoverPageSize
+// accounts each. The paging bound and its MALFORMED terminal are billing.ForEachAccount's.
+func (s *PrivateBillingAccountsServer) fetchAccounts(
+	ctx context.Context, adapter billing.Adapter) ([]billing.Account, error) {
+	var accounts []billing.Account
 	err := billing.ForEachAccount(
 		ctx, adapter, billing.AccountFilter{},
-		billing.Page{Size: billingAccountsDiscoverPageSize}, upsert)
+		billing.Page{Size: billingAccountsDiscoverPageSize}, func(account billing.Account) error {
+			accounts = append(accounts, account)
+			return nil
+		})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return database.MarkBillingAccountsUnobserved(ctx, tx, providerKey, seen, observedAt)
+	return accounts, nil
+}
+
+// storeAccounts normalizes and persists one fetched walk in a single short independent transaction: every
+// upsert and the unobserved sweep commit together or not at all, so a failure partway through the store leaves
+// no partial rows behind. Each fetched account becomes one billing_accounts row keyed by
+// (ProviderKey, ProviderAccountReference); accounts the provider no longer returns are marked UNKNOWN and
+// retained, never deleted. seen starts as an empty, never nil, slice: a provider whose list has become empty
+// must still mark every previously known account UNKNOWN, and pgx encodes a nil slice as SQL NULL, which the
+// sweep's not-in predicate would never match.
+func (s *PrivateBillingAccountsServer) storeAccounts(
+	ctx context.Context, accounts []billing.Account, observedAt time.Time) error {
+	providerKey := s.provider.Key()
+	seen := []string{}
+	_, err := database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
+		tx, txErr := database.TxFromContext(ctx)
+		if txErr != nil {
+			return struct{}{}, txErr
+		}
+		for _, account := range accounts {
+			seen = append(seen, account.Ref.ID())
+			_, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
+				ID:                       uuid.New(),
+				ProviderKey:              providerKey,
+				ProviderAccountReference: account.Ref.ID(),
+				// The display name is provider-supplied free text and is stored sanitized; the correlation
+				// value is stored raw because the resolver must compare it exactly against the provider's
+				// live value - the CLI sanitizes it for display instead.
+				DisplayName: billing.SanitizeProviderText(account.Name),
+				// M360 supplies no account currency. The design §2.3 rate-card fallback is deferred to
+				// https://redhat.atlassian.net/browse/OSAC-6873; this path assigns no default.
+				BaseCurrency:     validCurrency(account.BaseCurrency),
+				CorrelationID:    account.ExternalID,
+				State:            string(account.State),
+				StatusObservedAt: observedAt,
+			})
+			if err != nil {
+				return struct{}{}, err
+			}
+		}
+		return struct{}{}, database.MarkBillingAccountsUnobserved(ctx, tx, providerKey, seen, observedAt)
+	})
+	return err
 }
 
 // validCurrency returns code unchanged when it is a plausible ISO-4217 alphabetic code (exactly three ASCII

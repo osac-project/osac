@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -137,6 +138,51 @@ var _ = Describe("M360 accounts", func() {
 			Entry("over max", 500, 20),
 			Entry("within bounds", 7, 7),
 		)
+
+		It("fails instead of buffering a native page larger than the size requested", func() {
+			build(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(listBody(0, false, `[{"Id":"a1"},{"Id":"a2"},{"Id":"a3"}]`)))
+			})
+			page, err := adapter.ListAccounts(context.Background(), billing.AccountFilter{}, billing.Page{Size: 2})
+			Expect(reasonOf(err)).To(Equal(billing.ReasonMalformed))
+			Expect(page.Accounts).To(BeNil())
+			Expect((<-queries).Get("size")).To(Equal("2"))
+		})
+
+		It("rejects an oversized native page even when the exact-match filter would narrow it", func() {
+			build(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(listBody(0, false, `[
+					{"Id":"a1","ExternalId":"ext-1","Name":"Acme"},
+					{"Id":"a2","ExternalId":"ext-2","Name":"Acme"},
+					{"Id":"a3","ExternalId":"ext-3","Name":"Acme"}]`)))
+			})
+			page, err := adapter.ListAccounts(context.Background(),
+				billing.AccountFilter{ExternalID: "ext-1"}, billing.Page{Size: 2})
+			Expect(reasonOf(err)).To(Equal(billing.ReasonMalformed))
+			Expect(page.Accounts).To(BeNil(), "the oversized page is rejected before the filter narrows it")
+		})
+
+		It("rejects a native page larger than the clamped maximum even when a larger size was requested", func() {
+			items := make([]string, maxPageSize+1)
+			for i := range items {
+				items[i] = `{"Id":"a` + strconv.Itoa(i) + `"}`
+			}
+			build(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(listBody(0, true, `[`+strings.Join(items, ",")+`]`)))
+			})
+			_, err := adapter.ListAccounts(context.Background(), billing.AccountFilter{}, billing.Page{Size: 500})
+			Expect(reasonOf(err)).To(Equal(billing.ReasonMalformed))
+			Expect((<-queries).Get("size")).To(Equal("20"), "the bound is the clamped size, not the raw request")
+		})
+
+		It("accepts a native page that holds exactly the size requested", func() {
+			build(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(listBody(0, true, `[{"Id":"a1"},{"Id":"a2"}]`)))
+			})
+			page, err := adapter.ListAccounts(context.Background(), billing.AccountFilter{}, billing.Page{Size: 2})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(page.Accounts).To(HaveLen(2))
+		})
 
 		It("returns an empty page without error when the provider has no accounts", func() {
 			build(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(listBody(0, true, `[]`))) })

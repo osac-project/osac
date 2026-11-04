@@ -16,8 +16,10 @@ package database
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -67,6 +69,60 @@ var _ = Describe("Tenant billing assignments", func() {
 		createTenant("tenant-a")
 		createTenant("tenant-b")
 	})
+
+	// newManager creates a transaction manager over the test pool, for opening transactions independent of the
+	// shared one from the BeforeEach above (which stays open, and uncommitted, while a spec runs).
+	newManager := func() TxManager {
+		manager, err := NewTxManager().SetLogger(logger).SetPool(pool).Build()
+		Expect(err).ToNot(HaveOccurred())
+		return manager
+	}
+
+	// runCommitted runs fn in its own transaction and commits it, so the rows it writes are visible to the
+	// independent transactions the concurrency specs below open afterwards. The shared tx cannot be used for
+	// this: its rows stay uncommitted until its DeferCleanup'd End.
+	runCommitted := func(fn func(tx Tx)) {
+		Expect(newManager().Run(ctx, fn)).To(Succeed())
+	}
+
+	// createCommittedTenant inserts a tenant and commits it, so concurrent transactions can reference it. It
+	// deliberately uses names never inserted by the BeforeEach above: inserting 'tenant-a' here would block
+	// on that transaction's uncommitted tenants primary key entry.
+	createCommittedTenant := func(name string) {
+		runCommitted(func(tx Tx) {
+			_, err := tx.Exec(ctx,
+				`insert into tenants (id, name, tenant, creator, data) values ($1, $1, $1, 'system', '{}')
+				 on conflict do nothing`, name)
+			Expect(err).ToNot(HaveOccurred())
+		})
+	}
+
+	// createCommittedAccount inserts a billing account and commits it, so concurrent transactions can
+	// reference it.
+	createCommittedAccount := func(correlationID string) string {
+		id := uuid.New()
+		runCommitted(func(tx Tx) {
+			_, err := UpsertBillingAccount(ctx, tx, BillingAccountUpsert{
+				ID: id, ProviderKey: "m360", ProviderAccountReference: id,
+				CorrelationID: correlationID, State: "ACTIVE",
+			})
+			Expect(err).ToNot(HaveOccurred())
+		})
+		return id
+	}
+
+	// tryAdvisory reports whether the advisory transaction lock for accountID - the exact key
+	// LockBillingAccountForAssignment takes - can be acquired right now, from a fresh independent
+	// transaction. It observes contention without assuming that the production helper itself waits for a
+	// contended lock.
+	tryAdvisory := func(accountID string) bool {
+		var acquired bool
+		runCommitted(func(tx Tx) {
+			Expect(tx.QueryRow(ctx, `select pg_try_advisory_xact_lock(hashtextextended($1, 1))`, accountID).
+				Scan(&acquired)).To(Succeed())
+		})
+		return acquired
+	}
 
 	Describe("CloseAndInsertTenantBillingAssignment", func() {
 		It("opens the first interval for a tenant/account with no prior assignment", func() {
@@ -230,6 +286,103 @@ var _ = Describe("Tenant billing assignments", func() {
 		It("succeeds for any account id without error", func() {
 			Expect(LockBillingAccountForAssignment(ctx, tx, "any-account-id")).To(Succeed())
 		})
+
+		It("holds a real per-account advisory transaction lock: the same account contends, other accounts "+
+			"stay usable, and the lock is released when the transaction ends", func() {
+			accountA := createCommittedAccount("")
+			accountB := createCommittedAccount("")
+			createCommittedTenant("tenant-c")
+			manager := newManager()
+
+			// Account A is locked by txA, on its own connection:
+			txA, err := manager.Begin(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func() { _ = txA.End(ctx) })
+			Expect(LockBillingAccountForAssignment(ctx, txA, accountA)).To(Succeed())
+
+			// A contends: the same advisory lock cannot be taken from an independent transaction. This is
+			// what a no-op lock implementation would fail.
+			Expect(tryAdvisory(accountA)).To(BeFalse(), "account A's advisory lock must be held by txA")
+			// The lock is keyed per account: B's key stays free while A's is held.
+			Expect(tryAdvisory(accountB)).To(BeTrue(), "account B's advisory lock must not be affected")
+
+			// B remains usable end to end while A is locked: an independent transaction locks B, opens B's
+			// active assignment and commits.
+			txB, err := manager.Begin(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func() { _ = txB.End(ctx) })
+			Expect(LockBillingAccountForAssignment(ctx, txB, accountB)).To(Succeed())
+			_, err = CloseAndInsertTenantBillingAssignment(ctx, txB, "", TenantBillingAssignmentInsert{
+				ID: uuid.New(), Name: "asg-b", TenantID: "tenant-c", BillingAccountID: accountB,
+				ConnectionState: "CONNECTED",
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(txB.End(ctx)).To(Succeed())
+
+			// Release after end: committing txA frees A's lock, and A can be acquired again through the
+			// helper.
+			Expect(txA.End(ctx)).To(Succeed())
+			Expect(tryAdvisory(accountA)).To(BeTrue(), "txA's End must have released account A's lock")
+			txC, err := manager.Begin(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func() { _ = txC.End(ctx) })
+			Expect(LockBillingAccountForAssignment(ctx, txC, accountA)).To(Succeed())
+			Expect(tryAdvisory(accountA)).To(BeFalse(), "account A's lock must be held again, now by txC")
+			Expect(txC.End(ctx)).To(Succeed())
+		})
+
+		It("blocks another session waiting for the same account's advisory lock until the holding "+
+			"transaction ends", func() {
+			accountA := createCommittedAccount("")
+			manager := newManager()
+
+			// The holder takes A's lock through the production helper, on its own connection:
+			txA, err := manager.Begin(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func() { _ = txA.End(ctx) })
+			var holderPID int32
+			Expect(txA.QueryRow(ctx, `select pg_backend_pid()`).Scan(&holderPID)).To(Succeed())
+			Expect(LockBillingAccountForAssignment(ctx, txA, accountA)).To(Succeed())
+
+			// The waiter is an independent transaction on a distinct connection, asking for the same lock
+			// with the blocking primitive the helper is built on. The spec uses the raw SQL rather than
+			// LockBillingAccountForAssignment because that helper is allowed to become fail-fast instead
+			// of waiting.
+			txW, err := manager.Begin(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			var waiterPID int32
+			Expect(txW.QueryRow(ctx, `select pg_backend_pid()`).Scan(&waiterPID)).To(Succeed())
+			Expect(waiterPID).ToNot(Equal(holderPID), "the waiter must run on a distinct connection")
+
+			waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			DeferCleanup(cancel)
+			acquired := make(chan error, 1)
+			go func() {
+				_, err := txW.Exec(waitCtx, `select pg_advisory_xact_lock(hashtextextended($1, 1))`, accountA)
+				acquired <- err
+				close(acquired)
+			}()
+
+			// Observe the actual blocking through pg_stat_activity's lock data, not by sleeping:
+			probe, err := pool.Acquire(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(probe.Release)
+			Eventually(func() []int32 {
+				var blockedBy []int32
+				Expect(probe.QueryRow(ctx, `select pg_blocking_pids($1)`, waiterPID).Scan(&blockedBy)).To(Succeed())
+				return blockedBy
+			}, 10*time.Second, 50*time.Millisecond).Should(ContainElement(holderPID),
+				"the waiter must be blocked by the transaction holding account A's lock")
+
+			// Ending the holding transaction releases the lock and lets the waiter take it:
+			Expect(txA.End(ctx)).To(Succeed())
+			var waitErr error
+			Eventually(acquired, 10*time.Second).Should(Receive(&waitErr))
+			Expect(waitErr).ToNot(HaveOccurred())
+			Expect(tryAdvisory(accountA)).To(BeFalse(), "the waiter must now hold account A's lock")
+			Expect(txW.End(ctx)).To(Succeed())
+			Expect(tryAdvisory(accountA)).To(BeTrue(), "the waiter's End must release account A's lock")
+		})
 	})
 
 	Describe("BillingAccountCorrelationConflict and SetBillingAccountCorrelationID", func() {
@@ -284,6 +437,142 @@ var _ = Describe("Tenant billing assignments", func() {
 		It("returns pgx.ErrNoRows for an unknown account", func() {
 			_, err := GetBillingAccountForAssignment(ctx, tx, "no-such-account")
 			Expect(errors.Is(err, pgx.ErrNoRows)).To(BeTrue())
+		})
+	})
+
+	Describe("CloseAndInsertTenantBillingAssignment raced from independent transactions", func() {
+		// raceSecondInsertAgainstHolder opens the winner's active interval on one transaction and connection,
+		// then inserts the loser's from a second, independent transaction. It verifies - through
+		// pg_stat_activity's pg_blocking_pids, not by sleeping - that the raced insert really blocks on the
+		// first transaction's uncommitted unique-index entry, then commits the first transaction and expects
+		// the raced insert to fail on the given partial unique index. It returns the winner's assignment id.
+		raceSecondInsertAgainstHolder := func(winner, loser TenantBillingAssignmentInsert, uniqueIndex string) string {
+			manager := newManager()
+
+			// The first racer opens the active interval on its own transaction; the row and its unique-index
+			// entries stay uncommitted while the race runs:
+			tx1, err := manager.Begin(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			var holderPID int32
+			Expect(tx1.QueryRow(ctx, `select pg_backend_pid()`).Scan(&holderPID)).To(Succeed())
+			winnerID, err := CloseAndInsertTenantBillingAssignment(ctx, tx1, "", winner)
+			Expect(err).ToNot(HaveOccurred())
+
+			// The second racer runs on an independent transaction and a distinct connection:
+			tx2, err := manager.Begin(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			var waiterPID int32
+			Expect(tx2.QueryRow(ctx, `select pg_backend_pid()`).Scan(&waiterPID)).To(Succeed())
+			Expect(waiterPID).ToNot(Equal(holderPID), "the racing inserts must run on distinct connections")
+
+			// The raced insert blocks inside PostgreSQL on tx1's uncommitted index entry. A bounded context
+			// keeps a lost race from hanging the spec.
+			racedCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			racedErr := make(chan error, 1)
+			// DeferCleanup runs LIFO: the holder is ended first (resolving a still-blocked racer), then the
+			// racer's context is canceled, and only then is the waiter's transaction ended, after its
+			// goroutine has finished.
+			DeferCleanup(func() {
+				select {
+				case <-racedErr:
+				case <-time.After(5 * time.Second):
+				}
+				_ = tx2.End(ctx)
+			})
+			DeferCleanup(cancel)
+			go func() {
+				_, err := CloseAndInsertTenantBillingAssignment(racedCtx, tx2, "", loser)
+				tx2.ReportError(&err)
+				racedErr <- err
+				close(racedErr)
+			}()
+			DeferCleanup(func() { _ = tx1.End(ctx) })
+
+			// Observe the actual blocking through pg_stat_activity's lock data - the raced insert must be
+			// waiting on the holder's transaction, not merely "not finished yet":
+			probe, err := pool.Acquire(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(probe.Release)
+			Eventually(func() []int32 {
+				var blockedBy []int32
+				Expect(probe.QueryRow(ctx, `select pg_blocking_pids($1)`, waiterPID).Scan(&blockedBy)).To(Succeed())
+				return blockedBy
+			}, 10*time.Second, 50*time.Millisecond).Should(ContainElement(holderPID),
+				"the raced insert must block on the first racer's transaction")
+
+			// Committing the first racer resolves the race in its favor: the raced insert hits the partial
+			// unique index.
+			Expect(tx1.End(ctx)).To(Succeed())
+			var raced error
+			Eventually(racedErr, 10*time.Second).Should(Receive(&raced))
+			Expect(tx2.End(ctx)).To(Succeed())
+
+			var pgErr *pgconn.PgError
+			Expect(errors.As(raced, &pgErr)).To(BeTrue(),
+				"the raced insert must fail with a PostgreSQL error, got: %v", raced)
+			Expect(pgErr.Code).To(Equal("23505"), "a unique violation, as the server error mapper expects")
+			Expect(pgErr.ConstraintName).To(Equal(uniqueIndex))
+			return winnerID
+		}
+
+		// readActive reads one active assignment row in its own committed transaction, after the race has
+		// been resolved.
+		readActive := func(read func(tx Tx) (TenantBillingAssignmentRow, error)) TenantBillingAssignmentRow {
+			var row TenantBillingAssignmentRow
+			Expect(newManager().Run(ctx, func(tx Tx) error {
+				var err error
+				row, err = read(tx)
+				return err
+			})).To(Succeed())
+			return row
+		}
+
+		It("rejects a raced second active interval for the same tenant", func() {
+			createCommittedTenant("tenant-c")
+			account1 := createCommittedAccount("")
+			account2 := createCommittedAccount("")
+
+			winner := raceSecondInsertAgainstHolder(
+				TenantBillingAssignmentInsert{
+					ID: uuid.New(), Name: "asg-race-first", TenantID: "tenant-c",
+					BillingAccountID: account1, ConnectionState: "CONNECTED",
+				},
+				TenantBillingAssignmentInsert{
+					ID: uuid.New(), Name: "asg-race-second", TenantID: "tenant-c",
+					BillingAccountID: account2, ConnectionState: "CONNECTED",
+				},
+				"tenant_billing_assignments_unique_active_tenant",
+			)
+
+			// The committed winner remains the single active interval for the tenant:
+			active := readActive(func(tx Tx) (TenantBillingAssignmentRow, error) {
+				return GetActiveTenantBillingAssignmentByTenant(ctx, tx, "tenant-c")
+			})
+			Expect(active.ID).To(Equal(winner))
+		})
+
+		It("rejects a raced second active interval for the same billing account", func() {
+			createCommittedTenant("tenant-c")
+			createCommittedTenant("tenant-d")
+			account := createCommittedAccount("")
+
+			winner := raceSecondInsertAgainstHolder(
+				TenantBillingAssignmentInsert{
+					ID: uuid.New(), Name: "asg-race-first", TenantID: "tenant-c",
+					BillingAccountID: account, ConnectionState: "CONNECTED",
+				},
+				TenantBillingAssignmentInsert{
+					ID: uuid.New(), Name: "asg-race-second", TenantID: "tenant-d",
+					BillingAccountID: account, ConnectionState: "CONNECTED",
+				},
+				"tenant_billing_assignments_unique_active_account",
+			)
+
+			// The committed winner remains the single active interval for the account:
+			active := readActive(func(tx Tx) (TenantBillingAssignmentRow, error) {
+				return GetActiveTenantBillingAssignmentByAccount(ctx, tx, account)
+			})
+			Expect(active.ID).To(Equal(winner))
 		})
 	})
 })

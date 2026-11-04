@@ -608,6 +608,15 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	txInterceptor, err := database.NewTxInterceptor().
 		SetLogger(c.logger).
 		SetManager(txManager).
+		AddManagerOnlyMethods(
+			"/osac.public.v1.BillingAccounts/List",
+			"/osac.private.v1.BillingAccounts/List",
+			"/osac.public.v1.TenantBillingAssignments/Create",
+			"/osac.private.v1.TenantBillingAssignments/Create",
+			"/osac.public.v1.TenantBillingAssignments/Update",
+			"/osac.private.v1.TenantBillingAssignments/Update",
+			"/osac.private.v1.TenantBillingAssignments/Signal",
+		).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create transactions interceptor: %w", err)

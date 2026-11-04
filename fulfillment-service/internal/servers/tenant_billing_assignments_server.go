@@ -37,7 +37,8 @@ var _ publicv1.TenantBillingAssignmentsServer = (*TenantBillingAssignmentsServer
 //
 // Tenant isolation note: a tenant billing assignment names its tenant only as data - this server applies no
 // scoping by the caller's tenant, so a caller that reaches a method can read every tenant's assignment.
-// authz.rego's default deny keeps these methods admin-only, and the authorization evaluator suites pin that.
+// authz.rego explicitly grants global admins and cloud-provider-admin role holders deployment-wide billing
+// access; the platform has no per-tenant administrator scope. The authorization evaluator suites pin that boundary.
 // If a future change grants tenant roles access to any method here, add a caller-tenant filter to it first.
 type TenantBillingAssignmentsServer struct {
 	publicv1.UnimplementedTenantBillingAssignmentsServer

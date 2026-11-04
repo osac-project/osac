@@ -152,4 +152,25 @@ var _ = Describe("Billing accounts server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response.GetTotal()).To(Equal(int32(1)))
 	})
+
+	It("serves rows durably committed by an earlier request to a fresh server instance", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive},
+		}})
+		first := build(fake.Provider())
+		response, err := first.List(ctx, &publicv1.BillingAccountsListRequest{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetTotal()).To(Equal(int32(1)))
+
+		// A second server instance over the same storage - a restarted process, or another pod - reads the
+		// rows the first request committed through its own short transaction; nothing waits on the first
+		// instance's request scope. The freshness window itself remains per-process, an existing
+		// limitation: a second pod still re-walks the provider inside the first pod's window, and
+		// cross-pod freshness sharing is not covered here.
+		second := build(fake.Provider())
+		response, err = second.List(ctx, &publicv1.BillingAccountsListRequest{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetTotal()).To(Equal(int32(1)))
+		Expect(fake.Count("ListAccounts")).To(Equal(2), "a fresh instance has no freshness window yet")
+	})
 })

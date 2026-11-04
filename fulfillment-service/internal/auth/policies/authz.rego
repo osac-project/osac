@@ -189,6 +189,20 @@ is_tenant_idp_manager if {
   role in tenant_idp_manager_roles
 }
 
+# Cloud Provider Admin realm roles. The role grants only the closed billing
+# method allow-list below (billing design §4.5); it adds no platform-admin
+# permissions and leaves existing client/tenant grants unchanged. Managed service-account candidates resolve
+# their roles from the database and their token realm roles are ignored (see
+# subject_realm_roles), so a forged realm role claim cannot reach this grant.
+cloud_provider_admin_roles := {
+  "cloud-provider-admin",
+}
+default is_cloud_provider_admin = false
+is_cloud_provider_admin if {
+  some role in subject_realm_roles
+  role in cloud_provider_admin_roles
+}
+
 # CSI driver realm roles. The OSAC CSI driver's Keycloak service account is granted the
 # "osac-csi-driver" realm role. The role name is distinct from VAST's array-side VMS role
 # "osac-csi-<tenant>" to avoid collision. Short term the driver uses a single shared client;
@@ -222,7 +236,7 @@ is_reader_only if {
   not is_csi
 }
 
-# Check if an account is a regular client (no admin, tenant management, or CSI roles):
+# Check if an account is a regular client (no admin, tenant management, CSI, or reader roles):
 default is_client = false
 is_client if {
   not is_admin
@@ -574,9 +588,72 @@ legacy_allow if {
   }
 }
 
-# Allow everything to admins:
+# Billing services use a closed, reviewed method allow-list (billing design
+# §4.5): every billing method must be granted explicitly. To keep unknown or
+# newly added billing methods from silently becoming reachable through the
+# legacy admin catch-all below, the billing service namespaces are excluded
+# from that catch-all and granted only through the sets in this section.
+billing_service_namespaces := {
+  "/osac.public.v1.BillingAccounts/",
+  "/osac.private.v1.BillingAccounts/",
+  "/osac.public.v1.BillingProviderStatuses/",
+  "/osac.private.v1.BillingProviderStatuses/",
+  "/osac.public.v1.TenantBillingAssignments/",
+  "/osac.private.v1.TenantBillingAssignments/",
+}
+
+default is_billing_method = false
+is_billing_method if {
+  some namespace in billing_service_namespaces
+  startswith(grpc_method, namespace)
+}
+
+# The closed billing method allow-list. Platform admins (is_admin) and
+# cloud-provider-admin realm role holders may use exactly these methods. Any
+# other billing method is denied for everyone, so a new billing method must be
+# reviewed and added here before it becomes reachable.
+billing_allowed_methods := {
+  "/osac.public.v1.BillingAccounts/List",
+  "/osac.private.v1.BillingAccounts/List",
+  "/osac.public.v1.BillingProviderStatuses/Get",
+  "/osac.private.v1.BillingProviderStatuses/Get",
+  "/osac.public.v1.TenantBillingAssignments/List",
+  "/osac.public.v1.TenantBillingAssignments/Get",
+  "/osac.public.v1.TenantBillingAssignments/Create",
+  "/osac.public.v1.TenantBillingAssignments/Update",
+  "/osac.private.v1.TenantBillingAssignments/List",
+  "/osac.private.v1.TenantBillingAssignments/Get",
+  "/osac.private.v1.TenantBillingAssignments/Create",
+  "/osac.private.v1.TenantBillingAssignments/Update",
+}
+
+# Billing methods reserved for platform admins and controllers only. The
+# cloud-provider-admin realm role must never grant these.
+billing_admin_only_methods := {
+  "/osac.private.v1.TenantBillingAssignments/Signal",
+}
+
 legacy_allow if {
   is_admin
+  grpc_method in billing_allowed_methods
+}
+
+legacy_allow if {
+  is_cloud_provider_admin
+  grpc_method in billing_allowed_methods
+}
+
+legacy_allow if {
+  is_admin
+  grpc_method in billing_admin_only_methods
+}
+
+# Allow everything to admins, except the billing services: those are governed
+# by the closed allow-list above so no billing method can bypass review
+# through this catch-all (billing design §4.5).
+legacy_allow if {
+  is_admin
+  not is_billing_method
 }
 
 # The CSI driver identity may only manage volumes through the private Volume API

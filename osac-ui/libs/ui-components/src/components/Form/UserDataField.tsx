@@ -16,7 +16,6 @@ import { useField } from 'formik';
 import { Secret, SecretType } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
 
-import { CATALOG_PROVISION_MULTILINE_TEXTAREA } from './constants';
 import { getVisibleFieldError } from './fieldError';
 import { useShowFieldValidationErrors } from './FieldValidationContext';
 import { FormFieldHelper } from './FormFieldHelper';
@@ -158,8 +157,6 @@ const UserDataField = ({
           name={inlineName}
           fieldId="inline-user-data"
           multiline
-          rows={CATALOG_PROVISION_MULTILINE_TEXTAREA.rows}
-          resizeOrientation={CATALOG_PROVISION_MULTILINE_TEXTAREA.resizeOrientation}
           helperText={t('Optional cloud-init user data (max 64 KB).')}
           isDisabled={isDisabled}
           asFormGroup={false}

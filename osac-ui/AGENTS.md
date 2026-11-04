@@ -106,6 +106,11 @@ Multi-stage build images: `nodejs-22-minimal:9.8`, `go-toolset:1.25`, `ubi-minim
   - ui-components consumers: use `useApiQueryClient` from `@osac/ui-components/api/use-api-query`, never `useQueryClient` directly
 - Do not add dependencies without aligning with existing stack and license policy; prefer patterns already present in the target package
 
+### Form values
+
+- Trim user-entered text at the Form field boundary before writing it to Formik, using components and shared input helpers under `libs/ui-components/src/components/Form/`. Route Formik-bound text through those fields instead of adding trimming in callers, validation, or submit handlers. Keep an untrimmed input draft while the user types so spaces between words and multiline indentation remain possible.
+- Preserve all other strings as supplied, including API responses, resource names and IDs, selected option values, and programmatic form values. Add trimming elsewhere only for a specific, documented domain requirement, with a focused test for that exception.
+
 ### Styling
 
 1. Prefer PatternFly CSS classes and utility classes

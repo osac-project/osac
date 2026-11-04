@@ -1,6 +1,6 @@
 import { FormSection, Stack, StackItem } from '@patternfly/react-core';
 
-import ClusterNodeSetsArrayField from './ClusterNodeSetsArrayField';
+import ClusterNodeSetsArrayField from './fields/ClusterNodeSetsArrayField';
 import ClusterVersionField from './fields/ClusterVersionField';
 import { useTranslation } from '../../../hooks/useTranslation';
 import OsacForm from '../../Form/OsacForm';

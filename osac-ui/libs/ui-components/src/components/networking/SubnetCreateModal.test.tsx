@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Subnet, SubnetState, VirtualNetwork, VirtualNetworkState } from '@osac/types';
@@ -116,5 +117,32 @@ describe('SubnetCreateModal', () => {
 
     const createButton = screen.getByRole('button', { name: /Create/i });
     expect(createButton).not.toBeDisabled();
+  });
+
+  it('submits a trimmed IPv4 CIDR', async () => {
+    const user = userEvent.setup();
+    mutateAsync.mockResolvedValue({ id: 'subnet-new' });
+
+    render(
+      <SubnetCreateModal
+        onClose={mockOnClose}
+        parentVN={mockParentVN}
+        existingSubnets={mockExistingSubnets}
+      />,
+    );
+
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'subnet-new');
+    const cidrInput = screen.getByRole('textbox', { name: 'IPv4 CIDR' });
+    await user.type(cidrInput, ' 10.0.2.0/24 ');
+    expect(cidrInput).toHaveValue(' 10.0.2.0/24 ');
+
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith({
+        metadata: { name: 'subnet-new', project: 'foo' },
+        spec: { virtualNetwork: { name: 'prod-vn' }, ipv4Cidr: '10.0.2.0/24' },
+      });
+    });
   });
 });

@@ -1,6 +1,6 @@
-import { InputField } from './InputField';
-import { useTranslation } from '../../hooks/useTranslation';
-import type { ProvisioningFieldControlProps } from '../ProvisioningWizard/fields/provisioningFieldValue';
+import { useTranslation } from '../../../../hooks/useTranslation';
+import { InputField } from '../../../Form/InputField';
+import type { ProvisioningFieldControlProps } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 
 interface ClusterPoolSizeFieldProps extends ProvisioningFieldControlProps {
   fieldId: string;

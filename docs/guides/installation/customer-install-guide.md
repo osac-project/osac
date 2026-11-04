@@ -117,16 +117,16 @@ tag alone does not mean that the full pipeline succeeded. The chart
 includes a `values.schema.json` file and a `values-example.yaml` file.
 
 Select an umbrella chart version from the release links above and export it
-once. The following example uses version `0.0.64`:
+once. The following example uses version `0.0.65`:
 
 ```console
-export OSAC_RELEASE_VERSION="0.0.64"
+export OSAC_RELEASE_VERSION="0.0.65"
 export OSAC_CHART="oci://ghcr.io/osac-project/charts/osac"
 ```
 
 The preflight described in
 [Section 11.1](#111-the-install-preflight-stops-the-installation) requires a
-chart containing `templates/preflight/_engine.tpl`, as in version `0.0.64`.
+chart containing `templates/preflight/_engine.tpl`, as in version `0.0.65`.
 Older charts can have a different schema and validation workflow. Keep the
 selected chart's pinned image and AAP content defaults; remove stale image or
 Ansible revision overrides from an older values file.
@@ -1102,8 +1102,9 @@ retryable with "Missing or malformed setting in network-fulfillment-ig".
 | `NETRIS_PORT_SETTLE_SECONDS` | `config` | Optional. Default `15`. |
 | `NETRIS_BM_PROVISIONING_VNET`, `NETRIS_RESOURCE_CLASS_MAP` | `config` | BMaaS and FabricDomains only, so not used in this release: the provisioning V-Net name, and a non-empty JSON object that maps each resource class to its Netris server cluster template. |
 
-The networking jobs mount no CA for Netris. `NETRIS_CA_CONFIGMAP` applies only
-to the CaaS cluster-fulfillment jobs. With a Netris controller certificate from
+The networking jobs do not get a CA ConfigMap mount from the chart. In chart
+`0.0.65`, `NETRIS_CA_CONFIGMAP` applies only to the CaaS
+cluster-fulfillment jobs. With a Netris controller certificate from
 a private CA, either set `NETRIS_VALIDATE_CERTS: "false"`, or build an image on
 the `osac-aap` image with the CA in it, set it as `eeImage`, and set
 `NETRIS_CA_PATH` to the CA's path in the image. For every key, see
@@ -1379,7 +1380,7 @@ prepared by your platform administrators
 ([Section 2.6](#26-evpn-host-networking-for-vmaas)). See
 [Section 4.4](#44-installing-with-provider-networking).
 
-For chart `0.0.64`, configure `global.networking` directly. The chart creates
+For chart `0.0.65`, configure `global.networking` directly. The chart creates
 the deployment NetworkClass through the Fulfillment API. Manager selection,
 NetworkClass defaults, capabilities, and address plan are fixed at installation;
 an upgrade rejects changes to the existing NetworkClass spec. The provider
@@ -1404,7 +1405,7 @@ as shown in [Section 6.1](#cudn-evpn-with-netris).
 
 When migrating an older values file, remove `k8s_only`, the top-level
 `networkClass` and `global.expertOverrides` blocks, and
-`global.networking.networkClass.title` / `description`. The `0.0.64` schema
+`global.networking.networkClass.title` / `description`. The `0.0.65` schema
 does not accept these configuration paths. There is no default-class flag to
 set. Move Netris connection settings from `global.networking.netris` to the
 AAP instance groups shown in [Section 6](#6-installation-workflows-by-service).
@@ -1471,8 +1472,6 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `service.kafka.connection` | schema | ConfigMap/Secret mappings for the required `brokers`, `user`, and `password` parameters. Supply resources in the OSAC namespace. | `fulfillment-service-kafka` Secret |
 | `metering.database.connection` | schema | Metering service database connection. The metering service is always deployed: billing is not optional, and the event publisher writes usage events unconditionally. Requires Strimzi-managed Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml) and [Kafka configuration](kafka-configuration.md#metering)). | Secret-based default |
 | `metering.heartbeat.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.m360.apiKeySecret` | subchart | Heartbeat round interval and the Monetize360 billing adapter. | Not applicable |
-| `metering.readers[]` | schema | Outside systems allowed to read every tenant's heartbeat topics. Each entry has a unique `name` and no tenant; the chart renders a read-only Strimzi `KafkaUser` with a read and describe ACL on the `osac.metering.heartbeat.` topic prefix, deny ACLs on the `system` and `shared` heartbeat topics, and a consumer group named after the reader. The prefix covers tenants created later, so the entry does not change when a tenant is onboarded. Add or remove entries to grant or revoke; no OSAC service restarts. | `[]` |
-| `kafka.exporter.enabled`, `kafka.exporter.lagThreshold` | `osac-infra` | Enables Strimzi's Kafka Exporter, its PodMonitor, and the `MeteringConsumerLag` alert. The alert covers every consumer group reading a heartbeat topic. Strimzi adds the exporter to the broker's super users, so the exporter stays off unless you turn it on for lag monitoring. `lagThreshold` is the number of records a group may fall behind. | `false` and `15` |
 | `validation.enabled` | schema | Runs the install preflight. When `false`, every check is skipped and recorded as skipped in the report. | `true` |
 | `preflight.mode` | schema | `enforce` stops the installation on a blocking problem. `report` records problems without stopping. `strict` also stops on warnings. See [Section 11.1](#111-the-install-preflight-stops-the-installation). | `enforce` |
 | `preflight.skip.<check_id>` | schema | Skips one preflight check. The value is the reason, which the report records. | `{}` |
@@ -1522,7 +1521,7 @@ the cluster. Every workflow also needs the networking values and steps of
 **Procedure**
 
 1. In `my-values.yaml`, enable the VMaaS tier and select its Fabric Manager
-   and CUDN EVPN Kubernetes Manager. Chart `0.0.64` requires a nonempty
+   and CUDN EVPN Kubernetes Manager. Chart `0.0.65` requires a nonempty
    Fabric Manager and `k8sManager: cudn_evpn`; the older fabric-less
    `k8s_only` example is not accepted.
 
@@ -1667,7 +1666,7 @@ use that VirtualNetwork's VPC instead. Use a Netris endpoint whose certificate
 is trusted by the execution environment; coordinate private CA trust with
 your platform administrators.
 
-In `0.0.64`, `global.networking.fabricManager: netris` and
+In `0.0.65`, `global.networking.fabricManager: netris` and
 `global.networking.k8sManager: cudn_evpn` directly select the two managers.
 The chart supplies their registration roles, network types, and capabilities.
 The old expert NetworkClass block and manual `capabilities: [ipv4]`

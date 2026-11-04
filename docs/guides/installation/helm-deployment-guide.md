@@ -529,7 +529,7 @@ longer needs them. The VTEP range, the fabric loopback ranges and the uplink
 ranges must not overlap tenant address space. Add them to
 `global.networking.excludedIpv4Cidrs` in the `osac` chart.
 
-For phase 2 with chart `0.0.64`, use the complete
+For phase 2 with chart `0.0.65`, use the complete
 [CUDN EVPN with Netris example](customer-install-guide.md#cudn-evpn-with-netris).
 Set `global.networking.fabricManager: netris` and
 `global.networking.k8sManager: cudn_evpn`. The umbrella chart renders both
@@ -539,7 +539,7 @@ registrations; do not add duplicate Netris or CUDN EVPN entries there.
 Configure Netris coordinates and credentials in
 `aap.instanceGroups.networkFulfillment.config` and `.secret`.
 The old expert NetworkClass block and `k8s_only` selection do not apply to
-`0.0.64`. Networking selection and the provider-provisioning switch are fixed
+`0.0.65`. Networking selection and the provider-provisioning switch are fixed
 at the first installation; a successful Helm render does not verify the fabric.
 
 For phase 2, use the complete

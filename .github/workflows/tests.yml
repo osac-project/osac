@@ -125,6 +125,18 @@ jobs:
         env:
           CONTAINER_TOOL: docker
         run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+      - name: Configure deployed billing stub listener
+        if: inputs.kind == 'it-fulfillment-service'
+        run: |
+          set -euo pipefail
+          # The HTTPS stub runs in the test process; pods reach the host through Kind's IPv4 Docker gateway.
+          # Do not select the first IPAM entry: Kind can list its IPv6 subnet first.
+          gateway="$(docker network inspect kind --format '{{json .IPAM.Config}}' | jq -er '
+            [.[] | .Gateway // empty | select(test("^[0-9]+(\\.[0-9]+){3}$"))]
+            | if length == 1 then .[0] else error("expected one IPv4 Kind gateway") end
+          ')"
+          echo 'OSAC_IT_BILLING_STUB_LISTEN=0.0.0.0:18443' >> "$GITHUB_ENV"
+          echo "OSAC_IT_BILLING_STUB_URL=https://${gateway}:18443" >> "$GITHUB_ENV"
       - name: Run integration tests
         if: inputs.kind == 'it-fulfillment-service'
         env:

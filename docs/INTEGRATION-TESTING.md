@@ -236,7 +236,8 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 | Component integration | `it/`; `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` | Deployed Fulfillment Service, its database, and the CLI binary built from this checkout. The specs labelled `networking-operator` run in a second phase with the local OSAC Operator image deployed and `global.networking.provisioningEnabled=false`; the first phase excludes them. | CaaS, VMaaS, BMaaS, and external provider workflows unless a specific test exercises them. |
 | Component integration ([DEV] OSAC-6553, OSAC-6554, OSAC-6555) | `it/it_service_accounts*.go`, `it/it_managed_service_account_authorization_test.go`; focused commands in [service-account coverage](#coverage-notes) | Deployed Fulfillment API, PostgreSQL, Keycloak, the controller's IDP management principal, and the configured runtime IDP principal for CRUD, tenant isolation, PENDING-to-READY credential Secret provisioning with client ID and secret retrieval, rotation, client lifecycle, and managed-token role authorization | Failure tests run the service and reconciler in process against PostgreSQL and Keycloak, injecting Keycloak transport and persistence failures; external provider provisioning is out of scope. |
 | Component integration ([DEV] OSAC-6307) | `internal/servers` and `internal/database/migrations/126_hold_external_ip_capacity_until_archive_test.go`; from `fulfillment-service/`, run `go test ./internal/servers ./internal/database/migrations -timeout 20m` | Fulfillment server logic and PostgreSQL test container, including archive-time capacity and exclusivity for terminating consumers | Kubernetes and provider cleanup are not run; release completion is exercised by operator tests with provider fixtures. |
-| Component integration ([DEV] OSAC-6882, OSAC-6889, OSAC-6890, OSAC-6891) | `internal/testing/billingfake`, `internal/testing/billingstub`, `internal/servers`; focused command in [billing coverage](#coverage-notes) | Fulfillment billing, catalog pricing and provider rate card handlers and guard against the adapter contract; the real `m360` adapter against the stub server | The billing provider is a deterministic in-process fake; no M360 endpoint, token or network. Not wired into the deployed `it/` suite yet, see below. |
+| Unit / server-PostgreSQL component integration ([DEV] OSAC-6882, OSAC-6889, OSAC-6890, OSAC-6891) | `internal/testing/billingfake`, `internal/testing/billingstub`, `internal/servers`; focused command in [billing coverage](#coverage-notes) | In-process billing, catalog pricing and provider rate card handlers; PostgreSQL in the servers suite; the real `m360` adapter against a loopback HTTP stub | Deterministic fake adapter or HTTP stub, not a real M360 provider. These checks do not exercise a deployed Fulfillment service. |
+| Deployed component integration ([DEV] OSAC-6889, OSAC-6891) | `it/it_billing_provider_status_test.go`, `it/it_billing_pricing_authorization_test.go`; commands and pending execution in [pricing Lists deployed evidence](#pricing-lists-deployed-evidence) | Deployed public/private Fulfillment APIs, authorization, PostgreSQL, and the real M360 adapter using a mounted test credential and CA | M360 is a test-process HTTPS stub. The serial fixture patches the pod, not chart values; no real provider, account assignment, metering or provisioning is exercised. |
 | E2E | `../tests/e2e/` | Cross-component OSAC user journeys | Depends on the deployed test environment and its configured providers. |
 
 ### ComputeInstance disk handoff (OSAC-6685)
@@ -363,11 +364,21 @@ the test process, creates the credential Secret, patches the
 `fulfillment-grpc-server` Deployment in `osac` with the four `OSAC_BILLING_*`
 settings and the Secret volume, waits for the rollout, and expects `AVAILABLE`,
 then `UNAVAILABLE` after `SetScenario` scripts a 503. Cleanup restores the
-original pod spec. The specs are `Serial` and skip unless
+original pod spec. A third spec seeds a catalog item locked to a known
+instance type and calls public `ProviderRateCardItems.List` with explicit
+`service=compute_instance` and `currency_code=USD`. It checks the normalized
+`QUANTITY` row's exact amount `0.00125`, `second` unit, `instance_type` EQUALS
+condition and catalog-item name match. The recorded provider requests must be
+exactly the service, attribute and USD rate-card GETs, with no writes.
+The specs are `Serial` and skip unless
 `OSAC_IT_BILLING_STUB_LISTEN` (bind address) and `OSAC_IT_BILLING_STUB_URL`
 (that listener as seen from the cluster, for kind the host side of the docker
-network) are set. No installer or chart setting exists for either variable,
-and the suite does not set them.
+network) are set. The existing `it-fulfillment-service` leg in
+`.github/workflows/tests.yml` sets the listener to `0.0.0.0:18443` and derives
+the HTTPS URL from the Kind Docker network's IPv4 gateway before the existing
+test target. No installer/chart setting, new job or second billing deployment
+phase is added. Billing remains disabled in the default dev profile and after
+each serial spec's cleanup.
 
 What runs where:
 
@@ -375,14 +386,76 @@ What runs where:
 |---|---|---|
 | `billingfake` and `billingstub` unit specs | Yes, `ginkgo run -r internal` in the fulfillment-service unit leg | No cluster needed. |
 | Real `m360` adapter against the stub (happy path, 5xx, 401) | Yes, in the `billingstub` unit specs | |
-| Deployed stub spec in `it/` | No | Skipped without the two variables, and no CI job sets them. |
-| Default `it/` billing specs | Yes | They cover only the unconfigured, `NOT_CONFIGURED` case. |
+| Deployed HTTPS stub specs in `it/` | Wired into the existing fulfillment IT leg; execution pending | Public status and configured-provider rate-card read; requires pod-to-host gateway routing. |
+| Pricing List non-admin denial in `it/` | Wired into the existing fulfillment IT leg; execution pending | Existing authenticated regular user, public/private APIs × both Lists; no provider needed. |
+| Default `it/` billing specs | Yes | Retain the unconfigured `NOT_CONFIGURED`/billing-disabled assertions. |
 
-To run the deployed spec, a developer must start the suite with the two
-variables set and a network path from the kind nodes to the test host. The
-same configured-provider boundary is listed as unresolved in the billing
-provider-status coverage note above; no follow-up ticket exists yet for
-wiring these specs into CI.
+#### Pricing Lists deployed evidence
+
+These component-integration cases belong to [DEV]: configured read to
+[OSAC-6891](https://redhat.atlassian.net/browse/OSAC-6891), and all four
+non-admin denials to [OSAC-6889](https://redhat.atlassian.net/browse/OSAC-6889).
+Denials use the existing authenticated regular tenant user and assert
+`PermissionDenied` for public/private `CatalogPricingInputs.List` and
+`ProviderRateCardItems.List`; the latter supplies a valid USD currency so
+validation/disabled billing cannot masquerade as authorization evidence.
+
+On a **verified disposable** Kind test environment, with the documented service
+hostnames, TLS trust and infrastructure ready, run from the repository root:
+
+```bash
+export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+export OSAC_IT_BILLING_STUB_LISTEN=0.0.0.0:18443
+gateway="$(docker network inspect kind --format '{{json .IPAM.Config}}' | jq -er '
+  [.[] | .Gateway // empty | select(test("^[0-9]+(\\.[0-9]+){3}$"))]
+  | if length == 1 then .[0] else error("expected one IPv4 Kind gateway") end
+')"
+export OSAC_IT_BILLING_STUB_URL="https://${gateway}:18443"
+CONTAINER_TOOL=docker make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
+```
+
+Against an already deployed compatible test image, with the same environment,
+run from `fulfillment-service/`:
+
+```bash
+go test ./it -count=1 -timeout=20m -run '^TestIntegration$' -args -ginkgo.label-filter=billing
+```
+
+Both commands modify the test environment, including the shared gRPC Deployment;
+do not run them against an unverified/shared cluster. Real dependencies are the
+deployed Fulfillment APIs, PostgreSQL, Keycloak test identities and Kubernetes;
+only M360 is stubbed over HTTPS. The manually patched credential/CA mounts do
+not prove chart installation wiring. This clean-card case does not prove
+mixed unsupported-row tolerance, tenant/account assignment, currency discovery,
+provider writes, or any real M360 integration.
+
+**Execution pending (2026-11-04):** neither deployed command above nor the
+extended Actions leg has been executed for these changes. Docker/Kind inspection
+found running `osac-dev` and `dcm-repro` clusters without verified disposability,
+and a stopped `osac-billing-review` node. None was patched or restarted.
+The Kind network exposes an IPv4 gateway, but pod-to-host HTTPS routability
+remains empirically unverified. Keep both deployed gaps pending under the
+owning Jira URLs above until a passing run exercises the named boundaries;
+stop and escalate if routing fails, rather than adding in-cluster infrastructure.
+
+Executed locally from `fulfillment-service/`: `go build -buildvcs=false ./...`,
+`go test ./it -run '^TestBillingRateCardScenario$' -count=1 -timeout=5m`, and
+`go test ./internal/testing/billingstub ./internal/billing/... -count=1 -timeout=5m`.
+All passed. The narrowly scoped fixture test validates this scenario through
+the real M360 adapter/normalizer over loopback HTTPS, with no cluster, public
+API, database or catalog cross-reference. Build/fixture evidence does not close
+either deployed gap. Workflow changes require `.github` code-owner review.
+
+Workflow checks also passed locally: `actionlint -shellcheck= .github/workflows/tests.yml`
+(v1.7.7), `uvx --from yamllint==1.35.1 yamllint --strict .github/workflows/tests.yml`,
+and `python3 -m unittest discover -s .github/scripts -p test_flake_report.py`
+(21 tests), from the repository root. Executing the workflow's exact gateway
+step against the existing Docker network selected IPv4 despite IPv6-first
+IPAM; this inspected the network only, not a pod connection. From
+`fulfillment-service/`, `golangci-lint run` (v2.15.0, `GOFLAGS=-buildvcs=false`)
+reported zero issues. A billing-labelled Ginkgo dry run collected all 13 billing
+specs, including the new configured read and four denials; no spec body or
+cluster setup ran. These checks are not deployed evidence.
 
 ### Fulfillment integration timings
 
@@ -527,10 +600,10 @@ installer command in the tier table remains the component-integration check.
 - **FabricDomain to Netris lifecycle:** The complete BMaaS E2E journey is tracked by [OSAC-4786](https://redhat.atlassian.net/browse/OSAC-4786). It requires reserved real Netris hosts and owned cleanup; API-only integration cases are not substitutes.
 - **Catalog Items:** `it/` checks creation and update behavior, publication visibility, CLI creation, and the ClusterOrder release image written by Fulfillment. Catalog-backed provisioning journeys that exercise other components remain in the CaaS, VMaaS, BMaaS, and reference E2E suites.
 - **ComputeInstance additional-disk defaults:** the VMaaS regression test `test_compute_instance_empty_additional_disks_disables_catalog_item_default` covers the API contract for omitted and explicitly empty disk lists through provisioning and the resulting operator resource.
-- **Billing provider status ([DEV] [OSAC-6879](https://redhat.atlassian.net/browse/OSAC-6879), [OSAC-6881](https://redhat.atlassian.net/browse/OSAC-6881)):** `internal/servers/billing_provider_statuses_server_test.go` covers the statuses servers against a counting adapter double: one bounded probe per read, the shared last successful check, and failure reasons; authorization (admin group, service accounts, tenant-role denial on the public and private Get) is covered by `internal/auth/authorization_evaluator_test.go` at Unit tier. `it/it_billing_provider_status_test.go` targets the deployed CLI/gRPC boundary in disabled (`NOT_CONFIGURED`) mode only, because the dev deployment configures no billing provider; its sole execution path is the CI leg Integration test (fulfillment-service) (`ci-tests.yml`, run by `workflows/tests.yml`), which runs the Fulfillment installer target on Kind, and no locally executed run is recorded for this branch, so the deployed tier is planned rather than executed locally. The billing provider statuses REST route has no route-level test — only handler-list membership in `start_rest_gateway_cmd_test.go` and a simulated gateway error-mapping case in the guard spec; this epic's pricing routes do have route-level specs, in `it/it_billing_pricing_rest_test.go`. Configured-provider states (AVAILABLE/UNAVAILABLE probes, `lastSuccessfulCheck` retention, provider failure messages), the statuses REST route, and deployed non-admin denial have no deployed-tier coverage. No owning follow-up ticket exists yet, so these gaps are unresolved.
-- **Catalog pricing inputs ([DEV] [OSAC-6889](https://redhat.atlassian.net/browse/OSAC-6889)):** `internal/servers/catalog_pricing_inputs_server_test.go`, `private_catalog_pricing_inputs_server_test.go` and `catalog_pricing_inputs_aggregation_test.go` cover the public and private List, the distinct (service, dimension, value) aggregation, and the optional CEL filter end to end against real PostgreSQL through the servers suite (the [DEV] OSAC-6307 tier above); `internal/servers/cel_filter_test.go` adds unit specs for the shared filter pipeline. `it/it_catalog_pricing_inputs_cli_test.go` targets the deployed CLI boundary; the inventory needs no billing provider, so the dev deployment's unconfigured billing is not a gap for it, but its sole execution path is the CI leg Integration test (fulfillment-service) and no locally executed run is recorded for this branch, so the deployed tier is planned rather than executed locally. The REST routes have route-level specs in `it/it_billing_pricing_rest_test.go` (public and private List, asserting REST/gRPC parity over a seeded catalog item), executed by the same CI leg with no locally executed run recorded for this branch. Deployed non-admin denial has no deployed-tier coverage. No owning follow-up ticket exists yet, so these gaps are unresolved.
-- **Rate resolution and coverage service ([DEV] [OSAC-6890](https://redhat.atlassian.net/browse/OSAC-6890)):** `internal/billing/pricing` specs cover resolve/coverage classification, currency resolution, and rate normalization against `billingfake` at Unit tier (`go test ./internal/billing/...`). The resolver's full-configuration Resolve path has no production caller yet — its first caller lands with the epic's catalog pricing and estimate stories, which own adding the higher tiers — while its rate-card read path is exercised through the provider rate card items server specs below.
-- **Provider rate card items ([DEV] [OSAC-6891](https://redhat.atlassian.net/browse/OSAC-6891)):** `internal/servers/provider_rate_card_items_server_test.go` covers the servers against `billingfake`: documented fields only, unsupported-row omission with its metric, tenant account validation, the catalog cross-reference, and the per-process rate-card cache (one provider read across repeated Lists); `ttl_cache_test.go` unit-specs the shared cache skeleton both pricing caches use (TTL refresh, failures never cached), and `internal/billing/pricing/rate_card_items_test.go` the row normalization. `it/it_provider_rate_card_items_cli_test.go` targets the deployed CLI boundary in disabled (`NOT_CONFIGURED`) mode only, because the dev deployment configures no billing provider; its sole execution path is the CI leg Integration test (fulfillment-service) and no locally executed run is recorded for this branch, so the deployed tier is planned rather than executed locally. A configured-provider deployed List and deployed non-admin denial have no deployed-tier coverage; the REST routes have route-level specs in `it/it_billing_pricing_rest_test.go` (public and private List asserting the same `NOT_CONFIGURED` rejection as the gRPC path), executed by the same CI leg with no locally executed run recorded for this branch. No owning follow-up ticket exists yet, so these gaps are unresolved. Run every billing and pricing servers suite in these notes from `fulfillment-service/` with `go test ./internal/testing/billingfake ./internal/testing/billingstub ./internal/billing/...` and `go test ./internal/servers -ginkgo.focus 'Billing|[Cc]atalog pricing|Provider rate card|CEL filter utilities'`.
+- **Billing provider status ([DEV] [OSAC-6879](https://redhat.atlassian.net/browse/OSAC-6879), [OSAC-6881](https://redhat.atlassian.net/browse/OSAC-6881)):** `internal/servers/billing_provider_statuses_server_test.go` covers the statuses servers against a counting adapter double: one bounded probe per read, the shared last successful check, and failure reasons; authorization (admin group, service accounts, tenant-role denial on the public and private Get) is covered by `internal/auth/authorization_evaluator_test.go` at Unit tier. `it/it_billing_provider_status_test.go` retains deployed CLI/gRPC disabled (`NOT_CONFIGURED`) specs and the serial HTTPS-stub AVAILABLE/UNAVAILABLE specs. The existing fulfillment CI leg now supplies the stub variables; executed deployed evidence and routing remain pending as detailed in [pricing Lists deployed evidence](#pricing-lists-deployed-evidence). The billing provider statuses REST route has no route-level test — only handler-list membership in `start_rest_gateway_cmd_test.go` and a simulated gateway error-mapping case in the guard spec; this epic's pricing routes do have route-level specs, in `it/it_billing_pricing_rest_test.go`. Deployed `lastSuccessfulCheck` retention, the statuses REST route and status-Get non-admin denial remain unresolved gaps without owning follow-up tickets.
+- **Catalog pricing inputs ([DEV] [OSAC-6889](https://redhat.atlassian.net/browse/OSAC-6889)):** `internal/servers/catalog_pricing_inputs_server_test.go`, `private_catalog_pricing_inputs_server_test.go` and `catalog_pricing_inputs_aggregation_test.go` cover the public and private List, the distinct (service, dimension, value) aggregation, and the optional CEL filter end to end against real PostgreSQL through the servers suite (the [DEV] OSAC-6307 tier above); `internal/servers/cel_filter_test.go` adds unit specs for the shared filter pipeline. `it/it_catalog_pricing_inputs_cli_test.go` targets the deployed CLI boundary; the inventory needs no billing provider, so the dev deployment's unconfigured billing is not a gap for it, but its sole execution path is the CI leg Integration test (fulfillment-service) and no locally executed run is recorded for this branch, so the deployed tier is planned rather than executed locally. The REST routes have route-level specs in `it/it_billing_pricing_rest_test.go` (public and private List, asserting REST/gRPC parity over a seeded catalog item), wired into the same CI leg with no locally executed run recorded for this branch. `it/it_billing_pricing_authorization_test.go` adds public/private regular-user denial. That deployed denial gap remains **pending execution**, owned by OSAC-6889; see [pricing Lists deployed evidence](#pricing-lists-deployed-evidence) for commands, prerequisites and real/stub boundaries.
+- **Rate resolution and coverage service ([DEV] [OSAC-6890](https://redhat.atlassian.net/browse/OSAC-6890)):** `internal/billing/pricing` specs cover resolve/coverage classification, supplied-currency validation (success, mismatch and unresolved rejection), and rate normalization against `billingfake` at Unit tier (`go test ./internal/billing/...`). They do not prove account-currency discovery or resolution. The resolver's full-configuration Resolve path has no production caller yet — its first caller lands with the epic's catalog pricing and estimate stories, which own adding the higher tiers — while its rate-card read path is exercised through the provider rate card items server specs below.
+- **Provider rate card items ([DEV] [OSAC-6891](https://redhat.atlassian.net/browse/OSAC-6891)):** `internal/servers/provider_rate_card_items_server_test.go` covers the servers against `billingfake`: documented fields only, unsupported-row omission with its metric, unsupported `tenant_id` rejection before provider access, the catalog cross-reference, and the per-process rate-card cache (one provider read across repeated Lists); `ttl_cache_test.go` unit-specs the shared cache skeleton both pricing caches use (TTL refresh, failures never cached), and `internal/billing/pricing/rate_card_items_test.go` the row normalization. `it/it_provider_rate_card_items_cli_test.go` retains the deployed CLI billing-disabled assertion. The serial HTTPS fixture in `it/it_billing_provider_status_test.go` now adds configured public List normalization/catalog matching through the real deployed M360 adapter; `it/it_billing_pricing_authorization_test.go` adds public/private regular-user denial. These deployed gaps remain **pending execution**, owned by OSAC-6891 (configured read) and [OSAC-6889](https://redhat.atlassian.net/browse/OSAC-6889) (denial); see [pricing Lists deployed evidence](#pricing-lists-deployed-evidence). The REST routes retain public/private disabled-mode rejection specs in `it/it_billing_pricing_rest_test.go`, wired into the same CI leg, with no locally executed run recorded for this branch. Run every billing and pricing servers suite in these notes from `fulfillment-service/` with `go test ./internal/testing/billingfake ./internal/testing/billingstub ./internal/billing/...` and `go test ./internal/servers -ginkgo.focus 'Billing|[Cc]atalog pricing|Provider rate card|CEL filter utilities'`.
 
 ## osac-installer
 
@@ -608,19 +681,21 @@ Jira ticket exists yet) and does not cover how metering consumes the block; no
 Jira ticket exists yet for that gap. CI runs it in the `helm-lint-installer`
 job.
 
-Not proven by this contract or by any suite that runs in CI today, each
-unresolved with no owning ticket:
+Not proven by this render contract; deployed execution remains pending as
+described in [pricing Lists deployed evidence](#pricing-lists-deployed-evidence):
 
 - A deployed `fulfillment-grpc-server` reaching `AVAILABLE` over TLS. The
   deployed stub-based `AVAILABLE` and `UNAVAILABLE` cases in
   `fulfillment-service/it/it_billing_provider_status_test.go` skip unless
-  `OSAC_IT_BILLING_STUB_LISTEN` and `OSAC_IT_BILLING_STUB_URL` are set, and no
-  CI job sets them.
+  `OSAC_IT_BILLING_STUB_LISTEN` and `OSAC_IT_BILLING_STUB_URL` are set. The
+  existing fulfillment CI leg now supplies them; no passing deployed run is
+  recorded for these changes yet.
 - The `Authorization` header and the request paths as sent by a running pod.
-  Only the `m360` and `billingstub` unit specs cover them.
+  Unit specs execute this locally; the pod assertions await a deployed run.
 - The mounted CA Secret reaching the process, in CI. The render test asserts
   the volume, mount and variable only. The env-gated deployed `AVAILABLE` case
-  above covers it through a hand-patched mount, but no CI job runs it.
+  above checks it through a hand-patched mount, not chart installation wiring;
+  the CI leg is wired, but execution is pending.
 
 The new `global.billing` block is validated by both the umbrella and standalone
 Fulfillment chart schemas; the umbrella `values.schema.json` is also rendered by

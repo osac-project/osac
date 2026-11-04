@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "osac/private/v1/provider_rate_card_item_type.proto";
@@ -23,15 +24,30 @@ option (cleanapi.file).package = "osac.public.v1";
 option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 message ProviderRateCardItemsListRequest {
+  // Index of the first result. Omitted or negative values use zero.
   optional int32 offset = 1;
-  optional int32 limit = 2;
+  // Maximum results: defaults to 100, capped at 1000. Zero returns only the total count.
+  optional int32 limit = 2 [(buf.validate.field).int32.gte = 0];
+  // CEL expression evaluated against each provider-neutral row, before pagination.
   optional string filter = 3;
+  // Sort order. Accepted but not yet implemented, as with other list requests.
   optional string order = 4;
+  // Reserved for tenant-to-account assignment support in OSAC-6871. Any nonempty value currently returns
+  // UNIMPLEMENTED; OSAC tenant identifiers are never treated as provider account correlation values.
   optional string tenant_id = 5;
+  // Exact provider service name. Omission includes every mapped OSAC service (compute_instance and cluster),
+  // even when the catalog inventory is empty. An unknown service returns no rows.
   optional string service = 6;
-  optional string currency_code = 7;
+  // Required three-character ISO-4217 currency code. Callers supply the currency; this method does not resolve
+  // it from an account or discover it from the provider.
+  optional string currency_code = 7 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.len = 3
+  ];
 }
 
+// The REST gateway omits zero-valued fields, including size and total. The design openapi marks these fields
+// required: this is known contract drift, so clients must not rely on their presence in REST responses.
 message ProviderRateCardItemsListResponse {
   int32 size = 1;
   int32 total = 2;

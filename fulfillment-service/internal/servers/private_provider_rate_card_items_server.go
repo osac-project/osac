@@ -162,23 +162,14 @@ func (b *PrivateProviderRateCardItemsServerBuilder) Build() (result *PrivateProv
 // List implements privatev1.ProviderRateCardItemsServer.
 func (s *PrivateProviderRateCardItemsServer) List(ctx context.Context,
 	request *privatev1.ProviderRateCardItemsListRequest) (*privatev1.ProviderRateCardItemsListResponse, error) {
+	if request.GetTenantId() != "" {
+		return nil, status.Error(codes.Unimplemented, "tenant_id is not supported until tenant-to-account assignments are available")
+	}
 	if err := requireBilling(s.provider); err != nil {
 		return nil, err
 	}
 
 	currency := request.GetCurrencyCode()
-	if currency == "" {
-		// Reject the malformed request before the tenant validation, so it cannot pay a provider ListAccounts
-		// round trip only to be rejected locally.
-		return nil, currencyUnresolvedError()
-	}
-	if tenantID := request.GetTenantId(); tenantID != "" {
-		if err := s.validateTenantAccount(ctx, tenantID); err != nil {
-			return nil, err
-		}
-		// OSAC applies no separate override tier (AC4): the rows for a validated tenant are the same globally
-		// configured rows as the no-tenant path, so no account-specific lookup follows here.
-	}
 
 	adapter, err := s.provider.Adapter()
 	if err != nil {
@@ -188,10 +179,10 @@ func (s *PrivateProviderRateCardItemsServer) List(ctx context.Context,
 
 	services := []string{request.GetService()}
 	if request.GetService() == "" {
-		// Scoped limitation (OSAC-6891): without OSAC-6889's CatalogPricingInputs.List, OSAC has no registry of
-		// every mapped service name in this codebase yet, so an omitted `service` filter lists compute_instance
-		// only. Passing `service` explicitly queries any provider service by exact name.
-		services = []string{computeInstanceServiceName}
+		// These are the service mappings used by aggregateCatalogPricingInputs, not the services present in
+		// today's inventory: an empty catalog must not hide configured provider rows for either mapped service.
+		// Passing service explicitly still queries any provider service by exact name.
+		services = []string{computeInstanceServiceName, serviceCluster}
 	}
 
 	var allItems []pricing.RateCardItem
@@ -240,61 +231,16 @@ func (s *PrivateProviderRateCardItemsServer) List(ctx context.Context,
 		return nil, status.Errorf(codes.InvalidArgument, "invalid filter: %s", err)
 	}
 
-	total := int32(len(objects)) // #nosec G115 -- bounded by one provider rate card, never a user-controlled count
-	objects = paginate(objects, request.GetOffset(), request.GetLimit())
+	total := int32(len(objects)) // #nosec G115 -- bounded by the fetched provider rate cards, never a user-controlled count
+	objects, err = paginate(objects, request.GetOffset(), request.GetLimit(), request.HasLimit())
+	if err != nil {
+		return nil, err
+	}
 	return privatev1.ProviderRateCardItemsListResponse_builder{
 		Size:  int32(len(objects)), // #nosec G115 -- bounded by total above
 		Total: total,
 		Items: objects,
 	}.Build(), nil
-}
-
-// validateTenantAccount checks that tenantID identifies exactly one active provider account, matching it the same
-// way the design's day-one tenant/account pairing does: against the account's correlation value (ExternalID). This
-// story's worktree has no persisted tenant-to-account assignment store yet (that is a separate, not-yet-landed
-// story in this epic), so tenantID is matched directly as that correlation value rather than looked up through one.
-// The check is deliberately a live provider read on every tenant-scoped List, never cached: an account can be
-// unlinked or deactivated between requests, and serving a remembered verdict would keep a just-disconnected
-// account's rates listable for a cache TTL, so each List pays one ListAccounts discovery call instead.
-func (s *PrivateProviderRateCardItemsServer) validateTenantAccount(ctx context.Context, tenantID string) error {
-	adapter, err := s.provider.Adapter()
-	if err != nil {
-		return classifyBillingError(err)
-	}
-	page, err := adapter.ListAccounts(ctx, billing.AccountFilter{ExternalID: tenantID}, billing.Page{Size: 2})
-	if err != nil {
-		return classifyBillingError(err)
-	}
-	switch len(page.Accounts) {
-	case 0:
-		return tenantValidationError(tenantID, "no billing account is linked to this tenant")
-	case 1:
-		if page.Accounts[0].State != billing.AccountActive {
-			return tenantValidationError(tenantID, "the tenant's linked billing account is not active")
-		}
-		return nil
-	default:
-		return tenantValidationError(tenantID, "more than one billing account is linked to this tenant")
-	}
-}
-
-func tenantValidationError(tenantID, reason string) error {
-	result := status.Newf(codes.InvalidArgument, "tenant_id %q is invalid: %s", tenantID, reason)
-	if detailed, err := result.WithDetails(&errdetails.BadRequest{
-		FieldViolations: []*errdetails.BadRequest_FieldViolation{{Field: "tenant_id", Description: reason}},
-	}); err == nil {
-		result = detailed
-	}
-	return result.Err()
-}
-
-func currencyUnresolvedError() error {
-	result := status.New(codes.InvalidArgument,
-		"currency_code is required: no billing account currency is available to resolve it")
-	if detailed, err := result.WithDetails(&errdetails.ErrorInfo{Reason: pricing.ReasonCurrencyUnresolved}); err == nil {
-		result = detailed
-	}
-	return result.Err()
 }
 
 // classifyBillingError maps an adapter failure to UNAVAILABLE (AC8): a provider failure never serves a cached or
@@ -331,21 +277,29 @@ func toProtoRateCardItem(item pricing.RateCardItem, catalogMatches []string) *pr
 	}.Build()
 }
 
-// paginate applies a list request's offset/limit over an already-computed, in-memory slice: a negative offset is
-// clamped to zero, a limit of zero or less means everything, and an offset past the end yields an empty page. It
-// compares the limit against the remaining length instead of adding offset and limit, so large int32 values cannot
-// overflow the arithmetic and panic the handler with a slice bound error. `order` is accepted for API consistency
-// with every other List method but, like everywhere else in this API, is not yet implemented (see docs/API.md).
-func paginate[T any](items []T, offset, limit int32) []T {
+// paginate follows the shared List contract for an in-memory slice: omitted limit defaults to 100, explicit zero
+// is count-only, negative limits are invalid, and limits are capped at 1000. Negative offsets clamp to zero.
+// Comparing limit with the remaining length avoids overflowing offset+limit for large int32 inputs.
+// `order` remains accepted but unimplemented, as documented for other Lists in docs/API.md.
+func paginate[T any](items []T, offset, limit int32, hasLimit bool) ([]T, error) {
+	if !hasLimit {
+		limit = 100
+	}
+	if limit < 0 {
+		return nil, status.Error(codes.InvalidArgument, "limit must not be negative")
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
 	if offset < 0 {
 		offset = 0
 	}
-	if int(offset) >= len(items) {
-		return nil
+	if limit == 0 || int(offset) >= len(items) {
+		return nil, nil
 	}
 	items = items[offset:]
-	if limit > 0 && int(limit) < len(items) {
+	if int(limit) < len(items) {
 		items = items[:limit]
 	}
-	return items
+	return items, nil
 }

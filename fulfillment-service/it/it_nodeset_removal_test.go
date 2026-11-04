@@ -35,7 +35,7 @@ var _ = Describe("Node set removal", func() {
 		workerBmitName      string
 		storageBmitName     string
 		templateId          string
-		network             catalogItemNetworkFixture
+		network             resourceNetworkFixture
 	)
 
 	BeforeEach(func() {
@@ -44,7 +44,7 @@ var _ = Describe("Node set removal", func() {
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
-		network = createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network = createNetworkFixture(ctx, usersGroup, "")
 
 		// Create worker bare metal instance type:
 		workerBmitName = fmt.Sprintf("worker-bmit-%s", uuid.New()[24:32])
@@ -73,7 +73,7 @@ var _ = Describe("Node set removal", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+		deferResourceFixtureDeletion(func(ctx context.Context) error {
 			_, err := instanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{Id: workerBmitName}.Build())
 			return err
 		}, nil)
@@ -105,7 +105,7 @@ var _ = Describe("Node set removal", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+		deferResourceFixtureDeletion(func(ctx context.Context) error {
 			_, err := instanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{Id: storageBmitName}.Build())
 			return err
 		}, nil)
@@ -123,7 +123,7 @@ var _ = Describe("Node set removal", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+		deferResourceFixtureDeletion(func(ctx context.Context) error {
 			_, err := templatesClient.Delete(ctx, privatev1.ClusterTemplatesDeleteRequest_builder{Id: templateId}.Build())
 			return err
 		}, nil)

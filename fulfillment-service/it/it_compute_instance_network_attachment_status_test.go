@@ -27,12 +27,12 @@ import (
 
 var _ = Describe("Compute instance network attachment status", Label("compute-networking"), func() {
 	It("persists per-attachment status and exposes it through the public API", func(ctx context.Context) {
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		publicClient := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 		created, err := publicClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 			Object: publicv1.ComputeInstance_builder{
-				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+				Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 				Spec: publicv1.ComputeInstanceSpec_builder{
 					Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},

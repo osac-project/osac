@@ -283,7 +283,7 @@ var _ = Describe("Networking tenant isolation", func() {
 		})
 
 		clusterID := fmt.Sprintf("cluster-%s", uuid.New())
-		network := createCatalogItemNetworkInClassFixture(ctx, tenant, "", networkClassId)
+		network := createNetworkInClassFixture(ctx, tenant, "", networkClassId)
 		_, err = clustersClient.Create(ctx, privatev1.ClustersCreateRequest_builder{
 			Object: privatev1.Cluster_builder{
 				Id: clusterID,

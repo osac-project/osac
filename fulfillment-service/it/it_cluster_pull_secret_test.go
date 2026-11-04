@@ -42,7 +42,7 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 		ctx                   context.Context
 		clustersClient        publicv1.ClustersClient
 		privateClustersClient privatev1.ClustersClient
-		network               catalogItemNetworkFixture
+		network               resourceNetworkFixture
 		secretsClient         publicv1.SecretsClient
 		instanceTypesClient   privatev1.BareMetalInstanceTypesClient
 		templatesClient       privatev1.ClusterTemplatesClient
@@ -154,7 +154,7 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		privateClustersClient = privatev1.NewClustersClient(tool.InternalView().AdminConn())
-		network = createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network = createNetworkFixture(ctx, usersGroup, "")
 		secretsClient = publicv1.NewSecretsClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())

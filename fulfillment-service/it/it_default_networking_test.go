@@ -254,7 +254,7 @@ var _ = Describe("Default networking provisioning", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			clusterID := response.GetObject().GetId()
-			deferCatalogItemFixtureDeletion(func(deleteCtx context.Context) error {
+			deferResourceFixtureDeletion(func(deleteCtx context.Context) error {
 				_, err := clustersClient.Delete(deleteCtx, publicv1.ClustersDeleteRequest_builder{Id: clusterID}.Build())
 				return err
 			}, func(getCtx context.Context) (bool, error) {

@@ -39,7 +39,7 @@ var _ = Describe("Public clusters", func() {
 		networkClassID        string
 		bmitName              string
 		templateId            string
-		network               catalogItemNetworkFixture
+		network               resourceNetworkFixture
 	)
 
 	BeforeEach(func() {
@@ -47,14 +47,14 @@ var _ = Describe("Public clusters", func() {
 		ctx = context.Background()
 		// Public cluster requests validate the canonical networking Hub even when
 		// the request does not specify a subnet or SecurityGroup.
-		networkClassID = createCatalogItemNetworkClassFixture(ctx)
+		networkClassID = createNetworkClassFixture(ctx)
 
 		// Create the clients:
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		privateClustersClient = privatev1.NewClustersClient(tool.InternalView().AdminConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
-		network = createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
+		network = createNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
 
 		// Create a bare metal instance type for testing:
 		bmitName = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
@@ -447,7 +447,7 @@ var _ = Describe("Public clusters", func() {
 
 	It("rejects a shared ClusterVersion without a disk image without persisting a cluster", func() {
 		versions := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
-		versionName := catalogItemFixtureName()
+		versionName := resourceFixtureName()
 		created, err := versions.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
 			Object: privatev1.ClusterVersion_builder{
 				Metadata: privatev1.Metadata_builder{Name: versionName, Tenant: "shared"}.Build(),
@@ -463,7 +463,7 @@ var _ = Describe("Public clusters", func() {
 		})
 		Expect(created.GetObject().GetSpec().GetDiskImage()).To(BeNil())
 
-		name := catalogItemFixtureName()
+		name := resourceFixtureName()
 		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
@@ -492,8 +492,8 @@ var _ = Describe("Public clusters", func() {
 
 	It("Can create a cluster with explicit version", func() {
 		// Bare-metal workers require the selected version to have a DiskImage.
-		image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
-		network := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
+		image := createDiskImageFixture(ctx, "shared", resourceFixtureName())
+		network := createNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
 		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 		version := nextCVVersion()
 		cvResponse, err := cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{

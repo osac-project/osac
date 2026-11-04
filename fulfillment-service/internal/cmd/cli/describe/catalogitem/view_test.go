@@ -100,7 +100,7 @@ var _ = Describe("Catalog item views", func() {
 			Template: publicv1.ClusterTemplateReference_builder{Id: "template-id", Shared: true, Project: "infra"}.Build(),
 			Fields: publicv1.ClusterCatalogItemFields_builder{
 				Version:          publicv1.ClusterVersionReferenceFieldPolicy_builder{Editable: publicv1.EditableClusterVersionReferenceField_builder{DefaultValue: publicv1.ClusterVersionReference_builder{Name: "4-20", Shared: true}.Build()}.Build()}.Build(),
-				SshPublicKey:     publicv1.StringFieldPolicy_builder{Editable: publicv1.EditableStringField_builder{}.Build()}.Build(),
+				SshKey:           publicv1.FullSecretReferenceFieldPolicy_builder{Editable: publicv1.EditableFullSecretReferenceField_builder{}.Build()}.Build(),
 				PullSecretSecret: publicv1.SecretReferenceFieldPolicy_builder{Locked: publicv1.SecretLocalReference_builder{Name: "pull"}.Build()}.Build(),
 				Network: publicv1.ClusterNetworkFieldPolicies_builder{
 					PodCidr:     publicv1.StringFieldPolicy_builder{Locked: new("10.0.0.0/16")}.Build(),
@@ -197,7 +197,7 @@ var _ = Describe("Catalog item views", func() {
 
 	It("sanitizes terminal controls without changing the colored layout", func() {
 		v := view{name: "a\x1b[31m\tname\u202e", id: "id", title: "title\x1b[31m", description: "hello\rworld", kind: "clustercatalogitem",
-			fields: []row{{label: "Disk image", state: "LOCKED", value: "image"}, {label: "SSH public key", state: "EDITABLE"}}}
+			fields: []row{{label: "Disk image", state: "LOCKED", value: "image"}, {label: "SSH key", state: "EDITABLE"}}}
 		plain := printView(v, false)
 		for _, control := range []string{"\x1b", "\t", "\r", "\u202e"} {
 			Expect(plain).NotTo(ContainSubstring(control))

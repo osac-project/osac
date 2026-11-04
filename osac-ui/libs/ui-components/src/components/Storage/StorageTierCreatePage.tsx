@@ -35,7 +35,7 @@ import { storageTierFieldIds } from './fieldIds';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import { resourceNameSchema } from '../../validation/resource-name';
-import { InputField } from '../Form/InputField';
+import TextField from '../Form/base/TextField';
 import LeaveFormConfirmation from '../Form/LeaveFormConfirmation';
 import NameField from '../Form/NameField';
 import OsacForm from '../Form/OsacForm';
@@ -177,7 +177,7 @@ const StorageTierForm = ({ tier, backendOptions, backendsLoading }: StorageTierF
                 <StackItem>
                   <OsacForm>
                     <NameField fieldId={storageTierFieldIds.name} isDisabled={isEdit} />
-                    <InputField
+                    <TextField
                       name="description"
                       label={t('Description')}
                       fieldId={storageTierFieldIds.description}

@@ -25,7 +25,7 @@ import { tenantValues } from './values';
 import { useCreateResource } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
-import { InputField } from '../../Form/InputField';
+import TextField from '../../Form/base/TextField';
 import OsacForm from '../../Form/OsacForm';
 
 const TenantCreatePage = () => {
@@ -68,14 +68,14 @@ const TenantCreatePage = () => {
             <Stack hasGutter>
               <StackItem>
                 <OsacForm>
-                  <InputField name="name" label={t('Name')} fieldId="tenant-name" isRequired />
+                  <TextField name="name" label={t('Name')} fieldId="tenant-name" isRequired />
                   <FormSection title={t('Domains')}>
                     <FieldArray name="domains">
                       {(helpers) => (
                         <Stack hasGutter>
                           {values.domains.map((_domain, index) => (
                             <StackItem key={index}>
-                              <InputField
+                              <TextField
                                 name={`domains.${index}`}
                                 label={t('Domain {{number}}', { number: index + 1 })}
                                 fieldId={`tenant-domain-${index}`}
@@ -87,7 +87,7 @@ const TenantCreatePage = () => {
                                   onClick={() => helpers.remove(index)}
                                   icon={<MinusCircleIcon />}
                                 />
-                              </InputField>
+                              </TextField>
                             </StackItem>
                           ))}
                           <StackItem>

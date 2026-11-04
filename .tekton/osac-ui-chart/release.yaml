@@ -144,20 +144,32 @@ spec:
             # (per-release stamping commits are never merged into main, so
             # neither an exact-match nor an ancestor-walking git describe can
             # find this chart's own tag unless it was bumped this exact
-            # release). Tags are monotonically increasing, so the highest
-            # version by semver sort is always the real, currently-released
-            # one, bumped this release or not.
+            # release). A tag may carry a prerelease suffix (e.g. a
+            # release-branch freeze's "-rc.N" build) -- resolve the highest
+            # BASE version first, then prefer a bare X.Y.Z tag at that base
+            # over any prerelease tag sharing it (real semver precedence: a
+            # release always outranks its own prereleases), falling back to
+            # the highest prerelease tag only while no bare tag exists yet
+            # at that base -- plain `sort -V` alone gets this backwards,
+            # since it has no notion of semver precedence and sorts a bare
+            # "X.Y.Z" BELOW "X.Y.Z-rc.N".
             echo "Resolving real chart version from $(params.tag-prefix)*..."
             git clone --filter=blob:none --no-checkout "$(params.git-url)" /tmp/repo
             cd /tmp/repo
             git fetch --tags origin
-            CHART_VERSION=$(git tag -l "$(params.tag-prefix)*" \
+            ALL_VERSIONS=$(git tag -l "$(params.tag-prefix)*" \
               | sed "s#^$(params.tag-prefix)##" \
-              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
-              | sort -V | tail -1)
-            if [ -z "${CHART_VERSION}" ]; then
+              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || true; })
+            if [ -z "${ALL_VERSIONS}" ]; then
               echo "ERROR: no tag matching $(params.tag-prefix)* found" >&2
               exit 1
+            fi
+            MAX_BASE=$(printf '%s\n' "${ALL_VERSIONS}" | sed -E 's/-.*$//' | sort -V | tail -1)
+            BARE_AT_MAX=$(printf '%s\n' "${ALL_VERSIONS}" | grep -Fx "${MAX_BASE}" || true)
+            if [ -n "${BARE_AT_MAX}" ]; then
+              CHART_VERSION="${MAX_BASE}"
+            else
+              CHART_VERSION=$(printf '%s\n' "${ALL_VERSIONS}" | grep -F -- "${MAX_BASE}-" | sort -V | tail -1)
             fi
             echo "Real chart version: ${CHART_VERSION}"
             echo -n "${CHART_VERSION}" >"$(results.CHART_VERSION.path)"

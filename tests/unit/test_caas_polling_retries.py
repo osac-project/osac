@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from tests.e2e import conftest as e2e_fixtures
+from tests.e2e.caas.sanity import test_cluster_create as scenario
 from tests.e2e.core import helpers, runner
 from tests.e2e.core import k8s_client as k8s_client_module
 from tests.e2e.core.k8s_client import K8sClient
@@ -76,3 +77,22 @@ def test_storage_lookup_errors_do_not_count_as_successful_removal(monkeypatch: p
         helpers.wait_for_tenant_cluster_storage_entry_removed(
             k8s=K8sClient(namespace="osac"), tenant_name="tenant-a", cluster_name="order-a"
         )
+
+
+def test_cluster_deletion_bmi_poll_retries_transient_grpc_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A DNS/transport blip during BMI-removal polling must not abort the teardown check.
+
+    The merge-queue failure this covers: the runner's local resolver refused
+    connections while ``BareMetalInstances/List`` was polled, and the poll
+    was not configured to retry the resulting grpcurl ``CommandFailed``.
+    """
+    poll = Mock(side_effect=RuntimeError("poll captured"))
+    monkeypatch.setattr(scenario, "wait_for_cluster_deleting", lambda **_kwargs: None)
+    monkeypatch.setattr(scenario, "wait_for_cluster_grpc_deleting_or_archived", lambda **_kwargs: None)
+    monkeypatch.setattr(scenario, "poll_until", poll)
+
+    cluster = scenario._ClusterResources(co_name="order-a", owned_bmi_ids={"bmi-a"}, infra_env_name="order-a-infraenv")
+    with pytest.raises(RuntimeError, match="poll captured"):
+        scenario._assert_cluster_deleted(grpc=Mock(), k8s=Mock(), metering=Mock(), uuid="uuid-a", cluster=cluster)
+
+    assert poll.call_args.kwargs["retry_on_error"] is True

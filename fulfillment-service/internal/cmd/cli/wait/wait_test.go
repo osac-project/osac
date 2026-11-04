@@ -187,9 +187,15 @@ var _ = Describe("Poll", func() {
 		})
 
 		It("caps the initial interval at MaxInterval", func() {
-			// If the first delay ignored MaxInterval, this test
-			// would take ~50ms instead of ~10ms per poll cycle.
+			// With the cap, Poll waits 5ms between fetches and
+			// fetches several times within the 40ms timeout. If
+			// Poll ignored MaxInterval, the first delay alone
+			// (50ms) would exceed the timeout and only one fetch
+			// would happen. Requiring multiple fetches makes the
+			// test fail if the initial interval is not clamped.
+			var fetches int
 			steady := func(_ context.Context) (fakeResource, error) {
+				fetches++
 				return fakeResource{state: "PENDING"}, nil
 			}
 			opts := wait.Options[fakeResource]{
@@ -204,6 +210,10 @@ var _ = Describe("Poll", func() {
 			var toErr *wait.ErrTimeout
 			Expect(errors.As(err, &toErr)).To(BeTrue(),
 				"expected ErrTimeout, got %T: %v", err, err)
+			Expect(fetches).To(BeNumerically(">=", 3),
+				"expected several fetches within the timeout; "+
+					"only %d happened, so the initial interval "+
+					"was probably not capped at MaxInterval", fetches)
 		})
 	})
 

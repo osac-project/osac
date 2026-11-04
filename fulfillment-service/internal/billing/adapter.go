@@ -30,13 +30,20 @@ const MaxListPages = 50
 // reports the last page, or - after MaxListPages pages that all report a following page - with a MALFORMED
 // *Error: a provider that never ends a list is misbehaving, not merely large. It is the one owner of the
 // account-walk bound and its MALFORMED terminal, so the walkers over provider accounts cannot drift apart in
-// how they treat a provider that pages forever.
+// how they treat a provider that pages forever. A page that holds more accounts than the positive size the walk
+// requested is likewise MALFORMED, rejected before any visitor runs: a caller that bounds a walk's buffering by
+// its page size - discovery reads at most MaxListPages pages of at most the requested size - must not have one
+// oversized provider page widen that buffer, whatever adapter serves the walk. A walk started without a size
+// cannot know the adapter's default, so there the bound is the adapter's own to enforce.
 func ForEachAccount(
 	ctx context.Context, adapter Adapter, filter AccountFilter, page Page, fn func(Account) error) error {
 	for range MaxListPages {
 		result, err := adapter.ListAccounts(ctx, filter, page)
 		if err != nil {
 			return err
+		}
+		if page.Size > 0 && len(result.Accounts) > page.Size {
+			return NewError(ReasonMalformed, "ListAccounts", false, 0)
 		}
 		for _, account := range result.Accounts {
 			if err := fn(account); err != nil {
@@ -83,7 +90,8 @@ func SanitizeProviderText(text string) string {
 // Adapter is the only boundary through which OSAC talks to a billing provider. It exposes normalized values only.
 type Adapter interface {
 	// ListAccounts pages through accounts that exactly match filter. A page may hold fewer accounts than its size,
-	// or none, while Next is still set, so callers must keep paging until Next is empty.
+	// or none, while Next is still set, so callers must keep paging until Next is empty. It never holds more
+	// accounts than the positive size the caller requested: ForEachAccount rejects such a page as MALFORMED.
 	ListAccounts(ctx context.Context, filter AccountFilter, page Page) (AccountPage, error)
 	// GetAccount and CorrelationValue fail with a NOT_FOUND *Error when the account does not exist.
 	GetAccount(ctx context.Context, ref AccountRef) (Account, error)

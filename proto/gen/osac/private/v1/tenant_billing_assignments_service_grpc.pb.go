@@ -36,6 +36,7 @@ const (
 	TenantBillingAssignments_Get_FullMethodName    = "/osac.private.v1.TenantBillingAssignments/Get"
 	TenantBillingAssignments_Create_FullMethodName = "/osac.private.v1.TenantBillingAssignments/Create"
 	TenantBillingAssignments_Update_FullMethodName = "/osac.private.v1.TenantBillingAssignments/Update"
+	TenantBillingAssignments_Signal_FullMethodName = "/osac.private.v1.TenantBillingAssignments/Signal"
 )
 
 // TenantBillingAssignmentsClient is the client API for TenantBillingAssignments service.
@@ -60,6 +61,11 @@ type TenantBillingAssignmentsClient interface {
 	// transaction. A resubmission for the same tenant and account re-runs correlation resolution; it is a no-op
 	// when the current interval is already CONNECTED.
 	Update(ctx context.Context, in *TenantBillingAssignmentsUpdateRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsUpdateResponse, error)
+	// Synchronously revalidates the current assignment interval, running the same correlation and
+	// account-match validation as Update. An id naming a closed historical interval is rejected. There is
+	// no continuous reconciliation of assignments: revalidation runs only on Create, Update, or this
+	// explicit signal. Controller or global administrator use only; never part of the public API.
+	Signal(ctx context.Context, in *TenantBillingAssignmentsSignalRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsSignalResponse, error)
 }
 
 type tenantBillingAssignmentsClient struct {
@@ -110,6 +116,16 @@ func (c *tenantBillingAssignmentsClient) Update(ctx context.Context, in *TenantB
 	return out, nil
 }
 
+func (c *tenantBillingAssignmentsClient) Signal(ctx context.Context, in *TenantBillingAssignmentsSignalRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsSignalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TenantBillingAssignmentsSignalResponse)
+	err := c.cc.Invoke(ctx, TenantBillingAssignments_Signal_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TenantBillingAssignmentsServer is the server API for TenantBillingAssignments service.
 // All implementations must embed UnimplementedTenantBillingAssignmentsServer
 // for forward compatibility.
@@ -132,6 +148,11 @@ type TenantBillingAssignmentsServer interface {
 	// transaction. A resubmission for the same tenant and account re-runs correlation resolution; it is a no-op
 	// when the current interval is already CONNECTED.
 	Update(context.Context, *TenantBillingAssignmentsUpdateRequest) (*TenantBillingAssignmentsUpdateResponse, error)
+	// Synchronously revalidates the current assignment interval, running the same correlation and
+	// account-match validation as Update. An id naming a closed historical interval is rejected. There is
+	// no continuous reconciliation of assignments: revalidation runs only on Create, Update, or this
+	// explicit signal. Controller or global administrator use only; never part of the public API.
+	Signal(context.Context, *TenantBillingAssignmentsSignalRequest) (*TenantBillingAssignmentsSignalResponse, error)
 	mustEmbedUnimplementedTenantBillingAssignmentsServer()
 }
 
@@ -153,6 +174,9 @@ func (UnimplementedTenantBillingAssignmentsServer) Create(context.Context, *Tena
 }
 func (UnimplementedTenantBillingAssignmentsServer) Update(context.Context, *TenantBillingAssignmentsUpdateRequest) (*TenantBillingAssignmentsUpdateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
+}
+func (UnimplementedTenantBillingAssignmentsServer) Signal(context.Context, *TenantBillingAssignmentsSignalRequest) (*TenantBillingAssignmentsSignalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Signal not implemented")
 }
 func (UnimplementedTenantBillingAssignmentsServer) mustEmbedUnimplementedTenantBillingAssignmentsServer() {
 }
@@ -248,6 +272,24 @@ func _TenantBillingAssignments_Update_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TenantBillingAssignments_Signal_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TenantBillingAssignmentsSignalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantBillingAssignmentsServer).Signal(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantBillingAssignments_Signal_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantBillingAssignmentsServer).Signal(ctx, req.(*TenantBillingAssignmentsSignalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TenantBillingAssignments_ServiceDesc is the grpc.ServiceDesc for TenantBillingAssignments service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -270,6 +312,10 @@ var TenantBillingAssignments_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Update",
 			Handler:    _TenantBillingAssignments_Update_Handler,
+		},
+		{
+			MethodName: "Signal",
+			Handler:    _TenantBillingAssignments_Signal_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

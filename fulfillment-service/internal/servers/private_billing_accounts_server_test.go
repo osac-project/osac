@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -101,6 +102,33 @@ func (a *gatedDiscoveryAdapter) ListAccounts(_ context.Context, _ billing.Accoun
 	}, nil
 }
 
+// gatedTwoPageAdapter serves the first page immediately and holds the second page until released - it
+// reproduces a multi-page walk that is in flight, waiting on the provider, while the suite checks that the
+// walk holds no database connection. enteredSecondPage closes once the walk has asked for page two.
+type gatedTwoPageAdapter struct {
+	billing.Adapter
+	enteredSecondPage chan struct{}
+	release           chan struct{}
+	once              sync.Once
+	calls             int
+}
+
+// ListAccounts returns page one on the first call; every later call signals the walk has reached the
+// provider's slow page and then blocks until released.
+func (a *gatedTwoPageAdapter) ListAccounts(_ context.Context, _ billing.AccountFilter, _ billing.Page) (
+	billing.AccountPage, error) {
+	a.calls++
+	if a.calls == 1 {
+		return billing.AccountPage{
+			Accounts: []billing.Account{{Ref: billing.NewAccountRef("acct-1"), State: billing.AccountActive}},
+			Next:     "page-2",
+		}, nil
+	}
+	a.once.Do(func() { close(a.enteredSecondPage) })
+	<-a.release
+	return billing.AccountPage{}, nil
+}
+
 var _ = Describe("Private billing accounts server", func() {
 	build := func(p *billing.Provider) *PrivateBillingAccountsServer {
 		server, err := NewPrivateBillingAccountsServer().SetLogger(logger).SetProvider(p).Build()
@@ -113,6 +141,14 @@ var _ = Describe("Private billing accounts server", func() {
 			req = &privatev1.BillingAccountsListRequest{}
 		}
 		return s.List(ctx, req)
+	}
+	// storedCount reads the billing_accounts row count on the suite pool's own connection, outside any
+	// transaction: like a later request in another process, it can only observe durably committed rows, never
+	// an ambient request transaction's uncommitted state.
+	storedCount := func() int {
+		var count int
+		Expect(testPool.QueryRow(ctx, `select count(*) from billing_accounts`).Scan(&count)).To(Succeed())
+		return count
 	}
 
 	It("requires a logger and a provider", func() {
@@ -266,30 +302,140 @@ var _ = Describe("Private billing accounts server", func() {
 			To(Equal(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_UNKNOWN))
 	})
 
-	It("leaves no row committed when discovery fails partway through pagination", func() {
+	It("leaves no row stored when discovery fails partway through pagination", func() {
 		adapter := &twoPageThenFailAdapter{}
 		server := build(billing.NewProvider("m360", adapter, nil))
 		_, err := list(server, nil)
 		Expect(err).To(HaveOccurred())
 
-		// Reproduce what the production TxInterceptor does after a handler returns (see
-		// database_tx_interceptor.go): it ends the transaction directly, with no call of its own to
-		// tx.ReportError. Only the handler itself can mark the transaction for rollback; if List never does
-		// that, End sees nothing reported and commits anyway.
-		tx, txErr := database.TxFromContext(ctx)
-		Expect(txErr).ToNot(HaveOccurred())
-		Expect(tx.End(ctx)).To(Succeed())
-
-		// Read back from a new transaction against the same database, the way a later request would.
-		freshTx, err := tm.Begin(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		defer func() { Expect(freshTx.End(ctx)).To(Succeed()) }()
-		_, total, err := database.ListBillingAccounts(ctx, freshTx, 0, 10, "", "")
-		Expect(err).ToNot(HaveOccurred())
-		Expect(total).To(BeZero(), "the page-1 upsert must not survive a failed discovery call")
-
-		suiteTx = nil // already ended above; stop the suite's DeferCleanup from ending it again
+		// The walk failed on page two, before any store transaction ran. Read back outside any request
+		// transaction, the way a later request would: nothing from page one may have been stored.
+		Expect(storedCount()).To(BeZero(), "the page-1 accounts must not be stored by a failed walk")
 	})
+
+	It("stores the whole walk or nothing, and a failed store does not open the freshness window", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive},
+			{ID: "acct-2", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		server.discoverFailureBackoff = 10 * time.Millisecond
+
+		// Reject only the second account's write, the same trigger-injection pattern as
+		// service_account_create_test.go: the first upsert succeeds inside the store transaction, so only a
+		// real rollback - not failing before any write - can keep it out of the table.
+		_, err := testPool.Exec(ctx, `create function reject_second_billing_account() returns trigger language plpgsql as $$
+		begin
+			if new.provider_account_reference = 'acct-2' then
+				raise exception 'test write failure';
+			end if;
+			return new;
+		end $$;
+		create trigger reject_second_billing_account before insert or update on billing_accounts
+		for each row execute function reject_second_billing_account()`)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = list(server, nil)
+		Expect(err).To(HaveOccurred())
+		Expect(storedCount()).To(BeZero(),
+			"the store transaction must roll back its first upsert together with the failed second")
+
+		_, err = testPool.Exec(ctx, `drop trigger reject_second_billing_account on billing_accounts;
+		drop function reject_second_billing_account()`)
+		Expect(err).ToNot(HaveOccurred())
+
+		// The failed store must not open the freshness window: once the failure backoff has elapsed, the
+		// next List runs a second full walk instead of serving a stored page.
+		var response *privatev1.BillingAccountsListResponse
+		Eventually(func() error {
+			var listErr error
+			response, listErr = list(server, nil)
+			return listErr
+		}, 5*time.Second).Should(Succeed())
+		Expect(response.GetTotal()).To(Equal(int32(2)))
+		Expect(fake.Count("ListAccounts")).To(Equal(2),
+			"only a durably committed walk may open the freshness window")
+	})
+
+	It("commits discovery durably: a later List inside the freshness window still reads the stored rows", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		first, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(first.GetTotal()).To(Equal(int32(1)))
+		// A connection outside any request transaction sees the row: the store committed durably rather
+		// than riding on this test's ambient suite transaction.
+		Expect(storedCount()).To(Equal(1))
+
+		// An invalid filter fails after discovery already succeeded, without disturbing the stored rows:
+		req := &privatev1.BillingAccountsListRequest{}
+		req.SetFilter(`this.state != "ACTIVE"`)
+		_, err = list(server, req)
+		st, ok := status.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(st.Code()).To(Equal(codes.InvalidArgument))
+
+		// ...and a second List inside the freshness window still reads the committed rows through its own
+		// short read transaction, without re-reading the provider.
+		second, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(second.GetTotal()).To(Equal(int32(1)))
+		Expect(fake.Count("ListAccounts")).To(Equal(1), "still inside the freshness window")
+	})
+
+	It("holds no database connection while the provider is slow: an unrelated query still runs on a one-connection pool",
+		func() {
+			adapter := &gatedTwoPageAdapter{
+				enteredSecondPage: make(chan struct{}),
+				release:           make(chan struct{}),
+			}
+
+			// A pool with a single connection, and the server's transaction manager over that pool: if the
+			// discovery walk held a connection (or an open transaction) while waiting on the provider,
+			// nothing else could use the pool.
+			config, err := pgxpool.ParseConfig(testPool.Config().ConnString())
+			Expect(err).ToNot(HaveOccurred())
+			config.MaxConns = 1
+			singlePool, err := pgxpool.NewWithConfig(ctx, config)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(singlePool.Close)
+			singlePoolTm, err := database.NewTxManager().
+				SetLogger(logger).
+				SetPool(singlePool).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			singlePoolCtx := database.TxManagerIntoContext(ctx, singlePoolTm)
+
+			type listOutcome struct {
+				response *privatev1.BillingAccountsListResponse
+				err      error
+			}
+			server := build(billing.NewProvider("m360", adapter, nil))
+			result := make(chan listOutcome, 1)
+			go func() {
+				response, listErr := server.List(singlePoolCtx, &privatev1.BillingAccountsListRequest{})
+				result <- listOutcome{response: response, err: listErr}
+			}()
+			Eventually(adapter.enteredSecondPage, 5*time.Second).
+				Should(BeClosed(), "the walk must reach the provider's second page")
+
+			// The pool's only connection must be free while the provider is being read:
+			unrelated := make(chan error, 1)
+			go func() {
+				_, execErr := singlePool.Exec(context.Background(), `select 1`)
+				unrelated <- execErr
+			}()
+			Eventually(unrelated, 5*time.Second).Should(Receive(Succeed()),
+				"the walk must not pin the pool's only connection while the provider is waiting")
+
+			close(adapter.release)
+			var outcome listOutcome
+			Eventually(result, 5*time.Second).Should(Receive(&outcome))
+			Expect(outcome.err).ToNot(HaveOccurred())
+			Expect(outcome.response.GetTotal()).To(Equal(int32(1)))
+		})
 
 	It("fails with FAILED_PRECONDITION/MALFORMED when the provider never reports a last page", func() {
 		server := build(billing.NewProvider("m360", &endlessDiscoveryAdapter{}, nil))
@@ -374,7 +520,7 @@ var _ = Describe("Private billing accounts server", func() {
 		Eventually(adapter.entered, 5*time.Second).Should(BeClosed(), "the first List must start the walk")
 
 		// A second stale List while the walk is in flight fails fast as UNAVAILABLE, without starting a
-		// second walk and without queueing this request's transaction behind the first:
+		// second walk and without stacking behind the first:
 		_, err := list(server, nil)
 		st, ok := status.FromError(err)
 		Expect(ok).To(BeTrue())

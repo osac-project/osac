@@ -30,7 +30,7 @@ const maxGenerateAttempts = 5
 const (
 	// ReasonBillingCorrelationIDConflict: both sides already have a value and they differ.
 	ReasonBillingCorrelationIDConflict = "BILLING_CORRELATION_ID_CONFLICT"
-	// ReasonAccountAmbiguous: more than one provider account carries the resolved value.
+	// ReasonAccountAmbiguous: the resolved value is duplicated or carried by a different provider account.
 	ReasonAccountAmbiguous = "ACCOUNT_AMBIGUOUS"
 	// ReasonAccountCorrelationConflict: another billing_account row already stores the resolved value.
 	ReasonAccountCorrelationConflict = "ACCOUNT_CORRELATION_CONFLICT"
@@ -59,9 +59,8 @@ func NewCorrelationValue() string {
 }
 
 // LocalCorrelationLookup reports whether value is already stored as another billing_account row's
-// correlation_id, excluding excludeAccountID (the account being resolved). The caller backs this with its own
-// transaction, so the check participates in the same lock/commit scope as the eventual write; see
-// ResolveAccountCorrelationID.
+// correlation_id, excluding excludeAccountID (the account being resolved). The caller must coordinate concurrent
+// resolutions of the same value and recheck uniqueness when committing it. A lookup alone is not a reservation.
 type LocalCorrelationLookup func(ctx context.Context, value string, excludeAccountID string) (conflict bool, err error)
 
 // AccountCorrelationInput is everything ResolveAccountCorrelationID needs to resolve one account's correlation
@@ -205,9 +204,9 @@ func (account AccountCorrelationInput) writeIfSupported(ctx context.Context, val
 
 // countProviderMatches returns how many provider accounts carry value, failing with ACCOUNT_AMBIGUOUS when
 // more than one does. The count backs Resolution.ProviderMatches: the caller (OSAC-6884) derives the
-// post-write connection state from it instead of re-listing the provider. Zero or one match is not an error:
-// a write-unsupported adapter never gets value written to any account, which is an expected, not a failure,
-// state.
+// post-write connection state from it instead of re-listing the provider. Whether zero or one match is
+// acceptable is a branch decision: the provider-present branches count the assigned account itself, while
+// commitValue — reached only when the assigned account does not carry the value — requires zero.
 func (account AccountCorrelationInput) countProviderMatches(ctx context.Context, value string) (int, error) {
 	matches, err := CountAccountsWithExternalID(ctx, account.Adapter, value)
 	if err != nil {
@@ -226,6 +225,11 @@ func (account AccountCorrelationInput) commitValue(ctx context.Context, candidat
 	matches, err := account.countProviderMatches(ctx, candidate)
 	if err != nil {
 		return Resolution{}, err
+	}
+	// Design §4.1's M360 note requires the assigned account to be the unique carrier. This path runs only
+	// when that account has no value, so every pre-write match is foreign and must be rejected before writing.
+	if matches > 0 {
+		return Resolution{}, &CorrelationResolutionError{Reason: ReasonAccountAmbiguous}
 	}
 	written, skipReason, err := account.writeIfSupported(ctx, candidate)
 	if err != nil {

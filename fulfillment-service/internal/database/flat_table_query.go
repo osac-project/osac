@@ -37,6 +37,11 @@ func invalidFlatTableQueryf(format string, args ...any) error {
 // defaultLimit/maxLimit: an unset limit serves the default page rather than the whole table, and an explicit
 // limit is clamped to the maximum rather than rejected. The assignment table is append-only history that is
 // never pruned, so an unbounded List would materialize it in full.
+//
+// Deliberate deviation from the billing design's openapi.yaml: the design documents limit: 0 as an empty
+// page, but this code keeps the platform convention shared with the generic DAO and the other list services
+// instead - 0 (proto3's unset value) and an omitted limit both serve the default page of 100, and a limit
+// above the maximum clamps to 1000 rather than being rejected.
 const (
 	flatTableDefaultLimit = 100
 	flatTableMaxLimit     = 1000

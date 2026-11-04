@@ -305,24 +305,29 @@ After the full mirror contains the approved direct-mirror debug image, invoke on
 #### 2d. Apply generated artifacts
 
 Before **any apply or handoff**, set `mirrorSourcePolicy: NeverContactSource`
-on **every** `spec.imageTagMirrors` entry in **every** generated ITMS document,
+on **every** `spec.imageDigestMirrors` entry in **every** generated IDMS document
+and **every** `spec.imageTagMirrors` entry in **every** generated ITMS document,
 including operator, core and optional-service images. Repeat after every
 regeneration, overwriting an explicit `AllowContactingSource` as well as an
 absent policy. This is mandatory even for Core-only installations.
 
-The [oc-mirror 4.22 generator](https://github.com/openshift/oc-mirror/blob/7860a5e7f0707a3d8d8729586e8313a41983008d/internal/pkg/clusterresources/clusterresources.go#L126-L153)
-sets `Source` and `Mirrors`, but not the policy. The
-[ITMS API](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_tag_mirror_set.go#L119-L127)
-allows fallback to the original source when the policy is unset.
+The oc-mirror 4.22 [IDMS generator](https://github.com/openshift/oc-mirror/blob/7860a5e7f0707a3d8d8729586e8313a41983008d/internal/pkg/clusterresources/clusterresources.go#L498-L525)
+and [ITMS generator](https://github.com/openshift/oc-mirror/blob/7860a5e7f0707a3d8d8729586e8313a41983008d/internal/pkg/clusterresources/clusterresources.go#L126-L153)
+set `Source` and `Mirrors`, but not the policy. Both the
+[IDMS API](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_digest_mirror_set.go#L136-L140)
+and [ITMS API](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_tag_mirror_set.go#L119-L127)
+allow fallback to the original source when the policy is unset.
 
 Run the following as a standalone **Bash** script with **Mike Farah yq v4**
-and **jq**. It handles multiple files and YAML documents, preserves non-ITMS
+and **jq**. It handles multiple files and YAML documents, preserves non-mirror
 documents semantically, validates input before mutation, then checks all
-patched artifacts before applying anything. Retain the patched files for
-handoff, not the temporary JSON list. Empty/malformed documents, missing or
-empty ITMS entries, and empty mirror lists stop the procedure. A digest-only
-inventory can legitimately produce no ITMS; selected tagged images still
-require coverage, as reviewed in Category C.
+patched IDMS **and** ITMS artifacts before applying **either** kind. Retain
+the patched files for handoff, not the temporary JSON list. Empty/malformed
+documents, missing or empty entry arrays in either kind, empty mirror lists,
+or a workspace with no mirror sets stop the procedure. A digest-only inventory
+can legitimately produce no ITMS; selected tagged images still require coverage,
+as reviewed in Category C. Absence of one kind never waives validation of the
+other kind or coverage of the selected references.
 
 ```bash
 set -euo pipefail
@@ -337,11 +342,14 @@ trap 'rm -rf "$policy_work"' EXIT
 validate_documents() {
   jq -se '
     def nonempty_string: type == "string" and length > 0;
+    def entries:
+      if .kind == "ImageDigestMirrorSet" then .spec.imageDigestMirrors
+      else .spec.imageTagMirrors end;
     length > 0 and all(.[];
       type == "object" and (.kind | nonempty_string) and
-      (if .kind == "ImageTagMirrorSet" then
-        (.spec.imageTagMirrors | type == "array" and length > 0) and
-        all(.spec.imageTagMirrors[];
+      (if .kind == "ImageDigestMirrorSet" or .kind == "ImageTagMirrorSet" then
+        (entries | type == "array" and length > 0) and
+        all(entries[];
           (.source | nonempty_string) and
           (.mirrors | type == "array" and length > 0) and
           all(.mirrors[]; nonempty_string))
@@ -354,8 +362,11 @@ for resource_file in "${resource_files[@]}"; do
   validate_documents "$policy_work/documents.json"
 done
 for resource_file in "${resource_files[@]}"; do
-  yq -i '(select(.kind == "ImageTagMirrorSet") |
-    .spec.imageTagMirrors[].mirrorSourcePolicy) = "NeverContactSource"'     "$resource_file"
+  yq -i '(select(.kind == "ImageDigestMirrorSet") |
+    .spec.imageDigestMirrors[].mirrorSourcePolicy) = "NeverContactSource" |
+    (select(.kind == "ImageTagMirrorSet") |
+    .spec.imageTagMirrors[].mirrorSourcePolicy) = "NeverContactSource"' \
+    "$resource_file"
 done
 
 : > "$policy_work/all.json"
@@ -365,26 +376,31 @@ for resource_file in "${resource_files[@]}"; do
   cat "$policy_work/documents.json" >> "$policy_work/all.json"
 done
 jq -se '
-  [.[] | select(.kind == "ImageTagMirrorSet")] as $sets |
-  if all($sets[].spec.imageTagMirrors[];
-    .mirrorSourcePolicy == "NeverContactSource")
+  def entries:
+    if .kind == "ImageDigestMirrorSet" then .spec.imageDigestMirrors
+    else .spec.imageTagMirrors end;
+  [.[] | select(.kind == "ImageDigestMirrorSet" or
+    .kind == "ImageTagMirrorSet")] as $sets |
+  if ($sets | length > 0) and all($sets[];
+    all(entries[]; .mirrorSourcePolicy == "NeverContactSource"))
   then {apiVersion: "v1", kind: "List", items: $sets}
-  else error("ITMS source fallback is not disabled") end
-' "$policy_work/all.json" > "$policy_work/itms.json"
+  else error("IDMS/ITMS missing or source fallback is not disabled") end
+' "$policy_work/all.json" > "$policy_work/mirrors.json"
 
-itms_count=$(jq -er '.items | length' "$policy_work/itms.json")
-oc apply --server-side -f "$resource_dir/idms-oc-mirror.yaml"
-if ((itms_count > 0)); then
-  oc apply --server-side -f "$policy_work/itms.json"
-fi
+mirror_count=$(jq -er '.items | length' "$policy_work/mirrors.json")
+((mirror_count > 0)) || exit 1
+oc apply --server-side -f "$policy_work/mirrors.json"
 oc apply --server-side -f "$resource_dir/cs-redhat-operator-index-v4-22.yaml"
 oc apply --server-side -f "$resource_dir/cc-redhat-operator-index-v4-22.yaml"
 oc apply --server-side -f "$resource_dir/signature-configmap.yaml"
 ```
 
 Do not apply a partially patched workspace after a failure. Correct it and
-rerun the whole block; a failed `oc` command stops subsequent applies.
-This gate covers ITMS policy, not IDMS policy or completeness of mirror content.
+rerun the whole block. A validation or producer failure in **either** kind
+prevents **any** apply. A failed `oc` command stops subsequent applies; the
+API apply itself is not an atomic transaction and may require owner-reviewed
+reconciliation of partially applied resources. This gate checks both kinds'
+policy, not completeness of mirror content.
 The platform/network prerequisites must already provide the site's approved
 egress restrictions. `NeverContactSource` controls source fallback for matching
 image pulls; it is **not a firewall**, and network-egress testing is outside

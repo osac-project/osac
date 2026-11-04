@@ -4,10 +4,15 @@ import QueryErrorState, { type QueryErrorStateProps } from './QueryErrorState';
 
 type QueryErrorPageProps = Omit<QueryErrorStateProps, 'mode'> & {
   headingLevel?: EmptyStateProps['headingLevel'];
+  sectionClassName?: string;
 };
 
-const QueryErrorPage = ({ headingLevel = 'h1', ...props }: QueryErrorPageProps) => (
-  <PageSection hasBodyWrapper={false} isFilled>
+const QueryErrorPage = ({
+  headingLevel = 'h1',
+  sectionClassName,
+  ...props
+}: QueryErrorPageProps) => (
+  <PageSection hasBodyWrapper={false} isFilled className={sectionClassName}>
     <QueryErrorState {...props} mode="page" headingLevel={headingLevel} />
   </PageSection>
 );

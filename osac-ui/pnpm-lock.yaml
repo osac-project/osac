@@ -61,7 +61,7 @@ importers:
         version: link:../../libs/ui-components
       '@patternfly/patternfly':
         specifier: ^6.6.1
-        version: 6.6.1
+        version: 6.7.0
       '@patternfly/react-charts':
         specifier: ^8.6.1
         version: 8.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))
@@ -225,7 +225,7 @@ importers:
         version: link:../types
       '@patternfly/patternfly':
         specifier: ^6.6.1
-        version: 6.6.1
+        version: 6.7.0
       '@patternfly/react-charts':
         specifier: ^8.0.0
         version: 8.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))
@@ -371,8 +371,8 @@ packages:
     engines: {node: '>=6.0.0'}
     hasBin: true
 
-  '@babel/runtime@7.29.10':
-    resolution: {integrity: sha512-NpugTzbKgGrNe45Ui32cN8vCFFMxVtP/9rtfwv0nP5FRDAjvYBxJcLVpYA9mr1jxP6cnIT7x9LUzuDTbWYYNRA==}
+  '@babel/runtime@7.29.13':
+    resolution: {integrity: sha512-v+oN26xP4YIlQsbQ/CbTH1WG5m/l/DjKKZNy/Kp3f/AFvbgt7Em/D0FeMM3O2hX0YzeN2M16W8lOpyhIkfCBcQ==}
     engines: {node: '>=6.9.0'}
 
   '@babel/runtime@7.29.2':
@@ -875,8 +875,8 @@ packages:
   '@oxc-project/types@0.124.0':
     resolution: {integrity: sha512-VBFWMTBvHxS11Z5Lvlr3IWgrwhMTXV+Md+EQF0Xf60+wAdsGFTBx7X7K/hP4pi8N7dcm1RvcHwDxZ16Qx8keUg==}
 
-  '@patternfly/patternfly@6.6.1':
-    resolution: {integrity: sha512-8P9C1TmFk5y5s2/1XVjmP9JmSyDXDiNBwPZewhPizULtqlaRu+Evljx/X1HTSFrCNY0qgI1uDKy+NXiorIniyA==}
+  '@patternfly/patternfly@6.7.0':
+    resolution: {integrity: sha512-jV7bPxypppPtZA1XaJOz/uZsrIy2TA6Av18PLqAbHpZXDtzyHmFUEk3Sl21dQXEJmlMqniOh5Pv/6PHmmamJ9w==}
 
   '@patternfly/react-charts@8.6.1':
     resolution: {integrity: sha512-HkYmBanA3KmP/+dw3sbCGITjCif+r1EDzYcfjzLUUshllp55zBMv4UraEpV+pSwSv3fz1SfMQm7Dt5UXL0CWzA==}
@@ -3687,7 +3687,7 @@ snapshots:
     dependencies:
       '@babel/types': 7.29.0
 
-  '@babel/runtime@7.29.10': {}
+  '@babel/runtime@7.29.13': {}
 
   '@babel/runtime@7.29.2': {}
 
@@ -4089,7 +4089,7 @@ snapshots:
 
   '@oxc-project/types@0.124.0': {}
 
-  '@patternfly/patternfly@6.6.1': {}
+  '@patternfly/patternfly@6.7.0': {}
 
   '@patternfly/react-charts@8.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))':
     dependencies:
@@ -4302,7 +4302,7 @@ snapshots:
   '@testing-library/dom@10.4.0':
     dependencies:
       '@babel/code-frame': 7.29.7
-      '@babel/runtime': 7.29.10
+      '@babel/runtime': 7.29.13
       '@types/aria-query': 5.0.4
       aria-query: 5.3.0
       chalk: 4.1.2

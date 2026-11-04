@@ -697,8 +697,8 @@ func ndRemoveSecurityGroupHoldIfPresent(ctx context.Context, c ndClients, id str
 }
 
 // ndRemoveHoldIfPresent releases the hold and treats a record that is already gone as success. Specs call it inside
-// the polled wait for the delete, not once before it: the controllers write finalizers without a version check, so a
-// stale reconcile can overwrite the release and restore the hold, and nothing else would release it again.
+// the polled wait for the delete, not once before it: a release that reads the record just before a controller writes
+// it is rejected with Aborted, and the next poll reads the record again and repeats the release.
 func ndRemoveHoldIfPresent(ctx context.Context, what string, update func(context.Context) error) {
 	GinkgoHelper()
 	ndStatusUpdate(ctx, what, func() error {

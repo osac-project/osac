@@ -243,6 +243,8 @@ func (s *BareMetalInstanceCatalogItemsServer) Update(ctx context.Context,
 		return nil, publicInputMappingError(err, "failed to process bare metal instance catalog item")
 	}
 
+	// GenericServer restores the stored finalizers of public updates; this also keeps the name, labels and
+	// annotations when the request has no metadata.
 	if request.GetUpdateMask() == nil {
 		// Preserve private metadata under a row lock so a concurrent finalizer update cannot be lost.
 		current, err := getLockedReferenceResource(ctx, s.delegate.generic.dao, id)

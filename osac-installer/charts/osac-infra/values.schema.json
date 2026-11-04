@@ -40,6 +40,52 @@
         }
       }
     },
+    "metallb": {
+      "type": "object",
+      "description": "MetalLB LoadBalancer address pool for CaaS services",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Install MetalLB configuration and run the configure-metallb hook",
+          "default": false
+        },
+        "channel": {
+          "type": "string",
+          "description": "MetalLB operator subscription channel (osac-deps chart)",
+          "default": "stable"
+        },
+        "addresses": {
+          "type": "array",
+          "description": "MetalLB IPAddressPool spec.addresses entries (IPv4 CIDR, inclusive range such as 192.168.1.240-192.168.1.250, or a single address as a /32 such as 192.168.1.10/32). Single addresses ending in .0 or .255 cannot be allocated because avoidBuggyIPs is enabled.",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": ["192.168.100.240-192.168.100.250"]
+        },
+        "derivePoolFromNodeIP": {
+          "type": "boolean",
+          "description": "When true, the configure-metallb hook patches the pool to the first node InternalIP subnet using poolRangeStart and poolRangeEnd as host octets",
+          "default": false
+        },
+        "poolRangeStart": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Last octet of the LoadBalancer range start when derivePoolFromNodeIP is true; must be less than poolRangeEnd",
+          "default": 240
+        },
+        "poolRangeEnd": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Last octet of the LoadBalancer range end when derivePoolFromNodeIP is true; must be greater than poolRangeStart",
+          "default": 250
+        }
+      },
+      "additionalProperties": false
+    },
     "metal3": {
       "type": "object",
       "description": "Metal3/Ironic activation for the Bare Metal Fulfillment operator's Metal3 inventory backend",

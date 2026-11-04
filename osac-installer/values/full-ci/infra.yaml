@@ -11,6 +11,7 @@ lvms:
   enabled: true
 metallb:
   enabled: true
+  derivePoolFromNodeIP: true
 cnv:
   enabled: true
 mce:

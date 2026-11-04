@@ -97,6 +97,16 @@ topolvm:
 metallb:
   enabled: false
   channel: "stable"
+  # MetalLB IPAddressPool spec.addresses (IPv4 CIDR, inclusive range, or
+  # single address as /32, e.g. 192.168.1.10/32).
+  # Used as-is unless derivePoolFromNodeIP is enabled (configure-metallb hook).
+  addresses:
+    - 192.168.100.240-192.168.100.250
+  # Replace the pool after apply with {node-subnet}.poolRangeStart-{node-subnet}.poolRangeEnd
+  # using the first node's InternalIP. Off by default; set explicit addresses instead.
+  derivePoolFromNodeIP: false
+  poolRangeStart: 240
+  poolRangeEnd: 250
 
 # Activate metal3/Ironic so the Bare Metal Fulfillment operator's Metal3
 # inventory backend can reconcile BareMetalHosts. The hook applies the

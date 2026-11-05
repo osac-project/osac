@@ -1303,6 +1303,10 @@ func selectClusterFabricInterface(instanceType *privatev1.BareMetalInstanceType)
 // autoProvisionExternalIPs creates the API and ingress ExternalIPs. The ClusterOrder
 // reconciler requests their ExternalIPAttachments once the cluster endpoints are ready.
 func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cluster *privatev1.Cluster) error {
+	if !s.settings.ProvisioningEnabled {
+		return nil
+	}
+
 	pool, err := SelectExternalIPPool(ctx, s.logger, s.externalIPPoolDao, 2)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)

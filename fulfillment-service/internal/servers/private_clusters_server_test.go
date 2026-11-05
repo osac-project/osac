@@ -905,6 +905,69 @@ var _ = Describe("Private clusters server", func() {
 			Expect(stored.GetItems()).To(BeEmpty())
 		})
 
+		It("skips automatic ExternalIPs and pool reservations when provider networking is disabled", func() {
+			server.settings.ProvisioningEnabled = false
+
+			poolID := "disabled-auto-eip-pool"
+			_, err := server.externalIPPoolDao.Create().SetObject(privatev1.ExternalIPPool_builder{
+				Id:       poolID,
+				Metadata: privatev1.Metadata_builder{Name: poolID, Tenant: auth.SharedTenant}.Build(),
+				Spec: privatev1.ExternalIPPoolSpec_builder{
+					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+				}.Build(),
+				Status: privatev1.ExternalIPPoolStatus_builder{
+					State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+					Total:     5,
+					Available: 5,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			createWithoutExternalIPs := func(name string) {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template:                 privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							AutoExternalIpAttachment: proto.Bool(true),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+
+				clusterID := response.GetObject().GetId()
+				eips, err := server.externalIPDao.List().
+					SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, clusterID)).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(eips.GetItems()).To(BeEmpty())
+			}
+
+			poolResponse, err := server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			available := poolResponse.GetObject().GetStatus().GetAvailable()
+			allocated := poolResponse.GetObject().GetStatus().GetAllocated()
+
+			createWithoutExternalIPs(fmt.Sprintf("disabled-auto-eip-%s", uuid.New()[24:32]))
+			poolResponse, err = server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(available))
+			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(allocated))
+
+			// No READY pool is available, but the cluster request still succeeds.
+			pool := poolResponse.GetObject()
+			pool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
+			_, err = server.externalIPPoolDao.Update().SetObject(pool).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			createWithoutExternalIPs(fmt.Sprintf("disabled-auto-eip-%s", uuid.New()[24:32]))
+			poolResponse, err = server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(available))
+			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(allocated))
+		})
+
 		It("creates automatic ExternalIPs without attachments and cleans them up", func() {
 			poolDao, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
 				SetLogger(logger).

@@ -83,10 +83,16 @@ func reconcileAutomaticExternalIPAttachments(
 	ctx context.Context,
 	k8sClient client.Client,
 	networkingNamespace string,
+	provisioningEnabled bool,
 	attachmentsClient automaticExternalIPAttachmentsClient,
 	pollInterval time.Duration,
 	target automaticExternalIPAttachmentTarget,
 ) (ctrl.Result, error) {
+	if !provisioningEnabled {
+		// Disabled mode intentionally omits automatic ExternalIPs, so waiting
+		// for one here would requeue forever.
+		return ctrl.Result{}, nil
+	}
 	if networkingNamespace == "" || attachmentsClient == nil {
 		return ctrl.Result{}, nil
 	}

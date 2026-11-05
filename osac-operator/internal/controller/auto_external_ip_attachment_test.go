@@ -29,9 +29,11 @@ import (
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -39,10 +41,12 @@ import (
 type testExternalIPAttachmentsClient struct {
 	attachments []*privatev1.ExternalIPAttachment
 	created     []*privatev1.ExternalIPAttachment
+	listCalls   int
 	createErr   error
 }
 
 func (c *testExternalIPAttachmentsClient) List(_ context.Context, request *privatev1.ExternalIPAttachmentsListRequest, _ ...grpc.CallOption) (*privatev1.ExternalIPAttachmentsListResponse, error) {
+	c.listCalls++
 	items := make([]*privatev1.ExternalIPAttachment, 0, len(c.attachments))
 	for _, attachment := range c.attachments {
 		if strings.Contains(request.GetFilter(), strconv.Quote(attachment.GetSpec().GetExternalIp().GetId())) {
@@ -62,12 +66,34 @@ func (c *testExternalIPAttachmentsClient) Create(_ context.Context, request *pri
 	return &privatev1.ExternalIPAttachmentsCreateResponse{Object: attachment}, nil
 }
 
+type unexpectedAutomaticClustersGetter struct{}
+
+func (unexpectedAutomaticClustersGetter) Get(context.Context, *privatev1.ClustersGetRequest, ...grpc.CallOption) (*privatev1.ClustersGetResponse, error) {
+	panic("unexpected Fulfillment Cluster read when networking is disabled")
+}
+
+type unexpectedAutomaticBareMetalInstancesGetter struct{}
+
+func (unexpectedAutomaticBareMetalInstancesGetter) Get(context.Context, *privatev1.BareMetalInstancesGetRequest, ...grpc.CallOption) (*privatev1.BareMetalInstancesGetResponse, error) {
+	panic("unexpected Fulfillment BareMetalInstance read when networking is disabled")
+}
+
+type countingAutomaticExternalIPClient struct {
+	client.Client
+	listCalls int
+}
+
+func (c *countingAutomaticExternalIPClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	c.listCalls++
+	return c.Client.List(ctx, list, opts...)
+}
+
 func TestReconcileAutomaticExternalIPAttachmentsWaitsForAllocation(t *testing.T) {
 	target := testAutomaticAttachmentTarget(bareMetalInstanceOwner, "bmi-1", "tenant-1")
 	c := testExternalIPAttachmentsClient{}
 	result, err := reconcileAutomaticExternalIPAttachments(context.Background(),
 		testAutomaticExternalIPClient(t, testAutomaticExternalIP("eip-1", target, "", "")),
-		"networking", &c, time.Second, target)
+		"networking", true, &c, time.Second, target)
 	if err != nil {
 		t.Fatalf("reconcile automatic attachment: %v", err)
 	}
@@ -84,7 +110,7 @@ func TestReconcileAutomaticExternalIPAttachmentsCreatesReadyBareMetalAttachment(
 	c := testExternalIPAttachmentsClient{}
 	result, err := reconcileAutomaticExternalIPAttachments(context.Background(),
 		testAutomaticExternalIPClient(t, testAutomaticExternalIP("eip-1", target, "", "192.0.2.10")),
-		"networking", &c, time.Second, target)
+		"networking", true, &c, time.Second, target)
 	if err != nil {
 		t.Fatalf("reconcile automatic attachment: %v", err)
 	}
@@ -120,7 +146,7 @@ func TestReconcileAutomaticExternalIPAttachmentsCreatesClusterEndpoints(t *testi
 	ingressIP := testAutomaticExternalIP("eip-ingress", target, autoCreatedEndpointIngress, "192.0.2.11")
 	c := testExternalIPAttachmentsClient{}
 	_, err := reconcileAutomaticExternalIPAttachments(context.Background(), testAutomaticExternalIPClient(t, apiIP, ingressIP),
-		"networking", &c, time.Second, target)
+		"networking", true, &c, time.Second, target)
 	if err != nil {
 		t.Fatalf("reconcile automatic cluster attachments: %v", err)
 	}
@@ -147,7 +173,7 @@ func TestReconcileAutomaticExternalIPAttachmentsDoesNotCreateBeforeClusterEndpoi
 	result, err := reconcileAutomaticExternalIPAttachments(context.Background(), testAutomaticExternalIPClient(t,
 		testAutomaticExternalIP("eip-api", target, autoCreatedEndpointAPI, "192.0.2.10"),
 		testAutomaticExternalIP("eip-ingress", target, autoCreatedEndpointIngress, "192.0.2.11")),
-		"networking", &c, time.Second, target)
+		"networking", true, &c, time.Second, target)
 	if err != nil {
 		t.Fatalf("reconcile automatic cluster attachments: %v", err)
 	}
@@ -165,7 +191,7 @@ func TestReconcileAutomaticExternalIPAttachmentsIsIdempotent(t *testing.T) {
 	existing := testExpectedAutomaticAttachment("eip-1", target, "")
 	c := testExternalIPAttachmentsClient{attachments: []*privatev1.ExternalIPAttachment{existing}}
 	_, err := reconcileAutomaticExternalIPAttachments(context.Background(), testAutomaticExternalIPClient(t, ip),
-		"networking", &c, time.Second, target)
+		"networking", true, &c, time.Second, target)
 	if err != nil {
 		t.Fatalf("reconcile existing automatic attachment: %v", err)
 	}
@@ -179,7 +205,7 @@ func TestReconcileAutomaticExternalIPAttachmentsRetriesFulfillmentReadinessRace(
 	c := testExternalIPAttachmentsClient{createErr: status.Error(codes.FailedPrecondition, "target is not ready yet")}
 	result, err := reconcileAutomaticExternalIPAttachments(context.Background(),
 		testAutomaticExternalIPClient(t, testAutomaticExternalIP("eip-1", target, "", "192.0.2.10")),
-		"networking", &c, time.Second, target)
+		"networking", true, &c, time.Second, target)
 	if err != nil {
 		t.Fatalf("reconcile readiness race: %v", err)
 	}
@@ -194,7 +220,7 @@ func TestReconcileAutomaticExternalIPAttachmentsReturnsUnexpectedCreateError(t *
 	c := testExternalIPAttachmentsClient{createErr: wantErr}
 	_, err := reconcileAutomaticExternalIPAttachments(context.Background(),
 		testAutomaticExternalIPClient(t, testAutomaticExternalIP("eip-1", target, "", "192.0.2.10")),
-		"networking", &c, time.Second, target)
+		"networking", true, &c, time.Second, target)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want wrapped %v", err, wantErr)
 	}
@@ -207,13 +233,81 @@ func TestReconcileAutomaticExternalIPAttachmentsStopsForFailedExternalIP(t *test
 		Reason: v1alpha1.ReasonFailed, Message: "pool exhausted", LastTransitionTime: metav1.Now()}}
 	c := testExternalIPAttachmentsClient{}
 	result, err := reconcileAutomaticExternalIPAttachments(context.Background(),
-		testAutomaticExternalIPClient(t, ip), "networking", &c, time.Second, target)
+		testAutomaticExternalIPClient(t, ip), "networking", true, &c, time.Second, target)
 	if err != nil {
 		t.Fatalf("reconcile failed ExternalIP: %v", err)
 	}
 	if result.RequeueAfter != 0 || len(c.created) != 0 {
 		t.Fatalf("a FAILED ExternalIP must stop the recheck: requeue %s, created %d", result.RequeueAfter, len(c.created))
 	}
+}
+
+func TestReconcileAutomaticExternalIPAttachmentsDoesNotPollWhenProvisioningDisabled(t *testing.T) {
+	target := testAutomaticAttachmentTarget(bareMetalInstanceOwner, "bmi-1", "tenant-1")
+	attachmentsClient := &testExternalIPAttachmentsClient{}
+	k8sClient := &countingAutomaticExternalIPClient{Client: testAutomaticExternalIPClient(t)}
+
+	result, err := reconcileAutomaticExternalIPAttachments(context.Background(), k8sClient,
+		"networking", false, attachmentsClient, time.Second, target)
+	if err != nil {
+		t.Fatalf("reconcile automatic attachment with provisioning disabled: %v", err)
+	}
+	if result != (ctrl.Result{}) {
+		t.Fatalf("result = %+v, want no requeue when provisioning is disabled", result)
+	}
+	if k8sClient.listCalls != 0 {
+		t.Errorf("Kubernetes list calls = %d, want 0", k8sClient.listCalls)
+	}
+	if attachmentsClient.listCalls != 0 || len(attachmentsClient.created) != 0 {
+		t.Errorf("Fulfillment calls: lists=%d creates=%d, want none",
+			attachmentsClient.listCalls, len(attachmentsClient.created))
+	}
+}
+
+func TestDisabledProvisioningSkipsAutomaticExternalIPAttachmentLookups(t *testing.T) {
+	t.Run("ClusterOrder", func(t *testing.T) {
+		reconciler := &ClusterOrderReconciler{
+			NetworkingNamespace:           "networking",
+			NetworkingProvisioningEnabled: false,
+			ClustersClient:                unexpectedAutomaticClustersGetter{},
+			ExternalIPAttachmentsClient:   &testExternalIPAttachmentsClient{},
+		}
+		order := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{osacClusterOrderIDLabel: "cluster-1"}},
+			Status: v1alpha1.ClusterOrderStatus{
+				Phase:           v1alpha1.ClusterOrderPhaseReady,
+				ApiEndpoint:     "192.0.2.10",
+				IngressEndpoint: "192.0.2.11",
+			},
+		}
+
+		result, err := reconciler.reconcileAutomaticExternalIPAttachments(context.Background(), order)
+		if err != nil || result != (ctrl.Result{}) {
+			t.Fatalf("result = %+v, error = %v; want no lookup or requeue", result, err)
+		}
+	})
+
+	t.Run("BareMetalInstance", func(t *testing.T) {
+		reconciler := &BareMetalInstanceCleanupReconciler{
+			networkingNamespace:           "networking",
+			NetworkingProvisioningEnabled: false,
+			BareMetalInstancesClient:      unexpectedAutomaticBareMetalInstancesGetter{},
+			ExternalIPAttachmentsClient:   &testExternalIPAttachmentsClient{},
+		}
+		instance := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseReady,
+				NetworkAttachmentStatuses: []bmfov1alpha1.BareMetalNetworkAttachmentStatus{{
+					Primary: true, IPAddress: "192.0.2.12",
+				}},
+			},
+		}
+
+		result, err := reconciler.reconcileAutomaticExternalIPAttachments(context.Background(), instance, "bmi-1")
+		if err != nil || result != (ctrl.Result{}) {
+			t.Fatalf("result = %+v, error = %v; want no lookup or requeue", result, err)
+		}
+	})
 }
 
 func testAutomaticAttachmentTarget(kind autoExternalIPOwnerKind, id, tenant string) automaticExternalIPAttachmentTarget {

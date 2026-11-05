@@ -45,6 +45,20 @@ var _ = Describe("Bare metal instances server", func() {
 			Expect(server).ToNot(BeNil())
 		})
 
+		It("passes networking settings to its private delegate", func() {
+			server, err := NewBareMetalInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetNetworkingSettings(NetworkingSettings{ProvisioningEnabled: false}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			delegate, ok := server.delegate.(*PrivateBareMetalInstancesServer)
+			Expect(ok).To(BeTrue())
+			Expect(delegate.settings.ProvisioningEnabled).To(BeFalse())
+		})
+
 		It("Fails if logger is not set", func() {
 			server, err := NewBareMetalInstancesServer().
 				SetAttributionLogic(attribution).

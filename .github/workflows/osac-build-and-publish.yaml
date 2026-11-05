@@ -3012,12 +3012,35 @@ jobs:
   # create-component-releases/create-umbrella-release above) -- a tag
   # existing with nothing real behind it (no image ever reached
   # registry.stage.redhat.io) is exactly the "ghost tag" failure mode a
-  # cancelled or failed release used to leave behind, needing manual
-  # cleanup (deleting the tag, any GitHub Release, and confirming no
-  # Konflux artifact was ever built) to recover from. Deliberately does
-  # NOT also require trigger-konflux-chart-staging-release to succeed --
-  # same reasoning as create-component-releases' own comment (that job's
-  # continue-on-error makes its result meaningless as a gate).
+  # failed release used to leave behind, needing manual cleanup (deleting
+  # the tag, any GitHub Release, and confirming no Konflux artifact was
+  # ever built) to recover from. Deliberately does NOT also require
+  # trigger-konflux-chart-staging-release to succeed -- same reasoning as
+  # create-component-releases' own comment (that job's continue-on-error
+  # makes its result meaningless as a gate).
+  #
+  # Gated on result == 'failure' specifically, not != 'success': a
+  # cancelled run (someone cancels the workflow, or GitHub's own
+  # timeout-minutes fires) means the job stopped WATCHING, not that
+  # trigger-konflux-staging-release's own apply_release already applied a
+  # real Konflux Release CR that may still be progressing on the cluster
+  # and could still land Released=True later -- rolling back tags in that
+  # case would orphan a release that might actually succeed. Only a
+  # confirmed 'failure' (that job's own script reaching sys.exit(1) after
+  # exhausting its retries or its internal poll timeout -- see its own
+  # comment on why both count as terminal from its perspective) is treated
+  # as safe to roll back. A cancelled/timed-out run is left alone and
+  # needs manual reconciliation: check whether the Konflux Release it
+  # created actually completed before deciding whether to delete anything
+  # by hand.
+  #
+  # IMPORTANT recovery-path note: once this job has deleted tags, GitHub's
+  # "Re-run failed jobs" is no longer a valid way to recover this release
+  # -- create-component-releases and friends would reference tags that no
+  # longer exist, and cleanup (which always runs once tag succeeds,
+  # regardless of staging's outcome) has already deleted the temp branch
+  # stamp-and-release-charts would need too. Dispatch a fresh
+  # osac-release.yaml run with a new release_version instead.
   #
   # Must be in cleanup's own needs: below so cleanup can never delete the
   # temp branch this job still needs to check out first -- they'd
@@ -3025,12 +3048,12 @@ jobs:
   # directly need trigger-konflux-staging-release).
   # -------------------------------------------------------------------
   rollback-tags-on-failure:
-    name: Roll back tags (staging release did not succeed)
+    name: Roll back tags (staging release confirmed failed)
     needs: [prepare, tag, trigger-konflux-staging-release]
     if: |
       always() && inputs.mode == 'release' &&
       needs.tag.result == 'success' &&
-      needs.trigger-konflux-staging-release.result != 'success'
+      needs.trigger-konflux-staging-release.result == 'failure'
     runs-on: osac-ci
     timeout-minutes: 15
     permissions:
@@ -3155,6 +3178,8 @@ jobs:
           echo "::error::One or more tags failed to roll back -- see the errors above, clean up manually" >&2
           exit 1
         fi
+
+        echo "::notice::Tags for ${VERSION} rolled back after a confirmed staging failure. GitHub's 'Re-run failed jobs' will NOT work for this release -- the tags it deletes just now would need to exist, and the temp branch stamp-and-release-charts needs has already been deleted by cleanup regardless. Dispatch a fresh osac-release.yaml run with a new release_version instead." >&2
 
   # -------------------------------------------------------------------
   # Stamp charts with their real, now-confirmed-released images, then

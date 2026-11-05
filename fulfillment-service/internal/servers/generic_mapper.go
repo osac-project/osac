@@ -350,7 +350,7 @@ func filterSystemTenantReferences(
 	}
 	if isFullResourceReference(message.Descriptor()) {
 		tenantField := message.Descriptor().Fields().ByName("tenant")
-		if message.Get(tenantField).String() == "system" {
+		if message.Get(tenantField).String() == auth.SystemTenant {
 			clearFullResourceReference(message)
 			return nil
 		}

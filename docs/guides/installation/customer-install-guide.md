@@ -762,16 +762,22 @@ You create one values file for the `osac` chart, `my-values.yaml`.
 
 **Procedure**
 
-1. Retrieve the full set of value keys from the chart:
+1. Retrieve the chart defaults and unpack the selected chart to access its
+   bundled example values:
 
    ```console
    helm show values "$OSAC_CHART" --version "$OSAC_RELEASE_VERSION" > values-upstream.yaml
+   OSAC_CHART_DIR=$(mktemp -d)
+   helm pull "$OSAC_CHART" \
+     --version "$OSAC_RELEASE_VERSION" \
+     --untar \
+     --untardir "$OSAC_CHART_DIR"
    ```
 
 2. Create `my-values.yaml` for the `osac` chart. Copy the keys you need from
-   the chart `values-example.yaml` file, which describes a production setup
-   with an external PostgreSQL database, an external Keycloak, and pinned image
-   tags. Leave out `dbMigrate.dbUrl`, which the chart schema rejects. Set
+   `$OSAC_CHART_DIR/osac/values-example.yaml`, which describes a production
+   setup with an external PostgreSQL database, an external Keycloak, and pinned
+   image tags. Leave out `dbMigrate.dbUrl`, which the chart schema rejects. Set
    `global.osacDeploymentId` to a stable identity for this deployment; the
    install fails without it.
    For production, set `dbInit.host` in this file to the reachable hostname

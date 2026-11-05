@@ -68,18 +68,16 @@ class K8sClient:
 
     # Generic kubectl operations
 
-    def get_json(self, *, resource: str, name: str, namespace: str | None = None, timeout: int = 300) -> dict[str, Any]:
+    def get_json(self, *, resource: str, name: str, namespace: str | None = None) -> dict[str, Any]:
         target_namespace = self.namespace if namespace is None else namespace
-        return json.loads(
-            run(*self._base(), "get", resource, name, "-n", target_namespace, "-o", "json", timeout=timeout)
-        )
+        return json.loads(run(*self._base(), "get", resource, name, "-n", target_namespace, "-o", "json"))
 
-    def list_json(self, *, resource: str, namespace: str | None = None, timeout: int = 300) -> dict[str, Any]:
+    def list_json(self, *, resource: str, namespace: str | None = None) -> dict[str, Any]:
         args = [*self._base(), "get", resource]
         if namespace is not None:
             args.extend(["-n", namespace])
         args.extend(["-o", "json"])
-        return json.loads(run(*args, timeout=timeout))
+        return json.loads(run(*args))
 
     def get_operator_metrics(self) -> str:
         services = self.list_json(resource="services", namespace=self.namespace).get("items", [])

@@ -1,9 +1,9 @@
 # OSAC Helm Deployment Guide
 
-This guide provides an administrator procedure for deploying the prerequisite
-Operators and infrastructure layer (phase 1) for OSAC on a clean connected
-OpenShift cluster, using `oc` and Helm from a monorepo checkout. If your cluster
-already has the prerequisites, see the
+This guide provides an administrator procedure for installing the prerequisite
+Operators and infrastructure layer (phase 1) from a monorepo checkout, then
+installing the matching published `osac` chart (phase 2) on a clean, connected
+OpenShift cluster. If your cluster already has the prerequisites, see the
 [customer install guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md)
 to install just the published `osac` chart.
 
@@ -384,8 +384,9 @@ Keycloak, use the realm issuer URL configured in `service.auth.issuerUrl`. See
 the [customer install guide](customer-install-guide.md#42-configuring-the-helm-values).
 
 ```bash
-helm dependency update ./charts/osac
-helm upgrade --install osac ./charts/osac \
+helm upgrade --install osac \
+    oci://ghcr.io/osac-project/charts/osac \
+    --version "$OSAC_RELEASE_VERSION" \
     -n "$NS" --create-namespace \
     -f my-values.yaml \
     --set global.clusterDomain="$DOMAIN" \
@@ -541,7 +542,14 @@ and RBAC resources on uninstall. To remove the labeled EVPN resources manually:
 oc delete routeadvertisements,vteps -l osac.openshift.io/evpn=true
 oc delete frrconfigurations -n openshift-frr-k8s -l osac.openshift.io/evpn=true
 oc delete nncp -l osac.openshift.io/evpn=true
-oc delete nmstate -l osac.openshift.io/evpn=true
+```
+
+The `nmstate/nmstate` custom resource is a shared NMState Operator singleton.
+Do not delete it as part of routine EVPN cleanup. Only remove it after cluster
+administrators confirm that no other integration depends on it:
+
+```bash
+oc delete nmstate nmstate
 ```
 
 Restore the cluster network operator settings separately if the cluster no

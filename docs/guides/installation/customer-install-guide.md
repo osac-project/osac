@@ -109,7 +109,8 @@ that the chart is available in OCI using `helm show chart` as described in
 An umbrella release's `osac-release/v<VERSION>` tag and matching
 `osac/v<VERSION>` source tag point to the same commit. The source checkout
 and download commands below use `osac/v`; nightly source tags also use this
-prefix. This guide targets the final OSAC `0.4.0` release.
+prefix. This guide targets the final OSAC `0.4.0` release. Use it after the
+matching `osac/v0.4.0` release and OCI chart have been published.
 
 For evaluation builds, check the
 [OSAC Nightly Build workflow](https://github.com/osac-project/osac/actions/workflows/nightly-build.yaml)
@@ -1465,7 +1466,7 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `service.idp.provider`, `service.idp.url`, `service.idp.credentials[]` | Identity provider for user and role management. Only `keycloak` is supported. |
 | `service.database.connection[]` | Volume sources for the database URL and client certificate, for example `osac-db-config` and `osac-db-client-cert`. |
 | `service.log.level`, `service.log.headers`, `service.log.bodies` | Log verbosity. Keep `headers` and `bodies` set to `false` in production. |
-| `service.vault.endpoint` | Vault-compatible API URL. Leave it empty to disable Vault integration. Production deployments using Vault or OpenBao must set it to the reachable endpoint. See the [secrets management configuration guide](secrets-management-configuration.md). |
+| `service.vault.endpoint` | Required Vault-compatible API URL. The default targets bundled OpenBao in `osac-infra`; in production, set it to a reachable Vault or OpenBao endpoint. See the [secrets management configuration guide](secrets-management-configuration.md). |
 | `service.vault.namespace`, `service.vault.kvMountPath`, `service.vault.lifecycleRole`, `service.vault.lifecycleMountPath`, `service.vault.keycloakClientId`, `service.vault.keycloakIssuerUrl`, `service.vault.keycloakAudience`, `service.vault.caBundle`, `service.vault.credentials` | Vault namespace, mount paths, JWT role, Keycloak client and audience, CA bundle, and client credentials. Configure these for an external store as described in the [secrets management configuration guide](secrets-management-configuration.md). |
 
 **Table 5.5. AAP (`aap.*`, all `schema`)**
@@ -1998,15 +1999,15 @@ export KUBECONFIG=/path/to/management-kubeconfig
 oc whoami --show-server
 ```
 
-Confirm that the server shown is the management cluster. Run the OSAC and
-preflight checks in [Section 7](#7-verifying-the-installation) on that cluster.
-For VMaaS, check the OpenShift Virtualization CSV from Section 7 on the
-workload cluster. Check the LVM Storage and MetalLB CSVs on whichever cluster
-hosts those providers.
+Confirm that the server shown is the management cluster.
 
 Install OSAC on the management cluster. See
-[Section 4.3](#43-installing-osac). Confirm that the virtual machine is created
-on the workload cluster.
+[Section 4.3](#43-installing-osac). After installation, run the OSAC and
+preflight checks in [Section 7](#7-verifying-the-installation) on the
+management cluster. For VMaaS, check the OpenShift Virtualization CSV from
+Section 7 on the workload cluster. Check the LVM Storage and MetalLB CSVs on
+whichever cluster hosts those providers. Confirm that the virtual machine is
+created on the workload cluster.
 
 ---
 

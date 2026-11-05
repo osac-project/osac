@@ -1,0 +1,20 @@
+---
+name: ontap-storage
+title: NetApp ONTAP Storage Provider
+description: >
+  Validates operator-supplied ONTAP backend parameters for OSAC tenants in
+  both customer-managed Shared-TBC mode (provider_config.profiles) and
+  administrator-prepared Dedicated-SVM mode (tenant_preparation), and drives
+  NetApp Trident on the target VMaaS cluster to serve block volumes. In
+  Shared-TBC mode, creates per-tier StorageClasses bound to customer-managed
+  TridentBackendConfigs; in Dedicated-SVM mode, creates a per-tenant
+  TridentBackendConfig with labeled virtual pools, its SVM CSI Secret in the
+  Trident namespace, and per-tier StorageClasses.
+
+template_type: storage_provider
+implementation_strategy: ontap
+capabilities:
+  supported_protocols:
+    - block
+  provisioning_targets:
+    - vmaas

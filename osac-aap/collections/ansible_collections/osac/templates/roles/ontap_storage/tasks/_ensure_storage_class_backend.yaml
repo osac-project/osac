@@ -1,0 +1,521 @@
+---
+# Per-backend TridentBackendConfig + StorageClasses (included by
+# ensure_storage_class.yaml with loop_var _ontap_backend_id).
+#
+# Kubeconfig routing: the dispatcher's module_defaults route k8s/k8s_info to
+# the target cluster via storage_provider_target_kubeconfig. All resources
+# created here (CSI Secret, TridentBackendConfig, StorageClasses) live on the
+# target cluster and use the routed default.
+#
+# Resource naming & mapping:
+#   assignment_key = lowercase sha256(backend_id + "|" + tenant_name)[:16]
+#   tier_key       = lowercase sha256(tier_name)[:16]
+#   TBC            = ontap-<assignment_key>            (in Trident namespace)
+#   CSI Secret     = ontap-csi-<assignment_key>        (in Trident namespace)
+#   StorageClass   = ontap-<assignment_key>-<tier_key>
+#   QoS policy     = osac-<assignment_key>-<tier_key>-qos (pre-provisioned by admin)
+#
+# Virtual-pool mapping: Trident's OntapStorageDriverPool has no user-configurable
+# pool name field (Trident auto-names virtual pools <backendName>_pool_<index>).
+# Each virtual pool in TBC spec.storage is labeled with
+# osac_backend: ontap-<assignment_key> and tier: <tier.name>, and each
+# StorageClass binds to its tenant TBC + tier virtual pool via
+# parameters.selector: "osac_backend=ontap-<assignment_key>;tier=<tier.name>".
+
+- name: Provision CSI Secret, TridentBackendConfig, and StorageClasses for dispatched backend
+  block:
+    - name: Compute assignment key for dispatched backend
+      ansible.builtin.set_fact:
+        _assignment_key: >-
+          {{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}
+        _tbc_name: "ontap-{{ ((_ontap_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+      no_log: true
+
+    - name: Validate backend tenancy mode and tier parameters
+      ansible.builtin.include_tasks: _validate_backend_mode.yaml
+
+    - name: Compute referenced Shared-TBC profiles for dispatched backend
+      ansible.builtin.set_fact:
+        _ontap_referenced_profiles: >-
+          {{ _backend_tiers | map(attribute='provider_config.profile') | map('trim') | unique | list }}
+      when: _ontap_is_shared_tbc | bool
+      no_log: true
+
+    - name: Inspect referenced customer TridentBackendConfigs (best-effort)
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        namespace: "{{ _ontap_shared_profile_map[item].tbc_namespace }}"
+        name: "{{ _ontap_shared_profile_map[item].tbc_name }}"
+      loop: "{{ _ontap_referenced_profiles if (_ontap_is_shared_tbc | bool) else [] }}"
+      loop_control:
+        label: "shared-tbc-profile"
+      register: _shared_tbc_lookups
+      failed_when: false
+      when: _ontap_is_shared_tbc | bool
+      no_log: true
+
+    - name: Fail when a visible customer TridentBackendConfig is in Failed state
+      ansible.builtin.fail:
+        msg: >-
+          Referenced shared TridentBackendConfig is in Failed state
+          (status.phase or status.lastOperationStatus is Failed). Inspect the
+          customer TridentBackendConfig on the target cluster.
+      when: >-
+        (_ontap_is_shared_tbc | bool) and (
+          (
+            (_shared_tbc_lookups.results | default([])
+             | selectattr('resources', 'defined')
+             | selectattr('resources', 'sequence')
+             | map(attribute='resources')
+             | flatten(levels=1)
+             | selectattr('status', 'defined')
+             | selectattr('status', 'mapping')
+             | map(attribute='status.phase', default='')
+             | select('equalto', 'Failed')
+             | list | length) > 0
+          ) or (
+            (_shared_tbc_lookups.results | default([])
+             | selectattr('resources', 'defined')
+             | selectattr('resources', 'sequence')
+             | map(attribute='resources')
+             | flatten(levels=1)
+             | selectattr('status', 'defined')
+             | selectattr('status', 'mapping')
+             | map(attribute='status.lastOperationStatus', default='')
+             | select('equalto', 'Failed')
+             | list | length) > 0
+          )
+        )
+      no_log: true
+
+    - name: Fail when a visible customer TridentBackendConfig is not Bound
+      ansible.builtin.fail:
+        msg: >-
+          Referenced shared TridentBackendConfig is visible on the target
+          cluster but is not in phase Bound. Wait for the customer
+          TridentBackendConfig to reach phase Bound, then retry.
+      when: >-
+        (_ontap_is_shared_tbc | bool) and (
+          (_shared_tbc_lookups.results | default([])
+           | selectattr('resources', 'defined')
+           | selectattr('resources', 'sequence')
+           | map(attribute='resources')
+           | flatten(levels=1)
+           | map(attribute='status', default={})
+           | map('default', {}, true)
+           | map(attribute='phase', default='')
+           | map('string')
+           | map('trim')
+           | reject('equalto', 'Bound')
+           | list | length) > 0
+        )
+      no_log: true
+
+    - name: Fail when a visible customer TridentBackendConfig uses an unsupported driver or sanType
+      ansible.builtin.fail:
+        msg: >-
+          Referenced shared TridentBackendConfig has an unsupported
+          storageDriverName (must be ontap-san) or sanType (must be one of
+          iscsi, fcp, nvme when specified).
+      when: >-
+        (_ontap_is_shared_tbc | bool) and (
+          (
+            (_shared_tbc_lookups.results | default([])
+             | selectattr('resources', 'defined')
+             | selectattr('resources', 'sequence')
+             | map(attribute='resources')
+             | flatten(levels=1)
+             | selectattr('spec', 'defined')
+             | selectattr('spec', 'mapping')
+             | map(attribute='spec.storageDriverName', default='')
+             | map('string')
+             | map('trim')
+             | reject('in', ['', 'ontap-san'])
+             | list | length) > 0
+          ) or (
+            (_shared_tbc_lookups.results | default([])
+             | selectattr('resources', 'defined')
+             | selectattr('resources', 'sequence')
+             | map(attribute='resources')
+             | flatten(levels=1)
+             | selectattr('spec', 'defined')
+             | selectattr('spec', 'mapping')
+             | map(attribute='spec.sanType', default='')
+             | map('string')
+             | map('trim')
+             | reject('in', ['', 'iscsi', 'fcp', 'nvme'])
+             | list | length) > 0
+          )
+        )
+      no_log: true
+
+    - name: Resolve bound Trident backend names per Shared-TBC profile
+      ansible.builtin.set_fact:
+        _ontap_profile_backend_names: >-
+          {% set bnames = {} -%}
+          {% for prof in _ontap_referenced_profiles -%}
+          {% set _ = bnames.update({prof: ''}) -%}
+          {% endfor -%}
+          {% for res in (_shared_tbc_lookups.results | default([])) -%}
+          {% if res.resources is defined
+                and res.resources is sequence
+                and (res.resources | length > 0)
+                and ((res.resources[0].status | default({}, true)).phase | default('') == 'Bound') -%}
+          {% set _bname = (((res.resources[0].status | default({}, true)).backendInfo | default({}, true)).backendName
+                           | default((res.resources[0].spec | default({}, true)).backendName | default('', true), true)
+                           | string | trim) -%}
+          {% set _ = bnames.update({(res.item | string | trim): _bname}) -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ bnames }}
+      when: _ontap_is_shared_tbc | bool
+      no_log: true
+
+    - name: Validate resolved bound Trident backend names against regex injection
+      ansible.builtin.fail:
+        msg: >-
+          Resolved Trident backendName contains invalid characters. Must match
+          ^[A-Za-z0-9._-]+$.
+      when: >-
+        (_ontap_is_shared_tbc | bool) and (
+          (_ontap_profile_backend_names | dict2items
+           | selectattr('value', 'string')
+           | map(attribute='value')
+           | reject('equalto', '')
+           | reject('regex', '^[A-Za-z0-9._-]+$')
+           | list | length) > 0
+        )
+      no_log: true
+
+    - name: Build desired Shared-TBC StorageClass parameters per tier
+      ansible.builtin.set_fact:
+        _ontap_shared_sc_desired_params: >-
+          {% set desired_map = {} -%}
+          {% for item in _backend_tiers -%}
+          {% set _parts = [] -%}
+          {% for entry in (item.provider_config.pool_selector | dict2items | sort(attribute='key')) -%}
+          {% set _ = _parts.append((entry.key | string) ~ '=' ~ (entry.value | string)) -%}
+          {% endfor -%}
+          {% set _sel = _parts | join(';') -%}
+          {% set _bname = _ontap_profile_backend_names[item.provider_config.profile | trim] | default('') -%}
+          {% set _desired = {'backendType': 'ontap-san', 'selector': _sel}
+             | combine({'storagePools': (_bname | replace('.', '\\.')) ~ ':.*'} if (_bname | length > 0) else {}) -%}
+          {% set _ = desired_map.update({item.name: _desired}) -%}
+          {% endfor -%}
+          {{ desired_map }}
+      when: _ontap_is_shared_tbc | bool
+      no_log: true
+
+    - name: Identify existing Shared-TBC StorageClasses with changed immutable parameters
+      ansible.builtin.set_fact:
+        _ontap_stale_shared_sc_names: >-
+          {% set stale = [] -%}
+          {% for item in _backend_tiers -%}
+          {% set _sc_name = 'ontap-' ~ _assignment_key ~ '-' ~ ((item.name | hash('sha256'))[:16] | lower) -%}
+          {% set _existing = (_ontap_sc_checks.resources | default([])) | selectattr('metadata.name', 'equalto', _sc_name) | list -%}
+          {% if (_existing | length > 0) and ((_existing[0].parameters | default({}, true)) != _ontap_shared_sc_desired_params[item.name]) -%}
+          {% set _ = stale.append(_sc_name) -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ stale }}
+      when: _ontap_is_shared_tbc | bool
+      no_log: true
+
+    - name: Delete existing Shared-TBC StorageClasses when immutable parameters differ
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item }}"
+      loop: "{{ (_ontap_stale_shared_sc_names | default([])) if (_ontap_is_shared_tbc | bool) else [] }}"
+      loop_control:
+        label: "stale-storage-class"
+      when: _ontap_is_shared_tbc | bool
+      no_log: true
+
+    - name: Create the per-tier StorageClasses for shared Trident backend
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "ontap-{{ _assignment_key }}-{{ (item.name | hash('sha256'))[:16] | lower }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/storage-tier: "{{ item.name }}"
+              osac.openshift.io/storage-protocol: block
+              osac.openshift.io/storage-provider: ontap
+              osac.openshift.io/storage-backend-id: "{{ _ontap_backend_id }}"
+          provisioner: csi.trident.netapp.io
+          parameters: "{{ _ontap_shared_sc_desired_params[item.name] }}"
+          reclaimPolicy: Delete
+          volumeBindingMode: WaitForFirstConsumer
+      loop: "{{ _backend_tiers if (_ontap_is_shared_tbc | bool) else [] }}"
+      loop_control:
+        label: "storage-tier"
+      when: _ontap_is_shared_tbc | bool
+      no_log: true
+
+    - name: Set runtime credentials and SVM name from operator preparation
+      ansible.builtin.set_fact:
+        _runtime_username: "{{ _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.username | string | trim }}"
+        _runtime_password: "{{ _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.password | string }}"
+        _svm_name: "{{ _provider_backend_connections[_ontap_backend_id].tenant_preparation.provider_config.svm | string | trim }}"
+      when: not (_ontap_is_shared_tbc | bool)
+      no_log: true
+
+    # Resolve the CA bundle from ontap_storage_ca_bundle_path to pass as TBC
+    # spec.trustedCACertificate (base64 of PEM) when ontap_storage_validate_certs
+    # is enabled. When ontap_storage_validate_certs is false, omit
+    # trustedCACertificate so Trident does not reject self-signed/expired lab certs.
+    - name: Resolve trustedCACertificate from cluster CA bundle when cert validation is enabled
+      ansible.builtin.set_fact:
+        _trusted_ca_b64: >-
+          {% if ontap_storage_validate_certs | bool -%}
+          {% set _ca_pem = lookup('file', ontap_storage_ca_bundle_path, errors='ignore') | default('', true) -%}
+          {{ (_ca_pem | b64encode) if (_ca_pem | length > 0) else '' }}
+          {%- else -%}
+          {{ '' }}
+          {%- endif %}
+      when: not (_ontap_is_shared_tbc | bool)
+      no_log: true
+
+    - name: Fail when certificate validation is enabled without a CA bundle
+      ansible.builtin.fail:
+        msg: >-
+          Certificate validation is enabled, but ontap_storage_ca_bundle_path is
+          missing, unreadable, or empty. Provide a CA bundle or explicitly
+          disable validation with ONTAP_VALIDATE_CERTS=false.
+      when: >-
+        not (_ontap_is_shared_tbc | bool) and
+        (ontap_storage_validate_certs | bool) and
+        (_trusted_ca_b64 | default('') | length == 0)
+      no_log: true
+
+    # The managementLIF is the ONTAP management endpoint the SVM is accessed
+    # through — the backend connection's endpoint, stripped to host:port.
+    - name: Derive the management LIF from the backend connection endpoint
+      ansible.builtin.set_fact:
+        _management_lif: >-
+          {{ _provider_backend_connections[_ontap_backend_id].endpoint | string | trim | regex_replace('^https?://', '') | regex_replace('/.*$', '') | trim }}
+      when: not (_ontap_is_shared_tbc | bool)
+      no_log: true
+
+    - name: Create the CSI Secret in the Trident namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "ontap-csi-{{ _assignment_key }}"
+            namespace: "{{ ontap_storage_trident_namespace }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/storage-provider: ontap
+              osac.openshift.io/storage-backend-id: "{{ _ontap_backend_id }}"
+          type: Opaque
+          stringData:
+            username: "{{ _runtime_username }}"
+            password: "{{ _runtime_password }}"
+      when: not (_ontap_is_shared_tbc | bool)
+      no_log: true
+
+    # Virtual pools: one per tier. Trident's OntapStorageDriverPool schema has
+    # `labels` and `defaults` (`encryption`, `qosPolicy`) — no `name` field.
+    # Each pool carries `osac_backend: <tbc_name>` and `tier: <tier.name>` labels
+    # so the tier's StorageClass can uniquely select it via parameters.selector.
+    - name: Build the TBC virtual pools for dispatched backend
+      ansible.builtin.set_fact:
+        _virtual_pools: >-
+          {% set _pools = [] -%}
+          {% for tier in _backend_tiers -%}
+          {% set _tier_key = (tier.name | hash('sha256'))[:16] | lower -%}
+          {% set _enc = (tier.encryption_enabled | default(false) | bool) | ternary('true', 'false') -%}
+          {% set _defaults = {'encryption': _enc} -%}
+          {% set _max_iops = (tier.qos_limits.provider_config.max_iops | default(0) | int)
+                             if (tier.qos_limits is defined and tier.qos_limits is mapping and tier.qos_limits.provider_config is defined and tier.qos_limits.provider_config is mapping)
+                             else 0 -%}
+          {% if _max_iops > 0 -%}
+          {% set _ = _defaults.update({'qosPolicy': 'osac-' ~ _assignment_key ~ '-' ~ _tier_key ~ '-qos'}) -%}
+          {% endif -%}
+          {% set _pool = {
+               'labels': {
+                 'osac_backend': _tbc_name,
+                 'tier': tier.name
+               },
+               'defaults': _defaults
+             } -%}
+          {% set _ = _pools.append(_pool) -%}
+          {% endfor -%}
+          {{ _pools }}
+      when: not (_ontap_is_shared_tbc | bool)
+      no_log: true
+
+    - name: Create the TridentBackendConfig for dispatched backend
+      kubernetes.core.k8s:
+        state: present
+        definition: >-
+          {{ {'apiVersion': 'trident.netapp.io/v1',
+              'kind': 'TridentBackendConfig',
+              'metadata': {
+                'name': _tbc_name,
+                'namespace': ontap_storage_trident_namespace,
+                'labels': {
+                  'app.kubernetes.io/managed-by': 'osac-aap',
+                  'osac.openshift.io/tenant': tenant_name,
+                  'osac.openshift.io/storage-provider': 'ontap',
+                  'osac.openshift.io/storage-backend-id': _ontap_backend_id
+                }
+              },
+              'spec': (
+                {
+                  'version': 1,
+                  'storageDriverName': 'ontap-san',
+                  'backendName': _tbc_name,
+                  'sanType': ontap_storage_san_type,
+                  'managementLIF': _management_lif,
+                  'svm': _svm_name,
+                  'useREST': True,
+                  'deletionPolicy': 'delete',
+                  'credentials': {'name': 'ontap-csi-' ~ _assignment_key},
+                  'storage': _virtual_pools
+                }
+                | combine({'trustedCACertificate': _trusted_ca_b64} if (_trusted_ca_b64 | default('') | length > 0) else {})
+              )
+            } }}
+      when: not (_ontap_is_shared_tbc | bool)
+      no_log: true
+
+    # Fail fast on a Failed phase or lastOperationStatus instead of burning the full retry window.
+    - name: Wait for the TridentBackendConfig to become Bound
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "{{ _tbc_name }}"
+        namespace: "{{ ontap_storage_trident_namespace }}"
+      register: _tbc_status
+      until: >-
+        (_tbc_status.resources | default([]) | length > 0) and (
+          ((_tbc_status.resources[0].status | default({}, true)).phase | default('') == "Failed") or
+          ((_tbc_status.resources[0].status | default({}, true)).lastOperationStatus | default('') == "Failed") or
+          (
+            ((_tbc_status.resources[0].status | default({}, true)).phase | default('') == "Bound") and
+            ((_tbc_status.resources[0].status | default({}, true)).lastOperationStatus | default('Success', true) == "Success")
+          )
+        )
+      retries: 12
+      delay: 5
+      failed_when: false
+      when: not (_ontap_is_shared_tbc | bool)
+      no_log: true
+
+    - name: Fail when TridentBackendConfig phase is Failed
+      ansible.builtin.fail:
+        msg: >-
+          TridentBackendConfig reached phase Failed or lastOperationStatus
+          Failed during backend binding. Inspect the TridentBackendConfig
+          status conditions and Trident operator logs on the target cluster.
+      when: >-
+        not (_ontap_is_shared_tbc | bool) and
+        (_tbc_status.resources | default([]) | length > 0) and (
+          ((_tbc_status.resources[0].status | default({}, true)).phase | default('') == "Failed") or
+          ((_tbc_status.resources[0].status | default({}, true)).lastOperationStatus | default('') == "Failed")
+        )
+      no_log: true
+
+    - name: Fail if the TridentBackendConfig did not become Bound
+      ansible.builtin.fail:
+        msg: >-
+          TridentBackendConfig did not reach phase Bound within the wait
+          window. Inspect the TridentBackendConfig status conditions and
+          Trident operator logs on the target cluster.
+      when: >-
+        not (_ontap_is_shared_tbc | bool) and (
+          (_tbc_status.resources | default([]) | length == 0) or
+          ((_tbc_status.resources[0].status | default({}, true)).phase | default('') != "Bound") or
+          ((_tbc_status.resources[0].status | default({}, true)).lastOperationStatus | default('Success', true) != "Success")
+        )
+      no_log: true
+
+    - name: Identify existing Dedicated-SVM StorageClasses with changed immutable parameters
+      ansible.builtin.set_fact:
+        _ontap_stale_dedicated_sc_names: >-
+          {% set stale = [] -%}
+          {% for item in _backend_tiers -%}
+          {% set _sc_name = 'ontap-' ~ _assignment_key ~ '-' ~ ((item.name | hash('sha256'))[:16] | lower) -%}
+          {% set _existing = (_ontap_sc_checks.resources | default([])) | selectattr('metadata.name', 'equalto', _sc_name) | list -%}
+          {% set _desired = {'backendType': 'ontap-san', 'selector': 'osac_backend=' ~ _tbc_name ~ ';tier=' ~ item.name} -%}
+          {% if (_existing | length > 0) and ((_existing[0].parameters | default({}, true)) != _desired) -%}
+          {% set _ = stale.append(_sc_name) -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ stale }}
+      when: not (_ontap_is_shared_tbc | bool)
+      no_log: true
+
+    - name: Delete existing Dedicated-SVM StorageClasses when immutable parameters differ
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item }}"
+      loop: "{{ (_ontap_stale_dedicated_sc_names | default([])) if not (_ontap_is_shared_tbc | bool) else [] }}"
+      loop_control:
+        label: "stale-dedicated-storage-class"
+      when: not (_ontap_is_shared_tbc | bool)
+      no_log: true
+
+    - name: Create the per-tier StorageClasses
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "ontap-{{ _assignment_key }}-{{ (item.name | hash('sha256'))[:16] | lower }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/storage-tier: "{{ item.name }}"
+              osac.openshift.io/storage-protocol: block
+              osac.openshift.io/storage-provider: ontap
+              osac.openshift.io/storage-backend-id: "{{ _ontap_backend_id }}"
+          provisioner: csi.trident.netapp.io
+          parameters:
+            backendType: ontap-san
+            selector: "osac_backend={{ _tbc_name }};tier={{ item.name }}"
+          reclaimPolicy: Delete
+          volumeBindingMode: WaitForFirstConsumer
+      loop: "{{ _backend_tiers if not (_ontap_is_shared_tbc | bool) else [] }}"
+      loop_control:
+        label: "storage-tier"
+      when: not (_ontap_is_shared_tbc | bool)
+      no_log: true
+
+  always:
+    - name: Clear credential-bearing facts
+      ansible.builtin.set_fact:
+        _trusted_ca_b64: ""
+        _runtime_username: ""
+        _runtime_password: ""
+        _svm_name: ""
+        _assignment_key: ""
+        _tbc_name: ""
+        _tbc_status: {}
+        _management_lif: ""
+        _virtual_pools: []
+        _shared_tbc_lookups: {}
+        _ontap_profile_backend_names: {}
+        _ontap_shared_profile_map: {}
+        _ontap_referenced_profiles: []
+        _ontap_shared_sc_desired_params: {}
+        _ontap_stale_shared_sc_names: []
+        _ontap_stale_dedicated_sc_names: []
+        _ontap_is_shared_tbc: false
+        _backend_tiers: []
+      no_log: true

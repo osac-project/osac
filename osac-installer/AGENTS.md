@@ -66,7 +66,7 @@ Focused contracts, selected by the changed wiring:
 | Optional LVMS worker/device allowlist | `make lvms-optional-path-render-test` |
 | Fulfillment trust and CA mounts | `make fulfillment-trust-render-test` |
 | Service-account IDP credentials and realm roles | `make service-account-idp-render-test` |
-| Storage workflow certificate-validation values or AAP/AWX environment injection | `make certificate-validation-render-test` and `make dev-full-render-test` |
+| Storage workflow certificate-validation values or AAP/AWX environment injection | AAP defaults, profiles, and managed-key checks in `make helm-networking-test` (`AapSettingsTest`); AWX hook and `AWX_TASK_ENV` fixture checks in `make dev-full-render-test` |
 | Fulfillment hook token exchange and dev-full wiring | `make fulfillment-auth-test dev-full-render-test` |
 | Billing provider mounts and tuning bounds | `make billing-render-test` |
 | EVPN host networking | `make evpn-render-test` |

@@ -567,7 +567,14 @@ var _ = Describe("MCP server", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		currentVersion := currentResponse.GetObject().GetMetadata().GetVersion()
-		staleVersion := currentVersion + 1
+		// The instance is still reconciling toward RUNNING, so its version
+		// keeps advancing; currentVersion + 1 can become the stored version
+		// between this Get and the tool's internal pre-check, letting the
+		// update succeed. Subtract instead: the stored version never goes
+		// below the observed one, so currentVersion - 1 always mismatches.
+		// It is at least 2 here because reaching the STARTING state already
+		// bumped the version past creation.
+		staleVersion := currentVersion - 1
 
 		_, err = callMCPTool[mcpserver.UpdateComputeInstanceOutput](
 			ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{

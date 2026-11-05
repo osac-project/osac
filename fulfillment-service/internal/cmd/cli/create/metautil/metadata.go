@@ -18,6 +18,8 @@ package metautil
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -30,4 +32,26 @@ func ForCreate(ctx context.Context, name string) publicv1.Metadata_builder {
 		Tenant:  config.TenantFromContext(ctx),
 		Project: config.ProjectFromContext(ctx),
 	}
+}
+
+// ParseLabels parses repeatable label values in key=value format.
+func ParseLabels(values []string) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	labels := make(map[string]string, len(values))
+	for _, value := range values {
+		key, labelValue, ok := strings.Cut(value, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid label %q: must be in key=value format", value)
+		}
+		if key == "" {
+			return nil, fmt.Errorf("invalid label %q: key must not be empty", value)
+		}
+		if _, exists := labels[key]; exists {
+			return nil, fmt.Errorf("duplicate label key %q", key)
+		}
+		labels[key] = labelValue
+	}
+	return labels, nil
 }

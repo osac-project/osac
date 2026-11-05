@@ -12,14 +12,14 @@ import { getAllResourceSelectInputs } from '../../../test-utils/query';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { type ResourceSelectValue, emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 
-const makeTier = (name: string, displayName: string) =>
+const makeTier = (name: string) =>
   create(StorageTierSchema, {
     id: `id-${name}`,
-    metadata: { name, displayName },
+    metadata: { name },
     status: { state: StorageTierState.ACTIVE },
   });
 
-const storageTiers = [makeTier('fast', 'Fast SSD'), makeTier('bulk', 'Bulk Capacity')];
+const storageTiers = [makeTier('fast'), makeTier('bulk')];
 
 const selectTier = async (
   user: ReturnType<typeof renderWithProviders>['user'],

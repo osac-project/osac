@@ -42,8 +42,6 @@ const mockSecurityGroups: SecurityGroup[] = [
     id: 'sg-1',
     metadata: {
       $typeName: 'osac.public.v1.Metadata',
-      displayName: '',
-      description: '',
       name: 'sg-web',
       annotations: {},
       creator: 'foo',

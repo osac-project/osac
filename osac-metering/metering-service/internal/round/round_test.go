@@ -1838,6 +1838,89 @@ func TestRoundCarriesTheLatestExternalBillingAccountID(t *testing.T) {
 	}
 }
 
+type gatedCloseConsumer struct {
+	sarama.Consumer
+	closing chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (consumer *gatedCloseConsumer) ConsumePartition(
+	topic string, partition int32, offset int64,
+) (sarama.PartitionConsumer, error) {
+	actual, err := consumer.Consumer.ConsumePartition(topic, partition, offset)
+	if err != nil {
+		return nil, err
+	}
+	return &gatedClosePartition{PartitionConsumer: actual, owner: consumer}, nil
+}
+
+type gatedClosePartition struct {
+	sarama.PartitionConsumer
+	owner *gatedCloseConsumer
+}
+
+func (partition *gatedClosePartition) Close() error {
+	partition.owner.once.Do(func() { close(partition.owner.closing) })
+	<-partition.owner.release
+	return partition.PartitionConsumer.Close()
+}
+
+func TestFoldAllWaitsForConsumerRelease(t *testing.T) {
+	const tenant = "fold-all-release"
+	pipeline := pipelinetest.NewPipeline(t, tenant)
+	consumer := &gatedCloseConsumer{
+		Consumer: testenv.NewConsumer(t),
+		closing:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(consumer.release) }) }
+	worker, err := fold.New(pipeline.Store, consumer, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipeline.Fold = worker
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "RUNNING", base, "small", base),
+	})
+	returned := make(chan struct{})
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-returned:
+		case <-time.After(5 * time.Second):
+			t.Error("fold worker did not finish during cleanup")
+		}
+	})
+	go func() {
+		defer close(returned)
+		pipeline.FoldAll(t, total)
+	}()
+	select {
+	case <-consumer.closing:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled fold did not start closing its partition")
+	}
+	select {
+	case <-returned:
+		t.Fatal("FoldAll returned before its partition consumer was released")
+	case <-time.After(250 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("FoldAll did not return after releasing its partition consumer")
+	}
+	total += testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			base.Add(time.Minute), base, "web", "RUNNING", base, "small", base),
+	})
+	pipeline.FoldAll(t, total)
+}
+
 // TestRoundCarriesBillingAccountFromLaterEventOffset checks that a later Kafka
 // offset wins when its event timestamp is earlier than a previous envelope.
 func TestRoundCarriesBillingAccountFromLaterEventOffset(t *testing.T) {

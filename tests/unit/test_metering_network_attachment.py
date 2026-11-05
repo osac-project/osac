@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from inspect import unwrap
 from unittest.mock import Mock, call
 
 import pytest
@@ -19,7 +20,7 @@ def network_calls(monkeypatch: pytest.MonkeyPatch) -> Mock:
     calls.grpc.create_subnet.return_value = "subnet-id"
     calls.grpc.create_security_group_with_rules.return_value = "sg-id"
     calls.grpc.get_virtual_network.return_value = {"object": {"status": {"state": "VIRTUAL_NETWORK_STATE_PENDING"}}}
-    monkeypatch.setattr("tests.e2e.core.runner.time.sleep", lambda _: None)
+    monkeypatch.setattr("tests.e2e.core.runner.time.sleep", Mock())
     for resource in ("virtual_network", "subnet", "security_group"):
         for operation in ("cr", "ready", "deletion"):
             name = f"wait_for_{resource}_{operation}"
@@ -39,7 +40,7 @@ def test_network_attachment_waits_for_api_vn_before_children_and_cleans_up(netwo
         {"object": {"status": {"state": state}}}
         for state in ("VIRTUAL_NETWORK_STATE_PENDING", "VIRTUAL_NETWORK_STATE_READY")
     ]
-    attachment = billing.metering_network_attachment.__wrapped__(network_calls.grpc, network_calls.k8s, "project")
+    attachment = unwrap(billing.metering_network_attachment)(network_calls.grpc, network_calls.k8s, "project")
     try:
         assert next(attachment) == {"subnet": "subnet-id", "security_groups": ["sg-id"]}
         assert [event[0] for event in network_calls.mock_calls] == [
@@ -74,7 +75,7 @@ def test_network_attachment_waits_for_api_vn_before_children_and_cleans_up(netwo
 
 
 def test_network_attachment_api_vn_timeout_creates_no_children_and_cleans_up(network_calls: Mock) -> None:
-    attachment = billing.metering_network_attachment.__wrapped__(network_calls.grpc, network_calls.k8s, "project")
+    attachment = unwrap(billing.metering_network_attachment)(network_calls.grpc, network_calls.k8s, "project")
     try:
         with pytest.raises(StuckState, match="VirtualNetwork vn-id gRPC READY"):
             next(attachment)

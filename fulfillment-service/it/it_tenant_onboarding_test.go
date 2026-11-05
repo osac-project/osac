@@ -215,15 +215,74 @@ var _ = Describe("Tenant onboarding to hub", func() {
 	})
 })
 
-var _ = Describe("Tenant deletion with projects", func() {
+var _ = Describe("Tenant deletion", func() {
 	var (
 		tenantsClient  privatev1.TenantsClient
 		projectsClient privatev1.ProjectsClient
+		usersClient    privatev1.UsersClient
 	)
 
 	BeforeEach(func() {
 		tenantsClient = privatev1.NewTenantsClient(tool.InternalView().AdminConn())
 		projectsClient = privatev1.NewProjectsClient(tool.InternalView().AdminConn())
+		usersClient = privatev1.NewUsersClient(tool.InternalView().AdminConn())
+	})
+
+	It("Deletes a tenant with a user in its root project", func(ctx context.Context) {
+		name := fmt.Sprintf("test-%s", uuid.New())
+
+		By(fmt.Sprintf("Creating tenant %q", name))
+		id := createTenant(ctx, tenantsClient, name)
+		By("Waiting for tenant to reach SYNCED state")
+		waitForTenantSynced(ctx, tenantsClient, id)
+
+		By("Creating a user in the tenant root project")
+		userName := fmt.Sprintf("user-%s", uuid.New())
+		createdUser, err := usersClient.Create(ctx, privatev1.UsersCreateRequest_builder{
+			Object: privatev1.User_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   userName,
+					Tenant: name,
+				}.Build(),
+				Spec: privatev1.UserSpec_builder{
+					Username: userName,
+					Email:    userName + "@example.com",
+					Enabled:  true,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(createdUser.GetObject().GetMetadata().GetProject()).To(BeEmpty())
+
+		By("Deleting the tenant without first deleting its user")
+		_, err = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+			Id: id,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		listFilter := fmt.Sprintf("this.metadata.tenant == %q", name)
+		Eventually(
+			func(g Gomega) {
+				usersResp, err := usersClient.List(ctx, privatev1.UsersListRequest_builder{
+					Filter: &listFilter,
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(usersResp.GetTotal()).To(BeZero())
+
+				projectsResp, err := projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
+					Filter: &listFilter,
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(projectsResp.GetTotal()).To(BeZero())
+
+				_, err = tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
+					Id: id,
+				}.Build())
+				g.Expect(isGRPCCode(err, grpccodes.NotFound)).To(BeTrue())
+			},
+			3*time.Minute,
+			time.Second,
+		).Should(Succeed())
 	})
 
 	It("Deletes all projects before removing the tenant", func(ctx context.Context) {

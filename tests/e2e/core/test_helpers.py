@@ -519,6 +519,26 @@ def test_wait_for_workload_cluster_health_names_the_operator_it_saw(monkeypatch:
         helpers.wait_for_workload_cluster_health(k8s=k8s, cluster_name="guest-cluster", expected_workers=1)
 
 
+def test_wait_for_workload_cluster_health_reports_why_nothing_was_readable(monkeypatch: pytest.MonkeyPatch) -> None:
+    k8s = Mock()
+    k8s.list_json.side_effect = runner.CommandFailed(
+        returncode=1, cmd=["kubectl", "get", "nodes"], stderr=f"connection refused after {_QUOTED_CREDENTIAL}"
+    )
+    monkeypatch.setattr(helpers, "wait_for_workload_node_provider_ids", lambda **_kwargs: None)
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(AssertionError) as failure:
+        helpers.wait_for_workload_cluster_health(k8s=k8s, cluster_name="guest-cluster", expected_workers=1)
+
+    # Nothing was ever read, so the read failure is the whole diagnosis: it
+    # reaches the failure through the StuckState's sanitized message only.
+    message = str(failure.value)
+    assert "no Nodes or ClusterOperators were readable" in message
+    assert "last call failed: CommandFailed: kubectl get nodes exited 1: " in message
+    assert f"connection refused after {_REDACTED_CREDENTIAL}" in message
+    assert _QUOTED_CREDENTIAL not in message
+
+
 def test_guest_health_has_at_most_fifteen_minutes_of_scheduled_waits() -> None:
     scheduled_wait = (helpers._WORKLOAD_HEALTH_RETRIES - 1) * helpers._WORKLOAD_HEALTH_DELAY
 

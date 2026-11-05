@@ -1212,8 +1212,13 @@ def wait_for_workload_cluster_health(*, k8s: K8sClient, cluster_name: str, expec
             resource_kind=WaitResourceKind.CLUSTER,
             resource_id=cluster_name,
         )
-    except TimeoutError:
-        details = "; ".join(observed) or "no Nodes or ClusterOperators were readable"
+    except TimeoutError as timeout:
+        details = "; ".join(observed)
+        if not details:
+            # No read ever completed, so the problems list cannot say why. The
+            # StuckState message can: it ends with the sanitized summary of the
+            # last failed read, and every part of it is sanitized already.
+            details = f"no Nodes or ClusterOperators were readable ({timeout})"
         raise AssertionError(f"guest cluster did not become healthy: {details}") from None
     logger.info("CaaS phase: all ClusterOperators healthy")
     logger.info(

@@ -89,6 +89,7 @@ var _ = Describe("finalizer CAS", func() {
 			err := t.update(ctx, withFinalizers(stale, finalizerHold), finalizersMask(), false)
 
 			t.expectFinalizerConflict(ctx, err, finalizerController)
+			commitSuiteTx()
 			Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty(), "a rejected write must not log a change")
 		},
 		finalizerEntries(),
@@ -447,13 +448,14 @@ var _ = Describe("finalizer CAS", func() {
 		)
 	})
 
-	// The generic server logs a finalizer change once it has been written, so that the writer of a finalizer
-	// transition can be found in the server logs.
+	// The generic server logs a finalizer change once the transaction that wrote it commits, so that the writer of a
+	// finalizer transition can be found in the server logs. The specs end the suite transaction before they look at
+	// the log.
 	Describe("finalizer change log", func() {
 		// The lists are the ones that the database stored, which are sorted and have no repeated finalizer, and the
 		// version is the one that the change was checked against, not the one that the write produced. The object
 		// is written once before, so that its version is not zero.
-		DescribeTable("logs an accepted finalizer change once",
+		DescribeTable("logs an accepted finalizer change once, when it is committed",
 			func(c finalizerCase) {
 				t := c.target([]string{finalizerController})
 				t.bump(ctx)
@@ -463,6 +465,9 @@ var _ = Describe("finalizer CAS", func() {
 
 				object := withFinalizers(before, finalizerHold, finalizerController, finalizerHold)
 				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty(),
+					"nothing must be logged before the transaction commits")
+				commitSuiteTx()
 
 				records := logs.withMessage(finalizerChangeMessage)
 				Expect(records).To(HaveLen(1))
@@ -486,6 +491,7 @@ var _ = Describe("finalizer CAS", func() {
 
 				object := withFinalizers(t.get(ctx))
 				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+				commitSuiteTx()
 
 				_, err := t.ops.get(ctx, t.id)
 				Expect(status.Code(err)).To(Equal(codes.NotFound), "the object must have been archived")
@@ -506,6 +512,7 @@ var _ = Describe("finalizer CAS", func() {
 					metadata.SetLabels(map[string]string{"x": "y"})
 				})
 				Expect(t.update(ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
+				commitSuiteTx()
 
 				Expect(finalizerMetadataOf(t.get(ctx)).GetLabels()).To(HaveKeyWithValue("x", "y"))
 				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty())
@@ -526,11 +533,71 @@ var _ = Describe("finalizer CAS", func() {
 				err := t.update(ctx, object, finalizerMaskOf("metadata.finalizers", "metadata.labels"), false)
 
 				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				commitSuiteTx()
 				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController))
 				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty())
 			},
 			finalizerEntries(),
 		)
+
+		// Code that runs after the generic update in the same request, like the settlement of the parent of an
+		// ExternalIPAttachment, can report an error that rolls the whole transaction back. The fixture is committed
+		// first, so that the rollback only undoes the update.
+		DescribeTable("logs nothing when the transaction is rolled back after the write",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController})
+				commitSuiteTx()
+				logs := t.recordLogs()
+
+				object := withFinalizers(t.get(ctx), finalizerController, finalizerHold)
+				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+				rollBackSuiteTx()
+
+				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController), "the write must have been rolled back")
+				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty())
+			},
+			finalizerEntries(),
+		)
+
+		// Secrets updates the object inside a savepoint and then stores the data in Vault. When that fails the
+		// savepoint is rolled back, but the enclosing transaction can still commit.
+		Describe("inside a savepoint", func() {
+			It("logs nothing when the savepoint is rolled back", func() {
+				t := finalizerCaseFor(privatev1.Hubs_ServiceDesc.ServiceName).target([]string{finalizerController})
+				logs := t.recordLogs()
+				object := withFinalizers(t.get(ctx), finalizerController, finalizerHold)
+
+				laterErr := errors.New("a later step of the request failed")
+				err := suiteTx.Savepoint(ctx, func(ctx context.Context) error {
+					if err := t.update(ctx, object, finalizersMask(), false); err != nil {
+						return err
+					}
+					return laterErr
+				})
+				Expect(err).To(BeIdenticalTo(laterErr))
+				commitSuiteTx()
+
+				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController), "the write must have been rolled back")
+				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty())
+			})
+
+			It("logs the change once the enclosing transaction commits", func() {
+				t := finalizerCaseFor(privatev1.Hubs_ServiceDesc.ServiceName).target([]string{finalizerController})
+				logs := t.recordLogs()
+				object := withFinalizers(t.get(ctx), finalizerController, finalizerHold)
+
+				err := suiteTx.Savepoint(ctx, func(ctx context.Context) error {
+					return t.update(ctx, object, finalizersMask(), false)
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty(),
+					"releasing the savepoint must not log the change")
+				commitSuiteTx()
+
+				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
+				Expect(logs.withMessage(finalizerChangeMessage)).To(HaveLen(1))
+			})
+		})
 	})
 
 	Describe("mask edges", func() {

@@ -816,25 +816,35 @@ func (s *GenericServer[O]) checkFinalizerChange(requestObject, currentObject, me
 // logFinalizerChange records a finalizer change that has been written, with the stored version it
 // was checked against, so that every finalizer transition of an object can be traced to the request
 // that made it. The lists logged are the ones of the stored object, which is what the database
-// returns after the write. It runs after the write, so requests that are rejected on the way log
-// nothing, and requests that leave the finalizers as they are log nothing either. The write belongs
-// to the transaction of the request, so a failure to commit it can still leave a line for a change
-// that was not stored.
+// returns after the write. The write belongs to the transaction of the request, and code that runs
+// after it, in the same request, can still roll that transaction back, so the line is only written
+// once the transaction commits. Requests that are rejected, that are rolled back, or that leave the
+// finalizers as they are log nothing.
 func (s *GenericServer[O]) logFinalizerChange(ctx context.Context, id string, currentObject, writtenObject O) {
 	currentMetadata := s.getMetadata(currentObject)
-	before := metadataFinalizers(currentMetadata)
-	after := metadataFinalizers(s.getMetadata(writtenObject))
+	before := slices.Clone(metadataFinalizers(currentMetadata))
+	after := slices.Clone(metadataFinalizers(s.getMetadata(writtenObject)))
 	if sameFinalizers(before, after) {
 		return
 	}
-	s.logger.InfoContext(
-		ctx,
-		"Updated finalizers",
-		slog.String("id", id),
-		slog.Any("from", before),
-		slog.Any("to", after),
-		slog.Int("version", int(currentMetadata.GetVersion())),
-	)
+	logger := s.logger
+	version := currentMetadata.GetVersion()
+	log := func() {
+		logger.InfoContext(
+			ctx,
+			"Updated finalizers",
+			slog.String("id", id),
+			slog.Any("from", before),
+			slog.Any("to", after),
+			slog.Int("version", int(version)),
+		)
+	}
+	// The DAO can't write without a transaction in the context, so there is always one here:
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	tx.OnCommit(log)
 }
 
 func (s *GenericServer[O]) updateWithCandidatePreparation(

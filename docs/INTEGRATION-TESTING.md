@@ -625,6 +625,7 @@ the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
 
+<<<<<<< HEAD
 The `make billing-render-test` Helm contract renders the umbrella chart with
 and without `global.billing.provider`, and the fulfillment-service subchart on
 its own. It asserts that nothing billing-related renders in the gRPC server
@@ -699,6 +700,15 @@ ConfigMap and the dev-full AWX configuration hook, and exercises the hook's
 `AWX_TASK_ENV` merge with fixture input. It checks rendered configuration
 only; the storage role's unit and local mock-HTTPS integration tests cover
 Ansible client behavior, not a deployed controller.
+=======
+The `make helm-networking-test` Helm contract verifies the secure default and
+development overrides in the AAP storage instance-group ConfigMap, including
+the managed-key rejection. The `make dev-full-render-test` contract checks the
+AWX hook's default and development override, and exercises its `AWX_TASK_ENV`
+merge with fixture input. These checks render configuration only; the storage
+role's unit and local mock-HTTPS integration tests cover Ansible client
+behavior, not a deployed controller.
+>>>>>>> 89bcbce3a (NO-ISSUE: consolidate certificate validation render coverage)
 
 ### Install preflight (OSAC-6561)
 

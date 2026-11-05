@@ -31,8 +31,9 @@ const schemaSQL = `
 -- held from a moment on. The fold writes it from the tenant's events, idempotently, in
 -- any order; the whole table is rebuildable by replaying the event topic.
 --
--- Example: tenant acme's VM vm-7 entered RUNNING at 10:00, event 42 carried it:
---   ('acme', 'ComputeInstance', 'vm-7', 'status.state', '2026-10-05 10:00:00Z', 'RUNNING', 42)
+-- Example: tenant acme's VM vm-7 entered RUNNING at 10:00, event 42 carried it,
+-- on topic generation 0:
+--   ('acme', 'ComputeInstance', 'vm-7', 'status.state', '2026-10-05 10:00:00Z', 'RUNNING', 42, 0)
 --
 -- A tenant's external billing account is a row here too: resource_type Tenant,
 -- resource_id the tenant name, field external_billing_id. The round copies the
@@ -48,6 +49,10 @@ CREATE TABLE IF NOT EXISTS history (
     event_offset  BIGINT      NOT NULL,   -- position of the carrying event in the
                                           -- topic; the round uses it to find changed
                                           -- resources
+    topic_generation BIGINT   NOT NULL DEFAULT 0, -- which event topic the offset
+                                                   -- belongs to; a prefix change
+                                                   -- advances it, so the new topic's
+                                                   -- facts sort ahead of the old
     PRIMARY KEY (tenant, resource_type, resource_id, field, since)
 );
 -- Finds the resources whose facts changed since the previous round.
@@ -120,15 +125,24 @@ CREATE TABLE IF NOT EXISTS progress (
     last_round_time         TIMESTAMPTZ,                     -- when the last round ran
     last_round_event_offset BIGINT      NOT NULL DEFAULT 0,  -- the event offset the last
                                                              -- round had folded
-    event_topic             TEXT        NOT NULL DEFAULT ''  -- the event topic those offsets
-                                                             -- belong to; empty until the
-                                                             -- first fold records it
+    event_topic             TEXT        NOT NULL DEFAULT '', -- the event topic those offsets
+                                                              -- belong to; empty until the
+                                                              -- first fold records it
+    topic_generation       BIGINT      NOT NULL DEFAULT 0   -- the event topic generation
+                                                             -- the fold is writing
 );
 
--- Databases created before event_topic existed keep their offsets. The first fold stamps
--- the current topic onto an empty value and does not rewind. A later prefix change stores
--- a different topic and rewinds, which NoteEventTopic does.
+-- Databases created before event_topic existed stored offsets for the default event
+-- topic. An empty value is that topic: NoteEventTopic keeps the offsets when the
+-- current topic is the default, and rewinds when an upgrade changes the prefix.
+-- A later prefix change rewinds the same way.
 ALTER TABLE progress ADD COLUMN IF NOT EXISTS event_topic TEXT NOT NULL DEFAULT '';
+
+-- topic_generation separates offsets from successive event topics. Rows written
+-- before the column existed are generation 0, and the fold stays there until
+-- the topic changes.
+ALTER TABLE history ADD COLUMN IF NOT EXISTS topic_generation BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE progress ADD COLUMN IF NOT EXISTS topic_generation BIGINT NOT NULL DEFAULT 0;
 
 -- Which rule revisions metering has billed under, so a revision that would reprice
 -- spans this database already billed refuses to start rather than change them.

@@ -1125,9 +1125,11 @@ retryable with "Missing or malformed setting in network-fulfillment-ig".
 The networking jobs do not get a CA ConfigMap mount from the chart. In chart
 `0.0.65`, `NETRIS_CA_CONFIGMAP` applies only to the CaaS
 cluster-fulfillment jobs. With a Netris controller certificate from
-a private CA, either set `NETRIS_VALIDATE_CERTS: "false"`, or build an image on
-the `osac-aap` image with the CA in it, set it as `eeImage`, and set
-`NETRIS_CA_PATH` to the CA's path in the image. For every key, see
+a private CA, build an execution environment image based on `osac-aap` that
+contains the CA certificate. Set it as `eeImage` and set `NETRIS_CA_PATH` to
+the CA file's path in the image. Setting `NETRIS_VALIDATE_CERTS: "false"`
+disables certificate validation and is suitable only for evaluation, never
+production. For every key, see
 [`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md).
 
 Keep AAP job records at least as long as networking resources exist: OSAC

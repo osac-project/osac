@@ -306,11 +306,14 @@ reaches the failure notification instead of a success message. Optional
 Konflux staging remains independent of this GHCR publication path.
 
 **GitHub's "Re-run failed jobs" does not recover a confirmed staging
-failure.** GitHub/GHCR publication (component GitHub Releases, the umbrella
-release, fulfillment-service's binaries/proto) only happens once the real
-Konflux image staging release has actually succeeded — never on a cancelled
-or timed-out run, only on a confirmed failure of
-`trigger-konflux-staging-release` itself. Rolling tags back after a
+failure.** GHCR image and chart publication (`promote-and-publish`,
+`publish-umbrella`) runs before Konflux staging even starts, so those
+artifacts can remain published after a confirmed staging failure — only
+the GitHub Releases (component and umbrella) and fulfillment-service's
+binaries/proto wait for the real Konflux image staging release to have
+actually succeeded, never on a cancelled or timed-out run, only on a
+confirmed failure of `trigger-konflux-staging-release` itself. Rolling
+tags back after a
 confirmed failure, combined with `cleanup` always deleting the temp branch
 once `tag` succeeds, means a "Re-run failed jobs" attempt afterward has
 neither the tags `create-component-releases` would reference nor the

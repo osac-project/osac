@@ -4,6 +4,7 @@ import { screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ComputeInstanceCatalogItemSchema, ComputeInstanceRunStrategy } from '@osac/types';
+import { type Tenant, TenantState } from '@osac/types/private';
 
 import VmCreateWizard from './VmCreateWizard';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
@@ -190,5 +191,111 @@ describe('VmCreateWizard', () => {
     expect(
       screen.queryByText(unpublishedVmCatalogItem.metadata?.name ?? ''),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('VmCreateWizard for a cloud provider admin', () => {
+  const makeTenant = (id: string): Tenant =>
+    ({
+      id,
+      metadata: { name: id },
+      spec: { domains: [`${id}.example.com`] },
+      status: { state: TenantState.SYNCED },
+    }) as Tenant;
+  const tenants = [makeTenant('tenant-1'), makeTenant('tenant-2')];
+  const sharedItem = create(ComputeInstanceCatalogItemSchema, {
+    id: vmCatalogItem.id,
+    metadata: { name: 'catalog-vm-1', tenant: 'shared' },
+    title: vmCatalogItem.title,
+    published: true,
+    fields: vmCatalogItem.fields,
+  });
+  const otherTenantItem = create(ComputeInstanceCatalogItemSchema, {
+    id: 'catalog-vm-tenant-2',
+    metadata: { name: 'catalog-vm-tenant-2', tenant: 'tenant-2' },
+    title: 'Tenant 2 VM',
+    published: true,
+  });
+
+  const selectTenant = async (user: ReturnType<typeof renderWizard>['user'], tenant: string) => {
+    await user.click(await screen.findByLabelText(/^Tenant/));
+    await user.click(await screen.findByRole('option', { name: tenant }));
+  };
+
+  beforeEach(() => {
+    mockNavigate.mockReset();
+  });
+
+  it("lists only the chosen tenant's catalog items and the shared ones", async () => {
+    const { user } = renderWithProviders(<VmCreateWizard onClosed={vi.fn()} />, {
+      apiFixtures: { catalogItems: [sharedItem, otherTenantItem], tenants },
+      session: { role: 'admin', tenantId: '' },
+    });
+
+    expect(
+      await screen.findByText('Select a tenant to see the catalog items available to it.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('catalog-vm-1')).not.toBeInTheDocument();
+
+    await selectTenant(user, 'tenant-1');
+    expect(await screen.findByText('catalog-vm-1')).toBeInTheDocument();
+    expect(screen.queryByText('catalog-vm-tenant-2')).not.toBeInTheDocument();
+
+    await selectTenant(user, 'tenant-2');
+    expect(await screen.findByText('catalog-vm-tenant-2')).toBeInTheDocument();
+  });
+
+  it('requires a tenant before leaving the catalog step', async () => {
+    const { user } = renderWithProviders(<VmCreateWizard onClosed={vi.fn()} />, {
+      apiFixtures: { catalogItems: [sharedItem], tenants },
+      session: { role: 'admin', tenantId: '' },
+    });
+
+    await screen.findByLabelText(/^Tenant/);
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(screen.getByText('Fix the highlighted errors before continuing.')).toBeInTheDocument();
+  });
+
+  it('clears the catalog selection when the tenant changes', async () => {
+    const { user } = renderWithProviders(<VmCreateWizard onClosed={vi.fn()} />, {
+      apiFixtures: { catalogItems: [sharedItem], tenants },
+      session: { role: 'admin', tenantId: '' },
+    });
+
+    await selectTenant(user, 'tenant-1');
+    await clickCatalogItemCard(user);
+    expect(document.getElementById('selectedCatalogItem-catalog-vm-1')).toBeChecked();
+
+    await selectTenant(user, 'tenant-2');
+    await screen.findByText('catalog-vm-1');
+    expect(document.getElementById('selectedCatalogItem-catalog-vm-1')).not.toBeChecked();
+  });
+
+  it('creates the VM in the chosen tenant', async () => {
+    const onComputeInstanceCreate = vi.fn(
+      (req: { object?: { metadata?: unknown; spec?: unknown } }) => ({
+        object: { id: 'vm-new-1', metadata: req.object?.metadata, spec: req.object?.spec },
+      }),
+    );
+    const { user } = renderWithProviders(<VmCreateWizard onClosed={vi.fn()} />, {
+      apiFixtures: { catalogItems: [sharedItem], tenants },
+      transportOverrides: { onComputeInstanceCreate: onComputeInstanceCreate as never },
+      session: { role: 'admin', tenantId: '' },
+    });
+
+    await selectTenant(user, 'tenant-1');
+    await selectCatalogItemAndFillName(user, 'my-vm');
+    await advanceThroughRemainingSteps(user);
+    expect(screen.getByText('tenant-1')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(onComputeInstanceCreate).toHaveBeenCalledTimes(1);
+    });
+    expect(onComputeInstanceCreate.mock.calls[0][0].object?.metadata).toMatchObject({
+      name: 'my-vm',
+      tenant: 'tenant-1',
+    });
   });
 });

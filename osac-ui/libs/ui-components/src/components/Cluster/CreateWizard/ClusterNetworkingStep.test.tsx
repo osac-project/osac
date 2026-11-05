@@ -98,7 +98,7 @@ const renderStep = (values = createEmptyClusterValues()) =>
         </>
       )}
     </Formik>,
-    { apiFixtures: { virtualNetworks, subnets, securityGroups } },
+    { apiFixtures: { virtualNetworks, subnets, securityGroups }, session: { role: 'tenant-user' } },
   );
 
 describe('ClusterNetworkingStep', () => {
@@ -134,6 +134,7 @@ describe('ClusterNetworkingStep', () => {
         <ClusterNetworkingStep />
       </Formik>,
       {
+        session: { role: 'tenant-user' },
         apiFixtures: {
           virtualNetworks,
           subnets: [
@@ -197,6 +198,7 @@ describe('ClusterNetworkingStep', () => {
         <ClusterNetworkingStep />
       </Formik>,
       {
+        session: { role: 'tenant-user' },
         apiFixtures: {
           virtualNetworks,
           subnets: [makeSubnet('old-subnet', 1n), makeSubnet('new-subnet', 2n)],

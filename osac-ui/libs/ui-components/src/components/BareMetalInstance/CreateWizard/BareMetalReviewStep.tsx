@@ -13,10 +13,12 @@ import { type BareMetalInstanceWizardValues, hasBareMetalAuthentication } from '
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { NetworkAttachmentReviewFields } from '../../ProvisioningWizard/NetworkAttachmentReviewFields';
+import { useWorkloadTenant } from '../../ProvisioningWizard/useWorkloadTenant';
 
 export const BareMetalReviewStep = () => {
   const { t } = useTranslation();
   const { values } = useFormikContext<BareMetalInstanceWizardValues>();
+  const { isAdmin } = useWorkloadTenant();
   const userData = values.spec.userData.value;
   const isSecretSource = userData.source === 'secret';
   const selectedUserData = isSecretSource ? userData.secret : userData.inline;
@@ -56,6 +58,14 @@ export const BareMetalReviewStep = () => {
             </DescriptionListDescription>
           </DescriptionListGroup>
 
+          {isAdmin ? (
+            <DescriptionListGroup>
+              <DescriptionListTerm>{t('Tenant')}</DescriptionListTerm>
+              <DescriptionListDescription>
+                {values.metadata.tenant?.name || values.metadata.tenant?.id}
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+          ) : null}
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
             <DescriptionListDescription>

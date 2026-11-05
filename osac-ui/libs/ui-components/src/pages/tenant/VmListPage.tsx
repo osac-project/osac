@@ -30,6 +30,7 @@ import {
   usePageFilter,
 } from '@osac/ui-components/hooks/use-page-filter';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
+import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
@@ -51,6 +52,7 @@ const vmMatchesStatusFilter = (vm: ComputeInstance, filter: VmStatusFilter): boo
 
 export const VmListPage = () => {
   const { t } = useTranslation();
+  const isAdmin = useSession().role === 'admin';
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
   const [statusFilters, setStatusFilters] = useArrayPageFilter(
     STATUS_FILTER_PARAM,
@@ -182,6 +184,7 @@ export const VmListPage = () => {
                 vms={filteredVms}
                 instanceTypes={instanceTypes}
                 isInstanceTypesLoading={isInstanceTypesLoading}
+                showTenant={isAdmin}
               />
             )}
           </StackItem>

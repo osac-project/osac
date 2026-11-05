@@ -1,8 +1,9 @@
 import { useFormikContext } from 'formik';
 
-import { VirtualNetworks } from '@osac/types';
+import { type VirtualNetwork, VirtualNetworks } from '@osac/types';
 
 import type { ProvisioningFieldControlProps } from './provisioningFieldValue';
+import { cel } from '../../../api/cel';
 import { VIRTUAL_NETWORK_READY_LIST_FILTER } from '../../../api/v1/networking';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceSelectField } from '../../Form/ResourceSelectField';
@@ -13,6 +14,8 @@ interface VirtualNetworkFieldProps extends ProvisioningFieldControlProps {
   securityGroupsName: string;
   isRequired?: boolean;
   onCreate?: () => void;
+  /** Set for a cloud provider admin: limits the list to the workload's tenant. */
+  tenant?: string;
 }
 
 const VirtualNetworkField = ({
@@ -22,6 +25,7 @@ const VirtualNetworkField = ({
   isRequired = false,
   onCreate,
   isDisabled = false,
+  tenant,
 }: VirtualNetworkFieldProps) => {
   const { t } = useTranslation();
   const { setFieldValue } = useFormikContext();
@@ -32,7 +36,17 @@ const VirtualNetworkField = ({
       label={t('Virtual network')}
       fieldId={name}
       service={VirtualNetworks}
-      request={{ filter: VIRTUAL_NETWORK_READY_LIST_FILTER }}
+      request={{
+        filter:
+          tenant === undefined
+            ? VIRTUAL_NETWORK_READY_LIST_FILTER
+            : cel<VirtualNetwork>((filter) =>
+                filter.and(
+                  VIRTUAL_NETWORK_READY_LIST_FILTER,
+                  filter.field('metadata.tenant').equals(tenant),
+                ),
+              ),
+      }}
       autoSelectSingleOption
       isRequired={isRequired}
       createOption={

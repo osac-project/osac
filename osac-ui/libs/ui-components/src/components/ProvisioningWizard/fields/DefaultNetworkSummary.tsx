@@ -19,7 +19,6 @@ import {
   useSecurityGroups,
   useSubnets,
 } from '../../../api/v1/networking';
-import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 
@@ -35,20 +34,24 @@ const newestFirst = (
   return (bTime?.nanos ?? 0) - (aTime?.nanos ?? 0);
 };
 
-const DefaultNetworkSummary = () => {
+interface DefaultNetworkSummaryProps {
+  /** The workload's tenant, whose defaults apply. */
+  tenant: string;
+}
+
+const DefaultNetworkSummary = ({ tenant: tenantId }: DefaultNetworkSummaryProps) => {
   const { t } = useTranslation();
   // Tenant defaults live in the tenant's default project and apply to every
-  // project of the tenant. Only tenant users reach the provisioning wizards, so
-  // the session tenant is the workload's tenant.
-  const { tenantId } = useSession();
-  const inScope = (metadata?: { tenant?: string; project?: string }) =>
-    metadata?.tenant === tenantId && metadata?.project === '';
-  const subnetsQuery = useSubnets({ filter: defaultSubnetListFilter(tenantId) });
+  // project of the tenant. The list filters scope the results to that tenant's
+  // default project.
+  const subnetsQuery = useSubnets(
+    { filter: defaultSubnetListFilter(tenantId) },
+    { enabled: tenantId !== '' },
+  );
   const subnet = subnetsQuery.data
     ?.filter(
       (item) =>
         item.metadata?.labels?.['osac.openshift.io/default'] === 'true' &&
-        inScope(item.metadata) &&
         !item.metadata.deletionTimestamp &&
         item.status?.state === SubnetState.READY &&
         Boolean(item.spec?.ipv4Cidr),
@@ -65,7 +68,6 @@ const DefaultNetworkSummary = () => {
     ?.filter(
       (group) =>
         group.metadata?.labels?.['osac.openshift.io/default'] === 'true' &&
-        inScope(group.metadata) &&
         !group.metadata.deletionTimestamp &&
         group.spec?.virtualNetwork?.id === virtualNetworkId &&
         group.status?.state === SecurityGroupState.READY,

@@ -17,11 +17,12 @@ vi.mock('../../../api/v1/disk-image', () => ({
 }));
 
 vi.mock('./VmDetailsActionButtons', () => ({
-  default: ({ onOpenConsole }: { onOpenConsole: VoidFunction }) => (
-    <button type="button" onClick={onOpenConsole}>
-      Open console
-    </button>
-  ),
+  default: ({ onOpenConsole }: { onOpenConsole?: VoidFunction }) =>
+    onOpenConsole ? (
+      <button type="button" onClick={onOpenConsole}>
+        Open console
+      </button>
+    ) : null,
 }));
 
 vi.mock('./VmDetailsSections', () => ({
@@ -57,7 +58,8 @@ const vm = {
   status: { state: ComputeInstanceState.RUNNING },
 } as ComputeInstance;
 
-const renderDetails = () => renderWithProviders(<VmDetails vm={vm} />);
+const renderDetails = (role: 'admin' | 'tenant-user' = 'tenant-user') =>
+  renderWithProviders(<VmDetails vm={vm} />, { session: { role } });
 
 describe('VmDetails', () => {
   beforeEach(() => {
@@ -90,6 +92,12 @@ describe('VmDetails', () => {
 
     expect(openWindow).toHaveBeenCalledWith('/vms/vm-1/console', '_blank', 'noopener,noreferrer');
     openWindow.mockRestore();
+  });
+
+  it('does not offer the console to a cloud provider admin, who has no console route', () => {
+    renderDetails('admin');
+
+    expect(screen.queryByRole('button', { name: 'Open console' })).not.toBeInTheDocument();
   });
 
   it('shows an alert and still renders the page when instance type lookup fails', () => {

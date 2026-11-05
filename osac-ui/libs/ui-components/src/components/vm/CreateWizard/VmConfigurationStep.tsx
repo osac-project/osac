@@ -5,8 +5,10 @@ import ComputeInstanceTypeField from './fields/ComputeInstanceTypeField';
 import OsacForm from '../../Form/OsacForm';
 import DiskImageField from '../../ProvisioningWizard/fields/DiskImageField';
 import ProvisioningField from '../../ProvisioningWizard/fields/ProvisioningField';
+import { useWorkloadTenant } from '../../ProvisioningWizard/useWorkloadTenant';
 
 export const VmConfigurationStep = () => {
+  const { adminTenant } = useWorkloadTenant();
   return (
     <OsacForm>
       <ProvisioningField name={VM_DISK_IMAGE_FORM_PATH}>
@@ -14,6 +16,7 @@ export const VmConfigurationStep = () => {
           <DiskImageField
             name={valueName}
             guestOsFamilyName="spec.guestOsFamily"
+            tenant={adminTenant}
             isDisabled={isDisabled}
           />
         )}

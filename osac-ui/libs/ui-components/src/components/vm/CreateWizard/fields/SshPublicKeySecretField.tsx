@@ -7,11 +7,14 @@ import type { ProvisioningFieldControlProps } from '../../../ProvisioningWizard/
 
 interface SshPublicKeySecretFieldProps extends ProvisioningFieldControlProps {
   project: string;
+  /** Set for a cloud provider admin: limits the list to the workload's tenant. */
+  tenant?: string;
 }
 
 const SshPublicKeySecretField = ({
   name,
   project,
+  tenant,
   isDisabled = false,
 }: SshPublicKeySecretFieldProps) => {
   const { t } = useTranslation();
@@ -20,6 +23,7 @@ const SshPublicKeySecretField = ({
     <SecretSelectionField
       filter={cel<Secret>((filter) =>
         filter.and(
+          tenant === undefined ? undefined : filter.field('metadata.tenant').equals(tenant),
           filter.field('metadata.project').equals(project),
           filter.field('type').equals(SecretType.SSH_PUBLIC_KEY),
         ),

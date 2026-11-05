@@ -9,7 +9,9 @@ import { useCreateBareMetalInstance } from '@osac/ui-components/api/v1/baremetal
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/CatalogStep';
+import { withCatalogItemTenant } from '@osac/ui-components/components/ProvisioningWizard/useWorkloadTenant';
 import { OSACWizardFooter } from '@osac/ui-components/components/Wizard/OSACWizardFooter';
+import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import BareMetalConfigurationStep from './BareMetalConfigurationStep';
@@ -17,7 +19,7 @@ import BareMetalGeneralStep from './BareMetalGeneralStep';
 import { BareMetalNetworkingStep } from './BareMetalNetworkingStep';
 import { BareMetalReviewStep } from './BareMetalReviewStep';
 import type { BareMetalInstanceWizardValues } from './fields';
-import { getBareMetalInstanceInitialValues } from './fields';
+import { createEmptyBareMetalInstanceValues, getBareMetalInstanceInitialValues } from './fields';
 import { buildBareMetalInstanceCreatePayload } from './payload';
 import { type BareMetalWizardStepId, buildBareMetalInstanceStepSchema } from './schemas';
 
@@ -28,6 +30,7 @@ interface Props {
 
 const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const { t } = useTranslation();
+  const isAdmin = useSession().role === 'admin';
   const navigate = useNavigate();
   const provision = useCreateBareMetalInstance();
   const catalogItemQuery = useGetResource(
@@ -67,10 +70,18 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
   );
 
   const initialValues = useMemo(
-    () => getBareMetalInstanceInitialValues(catalogItemQuery.data?.object),
-    [catalogItemQuery.data?.object],
+    () =>
+      withCatalogItemTenant(
+        getBareMetalInstanceInitialValues(catalogItemQuery.data?.object),
+        isAdmin,
+        catalogItemQuery.data?.object?.metadata?.tenant,
+      ),
+    [catalogItemQuery.data?.object, isAdmin],
   );
-  const schema = useMemo(() => buildBareMetalInstanceStepSchema(activeStep, t), [activeStep, t]);
+  const schema = useMemo(
+    () => buildBareMetalInstanceStepSchema(activeStep, t, { requireTenant: isAdmin }),
+    [activeStep, isAdmin, t],
+  );
   const stepHasErrors = useCallback(
     (_stepId: string, errors: Record<string, unknown>) => {
       return Boolean(schema && Object.keys(errors).length > 0);
@@ -110,6 +121,7 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
                     catalogService={BareMetalInstanceCatalogItems}
                     isInitializing={Boolean(initialCatalogItemId) && catalogItemQuery.isPending}
                     getInitialFormValues={getBareMetalInstanceInitialValues}
+                    getEmptyFormValues={createEmptyBareMetalInstanceValues}
                     onCatalogItemSelected={setSelectedCatalogItem}
                   />
                 )}

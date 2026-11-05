@@ -3,6 +3,7 @@ import { type MessageInitShape } from '@bufbuild/protobuf';
 import { ClusterSchema } from '@osac/types';
 
 import type { ClusterWizardValues } from './fields';
+import { workloadTenantMetadata } from '../../ProvisioningWizard/useWorkloadTenant';
 
 export const buildClusterCreatePayload = (
   values: ClusterWizardValues,
@@ -82,7 +83,11 @@ export const buildClusterCreatePayload = (
   }
 
   return {
-    metadata: { name: values.metadata.name.trim(), project: values.metadata.project },
+    metadata: {
+      name: values.metadata.name.trim(),
+      project: values.metadata.project,
+      ...workloadTenantMetadata(values.metadata.tenant),
+    },
     spec,
   };
 };

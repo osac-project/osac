@@ -53,7 +53,7 @@ describe('VmGeneralStep', () => {
           <SecretValuesReadout />
         </>
       </Formik>,
-      { apiFixtures: { projects } },
+      { apiFixtures: { projects }, session: { role: 'tenant-user' } },
     );
 
     expect(screen.getByLabelText('ssh-key')).toHaveTextContent('ssh-secret-a');

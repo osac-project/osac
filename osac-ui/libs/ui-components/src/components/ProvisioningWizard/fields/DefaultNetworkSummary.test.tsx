@@ -38,7 +38,7 @@ const makeSecurityGroup = (tenant: string, project: string) =>
 
 describe('DefaultNetworkSummary', () => {
   it("shows the session tenant's default network", async () => {
-    renderWithProviders(<DefaultNetworkSummary />, {
+    renderWithProviders(<DefaultNetworkSummary tenant="tenant-1" />, {
       session: { role: 'tenant-user', tenantId: 'tenant-1' },
       apiFixtures: {
         subnets: [
@@ -55,8 +55,24 @@ describe('DefaultNetworkSummary', () => {
     expect(screen.getByLabelText('Tenant default network details')).toBeInTheDocument();
   });
 
+  it("shows the workload tenant's default network to a cloud provider admin", async () => {
+    renderWithProviders(<DefaultNetworkSummary tenant="tenant-2" />, {
+      session: { role: 'admin', tenantId: '' },
+      apiFixtures: {
+        subnets: [
+          makeSubnet('tenant-1', '', '192.168.100.0/24'),
+          makeSubnet('tenant-2', '', '192.168.101.0/24'),
+        ],
+        securityGroups: [makeSecurityGroup('tenant-1', ''), makeSecurityGroup('tenant-2', '')],
+      },
+    });
+
+    expect(await screen.findByText('192.168.101.0/24')).toBeInTheDocument();
+    expect(screen.queryByText('192.168.100.0/24')).not.toBeInTheDocument();
+  });
+
   it('ignores a default-labeled subnet outside the default project', async () => {
-    renderWithProviders(<DefaultNetworkSummary />, {
+    renderWithProviders(<DefaultNetworkSummary tenant="tenant-1" />, {
       session: { role: 'tenant-user', tenantId: 'tenant-1' },
       apiFixtures: {
         subnets: [makeSubnet('tenant-1', 'team', '192.168.102.0/24')],
@@ -69,7 +85,7 @@ describe('DefaultNetworkSummary', () => {
   });
 
   it('warns when the tenant has no default subnet', async () => {
-    renderWithProviders(<DefaultNetworkSummary />, {
+    renderWithProviders(<DefaultNetworkSummary tenant="tenant-1" />, {
       session: { role: 'tenant-user', tenantId: 'tenant-1' },
       apiFixtures: {
         subnets: [makeSubnet('tenant-2', '', '192.168.101.0/24')],

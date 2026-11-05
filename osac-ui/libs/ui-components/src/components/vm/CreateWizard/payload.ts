@@ -7,6 +7,7 @@ import type { ComputeInstanceCatalogItem } from '@osac/types';
 import { type ComputeInstanceWizardValues } from './fields';
 import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
 import { getUserDataSourcePayload } from '../../ProvisioningWizard/fields/provisioningFieldValue';
+import { workloadTenantMetadata } from '../../ProvisioningWizard/useWorkloadTenant';
 
 export { createEmptyComputeInstanceValues } from './fields';
 
@@ -113,7 +114,11 @@ export const buildComputeInstanceCreatePayload = (
   }
 
   return {
-    metadata: { name: values.metadata.name.trim(), project: values.metadata.project },
+    metadata: {
+      name: values.metadata.name.trim(),
+      project: values.metadata.project,
+      ...workloadTenantMetadata(values.metadata.tenant),
+    },
     spec,
   };
 };

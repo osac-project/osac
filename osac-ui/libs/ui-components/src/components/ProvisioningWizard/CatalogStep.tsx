@@ -26,9 +26,12 @@ import { useCatalogItemResourceLookups } from '../catalog/catalogItemResourceLoo
 import { getVisibleFieldError } from '../Form/fieldError';
 import { useShowFieldValidationErrors } from '../Form/FieldValidationContext';
 import { FormFieldHelper } from '../Form/FormFieldHelper';
+import type { ResourceSelectValue } from '../Form/resourceSelectValue';
+import TenantSelectField from '../Form/TenantSelectField';
 
 interface CatalogFormValues {
   catalogItemReference: { id?: string; name?: string };
+  metadata: { tenant?: ResourceSelectValue };
 }
 
 const isCatalogItemList = <T extends CatalogItem>(value: unknown): value is { items: T[] } =>
@@ -38,13 +41,16 @@ interface Props<T extends CatalogItem, V extends CatalogFormValues> {
   catalogService: ResourceService<'list', DescMessage, DescMessage>;
   isInitializing?: boolean;
   getInitialFormValues: (item: T) => V;
-  onCatalogItemSelected?: (item: T) => void;
+  /** Form values with no catalog item, used when a cloud provider admin changes the tenant. */
+  getEmptyFormValues: () => V;
+  onCatalogItemSelected?: (item: T | undefined) => void;
 }
 
 export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>({
   catalogService,
   isInitializing = false,
   getInitialFormValues,
+  getEmptyFormValues,
   onCatalogItemSelected,
 }: Props<T, V>) => {
   const { t } = useTranslation();
@@ -52,15 +58,24 @@ export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>(
   const [search, setSearch] = useState('');
   const formik = useFormikContext<V>();
   const { values } = formik;
-  const catalogFilter =
-    role === 'tenant-user' ? buildCatalogListFilter({ published: 'published' }) : undefined;
+  const isAdmin = role === 'admin';
+  // A cloud provider admin provisions on behalf of a tenant and sees every tenant's items, so the
+  // list is limited to the chosen tenant's items and the shared ones, as that tenant sees them.
+  const tenant = values.metadata?.tenant;
+  const tenantId = tenant?.id ?? '';
+  const catalogFilter = isAdmin
+    ? buildCatalogListFilter({ tenant: tenantId })
+    : role === 'tenant-user'
+      ? buildCatalogListFilter({ published: 'published' })
+      : undefined;
   const catalogQuery = useListResource<DescMessage, DescMessage, T[]>(
     catalogService,
     catalogFilter ? { filter: catalogFilter } : {},
-    {},
+    { enabled: !isAdmin || tenantId !== '' },
     (data) => (isCatalogItemList<T>(data) ? data.items : []),
   );
-  const loading = isInitializing || catalogQuery.isPending;
+  const awaitingTenant = isAdmin && tenantId === '';
+  const loading = !awaitingTenant && (isInitializing || catalogQuery.isPending);
   const error = catalogQuery.isError;
   const retry = () => void catalogQuery.refetch();
 
@@ -70,7 +85,7 @@ export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>(
   );
 
   const resourceLookups = useCatalogItemResourceLookups({
-    enabled: !loading && !error && filtered.length > 0,
+    enabled: !awaitingTenant && !loading && !error && filtered.length > 0,
   });
 
   const count = filtered.length;
@@ -81,13 +96,33 @@ export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>(
     showValidationErrors,
   );
 
+  const withTenant = (formValues: V, selectedTenant: ResourceSelectValue | undefined): V =>
+    isAdmin && selectedTenant
+      ? { ...formValues, metadata: { ...formValues.metadata, tenant: selectedTenant } }
+      : formValues;
+
   const handleSelect = (item: T) => {
-    formik.resetForm({ values: getInitialFormValues(item) });
+    formik.resetForm({ values: withTenant(getInitialFormValues(item), tenant) });
     onCatalogItemSelected?.(item);
+  };
+
+  const handleTenantSelect = (selectedTenant: ResourceSelectValue) => {
+    if (selectedTenant.id === tenantId) {
+      return;
+    }
+    // Every other choice depends on the tenant, so start over in the new one.
+    setSearch('');
+    formik.resetForm({ values: withTenant(getEmptyFormValues(), selectedTenant) });
+    onCatalogItemSelected?.(undefined);
   };
 
   return (
     <Stack hasGutter>
+      {isAdmin ? (
+        <StackItem>
+          <TenantSelectField onSelect={handleTenantSelect} />
+        </StackItem>
+      ) : null}
       <StackItem>
         <Flex
           direction={{ default: 'column', md: 'row' }}
@@ -102,13 +137,18 @@ export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>(
               onChange={(_event, value) => setSearch(value)}
               onClear={() => setSearch('')}
               aria-label={t('catalogProvision.catalog.searchAria')}
+              isDisabled={awaitingTenant}
             />
           </FlexItem>
         </Flex>
       </StackItem>
       <StackItem>
         <Content component="p">
-          {loading ? t('catalogProvision.catalog.loading') : countPhrase}
+          {awaitingTenant
+            ? t('Select a tenant to see the catalog items available to it.')
+            : loading
+              ? t('catalogProvision.catalog.loading')
+              : countPhrase}
         </Content>
       </StackItem>
       {catalogItemError ? (
@@ -146,12 +186,13 @@ export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>(
               </Bullseye>
             </GalleryItem>
           ) : null}
-          {!loading && !error && count === 0 ? (
+          {!awaitingTenant && !loading && !error && count === 0 ? (
             <GalleryItem>
               <Content component="p">{t('catalogProvision.catalog.empty')}</Content>
             </GalleryItem>
           ) : null}
-          {!loading &&
+          {!awaitingTenant &&
+            !loading &&
             !error &&
             filtered.map((item) => {
               const selected =

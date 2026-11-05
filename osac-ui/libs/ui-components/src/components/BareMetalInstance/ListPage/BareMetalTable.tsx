@@ -9,10 +9,12 @@ import ResourceNameField from '@osac/ui-components/components/Resource/ResourceN
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 interface BareMetalTableProps {
+  /** Adds a Tenant column, for cloud provider admins who see every tenant's workloads. */
+  showTenant?: boolean;
   instances: BareMetalInstance[];
 }
 
-export const BareMetalTable = ({ instances }: BareMetalTableProps) => {
+export const BareMetalTable = ({ instances, showTenant = false }: BareMetalTableProps) => {
   const { t } = useTranslation();
   const columnLabels = useMemo(
     () => ({
@@ -32,6 +34,7 @@ export const BareMetalTable = ({ instances }: BareMetalTableProps) => {
       <Thead>
         <Tr>
           <Th>{columnLabels.name}</Th>
+          {showTenant ? <Th>{t('Tenant')}</Th> : null}
           <Th>{columnLabels.status}</Th>
           <Th>{columnLabels.project}</Th>
           <Th>{columnLabels.instanceType}</Th>
@@ -50,6 +53,9 @@ export const BareMetalTable = ({ instances }: BareMetalTableProps) => {
                 subTitle={instance.spec?.catalogItem?.name}
               />
             </Td>
+            {showTenant ? (
+              <Td dataLabel={t('Tenant')}>{instance.metadata?.tenant || '—'}</Td>
+            ) : null}
             <Td dataLabel={columnLabels.status}>
               <BareMetalStatusLabel state={instance.status?.state} />
             </Td>

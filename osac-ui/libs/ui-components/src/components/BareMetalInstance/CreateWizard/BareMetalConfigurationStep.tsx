@@ -12,9 +12,11 @@ import OsacForm from '../../Form/OsacForm';
 import UserDataField from '../../Form/UserDataField';
 import DiskImageField from '../../ProvisioningWizard/fields/DiskImageField';
 import ProvisioningField from '../../ProvisioningWizard/fields/ProvisioningField';
+import { useWorkloadTenant } from '../../ProvisioningWizard/useWorkloadTenant';
 
 const BareMetalConfigurationStep = () => {
   const { values } = useFormikContext<BareMetalInstanceWizardValues>();
+  const { adminTenant } = useWorkloadTenant();
 
   return (
     <Stack hasGutter>
@@ -30,6 +32,7 @@ const BareMetalConfigurationStep = () => {
               <DiskImageField
                 name={valueName}
                 guestOsFamilyName="spec.guestOsFamily"
+                tenant={adminTenant}
                 isDisabled={isDisabled}
               />
             )}
@@ -39,6 +42,7 @@ const BareMetalConfigurationStep = () => {
               <UserDataField
                 name={valueName}
                 projectName={values.metadata.project}
+                tenant={adminTenant}
                 isDisabled={isDisabled}
               />
             )}

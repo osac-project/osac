@@ -409,4 +409,20 @@ describe('buildClusterCreatePayload — locked catalog fields', () => {
     expect(payload.spec).not.toHaveProperty('pullSecretSecret');
     expect(payload.spec).not.toHaveProperty('networkAttachment');
   });
+
+  it("creates the cluster in a cloud provider admin's chosen tenant", () => {
+    const values = createEmptyClusterValues();
+    values.catalogItemReference = { id: 'catalog-1', name: 'catalog-1' };
+    values.metadata = {
+      name: 'my-cluster',
+      project: 'team-a',
+      tenant: { id: 'tenant-1', name: 'tenant-1' },
+    };
+
+    expect(buildClusterCreatePayload(values).metadata).toEqual({
+      name: 'my-cluster',
+      project: 'team-a',
+      tenant: 'tenant-1',
+    });
+  });
 });

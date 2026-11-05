@@ -19,6 +19,8 @@ interface DiskImageFieldProps extends ProvisioningFieldControlProps {
   fieldId?: string;
   guestOsFamilyName: string;
   autoSelectSingleOption?: boolean;
+  /** Set for a cloud provider admin: limits the list to the workload's tenant. */
+  tenant?: string;
 }
 
 const DiskImageField = ({
@@ -29,6 +31,7 @@ const DiskImageField = ({
   isRequired = true,
   labelInfo,
   autoSelectSingleOption = true,
+  tenant,
 }: DiskImageFieldProps) => {
   const { t } = useTranslation();
   const [diskImageField] = useField<ResourceSelectValue>(name);
@@ -89,6 +92,13 @@ const DiskImageField = ({
   const diskImageFilter = cel<DiskImage>((filter) =>
     filter.and(
       DISK_IMAGE_NON_OBSOLETE_FILTER,
+      // A tenant sees the global images and its own.
+      tenant === undefined
+        ? undefined
+        : filter.or(
+            filter.field('metadata.tenant').equals('shared'),
+            filter.field('metadata.tenant').equals(tenant),
+          ),
       guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED
         ? undefined
         : filter.field('spec.guestOsFamily').equals(guestOsFamily),

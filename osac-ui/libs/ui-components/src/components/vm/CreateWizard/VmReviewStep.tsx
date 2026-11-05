@@ -25,16 +25,20 @@ import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { NetworkAttachmentReviewFields } from '../../ProvisioningWizard/NetworkAttachmentReviewFields';
 import { getVmStorageRows } from '../../ProvisioningWizard/storageRows';
+import { useWorkloadTenant } from '../../ProvisioningWizard/useWorkloadTenant';
 
 export const VmReviewStep = () => {
   const { t } = useTranslation();
   const { values } = useFormikContext<ComputeInstanceWizardValues>();
+  const { isAdmin, adminTenant } = useWorkloadTenant();
 
   const {
     data: projects,
     isLoading: projectsLoading,
     error: projectsError,
-  } = useListResource(Projects, { filter: fullProjectPathToQueryFilter(values.metadata.project) });
+  } = useListResource(Projects, {
+    filter: fullProjectPathToQueryFilter(values.metadata.project, adminTenant),
+  });
 
   if (projectsLoading) {
     return (
@@ -82,6 +86,14 @@ export const VmReviewStep = () => {
             </DescriptionListDescription>
           </DescriptionListGroup>
 
+          {isAdmin ? (
+            <DescriptionListGroup>
+              <DescriptionListTerm>{t('Tenant')}</DescriptionListTerm>
+              <DescriptionListDescription>
+                {values.metadata.tenant?.name || values.metadata.tenant?.id}
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+          ) : null}
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
             <DescriptionListDescription>

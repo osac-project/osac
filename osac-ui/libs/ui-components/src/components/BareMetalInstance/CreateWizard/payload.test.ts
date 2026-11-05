@@ -7,7 +7,7 @@ import {
   BareMetalInstanceSchema,
 } from '@osac/types';
 
-import { createEmptyBareMetalInstanceValues } from './fields';
+import { type BareMetalInstanceWizardValues, createEmptyBareMetalInstanceValues } from './fields';
 import { buildBareMetalInstanceCreatePayload } from './payload';
 import { provisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
@@ -18,6 +18,23 @@ const buildValues = (project: string) => ({
 });
 
 describe('buildBareMetalInstanceCreatePayload', () => {
+  it("creates the instance in a cloud provider admin's chosen tenant", () => {
+    const values: BareMetalInstanceWizardValues = buildValues('team-a');
+    values.metadata = { ...values.metadata, tenant: { id: 'tenant-1', name: 'tenant-1' } };
+
+    expect(buildBareMetalInstanceCreatePayload(values).metadata).toEqual({
+      name: 'my-bmi',
+      project: 'team-a',
+      tenant: 'tenant-1',
+    });
+  });
+
+  it('sends no tenant for a tenant user', () => {
+    expect(buildBareMetalInstanceCreatePayload(buildValues('')).metadata).not.toHaveProperty(
+      'tenant',
+    );
+  });
+
   it('builds a catalog-item create payload', () => {
     expect(buildBareMetalInstanceCreatePayload(buildValues(''))).toEqual({
       metadata: { name: 'my-bmi', project: '' },

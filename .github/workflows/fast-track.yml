@@ -1,0 +1,31 @@
+---
+# Fast track: a member of the fast-track team (`fast_track.team` of .github/e2e-policy.yml; absent: nobody) skips every
+# test of one pull request. Actions, Fast track, Run workflow, with the number of the pull request and a reason. It runs
+# only from the default branch, and the shared workflow of osac-ci checks who runs it (see osac-ci docs/CALLERS.md, "Fast
+# track", and .github/CI.md). The run belongs to the default branch, so it adds no row to a pull request.
+name: Fast track
+run-name: "Fast track #${{ inputs.number }} · ${{ github.actor }}"  # quoted: an unquoted " #" starts a YAML comment
+
+on:
+  workflow_dispatch:
+    inputs:
+      number:
+        description: Pull request number
+        required: true
+      reason:
+        description: Why (shown on the pull request)
+        required: true
+
+permissions: {}
+
+jobs:
+  fast-track:
+    name: Fast track
+    uses: osac-project/osac-ci/.github/workflows/fast-track.yml@fd8b518a7d1a2e10921645983c7747bef0447bde  # v1.3.8
+    permissions:
+      contents: read
+    with:
+      number: ${{ inputs.number }}
+      reason: ${{ inputs.reason }}
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

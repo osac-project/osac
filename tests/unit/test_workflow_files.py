@@ -91,3 +91,23 @@ def test_a_suite_that_runs_as_a_run_of_its_own_follows_the_contract_of_the_decis
         )
     listed = load(WORKFLOWS / "e2e-pr.yml")[True]["workflow_run"]["workflows"]
     assert wrapper["name"] in listed, "e2e-pr.yml must listen to the end of the suite's run"
+
+
+def test_the_fast_track_form_runs_from_a_form_and_gives_the_shared_workflow_the_key_by_name() -> None:
+    form = yaml.safe_load((WORKFLOWS / "fast-track.yml").read_text())
+    assert list(form[True]) == ["workflow_dispatch"] and form["permissions"] == {}
+    assert set(form[True]["workflow_dispatch"]["inputs"]) == {"number", "reason"}
+    job = form["jobs"]["fast-track"]
+    assert job["uses"].startswith("osac-project/osac-ci/.github/workflows/fast-track.yml@")
+    assert job["secrets"] == {"OSAC_CI_APP_PRIVATE_KEY": "${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}"}
+    assert form["run-name"].startswith("Fast track #"), "quoted: an unquoted ' #' would start a YAML comment"
+
+
+def test_the_ci_workflow_asks_for_a_fast_track_and_runs_no_check_that_needs_a_test_when_there_is_one() -> None:
+    plan = yaml.safe_load((WORKFLOWS / "ci.yml").read_text())["jobs"]["plan"]
+    ask = next(s for s in plan["steps"] if s.get("id") == "fast")
+    assert ask["uses"].startswith("osac-project/osac-ci/.github/actions/fast-track-check@")
+    assert ask["continue-on-error"] is True, "not knowing is not a fast track: the tests run"
+    assert plan["permissions"]["checks"] == "read" and plan["permissions"]["pull-requests"] == "read"
+    assert plan["outputs"]["changed"].startswith("${{ steps.fast.outputs.fast == 'true' && '||'")
+    assert plan["outputs"]["tests"].startswith("${{ steps.fast.outputs.fast == 'true' && '[]'")

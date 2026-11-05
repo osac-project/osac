@@ -49,7 +49,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: osac-project/osac-ci/.github/workflows/suite-inputs.yml@5bfcd1ff220362171967451de7aaabb9e027d855  # v1.3.6
+    uses: osac-project/osac-ci/.github/workflows/suite-inputs.yml@fd8b518a7d1a2e10921645983c7747bef0447bde  # v1.3.8
     with:
       repo: ${{ inputs.repo }}
       sha: ${{ inputs.sha }}

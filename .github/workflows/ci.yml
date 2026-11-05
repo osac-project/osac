@@ -41,13 +41,16 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      checks: read  # the E2E check of the pull request, for a fast track
     outputs:
       # The filters that matched, as |name|name|, or every filter when the CI
       # wiring itself changed or the emergency override is on. Tested with
-      # contains(changed, '|name|').
-      changed: ${{ steps.pick.outputs.changed }}
+      # contains(changed, '|name|'). A fast-tracked pull request needs no check: nothing matched.
+      changed: ${{ steps.fast.outputs.fast == 'true' && '||' || steps.pick.outputs.changed }}
       # The unit and integration test legs this change needs (see .github/ci-tests.yml), as a JSON list for a matrix.
-      tests: ${{ steps.tests.outputs.tests }}
+      tests: ${{ steps.fast.outputs.fast == 'true' && '[]' || steps.tests.outputs.tests }}
+      # "login: reason" when a member of the fast-track team skipped every test of this pull request (osac-ci docs/CALLERS.md).
+      fast-track: ${{ steps.fast.outputs.detail }}
     steps:
       # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
       # so the repository must be checked out with enough history for base..head.
@@ -88,6 +91,18 @@ jobs:
             [ .[] | select(all(.filters[]; . as $f | ($changed | contains("|" + $f + "|")))) ]')
           echo "tests=${tests}" >> "$GITHUB_OUTPUT"
           echo "Tests that run: $(jq -r 'map(.id) | join(", ") | if . == "" then "none" else . end' <<<"${tests}")" >> "$GITHUB_STEP_SUMMARY"
+
+      # A pull request (or the queue entry of one) that a member of the fast-track team skipped has no test to run: the E2E
+      # check of its commit, written by the OSAC CI app, says so. Only pre-commit and dependency-review still run (a secret or
+      # a bad dependency is not a test). If the answer is not known the tests run, as always.
+      - uses: osac-project/osac-ci/.github/actions/fast-track-check@fd8b518a7d1a2e10921645983c7747bef0447bde  # v1.3.8
+        id: fast
+        continue-on-error: true
+        with:
+          github-token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          number: ${{ github.event.pull_request.number }}
+          head-ref: ${{ github.event.merge_group.head_ref }}
 
   # Run on every change: they look at the whole diff, not at one component.
   pre-commit:

@@ -18,7 +18,20 @@ limitations under the License.
 // backends.
 package credentials
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+var (
+	// ErrResolutionFailed identifies credentials that are missing or invalid
+	// and will not succeed if the caller retries without a configuration change.
+	ErrResolutionFailed = errors.New("BMC credential resolution failed")
+	// ErrCredentialsNotFound identifies a source with no matching credentials.
+	ErrCredentialsNotFound = errors.New("BMC credentials not found")
+	// ErrAmbiguousCredentials identifies a source with multiple matching credentials.
+	ErrAmbiguousCredentials = errors.New("multiple BMC credentials found")
+)
 
 // BMC contains the username and password used to connect to a BMC.
 type BMC struct {
@@ -30,4 +43,10 @@ type BMC struct {
 type Reader interface {
 	GetCredentials(ctx context.Context, hostID string) (*BMC, error)
 	Close() error
+}
+
+// BMCSecretStore ensures and deletes the Kubernetes Secret consumed by BMO.
+type BMCSecretStore interface {
+	Ensure(ctx context.Context, secretName string, bmc *BMC) error
+	Delete(ctx context.Context, secretName string) error
 }

@@ -27,8 +27,6 @@ type BMHLifecycleManager interface {
 	DeleteBMH(ctx context.Context, name string) error
 	BMHExists(ctx context.Context, name string) (bool, error)
 	IsBMHReady(ctx context.Context, name string) (bool, error)
-	EnsureBMCSecret(ctx context.Context, name, username, password string) error
-	DeleteBMCSecret(ctx context.Context, name string) error
 	GetHardwareNICs(ctx context.Context, name string) ([]string, error)
 	Namespace() string
 }

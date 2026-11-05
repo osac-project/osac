@@ -35,6 +35,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bcmclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bmcdiscovery"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
@@ -45,6 +46,7 @@ const certBaseDir = "/etc/osac/certs"
 // without depending on the bcmclient package.
 //
 //go:generate mockgen -source=$GOFILE -destination=bcm_mock_test.go -package=$GOPACKAGE BCMAPI,BMCDiscoverer
+//go:generate mockgen -destination=bmc_secret_store_mock_test.go -package=$GOPACKAGE github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials BMCSecretStore
 type BCMAPI interface {
 	CertWatcher() *certwatcher.CertWatcher
 	GetDevices(ctx context.Context) ([]bcmclient.Device, error)
@@ -124,18 +126,25 @@ func ParseBCMOptions(options map[string]any) (*BCMClientConfig, error) {
 // BCMClient implements inventory.Client by wrapping a BCMAPI
 // for BCM API communication and a baremetalhost.BMHLifecycleManager for BMH lifecycle.
 type BCMClient struct {
-	client        BCMAPI
-	bmhManager    baremetalhost.BMHLifecycleManager
-	bmcDiscoverer BMCDiscoverer
-	hostClass     string
+	client         BCMAPI
+	bmhManager     baremetalhost.BMHLifecycleManager
+	bmcSecretStore credentials.BMCSecretStore
+	bmcDiscoverer  BMCDiscoverer
+	hostClass      string
 }
 
 // NewBCMClient creates a BCM inventory client with injected dependencies.
-func NewBCMClient(client BCMAPI, bmhManager baremetalhost.BMHLifecycleManager, hostClass string) *BCMClient {
+func NewBCMClient(
+	client BCMAPI,
+	bmhManager baremetalhost.BMHLifecycleManager,
+	bmcSecretStore credentials.BMCSecretStore,
+	hostClass string,
+) *BCMClient {
 	return &BCMClient{
-		client:     client,
-		bmhManager: bmhManager,
-		hostClass:  hostClass,
+		client:         client,
+		bmhManager:     bmhManager,
+		bmcSecretStore: bmcSecretStore,
+		hostClass:      hostClass,
 	}
 }
 
@@ -484,7 +493,10 @@ func (c *BCMClient) ensureBMHExists(ctx context.Context, device *bcmclient.Devic
 
 	// Secret name is derived from the BMH so the two stay coupled.
 	secretName := bmhName + bmcSecretSuffix
-	if err := c.bmhManager.EnsureBMCSecret(ctx, secretName, username, password); err != nil {
+	if err := c.bmcSecretStore.Ensure(ctx, secretName, &credentials.BMC{
+		Username: []byte(username),
+		Password: []byte(password),
+	}); err != nil {
 		return fmt.Errorf("failed to create BMC credentials Secret for host %q: %w", device.Hostname, err)
 	}
 
@@ -687,9 +699,9 @@ func (c *BCMClient) UnassignHost(ctx context.Context, inventoryHostID, bareMetal
 		return fmt.Errorf("UnassignHost: %w", err)
 	}
 
-	// Delete the operator-created BMC Secret if we own it. Label-guarded inside
-	// DeleteBMCSecret, so admin-provided Secrets are never touched.
-	if err := c.bmhManager.DeleteBMCSecret(ctx, hostname+bmcSecretSuffix); err != nil {
+	// Delete the operator-created BMC Secret if we own it. The store checks its
+	// managed-by label so admin-provided Secrets are never touched.
+	if err := c.bmcSecretStore.Delete(ctx, hostname+bmcSecretSuffix); err != nil {
 		return fmt.Errorf("UnassignHost: %w", err)
 	}
 

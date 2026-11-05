@@ -30,18 +30,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
-
-	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
-)
-
-// bmcSecretManagedByLabel marks a BMC credentials Secret as created and owned
-// by the operator. Only Secrets carrying this label are deleted on unassign —
-// admin-created Secrets (which lack it) are never touched.
-var (
-	bmcSecretManagedByLabel = shared.OsacPrefix + "/managed-by"
-	bmcSecretManagedByValue = shared.OsacDefaultManagedByValue
 )
 
 // CreateParams holds the parameters for creating a BareMetalHost CR.
@@ -59,9 +48,7 @@ type CreateParams struct {
 // readiness checking. Any inventory backend that needs BMH CRs can
 // use this utility.
 //
-// uncachedClient handles BMC credential Secrets and confirms BMH deletion
-// directly with the API server. Direct Secret access avoids cluster-wide
-// Secret caching and its list/watch RBAC requirements.
+// uncachedClient confirms BMH deletion directly with the API server.
 type Manager struct {
 	client         client.Client
 	uncachedClient client.Client
@@ -156,85 +143,8 @@ func (m *Manager) BMHExists(ctx context.Context, name string) (bool, error) {
 	return true, nil
 }
 
-// EnsureBMCSecret creates (or updates) an operator-managed BMC credentials
-// Secret in the Metal3 namespace with the standard Metal3/BMO "username" and
-// "password" keys. The Secret is labeled so DeleteBMCSecret can safely tell
-// operator-created Secrets apart from admin-created ones. Idempotent: if the
-// Secret already exists its data and label are updated.
-func (m *Manager) EnsureBMCSecret(ctx context.Context, name, username, password string) error {
-	log := ctrllog.FromContext(ctx)
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: m.namespace},
-	}
-	result, err := controllerutil.CreateOrUpdate(ctx, m.uncachedClient, secret, func() error {
-		// Refuse to claim a Secret we did not create: overwriting an unlabeled
-		// (e.g. externally-created) Secret and stamping our label would later
-		// cause DeleteBMCSecret to delete it, violating the "never touch
-		// non-operator Secrets" invariant. A non-empty ResourceVersion means the
-		// Secret already existed (update path).
-		if secret.ResourceVersion != "" && secret.Labels[bmcSecretManagedByLabel] != bmcSecretManagedByValue {
-			return fmt.Errorf("BMC credentials Secret %s/%s already exists and is not operator-managed; refusing to overwrite", m.namespace, name)
-		}
-		if secret.Labels == nil {
-			secret.Labels = map[string]string{}
-		}
-		secret.Labels[bmcSecretManagedByLabel] = bmcSecretManagedByValue
-		secret.Type = corev1.SecretTypeOpaque
-		secret.Data = map[string][]byte{
-			"username": []byte(username),
-			"password": []byte(password),
-		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to ensure BMC credentials Secret %s/%s: %w", m.namespace, name, err)
-	}
-
-	log.Info("Ensured BMC credentials Secret", "name", name, "namespace", m.namespace, "result", result)
-	return nil
-}
-
-// DeleteBMCSecret deletes a BMC credentials Secret by name, but ONLY if it is
-// operator-managed (carries the managed-by label). Admin-created Secrets and
-// missing Secrets are left untouched. Returns an error while deletion is pending.
-func (m *Manager) DeleteBMCSecret(ctx context.Context, name string) error {
-	log := ctrllog.FromContext(ctx)
-
-	secret := &corev1.Secret{}
-	if err := m.uncachedClient.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: name}, secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to get BMC credentials Secret %s/%s: %w", m.namespace, name, err)
-	}
-
-	if secret.Labels[bmcSecretManagedByLabel] != bmcSecretManagedByValue {
-		log.Info("BMC credentials Secret is not operator-managed, leaving it in place",
-			"name", name, "namespace", m.namespace)
-		return nil
-	}
-
-	if err := m.uncachedClient.Delete(ctx, secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to delete BMC credentials Secret %s/%s: %w", m.namespace, name, err)
-	}
-	log.Info("Requested deletion of operator-managed BMC credentials Secret", "name", name, "namespace", m.namespace)
-	return m.confirmBMCSecretDeletion(ctx, name)
-}
-
-func (m *Manager) confirmBMCSecretDeletion(ctx context.Context, name string) error {
-	err := m.uncachedClient.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: name}, &corev1.Secret{})
-	if err == nil {
-		return fmt.Errorf("BMC credentials Secret %s/%s deletion is pending", m.namespace, name)
-	}
-	return client.IgnoreNotFound(err)
-}
-
 // DeleteBMH deletes a BareMetalHost CR by name. Idempotent — ignores NotFound.
-// Does not delete BMC credentials Secrets (they are admin-managed and reusable).
+// It leaves the referenced credentials Secret untouched.
 func (m *Manager) DeleteBMH(ctx context.Context, name string) error {
 	log := ctrllog.FromContext(ctx)
 

@@ -482,6 +482,25 @@ administrators, using the administrator procedure for your environment. The
 [Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md#evpn-host-networking-vmaas)
 provides one example procedure for preparing the required host configuration.
 
+Before installation, confirm these inputs with the administrators preparing
+the VMaaS cluster and fabric. The platform administrator sets them in the
+infra values file passed to `osac-deps` and `osac-infra`; the Helm guide has
+the detailed procedure.
+
+| Value | Information to confirm | Owner or source |
+|---|---|---|
+| `evpn.enabled` | Enable host networking for CUDN EVPN on the VMaaS cluster. | Platform administrator |
+| `evpn.nmstate.install`, `evpn.nmstate.channel` | Whether NMState must be installed and which supported channel to use. | Cluster administrator |
+| `evpn.configureClusterNetwork` | Whether to apply the cluster network settings; this restarts OVN-Kubernetes once. | Cluster administrator |
+| `evpn.vtepCIDR` | Address range reserved for node VTEP addresses and configured on the fabric. | Agree with the fabric administrator |
+| `evpn.bgp.asn`, `evpn.nodes[].asn` | Node ASN and any per-node overrides; they must match the fabric BGP configuration. | Fabric administrator |
+| `evpn.bgp.acceptPrefixes` | Fabric loopback ranges to accept; only `/32` routes are accepted. | Fabric administrator |
+| `evpn.bgp.waitForEstablished`, `evpn.bgp.timeoutSeconds` | Whether installation waits for BGP sessions (default `true`) and the maximum wait per session (default `900` seconds). | Platform administrator |
+| `evpn.nodes[].name` | Kubernetes node name for each node that will run VMs. | Cluster administrator |
+| `evpn.nodes[].vtepIP` | Unique address inside `evpn.vtepCIDR` for each node, configured on the fabric as well. | Agree with the platform and fabric administrators |
+| `evpn.nodes[].uplinks[].interface`, `evpn.nodes[].uplinks[].address` | Node interface connected to a fabric leaf; the address is optional when already configured. | Cluster and fabric administrators |
+| `evpn.nodes[].uplinks[].peerAddress`, `evpn.nodes[].uplinks[].peerASN` | Address and ASN of the connected fabric BGP peer. | Fabric administrator |
+
 For a VirtualNetwork's Subnet, `cudn_evpn` creates a
 `ClusterUserDefinedNetwork` (CUDN) on `tenant-vtep`, with the VNIs that the
 Fabric Manager allocated: a MAC-VRF (VNI `<l2_vni>`, route target `0:<l2_vni>`) and

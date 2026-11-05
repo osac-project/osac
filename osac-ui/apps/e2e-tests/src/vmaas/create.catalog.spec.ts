@@ -57,7 +57,12 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
     await page.locator(...CatalogCreatePage.globalScope).click();
     await page.getByRole(...CatalogCreatePage.name).fill(catalogTestData.name);
     await page.getByRole(...CatalogCreatePage.description).fill(catalogTestData.description);
-    await selectOption(page, CatalogCreatePage.template, catalogTestData.template);
+    const selectedTemplate = await selectOption(
+      page,
+      CatalogCreatePage.template,
+      catalogTestData.template,
+    );
+    expect(selectedTemplate).toBe(catalogTestData.template);
     await page.getByRole(...CatalogCreatePage.next).click();
   });
 
@@ -90,15 +95,17 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
   await testStep('catalog-create', 'Create the catalog item', async () => {
     await expect(page.getByRole(...CatalogCreatePage.review)).toBeVisible();
     await page.getByRole(...CatalogCreatePage.create).click();
-    await expect(page).toHaveURL((url) => /^\/catalog\/vm\/[^/]+$/.test(url.pathname));
-    await expect(
-      page.getByRole('heading', { name: catalogTestData.name, exact: true }),
-    ).toBeVisible();
+    await expect(page).toHaveURL(
+      (url) => /^\/catalog\/vm\/[^/]+$/.test(url.pathname) && url.pathname !== '/catalog/vm/create',
+    );
     await writeFile(ownershipFile, '', {
       encoding: 'utf8',
       flag: 'wx',
       mode: 0o600,
     });
+    await expect(
+      page.getByRole('heading', { name: catalogTestData.name, exact: true }),
+    ).toBeVisible();
   });
 
   await testStep('catalog-create', 'Publish the catalog item', async () => {

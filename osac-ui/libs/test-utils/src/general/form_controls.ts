@@ -17,7 +17,9 @@ export const selectOption = async (
       : page.getByRole(field[0], field[1]).nth(index);
   await expect(fieldLocator).toBeVisible();
   await fieldLocator.click();
-  const option = page.getByRole('option', { name: optionName }).first();
+  const option = page
+    .getByRole('option', { name: optionName, exact: typeof optionName === 'string' })
+    .first();
   await expect(option).toBeVisible();
   const selectedName = (await option.innerText()).trim();
   await option.click();

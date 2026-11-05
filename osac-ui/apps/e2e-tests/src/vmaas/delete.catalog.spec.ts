@@ -4,7 +4,6 @@ import { access, rm } from 'node:fs/promises';
 import { catalogOwnershipFilePath, catalogTestData } from './test_data';
 import {
   deleteCatalogItem,
-  expectCatalogItemListed,
   expectCatalogItemNotListed,
 } from '../../../../libs/test-utils/src/catalog.page';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
@@ -50,22 +49,6 @@ test('deletes a catalog item through the Catalog UI', async ({ page }) => {
   );
 
   await testStep('catalog-delete', 'Open the Catalog page', () => openCatalogPage(page));
-
-  await testStep(
-    'catalog-delete',
-    `Verify catalog item "${catalogTestData.name}" exists before deletion`,
-    () =>
-      expectCatalogItemListed(
-        page,
-        catalogTestData.name,
-        catalogTestData.status,
-        catalogTestData.usage,
-        {
-          instanceType: catalogTestData.fields.instanceType.name,
-          diskImage: catalogTestData.fields.diskImage.name,
-        },
-      ),
-  );
 
   await testStep('catalog-delete', 'Delete the catalog item through the UI', () =>
     deleteCatalogItem(page, catalogTestData.name),

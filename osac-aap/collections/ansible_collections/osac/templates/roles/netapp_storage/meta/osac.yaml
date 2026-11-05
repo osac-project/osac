@@ -1,5 +1,5 @@
 ---
-name: ontap-storage
+name: netapp-storage
 title: NetApp ONTAP Storage Provider
 description: >
   Validates operator-supplied ONTAP backend parameters for OSAC tenants in
@@ -12,7 +12,7 @@ description: >
   Trident namespace, and per-tier StorageClasses.
 
 template_type: storage_provider
-implementation_strategy: ontap
+implementation_strategy: netapp
 capabilities:
   supported_protocols:
     - block

@@ -2,7 +2,7 @@
 # Shared tier validation, included by setup.yaml and ensure_storage_class.yaml
 # so the two action entry points can't drift out of sync on which protocols
 # and SAN transports are allowed.
-# Requires: _provider_tiers (set by the dispatcher), ontap_storage_san_type (defaults).
+# Requires: _provider_tiers (set by the dispatcher), netapp_storage_san_type (defaults).
 
 - name: Assert _provider_tiers is defined and non-empty
   ansible.builtin.assert:
@@ -52,16 +52,16 @@
 - name: Fail if sanType is not a valid Trident SAN transport
   ansible.builtin.fail:
     msg: >-
-      ontap_storage_san_type is invalid. Trident accepts one of: iscsi, fcp,
+      netapp_storage_san_type is invalid. Trident accepts one of: iscsi, fcp,
       nvme. The value must match the transport the prepared SVM's LIFs
       actually carry.
-  when: ontap_storage_san_type not in ['iscsi', 'fcp', 'nvme']
+  when: netapp_storage_san_type not in ['iscsi', 'fcp', 'nvme']
   no_log: true
 
 - name: Fail if the trident namespace is empty
   ansible.builtin.fail:
     msg: >-
-      ontap_storage_trident_namespace resolved to an empty value. Set
-      ONTAP_TRIDENT_NAMESPACE to a valid namespace name (default: trident).
-  when: ontap_storage_trident_namespace | default('') | length == 0
+      netapp_storage_trident_namespace resolved to an empty value. Set
+      NETAPP_TRIDENT_NAMESPACE to a valid namespace name (default: trident).
+  when: netapp_storage_trident_namespace | default('') | length == 0
   no_log: true

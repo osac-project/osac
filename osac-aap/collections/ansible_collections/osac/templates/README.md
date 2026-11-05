@@ -194,7 +194,7 @@ extra_var, each tier declares its provider, and the service-layer dispatcher
 template role with the filtered tier subset.
 
 1. Create role structure. The role **MUST** be named `{provider}_storage` (e.g.,
-   `vast_storage`, `ontap_storage`). This naming convention is enforced by the
+   `vast_storage`, `netapp_storage`). This naming convention is enforced by the
    dispatcher at `osac.service.storage_provider`, which constructs the role name
    dynamically: `osac.templates.{{ provider }}_storage`. Using a different naming
    pattern will cause a runtime role-not-found error.
@@ -296,24 +296,61 @@ or API tokens — these 4 resources use `ansible.builtin.uri` directly. Per-tena
 credentials are stored in a hub-cluster Secret and used in CSI Secrets. Password
 rotation requires teardown + re-provisioning.
 
-**ONTAP provider specifics (`ontap_storage`):** The `ontap_storage` role supports two
-per-backend tenancy modes via NetApp Trident (`ontap-san`, block-only on VMaaS):
-- **Shared-TBC mode (`provider_config.profiles`):** Consumes a customer-managed
-  `TridentBackendConfig` (e.g. `trident/customer-fc`) declared under
-  `storage_backend_connections[backend_id].provider_config.profiles` and per-tier
-  `provider_config.{profile, pool_selector}` bindings. `setup` validates profile and
-  selector inputs without cluster or ONTAP network calls; `ensure_storage_class` performs
-  a best-effort `k8s_info` check on the referenced `TridentBackendConfig` (failing fast if
-  visibly `Failed` or misconfigured, pinning `parameters.storagePools: "<backendName>:.*"`
-  when `Bound`, and falling back to `parameters.selector` only when `NotFound`/`Forbidden`)
-  and creates per-tenant per-tier `StorageClass`es without creating or deleting customer
-  TBCs or Secrets.
-- **Dedicated-SVM mode (`tenant_preparation`):** Consumes administrator-prepared per-tenant
-  SVM credentials (`endpoint` + `tenant_preparation.provider_config.{username, password, svm}`,
-  prepared via `osac-installer/scripts/dev-full/prepare-ontap-svm.sh`). `ensure_storage_class`
-  creates a per-tenant CSI `Secret`, `TridentBackendConfig` with labeled virtual pools, and
-  per-tier `StorageClass`es on the target cluster, and `teardown_cluster_storage` removes
-  only OSAC-managed resources (`app.kubernetes.io/managed-by=osac-aap`).
+**NetApp provider specifics (`netapp_storage`):** The `netapp_storage` role serves
+OSAC-managed NetApp ONTAP block tiers on VMaaS through NetApp Trident (`ontap-san`
+driver). It never calls the ONTAP API itself: Trident on the target cluster does,
+and Trident must already be installed there. The role writes no hub Secret. The
+service dispatcher currently routes the `netapp` product key to `osac_csi_storage`,
+so routing OSAC-managed VMaaS `netapp` tiers to this role is a separate change.
+Each dispatched `backend_id` uses exactly one of two modes, selected by its
+`storage_provider_backend_connections` entry:
+
+- **Dedicated-SVM mode (`tenant_preparation`):** the tenant is assigned a
+  storage-administrator-prepared SVM. `ensure_storage_class` creates, on the target
+  cluster, a per-tenant CSI `Secret` and `TridentBackendConfig` (one labeled virtual
+  pool per tier, `useREST: true`) in the Trident namespace and one `StorageClass` per
+  tier. Expected input:
+  ```yaml
+  storage_provider_backend_connections:
+    <backend_id>:
+      endpoint: https://<cluster-mgmt-lif>     # fallback management endpoint
+      tenant_preparation:
+        provider_config:
+          svm: <prepared SVM name>              # required
+          username: <SVM runtime account>       # required, used by Trident
+          password: <SVM runtime password>      # required, used by Trident
+          management_lif: <svm-mgmt-lif>        # SVM's own management LIF
+          qos_policies:                         # tier name -> policy group
+            <tier name>: <existing QoS policy group on the SVM>
+  ```
+  `managementLIF` must match the credential scope: an SVM-scoped account (for
+  example `vsadmin`) authenticates only through that SVM's management LIF, so supply
+  `management_lif`; the backend `endpoint` (cluster management LIF) is used only when
+  `management_lif` is absent, which suits cluster-scoped accounts.
+  ONTAP QoS policy groups are created by a cluster administrator, belong to one SVM,
+  and are only referenced by name from Trident virtual pools; Trident does not check
+  they exist until it provisions a volume. A tier that requests bandwidth QoS
+  (non-zero `qos_limits.static_limits`) must therefore have a `qos_policies` entry,
+  or `setup`/`ensure_storage_class` fail. Create those policy groups non-shared
+  (`-is-shared false`); ONTAP enforces a single combined MB/s ceiling, not separate
+  read and write limits.
+- **Shared-TBC mode (`provider_config.profiles`):** the tenant consumes virtual pools
+  of a customer-managed `TridentBackendConfig` shared by several tenants. Expected
+  input: `storage_provider_backend_connections[backend_id].provider_config.profiles`
+  (`[{name, shared: {tbc_namespace, tbc_name}}]`) and, per tier,
+  `provider_config.{profile, pool_selector}`. `ensure_storage_class` checks the
+  referenced `TridentBackendConfig` best-effort (failing fast if it is visibly
+  `Failed` or misconfigured, pinning `parameters.storagePools: "<backendName>:.*"`
+  when `Bound`, and using `parameters.selector` alone when it is `NotFound` or
+  `Forbidden`) and creates per-tenant per-tier `StorageClass`es; it never creates or
+  deletes customer TBCs or Secrets. Bandwidth QoS belongs to the customer's virtual
+  pools, so tiers with non-zero `qos_limits.static_limits` are rejected.
+
+`teardown_cluster_storage` removes only OSAC-managed resources
+(`app.kubernetes.io/managed-by=osac-aap`) and refuses to remove anything while a
+PersistentVolume or PersistentVolumeClaim still uses one of the tenant's
+StorageClasses. `teardown_backend` leaves the prepared SVM, accounts, and QoS policy
+groups untouched.
 
 **Block encryption:** When `spec.blockEncryptionPassphrase` is provided in the Tenant CR
 event payload, the passphrase is persisted to the hub Secret during `setup` and used by

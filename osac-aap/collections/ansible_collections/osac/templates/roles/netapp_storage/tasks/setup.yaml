@@ -12,7 +12,7 @@
 
 - name: Compute the dispatched backend ids
   ansible.builtin.set_fact:
-    _ontap_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
+    _netapp_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
   no_log: true
 
 - name: Fail if no connection details were provided for a dispatched backend
@@ -23,22 +23,22 @@
       tenant_preparation, or provider_config.profiles) for every backend_id
       referenced by storage_tier_definitions.
   when: >-
-    (_ontap_backend_ids | difference((_provider_backend_connections | default({}, true)).keys() | list) | length) > 0
+    (_netapp_backend_ids | difference((_provider_backend_connections | default({}, true)).keys() | list) | length) > 0
   no_log: true
 
 - name: Initialize the per-backend tenant config accumulator
   ansible.builtin.set_fact:
-    _ontap_tenant_configs: {}
+    _netapp_tenant_configs: {}
   no_log: true
 
 - name: Validate the prepared SVM assignment for each dispatched backend
   ansible.builtin.include_tasks: _setup_backend.yaml
-  loop: "{{ _ontap_backend_ids }}"
+  loop: "{{ _netapp_backend_ids }}"
   loop_control:
-    loop_var: _ontap_backend_id
-    label: "ontap-backend"
+    loop_var: _netapp_backend_id
+    label: "netapp-backend"
 
 - name: Set tenant config output fact
   ansible.builtin.set_fact:
-    storage_provider_tenant_config: "{{ _ontap_tenant_configs }}"
+    storage_provider_tenant_config: "{{ _netapp_tenant_configs }}"
   no_log: true

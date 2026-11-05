@@ -324,7 +324,7 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     "storage_provider_ensure_sc"
     "storage_provider_onboarding"
     "storage_provider_setup_rollback"
-    "ontap_storage_provider"
+    "netapp_storage_provider"
     # Playbook-level wiring tests for osac.service.csi_driver_install (stub the
     # real Helm install via csi_driver_install_override, run the real
     # storage_provider dispatch after it) -- share this gate/mock server since

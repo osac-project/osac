@@ -22,6 +22,8 @@ import {
   ClusterVersionsListRequest,
   ClustersCreateRequest,
   ClustersCreateResponse,
+  ClustersGetRequest,
+  ClustersUpdateRequest,
   ComputeInstanceCatalogItem,
   type ComputeInstanceCatalogItemsCreateRequest,
   ComputeInstanceCatalogItemsCreateResponse,
@@ -101,6 +103,8 @@ import {
   ClusterVersions,
   ClusterVersionsListResponseSchema,
   Clusters,
+  ClustersGetResponseSchema,
+  ClustersUpdateResponseSchema,
   ComputeInstanceCatalogItems,
   ComputeInstanceCatalogItemsDeleteResponseSchema,
   ComputeInstanceCatalogItemsUpdateResponseSchema,
@@ -457,6 +461,10 @@ export type MockTransportOverrides = {
     | MessageInitShape<typeof BareMetalInstanceCatalogItemsDeleteResponseSchema>
     | Promise<MessageInitShape<typeof BareMetalInstanceCatalogItemsDeleteResponseSchema>>;
   onClusterCreate?: (req: ClustersCreateRequest) => ClustersCreateResponse;
+  onClusterGet?: (req: ClustersGetRequest) => MessageInitShape<typeof ClustersGetResponseSchema>;
+  onClusterUpdate?: (
+    req: ClustersUpdateRequest,
+  ) => MessageInitShape<typeof ClustersUpdateResponseSchema>;
   onComputeInstanceCreate?: (
     req: ComputeInstancesCreateRequest,
   ) => ComputeInstancesCreateResponse | Promise<ComputeInstancesCreateResponse>;
@@ -1207,14 +1215,19 @@ export const createMockConnectTransport = (
 
       router.service(Clusters, {
         list: () => ({ items: clusters, size: clusters.length, total: clusters.length }),
-        get: (req) => ({
-          object: clusters.find((c) => c.id === req.id),
-        }),
+        get: (req) =>
+          overrides.onClusterGet?.(req) ?? { object: clusters.find((c) => c.id === req.id) },
         create: (req) => {
           if (overrides.onClusterCreate) {
             return overrides.onClusterCreate(req);
           }
           return { object: { id: 'cluster-1', ...req.object } };
+        },
+        update: (req) => {
+          if (overrides.onClusterUpdate) {
+            return overrides.onClusterUpdate(req);
+          }
+          throw new ConnectError('Cluster update not configured in test', Code.Unimplemented);
         },
       });
 

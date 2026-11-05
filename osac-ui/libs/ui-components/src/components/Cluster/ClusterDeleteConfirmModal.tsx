@@ -1,9 +1,9 @@
 import { Alert, Stack, StackItem } from '@patternfly/react-core';
 
-import type { Cluster } from '@osac/types';
+import { type Cluster, Clusters } from '@osac/types';
 import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal.tsx';
 
-import { useDeleteCluster } from '../../api/v1/cluster';
+import { useDeleteResource } from '../../api/use-resource';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface ClusterDeleteConfirmModalProps {
@@ -18,7 +18,7 @@ const ClusterDeleteConfirmModal = ({
   onSuccess,
 }: ClusterDeleteConfirmModalProps) => {
   const { t } = useTranslation();
-  const deleteCluster = useDeleteCluster();
+  const deleteCluster = useDeleteResource(Clusters, { retry: false });
   const clusterName = cluster.metadata?.name ?? cluster.id;
   const hasAutoExternalIp = cluster.spec?.autoExternalIpAttachment === true;
 
@@ -47,7 +47,7 @@ const ClusterDeleteConfirmModal = ({
       onClose={onClose}
       onSuccess={onSuccess}
       mutation={deleteCluster}
-      variables={cluster.id}
+      variables={{ id: cluster.id }}
     />
   );
 };

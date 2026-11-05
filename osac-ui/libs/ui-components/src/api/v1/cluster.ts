@@ -1,62 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { type MessageInitShape } from '@bufbuild/protobuf';
-import { keepPreviousData, useMutation } from '@tanstack/react-query';
 
-import { Cluster, ClusterSchema, Clusters, Secrets } from '@osac/types';
-import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
+import { Secrets } from '@osac/types';
 
 import { useApiFetch } from '../api-context';
-import { apiQueryKey } from '../types';
-import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
-
-export const useClusters = () => {
-  const client = useApiFetch(Clusters);
-  const filter = useProjectFilterQuery<Cluster>();
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/clusters', undefined, filter ? { filter } : undefined),
-    queryFn: () => client.list({ filter }),
-    select: (data) => data.items,
-    placeholderData: keepPreviousData,
-  });
-};
-
-export const useCluster = (id: string) => {
-  const client = useApiFetch(Clusters);
-  const trimmedId = id?.trim() ?? '';
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/clusters', [trimmedId]),
-    queryFn: () => client.get({ id: trimmedId }),
-    select: (data) => data.object,
-    enabled: Boolean(trimmedId),
-  });
-};
-
-export const invalidateClustersQueries = async (qc: ApiQueryClient) => {
-  await qc.invalidateQueries({ queryKey: apiQueryKey('v1/clusters') });
-};
-
-export const useDeleteCluster = () => {
-  const client = useApiFetch(Clusters);
-  const qc = useApiQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => client.delete({ id }),
-    onSuccess: () => invalidateClustersQueries(qc),
-    retry: false,
-  });
-};
-
-export const useProvisionCluster = () => {
-  const client = useApiFetch(Clusters);
-  const qc = useApiQueryClient();
-  return useMutation({
-    mutationFn: (cluster: MessageInitShape<typeof ClusterSchema>) =>
-      client.create({ object: cluster }).then((r) => r.object),
-    onSuccess: async () => {
-      await invalidateClustersQueries(qc);
-    },
-    retry: false,
-  });
-};
 
 const triggerDownload = (content: string, filename: string) => {
   const blob = new Blob([content], { type: 'application/octet-stream' });

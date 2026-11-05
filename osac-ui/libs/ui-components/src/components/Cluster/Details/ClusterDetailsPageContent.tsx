@@ -118,9 +118,10 @@ const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
               id={CLUSTER_DETAIL_OVERVIEW_TAB_ID}
               activeKey={activeTabKey}
               hidden={0 !== activeTabKey}
+              className="pf-v6-u-h-100"
             >
-              <TabContentBody>
-                <ClusterOverviewTab cluster={cluster} />
+              <TabContentBody className="pf-v6-u-h-100">
+                {activeTabKey === 0 && <ClusterOverviewTab cluster={cluster} />}
               </TabContentBody>
             </TabContent>
             <TabContent

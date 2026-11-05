@@ -6,59 +6,40 @@ import {
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
-  Flex,
-  FlexItem,
-  Skeleton,
 } from '@patternfly/react-core';
 
 import type { Cluster } from '@osac/types';
 
-import { useClusterVersion } from '../../../api/v1/cluster-versions';
+import ClusterVersionControls from './ClusterVersionControls';
+import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { Timestamp } from '../../Primitives/Timestamp';
-import ClusterVersionLifecycleLabel from '../ClusterVersionLifecycleLabel';
 
 interface ClusterConfigurationCardProps {
   cluster: Cluster;
 }
 
 export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardProps) => {
+  const { t } = useTranslation();
   const catalogItem = cluster.spec?.catalogItem;
-  const { data: clusterVersion, isLoading: isVersionLoading } = useClusterVersion(
-    cluster.spec?.version?.id,
-  );
+
   return (
     <Card isFullHeight>
       <CardTitle>Cluster configuration</CardTitle>
       <CardBody>
         <DescriptionList isCompact>
           <DescriptionListGroup>
+            <DescriptionListTerm>{t('Current version')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              <ClusterVersionControls key={cluster.id} cluster={cluster} />
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+          <DescriptionListGroup>
             <DescriptionListTerm>Catalog item</DescriptionListTerm>
             <DescriptionListDescription>
               {displayValue(catalogItem?.name || catalogItem?.id)}
             </DescriptionListDescription>
           </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>Version</DescriptionListTerm>
-            <DescriptionListDescription>
-              {isVersionLoading ? (
-                <Skeleton width="150px" />
-              ) : clusterVersion ? (
-                <Flex
-                  spaceItems={{ default: 'spaceItemsSm' }}
-                  alignItems={{ default: 'alignItemsCenter' }}
-                >
-                  <FlexItem>{displayValue(clusterVersion.spec?.version)}</FlexItem>
-                  <FlexItem>
-                    <ClusterVersionLifecycleLabel clusterVersion={clusterVersion} />
-                  </FlexItem>
-                </Flex>
-              ) : (
-                displayValue(cluster.spec?.version?.name)
-              )}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-
           <DescriptionListGroup>
             <DescriptionListTerm>Created</DescriptionListTerm>
             <DescriptionListDescription>

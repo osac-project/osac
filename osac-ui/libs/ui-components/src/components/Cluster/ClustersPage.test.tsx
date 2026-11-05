@@ -3,13 +3,14 @@ import { MemoryRouter } from 'react-router-dom';
 import { create } from '@bufbuild/protobuf';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   type Cluster,
   ClusterSchema,
   ClusterVersionSchema,
   ClusterVersionState,
+  Clusters,
 } from '@osac/types';
 
 import { ClustersPage } from './ClustersPage';
@@ -50,6 +51,7 @@ const renderPage = (clusters: Cluster[]) => {
       },
     },
   );
+  const clusterRequests = vi.spyOn(transport, 'unary');
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -62,7 +64,7 @@ const renderPage = (clusters: Cluster[]) => {
         { client: queryClient },
         createElement(
           MemoryRouter,
-          null,
+          { initialEntries: ['/?project=project-a'] },
           // eslint-disable-next-line react/no-children-prop
           createElement(SessionProvider, {
             role: 'tenant-user',
@@ -77,10 +79,24 @@ const renderPage = (clusters: Cluster[]) => {
   return {
     getCallCount: () => callCount,
     getCapturedFilter: () => capturedFilter,
+    getClusterFilter: () =>
+      (
+        clusterRequests.mock.calls.find(
+          ([method]) => method.parent.typeName === Clusters.typeName && method.name === 'List',
+        )?.[4] as { filter?: string } | undefined
+      )?.filter,
   };
 };
 
 describe('ClustersPage version join', () => {
+  it('applies the selected project filter to the cluster list request', async () => {
+    const { getClusterFilter } = renderPage([makeCluster('c-active', 'v4.17')]);
+
+    await waitFor(() =>
+      expect(getClusterFilter()).toContain('this.metadata.project in ["project-a"]'),
+    );
+  });
+
   it('resolves versions with exactly one scoped List call for multiple clusters', async () => {
     const { getCallCount, getCapturedFilter } = renderPage([
       makeCluster('c-active', 'v4.17'),

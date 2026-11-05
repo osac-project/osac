@@ -1,9 +1,8 @@
 import { type ClusterVersion, ClusterVersionState, ClusterVersions } from '@osac/types';
 
-import { useApiFetch } from '../api-context';
 import { cel } from '../cel';
-import { type ListParams, apiQueryKey } from '../types';
-import { useApiQuery } from '../use-api-query';
+import { type ListParams } from '../types';
+import { useListResource } from '../use-resource';
 
 type ClusterVersionsQueryOptions = {
   enabled?: boolean;
@@ -18,6 +17,14 @@ export const CLUSTER_VERSION_ACTIVE_LIST_FILTER = cel<ClusterVersion>((filter) =
     filter.field('spec.enabled').equals(true),
   ),
 );
+
+export const clusterUpgradeCatalogFilter = (tenant: string) =>
+  cel<ClusterVersion>((filter) =>
+    filter.or(
+      filter.field('metadata.tenant').equals(tenant),
+      filter.field('metadata.tenant').equals('shared'),
+    ),
+  );
 
 // References both spec.state and spec.enabled so the public List RPC returns
 // every version — including obsolete and disabled ones. The server injects
@@ -57,22 +64,10 @@ export const clusterVersionNamesFilter = (names: string[]) =>
 export const useClusterVersions = (
   params: ListParams = {},
   options: ClusterVersionsQueryOptions = {},
-) => {
-  const client = useApiFetch(ClusterVersions);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/cluster_versions', undefined, params),
-    queryFn: () => client.list(params),
-    select: (data) => data.items,
-    enabled: options.enabled ?? true,
-  });
-};
-
-export const useClusterVersion = (id: string | undefined) => {
-  const client = useApiFetch(ClusterVersions);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/cluster_versions', id ? [id] : undefined),
-    queryFn: () => client.get({ id: id ?? '' }),
-    select: (data) => data.object,
-    enabled: Boolean(id),
-  });
-};
+) =>
+  useListResource(
+    ClusterVersions,
+    params,
+    { enabled: options.enabled ?? true },
+    (reply) => reply.items,
+  );

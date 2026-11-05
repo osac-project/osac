@@ -524,6 +524,7 @@ jobs:
       commit-sha: ${{ steps.push-tag.outputs.commit-sha }}
     env:
       RELEASE_VERSION: ${{ github.event.inputs.release_version }}
+      CHART_SNAPSHOT: ${{ needs.resolve-and-verify.outputs.chart-snapshot }}
 
     steps:
     - name: Log in to Konflux cluster
@@ -586,12 +587,13 @@ jobs:
         # git tag to this repository, nothing else.
         permission-contents: write
 
-    # The exact commit trigger-konflux-chart-staging-release already
-    # built and shipped to stage from -- chart_snapshot's own checks in
-    # resolve-and-verify (AppStudioTestSucceeded + a successful stage
-    # Release) already prove this tag exists and is real; see that
-    # job's own comments on why no separate existence check is added
-    # here.
+    # chart_snapshot's own checks in resolve-and-verify
+    # (AppStudioTestSucceeded + a successful stage Release) already
+    # prove this tag exists and is real; see that job's own comments.
+    # They don't prove this tag still points at the exact commit
+    # chart_snapshot was actually built from, though -- the next step
+    # cross-checks that directly against Konflux's own recorded
+    # provenance, independent of trusting the git ref alone.
     - name: Checkout stage-stamped chart source commit
       if: steps.dedup.outputs.already-released != 'true'
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
@@ -599,6 +601,29 @@ jobs:
         ref: refs/tags/osac-charts-release/v${{ github.event.inputs.release_version }}
         fetch-depth: 0
         token: ${{ steps.app-token.outputs.token }}
+
+    # stamp-and-release-charts' own tag-push already refuses to move
+    # this tag to a different commit once it exists (osac-build-and-
+    # publish.yaml: "refusing to move tag"), so in the normal case this
+    # can't actually fail -- added anyway as a real, independent check
+    # against Konflux's own recorded provenance (the override
+    # Snapshot's component source.git.revision, not the git ref) rather
+    # than resting entirely on that one git-side safeguard: it also
+    # catches the case of someone manually force-moving this specific
+    # tag outside of normal automation.
+    - name: Verify checked-out commit matches the validated chart Snapshot
+      if: steps.dedup.outputs.already-released != 'true'
+      run: |
+        set -euo pipefail
+        CHECKED_OUT_SHA=$(git rev-parse HEAD)
+        # Any one component's revision suffices: every component in
+        # this Snapshot was built from the same tag-push event, so they
+        # all share the same source commit.
+        SNAPSHOT_SHA=$(oc get snapshot "${CHART_SNAPSHOT}" -n osac-tenant -o json | jq -er '.spec.components[0].source.git.revision')
+        if [[ "${CHECKED_OUT_SHA}" != "${SNAPSHOT_SHA}" ]]; then
+          echo "::error::Checked-out commit for osac-charts-release/v${RELEASE_VERSION} does not match chart_snapshot ${CHART_SNAPSHOT}'s own recorded source commit -- refusing to stamp or build from the wrong content" >&2
+          exit 1
+        fi
 
     - name: Re-stamp chart image refs for registry.redhat.io
       if: steps.dedup.outputs.already-released != 'true'

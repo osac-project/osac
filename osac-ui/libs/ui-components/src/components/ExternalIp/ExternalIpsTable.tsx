@@ -49,6 +49,12 @@ const ExternalIpsTable = ({
           const address = externalIp.status?.address || '—';
           const name = externalIp.metadata?.name;
           const pool = resolvePool(externalIp, poolsById);
+          const poolName =
+            pool?.metadata?.name ||
+            externalIp.spec?.pool?.name ||
+            externalIp.spec?.pool?.id ||
+            externalIp.status?.pool ||
+            '—';
           const available = pool?.status?.available;
 
           return (
@@ -76,7 +82,7 @@ const ExternalIpsTable = ({
               <Td dataLabel={t('Address')}>{address}</Td>
               <Td dataLabel={t('IP pool')}>
                 <Flex direction={{ default: 'column' }} spaceItems={{ default: 'spaceItemsXs' }}>
-                  <FlexItem>{externalIp.spec?.pool?.name}</FlexItem>
+                  <FlexItem>{poolName}</FlexItem>
                   {available !== undefined ? (
                     <FlexItem>
                       <Content component="small">

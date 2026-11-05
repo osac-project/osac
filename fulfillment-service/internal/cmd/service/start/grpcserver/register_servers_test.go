@@ -109,12 +109,12 @@ var _ = BeforeSuite(func() {
 		SetLogger(logger).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
-	err = dbContainer.Start(startupCtx)
-	Expect(err).ToNot(HaveOccurred())
 	DeferCleanup(func(ctx context.Context) {
 		err := dbContainer.Stop(ctx)
 		Expect(err).ToNot(HaveOccurred())
 	})
+	err = dbContainer.Start(startupCtx)
+	Expect(err).ToNot(HaveOccurred())
 
 	ctx = context.Background()
 

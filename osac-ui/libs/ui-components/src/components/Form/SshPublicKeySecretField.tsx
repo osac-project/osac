@@ -2,8 +2,8 @@ import { Secret, SecretType } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
 import SecretSelectionField from '@osac/ui-components/components/Form/SecretSelectionField';
 
-import { useTranslation } from '../../../../hooks/useTranslation';
-import type { ProvisioningFieldControlProps } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
+import { useTranslation } from '../../hooks/useTranslation';
+import type { ProvisioningFieldControlProps } from '../ProvisioningWizard/fields/provisioningFieldValue';
 
 interface SshPublicKeySecretFieldProps extends ProvisioningFieldControlProps {
   project: string;

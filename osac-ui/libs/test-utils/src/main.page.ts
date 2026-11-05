@@ -31,7 +31,7 @@ const parentByNestedOption: Partial<Record<MainPageOption, ExpandableMainPageOpt
 
 const getMainPageLocator = (page: Page, option: MainPageOption) => {
   const [role, options] = MainPage[option];
-  return page.getByRole(role, options);
+  return page.getByRole(...MainPage.navigation).getByRole(role, options);
 };
 
 const openSection = async (page: Page, option: ExpandableMainPageOption): Promise<void> => {

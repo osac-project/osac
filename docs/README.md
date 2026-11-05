@@ -30,6 +30,9 @@ see the [external services support guide](guides/installation/external-services-
 - [Storage](storage/): concepts and configuration for tenant storage:
   StorageBackends, StorageTiers, ownership models, tenancy models, provider
   integrations, and tenant onboarding.
+- [NetBox inventory backend](guides/admin/netbox-backend.md): preparing the device
+  pool, configuring BMC credentials and the installer, managing allocation and
+  release, draining, and recovery.
 
 This directory also contains concise, hand-maintained guidance for
 architecture and conventions that span component or repository boundaries

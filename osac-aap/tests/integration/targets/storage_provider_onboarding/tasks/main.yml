@@ -584,7 +584,7 @@
           {% set _n = [] -%}
           {% for _c in _window_one -%}
           {% if _c.method == 'POST' and 'managers' in _c.path
-                and (_c.body | default({})).get('username', '') == 'osac-test-obmulti' -%}
+                and (_c.body | default({})).get('username', '').startswith('osac-test-obmulti-be-') -%}
           {% set _ = _n.append(1) -%}
           {% endif -%}
           {% endfor -%}
@@ -593,7 +593,7 @@
           {% set _n = [] -%}
           {% for _c in _window_two -%}
           {% if _c.method == 'POST' and 'managers' in _c.path
-                and (_c.body | default({})).get('username', '') == 'osac-test-obmulti' -%}
+                and (_c.body | default({})).get('username', '').startswith('osac-test-obmulti-be-') -%}
           {% set _ = _n.append(1) -%}
           {% endif -%}
           {% endfor -%}

@@ -18,4 +18,5 @@ osac_job_vars:
     - name: fast
       protocol: block
       provider: lvms
+      backend_id: lvms-backend-1
   storage_backend_connections: {}

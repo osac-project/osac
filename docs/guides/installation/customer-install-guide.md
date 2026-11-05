@@ -109,8 +109,7 @@ that the chart is available in OCI using `helm show chart` as described in
 An umbrella release's `osac-release/v<VERSION>` tag and matching
 `osac/v<VERSION>` source tag point to the same commit. The source checkout
 and download commands below use `osac/v`; nightly source tags also use this
-prefix. This guide targets the final OSAC `0.4.0` release. Use it after the
-matching `osac/v0.4.0` release and OCI chart have been published.
+prefix. This guide targets the final OSAC `0.4.0` release.
 
 For evaluation builds, check the
 [OSAC Nightly Build workflow](https://github.com/osac-project/osac/actions/workflows/nightly-build.yaml)
@@ -1921,8 +1920,11 @@ Manager such as Netris.
 
 Use this layout when OSAC management services run on one OpenShift cluster
 and virtual machines run on another. Disable CaaS and BMaaS: the operator
-refuses to start when either the cluster controller or the bare-metal-instance
-controller is enabled with a remote kubeconfig. Provider networking across
+refuses to start when either the ClusterOrder or BareMetalInstance controller
+is enabled with a remote kubeconfig. The `values-example.yaml` sets
+`operator.controllers.clusterOrder: true`, and explicit controller values
+override service toggles, so set both `clusterOrder` and `bareMetalInstance`
+to `false` in `my-values.yaml` as shown below. Provider networking across
 these clusters is not supported in this release; set
 `global.networking.provisioningEnabled: false` at the first installation.
 
@@ -1974,6 +1976,9 @@ global:
 lvms:
   enabled: false  # production storage registration is administrator-managed
 operator:
+  controllers:
+    clusterOrder: false
+    bareMetalInstance: false
   remoteClusterKubeconfig: /var/run/secrets/remote/kubeconfig
   remoteClusterKubeconfigSecretName: osac-remote-kubeconfig
   remoteClusterKubeconfigSecretKey: kubeconfig

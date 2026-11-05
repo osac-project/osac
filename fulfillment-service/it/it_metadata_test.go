@@ -34,6 +34,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 const (
@@ -298,6 +299,36 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		annotations, err = metadataMapValues(empty.ProtoReflect(), "annotations")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(annotations).To(BeEmpty())
+	})
+
+	It("rejects private API updates to a project's creator", func(ctx context.Context) {
+		projectName := createCatalogItemProjectFixture(ctx, "users")
+		projects := privatev1.NewProjectsClient(tool.InternalView().AdminConn())
+		projectResponse, err := projects.List(ctx, privatev1.ProjectsListRequest_builder{
+			Filter: new(fmt.Sprintf("this.metadata.name == %q && this.metadata.tenant == %q", projectName, "users")),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(projectResponse.GetItems()).To(HaveLen(1))
+		project := projectResponse.GetItems()[0]
+		originalCreator := project.GetMetadata().GetCreator()
+
+		updateResponse, err := projects.Update(ctx, privatev1.ProjectsUpdateRequest_builder{
+			Object: privatev1.Project_builder{
+				Id: project.GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Creator: "attacker-user",
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.creator"}},
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(updateResponse).To(BeNil())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal("field 'metadata.creator' is immutable"))
+
+		updatedProject, err := projects.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: project.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updatedProject.GetObject().GetMetadata().GetCreator()).To(Equal(originalCreator))
 	})
 
 	It("replaces private labels and annotations on workload, storage, and administration resources", func(ctx context.Context) {

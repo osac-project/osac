@@ -106,7 +106,7 @@ operatorCrds:
 operator:
   enabled: true
   image:
-    repository: registry.stage.redhat.io/cloud-extensions/osac-operator-rhel10
+    repository: registry.redhat.io/cloud-extensions/osac-operator-rhel10
     tag: 0.4.0-rc.1
     pullPolicy: Always
   replicaCount: 1
@@ -191,7 +191,7 @@ service:
         memory: 512Mi
   images:
     service:
-      repository: registry.stage.redhat.io/cloud-extensions/fulfillment-service-rhel10
+      repository: registry.redhat.io/cloud-extensions/fulfillment-service-rhel10
       tag: 0.4.0-rc.1
       pullPolicy: Always
     envoy:
@@ -293,7 +293,7 @@ aap:
       imagePullPolicy: IfNotPresent
   bootstrap:
     enabled: true
-    image: registry.stage.redhat.io/cloud-extensions/osac-aap-rhel10:0.4.0-rc.1
+    image: registry.redhat.io/cloud-extensions/osac-aap-rhel10:0.4.0-rc.1
     backoffLimit: 15
     readinessConsecutiveSuccesses: 3
     gateway:
@@ -305,7 +305,7 @@ aap:
     secret: "config-as-code-ig"
     # Maximum number of add-on operator jobs allowed to run concurrently.
     addonOperatorMaxConcurrentJobs: 50
-    eeImage: registry.stage.redhat.io/cloud-extensions/osac-aap-rhel10:0.4.0-rc.1
+    eeImage: registry.redhat.io/cloud-extensions/osac-aap-rhel10:0.4.0-rc.1
     projectGitUri: https://github.com/osac-project/osac
     projectGitBranch: ecad64690a1751f49ecfe49826b582d54e620f3e
     remoteClusterKubeconfigSecretName: ""
@@ -366,7 +366,7 @@ ui:
   log:
     level: info
   images:
-    ui: registry.stage.redhat.io/cloud-extensions/osac-ui-rhel10:0.4.0-rc.1
+    ui: registry.redhat.io/cloud-extensions/osac-ui-rhel10:0.4.0-rc.1
     pullPolicy: auto
 # --- Metering ---
 # Always deployed: billing is not optional. The event publisher writes usage
@@ -375,7 +375,7 @@ ui:
 # workload-db-secrets template creates for the configured DB host.
 metering:
   image:
-    repository: registry.stage.redhat.io/cloud-extensions/metering-service-rhel10
+    repository: registry.redhat.io/cloud-extensions/metering-service-rhel10
     tag: 0.4.0-rc.1
     pullPolicy: Always
   # Outside systems that read every tenant's heartbeat topics with their own
@@ -407,7 +407,7 @@ bmfCrds: {}
 # --- Bare Metal Fulfillment Operator ---
 bmf:
   image:
-    repository: registry.stage.redhat.io/cloud-extensions/bare-metal-fulfillment-operator-rhel10
+    repository: registry.redhat.io/cloud-extensions/bare-metal-fulfillment-operator-rhel10
     tag: 0.4.0-rc.1
     pullPolicy: Always
   replicaCount: 1

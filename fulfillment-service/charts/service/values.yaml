@@ -140,7 +140,7 @@ httpCorsAllowedOrigins: []
 # Image configuration:
 images:
   service:
-    repository: registry.stage.redhat.io/cloud-extensions/fulfillment-service-rhel10
+    repository: registry.redhat.io/cloud-extensions/fulfillment-service-rhel10
     tag: 0.4.0-rc.1 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
     pullPolicy: Always
   envoy:

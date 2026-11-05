@@ -4,7 +4,7 @@ global:
     provisioningEnabled: true
 fullnameOverride: "bmf-operator"
 image:
-  repository: registry.stage.redhat.io/cloud-extensions/bare-metal-fulfillment-operator-rhel10
+  repository: registry.redhat.io/cloud-extensions/bare-metal-fulfillment-operator-rhel10
   tag: 0.4.0-rc.1 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   pullPolicy: Always
 replicaCount: 1

@@ -1,5 +1,5 @@
 image:
-  repository: registry.stage.redhat.io/cloud-extensions/metering-service-rhel10
+  repository: registry.redhat.io/cloud-extensions/metering-service-rhel10
   tag: 0.4.0-rc.1 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   pullPolicy: Always
 # Global values are supplied by the umbrella chart. The service validates the
@@ -81,7 +81,7 @@ echoAdapter:
 m360Adapter:
   enabled: false
   image:
-    repository: registry.stage.redhat.io/cloud-extensions/metering-m360-adapter-rhel10
+    repository: registry.redhat.io/cloud-extensions/metering-m360-adapter-rhel10
     tag: 0.4.0-rc.1 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
     pullPolicy: Always
   m360:

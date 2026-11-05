@@ -37,6 +37,6 @@ log:
   level: info
 # Image configuration:
 images:
-  ui: registry.stage.redhat.io/cloud-extensions/osac-ui-rhel10:0.4.0-rc.1 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+  ui: registry.redhat.io/cloud-extensions/osac-ui-rhel10:0.4.0-rc.1 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   # "auto" leaves the field unset so Kubernetes selects its tag-based default.
   pullPolicy: auto

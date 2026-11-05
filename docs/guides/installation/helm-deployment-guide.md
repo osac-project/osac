@@ -333,6 +333,8 @@ repositories even when their charts are disabled. The machine running Helm
 must be able to reach both repositories.
 
 ```bash
+helm repo add topolvm https://topolvm.github.io/topolvm --force-update
+helm repo add netbox https://netbox-community.github.io/netbox-chart/ --force-update
 helm dependency build ./charts/osac-infra
 ```
 

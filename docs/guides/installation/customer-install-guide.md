@@ -1813,7 +1813,7 @@ Manager such as Netris.
      registration.
 
 2. If `DNS_CLASS` is `dns.route53.dns`, put the AWS credentials in a separate
-   values file that is excluded from version control:
+   values file excluded from version control, such as `my-secrets.local.yaml`:
 
    ```yaml
    aap:
@@ -1829,8 +1829,9 @@ Manager such as Netris.
    leave the AWS credentials unset.
 
 3. Install OSAC (see [Section 4.3](#43-installing-osac)), passing every
-   applicable values file. Include `my-secrets.local.yaml` only when you
-   completed step 2; omit it for `dns.noop.dns`. For example,
+   values file that contains required settings. For `dns.noop.dns`, leave the
+   Route 53 credentials unset; keep passing `my-secrets.local.yaml` if it
+   contains other required values. For example,
    `helm ... -f my-values.yaml -f my-secrets.local.yaml ...`. For more
    information, see
    [`aap-configuration.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/aap-configuration.md)

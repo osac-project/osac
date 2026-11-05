@@ -49,7 +49,7 @@ RUN --mount=type=cache,id=osac-go-pkg,target=/opt/app-root/src/go/pkg,uid=1001,g
     --mount=type=cache,id=osac-go-build,target=/opt/app-root/src/.cache/go-build,uid=1001,gid=0 \
     cd osac-metering/metering-service && { [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o /opt/app-root/src/bin/metering-service ./cmd/metering-service; }
 
-FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1793863917
 # Stamped to the real release version on osac-build-and-publish.yaml's
 # temp branch before tagging (same mechanism as Chart.yaml's own
 # version field) -- the committed default below is only ever what a

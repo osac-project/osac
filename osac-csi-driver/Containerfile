@@ -40,7 +40,7 @@ RUN --mount=type=cache,id=osac-go-pkg,target=/opt/app-root/src/go/pkg,uid=1001,g
     go build -buildvcs=false -ldflags "-X main.version=${VERSION} -X main.gitCommit=${GIT_COMMIT}" \
     -o osac-csi-driver ./cmd/osac-csi-driver
 
-FROM registry.access.redhat.com/ubi10-minimal:10.2-1793642335
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1793863917
 # Stamped to the real release version on osac-build-and-publish.yaml's
 # temp branch before tagging (same mechanism as Chart.yaml's own
 # version field). Surfaced as a real OCI label so Konflux's release-side

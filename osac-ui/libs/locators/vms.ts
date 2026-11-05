@@ -35,6 +35,7 @@ export const VmCreatePage = {
   project: ['button', { name: 'Project', exact: true }],
   vmName: ['textbox', { name: 'Name', exact: true }],
   diskImage: ['button', { name: 'Select the image reference', exact: true }],
+  diskImageValue: ['#disk-image-select'],
   instanceType: ['button', { name: 'Instance type', exact: true }],
   bootDisk: ['Boot disk'],
   storageTier: ['button', { name: 'Storage tier', exact: true }],

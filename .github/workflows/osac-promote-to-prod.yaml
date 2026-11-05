@@ -1024,7 +1024,14 @@ jobs:
         }
         with open("/tmp/prod-chart-snapshot.json", "w") as f:
             json.dump(snapshot, f)
-        subprocess.run(["oc", "apply", "-f", "/tmp/prod-chart-snapshot.json"], check=True)
+        try:
+            subprocess.run(
+                ["oc", "apply", "-f", "/tmp/prod-chart-snapshot.json"],
+                capture_output=True, text=True, check=True,
+            )
+        except subprocess.CalledProcessError:
+            print("::error::oc apply failed for the override Snapshot")
+            sys.exit(1)
         print(f"Created override Snapshot {resource_name}")
 
         deadline = time.time() + TIMEOUT_SECONDS
@@ -1117,10 +1124,14 @@ jobs:
         # already promoted this exact Snapshot to this exact
         # ReleasePlan successfully -- same reasoning as promote-image's
         # identical check.
-        existing = subprocess.run(
-            ["oc", "get", "release", "-n", NAMESPACE, "-o", "json"],
-            capture_output=True, text=True, check=True,
-        )
+        try:
+            existing = subprocess.run(
+                ["oc", "get", "release", "-n", NAMESPACE, "-o", "json"],
+                capture_output=True, text=True, check=True,
+            )
+        except subprocess.CalledProcessError:
+            print("::error::oc get release failed while checking for an existing Release")
+            sys.exit(1)
         for item in json.loads(existing.stdout).get("items", []):
             spec = item.get("spec", {})
             if spec.get("snapshot") == resource_name and spec.get("releasePlan") == RELEASE_PLAN:

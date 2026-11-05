@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { SecretSchema, SecretType } from '@osac/types';
 
 import SshPublicKeySecretField from './SshPublicKeySecretField';
-import { renderWithProviders } from '../../../../test-utils/TestProviders';
+import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const secrets = [
   create(SecretSchema, {

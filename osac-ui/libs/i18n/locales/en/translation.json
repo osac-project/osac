@@ -816,7 +816,7 @@
   "Protocol": "Protocol",
   "Protocol changes require the associated StorageClass to be recreated before new volumes pick them up; existing volumes are unaffected.": "Protocol changes require the associated StorageClass to be recreated before new volumes pick them up; existing volumes are unaffected.",
   "Protocol is required": "Protocol is required",
-  "Provide either an SSH public key or user data containing access credentials.": "Provide either an SSH public key or user data containing access credentials.",
+  "Provide either an SSH public key or user data.": "Provide either an SSH public key or user data.",
   "Provider": "Provider",
   "Provider is required": "Provider is required",
   "Provides outbound internet access for workloads in this virtual network.": "Provides outbound internet access for workloads in this virtual network.",

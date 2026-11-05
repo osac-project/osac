@@ -59,12 +59,25 @@ class KindRuntimeTests(unittest.TestCase):
             "MOCK_PID_UPDATE_FAILURE": "0",
             "MOCK_PID_UPDATE_NOOP": "0",
             "MOCK_PID_VERIFY_FAILURE": "0",
+            "MOCK_SYSCTL_FAILURE": "0",
+            "MOCK_SYSCTL_NOOP": "0",
             "GOTOOLCHAIN": "local",
         }
         for name in ("CONTAINER_HOST", "CONTAINER_CONNECTION", "MOCK_AS_ROOT", "PROFILE"):
             self.env.pop(name, None)
         self.write_command("uname", 'if [[ "${1:-}" == -m ]]; then echo x86_64; else echo "$MOCK_OS"; fi')
         self.write_command("id", 'echo "$MOCK_UID"')
+        self.write_command("sysctl", """
+printf 'sysctl %s\\n' "$*" >> "$MOCK_LOG"
+if [[ "${MOCK_SYSCTL_FAILURE:-0}" == 1 ]]; then exit 1; fi
+if [[ "${1:-}" == -w ]]; then
+  key="${2%%=*}"
+  value="${2#*=}"
+  if [[ "${MOCK_SYSCTL_NOOP:-0}" != 1 && "$key" == "fs.inotify.max_user_instances" && -n "${_INOTIFY_INSTANCES_FILE:-}" ]]; then
+    echo "$value" > "$_INOTIFY_INSTANCES_FILE"
+  fi
+fi
+""")
         self.write_command("go", 'echo /tmp/osac-test-go')
         self.write_command("helm", 'echo v3.0.0')
         self.write_command("jq", 'exit 0')
@@ -1140,6 +1153,334 @@ exec /usr/bin/mktemp "$@"
         )
         self.assert_success(result)
         self.assertIn('KIND_PROFILE=dev-full KIND_OSAC_NAMESPACE=osac', result.stdout)
+
+    # ── inotify guard (ensure_inotify_instances) ────────────────────────
+
+    def _run_inotify(self):
+        return self.run_shell(
+            'source "${SCRIPT_DIR}/../lib.sh"; ensure_inotify_instances')
+
+    def test_inotify_sufficient_values_skip_write(self):
+        """Values >= 512 are preserved with no sysctl or elevation."""
+        for value in ("512", "1024", "65536"):
+            with self.subTest(value=value):
+                self.log.unlink(missing_ok=True)
+                inotify = self.directory / "max_user_instances"
+                inotify.write_text(f"{value}\n")
+                self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+                self.assert_success(self._run_inotify())
+                self.assertEqual(inotify.read_text().strip(), value)
+                cmds = self.commands()
+                self.assertFalse(
+                    any("sysctl" in c for c in cmds))
+                self.assertFalse(
+                    any(c.startswith("sudo ") for c in cmds))
+
+    def test_inotify_low_as_root_raises_to_floor(self):
+        """Root user: direct sysctl -w, no sudo, verifies."""
+        for initial in ("128", "0"):
+            with self.subTest(initial=initial):
+                self.log.unlink(missing_ok=True)
+                inotify = self.directory / "max_user_instances"
+                inotify.write_text(f"{initial}\n")
+                self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+                self.env["MOCK_UID"] = "0"
+                self.assert_success(self._run_inotify())
+                self.assertEqual(
+                    inotify.read_text().strip(), "512")
+                cmds = self.commands()
+                self.assertIn(
+                    "sysctl -w fs.inotify.max_user_instances=512",
+                    cmds)
+                self.assertFalse(
+                    any(c.startswith("sudo ") for c in cmds))
+        self.env["MOCK_UID"] = "1000"
+
+    def test_inotify_low_nonroot_uses_passwordless_sudo(self):
+        """Non-root: sudo -n sysctl write."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_NOPASSWD"] = "1"
+        self.assert_success(self._run_inotify())
+        self.assertEqual(inotify.read_text().strip(), "512")
+        self.assertIn(
+            "sudo -n sysctl -w fs.inotify.max_user_instances=512",
+            self.commands())
+        self.env["MOCK_NOPASSWD"] = "0"
+
+    def test_inotify_writes_only_target_key(self):
+        """Exactly one sysctl call with the one expected key."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_UID"] = "0"
+        self.assert_success(self._run_inotify())
+        sysctl_cmds = [
+            c for c in self.commands() if c.startswith("sysctl ")]
+        self.assertEqual(len(sysctl_cmds), 1)
+        self.assertEqual(
+            sysctl_cmds[0],
+            "sysctl -w fs.inotify.max_user_instances=512")
+        self.env["MOCK_UID"] = "1000"
+
+    def test_inotify_missing_proc_file_errors(self):
+        """Missing instances file returns error."""
+        absent = self.directory / "absent" / "max_user_instances"
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(absent)
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not found", result.stderr)
+
+    def test_inotify_invalid_value_errors(self):
+        """Non-numeric value returns error."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("garbage\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not read a numeric value", result.stderr)
+
+    def test_inotify_sysctl_write_failure_errors(self):
+        """sysctl write failure stops with error."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_UID"] = "0"
+        self.env["MOCK_SYSCTL_FAILURE"] = "1"
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("failed", result.stderr)
+        self.assertEqual(inotify.read_text().strip(), "128")
+        self.env["MOCK_UID"] = "1000"
+        self.env["MOCK_SYSCTL_FAILURE"] = "0"
+
+    def test_inotify_verify_still_low_after_write_errors(self):
+        """Write succeeds but re-read still low returns error."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_UID"] = "0"
+        self.env["MOCK_SYSCTL_NOOP"] = "1"
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("after write", result.stderr)
+        self.env["MOCK_UID"] = "1000"
+        self.env["MOCK_SYSCTL_NOOP"] = "0"
+
+    def test_inotify_non_linux_fails_with_guidance(self):
+        """Non-Linux host fails with actionable guidance."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_OS"] = "Darwin"
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("native Linux", result.stderr)
+        self.assertIn("512", result.stderr)
+        self.assertEqual(inotify.read_text().strip(), "128")
+        self.assertFalse(
+            any("sysctl" in c for c in self.commands()))
+        self.env["MOCK_OS"] = "Linux"
+
+    def test_inotify_remote_container_host_fails_closed(self):
+        """Remote CONTAINER_HOST/DOCKER_HOST: no sysctl, no
+        endpoint value in stderr."""
+        inotify = self.directory / "max_user_instances"
+        for var, url in (
+            ("CONTAINER_HOST", "ssh://sentinel-user@sentinel-host"),
+            ("CONTAINER_HOST", "tcp://192.0.2.1:2375"),
+            ("DOCKER_HOST", "tcp://sentinel-dock:2376"),
+        ):
+            for val in ("128", "1024"):
+                with self.subTest(var=var, url=url, val=val):
+                    self.log.unlink(missing_ok=True)
+                    inotify.write_text(f"{val}\n")
+                    self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+                    self.env[var] = url
+                    result = self._run_inotify()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("remote", result.stderr)
+                    self.assertNotIn("sentinel", result.stderr)
+                    self.assertEqual(
+                        inotify.read_text().strip(), val)
+                    self.assertFalse(any(
+                        "sysctl" in c for c in self.commands()))
+                    self.assertFalse(any(
+                        c.startswith("sudo ") for c in
+                        self.commands()))
+                    del self.env[var]
+
+    def test_inotify_mixed_endpoints_remote_detected(self):
+        """Local unix in one var must not mask remote in the other."""
+        inotify = self.directory / "max_user_instances"
+        cases = (
+            # local podman + remote docker
+            {"CONTAINER_HOST": "unix:///run/podman.sock",
+             "DOCKER_HOST": "tcp://example.invalid:2376"},
+            # remote podman + local docker
+            {"CONTAINER_HOST": "ssh://sentinel@remote.invalid",
+             "DOCKER_HOST": "unix:///var/run/docker.sock"},
+        )
+        for env_set in cases:
+            for val in ("128", "1024"):
+                with self.subTest(env=env_set, val=val):
+                    self.log.unlink(missing_ok=True)
+                    inotify.write_text(f"{val}\n")
+                    self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+                    for k, v in env_set.items():
+                        self.env[k] = v
+                    result = self._run_inotify()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("remote", result.stderr)
+                    self.assertNotIn("sentinel", result.stderr)
+                    self.assertEqual(
+                        inotify.read_text().strip(), val)
+                    self.assertFalse(any(
+                        "sysctl" in c for c in self.commands()))
+                    for k in env_set:
+                        del self.env[k]
+
+    def test_inotify_local_unix_socket_proceeds(self):
+        """CONTAINER_HOST=unix://... is local, guard proceeds."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_UID"] = "0"
+        self.env["CONTAINER_HOST"] = "unix:///run/podman.sock"
+        self.assert_success(self._run_inotify())
+        self.assertEqual(inotify.read_text().strip(), "512")
+        del self.env["CONTAINER_HOST"]
+        self.env["MOCK_UID"] = "1000"
+
+    def test_inotify_named_connection_fails_closed(self):
+        """Named Podman connection / Docker context: error,
+        no connection/context name in stderr."""
+        inotify = self.directory / "max_user_instances"
+        for var in ("CONTAINER_CONNECTION", "DOCKER_CONTEXT"):
+            with self.subTest(var=var):
+                self.log.unlink(missing_ok=True)
+                inotify.write_text("128\n")
+                self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+                self.env[var] = "sentinel-ctx-name"
+                result = self._run_inotify()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("engine host", result.stderr)
+                self.assertNotIn("sentinel", result.stderr)
+                self.assertEqual(
+                    inotify.read_text().strip(), "128")
+                self.assertFalse(any(
+                    "sysctl" in c for c in self.commands()))
+                del self.env[var]
+
+    def test_inotify_sudo_not_authorized_errors(self):
+        """Non-root without passwordless sudo fails actionably."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("passwordless sudo", result.stderr)
+        self.assertEqual(inotify.read_text().strip(), "128")
+
+    def test_inotify_baseline_install_infra_unchanged(self):
+        """Existing install-infra flow does not touch inotify."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.assert_success(self.run_direct_infra())
+        self.assertEqual(inotify.read_text().strip(), "128")
+        self.assertFalse(
+            any("sysctl" in c for c in self.commands()))
+
+    def test_inotify_ci_workflow_prepares_before_install_infra(self):
+        """CI workflow runs inotify guard before install-infra."""
+        workflow = (REPO / ".github/workflows/tests.yml").read_text()
+        inotify_pos = workflow.index("ensure_inotify_instances")
+        infra_pos = workflow.index(
+            "make -C osac-installer install-infra", inotify_pos)
+        self.assertGreater(infra_pos, inotify_pos)
+
+    def test_inotify_ensure_make_target(self):
+        """make ensure-inotify invokes the guard."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_UID"] = "0"
+        result = subprocess.run(
+            ["/usr/bin/make", "--no-print-directory",
+             "-C", str(INSTALLER), "ensure-inotify"],
+            env=self.env, text=True, capture_output=True,
+            timeout=15)
+        self.assert_success(result)
+        self.assertEqual(inotify.read_text().strip(), "512")
+        self.assertIn(
+            "sysctl -w fs.inotify.max_user_instances=512",
+            self.commands())
+        self.env["MOCK_UID"] = "1000"
+
+    def _run_multicluster_test(self):
+        """Run make test SUITE=operator-multicluster with a build sentinel."""
+        sentinel = self.write_command("build-sentinel", '''
+echo "BUILD_SENTINEL $*" >> "$MOCK_LOG"
+echo "inotify-guard-build-sentinel: intentional stop" >&2
+exit 77
+''')
+        self.write_command("helm", '''
+if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >> "$MOCK_LOG"; fi
+''')
+        return subprocess.run(
+            ["/usr/bin/make", "--no-print-directory",
+             "-C", str(INSTALLER),
+             "test", "PLATFORM=kind", "PROFILE=dev", "NS=osac",
+             "SUITE=operator-multicluster",
+             f"CONTAINER_TOOL={sentinel}"],
+            env=self.env, text=True, capture_output=True,
+            timeout=15)
+
+    def test_inotify_multicluster_guard_before_build(self):
+        """make test SUITE=operator-multicluster: guard runs,
+        then build; sysctl logged BEFORE first build command."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_UID"] = "0"
+        result = self._run_multicluster_test()
+        # Build sentinel exits 77; Make propagates the error.
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("build-sentinel", result.stderr)
+        # Guard wrote 512 before the build ran.
+        self.assertEqual(inotify.read_text().strip(), "512")
+        cmds = self.commands()
+        sysctl_idx = cmds.index(
+            "sysctl -w fs.inotify.max_user_instances=512")
+        build_cmds = [
+            i for i, c in enumerate(cmds)
+            if "BUILD_SENTINEL" in c]
+        self.assertTrue(build_cmds, "build sentinel not logged")
+        self.assertLess(sysctl_idx, build_cmds[0])
+        self.env["MOCK_UID"] = "1000"
+
+    def test_inotify_multicluster_guard_failure_stops_build(self):
+        """make test SUITE=operator-multicluster: guard failure
+        prevents any image build or AWX command."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_UID"] = "0"
+        self.env["MOCK_SYSCTL_FAILURE"] = "1"
+        result = self._run_multicluster_test()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(inotify.read_text().strip(), "128")
+        cmds = self.commands()
+        self.assertFalse(
+            any("BUILD_SENTINEL" in c for c in cmds),
+            "build ran despite guard failure")
+        self.assertFalse(
+            any(c.startswith("helm ") for c in cmds),
+            "helm ran despite guard failure")
+        self.env["MOCK_UID"] = "1000"
+        self.env["MOCK_SYSCTL_FAILURE"] = "0"
 
 
 if __name__ == "__main__":

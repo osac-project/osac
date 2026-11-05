@@ -324,6 +324,64 @@ test/e2e/console_proxy_test.go     # E2E tests
 
 ## Getting Started
 
+### Split-cluster integration test SCM
+
+Run the deployed suite from the repository root with:
+
+```sh
+make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator-multicluster
+```
+
+This uses two Kind clusters and real OSAC APIs, controllers, and AWX jobs.
+Workload KubeVirt/CDI/OVN CRDs are test doubles; the resulting VM is Halted,
+so this does not validate VM execution or the dataplane.
+
+AWX must be able to clone a **public GitHub repository without credentials**.
+For local runs, push the exact local `HEAD` before running the suite. The
+default source is the current branch's tracking remote and merge ref, or
+`origin` and `refs/heads/<local-branch>` when no tracking configuration exists.
+For remotes with multiple URLs, the first fetch URL is used, as in Git;
+push-only URLs do not select the AWX source.
+GitHub SSH remote URLs are converted to public HTTPS; local paths, private
+repositories, credential-bearing URLs, and other hosts are not supported.
+
+When the intended source differs from the tracking configuration, set
+`OSAC_TEST_AWX_SCM_URL=https://github.com/<owner>/<repo>.git` and/or
+`OSAC_TEST_AWX_SCM_REF=refs/heads/<published-branch>`. Detached local checkouts
+require an explicit fetch ref (and a URL override if `origin` is unsuitable).
+The ref must contain the exact local `HEAD`; an ancestor of its tip is valid.
+Overrides select where to fetch, never a replacement commit. Uncommitted files
+are not included in AWX's checkout.
+
+In GitHub PR jobs, the event's `pull_request.head.sha` is pinned, not the
+synthetic merge checkout or the latest PR tip. The base repository's
+`refs/pull/<number>/head` supplies the objects. Local overrides are rejected
+in this mode. A shallow Actions checkout does not require local PR parents.
+
+Before updating AWX, the suite fetches the selected ref into a temporary Git
+repository and checks out the intended commit. Missing refs, unpublished
+commits, and unsupported sources fail before project-sync polling. AWX uses
+the same explicit refspec with the immutable SHA as `scm_branch`; the suite
+checks the triggered project update's `scm_revision` before provisioning.
+Fetch success on the test host does not guarantee network access from AWX;
+AWX update failures are reported separately.
+
+The fetch/pin contract follows the public
+[AWX project update playbook](https://github.com/ansible/awx/blob/24.6.1/awx/playbooks/project_update.yml)
+and the Ansible Git module's
+[additional refspec support](https://docs.ansible.com/ansible/latest/collections/ansible/builtin/git_module.html#parameter-refspec).
+
+Run the SCM and existing helper regressions without creating clusters:
+
+```sh
+cd osac-operator
+go test -run '^(TestHelper|TestAWX|TestDiag)' -v ./test/integration/multicluster/
+```
+
+The SCM tests use isolated local Git repositories, not live GitHub or AWX.
+The deployed suite above remains the integration validation boundary.
+
 ### Prerequisites
 
 - go version v1.22.0+

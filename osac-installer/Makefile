@@ -151,10 +151,10 @@ endif
 SUITE_TARGETS := test
 ifneq ($(filter $(SUITE_TARGETS),$(MAKECMDGOALS)),)
 ifndef SUITE
-$(error SUITE is required (all|fulfillment|compute-storage|operator|bmf))
+$(error SUITE is required (all|fulfillment|compute-storage|operator|operator-multicluster|bmf))
 endif
-ifeq ($(filter $(SUITE),all fulfillment compute-storage operator bmf),)
-$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, compute-storage, operator, or bmf)
+ifeq ($(filter $(SUITE),all fulfillment compute-storage operator operator-multicluster bmf),)
+$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, compute-storage, operator, operator-multicluster, or bmf)
 endif
 ifeq ($(MCP_TEST_ENABLED),true)
 ifneq ($(PLATFORM),kind)
@@ -781,6 +781,36 @@ ifeq ($(SUITE),operator)
 		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.provisioningEnabled=true --set global.networking.fabricManager=netris --set global.networking.k8sManager=cudn_evpn $(METERING_IT_IMAGE_ARGS)"
 	cd ../osac-operator && ginkgo run --timeout 15m -v --label-filter 'networkclass' test/integration
 endif
+ifeq ($(SUITE),operator-multicluster)
+	@# Multi-cluster tests create a second Kind cluster; ensure the host
+	@# has enough inotify instances for kubelet and containerd watchers.
+	@source scripts/lib.sh && ensure_inotify_instances
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
+	$(call kind-load-image,localhost/osac-operator:it)
+	$(call kind-container-build,-t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ../ --build-arg GODEBUG=$(GODEBUG))
+	$(call kind-load-image,localhost/fulfillment-service:it)
+	@echo "Installing AWX for real AAP provisioning..."
+	$(MAKE) helm-devstack-deps
+ifeq ($(HELM_MAJOR),4)
+	@if helm plugin list | awk '$$1 == "osac-dev-full-awx-image" { found=1 } END { exit !found }'; then \
+		helm plugin uninstall osac-dev-full-awx-image; \
+	fi
+	helm plugin install scripts/dev-full/helm-post-renderer
+endif
+	helm upgrade --install osac-devstack charts/osac-devstack \
+		--namespace $(NS) --create-namespace \
+		--set osacNamespace=$(NS) \
+		--set virt.enabled=false \
+		--set ui.enabled=false \
+		--set catalog.enabled=false \
+		--set tenant.enabled=false \
+		--post-renderer $(DEV_FULL_HELM_POST_RENDERER) \
+		$(DEVSTACK_HELM_APPLY_ARGS) \
+		--wait-for-jobs --timeout 20m
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
+		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set lvms.enabled=true --set hubAccess.enabled=false --set validation.enabled=false --set operator.aap.url=http://awx-service.$(NS).svc.cluster.local:80/api --set operator.controllers.networking=true --set global.networking.provisioningEnabled=true --set global.services.caas.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false"
+	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration/multicluster
+endif
 ifeq ($(SUITE),bmf)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
 	$(call kind-load-image,localhost/bmf-operator:it)
@@ -957,8 +987,12 @@ dev-full-render-test: helm-deps helm-infra-deps ## Check dev-full TLS and Helm p
 openbao-security-context-test: helm-infra-deps ## Check OpenBao securityContext renders numeric UID on Kind, omits on OpenShift
 	./scripts/test-openbao-security-context.sh
 
+.PHONY: ensure-inotify
+ensure-inotify: ## Ensure inotify max_user_instances >= 512 (multi-Kind-cluster setups)
+	@source scripts/lib.sh && ensure_inotify_instances
+
 .PHONY: kind-runtime-test
-kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster cleanup with command stubs
+kind-runtime-test: ## Check Kind runtime, sudo, image loading, inotify guard, and cluster cleanup with command stubs
 	python3 scripts/test-kind-runtime.py
 
 .PHONY: bmf-netbox-render-test

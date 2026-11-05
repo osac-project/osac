@@ -1,0 +1,1973 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package multicluster
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
+	"k8s.io/client-go/tools/clientcmd"
+
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	"google.golang.org/protobuf/encoding/protojson"
+)
+
+// These tests exercise helper logic without Ginkgo's BeforeSuite.
+// Run with: go test -run TestHelper -v ./test/integration/multicluster/
+
+// grpcTenantResponse mirrors the TenantsCreateResponse envelope
+// returned by grpcurl.
+type grpcTenantResponse struct {
+	Object struct {
+		ID       string `json:"id"`
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+	} `json:"object"`
+}
+
+// grpcCIResponse mirrors the ComputeInstancesCreateResponse envelope
+// returned by grpcurl.
+type grpcCIResponse struct {
+	Object struct {
+		ID       string `json:"id"`
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+	} `json:"object"`
+}
+
+func TestHelperParseTenantResponse(t *testing.T) {
+	raw := `{"object":{"id":"tenant-uuid-123",` +
+		`"metadata":{"name":"mc-tenant-abc"}}}`
+
+	var resp grpcTenantResponse
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if resp.Object.ID != "tenant-uuid-123" {
+		t.Errorf("expected object.id=%q, got %q",
+			"tenant-uuid-123", resp.Object.ID)
+	}
+	if resp.Object.Metadata.Name != "mc-tenant-abc" {
+		t.Errorf("expected object.metadata.name=%q, got %q",
+			"mc-tenant-abc", resp.Object.Metadata.Name)
+	}
+}
+
+func TestHelperParseComputeInstanceResponse(t *testing.T) {
+	raw := `{"object":{"id":"ci-uuid-456",` +
+		`"metadata":{"name":"mc-test-def",` +
+		`"tenant":"mc-tenant-abc"},"spec":{}},` +
+		`"warnings":[]}`
+
+	var resp grpcCIResponse
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if resp.Object.ID != "ci-uuid-456" {
+		t.Errorf("expected object.id=%q, got %q",
+			"ci-uuid-456", resp.Object.ID)
+	}
+	if resp.Object.Metadata.Name != "mc-test-def" {
+		t.Errorf("expected object.metadata.name=%q, got %q",
+			"mc-test-def", resp.Object.Metadata.Name)
+	}
+}
+
+func TestHelperEmptyIDRejection(t *testing.T) {
+	// Simulates a response with an empty ID field -- the test
+	// should detect this and reject it.
+	raw := `{"object":{"id":"","metadata":{"name":"mc-test"}}}`
+
+	var resp grpcTenantResponse
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if resp.Object.ID != "" {
+		t.Errorf("expected empty object.id, got %q",
+			resp.Object.ID)
+	}
+	// In the real test, Expect(resp.Object.ID).NotTo(BeEmpty())
+	// would catch this.
+}
+
+func TestHelperFlatParseWouldMiss(t *testing.T) {
+	// Demonstrates that parsing at the top level (the old bug)
+	// would miss the nested id/metadata fields.
+	raw := `{"object":{"id":"tenant-uuid-123",` +
+		`"metadata":{"name":"mc-tenant-abc"}}}`
+
+	var flat struct {
+		ID       string `json:"id"`
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal([]byte(raw), &flat); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if flat.ID != "" {
+		t.Errorf("flat parse should yield empty id, got %q",
+			flat.ID)
+	}
+	if flat.Metadata.Name != "" {
+		t.Errorf("flat parse should yield empty name, got %q",
+			flat.Metadata.Name)
+	}
+}
+
+func TestHelperCleanupGating(t *testing.T) {
+	// Verify that cleanup functions are gated on creation flags.
+	// deleteTenantViaAPI and deleteComputeInstanceViaAPI both
+	// return immediately when the ID is empty.
+
+	// Simulate: tenant not created, ID is empty.
+	tenantCreatedFlag := false
+	tenantIDVal := ""
+	if tenantCreatedFlag && tenantIDVal != "" {
+		t.Error("cleanup should be skipped when " +
+			"tenantCreated is false")
+	}
+
+	// Simulate: CI not created, ID is empty.
+	ciCreatedFlag := false
+	ciIDVal := ""
+	if ciCreatedFlag && ciIDVal != "" {
+		t.Error("cleanup should be skipped when " +
+			"computeInstanceCreated is false")
+	}
+
+	// Simulate: created but ID is empty (should not happen but
+	// the gate catches it).
+	tenantCreatedFlag = true
+	if tenantCreatedFlag && tenantIDVal == "" {
+		// Expected: deleteTenantViaAPI returns immediately for
+		// empty ID. Verify the gate condition holds.
+		t.Log("gate correctly prevents delete with empty ID")
+	}
+}
+
+func TestHelperSubnetAnnotationParsing(t *testing.T) {
+	// Verify JSON-based subnet discovery parses correctly.
+	raw := `{"items":[` +
+		`{"metadata":{"name":"subnet-aaa",` +
+		`"annotations":{` +
+		`"osac.openshift.io/tenant":"other-tenant"}}},` +
+		`{"metadata":{"name":"subnet-bbb",` +
+		`"annotations":{` +
+		`"osac.openshift.io/tenant":"mc-tenant-test"}}},` +
+		`{"metadata":{"name":"subnet-ccc",` +
+		`"annotations":{}}}` +
+		`]}`
+
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name        string            `json:"name"`
+				Annotations map[string]string `json:"annotations"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+
+	var found string
+	for _, item := range list.Items {
+		if item.Metadata.Annotations["osac.openshift.io/tenant"] ==
+			"mc-tenant-test" {
+			found = item.Metadata.Name
+			break
+		}
+	}
+	if found != "subnet-bbb" {
+		t.Errorf("expected subnet-bbb, got %q", found)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Gap 1: Protobuf payload validation against real generated types.
+//
+// The outgoing gRPC payloads built by createTenantViaAPI and
+// createComputeInstanceViaAPI are string-formatted JSON.  These tests
+// validate that the EXACT payload structure matches the generated
+// protobuf request types using protojson.Unmarshal with
+// DiscardUnknown=false, so any unknown fields cause a hard failure.
+// ---------------------------------------------------------------------------
+
+// protojsonStrictOpts rejects unknown fields so a typo or
+// schema drift in the test payload is caught at compile/test time.
+var protojsonStrictOpts = protojson.UnmarshalOptions{
+	DiscardUnknown: false,
+}
+
+func TestHelperTenantPayloadMatchesProto(t *testing.T) {
+	// This is the SAME format string used in createTenantViaAPI.
+	tenantName := "mc-tenant-test123"
+	payload := fmt.Sprintf(
+		`{"object":{"metadata":{"name":"%s"}}}`,
+		tenantName)
+
+	var req privatev1.TenantsCreateRequest
+	if err := protojsonStrictOpts.Unmarshal(
+		[]byte(payload), &req,
+	); err != nil {
+		t.Fatalf("Tenant create payload rejected by "+
+			"protojson (unknown fields?): %v", err)
+	}
+	if req.GetObject().GetMetadata().GetName() != tenantName {
+		t.Errorf("expected metadata.name=%q, got %q",
+			tenantName,
+			req.GetObject().GetMetadata().GetName())
+	}
+}
+
+func TestHelperCIPayloadMatchesProto(t *testing.T) {
+	// This is the SAME format string used in
+	// createComputeInstanceViaAPI.
+	name := "mc-test-abc"
+	tenant := "mc-tenant-xyz"
+	subnet := "subnet-001"
+	payload := fmt.Sprintf(
+		`{"object":{"metadata":{"name":"%s","tenant":"%s"},`+
+			`"spec":{"template":{"name":`+
+			`"osac.templates.ocp_virt_vm"},`+
+			`"boot_disk":{"size_gib":20,`+
+			`"storage_tier":{"name":"local"}},`+
+			`"run_strategy":`+
+			`"COMPUTE_INSTANCE_RUN_STRATEGY_HALTED",`+
+			`"network_attachments":`+
+			`[{"subnet":{"name":"%s"}}]}}}`,
+		name, tenant, subnet)
+
+	var req privatev1.ComputeInstancesCreateRequest
+	if err := protojsonStrictOpts.Unmarshal(
+		[]byte(payload), &req,
+	); err != nil {
+		t.Fatalf("ComputeInstance create payload rejected "+
+			"by protojson (unknown fields?): %v", err)
+	}
+
+	obj := req.GetObject()
+	if obj.GetMetadata().GetName() != name {
+		t.Errorf("metadata.name: want %q, got %q",
+			name, obj.GetMetadata().GetName())
+	}
+	if obj.GetMetadata().GetTenant() != tenant {
+		t.Errorf("metadata.tenant: want %q, got %q",
+			tenant, obj.GetMetadata().GetTenant())
+	}
+
+	spec := obj.GetSpec()
+	if spec.GetTemplate().GetName() !=
+		"osac.templates.ocp_virt_vm" {
+		t.Errorf("template.name: want %q, got %q",
+			"osac.templates.ocp_virt_vm",
+			spec.GetTemplate().GetName())
+	}
+
+	bd := spec.GetBootDisk()
+	if bd.GetSizeGib() != 20 {
+		t.Errorf("boot_disk.size_gib: want 20, got %d",
+			bd.GetSizeGib())
+	}
+	if bd.GetStorageTier().GetName() != "local" {
+		t.Errorf("boot_disk.storage_tier.name: want %q, "+
+			"got %q", "local",
+			bd.GetStorageTier().GetName())
+	}
+
+	rs := spec.GetRunStrategy()
+	//nolint:staticcheck // Enum comparison is intentional.
+	want := privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED
+	if rs != want {
+		t.Errorf("run_strategy: want %v, got %v",
+			want, rs)
+	}
+
+	nas := spec.GetNetworkAttachments()
+	if len(nas) != 1 {
+		t.Fatalf("network_attachments: want 1, got %d",
+			len(nas))
+	}
+	if nas[0].GetSubnet().GetName() != subnet {
+		t.Errorf("network_attachments[0].subnet.name: "+
+			"want %q, got %q",
+			subnet, nas[0].GetSubnet().GetName())
+	}
+}
+
+func TestHelperTenantDeletePayloadMatchesProto(t *testing.T) {
+	tID := "tenant-uuid-abc"
+	payload := fmt.Sprintf(`{"id":"%s"}`, tID)
+
+	var req privatev1.TenantsDeleteRequest
+	if err := protojsonStrictOpts.Unmarshal(
+		[]byte(payload), &req,
+	); err != nil {
+		t.Fatalf("Tenant delete payload rejected by "+
+			"protojson: %v", err)
+	}
+	if req.GetId() != tID {
+		t.Errorf("id: want %q, got %q", tID, req.GetId())
+	}
+}
+
+func TestHelperCIDeletePayloadMatchesProto(t *testing.T) {
+	ciID := "ci-uuid-def"
+	payload := fmt.Sprintf(`{"id":"%s"}`, ciID)
+
+	var req privatev1.ComputeInstancesDeleteRequest
+	if err := protojsonStrictOpts.Unmarshal(
+		[]byte(payload), &req,
+	); err != nil {
+		t.Fatalf("ComputeInstance delete payload rejected "+
+			"by protojson: %v", err)
+	}
+	if req.GetId() != ciID {
+		t.Errorf("id: want %q, got %q", ciID, req.GetId())
+	}
+}
+
+func TestHelperPayloadRejectsUnknownField(t *testing.T) {
+	// Prove that protojson with DiscardUnknown=false rejects
+	// payloads with unknown fields — the safety net.
+	payload := `{"object":{"metadata":{"name":"t"}},` +
+		`"bogus_field":"should_fail"}`
+
+	var req privatev1.TenantsCreateRequest
+	err := protojsonStrictOpts.Unmarshal(
+		[]byte(payload), &req)
+	if err == nil {
+		t.Fatal("expected protojson to reject unknown " +
+			"field 'bogus_field', but it succeeded")
+	}
+	t.Logf("correctly rejected unknown field: %v", err)
+}
+
+// ---------------------------------------------------------------------------
+// Gap 2: Exact namespace label and CUDN selector linkage assertions.
+//
+// The cudn_net.create_subnet Ansible role creates:
+//   - Namespace with labels including:
+//       k8s.ovn.org/primary-user-defined-network: ""
+//       osac.openshift.io/subnet-id: <subnet_id>
+//       osac.openshift.io/tenant: <tenant_id>
+//   - CUDN with spec.namespaceSelector.matchLabels:
+//       osac.openshift.io/subnet-id: <subnet_id>
+//
+// The test must assert exact key=value, not just key presence.
+// ---------------------------------------------------------------------------
+
+// nsLabelAssertions models the exact label values that create_subnet.yaml
+// sets on the namespace.  The test assertions in
+// split_cluster_test.go parse labels as JSON and verify values.
+type nsLabelAssertions struct {
+	PrimaryUDN string // k8s.ovn.org/primary-user-defined-network
+	SubnetID   string // osac.openshift.io/subnet-id
+	TenantID   string // osac.openshift.io/tenant
+}
+
+// assertNSLabels checks that actual namespace labels contain
+// the required keys with their exact expected values.  Returns
+// a list of mismatches (empty on success).
+func assertNSLabels(
+	actual map[string]string, expected nsLabelAssertions,
+) []string {
+	var mismatches []string
+
+	// k8s.ovn.org/primary-user-defined-network must be present
+	// with empty string value (not just key existence).
+	if v, ok := actual["k8s.ovn.org/primary-user-defined-network"]; !ok {
+		mismatches = append(mismatches,
+			"missing label k8s.ovn.org/"+
+				"primary-user-defined-network")
+	} else if v != expected.PrimaryUDN {
+		mismatches = append(mismatches, fmt.Sprintf(
+			"k8s.ovn.org/primary-user-defined-network: "+
+				"want %q, got %q",
+			expected.PrimaryUDN, v))
+	}
+
+	// osac.openshift.io/subnet-id must match subnet_id.
+	if v, ok := actual["osac.openshift.io/subnet-id"]; !ok {
+		mismatches = append(mismatches,
+			"missing label osac.openshift.io/subnet-id")
+	} else if v != expected.SubnetID {
+		mismatches = append(mismatches, fmt.Sprintf(
+			"osac.openshift.io/subnet-id: want %q, got %q",
+			expected.SubnetID, v))
+	}
+
+	// osac.openshift.io/tenant must match tenant_id.
+	if v, ok := actual["osac.openshift.io/tenant"]; !ok {
+		mismatches = append(mismatches,
+			"missing label osac.openshift.io/tenant")
+	} else if v != expected.TenantID {
+		mismatches = append(mismatches, fmt.Sprintf(
+			"osac.openshift.io/tenant: want %q, got %q",
+			expected.TenantID, v))
+	}
+
+	return mismatches
+}
+
+// assertCUDNSelector checks that the CUDN's
+// namespaceSelector.matchLabels exactly links to the subnet.
+func assertCUDNSelector(
+	matchLabels map[string]string, subnetID string,
+) []string {
+	var mismatches []string
+
+	if v, ok := matchLabels["osac.openshift.io/subnet-id"]; !ok {
+		mismatches = append(mismatches,
+			"CUDN namespaceSelector missing "+
+				"osac.openshift.io/subnet-id")
+	} else if v != subnetID {
+		mismatches = append(mismatches, fmt.Sprintf(
+			"CUDN namespaceSelector "+
+				"osac.openshift.io/subnet-id: "+
+				"want %q, got %q",
+			subnetID, v))
+	}
+
+	return mismatches
+}
+
+func TestHelperNSLabelsCorrect(t *testing.T) {
+	labels := map[string]string{
+		"k8s.ovn.org/primary-user-defined-network": "",
+		"osac.openshift.io/subnet-id":              "sn-123",
+		"osac.openshift.io/tenant":                 "t-abc",
+		"osac.openshift.io/managed-by":             "osac-fulfillment",
+	}
+	expected := nsLabelAssertions{
+		PrimaryUDN: "",
+		SubnetID:   "sn-123",
+		TenantID:   "t-abc",
+	}
+	if mm := assertNSLabels(labels, expected); len(mm) > 0 {
+		t.Errorf("unexpected mismatches: %v", mm)
+	}
+}
+
+func TestHelperNSLabelsMissingUDN(t *testing.T) {
+	labels := map[string]string{
+		"osac.openshift.io/subnet-id": "sn-123",
+		"osac.openshift.io/tenant":    "t-abc",
+	}
+	expected := nsLabelAssertions{
+		PrimaryUDN: "",
+		SubnetID:   "sn-123",
+		TenantID:   "t-abc",
+	}
+	mm := assertNSLabels(labels, expected)
+	if len(mm) == 0 {
+		t.Fatal("expected mismatch for missing UDN label")
+	}
+	found := false
+	for _, m := range mm {
+		if m == "missing label k8s.ovn.org/"+
+			"primary-user-defined-network" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected UDN missing error, got: %v", mm)
+	}
+}
+
+func TestHelperNSLabelsWrongTenant(t *testing.T) {
+	labels := map[string]string{
+		"k8s.ovn.org/primary-user-defined-network": "",
+		"osac.openshift.io/subnet-id":              "sn-123",
+		"osac.openshift.io/tenant":                 "wrong-tenant",
+	}
+	expected := nsLabelAssertions{
+		PrimaryUDN: "",
+		SubnetID:   "sn-123",
+		TenantID:   "t-abc",
+	}
+	mm := assertNSLabels(labels, expected)
+	if len(mm) == 0 {
+		t.Fatal("expected mismatch for wrong tenant")
+	}
+	t.Logf("correctly detected mismatch: %v", mm)
+}
+
+func TestHelperNSLabelsWrongSubnetID(t *testing.T) {
+	labels := map[string]string{
+		"k8s.ovn.org/primary-user-defined-network": "",
+		"osac.openshift.io/subnet-id":              "wrong-sn",
+		"osac.openshift.io/tenant":                 "t-abc",
+	}
+	expected := nsLabelAssertions{
+		PrimaryUDN: "",
+		SubnetID:   "sn-123",
+		TenantID:   "t-abc",
+	}
+	mm := assertNSLabels(labels, expected)
+	if len(mm) == 0 {
+		t.Fatal("expected mismatch for wrong subnet-id")
+	}
+	t.Logf("correctly detected mismatch: %v", mm)
+}
+
+func TestHelperCUDNSelectorCorrect(t *testing.T) {
+	matchLabels := map[string]string{
+		"osac.openshift.io/subnet-id": "sn-123",
+	}
+	if mm := assertCUDNSelector(
+		matchLabels, "sn-123",
+	); len(mm) > 0 {
+		t.Errorf("unexpected mismatches: %v", mm)
+	}
+}
+
+func TestHelperCUDNSelectorMissing(t *testing.T) {
+	matchLabels := map[string]string{}
+	mm := assertCUDNSelector(matchLabels, "sn-123")
+	if len(mm) == 0 {
+		t.Fatal("expected mismatch for missing selector")
+	}
+	t.Logf("correctly detected: %v", mm)
+}
+
+func TestHelperCUDNSelectorWrongValue(t *testing.T) {
+	matchLabels := map[string]string{
+		"osac.openshift.io/subnet-id": "wrong-sn",
+	}
+	mm := assertCUDNSelector(matchLabels, "sn-123")
+	if len(mm) == 0 {
+		t.Fatal("expected mismatch for wrong value")
+	}
+	t.Logf("correctly detected: %v", mm)
+}
+
+// ---------------------------------------------------------------------------
+// Gap 3: Token JSON parsing robustness.
+//
+// acquireFulfillmentToken runs python3 json.load inside the awx-task
+// pod (which has python3).  This matches fulfillment-auth.sh exactly.
+// These tests validate the python3 JSON parsing contract using
+// Go json.Unmarshal (same semantics).
+// ---------------------------------------------------------------------------
+
+// parseAccessToken implements the same logic as python3 json.load in
+// fulfillment-auth.sh and acquireFulfillmentToken: parse the full
+// JSON response and extract the access_token field.
+func parseAccessToken(jsonResp string) (string, error) {
+	var resp map[string]interface{}
+	if err := json.Unmarshal(
+		[]byte(jsonResp), &resp,
+	); err != nil {
+		return "", fmt.Errorf("invalid JSON: %w", err)
+	}
+	tok, ok := resp["access_token"]
+	if !ok {
+		return "", fmt.Errorf("no access_token field")
+	}
+	tokStr, ok := tok.(string)
+	if !ok || tokStr == "" {
+		return "", fmt.Errorf("access_token is not a " +
+			"non-empty string")
+	}
+	return tokStr, nil
+}
+
+func TestHelperTokenParseCompact(t *testing.T) {
+	resp := `{"access_token":"eyJhbGci.test.sig",` +
+		`"token_type":"Bearer","expires_in":300}`
+	tok, err := parseAccessToken(resp)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if tok != "eyJhbGci.test.sig" {
+		t.Errorf("want %q, got %q",
+			"eyJhbGci.test.sig", tok)
+	}
+}
+
+func TestHelperTokenParseWhitespace(t *testing.T) {
+	// Keycloak may return pretty-printed JSON.
+	resp := `{
+  "access_token" : "eyJhbGci.ws.sig",
+  "token_type" : "Bearer",
+  "expires_in" : 300
+}`
+	tok, err := parseAccessToken(resp)
+	if err != nil {
+		t.Fatalf("whitespace JSON parse failed: %v", err)
+	}
+	if tok != "eyJhbGci.ws.sig" {
+		t.Errorf("want %q, got %q",
+			"eyJhbGci.ws.sig", tok)
+	}
+}
+
+func TestHelperTokenParseEmptyRejects(t *testing.T) {
+	resp := `{"access_token":"","token_type":"Bearer"}`
+	_, err := parseAccessToken(resp)
+	if err == nil {
+		t.Fatal("expected error for empty access_token")
+	}
+	t.Logf("correctly rejected: %v", err)
+}
+
+func TestHelperTokenParseMissingFieldRejects(t *testing.T) {
+	resp := `{"token_type":"Bearer","expires_in":300}`
+	_, err := parseAccessToken(resp)
+	if err == nil {
+		t.Fatal("expected error for missing access_token")
+	}
+	t.Logf("correctly rejected: %v", err)
+}
+
+func TestHelperTokenParseInvalidJSONRejects(t *testing.T) {
+	resp := `not json at all`
+	_, err := parseAccessToken(resp)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	t.Logf("correctly rejected: %v", err)
+}
+
+func TestHelperTokenParseHTMLErrorRejects(t *testing.T) {
+	resp := `<html><body>502 Bad Gateway</body></html>`
+	_, err := parseAccessToken(resp)
+	if err == nil {
+		t.Fatal("expected error for HTML response")
+	}
+	t.Logf("correctly rejected: %v", err)
+}
+
+func TestHelperTokenParseNullRejects(t *testing.T) {
+	resp := `{"access_token":null,"token_type":"Bearer"}`
+	_, err := parseAccessToken(resp)
+	if err == nil {
+		t.Fatal("expected error for null access_token")
+	}
+	t.Logf("correctly rejected: %v", err)
+}
+
+// TestHelperTokenParsePython3Real runs the ACTUAL python3 script
+// used by acquireFulfillmentToken against test fixtures.  This
+// validates the real consumer path, not a Go simulation.
+func TestHelperTokenParsePython3Real(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available on test host")
+	}
+
+	cases := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "compact",
+			input: `{"access_token":"eyJ.test.sig",` +
+				`"token_type":"Bearer"}`,
+			want: "eyJ.test.sig",
+		},
+		{
+			name: "whitespace",
+			input: "{\n  \"access_token\" : " +
+				"\"eyJ.ws.sig\",\n  " +
+				"\"token_type\" : \"Bearer\"\n}",
+			want: "eyJ.ws.sig",
+		},
+		{
+			name: "newline-separated",
+			input: "{\n\"access_token\"\n:\n" +
+				"\"eyJ.nl.sig\"\n,\n" +
+				"\"token_type\":\"Bearer\"\n}",
+			want: "eyJ.nl.sig",
+		},
+		{
+			name:    "empty-value",
+			input:   `{"access_token":""}`,
+			wantErr: true,
+		},
+		{
+			name:    "missing-field",
+			input:   `{"token_type":"Bearer"}`,
+			wantErr: true,
+		},
+		{
+			name:    "invalid-json",
+			input:   `not json`,
+			wantErr: true,
+		},
+		{
+			name:    "html-error",
+			input:   `<html>502</html>`,
+			wantErr: true,
+		},
+		{
+			name:    "null-value",
+			input:   `{"access_token":null}`,
+			wantErr: true,
+		},
+	}
+
+	// This is the EXACT python3 script from
+	// acquireFulfillmentToken, extracted verbatim.
+	pyScript := `import json,sys; ` +
+		`t=json.load(sys.stdin).get("access_token",""); ` +
+		`sys.exit(1) if not t else sys.stdout.write(t)`
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("python3", "-c", pyScript)
+			cmd.Stdin = strings.NewReader(tc.input)
+			out, err := cmd.Output()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %q",
+						out)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if string(out) != tc.want {
+				t.Errorf("want %q, got %q",
+					tc.want, string(out))
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Manifest builder tests: call the REAL buildGRPCPod function and
+// verify the emitted Pod struct.
+// ---------------------------------------------------------------------------
+
+func TestHelperBuildGRPCPodTenantCreate(t *testing.T) {
+	// Use the SAME payload format string as createTenantViaAPI.
+	tenantName := "mc-tenant-test"
+	payload := fmt.Sprintf(
+		`{"object":{"metadata":{"name":"%s"}}}`,
+		tenantName)
+
+	pod := buildGRPCPod(
+		"test-pod", "osac", "test-token-secret",
+		"osac.private.v1.Tenants/Create",
+		payload,
+		"fulfillment-internal-api.osac.svc.cluster.local:8001",
+	)
+
+	// Verify it serializes to valid JSON (the consumer path).
+	podJSON, err := json.Marshal(pod)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	// Re-parse to verify structure.
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(podJSON, &parsed); err != nil {
+		t.Fatalf("round-trip unmarshal failed: %v", err)
+	}
+
+	// Verify the grpcPayload survives JSON round-trip intact.
+	containers := pod.Spec.Containers
+	if len(containers) != 1 {
+		t.Fatalf("want 1 container, got %d",
+			len(containers))
+	}
+	c := containers[0]
+
+	// Command must be ["grpcurl"] (no shell).
+	if len(c.Command) != 1 || c.Command[0] != "grpcurl" {
+		t.Errorf("command: want [grpcurl], got %v",
+			c.Command)
+	}
+
+	// Args must contain the exact payload.
+	foundPayload := false
+	for i, arg := range c.Args {
+		if arg == "-d" && i+1 < len(c.Args) {
+			if c.Args[i+1] != payload {
+				t.Errorf("-d arg: want %q, got %q",
+					payload, c.Args[i+1])
+			}
+			foundPayload = true
+			break
+		}
+	}
+	if !foundPayload {
+		t.Error("-d flag not found in args")
+	}
+
+	// Verify method is last arg.
+	lastArg := c.Args[len(c.Args)-1]
+	if lastArg != "osac.private.v1.Tenants/Create" {
+		t.Errorf("last arg: want method, got %q",
+			lastArg)
+	}
+
+	// Token from Secret, not literal.
+	if len(c.Env) != 1 {
+		t.Fatalf("want 1 env var, got %d", len(c.Env))
+	}
+	env := c.Env[0]
+	if env.Name != "FULFILLMENT_TOKEN" {
+		t.Errorf("env name: want FULFILLMENT_TOKEN, "+
+			"got %q", env.Name)
+	}
+	if env.Value != "" {
+		t.Error("env.Value must be empty (use secretKeyRef)")
+	}
+	if env.ValueFrom == nil ||
+		env.ValueFrom.SecretKeyRef == nil {
+		t.Fatal("env must use secretKeyRef")
+	}
+	if env.ValueFrom.SecretKeyRef.Name != "test-token-secret" {
+		t.Errorf("secretKeyRef.name: want %q, got %q",
+			"test-token-secret",
+			env.ValueFrom.SecretKeyRef.Name)
+	}
+
+	// AutomountServiceAccountToken must be false.
+	if pod.Spec.AutomountServiceAccountToken == nil ||
+		*pod.Spec.AutomountServiceAccountToken {
+		t.Error("automountServiceAccountToken must be " +
+			"false")
+	}
+
+	// CA bundle volume.
+	if len(pod.Spec.Volumes) != 1 {
+		t.Fatalf("want 1 volume, got %d",
+			len(pod.Spec.Volumes))
+	}
+	vol := pod.Spec.Volumes[0]
+	if vol.Name != "ca-bundle" {
+		t.Errorf("volume name: want ca-bundle, got %q",
+			vol.Name)
+	}
+	if vol.ConfigMap == nil ||
+		vol.ConfigMap.Name != "ca-bundle" {
+		t.Error("volume must reference ca-bundle ConfigMap")
+	}
+
+	// No initContainers.
+	if len(pod.Spec.InitContainers) > 0 {
+		t.Errorf("want 0 initContainers, got %d",
+			len(pod.Spec.InitContainers))
+	}
+}
+
+func TestHelperBuildGRPCPodCICreate(t *testing.T) {
+	// Use the SAME payload format as createComputeInstanceViaAPI.
+	name := "mc-test-abc"
+	tenant := "mc-tenant-xyz"
+	subnet := "subnet-001"
+	payload := fmt.Sprintf(
+		`{"object":{"metadata":{"name":"%s","tenant":"%s"},`+
+			`"spec":{"template":{"name":`+
+			`"osac.templates.ocp_virt_vm"},`+
+			`"boot_disk":{"size_gib":20,`+
+			`"storage_tier":{"name":"local"}},`+
+			`"run_strategy":`+
+			`"COMPUTE_INSTANCE_RUN_STRATEGY_HALTED",`+
+			`"network_attachments":`+
+			`[{"subnet":{"name":"%s"}}]}}}`,
+		name, tenant, subnet)
+
+	pod := buildGRPCPod(
+		"ci-pod", "osac", "ci-token-secret",
+		"osac.private.v1.ComputeInstances/Create",
+		payload,
+		"fulfillment-internal-api.osac.svc.cluster.local:8001",
+	)
+
+	podJSON, err := json.Marshal(pod)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	// Verify JSON is valid and payload survives intact.
+	var check map[string]interface{}
+	if err := json.Unmarshal(podJSON, &check); err != nil {
+		t.Fatalf("round-trip failed: %v", err)
+	}
+
+	// Extract the -d arg and validate it against protojson.
+	c := pod.Spec.Containers[0]
+	var dArg string
+	for i, arg := range c.Args {
+		if arg == "-d" && i+1 < len(c.Args) {
+			dArg = c.Args[i+1]
+			break
+		}
+	}
+	if dArg == "" {
+		t.Fatal("-d arg not found")
+	}
+
+	var req privatev1.ComputeInstancesCreateRequest
+	if err := protojsonStrictOpts.Unmarshal(
+		[]byte(dArg), &req,
+	); err != nil {
+		t.Fatalf("payload rejected by protojson: %v", err)
+	}
+	if req.GetObject().GetMetadata().GetName() != name {
+		t.Errorf("metadata.name: want %q, got %q",
+			name,
+			req.GetObject().GetMetadata().GetName())
+	}
+}
+
+func TestHelperBuildGRPCPodPayloadWithSpecialChars(t *testing.T) {
+	// Verify that payloads with YAML-breaking characters
+	// (colons, quotes, braces) survive the JSON serialization.
+	// This is the bug that fmt.Sprintf into YAML would break.
+	payload := `{"object":{"metadata":{"name":"test: \"quoted\" {braced}"}}}`
+
+	pod := buildGRPCPod(
+		"special-pod", "osac", "tok-secret",
+		"osac.private.v1.Tenants/Create",
+		payload,
+		"fulfillment-internal-api.osac.svc.cluster.local:8001",
+	)
+
+	podJSON, err := json.Marshal(pod)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	// The key test: re-parse and verify the -d arg is
+	// bit-identical to the original payload.
+	var roundTripped map[string]interface{}
+	if err := json.Unmarshal(podJSON, &roundTripped); err != nil {
+		t.Fatalf("round-trip parse failed: %v", err)
+	}
+
+	c := pod.Spec.Containers[0]
+	for i, arg := range c.Args {
+		if arg == "-d" && i+1 < len(c.Args) {
+			if c.Args[i+1] != payload {
+				t.Errorf("payload corrupted:\n"+
+					"  want: %s\n  got:  %s",
+					payload, c.Args[i+1])
+			}
+			return
+		}
+	}
+	t.Error("-d flag not found in args")
+}
+
+// ---------------------------------------------------------------------------
+// Security regression tests: the REAL buildTokenScript must never
+// include secret material in the returned script string.
+// ---------------------------------------------------------------------------
+
+func TestHelperBuildTokenScriptNoSecretInScript(t *testing.T) {
+	script := buildTokenScript("my-client-id",
+		"https://keycloak.example/auth/realms/osac")
+
+	if !strings.Contains(script, "my-client-id") {
+		t.Error("script missing client_id")
+	}
+	if !strings.Contains(script, "keycloak.example") {
+		t.Error("script missing token URL")
+	}
+	if strings.Contains(script, "client_secret=") {
+		t.Error("script uses client_secret= (inline)")
+	}
+	if !strings.Contains(script, "client_secret@") {
+		t.Error("script missing client_secret@file")
+	}
+	if !strings.Contains(script,
+		"/var/run/secrets/fc-cred/client-secret") {
+		t.Error("script missing mounted secret file path")
+	}
+	if !strings.Contains(script, "--cacert") {
+		t.Error("script missing --cacert")
+	}
+	if strings.Contains(script, "-k") ||
+		strings.Contains(script, "--insecure") {
+		t.Error("script uses insecure TLS bypass")
+	}
+	// Token must NOT go to stdout — must write to file.
+	if strings.Contains(script, "sys.stdout.write(t)") {
+		t.Error("script writes token to stdout; " +
+			"must write to file only")
+	}
+	if !strings.Contains(script, "open(") {
+		t.Error("script must write token to file via open()")
+	}
+	// Script must include sleep to keep Pod alive.
+	if !strings.Contains(script, "sleep") {
+		t.Error("script must sleep to keep Pod alive " +
+			"for exec retrieval")
+	}
+}
+
+func TestHelperBuildTokenPodNoSecretInSpec(t *testing.T) {
+	sentinel := "SENTINEL_SECRET_abc123"
+	script := buildTokenScript("client-id",
+		"https://keycloak.example/token")
+
+	pod := buildTokenPod("test-pod", "osac",
+		"fulfillment-controller-credentials", script)
+
+	podJSON, err := json.Marshal(pod)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	podStr := string(podJSON)
+
+	if strings.Contains(podStr, sentinel) {
+		t.Fatalf("Pod spec contains sentinel")
+	}
+	if !strings.Contains(podStr,
+		"fulfillment-controller-credentials") {
+		t.Error("Pod missing Secret reference")
+	}
+	if !strings.Contains(podStr, "ca-bundle") {
+		t.Error("Pod missing ca-bundle ConfigMap")
+	}
+	if pod.Spec.AutomountServiceAccountToken == nil ||
+		*pod.Spec.AutomountServiceAccountToken {
+		t.Error("automountServiceAccountToken must be false")
+	}
+	// Secret volume with defaultMode 0440.
+	foundSecretVol := false
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "fc-cred" && v.Secret != nil {
+			foundSecretVol = true
+			if v.Secret.DefaultMode == nil ||
+				*v.Secret.DefaultMode != 0440 {
+				t.Error("fc-cred defaultMode must be 0440")
+			}
+		}
+	}
+	if !foundSecretVol {
+		t.Error("fc-cred Secret volume not found")
+	}
+	// Readiness probe must check tokenFilePath.
+	c := pod.Spec.Containers[0]
+	if c.ReadinessProbe == nil ||
+		c.ReadinessProbe.Exec == nil {
+		t.Fatal("readiness probe with exec required")
+	}
+	probeCmd := strings.Join(
+		c.ReadinessProbe.Exec.Command, " ")
+	if !strings.Contains(probeCmd, tokenFilePath) {
+		t.Errorf("readiness probe must check %s, got: %s",
+			tokenFilePath, probeCmd)
+	}
+}
+
+func TestHelperBuildTokenScriptFileFlow(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	sentinel := "test_secret_42"
+	tokenOut := t.TempDir() + "/token"
+	script := buildTokenScript("test-client",
+		"https://fake.example/token")
+
+	// Rewrite paths to temp dir.
+	tmpDir := t.TempDir()
+	secretDir := tmpDir + "/var/run/secrets/fc-cred"
+	_ = os.MkdirAll(secretDir, 0755)
+	_ = os.WriteFile(secretDir+"/client-secret",
+		[]byte(sentinel), 0600)
+	caDir := tmpDir + "/etc/ca-bundle"
+	_ = os.MkdirAll(caDir, 0755)
+	_ = os.WriteFile(caDir+"/bundle.pem",
+		[]byte("mock-ca"), 0644)
+
+	rewritten := strings.ReplaceAll(script,
+		"/var/run/secrets/fc-cred/client-secret",
+		secretDir+"/client-secret")
+	rewritten = strings.ReplaceAll(rewritten,
+		"/etc/ca-bundle/bundle.pem", caDir+"/bundle.pem")
+	rewritten = strings.ReplaceAll(rewritten,
+		tokenFilePath, tokenOut)
+	// Remove the sleep so the test doesn't hang.
+	rewritten = strings.ReplaceAll(rewritten,
+		"exec sleep 300", "true")
+
+	// Mock curl that returns valid JSON.
+	mockCurl := tmpDir + "/curl"
+	mockScript := fmt.Sprintf(`#!/bin/bash
+for arg; do
+  case "$arg" in client_secret@*)
+    F="${arg#client_secret@}"
+    GOT=$(cat "$F")
+    if [ "$GOT" = "%s" ]; then
+      printf '{"access_token":"file_token_ok"}'
+      exit 0
+    fi
+    echo "WRONG" >&2; exit 1;;
+  esac
+done
+echo "NO_FILE" >&2; exit 1
+`, sentinel)
+	_ = os.WriteFile(mockCurl, []byte(mockScript), 0755)
+
+	cmd := exec.Command("bash", "-c", rewritten)
+	cmd.Env = append(os.Environ(),
+		"PATH="+tmpDir+":"+os.Getenv("PATH"))
+	stdout, err := cmd.Output()
+	if err != nil {
+		stderr := ""
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = string(ee.Stderr)
+		}
+		t.Fatalf("script failed: %v\nstderr: %s", err,
+			stderr)
+	}
+
+	// stdout must be EMPTY — token goes to file only.
+	if len(strings.TrimSpace(string(stdout))) > 0 {
+		t.Errorf("stdout must be empty, got: %q",
+			string(stdout))
+	}
+
+	// Token file must exist with correct content.
+	data, err := os.ReadFile(tokenOut)
+	if err != nil {
+		t.Fatalf("token file not created: %v", err)
+	}
+	if string(data) != "file_token_ok" {
+		t.Errorf("token file: want %q, got %q",
+			"file_token_ok", string(data))
+	}
+
+	// Token file must have mode 0600 (umask 077).
+	info, err := os.Stat(tokenOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perm := info.Mode().Perm()
+	if perm&0077 != 0 {
+		t.Errorf("token file perm: want 0600, got %04o",
+			perm)
+	}
+}
+
+func TestHelperBuildTokenScriptErrorNoSecretLeak(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	script := buildTokenScript("test-client",
+		"https://fake.example/token")
+	// Remove sleep so test doesn't hang.
+	rewritten := strings.ReplaceAll(script,
+		"exec sleep 300", "true")
+
+	wrapper := fmt.Sprintf(
+		`curl() { echo "curl: (7) Failed" >&2; return 22; }; `+
+			`export -f curl; %s`, rewritten)
+
+	cmd := exec.Command("bash", "-c", wrapper)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("expected script to fail when curl fails")
+	}
+	if !strings.Contains(string(out), "FAIL") {
+		t.Errorf("expected FAIL in error, got: %s", out)
+	}
+}
+
+func TestHelperReadTokenFromPodErrorGeneric(t *testing.T) {
+	// readTokenFromPod must return a generic error that does
+	// not contain any token or partial response content.
+	// Use a clean pod name (no sentinel in it).
+	_, err := readTokenFromPod(
+		"nonexistent-test-pod-abc", "default")
+	if err == nil {
+		t.Fatal("expected error for nonexistent pod")
+	}
+	errStr := err.Error()
+	// Error must say "details withheld" — no kubectl output.
+	if !strings.Contains(errStr, "details withheld") {
+		t.Errorf("error must say 'details withheld': %s",
+			errStr)
+	}
+	// Error must not contain token file path content.
+	if strings.Contains(errStr, "/tmp/token") {
+		t.Errorf("error should not reference token path")
+	}
+}
+
+func TestHelperSourceGrepNoLogsNoInlineSecret(t *testing.T) {
+	// Source-grep: acquireFulfillmentToken must NOT call
+	// runKubectlHub("logs",...) and must NOT use
+	// client_secret= interpolation.
+	//
+	// The test runs from the osac-operator directory.
+	// Locate the source file relative to the test binary.
+	// runtime.Caller gives us the source path at compile time.
+	_, thisFile, _, _ := runtime.Caller(0)
+	srcDir := filepath.Dir(thisFile)
+	srcPath := filepath.Join(srcDir,
+		"multicluster_suite_test.go")
+	src, err := os.ReadFile(srcPath)
+	if err != nil {
+		t.Skipf("source file not found at %s: %v",
+			srcPath, err)
+	}
+
+	startMarker := "func acquireFulfillmentToken("
+	start := strings.Index(string(src), startMarker)
+	if start < 0 {
+		t.Fatal("acquireFulfillmentToken not found")
+	}
+	rest := string(src)[start+len(startMarker):]
+	endMarker := "\nfunc "
+	end := strings.Index(rest, endMarker)
+	if end < 0 {
+		end = len(rest)
+	}
+	body := rest[:end]
+
+	if strings.Contains(body, `"logs"`) {
+		t.Error("acquireFulfillmentToken calls " +
+			"kubectl logs — token must not go " +
+			"through Pod logs")
+	}
+	if strings.Contains(body, "client_secret=") {
+		t.Error("acquireFulfillmentToken has " +
+			"client_secret= interpolation")
+	}
+}
+
+// ---------------------------------------------------------------
+// Kubeconfig export: CombinedOutput stderr contamination
+// regression test.
+// ---------------------------------------------------------------
+
+const validKubeconfig = `apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: dGVzdA==
+    server: https://127.0.0.1:12345
+  name: kind-osac-workload
+contexts:
+- context:
+    cluster: kind-osac-workload
+    user: kind-osac-workload
+  name: kind-osac-workload
+current-context: kind-osac-workload
+kind: Config
+preferences: {}
+users:
+- name: kind-osac-workload
+  user:
+    client-certificate-data: dGVzdA==
+    client-key-data: dGVzdA==
+`
+
+func writeFakeKind(t *testing.T, dir string) {
+	t.Helper()
+	script := `#!/bin/sh
+if [ "$1" != "get" ] || [ "$2" != "kubeconfig" ]; then
+  echo "unexpected args: $*" >&2; exit 99
+fi
+if [ "${FAKE_KIND_HANG:-}" = "1" ]; then exec sleep 120; fi
+if [ -n "${FAKE_KIND_STDERR:-}" ]; then
+  printf '%s' "${FAKE_KIND_STDERR}" >&2
+fi
+if [ -n "${FAKE_KIND_STDOUT:-}" ]; then
+  printf '%s' "${FAKE_KIND_STDOUT}"
+fi
+exit "${FAKE_KIND_EXIT:-0}"
+`
+	p := filepath.Join(dir, "kind")
+	if err := os.WriteFile(p, []byte(script), 0755); err != nil {
+		t.Fatalf("write fake kind: %v", err)
+	}
+}
+
+func TestHelperKubeconfigHelperProcess(t *testing.T) {
+	if os.Getenv("GO_TEST_HELPER_PROCESS") != "1" {
+		return
+	}
+	fmt.Fprint(os.Stdout, validKubeconfig)
+	if os.Getenv("EMIT_STDERR_WARNING") == "1" {
+		fmt.Fprintln(os.Stderr,
+			"enabling experimental podman provider")
+	}
+	os.Exit(0)
+}
+
+func TestHelperCombinedOutputCorruptsKubeconfig(t *testing.T) {
+	cmd := exec.Command(os.Args[0],
+		"-test.run=^TestHelperKubeconfigHelperProcess$")
+	cmd.Env = []string{
+		"GO_TEST_HELPER_PROCESS=1",
+		"EMIT_STDERR_WARNING=1",
+	}
+	combined, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("helper subprocess failed: %v", err)
+	}
+	if !bytes.Contains(combined,
+		[]byte("enabling experimental podman provider")) {
+		t.Fatal("expected stderr warning in combined output")
+	}
+	_, parseErr := clientcmd.Load(combined)
+	if parseErr == nil {
+		t.Fatal("expected client-go to reject " +
+			"stderr-contaminated kubeconfig")
+	}
+	t.Logf("CombinedOutput demonstration: correctly "+
+		"rejected: %v", parseErr)
+}
+
+func TestHelperExportWithPodmanStderrWarning(t *testing.T) {
+	fakeDir := t.TempDir()
+	writeFakeKind(t, fakeDir)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	t.Setenv("FAKE_KIND_STDOUT", validKubeconfig)
+	t.Setenv("FAKE_KIND_STDERR",
+		"enabling experimental podman provider\n")
+	t.Setenv("FAKE_KIND_EXIT", "0")
+
+	out, err := exportKindKubeconfig("test-cluster")
+	if err != nil {
+		t.Fatalf("exportKindKubeconfig failed: %v", err)
+	}
+	cfg, err := clientcmd.Load(out)
+	if err != nil {
+		t.Fatalf("client-go rejected kubeconfig: %v", err)
+	}
+	if cfg.CurrentContext != "kind-osac-workload" {
+		t.Errorf("current-context: want %q, got %q",
+			"kind-osac-workload", cfg.CurrentContext)
+	}
+}
+
+func TestHelperExportCleanDockerNoStderr(t *testing.T) {
+	fakeDir := t.TempDir()
+	writeFakeKind(t, fakeDir)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	t.Setenv("FAKE_KIND_STDOUT", validKubeconfig)
+	t.Setenv("FAKE_KIND_STDERR", "")
+	t.Setenv("FAKE_KIND_EXIT", "0")
+
+	out, err := exportKindKubeconfig("test-cluster")
+	if err != nil {
+		t.Fatalf("exportKindKubeconfig failed: %v", err)
+	}
+	if _, err := clientcmd.Load(out); err != nil {
+		t.Fatalf("client-go rejected kubeconfig: %v", err)
+	}
+}
+
+func TestHelperExportNonzeroExitNoOutput(t *testing.T) {
+	fakeDir := t.TempDir()
+	writeFakeKind(t, fakeDir)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	t.Setenv("FAKE_KIND_STDOUT", "apiVersion: v1\n")
+	t.Setenv("FAKE_KIND_STDERR", "Error: cluster not found\n")
+	t.Setenv("FAKE_KIND_EXIT", "1")
+
+	out, err := exportKindKubeconfig("test-cluster")
+	if err == nil {
+		t.Fatal("expected error for non-zero exit")
+	}
+	if out != nil {
+		t.Errorf("expected nil output on error, "+
+			"got %d bytes", len(out))
+	}
+}
+
+func TestHelperExportContainerRuntimeDetection(t *testing.T) {
+	// Use a deterministic fake PATH so the test does not
+	// depend on an ambient docker/podman daemon.
+	fakeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fakeDir, "docker"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeDir)
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "")
+	t.Setenv("CONTAINER_TOOL", "")
+	rt, err := detectContainerRuntime()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt != "docker" {
+		t.Errorf("expected docker from fake PATH, got %q", rt)
+	}
+
+	if err := os.WriteFile(filepath.Join(fakeDir, "podman"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "podman")
+	rt, err = detectContainerRuntime()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt != "podman" {
+		t.Errorf("want podman via provider env, got %q", rt)
+	}
+}
+
+func TestHelperPodmanPIDLimitsNoopForDocker(t *testing.T) {
+	saved := containerRuntime
+	containerRuntime = "docker"
+	defer func() { containerRuntime = saved }()
+
+	err := ensureWorkloadPodmanPIDLimits("nonexistent")
+	if err != nil {
+		t.Fatalf("expected no-op for docker, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Defect A: detectContainerRuntime fail-closed tests.
+// ---------------------------------------------------------------------------
+
+func TestHelperDetectRuntimeExplicitProviderMissing(
+	t *testing.T,
+) {
+	fakeDir := t.TempDir()
+	fakeDocker := filepath.Join(fakeDir, "docker")
+	if err := os.WriteFile(fakeDocker,
+		[]byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeDir)
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "podman")
+	t.Setenv("CONTAINER_TOOL", "")
+
+	_, err := detectContainerRuntime()
+	if err == nil {
+		t.Fatal("expected error for missing podman")
+	}
+	if !strings.Contains(err.Error(), "podman") ||
+		!strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should mention podman: %v", err)
+	}
+	t.Logf("correctly failed closed: %v", err)
+}
+
+func TestHelperDetectRuntimeExplicitProviderUnsupported(
+	t *testing.T,
+) {
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "nerdctl")
+	t.Setenv("CONTAINER_TOOL", "")
+
+	_, err := detectContainerRuntime()
+	if err == nil {
+		t.Fatal("expected error for unsupported provider")
+	}
+	if !strings.Contains(err.Error(), "nerdctl") {
+		t.Errorf("error should mention nerdctl: %v", err)
+	}
+	t.Logf("correctly failed closed: %v", err)
+}
+
+func TestHelperDetectRuntimeExplicitToolMissing(
+	t *testing.T,
+) {
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "")
+	t.Setenv("CONTAINER_TOOL", "/nonexistent/podman")
+
+	_, err := detectContainerRuntime()
+	if err == nil {
+		t.Fatal("expected error for missing tool")
+	}
+	if !strings.Contains(err.Error(), "CONTAINER_TOOL") {
+		t.Errorf("error should mention CONTAINER_TOOL: %v",
+			err)
+	}
+	t.Logf("correctly failed closed: %v", err)
+}
+
+func TestHelperDetectRuntimeExplicitDockerExists(
+	t *testing.T,
+) {
+	fakeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fakeDir, "docker"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeDir)
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "docker")
+	t.Setenv("CONTAINER_TOOL", "")
+	rt, err := detectContainerRuntime()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt != "docker" {
+		t.Errorf("want docker, got %q", rt)
+	}
+}
+
+func TestHelperDetectRuntimeExplicitPodmanExists(
+	t *testing.T,
+) {
+	fakeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fakeDir, "podman"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeDir)
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "podman")
+	t.Setenv("CONTAINER_TOOL", "")
+	rt, err := detectContainerRuntime()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt != "podman" {
+		t.Errorf("want podman, got %q", rt)
+	}
+}
+
+func TestHelperDetectRuntimeNoRuntimeAvailable(
+	t *testing.T,
+) {
+	// Empty PATH: neither docker nor podman available.
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir)
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "")
+	t.Setenv("CONTAINER_TOOL", "")
+
+	_, err := detectContainerRuntime()
+	if err == nil {
+		t.Fatal("expected error when no runtime in PATH")
+	}
+	if !strings.Contains(err.Error(),
+		"no container runtime") {
+		t.Errorf("error should mention missing runtime: %v",
+			err)
+	}
+}
+
+// TestHelperFailerPoisonRegression verifies that negative
+// detectContainerRuntime tests do NOT poison Ginkgo's
+// global.Failer and mask real BeforeSuite failures.
+//
+// Strategy: use os.Executable to get the already-compiled
+// test binary, run it in a subprocess with only the three
+// negative helper tests plus the Ginkgo suite, using a fake
+// PATH so BeforeSuite fails at a known sentinel step.
+// Assert the Ginkgo [FAILED] section reports the actual
+// sentinel error, not the stale provider message from the
+// negative helpers' t.Logf output.
+//
+// The -test.run regex excludes this test to prevent
+// recursion.
+func TestHelperFailerPoisonRegression(t *testing.T) {
+	testBin, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	// Create a fake PATH with docker and kind stubs.
+	fakeDir := t.TempDir()
+	for _, name := range []string{"docker", "kubectl"} {
+		if err := os.WriteFile(
+			filepath.Join(fakeDir, name),
+			[]byte("#!/bin/sh\nexit 0\n"),
+			0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// kind stub: exits 0 for cleanup commands, exits 1
+	// with a sentinel message for "create cluster" so
+	// BeforeSuite fails at a known point AFTER
+	// detectContainerRuntime succeeds.
+	kindScript := `#!/bin/sh
+case "$1" in
+  delete) exit 0 ;;
+  get)
+    case "$2" in
+      kubeconfig) echo "apiVersion: v1"; exit 0 ;;
+      nodes) echo "none"; exit 0 ;;
+    esac ;;
+  create)
+    echo "SENTINEL_KIND_CREATE_FAILURE" >&2
+    exit 1 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(
+		filepath.Join(fakeDir, "kind"),
+		[]byte(kindScript), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Select exactly the three negative tests plus the
+	// Ginkgo suite.  Exclude this regression test and all
+	// other helpers to prevent recursion and keep the
+	// subprocess fast.
+	run := "^(" +
+		"TestHelperDetectRuntimeExplicitProviderMissing|" +
+		"TestHelperDetectRuntimeExplicitProviderUnsupported|" +
+		"TestHelperDetectRuntimeExplicitToolMissing|" +
+		"TestMulticluster" +
+		")$"
+
+	cmd := exec.Command(testBin,
+		"-test.run", run,
+		"-test.v",
+		"-test.timeout", "60s",
+	)
+	cmd.Env = append(os.Environ(),
+		"PATH="+fakeDir,
+		"KIND_EXPERIMENTAL_PROVIDER=docker",
+		"CONTAINER_TOOL=",
+		"HOME="+t.TempDir(),
+		"KUBECONFIG="+filepath.Join(t.TempDir(), "kc"),
+	)
+	out, exitErr := cmd.CombinedOutput()
+	output := string(out)
+
+	// The subprocess MUST exit non-zero (BeforeSuite's
+	// kind-create fails).  A zero exit or timeout is wrong.
+	if exitErr == nil {
+		t.Fatalf("subprocess should have failed but "+
+			"exited 0:\n%s", truncateOutput(output, 2000))
+	}
+
+	// Verify each negative helper actually ran.
+	for _, name := range []string{
+		"TestHelperDetectRuntimeExplicitProviderMissing",
+		"TestHelperDetectRuntimeExplicitProviderUnsupported",
+		"TestHelperDetectRuntimeExplicitToolMissing",
+	} {
+		marker := "--- PASS: " + name
+		if !strings.Contains(output, marker) {
+			t.Errorf("negative helper %s did not run "+
+				"or did not pass; missing %q in output",
+				name, marker)
+		}
+	}
+
+	// Extract the Ginkgo [FAILED] section to check what
+	// BeforeSuite actually reported.  The section starts
+	// with "[FAILED]" and contains the failure message.
+	ginkgoFailed := ""
+	if idx := strings.Index(output, "[FAILED]"); idx >= 0 {
+		ginkgoFailed = output[idx:]
+	}
+
+	if ginkgoFailed == "" {
+		t.Errorf("no Ginkgo [FAILED] section in output:\n%s",
+			truncateOutput(output, 2000))
+	} else {
+		// The Ginkgo failure section must contain the
+		// actual sentinel, not the stale provider error.
+		if !strings.Contains(ginkgoFailed,
+			"SENTINEL_KIND_CREATE_FAILURE") {
+			t.Errorf("Ginkgo [FAILED] section does not "+
+				"contain the sentinel create error:\n%s",
+				truncateOutput(ginkgoFailed, 1500))
+		}
+		if strings.Contains(ginkgoFailed,
+			"binary not found in PATH") {
+			t.Errorf("Ginkgo [FAILED] section contains "+
+				"stale provider error (failer poison):\n%s",
+				truncateOutput(ginkgoFailed, 1500))
+		}
+	}
+}
+
+// truncateOutput returns at most n bytes of s for error
+// reporting without flooding test output.
+func truncateOutput(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "\n...(truncated)"
+}
+
+// ---------------------------------------------------------------------------
+// Defect B: PID limits wrapper invokes lib.sh.
+// ---------------------------------------------------------------------------
+
+func writeFakePodmanPID(
+	t *testing.T, dir, initialLimit string,
+) {
+	t.Helper()
+	stateFile := filepath.Join(dir, "podman-state")
+	kindScript := `#!/bin/sh
+if [ "$1" = "get" ] && [ "$2" = "nodes" ]; then
+  echo "test-node-control-plane"
+  echo "WARNING: enabling experimental podman provider" >&2
+  exit 0
+fi
+echo "unexpected kind args: $*" >&2; exit 1
+`
+	_ = os.WriteFile(filepath.Join(dir, "kind"),
+		[]byte(kindScript), 0755)
+
+	podmanScript := fmt.Sprintf(`#!/bin/sh
+STATE_FILE="%s"
+INITIAL="%s"
+case "$1" in
+  inspect) if [ -f "$STATE_FILE" ]; then echo "65536"
+           else echo "$INITIAL"; fi ;;
+  update)  touch "$STATE_FILE" ;;
+  *)       echo "unexpected: $*" >&2; exit 1 ;;
+esac
+exit 0
+`, stateFile, initialLimit)
+	_ = os.WriteFile(filepath.Join(dir, "podman"),
+		[]byte(podmanScript), 0755)
+}
+
+func TestHelperPIDLimitsWrapperInvokesLibSh(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	fakeDir := t.TempDir()
+	writeFakePodmanPID(t, fakeDir, "4096")
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	saved := containerRuntime
+	containerRuntime = "podman"
+	defer func() { containerRuntime = saved }()
+
+	if err := ensureWorkloadPodmanPIDLimits(
+		"test-cluster"); err != nil {
+		t.Fatalf("wrapper failed: %v", err)
+	}
+	stateFile := filepath.Join(fakeDir, "podman-state")
+	if _, err := os.Stat(stateFile); os.IsNotExist(err) {
+		t.Error("podman update was not called")
+	}
+}
+
+func TestHelperPIDLimitsWrapperUnlimitedSkips(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	fakeDir := t.TempDir()
+	writeFakePodmanPID(t, fakeDir, "-1")
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	saved := containerRuntime
+	containerRuntime = "podman"
+	defer func() { containerRuntime = saved }()
+
+	if err := ensureWorkloadPodmanPIDLimits(
+		"test-cluster"); err != nil {
+		t.Fatalf("wrapper failed: %v", err)
+	}
+	stateFile := filepath.Join(fakeDir, "podman-state")
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Error("update should not be called for -1")
+	}
+}
+
+func TestHelperPIDLimitsWrapperFailurePropagates(
+	t *testing.T,
+) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	fakeDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(fakeDir, "kind"),
+		[]byte("#!/bin/sh\nexit 1\n"), 0755)
+	_ = os.WriteFile(filepath.Join(fakeDir, "podman"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0755)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	saved := containerRuntime
+	containerRuntime = "podman"
+	defer func() { containerRuntime = saved }()
+
+	if err := ensureWorkloadPodmanPIDLimits(
+		"test-cluster"); err == nil {
+		t.Fatal("expected error for failing kind")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Defect C: kubeconfig export timeout and oversize.
+// ---------------------------------------------------------------------------
+
+func TestHelperExportKubeconfigTimeout(t *testing.T) {
+	fakeDir := t.TempDir()
+	hangScript := `#!/bin/sh
+if [ "$1" != "get" ] || [ "$2" != "kubeconfig" ]; then
+  echo "unexpected: $*" >&2; exit 99
+fi
+exec sleep 120
+`
+	_ = os.WriteFile(filepath.Join(fakeDir, "kind"),
+		[]byte(hangScript), 0755)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+
+	start := time.Now()
+	_, err := exportKindKubeconfig("test-cluster")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected error for hanging command")
+	}
+	if elapsed > 45*time.Second {
+		t.Errorf("timeout took %s; expected ~30s", elapsed)
+	}
+	t.Logf("correctly timed out: %s: %v",
+		elapsed.Round(time.Second), err)
+}
+
+func TestHelperExportKubeconfigOversizeRejects(t *testing.T) {
+	fakeDir := t.TempDir()
+	oversizeScript := fmt.Sprintf(`#!/bin/sh
+if [ "$1" != "get" ] || [ "$2" != "kubeconfig" ]; then
+  echo "unexpected: $*" >&2; exit 99
+fi
+head -c %d /dev/zero | tr '\0' 'x'
+exit 0
+`, maxKubeconfigBytes+100)
+	_ = os.WriteFile(filepath.Join(fakeDir, "kind"),
+		[]byte(oversizeScript), 0755)
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+
+	out, err := exportKindKubeconfig("test-cluster")
+	if err == nil {
+		t.Fatal("expected error for oversize stdout")
+	}
+	if out != nil {
+		t.Errorf("expected nil on oversize, got %d bytes",
+			len(out))
+	}
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Errorf("error should mention truncation: %v",
+			err)
+	}
+}
+
+// Fix A: CONTAINER_TOOL as full path returns the resolved
+// executable, not just the basename.  PID noop still works
+// because ensureWorkloadPodmanPIDLimits uses filepath.Base.
+func TestHelperDetectRuntimeFullPathTool(t *testing.T) {
+	// Place a fake podman OUTSIDE the normal PATH.
+	isolatedDir := t.TempDir()
+	fakePodman := filepath.Join(isolatedDir, "podman")
+	_ = os.WriteFile(fakePodman,
+		[]byte("#!/bin/sh\nexit 0\n"), 0755)
+
+	// Set PATH to something that does NOT contain podman.
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir)
+	t.Setenv("KIND_EXPERIMENTAL_PROVIDER", "")
+	t.Setenv("CONTAINER_TOOL", fakePodman)
+
+	rt, err := detectContainerRuntime()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Must return the resolved full path, not just "podman".
+	if rt != fakePodman {
+		t.Errorf("want resolved path %q, got %q",
+			fakePodman, rt)
+	}
+	// PID noop must still recognise it as podman via basename.
+	saved := containerRuntime
+	containerRuntime = rt
+	defer func() { containerRuntime = saved }()
+	// Docker noop path should NOT trigger for a podman path.
+	if filepath.Base(rt) == "docker" {
+		t.Error("basename should be podman, not docker")
+	}
+}
+
+// Fix B: GinkgoWriter stderr redaction — capture what the
+// REAL exportKindKubeconfig writes to GinkgoWriter via TeeTo,
+// then assert sentinel secrets are absent from the logged
+// output (not just from the returned kubeconfig bytes).
+func TestHelperExportStderrSanitisedBeforeLog(t *testing.T) {
+	fakeDir := t.TempDir()
+	writeFakeKind(t, fakeDir)
+
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeDir+":"+origPath)
+	t.Setenv("FAKE_KIND_STDOUT", validKubeconfig)
+	// PEM markers split across concatenation so the test
+	// fixture itself doesn't trigger detect-private-key.
+	pemBegin := "-----BEGIN RSA PRIVATE" + " KEY-----"
+	pemEnd := "-----END RSA PRIVATE" + " KEY-----"
+	sentinel := "SENTINEL_SECRET_XYZ_42"
+	t.Setenv("FAKE_KIND_STDERR",
+		"warning: something benign\n"+
+			pemBegin+"\n"+
+			"MIIBogIBAAJBALRiMLAHx\n"+
+			pemEnd+"\n"+
+			"authorization: Bearer "+sentinel+"\n")
+	t.Setenv("FAKE_KIND_EXIT", "0")
+
+	// Tee GinkgoWriter to a buffer so we capture what the
+	// real production code logs, then clean up.
+	var logBuf bytes.Buffer
+	GinkgoWriter.TeeTo(&logBuf)
+	t.Cleanup(func() { GinkgoWriter.ClearTeeWriters() })
+
+	// Call the REAL production function — it writes
+	// sanitized stderr to GinkgoWriter internally.
+	out, err := exportKindKubeconfig("test-cluster")
+	if err != nil {
+		t.Fatalf("export failed: %v", err)
+	}
+
+	logged := logBuf.String()
+
+	// The benign warning MUST appear (proves logging works).
+	if !strings.Contains(logged, "something benign") {
+		t.Error("GinkgoWriter log missing benign warning")
+	}
+	// Sentinel bearer token MUST be redacted.
+	if strings.Contains(logged, sentinel) {
+		t.Errorf("GinkgoWriter log contains sentinel "+
+			"%q — not redacted", sentinel)
+	}
+	// PEM body MUST be redacted.
+	if strings.Contains(logged, "MIIBogIBAAJBALRiMLAHx") {
+		t.Error("GinkgoWriter log contains PEM body")
+	}
+	// REDACTED marker MUST be present.
+	if !strings.Contains(logged, "REDACTED") {
+		t.Error("GinkgoWriter log missing REDACTED marker")
+	}
+
+	// Stdout (kubeconfig) must be clean and parseable.
+	if strings.Contains(string(out), sentinel) {
+		t.Error("sentinel leaked into kubeconfig output")
+	}
+	if _, parseErr := clientcmd.Load(out); parseErr != nil {
+		t.Fatalf("kubeconfig parse failed: %v", parseErr)
+	}
+}

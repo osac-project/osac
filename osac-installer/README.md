@@ -705,6 +705,16 @@ make uninstall
 
 #### Makefile Targets
 
+For native-Linux multicluster runs, prepare the actual container-engine host
+before running setup or tests:
+
+```bash
+make ensure-inotify  # Native-Linux multicluster host preparation
+```
+
+This prerequisite is separate from the `compute-storage` example in the
+general target list below.
+
 ```bash
 make install       PLATFORM=... PROFILE=... NS=...  # Full install (infra + osac)
 make install-infra PLATFORM=... PROFILE=... NS=...  # Infrastructure only
@@ -719,6 +729,44 @@ make mce-render-test                                  # Verify disabled MCE defa
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)
 ```
+
+#### Multicluster integration tests (Kind, PROFILE=dev)
+
+The `operator-multicluster` test suite creates a second Kind cluster
+and runs the OSAC management stack on the hub cluster.  This suite sets a
+baseline `fs.inotify.max_user_instances` floor of 512 on the native
+Linux host to reliably cover the kubelet, containerd, and workload
+watchers across both clusters.  The guard preserves any higher
+existing value; the setting is temporary (not persisted to
+`/etc/sysctl.d/`) and covers only the `max_user_instances` key.
+
+`make test SUITE=operator-multicluster` raises the limit
+automatically (requires root or passwordless `sudo -n` on
+native Linux) before image builds.  For the two-step local
+flow, run the inotify guard explicitly on the actual Linux
+engine host before creating the hub cluster:
+
+```bash
+# 1. Raise inotify instances on the native Linux host
+#    (idempotent; requires root or passwordless sudo):
+make ensure-inotify
+# 2. Create hub infrastructure:
+make install-infra PLATFORM=kind PROFILE=dev NS=osac
+# 3. Run multicluster tests (creates a second Kind cluster):
+make test PLATFORM=kind PROFILE=dev NS=osac \
+  SUITE=operator-multicluster
+```
+
+CI runs the guard before `install-infra` automatically.
+The `install-infra` target for `PROFILE=dev` does not call the
+guard itself; the explicit `make ensure-inotify` step is required
+before the first cluster when using the two-step flow.
+
+The guard is scoped to native Linux engines (CI Ubuntu with
+Docker, local Linux with Podman).  macOS, remote container
+hosts, and named Podman connections or Docker contexts are not
+supported for automated tuning; prepare the actual Linux engine
+host manually in those cases.
 
 ### Monitor Progress
 

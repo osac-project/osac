@@ -866,5 +866,96 @@ class NetrisOverlayTest(unittest.TestCase):
         self.assertEqual(list(values.values()), ["5s"], values)
 
 
+class MulticlusterOverrideTest(unittest.TestCase):
+    """Regression: operator-multicluster SUITE Helm overrides must
+    pass schema validation and render networking controls (OSAC-6410).
+    """
+
+    @staticmethod
+    def _multicluster_set_args() -> tuple[str, ...]:
+        """Extract --set args from SUITE=operator-multicluster."""
+        import re
+
+        makefile = (INSTALLER / "Makefile").read_text()
+        match = re.search(
+            r"ifeq \(\$\(SUITE\),operator-multicluster\)"
+            r".*?EXTRA_HELM_ARGS=\"([^\"]+)\"",
+            makefile,
+            re.DOTALL,
+        )
+        if not match:
+            raise AssertionError(
+                "operator-multicluster EXTRA_HELM_ARGS "
+                "not found in Makefile"
+            )
+        raw = match.group(1).replace("$(NS)", "osac")
+        return tuple(raw.split())
+
+    def test_overrides_pass_schema(self):
+        result = helm(args=self._multicluster_set_args())
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"operator-multicluster overrides rejected by "
+            f"schema: {result.stderr}",
+        )
+
+    def test_networking_controls_rendered(self):
+        docs = render(args=self._multicluster_set_args())
+        dep = find(docs, "Deployment", "osac-operator")
+        env = container_env(dep, "manager")
+        self.assertEqual(
+            env["OSAC_ENABLE_NETWORKING_CONTROLLER"], "true"
+        )
+        self.assertEqual(
+            env["OSAC_PROVISIONING_ENABLED"], "true"
+        )
+        args = SubchartPlumbingTest.fulfillment_args(docs)
+        self.assertIn(
+            "--networking-provisioning-enabled=true", args
+        )
+
+    def test_overrides_on_dev_kind_profile(self):
+        """Render with actual PLATFORM=kind PROFILE=dev values.
+
+        install-osac always sets global.osacDeploymentId; supply the
+        same stable fixture the Makefile uses for NS=osac.
+        """
+        set_args = self._multicluster_set_args()
+        result = subprocess.run(
+            [
+                HELM,
+                "template",
+                "osac",
+                str(CHART),
+                "--namespace",
+                "osac",
+                "--values",
+                str(INSTALLER / "values/dev/kind-instance.yaml"),
+                "--set-string",
+                "global.osacDeploymentId=osac/osac",
+                *set_args,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            result.returncode, 0, result.stderr
+        )
+        docs = [
+            d
+            for d in yaml.safe_load_all(result.stdout)
+            if d
+        ]
+        dep = find(docs, "Deployment", "osac-operator")
+        env = container_env(dep, "manager")
+        self.assertEqual(
+            env["OSAC_PROVISIONING_ENABLED"], "true"
+        )
+        self.assertEqual(
+            env["OSAC_ENABLE_NETWORKING_CONTROLLER"], "true"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

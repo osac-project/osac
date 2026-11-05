@@ -34,6 +34,136 @@ ensure_podman_pid_limits() {
     done <<< "${nodes}"
 }
 
+# Ensure fs.inotify.max_user_instances is at least 512 for setups that
+# run multiple Kind clusters (e.g. the operator-multicluster test suite).
+# Read the current value; if already >= 512, do nothing and preserve the
+# higher setting.  If below 512, write exactly that one key via sysctl as
+# root or via passwordless sudo (-n), then re-read to verify.
+#
+# Fails actionably BEFORE any Kind cluster side-effects when the host
+# value cannot be read, written, or verified.  Non-Linux hosts and known
+# remote container engines fail with guidance rather than claiming
+# readiness — automated setup is scoped to native Linux (CI Docker,
+# local Podman).
+#
+# Testing: set _INOTIFY_INSTANCES_FILE to a writable temp-file path;
+# the fake sysctl stub writes to it instead of the real procfs entry.
+ensure_inotify_instances() {
+    local floor=512
+    local instances_file="${_INOTIFY_INSTANCES_FILE:-/proc/sys/fs/inotify/max_user_instances}"
+
+    # Non-Linux: the local procfs does not exist; require manual
+    # preparation on the actual Linux engine host (VM, remote).
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        echo "ERROR: inotify tuning requires a native Linux host." >&2
+        echo "Ensure fs.inotify.max_user_instances >= ${floor} on" >&2
+        echo "the actual Linux engine host before creating Kind" >&2
+        echo "clusters.  Temporary: sudo sysctl -w" >&2
+        echo "fs.inotify.max_user_instances=${floor}" >&2
+        return 1
+    fi
+
+    # Fail closed for known remote container engines: the local
+    # procfs does not control the engine host's inotify limit.
+    # Inspect each variable independently — a local unix socket in
+    # one must not mask a remote endpoint in the other.
+    if [[ -n "${CONTAINER_HOST:-}" && "${CONTAINER_HOST}" != unix://* ]]; then
+        echo "ERROR: CONTAINER_HOST indicates a remote" >&2
+        echo "container engine.  Local sysctl cannot tune" >&2
+        echo "the engine host.  Ensure" >&2
+        echo "fs.inotify.max_user_instances >= ${floor}" >&2
+        echo "on the actual engine host." >&2
+        return 1
+    fi
+    if [[ -n "${DOCKER_HOST:-}" && "${DOCKER_HOST}" != unix://* ]]; then
+        echo "ERROR: DOCKER_HOST indicates a remote" >&2
+        echo "container engine.  Local sysctl cannot tune" >&2
+        echo "the engine host.  Ensure" >&2
+        echo "fs.inotify.max_user_instances >= ${floor}" >&2
+        echo "on the actual engine host." >&2
+        return 1
+    fi
+    if [[ -n "${CONTAINER_CONNECTION:-}" ]]; then
+        echo "ERROR: a named Podman connection is active" >&2
+        echo "(CONTAINER_CONNECTION).  Cannot verify the" >&2
+        echo "local inotify setting applies to the engine" >&2
+        echo "host.  Ensure" >&2
+        echo "fs.inotify.max_user_instances >= ${floor}" >&2
+        echo "on the actual engine host." >&2
+        return 1
+    fi
+    if [[ -n "${DOCKER_CONTEXT:-}" ]]; then
+        echo "ERROR: a named Docker context is active" >&2
+        echo "(DOCKER_CONTEXT).  Cannot verify the local" >&2
+        echo "inotify setting applies to the engine host." >&2
+        echo "Ensure fs.inotify.max_user_instances >=" >&2
+        echo "${floor} on the actual engine host." >&2
+        return 1
+    fi
+
+    if [[ ! -f "${instances_file}" ]]; then
+        echo "ERROR: ${instances_file} not found — cannot" >&2
+        echo "verify inotify capacity." >&2
+        return 1
+    fi
+
+    local current
+    if ! current=$(cat "${instances_file}" 2>/dev/null) || \
+       [[ ! "${current}" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: could not read a numeric value from" >&2
+        echo "${instances_file}." >&2
+        return 1
+    fi
+
+    if (( 10#${current} >= floor )); then
+        echo "ensure_inotify_instances: current ${current}" >&2
+        echo ">= ${floor}, no change needed" >&2
+        return 0
+    fi
+
+    echo "ensure_inotify_instances: current ${current}" >&2
+    echo "< ${floor}, raising to ${floor}" >&2
+
+    if [[ "$(id -u)" == "0" ]]; then
+        if ! sysctl -w "fs.inotify.max_user_instances=${floor}" \
+             >/dev/null 2>&1; then
+            echo "ERROR: sysctl -w" >&2
+            echo "fs.inotify.max_user_instances=${floor}" >&2
+            echo "failed." >&2
+            return 1
+        fi
+    else
+        if ! sudo -n sysctl -w \
+             "fs.inotify.max_user_instances=${floor}" \
+             >/dev/null 2>&1; then
+            echo "ERROR: could not raise" >&2
+            echo "fs.inotify.max_user_instances to ${floor}" >&2
+            echo "(passwordless sudo required)." >&2
+            echo "Fix: sudo sysctl -w" >&2
+            echo "fs.inotify.max_user_instances=${floor}" >&2
+            return 1
+        fi
+    fi
+
+    local verified
+    if ! verified=$(cat "${instances_file}" 2>/dev/null) || \
+       [[ ! "${verified}" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: could not verify" >&2
+        echo "fs.inotify.max_user_instances after write." >&2
+        return 1
+    fi
+    if (( 10#${verified} < floor )); then
+        echo "ERROR: fs.inotify.max_user_instances is" >&2
+        echo "${verified} after write, expected" >&2
+        echo ">= ${floor}." >&2
+        return 1
+    fi
+
+    echo "ensure_inotify_instances: verified ${verified}" >&2
+    echo ">= ${floor}" >&2
+    return 0
+}
+
 # Validate the Kubernetes Secret metadata.name and data key used for the
 # remote-cluster kubeconfig before either value reaches a command or manifest.
 validate_remote_kubeconfig_secret() {

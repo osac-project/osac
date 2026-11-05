@@ -343,6 +343,14 @@ that namespace earlier to store the AAP license secret, so pass
 chart skips this namespace resource, so this particular ownership reason does
 not apply.
 
+Before Phase 1b on OpenShift, set `keycloak.uiUrl` in the values file passed to
+this command to the bundled OSAC UI's HTTPS Route URL on this cluster. For the
+default `osac` namespace, the URL is
+`https://osac-ui-osac.<cluster-ingress-domain>`. In a separate-workload layout,
+use the management cluster's ingress domain. Keep this value aligned with
+`ui.externalHostname` if you customize the UI Route. See
+[Keycloak osac-ui redirect URIs](#keycloak-osac-ui-redirect-uris).
+
 ```bash
 helm upgrade --install osac-infra ./charts/osac-infra \
     -n osac-infra --create-namespace \
@@ -366,6 +374,15 @@ supports the cluster's Kubernetes version; see the
 Helm 3.17.0 is the minimum version required for `--take-ownership` and for
 installing a chart pinned by content digest (`oci://...@sha256:...`).
 
+Before running the Phase 2 command, when the web console is enabled (the
+default), set `ui.auth.oidcIssuerURL` in `my-values.yaml` to the same fully
+resolved URL as `service.auth.issuerUrl`. The UI chart requires this explicit
+URL; it does not inherit the service value or expand templates. For bundled
+Keycloak, use `https://keycloak-keycloak.<cluster-domain>/realms/osac`,
+replacing `<cluster-domain>` with the actual cluster domain. For external
+Keycloak, use the realm issuer URL configured in `service.auth.issuerUrl`. See
+the [customer install guide](customer-install-guide.md#42-configuring-the-helm-values).
+
 ```bash
 helm dependency update ./charts/osac
 helm upgrade --install osac ./charts/osac \
@@ -376,15 +393,6 @@ helm upgrade --install osac ./charts/osac \
     --set service.internalHostname="fulfillment-internal-api-$NS.$DOMAIN" \
     --wait --timeout 40m
 ```
-
-When the web console is enabled (the default), set `ui.auth.oidcIssuerURL`
-in `my-values.yaml` to the same fully resolved URL as
-`service.auth.issuerUrl`. The UI chart requires this explicit URL; it
-does not inherit the service value or expand templates. For bundled Keycloak,
-use `https://keycloak-keycloak.<cluster-domain>/realms/osac`, replacing
-`<cluster-domain>` with the actual cluster domain. For external Keycloak, use
-the realm issuer URL configured in `service.auth.issuerUrl`. See the
-[customer install guide](customer-install-guide.md#42-configuring-the-helm-values).
 
 On Helm 4, every later upgrade of the `osac` release, including
 `helm upgrade --install`, must include `--force-conflicts`. After installation,
@@ -648,11 +656,27 @@ LVMS channel:
 
 ```bash
 export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
+export DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
+```
+
+Create the AAP license Secret on the management cluster as well. Set
+`AAP_LICENSE_FILE` to the local path of the license file if needed, then run:
+
+```bash
+oc create namespace "$NS" --dry-run=client -o yaml | oc apply -f -
+oc create secret generic config-as-code-manifest-ig \
+    --from-file=license.zip="$AAP_LICENSE_FILE" -n "$NS" \
+    --dry-run=client -o yaml | oc apply --server-side -f -
+oc label secret config-as-code-manifest-ig \
+    osac.openshift.io/project=osac-aap -n "$NS" --overwrite
 ```
 
 Create a separate `my-management-infra-values.yaml` for its prerequisites.
 Keep the certificate stack enabled and OpenShift Virtualization and EVPN
-disabled:
+disabled. Set `keycloak.uiUrl` in this file to the management cluster's actual
+UI Route URL before Phase 1b. With `NS=osac`, its default host is
+`osac-ui-osac.<DOMAIN>`; replace `<DOMAIN>` with the value from the command
+above:
 
 ```yaml
 certManager:
@@ -665,6 +689,8 @@ cnv:
   enabled: false
 evpn:
   enabled: false
+keycloak:
+  uiUrl: https://osac-ui-osac.apps.example.com
 ```
 
 Run phase 1a and phase 1b, replacing `-f my-infra-values.yaml` with

@@ -98,10 +98,10 @@ must be ready before you install OSAC. See [Section 2](#2-prerequisites).
 The OSAC platform chart is published as an OCI artifact at
 `oci://ghcr.io/osac-project/charts/osac`. Find the latest umbrella version on
 the [OSAC releases page](https://github.com/osac-project/osac/releases) by
-selecting a release with an `osac-release/v<VERSION>` tag. The repository also lists
-individual component releases, such as `osac-operator`; use the `osac-release/v`
-tag prefix to identify the umbrella chart. If its release page is not yet
-available, select the matching `osac-release/v<VERSION>` tag from the
+selecting a release with an `osac/v<VERSION>` tag. The repository also lists
+individual component releases, such as `osac-operator`; use the `osac/v` tag
+prefix to identify the umbrella chart. If its release page is not yet
+available, select the matching `osac/v<VERSION>` tag from the
 [OSAC tags page](https://github.com/osac-project/osac/tags), then confirm
 that the chart is available in OCI using `helm show chart` as described in
 [Section 3](#3-osac-component-versions).
@@ -1382,6 +1382,7 @@ subchart's own `values.yaml` file.
 | `operator.replicaCount`, `operator.resources.*` | schema | Operator sizing. |
 | `operator.aap.url`, `operator.aap.token`, `operator.aap.insecureSkipVerify`, `operator.aap.statusPollInterval`, `operator.aap.templatePrefix` | schema | How the Operator reaches AAP. Set `insecureSkipVerify: "true"` for self-signed AAP routes. |
 | `operator.fulfillment.serverAddress` | schema | Fulfillment gRPC endpoint. When configured, the Operator uses it to verify the saved installation networking setting before reconciliation; it can be empty for standalone runs. |
+| `operator.fulfillment.tls.caBundle.configMap` | schema | ConfigMap with the PEM bundle used by the Operator's Fulfillment TLS client. Keep this name aligned with `service.certs.caBundle.configMap` when using a custom bundle name. The default is `ca-bundle`; the key defaults to `bundle.pem`. |
 | `operator.fulfillment.credentials.secretName`, `clientIdKey`, `clientSecretKey` | schema | Name and keys of the Kubernetes Secret holding the `osac-controller` Keycloak service-account credentials. Provide this Secret before installation; the OSAC chart only references it. |
 | `operator.controllers.tenant`, `operator.controllers.networking`, `operator.controllers.storage` | schema | Enable or disable individual reconcilers. Which services run is driven by `global.services.*`. |
 | `operator.controllers.volume` | subchart | Enables the Volume reconciler. |
@@ -1445,13 +1446,13 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `service.variant` | `openshift` or `kind`. Use `openshift`. |
 | `service.images.service`, `service.images.envoy` | Fulfillment Service and Envoy sidecar images. |
 | `service.certs.issuerRef.kind`, `service.certs.issuerRef.name` | cert-manager issuer for the service certificates. |
-| `service.certs.caBundle.configMap` | Existing CA-bundle `ConfigMap` mounted by the OSAC hooks. It must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap. For OSAC-managed trust, match `certs.caBundle.configMap` in the phase-1 `osac-infra` values; both default to `ca-bundle`. Set this to the existing ConfigMap name in the OSAC release namespace; see step 4 of [Section 7](#7-verifying-the-installation). |
+| `service.certs.caBundle.configMap` | Existing CA-bundle `ConfigMap` mounted by the OSAC hooks. It must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap. All four component values default to `ca-bundle`; when using a custom name, set `operator.fulfillment.tls.caBundle.configMap`, `ui.api.fulfillment.certs.caBundle.configMap`, and `ui.auth.certs.caBundle.configMap` to the same name. For OSAC-managed trust, also match `certs.caBundle.configMap` in the phase-1 `osac-infra` values. Set this to the existing ConfigMap name in the OSAC release namespace; see step 4 of [Section 7](#7-verifying-the-installation). |
 | `service.auth.issuerUrl` | OIDC issuer. Templated from `global.clusterDomain` by default. |
 | `service.auth.controllerCredentials[]` | Volume sources for the controller OIDC client credentials. |
 | `service.idp.provider`, `service.idp.url`, `service.idp.credentials[]` | Identity provider for user and role management. Only `keycloak` is supported. |
 | `service.database.connection[]` | Volume sources for the database URL and client certificate, for example `osac-db-config` and `osac-db-client-cert`. |
 | `service.log.level`, `service.log.headers`, `service.log.bodies` | Log verbosity. Keep `headers` and `bodies` set to `false` in production. |
-| `service.vault.endpoint` | Vault-compatible API URL. Set it to your existing Vault or OpenBao URL; the Fulfillment chart requires a nonempty endpoint. See the [secrets management configuration guide](secrets-management-configuration.md). |
+| `service.vault.endpoint` | Vault-compatible API URL. Leave it empty to disable Vault integration. Production deployments using Vault or OpenBao must set it to the reachable endpoint. See the [secrets management configuration guide](secrets-management-configuration.md). |
 | `service.vault.namespace`, `service.vault.kvMountPath`, `service.vault.lifecycleRole`, `service.vault.lifecycleMountPath`, `service.vault.keycloakClientId`, `service.vault.keycloakIssuerUrl`, `service.vault.keycloakAudience`, `service.vault.caBundle`, `service.vault.credentials` | Vault namespace, mount paths, JWT role, Keycloak client and audience, CA bundle, and client credentials. Configure these for an external store as described in the [secrets management configuration guide](secrets-management-configuration.md). |
 
 **Table 5.5. AAP (`aap.*`, all `schema`)**
@@ -1482,6 +1483,7 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `ui.enabled` | schema | Deploys the OSAC web console. | `true` |
 | `ui.externalHostname` | schema | Route host name. Auto-assigned from `global.clusterDomain` if empty. | `""` |
 | `ui.api.fulfillment.url` | schema | Fulfillment API that the web console calls. | Internal URL |
+| `ui.api.fulfillment.certs.caBundle.configMap`, `ui.auth.certs.caBundle.configMap` | schema | CA-bundle ConfigMaps for the web console's Fulfillment API and authentication TLS clients. Set both to match `service.certs.caBundle.configMap` when using a custom name. | `ca-bundle` |
 | `ui.auth.oidcClientId` | schema | OIDC client ID for the web console. | `osac-ui` |
 | `ui.auth.oidcIssuerURL` | schema | Required when the web console is enabled. Set explicitly to the fully resolved `service.auth.issuerUrl`; templates are not expanded. | `""` |
 | `ui.images.ui` | schema | Web console image. | Release tag |
@@ -1918,6 +1920,19 @@ Create the workload kubeconfig Secret on the management cluster, including
 the console-proxy label, as described in
 [VMaaS dedicated cluster](https://github.com/osac-project/osac/blob/main/osac-operator/docs/vmaas-dedicated-cluster/README.md).
 
+The `kubevirt-crds` install preflight checks the cluster where Helm runs, which
+is the management cluster. After OpenShift Virtualization is installed on the
+workload cluster, point `KUBECONFIG` at that cluster and verify the CRD checked
+by the preflight:
+
+```console
+oc get crd kubevirts.kubevirt.io
+```
+
+Keep `cnv.enabled: false` on the management cluster. In the phase-2
+`my-values.yaml`, skip only this preflight check and give the verified reason;
+the remaining preflight checks stay enabled.
+
 Start with the VMaaS values from [Section 6.1](#61-installing-osac-for-vmaas),
 including the storage registration and networking settings. Select storage
 based on the workload cluster, and put its values in `my-values.yaml` on the
@@ -1952,16 +1967,33 @@ aap:
   configAsCode:
     remoteClusterKubeconfigSecretName: osac-remote-kubeconfig
     remoteClusterKubeconfigSecretKey: kubeconfig
+preflight:
+  skip:
+    kubevirt-crds: "OpenShift Virtualization CRD verified on workload cluster"
 ```
 
 `remoteClusterKubeconfig` is the path inside the operator container. The
 Secret name and key must match the Secret on the management cluster. The
 chart default key is `kubeconfig`.
 
+Before installing OSAC, point `KUBECONFIG` back to the management cluster and
+confirm that the active API server is its endpoint. The Phase 2 Helm command
+uses the active cluster context:
+
+```console
+export KUBECONFIG=/path/to/management-kubeconfig
+oc whoami --show-server
+```
+
+Confirm that the server shown is the management cluster. Run the OSAC and
+preflight checks in [Section 7](#7-verifying-the-installation) on that cluster.
+For VMaaS, check the OpenShift Virtualization CSV from Section 7 on the
+workload cluster. Check the LVM Storage and MetalLB CSVs on whichever cluster
+hosts those providers.
+
 Install OSAC on the management cluster. See
-[Section 4.3](#43-installing-osac). Complete
-[Section 7](#7-verifying-the-installation) there, and confirm that the
-virtual machine is created on the workload cluster.
+[Section 4.3](#43-installing-osac). Confirm that the virtual machine is created
+on the workload cluster.
 
 ---
 

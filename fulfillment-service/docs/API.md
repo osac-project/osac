@@ -889,6 +889,10 @@ example, cluster templates, catalog items, host types, instance types, IP pools,
 Public responses retain the reference field for system-tenant objects but omit its `id`, `name`,
 `project`, `tenant`, and `shared` values.
 
+New ExternalIPPools live in the `shared` tenant. For a name reference to one, set `tenant: "shared"`
+(or the legacy `shared: true`); an ID reference to a shared pool may omit both selectors. Existing
+tenant-owned pools remain resolvable in their owner's tenant.
+
 ### Local references
 
 Local references are scoped to the same tenant and project as the parent object. They have only

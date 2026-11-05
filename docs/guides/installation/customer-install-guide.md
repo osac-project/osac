@@ -109,7 +109,7 @@ that the chart is available in OCI using `helm show chart` as described in
 An umbrella release's `osac-release/v<VERSION>` tag and matching
 `osac/v<VERSION>` source tag point to the same commit. The source checkout
 and download commands below use `osac/v`; nightly source tags also use this
-prefix. This guide targets the final OSAC `0.4.0` release.
+prefix. This guide targets the OSAC `0.4.0` release.
 
 For evaluation builds, check the
 [OSAC Nightly Build workflow](https://github.com/osac-project/osac/actions/workflows/nightly-build.yaml)

@@ -243,19 +243,15 @@ func (s *BareMetalInstanceCatalogItemsServer) Update(ctx context.Context,
 		return nil, publicInputMappingError(err, "failed to process bare metal instance catalog item")
 	}
 
-	if request.GetUpdateMask() == nil {
-		// GenericServer restores the stored finalizers for public updates. This block also copies the stored
-		// name, labels and annotations, read under the row lock, when the request has no metadata.
+	if request.GetUpdateMask() == nil && privateCatalogItem.GetMetadata() == nil {
+		// GenericServer restores the stored finalizers for public updates, but a nil-mask update without
+		// request metadata would still clear the stored name, labels and annotations, so copy the metadata
+		// read under the row lock.
 		current, err := getLockedReferenceResource(ctx, s.delegate.generic.dao, id)
 		if err != nil {
 			return nil, resourceLookupError(err, "catalog item", id, "", grpccodes.NotFound)
 		}
-		metadata := cloneMessage(current.GetMetadata())
-		if privateCatalogItem.GetMetadata() == nil {
-			privateCatalogItem.SetMetadata(metadata)
-		} else {
-			privateCatalogItem.GetMetadata().SetFinalizers(metadata.GetFinalizers())
-		}
+		privateCatalogItem.SetMetadata(cloneMessage(current.GetMetadata()))
 	}
 
 	privateRequest := &privatev1.BareMetalInstanceCatalogItemsUpdateRequest{}

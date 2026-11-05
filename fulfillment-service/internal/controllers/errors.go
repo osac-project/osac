@@ -65,8 +65,9 @@ func ClassifyHubError(err error) error {
 }
 
 // IsConflict reports whether err is, or contains, an optimistic-concurrency conflict reported by the server as a gRPC
-// Aborted status. The whole error tree is searched, including errors joined with others, because grpcstatus.Code only
-// looks at the first status it finds and would miss a conflict combined with another failure.
+// Aborted status. The whole error tree is searched, including errors joined with others, because grpcstatus.Code
+// stops at the first gRPC status it finds and would miss a conflict joined behind a failure that carries another
+// status, such as an Unavailable from the hub.
 func IsConflict(err error) bool {
 	found, _ := scanConflicts(err)
 	return found

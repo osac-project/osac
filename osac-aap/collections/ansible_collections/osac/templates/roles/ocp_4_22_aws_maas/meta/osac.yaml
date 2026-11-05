@@ -1,5 +1,5 @@
 ---
-name: ocp-4-22-aws-gpu-maas
+name: ocp-4-22-aws-maas
 title: OpenShift AI Cluster on AWS with GPU Workers (RHOAI 3.5 GA)
 description: >
   Builds an OpenShift 4.22 hosted cluster with AWS GPU worker nodes and
@@ -8,7 +8,7 @@ description: >
   Supports 0..n tenants. No Keycloak — identity via external OIDC issuer
   (optional) plus K8s ServiceAccount/TokenReview.
 template_type: cluster
-implementation_strategy: ocp_4_22_aws_gpu_maas
+implementation_strategy: ocp_4_22_aws_maas
 
 spec_defaults:
   version_name: "4.22.0"

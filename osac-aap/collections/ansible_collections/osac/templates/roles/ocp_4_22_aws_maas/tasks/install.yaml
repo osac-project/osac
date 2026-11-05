@@ -6,13 +6,13 @@
 
 - name: Bridge templateParameters to role variables
   ansible.builtin.set_fact:
-    ocp_4_22_aws_gpu_maas_aws_region: "{{ template_parameters.aws_region | default('us-east-1') }}"
-    ocp_4_22_aws_gpu_maas_aws_instance_type: "{{ template_parameters.aws_instance_type | default('g5.xlarge') }}"
-    ocp_4_22_aws_gpu_maas_aws_worker_count: "{{ template_parameters.aws_worker_count | default(2) | int }}"
-    ocp_4_22_aws_gpu_maas_aws_root_volume_size: "{{ template_parameters.aws_root_volume_size | default(120) | int }}"
-    ocp_4_22_aws_gpu_maas_aws_root_volume_type: "{{ template_parameters.aws_root_volume_type | default('gp3') }}"
-    ocp_4_22_aws_gpu_maas_aws_subnet_id: "{{ template_parameters.aws_subnet_id | default('') }}"
-    ocp_4_22_aws_gpu_maas_aws_security_group_id: "{{ template_parameters.aws_security_group_id | default('') }}"
+    ocp_4_22_aws_maas_aws_region: "{{ template_parameters.aws_region | default('us-east-1') }}"
+    ocp_4_22_aws_maas_aws_instance_type: "{{ template_parameters.aws_instance_type | default('g5.xlarge') }}"
+    ocp_4_22_aws_maas_aws_worker_count: "{{ template_parameters.aws_worker_count | default(2) | int }}"
+    ocp_4_22_aws_maas_aws_root_volume_size: "{{ template_parameters.aws_root_volume_size | default(120) | int }}"
+    ocp_4_22_aws_maas_aws_root_volume_type: "{{ template_parameters.aws_root_volume_type | default('gp3') }}"
+    ocp_4_22_aws_maas_aws_subnet_id: "{{ template_parameters.aws_subnet_id | default('') }}"
+    ocp_4_22_aws_maas_aws_security_group_id: "{{ template_parameters.aws_security_group_id | default('') }}"
     ocp_4_20_ai_maas_enable_maas: "{{ template_parameters.enable_maas | default(true) | bool }}"
     ocp_4_20_ai_maas_oidc_issuer: "{{ template_parameters.oidc_issuer | default('') }}"
     ocp_4_20_ai_maas_oidc_client_id: "{{ template_parameters.oidc_client_id | default('') }}"
@@ -31,7 +31,7 @@
     tasks_from: install
   vars:
     install_step_hosted_cluster_override:
-      name: osac.templates.ocp_4_22_aws_gpu_maas
+      name: osac.templates.ocp_4_22_aws_maas
       tasks_from: create_aws_hosted_cluster.yaml
     install_step_post_install_hook_override:
       name: osac.templates.ocp_4_20_ai_maas

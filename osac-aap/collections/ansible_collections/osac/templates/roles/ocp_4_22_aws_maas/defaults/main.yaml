@@ -1,16 +1,16 @@
 ---
-# ocp_4_22_aws_gpu_maas — RHOAI 3.5 GA on OpenShift 4.22.x with AWS GPU workers
+# ocp_4_22_aws_maas — RHOAI 3.5 GA on OpenShift 4.22.x with AWS GPU workers
 # Multi-tenant (0..n) MaaS. No Keycloak: identity via external OIDC issuer
 # (optional, wired onto AITenant.spec.oidc) + K8s ServiceAccount/TokenReview.
 
 # --- AWS GPU Worker Configuration ---
-ocp_4_22_aws_gpu_maas_aws_region: us-east-1
-ocp_4_22_aws_gpu_maas_aws_instance_type: g5.xlarge
-ocp_4_22_aws_gpu_maas_aws_worker_count: 2
-ocp_4_22_aws_gpu_maas_aws_root_volume_size: 120
-ocp_4_22_aws_gpu_maas_aws_root_volume_type: gp3
-ocp_4_22_aws_gpu_maas_aws_subnet_id: ""
-ocp_4_22_aws_gpu_maas_aws_security_group_id: ""
+ocp_4_22_aws_maas_aws_region: us-east-1
+ocp_4_22_aws_maas_aws_instance_type: g5.xlarge
+ocp_4_22_aws_maas_aws_worker_count: 2
+ocp_4_22_aws_maas_aws_root_volume_size: 120
+ocp_4_22_aws_maas_aws_root_volume_type: gp3
+ocp_4_22_aws_maas_aws_subnet_id: ""
+ocp_4_22_aws_maas_aws_security_group_id: ""
 #
 # PARAMETER CONTRACT: every var below is settable on the LOCAL path (-e /
 # playbook_osac_create_maas_deployment.yml) and validated by meta/argument_specs.yaml

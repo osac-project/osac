@@ -775,11 +775,13 @@ You create one values file for the `osac` chart, `my-values.yaml`.
    ```
 
 2. Create `my-values.yaml` for the `osac` chart. Copy the keys you need from
-   `$OSAC_CHART_DIR/osac/values-example.yaml`, which describes a production
-   setup with an external PostgreSQL database, an external Keycloak, and pinned
-   image tags. Leave out `dbMigrate.dbUrl`, which the chart schema rejects. Set
-   `global.osacDeploymentId` to a stable identity for this deployment; the
-   install fails without it.
+   `$OSAC_CHART_DIR/osac/values-example.yaml`, which demonstrates external
+   PostgreSQL and Keycloak settings but uses development `latest` image tags.
+   For production, omit its image blocks so the selected chart's pinned image
+   defaults apply. If you need image overrides, use the pinned values from
+   `values-upstream.yaml`. Leave out `dbMigrate.dbUrl`, which the chart schema
+   rejects. Set `global.osacDeploymentId` to a stable identity for this
+   deployment; the install fails without it.
    For production, set `dbInit.host` in this file to the reachable hostname
    of the external PostgreSQL server prepared in
    [Section 4.1](#41-preparing-the-cluster):
@@ -1465,7 +1467,7 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `service.variant` | `openshift` or `kind`. Use `openshift`. |
 | `service.images.service`, `service.images.envoy` | Fulfillment Service and Envoy sidecar images. |
 | `service.certs.issuerRef.kind`, `service.certs.issuerRef.name` | cert-manager issuer for the service certificates. |
-| `service.certs.caBundle.configMap` | Existing CA-bundle `ConfigMap` mounted by the OSAC hooks. It must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap. All four component values default to `ca-bundle`; when using a custom name, set `operator.fulfillment.tls.caBundle.configMap`, `ui.api.fulfillment.certs.caBundle.configMap`, and `ui.auth.certs.caBundle.configMap` to the same name. For OSAC-managed trust, also match `certs.caBundle.configMap` in the phase-1 `osac-infra` values. Set this to the existing ConfigMap name in the OSAC release namespace; see step 4 of [Section 7](#7-verifying-the-installation). |
+| `service.certs.caBundle.configMap` | Existing CA-bundle `ConfigMap` mounted by the OSAC hooks. It must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap. The shared CA-bundle ConfigMap values default to `ca-bundle`; when using a custom name, set `operator.fulfillment.tls.caBundle.configMap`, `ui.api.fulfillment.certs.caBundle.configMap`, and `ui.auth.certs.caBundle.configMap` to the same name. If BMaaS is enabled, also set `bmf.secretAPI.caBundle.configMap` to that name. For OSAC-managed trust, also match `certs.caBundle.configMap` in the phase-1 `osac-infra` values. Set this to the existing ConfigMap name in the OSAC release namespace; see step 4 of [Section 7](#7-verifying-the-installation). |
 | `service.auth.issuerUrl` | OIDC issuer. Templated from `global.clusterDomain` by default. |
 | `service.auth.controllerCredentials[]` | Volume sources for the controller OIDC client credentials. |
 | `service.idp.provider`, `service.idp.url`, `service.idp.credentials[]` | Identity provider for user and role management. Only `keycloak` is supported. |

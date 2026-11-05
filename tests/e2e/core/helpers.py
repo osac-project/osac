@@ -823,6 +823,7 @@ def _agent_install_progress(agent: dict[str, Any]) -> str:
 
 
 def _agent_installed(agent: dict[str, Any]) -> bool:
+    """Whether the Agent reports an Installed condition with status True."""
     return any(
         condition.get("type") == "Installed" and condition.get("status") == "True"
         for condition in agent.get("status", {}).get("conditions", [])
@@ -938,6 +939,7 @@ def _condition_status(resource: dict[str, Any], condition_type: str) -> str:
 
 
 def _condition(resource: dict[str, Any], condition_type: str) -> dict[str, Any]:
+    """The condition of one type, or an empty dict when it is not carried."""
     conditions = resource.get("status", {}).get("conditions", [])
     return next((condition for condition in conditions if condition.get("type") == condition_type), {})
 
@@ -974,6 +976,7 @@ def node_pool_ready(node_pool: dict[str, Any], *, expected_ready_nodes: int) -> 
 
 
 def _worker_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The Nodes carrying the worker role label, which the pool must fill."""
     return [node for node in nodes if "node-role.kubernetes.io/worker" in node.get("metadata", {}).get("labels", {})]
 
 
@@ -1051,10 +1054,13 @@ def wait_for_workload_node_provider_ids(*, k8s: K8sClient, cluster_name: str, ex
     ClusterOperators are still settling.
     """
     observed: dict[str, str] = {}
+    nodes_read = False
     logger.info("CaaS phase: waiting for worker provider IDs")
 
     def _check() -> bool:
+        nonlocal nodes_read
         nodes = k8s.list_json(resource="nodes").get("items", [])
+        nodes_read = True
         observed.clear()
         observed.update(workload_cluster_provider_ids(nodes=nodes))
         return workload_cluster_provider_ids_assigned(nodes=nodes, expected_workers=expected_workers)
@@ -1070,7 +1076,12 @@ def wait_for_workload_node_provider_ids(*, k8s: K8sClient, cluster_name: str, ex
             resource_kind=WaitResourceKind.CLUSTER,
             resource_id=cluster_name,
         )
-    except TimeoutError:
+    except TimeoutError as timeout:
+        if not nodes_read:
+            # An empty summary can also be a healthy read of zero workers, so it
+            # cannot say why nothing was seen. A read that never completed can:
+            # the StuckState message ends with the sanitized last read failure.
+            raise AssertionError(f"guest cluster Nodes were never readable ({timeout})") from None
         missing = sorted(name for name, provider_id in observed.items() if not provider_id)
         raise AssertionError(
             f"guest cluster workers do not carry an '{_AGENT_PROVIDER_ID_PREFIX}' provider ID: "
@@ -1082,6 +1093,7 @@ def wait_for_workload_node_provider_ids(*, k8s: K8sClient, cluster_name: str, ex
 
 
 def _provider_id_summary(observed: dict[str, str]) -> str:
+    """One name=provider-ID pair per worker, sorted by node name."""
     return ", ".join(f"{name}={provider_id}" for name, provider_id in sorted(observed.items()))
 
 
@@ -1103,6 +1115,7 @@ def wait_for_hosted_cluster_reference(*, k8s: K8sClient, co_name: str) -> tuple[
 
 
 def _version_conditions(resource: dict[str, Any], expected: dict[str, str]) -> dict[str, str]:
+    """The observed statuses of the expected version conditions, per type."""
     return {condition_type: _condition_status(resource, condition_type) for condition_type in expected}
 
 
@@ -1119,6 +1132,7 @@ def hosted_control_plane_version_conditions(hosted_control_plane: dict[str, Any]
 def hosted_cluster_version_conditions_settled(
     hosted_cluster: dict[str, Any], hosted_control_plane: dict[str, Any]
 ) -> bool:
+    """Whether both resources' version conditions match the expected set."""
     return (
         hosted_cluster_version_conditions(hosted_cluster) == _HOSTED_CLUSTER_VERSION_CONDITIONS
         and hosted_control_plane_version_conditions(hosted_control_plane) == _HOSTED_CONTROL_PLANE_VERSION_CONDITIONS

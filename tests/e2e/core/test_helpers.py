@@ -15,7 +15,11 @@ from tests.e2e.core.wait_kinds import WaitResourceKind
 
 _AGENT_PROVIDER_ID = "agent://osac-order-agent/6b0b0c1e-0000-4000-8000-000000000000"
 # A credential an operator could echo back in the message of a failed condition.
-_QUOTED_CREDENTIAL = "Bearer eyJhbGciOiJIUzI1NiJ9.c2VjcmV0LXZhbHVl.c2lnbmF0dXJl"
+# Built at runtime from non-secret fragments, like FAKE_JWT in
+# tests/unit/test_e2e_failure_plugin.py, so no recognizable bearer token is
+# committed for scanners and reviewers to chase: it decodes to nothing, and
+# sanitize_text still has a quoted credential to redact.
+_FAKE_QUOTED_CREDENTIAL = "Bearer " + ".".join(["eyJ" + "a" * 20, "eyJ" + "b" * 20, "c" * 20])
 _REDACTED_CREDENTIAL = "Bearer <redacted>"
 
 
@@ -353,6 +357,24 @@ def test_wait_for_workload_node_provider_ids_reports_the_unbound_node(monkeypatc
         helpers.wait_for_workload_node_provider_ids(k8s=k8s, cluster_name="guest-cluster", expected_workers=2)
 
 
+def test_wait_for_workload_node_provider_ids_reports_why_nodes_were_unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
+    k8s = Mock()
+    k8s.list_json.side_effect = runner.CommandFailed(
+        returncode=1, cmd=["kubectl", "get", "nodes"], stderr="connection refused"
+    )
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(AssertionError) as failure:
+        helpers.wait_for_workload_node_provider_ids(k8s=k8s, cluster_name="guest-cluster", expected_workers=1)
+
+    # A read that never completed is not a cluster with no workers: the failure
+    # says the Nodes were unreadable and why, through the StuckState message.
+    message = str(failure.value)
+    assert "guest cluster Nodes were never readable" in message
+    assert "last call failed: CommandFailed: kubectl get nodes exited 1: connection refused" in message
+    assert "saw 0 worker node(s)" not in message
+
+
 def test_workload_cluster_health_checks_provider_ids_before_operators(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
 
@@ -522,7 +544,7 @@ def test_wait_for_workload_cluster_health_names_the_operator_it_saw(monkeypatch:
 def test_wait_for_workload_cluster_health_reports_why_nothing_was_readable(monkeypatch: pytest.MonkeyPatch) -> None:
     k8s = Mock()
     k8s.list_json.side_effect = runner.CommandFailed(
-        returncode=1, cmd=["kubectl", "get", "nodes"], stderr=f"connection refused after {_QUOTED_CREDENTIAL}"
+        returncode=1, cmd=["kubectl", "get", "nodes"], stderr=f"connection refused after {_FAKE_QUOTED_CREDENTIAL}"
     )
     monkeypatch.setattr(helpers, "wait_for_workload_node_provider_ids", lambda **_kwargs: None)
     monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
@@ -536,7 +558,7 @@ def test_wait_for_workload_cluster_health_reports_why_nothing_was_readable(monke
     assert "no Nodes or ClusterOperators were readable" in message
     assert "last call failed: CommandFailed: kubectl get nodes exited 1: " in message
     assert f"connection refused after {_REDACTED_CREDENTIAL}" in message
-    assert _QUOTED_CREDENTIAL not in message
+    assert _FAKE_QUOTED_CREDENTIAL not in message
 
 
 def test_guest_health_has_at_most_fifteen_minutes_of_scheduled_waits() -> None:
@@ -792,7 +814,7 @@ def test_wait_for_worker_aggregates_scrubs_a_credential_in_the_order_phase(
             "desiredWorkers": 1,
             "currentWorkers": 1,
             "readyWorkers": 1,
-            "conditions": [{"type": "Progressing", "status": "True", "reason": f"Retrying {_QUOTED_CREDENTIAL}"}],
+            "conditions": [{"type": "Progressing", "status": "True", "reason": f"Retrying {_FAKE_QUOTED_CREDENTIAL}"}],
         }
     }
     k8s = Mock()
@@ -851,7 +873,7 @@ def test_workload_cluster_unhealthy_scrubs_a_credential_the_operator_quotes() ->
                         "type": "Degraded",
                         "status": "True",
                         "reason": "CanaryChecksSucceeding",
-                        "message": f"The canary route check failed: 503 after {_QUOTED_CREDENTIAL}",
+                        "message": f"The canary route check failed: 503 after {_FAKE_QUOTED_CREDENTIAL}",
                     },
                 ]
             },
@@ -864,5 +886,5 @@ def test_workload_cluster_unhealthy_scrubs_a_credential_the_operator_quotes() ->
 
     # The message reaches the log and the failure it raises, so the credential
     # quoted in it must not.
-    assert _QUOTED_CREDENTIAL not in problems[0]
+    assert _FAKE_QUOTED_CREDENTIAL not in problems[0]
     assert _REDACTED_CREDENTIAL in problems[0]

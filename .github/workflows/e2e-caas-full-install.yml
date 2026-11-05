@@ -49,6 +49,13 @@ on:
         required: false
         type: boolean
         default: false
+    secrets:
+      # Passed by a caller (the merge queue, for its ci-observe capture).
+      # Empty when the workflow runs on its own schedule; a run without the
+      # password still passes, it just leaves no telemetry.
+      CI_OBSERVE_OTLP_PASSWORD:
+        description: The central ci-observe OTLP ingest password, used by the live telemetry push when ci-observe is on
+        required: false
   # 5x/day. Offset 38 minutes past the hour, not on the hour -- GitHub
   # Actions' shared cron scheduler queues everyone's on-the-hour
   # schedules together and can delay/drop them under load.

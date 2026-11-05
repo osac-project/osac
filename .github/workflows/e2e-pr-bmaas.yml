@@ -107,3 +107,7 @@ jobs:
       fork-pr-author: ${{ needs.verify.outputs.fork-author }}
       fork-pr-author-association: ${{ needs.verify.outputs.fork-association }}
       ci-observe: ${{ needs.labels.outputs.ci-observe == 'true' }}
+    secrets:
+      # Read only when ci-observe is on: without the label the run captures nothing and the password is unused. Without
+      # it a labelled run would pass but leave no telemetry (see the capture action in osac-test-infra).
+      CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}

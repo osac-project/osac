@@ -149,13 +149,13 @@ func (r *Reconciler) buildBMICreateRequest(
 	var instanceType *privatev1.BareMetalInstanceTypeReference
 	if nodeSet.BareMetal.InstanceType != "" {
 		instanceType = privatev1.BareMetalInstanceTypeReference_builder{
-			Name: nodeSet.BareMetal.InstanceType, Shared: true,
+			Name: nodeSet.BareMetal.InstanceType, Tenant: "shared",
 		}.Build()
 	}
 
 	specBuilder := privatev1.BareMetalInstanceSpec_builder{
 		Template: privatev1.BareMetalInstanceTemplateReference_builder{
-			Id: systemBMITemplateID, Shared: true,
+			Id: systemBMITemplateID, Tenant: "shared",
 		}.Build(),
 		DiskImage:          image,
 		UserDataSource:     privatev1.UserDataSource_builder{Inline: &ignitionRaw}.Build(),

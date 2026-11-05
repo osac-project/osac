@@ -109,6 +109,7 @@ func buildClusterVersionReference(cv *privatev1.ClusterVersion) *privatev1.Clust
 	ref := &privatev1.ClusterVersionReference{}
 	ref.SetId(cv.GetId())
 	ref.SetName(cv.GetMetadata().GetName())
+	ref.SetTenant(cv.GetMetadata().GetTenant())
 	ref.SetShared(cv.GetMetadata().GetTenant() == auth.SharedTenant)
 	ref.SetProject(cv.GetMetadata().GetProject())
 	return ref

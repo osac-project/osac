@@ -621,8 +621,7 @@ func createNetBoxInventoryClientWithManager(
 
 func createSecretAPIClientFromEnv() (inventory.SecretAPIClient, error) {
 	if strings.TrimSpace(os.Getenv(envSecretAPIURL)) == "" {
-		return nil, fmt.Errorf("%s is required; "+
-			"set secretAPI.url in the Helm chart or provide the environment variable", envSecretAPIURL)
+		return nil, fmt.Errorf("%s is required", envSecretAPIURL)
 	}
 	secretsClient, err := secretapi.New(secretapi.Config{
 		Endpoint:         os.Getenv(envSecretAPIURL),
@@ -632,7 +631,7 @@ func createSecretAPIClientFromEnv() (inventory.SecretAPIClient, error) {
 		CAFile:           os.Getenv(envSecretAPICAFile),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to configure Secret API client (%s / secretAPI.url): %w", envSecretAPIURL, err)
+		return nil, fmt.Errorf("failed to configure Secret API client (%s): %w", envSecretAPIURL, err)
 	}
 	return secretsClient, nil
 }

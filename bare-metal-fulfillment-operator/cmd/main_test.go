@@ -80,8 +80,7 @@ var _ = Describe("createSecretAPIClientFromEnv", func() {
 			GinkgoT().Setenv(envSecretAPIURL, endpoint)
 			secretsClient, err := createSecretAPIClientFromEnv()
 			Expect(secretsClient).To(BeNil())
-			Expect(err).To(MatchError("OSAC_SECRET_API_URL is required; " +
-				"set secretAPI.url in the Helm chart or provide the environment variable"))
+			Expect(err).To(MatchError("OSAC_SECRET_API_URL is required"))
 		},
 		Entry("missing", ""),
 		Entry("blank", " \t\n"),
@@ -93,7 +92,7 @@ var _ = Describe("createSecretAPIClientFromEnv", func() {
 			secretsClient, err := createSecretAPIClientFromEnv()
 			Expect(secretsClient).To(BeNil())
 			Expect(err).To(MatchError("failed to configure Secret API client " +
-				"(OSAC_SECRET_API_URL / secretAPI.url): Secret API endpoint must be a valid URL with a host"))
+				"(OSAC_SECRET_API_URL): Secret API endpoint must be a valid URL with a host"))
 			Expect(err.Error()).NotTo(ContainSubstring(endpoint))
 		},
 		Entry("malformed", "https://example.test:invalid"),
@@ -113,7 +112,7 @@ var _ = Describe("createSecretAPIClientFromEnv", func() {
 			secretsClient, err := createSecretAPIClientFromEnv()
 			Expect(secretsClient).To(BeNil())
 			Expect(err).To(MatchError(ContainSubstring("failed to configure Secret API client " +
-				"(OSAC_SECRET_API_URL / secretAPI.url): " + wantCause)))
+				"(OSAC_SECRET_API_URL): " + wantCause)))
 			Expect(err.Error()).NotTo(ContainSubstring("endpoint must be a valid URL"))
 		},
 		Entry("issuer", "", "", "Secret API issuer URL must use HTTPS"),

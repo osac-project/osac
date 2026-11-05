@@ -27,6 +27,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
@@ -101,6 +102,12 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 								Role:  "fabric",
 								Type:  "Ethernet",
 								Speed: "25Gbps",
+							}.Build(),
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "management-0",
+								Role:  "management",
+								Type:  "Ethernet",
+								Speed: "1Gbps",
 							}.Build(),
 						},
 					}.Build(),
@@ -278,6 +285,106 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			"persisted attachment should reference the tenant default SecurityGroup")
 		Expect(persistedAttachment.GetInterface()).To(Equal("data-0"),
 			"persisted attachment should select the first fabric-role interface")
+	})
+
+	It("rejects a tenant attachment on a non-fabric interface without persisting the instance", func(ctx context.Context) {
+		name := fmt.Sprintf("test-bmi-non-fabric-%s", uuid.New()[24:32])
+		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
+		attachment := network.bareMetalInstanceAttachment()
+		attachment.SetInterface("management-0")
+
+		_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+				Spec: publicv1.BareMetalInstanceSpec_builder{
+					CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					SshPublicKey:       new(bmiTestSSHPublicKey),
+					DiskImage:          publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{attachment},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("interface must have role 'fabric'"))
+
+		listed, err := bareMetalInstancesClient.List(ctx, publicv1.BareMetalInstancesListRequest_builder{
+			Filter: new(`this.metadata.name == "` + name + `"`),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(BeEmpty(), "rejected Create must not persist a BMI")
+	})
+
+	It("persists and exposes a curated NETWORK_READY condition", func(ctx context.Context) {
+		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
+		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-network-ready-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: publicv1.BareMetalInstanceSpec_builder{
+					CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					SshPublicKey:       new(bmiTestSSHPublicKey),
+					DiskImage:          publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		bmiID := createResp.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, err := privateBareMetalInstancesClient.Delete(ctx,
+				privatev1.BareMetalInstancesDeleteRequest_builder{Id: bmiID}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				_, err := privateBareMetalInstancesClient.Get(ctx,
+					privatev1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+				g.Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+		})
+
+		kubeClient := tool.KubeClient()
+		bmiList := &bmfov1alpha1.BareMetalInstanceList{}
+		var kubeBMI *bmfov1alpha1.BareMetalInstance
+		Eventually(func(g Gomega) {
+			g.Expect(kubeClient.List(ctx, bmiList, crclient.MatchingLabels{
+				labels.BareMetalInstanceUuid: bmiID,
+			})).To(Succeed())
+			g.Expect(bmiList.Items).To(HaveLen(1))
+			kubeBMI = &bmiList.Items[0]
+		}, time.Minute, time.Second).Should(Succeed())
+
+		kubeBMI.Status.Conditions = []metav1.Condition{{
+			Type:               string(bmfov1alpha1.HostConditionNetworkAttachmentsReady),
+			Status:             metav1.ConditionFalse,
+			Reason:             "NetworkAttachmentFailed",
+			Message:            "provider detail must not be exposed",
+			ObservedGeneration: kubeBMI.Generation,
+			LastTransitionTime: metav1.Now(),
+		}}
+		Expect(kubeClient.Status().Update(ctx, kubeBMI)).To(Succeed())
+		_, err = privateBareMetalInstancesClient.Signal(ctx,
+			privatev1.BareMetalInstancesSignalRequest_builder{Id: bmiID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(func(g Gomega) {
+			persisted, err := bareMetalInstancesClient.Get(ctx,
+				publicv1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+			g.Expect(err).NotTo(HaveOccurred())
+			var networkReady *publicv1.BareMetalInstanceCondition
+			for _, condition := range persisted.GetObject().GetStatus().GetConditions() {
+				if condition.GetType() == publicv1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY {
+					networkReady = condition
+					break
+				}
+			}
+			g.Expect(networkReady).NotTo(BeNil())
+			g.Expect(networkReady.GetStatus()).To(Equal(publicv1.ConditionStatus_CONDITION_STATUS_FALSE))
+			g.Expect(networkReady.GetReason()).To(Equal("NetworkAttachmentFailed"))
+			g.Expect(networkReady.GetMessage()).To(Equal("Network attachment did not complete."))
+			g.Expect(networkReady.GetMessage()).NotTo(ContainSubstring("provider detail"))
+		}, 2*time.Minute, time.Second).Should(Succeed())
 	})
 
 	It("waits for automatic ExternalIP cleanup before deleting the BMFO CR", func(ctx context.Context) {

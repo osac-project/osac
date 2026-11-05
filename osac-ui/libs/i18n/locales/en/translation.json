@@ -942,6 +942,7 @@
   "Selected secret file": "Selected secret file",
   "Serial console": "Serial console",
   "Service": "Service",
+  "Service account credential": "Service account credential",
   "Service CIDR": "Service CIDR",
   "Service CIDR access": "Service CIDR access",
   "Service CIDR must not overlap the pod CIDR.": "Service CIDR must not overlap the pod CIDR.",

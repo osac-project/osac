@@ -34,6 +34,7 @@ export const getSecretType = (t: TFunction): Record<SecretType, string> => {
     [SecretType.USER_DATA]: t('User data'),
     [SecretType.VALUE]: t('Value'),
     [SecretType.SSH_PUBLIC_KEY]: t('SSH public key'),
+    [SecretType.SERVICE_ACCOUNT_CREDENTIAL]: t('Service account credential'),
   };
 };
 

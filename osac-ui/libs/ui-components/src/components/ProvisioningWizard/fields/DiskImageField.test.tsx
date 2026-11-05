@@ -4,7 +4,7 @@ import { screen, waitFor } from '@testing-library/react';
 import { Formik } from 'formik';
 import { describe, expect, it } from 'vitest';
 
-import { DiskImageLifecycle, DiskImageSchema, GuestOSFamily, MetadataSchema } from '@osac/types';
+import { DiskImageLifecycle, DiskImageSchema, GuestOSFamily } from '@osac/types';
 
 import DiskImageField from './DiskImageField';
 import type {
@@ -263,40 +263,6 @@ describe('DiskImageField', () => {
     expect(screen.getAllByRole('option')).toHaveLength(3);
     expect(screen.getByRole('option', { name: 'fedora' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'windows' })).toBeInTheDocument();
-  });
-
-  it('does not show disk image descriptions in typeahead options', async () => {
-    const imagesWithDescriptions = diskImages.map((image) =>
-      image.id === 'disk-image-fedora'
-        ? create(DiskImageSchema, {
-            ...image,
-            metadata: create(MetadataSchema, {
-              name: image.metadata?.name,
-              description: 'Fedora disk image description',
-            }),
-          })
-        : image,
-    );
-    const { user } = renderWithProviders(
-      <Formik
-        initialValues={{
-          spec: {
-            diskImage: emptyResourceSelectValue(),
-            guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
-          },
-        }}
-        onSubmit={() => undefined}
-      >
-        <DiskImageField name="spec.diskImage" guestOsFamilyName="spec.guestOsFamily" />
-      </Formik>,
-      { apiFixtures: { diskImages: imagesWithDescriptions } },
-    );
-
-    await user.click(await screen.findByRole('button', { name: 'Select the image reference' }));
-
-    expect(screen.getByRole('option', { name: 'fedora' })).not.toHaveTextContent(
-      'Fedora disk image description',
-    );
   });
 
   it('clears an image selected for a different guest OS family', async () => {

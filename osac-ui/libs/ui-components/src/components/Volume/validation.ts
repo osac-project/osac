@@ -12,7 +12,6 @@ export const getVolumeValidationSchema = (t: TFunction) =>
   Yup.object({
     metadata: Yup.object({
       name: resourceNameSchema(t),
-      description: Yup.string(),
     }),
     spec: Yup.object({
       storageTier: Yup.object({

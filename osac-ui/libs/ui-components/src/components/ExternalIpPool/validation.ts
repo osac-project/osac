@@ -14,7 +14,7 @@ export const getExternalIpPoolSchema = (t: TFunction) =>
     }),
     cidrs: Yup.array()
       .of(buildCidrSchema(t, 'ipv4').required(t('CIDR is required')))
-      .min(1, t('At least one CIDR is required')),
+      .length(1, t('Exactly one CIDR is required')),
   });
 
 export const externalIpPoolStepHasErrors = (

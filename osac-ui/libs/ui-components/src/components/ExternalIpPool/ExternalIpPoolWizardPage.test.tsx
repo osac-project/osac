@@ -40,7 +40,7 @@ const clickNext = async (user: UserEvent) => {
 
 const fillPoolStep = async (user: UserEvent, name: string, cidr: string) => {
   await user.type(screen.getByRole('textbox', { name: 'Name' }), name);
-  await user.type(screen.getByRole('textbox', { name: 'CIDR 1' }), cidr);
+  await user.type(screen.getByRole('textbox', { name: 'CIDR' }), cidr);
 };
 
 const fillValidWizard = async (user: UserEvent) => {
@@ -62,7 +62,7 @@ describe('ExternalIpPoolWizardPage', () => {
       expect(screen.getByRole('button', { name: 'External IP pools' })).toBeInTheDocument();
       expect(screen.getByRole('heading', { name: 'External IP pool' })).toBeInTheDocument();
       expect(screen.getByRole('textbox', { name: 'Name' })).toBeInTheDocument();
-      expect(screen.getByRole('textbox', { name: 'CIDR 1' })).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'CIDR' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
     });
@@ -145,20 +145,13 @@ describe('ExternalIpPoolWizardPage', () => {
       expect(onExternalIPPoolCreate).not.toHaveBeenCalled();
     });
 
-    it('adds and removes CIDR rows, keeping at least one', async () => {
-      const { user } = renderCreatePage();
+    it('offers exactly one CIDR and no Add CIDR action', () => {
+      renderCreatePage();
 
-      expect(screen.getByRole('textbox', { name: 'CIDR 1' })).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'CIDR' })).toBeInTheDocument();
       expect(screen.queryByRole('textbox', { name: 'CIDR 2' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Remove CIDR 1' })).not.toBeInTheDocument();
-
-      await user.click(screen.getByRole('button', { name: 'Add CIDR' }));
-
-      expect(screen.getByRole('textbox', { name: 'CIDR 2' })).toBeInTheDocument();
-
-      await user.click(screen.getByRole('button', { name: 'Remove CIDR 2' }));
-
-      expect(screen.queryByRole('textbox', { name: 'CIDR 2' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Add CIDR' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Remove CIDR/ })).not.toBeInTheDocument();
     });
 
     it('blocks advancing past External IP pool for a malformed CIDR', async () => {

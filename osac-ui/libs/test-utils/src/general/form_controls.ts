@@ -1,9 +1,8 @@
 import { type Page, expect } from '@playwright/test';
 
-export type TypeaheadField = readonly [
-  role: 'button',
-  options: { readonly name: string; readonly exact: true },
-];
+export type TypeaheadField =
+  | readonly [role: 'button', options: { readonly name: string; readonly exact: true }]
+  | readonly [selector: string];
 
 /** Select an option from a PatternFly typeahead field. */
 export const selectOption = async (
@@ -12,7 +11,10 @@ export const selectOption = async (
   optionName: string | RegExp,
   index = 0,
 ): Promise<string> => {
-  const fieldLocator = page.getByRole(...field).nth(index);
+  const fieldLocator =
+    field.length === 1
+      ? page.locator(field[0]).nth(index)
+      : page.getByRole(field[0], field[1]).nth(index);
   await expect(fieldLocator).toBeVisible();
   await fieldLocator.click();
   const option = page.getByRole('option', { name: optionName }).first();

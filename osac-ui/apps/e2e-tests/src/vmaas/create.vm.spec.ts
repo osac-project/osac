@@ -82,7 +82,7 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
 
   const projectName = await testStep('catalog-launch', 'Set the project and VM name', async () => {
     const selectedProject = await selectOption(page, VmCreatePage.project, /.*/);
-    await page.getByRole(...VmCreatePage.vmName).fill(vmName);
+    await page.locator(...VmCreatePage.vmName).fill(vmName);
     await page.getByRole(...VmCreatePage.next).click();
     return selectedProject;
   });
@@ -91,7 +91,7 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
     'catalog-launch',
     'Verify the Disk image field on the Compute configuration step',
     async () => {
-      const diskImage = page.getByRole(...VmCreatePage.diskImage);
+      const diskImage = page.locator(...VmCreatePage.diskImage);
       await expect(diskImage).toBeVisible();
       if (await diskImage.isEnabled()) {
         await selectOption(page, VmCreatePage.diskImage, catalogTestData.fields.diskImage.name);
@@ -105,17 +105,17 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
   });
 
   await testStep('catalog-launch', 'Configure boot and additional disks', async () => {
-    await page.getByLabel(...VmCreatePage.bootDisk).fill('100');
+    await page.locator(...VmCreatePage.bootDisk).fill('100');
     await selectOption(page, VmCreatePage.bootStorageTier, storageTierTestData.name);
     await page.getByRole(...VmCreatePage.addDisk).click();
-    await page.getByLabel(...VmCreatePage.additionalDiskSize).fill('30');
+    await page.locator(...VmCreatePage.additionalDiskSize).fill('30');
     await selectOption(page, VmCreatePage.storageTier, storageTierTestData.name);
     await page.getByRole(...VmCreatePage.next).click();
   });
 
   await testStep('catalog-launch', 'Configure default networking and external IP', async () => {
-    await expect(page.getByRole(...VmCreatePage.useTenantDefaultNetwork)).toBeChecked();
-    await page.getByRole(...VmCreatePage.autoExternalIp).check();
+    await expect(page.locator(...VmCreatePage.useTenantDefaultNetwork)).toBeChecked();
+    await page.locator(...VmCreatePage.autoExternalIp).check();
     await page.getByRole(...VmCreatePage.next).click();
   });
 

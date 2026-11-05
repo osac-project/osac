@@ -132,7 +132,7 @@ for resource in imagedigestmirrorsets.config.openshift.io \
       field=imageTagMirrors
       ;;
   esac
-  MIRROR_JSON=$(oc get "$resource" -o json) || exit 1
+  MIRROR_JSON=$(oc get "$resource" --request-timeout=30s -o json) || exit 1
   printf '%s\n' "$MIRROR_JSON" | jq -se --arg kind "$kind" --arg field "$field" '
     def nonempty_string: type == "string" and length > 0;
     length == 1 and (.[0] |

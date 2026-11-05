@@ -613,6 +613,9 @@ message ThingsUpdateResponse {
   the object again, reapply the change, and retry.
   - A private update with no `metadata` that would change the finalizers is always rejected with
     `Aborted`, whatever the stored version.
+  - An update without a mask replaces the whole object, so leaving `finalizers` out of it is a
+    finalizer change when the stored object has any. To change other fields of an object that
+    controllers may give finalizers, send an update mask for those fields.
   - A `metadata` message with an unset `version` counts as version 0. The field is a plain `int32`,
     so unset and 0 cannot be told apart. An object that has never been updated since creation is at
     version 0.

@@ -680,19 +680,17 @@ def _tenant_object(private_grpc: GRPCClient, name: str) -> dict[str, Any]:
 def _set_external_billing_id(
     private_grpc: GRPCClient, tenant: dict[str, Any], billing_id: str | None
 ) -> dict[str, Any]:
-    """Replace TenantSpec, preserving every field except the billing id.
+    """Set or clear only the tenant's billing id.
 
-    Private Update replaces the whole spec: sending only the billing id would
-    clear domains and the break-glass secret reference.
+    The update mask limits the write to that field, so domains, the break-glass
+    secret reference and the finalizers stay as stored. A whole-object write
+    would carry the finalizers read earlier, and the server rejects it with
+    Aborted if a controller has changed them since.
     """
-    spec = dict(tenant.get("spec") or {})
-    spec.pop("external_billing_id", None)
-    spec.pop("externalBillingId", None)
-    if billing_id is not None:
-        spec["externalBillingId"] = billing_id
+    spec = {} if billing_id is None else {"externalBillingId": billing_id}
     return private_grpc.call(
         service=f"{PRIVATE_API}.Tenants/Update",
-        data={"object": {"id": tenant["id"], "metadata": tenant.get("metadata") or {}, "spec": spec}},
+        data={"object": {"id": tenant["id"], "spec": spec}, "updateMask": {"paths": ["spec.external_billing_id"]}},
     )["object"]
 
 

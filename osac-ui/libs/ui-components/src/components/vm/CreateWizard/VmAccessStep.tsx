@@ -5,8 +5,8 @@ import {
   VM_SSH_KEY_FORM_PATH,
   VM_USER_DATA_FORM_PATH,
 } from './fields';
-import SshPublicKeySecretField from './fields/SshPublicKeySecretField';
 import OsacForm from '../../Form/OsacForm';
+import SshPublicKeySecretField from '../../Form/SshPublicKeySecretField';
 import UserDataField from '../../Form/UserDataField';
 import ProvisioningField from '../../ProvisioningWizard/fields/ProvisioningField';
 

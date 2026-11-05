@@ -64,7 +64,7 @@ func (f *Fold) RunTenant(ctx context.Context, tenant string) error {
 	topic := f.eventTopic(tenant)
 	// Record the topic before reading the offset. A prefix change clears the offset
 	// taken from the previous topic so this topic is read from the beginning.
-	if err := f.store.NoteEventTopic(ctx, tenant, topic); err != nil {
+	if err := f.store.NoteEventTopic(ctx, tenant, topic, topics.EventTopic("", tenant)); err != nil {
 		return err
 	}
 

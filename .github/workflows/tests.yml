@@ -180,9 +180,16 @@ jobs:
           # suite is far outside the 100 lines above by the time this step runs, and the controller's writes
           # are only visible here. Kind keeps 64Mi per container, see osac-installer/kind-config.yaml.
           for pod in $(kubectl get pods -n osac -o jsonpath='{.items[*].metadata.name}'); do
-            kubectl logs -n osac "$pod" --all-containers --tail=-1 --prefix > "fulfillment-service/logs/pods/${pod}.log" 2>&1 || echo "Failed to get logs for $pod"
-            # Restarted containers keep one earlier log; the file is dropped when there is none.
-            kubectl logs -n osac "$pod" --all-containers --previous --tail=-1 --prefix > "fulfillment-service/logs/pods/${pod}-previous.log" 2>/dev/null || rm -f "fulfillment-service/logs/pods/${pod}-previous.log"
+            # One request per container: kubectl stops at the first container that fails, which would lose
+            # the logs of the others, and only a container that restarted has a previous log to ask for.
+            for container in $(kubectl get pod -n osac "$pod" -o jsonpath='{.spec.initContainers[*].name} {.spec.containers[*].name}'); do
+              file="fulfillment-service/logs/pods/${pod}_${container}"
+              kubectl logs -n osac "$pod" -c "$container" --tail=-1 > "${file}.log" 2>&1 || echo "Failed to get logs for ${pod}/${container}"
+              restarts=$(kubectl get pod -n osac "$pod" -o jsonpath="{.status.initContainerStatuses[?(@.name=='${container}')].restartCount}{.status.containerStatuses[?(@.name=='${container}')].restartCount}")
+              if [ "${restarts:-0}" -gt 0 ]; then
+                kubectl logs -n osac "$pod" -c "$container" --previous --tail=-1 > "${file}-previous.log" 2>&1 || echo "Failed to get previous logs for ${pod}/${container}"
+              fi
+            done
           done
       - if: inputs.kind == 'it-fulfillment-service' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7

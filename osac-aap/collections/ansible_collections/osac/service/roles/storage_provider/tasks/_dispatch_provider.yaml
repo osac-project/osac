@@ -51,6 +51,7 @@
         _computed_provider_tiers
         | selectattr('backend_id', 'defined')
         | map(attribute='backend_id')
+        | map('string')
         | list
       }}
 

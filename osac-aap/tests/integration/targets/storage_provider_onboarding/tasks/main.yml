@@ -56,6 +56,7 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
     vast_storage_config_namespace: osac-system
     tenant_name: "test-onboard"
     tenant_namespace: "osac-system"
@@ -70,7 +71,7 @@
       be-test:
         endpoint: "127.0.0.1:18443"
         username: "admin"
-        password: "mock-admin-password"
+        password: "{{ _mock_vast_password }}"
     vast_storage_validate_certs: false
 
   tasks:
@@ -102,6 +103,7 @@
         name: "vast-tenant-config-test-onboard-be-test"
         namespace: "osac-system"
       register: _hub_secret
+      no_log: true
 
     - name: Assert hub Secret exists
       ansible.builtin.assert:
@@ -147,6 +149,7 @@
         name: "vast-csi-test-onboard-be-test"
         namespace: "osac-system"
       register: _csi_secret
+      no_log: true
 
     - name: Assert CSI Secret exists
       ansible.builtin.assert:
@@ -293,6 +296,7 @@
         name: "lvms-tenant-config-test-lvms-onboard-be-lvms"
         namespace: "osac-system"
       register: _lvms_hub_secret
+      no_log: true
 
     - name: Assert LVMS hub Secret exists
       ansible.builtin.assert:
@@ -394,6 +398,7 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
     vast_storage_config_namespace: osac-system
     tenant_name: "test-obmulti"
     tenant_namespace: "osac-system"
@@ -412,11 +417,11 @@
       be-one:
         endpoint: "127.0.0.1:18443"
         username: "admin"
-        password: "mock-admin-password"
+        password: "{{ _mock_vast_password }}"
       be-two:
         endpoint: "127.0.0.1:18445"
         username: "admin"
-        password: "mock-admin-password"
+        password: "{{ _mock_vast_password }}"
     vast_storage_validate_certs: false
 
   tasks:
@@ -458,6 +463,7 @@
           - "osac.openshift.io/tenant=test-obmulti"
           - "osac.openshift.io/storage-provider=vast"
       register: _obmulti_hub_secrets
+      no_log: true
 
     # Built with an explicit loop: map(attribute=...) splits the attribute string
     # on dots, so it cannot address a label key that contains them.

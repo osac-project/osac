@@ -1,0 +1,67 @@
+---
+# Shared tier validation, included by setup.yaml and ensure_storage_class.yaml
+# so the two action entry points can't drift out of sync on which protocols
+# and SAN transports are allowed.
+# Requires: _provider_tiers (set by the dispatcher), ontap_storage_san_type (defaults).
+
+- name: Assert _provider_tiers is defined and non-empty
+  ansible.builtin.assert:
+    that:
+      - _provider_tiers is defined
+      - _provider_tiers | length > 0
+    fail_msg: >-
+      _provider_tiers must be provided by the service role dispatcher.
+      This role should not be called directly — use osac.service.storage_provider.
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: >-
+      tenant_name is not a valid DNS label. Must be 1-63 lowercase
+      alphanumeric characters or hyphens, cannot start or end with a hyphen.
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+  no_log: true
+
+- name: Fail if any tier protocol is unsupported by the ONTAP provider
+  ansible.builtin.fail:
+    msg: >-
+      A dispatched tier has an unsupported protocol. The ONTAP provider is
+      block-only; Trident serves these tiers through the ontap-san driver.
+      Supported protocols: block.
+  when: >-
+    (_provider_tiers | map(attribute='protocol') | reject('equalto', 'block') | list | length) > 0
+  no_log: true
+
+- name: Fail if any dispatched tier is missing backend_id
+  ansible.builtin.fail:
+    msg: >-
+      A dispatched tier has no backend_id. Every tier dispatched to the
+      ONTAP provider must reference the backend_id its connection details
+      are keyed by.
+  when: >-
+    (
+      _provider_tiers | default([])
+      | selectattr('backend_id', 'defined')
+      | map(attribute='backend_id')
+      | select('string')
+      | map('trim')
+      | reject('equalto', '')
+      | list | length
+    ) != (_provider_tiers | default([]) | length)
+  no_log: true
+
+- name: Fail if sanType is not a valid Trident SAN transport
+  ansible.builtin.fail:
+    msg: >-
+      ontap_storage_san_type is invalid. Trident accepts one of: iscsi, fcp,
+      nvme. The value must match the transport the prepared SVM's LIFs
+      actually carry.
+  when: ontap_storage_san_type not in ['iscsi', 'fcp', 'nvme']
+  no_log: true
+
+- name: Fail if the trident namespace is empty
+  ansible.builtin.fail:
+    msg: >-
+      ontap_storage_trident_namespace resolved to an empty value. Set
+      ONTAP_TRIDENT_NAMESPACE to a valid namespace name (default: trident).
+  when: ontap_storage_trident_namespace | default('') | length == 0
+  no_log: true

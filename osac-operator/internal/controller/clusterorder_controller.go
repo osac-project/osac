@@ -76,18 +76,20 @@ func (r *ClusterOrderReconciler) components() []component {
 // ClusterOrderReconciler reconciles a ClusterOrder object
 type ClusterOrderReconciler struct {
 	client.Client
-	apiReader                   client.Reader
-	Scheme                      *runtime.Scheme
-	ClusterOrderNamespace       string
-	AgentNamespace              string
-	NetworkingNamespace         string
-	ClustersClient              automaticClustersGetter
-	ExternalIPAttachmentsClient automaticExternalIPAttachmentsClient
-	ProvisioningProvider        provisioning.ProvisioningProvider
-	StatusPollInterval          time.Duration
-	MaxJobHistory               int
-	StallThresholds             ClusterOrderStallThresholds
-	Recorder                    events.EventRecorder
+	apiReader             client.Reader
+	Scheme                *runtime.Scheme
+	ClusterOrderNamespace string
+	AgentNamespace        string
+	NetworkingNamespace   string
+	// NetworkingProvisioningEnabled is global.networking.provisioningEnabled.
+	NetworkingProvisioningEnabled bool
+	ClustersClient                automaticClustersGetter
+	ExternalIPAttachmentsClient   automaticExternalIPAttachmentsClient
+	ProvisioningProvider          provisioning.ProvisioningProvider
+	StatusPollInterval            time.Duration
+	MaxJobHistory                 int
+	StallThresholds               ClusterOrderStallThresholds
+	Recorder                      events.EventRecorder
 	// SecretsClient resolves the Cluster's registered SSH-key Secret through
 	// the fulfillment private API. The resolved material is passed only as an
 	// AAP launch variable; it is never persisted on the ClusterOrder.
@@ -144,17 +146,18 @@ func NewClusterOrderReconciler(
 	}
 
 	return &ClusterOrderReconciler{
-		Client:                client,
-		apiReader:             apiReader,
-		Scheme:                scheme,
-		ClusterOrderNamespace: clusterOrderNamespace,
-		NetworkingNamespace:   networkingNamespace,
-		ProvisioningProvider:  provisioningProvider,
-		StatusPollInterval:    statusPollInterval,
-		MaxJobHistory:         maxJobHistory,
-		StallThresholds:       DefaultClusterOrderStallThresholds(),
-		Recorder:              nil,
-		now:                   time.Now,
+		Client:                        client,
+		apiReader:                     apiReader,
+		Scheme:                        scheme,
+		ClusterOrderNamespace:         clusterOrderNamespace,
+		NetworkingNamespace:           networkingNamespace,
+		NetworkingProvisioningEnabled: true,
+		ProvisioningProvider:          provisioningProvider,
+		StatusPollInterval:            statusPollInterval,
+		MaxJobHistory:                 maxJobHistory,
+		StallThresholds:               DefaultClusterOrderStallThresholds(),
+		Recorder:                      nil,
+		now:                           time.Now,
 	}
 }
 
@@ -1201,7 +1204,7 @@ func (r *ClusterOrderReconciler) reconcileAutomaticExternalIPAttachments(
 	ctx context.Context,
 	instance *v1alpha1.ClusterOrder,
 ) (ctrl.Result, error) {
-	if instance.Status.Phase != v1alpha1.ClusterOrderPhaseReady || r.ClustersClient == nil ||
+	if !r.NetworkingProvisioningEnabled || instance.Status.Phase != v1alpha1.ClusterOrderPhaseReady || r.ClustersClient == nil ||
 		r.ExternalIPAttachmentsClient == nil || r.NetworkingNamespace == "" {
 		return ctrl.Result{}, nil
 	}

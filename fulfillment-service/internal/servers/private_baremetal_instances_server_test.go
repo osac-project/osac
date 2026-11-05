@@ -3950,6 +3950,72 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(attachments[0].GetInterface()).To(Equal("data-0"))
 		})
 
+		DescribeTable("rejects a non-ready tenant default without storing an instance",
+			func(kind, state string, reason string) {
+				if kind == "subnet" {
+					resource := defaultSubnet
+					switch state {
+					case "pending":
+						resource.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
+					case "failed":
+						resource.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_FAILED)
+					case "deleting":
+						resource.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+					}
+					subnets := fixtureDAO[*privatev1.Subnet]()
+					_, err := subnets.Update().SetObject(resource).Do(ctx)
+					Expect(err).NotTo(HaveOccurred())
+					if state == "deleting" {
+						_, err = subnets.Delete().SetId(resource.GetId()).Do(ctx)
+						Expect(err).NotTo(HaveOccurred())
+					}
+				} else {
+					resource := defaultSG
+					switch state {
+					case "pending":
+						resource.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING)
+					case "failed":
+						resource.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED)
+					case "deleting":
+						resource.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+					}
+					groups := fixtureDAO[*privatev1.SecurityGroup]()
+					_, err := groups.Update().SetObject(resource).Do(ctx)
+					Expect(err).NotTo(HaveOccurred())
+					if state == "deleting" {
+						_, err = groups.Delete().SetId(resource.GetId()).Do(ctx)
+						Expect(err).NotTo(HaveOccurred())
+					}
+				}
+
+				id := uuid.NewString()
+				response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+					Object: privatev1.BareMetalInstance_builder{
+						Id: id,
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.BareMetalInstanceSpec_builder{
+							DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+							CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+							SshPublicKey: new(testSSHPublicKey),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(response).To(BeNil())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(reason))
+				_, getErr := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: id}.Build())
+				Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+			},
+			Entry("pending Subnet", "subnet", "pending", "SUBNET_STATE_PENDING"),
+			Entry("failed Subnet", "subnet", "failed", "SUBNET_STATE_FAILED"),
+			Entry("deleting Subnet", "subnet", "deleting", "is being deleted"),
+			Entry("pending SecurityGroup", "security group", "pending", "SECURITY_GROUP_STATE_PENDING"),
+			Entry("failed SecurityGroup", "security group", "failed", "SECURITY_GROUP_STATE_FAILED"),
+			Entry("deleting SecurityGroup", "security group", "deleting", "is being deleted"),
+		)
+
 		It("Populates default network_attachments when the list is empty", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
@@ -4135,6 +4201,7 @@ var _ = Describe("Private bare metal instances server", func() {
 		})
 
 		It("Rejects Create when no default subnet exists", func() {
+			id := uuid.NewString()
 			// Delete the default SG first (migration 103 blocks subnet deletion while SGs
 			// reference the same VN), then delete the default subnet.
 			sgDao, sgErr := dao.NewGenericDAO[*privatev1.SecurityGroup]().
@@ -4157,8 +4224,9 @@ var _ = Describe("Private bare metal instances server", func() {
 			_, sdErr = subnetDao.Delete().SetId(defaultSubnet.GetId()).Do(ctx)
 			Expect(sdErr).ToNot(HaveOccurred())
 
-			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Id: id,
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
@@ -4170,13 +4238,17 @@ var _ = Describe("Private bare metal instances server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("no tenant default subnet"))
+			_, getErr := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: id}.Build())
+			Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
 		})
 
 		It("Rejects Create when no default security group exists", func() {
+			id := uuid.NewString()
 			sgDao, sgErr := dao.NewGenericDAO[*privatev1.SecurityGroup]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -4185,8 +4257,9 @@ var _ = Describe("Private bare metal instances server", func() {
 			_, sgErr = sgDao.Delete().SetId(defaultSG.GetId()).Do(ctx)
 			Expect(sgErr).ToNot(HaveOccurred())
 
-			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Id: id,
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
@@ -4198,10 +4271,13 @@ var _ = Describe("Private bare metal instances server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("no tenant default security group"))
+			_, getErr := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: id}.Build())
+			Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
 		})
 
 		It("Fails when the instance type has no fabric network port", func() {

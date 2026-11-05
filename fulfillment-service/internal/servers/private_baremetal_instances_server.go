@@ -666,6 +666,9 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"spec.network_attachments: subnet is required and no tenant default subnet is available")
 		}
+		if err := validateResolvedSubnetReady(defaultSubnet, defaultSubnet.GetId(), " in spec.network_attachments[0]"); err != nil {
+			return err
+		}
 		attachment.SetSubnet(privatev1.SubnetLocalReference_builder{Id: defaultSubnet.GetId()}.Build())
 		resolvedSubnet = defaultSubnet
 	} else if securityGroupsMissing(attachment) {
@@ -691,6 +694,9 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 		if sg == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"spec.network_attachments[0]: security_groups are required and no tenant default security group is available")
+		}
+		if err := validateResolvedSecurityGroup(sg, sg.GetId(), " in spec.network_attachments[0]", subnetVN); err != nil {
+			return err
 		}
 		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
 			privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
@@ -732,6 +738,9 @@ func (s *PrivateBareMetalInstancesServer) injectFullDefaultNetworkAttachment(
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"spec.network_attachments: at least one network attachment is required and no tenant default subnet is available")
 	}
+	if err := validateResolvedSubnetReady(defaultSubnet, defaultSubnet.GetId(), " in spec.network_attachments[0]"); err != nil {
+		return err
+	}
 	subnetVN := refKey(defaultSubnet.GetSpec().GetVirtualNetwork())
 	sg, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, subnetVN, tenantName, project)
 	if err != nil {
@@ -742,6 +751,9 @@ func (s *PrivateBareMetalInstancesServer) injectFullDefaultNetworkAttachment(
 	if sg == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"spec.network_attachments: no tenant default security group is available")
+	}
+	if err := validateResolvedSecurityGroup(sg, sg.GetId(), " in spec.network_attachments[0]", subnetVN); err != nil {
+		return err
 	}
 
 	ifaceName, err := s.resolveDefaultInterface(instanceType)

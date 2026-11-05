@@ -1131,9 +1131,10 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet")
 	}
 	if subnet == nil {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "tenant default networking is not ready")
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"spec.network_attachment.subnet: a default subnet is required when no subnet is provided")
 	}
-	if err := requireDefaultNetworkingReady(ctx, s.tenantsDao, tenant); err != nil {
+	if err := validateResolvedSubnetReady(subnet, subnet.GetId(), " in spec.network_attachment"); err != nil {
 		return err
 	}
 
@@ -1148,7 +1149,14 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default security group")
 	}
 	if sg == nil {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "tenant default networking is not ready")
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"spec.network_attachment.security_groups: a default security group is required when no security groups are provided")
+	}
+	if err := validateResolvedSecurityGroup(sg, sg.GetId(), " in spec.network_attachment.security_groups[0]", virtualNetworkID); err != nil {
+		return err
+	}
+	if err := requireDefaultNetworkingReady(ctx, s.tenantsDao, tenant); err != nil {
+		return err
 	}
 	attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
 		privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),

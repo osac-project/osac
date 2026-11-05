@@ -10,8 +10,8 @@ import type { ComputeInstance } from '@osac/types';
 import { ComputeInstanceState } from '@osac/types';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
-import VmDeleteConfirmModal from './VmDeleteConfirmModal';
 import { useVmPowerAction } from '../useVmPowerAction';
+import VmDeleteConfirmModal from '../VmDeleteConfirmModal';
 
 interface VmDetailsActionButtonsProps {
   vm: ComputeInstance;

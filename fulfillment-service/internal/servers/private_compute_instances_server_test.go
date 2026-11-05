@@ -2572,6 +2572,73 @@ var _ = Describe("Private compute instances server", func() {
 		})
 
 		Context("Required network fields", func() {
+			DescribeTable("classifies an existing non-ready tenant default without storing a VM",
+				func(kind, state, reason string) {
+					subnet := createTestSubnet(ctx, virtualNetwork.GetId(), privatev1.SubnetState_SUBNET_STATE_READY, true)
+					if kind == "subnet" {
+						switch state {
+						case "pending":
+							subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
+						case "failed":
+							subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_FAILED)
+						case "deleting":
+							subnet.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+						}
+						subnets := fixtureDAO[*privatev1.Subnet]()
+						_, err := subnets.Update().SetObject(subnet).Do(ctx)
+						Expect(err).NotTo(HaveOccurred())
+						if state == "deleting" {
+							_, err = subnets.Delete().SetId(subnet.GetId()).Do(ctx)
+							Expect(err).NotTo(HaveOccurred())
+						}
+					} else {
+						group, err := findDefaultSecurityGroup(ctx, logger, fixtureDAO[*privatev1.SecurityGroup](),
+							virtualNetwork.GetId(), testTenant, "")
+						Expect(err).NotTo(HaveOccurred())
+						Expect(group).NotTo(BeNil())
+						switch state {
+						case "pending":
+							group.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING)
+						case "failed":
+							group.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED)
+						case "deleting":
+							group.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+						}
+						groups := fixtureDAO[*privatev1.SecurityGroup]()
+						_, err = groups.Update().SetObject(group).Do(ctx)
+						Expect(err).NotTo(HaveOccurred())
+						if state == "deleting" {
+							_, err = groups.Delete().SetId(group.GetId()).Do(ctx)
+							Expect(err).NotTo(HaveOccurred())
+						}
+					}
+
+					id := uuid.NewString()
+					response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+						Object: privatev1.ComputeInstance_builder{
+							Id: id,
+							Metadata: privatev1.Metadata_builder{
+								Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+							}.Build(),
+							Spec: privatev1.ComputeInstanceSpec_builder{
+								Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build())
+					Expect(response).To(BeNil())
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+					Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(reason))
+					_, getErr := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+					Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+				},
+				Entry("pending Subnet", "subnet", "pending", "SUBNET_STATE_PENDING"),
+				Entry("failed Subnet", "subnet", "failed", "SUBNET_STATE_FAILED"),
+				Entry("deleting Subnet", "subnet", "deleting", "is being deleted"),
+				Entry("pending SecurityGroup", "security group", "pending", "SECURITY_GROUP_STATE_PENDING"),
+				Entry("failed SecurityGroup", "security group", "failed", "SECURITY_GROUP_STATE_FAILED"),
+				Entry("deleting SecurityGroup", "security group", "deleting", "is being deleted"),
+			)
+
 			It("Should reject when network_attachments is missing and no default subnet exists", func() {
 				instanceID := uuid.NewString()
 				vm := privatev1.ComputeInstance_builder{

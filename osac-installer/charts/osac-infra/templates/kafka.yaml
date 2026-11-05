@@ -59,4 +59,12 @@ data:
       entityOperator:
         topicOperator: {}
         userOperator: {}
+      # Strimzi's Kafka Exporter reports consumer-group lag per group and
+      # topic. Strimzi adds its identity to the broker's super.users, so it
+      # stays off unless kafka.exporter.enabled turns lag monitoring on. The
+      # empty object enables it with Strimzi's defaults (every group and topic,
+      # and the operator's own resources).
+      {{- if .Values.kafka.exporter.enabled }}
+      kafkaExporter: {}
+      {{- end }}
 {{- end }}

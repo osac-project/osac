@@ -3280,6 +3280,181 @@ var _ = Describe("Private clusters server", func() {
 			})
 		})
 
+		Describe("Tenant-default networking", func() {
+			var defaultSubnetID, defaultGroupID string
+
+			BeforeEach(func() {
+				subnet, err := findDefaultSubnet(ctx, logger, fixtureDAO[*privatev1.Subnet](), testTenant, "")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(subnet).NotTo(BeNil())
+				defaultSubnetID = subnet.GetId()
+				group, err := findDefaultSecurityGroup(ctx, logger, fixtureDAO[*privatev1.SecurityGroup](),
+					subnet.GetSpec().GetVirtualNetwork().GetId(), testTenant, "")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(group).NotTo(BeNil())
+				defaultGroupID = group.GetId()
+			})
+			setSubnetDefaultState := func(state string) {
+				subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				getResponse, err := subnetsDao.Get().SetId(defaultSubnetID).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				subnet := getResponse.GetObject()
+				switch state {
+				case "missing":
+					subnet.GetMetadata().SetLabels(map[string]string{})
+				case "pending":
+					subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
+				case "failed":
+					subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_FAILED)
+				case "deleting":
+					subnet.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+				}
+				_, err = subnetsDao.Update().SetObject(subnet).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				if state == "deleting" {
+					_, err = subnetsDao.Delete().SetId(defaultSubnetID).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
+			}
+
+			setSecurityGroupDefaultState := func(state string) {
+				securityGroupsDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				getResponse, err := securityGroupsDao.Get().SetId(defaultGroupID).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				securityGroup := getResponse.GetObject()
+				switch state {
+				case "missing":
+					securityGroup.GetMetadata().SetLabels(map[string]string{})
+				case "pending":
+					securityGroup.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING)
+				case "failed":
+					securityGroup.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED)
+				case "deleting":
+					securityGroup.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+				}
+				_, err = securityGroupsDao.Update().SetObject(securityGroup).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				if state == "deleting" {
+					_, err = securityGroupsDao.Delete().SetId(defaultGroupID).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
+			}
+
+			newOmittedAttachmentRequest := func() *privatev1.ClustersCreateRequest {
+				return privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: uuid.New(),
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
+						}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build()
+			}
+
+			newExplicitAttachmentRequest := func() *privatev1.ClustersCreateRequest {
+				request := newOmittedAttachmentRequest()
+				request.GetObject().GetSpec().SetNetworkAttachment(privatev1.ClusterNetworkAttachment_builder{
+					Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-2"}.Build(),
+					SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+						privatev1.SecurityGroupLocalReference_builder{Id: "sg-2"}.Build(),
+					},
+				}.Build())
+				return request
+			}
+
+			expectNoStoredCluster := func(request *privatev1.ClustersCreateRequest) {
+				_, getErr := server.Get(ctx, privatev1.ClustersGetRequest_builder{
+					Id: request.GetObject().GetId(),
+				}.Build())
+				Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+			}
+
+			DescribeTable("classifies an omitted attachment with an unusable default",
+				func(configure func(), code grpccodes.Code, reason string) {
+					configure()
+					request := newOmittedAttachmentRequest()
+					response, err := server.Create(ctx, request)
+					Expect(err).To(HaveOccurred())
+					Expect(response).To(BeNil())
+					st, ok := grpcstatus.FromError(err)
+					Expect(ok).To(BeTrue())
+					Expect(st.Code()).To(Equal(code))
+					Expect(st.Message()).To(ContainSubstring(reason))
+					expectNoStoredCluster(request)
+				},
+				Entry("missing default Subnet", func() { setSubnetDefaultState("missing") },
+					grpccodes.InvalidArgument, "default subnet is required"),
+				Entry("pending default Subnet", func() { setSubnetDefaultState("pending") },
+					grpccodes.FailedPrecondition, "SUBNET_STATE_PENDING"),
+				Entry("failed default Subnet", func() { setSubnetDefaultState("failed") },
+					grpccodes.FailedPrecondition, "SUBNET_STATE_FAILED"),
+				Entry("deleting default Subnet", func() { setSubnetDefaultState("deleting") },
+					grpccodes.FailedPrecondition, "is being deleted"),
+				Entry("missing default SecurityGroup", func() { setSecurityGroupDefaultState("missing") },
+					grpccodes.InvalidArgument, "default security group is required"),
+				Entry("pending default SecurityGroup", func() { setSecurityGroupDefaultState("pending") },
+					grpccodes.FailedPrecondition, "SECURITY_GROUP_STATE_PENDING"),
+				Entry("failed default SecurityGroup", func() { setSecurityGroupDefaultState("failed") },
+					grpccodes.FailedPrecondition, "SECURITY_GROUP_STATE_FAILED"),
+				Entry("deleting default SecurityGroup", func() { setSecurityGroupDefaultState("deleting") },
+					grpccodes.FailedPrecondition, "is being deleted"),
+			)
+
+			It("resolves ready defaults and stores both references", func() {
+				response, err := server.Create(ctx, newOmittedAttachmentRequest())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+				attachment := response.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(attachment.GetSubnet().GetId()).To(Equal(defaultSubnetID))
+				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal(defaultGroupID))
+				Expect(response.GetObject().GetSpec().GetNodeSets()["compute"].GetFabricInterface()).
+					To(Equal("data-0"))
+
+				stored, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{
+					Id: response.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				storedAttachment := stored.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(storedAttachment.GetSubnet().GetId()).To(Equal(defaultSubnetID))
+				Expect(storedAttachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(storedAttachment.GetSecurityGroups()[0].GetId()).To(Equal(defaultGroupID))
+			})
+
+			It("preserves a complete explicit attachment without labelled defaults", func() {
+				setSubnetDefaultState("missing")
+				setSecurityGroupDefaultState("missing")
+				request := newExplicitAttachmentRequest()
+				response, err := server.Create(ctx, request)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+				attachment := response.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(attachment.GetSubnet().GetId()).To(Equal("subnet-2"))
+				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal("sg-2"))
+
+				stored, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{
+					Id: request.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				storedAttachment := stored.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(storedAttachment.GetSubnet().GetId()).To(Equal("subnet-2"))
+				Expect(storedAttachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(storedAttachment.GetSecurityGroups()[0].GetId()).To(Equal("sg-2"))
+			})
+		})
+
 		Describe("Catalog item", func() {
 			var catalogItemsDao *dao.GenericDAO[*privatev1.ClusterCatalogItem]
 
@@ -4547,9 +4722,9 @@ var _ = Describe("Private clusters server", func() {
 			metadataOnly, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Id:       clusterID,
-					Metadata: privatev1.Metadata_builder{Description: "edited"}.Build(),
+					Metadata: privatev1.Metadata_builder{Labels: map[string]string{"env": "test"}}.Build(),
 				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.description"}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(proto.Equal(metadataOnly.GetObject().GetSpec(), created.GetObject().GetSpec())).To(BeTrue())
@@ -5728,6 +5903,33 @@ var _ = Describe("Private clusters server", func() {
 				Expect(updated.GetStatus().GetNodeSets()["compute"].GetObservedVersion()).To(Equal("4.17.0"))
 			})
 
+			It("persists independent observed-version feedback without changing upgrade intent or history", func() {
+				cluster := createCluster()
+				initialSpec := proto.Clone(cluster.GetSpec())
+				initialHistory := proto.Clone(cluster.GetStatus()).(*privatev1.ClusterStatus).GetUpgradeHistory()
+				incomingStatus := proto.Clone(cluster.GetStatus()).(*privatev1.ClusterStatus)
+				incomingStatus.SetObservedVersion("4.17.1")
+				for _, nodeSet := range incomingStatus.GetNodeSets() {
+					nodeSet.SetObservedVersion("4.17.1")
+				}
+				updated, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{Id: cluster.GetId(), Status: incomingStatus}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+						"status.observed_version", "status.node_sets",
+					}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updated.GetObject().GetStatus().GetObservedVersion()).To(Equal("4.17.1"))
+				for _, nodeSet := range updated.GetObject().GetStatus().GetNodeSets() {
+					Expect(nodeSet.GetObservedVersion()).To(Equal("4.17.1"))
+				}
+				stored, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(stored.GetObject().GetSpec(), initialSpec)).To(BeTrue())
+				Expect(stored.GetObject().GetStatus().GetUpgradeHistory()).To(Equal(initialHistory))
+				Expect(stored.GetObject().GetStatus().GetState()).To(Equal(cluster.GetStatus().GetState()))
+			})
+
 			It("keeps independent component IDs and newest-first history", func() {
 				cluster := createCluster()
 				seedNextVersion()
@@ -6576,6 +6778,7 @@ var _ = Describe("Private clusters server", func() {
 				_, err = tenantDao.Update().SetObject(tenant).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
+				By("rejecting the omitted attachment while the readiness reads False")
 				const name = "default-network-not-ready"
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
@@ -6601,6 +6804,27 @@ var _ = Describe("Private clusters server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(listed.GetTotal()).To(BeZero(), "a rejected Cluster Create must not persist the Cluster")
+
+				By("storing a complete explicit attachment despite the not-ready defaults")
+				created, err := server.Create(ctx, newCaaSNodeSetCreateRequest("explicit-network-after-readiness-reset",
+					map[string]*privatev1.ClusterNodeSet{
+						"compute": privatev1.ClusterNodeSet_builder{
+							Size: proto.Int32(3),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+								Id: "bmit-fabric-id", Shared: true,
+							}.Build(),
+						}.Build(),
+					}, privatev1.ClusterNetworkAttachment_builder{
+						Subnet:         privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+						SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "default-sg"}.Build()},
+					}.Build()))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(created).ToNot(BeNil())
+				Expect(created.GetObject().GetId()).ToNot(BeEmpty())
+				storedAttachment := created.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(storedAttachment.GetSubnet().GetId()).To(Equal("subnet-1"))
+				Expect(storedAttachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(storedAttachment.GetSecurityGroups()[0].GetId()).To(Equal("default-sg"))
 			})
 
 			It("Resolves tenant defaults when provider networking is disabled", func() {

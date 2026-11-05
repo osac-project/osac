@@ -1,0 +1,86 @@
+{{- /*
+One KafkaUser per entry in .Values.readers. A reader is an outside system
+that reads every tenant's heartbeat topics with its own credentials, granted and
+revoked as chart values.
+
+The user reads the heartbeat topic prefix osac.metering.heartbeat. and one
+consumer group named after the reader. The prefix covers every tenant,
+including tenants created after the grant, so onboarding a tenant needs no
+chart change. Deny ACLs take back the system and shared tenants, whose topics
+exist but whose usage is never billed. It gets no write ACL and no access to
+the raw event log or the dead-letter topics. The group name is the reader name,
+so the lag Strimzi's Kafka exporter reports maps to the reader.
+
+Names are rejected when they repeat, are not a lowercase DNS name, or collide
+with a KafkaUser OSAC owns. A collision would let a reader replace an OSAC
+user's ACLs or split an adapter's consumer group, so the whole osac- and osac.
+namespaces are reserved.
+*/}}
+{{- $reserved := list "osac-metering" "osac-metering-echo-adapter" "osac-metering-m360-adapter" -}}
+{{- $seen := dict -}}
+{{- range .Values.readers }}
+{{- $name := required "readers[].name is required" .name -}}
+{{- if hasKey $seen $name }}
+{{- fail (printf "duplicate metering reader %q: each reader name must be unique" $name) }}
+{{- end }}
+{{- $_ := set $seen $name true }}
+{{- if has $name $reserved }}
+{{- fail (printf "metering reader %q is a KafkaUser OSAC owns; pick another name" $name) }}
+{{- end }}
+{{- if or (hasPrefix "osac-" $name) (hasPrefix "osac." $name) }}
+{{- fail (printf "metering reader %q uses the reserved osac- or osac. name prefix" $name) }}
+{{- end }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $name) }}
+{{- fail (printf "metering reader %q must be a lowercase DNS name: letters, digits, dots, and dashes" $name) }}
+{{- end }}
+{{- if gt (len $name) 253 }}
+{{- fail (printf "metering reader %q must be at most 253 characters" $name) }}
+{{- end }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: {{ $name }}
+  namespace: {{ include "osac-metering.kafkaClusterNamespace" $ }}
+  labels:
+    {{- include "osac-metering.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: metering-reader
+    strimzi.io/cluster: {{ include "osac-metering.kafkaClusterName" $ }}
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: osac.metering.heartbeat.
+          patternType: prefix
+        operations:
+          - Read
+          - Describe
+        host: "*"
+      {{- /*
+      The system and shared tenants are platform-internal and never billed.
+      Kafka denies a matching resource even when a prefix allow covers it, so
+      these two entries keep the reader inside the billing boundary.
+      */}}
+      {{- range list "system" "shared" }}
+      - resource:
+          type: topic
+          name: {{ printf "osac.metering.heartbeat.%s" . }}
+          patternType: literal
+        operations:
+          - Read
+          - Describe
+        type: deny
+        host: "*"
+      {{- end }}
+      - resource:
+          type: group
+          name: {{ $name }}
+          patternType: literal
+        operations:
+          - Read
+        host: "*"
+{{- end }}

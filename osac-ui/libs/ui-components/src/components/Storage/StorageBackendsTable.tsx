@@ -6,6 +6,7 @@ import ResourceNameField from '@osac/ui-components/components/Resource/ResourceN
 import StorageBackendActionsMenu from './StorageBackendActionsMenu';
 import StorageBackendStatusLabel from './StorageBackendStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
+import { getStorageBackendProviderLabel } from '../../utils/storageBackendProvider';
 
 interface StorageBackendsTableProps {
   backends: StorageBackend[];
@@ -37,7 +38,9 @@ export const StorageBackendsTable = ({ backends }: StorageBackendsTableProps) =>
             <Td dataLabel={t('Status')}>
               <StorageBackendStatusLabel state={backend.status?.state} />
             </Td>
-            <Td dataLabel={t('Provider')}>{backend.spec?.provider}</Td>
+            <Td dataLabel={t('Provider')}>
+              {getStorageBackendProviderLabel(backend.spec?.provider ?? '', t)}
+            </Td>
             <Td dataLabel={t('Endpoint')}>{backend.spec?.endpoint}</Td>
             <Td dataLabel={t('Actions')} isActionCell>
               <StorageBackendActionsMenu backend={backend} />

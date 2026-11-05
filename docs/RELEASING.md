@@ -241,8 +241,19 @@ whole set together to the **staging** registry
 (`registry.stage.redhat.io`, under `cloud-extensions/<component>-rhel10`).
 This wait set is fixed regardless of what `component_versions` actually
 bumped this run; `osac-aap` has no Konflux image component yet and is
-never included. This is currently staging only — there is no automated
-path to a production release yet.
+never included.
+
+A separate, manually-dispatched workflow, `osac-promote-to-prod.yaml`,
+promotes an already-staged release to `registry.redhat.io` once it's
+ready. Images promote with no rebuild — the same built digest is
+multi-homed into `registry.redhat.io` by `cloud-extensions-prod`'s own
+`ReleasePlanAdmission`. The chart cannot: its own `values.yaml` has
+`registry.stage.redhat.io` baked into every component image reference at
+build time, so the already-built staging chart is only ever correct for
+stage. Promoting it re-stamps that exact same source commit with
+`registry.redhat.io` (only the hostname changes) and pushes it through a
+real, independent Konflux build — expect the chart side of a production
+promotion to take meaningfully longer than the image side as a result.
 
 A component only reaches staging if its Konflux build passes Red Hat's
 Enterprise Contract policy — a set of supply-chain and security checks

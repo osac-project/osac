@@ -208,7 +208,7 @@ func (c *NetBoxClient) netBoxHostFromDevice(namespace string, device netboxclien
 		HostClass:       c.hostClass,
 		ProvisionState:  shared.OsacDefaultProvisionStateValue,
 		ManagedBy:       shared.OsacDefaultManagedByValue,
-		Ready:           true,
+		Available:       true,
 	}
 }
 
@@ -335,11 +335,11 @@ func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connec
 		return nil, fmt.Errorf("failed to create BareMetalHost for NetBox host: %w", err)
 	}
 
-	ready, err := c.bmhManager.IsBMHReady(ctx, host.Name)
+	available, err := c.bmhManager.IsBMHAvailable(ctx, host.Name)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check BareMetalHost readiness for NetBox host: %w", err)
+		return nil, fmt.Errorf("failed to check BareMetalHost availability for NetBox host: %w", err)
 	}
-	host.Ready = ready
+	host.Available = available
 	return host, nil
 }
 
@@ -587,7 +587,7 @@ func (c *NetBoxClient) GetHostNICs(ctx context.Context, inventoryHostID string) 
 		return nil, err
 	}
 	bmhName := netBoxHostPrefix + deviceID
-	ready, err := c.bmhManager.IsBMHReady(ctx, bmhName)
+	ready, err := c.bmhManager.IsBMHAvailable(ctx, bmhName)
 	if err != nil {
 		return nil, err
 	}

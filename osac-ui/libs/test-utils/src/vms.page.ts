@@ -1,6 +1,6 @@
 import { type Locator, type Page, expect } from '@playwright/test';
 
-import { getTableRowByCellText } from './general/row_assertions';
+import { confirmDetailDeletion, getTableRowByCellText } from './general/row_assertions';
 import { openMainPageOption } from './main.page';
 import { VmDetailsPage, VmsMainPage } from '../../locators/vms';
 
@@ -140,11 +140,13 @@ export const deleteVm = async (page: Page, name: string): Promise<void> => {
   await page.getByRole(...VmDetailsPage.deleteButton).click();
 
   const deleteDialog = page.locator(...VmDetailsPage.deleteDialog);
-  await expect(deleteDialog).toBeVisible();
-  await expect(deleteDialog.locator(...VmDetailsPage.deleteTitle)).toContainText(`Delete ${name}?`);
-  await expect(deleteDialog.getByText(...VmDetailsPage.deleteWarning)).toBeVisible();
-  await deleteDialog.getByRole(...VmDetailsPage.deleteButton).click();
-  await expect(deleteDialog).toBeHidden();
+  await confirmDetailDeletion(
+    deleteDialog,
+    deleteDialog.locator(...VmDetailsPage.deleteTitle),
+    deleteDialog.getByText(...VmDetailsPage.deleteWarning),
+    deleteDialog.getByRole(...VmDetailsPage.deleteButton),
+    name,
+  );
   await expect(page).toHaveURL((url) => url.pathname === '/vms');
   await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
 };

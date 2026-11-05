@@ -16,6 +16,7 @@ package database
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"google.golang.org/grpc"
@@ -93,6 +94,24 @@ func (i *TxInterceptor) UnaryServer(ctx context.Context, request any, info *grpc
 	// return that, no matter what is the outcome of the transaction. If the method succeeded but ending the
 	// transaction fails, then we will return an internal error.
 	defer func() {
+		// A method that panics must not commit what it wrote, so the panic is reported to the transaction, which
+		// rolls it back, and then it goes on to the interceptors outside this one, which turn it into an error.
+		if fault := recover(); fault != nil {
+			panicErr := fmt.Errorf("method panicked: %v", fault)
+			tx.ReportError(&panicErr)
+			txErr := tx.End(ctx)
+			if txErr != nil {
+				i.logger.ErrorContext(
+					ctx,
+					"Failed to end transaction",
+					slog.String("method", info.FullMethod),
+					slog.Any("method_error", panicErr),
+					slog.Any("tx_error", txErr),
+				)
+			}
+			panic(fault)
+		}
+
 		// Try to end the transaction:
 		txErr := tx.End(ctx)
 

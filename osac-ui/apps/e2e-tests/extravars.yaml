@@ -27,7 +27,7 @@ instance_type:
   name: 'instance-type-e2e'
   description: 'Instance type created by e2e test'
   vcpus: 4
-  memory_gib: 16
+  memory_gib: 8
 
 disk_image:
   # Playwright appends a per-run suffix so teardown only targets this run's image.

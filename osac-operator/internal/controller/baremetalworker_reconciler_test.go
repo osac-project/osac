@@ -362,7 +362,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(err).To(HaveOccurred(), "an unmanaged ClusterOrder must be skipped (no InfraEnv)")
 	})
 
-	It("returns an error when the discovery ignition fetch fails", func() {
+	It("waits for discovery ignition when its fetch fails", func() {
 		preloadDiskImageChain()
 		create(newBareMetalClusterOrder("bmw-fetcherr"))
 
@@ -373,8 +373,15 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(setWorkerIgnitionURL(ctx, "bmw-fetcherr-infraenv", testNamespace,
 			"http://127.0.0.1:0/discovery.ign")).To(Succeed())
 
-		_, err = runReconcile("bmw-fetcherr")
-		Expect(err).To(HaveOccurred())
+		res, err := runReconcile("bmw-fetcherr")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(res.RequeueAfter).To(BeNumerically("<=", 30*time.Second))
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		cond := apimeta.FindStatusCondition(getClusterOrder("bmw-fetcherr").Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal("IgnitionFetchFailed"))
 	})
 })
 

@@ -484,8 +484,10 @@ var _ = It("persists the worker summary before checking Create prerequisites", f
 	r07CreateInfraEnv(r, r07InfraEnv(r, co, "infra-uid", "http://ignition.test"))
 	co.SetStatusCondition(v1alpha1.ConditionInfraEnvReady, metav1.ConditionTrue, "ready", reasonInfraEnvReady)
 	Expect(r.Status().Update(ctx, co)).To(Succeed())
-	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
-	Expect(errors.Is(err, imageErr)).To(BeTrue(), "error=%v, want the blocked image lookup", err)
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+	Expect(res.RequeueAfter).To(BeNumerically("<=", infraEnvRequeueInterval))
 	Expect(r.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
 	Expect(co.Status.ReadyWorkers).NotTo(BeNil(), "stale ready summary was not demoted before the create gate: %+v", co.Status)
 	Expect(*co.Status.ReadyWorkers).To(Equal(int32(0)), "stale ready summary was not demoted before the create gate: %+v", co.Status)
@@ -849,33 +851,241 @@ var _ = It("does not create a BMI from invalid ignition", func() {
 		ignitionURL string
 		body        []byte
 		fetchErr    error
-		wantErr     string
+		wantReason  string
 	}{
-		"missing URL":   {wantErr: ""},
-		"invalid JSON":  {ignitionURL: "http://ignition.test", body: []byte("not-json"), wantErr: "not valid JSON"},
-		"fetch failure": {ignitionURL: "http://ignition.test", fetchErr: errors.New("tls: bad certificate"), wantErr: "fetching discovery ignition"},
+		"missing URL":   {wantReason: reasonIgnitionPending},
+		"invalid JSON":  {ignitionURL: "http://ignition.test", body: []byte("not-json"), wantReason: reasonIgnitionInvalid},
+		"fetch failure": {ignitionURL: "http://ignition.test", fetchErr: errors.New("tls: bad certificate"), wantReason: reasonIgnitionFetchFailed},
 	}
 	for name, tc := range cases {
 		By(name)
 		func() {
 			r, fc, co := r07CreateHarness()
+			co.SetStatusCondition(v1alpha1.ConditionInfraEnvReady, metav1.ConditionTrue, "previously fetched", reasonInfraEnvReady)
+			Expect(r.Status().Update(ctx, co)).To(Succeed())
 			r07CreateInfraEnv(r, r07InfraEnv(r, co, "infra-uid", tc.ignitionURL))
 			ignition := &r07IgnitionScripted{body: tc.body, err: tc.fetchErr}
 			r.ignition = ignition
 			// A create is due (one requested node, no reserved slot): only validated
 			// ignition bytes may produce one, and the missing URL holds instead.
 			for i := range 2 {
-				_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
-				switch {
-				case tc.wantErr == "":
-					Expect(err).ToNot(HaveOccurred(), "invocation %d: err=%v, want a bounded wait for the missing URL", i, err)
-				case err == nil || !strings.Contains(err.Error(), tc.wantErr):
-					Fail(fmt.Sprintf("invocation %d: err=%v, want %q", i, err, tc.wantErr))
-				}
+				res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+				Expect(err).NotTo(HaveOccurred(), "invocation %d", i)
+				Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+				Expect(res.RequeueAfter).To(BeNumerically("<=", infraEnvRequeueInterval))
+				Expect(r.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
+				cond := apimeta.FindStatusCondition(co.Status.Conditions, v1alpha1.ConditionInfraEnvReady)
+				Expect(cond).NotTo(BeNil())
+				Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+				Expect(cond.Reason).To(Equal(tc.wantReason))
 			}
 			Expect(fc.names).To(BeEmpty(), "unenforceable ignition authorized a BMI create: %v", fc.names)
 			Expect(tc.ignitionURL == "" && ignition.calls != 0).To(BeFalse(), "missing URL was fetched anyway: %d call(s)", ignition.calls)
 		}()
+	}
+})
+
+// imagePrerequisiteClient supplies a mutable catalog chain for prerequisite recovery.
+type imagePrerequisiteClient struct {
+	*workerReadClient
+	versionID  string
+	versionErr error
+	imageID    string
+	imageErr   error
+}
+
+// GetCluster supplies the current version reference while preserving the tenant.
+func (c *imagePrerequisiteClient) GetCluster(ctx context.Context, id string) (*privatev1.Cluster, error) {
+	cluster, err := c.workerReadClient.GetCluster(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	cluster.GetSpec().SetVersion(privatev1.ClusterVersionReference_builder{Id: c.versionID}.Build())
+	return cluster, nil
+}
+
+// GetClusterVersion supplies the current image reference or a catalog lookup error.
+func (c *imagePrerequisiteClient) GetClusterVersion(_ context.Context, id string) (*privatev1.ClusterVersion, error) {
+	if c.versionErr != nil {
+		return nil, c.versionErr
+	}
+	return privatev1.ClusterVersion_builder{
+		Id: id,
+		Spec: privatev1.ClusterVersionSpec_builder{
+			DiskImage: privatev1.DiskImageReference_builder{Id: c.imageID}.Build(),
+		}.Build(),
+	}.Build(), nil
+}
+
+// GetDiskImage returns a usable canonical reference or a catalog lookup error.
+func (c *imagePrerequisiteClient) GetDiskImage(_ context.Context, id string) (*privatev1.DiskImage, error) {
+	if c.imageErr != nil {
+		return nil, c.imageErr
+	}
+	return privatev1.DiskImage_builder{
+		Id: id, Metadata: privatev1.Metadata_builder{Name: "worker-image"}.Build(),
+	}.Build(), nil
+}
+
+var _ = Describe("Prerequisite retry policy for worker images", func() {
+	for _, missing := range []string{"version reference", "ClusterVersion", "image reference", "DiskImage"} {
+		It("waits for a missing "+missing+" and clears the blocked condition after recovery", func() {
+			ctx := context.Background()
+			r, base, co := workerReadHarness()
+			catalog := &imagePrerequisiteClient{workerReadClient: base, versionID: "version", imageID: "image"}
+			r.fulfillment = catalog
+			switch missing {
+			case "version reference":
+				catalog.versionID = ""
+			case "ClusterVersion":
+				catalog.versionErr = status.Error(codes.NotFound, "version missing")
+			case "image reference":
+				catalog.imageID = ""
+			case "DiskImage":
+				catalog.imageErr = status.Error(codes.NotFound, "image missing")
+			}
+			for range 25 {
+				image, res, err := r.resolveDiskImage(ctx, co)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(image).To(BeNil())
+				Expect(res.RequeueAfter).To(Equal(infraEnvRequeueInterval))
+				Expect(r.Get(ctx, base.order, co)).To(Succeed())
+				Expect(co.Status.Conditions).To(ContainElement(And(
+					HaveField("Type", v1alpha1.ConditionRHCOSImageNotFound),
+					HaveField("Status", metav1.ConditionTrue),
+				)))
+			}
+			catalog.versionID, catalog.imageID = "version", "image"
+			catalog.versionErr, catalog.imageErr = nil, nil
+			image, res, err := r.resolveDiskImage(ctx, co)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.IsZero()).To(BeTrue())
+			Expect(image.GetId()).To(Equal("image"))
+			Expect(r.Get(ctx, base.order, co)).To(Succeed())
+			Expect(co.Status.Conditions).To(ContainElement(And(
+				HaveField("Type", v1alpha1.ConditionRHCOSImageNotFound),
+				HaveField("Status", metav1.ConditionFalse),
+			)))
+		})
+	}
+
+	for _, lookup := range []string{"version", "image"} {
+		for _, failure := range []error{
+			status.Error(codes.PermissionDenied, "denied"),
+			status.Error(codes.Internal, "internal failure"),
+			ErrFulfillmentServiceUnavailable,
+			context.Canceled,
+			context.DeadlineExceeded,
+		} {
+			It("preserves "+lookup+" lookup errors: "+failure.Error(), func() {
+				r, base, co := workerReadHarness()
+				catalog := &imagePrerequisiteClient{workerReadClient: base, versionID: "version", imageID: "image"}
+				if lookup == "version" {
+					catalog.versionErr = failure
+				} else {
+					catalog.imageErr = failure
+				}
+				r.fulfillment = catalog
+				image, res, err := r.resolveDiskImage(context.Background(), co)
+				Expect(errors.Is(err, failure)).To(BeTrue())
+				Expect(image).To(BeNil())
+				Expect(res.IsZero()).To(BeTrue())
+			})
+		}
+	}
+
+	It("preserves blocked-condition persistence errors", func() {
+		r, base, co := workerReadHarness()
+		r.fulfillment = &imagePrerequisiteClient{workerReadClient: base}
+		r.Client = &bmiConflictClient{Client: r.Client, beforePatch: func() {}}
+		_, res, err := r.resolveDiskImage(context.Background(), co)
+		Expect(apierrors.IsConflict(err)).To(BeTrue())
+		Expect(res.IsZero()).To(BeTrue())
+	})
+})
+
+var _ = Describe("Prerequisite retry policy for discovery ignition", func() {
+	for _, failure := range []string{"invalid JSON", "fetch failure"} {
+		It("keeps retries bounded through status changes and recovers from "+failure, func() {
+			ctx := context.Background()
+			r, base, co := r07CreateHarness()
+			r.fulfillment = &imagePrerequisiteClient{workerReadClient: base, versionID: "version", imageID: "image"}
+			r07CreateInfraEnv(r, r07InfraEnv(r, co, "infra-uid", "http://ignition.test"))
+			ignition := &r07IgnitionScripted{body: []byte("not-json")}
+			if failure == "fetch failure" {
+				ignition.err = errors.New("HTTP dependency unavailable")
+			}
+			r.ignition = ignition
+			request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)}
+			for i := range 25 {
+				Expect(r.Get(ctx, request.NamespacedName, co)).To(Succeed())
+				co.SetStatusCondition("Provisioning", metav1.ConditionTrue, fmt.Sprintf("update %d", i), "PreparingInfrastructure")
+				Expect(r.Status().Update(ctx, co)).To(Succeed())
+				res, err := r.Reconcile(ctx, request)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+				Expect(res.RequeueAfter).To(BeNumerically("<=", infraEnvRequeueInterval))
+				Expect(base.names).To(BeEmpty())
+			}
+			counter := &r07CountingStatusClient{Client: r.Client}
+			r.Client = counter
+			_, err := r.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(counter.patches).To(BeZero(), "unchanged blocked evidence wrote status")
+
+			// Restore only the external response; the next invocation represents the scheduled retry.
+			ignition.body, ignition.err = []byte(`{"ignition":{"version":"3.2.0"}}`), nil
+			for range 8 {
+				_, err := r.Reconcile(ctx, request)
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(base.names).To(HaveLen(1))
+			Expect(base.reservationMissing).To(BeFalse())
+			Expect(r.Get(ctx, request.NamespacedName, co)).To(Succeed())
+			Expect(apimeta.IsStatusConditionTrue(co.Status.Conditions, v1alpha1.ConditionInfraEnvReady)).To(BeTrue())
+		})
+	}
+
+	for _, failure := range []string{"invalid JSON", "fetch failure"} {
+		It("preserves condition-write errors for "+failure, func() {
+			r, _, co := r07CreateHarness()
+			infra := r07InfraEnv(r, co, "infra-uid", "http://ignition.test")
+			ignition := &r07IgnitionScripted{body: []byte("not-json")}
+			if failure == "fetch failure" {
+				ignition.err = errors.New("HTTP dependency unavailable")
+			}
+			r.ignition = ignition
+			r.Client = &bmiConflictClient{Client: r.Client, beforePatch: func() {}}
+			_, res, err := r.fetchDiscoveryIgnition(context.Background(), co, infra)
+			Expect(apierrors.IsConflict(err)).To(BeTrue())
+			Expect(res.IsZero()).To(BeTrue())
+		})
+	}
+
+	It("waits after a fetch deadline while the parent context remains active", func() {
+		r, _, co := r07CreateHarness()
+		infra := r07InfraEnv(r, co, "infra-uid", "http://ignition.test")
+		r.ignition = &r07IgnitionScripted{err: context.DeadlineExceeded}
+		_, res, err := r.fetchDiscoveryIgnition(context.Background(), co, infra)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.RequeueAfter).To(Equal(infraEnvRequeueInterval))
+	})
+
+	for _, failure := range []error{context.Canceled, context.DeadlineExceeded} {
+		It("preserves the parent context error: "+failure.Error(), func() {
+			r, _, co := r07CreateHarness()
+			infra := r07InfraEnv(r, co, "infra-uid", "http://ignition.test")
+			r.ignition = &r07IgnitionScripted{err: failure}
+			ctx, cancel := context.WithCancel(context.Background())
+			if failure == context.DeadlineExceeded {
+				cancel()
+				ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			}
+			cancel()
+			_, res, err := r.fetchDiscoveryIgnition(ctx, co, infra)
+			Expect(errors.Is(err, failure)).To(BeTrue())
+			Expect(res.IsZero()).To(BeTrue())
+		})
 	}
 })
 

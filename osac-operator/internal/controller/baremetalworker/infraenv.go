@@ -34,6 +34,8 @@ const (
 	reasonInfraEnvReady              = "InfraEnvReady"
 	reasonIgnitionPending            = "IgnitionPending"
 	reasonIgnitionPendingMessage     = "waiting for discovery ignition URL"
+	reasonIgnitionFetchFailed        = "IgnitionFetchFailed"
+	reasonIgnitionInvalid            = "IgnitionInvalid"
 	infraEnvUIDAnnotation            = "osac.openshift.io/infraenv-uid"
 	eventReasonStaleIgnition         = "StaleIgnition"
 	reasonInfraEnvRecreated          = "InfraEnvRecreated"
@@ -222,8 +224,9 @@ func (r *Reconciler) createMissingInfraEnv(
 
 // fetchDiscoveryIgnition is the create stage's input reader: it fetches and
 // validates the observed InfraEnv's discovery ignition and reports Ready only for
-// bytes it actually verified. A missing URL reports pending evidence and waits;
-// a failed fetch or invalid JSON is an error and never a successful input.
+// bytes it actually verified. Missing, unreadable or invalid artifacts report
+// blocked evidence and a bounded wait. Cancellation and status-write failures
+// retain their error handling.
 func (r *Reconciler) fetchDiscoveryIgnition(
 	ctx context.Context, co *v1alpha1.ClusterOrder, infraEnv *unstructured.Unstructured,
 ) ([]byte, ctrl.Result, error) {
@@ -242,10 +245,21 @@ func (r *Reconciler) fetchDiscoveryIgnition(
 
 	ignition, err := r.ignition.FetchIgnition(ctx, ignitionURL)
 	if err != nil {
-		return nil, ctrl.Result{}, fmt.Errorf("fetching discovery ignition for %s: %w", key, err)
+		if ctx.Err() != nil {
+			return nil, ctrl.Result{}, fmt.Errorf("fetching discovery ignition for %s: %w", key, err)
+		}
+		if condErr := r.setInfraEnvReady(ctx, co, metav1.ConditionFalse, reasonIgnitionFetchFailed,
+			"waiting for discovery ignition to be fetched"); condErr != nil {
+			return nil, ctrl.Result{}, condErr
+		}
+		return nil, ctrl.Result{RequeueAfter: infraEnvRequeueInterval}, nil
 	}
 	if !json.Valid(ignition) {
-		return nil, ctrl.Result{}, fmt.Errorf("discovery ignition for %s is not valid JSON", key)
+		if condErr := r.setInfraEnvReady(ctx, co, metav1.ConditionFalse, reasonIgnitionInvalid,
+			"discovery ignition is not valid JSON"); condErr != nil {
+			return nil, ctrl.Result{}, condErr
+		}
+		return nil, ctrl.Result{RequeueAfter: infraEnvRequeueInterval}, nil
 	}
 	if len(ignition) > ignitionSizeWarningThreshold {
 		r.recorder.Eventf(co, nil, corev1.EventTypeWarning, eventReasonIgnitionSizeWarning, "FetchIgnition",

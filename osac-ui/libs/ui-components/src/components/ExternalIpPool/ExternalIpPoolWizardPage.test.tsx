@@ -165,6 +165,18 @@ describe('ExternalIpPoolWizardPage', () => {
       expect(onExternalIPPoolCreate).not.toHaveBeenCalled();
     });
 
+    it('rejects an IPv6 CIDR', async () => {
+      const onExternalIPPoolCreate = vi.fn();
+      const { user } = renderCreatePage({ onExternalIPPoolCreate });
+
+      await fillPoolStep(user, 'prod-v4', 'fd01::/48');
+      await clickNext(user);
+
+      expect(await screen.findByText('Invalid IPv4 CIDR notation')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Review' })).not.toBeInTheDocument();
+      expect(onExternalIPPoolCreate).not.toHaveBeenCalled();
+    });
+
     it('shows a form-level error and does not navigate when the name already exists', async () => {
       const { user } = renderCreatePage({
         onExternalIPPoolCreate: () => {

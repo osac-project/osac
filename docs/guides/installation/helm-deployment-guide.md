@@ -163,11 +163,11 @@ separate verification.
 Select an exact umbrella chart version using
 [What is released](customer-install-guide.md#11-what-is-released) in the
 customer install guide. Replace `<chart_version>` below with that version,
-without a tag prefix. Umbrella releases use `osac-release/v<VERSION>`; their
-matching `osac/v<VERSION>` source tags point to the same commit and are used
-for the checkout below. Nightly source tags also use `osac/v`. If you already
-set `OSAC_RELEASE_VERSION` while following that guide, keep the same value.
-Use the same shell session for the remaining commands.
+without a tag prefix. For an umbrella release, `osac/v<VERSION>` is the GitHub
+Release tag and checkout tag. The separate `osac-release/v<VERSION>` tag is a
+release-only marker. Nightly source tags also use `osac/v`. If you already set
+`OSAC_RELEASE_VERSION` while following that guide, keep the same value. Use the
+same shell session for the remaining commands.
 
 ```bash
 export OSAC_RELEASE_VERSION="<chart_version>"
@@ -388,7 +388,7 @@ the [customer install guide](customer-install-guide.md#42-configuring-the-helm-v
 
 ```bash
 helm upgrade --install osac \
-    oci://ghcr.io/osac-project/charts/osac \
+    "$OSAC_CHART" \
     --version "$OSAC_RELEASE_VERSION" \
     -n "$NS" --create-namespace \
     -f my-values.yaml \
@@ -1016,7 +1016,7 @@ Confirm that `OSAC_RELEASE_VERSION` matches the selected umbrella release
 and that its chart is available:
 
 ```bash
-helm show chart oci://ghcr.io/osac-project/charts/osac --version "$OSAC_RELEASE_VERSION"
+helm show chart "$OSAC_CHART" --version "$OSAC_RELEASE_VERSION"
 ```
 
 ---

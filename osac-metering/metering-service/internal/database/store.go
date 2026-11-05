@@ -91,6 +91,9 @@ type Progress struct {
 	HeartbeatOffset      int64
 	LastRoundTime        *time.Time
 	LastRoundEventOffset int64
+	// EventTopic is the Kafka topic EventOffset and LastRoundEventOffset were taken
+	// from. Empty means those offsets were stored before the topic was recorded.
+	EventTopic string
 }
 
 // LedgerKey identifies one meter: a resource, a meter definition and component, and one set of
@@ -215,6 +218,34 @@ func TakeTenantLock(ctx context.Context, q Querier, kind LockKind, tenant string
 	return nil
 }
 
+// NoteEventTopic records the event topic the tenant's event offsets belong to. It creates
+// the progress row when the tenant is new. An empty stored topic is an offset written
+// before topics were recorded: it is stamped with topic and the offsets stay, so an
+// upgrade does not replay the log. A different stored topic means the prefix changed, so
+// the offsets from the previous topic are cleared and the fold starts at the beginning
+// of topic. The heartbeat offset is a different topic and stays.
+func (s *Store) NoteEventTopic(ctx context.Context, tenant, topic string) error {
+	_, err := s.pool.Exec(
+		ctx,
+		`INSERT INTO progress (tenant, event_topic) VALUES ($1, $2)
+		 ON CONFLICT (tenant) DO UPDATE SET
+		   event_offset = CASE
+		     WHEN progress.event_topic <> '' AND progress.event_topic <> EXCLUDED.event_topic THEN 0
+		     ELSE progress.event_offset
+		   END,
+		   last_round_event_offset = CASE
+		     WHEN progress.event_topic <> '' AND progress.event_topic <> EXCLUDED.event_topic THEN 0
+		     ELSE progress.last_round_event_offset
+		   END,
+		   event_topic = EXCLUDED.event_topic`,
+		tenant, topic,
+	)
+	if err != nil {
+		return fmt.Errorf("recording event topic %s for tenant %s: %w", topic, tenant, err)
+	}
+	return nil
+}
+
 // EnsureProgress creates the tenant's progress row if it does not exist yet. A new tenant starts
 // at offset 0 of both its topics.
 func (s *Store) EnsureProgress(ctx context.Context, tenant string) error {
@@ -235,10 +266,11 @@ func GetProgress(ctx context.Context, q Querier, tenant string) (Progress, error
 	var lastRound *time.Time
 	err := q.QueryRow(
 		ctx,
-		`SELECT tenant, event_offset, heartbeat_offset, last_round_time, last_round_event_offset
+		`SELECT tenant, event_offset, heartbeat_offset, last_round_time, last_round_event_offset,
+		        event_topic
 		 FROM progress WHERE tenant = $1`,
 		tenant,
-	).Scan(&p.Tenant, &p.EventOffset, &p.HeartbeatOffset, &lastRound, &p.LastRoundEventOffset)
+	).Scan(&p.Tenant, &p.EventOffset, &p.HeartbeatOffset, &lastRound, &p.LastRoundEventOffset, &p.EventTopic)
 	if err != nil {
 		return Progress{}, fmt.Errorf("reading progress of tenant %s: %w", tenant, err)
 	}

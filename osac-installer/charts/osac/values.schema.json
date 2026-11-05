@@ -100,8 +100,30 @@
         },
         "eventTopicPrefix": {
           "type": "string",
-          "description": "Prefix fulfillment prepends to a tenant name to form that tenant's event topic. Metering discovery and the event-topic Kafka permissions use the same value. Include the trailing dot.",
-          "default": "osac.events."
+          "description": "Prefix fulfillment prepends to a tenant name to form that tenant's event topic. Metering discovery and the event-topic Kafka permissions use the same value. Include the trailing dot. Empty uses osac.events. A prefix of osac.metering. (such as osac. or osac.metering.) is rejected: those Kafka prefix permissions also cover metering's own topics. Changing this value stops metering from reading events that were not folded under the previous prefix; facts already folded stay.",
+          "default": "osac.events.",
+          "anyOf": [
+            {
+              "enum": [""]
+            },
+            {
+              "allOf": [
+                {
+                  "pattern": "\\.$"
+                },
+                {
+                  "not": {
+                    "enum": ["osac."]
+                  }
+                },
+                {
+                  "not": {
+                    "pattern": "^osac\\.metering\\."
+                  }
+                }
+              ]
+            }
+          ]
         },
         "networking": {
           "$ref": "#/$defs/globalNetworking"

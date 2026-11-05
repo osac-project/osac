@@ -50,7 +50,7 @@ var _ = DescribeMigration("Protect StorageTier Volume references", func() {
 			_, err := conn.Exec(ctx, `insert into volumes (id, name, tenant, data)
 				values ('volume', 'volume', 'system', $1::jsonb)`, data)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Migrate(ctx, 149)).To(Succeed())
+			Expect(tool.Migrate(ctx, 150)).To(Succeed())
 
 			expectInUse(ctx)
 			_, err = conn.Exec(ctx, `update storage_tiers set data = '{"spec":{"description":"updated"}}' where id = 'tier'`)
@@ -72,7 +72,7 @@ var _ = DescribeMigration("Protect StorageTier Volume references", func() {
 				values ('volume', 'volume', 'system', now(),
 					case when $1 then now() else 'epoch'::timestamptz end, $2::jsonb)`, table), deleted, data)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Migrate(ctx, 149)).To(Succeed())
+			Expect(tool.Migrate(ctx, 150)).To(Succeed())
 
 			_, err = conn.Exec(ctx, `update storage_tiers set deletion_timestamp = now() where id = 'tier'`)
 			Expect(err).ToNot(HaveOccurred())
@@ -84,7 +84,7 @@ var _ = DescribeMigration("Protect StorageTier Volume references", func() {
 	)
 
 	It("allows deletion only after every active Volume reference is removed", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 149)).To(Succeed())
+		Expect(tool.Migrate(ctx, 150)).To(Succeed())
 		_, err := conn.Exec(ctx, `insert into volumes (id, name, tenant, data)
 			values ('first', 'first', 'system', '{"spec":{"storage_tier":"tier"}}'),
 				('second', 'second', 'shared', '{"spec":{"storage_tier":"tier"}}')`)
@@ -101,7 +101,7 @@ var _ = DescribeMigration("Protect StorageTier Volume references", func() {
 
 	DescribeTable("preserves other StorageTier reference protections",
 		func(ctx context.Context, table, data string) {
-			Expect(tool.Migrate(ctx, 149)).To(Succeed())
+			Expect(tool.Migrate(ctx, 150)).To(Succeed())
 			_, err := conn.Exec(ctx, fmt.Sprintf(`insert into %s (id, name, tenant, data)
 				values ('consumer', 'consumer', 'system', $1::jsonb)`, table), data)
 			Expect(err).ToNot(HaveOccurred())

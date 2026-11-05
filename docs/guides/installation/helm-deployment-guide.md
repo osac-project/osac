@@ -516,9 +516,10 @@ Add a node by adding it to `evpn.nodes` and rerunning the phase 1b
 entry and rerunning that command when at least one configured node remains.
 The chart deletes that node's NNCP and `FRRConfiguration` resources. To remove
 the final configured node, set `evpn.enabled: false` and `evpn.nodes: []`,
-then rerun the phase 1b command. That upgrade does not run the EVPN cleanup
-hook, so run the labeled EVPN deletion commands below after the upgrade
-succeeds. Deleting the NNCP does not remove its interface addresses from the
+then rerun the phase 1b command against the workload cluster. That upgrade does
+not run the EVPN cleanup hook, so run the labeled EVPN deletion commands below
+after the upgrade succeeds, with `KUBECONFIG` pointing to the same workload
+cluster. Deleting the NNCP does not remove its interface addresses from the
 node, so remove stale addresses separately when needed.
 
 Uninstalling `osac-infra` does not remove the EVPN resources or revert the

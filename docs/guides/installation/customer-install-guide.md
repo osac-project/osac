@@ -483,9 +483,10 @@ administrators, using the administrator procedure for your environment. The
 provides one example procedure for preparing the required host configuration.
 
 Before installation, confirm these inputs with the administrators preparing
-the VMaaS cluster and fabric. The platform administrator sets them in the
-infra values file passed to `osac-deps` and `osac-infra`; the Helm guide has
-the detailed procedure.
+the VMaaS cluster and fabric. When using the Helm Deployment Guide, the
+platform administrator sets them in the infra values file passed to
+`osac-deps` and `osac-infra`; otherwise, confirm the resulting host
+configuration and BGP readiness with the responsible administrators.
 
 | Value | Information to confirm | Owner or source |
 |---|---|---|

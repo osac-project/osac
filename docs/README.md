@@ -20,6 +20,9 @@ see [Configuring an external Kafka cluster](guides/installation/kafka-configurat
 To run PostgreSQL, OpenBao, Keycloak, or Kafka outside the cluster,
 see the [external services support guide](guides/installation/external-services-support-guide.md).
 
+For tenant machine identities, see the [Tenant Service Accounts Guide](guides/tenant-service-accounts.md)
+for account administration, access grants, credential rotation, and workload authentication.
+
 - [Ethernet FabricDomains](guides/admin/fabric-domains.md): hardware bindings,
   inventory onboarding, membership changes, cleanup, and troubleshooting.
 - [Labels and annotations](guides/admin/metadata.md): reserved metadata,

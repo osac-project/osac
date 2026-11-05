@@ -92,12 +92,6 @@ type publicFinalizerOps struct {
 	update func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error
 }
 
-// publicIDRequest is implemented by the generated public get request of every resource.
-type publicIDRequest interface {
-	proto.Message
-	SetId(string)
-}
-
 // publicUpdateRequest is implemented by the generated public update request of a resource whose public type is P.
 type publicUpdateRequest[P any] interface {
 	proto.Message
@@ -113,7 +107,7 @@ func newRequestOf[T proto.Message]() T {
 
 // newPublicFinalizerOps adapts the Get and Update methods of a public server. The object function extracts the public
 // object from the response of Get, which is the GetObject method of the response type.
-func newPublicFinalizerOps[P proto.Message, G publicIDRequest, R any, U publicUpdateRequest[P], V any](
+func newPublicFinalizerOps[P proto.Message, G finalizerIDRequest, R any, U publicUpdateRequest[P], V any](
 	get func(ctx context.Context, request G) (R, error),
 	update func(ctx context.Context, request U) (V, error),
 	object func(R) P,
@@ -169,15 +163,17 @@ func withPublicDescriptionAndNoMetadata(object proto.Message) proto.Message {
 }
 
 // storeFailingSecretStore is an in-memory secret store whose Store method fails once fail is set, as Vault does when
-// it is unavailable.
+// it is unavailable. It counts the failures, so that specs can tell that a request failed in the store.
 type storeFailingSecretStore struct {
 	*memorySecretStore
-	fail bool
+	fail     bool
+	failures int
 }
 
 func (s *storeFailingSecretStore) Store(ctx context.Context, tenant, project, name string,
 	data map[string][]byte) error {
 	if s.fail {
+		s.failures++
 		return errors.New("vault is unavailable")
 	}
 	return s.memorySecretStore.Store(ctx, tenant, project, name, data)
@@ -306,7 +302,12 @@ func (t finalizerTarget) raceAgainstRelease(table string, writer func(ctx contex
 	writerDone = make(chan error, 1)
 	go func() {
 		defer GinkgoRecover()
-		writerDone <- writer(writerCtx)
+		// Always send a result, so that the spec fails instead of waiting forever if the writer panics:
+		writerErr := errors.New("the writer panicked")
+		defer func() {
+			writerDone <- writerErr
+		}()
+		writerErr = writer(writerCtx)
 	}()
 
 	// Wait until PostgreSQL reports that the second writer is blocked by the first one:
@@ -457,7 +458,7 @@ var _ = Describe("typed finalizer updates", func() {
 			func(c publicFinalizerCase) {
 				t := finalizerCaseFor(c.service).target([]string{finalizerController, finalizerHold})
 				public := c.ops()
-				Expect(t.ops.del(ctx, t.id)).To(Succeed())
+				t.markDeleting(ctx)
 
 				object, err := public.get(ctx, t.id)
 				Expect(err).ToNot(HaveOccurred())
@@ -473,24 +474,10 @@ var _ = Describe("typed finalizer updates", func() {
 
 	Describe("BareMetalInstanceType", func() {
 		// This server applies the masks itself, with compiled paths, before calling the generic update.
-		var server *PrivateBareMetalInstanceTypesServer
 		var update typedUpdater
 
 		BeforeEach(func() {
-			var err error
-			server, err = NewPrivateBareMetalInstanceTypesServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-			update = func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error {
-				_, err := server.Update(ctx, privatev1.BareMetalInstanceTypesUpdateRequest_builder{
-					Object:     object.(*privatev1.BareMetalInstanceType),
-					UpdateMask: mask,
-				}.Build())
-				return err
-			}
+			update = newBareMetalInstanceTypesUpdater()
 		})
 
 		It("persists a finalizer added from the current version", func() {
@@ -547,6 +534,19 @@ var _ = Describe("typed finalizer updates", func() {
 			Entry("at version 0", false),
 			Entry("at a later version", true),
 		)
+
+		// The rule only rejects a request without metadata that would change the finalizers. Without a mask the
+		// merge leaves the stored metadata in place, so a request that only names the object is accepted, even at a
+		// later stored version.
+		It("accepts a request without metadata that leaves the finalizers as they are", func() {
+			t := finalizerCaseFor(privatev1.BareMetalInstanceTypes_ServiceDesc.ServiceName).
+				target([]string{finalizerController, finalizerHold})
+			t.bump(ctx)
+
+			Expect(update(ctx, withoutMetadata(withOnlyIDAndMetadata(t.get(ctx))), nil)).To(Succeed())
+
+			Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
+		})
 	})
 
 	Describe("private wrappers that merge the request into the stored object", func() {
@@ -726,6 +726,7 @@ var _ = Describe("typed finalizer updates", func() {
 			store.fail = true
 
 			Expect(update()).ToNot(Succeed())
+			Expect(store.failures).To(Equal(1), "the request must have failed in the Vault store, after the update")
 			commitSuiteTx()
 
 			Expect(storedFinalizers()).To(BeEmpty(), "the finalizer change must have been rolled back")
@@ -814,7 +815,7 @@ var _ = Describe("typed finalizer updates", func() {
 				public := c.ops()
 				before := t.get(ctx)
 				if variant == "deleting" {
-					Expect(t.ops.del(ctx, t.id)).To(Succeed())
+					t.markDeleting(ctx)
 				}
 
 				object, err := public.get(ctx, t.id)

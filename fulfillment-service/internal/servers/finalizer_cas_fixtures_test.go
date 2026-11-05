@@ -40,8 +40,9 @@ import (
 )
 
 // Fixtures for the finalizer compare-and-swap specs. Every private resource that can carry finalizers has
-// one finalizerCase. The specs run each scenario against the bare GenericServer of the resource, which is the single
-// choke point that all private Update RPCs go through.
+// one finalizerCase. The specs run each scenario against the bare GenericServer of the resource, which is the update
+// path that every private Update RPC ends in; the typed servers that add their own logic around it have their own
+// specs.
 
 const (
 	// finalizerController stands for the finalizer that a controller keeps on an object for its whole life.
@@ -310,12 +311,12 @@ func finalizerCases() []finalizerCase {
 	}, finalizerPlatformCases()...), finalizerTenantCases()...), finalizerNetworkingCases()...)
 }
 
-// finalizerEntries returns one table entry per case, followed by the extra parameters.
-func finalizerEntries(extra ...any) []TableEntry {
+// finalizerEntries returns one table entry per case.
+func finalizerEntries() []TableEntry {
 	cases := finalizerCases()
 	entries := make([]TableEntry, 0, len(cases))
 	for _, c := range cases {
-		entries = append(entries, Entry(c.service, append([]any{c}, extra...)...))
+		entries = append(entries, Entry(c.service, c))
 	}
 	return entries
 }
@@ -370,6 +371,15 @@ func (t finalizerTarget) get(ctx context.Context) proto.Message {
 	object, err := t.ops.get(ctx, t.id)
 	Expect(err).ToNot(HaveOccurred())
 	return object
+}
+
+// markDeleting deletes the object, which only marks it as being deleted because it has finalizers, and checks that it
+// was marked and not archived.
+func (t finalizerTarget) markDeleting(ctx context.Context) {
+	GinkgoHelper()
+	Expect(t.ops.del(ctx, t.id)).To(Succeed())
+	Expect(finalizerMetadataOf(t.get(ctx)).HasDeletionTimestamp()).To(BeTrue(),
+		"the object must be marked as being deleted")
 }
 
 // finalizers returns the stored finalizers.

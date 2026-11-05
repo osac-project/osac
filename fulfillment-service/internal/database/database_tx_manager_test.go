@@ -1,9 +1,11 @@
 package database
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	. "github.com/onsi/ginkgo/v2"
@@ -678,8 +680,17 @@ var _ = Describe("Transaction manager", func() {
 					Expect(called).To(BeFalse())
 				})
 
-			It("Should keep calling the functions and succeed when one of them panics", func() {
-				tx := insert("my_value")
+			It("Should log a panic, keep calling the functions and succeed when one of them panics", func() {
+				var output bytes.Buffer
+				loggingManager, err := NewTxManager().
+					SetLogger(slog.New(slog.NewJSONHandler(&output, nil))).
+					SetPool(pool).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				tx, err := loggingManager.Begin(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tx.Exec(ctx, "insert into my_table (my_column) values ($1)", "my_value")
+				Expect(err).ToNot(HaveOccurred())
 				var calls []string
 				tx.OnCommit(func() {
 					calls = append(calls, "first")
@@ -692,6 +703,17 @@ var _ = Describe("Transaction manager", func() {
 				Expect(tx.End(ctx)).To(Succeed())
 
 				Expect(calls).To(Equal([]string{"first", "second"}))
+				Expect(count()).To(Equal(1))
+				Expect(output.String()).To(ContainSubstring("Function registered to run after commit panicked"))
+				Expect(output.String()).To(ContainSubstring("my panic"))
+			})
+
+			It("Should ignore a nil function", func() {
+				tx := insert("my_value")
+				tx.OnCommit(nil)
+
+				Expect(tx.End(ctx)).To(Succeed())
+
 				Expect(count()).To(Equal(1))
 			})
 

@@ -56,7 +56,7 @@ jobs:
           fi
           if jq -e --arg bot "${CHERRYPICK_BOT}" '
               .author.login == $bot and
-              (.title | test("^\\[release-[0-9][0-9A-Za-z._-]*\\] (NO-ISSUE|[A-Z][A-Z0-9]*-[0-9]+): "))
+              (.title | test("^\\[release-[0-9]+\\.[0-9]+\\] (NO-ISSUE|[A-Z][A-Z0-9]*-[0-9]+): "))
             ' <<<"$VIEW" > /dev/null 2>&1; then
             echo "Jira reference is valid: a cherry-pick of ${CHERRYPICK_BOT} whose title keeps the reference of the original pull request"
             exit 0

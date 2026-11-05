@@ -1,0 +1,30 @@
+suite: node proxy security
+templates:
+  - templates/node-daemonset.yaml
+tests:
+  - it: runs the OSAC socket proxy without privileged host access
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.privileged
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          value:
+            - ALL
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: kubelet-dir
+            mountPath: /var/lib/kubelet
+            readOnly: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: kubelet-dir
+            mountPropagation: Bidirectional

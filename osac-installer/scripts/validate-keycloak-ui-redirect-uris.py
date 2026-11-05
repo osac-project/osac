@@ -20,6 +20,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -102,12 +103,23 @@ def run_script(script: pathlib.Path, env: dict[str, str]) -> int:
 
 
 def helm_template(*args: str) -> str:
-    return subprocess.run(
-        ["helm", "template", str(CHART_DIR), *args],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
+    with tempfile.TemporaryDirectory() as tmpdir:
+        password_file = pathlib.Path(tmpdir) / "keycloak-admin-password"
+        password_file.write_text(secrets.token_urlsafe(32), encoding="utf-8")
+        password_file.chmod(0o600)
+        return subprocess.run(
+            [
+                "helm",
+                "template",
+                str(CHART_DIR),
+                "--set-file",
+                f"keycloak.adminPassword={password_file}",
+                *args,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
 
 
 def render_ui_url(manifest: str) -> str | None:

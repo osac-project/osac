@@ -21,7 +21,6 @@ rules:
   - ""
   resources:
   - namespaces
-  - serviceaccounts
   verbs:
   - create
   - delete
@@ -38,6 +37,17 @@ rules:
   - create
   - get
   - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - agent-install.openshift.io
@@ -191,11 +201,18 @@ rules:
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io
+  resourceNames:
+  - admin
+  resources:
+  - clusterroles
+  verbs:
+  - bind
+- apiGroups:
+  - rbac.authorization.k8s.io
   resources:
   - rolebindings
   verbs:
   - create
-  - delete
   - get
   - list
   - patch

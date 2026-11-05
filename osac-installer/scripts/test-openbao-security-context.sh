@@ -20,7 +20,8 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 # securityContext block.
 render_openbao_security_context() {
   local values_file=$1
-  "${HELM_BIN}" template osac-infra "${INFRA_CHART}" --values "${values_file}" \
+  "${HELM_BIN}" template osac-infra "${INFRA_CHART}" \
+    --set keycloak.devFixtures.enabled=true --values "${values_file}" \
     | awk '/kind: Deployment/{found=0} /app: openbao/{found=1} found && /securityContext:/{sc=1; indent=0; next} sc{
         if(indent==0){match($0,/^[[:space:]]*/); indent=RLENGTH}
         if(NR>1 && match($0,/^[[:space:]]*/)==0){sc=0; next}

@@ -441,6 +441,20 @@ explicit disabled-state suppression, enabled empty-override behavior, and the
 CaaS profile's explicit enablement with inherited defaults. It does not install
 MCE or call an Operator catalog or cluster API.
 
+The `make osac-deps-hook-security-render-test` Helm contract checks the AAP and
+cert-manager hook Jobs' non-root pod context in the default OpenShift render
+and the explicit UID/group supplied by the Kind profile. It also verifies the
+CLI containers retain a read-only root filesystem, no privilege escalation,
+and no added capabilities. This is render-only; it does not execute the hooks
+against a cluster.
+
+The `make keycloak-security-context-test` Helm contract checks read-only root
+filesystems and writable-volume mounts for the bundled Keycloak and PostgreSQL
+containers, and verifies that the database pod does not override the image UID
+used by existing Kind PVCs. It also checks the standalone prerequisite
+manifests. This is render-only; it does not start Keycloak/PostgreSQL or verify
+an in-place upgrade against an existing PVC.
+
 The `make -C osac-installer kind-runtime-test` unit suite is owned by installer
 implementation work. It uses command stubs to check runtime selection, sudo
 authentication and credential expiry, Makefile/host setup routing, native
@@ -861,6 +875,7 @@ Touched-area requirements: [component guide](../osac-aap/AGENTS.md#integration-t
 |---|---|---|---|
 | Unit | `tests/unit/`; `uv run pytest tests/unit` | Filter and isolated plugin behavior | Kubernetes, AAP, cloud, and storage services are mocked or fixture-driven. |
 | Unit / local HTTP transport | `tests/unit/test_netris_external_ip_transport.py`; `uv run pytest tests/unit/test_netris_external_ip_transport.py` | Real Ansible HTTP transport and module subprocesses: authenticated GET/POST/DELETE, allocate/release, sanitized 401 errors, and Cookie isolation for same-origin and same-host cross-port redirects, with and without response `Set-Cookie` headers (session and unrelated cookies). The loopback provider (`tests/unit/netris_session_fixture.py`) rejects missing/incorrect sessions. | Synthetic loopback provider only; no Kind, deployed AAP, provider login, or real Netris. Both supplied and response-derived cookies are excluded on redirects; response-cookie refresh is not accepted by this client. POST/DELETE 307/308 remain rejected under the default urllib policy; explicit `all` tests also check method/body/Content-Type preservation. Live provider compatibility and cookie-refresh requirements remain unverified. |
+| Unit / Helm render | `tests/unit/test_aap_chart_security.py`; from `osac-aap/`, run `uv run pytest tests/unit/test_aap_chart_security.py` | Real Helm render checks the bootstrap container security context and the named admin-secret read-only Role | No Kubernetes cluster or AAP API is contacted. |
 | Unit | `tests/unit/plugins/lookup/test_fulfillment_token.py`; included by `uv run pytest tests/unit` | OIDC discovery validation, Keycloak client-credentials exchange, token caching/refresh, and sanitized failures | Keycloak and Fulfillment are mocked; this does not prove deployed credentials or cross-cluster reachability. |
 | Unit | `tests/unit/test_publish_templates_auth_config.py`; included by `uv run pytest tests/unit` | Parsed publisher pod spec, Kubernetes service-account projection, and OAuth Secret/ConfigMap references | No Kubernetes objects are created and no AAP API or external issuer is contacted. |
 | Unit / isolated role transform ([DEV]) | `uv run --group development ansible-playbook collections/ansible_collections/osac/service/roles/hosted_cluster/tests/test.yml` | Executable NodePool definition transforms: distinct NodeSet names and selectors for the same hardware profile, independent replica counts and scale-up | No Kubernetes resources are created. This is not component-integration or deployed AAP/provider coverage; those gaps remain owned by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843). |
@@ -957,6 +972,7 @@ Touched-area requirements: [component guide](../osac-csi-driver/AGENTS.md#integr
 - **Fulfillment private Volume API contract:** A fake generated client does not prove compatibility with the deployed service.
 - **Vendor attach, detach, mount, or storage lifecycle:** The fake vendor cannot satisfy a real storage-backend requirement.
 - **Helm/deployment changes:** Build an image when container/deployment inputs change.
+- **CSI controller pod security context:** `make -C ../osac-installer csi-render-test` renders the controller Deployment and verifies the OSAC container enforces its image's non-root identity; this does not exercise a deployed CSI controller or storage vendor.
 
 ### Coverage gaps
 

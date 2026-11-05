@@ -55,11 +55,14 @@ keycloak:
   # `make install-infra` overrides it with the osac-ui Route URL.
   uiUrl: "http://ui.osac.localhost:8080"
   adminUsername: admin
-  adminPassword: admin
-  defaultUserPassword: foobar
-  # extraEnv injects additional environment variables into the Keycloak pod.
-  # Use this for SPI overrides that must be set at the server level (e.g.
-  # KC_SPI_CONNECTIONS_HTTP_CLIENT_DEFAULT_DISABLE_TRUST_MANAGER for Kind).
+  # Required unless devFixtures.enabled is true; dev fixtures generate a
+  # random password on first install and reuse the existing Secret on upgrade.
+  adminPassword: ""
+  # Optional override for the random dev-fixture user password.
+  defaultUserPassword: ""
+  # extraEnv injects non-secret settings into both the Quarkus build and the
+  # Keycloak runtime. Build-time options must match between the two stages.
+  # Use this for SPI overrides such as KC_SPI_CONNECTIONS_HTTP_CLIENT_DEFAULT_DISABLE_TRUST_MANAGER.
   extraEnv: []
   oidcIdpTrust:
     # PEM-encoded CA bundle for outbound TLS to an external OIDC identity
@@ -69,9 +72,9 @@ keycloak:
   route:
     hostname: ""
     publicIngress: false
-  # devFixtures seeds known, non-random passwords for the realm's built-in
-  # tenant/test users (admin, user, tenant1_admin, ...). Must stay disabled
-  # outside Kind/CI -- this chart is also used for real installs.
+  # Dev/CI only: seed built-in tenant/test users. When enabled, missing admin
+  # and user passwords are generated randomly and retained from the existing
+  # Secret across Helm upgrades. Keep disabled outside evaluation installs.
   devFixtures:
     enabled: false
     mcpResourceURL: "https://mcp.osac.localhost:8443/"

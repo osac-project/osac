@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import contextlib
 import json
 import re
@@ -71,6 +73,20 @@ class K8sClient:
     def get_json(self, *, resource: str, name: str, namespace: str | None = None) -> dict[str, Any]:
         target_namespace = self.namespace if namespace is None else namespace
         return json.loads(run(*self._base(), "get", resource, name, "-n", target_namespace, "-o", "json"))
+
+    def get_secret_value(self, *, name: str, key: str, namespace: str) -> str:
+        secret = self.get_json(resource="secret", name=name, namespace=namespace)
+        data = secret.get("data")
+        encoded = data.get(key) if isinstance(data, dict) else None
+        if not isinstance(encoded, str) or not encoded:
+            raise RuntimeError(f"Secret {namespace}/{name} has no data for key {key!r}")
+        try:
+            value = base64.b64decode(encoded, validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError) as exc:
+            raise RuntimeError(f"Secret {namespace}/{name} key {key!r} is not valid base64 UTF-8") from exc
+        if not value:
+            raise RuntimeError(f"Secret {namespace}/{name} has an empty value for key {key!r}")
+        return value
 
     def list_json(self, *, resource: str, namespace: str | None = None) -> dict[str, Any]:
         args = [*self._base(), "get", resource]

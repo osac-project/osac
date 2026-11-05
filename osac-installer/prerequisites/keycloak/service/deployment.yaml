@@ -31,11 +31,21 @@ spec:
         app: keycloak-service
     spec:
       serviceAccountName: keycloak-service
+      securityContext:
+        runAsNonRoot: true
       volumes:
       - name: realm-raw
         configMap:
           name: keycloak-realm
       - name: realm
+        emptyDir: {}
+      - name: keycloak-data
+        emptyDir: {}
+      # Build Keycloak's PostgreSQL Quarkus augmentation before starting the
+      # server, so the runtime can keep its root filesystem read-only.
+      - name: keycloak-quarkus
+        emptyDir: {}
+      - name: tmp
         emptyDir: {}
       - name: database-client-cert
         secret:
@@ -44,9 +54,64 @@ spec:
         secret:
           secretName: keycloak-tls-cert
       initContainers:
+      - name: seed-keycloak-quarkus
+        image: quay.io/keycloak/keycloak:26.6.4
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        command:
+        - /bin/sh
+        - -ec
+        - cp -R /opt/keycloak/lib/quarkus/. /keycloak-quarkus/
+        volumeMounts:
+        - name: keycloak-quarkus
+          mountPath: /keycloak-quarkus
+      - name: build-keycloak-quarkus
+        image: quay.io/keycloak/keycloak:26.6.4
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: KC_DB
+          value: postgres
+        - name: HOME
+          value: /tmp
+        - name: TMPDIR
+          value: /tmp
+        command: ["/opt/keycloak/bin/kc.sh", "build"]
+        volumeMounts:
+        - name: keycloak-quarkus
+          mountPath: /opt/keycloak/lib/quarkus
+        - name: keycloak-data
+          mountPath: /opt/keycloak/data
+        - name: tmp
+          mountPath: /tmp
       - name: wait-for-database
         image: quay.io/sclorg/postgresql-18-c10s:c10s
         imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
         command:
         - /bin/bash
         - -c
@@ -58,6 +123,14 @@ spec:
       - name: resolve-realm-secrets
         image: quay.io/openshift/origin-cli:4.21
         imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         command:
         - /bin/bash
         - -c
@@ -115,6 +188,10 @@ spec:
         # -- the Helm chart sets it from keycloak.uiUrl.
         - name: OSAC_UI_URL
           value: ""
+        - name: HOME
+          value: /tmp
+        - name: TMPDIR
+          value: /tmp
         - name: REALM_ADMIN_USERNAME
           valueFrom:
             secretKeyRef:
@@ -131,11 +208,28 @@ spec:
           readOnly: true
         - name: realm
           mountPath: /realm
+        - name: tmp
+          mountPath: /tmp
       containers:
       - name: keycloak
         image: quay.io/keycloak/keycloak:26.6.4
         imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         volumeMounts:
+        - name: keycloak-data
+          mountPath: /opt/keycloak/data
+        - name: keycloak-quarkus
+          mountPath: /opt/keycloak/lib/quarkus
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
         - name: realm
           mountPath: /opt/keycloak/data/import
           readOnly: true
@@ -182,6 +276,7 @@ spec:
           value: ""
         args:
         - start
+        - --optimized
         - --import-realm
         ports:
         - name: https

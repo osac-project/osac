@@ -93,6 +93,8 @@ spec:
   ttlSecondsAfterFinished: 3600
   template:
     spec:
+      securityContext:
+        runAsNonRoot: true
       serviceAccountName: approve-aap-installplan
       restartPolicy: OnFailure
       volumes:
@@ -119,6 +121,8 @@ spec:
             capabilities:
               drop:
                 - ALL
+            seccompProfile:
+              type: RuntimeDefault
           resources:
             requests:
               cpu: 50m

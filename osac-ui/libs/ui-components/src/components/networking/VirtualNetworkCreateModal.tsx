@@ -10,7 +10,7 @@ import {
   Stack,
   StackItem,
 } from '@patternfly/react-core';
-import { Formik } from 'formik';
+import { Formik, useField } from 'formik';
 import * as Yup from 'yup';
 
 import type { VirtualNetwork } from '@osac/types';
@@ -18,26 +18,34 @@ import type { VirtualNetwork } from '@osac/types';
 import { useCreateVirtualNetwork } from '../../api/v1/networking';
 import { InputField } from '../../components/Form/InputField';
 import OsacForm from '../../components/Form/OsacForm';
+import { useSession } from '../../hooks/use-session';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import { buildCidrSchema } from '../../validation/cidr-validation';
 import NameField from '../Form/NameField';
 import ProjectField from '../Form/ProjectField';
+import { type ResourceSelectValue, emptyResourceSelectValue } from '../Form/resourceSelectValue';
+import TenantSelectField from '../Form/TenantSelectField';
 
 type VirtualNetworkCreateFormValues = {
   metadata: {
     name: string;
     project: string;
+    tenant: ResourceSelectValue;
   };
   ipv4Cidr: string;
 };
 
-const VirtualNetworkCreateForm = () => {
+const VirtualNetworkCreateForm = ({ isAdmin }: { isAdmin: boolean }) => {
   const { t } = useTranslation();
+  const [tenantField] = useField<ResourceSelectValue>('metadata.tenant');
+  const [, , projectHelpers] = useField<string>('metadata.project');
+  const tenant = tenantField.value?.id ?? '';
 
   return (
     <OsacForm>
-      <ProjectField />
+      {isAdmin && <TenantSelectField onSelect={() => void projectHelpers.setValue('', false)} />}
+      <ProjectField tenant={isAdmin ? tenant : undefined} isDisabled={isAdmin && !tenant} />
       <NameField />
       <InputField
         name="ipv4Cidr"
@@ -62,6 +70,8 @@ export const VirtualNetworkCreateModal = ({
 }: VirtualNetworkCreateModalProps) => {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const { role } = useSession();
+  const isAdmin = role === 'admin';
   const { mutateAsync: create, error } = useCreateVirtualNetwork();
 
   const validationSchema = useMemo(
@@ -69,16 +79,19 @@ export const VirtualNetworkCreateModal = ({
       Yup.object({
         metadata: Yup.object({
           name: Yup.string().required(t('Name is required')),
+          tenant: isAdmin
+            ? Yup.object({ id: Yup.string().required(t('Tenant is required')) })
+            : Yup.mixed().notRequired(),
         }),
         ipv4Cidr: buildCidrSchema(t, 'ipv4').required(t('IPv4 CIDR is required')),
       }),
-    [t],
+    [isAdmin, t],
   );
 
   return (
     <Formik<VirtualNetworkCreateFormValues>
       initialValues={{
-        metadata: { name: '', project: initialProject },
+        metadata: { name: '', project: initialProject, tenant: emptyResourceSelectValue() },
         ipv4Cidr: '',
       }}
       validationSchema={validationSchema}
@@ -86,7 +99,13 @@ export const VirtualNetworkCreateModal = ({
         let result: VirtualNetwork;
         try {
           result = await create({
-            metadata: values.metadata,
+            metadata: {
+              name: values.metadata.name,
+              project: values.metadata.project,
+              ...(isAdmin && values.metadata.tenant.id
+                ? { tenant: values.metadata.tenant.id }
+                : {}),
+            },
             spec: {
               ipv4Cidr: values.ipv4Cidr || undefined,
             },
@@ -113,7 +132,7 @@ export const VirtualNetworkCreateModal = ({
           <ModalBody>
             <Stack hasGutter>
               <StackItem>
-                <VirtualNetworkCreateForm />
+                <VirtualNetworkCreateForm isAdmin={isAdmin} />
               </StackItem>
               {!!error && (
                 <StackItem>

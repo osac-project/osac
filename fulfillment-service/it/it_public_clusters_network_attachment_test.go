@@ -233,6 +233,8 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 	})
 
 	Context("Tenant-default networking", func() {
+		// Tenant defaults live in the tenant's default project, which has no name.
+		const tenantDefaultProject = ""
 		var tenant string
 
 		BeforeEach(func() {
@@ -481,8 +483,10 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		DescribeTable("classifies an omitted attachment with an unusable tenant default",
 			func(configure func(project, virtualNetworkId string), code grpccodes.Code, reason string) {
 				project := createCatalogItemProjectFixture(ctx, tenant)
-				virtualNetworkId := newIsolatedVirtualNetwork(project, true)
-				configure(project, virtualNetworkId)
+				// The defaults live in the tenant's default project, as the default networking manager creates
+				// them; the Cluster is in another project of the tenant.
+				virtualNetworkId := newIsolatedVirtualNetwork(tenantDefaultProject, true)
+				configure(tenantDefaultProject, virtualNetworkId)
 
 				clusterId := fmt.Sprintf("test-cluster-%s", uuid.New())
 				DeferCleanup(func(cleanupCtx context.Context) {
@@ -538,9 +542,9 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 
 		It("resolves ready tenant defaults and stores both references", func() {
 			project := createCatalogItemProjectFixture(ctx, tenant)
-			virtualNetworkId := newIsolatedVirtualNetwork(project, true)
-			defaultSubnetId := newProjectSubnet(project, virtualNetworkId, true, "ready")
-			defaultSecurityGroupId := newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
+			virtualNetworkId := newIsolatedVirtualNetwork(tenantDefaultProject, true)
+			defaultSubnetId := newProjectSubnet(tenantDefaultProject, virtualNetworkId, true, "ready")
+			defaultSecurityGroupId := newProjectSecurityGroup(tenantDefaultProject, virtualNetworkId, true, "ready")
 
 			clusterId := fmt.Sprintf("test-cluster-%s", uuid.New())
 			DeferCleanup(func(cleanupCtx context.Context) {

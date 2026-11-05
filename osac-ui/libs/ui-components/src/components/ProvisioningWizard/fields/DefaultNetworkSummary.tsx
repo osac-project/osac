@@ -19,12 +19,9 @@ import {
   useSecurityGroups,
   useSubnets,
 } from '../../../api/v1/networking';
+import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
-
-interface DefaultNetworkSummaryProps {
-  project: string;
-}
 
 const newestFirst = (
   a: { metadata?: { creationTimestamp?: { seconds: bigint; nanos: number } } },
@@ -38,14 +35,20 @@ const newestFirst = (
   return (bTime?.nanos ?? 0) - (aTime?.nanos ?? 0);
 };
 
-const DefaultNetworkSummary = ({ project }: DefaultNetworkSummaryProps) => {
+const DefaultNetworkSummary = () => {
   const { t } = useTranslation();
-  const subnetsQuery = useSubnets({ filter: defaultSubnetListFilter(project) });
+  // Tenant defaults live in the tenant's default project and apply to every
+  // project of the tenant. Only tenant users reach the provisioning wizards, so
+  // the session tenant is the workload's tenant.
+  const { tenantId } = useSession();
+  const inScope = (metadata?: { tenant?: string; project?: string }) =>
+    metadata?.tenant === tenantId && metadata?.project === '';
+  const subnetsQuery = useSubnets({ filter: defaultSubnetListFilter(tenantId) });
   const subnet = subnetsQuery.data
     ?.filter(
       (item) =>
         item.metadata?.labels?.['osac.openshift.io/default'] === 'true' &&
-        item.metadata.project === project &&
+        inScope(item.metadata) &&
         !item.metadata.deletionTimestamp &&
         item.status?.state === SubnetState.READY &&
         Boolean(item.spec?.ipv4Cidr),
@@ -53,14 +56,16 @@ const DefaultNetworkSummary = ({ project }: DefaultNetworkSummaryProps) => {
     .sort(newestFirst)[0];
   const virtualNetworkId = subnet?.spec?.virtualNetwork?.id ?? '';
   const securityGroupsQuery = useSecurityGroups(
-    { filter: defaultSecurityGroupListFilter(project, virtualNetworkId) },
+    {
+      filter: defaultSecurityGroupListFilter(tenantId, virtualNetworkId),
+    },
     { enabled: Boolean(virtualNetworkId) },
   );
   const securityGroup = securityGroupsQuery.data
     ?.filter(
       (group) =>
         group.metadata?.labels?.['osac.openshift.io/default'] === 'true' &&
-        group.metadata.project === project &&
+        inScope(group.metadata) &&
         !group.metadata.deletionTimestamp &&
         group.spec?.virtualNetwork?.id === virtualNetworkId &&
         group.status?.state === SecurityGroupState.READY,

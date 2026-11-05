@@ -813,19 +813,23 @@ func (s *GenericServer[O]) checkFinalizerChange(requestObject, currentObject, me
 	return nil
 }
 
-// logFinalizerChange records a finalizer change that passed the compare-and-swap check, with the stored
-// version it was checked against, so that every finalizer transition of an object can be traced to the
-// request that made it. Requests that leave the finalizers as they are log nothing.
-func (s *GenericServer[O]) logFinalizerChange(ctx context.Context, id string, currentObject, mergedObject O) {
+// logFinalizerChange records a finalizer change that has been written, with the stored version it
+// was checked against, so that every finalizer transition of an object can be traced to the request
+// that made it. The lists logged are the ones of the stored object, which is what the database
+// returns after the write. It runs after the write, so requests that are rejected on the way log
+// nothing, and requests that leave the finalizers as they are log nothing either. The write belongs
+// to the transaction of the request, so a failure to commit it can still leave a line for a change
+// that was not stored.
+func (s *GenericServer[O]) logFinalizerChange(ctx context.Context, id string, currentObject, writtenObject O) {
 	currentMetadata := s.getMetadata(currentObject)
 	before := metadataFinalizers(currentMetadata)
-	after := metadataFinalizers(s.getMetadata(mergedObject))
+	after := metadataFinalizers(s.getMetadata(writtenObject))
 	if sameFinalizers(before, after) {
 		return
 	}
 	s.logger.InfoContext(
 		ctx,
-		"Updating finalizers",
+		"Updated finalizers",
 		slog.String("id", id),
 		slog.Any("from", before),
 		slog.Any("to", after),
@@ -928,7 +932,6 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 	if err = s.checkFinalizerChange(requestObject, currentObject, tmpObject); err != nil {
 		return err
 	}
-	s.logFinalizerChange(ctx, requestId, currentObject, tmpObject)
 
 	if !prepareBeforeValidation {
 		// Validate the merged object using protovalidate.
@@ -989,6 +992,7 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		if err != nil {
 			return s.translateUpdateError(ctx, requestId, err)
 		}
+		s.logFinalizerChange(ctx, requestId, currentObject, updateResponse.GetObject())
 		responseObject = updateResponse.GetObject()
 	} else {
 		responseObject = tmpObject

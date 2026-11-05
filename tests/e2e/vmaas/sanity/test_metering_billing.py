@@ -749,8 +749,9 @@ def test_metering_external_billing_account_on_heartbeats(
     """Heartbeats on the tenant topic carry the private tenant billing id.
 
     The JWT tenant is already onboarded, so the test sets the field through
-    private Tenants/Update with a full spec replacement: that is the same
-    document Create writes. Three paths from the design test plan:
+    private Tenants/Update with an update mask on spec.external_billing_id, so
+    the rest of the tenant stays as stored. Three paths from the design test
+    plan:
 
     - omit: a tenant without the field publishes heartbeats that omit the key
     - present: setting the field makes later heartbeats carry it

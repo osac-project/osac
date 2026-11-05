@@ -1,13 +1,8 @@
-# NICo BMaaS pilot overlay. Apply after kind-instance-devfull.yaml.
+# NICo BMaaS pilot overlay for the OSAC chart. Apply after
+# kind-instance-devfull.yaml. AWX project settings for the devstack chart are
+# supplied separately by redeploy-nico-pilot.sh.
 # NICo credentials and the OSAC-to-NICo tenant/subnet mapping live in a scoped
 # AAP credential, never in this Helm values file.
-# Pass this overlay to install-devstack as well as the later OSAC upgrade so
-# its AWX project and BMI template catalog use the NICo pilot revision.
-awx:
-  project:
-    scmUrl: https://github.com/vladikr/osac.git
-    scmBranch: no-issue/nico-bmaas-integration-audit
-    controllerVarsUrl: https://raw.githubusercontent.com/vladikr/osac/301eba88a44ba006f28b317e1f8fddbbd11557fd/osac-aap/collections/ansible_collections/osac/config_as_code/roles/aap/vars/controller.yml
 bmf:
   configMaps:
     nicoTenantBindings: osac-nico-tenant-bindings

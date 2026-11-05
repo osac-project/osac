@@ -75,11 +75,11 @@ make -C "${repo_dir}/osac-aap" kind-load-image IMG="${ee_image}" CONTAINER_TOOL=
 make -C "${repo_dir}/bare-metal-fulfillment-operator" image-build IMG="${bmf_image}" CONTAINER_TOOL="${container_tool}"
 make -C "${repo_dir}/bare-metal-fulfillment-operator" kind-load-image IMG="${bmf_image}" CONTAINER_TOOL="${container_tool}" KIND_CLUSTER_NAME="${kind_cluster}" NS="${namespace}"
 
-pilot_values="-f values/dev/kind-instance-devfull.yaml -f values/dev/kind-instance-nico-pilot.yaml"
-devstack_values="${pilot_values} --set-string awx.executionEnvironment.image=${ee_image} --set-string awx.project.scmUrl=${repo_url} --set-string awx.project.scmBranch=${branch} --set-string awx.project.controllerVarsUrl=${catalog_url}"
-osac_values="-f values/dev/kind-instance-devfull.yaml"
+devfull_values="-f values/dev/kind-instance-devfull.yaml"
+devstack_values="${devfull_values} --set-string awx.executionEnvironment.image=${ee_image} --set-string awx.project.scmUrl=${repo_url} --set-string awx.project.scmBranch=${branch} --set-string awx.project.controllerVarsUrl=${catalog_url}"
+osac_values="${devfull_values}"
 if [[ "${enable_bmf}" == yes ]]; then
-  osac_values="${pilot_values} --set bmf.replicaCount=1"
+  osac_values="${osac_values} -f values/dev/kind-instance-nico-pilot.yaml --set bmf.replicaCount=1"
 else
   osac_values="${osac_values} --set bmf.replicaCount=0"
 fi

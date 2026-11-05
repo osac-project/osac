@@ -60,9 +60,7 @@ jobs:
       repo: ${{ github.repository }}
       sha: ${{ github.event.merge_group.head_sha }}
       pr-number: ${{ needs.entry.outputs.pr-number }}
-      # This workflow runs for a queue entry only, so telemetry is always on here: every attempt leaves a capture the
-      # Pull requests dashboard can link to. The suite is called once, so no capture runs twice.
-      ci-observe: true
+      # Telemetry is always on for every suite run; this workflow has no switch.
     secrets:
       CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
 
@@ -79,8 +77,7 @@ jobs:
       repo: ${{ github.repository }}
       sha: ${{ github.event.merge_group.head_sha }}
       pr-number: ${{ needs.entry.outputs.pr-number }}
-      # Always on here: this workflow runs for a queue entry only (see the vmaas job).
-      ci-observe: true
+      # Always on for every suite run (see the vmaas job).
     secrets:
       CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
 
@@ -97,8 +94,7 @@ jobs:
       repo: ${{ github.repository }}
       sha: ${{ github.event.merge_group.head_sha }}
       pr-number: ${{ needs.entry.outputs.pr-number }}
-      # Always on here: this workflow runs for a queue entry only (see the vmaas job).
-      ci-observe: true
+      # Always on for every suite run (see the vmaas job).
     secrets:
       CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
 

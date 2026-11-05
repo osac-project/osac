@@ -429,20 +429,6 @@ func populatedChild(message protoreflect.Message, name string) protoreflect.Mess
 	return message.Get(field).Message()
 }
 
-// normalizeFieldMaskPath trims whitespace from each dot-separated part of a
-// field-mask path and removes empty parts, so spellings like "status. state"
-// and "status..state" normalize to "status.state".
-func normalizeFieldMaskPath(path string) string {
-	parts := strings.Split(path, ".")
-	normalizedParts := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part = strings.TrimSpace(part); part != "" {
-			normalizedParts = append(normalizedParts, part)
-		}
-	}
-	return strings.Join(normalizedParts, ".")
-}
-
 func (s *ComputeInstancesServer) Delete(ctx context.Context,
 	request *publicv1.ComputeInstancesDeleteRequest) (response *publicv1.ComputeInstancesDeleteResponse, err error) {
 	// Create private request:

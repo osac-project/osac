@@ -140,18 +140,26 @@ var _ = Describe("Generic server", func() {
 		originalCreator := created.GetMetadata().GetCreator()
 
 		for _, testCase := range []struct {
-			name     string
-			mask     *fieldmaskpb.FieldMask
-			rejected bool
+			name          string
+			mask          *fieldmaskpb.FieldMask
+			updateCreator bool
+			description   string
+			rejected      bool
 		}{
-			{name: "creator path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.creator"}}, rejected: true},
-			{name: "parent metadata path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata"}}, rejected: true},
-			{name: "missing mask", rejected: true},
-			{name: "empty mask is a no-op", mask: &fieldmaskpb.FieldMask{}},
+			{name: "creator path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.creator"}}, updateCreator: true, rejected: true},
+			{name: "normalized creator path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata..creator"}}, updateCreator: true, rejected: true},
+			{name: "parent metadata path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata"}}, updateCreator: true, rejected: true},
+			{name: "missing mask preserves ordinary updates", description: "updated without mask"},
+			{name: "empty mask is a no-op", mask: &fieldmaskpb.FieldMask{}, updateCreator: true},
 		} {
 			By(testCase.name)
 			updateObject := proto.Clone(created).(*privatev1.BareMetalInstanceTemplate)
-			updateObject.GetMetadata().SetCreator("attacker-user")
+			if testCase.updateCreator {
+				updateObject.GetMetadata().SetCreator("attacker-user")
+			}
+			if testCase.description != "" {
+				updateObject.SetDescription(testCase.description)
+			}
 			var updateResponse *privatev1.BareMetalInstanceTemplatesUpdateResponse
 			err = server.Update(ctx, privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
 				Object:     updateObject,
@@ -169,6 +177,9 @@ var _ = Describe("Generic server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(updateResponse).ToNot(BeNil())
 				Expect(updateResponse.GetObject().GetMetadata().GetCreator()).To(Equal(originalCreator))
+				if testCase.description != "" {
+					Expect(updateResponse.GetObject().GetDescription()).To(Equal(testCase.description))
+				}
 			}
 
 			getResponse := &privatev1.BareMetalInstanceTemplatesGetResponse{}

@@ -423,12 +423,10 @@ func inheritReferenceScope(ref interface {
 	}
 }
 
-// validateDependencyOwnerScope checks target's tenant against owner, independently of what
-// the caller can see. An explicit tenant must match the target. Without one, the compatibility
-// behavior allows owner-tenant or shared targets. Project checks for local references belong to
-// resolveResourceInScope.
+// validateDependencyOwnerScope checks that the target belongs to the explicit tenant when
+// one is selected. Without one, the compatibility behavior allows targets in the owner's or
+// shared tenant. Project checks for local references belong to resolveResourceInScope.
 // kind names the referenced type in errors; source adds the referencing field, or is empty.
-
 func validateDependencyOwnerScope(owner referenceScope, target *privatev1.Metadata, tenant, kind, source string) error {
 	if tenant != "" {
 		if target.GetTenant() != tenant {

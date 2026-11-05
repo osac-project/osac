@@ -623,9 +623,11 @@ message ThingsUpdateResponse {
     request fail with `Internal`.
   - The version covers the whole object. A client that keeps writing its own object can make a
     concurrent finalizer write return `Aborted`, so controllers must expect this and retry.
-  - The reconciler loop retries every `Aborted` returned by a reconciler function after 1 second,
+  - The reconciler loop retries an `Aborted` returned by a reconciler function after 1 second,
     with exponential backoff capped at 1 minute. Conflict-only failures are logged at DEBUG and at
-    WARN once the backoff reaches the cap.
+    WARN once the backoff reaches the cap. An `Aborted` that already carries a retry interval (see
+    `RequeueAfter`) keeps that interval and is logged at ERROR, as is a conflict joined with any
+    other failure.
 
 For the `metadata.labels` and `metadata.annotations` map rules, including reserved-entry handling,
 see [Administrator-only metadata](#administrator-only-metadata). The REST gateway normally builds

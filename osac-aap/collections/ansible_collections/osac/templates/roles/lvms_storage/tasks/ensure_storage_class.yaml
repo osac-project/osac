@@ -194,7 +194,7 @@
 
 - name: Check existing tenant StorageClasses
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit, true) }}"
     validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
     api_version: storage.k8s.io/v1
     kind: StorageClass
@@ -212,7 +212,7 @@
 
 - name: Create missing per-tenant StorageClasses
   kubernetes.core.k8s:
-    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit, true) }}"
     validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
     state: present
     definition:

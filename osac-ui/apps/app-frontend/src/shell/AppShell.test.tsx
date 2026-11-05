@@ -61,7 +61,7 @@ describe('AppShell', () => {
       await screen.findByRole('heading', { name: 'Bare metal instance types' }),
     ).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText('No bare metal instance types yet.')).toBeInTheDocument();
+      expect(screen.getByText('No bare metal instance types found')).toBeInTheDocument();
     });
   });
 

@@ -66,6 +66,19 @@ func finalizerCaseFor(service string) finalizerCase {
 	return finalizerCase{}
 }
 
+// publicFinalizerCaseFor returns the public server case of the given private service, failing the spec if there is
+// none.
+func publicFinalizerCaseFor(service string) publicFinalizerCase {
+	GinkgoHelper()
+	for _, c := range publicFinalizerCases() {
+		if c.service == service {
+			return c
+		}
+	}
+	Fail("there is no public finalizer case for " + service)
+	return publicFinalizerCase{}
+}
+
 // typedUpdater sends an update through a typed server. The object must be of the private type of the resource.
 type typedUpdater func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error
 
@@ -461,6 +474,24 @@ var _ = Describe("typed finalizer updates", func() {
 			Entry("DiskImages at a later version", privatev1.DiskImages_ServiceDesc.ServiceName,
 				newDiskImagesUpdater, true),
 		)
+
+		// With a nil mask the merge forwards the finalizers of the request, so a stale whole-object write would bring
+		// back a finalizer that another writer released after the stale read. It carries an old version, so it is
+		// rejected as a conflict instead.
+		DescribeTable("rejects a stale nil-mask write that would restore a released finalizer",
+			func(service string, newUpdate func() typedUpdater) {
+				update := newUpdate()
+				t := finalizerCaseFor(service).target([]string{finalizerController, finalizerHold})
+				stale := t.get(ctx)
+				t.release(ctx, finalizerController)
+
+				err := update(ctx, stale, nil)
+
+				t.expectFinalizerConflict(ctx, err, finalizerController)
+			},
+			Entry("InstanceTypes", privatev1.InstanceTypes_ServiceDesc.ServiceName, newInstanceTypesUpdater),
+			Entry("DiskImages", privatev1.DiskImages_ServiceDesc.ServiceName, newDiskImagesUpdater),
+		)
 	})
 
 	Describe("public servers that read the object before the update", func() {
@@ -489,6 +520,13 @@ var _ = Describe("typed finalizer updates", func() {
 			Entry("Clusters", privatev1.Clusters_ServiceDesc.ServiceName, "clusters", func() publicFinalizerOps {
 				return newPublicClustersOps()
 			}),
+			Entry("DiskImages", privatev1.DiskImages_ServiceDesc.ServiceName, "disk_images", func() publicFinalizerOps {
+				return publicFinalizerCaseFor(privatev1.DiskImages_ServiceDesc.ServiceName).ops()
+			}),
+			Entry("InstanceTypes", privatev1.InstanceTypes_ServiceDesc.ServiceName, "instance_types",
+				func() publicFinalizerOps {
+					return publicFinalizerCaseFor(privatev1.InstanceTypes_ServiceDesc.ServiceName).ops()
+				}),
 		)
 	})
 

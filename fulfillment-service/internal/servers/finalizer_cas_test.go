@@ -460,7 +460,9 @@ func finalizerEntriesPerLifecycle() []TableEntry {
 	return entries
 }
 
-// finalizerEntriesPerMask returns an entry for each resource and each way of selecting the finalizers.
+// finalizerEntriesPerMask returns an entry for each resource and each way of selecting the finalizers. The indexed path
+// replaces a single entry of the stored list, so a stale write through it changes the finalizer set as well. The
+// overlapping masks select the finalizers twice, or together with the version.
 func finalizerEntriesPerMask() []TableEntry {
 	masks := []struct {
 		name string
@@ -469,6 +471,9 @@ func finalizerEntriesPerMask() []TableEntry {
 		{"metadata mask", finalizerMaskOf("metadata")},
 		{"nil mask", nil},
 		{"metadata.finalizers mask", finalizerMaskOf("metadata.finalizers")},
+		{"metadata.finalizers.0 mask", finalizerMaskOf("metadata.finalizers.0")},
+		{"metadata and metadata.finalizers mask", finalizerMaskOf("metadata", "metadata.finalizers")},
+		{"metadata.finalizers and metadata.version mask", finalizerMaskOf("metadata.finalizers", "metadata.version")},
 	}
 	var entries []TableEntry
 	for _, c := range finalizerCases() {

@@ -31,7 +31,6 @@ import SecretDetailsActionButtons from './SecretDetailsActionButtons';
 import { Timestamp } from '../../Primitives/Timestamp';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
 import ResourceDetailsPage from '../../Resource/ResourceDetailsPage';
-import { SubtleContent } from '../../SubtleContent/SubtleContent';
 import { decodeSecretValue, getDataEntries } from '../CreatePage/values';
 import { downloadSecretBytes, getSecretType } from '../utils';
 
@@ -86,9 +85,6 @@ const SecretDetailsPageContent = ({ secret }: SecretDetailsPageContentProps) => 
             <Stack hasGutter>
               <StackItem>
                 <Title headingLevel="h5">{t('Overview')}</Title>
-                {secret.metadata?.description && (
-                  <SubtleContent>{secret.metadata?.description}</SubtleContent>
-                )}
               </StackItem>
               <StackItem>
                 <DescriptionList>

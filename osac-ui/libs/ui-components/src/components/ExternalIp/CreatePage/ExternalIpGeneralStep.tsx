@@ -1,6 +1,5 @@
 import { Stack, StackItem, Title } from '@patternfly/react-core';
 
-import { InputField } from '@osac/ui-components/components/Form/InputField';
 import NameField from '@osac/ui-components/components/Form/NameField';
 import OsacForm from '@osac/ui-components/components/Form/OsacForm';
 import ProjectField from '@osac/ui-components/components/Form/ProjectField';
@@ -20,12 +19,6 @@ const ExternalIpGeneralStep = () => {
         <OsacForm>
           <ProjectField />
           <NameField />
-          <InputField
-            name="metadata.description"
-            label={t('Description')}
-            fieldId="description-field"
-            multiline
-          />
         </OsacForm>
       </StackItem>
     </Stack>

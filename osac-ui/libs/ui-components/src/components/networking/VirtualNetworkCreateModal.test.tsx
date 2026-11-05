@@ -31,8 +31,6 @@ const projects: Project[] = [
     id: 'project-1',
     metadata: {
       $typeName: 'osac.public.v1.Metadata',
-      displayName: '',
-      description: '',
       name: 'my-project',
       annotations: {},
       creator: 'foo',

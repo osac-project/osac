@@ -10,7 +10,6 @@ export const getExternalIpSchema = (t: TFunction) =>
   Yup.object({
     metadata: Yup.object({
       name: resourceNameSchema(t),
-      description: Yup.string(),
     }),
     pool: Yup.object({
       id: Yup.string().required(t('An external IP pool is required')),

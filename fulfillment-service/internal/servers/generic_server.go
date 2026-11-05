@@ -677,6 +677,8 @@ func (s *GenericServer[O]) applyMaskAndRestoreProtectedFields(
 	requestMask *fieldmaskpb.FieldMask,
 ) (O, error) {
 	var tmpObject O
+	// Public ComputeInstances already reject creator changes in their own update validation.
+	// This guard closes the private API gap without changing public handling.
 	if !isPublicAPIView(ctx) {
 		// A nil mask replaces the full object; an explicit empty mask applies no paths below.
 		selectsCreator := requestMask == nil ||

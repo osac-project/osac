@@ -57,6 +57,6 @@ describe('TenantSelectField', () => {
     await waitFor(() => {
       expect(screen.getByRole('combobox', { name: 'Type to filter' })).toHaveValue('Tenant One');
     });
-    expect(document.getElementById('catalog-item-tenant')).toHaveClass('pf-m-disabled');
+    expect(document.getElementById('tenant-field')).toHaveClass('pf-m-disabled');
   });
 });

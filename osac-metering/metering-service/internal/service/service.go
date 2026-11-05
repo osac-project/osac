@@ -545,8 +545,10 @@ func (s *Service) runTenantLoops(ctx context.Context, tenant string, loops *tena
 	defer close(loops.stopped)
 
 	// Stamp the topic before the round reads the offset. The fold stamps it again.
-	if err := s.cfg.Store.NoteEventTopic(ctx, tenant, topics.EventTopic(s.cfg.EventTopicPrefix, tenant)); err != nil {
-		s.cfg.Logger.Error(err, "recording the event topic", "tenant", tenant)
+	if err := s.cfg.Store.NoteEventTopic(
+		ctx, tenant, topics.EventTopic(s.cfg.EventTopicPrefix, tenant), topics.EventTopic("", tenant),
+	); err != nil {
+		s.cfg.Logger.Error(err, "recording the event topic")
 		loops.fail()
 		return
 	}

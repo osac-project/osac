@@ -19,6 +19,7 @@ package inventory
 
 import (
 	"context"
+	"errors"
 )
 
 // Config is a struct that holds info needed to create a new client implementation
@@ -44,7 +45,17 @@ type Host struct {
 	// OpenStack) always set true; the BCM backend sets false until the
 	// on-demand BareMetalHost has completed Metal3 registration/inspection.
 	Available bool
+	// SelectedLogicalPortMAC is the normalized MAC for the requested logical
+	// port when FindFreeHost was called with a port name.
+	SelectedLogicalPortMAC string
 }
+
+var (
+	// ErrInvalidLogicalPortMAC indicates the requested port has no usable MAC.
+	ErrInvalidLogicalPortMAC = errors.New("invalid logical port MAC")
+	// ErrMalformedLogicalPortMACMapping indicates the backend mapping could not be parsed.
+	ErrMalformedLogicalPortMACMapping = errors.New("malformed logical port MAC mapping")
+)
 
 // HostNIC represents a physical network interface on an inventory host.
 type HostNIC struct {
@@ -54,8 +65,9 @@ type HostNIC struct {
 
 // Client interface for inventory implementations
 type Client interface {
-	// FindFreeHost returns a host with matching fields that is not already assigned
-	FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*Host, error)
+	// FindFreeHost returns a matching unassigned host. When a logical port is
+	// provided, candidates without a valid MAC for that port are skipped.
+	FindFreeHost(ctx context.Context, matchExpressions map[string]string, selectedLogicalPort ...string) (*Host, error)
 
 	// AssignHost attempts to mark a host as assigned
 	// bareMetalInstanceID must be non-empty; implementations should reject empty values.

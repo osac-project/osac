@@ -171,7 +171,11 @@ var reservedExtraValueKeys = map[string]bool{
 // satisfy the selector labels (arbitrary key=value, matched client-side against
 // extra_values — the BCM JSON API has no server-side filtering). managedBy is a
 // default-aware ownership guard; provisionState is excluded (no BCM analog).
-func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*Host, error) {
+func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string, selectedLogicalPorts ...string) (*Host, error) {
+	logicalPort, err := requestedLogicalPort(selectedLogicalPorts)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateBCMMatchExpressions(matchExpressions); err != nil {
 		return nil, err
 	}
@@ -244,18 +248,27 @@ func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[strin
 		candidates[i], candidates[j] = candidates[j], candidates[i]
 	})
 
-	selected := &candidates[0]
-	// Report the selected device's resource_class as HostType (observability only;
-	// resource_class is also matchable as an ordinary label).
-	resourceClass, _ := selected.ExtraValues[bcmclient.ExtraValueResourceClass].(string)
-
-	return &Host{
-		InventoryHostID: fmt.Sprintf("%s/%s", c.bmhManager.Namespace(), selected.Hostname),
-		Name:            selected.Hostname,
-		HostType:        resourceClass,
-		HostClass:       c.hostClass,
-		ManagedBy:       matchManagedBy,
-	}, nil
+	for i := range candidates {
+		selected := &candidates[i]
+		// Report resource_class as HostType (observability only; it is also
+		// matchable as an ordinary selector label).
+		resourceClass, _ := selected.ExtraValues[bcmclient.ExtraValueResourceClass].(string)
+		host := &Host{
+			InventoryHostID: fmt.Sprintf("%s/%s", c.bmhManager.Namespace(), selected.Hostname),
+			Name:            selected.Hostname,
+			HostType:        resourceClass,
+			HostClass:       c.hostClass,
+			ManagedBy:       matchManagedBy,
+		}
+		eligible, err := hostSupportsLogicalPort(ctx, c, host, logicalPort)
+		if err != nil {
+			return nil, fmt.Errorf("FindFreeHost: resolve selected logical port MAC: %w", err)
+		}
+		if eligible {
+			return host, nil
+		}
+	}
+	return nil, nil
 }
 
 // validateBCMMatchExpressions rejects an empty selector, empty keys, keys with
@@ -782,7 +795,7 @@ func (c *BCMClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHostID 
 	} else if value != nil {
 		raw, err = json.Marshal(value)
 		if err != nil {
-			return nil, fmt.Errorf("host %s: failed to marshal %s extra value: %w", inventoryHostID, bcmclient.ExtraValueInterfaceMACs, err)
+			return nil, fmt.Errorf("host %s: failed to marshal %s extra value: %w: %v", inventoryHostID, bcmclient.ExtraValueInterfaceMACs, ErrMalformedLogicalPortMACMapping, err)
 		}
 	}
 	if len(raw) == 0 {
@@ -790,7 +803,7 @@ func (c *BCMClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHostID 
 	}
 	macs := map[string]string{}
 	if err := json.Unmarshal(raw, &macs); err != nil {
-		return nil, fmt.Errorf("host %s: failed to parse %s mapping: %w", inventoryHostID, bcmclient.ExtraValueInterfaceMACs, err)
+		return nil, fmt.Errorf("host %s: failed to parse %s mapping: %w: %v", inventoryHostID, bcmclient.ExtraValueInterfaceMACs, ErrMalformedLogicalPortMACMapping, err)
 	}
 	return macs, nil
 }

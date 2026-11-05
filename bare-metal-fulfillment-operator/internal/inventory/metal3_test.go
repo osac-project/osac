@@ -464,6 +464,33 @@ func TestValidateMetal3MatchExpressions(t *testing.T) {
 func TestFindFreeHost(t *testing.T) {
 	ctx := context.Background()
 
+	t.Run("skips hosts without a valid MAC for the selected logical port", func(t *testing.T) {
+		invalid := newBMHBuilder("host-invalid").
+			WithNICs(testNIC("AA:BB:CC:DD:EE:01")).
+			WithAnnotations(map[string]string{HostInterfaceMACsAnnotation: `{"other":"52:54:00:00:00:01"}`}).BuildObjects()
+		unparseable := newBMHBuilder("host-unparseable").
+			WithNICs(testNIC("AA:BB:CC:DD:EE:03")).
+			WithAnnotations(map[string]string{HostInterfaceMACsAnnotation: "not-json"}).BuildObjects()
+		valid := newBMHBuilder("host-valid").
+			WithNICs(testNIC("AA:BB:CC:DD:EE:02")).
+			WithAnnotations(map[string]string{HostInterfaceMACsAnnotation: `{"data-0":"52-54-00-AA-BB-CC"}`}).BuildObjects()
+
+		m := newMetal3ClientForTest(append(append(invalid, unparseable...), valid...)...)
+		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"}, "data-0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if host == nil {
+			t.Fatal("expected the valid host, got nil")
+		}
+		if host.Name != "host-valid" {
+			t.Errorf("Name = %q, want host-valid", host.Name)
+		}
+		if host.SelectedLogicalPortMAC != "52:54:00:aa:bb:cc" {
+			t.Errorf("SelectedLogicalPortMAC = %q, want normalized MAC", host.SelectedLogicalPortMAC)
+		}
+	})
+
 	t.Run("returns matching unassigned host", func(t *testing.T) {
 		objs := newBMHBuilder("host-1").WithNICs(testNIC("AA:BB:CC:DD:EE:01")).BuildObjects()
 

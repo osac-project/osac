@@ -40,15 +40,18 @@ import (
 
 // mockInventoryClient implements inventory.Client for testing
 type mockInventoryClient struct {
-	findFreeHostFunc           func(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error)
-	assignHostFunc             func(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*inventory.Host, error)
-	unassignHostFunc           func(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error
-	getHostNICsFunc            func(ctx context.Context, inventoryHostID string) ([]inventory.HostNIC, error)
-	getHostNICsCalled          int
-	getHostLogicalPortMACsFunc func(ctx context.Context, inventoryHostID string) (map[string]string, error)
+	findFreeHostFunc            func(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error)
+	findFreeHostLogicalPort     []string
+	assignHostFunc              func(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*inventory.Host, error)
+	unassignHostFunc            func(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error
+	getHostNICsFunc             func(ctx context.Context, inventoryHostID string) ([]inventory.HostNIC, error)
+	getHostNICsCalled           int
+	getHostLogicalPortMACsFunc  func(ctx context.Context, inventoryHostID string) (map[string]string, error)
+	getHostLogicalPortMACsCalls int
 }
 
-func (m *mockInventoryClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error) {
+func (m *mockInventoryClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string, logicalPort ...string) (*inventory.Host, error) {
+	m.findFreeHostLogicalPort = append([]string(nil), logicalPort...)
 	if m.findFreeHostFunc != nil {
 		return m.findFreeHostFunc(ctx, matchExpressions)
 	}
@@ -78,6 +81,7 @@ func (m *mockInventoryClient) GetHostNICs(ctx context.Context, inventoryHostID s
 }
 
 func (m *mockInventoryClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHostID string) (map[string]string, error) {
+	m.getHostLogicalPortMACsCalls++
 	if m.getHostLogicalPortMACsFunc != nil {
 		return m.getHostLogicalPortMACsFunc(ctx, inventoryHostID)
 	}
@@ -417,6 +421,71 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			})
 		})
 
+		Context("when a tenant attachment selects a logical port", func() {
+			BeforeEach(func() {
+				reconciler.NetworkingProvider = &mockProvisioningProvider{}
+				bareMetalInstance.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{{
+					SubnetRef: "subnet-1",
+					Interface: "data-0",
+					Primary:   true,
+				}}
+				mockInvClient.findFreeHostFunc = func(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error) {
+					return &inventory.Host{
+						InventoryHostID:        "host-abc-123",
+						Name:                   "host-abc-123",
+						HostClass:              hostClass,
+						SelectedLogicalPortMAC: "52:54:00:16:04:83",
+					}, nil
+				}
+			})
+
+			It("passes the selected port to inventory and records its MAC before assignment", func() {
+				assigned := false
+				mockInvClient.assignHostFunc = func(context.Context, string, string, map[string]string) (*inventory.Host, error) {
+					assigned = true
+					return nil, nil
+				}
+				mockK8sClient.updateFunc = func(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+					instance := obj.(*v1alpha1.BareMetalInstance)
+					Expect(instance.Spec.ExternalHostID).To(Equal("host-abc-123"))
+					Expect(instance.Status.NetworkAttachmentStatuses).To(HaveLen(1))
+					Expect(instance.Status.NetworkAttachmentStatuses[0].MACAddress).To(Equal("52:54:00:16:04:83"))
+					return nil
+				}
+				mockK8sClient.statusUpdateFunc = func(context.Context, client.Object, ...client.SubResourceUpdateOption) error {
+					return nil
+				}
+
+				result, err := reconciler.reconcileInventory(ctx, bareMetalInstance)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal(ctrl.Result{}))
+				Expect(mockInvClient.findFreeHostLogicalPort).To(Equal([]string{"data-0"}))
+				Expect(assigned).To(BeFalse())
+			})
+
+			It("does not select or assign a candidate without a valid selected-port MAC", func() {
+				mockInvClient.findFreeHostFunc = func(context.Context, map[string]string) (*inventory.Host, error) {
+					return nil, nil
+				}
+				assigned := false
+				mockInvClient.assignHostFunc = func(context.Context, string, string, map[string]string) (*inventory.Host, error) {
+					assigned = true
+					return nil, nil
+				}
+				mockK8sClient.statusUpdateFunc = func(context.Context, client.Object, ...client.SubResourceUpdateOption) error {
+					return nil
+				}
+
+				result, err := reconciler.reconcileInventory(ctx, bareMetalInstance)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(Equal(DefaultNoFreeHostsPollIntervalDuration))
+				Expect(bareMetalInstance.Spec.ExternalHostID).To(BeEmpty())
+				Expect(assigned).To(BeFalse())
+			})
+		})
+
 		Context("when selector overrides default managedBy and provisionState", func() {
 			BeforeEach(func() {
 				bareMetalInstance.Spec.Selector = v1alpha1.HostSelectorSpec{
@@ -515,6 +584,73 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result.RequeueAfter).To(Equal(reconciler.HostAvailabilityPollIntervalDuration))
 			})
+		})
+
+		Context("when assigning a host for a tenant attachment", func() {
+			BeforeEach(func() {
+				reconciler.NetworkingProvider = &mockProvisioningProvider{}
+				bareMetalInstance.Spec.ExternalHostID = "host-selected-456"
+				bareMetalInstance.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{{
+					SubnetRef: "subnet-1",
+					Interface: "data-0",
+					Primary:   true,
+				}}
+				mockInvClient.getHostLogicalPortMACsFunc = func(context.Context, string) (map[string]string, error) {
+					return map[string]string{"data-0": "52-54-00-AA-BB-CC"}, nil
+				}
+			})
+
+			It("records the normalized selected MAC before AssignHost", func() {
+				assigned := false
+				mockInvClient.assignHostFunc = func(context.Context, string, string, map[string]string) (*inventory.Host, error) {
+					assigned = true
+					Expect(bareMetalInstance.Status.NetworkAttachmentStatuses).To(HaveLen(1))
+					Expect(bareMetalInstance.Status.NetworkAttachmentStatuses[0].MACAddress).To(Equal("52:54:00:aa:bb:cc"))
+					return &inventory.Host{InventoryHostID: "host-selected-456", HostClass: hostClass, Available: true}, nil
+				}
+				mockK8sClient.updateFunc = func(context.Context, client.Object, ...client.UpdateOption) error { return nil }
+
+				result, err := reconciler.reconcileInventory(ctx, bareMetalInstance)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal(ctrl.Result{}))
+				Expect(assigned).To(BeTrue())
+			})
+
+			It("does not assign a host when the selected port MAC is missing", func() {
+				mockInvClient.getHostLogicalPortMACsFunc = func(context.Context, string) (map[string]string, error) {
+					return map[string]string{"other": "52:54:00:aa:bb:cc"}, nil
+				}
+				assigned := false
+				mockInvClient.assignHostFunc = func(context.Context, string, string, map[string]string) (*inventory.Host, error) {
+					assigned = true
+					return nil, nil
+				}
+
+				result, err := reconciler.reconcileInventory(ctx, bareMetalInstance)
+
+				Expect(err).To(MatchError(ContainSubstring("no MAC for logical port")))
+				Expect(result).To(Equal(ctrl.Result{}))
+				Expect(assigned).To(BeFalse())
+			})
+		})
+
+		It("does not resolve a selected MAC when provider networking is disabled", func() {
+			bareMetalInstance.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{{
+				SubnetRef: "subnet-1",
+				Interface: "data-0",
+			}}
+			mockInvClient.findFreeHostFunc = func(context.Context, map[string]string) (*inventory.Host, error) {
+				return &inventory.Host{InventoryHostID: "host-legacy", Name: "host-legacy", HostClass: hostClass}, nil
+			}
+			mockK8sClient.updateFunc = func(context.Context, client.Object, ...client.UpdateOption) error { return nil }
+
+			_, err := reconciler.reconcileInventory(ctx, bareMetalInstance)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockInvClient.findFreeHostLogicalPort).To(BeNil())
+			Expect(mockInvClient.getHostLogicalPortMACsCalls).To(BeZero())
+			Expect(bareMetalInstance.Status.NetworkAttachmentStatuses).To(BeEmpty())
 		})
 
 		Context("when the host is already assigned to another BareMetalInstance", func() {

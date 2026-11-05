@@ -266,6 +266,11 @@ type BareMetalNetworkAttachmentStatus struct {
 	// +kubebuilder:validation:Optional
 	SubnetRef string `json:"subnetRef,omitempty"`
 
+	// MACAddress is the normalized hardware address selected for this interface.
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{2}(:[0-9a-f]{2}){5}$`
+	// +kubebuilder:validation:Optional
+	MACAddress string `json:"macAddress,omitempty"`
+
 	// IPAddress is the IP discovered after DHCP assignment.
 	// +kubebuilder:validation:Optional
 	IPAddress string `json:"ipAddress,omitempty"`

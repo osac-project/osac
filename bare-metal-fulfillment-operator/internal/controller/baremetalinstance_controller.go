@@ -241,6 +241,21 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 	log := logf.FromContext(ctx)
 	log.Info("Reconciling inventory")
 
+	logicalPort := ""
+	if r.NetworkingProvider != nil && len(bareMetalInstance.Spec.NetworkAttachments) > 0 {
+		logicalPort = bareMetalInstance.Spec.NetworkAttachments[0].Interface
+		if logicalPort == "" {
+			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			bareMetalInstance.SetStatusCondition(
+				v1alpha1.HostConditionAllocated,
+				metav1.ConditionFalse,
+				v1alpha1.HostConditionReasonInvalidSelector,
+				"Network attachment interface is required for host selection",
+			)
+			return ctrl.Result{}, nil
+		}
+	}
+
 	bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseAllocating
 	bareMetalInstance.SetStatusCondition(
 		v1alpha1.HostConditionAllocated,
@@ -280,10 +295,27 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 		// Clone selector labels without additional fields
 		matchExpressions := maps.Clone(bareMetalInstance.Spec.Selector.HostSelector)
 
-		inventoryHost, err := r.InventoryClient.FindFreeHost(ctx, matchExpressions)
+		var inventoryHost *inventory.Host
+		var err error
+		if logicalPort == "" {
+			inventoryHost, err = r.InventoryClient.FindFreeHost(ctx, matchExpressions)
+		} else {
+			inventoryHost, err = r.InventoryClient.FindFreeHost(ctx, matchExpressions, logicalPort)
+		}
 		if err != nil {
 			log.Error(err, "Failed to find a free host", "matchExpressions", matchExpressions)
 			return ctrl.Result{}, err
+		}
+		if inventoryHost != nil && logicalPort != "" {
+			mac, parseErr := inventory.ParseLogicalPortMAC(
+				map[string]string{logicalPort: inventoryHost.SelectedLogicalPortMAC}, logicalPort,
+			)
+			if inventoryHost.Name == "" || parseErr != nil {
+				log.Info("Inventory candidate skipped: selected logical port has no valid MAC", "port", logicalPort)
+				inventoryHost = nil
+			} else {
+				inventoryHost.SelectedLogicalPortMAC = mac
+			}
 		}
 		if inventoryHost == nil {
 			log.Info("No matching hosts available", "matchExpressions", matchExpressions)
@@ -295,6 +327,9 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 				"No matching hosts available",
 			)
 			return ctrl.Result{RequeueAfter: r.NoFreeHostsPollIntervalDuration}, nil
+		}
+		if logicalPort != "" {
+			r.recordSelectedLogicalPortMAC(bareMetalInstance, inventoryHost.SelectedLogicalPortMAC)
 		}
 
 		bareMetalInstance.Spec.ExternalHostID = inventoryHost.InventoryHostID
@@ -319,6 +354,15 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 		return ctrl.Result{RequeueAfter: r.TryLockFailPollIntervalDuration}, nil
 	}
 	defer inventory.Unlock(hostID)
+
+	if logicalPort != "" && selectedLogicalPortMAC(bareMetalInstance) == "" {
+		mac, err := inventory.ResolveHostLogicalPortMAC(ctx, r.InventoryClient, hostID, logicalPort)
+		if err != nil {
+			log.Error(err, "Failed to resolve selected logical port MAC", "host", hostID, "port", logicalPort)
+			return ctrl.Result{}, err
+		}
+		r.recordSelectedLogicalPortMAC(bareMetalInstance, mac)
+	}
 
 	// Build combined labels from spec fields
 	// Persistent labels override non-persistent labels with the same key

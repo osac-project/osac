@@ -753,16 +753,13 @@ jobs:
                 )
             except subprocess.CalledProcessError as e:
                 stderr = e.stderr or ""
-                # Detail stays in a plain, un-annotated line -- never
-                # inside a ::error::/::warning:: annotation, which
-                # GitHub surfaces prominently (and via its API) -- same
-                # reasoning as resolve-and-verify's own identical stance.
+                # No raw oc stderr is logged, even plainly -- it can
+                # embed cluster hostnames/internal details. The fixed
+                # messages below are all this logs.
                 if is_permanent_auth_error(stderr):
-                    print(f"oc get snapshots error detail: {stderr.strip()}")
-                    print("::error::oc get snapshots failed with a permanent auth/RBAC error -- see the plain-text line just above")
+                    print("::error::oc get snapshots failed with a permanent auth/RBAC error")
                     raise
-                print(f"oc get snapshots error detail: {stderr.strip()}")
-                print("::warning::oc get snapshots failed, will retry -- see the plain-text line just above", flush=True)
+                print("::warning::oc get snapshots failed, will retry", flush=True)
                 return None
             for item in json.loads(out.stdout)["items"]:
                 ann = item["metadata"].get("annotations", {})
@@ -791,12 +788,11 @@ jobs:
             except subprocess.CalledProcessError as e:
                 stderr = e.stderr or ""
                 if is_permanent_auth_error(stderr):
-                    print(f"oc get pipelinerun error detail: {stderr.strip()}")
                     print("::warning::oc get pipelinerun denied -- falling back to plain waiting messages for the rest of this poll")
                     pipelinerun_rbac_denied[0] = True
                     print(f"Waiting on {COMPONENT}'s Konflux build...", flush=True)
                     return
-                print(f"[{COMPONENT}] Waiting on Konflux build (oc get pipelinerun failed, will retry -- detail: {stderr.strip()})", flush=True)
+                print(f"[{COMPONENT}] Waiting on Konflux build (oc get pipelinerun failed, will retry)", flush=True)
                 return
             items = json.loads(out.stdout)["items"]
             if not items:
@@ -835,9 +831,8 @@ jobs:
                 )
                 data = json.loads(out.stdout)
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
-                     FileNotFoundError, json.JSONDecodeError) as e:
-                print(f"check-run lookup error detail: {e}")
-                print(f"::warning::check-run lookup for {COMPONENT} failed, will retry -- see the plain-text line just above", flush=True)
+                     FileNotFoundError, json.JSONDecodeError):
+                print(f"::warning::check-run lookup for {COMPONENT} failed, will retry", flush=True)
                 return False
             for check_run in data.get("check_runs", []):
                 if check_run.get("name") == check_name and check_run.get("status") == "completed":
@@ -1017,11 +1012,9 @@ jobs:
             except subprocess.CalledProcessError as e:
                 stderr = e.stderr or ""
                 if is_permanent_auth_error(stderr):
-                    print(f"oc get snapshot error detail: {stderr.strip()}")
-                    print("::error::oc get snapshot failed with a permanent auth/RBAC error -- see the plain-text line just above")
+                    print("::error::oc get snapshot failed with a permanent auth/RBAC error")
                     raise
-                print(f"oc get snapshot error detail: {stderr.strip()}")
-                print("::warning::oc get snapshot failed, will retry -- see the plain-text line just above", flush=True)
+                print("::warning::oc get snapshot failed, will retry", flush=True)
                 time.sleep(POLL_INTERVAL_SECONDS)
                 continue
             conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
@@ -1051,15 +1044,12 @@ jobs:
                 except subprocess.CalledProcessError as e:
                     stderr = e.stderr or ""
                     if is_permanent_auth_error(stderr):
-                        print(f"oc apply error detail: {stderr.strip()}")
-                        print("::error::oc apply failed with a permanent auth/RBAC error -- see the plain-text line just above")
+                        print("::error::oc apply failed with a permanent auth/RBAC error")
                         raise
                     if i == max_apply_retries:
-                        print(f"oc apply error detail: {stderr.strip()}")
-                        print(f"::error::oc apply failed {max_apply_retries} times for {release_name} -- see the plain-text line just above")
+                        print(f"::error::oc apply failed {max_apply_retries} times for {release_name}")
                         raise
-                    print(f"oc apply error detail: {stderr.strip()}")
-                    print(f"::warning::oc apply failed for {release_name}, retrying same apply -- see the plain-text line just above")
+                    print(f"::warning::oc apply failed for {release_name}, retrying same apply")
                     time.sleep(apply_retry_seconds)
 
         def poll_release(release_name, timeout_seconds):
@@ -1073,11 +1063,9 @@ jobs:
                 except subprocess.CalledProcessError as e:
                     stderr = e.stderr or ""
                     if is_permanent_auth_error(stderr):
-                        print(f"oc get release error detail: {stderr.strip()}")
-                        print("::error::oc get release failed with a permanent auth/RBAC error -- see the plain-text line just above")
+                        print("::error::oc get release failed with a permanent auth/RBAC error")
                         raise
-                    print(f"oc get release error detail: {stderr.strip()}")
-                    print("::warning::oc get release failed, will retry -- see the plain-text line just above", flush=True)
+                    print("::warning::oc get release failed, will retry", flush=True)
                     time.sleep(POLL_INTERVAL_SECONDS)
                     continue
                 conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
@@ -1177,7 +1165,15 @@ jobs:
         IMAGE_RESULT: ${{ needs.promote-image.result }}
         ALREADY_RELEASED: ${{ needs.stamp-prod-chart.outputs.already-released }}
         STAMP_RESULT: ${{ needs.stamp-prod-chart.result == 'skipped' && 'skipped' || ((needs.stamp-prod-chart.outputs.tag-pushed == 'true' || needs.stamp-prod-chart.outputs.already-released == 'true') && 'success' || 'failure') }}
-        CHART_RESULT: ${{ needs.release-prod-chart.outputs.release-outcome || needs.release-prod-chart.result }}
+        # release-prod-chart's job-level continue-on-error: true masks
+        # an early-step failure (e.g. the Konflux login or the artifact
+        # download, both before the "release" step) as job .result ==
+        # 'success', with steps.release.outcome left at 'skipped' since
+        # that step never ran. Only a genuinely skipped JOB (its own
+        # if: condition false) should read 'skipped' here; an outcome
+        # of 'skipped' on top of a 'success' job result means something
+        # failed before the release step got a chance to run at all.
+        CHART_RESULT: ${{ needs.release-prod-chart.result == 'skipped' && 'skipped' || (needs.release-prod-chart.outputs.release-outcome == 'skipped' && 'failure' || needs.release-prod-chart.outputs.release-outcome) }}
         WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         set -euo pipefail

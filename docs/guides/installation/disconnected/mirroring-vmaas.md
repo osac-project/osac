@@ -33,7 +33,7 @@ Machine as a Service) into a disconnected mirror registry using the
 
 | Check | Command / evidence |
 | ----- | ------------------ |
-| Category B complete: IDMS/ITMS applied, core images mirrored | `oc get idms,itms` |
+| Category B inventory composed before adding Category C | Shared ISC `mirror.additionalImages` contains the selected core component images; applied IDMS/ITMS and populated mirrors are not prerequisites for inventory composition |
 | VMaaS is enabled in OSAC Helm values | `global.services.vmaas.enabled: true` in values file |
 
 <!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
@@ -151,6 +151,12 @@ selections need IDMS source/digest coverage review in addition to that shared
 all-entry policy gate; tag coverage remains the ITMS review below.
 
 #### Required coverage and exact-tag review
+
+After the shared mirror run and Category A apply gate, verify that the selected
+Category B core images are present at their direct mirror references using the
+approved administration-host mirror-read client context, and that the
+[live-rule acceptance check](README.md#live-core-image-mirror-rules) passes
+before handoff. Continue with the Category C checks below.
 
 Keep the selected **upstream containerdisk repositories and exact tags**,
 their intended mirror references, and the review results in your organization's

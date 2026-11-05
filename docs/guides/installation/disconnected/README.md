@@ -12,6 +12,7 @@
   - [Key Principles](#key-principles)
   - [Quick Reference](#quick-reference)
   - [Doc 1 Acceptance Gate](#doc-1-acceptance-gate)
+    - [Live Core image mirror rules](#live-core-image-mirror-rules)
 
 Category-specific guides for mirroring OSAC images and dependencies into a disconnected (air-gapped) mirror registry.
 
@@ -155,7 +156,7 @@ flowchart TD
     ISC --> DRY[Dry run]
     DRY -->|pass| FULL[Full mirror using same workspace]
     DRY -->|fail| ISC
-    FULL --> APPLY[Apply five generated resources]
+    FULL --> APPLY[Apply generated mirror sets and catalogs; signatures if platform selected]
     APPLY --> MCP[Wait for MCP convergence]
     MCP --> GATE{Doc 1 acceptance gate}
     GATE -->|pass| PRE["Doc 2: prereqs.md"]
@@ -217,6 +218,7 @@ Complete this checklist before entering `prereqs.md` §2 and the remaining Doc 2
 
 - [ ] All three core package manifests are visible
 - [ ] Every entry in every generated IDMS and ITMS document has `mirrorSourcePolicy: NeverContactSource` before apply and handoff, including Core-only scope; Category A's joint pre-apply check passes for both kinds before either is applied
+- [ ] For each selected Core image, applied live rules of the applicable kind (ITMS for tags, IDMS for digests) have a most-specific matching source with nonempty mirrors and `mirrorSourcePolicy: NeverContactSource`; the check below passes, including all rules tied at that specificity
 - [ ] If VMaaS is selected, selected upstream containerdisk repositories and exact tags are retained in existing records, and Category C's most-specific source coverage and exact mirror-tag checks pass; CDI import acceptance remains separate
 - [ ] If VMaaS is selected, all three VMaaS package manifests are visible
 - [ ] If BMaaS is selected, the MCE package manifest is visible
@@ -229,3 +231,69 @@ Only after every check passes, continue to
 See
 [mirroring-operators.md § Handoff Verification](mirroring-operators.md#handoff-verification-doc-1-gate)
 for the verification commands.
+
+### Live Core image mirror rules
+
+Run this read-only **Bash** check after Category A apply and before handoff,
+using **Mike Farah yq v4** and **jq**. Use the exact ISC from the mirror run.
+It checks every selected `mirror.additionalImages` reference, including Core
+and any optional images, against live rules of its own kind only. Registry,
+namespace and repository sources match at path boundaries; wildcard registry
+sources match subdomains. Select the most-specific source **before** checking
+mirrors and policy, so an unsafe child cannot be hidden by a safe parent.
+All equally specific matching entries must pass (a conservative gate for merged
+rules). Empty inventories, missing coverage and failed reads stop the check.
+This verifies policy coverage, not mirror content, node convergence or pull success.
+
+```bash
+set -euo pipefail
+rule_work=$(mktemp -d)
+trap 'rm -rf "$rule_work"' EXIT
+yq -o=json '.' imageset-config.yaml | jq -e '
+  .mirror.additionalImages |
+  if type == "array" and length > 0 and
+     all(.[]; .name | type == "string" and length > 0)
+  then . else error("selected additionalImages inventory is required") end
+' > "$rule_work/images.json"
+oc get imagetagmirrorset -o json > "$rule_work/tags.json"
+oc get imagedigestmirrorset -o json > "$rule_work/digests.json"
+
+jq -er '.[].name' "$rule_work/images.json" > "$rule_work/references"
+while IFS= read -r image_ref; do
+  if [[ "$image_ref" == *@* ]]; then
+    source_repo=${image_ref%@*}
+    rule_kind=imageDigestMirrors
+    rule_file="$rule_work/digests.json"
+  else
+    [[ "${image_ref##*/}" == *:* ]] || {
+      echo "ERROR: explicit tag or digest required: $image_ref" >&2
+      exit 1
+    }
+    source_repo=${image_ref%:*}
+    rule_kind=imageTagMirrors
+    rule_file="$rule_work/tags.json"
+  fi
+  jq -e --arg repository "$source_repo" --arg kind "$rule_kind" '
+    def matches_source($source):
+      if ($source | startswith("*.")) then
+        ($repository | split("/")[0] | endswith($source[1:]))
+      else $repository == $source or
+        ($repository | startswith($source + "/")) end;
+    [.items[].spec[$kind][]? |
+      select(.source | type == "string" and length > 0) |
+      select(matches_source(.source))] |
+    if length == 0 then false
+    else (map(.source | ltrimstr("*") | length) | max) as $specificity |
+      [.[] | select((.source | ltrimstr("*") | length) == $specificity)] |
+      all(.[];
+        (.mirrors | type == "array" and length > 0) and
+        all(.mirrors[]; type == "string" and length > 0) and
+        .mirrorSourcePolicy == "NeverContactSource")
+    end
+  ' "$rule_file" >/dev/null || {
+    echo "ERROR: live $rule_kind coverage/policy failed: $image_ref" >&2
+    exit 1
+  }
+  printf 'OK: %s live mirror policy\n' "$image_ref"
+done < "$rule_work/references"
+```

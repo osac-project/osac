@@ -37,6 +37,7 @@ export const VmCreatePage = {
   diskImage: ['button', { name: 'Select the image reference', exact: true }],
   instanceType: ['button', { name: 'Instance type', exact: true }],
   bootDisk: ['Boot disk'],
+  bootStorageTier: ['button', { name: 'Boot storage tier', exact: true }],
   storageTier: ['button', { name: 'Storage tier', exact: true }],
   addDisk: ['button', { name: 'Add disk', exact: true }],
   additionalDiskSize: ['Size (GiB)'],

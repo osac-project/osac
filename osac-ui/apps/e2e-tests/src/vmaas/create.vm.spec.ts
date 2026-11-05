@@ -106,7 +106,7 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
 
   await testStep('catalog-launch', 'Configure boot and additional disks', async () => {
     await page.getByLabel(...VmCreatePage.bootDisk).fill('100');
-    await selectOption(page, VmCreatePage.storageTier, storageTierTestData.name);
+    await selectOption(page, VmCreatePage.bootStorageTier, storageTierTestData.name);
     await page.getByRole(...VmCreatePage.addDisk).click();
     await page.getByLabel(...VmCreatePage.additionalDiskSize).fill('30');
     await selectOption(page, VmCreatePage.storageTier, storageTierTestData.name, 1);

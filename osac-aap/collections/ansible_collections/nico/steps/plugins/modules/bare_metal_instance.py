@@ -214,6 +214,21 @@ def get_or_none(client, scope, path):
         raise
 
 
+def machine_has_blocking_health_alert(machine):
+    health = machine.get("health")
+    if not isinstance(health, dict) or not isinstance(health.get("alerts"), list):
+        raise NicoError("Ready Machine has no aggregate health alerts; retain BMI finalizer")
+    for alert in health["alerts"]:
+        if not isinstance(alert, dict):
+            raise NicoError("Ready Machine has invalid aggregate health alerts; retain BMI finalizer")
+        classifications = alert.get("classifications")
+        if not isinstance(classifications, list) or not all(isinstance(item, str) for item in classifications):
+            raise NicoError("Ready Machine has invalid health alert classifications; retain BMI finalizer")
+        if "PreventAllocations" in classifications:
+            return True
+    return False
+
+
 def assert_owned(instance, params, machine_id=None):
     if instance.get("tenantId") != params["tenant_id"]:
         raise NicoError("Instance tenant does not match configured NICo tenant")
@@ -395,12 +410,12 @@ def ensure_absent(client):
             machine = get_or_none(client, "provider", machine_path(machine_id))
             if machine is None:
                 raise NicoError("saved Machine is absent from provider inventory")
-            reports = client.request("provider", "GET", machine_path(machine_id) + "/health-report")[1]
-            alerts = [alert for report in reports for alert in report.get("alerts", [])
-                      if "PreventAllocations" in alert.get("classifications", [])]
-            if machine.get("status") == "Ready" and machine.get("instanceId") is None and not alerts:
-                return {"changed": changed, "instance_id": instance_id, "machine_id": machine_id,
-                        "status": "Released"}
+            if machine.get("status") == "Ready" and machine.get("instanceId") is None:
+                # Machine GET includes aggregate health. The separate health-report
+                # endpoint is diagnostic and may be unavailable during cleanup.
+                if not machine_has_blocking_health_alert(machine):
+                    return {"changed": changed, "instance_id": instance_id, "machine_id": machine_id,
+                            "status": "Released"}
         if time.monotonic() >= deadline:
             raise NicoError(f"NICo cleanup incomplete for Instance {instance_id} and Machine {machine_id}; retain BMI finalizer")
         time.sleep(params["poll_interval"])

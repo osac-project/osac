@@ -6,8 +6,8 @@ import type { ComputeInstance } from '@osac/types';
 import { ComputeInstances } from '@osac/types';
 
 import VmDeleteConfirmModal from './VmDeleteConfirmModal';
-import { useListResource } from '../../../api/use-resource';
-import { renderWithProviders } from '../../../test-utils/TestProviders';
+import { useListResource } from '../../api/use-resource';
+import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const vm = {
   id: 'vm-1',

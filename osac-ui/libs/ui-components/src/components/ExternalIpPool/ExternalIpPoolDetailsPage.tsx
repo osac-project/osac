@@ -60,7 +60,6 @@ export const ExternalIpPoolDetailsPage = () => {
                         },
                       ]}
                       resourceName={pool.metadata?.name || pool.id}
-                      description={pool.metadata?.description}
                     />
                   </FlexItem>
                   <FlexItem>

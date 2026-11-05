@@ -27,7 +27,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/metadata_type.proto.
  */
 export const file_osac_private_v1_metadata_type: GenFile = /*@__PURE__*/
-  fileDesc("CiNvc2FjL3ByaXZhdGUvdjEvbWV0YWRhdGFfdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxIrEECghNZXRhZGF0YRI2ChJjcmVhdGlvbl90aW1lc3RhbXAYASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjYKEmRlbGV0aW9uX3RpbWVzdGFtcBgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDwoHY3JlYXRvchgDIAEoCRIOCgZ0ZW5hbnQYBCABKAkSPQoEbmFtZRgFIAEoCUIvukgscioQARg/MiReW2EtejAtOV0oW2EtejAtOS1dezAsNjF9W2EtejAtOV0pPyQSNQoGbGFiZWxzGAYgAygLMiUub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhLkxhYmVsc0VudHJ5Ej8KC2Fubm90YXRpb25zGAcgAygLMioub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhLkFubm90YXRpb25zRW50cnkSDwoHdmVyc2lvbhgIIAEoBRIPCgdwcm9qZWN0GAkgASgJEh0KDGRpc3BsYXlfbmFtZRgKIAEoCUIHukgEcgIYPxIdCgtkZXNjcmlwdGlvbhgLIAEoCUIIukgFcgMYgAISGgoKZmluYWxpemVycxgMIAMoCUIGirUYAggBGi0KC0xhYmVsc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEaMgoQQW5ub3RhdGlvbnNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_protobuf_timestamp]);
+  fileDesc("CiNvc2FjL3ByaXZhdGUvdjEvbWV0YWRhdGFfdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxIpoECghNZXRhZGF0YRI2ChJjcmVhdGlvbl90aW1lc3RhbXAYASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjYKEmRlbGV0aW9uX3RpbWVzdGFtcBgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDwoHY3JlYXRvchgDIAEoCRIOCgZ0ZW5hbnQYBCABKAkSPQoEbmFtZRgFIAEoCUIvukgscioQARg/MiReW2EtejAtOV0oW2EtejAtOS1dezAsNjF9W2EtejAtOV0pPyQSNQoGbGFiZWxzGAYgAygLMiUub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhLkxhYmVsc0VudHJ5Ej8KC2Fubm90YXRpb25zGAcgAygLMioub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhLkFubm90YXRpb25zRW50cnkSDwoHdmVyc2lvbhgIIAEoBRIPCgdwcm9qZWN0GAkgASgJEhoKCmZpbmFsaXplcnMYDCADKAlCBoq1GAIIARotCgtMYWJlbHNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBGjIKEEFubm90YXRpb25zRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4AUoECAoQC0oECAsQDFIMZGlzcGxheV9uYW1lUgtkZXNjcmlwdGlvbkIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_protobuf_timestamp]);
 
 /**
  * Metadata common to all kinds of objects.
@@ -149,22 +149,6 @@ export type Metadata = Message<"osac.private.v1.Metadata"> & {
    * @generated from field: string project = 9;
    */
   project: string;
-
-  /**
-   * Human-friendly display name. Optional, not unique, mutable.
-   * Not constrained to DNS-label format.
-   *
-   * @generated from field: string display_name = 10;
-   */
-  displayName: string;
-
-  /**
-   * Optional human-friendly description. Opaque string; clients may
-   * treat content as Markdown. Not unique, mutable.
-   *
-   * @generated from field: string description = 11;
-   */
-  description: string;
 
   /**
    * Finalizers indicate tasks that need to be completed before the object can be completely deleted. When the object

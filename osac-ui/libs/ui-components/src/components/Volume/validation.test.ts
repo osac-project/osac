@@ -10,7 +10,6 @@ import { tIdentity as t } from '../../test-utils/i18n';
 const validValues: VolumeFormValues = {
   metadata: {
     name: 'data-volume',
-    description: 'A block volume',
   },
   spec: {
     storageTier: { id: 'gold-block', name: 'gold-block' },

@@ -59,6 +59,28 @@ func createTenant(ctx context.Context, client privatev1.TenantsClient, name stri
 	return id
 }
 
+// waitForTenantSyncedWithFinalizers blocks until the reconcilers have added both tenant finalizers and the tenant
+// is SYNCED. Specs that send whole-object updates need this, because from that point on a write that omits the
+// finalizers is a finalizer change and requires the current version.
+func waitForTenantSyncedWithFinalizers(ctx context.Context, client privatev1.TenantsClient, id string) {
+	Eventually(
+		func(g Gomega) {
+			getResponse, err := client.Get(ctx, privatev1.TenantsGetRequest_builder{
+				Id: id,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(getResponse.GetObject().GetMetadata().GetFinalizers()).To(
+				ContainElements(finalizers.TenantLifecycle, finalizers.TenantOnboarding),
+			)
+			g.Expect(getResponse.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.TenantState_TENANT_STATE_SYNCED),
+			)
+		},
+		time.Minute,
+		time.Second,
+	).Should(Succeed())
+}
+
 func deleteProject(ctx context.Context, client privatev1.ProjectsClient, id string) {
 	// Recursively find and delete all the child projects:
 	listFilter := fmt.Sprintf("this.metadata.project == %q && !has(this.metadata.deletion_timestamp)", id)
@@ -732,22 +754,7 @@ var _ = Describe("Tenant lifecycle", func() {
 		id := createTenant(ctx, tenantsClient, name)
 
 		By("Waiting for tenant to reach SYNCED with finalizer")
-		Eventually(
-			func(g Gomega) {
-				getResponse, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
-					Id: id,
-				}.Build())
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(getResponse.GetObject().GetMetadata().GetFinalizers()).To(
-					ContainElements(finalizers.TenantLifecycle, finalizers.TenantOnboarding),
-				)
-				g.Expect(getResponse.GetObject().GetStatus().GetState()).To(
-					Equal(privatev1.TenantState_TENANT_STATE_SYNCED),
-				)
-			},
-			time.Minute,
-			time.Second,
-		).Should(Succeed())
+		waitForTenantSyncedWithFinalizers(ctx, tenantsClient, id)
 
 		By("Attempting to rename the tenant")
 		newName := fmt.Sprintf("renamed-%s", uuid.New())
@@ -758,11 +765,45 @@ var _ = Describe("Tenant lifecycle", func() {
 					Name: newName,
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"metadata.name"},
+			},
 		}.Build())
 		Expect(err).To(HaveOccurred())
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+	})
+
+	It("Whole-object update that omits finalizers is rejected as a conflict", func(ctx context.Context) {
+		name := fmt.Sprintf("test-%s", uuid.New())
+
+		By(fmt.Sprintf("Creating tenant %q", name))
+		id := createTenant(ctx, tenantsClient, name)
+
+		By("Waiting for tenant to reach SYNCED with finalizer")
+		waitForTenantSyncedWithFinalizers(ctx, tenantsClient, id)
+
+		By("Attempting a whole-object update that carries no finalizers and no version")
+		_, err := tenantsClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Id: id,
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Aborted))
+
+		By("Verifying that the stored finalizers are untouched")
+		getResponse, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
+			Id: id,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(getResponse.GetObject().GetMetadata().GetFinalizers()).To(
+			ContainElements(finalizers.TenantLifecycle, finalizers.TenantOnboarding),
+		)
 	})
 })
 

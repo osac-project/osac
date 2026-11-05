@@ -168,16 +168,24 @@ var _ = Describe("Resolver", func() {
 		Expect(result.Reason).To(Equal(pricing.ReasonRateAmbiguous))
 	})
 
-	It("does not match an empty EQUALS value against a missing configuration dimension", func() {
-		scenario := baseScenario()
-		scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{Rows: []billing.RateRow{{
-			DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.25",
-			AttributeValues: []billing.AttributeValue{{Name: "region", Value: ""}},
-		}}}
-		result := resolveOne(scenario, "USD", baseComponent())
-		Expect(result.State).To(Equal(pricing.StateGap))
-		Expect(result.Reason).To(Equal(pricing.ReasonCoverageGap))
-	})
+	DescribeTable("does not match an invalid empty EQUALS condition",
+		func(values map[string]string) {
+			scenario := baseScenario()
+			scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{Rows: []billing.RateRow{{
+				DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.25",
+				AttributeValues: []billing.AttributeValue{{Name: "region", Value: ""}},
+			}}}
+			component := baseComponent()
+			for name, value := range values {
+				component.Values[name] = value
+			}
+			result := resolveOne(scenario, "USD", component)
+			Expect(result.State).To(Equal(pricing.StateGap))
+			Expect(result.Reason).To(Equal(pricing.ReasonCoverageGap))
+		},
+		Entry("missing configuration dimension", nil),
+		Entry("explicitly empty configuration dimension", map[string]string{"region": ""}),
+	)
 
 	It("prefers the more specific of two non-conflicting rows over the unconstrained one", func() {
 		scenario := baseScenario()

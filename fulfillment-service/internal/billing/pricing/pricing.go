@@ -384,7 +384,8 @@ func matchRow(rows []billing.RateRow, attrID string, values map[string]string) (
 func rowMatches(row billing.RateRow, values map[string]string) bool {
 	for _, av := range row.AttributeValues {
 		value, ok := values[av.Name]
-		if !ok || value != av.Value {
+		// Empty is reserved for ANY, which is represented by an absent condition, not an empty EQUALS value.
+		if av.Value == "" || !ok || value != av.Value {
 			return false
 		}
 	}

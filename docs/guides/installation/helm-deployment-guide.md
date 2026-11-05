@@ -612,6 +612,10 @@ oc rollout restart deployment/keycloak-service --namespace keycloak
 
 Run the OSAC management services on one OpenShift cluster and the virtual
 machines on another. The clusters must have different API server addresses.
+The workload API endpoint in the remote kubeconfig must resolve and be reachable
+from the OSAC operator, AAP workers, and Console Proxy workloads on the
+management cluster. Workstation-only access is insufficient; use direct
+connectivity or a supported proxy or tunnel configured for those workloads.
 The administrator installing phase 1 on each cluster and phase 2 on the
 management cluster needs `cluster-admin` access. Disable CaaS and BMaaS. The
 operator refuses to start with a remote kubeconfig when either the cluster

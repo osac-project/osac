@@ -2004,6 +2004,10 @@ preflight:
 `remoteClusterKubeconfig` is the path inside the operator container. The
 Secret name and key must match the Secret on the management cluster. The
 chart default key is `kubeconfig`.
+The workload API endpoint in that kubeconfig must resolve and be reachable from
+the management-cluster workloads that use it, including the OSAC operator, AAP
+workers, and Console Proxy. Workstation-only access is insufficient; use direct
+connectivity or a supported proxy or tunnel configured for those workloads.
 
 Before installing OSAC, point `KUBECONFIG` back to the management cluster and
 confirm that the active API server is its endpoint. The Phase 2 Helm command

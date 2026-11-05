@@ -677,6 +677,14 @@ func (s *GenericServer[O]) applyMaskAndRestoreProtectedFields(
 	requestMask *fieldmaskpb.FieldMask,
 ) (O, error) {
 	var tmpObject O
+	if !isPublicAPIView(ctx) {
+		// A nil mask replaces the full object; an explicit empty mask applies no paths below.
+		selectsCreator := requestMask == nil ||
+			(len(requestMask.GetPaths()) > 0 && updateIncludesField(requestMask, "metadata.creator"))
+		if selectsCreator {
+			return tmpObject, grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.creator' is immutable")
+		}
+	}
 
 	if requestMask != nil {
 		// Reject public API requests that attempt to modify status fields via update mask.

@@ -26,7 +26,7 @@ export const CatalogCreatePage = {
   diskImage: ['button', { name: 'Select the image reference', exact: true }],
   instanceType: ['button', { name: 'Instance type', exact: true }],
   bootDiskSize: ['spinbutton', { name: 'Boot disk size', exact: true }],
-  review: ['heading', { name: 'Review', exact: true }],
+  review: ['heading', { name: 'Review and create', exact: true }],
   next: ['button', { name: 'Next', exact: true }],
   create: ['button', { name: 'Create', exact: true }],
   publish: ['button', { name: 'Publish', exact: true }],

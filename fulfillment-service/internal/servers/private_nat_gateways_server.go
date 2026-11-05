@@ -217,7 +217,8 @@ func (s *PrivateNATGatewaysServer) prepareCreate(ctx context.Context, natGateway
 	}
 	tenant := metadata.GetTenant()
 	virtualNetwork, err := lockParentVirtualNetwork(ctx, s.guards, s.virtualNetworksDao,
-		refKey(natGateway.GetSpec().GetVirtualNetwork()), metadata)
+		natGateway.GetSpec().GetVirtualNetwork().GetId(), natGateway.GetSpec().GetVirtualNetwork().GetName(),
+		metadata)
 	if err != nil {
 		return err
 	}

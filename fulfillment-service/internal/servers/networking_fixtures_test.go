@@ -103,14 +103,19 @@ func seedVirtualNetwork(tenant, cidr string, state privatev1.VirtualNetworkState
 
 // seedSubnet creates a Subnet of a VirtualNetwork in the given state.
 func seedSubnet(vn *privatev1.VirtualNetwork, name, cidr string, state privatev1.SubnetState,
-	labels map[string]string) *privatev1.Subnet {
+	labels map[string]string, project ...string) *privatev1.Subnet {
 	if name == "" {
 		name = fmt.Sprintf("subnet-%s", uuid.NewString()[:8])
+	}
+	projectName := ""
+	if len(project) > 0 {
+		projectName = project[0]
 	}
 	response, err := fixtureDAO[*privatev1.Subnet]().Create().SetObject(privatev1.Subnet_builder{
 		Metadata: privatev1.Metadata_builder{
 			Name:        name,
 			Tenant:      vn.GetMetadata().GetTenant(),
+			Project:     projectName,
 			Labels:      labels,
 			Annotations: map[string]string{"osac.openshift.io/owner-reference": vn.GetId()},
 		}.Build(),
@@ -129,14 +134,19 @@ func seedSubnet(vn *privatev1.VirtualNetwork, name, cidr string, state privatev1
 
 // seedSecurityGroup creates a SecurityGroup of a VirtualNetwork in the given state.
 func seedSecurityGroup(vn *privatev1.VirtualNetwork, name string, state privatev1.SecurityGroupState,
-	labels map[string]string) *privatev1.SecurityGroup {
+	labels map[string]string, project ...string) *privatev1.SecurityGroup {
 	if name == "" {
 		name = fmt.Sprintf("sg-%s", uuid.NewString()[:8])
+	}
+	projectName := ""
+	if len(project) > 0 {
+		projectName = project[0]
 	}
 	response, err := fixtureDAO[*privatev1.SecurityGroup]().Create().SetObject(privatev1.SecurityGroup_builder{
 		Metadata: privatev1.Metadata_builder{
 			Name:        name,
 			Tenant:      vn.GetMetadata().GetTenant(),
+			Project:     projectName,
 			Labels:      labels,
 			Annotations: map[string]string{"osac.openshift.io/owner-reference": vn.GetId()},
 		}.Build(),

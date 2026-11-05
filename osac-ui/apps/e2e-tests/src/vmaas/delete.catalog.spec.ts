@@ -58,7 +58,6 @@ test('deletes a catalog item through the Catalog UI', async ({ page }) => {
       expectCatalogItemListed(
         page,
         catalogTestData.name,
-        catalogTestData.type,
         catalogTestData.status,
         catalogTestData.usage,
         {

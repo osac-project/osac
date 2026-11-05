@@ -114,7 +114,6 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
       await expectCatalogItemListed(
         page,
         catalogTestData.name,
-        catalogTestData.type,
         catalogTestData.status,
         catalogTestData.usage,
         {

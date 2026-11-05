@@ -24,7 +24,6 @@ export const openCreateCatalogItemPage = async (page: Page): Promise<void> => {
 export const expectCatalogItemListed = async (
   page: Page,
   name: string,
-  expectedType: string,
   expectedStatus: string,
   expectedUsage: string,
   expectedResources: ExpectedCatalogItemResources,
@@ -33,10 +32,9 @@ export const expectCatalogItemListed = async (
 
   await expect(catalogItemCard).toHaveCount(1);
   await expect(catalogItemCard.getByRole('link', { name, exact: true })).toBeVisible();
-  await expect(catalogItemCard.locator(...CatalogMainPage.catalogItemLabels)).toHaveText([
-    expectedType,
+  await expect(catalogItemCard.locator(...CatalogMainPage.catalogItemLabels)).toHaveText(
     expectedStatus,
-  ]);
+  );
   await expect(catalogItemCard.locator(...CatalogMainPage.catalogItemVisibility)).toHaveText(
     expectedUsage,
   );

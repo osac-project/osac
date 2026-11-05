@@ -115,7 +115,7 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
 
   await testStep('catalog-launch', 'Configure default networking and external IP', async () => {
     await expect(page.locator(...VmCreatePage.useTenantDefaultNetwork)).toBeChecked();
-    await page.locator(...VmCreatePage.autoExternalIp).check();
+    await page.locator(...VmCreatePage.autoExternalIp).check({ force: true });
     await page.getByRole(...VmCreatePage.next).click();
   });
 

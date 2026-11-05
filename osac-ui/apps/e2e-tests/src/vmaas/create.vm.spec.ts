@@ -83,21 +83,22 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
   const projectName = await testStep('catalog-launch', 'Set the project and VM name', async () => {
     const selectedProject = await selectOption(page, VmCreatePage.project, /.*/);
     await page.getByRole(...VmCreatePage.vmName).fill(vmName);
+    await page.getByRole(...VmCreatePage.next).click();
     return selectedProject;
   });
 
-  await testStep('catalog-launch', 'Verify the Disk image field on the General step', async () => {
-    const diskImage = page.getByRole(...VmCreatePage.diskImage);
-    const diskImageValue = page.locator(...VmCreatePage.diskImageValue);
-    await expect(diskImage).toBeVisible();
-    if (await diskImage.isEnabled()) {
-      if ((await diskImageValue.inputValue()) !== catalogTestData.fields.diskImage.name) {
+  await testStep(
+    'catalog-launch',
+    'Verify the Disk image field on the Compute configuration step',
+    async () => {
+      const diskImage = page.getByRole(...VmCreatePage.diskImage);
+      await expect(diskImage).toBeVisible();
+      if (await diskImage.isEnabled()) {
         await selectOption(page, VmCreatePage.diskImage, catalogTestData.fields.diskImage.name);
       }
-    }
-    await expect(diskImageValue).toHaveValue(catalogTestData.fields.diskImage.name);
-    await page.getByRole(...VmCreatePage.next).click();
-  });
+      await expect(diskImage).toContainText(catalogTestData.fields.diskImage.name);
+    },
+  );
 
   await testStep('catalog-launch', 'Select the Instance type', async () => {
     await selectOption(page, VmCreatePage.instanceType, new RegExp(instanceTypeTestData.name));

@@ -22,7 +22,7 @@ post-OSAC-4558 OCI reference approach.
 
 | Check | Command / evidence |
 | ----- | ------------------ |
-| Category B complete: `bare-metal-fulfillment-operator` image mirrored | Image present in mirror registry |
+| Conditional Category B inventory included for BMaaS | Shared ISC `mirror.additionalImages` includes the selected `ghcr.io/osac-project/bare-metal-fulfillment-operator` image |
 | BMaaS enabled in OSAC Helm values | `global.services.bmaas.enabled: true` in values file |
 
 <!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target operators.md §BMaaS prerequisite operators. See docs/guides/installation/disconnected/operators.md -->
@@ -145,6 +145,14 @@ arrays in an existing document are not an optional-file skip.
 <!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target operators.md §BMaaS BMC Secret and BareMetalHost setup. See docs/guides/installation/disconnected/operators.md -->
 
 ## Mirroring artifact checks
+
+After the shared mirror run and Category A apply gate, verify the selected
+`bare-metal-fulfillment-operator` image is present at its direct mirror reference
+using the approved administration-host mirror-read client context. Before
+handoff, require its live, reference-kind-specific mirror coverage and
+`NeverContactSource` using the
+[live-rule acceptance check](README.md#live-core-image-mirror-rules).
+This operator is a Category B `additionalImages` entry, not an OLM package.
 
 <!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target operators.md §BMaaS operator and operand diagnostics. See docs/guides/installation/disconnected/operators.md -->
 

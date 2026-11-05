@@ -34,7 +34,7 @@ are in [installation.md](installation.md).
 
 | Check | Command / evidence |
 | ----- | ------------------ |
-| Category A handoff complete for the selected profile | Selected-tier package manifests are visible; installation.md later verifies selected-tier CSVs (Core=3, Core+VMaaS=6, Full-stack=7) |
+| Category A inventory and package selection composed for the selected profile | Shared ISC selects the required operator packages and `mirror.additionalImages` contains the selected core component images below; no post-apply handoff is required yet |
 | Mirror registry reachable and TLS-trusted from bastion | `status=$(curl -sS -o /dev/null -w '%{http_code}' https://<registry>:8443/v2/) && { [ "$status" = 200 ] \|\| [ "$status" = 401 ]; }` |
 | `oc-mirror` v2 available on bastion | `oc-mirror version` |
 | `helm` CLI available on workstation (bastion laptop) | `helm version` |
@@ -206,6 +206,13 @@ Connected workstation (OCI chart) --> approved artifact transfer --> disconnecte
 <!-- Moved to installation.md §4.1 Preparing the cluster. See docs/guides/installation/disconnected/installation.md -->
 
 ### Step 4 - Continue to disconnected prerequisites and installation
+
+After the shared mirror and Category A apply gate, verify selected-tier package
+manifests are visible and the selected Core images are present at their direct
+mirror references in the approved administration-host mirror-read client
+context. Require the [live-rule acceptance check](README.md#live-core-image-mirror-rules)
+before handoff. Selected-tier CSV verification remains in `installation.md`
+(Core=3, Core+VMaaS=6, Full-stack=7), after operator installation.
 
 Doc 1 ends after mirror inventory and handoff verification. Continue to
 [prerequisites and configuration](prereqs.md), then follow the

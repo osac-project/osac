@@ -247,9 +247,11 @@ oc mirror -c imageset-config.yaml \
 
 ### Step 2 — Apply generated cluster resources (disconnected cluster)
 
-The `oc mirror` run generates five cluster resource files.  Apply
-them in the following order to avoid broken image resolution or
-duplicate catalog sources.
+The `oc mirror` run generates mirror sets and selected catalog resources.
+Release signatures are additionally required when platform release mirroring
+is selected; the artifact count is not fixed. Apply the generated resources
+in the following order to avoid broken image resolution or duplicate catalog
+sources.
 
 #### 2a. Disable default catalog sources
 
@@ -309,14 +311,28 @@ on **every** `spec.imageDigestMirrors` entry in **every** generated IDMS documen
 and **every** `spec.imageTagMirrors` entry in **every** generated ITMS document,
 including operator, core and optional-service images. Repeat after every
 regeneration, overwriting an explicit `AllowContactingSource` as well as an
-absent policy. This is mandatory even for Core-only installations.
+absent policy. This air-gap policy is mandatory even for Core-only installations.
+
+> **Unsupported generated-resource modification:** The OpenShift 4.22
+> [oc-mirror resource restrictions](https://github.com/openshift/openshift-docs/blob/enterprise-4.22/modules/oc-mirror-restricted-fields.adoc)
+> explicitly prohibit changing generated `spec.imageDigestMirrors` and
+> `spec.imageTagMirrors`; doing so can cause errors and is **not supported**.
+> The commands below make that unsupported modification. A documented API field
+> does not make editing oc-mirror-generated resources vendor-supported. Retaining
+> `NeverContactSource` is this guide's air-gap requirement, not a claim of Red Hat
+> support for this procedure. Obtain the responsible owners' acceptance of this
+> support limitation and error risk before proceeding; otherwise stop the handoff
+> and seek a vendor-supported mechanism. Do not silently allow source fallback.
 
 The oc-mirror 4.22 [IDMS generator](https://github.com/openshift/oc-mirror/blob/7860a5e7f0707a3d8d8729586e8313a41983008d/internal/pkg/clusterresources/clusterresources.go#L498-L525)
 and [ITMS generator](https://github.com/openshift/oc-mirror/blob/7860a5e7f0707a3d8d8729586e8313a41983008d/internal/pkg/clusterresources/clusterresources.go#L126-L153)
 set `Source` and `Mirrors`, but not the policy. Both the
 [IDMS API](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_digest_mirror_set.go#L136-L140)
 and [ITMS API](https://github.com/openshift/api/blob/f94a02c852f17a74216c277542c391b2c851d6ce/config/v1/types_image_tag_mirror_set.go#L119-L127)
-allow fallback to the original source when the policy is unset.
+define the optional `mirrorSourcePolicy` field, including `NeverContactSource`,
+and allow fallback to the original source when the policy is unset. This
+generator behavior explains why the policy must be checked after every run;
+it does not override the generated-resource restriction above.
 
 Run the following as a standalone **Bash** script with **Mike Farah yq v4**
 and **jq**. It handles multiple files and YAML documents, preserves non-mirror
@@ -333,6 +349,24 @@ other kind or coverage of the selected references.
 set -euo pipefail
 resource_dir=oc-mirror-workspace/working-dir/cluster-resources
 test -d "$resource_dir" || exit 1
+platform_selected=$(yq -o=json '.' imageset-config.yaml | jq -sr '
+  if length != 1 or (.[0] | type != "object") or
+     (.[0].mirror | type != "object")
+  then error("one ISC document with a mirror object is required")
+  else .[0] |
+  if .mirror.platform == null then false
+  elif (.mirror.platform | type == "object") and
+       (.mirror.platform.channels | type == "array" and length > 0)
+  then true
+  else error("mirror.platform must select release channels or be omitted") end
+  end
+')
+if [ "$platform_selected" = true ]; then
+  test -s "$resource_dir/signature-configmap.yaml" || {
+    echo "ERROR: platform selected but release signatures are missing" >&2
+    exit 1
+  }
+fi
 shopt -s nullglob globstar
 resource_files=("$resource_dir"/**/*.yaml "$resource_dir"/**/*.yml)
 ((${#resource_files[@]} > 0)) || exit 1
@@ -392,8 +426,18 @@ mirror_count=$(jq -er '.items | length' "$policy_work/mirrors.json")
 oc apply --server-side -f "$policy_work/mirrors.json"
 oc apply --server-side -f "$resource_dir/cs-redhat-operator-index-v4-22.yaml"
 oc apply --server-side -f "$resource_dir/cc-redhat-operator-index-v4-22.yaml"
-oc apply --server-side -f "$resource_dir/signature-configmap.yaml"
+if [ "$platform_selected" = true ]; then
+  oc apply --server-side -f "$resource_dir/signature-configmap.yaml"
+fi
 ```
+
+The artifact set includes the generated mirror sets and selected catalogs;
+the release-signature ConfigMap is additionally required only when the actual
+ISC selects release mirroring through `mirror.platform.channels`. Use the same
+`imageset-config.yaml` that produced this workspace. An operators/additionalImages-only
+run need not produce release signatures. A stale signature file does not select
+platform mirroring, and missing signatures for a selected platform stop **all**
+applies rather than being silently skipped.
 
 Do not apply a partially patched workspace after a failure. Correct it and
 rerun the whole block. A validation or producer failure in **either** kind
@@ -491,20 +535,38 @@ for catalog in "${cluster_catalogs[@]}"; do
   }
 done
 
-# 6. At least one release-signature ConfigMap is present.
+# 6. Release signatures are required only for selected platform mirroring.
 # oc-mirror v2 labels the generated ConfigMap
 # release.openshift.io/verification-signatures, not
 # operator.openshift.io/managed=true.
-signature_configmaps="$(
-  oc get configmap -n openshift-config-managed \
-    -l release.openshift.io/verification-signatures \
-    -o name 2>/dev/null
-)"
-if [ -z "$signature_configmaps" ]; then
-  echo "ERROR: no managed signature ConfigMap found in openshift-config-managed" >&2
-  exit 1
+platform_selected=$(yq -o=json '.' imageset-config.yaml | jq -sr '
+  if length != 1 or (.[0] | type != "object") or
+     (.[0].mirror | type != "object")
+  then error("one ISC document with a mirror object is required")
+  else .[0] |
+  if .mirror.platform == null then false
+  elif (.mirror.platform | type == "object") and
+       (.mirror.platform.channels | type == "array" and length > 0)
+  then true
+  else error("mirror.platform must select release channels or be omitted") end
+  end
+') || exit 1
+if [ "$platform_selected" = true ]; then
+  test -s oc-mirror-workspace/working-dir/cluster-resources/signature-configmap.yaml || {
+    echo "ERROR: platform selected but release signature artifact is missing" >&2
+    exit 1
+  }
+  signature_configmaps="$(
+    oc get configmap -n openshift-config-managed \
+      -l release.openshift.io/verification-signatures \
+      -o name 2>/dev/null
+  )" || exit 1
+  if [ -z "$signature_configmaps" ]; then
+    echo "ERROR: no managed signature ConfigMap found in openshift-config-managed" >&2
+    exit 1
+  fi
+  printf '%s\n' "$signature_configmaps"
 fi
-printf '%s\n' "$signature_configmaps"
 
 # 7. MCPs converged
 oc wait mcp --all --for=condition=Updated --timeout=0 || {

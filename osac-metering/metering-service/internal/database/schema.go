@@ -118,9 +118,17 @@ CREATE TABLE IF NOT EXISTS progress (
     heartbeat_offset        BIGINT      NOT NULL DEFAULT 0,  -- catch-up's position in the
                                                              -- heartbeat topic
     last_round_time         TIMESTAMPTZ,                     -- when the last round ran
-    last_round_event_offset BIGINT      NOT NULL DEFAULT 0   -- the event offset the last
+    last_round_event_offset BIGINT      NOT NULL DEFAULT 0,  -- the event offset the last
                                                              -- round had folded
+    event_topic             TEXT        NOT NULL DEFAULT ''  -- the event topic those offsets
+                                                             -- belong to; empty until the
+                                                             -- first fold records it
 );
+
+-- Databases created before event_topic existed keep their offsets. The first fold stamps
+-- the current topic onto an empty value and does not rewind. A later prefix change stores
+-- a different topic and rewinds, which NoteEventTopic does.
+ALTER TABLE progress ADD COLUMN IF NOT EXISTS event_topic TEXT NOT NULL DEFAULT '';
 
 -- Which rule revisions metering has billed under, so a revision that would reprice
 -- spans this database already billed refuses to start rather than change them.

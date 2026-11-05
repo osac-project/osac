@@ -38,6 +38,7 @@ import (
 	"github.com/osac-project/osac-metering/internal/relay"
 	"github.com/osac-project/osac-metering/internal/round"
 	"github.com/osac-project/osac-metering/internal/rules"
+	"github.com/osac-project/osac-metering/internal/topics"
 	"github.com/osac-project/osac-metering/internal/usage"
 )
 
@@ -542,6 +543,13 @@ func (s *Service) deleteRows(tenant string, loops *tenantLoops) {
 // error fails the tenant, so a later pass restarts it.
 func (s *Service) runTenantLoops(ctx context.Context, tenant string, loops *tenantLoops) {
 	defer close(loops.stopped)
+
+	// Stamp the topic before the round reads the offset. The fold stamps it again.
+	if err := s.cfg.Store.NoteEventTopic(ctx, tenant, topics.EventTopic(s.cfg.EventTopicPrefix, tenant)); err != nil {
+		s.cfg.Logger.Error(err, "recording the event topic", "tenant", tenant)
+		loops.fail()
+		return
+	}
 
 	foldLoop, err := fold.New(s.cfg.Store, s.consumer, s.cfg.Logger.WithValues("loop", "fold"), s.cfg.EventTopicPrefix)
 	if err != nil {

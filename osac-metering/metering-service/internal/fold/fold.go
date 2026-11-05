@@ -61,10 +61,12 @@ func (f *Fold) eventTopic(tenant string) string { return f.eventPrefix + tenant 
 // tenant's fold lock, writes the facts its events carry, and advances the event offset. Events
 // of types metering does not track only advance the offset.
 func (f *Fold) RunTenant(ctx context.Context, tenant string) error {
-	if err := f.store.EnsureProgress(ctx, tenant); err != nil {
+	topic := f.eventTopic(tenant)
+	// Record the topic before reading the offset. A prefix change clears the offset
+	// taken from the previous topic so this topic is read from the beginning.
+	if err := f.store.NoteEventTopic(ctx, tenant, topic); err != nil {
 		return err
 	}
-	topic := f.eventTopic(tenant)
 
 	for {
 		if ctx.Err() != nil {

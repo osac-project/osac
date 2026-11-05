@@ -47,6 +47,15 @@ var _ = Describe("event tenant discovery", func() {
 		}, "custom.events.")).To(Equal([]string{"acme"}))
 	})
 
+	It("does not treat heartbeat and dead-letter topics as event tenants", func() {
+		Expect(kafka.EventTenantsOf([]string{
+			"osac.metering.heartbeat.acme",
+			"osac.metering.dlq.acme",
+			"osac.acme",
+			"osac.events.oscar",
+		}, "osac.")).To(Equal([]string{"acme", "events.oscar"}))
+	})
+
 	It("treats an empty prefix as the default", func() {
 		Expect(kafka.EventTenantsOf([]string{
 			"osac.events.acme",

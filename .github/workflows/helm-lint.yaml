@@ -184,6 +184,10 @@ jobs:
       working-directory: osac-installer
       run: uv run --project .. make mce-render-test
 
+    - name: Test billing provider rendering
+      working-directory: osac-installer
+      run: uv run --project .. make billing-render-test
+
     - name: Test BMF NetBox rendering
       if: steps.should-run.outputs.run
       working-directory: osac-installer

@@ -1,0 +1,58 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/annotations.proto";
+import "osac/public/v1/provider_rate_card_item_type.proto";
+
+message ProviderRateCardItemsListRequest {
+  // Index of the first result. Omitted or negative values use zero.
+  optional int32 offset = 1;
+  // Maximum results: defaults to 100, capped at 1000. Zero returns only the total count.
+  optional int32 limit = 2 [(buf.validate.field).int32.gte = 0];
+  // CEL expression evaluated against each provider-neutral row, before pagination.
+  optional string filter = 3;
+  // Sort order. Accepted but not yet implemented, as with other list requests.
+  optional string order = 4;
+  // Reserved for tenant-to-account assignment support in OSAC-6871. Any nonempty value currently returns
+  // UNIMPLEMENTED; OSAC tenant identifiers are never treated as provider account correlation values.
+  optional string tenant_id = 5;
+  // Exact provider service name. Omission includes every mapped OSAC service (compute_instance and cluster),
+  // even when the catalog inventory is empty. An unknown service returns no rows.
+  optional string service = 6;
+  // Required three-character ISO-4217 currency code. Callers supply the currency; this method does not resolve
+  // it from an account or discover it from the provider.
+  optional string currency_code = 7 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.len = 3
+  ];
+}
+
+// The REST gateway omits zero-valued fields, including size and total. The design openapi marks these fields
+// required: this is known contract drift, so clients must not rely on their presence in REST responses.
+message ProviderRateCardItemsListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated ProviderRateCardItem items = 3;
+}
+
+service ProviderRateCardItems {
+  // Returns provider rate-card rows as currency-specific, provider-neutral rows for the Rates UI.
+  rpc List(ProviderRateCardItemsListRequest) returns (ProviderRateCardItemsListResponse) {
+    option (google.api.http) = {get: "/api/fulfillment/v1/billing/provider_rate_card_items"};
+  }
+}

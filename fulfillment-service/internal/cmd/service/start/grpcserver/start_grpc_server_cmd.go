@@ -697,6 +697,81 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create public attribution logic: %w", err)
 	}
 
+	// Resolve the billing provider once; this makes no provider call:
+	billingProvider := newBillingProvider(os.Getenv, os.ReadFile, c.logger)
+
+	// Create the billing provider statuses servers:
+	c.logger.InfoContext(ctx, "Creating billing provider statuses servers")
+	privateBillingProviderStatusesServer, err := servers.NewPrivateBillingProviderStatusesServer().
+		SetLogger(c.logger).
+		SetProvider(billingProvider).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private billing provider statuses server: %w", err)
+	}
+	// The public server delegates to the private one, which is not registered as a service of its own:
+	billingProviderStatusesServer, err := servers.NewBillingProviderStatusesServer().
+		SetLogger(c.logger).
+		SetDelegate(privateBillingProviderStatusesServer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create public billing provider statuses server: %w", err)
+	}
+	// filterable-resource-exempt: singleton status read, no List RPC or CEL filter field
+	publicv1.RegisterBillingProviderStatusesServer(grpcServer, billingProviderStatusesServer)
+
+	// Create the catalog pricing inputs servers:
+	c.logger.InfoContext(ctx, "Creating catalog pricing inputs servers")
+	privateCatalogPricingInputsServer, err := servers.NewPrivateCatalogPricingInputsServer().
+		SetLogger(c.logger).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private catalog pricing inputs server: %w", err)
+	}
+	catalogPricingInputsServer, err := servers.NewCatalogPricingInputsServer().
+		SetLogger(c.logger).
+		SetDelegate(privateCatalogPricingInputsServer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create public catalog pricing inputs server: %w", err)
+	}
+	// filterable-resource-exempt: derived aggregation over two existing catalog-item DAOs; the List RPC does have a
+	// CEL filter field, but it's evaluated in-memory against the aggregated rows (see
+	// filterCatalogPricingInputs in private_catalog_pricing_inputs_server.go), not through a DAO-backed
+	// GenericServer.List(), so it doesn't fit RegisterResourceServers's shared code path.
+	publicv1.RegisterCatalogPricingInputsServer(grpcServer, catalogPricingInputsServer)
+	// filterable-resource-exempt: see the justification above the public registration two lines up.
+	privatev1.RegisterCatalogPricingInputsServer(grpcServer, privateCatalogPricingInputsServer)
+
+	// Create the provider rate card items servers. Admin-only: no rego rule grants ProviderRateCardItems/List to
+	// client or tenant-admin subjects, so the default-deny policy keeps it Cloud-Provider-Admin-only.
+	c.logger.InfoContext(ctx, "Creating provider rate card items servers")
+	privateProviderRateCardItemsServer, err := servers.NewPrivateProviderRateCardItemsServer().
+		SetLogger(c.logger).
+		SetProvider(billingProvider).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private provider rate card items server: %w", err)
+	}
+	providerRateCardItemsServer, err := servers.NewProviderRateCardItemsServer().
+		SetLogger(c.logger).
+		SetDelegate(privateProviderRateCardItemsServer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create public provider rate card items server: %w", err)
+	}
+	// filterable-resource-exempt: derived, provider-computed rows, not DB-backed; the List RPC does have a CEL
+	// filter field, but it's evaluated in-memory against the normalized rows (see filterProviderRateCardItems in
+	// private_provider_rate_card_items_server.go), not through a DAO-backed GenericServer.List(), so it doesn't
+	// fit RegisterResourceServers's shared code path.
+	publicv1.RegisterProviderRateCardItemsServer(grpcServer, providerRateCardItemsServer)
+	// filterable-resource-exempt: see the justification above the public registration two lines up.
+	privatev1.RegisterProviderRateCardItemsServer(grpcServer, privateProviderRateCardItemsServer)
+
 	// Create the capabilities servers:
 	c.logger.InfoContext(ctx, "Creating capabilities servers")
 	capabilitiesServer, err := servers.NewCapabilitiesServer().

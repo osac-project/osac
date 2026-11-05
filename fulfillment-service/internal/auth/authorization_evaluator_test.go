@@ -881,4 +881,106 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 			Expect(adminCreate.Allowed).To(BeTrue())
 		})
 	})
+
+	Describe("billing provider status authorization", func() {
+		const (
+			publicStatusGet  = "/osac.public.v1.BillingProviderStatuses/Get"
+			privateStatusGet = "/osac.private.v1.BillingProviderStatuses/Get"
+		)
+		DescribeTable("only admins may read the status", expectMethodAllowed,
+			Entry("public: admin group", publicStatusGet, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("public: osac-admin service account", publicStatusGet, "service-account-osac-admin",
+				[]any{}, []any{}, true),
+			Entry("public: osac-controller service account", publicStatusGet, "service-account-osac-controller",
+				[]any{}, []any{}, true),
+			Entry("public: tenant user", publicStatusGet, "billing-test", []any{"user"}, []any{}, false),
+			Entry("public: tenant admin", publicStatusGet, "billing-test", []any{"tenant-admin"}, []any{}, false),
+			Entry("public: tenant IdP manager", publicStatusGet, "billing-test", []any{"tenant-idp-manager"},
+				[]any{}, false),
+			Entry("public: tenant reader", publicStatusGet, "billing-test", []any{"tenant-reader"}, []any{}, false),
+			Entry("public: cloud provider reader", publicStatusGet, "billing-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+			Entry("private: admin group", privateStatusGet, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("private: osac-admin service account", privateStatusGet, "service-account-osac-admin",
+				[]any{}, []any{}, true),
+			Entry("private: osac-controller service account", privateStatusGet, "service-account-osac-controller",
+				[]any{}, []any{}, true),
+			Entry("private: tenant user", privateStatusGet, "billing-test", []any{"user"}, []any{}, false),
+			Entry("private: tenant admin", privateStatusGet, "billing-test", []any{"tenant-admin"}, []any{}, false),
+			Entry("private: tenant IdP manager", privateStatusGet, "billing-test", []any{"tenant-idp-manager"},
+				[]any{}, false),
+			Entry("private: tenant reader", privateStatusGet, "billing-test", []any{"tenant-reader"}, []any{}, false),
+			Entry("private: cloud provider reader", privateStatusGet, "billing-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+		)
+	})
+
+	Describe("catalog pricing inputs authorization", func() {
+		const (
+			publicCatalogPricingInputsList  = "/osac.public.v1.CatalogPricingInputs/List"
+			privateCatalogPricingInputsList = "/osac.private.v1.CatalogPricingInputs/List"
+		)
+		DescribeTable("only admins may list the metered catalog inventory", expectMethodAllowed,
+			Entry("public: admin group", publicCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"user"}, []any{"admins"}, true),
+			Entry("public: tenant admin", publicCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"tenant-admin"}, []any{}, false),
+			Entry("public: tenant reader", publicCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"tenant-reader"}, []any{}, false),
+			Entry("public: cloud provider reader", publicCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+			Entry("private: admin group", privateCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"user"}, []any{"admins"}, true),
+			Entry("private: tenant admin", privateCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"tenant-admin"}, []any{}, false),
+			Entry("private: tenant reader", privateCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"tenant-reader"}, []any{}, false),
+			Entry("private: cloud provider reader", privateCatalogPricingInputsList, "catalog-pricing-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+		)
+	})
+
+	Describe("provider rate card items authorization", func() {
+		const (
+			publicProviderRateCardItemsList  = "/osac.public.v1.ProviderRateCardItems/List"
+			privateProviderRateCardItemsList = "/osac.private.v1.ProviderRateCardItems/List"
+		)
+		DescribeTable("only admins may list provider rate card items", expectMethodAllowed,
+			Entry("public: admin group", publicProviderRateCardItemsList, "rate-card-test",
+				[]any{"user"}, []any{"admins"}, true),
+			Entry("public: tenant admin", publicProviderRateCardItemsList, "rate-card-test",
+				[]any{"tenant-admin"}, []any{}, false),
+			Entry("public: tenant reader", publicProviderRateCardItemsList, "rate-card-test",
+				[]any{"tenant-reader"}, []any{}, false),
+			Entry("public: cloud provider reader", publicProviderRateCardItemsList, "rate-card-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+			Entry("private: admin group", privateProviderRateCardItemsList, "rate-card-test",
+				[]any{"user"}, []any{"admins"}, true),
+			Entry("private: tenant admin", privateProviderRateCardItemsList, "rate-card-test",
+				[]any{"tenant-admin"}, []any{}, false),
+			Entry("private: tenant reader", privateProviderRateCardItemsList, "rate-card-test",
+				[]any{"tenant-reader"}, []any{}, false),
+			Entry("private: cloud provider reader", privateProviderRateCardItemsList, "rate-card-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+		)
+	})
 })
+
+// expectMethodAllowed evaluates method for a subject with the given username, roles and groups, asserting the
+// decision matches allowed. The billing authorization DescribeTables share it.
+func expectMethodAllowed(ctx context.Context, method string, username string, roles []any, groups []any,
+	allowed bool) {
+	evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
+	Expect(err).ToNot(HaveOccurred())
+	authContext := &AuthContext{
+		Username:     username,
+		Groups:       groups,
+		AuthMethod:   "jwt",
+		Organization: []any{"acme-corp"},
+		RealmAccess:  map[string]any{"roles": roles},
+		Tenant:       "acme-corp",
+	}
+	decision, err := evaluator.Evaluate(ctx, authContext, method)
+	Expect(err).ToNot(HaveOccurred())
+	Expect(decision.Allowed).To(Equal(allowed))
+}

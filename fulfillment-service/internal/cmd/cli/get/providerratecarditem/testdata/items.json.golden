@@ -1,0 +1,34 @@
+[
+  {
+    "catalog_item_matches": [
+      "vm-fedora-small"
+    ],
+    "currency_code": "USD",
+    "rate": {
+      "amount": "0.00125",
+      "unit": "second"
+    },
+    "resource_conditions": [
+      {
+        "dimension": "instance_type",
+        "operator": "BILLING_RATE_MATCH_OPERATOR_EQUALS",
+        "value": "small"
+      }
+    ],
+    "service": "compute_instance"
+  },
+  {
+    "currency_code": "USD",
+    "rate": {
+      "amount": "5",
+      "unit": "second"
+    },
+    "resource_conditions": [
+      {
+        "dimension": "widget_size",
+        "operator": "BILLING_RATE_MATCH_OPERATOR_ANY"
+      }
+    ],
+    "service": "widget_service"
+  }
+]

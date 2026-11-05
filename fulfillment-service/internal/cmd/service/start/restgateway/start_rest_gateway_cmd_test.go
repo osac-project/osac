@@ -99,6 +99,9 @@ var bmaasHandlers = []string{
 
 var sharedHandlers = []string{
 	"public/v1.RegisterCapabilitiesHandler",
+	"public/v1.RegisterBillingProviderStatusesHandler",
+	"public/v1.RegisterCatalogPricingInputsHandler",
+	"public/v1.RegisterProviderRateCardItemsHandler",
 	"public/v1.RegisterVirtualNetworksHandler",
 	"public/v1.RegisterSubnetsHandler",
 	"public/v1.RegisterSecurityGroupsHandler",
@@ -114,6 +117,8 @@ var sharedHandlers = []string{
 	"public/v1.RegisterStorageTiersHandler",
 	"public/v1.RegisterSelfSubjectAccessReviewsHandler",
 	"private/v1.RegisterCapabilitiesHandler",
+	"private/v1.RegisterCatalogPricingInputsHandler",
+	"private/v1.RegisterProviderRateCardItemsHandler",
 	"private/v1.RegisterEventsHandler",
 	"private/v1.RegisterHubsHandler",
 	"private/v1.RegisterNetworkClassesHandler",
@@ -143,5 +148,9 @@ var _ = Describe("buildHandlerList", func() {
 		Expect(containsAll(names, bmaasHandlers)).To(BeEmpty(), "missing BMaaS handlers")
 		Expect(containsAll(names, diskImagesHandlers)).To(BeEmpty(), "missing DiskImages handlers")
 		Expect(containsAll(names, sharedHandlers)).To(BeEmpty(), "missing shared handlers")
+	})
+
+	It("does not register the private billing provider status handler, which has no gRPC service behind it", func() {
+		Expect(handlerNames(buildHandlerList())).ToNot(ContainElement("private/v1.RegisterBillingProviderStatusesHandler"))
 	})
 })

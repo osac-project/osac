@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/ast"
+	"google.golang.org/protobuf/proto"
 )
 
 var celSyntaxEnv = func() *cel.Env {
@@ -38,6 +39,57 @@ func validateCELSyntax(filter string) error {
 		return fmt.Errorf("syntax error: %w", issues.Err())
 	}
 	return nil
+}
+
+// newTypedFilterEnv builds the CEL environment for evaluating a 'filter' expression against items of proto
+// message type T, following the 'this' convention documented in docs/FILTER.md. The message type is fixed, so
+// the result is built once at package scope; there is nothing per-request to configure.
+func newTypedFilterEnv[T proto.Message]() *cel.Env {
+	var model T
+	desc := model.ProtoReflect().Descriptor()
+	env, err := cel.NewEnv(
+		cel.Types(model),
+		cel.Variable("this", cel.ObjectType(string(desc.FullName()))),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("failed to create CEL filter environment for %s: %v", desc.FullName(), err))
+	}
+	return env
+}
+
+// filterItems returns the subset of items for which the CEL filter expression evaluates to true against 'this'.
+// An empty filter matches every item. env comes from newTypedFilterEnv for the items' message type. It is the
+// single in-memory filter pipeline shared by every server that filters a derived, non-DAO-backed list.
+func filterItems[T proto.Message](env *cel.Env, items []T, filter string) ([]T, error) {
+	if filter == "" {
+		return items, nil
+	}
+	tree, issues := env.Compile(filter)
+	if issues != nil && issues.Err() != nil {
+		return nil, issues.Err()
+	}
+	if !tree.OutputType().IsExactType(cel.BoolType) {
+		return nil, fmt.Errorf("filter result must be a boolean, but it is of type '%v'", tree.OutputType())
+	}
+	program, err := env.Program(tree)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]T, 0, len(items))
+	for _, item := range items {
+		value, _, err := program.Eval(map[string]any{"this": item})
+		if err != nil {
+			return nil, err
+		}
+		accepted, ok := value.Value().(bool)
+		if !ok {
+			return nil, fmt.Errorf("filter result must be a boolean, but it is of type '%T'", value.Value())
+		}
+		if accepted {
+			result = append(result, item)
+		}
+	}
+	return result, nil
 }
 
 // filterReferencedFields parses a CEL filter and returns the set of all dotted field paths

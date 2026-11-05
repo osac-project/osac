@@ -16,9 +16,49 @@ package servers
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var _ = Describe("CEL filter utilities", func() {
+	Describe("filterItems", func() {
+		env := newTypedFilterEnv[*privatev1.CatalogPricingInput]()
+		items := []*privatev1.CatalogPricingInput{
+			privatev1.CatalogPricingInput_builder{Service: "compute_instance", Dimension: "instance_type"}.Build(),
+			privatev1.CatalogPricingInput_builder{Service: "cluster", Dimension: "node_count"}.Build(),
+		}
+
+		It("returns the input unchanged for an empty filter", func() {
+			result, err := filterItems(env, items, "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result).To(Equal(items))
+		})
+
+		It("keeps only the items the expression accepts", func() {
+			result, err := filterItems(env, items, `this.service == "cluster"`)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result).To(HaveLen(1))
+			Expect(result[0].GetService()).To(Equal("cluster"))
+		})
+
+		It("rejects a syntactically invalid filter", func() {
+			_, err := filterItems(env, items, `this.service ==`)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("rejects a filter whose result is not a boolean", func() {
+			_, err := filterItems(env, items, `this.service`)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("must be a boolean"))
+		})
+
+		It("rejects a non-boolean filter when there are no items", func() {
+			_, err := filterItems(env, []*privatev1.CatalogPricingInput{}, `this.service`)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("must be a boolean"))
+		})
+	})
+
 	Describe("validateCELSyntax", func() {
 		DescribeTable("validates syntax",
 			func(input string, shouldPass bool) {

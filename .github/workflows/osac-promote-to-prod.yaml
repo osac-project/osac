@@ -809,8 +809,10 @@ jobs:
                 {},
             )
             reason = succeeded.get("reason", "Unknown")
-            message = succeeded.get("message", "")
-            print(f"[{COMPONENT}] PipelineRun {latest['metadata']['name']}: {reason} -- {message}", flush=True)
+            # Only the enum-like reason is logged -- the condition's own
+            # free-text message can embed internal URLs/paths and isn't
+            # needed to follow progress here.
+            print(f"[{COMPONENT}] PipelineRun status: {reason}", flush=True)
 
         def check_run_failed():
             # Same reasoning as wait-for-konflux-chart-build's identical
@@ -858,7 +860,10 @@ jobs:
             print(f"::error::Timed out waiting for {COMPONENT}'s Konflux release build")
             sys.exit(1)
 
-        print(f"{COMPONENT}: {found['containerImage']}")
+        # The image ref itself isn't logged (it's an internal Konflux
+        # workload-registry path) -- component.json carries it forward
+        # for the next job to consume.
+        print(f"{COMPONENT}: build complete, tests passed")
         with open("component.json", "w") as f:
             json.dump(found, f)
         PYEOF
@@ -972,8 +977,8 @@ jobs:
             sys.exit(1)
 
         print("All prod chart components built and passed tests:")
-        for name, component in found.items():
-            print(f"  {name}: {component['containerImage']}")
+        for name in found:
+            print(f"  {name}: ready")
 
         slug = RELEASE_VERSION.replace(".", "-")
         resource_name = f"osac-charts-release-v{slug}-prod-r{RUN_ID}a{RUN_ATTEMPT}"
@@ -1026,10 +1031,10 @@ jobs:
                 print(f"::error::Override snapshot {resource_name} failed its integration tests")
                 sys.exit(1)
             if conditions:
-                summary = "; ".join(
-                    f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
-                    for c in conditions
-                )
+                # Only type/status/reason (short, enum-like) are logged --
+                # a condition's free-text message can embed internal
+                # URLs/paths.
+                summary = "; ".join(f"{c.get('type')}={c.get('status')} ({c.get('reason')})" for c in conditions)
                 print(f"[{resource_name}] {summary}", flush=True)
             else:
                 print(f"Waiting on {resource_name}'s integration tests -- no conditions reported yet", flush=True)
@@ -1085,10 +1090,9 @@ jobs:
                     print(f"::warning::Konflux production chart release failed: {release_name}")
                     return "failed"
                 if conditions:
-                    summary = "; ".join(
-                        f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
-                        for c in conditions
-                    )
+                    # Only type/status/reason are logged -- see the
+                    # identical reasoning on the Snapshot-wait loop above.
+                    summary = "; ".join(f"{c.get('type')}={c.get('status')} ({c.get('reason')})" for c in conditions)
                 else:
                     summary = f"Waiting on {release_name} -- no conditions yet"
                 print(f"[{release_name}] {summary}", flush=True)
@@ -1171,6 +1175,7 @@ jobs:
         IMAGE_READY: ${{ needs.resolve-and-verify.outputs.image-ready }}
         CHART_READY: ${{ needs.resolve-and-verify.outputs.chart-ready }}
         IMAGE_RESULT: ${{ needs.promote-image.result }}
+        ALREADY_RELEASED: ${{ needs.stamp-prod-chart.outputs.already-released }}
         STAMP_RESULT: ${{ needs.stamp-prod-chart.result == 'skipped' && 'skipped' || ((needs.stamp-prod-chart.outputs.tag-pushed == 'true' || needs.stamp-prod-chart.outputs.already-released == 'true') && 'success' || 'failure') }}
         CHART_RESULT: ${{ needs.release-prod-chart.outputs.release-outcome || needs.release-prod-chart.result }}
         WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1191,9 +1196,20 @@ jobs:
         # correctly withheld) must stay "skipped", not get mislabeled as
         # a stamping failure that never actually happened.
         [[ "${CHART_READY}" == "true" && "${STAMP_RESULT}" == "failure" ]] && CHART_TEXT="failure (stamping chart for production failed, see stamp-prod-chart)"
+        # When already-released short-circuits stamp-prod-chart,
+        # release-prod-chart never runs at all (its own if: requires
+        # tag-pushed == 'true'), so CHART_RESULT above would otherwise
+        # read plain "skipped" -- misleading, since the chart genuinely
+        # is already live in production. Report it as success instead.
+        CHART_SUCCESS=false
+        [[ "${CHART_TEXT}" == "success" ]] && CHART_SUCCESS=true
+        if [[ "${CHART_READY}" == "true" && "${ALREADY_RELEASED}" == "true" ]]; then
+          CHART_TEXT="success (already promoted previously)"
+          CHART_SUCCESS=true
+        fi
 
         HEADER_TEXT=":warning: ${VERSION} - Production promotion incomplete"
-        if [[ "${IMAGE_TEXT}" == "success" && "${CHART_TEXT}" == "success" ]]; then
+        if [[ "${IMAGE_TEXT}" == "success" && "${CHART_SUCCESS}" == "true" ]]; then
           HEADER_TEXT=":white_check_mark: ${VERSION} - Promoted to production"
         elif [[ "${IMAGE_TEXT}" == "failure" ]]; then
           HEADER_TEXT=":x: ${VERSION} - Production promotion failed"

@@ -162,14 +162,10 @@ The source runtime wiring clause is received here once: selected mirror-backed s
 
 ### 6.1.2 CDI consumer contract and configuration decision
 
-Do not infer CDI registry-import routing from IDMS/ITMS policy alone. The
-[CDI API](https://github.com/kubevirt/containerized-data-importer/blob/15b1fc5958919ae6f50d7165b1ce14a9ce3c8167/staging/src/kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1/types.go#L197-L218)
-distinguishes `pullMethod: pod` (default importer-client path) and
-`pullMethod: node` (node-cache path). In the
-[node implementation](https://github.com/kubevirt/containerized-data-importer/blob/15b1fc5958919ae6f50d7165b1ce14a9ce3c8167/pkg/controller/import-controller.go#L1161-L1188),
-the selected registry image is a Pod container image. Inspect the installed
-release's actual DataVolume source, effective pull method, Pod images and
-importer configuration; do not claim every CDI import bypasses node mirrors.
+Do not infer Containerized Data Importer (CDI) registry-import routing or node mirror resolution from ImageDigestMirrorSet (IDMS) or ImageTagMirrorSet (ITMS) policy alone. The CDI API distinguishes between pullMethod: pod (the default importer-client path) and pullMethod: node (the node-cache path). Under pullMethod: node, CDI delegates container disk retrieval to the host node's container runtime and node cache, uses the node runtime’s applicable credentials and mirror configuration. Under pullMethod: pod, the dedicated cdi-importer pod handles the import directly. Always inspect generated DataVolume and actual Pod containers as well as any DataImportCron template,effective pull Method, importer pods logs and registry configuration. Protect diagnostic logs and redact sensitive content before display or exporting. For official details, see the
+[OpenShift 4.22 Virtualization boot source updates documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/index%5D)
+[Managing Automatic Boot Source Updates (DataImportCron & pullMethod details)](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/managing-automatic-boot-source-updates)
+ [Virtualization Storage & Data Volume Configuration Overview](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/storage-configuration-overview)
 An IDMS/ITMS policy check or exact-tag/digest mirror lookup does not waive the actual
 selected-image CDI import acceptance in Section 7.1.
 

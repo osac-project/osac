@@ -24,6 +24,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -710,6 +711,16 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterRolesServer(registrar, privateRolesServer)
 
+	userReferenceDAO, err := dao.NewGenericDAO[*privatev1.User]().
+		SetLogger(deps.Logger).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create User DAO for public reference redaction: %w", err)
+	}
+	userReferenceLookup := references.NewScopedDAOLookupFunc(userReferenceDAO)
+
 	// Create the role bindings server:
 	deps.Logger.InfoContext(ctx, "Creating role bindings server")
 	roleBindingsServer, err := servers.NewRoleBindingsServer().
@@ -717,6 +728,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetUserReferenceLookup(userReferenceLookup).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create role bindings server: %w", err)
@@ -765,6 +777,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetUserReferenceLookup(userReferenceLookup).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project memberships server: %w", err)

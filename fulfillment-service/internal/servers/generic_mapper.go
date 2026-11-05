@@ -26,14 +26,17 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	metadatautil "github.com/osac-project/osac/fulfillment-service/internal/metadata"
+	"github.com/osac-project/osac/fulfillment-service/internal/references"
 )
 
 // GenericMapperBuilder contains the data and logic neede to create new generic mapper.
 type GenericMapperBuilder[From, To proto.Message] struct {
-	logger        *slog.Logger
-	strict        bool
-	ignoredFields []any
+	logger              *slog.Logger
+	strict              bool
+	ignoredFields       []any
+	userReferenceLookup references.ReferenceLookupFunc
 }
 
 // GenericMapper is knows how to map the private representation of an object to the corresponding public representation,
@@ -43,6 +46,7 @@ type GenericMapper[From, To proto.Message] struct {
 	strict                bool
 	ignoredFieldNames     map[protoreflect.Name]bool
 	ignoredFieldFullNames map[protoreflect.FullName]bool
+	userReferenceLookup   references.ReferenceLookupFunc
 }
 
 // NewGenericMapper creates a builder that can then be used to configure and create a new generic mapper.
@@ -60,6 +64,16 @@ func (b *GenericMapperBuilder[From, To]) SetLogger(value *slog.Logger) *GenericM
 // object that don't exist in the `to` object. This is optional and the default is `false`.
 func (b *GenericMapperBuilder[From, To]) SetStrict(value bool) *GenericMapperBuilder[From, To] {
 	b.strict = value
+	return b
+}
+
+// SetUserReferenceLookup configures the scoped lookup used to redact UserReferences before they
+// are returned from a public mapper. A lookup that cannot find a reference in its allowed scopes
+// is redacted as well.
+func (b *GenericMapperBuilder[From, To]) SetUserReferenceLookup(
+	value references.ReferenceLookupFunc,
+) *GenericMapperBuilder[From, To] {
+	b.userReferenceLookup = value
 	return b
 }
 
@@ -115,6 +129,7 @@ func (b *GenericMapperBuilder[From, To]) Build() (result *GenericMapper[From, To
 		logger:                b.logger,
 		ignoredFieldNames:     ignoredFieldNames,
 		ignoredFieldFullNames: ignoredFieldFullNames,
+		userReferenceLookup:   b.userReferenceLookup,
 		strict:                b.strict,
 	}
 	return
@@ -135,7 +150,11 @@ func (m *GenericMapper[From, To]) Copy(ctx context.Context, from From, to To) er
 	}
 	if toReflect.Descriptor().ParentFile().Package() == "osac.public.v1" {
 		filterReservedMetadata(toReflect)
-		filterSystemTenantReferences(toReflect)
+		if err := filterSystemTenantReferences(
+			ctx, toReflect, ownerTenant(fromReflect), m.userReferenceLookup,
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -318,20 +337,29 @@ func filterReservedMetadata(message protoreflect.Message) {
 }
 
 // filterSystemTenantReferences removes identifiers for system-tenant resources from public
-// references while retaining the reference messages in their original positions.
-func filterSystemTenantReferences(message protoreflect.Message) {
+// references while retaining the reference messages in their original positions. User references
+// are resolved in their selected or owner/shared scope before their identifiers are retained.
+func filterSystemTenantReferences(
+	ctx context.Context,
+	message protoreflect.Message,
+	ownerTenant string,
+	userReferenceLookup references.ReferenceLookupFunc,
+) error {
 	if !message.IsValid() {
-		return
+		return nil
 	}
 	if isFullResourceReference(message.Descriptor()) {
 		tenantField := message.Descriptor().Fields().ByName("tenant")
 		if message.Get(tenantField).String() == "system" {
-			for _, name := range []protoreflect.Name{"id", "name", "project", "tenant", "shared"} {
-				if field := message.Descriptor().Fields().ByName(name); field != nil {
-					message.Clear(field)
-				}
+			clearFullResourceReference(message)
+			return nil
+		}
+
+		if message.Descriptor().Name() == "UserReference" &&
+			message.Get(tenantField).String() == "" && userReferenceLookup != nil {
+			if err := retainVisibleUserReference(ctx, message, ownerTenant, userReferenceLookup); err != nil {
+				return err
 			}
-			return
 		}
 	}
 
@@ -346,9 +374,17 @@ func filterSystemTenantReferences(message protoreflect.Message) {
 				continue
 			}
 			list := message.Mutable(field).List()
+			clones := make([]proto.Message, list.Len())
 			for j := range list.Len() {
 				cloned := proto.Clone(list.Get(j).Message().Interface())
-				filterSystemTenantReferences(cloned.ProtoReflect())
+				if err := filterSystemTenantReferences(
+					ctx, cloned.ProtoReflect(), ownerTenant, userReferenceLookup,
+				); err != nil {
+					return err
+				}
+				clones[j] = cloned
+			}
+			for j, cloned := range clones {
 				list.Set(j, protoreflect.ValueOfMessage(cloned.ProtoReflect()))
 			}
 			continue
@@ -363,19 +399,111 @@ func filterSystemTenantReferences(message protoreflect.Message) {
 				value proto.Message
 			}
 			var entries []mapMessage
+			var filterErr error
 			values.Range(func(key protoreflect.MapKey, value protoreflect.Value) bool {
 				cloned := proto.Clone(value.Message().Interface())
-				filterSystemTenantReferences(cloned.ProtoReflect())
+				if err := filterSystemTenantReferences(
+					ctx, cloned.ProtoReflect(), ownerTenant, userReferenceLookup,
+				); err != nil {
+					filterErr = err
+					return false
+				}
 				entries = append(entries, mapMessage{key: key, value: cloned})
 				return true
 			})
+			if filterErr != nil {
+				return filterErr
+			}
 			for _, entry := range entries {
 				values.Set(entry.key, protoreflect.ValueOfMessage(entry.value.ProtoReflect()))
 			}
 			continue
 		}
 		if field.Message() != nil {
-			filterSystemTenantReferences(message.Mutable(field).Message())
+			if err := filterSystemTenantReferences(
+				ctx, message.Mutable(field).Message(), ownerTenant, userReferenceLookup,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func retainVisibleUserReference(
+	ctx context.Context,
+	message protoreflect.Message,
+	ownerTenant string,
+	lookup references.ReferenceLookupFunc,
+) error {
+	idField := message.Descriptor().Fields().ByName("id")
+	nameField := message.Descriptor().Fields().ByName("name")
+	if message.Get(idField).String() == "" {
+		return nil
+	}
+
+	tenantField := message.Descriptor().Fields().ByName("tenant")
+	tenant := message.Get(tenantField).String()
+	project := message.Get(message.Descriptor().Fields().ByName("project")).String()
+	sharedField := message.Descriptor().Fields().ByName("shared")
+	shared := sharedField != nil && message.Get(sharedField).Bool()
+
+	scopes := []string{}
+	switch {
+	case tenant != "":
+		scopes = append(scopes, tenant)
+	case shared:
+		scopes = append(scopes, auth.SharedTenant)
+	default:
+		if ownerTenant != "" {
+			scopes = append(scopes, ownerTenant)
+		}
+		if ownerTenant != auth.SharedTenant {
+			scopes = append(scopes, auth.SharedTenant)
+		}
+	}
+
+	for _, scopeTenant := range scopes {
+		resolved, err := lookup(
+			ctx, scopeTenant, project, message.Get(idField).String(), message.Get(nameField).String(),
+		)
+		if err != nil {
+			var notFound interface{ IsNotFound() bool }
+			if errors.As(err, &notFound) && notFound.IsNotFound() {
+				continue
+			}
+			return fmt.Errorf("failed to resolve public user reference for redaction: %w", err)
+		}
+		if resolved == nil {
+			continue
+		}
+		if resolved.Tenant != scopeTenant || resolved.Tenant == auth.SystemTenant {
+			clearFullResourceReference(message)
+		}
+		return nil
+	}
+
+	clearFullResourceReference(message)
+	return nil
+}
+
+func ownerTenant(message protoreflect.Message) string {
+	metadataField := message.Descriptor().Fields().ByName("metadata")
+	if metadataField == nil || !message.Has(metadataField) {
+		return ""
+	}
+	metadata := message.Get(metadataField).Message()
+	tenantField := metadata.Descriptor().Fields().ByName("tenant")
+	if tenantField == nil {
+		return ""
+	}
+	return metadata.Get(tenantField).String()
+}
+
+func clearFullResourceReference(message protoreflect.Message) {
+	for _, name := range []protoreflect.Name{"id", "name", "project", "tenant", "shared"} {
+		if field := message.Descriptor().Fields().ByName(name); field != nil {
+			message.Clear(field)
 		}
 	}
 }

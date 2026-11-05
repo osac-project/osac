@@ -400,12 +400,12 @@ func selectedReferenceScope(scope referenceScope, tenant string, shared bool, pr
 }
 
 // inheritReferenceScope updates ref when a default was copied from the object described by
-// owner. It carries that object's tenant/project into later name lookup. For example, an image
-// default from a shared Template must still select the shared image when used by an acme VM.
-// An explicitly scoped ref is left alone; otherwise the tenant and legacy shared selector are
-// set from owner and only an omitted project is filled. This function does not look up or validate
-// the target.
+// owner. Name-based defaults need the owner's tenant/project to disambiguate the target. ID-based
+// defaults keep their selectors unchanged so later validation can retain the compatibility rule
+// that an ID may refer to an owner-tenant or shared target. An explicitly scoped ref is left alone.
+// This function does not look up or validate the target.
 func inheritReferenceScope(ref interface {
+	GetId() string
 	GetTenant() string
 	GetShared() bool
 	SetTenant(string)
@@ -413,7 +413,7 @@ func inheritReferenceScope(ref interface {
 	GetProject() string
 	SetProject(string)
 }, owner *privatev1.Metadata) {
-	if ref.GetTenant() != "" || ref.GetShared() {
+	if ref.GetId() != "" || ref.GetTenant() != "" || ref.GetShared() {
 		return
 	}
 	ref.SetTenant(owner.GetTenant())

@@ -18,6 +18,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // Regression tests for OSAC-6381: global references with project==""
@@ -130,4 +131,47 @@ var _ = Describe("selectedReferenceScope", func() {
 			"", "", true,
 		),
 	)
+})
+
+var _ = Describe("inheritReferenceScope", func() {
+	owner := privatev1.Metadata_builder{
+		Tenant:  "acme",
+		Project: "apps",
+	}.Build()
+
+	It("inherits the owner tenant and project for a name-based default", func() {
+		reference := privatev1.DiskImageReference_builder{Name: "default-image"}.Build()
+
+		inheritReferenceScope(reference, owner)
+
+		Expect(reference.GetTenant()).To(Equal("acme"))
+		Expect(reference.GetProject()).To(Equal("apps"))
+		Expect(reference.GetShared()).To(BeFalse())
+	})
+
+	It("keeps an ID-based default tenantless so a shared target remains valid", func() {
+		reference := privatev1.DiskImageReference_builder{Id: "shared-image-id"}.Build()
+
+		inheritReferenceScope(reference, owner)
+
+		Expect(reference.GetTenant()).To(BeEmpty())
+		Expect(reference.GetShared()).To(BeFalse())
+		Expect(reference.GetProject()).To(BeEmpty())
+		Expect(validateDependencyOwnerScope(
+			referenceScope{tenant: owner.GetTenant(), project: owner.GetProject()},
+			privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+			reference.GetTenant(), "disk image", "",
+		)).To(Succeed())
+	})
+
+	It("preserves an explicit reference scope", func() {
+		reference := privatev1.DiskImageReference_builder{
+			Id: "shared-image-id", Tenant: auth.SharedTenant, Project: "templates",
+		}.Build()
+
+		inheritReferenceScope(reference, owner)
+
+		Expect(reference.GetTenant()).To(Equal(auth.SharedTenant))
+		Expect(reference.GetProject()).To(Equal("templates"))
+	})
 })

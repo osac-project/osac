@@ -119,7 +119,7 @@ func parseEndpoint(endpoint string) (string, error) {
 		return "", errors.New("Secret API endpoint is required")
 	}
 	parsed, err := url.Parse(endpoint)
-	if err != nil || parsed.Host == "" {
+	if err != nil || parsed.Hostname() == "" {
 		return "", errors.New("Secret API endpoint must be a valid URL with a host")
 	}
 	return parsed.Host, nil

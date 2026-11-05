@@ -243,6 +243,7 @@ def check_bmf_netbox(docs: list[dict[str, Any]]) -> None:
 
 
 def check_bmf_secret_api_is_independent(netbox_values: pathlib.Path) -> None:
+    """Check URL opt-in independently of NetBox, preserving required NetBox settings."""
     for netbox_enabled in (False, True):
         for configured in (False, True):
             endpoint = "https://fulfillment-internal-api:8001" if configured else ""
@@ -650,6 +651,7 @@ def check_infra_metal3_rbac() -> None:
 
 
 def main() -> None:
+    """Run BMF render contracts or the explicitly selected live Secret lookup check."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--live-lookup-only",

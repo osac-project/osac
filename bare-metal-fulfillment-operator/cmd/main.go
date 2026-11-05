@@ -619,18 +619,23 @@ func createNetBoxInventoryClientWithManager(
 	return netBoxClient, nil
 }
 
+// createSecretAPIClientFromEnv loads Secret API settings and adds configuration context to errors.
 func createSecretAPIClientFromEnv() (inventory.SecretAPIClient, error) {
 	if strings.TrimSpace(os.Getenv(envSecretAPIURL)) == "" {
-		return nil, fmt.Errorf("%s is required for NetBox inventory; "+
+		return nil, fmt.Errorf("%s is required; "+
 			"set secretAPI.url in the Helm chart or provide the environment variable", envSecretAPIURL)
 	}
-	return secretapi.New(secretapi.Config{
+	secretsClient, err := secretapi.New(secretapi.Config{
 		Endpoint:         os.Getenv(envSecretAPIURL),
 		IssuerURL:        os.Getenv(envSecretAPIIssuerURL),
 		ClientIDFile:     os.Getenv(envSecretAPIClientIDFile),
 		ClientSecretFile: os.Getenv(envSecretAPIClientSecretFile),
 		CAFile:           os.Getenv(envSecretAPICAFile),
 	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to configure Secret API client (%s / secretAPI.url): %w", envSecretAPIURL, err)
+	}
+	return secretsClient, nil
 }
 
 func createBCMInventoryClient(

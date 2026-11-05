@@ -80,19 +80,45 @@ var _ = Describe("createSecretAPIClientFromEnv", func() {
 			GinkgoT().Setenv(envSecretAPIURL, endpoint)
 			secretsClient, err := createSecretAPIClientFromEnv()
 			Expect(secretsClient).To(BeNil())
-			Expect(err).To(MatchError("OSAC_SECRET_API_URL is required for NetBox inventory; " +
+			Expect(err).To(MatchError("OSAC_SECRET_API_URL is required; " +
 				"set secretAPI.url in the Helm chart or provide the environment variable"))
 		},
 		Entry("missing", ""),
 		Entry("blank", " \t\n"),
 	)
 
-	It("does not expose credentials from an invalid endpoint", func() {
-		GinkgoT().Setenv(envSecretAPIURL, "https://test-user:test-password@example.test:invalid")
-		secretsClient, err := createSecretAPIClientFromEnv()
-		Expect(secretsClient).To(BeNil())
-		Expect(err).To(MatchError("Secret API endpoint must be a valid URL with a host"))
-	})
+	DescribeTable("identifies invalid endpoint configuration without exposing the input",
+		func(endpoint string) {
+			GinkgoT().Setenv(envSecretAPIURL, endpoint)
+			secretsClient, err := createSecretAPIClientFromEnv()
+			Expect(secretsClient).To(BeNil())
+			Expect(err).To(MatchError("failed to configure Secret API client " +
+				"(OSAC_SECRET_API_URL / secretAPI.url): Secret API endpoint must be a valid URL with a host"))
+			Expect(err.Error()).NotTo(ContainSubstring(endpoint))
+		},
+		Entry("malformed", "https://example.test:invalid"),
+		Entry("hostless", "https:///api"),
+		Entry("port-only", "https://:8001"),
+	)
+
+	DescribeTable("preserves the cause of non-endpoint configuration errors",
+		func(issuerURL, caFile, wantCause string) {
+			credentialFile := filepath.Join(GinkgoT().TempDir(), "credential")
+			Expect(os.WriteFile(credentialFile, []byte("test-value"), 0o600)).To(Succeed())
+			GinkgoT().Setenv(envSecretAPIURL, "https://secrets.example.test:8001")
+			GinkgoT().Setenv(envSecretAPIIssuerURL, issuerURL)
+			GinkgoT().Setenv(envSecretAPIClientIDFile, credentialFile)
+			GinkgoT().Setenv(envSecretAPIClientSecretFile, credentialFile)
+			GinkgoT().Setenv(envSecretAPICAFile, caFile)
+			secretsClient, err := createSecretAPIClientFromEnv()
+			Expect(secretsClient).To(BeNil())
+			Expect(err).To(MatchError(ContainSubstring("failed to configure Secret API client " +
+				"(OSAC_SECRET_API_URL / secretAPI.url): " + wantCause)))
+			Expect(err.Error()).NotTo(ContainSubstring("endpoint must be a valid URL"))
+		},
+		Entry("issuer", "", "", "Secret API issuer URL must use HTTPS"),
+		Entry("CA", "https://issuer.example.test", "/missing/secret-api-ca.pem", "failed to read Secret API CA file"),
+	)
 })
 
 var _ = Describe("Scheme Initialization", func() {

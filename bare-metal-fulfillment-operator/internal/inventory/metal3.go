@@ -271,8 +271,14 @@ func (m *Metal3Client) FindFreeHost(ctx context.Context, matchExpressions map[st
 	})
 
 	for i := range candidates {
-		host := bmhToHost(&candidates[i], m.hostClass)
-		eligible, err := hostSupportsLogicalPort(ctx, m, host, logicalPort)
+		bmh := &candidates[i]
+		host := bmhToHost(bmh, m.hostClass)
+		var macs map[string]string
+		var mappingErr error
+		if logicalPort != "" {
+			macs, mappingErr = decodeLogicalPortMACMapping(bmh.Annotations[HostInterfaceMACsAnnotation])
+		}
+		eligible, err := hostSupportsLogicalPort(ctx, host, logicalPort, macs, mappingErr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve selected logical port MAC: %w", err)
 		}
@@ -392,10 +398,9 @@ func (m *Metal3Client) GetHostLogicalPortMACs(ctx context.Context, inventoryHost
 	if !ok || raw == "" {
 		return map[string]string{}, nil
 	}
-
-	macs := map[string]string{}
-	if err := json.Unmarshal([]byte(raw), &macs); err != nil {
-		return nil, fmt.Errorf("host %s: failed to parse %s annotation: %w: %v", inventoryHostID, HostInterfaceMACsAnnotation, ErrMalformedLogicalPortMACMapping, err)
+	macs, err := decodeLogicalPortMACMapping(raw)
+	if err != nil {
+		return nil, fmt.Errorf("host %s: failed to parse %s annotation: %w", inventoryHostID, HostInterfaceMACsAnnotation, err)
 	}
 
 	return macs, nil

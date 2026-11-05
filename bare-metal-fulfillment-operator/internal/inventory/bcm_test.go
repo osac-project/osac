@@ -907,20 +907,12 @@ var _ = Describe("BCM Inventory Adapter", func() {
 		It("skips hosts without the selected logical-port MAC", func() {
 			api := NewMockBCMAPI(gomock.NewController(GinkgoT()))
 			api.EXPECT().GetDevices(ctx).Return([]bcmclient.Device{
-				{ChildType: "LiteNode", Hostname: "node-invalid", MAC: "aa:bb:cc:dd:ee:01", ExtraValues: map[string]interface{}{"resource_class": "h100"}},
-				{ChildType: "LiteNode", Hostname: "node-valid", MAC: "aa:bb:cc:dd:ee:02", ExtraValues: map[string]interface{}{"resource_class": "h100"}},
-			}, nil)
-			api.EXPECT().GetDevice(ctx, "node-invalid").Return(&bcmclient.Device{
-				Hostname: "node-invalid",
-				ExtraValues: map[string]interface{}{
-					bcmclient.ExtraValueInterfaceMACs: map[string]interface{}{"other": "52:54:00:16:04:83"},
-				},
-			}, nil)
-			api.EXPECT().GetDevice(ctx, "node-valid").Return(&bcmclient.Device{
-				Hostname: "node-valid",
-				ExtraValues: map[string]interface{}{
-					bcmclient.ExtraValueInterfaceMACs: map[string]interface{}{"data-0": "52-54-00-AA-BB-CC"},
-				},
+				{ChildType: "LiteNode", Hostname: "node-invalid", MAC: "aa:bb:cc:dd:ee:01", ExtraValues: map[string]interface{}{
+					"resource_class": "h100", bcmclient.ExtraValueInterfaceMACs: map[string]interface{}{"other": "52:54:00:16:04:83"},
+				}},
+				{ChildType: "LiteNode", Hostname: "node-valid", MAC: "aa:bb:cc:dd:ee:02", ExtraValues: map[string]interface{}{
+					"resource_class": "h100", bcmclient.ExtraValueInterfaceMACs: map[string]interface{}{"data-0": "52-54-00-AA-BB-CC"},
+				}},
 			}, nil)
 
 			client := NewBCMClient(api, bmhMgr, "bcm")

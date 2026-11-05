@@ -166,7 +166,7 @@ func TestGetHostNICs_OpenStack(t *testing.T) {
 func TestFindFreeHost_PortFilter(t *testing.T) {
 	// osac_labels carries the host selector labels; matchExpressions are now matched
 	// against these rather than resource_class (see OSAC-3578 label filtering).
-	const nodeListResponse = `{"nodes": [{"uuid": "node-1", "name": "host-1", "resource_class": "gpu-node", "provision_state": "available", "extra": {"osac_labels": {"hostType": "gpu-node"}}}]}`
+	const nodeListResponse = `{"nodes": [{"uuid": "node-1", "name": "host-1", "resource_class": "gpu-node", "provision_state": "available", "extra": {"osac_labels": {"hostType": "gpu-node"}, "osac_interface_macs": {"data-0": "52:54:00:16:04:83"}}}]}`
 
 	t.Run("selects node with ports", func(t *testing.T) {
 		fakeServer := th.SetupHTTP()
@@ -208,24 +208,13 @@ func TestFindFreeHost_PortFilter(t *testing.T) {
 		fakeServer.Mux.HandleFunc("/nodes", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprint(w, `{"nodes":[{"uuid":"node-invalid","name":"host-invalid","provision_state":"available","extra":{"osac_labels":{"hostType":"gpu-node"}}},{"uuid":"node-valid","name":"host-valid","provision_state":"available","extra":{"osac_labels":{"hostType":"gpu-node"}}}]}`)
+			_, _ = fmt.Fprint(w, `{"nodes":[{"uuid":"node-invalid","name":"host-invalid","provision_state":"available","extra":{"osac_labels":{"hostType":"gpu-node"},"osac_interface_macs":{"other":"52:54:00:16:04:83"}}},{"uuid":"node-valid","name":"host-valid","provision_state":"available","extra":{"osac_labels":{"hostType":"gpu-node"},"osac_interface_macs":{"data-0":"52-54-00-AA-BB-CC"}}}]}`)
 		})
 		fakeServer.Mux.HandleFunc("/ports/detail", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprint(w, `{"ports":[{"address":"aa:bb:cc:dd:ee:01"}]}`)
 		})
-		fakeServer.Mux.HandleFunc("/nodes/node-invalid", func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprint(w, `{"uuid":"node-invalid","extra":{"osac_interface_macs":{"other":"52:54:00:16:04:83"}}}`)
-		})
-		fakeServer.Mux.HandleFunc("/nodes/node-valid", func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprint(w, `{"uuid":"node-valid","extra":{"osac_interface_macs":{"data-0":"52-54-00-AA-BB-CC"}}}`)
-		})
-
 		c := &OpenStackClient{client: fakeclient.ServiceClient(fakeServer), hostClass: "openstack"}
 		host, err := c.FindFreeHost(context.Background(), map[string]string{"hostType": "gpu-node"}, "data-0")
 		if err != nil {

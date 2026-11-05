@@ -19,6 +19,7 @@ package inventory
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -73,8 +74,49 @@ func TestParseLogicalPortMAC(t *testing.T) {
 	}
 }
 
+func TestDecodeLogicalPortMACMapping(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   any
+		want    map[string]string
+		wantErr bool
+	}{
+		{name: "object", value: map[string]any{"data-0": "52:54:00:aa:bb:cc"}, want: map[string]string{"data-0": "52:54:00:aa:bb:cc"}},
+		{name: "JSON string", value: `{"data-0":"52:54:00:aa:bb:cc"}`, want: map[string]string{"data-0": "52:54:00:aa:bb:cc"}},
+		{name: "empty string", value: "", want: map[string]string{}},
+		{name: "nil", want: map[string]string{}},
+		{name: "wrong shape", value: []any{"not", "a", "mapping"}, wantErr: true},
+		{name: "malformed JSON string", value: "not-json", wantErr: true},
+		{name: "non-string MAC", value: map[string]any{"data-0": 42}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := decodeLogicalPortMACMapping(tt.value)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("decodeLogicalPortMACMapping error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if !errors.Is(err, ErrMalformedLogicalPortMACMapping) {
+					t.Fatalf("decodeLogicalPortMACMapping error = %v, want ErrMalformedLogicalPortMACMapping", err)
+				}
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("decodeLogicalPortMACMapping = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHostSupportsLogicalPortSkipsHostWithoutInventoryName(t *testing.T) {
-	eligible, err := hostSupportsLogicalPort(context.Background(), nil, &Host{InventoryHostID: "namespace/host-1"}, "data-0")
+	eligible, err := hostSupportsLogicalPort(
+		context.Background(),
+		&Host{InventoryHostID: "namespace/host-1"},
+		"data-0",
+		map[string]string{"data-0": "52:54:00:aa:bb:cc"},
+		nil,
+	)
 	if err != nil {
 		t.Fatalf("hostSupportsLogicalPort error = %v", err)
 	}

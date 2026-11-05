@@ -306,17 +306,6 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 			log.Error(err, "Failed to find a free host", "matchExpressions", matchExpressions)
 			return ctrl.Result{}, err
 		}
-		if inventoryHost != nil && logicalPort != "" {
-			mac, parseErr := inventory.ParseLogicalPortMAC(
-				map[string]string{logicalPort: inventoryHost.SelectedLogicalPortMAC}, logicalPort,
-			)
-			if inventoryHost.Name == "" || parseErr != nil {
-				log.Info("Inventory candidate skipped: selected logical port has no valid MAC", "port", logicalPort)
-				inventoryHost = nil
-			} else {
-				inventoryHost.SelectedLogicalPortMAC = mac
-			}
-		}
 		if inventoryHost == nil {
 			log.Info("No matching hosts available", "matchExpressions", matchExpressions)
 			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed

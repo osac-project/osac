@@ -475,7 +475,19 @@ func TestFindFreeHost(t *testing.T) {
 			WithNICs(testNIC("AA:BB:CC:DD:EE:02")).
 			WithAnnotations(map[string]string{HostInterfaceMACsAnnotation: `{"data-0":"52-54-00-AA-BB-CC"}`}).BuildObjects()
 
-		m := newMetal3ClientForTest(append(append(invalid, unparseable...), valid...)...)
+		getCalls := 0
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(newTestScheme()).
+			WithObjects(append(append(invalid, unparseable...), valid...)...).
+			WithStatusSubresource(&metal3api.BareMetalHost{}).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					getCalls++
+					return c.Get(ctx, key, obj, opts...)
+				},
+			}).
+			Build()
+		m := &Metal3Client{client: fakeClient, namespace: testNamespace, hostClass: testHostClass}
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"}, "data-0")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -488,6 +500,9 @@ func TestFindFreeHost(t *testing.T) {
 		}
 		if host.SelectedLogicalPortMAC != "52:54:00:aa:bb:cc" {
 			t.Errorf("SelectedLogicalPortMAC = %q, want normalized MAC", host.SelectedLogicalPortMAC)
+		}
+		if getCalls != 0 {
+			t.Errorf("candidate MAC lookup made %d GET calls, want 0", getCalls)
 		}
 	})
 

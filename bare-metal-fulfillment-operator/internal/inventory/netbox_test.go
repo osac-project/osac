@@ -481,14 +481,13 @@ var _ = Describe("NetBox selector query", func() {
 
 		It("skips devices without the selected custom-field MAC", func() {
 			api := &selectorQueryTestAPI{
-				devices: []netboxclient.Device{{ID: "46"}, {ID: "47"}},
-				deviceSnapshots: []netboxclient.DeviceSnapshot{
-					{Device: netboxclient.Device{ID: "46", CustomFields: map[string]interface{}{
+				devices: []netboxclient.Device{
+					{ID: "46", CustomFields: map[string]interface{}{
 						"osac_interface_macs": map[string]interface{}{"other": "52:54:00:16:04:83"},
-					}}},
-					{Device: netboxclient.Device{ID: "47", CustomFields: map[string]interface{}{
+					}},
+					{ID: "47", CustomFields: map[string]interface{}{
 						"osac_interface_macs": map[string]interface{}{"data-0": "52-54-00-AA-BB-CC"},
-					}}},
+					}},
 				},
 			}
 			manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
@@ -502,7 +501,7 @@ var _ = Describe("NetBox selector query", func() {
 			Expect(host.InventoryHostID).To(Equal("metal3-system/netbox-47"))
 			Expect(host.SelectedLogicalPortMAC).To(Equal("52:54:00:aa:bb:cc"))
 			Expect(api.deviceVisits).To(Equal(2))
-			Expect(api.deviceReadIDs).To(Equal([]string{"46", "47"}))
+			Expect(api.deviceReadCalls).To(BeZero())
 			Expect(api.interfaceDevice).To(BeEmpty())
 		})
 

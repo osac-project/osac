@@ -18,6 +18,7 @@ package inventory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -44,6 +45,35 @@ func ParseLogicalPortMAC(macs map[string]string, logicalPort string) (string, er
 	return strings.ToLower(parsed.String()), nil
 }
 
+// decodeLogicalPortMACMapping converts the provider's candidate metadata into
+// the common logical-port-to-MAC representation. Providers may expose this as
+// a JSON object or as a JSON-encoded string.
+func decodeLogicalPortMACMapping(value any) (map[string]string, error) {
+	if value == nil {
+		return map[string]string{}, nil
+	}
+
+	var raw []byte
+	if text, ok := value.(string); ok {
+		if strings.TrimSpace(text) == "" {
+			return map[string]string{}, nil
+		}
+		raw = []byte(text)
+	} else {
+		var err error
+		raw, err = json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to marshal mapping: %v", ErrMalformedLogicalPortMACMapping, err)
+		}
+	}
+
+	macs := map[string]string{}
+	if err := json.Unmarshal(raw, &macs); err != nil {
+		return nil, fmt.Errorf("%w: failed to parse mapping: %v", ErrMalformedLogicalPortMACMapping, err)
+	}
+	return macs, nil
+}
+
 // ResolveHostLogicalPortMAC reads and parses a host's selected logical-port MAC.
 func ResolveHostLogicalPortMAC(ctx context.Context, client Client, hostID, logicalPort string) (string, error) {
 	macs, err := client.GetHostLogicalPortMACs(ctx, hostID)
@@ -67,7 +97,13 @@ func requestedLogicalPort(selectedLogicalPorts []string) (string, error) {
 	}
 }
 
-func hostSupportsLogicalPort(ctx context.Context, inventoryClient Client, host *Host, logicalPort string) (bool, error) {
+func hostSupportsLogicalPort(
+	ctx context.Context,
+	host *Host,
+	logicalPort string,
+	macs map[string]string,
+	mappingErr error,
+) (bool, error) {
 	if logicalPort == "" {
 		return true, nil
 	}
@@ -77,9 +113,17 @@ func hostSupportsLogicalPort(ctx context.Context, inventoryClient Client, host *
 		return false, nil
 	}
 
-	mac, err := ResolveHostLogicalPortMAC(ctx, inventoryClient, host.InventoryHostID, logicalPort)
+	if mappingErr != nil && !errors.Is(mappingErr, ErrMalformedLogicalPortMACMapping) {
+		return false, mappingErr
+	}
+	if mappingErr != nil {
+		log.Info("Skipping host with malformed selected-port MAC mapping", "host", host.Name, "port", logicalPort)
+		return false, nil
+	}
+
+	mac, err := ParseLogicalPortMAC(macs, logicalPort)
 	if err != nil {
-		if errors.Is(err, ErrInvalidLogicalPortMAC) || errors.Is(err, ErrMalformedLogicalPortMACMapping) {
+		if errors.Is(err, ErrInvalidLogicalPortMAC) {
 			log.Info(fmt.Sprintf("host %s skipped: no valid MAC for port %s", host.Name, logicalPort))
 			return false, nil
 		}

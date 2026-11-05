@@ -211,7 +211,12 @@ func (c *OpenStackClient) FindFreeHost(ctx context.Context, matchExpressions map
 				ProvisionState:      node.ProvisionState,
 				ManagedBy:           managedBy,
 			}
-			eligible, err := hostSupportsLogicalPort(ctx, c, host, logicalPort)
+			var macs map[string]string
+			var mappingErr error
+			if logicalPort != "" {
+				macs, mappingErr = decodeLogicalPortMACMapping(node.Extra[OpenStackInterfaceMACsKey])
+			}
+			eligible, err := hostSupportsLogicalPort(ctx, host, logicalPort, macs, mappingErr)
 			if err != nil {
 				return false, fmt.Errorf("failed to resolve selected logical port MAC: %w", err)
 			}
@@ -466,17 +471,9 @@ func (c *OpenStackClient) GetHostLogicalPortMACs(ctx context.Context, inventoryH
 		return nil, fmt.Errorf("failed to get Ironic node %s: %w", inventoryHostID, err)
 	}
 
-	value, ok := node.Extra[OpenStackInterfaceMACsKey]
-	if !ok || value == nil {
-		return map[string]string{}, nil
-	}
-	raw, err := json.Marshal(value)
+	macs, err := decodeLogicalPortMACMapping(node.Extra[OpenStackInterfaceMACsKey])
 	if err != nil {
-		return nil, fmt.Errorf("host %s: failed to marshal %s extra: %w", inventoryHostID, OpenStackInterfaceMACsKey, err)
-	}
-	macs := map[string]string{}
-	if err := json.Unmarshal(raw, &macs); err != nil {
-		return nil, fmt.Errorf("host %s: failed to parse %s extra: %w: %v", inventoryHostID, OpenStackInterfaceMACsKey, ErrMalformedLogicalPortMACMapping, err)
+		return nil, fmt.Errorf("host %s: failed to parse %s extra: %w", inventoryHostID, OpenStackInterfaceMACsKey, err)
 	}
 	return macs, nil
 }

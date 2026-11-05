@@ -260,7 +260,12 @@ func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[strin
 			HostClass:       c.hostClass,
 			ManagedBy:       matchManagedBy,
 		}
-		eligible, err := hostSupportsLogicalPort(ctx, c, host, logicalPort)
+		var macs map[string]string
+		var mappingErr error
+		if logicalPort != "" {
+			macs, mappingErr = decodeLogicalPortMACMapping(selected.ExtraValues[bcmclient.ExtraValueInterfaceMACs])
+		}
+		eligible, err := hostSupportsLogicalPort(ctx, host, logicalPort, macs, mappingErr)
 		if err != nil {
 			return nil, fmt.Errorf("FindFreeHost: resolve selected logical port MAC: %w", err)
 		}
@@ -786,24 +791,9 @@ func (c *BCMClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHostID 
 		return nil, fmt.Errorf("BCM device %s not found", hostname)
 	}
 
-	// ExtraValues already preserves arbitrary JSON values. Accept an object or
-	// a JSON string so string-valued BCM metadata can carry the same mapping.
-	value := device.ExtraValues[bcmclient.ExtraValueInterfaceMACs]
-	var raw []byte
-	if text, ok := value.(string); ok {
-		raw = []byte(text)
-	} else if value != nil {
-		raw, err = json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("host %s: failed to marshal %s extra value: %w: %v", inventoryHostID, bcmclient.ExtraValueInterfaceMACs, ErrMalformedLogicalPortMACMapping, err)
-		}
-	}
-	if len(raw) == 0 {
-		return map[string]string{}, nil
-	}
-	macs := map[string]string{}
-	if err := json.Unmarshal(raw, &macs); err != nil {
-		return nil, fmt.Errorf("host %s: failed to parse %s mapping: %w: %v", inventoryHostID, bcmclient.ExtraValueInterfaceMACs, ErrMalformedLogicalPortMACMapping, err)
+	macs, err := decodeLogicalPortMACMapping(device.ExtraValues[bcmclient.ExtraValueInterfaceMACs])
+	if err != nil {
+		return nil, fmt.Errorf("host %s: failed to parse %s mapping: %w", inventoryHostID, bcmclient.ExtraValueInterfaceMACs, err)
 	}
 	return macs, nil
 }

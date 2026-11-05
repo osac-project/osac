@@ -192,7 +192,12 @@ func (c *NetBoxClient) findFreeHost(ctx context.Context, query netboxclient.Devi
 	var foundHost *Host
 	err = c.api.ForEachDevice(ctx, query, func(device netboxclient.Device) (bool, error) {
 		host := c.netBoxHostFromDevice(namespace, device)
-		eligible, err := hostSupportsLogicalPort(ctx, c, host, logicalPort)
+		var macs map[string]string
+		var mappingErr error
+		if logicalPort != "" {
+			macs, mappingErr = decodeLogicalPortMACMapping(device.CustomFields["osac_interface_macs"])
+		}
+		eligible, err := hostSupportsLogicalPort(ctx, host, logicalPort, macs, mappingErr)
 		if err != nil {
 			return false, fmt.Errorf("failed to resolve selected logical port MAC: %w", err)
 		}
@@ -641,16 +646,9 @@ func (c *NetBoxClient) customFieldLogicalPortMACs(ctx context.Context, deviceID 
 		return nil, err
 	}
 	value := snapshot.Device.CustomFields["osac_interface_macs"]
-	if value == nil {
-		return map[string]string{}, nil
-	}
-	raw, err := json.Marshal(value)
+	macs, err := decodeLogicalPortMACMapping(value)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal osac_interface_macs custom field: %w: %v", ErrMalformedLogicalPortMACMapping, err)
-	}
-	macs := map[string]string{}
-	if err := json.Unmarshal(raw, &macs); err != nil {
-		return nil, fmt.Errorf("failed to parse osac_interface_macs custom field: %w: %v", ErrMalformedLogicalPortMACMapping, err)
+		return nil, fmt.Errorf("failed to parse osac_interface_macs custom field: %w", err)
 	}
 	return macs, nil
 }

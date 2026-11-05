@@ -24,6 +24,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -619,6 +620,10 @@ func createNetBoxInventoryClientWithManager(
 }
 
 func createSecretAPIClientFromEnv() (inventory.SecretAPIClient, error) {
+	if strings.TrimSpace(os.Getenv(envSecretAPIURL)) == "" {
+		return nil, fmt.Errorf("%s is required for NetBox inventory; "+
+			"set secretAPI.url in the Helm chart or provide the environment variable", envSecretAPIURL)
+	}
 	return secretapi.New(secretapi.Config{
 		Endpoint:         os.Getenv(envSecretAPIURL),
 		IssuerURL:        os.Getenv(envSecretAPIIssuerURL),

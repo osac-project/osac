@@ -242,6 +242,33 @@ def check_bmf_netbox(docs: list[dict[str, Any]]) -> None:
     assert sum(mount.get("readOnly") is True for mount in manager.get("volumeMounts", [])) >= 3
 
 
+def check_bmf_secret_api_is_independent(netbox_values: pathlib.Path) -> None:
+    for netbox_enabled in (False, True):
+        for configured in (False, True):
+            endpoint = "https://fulfillment-internal-api:8001" if configured else ""
+            args = (
+                "--values", str(netbox_values),
+                "--set", f"netbox.enabled={str(netbox_enabled).lower()}",
+                "--set-string", f"secretAPI.url={endpoint}",
+            )
+            if netbox_enabled and not configured:
+                expect_bmf_failure("secretAPI.url is required when netbox.enabled is true", *args)
+                continue
+            docs = bmf_render(*args)
+            deployment = resource(docs, "Deployment", "bmf-operator-controller-manager")
+            manager = container(deployment, "manager")
+            env = environment(manager)
+            for suffix in ("URL", "ISSUER_URL", "CLIENT_ID_FILE", "CLIENT_SECRET_FILE", "CA_FILE"):
+                assert (f"OSAC_SECRET_API_{suffix}" in env) == configured
+            assert env["OSAC_INSTALLATION_API_URL"]["value"] == endpoint
+            if configured:
+                assert env["OSAC_SECRET_API_URL"]["value"] == endpoint
+            pod_spec = deployment["spec"]["template"]["spec"]
+            for name in ("secret-api-client-credentials", "secret-api-ca"):
+                assert any(volume["name"] == name for volume in pod_spec["volumes"]) == configured
+                assert any(mount["name"] == name for mount in manager["volumeMounts"]) == configured
+
+
 def check_bmf_ca_bundle_is_opt_in() -> None:
     docs = bmf_render()
     deployment = resource(docs, "Deployment", "bmf-operator-controller-manager")
@@ -643,6 +670,7 @@ def main() -> None:
 
         bmf_docs = bmf_render("--values", str(netbox_values))
         check_bmf_netbox(bmf_docs)
+        check_bmf_secret_api_is_independent(netbox_values)
         check_bmf_ca_bundle_is_opt_in()
         check_bmf_custom_token_key(netbox_values)
         check_bmf_without_ca(netbox_values)

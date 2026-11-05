@@ -74,6 +74,27 @@ func (m *startupTestManager) GetRESTMapper() meta.RESTMapper {
 	return m.mapper
 }
 
+var _ = Describe("createSecretAPIClientFromEnv", func() {
+	DescribeTable("requires an endpoint before reading credentials",
+		func(endpoint string) {
+			GinkgoT().Setenv(envSecretAPIURL, endpoint)
+			secretsClient, err := createSecretAPIClientFromEnv()
+			Expect(secretsClient).To(BeNil())
+			Expect(err).To(MatchError("OSAC_SECRET_API_URL is required for NetBox inventory; " +
+				"set secretAPI.url in the Helm chart or provide the environment variable"))
+		},
+		Entry("missing", ""),
+		Entry("blank", " \t\n"),
+	)
+
+	It("does not expose credentials from an invalid endpoint", func() {
+		GinkgoT().Setenv(envSecretAPIURL, "https://test-user:test-password@example.test:invalid")
+		secretsClient, err := createSecretAPIClientFromEnv()
+		Expect(secretsClient).To(BeNil())
+		Expect(err).To(MatchError("Secret API endpoint must be a valid URL with a host"))
+	})
+})
+
 var _ = Describe("Scheme Initialization", func() {
 	It("should register all expected schemes", func() {
 		// Verify the global scheme variable is initialized

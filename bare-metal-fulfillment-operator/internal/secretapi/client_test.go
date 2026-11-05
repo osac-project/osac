@@ -260,8 +260,12 @@ var _ = Describe("Secret API client", func() {
 				_, err := New(Config{Endpoint: endpoint})
 				Expect(err).To(MatchError(wantErr))
 			},
-			Entry("requires a host", "", "Secret API endpoint must include a host"),
-			Entry("rejects malformed URLs", "https://%zz", "Secret API endpoint must include a host"),
+			Entry("requires an endpoint", "", "Secret API endpoint is required"),
+			Entry("rejects blank endpoints", " \t\n", "Secret API endpoint is required"),
+			Entry("requires a host", "https:///api", "Secret API endpoint must be a valid URL with a host"),
+			Entry("rejects malformed URLs", "https://%zz", "Secret API endpoint must be a valid URL with a host"),
+			Entry("does not expose URL credentials", "https://test-user:test-password@example.test:invalid",
+				"Secret API endpoint must be a valid URL with a host"),
 		)
 
 		DescribeTable("uses only the endpoint host",

@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -25,9 +26,20 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
+
+type mapperReferenceNotFound struct{}
+
+func (mapperReferenceNotFound) Error() string {
+	return "reference not found"
+}
+
+func (mapperReferenceNotFound) IsNotFound() bool {
+	return true
+}
 
 var _ = Describe("Generic mapper", func() {
 	parseDate := func(text string) *timestamppb.Timestamp {
@@ -616,6 +628,62 @@ var _ = Describe("Generic mapper", func() {
 		Expect(nodeSetRef.GetId()).To(BeEmpty())
 		Expect(nodeSetRef.GetTenant()).To(BeEmpty())
 		Expect(proto.Equal(privateObject, original)).To(BeTrue())
+	})
+
+	It("resolves ID-only user references before public redaction", func() {
+		privateObject := privatev1.ProjectMembership_builder{
+			Metadata: privatev1.Metadata_builder{Tenant: "acme"}.Build(),
+			Spec: privatev1.ProjectMembershipSpec_builder{
+				Users: []*privatev1.UserReference{
+					privatev1.UserReference_builder{Id: "system-user-id"}.Build(),
+					privatev1.UserReference_builder{Id: "regular-user-id"}.Build(),
+					privatev1.UserReference_builder{Id: "shared-user-id"}.Build(),
+					privatev1.UserReference_builder{Id: "unavailable-user-id"}.Build(),
+					privatev1.UserReference_builder{Id: "explicit-tenant-user-id", Tenant: "acme"}.Build(),
+				},
+			}.Build(),
+		}.Build()
+
+		lookup := func(
+			_ context.Context, tenant, project, id, name string,
+		) (*references.ResolvedRef, error) {
+			Expect(tenant).To(BeElementOf("acme", "shared"))
+			Expect(project).To(BeEmpty())
+			Expect(name).To(BeEmpty())
+			switch id {
+			case "system-user-id":
+				return nil, mapperReferenceNotFound{}
+			case "regular-user-id":
+				if tenant == "acme" {
+					return &references.ResolvedRef{ID: id, Tenant: "acme"}, nil
+				}
+			case "shared-user-id":
+				if tenant == "shared" {
+					return &references.ResolvedRef{ID: id, Tenant: "shared"}, nil
+				}
+			default:
+			}
+			return nil, mapperReferenceNotFound{}
+		}
+		mapper, err := NewGenericMapper[*privatev1.ProjectMembership, *publicv1.ProjectMembership]().
+			SetLogger(logger).
+			SetUserReferenceLookup(lookup).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		publicObject := &publicv1.ProjectMembership{}
+		Expect(mapper.Copy(ctx, privateObject, publicObject)).To(Succeed())
+
+		users := publicObject.GetSpec().GetUsers()
+		Expect(users).To(HaveLen(5))
+		Expect(users[0].GetId()).To(BeEmpty())
+		Expect(users[0].GetTenant()).To(BeEmpty())
+		Expect(users[1].GetId()).To(Equal("regular-user-id"))
+		Expect(users[1].GetTenant()).To(BeEmpty())
+		Expect(users[2].GetId()).To(Equal("shared-user-id"))
+		Expect(users[3].GetId()).To(BeEmpty())
+		Expect(users[4].GetId()).To(Equal("explicit-tenant-user-id"))
+		Expect(users[4].GetTenant()).To(Equal("acme"))
 	})
 
 	It("preserves system-tenant full references in private mappings", func() {

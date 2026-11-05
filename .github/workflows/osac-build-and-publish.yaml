@@ -102,6 +102,14 @@ on:
           expression which itself resolves to nothing (secret doesn't
           exist, is empty, etc.) still passes silently either way.
         required: true
+      CI_OBSERVE_OTLP_PASSWORD:
+        description: >-
+          Password for the central ci-observe OTLP ingest. Passed to each
+          E2E job's capture action; without it the run still passes, it
+          just leaves no telemetry. Declared here for the same reason as
+          KONFLUX_SA_TOKEN above: an undeclared secret silently evaluates
+          to empty.
+        required: true
 
 permissions: {}
 

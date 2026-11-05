@@ -163,8 +163,8 @@ separate verification.
 Select an exact umbrella chart version using
 [What is released](customer-install-guide.md#11-what-is-released) in the
 customer install guide. Replace `<chart_version>` below with that version,
-without a tag prefix. Stable releases use `osac-release/vX.Y.Z`; their
-matching `osac/vX.Y.Z` source tags point to the same commit and are used
+without a tag prefix. Umbrella releases use `osac-release/v<VERSION>`; their
+matching `osac/v<VERSION>` source tags point to the same commit and are used
 for the checkout below. Nightly source tags also use `osac/v`. If you already
 set `OSAC_RELEASE_VERSION` while following that guide, keep the same value.
 Use the same shell session for the remaining commands.
@@ -327,9 +327,10 @@ oc get sub lvms-operator -n openshift-storage -o jsonpath='channel={.spec.channe
 
 ### Phase 1b: install shared infrastructure
 
-Build the `osac-infra` chart dependency before installing the chart. Run this
-from `osac-installer/`; the dependency is downloaded from the TopoLVM Helm
-repository.
+Build the `osac-infra` chart dependencies before installing the chart. Run this
+from `osac-installer/`; Helm downloads them from the TopoLVM and NetBox Helm
+repositories even when their charts are disabled. The machine running Helm
+must be able to reach both repositories.
 
 ```bash
 helm dependency build ./charts/osac-infra
@@ -538,7 +539,7 @@ longer needs them. The VTEP range, the fabric loopback ranges and the uplink
 ranges must not overlap tenant address space. Add them to
 `global.networking.excludedIpv4Cidrs` in the `osac` chart.
 
-For phase 2 with chart `0.0.65`, use the complete
+For phase 2 with chart `0.4.0`, use the complete
 [CUDN EVPN with Netris example](customer-install-guide.md#cudn-evpn-with-netris).
 Set `global.networking.fabricManager: netris` and
 `global.networking.k8sManager: cudn_evpn`. The umbrella chart renders both
@@ -548,7 +549,7 @@ registrations; do not add duplicate Netris or CUDN EVPN entries there.
 Configure Netris coordinates and credentials in
 `aap.instanceGroups.networkFulfillment.config` and `.secret`.
 The old expert NetworkClass block and `k8s_only` selection do not apply to
-`0.0.65`. Networking selection and the provider-provisioning switch are fixed
+`0.4.0`. Networking selection and the provider-provisioning switch are fixed
 at the first installation; a successful Helm render does not verify the fabric.
 
 ### Adding CA roots to the shared bundle at runtime

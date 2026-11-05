@@ -98,17 +98,18 @@ must be ready before you install OSAC. See [Section 2](#2-prerequisites).
 The OSAC platform chart is published as an OCI artifact at
 `oci://ghcr.io/osac-project/charts/osac`. Find the latest umbrella version on
 the [OSAC releases page](https://github.com/osac-project/osac/releases) by
-selecting a release with an `osac-release/vX.Y.Z` tag. The repository also lists
+selecting a release with an `osac-release/v<VERSION>` tag. The repository also lists
 individual component releases, such as `osac-operator`; use the `osac-release/v`
 tag prefix to identify the umbrella chart. If its release page is not yet
-available, select a stable `osac-release/vX.Y.Z` tag from the
+available, select the matching `osac-release/v<VERSION>` tag from the
 [OSAC tags page](https://github.com/osac-project/osac/tags), then confirm
 that the chart is available in OCI using `helm show chart` as described in
 [Section 3](#3-osac-component-versions).
 
-A stable release's `osac-release/vX.Y.Z` tag and matching `osac/vX.Y.Z`
-source tag point to the same commit. The source checkout and download
-commands below use `osac/v`; nightly source tags also use this prefix.
+An umbrella release's `osac-release/v<VERSION>` tag and matching
+`osac/v<VERSION>` source tag point to the same commit. The source checkout
+and download commands below use `osac/v`; nightly source tags also use this
+prefix. This guide targets the final OSAC `0.4.0` release.
 
 For evaluation builds, check the
 [OSAC Nightly Build workflow](https://github.com/osac-project/osac/actions/workflows/nightly-build.yaml)
@@ -116,17 +117,17 @@ and select the newest successful run. Use its exact chart version; a newer
 tag alone does not mean that the full pipeline succeeded. The chart
 includes a `values.schema.json` file and a `values-example.yaml` file.
 
-Select an umbrella chart version from the release links above and export it
-once. The following example uses version `0.0.65`:
+Select the final umbrella chart version from the release links above and
+export it once. The following example uses version `0.4.0`:
 
 ```console
-export OSAC_RELEASE_VERSION="0.0.65"
+export OSAC_RELEASE_VERSION="0.4.0"
 export OSAC_CHART="oci://ghcr.io/osac-project/charts/osac"
 ```
 
 The preflight described in
 [Section 11.1](#111-the-install-preflight-stops-the-installation) requires a
-chart containing `templates/preflight/_engine.tpl`, as in version `0.0.65`.
+chart containing `templates/preflight/_engine.tpl`, as in version `0.4.0`.
 Older charts can have a different schema and validation workflow. Keep the
 selected chart's pinned image and AAP content defaults; remove stale image or
 Ansible revision overrides from an older values file.
@@ -1123,7 +1124,7 @@ retryable with "Missing or malformed setting in network-fulfillment-ig".
 | `NETRIS_BM_PROVISIONING_VNET`, `NETRIS_RESOURCE_CLASS_MAP` | `config` | BMaaS and FabricDomains only, so not used in this release: the provisioning V-Net name, and a non-empty JSON object that maps each resource class to its Netris server cluster template. |
 
 The networking jobs do not get a CA ConfigMap mount from the chart. In chart
-`0.0.65`, `NETRIS_CA_CONFIGMAP` applies only to the CaaS
+`0.4.0`, `NETRIS_CA_CONFIGMAP` applies only to the CaaS
 cluster-fulfillment jobs. With a Netris controller certificate from
 a private CA, build an execution environment image based on `osac-aap` that
 contains the CA certificate. Set it as `eeImage` and set `NETRIS_CA_PATH` to
@@ -1402,17 +1403,17 @@ prepared by your platform administrators
 ([Section 2.6](#26-evpn-host-networking-for-vmaas)). See
 [Section 4.4](#44-installing-with-provider-networking).
 
-For chart `0.0.65`, configure `global.networking` directly. The chart creates
+For chart `0.4.0`, configure `global.networking` directly. The chart creates
 the deployment NetworkClass through the Fulfillment API. Manager selection,
 NetworkClass defaults, capabilities, and address plan are fixed at installation;
 an upgrade rejects changes to the existing NetworkClass spec. The provider
 provisioning switch is also fixed at installation.
 
 Normal deployments configure `global.networking`; Helm derives the AAP
-backend, manager registrations, and NetworkClass from it. Chart `0.0.65`
+backend, manager registrations, and NetworkClass from it. Chart `0.4.0`
 configures CUDN EVPN through `global.networking`, as shown in
 [Section 6.1](#cudn-evpn-with-netris). The legacy top-level `networkClass` and
-`global.expertOverrides` paths are not part of the `0.0.65` chart schema.
+`global.expertOverrides` paths are not part of the `0.4.0` chart schema.
 
 | Parameter | Source | Description | Default |
 |---|---|---|---|
@@ -1420,6 +1421,7 @@ configures CUDN EVPN through `global.networking`, as shown in
 | `global.networking.excludedIpv4Cidrs` | schema | IPv4 CIDRs that your infrastructure uses: management, provisioning, and node networks and, with EVPN host networking, the EVPN ranges. No VirtualNetwork or ExternalIPPool can overlap them. You can add ranges later (see [Table 4.2](#table-42-settings-fixed-at-installation)). | `[]` |
 | `global.networking.fabricManager` | schema | The registration `name` of the Fabric Manager. Required for every deployment. | Not set |
 | `global.networking.k8sManager` | schema | The OSAC Kubernetes Manager: `cudn_evpn`, or empty. Required for VMaaS. | Not set |
+| `global.networking.caBundle.adminGroups` | schema | Groups allowed to create, update, or delete the customer-managed Netris CA ConfigMap named by `aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP`. Add any identity-provider groups bound directly to `cluster-admin`; they are not included in the defaults. | `["system:masters", "system:cluster-admins"]` |
 | `global.networking.networkClass.defaults.virtualNetworkIPv4CIDR`, `global.networking.networkClass.defaults.subnetIPv4CIDR` | schema | The CIDRs of every tenant's default VirtualNetwork and Subnet. The Subnet CIDR is inside the VirtualNetwork CIDR and meets the prefix limit of the address plan. The chart defaults suit evaluation, except with Netris, whose reserved `10.0.0.0/8` contains them ([Section 2.6](#26-evpn-host-networking-for-vmaas)); set them for your deployment, because they cannot change after installation. | `10.200.0.0/16` and `10.200.0.0/20` |
 | `global.networking.networkClass.defaults.ingressRules`, `global.networking.networkClass.defaults.egressRules` | schema | Rules of every tenant's default SecurityGroup, as camelCase SecurityGroup rules, for example `{protocol: PROTOCOL_TCP, ipv4Cidr: 0.0.0.0/0, portFrom: 22, portTo: 22}`. Set them for your deployment; they cannot change after installation. | `[]` and one allow-all egress rule |
 | `global.networking.networkClass.eastWestCapabilities.supportsEastWestEthernet` | schema | Enables Ethernet east-west FabricDomains. Needs BMaaS and a Fabric Manager that declares `eastWestEthernet`. In this release BMaaS runs with provider networking disabled, so a FabricDomain becomes `READY` (reason `ProvisioningDisabled`) without any fabric configuration. | `false` |
@@ -1427,7 +1429,7 @@ configures CUDN EVPN through `global.networking`, as shown in
 
 When migrating an older values file, remove `k8s_only`, the top-level
 `networkClass` and `global.expertOverrides` blocks, and
-`global.networking.networkClass.title` / `description`. The `0.0.65` schema
+`global.networking.networkClass.title` / `description`. The `0.4.0` schema
 does not accept these configuration paths. There is no default-class flag to
 set. Move Netris connection settings from `global.networking.netris` to the
 AAP instance groups shown in [Section 6](#6-installation-workflows-by-service).
@@ -1544,7 +1546,7 @@ the cluster. Every workflow also needs the networking values and steps of
 **Procedure**
 
 1. In `my-values.yaml`, enable the VMaaS tier and select its Fabric Manager
-   and CUDN EVPN Kubernetes Manager. Chart `0.0.65` requires a nonempty
+   and CUDN EVPN Kubernetes Manager. Chart `0.4.0` requires a nonempty
    Fabric Manager and `k8sManager: cudn_evpn`; the older fabric-less
    `k8s_only` example is not accepted.
 
@@ -1689,7 +1691,7 @@ use that VirtualNetwork's VPC instead. Use a Netris endpoint whose certificate
 is trusted by the execution environment; coordinate private CA trust with
 your platform administrators.
 
-In `0.0.65`, `global.networking.fabricManager: netris` and
+In `0.4.0`, `global.networking.fabricManager: netris` and
 `global.networking.k8sManager: cudn_evpn` directly select the two managers.
 The chart supplies their registration roles, network types, and capabilities.
 The old expert NetworkClass block and manual `capabilities: [ipv4]`
@@ -1785,8 +1787,8 @@ Manager such as Netris.
      networking disabled, you need no image, Fabric Manager settings, or
      registration.
 
-2. Put the AWS credentials in a separate values file that is excluded
-   from version control:
+2. If `DNS_CLASS` is `dns.route53.dns`, put the AWS credentials in a separate
+   values file that is excluded from version control:
 
    ```yaml
    aap:
@@ -1797,9 +1799,15 @@ Manager such as Netris.
            AWS_SECRET_ACCESS_KEY: "<route53_secret_access_key>"
    ```
 
+   If `DNS_CLASS` is `dns.noop.dns`, set it in `my-values.yaml` as described
+   in [Section 8.4](#84-installing-without-dns-management), skip this step, and
+   leave the AWS credentials unset.
+
 3. Install OSAC (see [Section 4.3](#43-installing-osac)), passing every
-   values file, for example `helm ... -f my-values.yaml -f my-secrets.local.yaml
-   ...`. For more information, see
+   applicable values file. Include `my-secrets.local.yaml` only when you
+   completed step 2; omit it for `dns.noop.dns`. For example,
+   `helm ... -f my-values.yaml -f my-secrets.local.yaml ...`. For more
+   information, see
    [`aap-configuration.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/aap-configuration.md)
    and
    [`dns-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/dns-backend.md).

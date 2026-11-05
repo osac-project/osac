@@ -619,7 +619,6 @@ func createNetBoxInventoryClientWithManager(
 	return netBoxClient, nil
 }
 
-// createSecretAPIClientFromEnv loads Secret API settings and adds configuration context to errors.
 func createSecretAPIClientFromEnv() (inventory.SecretAPIClient, error) {
 	if strings.TrimSpace(os.Getenv(envSecretAPIURL)) == "" {
 		return nil, fmt.Errorf("%s is required; "+

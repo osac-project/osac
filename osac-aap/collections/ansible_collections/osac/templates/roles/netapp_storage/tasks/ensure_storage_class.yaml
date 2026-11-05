@@ -9,18 +9,18 @@
 #   parameters.storagePools when Bound, and creates per-tier StorageClasses
 #   selecting customer virtual pools via parameters.selector.
 # - Dedicated-SVM mode (tenant_preparation): creates one TridentBackendConfig
-#   (ontap-<assignment_key>, ontap-san driver, block-only) and CSI Secret
-#   (ontap-csi-<assignment_key>) in the Trident install namespace with
+#   (netapp-<assignment_key>, ontap-san driver, block-only) and CSI Secret
+#   (netapp-csi-<assignment_key>) in the Trident install namespace with
 #   per-tier labeled virtual pools (osac_backend, tier), and one StorageClass
-#   per tier (ontap-<assignment_key>-<tier_key>) bound via parameters.selector.
+#   per tier (netapp-<assignment_key>-<tier_key>) bound via parameters.selector.
 
 - name: Include shared tier validation
   ansible.builtin.include_tasks: _validate_tiers.yaml
 
 - name: Compute the dispatched backend ids and dedicated-SVM backend subset
   ansible.builtin.set_fact:
-    _ontap_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
-    _ontap_dedicated_backend_ids: >-
+    _netapp_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
+    _netapp_dedicated_backend_ids: >-
       {% set dedicated = [] -%}
       {% set conns = _provider_backend_connections | default({}, true) -%}
       {% for bid in (_provider_tiers | map(attribute='backend_id') | unique | list) -%}
@@ -37,17 +37,17 @@
 
 - name: Build expected StorageClass entries and dedicated backend keys
   ansible.builtin.set_fact:
-    _ontap_expected_sc_entries: >-
+    _netapp_expected_sc_entries: >-
       {% set entries = [] -%}
       {% for tier in _provider_tiers -%}
       {% set _key = ((tier.backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower -%}
       {% set _tier_key = (tier.name | hash('sha256'))[:16] | lower -%}
-      {% set _ = entries.append({'name': 'ontap-' ~ _key ~ '-' ~ _tier_key, 'tier': tier.name}) -%}
+      {% set _ = entries.append({'name': 'netapp-' ~ _key ~ '-' ~ _tier_key, 'tier': tier.name}) -%}
       {% endfor -%}
       {{ entries }}
-    _ontap_dedicated_assignment_keys: >-
+    _netapp_dedicated_assignment_keys: >-
       {% set keys = [] -%}
-      {% for bid in _ontap_dedicated_backend_ids -%}
+      {% for bid in _netapp_dedicated_backend_ids -%}
       {% set _ = keys.append(((bid ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower) -%}
       {% endfor -%}
       {{ keys }}
@@ -55,23 +55,23 @@
 
 - name: Build expected StorageClass names, selectors, TBC names, and CSI Secret names
   ansible.builtin.set_fact:
-    _ontap_expected_sc_names: "{{ _ontap_expected_sc_entries | map(attribute='name') | list }}"
+    _netapp_expected_sc_names: "{{ _netapp_expected_sc_entries | map(attribute='name') | list }}"
     # Shared-TBC tiers receive an empty expected selector so they always proceed
     # through the live customer TBC health and storagePools checks.
-    _ontap_expected_sc_selectors: >-
+    _netapp_expected_sc_selectors: >-
       {% set selectors = {} -%}
       {% for tier in _provider_tiers -%}
-      {% set _sc_name = _ontap_expected_sc_entries[loop.index0].name -%}
-      {% if tier.backend_id in _ontap_dedicated_backend_ids -%}
+      {% set _sc_name = _netapp_expected_sc_entries[loop.index0].name -%}
+      {% if tier.backend_id in _netapp_dedicated_backend_ids -%}
       {% set _key = ((tier.backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower -%}
-      {% set _ = selectors.update({_sc_name: 'osac_backend=ontap-' ~ _key ~ ';tier=' ~ tier.name}) -%}
+      {% set _ = selectors.update({_sc_name: 'osac_backend=netapp-' ~ _key ~ ';tier=' ~ tier.name}) -%}
       {% else -%}
       {% set _ = selectors.update({_sc_name: ''}) -%}
       {% endif -%}
       {% endfor -%}
       {{ selectors }}
-    _ontap_expected_tbc_names: "{{ _ontap_dedicated_assignment_keys | map('regex_replace', '^', 'ontap-') | list }}"
-    _ontap_expected_csi_secret_names: "{{ _ontap_dedicated_assignment_keys | map('regex_replace', '^', 'ontap-csi-') | list }}"
+    _netapp_expected_tbc_names: "{{ _netapp_dedicated_assignment_keys | map('regex_replace', '^', 'netapp-') | list }}"
+    _netapp_expected_csi_secret_names: "{{ _netapp_dedicated_assignment_keys | map('regex_replace', '^', 'netapp-csi-') | list }}"
   no_log: true
 
 # Check if all tiers' StorageClasses, TridentBackendConfigs, and CSI Secrets
@@ -82,13 +82,13 @@
     kind: StorageClass
     label_selectors:
       - "osac.openshift.io/tenant={{ tenant_name }}"
-      - "osac.openshift.io/storage-provider=ontap"
+      - "osac.openshift.io/storage-provider=netapp"
       - "app.kubernetes.io/managed-by=osac-aap"
-  register: _ontap_sc_checks
+  register: _netapp_sc_checks
   no_log: true
 
 - name: Verify TridentBackendConfig CRD is installed on the target cluster
-  when: _ontap_dedicated_backend_ids | length > 0
+  when: _netapp_dedicated_backend_ids | length > 0
   kubernetes.core.k8s_info:
     api_version: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
@@ -98,7 +98,7 @@
 
 - name: Fail if Trident is not installed on the target cluster
   when: >-
-    (_ontap_dedicated_backend_ids | length > 0) and
+    (_netapp_dedicated_backend_ids | length > 0) and
     (_trident_crd_check.resources | default([]) | length == 0)
   ansible.builtin.fail:
     msg: >-
@@ -108,76 +108,81 @@
   no_log: true
 
 - name: Check existing tenant TridentBackendConfigs
-  when: _ontap_dedicated_backend_ids | length > 0
+  when: _netapp_dedicated_backend_ids | length > 0
   kubernetes.core.k8s_info:
     api_version: trident.netapp.io/v1
     kind: TridentBackendConfig
-    namespace: "{{ ontap_storage_trident_namespace }}"
+    namespace: "{{ netapp_storage_trident_namespace }}"
     label_selectors:
       - "osac.openshift.io/tenant={{ tenant_name }}"
-      - "osac.openshift.io/storage-provider=ontap"
+      - "osac.openshift.io/storage-provider=netapp"
       - "app.kubernetes.io/managed-by=osac-aap"
-  register: _ontap_tbc_checks
+  register: _netapp_tbc_checks
   no_log: true
 
 - name: Check existing tenant CSI Secrets
-  when: _ontap_dedicated_backend_ids | length > 0
+  when: _netapp_dedicated_backend_ids | length > 0
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Secret
-    namespace: "{{ ontap_storage_trident_namespace }}"
+    namespace: "{{ netapp_storage_trident_namespace }}"
     label_selectors:
       - "osac.openshift.io/tenant={{ tenant_name }}"
-      - "osac.openshift.io/storage-provider=ontap"
+      - "osac.openshift.io/storage-provider=netapp"
       - "app.kubernetes.io/managed-by=osac-aap"
-  register: _ontap_csi_checks
+  register: _netapp_csi_checks
   no_log: true
 
 - name: Determine if all StorageClasses, Bound TridentBackendConfigs, and CSI Secrets already exist
   ansible.builtin.set_fact:
-    _ontap_all_sc_exist: >-
+    _netapp_all_sc_exist: >-
       {% set matching_sc_names = [] -%}
-      {% for sc in (_ontap_sc_checks.resources | default([])) -%}
+      {% for sc in (_netapp_sc_checks.resources | default([])) -%}
       {% set sc_name = sc.metadata.name -%}
-      {% if sc_name in _ontap_expected_sc_selectors
-            and (_ontap_expected_sc_selectors[sc_name] | length > 0)
-            and ((sc.parameters | default({}, true)) == {'backendType': 'ontap-san', 'selector': _ontap_expected_sc_selectors[sc_name]}) -%}
+      {% if sc_name in _netapp_expected_sc_selectors
+            and (_netapp_expected_sc_selectors[sc_name] | length > 0)
+            and ((sc.parameters | default({}, true)) == {'backendType': 'ontap-san', 'selector': _netapp_expected_sc_selectors[sc_name]}) -%}
       {% set _ = matching_sc_names.append(sc_name) -%}
       {% endif -%}
       {% endfor -%}
       {% set matching_tbc_names = [] -%}
       {% set matching_csi_names = [] -%}
       {% set conns = _provider_backend_connections | default({}, true) -%}
-      {% set _ca_required = (ontap_storage_validate_certs | default(true) | bool) and (ontap_storage_ca_bundle_path is defined) -%}
-      {% set _ca_b64 = ((lookup('file', ontap_storage_ca_bundle_path, errors='ignore') | default('', true)) | b64encode)
+      {% set _ca_required = (netapp_storage_validate_certs | default(true) | bool) and (netapp_storage_ca_bundle_path is defined) -%}
+      {% set _ca_b64 = ((lookup('file', netapp_storage_ca_bundle_path, errors='ignore') | default('', true)) | b64encode)
                        if _ca_required
                        else '' -%}
-      {% for bid in _ontap_dedicated_backend_ids -%}
+      {% for bid in _netapp_dedicated_backend_ids -%}
       {% set _key = ((bid ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower -%}
-      {% set _tbc_name = 'ontap-' ~ _key -%}
-      {% set _sec_name = 'ontap-csi-' ~ _key -%}
-      {% set _existing_tbc = (_ontap_tbc_checks.resources | default([])) | selectattr('metadata.name', 'equalto', _tbc_name) | list -%}
-      {% set _existing = (_ontap_csi_checks.resources | default([])) | selectattr('metadata.name', 'equalto', _sec_name) | list -%}
+      {% set _tbc_name = 'netapp-' ~ _key -%}
+      {% set _sec_name = 'netapp-csi-' ~ _key -%}
+      {% set _existing_tbc = (_netapp_tbc_checks.resources | default([])) | selectattr('metadata.name', 'equalto', _tbc_name) | list -%}
+      {% set _existing = (_netapp_csi_checks.resources | default([])) | selectattr('metadata.name', 'equalto', _sec_name) | list -%}
       {% set _conn = conns[bid] if (bid in conns and conns[bid] is mapping) else {} -%}
       {% set _prep = _conn.tenant_preparation if (_conn.tenant_preparation is defined and _conn.tenant_preparation is mapping) else {} -%}
       {% set _pcfg = _prep.provider_config if (_prep.provider_config is defined and _prep.provider_config is mapping) else {} -%}
-      {% set _lif = (_conn.endpoint | default('', true) | string | trim | regex_replace('^https?://', '') | regex_replace('/.*$', '') | trim) -%}
+      {% set _prep_lif = (_pcfg.management_lif | default('', true) | string | trim | regex_replace('^https?://', '') | regex_replace('/.*$', '') | trim) -%}
+      {% set _lif = _prep_lif if (_prep_lif | length > 0)
+                    else (_conn.endpoint | default('', true) | string | trim | regex_replace('^https?://', '') | regex_replace('/.*$', '') | trim) -%}
+      {% set _qos = _pcfg.qos_policies if (_pcfg.qos_policies is defined and _pcfg.qos_policies is mapping) else {} -%}
       {% set _svm = (_pcfg.svm | default('', true) | string | trim) -%}
-      {% set _san = (ontap_storage_san_type | default('fcp', true) | string | trim) -%}
+      {% set _san = (netapp_storage_san_type | default('fcp', true) | string | trim) -%}
       {% set _pools = [] -%}
       {% set _tiers_valid = namespace(ok=true) -%}
       {% for tier in (_provider_tiers | default([]) | selectattr('backend_id', 'equalto', bid) | list) -%}
       {% if tier.provider_config is defined and tier.provider_config is not none and (tier.provider_config is not mapping or tier.provider_config.profile is defined or tier.provider_config.pool_selector is defined) -%}
       {% set _tiers_valid.ok = false -%}
       {% endif -%}
-      {% set _tier_key = (tier.name | hash('sha256'))[:16] | lower -%}
+      {% set _ql = tier.qos_limits if (tier.qos_limits is defined and tier.qos_limits is mapping) else {} -%}
+      {% set _sl = _ql.static_limits if (_ql.static_limits is defined and _ql.static_limits is mapping) else {} -%}
+      {% if ((_sl.max_reads_bw_mbps | default(0, true) | int) > 0 or (_sl.max_writes_bw_mbps | default(0, true) | int) > 0)
+            and tier.name not in _qos -%}
+      {% set _tiers_valid.ok = false -%}
+      {% endif -%}
       {% set _enc = (tier.encryption_enabled | default(false) | bool) | ternary('true', 'false') -%}
       {% set _defaults = {'encryption': _enc} -%}
-      {% set _max_iops = (tier.qos_limits.provider_config.max_iops | default(0) | int)
-                         if (tier.qos_limits is defined and tier.qos_limits is mapping and tier.qos_limits.provider_config is defined and tier.qos_limits.provider_config is mapping)
-                         else 0 -%}
-      {% if _max_iops > 0 -%}
-      {% set _ = _defaults.update({'qosPolicy': 'osac-' ~ _key ~ '-' ~ _tier_key ~ '-qos'}) -%}
+      {% if tier.name in _qos -%}
+      {% set _ = _defaults.update({'qosPolicy': _qos[tier.name] | string}) -%}
       {% endif -%}
       {% set _ = _pools.append({'labels': {'osac_backend': _tbc_name, 'tier': tier.name}, 'defaults': _defaults}) -%}
       {% endfor -%}
@@ -195,7 +200,7 @@
             and (_espec.svm | default('') == _svm)
             and (((_espec.credentials | default({}, true)).name | default('')) == _sec_name)
             and ((_espec.storage | default([])) == _pools)
-            and (not (ontap_storage_validate_certs is defined or ontap_storage_ca_bundle_path is defined)
+            and (not (netapp_storage_validate_certs is defined or netapp_storage_ca_bundle_path is defined)
                  or (not _ca_required and ((_espec.trustedCACertificate | default('')) | length == 0))
                  or (_ca_required and (_ca_b64 | length > 0) and ((_espec.trustedCACertificate | default('')) == _ca_b64))) -%}
       {% set _ = matching_tbc_names.append(_tbc_name) -%}
@@ -212,64 +217,64 @@
       {% set _ = matching_csi_names.append(_sec_name) -%}
       {% endif -%}
       {% endfor -%}
-      {{ (_ontap_backend_ids | difference(_ontap_dedicated_backend_ids) | length) == 0
-          and (_ontap_expected_sc_names | difference(matching_sc_names) | length) == 0
-          and (_ontap_expected_tbc_names | difference(matching_tbc_names) | length) == 0
-          and (_ontap_expected_csi_secret_names | difference(matching_csi_names) | length) == 0 }}
+      {{ (_netapp_backend_ids | difference(_netapp_dedicated_backend_ids) | length) == 0
+          and (_netapp_expected_sc_names | difference(matching_sc_names) | length) == 0
+          and (_netapp_expected_tbc_names | difference(matching_tbc_names) | length) == 0
+          and (_netapp_expected_csi_secret_names | difference(matching_csi_names) | length) == 0 }}
   no_log: true
 
 - name: Provision TridentBackendConfig and StorageClasses on target cluster
   block:
     - name: Reconcile Dedicated-SVM CSI Secrets before short-circuiting
       when: >-
-        (_ontap_all_sc_exist | bool) and
-        (_ontap_dedicated_backend_ids | length > 0)
+        (_netapp_all_sc_exist | bool) and
+        (_netapp_dedicated_backend_ids | length > 0)
       kubernetes.core.k8s:
         state: present
         definition:
           apiVersion: v1
           kind: Secret
           metadata:
-            name: "ontap-csi-{{ ((item ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-            namespace: "{{ ontap_storage_trident_namespace }}"
+            name: "netapp-csi-{{ ((item ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+            namespace: "{{ netapp_storage_trident_namespace }}"
             labels:
               app.kubernetes.io/managed-by: osac-aap
               osac.openshift.io/tenant: "{{ tenant_name }}"
-              osac.openshift.io/storage-provider: ontap
+              osac.openshift.io/storage-provider: netapp
               osac.openshift.io/storage-backend-id: "{{ item }}"
           type: Opaque
           stringData:
             username: "{{ _provider_backend_connections[item].tenant_preparation.provider_config.username | string | trim }}"
             password: "{{ _provider_backend_connections[item].tenant_preparation.provider_config.password | string }}"
-      loop: "{{ _ontap_dedicated_backend_ids if (_ontap_all_sc_exist | bool) else [] }}"
+      loop: "{{ _netapp_dedicated_backend_ids if (_netapp_all_sc_exist | bool) else [] }}"
       loop_control:
-        label: "ontap-csi-secret"
+        label: "netapp-csi-secret"
       no_log: true
 
     - name: Provision per-backend Trident resources when not already present
-      when: not (_ontap_all_sc_exist | bool)
+      when: not (_netapp_all_sc_exist | bool)
       ansible.builtin.include_tasks: _ensure_storage_class_backend.yaml
-      loop: "{{ _ontap_backend_ids }}"
+      loop: "{{ _netapp_backend_ids }}"
       loop_control:
-        loop_var: _ontap_backend_id
-        label: "ontap-backend"
+        loop_var: _netapp_backend_id
+        label: "netapp-backend"
 
     - name: Log short-circuit when all target-cluster resources already exist
-      when: _ontap_all_sc_exist | bool
+      when: _netapp_all_sc_exist | bool
       ansible.builtin.debug:
         msg: "All ONTAP target-cluster resources already exist — skipping provisioning."
 
     - name: Set StorageClass names output (list)
       ansible.builtin.set_fact:
-        storage_provider_storage_class_names: "{{ _ontap_expected_sc_entries }}"
+        storage_provider_storage_class_names: "{{ _netapp_expected_sc_entries }}"
       no_log: true
 
   always:
     - name: Clear credential-bearing facts
       ansible.builtin.set_fact:
-        _ontap_sc_checks: {}
-        _ontap_tbc_checks: {}
-        _ontap_csi_checks: {}
+        _netapp_sc_checks: {}
+        _netapp_tbc_checks: {}
+        _netapp_csi_checks: {}
         _trident_crd_check: {}
-        _ontap_dedicated_assignment_keys: []
+        _netapp_dedicated_assignment_keys: []
       no_log: true

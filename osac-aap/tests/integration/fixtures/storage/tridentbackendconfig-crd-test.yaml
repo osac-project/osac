@@ -1,6 +1,6 @@
 ---
 # Minimal TridentBackendConfig CRD for ONTAP storage provider integration tests.
-# Mirrors only the fields the ontap_storage role sets and reads (spec fields are
+# Mirrors only the fields the netapp_storage role sets and reads (spec fields are
 # x-kubernetes-preserve-unknown-fields so any backend config validates; status.phase
 # carries the Bound value the role waits on, status.message the failure reason the
 # role surfaces on phase Failed). The real CRD ships with Trident —

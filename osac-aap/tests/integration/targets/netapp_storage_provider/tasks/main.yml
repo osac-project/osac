@@ -1,8 +1,9 @@
 ---
-# Integration test for the ontap_storage provider role (dispatched through
-# osac.service.storage_provider). Requires the kind cluster with the
-# TridentBackendConfig CRD fixture applied by setup_test_env.sh
-# (fixtures/storage/).
+# Integration test for the netapp_storage provider role. Requires the kind
+# cluster with the TridentBackendConfig CRD fixture applied by
+# setup_test_env.sh (fixtures/storage/). Each action runs through dispatch.yaml,
+# which hands the role the same filtered inputs osac.service.storage_provider
+# passes a provider role.
 #
 # Coverage:
 #   1. setup: validates operator-supplied SVM preparation parameters using
@@ -10,32 +11,36 @@
 #      connection and no hub-side HTTP calls to ONTAP), sets
 #      storage_provider_tenant_configs, and writes no hub Secret.
 #   2. setup: refuses an assignment when tenant_preparation.provider_config is
-#      missing required SVM fields.
-#   3. ensure_storage_class: creates CSI Secret + TBC (virtual-pool labels
-#      osac_backend + tier with no invalid 'name' field, defaults for encryption
-#      and qosPolicy, and trustedCACertificate when ontap_storage_validate_certs
+#      missing required SVM fields, or when a tier requests bandwidth QoS with
+#      no prepared QoS policy group.
+#   3. ensure_storage_class: creates CSI Secret + TBC (managementLIF from the
+#      prepared SVM, virtual-pool labels osac_backend + tier with no invalid
+#      'name' field, defaults for encryption and the prepared qosPolicy, and
+#      trustedCACertificate when netapp_storage_validate_certs
 #      is true) + per-tier StorageClasses bound via parameters.selector,
 #      short-circuits on the second run when all resources exist, and omits
-#      trustedCACertificate when ontap_storage_validate_certs is false.
+#      trustedCACertificate when netapp_storage_validate_certs is false.
 #   4. ensure_storage_class: fails fast when the TBC enters phase Failed.
 #   5. teardown_backend: rejects tiers missing backend_id and succeeds as a
 #      retention no-op for valid tiers.
-#   6. teardown_cluster_storage: removes TBC + SCs + CSI Secret, including
+#   6. teardown_cluster_storage: refuses to remove anything while a PVC uses a
+#      tenant StorageClass, then removes TBC + SCs + CSI Secret, including
 #      labeled resources no longer derivable from the dispatched tiers.
-#   8. Shared-TBC setup: validates profiles and pool_selector bindings without
+#   7. Shared-TBC setup: validates profiles and pool_selector bindings without
 #      endpoint or credentials, and rejects invalid selectors, unknown
-#      profiles, mixed-mode backends, max_iops, and duplicate profile names.
-#   9. Shared-TBC ensure_storage_class (Bound TBC): creates per-tier
+#      profiles, mixed-mode backends, bandwidth QoS, and duplicate profile
+#      names.
+#   8. Shared-TBC ensure_storage_class (Bound TBC): creates per-tier
 #      StorageClasses with selector and storagePools without creating OSAC
 #      TBCs/Secrets, and recreates StorageClasses on selector/backendName
 #      updates (including dotted spec.backendName fallback).
-#  10. Shared-TBC ensure_storage_class (NotFound TBC): falls back to
+#   9. Shared-TBC ensure_storage_class (NotFound TBC): falls back to
 #      selector-only StorageClasses when the customer TBC is NotFound, and
 #      recreates with storagePools when the TBC later becomes Bound.
-#  11. Shared-TBC ensure_storage_class (Fail-fast): fails fast when a visible
+#  10. Shared-TBC ensure_storage_class (Fail-fast): fails fast when a visible
 #      customer TBC is Failed, uses an unsupported storageDriverName/sanType,
 #      or has invalid characters in backendName.
-#  12. Shared-TBC teardown_cluster_storage: removes tenant StorageClasses while
+#  11. Shared-TBC teardown_cluster_storage: removes tenant StorageClasses while
 #      preserving the customer-owned TridentBackendConfig.
 
 # ── Test environment: trident namespace + stub operator ──
@@ -175,44 +180,41 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _t_assignment_key: "{{ (('netapp-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _t_svm_name: "customer_acme_svm"
     storage_provider_tiers:
       - name: gold
         protocol: block
-        provider: ontap
-        backend_id: ontap-be-1
+        provider: netapp
+        backend_id: netapp-be-1
         encryption_enabled: true
       - name: silver
         protocol: block
-        provider: ontap
-        backend_id: ontap-be-1
+        provider: netapp
+        backend_id: netapp-be-1
         encryption_enabled: false
         qos_limits:
           static_limits:
             max_reads_bw_mbps: 0
             max_writes_bw_mbps: 0
-          provider_config:
-            max_iops: 5000
     storage_provider_backend_connections:
-      ontap-be-1:
+      netapp-be-1:
         endpoint: "https://10.46.246.90"
         tenant_preparation:
           tenant_id: "id-test-ontap"
           source:
             namespace: "trident"
-            name: "test-ontap-primary-info"
+            name: "test-netapp-primary-info"
             uid: "uid-source-secret-1"
             resource_version: "42"
           provider_config:
             username: "trident_test_ontap"
-            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+            password: "{{ lookup('env', 'OSAC_TEST_NETAPP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
             svm: "{{ _t_svm_name }}"
 
   tasks:
     - name: Call storage_provider role with setup action
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: setup
 
@@ -223,7 +225,7 @@
         namespace: "osac-system"
         label_selectors:
           - "osac.openshift.io/tenant={{ tenant_name }}"
-          - "osac.openshift.io/storage-provider=ontap"
+          - "osac.openshift.io/storage-provider=netapp"
       register: _hub_ontap_secrets
       no_log: true
 
@@ -240,9 +242,9 @@
         that:
           - storage_provider_tenant_configs is defined
           - storage_provider_tenant_configs is mapping
-          - storage_provider_tenant_configs['ontap']['ontap-be-1'].assignment_key == _t_assignment_key
-          - storage_provider_tenant_configs['ontap']['ontap-be-1'].svm_name == _t_svm_name
-          - storage_provider_tenant_configs['ontap']['ontap-be-1'].status == 'ready'
+          - storage_provider_tenant_configs['netapp']['netapp-be-1'].assignment_key == _t_assignment_key
+          - storage_provider_tenant_configs['netapp']['netapp-be-1'].svm_name == _t_svm_name
+          - storage_provider_tenant_configs['netapp']['netapp-be-1'].status == 'ready'
         fail_msg: "storage_provider_tenant_configs did not match expected ready state"
         success_msg: "storage_provider_tenant_configs correct"
       no_log: true
@@ -258,68 +260,66 @@
     storage_provider_tiers:
       - name: gold
         protocol: block
-        provider: ontap
-        backend_id: ontap-be-1
+        provider: netapp
+        backend_id: netapp-be-1
         encryption_enabled: false
     storage_provider_backend_connections:
-      ontap-be-1:
+      netapp-be-1:
         endpoint: "https://10.46.246.90"
         tenant_preparation:
           tenant_id: "id-test-ontap"
           source:
             namespace: "trident"
-            name: "test-ontap-primary-info"
+            name: "test-netapp-primary-info"
             uid: "uid-source-secret-1"
             resource_version: "42"
           provider_config:
             username: "trident_test_ontap"
-            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+            password: "{{ lookup('env', 'OSAC_TEST_NETAPP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
             svm: ""
 
   tasks:
     - name: Attempt setup when tenant_preparation.provider_config.svm is empty
       block:
         - name: Call storage_provider role with setup action
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
+          ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: setup
       rescue:
         - name: Mark the incomplete-preparation test as passed
           ansible.builtin.set_fact:
-            _ontap_incomplete_prep_refused: true
+            _netapp_incomplete_prep_refused: true
 
     - name: Assert the role refused the incomplete tenant_preparation
       ansible.builtin.assert:
         that:
-          - _ontap_incomplete_prep_refused | default(false) | bool
+          - _netapp_incomplete_prep_refused | default(false) | bool
         fail_msg: "Setup should have failed when tenant_preparation.provider_config.svm is empty"
         success_msg: "Setup correctly refused the incomplete tenant_preparation"
 
     - name: Attempt Dedicated-SVM setup when a tier sets provider_config.profile or pool_selector
       block:
         - name: Call storage_provider setup with Shared-TBC fields on Dedicated-SVM tier
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
+          ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: setup
             storage_provider_tiers:
               - name: gold
                 protocol: block
-                provider: ontap
-                backend_id: ontap-be-1
+                provider: netapp
+                backend_id: netapp-be-1
                 provider_config:
                   profile: shared-fc
                   pool_selector:
                     performance: extreme
             storage_provider_backend_connections:
-              ontap-be-1:
+              netapp-be-1:
                 endpoint: "https://10.46.246.90"
                 tenant_preparation:
                   tenant_id: "id-test-ontap"
                   provider_config:
                     username: "trident_test_ontap"
-                    password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+                    password: "{{ lookup('env', 'OSAC_TEST_NETAPP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
                     svm: "customer_acme_svm"
       rescue:
         - name: Record Dedicated-SVM tier Shared-TBC field rejection
@@ -333,6 +333,43 @@
         fail_msg: "Dedicated-SVM setup must reject tiers setting provider_config.profile or pool_selector"
         success_msg: "Dedicated-SVM setup rejected tier setting profile/pool_selector"
 
+    - name: Attempt Dedicated-SVM setup when a QoS tier has no prepared policy group
+      block:
+        - name: Call storage_provider setup with bandwidth limits but no qos_policies entry
+          ansible.builtin.include_tasks: dispatch.yaml
+          vars:
+            storage_provider_action: setup
+            storage_provider_tiers:
+              - name: gold
+                protocol: block
+                provider: netapp
+                backend_id: netapp-be-1
+                qos_limits:
+                  static_limits:
+                    max_reads_bw_mbps: 0
+                    max_writes_bw_mbps: 200
+            storage_provider_backend_connections:
+              netapp-be-1:
+                endpoint: "https://10.46.246.90"
+                tenant_preparation:
+                  provider_config:
+                    username: "trident_test_ontap"
+                    password: "{{ lookup('env', 'OSAC_TEST_NETAPP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+                    svm: "customer_acme_svm"
+                    qos_policies:
+                      silver: "acme_silver_qos"
+      rescue:
+        - name: Record missing QoS policy rejection
+          ansible.builtin.set_fact:
+            _dedicated_missing_qos_rejected: true
+
+    - name: Assert Dedicated-SVM QoS tier without a prepared policy group was rejected
+      ansible.builtin.assert:
+        that:
+          - _dedicated_missing_qos_rejected | default(false) | bool
+        fail_msg: "Dedicated-SVM setup must reject a QoS tier with no prepared policy group"
+        success_msg: "Dedicated-SVM setup rejected QoS tier with no prepared policy group"
+
 # ── Test 3: ensure_storage_class creates TBC + SCs, then short-circuits ──
 - name: "ONTAP Storage Provider - Ensure storage classes"
   hosts: localhost
@@ -341,42 +378,43 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
-    _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    netapp_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
+    _t_assignment_key: "{{ (('netapp-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _t_svm_name: "customer_acme_svm"
-    _sc_gold: "ontap-{{ _t_assignment_key }}-{{ ('gold' | hash('sha256'))[:16] | lower }}"
-    _sc_silver: "ontap-{{ _t_assignment_key }}-{{ ('silver' | hash('sha256'))[:16] | lower }}"
+    _sc_gold: "netapp-{{ _t_assignment_key }}-{{ ('gold' | hash('sha256'))[:16] | lower }}"
+    _sc_silver: "netapp-{{ _t_assignment_key }}-{{ ('silver' | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:
       - name: gold
         protocol: block
-        provider: ontap
-        backend_id: ontap-be-1
+        provider: netapp
+        backend_id: netapp-be-1
         encryption_enabled: true
       - name: silver
         protocol: block
-        provider: ontap
-        backend_id: ontap-be-1
+        provider: netapp
+        backend_id: netapp-be-1
         encryption_enabled: false
         qos_limits:
           static_limits:
-            max_reads_bw_mbps: 0
-            max_writes_bw_mbps: 0
-          provider_config:
-            max_iops: 5000
+            max_reads_bw_mbps: 500
+            max_writes_bw_mbps: 250
     storage_provider_backend_connections:
-      ontap-be-1:
+      netapp-be-1:
         endpoint: "https://10.46.246.90"
         tenant_preparation:
           tenant_id: "id-test-ontap"
           source:
             namespace: "trident"
-            name: "test-ontap-primary-info"
+            name: "test-netapp-primary-info"
             uid: "uid-source-secret-1"
             resource_version: "42"
           provider_config:
             username: "trident_test_ontap"
-            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+            password: "{{ lookup('env', 'OSAC_TEST_NETAPP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
             svm: "{{ _t_svm_name }}"
+            management_lif: "https://10.46.246.91"
+            qos_policies:
+              silver: "acme_silver_qos"
 
   tasks:
     - name: Delete any pre-existing TBC, CSI Secret, and StorageClasses (clean slate)
@@ -387,12 +425,12 @@
         - apiVersion: trident.netapp.io/v1
           kind: TridentBackendConfig
           metadata:
-            name: "ontap-{{ _t_assignment_key }}"
+            name: "netapp-{{ _t_assignment_key }}"
             namespace: trident
         - apiVersion: v1
           kind: Secret
           metadata:
-            name: "ontap-csi-{{ _t_assignment_key }}"
+            name: "netapp-csi-{{ _t_assignment_key }}"
             namespace: trident
         - apiVersion: storage.k8s.io/v1
           kind: StorageClass
@@ -408,8 +446,7 @@
       no_log: true
 
     - name: Call storage_provider role with ensure_storage_class action
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: ensure_storage_class
 
@@ -417,7 +454,7 @@
       kubernetes.core.k8s_info:
         api_version: trident.netapp.io/v1
         kind: TridentBackendConfig
-        name: "ontap-{{ _t_assignment_key }}"
+        name: "netapp-{{ _t_assignment_key }}"
         namespace: trident
       register: _tbc
       no_log: true
@@ -428,11 +465,12 @@
           - _tbc.resources | length == 1
           - _tbc.resources[0].spec.storageDriverName == 'ontap-san'
           - _tbc.resources[0].spec.sanType == 'fcp'
-          - _tbc.resources[0].spec.managementLIF == '10.46.246.90'
+          # The prepared SVM management LIF takes precedence over the backend endpoint.
+          - _tbc.resources[0].spec.managementLIF == '10.46.246.91'
           - _tbc.resources[0].spec.svm == _t_svm_name
-          - _tbc.resources[0].spec.credentials.name == 'ontap-csi-' ~ _t_assignment_key
+          - _tbc.resources[0].spec.credentials.name == 'netapp-csi-' ~ _t_assignment_key
           - _tbc.resources[0].spec.storage | length == 2
-          # trustedCACertificate comes from the mounted cluster CA bundle when ontap_storage_validate_certs is true.
+          # trustedCACertificate comes from the mounted cluster CA bundle when netapp_storage_validate_certs is true.
           - _tbc.resources[0].spec.trustedCACertificate == _mock_ca_b64
           # Regression guard: Trident's OntapStorageDriverPool has NO 'name' field;
           # virtual pools must be matched via labels (osac_backend + tier).
@@ -440,20 +478,21 @@
           - "'name' not in _tbc.resources[0].spec.storage[1]"
           - >-
             (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'gold') | list | first).labels.osac_backend
-            == 'ontap-' ~ _t_assignment_key
+            == 'netapp-' ~ _t_assignment_key
           - >-
             (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'gold') | list | first).defaults.encryption == 'true'
           - >-
             (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'gold') | list | first).defaults.qosPolicy is not defined
-          # Silver has encryption_enabled: false and max_iops: 5000 -> defaults.encryption == 'false' and defaults.qosPolicy set.
+          # Silver has encryption_enabled: false and bandwidth limits -> defaults.encryption == 'false'
+          # and defaults.qosPolicy is the prepared policy group named for the tier.
           - >-
             (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'silver') | list | first).labels.osac_backend
-            == 'ontap-' ~ _t_assignment_key
+            == 'netapp-' ~ _t_assignment_key
           - >-
             (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'silver') | list | first).defaults.encryption == 'false'
           - >-
             (_tbc.resources[0].spec.storage | selectattr('labels.tier', 'equalto', 'silver') | list | first).defaults.qosPolicy
-            == 'osac-' ~ _t_assignment_key ~ '-' ~ (('silver' | hash('sha256'))[:16] | lower) ~ '-qos'
+            == 'acme_silver_qos'
         fail_msg: "TBC does not match the NetApp onboarding and Trident virtual-pool contract spec"
         success_msg: "TBC matches the NetApp onboarding and Trident virtual-pool contract spec"
       no_log: true
@@ -462,7 +501,7 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        name: "ontap-csi-{{ _t_assignment_key }}"
+        name: "netapp-csi-{{ _t_assignment_key }}"
         namespace: trident
       register: _csi_secret
       no_log: true
@@ -475,7 +514,7 @@
           - "import hmac, os, sys; sys.exit(0 if hmac.compare_digest(os.environ['ACTUAL_CRED'], os.environ['EXPECTED_CRED']) else 1)"
       environment:
         ACTUAL_CRED: "{{ _csi_secret.resources[0].data.password | default('') | b64decode }}"
-        EXPECTED_CRED: "{{ storage_provider_backend_connections['ontap-be-1'].tenant_preparation.provider_config.password }}"
+        EXPECTED_CRED: "{{ storage_provider_backend_connections['netapp-be-1'].tenant_preparation.provider_config.password }}"
       changed_when: false
       no_log: true
 
@@ -515,12 +554,12 @@
           - >-
             _scs.results[0].resources[0].metadata.labels['osac.openshift.io/storage-protocol'] == 'block'
           - >-
-            _scs.results[0].resources[0].metadata.labels['osac.openshift.io/storage-provider'] == 'ontap'
+            _scs.results[0].resources[0].metadata.labels['osac.openshift.io/storage-provider'] == 'netapp'
           # Regression guard: StorageClasses must bind to their tenant TBC + tier
           # virtual pool via parameters.selector (NOT storagePools).
           - "'storagePools' not in _scs.results[0].resources[0].parameters"
           - >-
-            _scs.results[0].resources[0].parameters['selector'] == 'osac_backend=ontap-' ~ _t_assignment_key ~ ';tier=gold'
+            _scs.results[0].resources[0].parameters['selector'] == 'osac_backend=netapp-' ~ _t_assignment_key ~ ';tier=gold'
           - >-
             _scs.results[0].resources[0].parameters['backendType'] == 'ontap-san'
           - >-
@@ -529,7 +568,7 @@
             _scs.results[1].resources[0].metadata.labels['osac.openshift.io/storage-tier'] == 'silver'
           - "'storagePools' not in _scs.results[1].resources[0].parameters"
           - >-
-            _scs.results[1].resources[0].parameters['selector'] == 'osac_backend=ontap-' ~ _t_assignment_key ~ ';tier=silver'
+            _scs.results[1].resources[0].parameters['selector'] == 'osac_backend=netapp-' ~ _t_assignment_key ~ ';tier=silver'
         fail_msg: "StorageClasses do not match expected contract names, labels, or selector parameters"
         success_msg: "StorageClasses carry contract names, labels, and selector parameters"
       no_log: true
@@ -548,15 +587,14 @@
 
     # ── Short-circuit: second run when all resources exist ──
     - name: Re-run ensure_storage_class (should short-circuit)
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: ensure_storage_class
 
     - name: Assert the output is stable across the short-circuit run
       ansible.builtin.assert:
         that:
-          - _ontap_all_sc_exist | bool
+          - _netapp_all_sc_exist | bool
           - storage_provider_storage_class_names | length == 2
           - >-
             storage_provider_storage_class_names | map(attribute='name') | list | sort
@@ -565,53 +603,51 @@
         success_msg: "Short-circuit run preserved the output fact"
       no_log: true
 
-    # ── Cert validation override: ontap_storage_validate_certs=false omits trustedCACertificate ──
-    - name: Delete TBC to test ontap_storage_validate_certs=false recreation
+    # ── Cert validation override: netapp_storage_validate_certs=false omits trustedCACertificate ──
+    - name: Delete TBC to test netapp_storage_validate_certs=false recreation
       kubernetes.core.k8s:
         state: absent
         api_version: trident.netapp.io/v1
         kind: TridentBackendConfig
-        name: "ontap-{{ _t_assignment_key }}"
+        name: "netapp-{{ _t_assignment_key }}"
         namespace: trident
       no_log: true
 
-    - name: Re-run ensure_storage_class with ontap_storage_validate_certs=false
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+    - name: Re-run ensure_storage_class with netapp_storage_validate_certs=false
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: ensure_storage_class
-        ontap_storage_validate_certs: false
+        netapp_storage_validate_certs: false
 
-    - name: Read back recreated TBC when ontap_storage_validate_certs=false
+    - name: Read back recreated TBC when netapp_storage_validate_certs=false
       kubernetes.core.k8s_info:
         api_version: trident.netapp.io/v1
         kind: TridentBackendConfig
-        name: "ontap-{{ _t_assignment_key }}"
+        name: "netapp-{{ _t_assignment_key }}"
         namespace: trident
       register: _tbc_no_cert
       no_log: true
 
-    - name: Assert trustedCACertificate is omitted when ontap_storage_validate_certs is false
+    - name: Assert trustedCACertificate is omitted when netapp_storage_validate_certs is false
       ansible.builtin.assert:
         that:
           - _tbc_no_cert.resources | length == 1
           - _tbc_no_cert.resources[0].spec.trustedCACertificate is not defined
-        fail_msg: "trustedCACertificate should be omitted when ontap_storage_validate_certs is false"
-        success_msg: "trustedCACertificate omitted when ontap_storage_validate_certs is false"
+        fail_msg: "trustedCACertificate should be omitted when netapp_storage_validate_certs is false"
+        success_msg: "trustedCACertificate omitted when netapp_storage_validate_certs is false"
       no_log: true
 
-    # ── Fail-closed check: ontap_storage_validate_certs=true with missing CA bundle ──
+    # ── Fail-closed check: netapp_storage_validate_certs=true with missing CA bundle ──
     # Retain the Bound TBC without trustedCACertificate so the short-circuit gate
     # is also tested against a missing CA bundle path (must not short-circuit).
-    - name: Attempt ensure_storage_class with ontap_storage_validate_certs=true and missing CA bundle
+    - name: Attempt ensure_storage_class with netapp_storage_validate_certs=true and missing CA bundle
       block:
         - name: Call storage_provider ensure_storage_class with missing CA bundle path
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
+          ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: ensure_storage_class
-            ontap_storage_validate_certs: true
-            ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/nonexistent-ca.pem"
+            netapp_storage_validate_certs: true
+            netapp_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/nonexistent-ca.pem"
       rescue:
         - name: Record missing CA bundle failure
           ansible.builtin.set_fact:
@@ -621,7 +657,7 @@
       ansible.builtin.assert:
         that:
           - _missing_ca_bundle_failed | default(false) | bool
-        fail_msg: "ensure_storage_class must fail closed when ontap_storage_validate_certs is true and CA bundle is missing"
+        fail_msg: "ensure_storage_class must fail closed when netapp_storage_validate_certs is true and CA bundle is missing"
         success_msg: "ensure_storage_class failed closed on missing CA bundle"
 
 # ── Test 4: ensure_storage_class fails fast on a Failed TBC phase ──
@@ -632,41 +668,39 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    ontap_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
-    _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    netapp_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
+    _t_assignment_key: "{{ (('netapp-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _t_svm_name: "customer_acme_svm"
-    _sc_gold: "ontap-{{ _t_assignment_key }}-{{ ('gold' | hash('sha256'))[:16] | lower }}"
-    _sc_silver: "ontap-{{ _t_assignment_key }}-{{ ('silver' | hash('sha256'))[:16] | lower }}"
+    _sc_gold: "netapp-{{ _t_assignment_key }}-{{ ('gold' | hash('sha256'))[:16] | lower }}"
+    _sc_silver: "netapp-{{ _t_assignment_key }}-{{ ('silver' | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:
       - name: gold
         protocol: block
-        provider: ontap
-        backend_id: ontap-be-1
+        provider: netapp
+        backend_id: netapp-be-1
         encryption_enabled: true
       - name: silver
         protocol: block
-        provider: ontap
-        backend_id: ontap-be-1
+        provider: netapp
+        backend_id: netapp-be-1
         encryption_enabled: false
         qos_limits:
           static_limits:
             max_reads_bw_mbps: 0
             max_writes_bw_mbps: 0
-          provider_config:
-            max_iops: 5000
     storage_provider_backend_connections:
-      ontap-be-1:
+      netapp-be-1:
         endpoint: "https://10.46.246.90"
         tenant_preparation:
           tenant_id: "id-test-ontap"
           source:
             namespace: "trident"
-            name: "test-ontap-primary-info"
+            name: "test-netapp-primary-info"
             uid: "uid-source-secret-1"
             resource_version: "42"
           provider_config:
             username: "trident_test_ontap"
-            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+            password: "{{ lookup('env', 'OSAC_TEST_NETAPP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
             svm: "{{ _t_svm_name }}"
 
   tasks:
@@ -701,7 +735,7 @@
         - apiVersion: trident.netapp.io/v1
           kind: TridentBackendConfig
           metadata:
-            name: "ontap-{{ _t_assignment_key }}"
+            name: "netapp-{{ _t_assignment_key }}"
             namespace: trident
         - apiVersion: storage.k8s.io/v1
           kind: StorageClass
@@ -723,19 +757,19 @@
           apiVersion: trident.netapp.io/v1
           kind: TridentBackendConfig
           metadata:
-            name: "ontap-{{ _t_assignment_key }}"
+            name: "netapp-{{ _t_assignment_key }}"
             namespace: trident
             labels:
               app.kubernetes.io/managed-by: osac-aap
               osac.openshift.io/tenant: "{{ tenant_name }}"
-              osac.openshift.io/storage-provider: ontap
+              osac.openshift.io/storage-provider: netapp
           spec: {}
       no_log: true
 
     - name: Patch the pre-created TBC status to Failed
       ansible.builtin.command:
         cmd: >-
-          kubectl patch tridentbackendconfig ontap-{{ _t_assignment_key }} -n trident
+          kubectl patch tridentbackendconfig netapp-{{ _t_assignment_key }} -n trident
           --subresource=status --type=merge
           -p '{"status":{"phase":"Failed","message":"fake failure for fail-fast test"}}'
       changed_when: true
@@ -744,8 +778,7 @@
     - name: Attempt ensure_storage_class against the Failed TBC
       block:
         - name: Call storage_provider role with ensure_storage_class action
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
+          ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: ensure_storage_class
       rescue:
@@ -774,24 +807,24 @@
     storage_provider_tiers:
       - name: gold
         protocol: block
-        provider: ontap
-        backend_id: ontap-be-1
+        provider: netapp
+        backend_id: netapp-be-1
     storage_provider_backend_connections:
-      ontap-be-1:
+      netapp-be-1:
         endpoint: "https://10.46.246.90"
 
   tasks:
     - name: Attempt teardown_backend with a tier missing backend_id
       block:
-        - name: Call ontap_storage teardown_backend directly with missing backend_id
+        - name: Call netapp_storage teardown_backend directly with missing backend_id
           ansible.builtin.include_role:
-            name: osac.templates.ontap_storage
+            name: osac.templates.netapp_storage
             tasks_from: teardown_backend
           vars:
             _provider_tiers:
               - name: gold
                 protocol: block
-                provider: ontap
+                provider: netapp
       rescue:
         - name: Record missing backend_id rejection on teardown_backend
           ansible.builtin.set_fact:
@@ -805,8 +838,7 @@
         success_msg: "teardown_backend rejected tier missing backend_id"
 
     - name: Call storage_provider role with teardown_backend action
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: teardown_backend
 
@@ -818,15 +850,15 @@
   vars:
     tenant_name: "test-ontap"
     tenant_namespace: "osac-system"
-    _t_assignment_key: "{{ (('ontap-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _drift_assignment_key: "{{ (('ontap-be-drifted' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _t_assignment_key: "{{ (('netapp-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _drift_assignment_key: "{{ (('netapp-be-drifted' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:
       - name: gold
         protocol: block
-        provider: ontap
-        backend_id: ontap-be-1
+        provider: netapp
+        backend_id: netapp-be-1
     storage_provider_backend_connections:
-      ontap-be-1:
+      netapp-be-1:
         endpoint: "https://10.46.246.90"
 
   tasks:
@@ -838,33 +870,102 @@
         - apiVersion: trident.netapp.io/v1
           kind: TridentBackendConfig
           metadata:
-            name: "ontap-{{ _drift_assignment_key }}"
+            name: "netapp-{{ _drift_assignment_key }}"
             namespace: trident
             labels:
               app.kubernetes.io/managed-by: osac-aap
               osac.openshift.io/tenant: "{{ tenant_name }}"
-              osac.openshift.io/storage-provider: ontap
+              osac.openshift.io/storage-provider: netapp
           spec: {}
         - apiVersion: v1
           kind: Secret
           metadata:
-            name: "ontap-csi-{{ _drift_assignment_key }}"
+            name: "netapp-csi-{{ _drift_assignment_key }}"
             namespace: trident
             labels:
               app.kubernetes.io/managed-by: osac-aap
               osac.openshift.io/tenant: "{{ tenant_name }}"
-              osac.openshift.io/storage-provider: ontap
+              osac.openshift.io/storage-provider: netapp
           type: Opaque
           stringData:
             username: drift-user
-            password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+            password: "{{ lookup('env', 'OSAC_TEST_NETAPP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
       loop_control:
         label: "drifted-resource"
       no_log: true
 
+    # Dependency guard: a claim on a tenant StorageClass blocks teardown and
+    # nothing is removed until the claim is gone.
+    - name: Create a labeled tenant StorageClass and a Pending PVC that uses it
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ item }}"
+      loop:
+        - apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: netapp-guard-sc
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/storage-provider: netapp
+          provisioner: csi.trident.netapp.io
+          volumeBindingMode: WaitForFirstConsumer
+        - apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: netapp-guard-claim
+            namespace: default
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            storageClassName: netapp-guard-sc
+            resources:
+              requests:
+                storage: 1Gi
+      loop_control:
+        label: "{{ item.kind }}/{{ item.metadata.name }}"
+
+    - name: Attempt teardown_cluster_storage while the PVC exists
+      block:
+        - name: Call storage_provider role with teardown_cluster_storage action (guarded)
+          ansible.builtin.include_tasks: dispatch.yaml
+          vars:
+            storage_provider_action: teardown_cluster_storage
+      rescue:
+        - name: Record the dependency guard rejection
+          ansible.builtin.set_fact:
+            _teardown_guard_rejected: true
+
+    - name: Read back the tenant TBCs after the guarded attempt
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        namespace: trident
+        label_selectors:
+          - "osac.openshift.io/tenant=test-ontap"
+          - "osac.openshift.io/storage-provider=netapp"
+      register: _tbc_guarded
+      no_log: true
+
+    - name: Assert the guard refused teardown and removed nothing
+      ansible.builtin.assert:
+        that:
+          - _teardown_guard_rejected | default(false) | bool
+          - _tbc_guarded.resources | length > 0
+        fail_msg: "teardown_cluster_storage must refuse to remove anything while a PVC uses a tenant StorageClass"
+        success_msg: "Dependency guard refused teardown and left resources in place"
+
+    - name: Delete the guard PVC
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: PersistentVolumeClaim
+        name: netapp-guard-claim
+        namespace: default
+        wait: true
+
     - name: Call storage_provider role with teardown_cluster_storage action
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: teardown_cluster_storage
 
@@ -875,7 +976,7 @@
         namespace: trident
         label_selectors:
           - "osac.openshift.io/tenant=test-ontap"
-          - "osac.openshift.io/storage-provider=ontap"
+          - "osac.openshift.io/storage-provider=netapp"
       register: _tbc_after
       no_log: true
 
@@ -893,7 +994,7 @@
         kind: StorageClass
         label_selectors:
           - "osac.openshift.io/tenant=test-ontap"
-          - "osac.openshift.io/storage-provider=ontap"
+          - "osac.openshift.io/storage-provider=netapp"
       register: _scs_after
       no_log: true
 
@@ -912,7 +1013,7 @@
         namespace: trident
         label_selectors:
           - "osac.openshift.io/tenant=test-ontap"
-          - "osac.openshift.io/storage-provider=ontap"
+          - "osac.openshift.io/storage-provider=netapp"
       register: _csi_secrets_after
       no_log: true
 
@@ -924,34 +1025,34 @@
         success_msg: "CSI Secret removed (dispatched and drifted)"
       no_log: true
 
-# ── Test 8: Shared-TBC setup validates profiles and pool selectors ──
+# ── Test 7: Shared-TBC setup validates profiles and pool selectors ──
 - name: "ONTAP Storage Provider - Shared-TBC setup validation"
   hosts: localhost
   gather_facts: false
 
   vars:
-    tenant_name: "test-ontap-shared"
+    tenant_name: "test-netapp-shared"
     tenant_namespace: "osac-system"
-    _t_assignment_key: "{{ (('ontap-shared-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _t_assignment_key: "{{ (('netapp-shared-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:
       - name: extreme
         protocol: block
-        provider: ontap
-        backend_id: ontap-shared-1
+        provider: netapp
+        backend_id: netapp-shared-1
         provider_config:
           profile: shared-fc
           pool_selector:
             performance: extreme
       - name: value
         protocol: block
-        provider: ontap
-        backend_id: ontap-shared-1
+        provider: netapp
+        backend_id: netapp-shared-1
         provider_config:
           profile: shared-fc
           pool_selector:
             performance: value
     storage_provider_backend_connections:
-      ontap-shared-1:
+      netapp-shared-1:
         provider_config:
           profiles:
             - name: shared-fc
@@ -961,8 +1062,7 @@
 
   tasks:
     - name: Call storage_provider role with setup action for Shared-TBC backend
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: setup
 
@@ -970,11 +1070,11 @@
       ansible.builtin.assert:
         that:
           - storage_provider_tenant_configs is defined
-          - storage_provider_tenant_configs['ontap']['ontap-shared-1'].assignment_key == _t_assignment_key
-          - storage_provider_tenant_configs['ontap']['ontap-shared-1'].mode == 'shared'
-          - storage_provider_tenant_configs['ontap']['ontap-shared-1'].profiles['shared-fc'].tbc_namespace == 'trident'
-          - storage_provider_tenant_configs['ontap']['ontap-shared-1'].profiles['shared-fc'].tbc_name == 'customer-fc'
-          - storage_provider_tenant_configs['ontap']['ontap-shared-1'].status == 'ready'
+          - storage_provider_tenant_configs['netapp']['netapp-shared-1'].assignment_key == _t_assignment_key
+          - storage_provider_tenant_configs['netapp']['netapp-shared-1'].mode == 'shared'
+          - storage_provider_tenant_configs['netapp']['netapp-shared-1'].profiles['shared-fc'].tbc_namespace == 'trident'
+          - storage_provider_tenant_configs['netapp']['netapp-shared-1'].profiles['shared-fc'].tbc_name == 'customer-fc'
+          - storage_provider_tenant_configs['netapp']['netapp-shared-1'].status == 'ready'
         fail_msg: "Shared-TBC setup did not produce expected storage_provider_tenant_configs"
         success_msg: "Shared-TBC setup output verified"
       no_log: true
@@ -982,15 +1082,14 @@
     - name: Attempt Shared-TBC setup with a malformed pool_selector containing semicolon
       block:
         - name: Call storage_provider setup with invalid pool_selector value
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
+          ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: setup
             storage_provider_tiers:
               - name: extreme
                 protocol: block
-                provider: ontap
-                backend_id: ontap-shared-1
+                provider: netapp
+                backend_id: netapp-shared-1
                 provider_config:
                   profile: shared-fc
                   pool_selector:
@@ -1010,15 +1109,14 @@
     - name: Attempt Shared-TBC setup with an unknown profile reference
       block:
         - name: Call storage_provider setup with unknown profile name
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
+          ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: setup
             storage_provider_tiers:
               - name: extreme
                 protocol: block
-                provider: ontap
-                backend_id: ontap-shared-1
+                provider: netapp
+                backend_id: netapp-shared-1
                 provider_config:
                   profile: unknown-profile
                   pool_selector:
@@ -1038,12 +1136,11 @@
     - name: Attempt setup when backend defines both provider_config.profiles and tenant_preparation
       block:
         - name: Call storage_provider setup with both profiles and tenant_preparation
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
+          ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: setup
             storage_provider_backend_connections:
-              ontap-shared-1:
+              netapp-shared-1:
                 endpoint: "https://10.46.246.90"
                 provider_config:
                   profiles:
@@ -1052,10 +1149,10 @@
                         tbc_namespace: trident
                         tbc_name: customer-fc
                 tenant_preparation:
-                  tenant_id: "id-test-ontap-shared"
+                  tenant_id: "id-test-netapp-shared"
                   provider_config:
                     username: "trident_test_ontap"
-                    password: "{{ lookup('env', 'OSAC_TEST_ONTAP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+                    password: "{{ lookup('env', 'OSAC_TEST_NETAPP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
                     svm: "customer_acme_svm"
       rescue:
         - name: Record mutual-exclusion mode rejection
@@ -1069,46 +1166,45 @@
         fail_msg: "Setup must reject backend connections defining both provider_config.profiles and tenant_preparation"
         success_msg: "Setup rejected backend connection defining both profiles and tenant_preparation"
 
-    - name: Attempt Shared-TBC setup when a tier sets qos_limits.provider_config.max_iops
+    - name: Attempt Shared-TBC setup when a tier requests bandwidth QoS
       block:
-        - name: Call storage_provider setup with max_iops on a Shared-TBC tier
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
+        - name: Call storage_provider setup with static bandwidth limits on a Shared-TBC tier
+          ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: setup
             storage_provider_tiers:
               - name: extreme
                 protocol: block
-                provider: ontap
-                backend_id: ontap-shared-1
+                provider: netapp
+                backend_id: netapp-shared-1
                 provider_config:
                   profile: shared-fc
                   pool_selector:
                     performance: extreme
                 qos_limits:
-                  provider_config:
-                    max_iops: 5000
+                  static_limits:
+                    max_reads_bw_mbps: 500
+                    max_writes_bw_mbps: 0
       rescue:
-        - name: Record Shared-TBC max_iops rejection
+        - name: Record Shared-TBC bandwidth QoS rejection
           ansible.builtin.set_fact:
-            _shared_tbc_max_iops_rejected: true
+            _shared_tbc_qos_rejected: true
 
-    - name: Assert Shared-TBC tier with qos_limits.provider_config.max_iops was rejected
+    - name: Assert Shared-TBC tier requesting bandwidth QoS was rejected
       ansible.builtin.assert:
         that:
-          - _shared_tbc_max_iops_rejected | default(false) | bool
-        fail_msg: "Shared-TBC setup must reject tiers setting qos_limits.provider_config.max_iops"
-        success_msg: "Shared-TBC setup rejected tier setting qos_limits.provider_config.max_iops"
+          - _shared_tbc_qos_rejected | default(false) | bool
+        fail_msg: "Shared-TBC setup must reject tiers with non-zero qos_limits.static_limits"
+        success_msg: "Shared-TBC setup rejected tier requesting bandwidth QoS"
 
     - name: Attempt Shared-TBC setup with duplicate profile names
       block:
         - name: Call storage_provider setup with duplicate profile names
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
+          ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: setup
             storage_provider_backend_connections:
-              ontap-shared-1:
+              netapp-shared-1:
                 provider_config:
                   profiles:
                     - name: shared-fc
@@ -1131,36 +1227,36 @@
         fail_msg: "Shared-TBC setup must reject duplicate profile names in provider_config.profiles"
         success_msg: "Shared-TBC setup rejected duplicate profile names"
 
-# ── Test 9: Shared-TBC ensure_storage_class (Bound TBC + selector update) ──
+# ── Test 8: Shared-TBC ensure_storage_class (Bound TBC + selector update) ──
 - name: "ONTAP Storage Provider - Shared-TBC ensure_storage_class with Bound customer TBC"
   hosts: localhost
   gather_facts: false
 
   vars:
-    tenant_name: "test-ontap-shared"
+    tenant_name: "test-netapp-shared"
     tenant_namespace: "osac-system"
-    _t_assignment_key: "{{ (('ontap-shared-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _sc_extreme: "ontap-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
-    _sc_value: "ontap-{{ _t_assignment_key }}-{{ ('value' | hash('sha256'))[:16] | lower }}"
+    _t_assignment_key: "{{ (('netapp-shared-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _sc_extreme: "netapp-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
+    _sc_value: "netapp-{{ _t_assignment_key }}-{{ ('value' | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:
       - name: extreme
         protocol: block
-        provider: ontap
-        backend_id: ontap-shared-1
+        provider: netapp
+        backend_id: netapp-shared-1
         provider_config:
           profile: shared-fc
           pool_selector:
             performance: extreme
       - name: value
         protocol: block
-        provider: ontap
-        backend_id: ontap-shared-1
+        provider: netapp
+        backend_id: netapp-shared-1
         provider_config:
           profile: shared-fc
           pool_selector:
             performance: value
     storage_provider_backend_connections:
-      ontap-shared-1:
+      netapp-shared-1:
         provider_config:
           profiles:
             - name: shared-fc
@@ -1202,8 +1298,7 @@
       no_log: true
 
     - name: Run ensure_storage_class for Shared-TBC backend
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: ensure_storage_class
 
@@ -1243,10 +1338,10 @@
       loop:
         - api_version: trident.netapp.io/v1
           kind: TridentBackendConfig
-          name: "ontap-{{ _t_assignment_key }}"
+          name: "netapp-{{ _t_assignment_key }}"
         - api_version: v1
           kind: Secret
-          name: "ontap-csi-{{ _t_assignment_key }}"
+          name: "netapp-csi-{{ _t_assignment_key }}"
       loop_control:
         label: "osac-managed-check"
       register: _shared_osac_resources
@@ -1261,8 +1356,7 @@
       no_log: true
 
     - name: Re-run ensure_storage_class for Shared-TBC backend (idempotent short-circuit)
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: ensure_storage_class
 
@@ -1298,15 +1392,14 @@
       no_log: true
 
     - name: Update extreme tier to multi-key pool_selector and re-run ensure_storage_class
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: ensure_storage_class
         storage_provider_tiers:
           - name: extreme
             protocol: block
-            provider: ontap
-            backend_id: ontap-shared-1
+            provider: netapp
+            backend_id: netapp-shared-1
             provider_config:
               profile: shared-fc
               pool_selector:
@@ -1314,8 +1407,8 @@
                 performance: highwrite
           - name: value
             protocol: block
-            provider: ontap
-            backend_id: ontap-shared-1
+            provider: netapp
+            backend_id: netapp-shared-1
             provider_config:
               profile: shared-fc
               pool_selector:
@@ -1371,27 +1464,27 @@
       changed_when: true
       no_log: true
 
-# ── Test 10: Shared-TBC ensure_storage_class fallback when customer TBC is NotFound ──
+# ── Test 9: Shared-TBC ensure_storage_class fallback when customer TBC is NotFound ──
 - name: "ONTAP Storage Provider - Shared-TBC NotFound TBC fallback to selector-only"
   hosts: localhost
   gather_facts: false
 
   vars:
-    tenant_name: "test-ontap-shared-nf"
+    tenant_name: "test-netapp-shared-nf"
     tenant_namespace: "osac-system"
-    _t_assignment_key: "{{ (('ontap-shared-nf' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _sc_extreme: "ontap-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
+    _t_assignment_key: "{{ (('netapp-shared-nf' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _sc_extreme: "netapp-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:
       - name: extreme
         protocol: block
-        provider: ontap
-        backend_id: ontap-shared-nf
+        provider: netapp
+        backend_id: netapp-shared-nf
         provider_config:
           profile: shared-unreadable
           pool_selector:
             performance: extreme
     storage_provider_backend_connections:
-      ontap-shared-nf:
+      netapp-shared-nf:
         provider_config:
           profiles:
             - name: shared-unreadable
@@ -1401,8 +1494,7 @@
 
   tasks:
     - name: Run ensure_storage_class when referenced TBC does not exist
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: ensure_storage_class
 
@@ -1426,12 +1518,11 @@
       no_log: true
 
     - name: Re-run ensure_storage_class when referenced TBC becomes Bound with unchanged pool_selector
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: ensure_storage_class
         storage_provider_backend_connections:
-          ontap-shared-nf:
+          netapp-shared-nf:
             provider_config:
               profiles:
                 - name: shared-unreadable
@@ -1458,22 +1549,22 @@
         success_msg: "StorageClass recreated with storagePools after NotFound -> Bound transition"
       no_log: true
 
-# ── Test 11: Shared-TBC ensure_storage_class fails fast on visible Failed customer TBC ──
+# ── Test 10: Shared-TBC ensure_storage_class fails fast on visible Failed customer TBC ──
 - name: "ONTAP Storage Provider - Shared-TBC fail-fast on visible Failed customer TBC"
   hosts: localhost
   gather_facts: false
 
   vars:
-    tenant_name: "test-ontap-shared"
+    tenant_name: "test-netapp-shared"
     tenant_namespace: "osac-system"
-    _t_assignment_key: "{{ (('ontap-shared-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _sc_extreme: "ontap-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
-    _sc_value: "ontap-{{ _t_assignment_key }}-{{ ('value' | hash('sha256'))[:16] | lower }}"
+    _t_assignment_key: "{{ (('netapp-shared-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _sc_extreme: "netapp-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
+    _sc_value: "netapp-{{ _t_assignment_key }}-{{ ('value' | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:
       - name: extreme
         protocol: block
-        provider: ontap
-        backend_id: ontap-shared-1
+        provider: netapp
+        backend_id: netapp-shared-1
         provider_config:
           profile: shared-fc
           pool_selector:
@@ -1481,14 +1572,14 @@
             performance: highwrite
       - name: value
         protocol: block
-        provider: ontap
-        backend_id: ontap-shared-1
+        provider: netapp
+        backend_id: netapp-shared-1
         provider_config:
           profile: shared-fc
           pool_selector:
             performance: value
     storage_provider_backend_connections:
-      ontap-shared-1:
+      netapp-shared-1:
         provider_config:
           profiles:
             - name: shared-fc
@@ -1509,8 +1600,7 @@
     - name: Attempt ensure_storage_class against visible Failed customer TBC
       block:
         - name: Call storage_provider ensure_storage_class with Failed customer TBC
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
+          ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: ensure_storage_class
       rescue:
@@ -1555,8 +1645,7 @@
     - name: Attempt ensure_storage_class against customer TBC with unsupported storageDriverName
       block:
         - name: Call storage_provider ensure_storage_class with unsupported storageDriverName
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
+          ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: ensure_storage_class
       rescue:
@@ -1601,8 +1690,7 @@
     - name: Attempt ensure_storage_class against customer TBC with invalid backendName
       block:
         - name: Call storage_provider ensure_storage_class with invalid backendName
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
+          ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: ensure_storage_class
       rescue:
@@ -1620,27 +1708,27 @@
         success_msg: "Shared-TBC ensure_storage_class rejected invalid characters in backendName"
       no_log: true
 
-# ── Test 12: Shared-TBC teardown_cluster_storage preserves customer TBC ──
+# ── Test 11: Shared-TBC teardown_cluster_storage preserves customer TBC ──
 - name: "ONTAP Storage Provider - Shared-TBC teardown preserves customer TBC"
   hosts: localhost
   gather_facts: false
 
   vars:
-    tenant_name: "test-ontap-shared-nf"
+    tenant_name: "test-netapp-shared-nf"
     tenant_namespace: "osac-system"
-    _t_assignment_key: "{{ (('ontap-shared-nf' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-    _sc_extreme: "ontap-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
+    _t_assignment_key: "{{ (('netapp-shared-nf' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _sc_extreme: "netapp-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:
       - name: extreme
         protocol: block
-        provider: ontap
-        backend_id: ontap-shared-nf
+        provider: netapp
+        backend_id: netapp-shared-nf
         provider_config:
           profile: shared-unreadable
           pool_selector:
             performance: extreme
     storage_provider_backend_connections:
-      ontap-shared-nf:
+      netapp-shared-nf:
         provider_config:
           profiles:
             - name: shared-unreadable
@@ -1650,8 +1738,7 @@
 
   tasks:
     - name: Run teardown_cluster_storage for Shared-TBC tenant
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
+      ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: teardown_cluster_storage
 
@@ -1692,7 +1779,7 @@
         api_version: storage.k8s.io/v1
         kind: StorageClass
         label_selectors:
-          - "osac.openshift.io/storage-provider=ontap"
+          - "osac.openshift.io/storage-provider=netapp"
       register: _remaining_ontap_scs
       failed_when: false
       no_log: true

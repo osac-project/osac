@@ -15,6 +15,7 @@ package servers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -33,6 +34,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -485,6 +487,40 @@ func (r *finalizerLogRecorder) withMessage(message string) []finalizerLogRecord 
 		}
 	}
 	return result
+}
+
+// commitSuiteTx commits the suite transaction and starts a new one for the rest of the spec. The generic server writes
+// its finalizer log when the transaction commits, so the specs about that log call this before they look at it. It
+// fails the spec if the transaction was rolled back instead, so that a spec that expects no log line can't pass only
+// because nothing was committed.
+func commitSuiteTx() {
+	GinkgoHelper()
+	endSuiteTx(true)
+}
+
+// rollBackSuiteTx rolls the suite transaction back, as code that runs after a write in the same request does when it
+// reports an error, and starts a new one for the rest of the spec.
+func rollBackSuiteTx() {
+	GinkgoHelper()
+	endSuiteTx(false)
+}
+
+func endSuiteTx(commit bool) {
+	GinkgoHelper()
+	if !commit {
+		laterErr := errors.New("a later step of the request failed")
+		suiteTx.ReportError(&laterErr)
+	}
+	committed := false
+	suiteTx.OnCommit(func() {
+		committed = true
+	})
+	Expect(suiteTx.End(ctx)).To(Succeed())
+	Expect(committed).To(Equal(commit), "the suite transaction must have been committed: %t", commit)
+	tx, err := tm.Begin(context.Background())
+	Expect(err).ToNot(HaveOccurred())
+	suiteTx = tx
+	ctx = database.TxIntoContext(ctx, suiteTx)
 }
 
 // recordLogs replaces the logger of the server behind the target with one that records everything it logs, and returns

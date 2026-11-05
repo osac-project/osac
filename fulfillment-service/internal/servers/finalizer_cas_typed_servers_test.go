@@ -15,6 +15,8 @@ package servers
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -164,6 +166,21 @@ func withPublicDescriptionAndNoMetadata(object proto.Message) proto.Message {
 	result.(interface{ SetDescription(string) }).SetDescription("changed by the specs")
 	result.(interface{ SetMetadata(*publicv1.Metadata) }).SetMetadata(nil)
 	return result
+}
+
+// storeFailingSecretStore is an in-memory secret store whose Store method fails once fail is set, as Vault does when
+// it is unavailable.
+type storeFailingSecretStore struct {
+	*memorySecretStore
+	fail bool
+}
+
+func (s *storeFailingSecretStore) Store(ctx context.Context, tenant, project, name string,
+	data map[string][]byte) error {
+	if s.fail {
+		return errors.New("vault is unavailable")
+	}
+	return s.memorySecretStore.Store(ctx, tenant, project, name, data)
 }
 
 // withOnlyIDAndMetadata returns a copy of the object that keeps its identifier and its metadata and nothing else. The
@@ -644,6 +661,85 @@ var _ = Describe("typed finalizer updates", func() {
 			stored := t.get(ctx)
 			Expect(finalizersOf(stored)).To(ConsistOf(finalizerController))
 			Expect(finalizerMetadataOf(stored).GetLabels()).To(HaveKeyWithValue("x", "y"))
+		})
+	})
+
+	// Secrets updates the object inside a savepoint and then stores its data in Vault. When the store fails the
+	// savepoint is rolled back, so a finalizer change made by the same request is neither stored nor logged.
+	Describe("Secrets server and its Vault store", func() {
+		var (
+			store  *storeFailingSecretStore
+			server *PrivateSecretsServer
+			logs   *finalizerLogRecorder
+			id     string
+		)
+
+		BeforeEach(func() {
+			var err error
+			store = &storeFailingSecretStore{memorySecretStore: newMemorySecretStore()}
+			server, err = NewPrivateSecretsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetSecretStore(store).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+				Object: privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{Name: finalizerName("secret")}.Build(),
+					Data:     map[string][]byte{"key": []byte("value")},
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id = created.GetObject().GetId()
+			commitSuiteTx()
+			logs = &finalizerLogRecorder{}
+			server.generic.logger = slog.New(logs)
+		})
+
+		// update adds a finalizer from the current version and changes the data, which is stored in Vault.
+		update := func() error {
+			current, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+				Object: privatev1.Secret_builder{
+					Id: id,
+					Metadata: privatev1.Metadata_builder{
+						Finalizers: []string{finalizerHold},
+						Version:    current.GetObject().GetMetadata().GetVersion(),
+					}.Build(),
+					Data: map[string][]byte{"key": []byte("changed")},
+				}.Build(),
+				UpdateMask: finalizerMaskOf("data", "metadata.finalizers"),
+			}.Build())
+			return err
+		}
+
+		storedFinalizers := func() []string {
+			GinkgoHelper()
+			response, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject().GetMetadata().GetFinalizers()
+		}
+
+		It("logs nothing for a finalizer change that a failed Vault store rolls back", func() {
+			store.fail = true
+
+			Expect(update()).ToNot(Succeed())
+			commitSuiteTx()
+
+			Expect(storedFinalizers()).To(BeEmpty(), "the finalizer change must have been rolled back")
+			Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty())
+		})
+
+		It("logs the finalizer change once the Vault store succeeds and the transaction commits", func() {
+			Expect(update()).To(Succeed())
+			Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty(),
+				"nothing must be logged before the transaction commits")
+			commitSuiteTx()
+
+			Expect(storedFinalizers()).To(ConsistOf(finalizerHold))
+			Expect(logs.withMessage(finalizerChangeMessage)).To(HaveLen(1))
 		})
 	})
 

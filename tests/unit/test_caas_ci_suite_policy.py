@@ -183,7 +183,7 @@ FILE_CHANGES = [
 @pytest.mark.parametrize("matched", ["true", "false"])
 @pytest.mark.parametrize("requested", ["", "sanity", "full"])
 def test_filtered_tier_reaches_caas(matched: str, requested: str) -> None:
-    expression = _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["labels"]["outputs"]["tier"]
+    expression = _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["selection"]["outputs"]["tier"]
     expression = expression.replace("steps.comparison.outputs.changed", repr(matched))
     tier = _selection(expression, "workflow_dispatch", tier=requested)
     full = matched == "true" or requested == "full"
@@ -202,7 +202,7 @@ def test_filtered_tier_reaches_caas(matched: str, requested: str) -> None:
 )
 def test_pr_base_read_fails_closed(tmp_path: Path, response: str) -> None:
     step = next(
-        step for step in _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["labels"]["steps"] if step.get("id") == "base"
+        step for step in _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["selection"]["steps"] if step.get("id") == "base"
     )
     pull = {"head": {"sha": "b" * 40 if response == "stale" else PR_SHA}, "base": {"sha": "c" * 40}}
     if response == "invalid-sha":
@@ -252,7 +252,7 @@ def test_pr_base_read_fails_closed(tmp_path: Path, response: str) -> None:
     ],
 )
 def test_git_directory_selection_on_pr_changes(tmp_path: Path, changed: dict) -> None:
-    steps = _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["labels"]["steps"]
+    steps = _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["selection"]["steps"]
 
     def git(*args: str) -> str:
         return subprocess.check_output(
@@ -320,7 +320,7 @@ def test_git_directory_selection_on_pr_changes(tmp_path: Path, changed: dict) ->
         for path in (changed["filename"], changed.get("previous_filename", ""))
     )
     assert output.read_text() == f"changed={str(expected).lower()}\n"
-    expression = _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["labels"]["outputs"]["tier"]
+    expression = _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["selection"]["outputs"]["tier"]
     expression = expression.replace("steps.comparison.outputs.changed", repr(str(expected).lower()))
     for requested in ("", "sanity", "full"):
         assert _selection(expression, "workflow_dispatch", tier=requested) == (
@@ -338,29 +338,49 @@ def test_pr_tier_resolution_preserves_trust_boundaries() -> None:
     assert jobs["verify"]["uses"] == (
         "osac-project/osac-ci/.github/workflows/suite-inputs.yml@5bfcd1ff220362171967451de7aaabb9e027d855"
     )
-    assert jobs["labels"]["needs"] == "verify"
-    assert jobs["labels"]["permissions"] == {"contents": "read", "pull-requests": "read"}
-    assert "secrets" not in jobs["labels"]
-    checkout, base, comparison, _ = jobs["labels"]["steps"]
+    assert jobs["selection"]["needs"] == "verify"
+    assert jobs["selection"]["permissions"] == {"contents": "read", "pull-requests": "read"}
+    assert "secrets" not in jobs["selection"]
+    checkout, base, comparison = jobs["selection"]["steps"]
     assert checkout["uses"] == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
     assert checkout["with"] == {"ref": "${{ github.workflow_sha }}", "fetch-depth": 0, "persist-credentials": False}
     assert base["env"]["PR_SHA"] == "${{ inputs.sha }}"
     assert comparison["env"] == {"PR_BASE": "${{ steps.base.outputs.sha }}", "PR_SHA": "${{ inputs.sha }}"}
-    assert all("if" not in step and not step.get("continue-on-error") for step in (base, comparison))
-    assert "if" not in jobs["labels"]
+    assert all("if" not in step and not step.get("continue-on-error") for step in (checkout, base, comparison))
+    assert "if" not in jobs["selection"]
     assert jobs["verify"]["with"] == {
         "repo": "${{ inputs.repo }}",
         "sha": "${{ inputs.sha }}",
         "pr-number": "${{ inputs.pr-number }}",
     }
-    assert jobs["caas"]["needs"] == ["verify", "labels"]
-    assert jobs["caas"]["with"]["tier"] == "${{ needs.labels.outputs.tier }}"
+    assert jobs["caas"]["needs"] == ["verify", "selection"]
+    assert jobs["caas"]["with"]["tier"] == "${{ needs.selection.outputs.tier }}"
     assert jobs["caas"]["with"]["fork-pr-author"] == "${{ needs.verify.outputs.fork-author }}"
     assert jobs["caas"]["with"]["fork-pr-author-association"] == "${{ needs.verify.outputs.fork-association }}"
     assert jobs["caas"]["with"]["sha"] == "${{ inputs.sha }}"
     assert "if" not in jobs["caas"]
+    assert "if" not in jobs["verify"]
+    assert not jobs["verify"].get("continue-on-error")
+    assert not jobs["selection"].get("continue-on-error")
+    assert not jobs["caas"].get("continue-on-error")
+    assert set(jobs["selection"]["outputs"]) == {"tier"}
+    assert "labels" not in jobs
     queue = _workflow(ROOT, "e2e-queue.yml")
     assert "tier" not in queue["jobs"]["caas"]["with"]
+
+
+def test_native_selection_preserves_unconditional_telemetry() -> None:
+    caas = _workflow(ROOT, "e2e-pr-caas.yml")["jobs"]["caas"]
+    assert "ci-observe" not in caas["with"]
+    assert caas["secrets"] == {"CI_OBSERVE_OTLP_PASSWORD": "${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}"}
+    wrapper = _workflow(ROOT, "e2e-caas-full-install.yml")
+    triggers = wrapper.get("on") or wrapper[True]
+    for event in ("workflow_call", "workflow_dispatch"):
+        assert "ci-observe" not in triggers[event]["inputs"]
+    assert triggers["workflow_call"]["secrets"]["CI_OBSERVE_OTLP_PASSWORD"]["required"] is False
+    runner = wrapper["jobs"]["e2e-caas-full-install"]
+    assert runner["with"]["ci-observe"] is True
+    assert runner["secrets"]["ci-observe-otlp-password"] == "${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}"
 
 
 def test_parent_decision_reaches_caas_for_regression_changes() -> None:

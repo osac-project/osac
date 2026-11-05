@@ -50,6 +50,8 @@ fixed `tests/e2e/caas/regression/` directory pathspec. A nonempty NUL-separated 
 parsing filenames, including names containing newlines. Only the workflow revision is checked out, never PR code;
 Git/API failures stop the suite instead of using sanity.
 This only selects tests: the existing approval, readiness, and fork authorization requirements still apply.
+The verified `selection` job is independent of telemetry: CaaS still captures telemetry unconditionally,
+as the full-install workflow does for other run types.
 
 The full suite also runs every 5 hours on `main`. To request it for another pull request, check
 **CaaS Full Install · sanity + regression** in the E2E comment of the pull request (any member of the organization, any

@@ -63,7 +63,7 @@ jobs:
       pr-number: ${{ inputs.pr-number }}
 
   # Resolve the suite tier only after the dispatch inputs have been verified.
-  labels:
+  selection:
     needs: verify
     permissions:
       contents: read
@@ -109,13 +109,13 @@ jobs:
 
   # Named after the suite id of .github/e2e-policy.yml: the line of the suite follows the deepest job of this run.
   caas:
-    needs: [verify, labels]
+    needs: [verify, selection]
     permissions:
       contents: read
       id-token: write
     uses: ./.github/workflows/e2e-caas-full-install.yml
     with:
-      tier: ${{ needs.labels.outputs.tier }}
+      tier: ${{ needs.selection.outputs.tier }}
       repo: ${{ inputs.repo }}
       sha: ${{ inputs.sha }}
       pr-number: ${{ inputs.pr-number }}

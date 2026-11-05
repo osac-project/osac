@@ -106,6 +106,36 @@ state out of band before using this v1 layout. The OSAC-6306/OSAC-6307 schema-v1
 intentionally supersedes the schema-v2/additive-migration provision in the
 [OSAC-3664 Agentless VLAN Fabric Manager design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-3664-agentless-vlan-fabric-manager/design.md).
 
+### Disposable lab state reset
+
+Legacy lab state is not migrated or adopted. Before switching layouts, stop
+provisioning and concurrent AAP jobs and coordinate a maintenance window with
+the lab owner. Preserve the old state and inventory for ownership review. When
+possible, use the old version's normal delete workflow before upgrading;
+otherwise manually identify and remove only the old deployment's resources.
+Coordinate switch access-port restoration and trunk VLAN membership cleanup
+with network-node cleanup: Subnet VLAN/gateway interfaces, per-VirtualNetwork
+dnsmasq service and configuration/lease files, namespaces and transit uplinks,
+and owned forwarding/NAT rules and advertised ExternalIP routes. Shared switch
+VLANs and host rules require checking other users before removal.
+
+The current cleanup path is in `agentless_net_state.py`
+(`prepare_delete_subnet`, `release_subnet`, `delete_and_remove_virtual_network`)
+and the `agentless_net_subnet.py` / `agentless_net_network.py` provider helpers.
+It relies on saved ownership and dependency ordering; it cannot infer or adopt
+legacy resources. Only after verifying provider cleanup should the lab owner
+reset the persisted state and recreate resources with the new version. Deleting
+the database alone loses ownership/allocation records and can orphan VLANs,
+namespaces and dnsmasq processes; a fresh allocator may then reuse live IDs.
+This is a manual, lab-only reset procedure, not an in-place upgrade path.
+
+Existing labs must also plan a coordinated registration/NetworkClass replacement
+or reinstall to pick up `security_group_icmp`: the AgentlessNet registration
+ConfigMap is immutable, and the operator derives capabilities only until the
+NetworkClass first becomes READY. A Helm upgrade alone cannot refresh this
+capability on an existing READY class; respect dependency guards and the manual
+cleanup above rather than deleting live resources indiscriminately.
+
 AgentlessNet ExternalIPPool and ExternalIP jobs use the same inventory and
 state-file settings as VirtualNetwork jobs. Inventory describes exactly one
 network node; pool registration and address reservation do not require switch

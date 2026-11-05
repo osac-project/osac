@@ -6,6 +6,7 @@ from __future__ import annotations
 from ansible.module_utils.basic import AnsibleModule
 
 from ansible_collections.osac.templates.plugins.module_utils.agentless_net_state import (
+    PublicStateError,
     RetryableStateError,
     StateError,
     StateStore,
@@ -593,6 +594,13 @@ def main() -> None:
         )
     except (StateError, SubnetProviderError) as error:
         retryable = bool(getattr(error, "retryable", isinstance(error, SubnetProviderError)))
+        if isinstance(error, PublicStateError):
+            module.fail_json(
+                msg=error.public_message,
+                public_message=error.public_message,
+                retryable=retryable,
+            )
+            return
         if params["action"] in EXTERNAL_IP_ATTACHMENT_ACTIONS:
             module.fail_json(
                 msg="AgentlessNet ExternalIPAttachment operation failed; inspect the network node and retry.",

@@ -6,6 +6,34 @@
 # is ever sourced by a script that forgot to.
 set -euo pipefail
 
+ensure_podman_pid_limits() {
+    local cluster="$1" kind_command="$2" podman_command="$3" nodes node limit
+    if ! nodes=$("${kind_command}" get nodes --name "${cluster}") || [[ -z "${nodes}" ]]; then
+        echo "ERROR: Could not list Podman Kind nodes for '${cluster}'; check the selected connection." >&2
+        return 1
+    fi
+    while IFS= read -r node; do
+        [[ -n "${node}" ]] || continue
+        if ! limit=$("${podman_command}" inspect --format '{{.HostConfig.PidsLimit}}' "${node}") ||
+           [[ ! "${limit}" =~ ^(-1|0|[1-9][0-9]*)$ ]]; then
+            echo "ERROR: Could not inspect configured Podman PID limit for '${node}'; check the selected connection." >&2
+            return 1
+        fi
+        if [[ "${limit}" != -1 && "${limit}" != 0 ]] && (( limit < 65536 )); then
+            if ! "${podman_command}" update --pids-limit 65536 "${node}"; then
+                echo "ERROR: Could not raise Podman PID limit for '${node}' from ${limit} to 65536; check runtime permissions." >&2
+                return 1
+            fi
+            if ! limit=$("${podman_command}" inspect --format '{{.HostConfig.PidsLimit}}' "${node}") ||
+               [[ ! "${limit}" =~ ^(-1|0|[1-9][0-9]*)$ ]] ||
+               { [[ "${limit}" != -1 && "${limit}" != 0 ]] && (( limit < 65536 )); }; then
+                echo "ERROR: Podman PID limit verification failed for '${node}' (reported '${limit}'); expected at least 65536 or unlimited." >&2
+                return 1
+            fi
+        fi
+    done <<< "${nodes}"
+}
+
 # Validate the Kubernetes Secret metadata.name and data key used for the
 # remote-cluster kubeconfig before either value reaches a command or manifest.
 validate_remote_kubeconfig_secret() {

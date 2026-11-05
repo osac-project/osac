@@ -52,10 +52,12 @@ on:
     inputs:
       release_version:
         description: >-
-          The umbrella chart version being promoted (e.g. 0.4.0) --
-          informational only (run name, Slack message); not used to
-          compute anything, since the two inputs below already name the
-          exact Snapshots directly.
+          The umbrella chart version being promoted (e.g. 0.4.0, or a
+          release-branch freeze build like 0.4.0-rc.1) -- used for the
+          run name/Slack message and to cross-check that image_snapshot
+          and chart_snapshot below both belong to this same release (the
+          same dot-to-hyphen slug osac-build-and-publish.yaml itself
+          uses to name a Snapshot).
         type: string
         required: true
       image_snapshot:
@@ -107,8 +109,16 @@ jobs:
       id: validate
       run: |
         set -euo pipefail
-        if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          echo "::error::release_version '${RELEASE_VERSION}' is not a plain X.Y.Z semver" >&2
+        # Accepts an optional prerelease suffix (e.g. a release-branch
+        # freeze build's "-rc.1") -- same grammar as validate_semver
+        # (osac-installer/scripts/lib.sh), minus build metadata (unused
+        # by this pipeline). SLUG below must still match
+        # osac-build-and-publish.yaml's own version_slug computation
+        # exactly (a plain dot-to-hyphen replace, no other
+        # transformation), which is why it isn't restricted to only the
+        # X.Y.Z portion.
+        if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+          echo "::error::release_version '${RELEASE_VERSION}' is not a valid semver (with an optional prerelease suffix)" >&2
           exit 1
         fi
         SLUG="${RELEASE_VERSION//./-}"

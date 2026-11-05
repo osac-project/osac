@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -149,6 +151,30 @@ func namespacePredicate(namespace string) predicate.Predicate {
 	})
 }
 
+// workerClusterOrderChangedPredicate admits worker inputs and lifecycle changes.
+// Worker condition and count writes complete in the current invocation or use
+// explicit requeues to continue convergence.
+func workerClusterOrderChangedPredicate() predicate.Predicate {
+	return predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			old := e.ObjectOld.(*v1alpha1.ClusterOrder)
+			current := e.ObjectNew.(*v1alpha1.ClusterOrder)
+			if !old.DeletionTimestamp.Equal(current.DeletionTimestamp) ||
+				!reflect.DeepEqual(old.Finalizers, current.Finalizers) ||
+				old.Labels[clusterOrderIDLabel] != current.Labels[clusterOrderIDLabel] {
+				return true
+			}
+			for _, key := range []string{tenantAnnotationKey, managementStateAnnotation, infraEnvUIDAnnotation} {
+				if old.Annotations[key] != current.Annotations[key] {
+					return true
+				}
+			}
+			return !reflect.DeepEqual(old.Status.ClusterReference, current.Status.ClusterReference) ||
+				!reflect.DeepEqual(old.Status.Workers, current.Status.Workers)
+		},
+	})
+}
+
 // SetupWithManager registers the reconciler, watching ClusterOrder in the configured namespace.
 // Agent and NodePool watches are gated on CRD presence to avoid hard startup dependencies.
 func (r *Reconciler) SetupWithManager(mgr mcmanager.Manager) error {
@@ -160,7 +186,9 @@ func (r *Reconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	log := ctrl.Log.WithName("baremetalworker")
 	bld := ctrl.NewControllerManagedBy(localMgr).
 		Named("baremetalworker").
-		For(&v1alpha1.ClusterOrder{}, builder.WithPredicates(namespacePredicate(r.clusterOrderNamespace)))
+		For(&v1alpha1.ClusterOrder{}, builder.WithPredicates(
+			namespacePredicate(r.clusterOrderNamespace), workerClusterOrderChangedPredicate(),
+		))
 
 	if crdExists(mgr, agentGVK) {
 		agentObj := &unstructured.Unstructured{}

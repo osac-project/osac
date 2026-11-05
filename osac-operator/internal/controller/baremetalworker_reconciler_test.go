@@ -362,6 +362,40 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(err).To(HaveOccurred(), "an unmanaged ClusterOrder must be skipped (no InfraEnv)")
 	})
 
+	It("reports invalid discovery ignition as an error and recovers when HTTP content is repaired", func() {
+		preloadDiskImageChain()
+		create(newBareMetalClusterOrder("bmw-invalid-ignition"))
+		ign.SetContent([]byte("not-json"))
+
+		_, err := runReconcile("bmw-invalid-ignition")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(setWorkerIgnitionURL(ctx, "bmw-invalid-ignition-infraenv", testNamespace, ign.URL())).To(Succeed())
+
+		res, err := runReconcile("bmw-invalid-ignition")
+		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
+		Expect(res.IsZero()).To(BeTrue())
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		blocked := getClusterOrder("bmw-invalid-ignition")
+		cond := apimeta.FindStatusCondition(blocked.Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal("IgnitionInvalid"))
+
+		res, err = runReconcile("bmw-invalid-ignition")
+		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
+		Expect(res.IsZero()).To(BeTrue())
+		Expect(getClusterOrder("bmw-invalid-ignition").ResourceVersion).To(Equal(blocked.ResourceVersion),
+			"unchanged invalid content must leave status unchanged")
+
+		// Repair the response at the same URL, leaving Kubernetes inputs untouched.
+		ign.SetContent(defaultIgnition)
+		_, err = runReconcile("bmw-invalid-ignition")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		Expect(apimeta.IsStatusConditionTrue(
+			getClusterOrder("bmw-invalid-ignition").Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)).To(BeTrue())
+	})
+
 	It("returns an error when the discovery ignition fetch fails", func() {
 		preloadDiskImageChain()
 		create(newBareMetalClusterOrder("bmw-fetcherr"))

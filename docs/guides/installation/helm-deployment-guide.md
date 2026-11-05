@@ -386,8 +386,10 @@ use `https://keycloak-keycloak.<cluster-domain>/realms/osac`, replacing
 the realm issuer URL configured in `service.auth.issuerUrl`. See the
 [customer install guide](customer-install-guide.md#42-configuring-the-helm-values).
 
-With Helm 4, add `--force-conflicts` if an AAP field ownership conflict occurs.
-Helm 3 does not support this option.
+On Helm 4, every later upgrade of the `osac` release, including
+`helm upgrade --install`, must include `--force-conflicts`. After installation,
+the AAP operator owns `app.kubernetes.io/managed-by` on the `osac-aap` custom
+resource. Helm 3 does not support this option.
 
 `my-infra-values.yaml` configures `osac-deps` and `osac-infra`; see
 [Phase-1 Parameters](#phase-1-parameters) below. For Phase 2,

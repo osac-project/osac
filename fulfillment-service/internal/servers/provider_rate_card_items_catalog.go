@@ -28,6 +28,9 @@ const computeInstanceServiceName = "compute_instance"
 // rate-card row's conditions can be matched against it without re-deriving the field-policy walk
 // aggregateCatalogPricingInputs already performs over the VMaaS/CaaS catalog item DAOs.
 type catalogDimensionIndex struct {
+	// byService includes every catalog item, including items that emit no pricing dimensions. A row with no
+	// conditions matches every item in its service.
+	byService map[string]map[string]*privatev1.CatalogPricingInputCatalogItem
 	// byValue maps (service, dimension, value) to the catalog items locked to, or defaulted to, exactly that
 	// value.
 	byValue map[[3]string]map[string]*privatev1.CatalogPricingInputCatalogItem
@@ -36,11 +39,48 @@ type catalogDimensionIndex struct {
 	anyByDimension map[[2]string]map[string]*privatev1.CatalogPricingInputCatalogItem
 }
 
-// buildCatalogDimensionIndex indexes the full (service, dimension, value) -> catalog-items inventory OSAC-6889's
-// aggregateCatalogPricingInputs computes, for AC5/AC6 catalog cross-reference across all five documented dimensions
-// (instance_type, additional_disk_size_gib, additional_storage_tier, baremetal_instance_type, node_count).
-func buildCatalogDimensionIndex(inputs []*privatev1.CatalogPricingInput) catalogDimensionIndex {
+// catalogPricingInventory keeps the public comparison rows and the complete catalog-item set used by
+// conditionless provider rows together in the rate-card server's inventory cache.
+type catalogPricingInventory struct {
+	inputs         []*privatev1.CatalogPricingInput
+	itemsByService map[string]map[string]*privatev1.CatalogPricingInputCatalogItem
+}
+
+func newCatalogPricingInventoryCache() *ttlCache[catalogInventoryKey, catalogPricingInventory] {
+	return newTTLCache[catalogInventoryKey, catalogPricingInventory](catalogInventoryCacheTTL, 1,
+		func(catalogInventoryKey) string { return "catalog-inventory" })
+}
+
+// catalogItemsByService returns all catalog items grouped by their mapped pricing service, even when an item has
+// no field policy that contributes a row to CatalogPricingInputs.List.
+func catalogItemsByService(computeItems []*privatev1.ComputeInstanceCatalogItem,
+	clusterItems []*privatev1.ClusterCatalogItem) map[string]map[string]*privatev1.CatalogPricingInputCatalogItem {
+	result := map[string]map[string]*privatev1.CatalogPricingInputCatalogItem{}
+	add := func(service string, item *privatev1.CatalogPricingInputCatalogItem) {
+		if result[service] == nil {
+			result[service] = map[string]*privatev1.CatalogPricingInputCatalogItem{}
+		}
+		result[service][item.GetId()] = item
+	}
+	for _, item := range computeItems {
+		if item != nil {
+			add(serviceComputeInstance, catalogItemInfo(item.GetId(), item.GetMetadata().GetName(), item.GetTitle(), item.GetPublished()))
+		}
+	}
+	for _, item := range clusterItems {
+		if item != nil {
+			add(serviceCluster, catalogItemInfo(item.GetId(), item.GetMetadata().GetName(), item.GetTitle(), item.GetPublished()))
+		}
+	}
+	return result
+}
+
+// buildCatalogDimensionIndex indexes every emitted (service, dimension, value) row for conditional cross-reference,
+// plus the complete per-service catalog item set for conditionless rows.
+func buildCatalogDimensionIndex(inputs []*privatev1.CatalogPricingInput,
+	itemsByService map[string]map[string]*privatev1.CatalogPricingInputCatalogItem) catalogDimensionIndex {
 	idx := catalogDimensionIndex{
+		byService:      itemsByService,
 		byValue:        map[[3]string]map[string]*privatev1.CatalogPricingInputCatalogItem{},
 		anyByDimension: map[[2]string]map[string]*privatev1.CatalogPricingInputCatalogItem{},
 	}
@@ -62,13 +102,14 @@ func buildCatalogDimensionIndex(inputs []*privatev1.CatalogPricingInput) catalog
 }
 
 // matchCatalogItems evaluates every one of a rate-card row's conditions together (AC6: "all conditions on a row
-// apply together") against idx, returning the names of the catalog items satisfying all of them. An EQUALS
-// condition matches catalog items locked or defaulted to that exact value; an ANY condition matches catalog items
-// that have any value for that dimension, open or fixed. A row matching no catalog item returns an empty list,
-// which is itself a valid "not in catalog" result (AC6), never a guessed one.
+// apply together") against idx, returning the names of the catalog items satisfying all of them. A row with no
+// conditions matches every catalog item of its service. An EQUALS condition matches catalog items locked or
+// defaulted to that exact value; an ANY condition matches catalog items that have any value for that dimension,
+// open or fixed. A row matching no catalog item returns an empty list, which is itself a valid "not in catalog"
+// result (AC6), never a guessed one.
 func matchCatalogItems(item pricing.RateCardItem, idx catalogDimensionIndex) []string {
 	if len(item.Conditions) == 0 {
-		return nil
+		return catalogItemNames(idx.byService[item.Service])
 	}
 	var matches map[string]*privatev1.CatalogPricingInputCatalogItem
 	for i, condition := range item.Conditions {
@@ -87,9 +128,13 @@ func matchCatalogItems(item pricing.RateCardItem, idx catalogDimensionIndex) []s
 			return nil
 		}
 	}
-	names := make([]string, 0, len(matches))
-	for _, candidate := range matches {
-		names = append(names, candidate.GetName())
+	return catalogItemNames(matches)
+}
+
+func catalogItemNames(items map[string]*privatev1.CatalogPricingInputCatalogItem) []string {
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		names = append(names, item.GetName())
 	}
 	slices.Sort(names)
 	return names

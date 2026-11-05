@@ -48,6 +48,11 @@ func aggregateCatalogPricingInputs(
 		if fields == nil {
 			continue
 		}
+		// Include provider-condition dimensions even when a dimension is not currently listed as a metered
+		// billable dimension (notably boot_disk_storage_tier). The inventory is also the admin's name-alignment
+		// reference for provider rules; this preserves that comparison without claiming each condition is metered.
+		emitDiskImage(rows, fields.GetDiskImage(), info)
+		emitBootDisk(rows, fields.GetBootDisk(), info)
 		emitInstanceType(rows, fields.GetInstanceType(), info)
 		emitAdditionalDisks(rows, fields.GetAdditionalDisks(), info)
 	}
@@ -100,7 +105,92 @@ const (
 	dimensionAdditionalStorageTier = "additional_storage_tier"
 	dimensionNodeCount             = "node_count"
 	dimensionBaremetalInstanceType = "baremetal_instance_type"
+	dimensionImage                 = "image"
+	dimensionBootDiskSize          = "boot_disk_size_gib"
+	dimensionBootDiskStorageTier   = "boot_disk_storage_tier"
 )
+
+func emitDiskImage(rows map[[3]string]*catalogPricingInputRow,
+	policy *privatev1.DiskImageReferenceFieldPolicy,
+	item *privatev1.CatalogPricingInputCatalogItem) {
+	if policy == nil {
+		return
+	}
+	switch {
+	case policy.HasLocked():
+		emitReference(rows, dimensionImage, policy.GetLocked().GetId(), policy.GetLocked().GetName(), item)
+	case policy.HasEditable():
+		emit(rows, serviceComputeInstance, dimensionImage, "", true, item)
+		if editable := policy.GetEditable(); editable != nil {
+			if def := editable.GetDefaultValue(); def != nil {
+				emitReference(rows, dimensionImage, def.GetId(), def.GetName(), item)
+			}
+		}
+	}
+}
+
+func emitBootDisk(rows map[[3]string]*catalogPricingInputRow,
+	policies *privatev1.ComputeInstanceBootDiskFieldPolicies,
+	item *privatev1.CatalogPricingInputCatalogItem) {
+	if policies == nil {
+		return
+	}
+	emitBootDiskSize(rows, policies.GetSizeGib(), item)
+	emitBootDiskStorageTier(rows, policies.GetStorageTier(), item)
+}
+
+func emitBootDiskSize(rows map[[3]string]*catalogPricingInputRow,
+	policy *privatev1.Int32FieldPolicy,
+	item *privatev1.CatalogPricingInputCatalogItem) {
+	if policy == nil {
+		return
+	}
+	switch {
+	case policy.HasLocked():
+		if size := policy.GetLocked(); size != 0 {
+			emit(rows, serviceComputeInstance, dimensionBootDiskSize, strconv.Itoa(int(size)), false, item)
+		}
+	case policy.HasEditable():
+		emit(rows, serviceComputeInstance, dimensionBootDiskSize, "", true, item)
+		if editable := policy.GetEditable(); editable != nil && editable.HasDefaultValue() {
+			if size := editable.GetDefaultValue(); size != 0 {
+				emit(rows, serviceComputeInstance, dimensionBootDiskSize, strconv.Itoa(int(size)), false, item)
+			}
+		}
+	}
+}
+
+func emitBootDiskStorageTier(rows map[[3]string]*catalogPricingInputRow,
+	policy *privatev1.StorageTierReferenceFieldPolicy,
+	item *privatev1.CatalogPricingInputCatalogItem) {
+	if policy == nil {
+		return
+	}
+	switch {
+	case policy.HasLocked():
+		emitReference(rows, dimensionBootDiskStorageTier, policy.GetLocked().GetId(), policy.GetLocked().GetName(), item)
+	case policy.HasEditable():
+		emit(rows, serviceComputeInstance, dimensionBootDiskStorageTier, "", true, item)
+		if editable := policy.GetEditable(); editable != nil {
+			if def := editable.GetDefaultValue(); def != nil {
+				emitReference(rows, dimensionBootDiskStorageTier, def.GetId(), def.GetName(), item)
+			}
+		}
+	}
+}
+
+// emitReference uses the canonical name when available, falling back to the stable ID as the metering
+// reference formatter does. Catalog policies are canonicalized to carry both values before persistence.
+func emitReference(rows map[[3]string]*catalogPricingInputRow, dimension, id, name string,
+	item *privatev1.CatalogPricingInputCatalogItem) {
+	value := name
+	if value == "" {
+		value = id
+	}
+	if value != "" {
+		emit(rows, serviceComputeInstance, dimension, value, false, item)
+	}
+}
 
 func emitInstanceType(rows map[[3]string]*catalogPricingInputRow, policy *privatev1.InstanceTypeReferenceFieldPolicy,
 	item *privatev1.CatalogPricingInputCatalogItem) {

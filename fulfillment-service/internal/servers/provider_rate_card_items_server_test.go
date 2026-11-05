@@ -220,14 +220,14 @@ var _ = Describe("Provider rate card items server", func() {
 			server := build(fake.Provider(), prometheus.NewRegistry())
 			if inventoryServices != nil {
 				_, err := server.private.inventoryCache.get(ctx, catalogInventoryKey{},
-					func(context.Context) ([]*privatev1.CatalogPricingInput, error) {
+					func(context.Context) (catalogPricingInventory, error) {
 						var inventory []*privatev1.CatalogPricingInput
 						for _, service := range inventoryServices {
 							inventory = append(inventory, privatev1.CatalogPricingInput_builder{
 								Service: service, Dimension: "widget_size", Value: "large",
 							}.Build())
 						}
-						return inventory, nil
+						return catalogPricingInventory{inputs: inventory}, nil
 					})
 				Expect(err).ToNot(HaveOccurred())
 			}
@@ -395,7 +395,8 @@ var _ = Describe("Provider rate card items server", func() {
 var _ = Describe("Provider rate card items server catalog cross-reference", func() {
 	buildIndex := func(computeItems []*privatev1.ComputeInstanceCatalogItem,
 		clusterItems []*privatev1.ClusterCatalogItem) catalogDimensionIndex {
-		return buildCatalogDimensionIndex(aggregateCatalogPricingInputs(computeItems, clusterItems))
+		return buildCatalogDimensionIndex(aggregateCatalogPricingInputs(computeItems, clusterItems),
+			catalogItemsByService(computeItems, clusterItems))
 	}
 
 	It("matches a CaaS row against a cluster catalog item's locked baremetal instance type", func() {
@@ -479,6 +480,130 @@ var _ = Describe("Provider rate card items server catalog cross-reference", func
 			Conditions: []pricing.RateCondition{{Dimension: "instance_type", Operator: pricing.OperatorAny}},
 		}
 		Expect(matchCatalogItems(item, idx)).To(ConsistOf("vm-open", "vm-locked"))
+	})
+
+	It("matches EQUALS and ANY conditions for image and boot-disk dimensions", func() {
+		defaultItem := privatev1.ComputeInstanceCatalogItem_builder{
+			Id:       "c1",
+			Metadata: privatev1.Metadata_builder{Name: "vm-default"}.Build(),
+			Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+				DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
+					Locked: privatev1.DiskImageReference_builder{Id: "image-id", Name: "fedora"}.Build(),
+				}.Build(),
+				BootDisk: privatev1.ComputeInstanceBootDiskFieldPolicies_builder{
+					SizeGib: privatev1.Int32FieldPolicy_builder{Locked: int32Ptr(80)}.Build(),
+					StorageTier: privatev1.StorageTierReferenceFieldPolicy_builder{
+						Editable: privatev1.EditableStorageTierReferenceField_builder{
+							DefaultValue: privatev1.StorageTierReference_builder{Id: "tier-id", Name: "fast"}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build()
+		openItem := privatev1.ComputeInstanceCatalogItem_builder{
+			Id:       "c2",
+			Metadata: privatev1.Metadata_builder{Name: "vm-open"}.Build(),
+			Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+				DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
+					Editable: privatev1.EditableDiskImageReferenceField_builder{}.Build(),
+				}.Build(),
+				BootDisk: privatev1.ComputeInstanceBootDiskFieldPolicies_builder{
+					SizeGib: privatev1.Int32FieldPolicy_builder{
+						Editable: privatev1.EditableInt32Field_builder{}.Build(),
+					}.Build(),
+					StorageTier: privatev1.StorageTierReferenceFieldPolicy_builder{
+						Editable: privatev1.EditableStorageTierReferenceField_builder{}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build()
+		idx := buildIndex([]*privatev1.ComputeInstanceCatalogItem{defaultItem, openItem}, nil)
+
+		equals := pricing.RateCardItem{
+			Service: serviceComputeInstance,
+			Conditions: []pricing.RateCondition{
+				{Dimension: "image", Operator: pricing.OperatorEquals, Value: "fedora"},
+				{Dimension: "boot_disk_size_gib", Operator: pricing.OperatorEquals, Value: "80"},
+				{Dimension: "boot_disk_storage_tier", Operator: pricing.OperatorEquals, Value: "fast"},
+			},
+		}
+		Expect(matchCatalogItems(equals, idx)).To(ConsistOf("vm-default"))
+
+		for _, dimension := range []string{"image", "boot_disk_size_gib", "boot_disk_storage_tier"} {
+			any := pricing.RateCardItem{
+				Service:    serviceComputeInstance,
+				Conditions: []pricing.RateCondition{{Dimension: dimension, Operator: pricing.OperatorAny}},
+			}
+			Expect(matchCatalogItems(any, idx)).To(ConsistOf("vm-default", "vm-open"), dimension)
+		}
+		missingDefault := pricing.RateCardItem{
+			Service:    serviceComputeInstance,
+			Conditions: []pricing.RateCondition{{Dimension: "image", Operator: pricing.OperatorEquals, Value: "unconfigured"}},
+		}
+		Expect(matchCatalogItems(missingDefault, idx)).To(BeEmpty())
+	})
+
+	It("matches conditionless rows to every catalog item, including items without pricing dimensions", func() {
+		dimensionedItem := privatev1.ComputeInstanceCatalogItem_builder{
+			Id:       "c1",
+			Metadata: privatev1.Metadata_builder{Name: "vm-small"}.Build(),
+			Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+				InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
+					Locked: privatev1.InstanceTypeReference_builder{Id: "type-id", Name: "small"}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build()
+		noDimensionItem := privatev1.ComputeInstanceCatalogItem_builder{
+			Id:       "c2",
+			Metadata: privatev1.Metadata_builder{Name: "vm-no-dimensions"}.Build(),
+		}.Build()
+		clusterItem := privatev1.ClusterCatalogItem_builder{
+			Id:       "k1",
+			Metadata: privatev1.Metadata_builder{Name: "cluster-no-dimensions"}.Build(),
+		}.Build()
+		idx := buildIndex([]*privatev1.ComputeInstanceCatalogItem{dimensionedItem, noDimensionItem},
+			[]*privatev1.ClusterCatalogItem{clusterItem})
+
+		Expect(matchCatalogItems(pricing.RateCardItem{Service: serviceComputeInstance}, idx)).To(
+			ConsistOf("vm-small", "vm-no-dimensions"))
+		Expect(matchCatalogItems(pricing.RateCardItem{Service: serviceCluster}, idx)).To(
+			ConsistOf("cluster-no-dimensions"))
+		Expect(matchCatalogItems(pricing.RateCardItem{Service: "unmapped"}, idx)).To(BeEmpty())
+	})
+
+	It("loads dimensionless catalog items into the conditionless-match inventory", func() {
+		server, err := NewPrivateProviderRateCardItemsServer().
+			SetLogger(logger).
+			SetProvider(billingfake.New(widgetScenario()).Provider()).
+			SetTenancyLogic(tenancy).
+			SetMetricsRegisterer(prometheus.NewRegistry()).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		for _, item := range []*privatev1.ComputeInstanceCatalogItem{
+			privatev1.ComputeInstanceCatalogItem_builder{
+				Id:       uuid.NewString(),
+				Metadata: privatev1.Metadata_builder{Name: "vm-without-pricing-fields", Tenant: testTenant}.Build(),
+			}.Build(),
+			privatev1.ComputeInstanceCatalogItem_builder{
+				Id:       uuid.NewString(),
+				Metadata: privatev1.Metadata_builder{Name: "vm-with-instance-type", Tenant: testTenant}.Build(),
+				Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+					InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
+						Locked: privatev1.InstanceTypeReference_builder{Id: "type-id", Name: "small"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		} {
+			_, err := server.computeCatalogItemsDao.Create().SetObject(item).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		inventory, err := sweepProviderRateCardCatalogInventory(ctx,
+			server.computeCatalogItemsDao, server.clusterCatalogItemsDao)
+		Expect(err).ToNot(HaveOccurred())
+		idx := buildCatalogDimensionIndex(inventory.inputs, inventory.itemsByService)
+		Expect(matchCatalogItems(pricing.RateCardItem{Service: serviceComputeInstance}, idx)).To(
+			ConsistOf("vm-without-pricing-fields", "vm-with-instance-type"))
 	})
 
 	It("returns an empty, valid result for a row matching no catalog item", func() {

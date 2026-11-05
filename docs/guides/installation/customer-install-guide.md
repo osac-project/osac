@@ -1925,6 +1925,10 @@ that provider's StorageBackend, StorageTier, and tenant storage configuration
 as described in Section 6.1. For development or CI with LVMS, see
 [Section 9.2](#92-evaluation-only).
 
+The chart still requires a non-empty `fabricManager` when provider networking
+is disabled, and VMaaS requires `k8sManager: cudn_evpn`. Use the name of a
+Fabric Manager registration whose `network_types` includes `evpn`.
+
 Merge these values into `my-values.yaml` to enable VMaaS only and point the
 operator and AAP at the Secret:
 
@@ -1933,6 +1937,8 @@ global:
   services: { vmaas: { enabled: true }, caas: { enabled: false }, bmaas: { enabled: false }, maas: { enabled: false } }
   networking:
     provisioningEnabled: false
+    fabricManager: acme_fabric
+    k8sManager: cudn_evpn
 lvms:
   enabled: false  # production storage registration is administrator-managed
 operator:

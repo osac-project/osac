@@ -615,8 +615,15 @@ Create the workload kubeconfig Secret on the management cluster before phase
 The phase-2 values that mount that Secret are in the
 [customer install guide](customer-install-guide.md#64-installing-vmaas-on-a-separate-workload-cluster).
 
-**Workload cluster.** Point `KUBECONFIG` at the workload cluster. In
-`my-workload-infra-values.yaml`, enable `cnv`. Enable `lvms` if LVM Storage
+**Workload cluster.** Point `KUBECONFIG` at the workload cluster and refresh
+`OCP_VERSION` for this cluster before Phase 1a and Phase 1b set the LVMS
+channel:
+
+```bash
+export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
+```
+
+In `my-workload-infra-values.yaml`, enable `cnv`. Enable `lvms` if LVM Storage
 needs to be installed on that cluster. Keep `evpn.enabled: false` when the
 workload cluster uses the default pod network. If it uses CUDN EVPN, enable
 `evpn` and configure phase 1b as described in
@@ -633,9 +640,17 @@ replacing `-f my-infra-values.yaml` with `-f my-workload-infra-values.yaml`
 in both commands.
 Do not install the `osac` chart on this cluster.
 
-**Management cluster.** Point `KUBECONFIG` at the management cluster. Create
-a separate `my-management-infra-values.yaml` for its prerequisites. Keep the
-certificate stack enabled and OpenShift Virtualization and EVPN disabled:
+**Management cluster.** Point `KUBECONFIG` at the management cluster and
+refresh `OCP_VERSION` for this cluster before Phase 1a and Phase 1b set the
+LVMS channel:
+
+```bash
+export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
+```
+
+Create a separate `my-management-infra-values.yaml` for its prerequisites.
+Keep the certificate stack enabled and OpenShift Virtualization and EVPN
+disabled:
 
 ```yaml
 certManager:

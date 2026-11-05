@@ -109,7 +109,7 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
     await selectOption(page, VmCreatePage.bootStorageTier, storageTierTestData.name);
     await page.getByRole(...VmCreatePage.addDisk).click();
     await page.getByLabel(...VmCreatePage.additionalDiskSize).fill('30');
-    await selectOption(page, VmCreatePage.storageTier, storageTierTestData.name, 1);
+    await selectOption(page, VmCreatePage.storageTier, storageTierTestData.name);
     await page.getByRole(...VmCreatePage.next).click();
   });
 

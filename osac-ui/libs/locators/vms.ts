@@ -2,7 +2,7 @@ import { deleteResourceModalIds } from '../ui-components/src/components/Resource
 
 type VmsLocator =
   | readonly [
-      role: 'button' | 'checkbox' | 'grid' | 'heading' | 'link' | 'textbox',
+      role: 'button' | 'checkbox' | 'grid' | 'heading' | 'link' | 'radio' | 'switch' | 'textbox',
       options: { name: string; exact: true },
     ]
   | readonly [label: string]
@@ -41,8 +41,8 @@ export const VmCreatePage = {
   storageTier: ['button', { name: 'Storage tier', exact: true }],
   addDisk: ['button', { name: 'Add disk', exact: true }],
   additionalDiskSize: ['Size (GiB)'],
-  useTenantDefaultNetwork: ['checkbox', { name: 'Use tenant default network', exact: true }],
-  autoExternalIp: ['checkbox', { name: 'Auto External IP Attachment', exact: true }],
+  useTenantDefaultNetwork: ['radio', { name: 'Tenant default', exact: true }],
+  autoExternalIp: ['switch', { name: 'Auto-attach external IP', exact: true }],
   sshPublicKey: ['button', { name: 'SSH public key', exact: true }],
   cloudInit: ['#inline-user-data'],
   next: ['button', { name: 'Next', exact: true }],

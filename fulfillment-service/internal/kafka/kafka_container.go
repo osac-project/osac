@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v7"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )

@@ -16,7 +16,9 @@ package servers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
+	"sync"
 
 	"buf.build/go/protovalidate"
 	"github.com/google/uuid"
@@ -49,10 +51,6 @@ const (
 	// finalizerForeign stands for a finalizer owned by a writer that the test doesn't control.
 	finalizerForeign = "test.osac.io/foreign"
 )
-
-// finalizerCaseSkips lists the resources that the specs can't cover, by fully qualified service name, with the reason
-// and the location of the constraint that blocks seeding. It is empty when every resource is covered.
-var finalizerCaseSkips = map[string]string{}
 
 // finalizerBearingServices returns the fully qualified names of the private services that have an Update method whose
 // object has metadata with finalizers. Services without Update are read-only and are excluded by construction.
@@ -99,6 +97,7 @@ type finalizerOps interface {
 	get(ctx context.Context, id string) (proto.Message, error)
 	update(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask, lock bool) error
 	del(ctx context.Context, id string) error
+	setLogger(logger *slog.Logger)
 }
 
 // finalizerUpdateRequest is implemented by the generated update request of every resource.
@@ -146,6 +145,11 @@ func (o *genericFinalizerOps[O]) del(ctx context.Context, id string) error {
 	request.SetId(id)
 	var response proto.Message
 	return o.server.Delete(ctx, request, &response)
+}
+
+// setLogger replaces the logger of the server, so that specs can look at what it logs.
+func (o *genericFinalizerOps[O]) setLogger(logger *slog.Logger) {
+	o.server.logger = logger
 }
 
 // finalizerTarget is a seeded object together with the operations of its server.
@@ -424,4 +428,69 @@ func expectConflictMessage(err error, id string) {
 	Expect(message).To(ContainSubstring(id))
 	Expect(message).ToNot(ContainSubstring(finalizerHold))
 	Expect(message).ToNot(ContainSubstring(finalizerController))
+}
+
+// finalizerChangeMessage is the message that the generic server logs when it has written a finalizer change.
+const finalizerChangeMessage = "Updated finalizers"
+
+// finalizerLogRecord is a record kept by finalizerLogRecorder, with its attributes by key.
+type finalizerLogRecord struct {
+	level   slog.Level
+	message string
+	attrs   map[string]any
+}
+
+// finalizerLogRecorder is a log handler that keeps every record, at any level, together with its attributes.
+type finalizerLogRecorder struct {
+	mu      sync.Mutex
+	records []finalizerLogRecord
+}
+
+func (r *finalizerLogRecorder) Enabled(context.Context, slog.Level) bool {
+	return true
+}
+
+func (r *finalizerLogRecorder) Handle(_ context.Context, record slog.Record) error {
+	attrs := map[string]any{}
+	record.Attrs(func(attr slog.Attr) bool {
+		attrs[attr.Key] = attr.Value.Any()
+		return true
+	})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records = append(r.records, finalizerLogRecord{
+		level:   record.Level,
+		message: record.Message,
+		attrs:   attrs,
+	})
+	return nil
+}
+
+func (r *finalizerLogRecorder) WithAttrs([]slog.Attr) slog.Handler {
+	return r
+}
+
+func (r *finalizerLogRecorder) WithGroup(string) slog.Handler {
+	return r
+}
+
+// withMessage returns the records that have the given message.
+func (r *finalizerLogRecorder) withMessage(message string) []finalizerLogRecord {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var result []finalizerLogRecord
+	for _, record := range r.records {
+		if record.message == message {
+			result = append(result, record)
+		}
+	}
+	return result
+}
+
+// recordLogs replaces the logger of the server behind the target with one that records everything it logs, and returns
+// the recorder. Call it after the target has been created, so the seeding isn't recorded.
+func (t finalizerTarget) recordLogs() *finalizerLogRecorder {
+	recorder := &finalizerLogRecorder{}
+	t.ops.setLogger(slog.New(recorder))
+	return recorder
 }

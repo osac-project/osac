@@ -128,6 +128,20 @@ func (e *unavailableWrapper) GRPCStatus() *status.Status {
 	return status.New(codes.Unavailable, "unavailable")
 }
 
+// nilCauseError has an Unwrap method that returns no cause, which conflict detection must treat as an independent
+// failure rather than as a wrapper around nothing.
+type nilCauseError struct{}
+
+func (nilCauseError) Error() string { return "nil cause" }
+func (nilCauseError) Unwrap() error { return nil }
+
+// emptyJoinError has an Unwrap method that returns an empty list of causes, and is expected to be treated like
+// nilCauseError.
+type emptyJoinError struct{}
+
+func (emptyJoinError) Error() string   { return "empty join" }
+func (emptyJoinError) Unwrap() []error { return []error{} }
+
 var _ = Describe("conflict classification", func() {
 	aborted := func() error { return status.Error(codes.Aborted, "modified") }
 
@@ -150,6 +164,12 @@ var _ = Describe("conflict classification", func() {
 			RequeueAfter(aborted(), time.Second), true),
 		Entry("plain error behind a node with a different status",
 			&unavailableWrapper{cause: errors.New("x")}, false),
+		Entry("node whose Unwrap returns no cause", nilCauseError{}, false),
+		Entry("node whose Unwrap returns an empty list", emptyJoinError{}, false),
+		Entry("Aborted joined with a node whose Unwrap returns no cause",
+			errors.Join(aborted(), nilCauseError{}), true),
+		Entry("Aborted joined with a node whose Unwrap returns an empty list",
+			errors.Join(aborted(), emptyJoinError{}), true),
 	)
 
 	DescribeTable("isOnlyConflict",
@@ -169,6 +189,12 @@ var _ = Describe("conflict classification", func() {
 			RequeueAfter(aborted(), time.Second), true),
 		Entry("Aborted behind a node with a different status",
 			&unavailableWrapper{cause: aborted()}, true),
+		Entry("node whose Unwrap returns no cause", nilCauseError{}, false),
+		Entry("node whose Unwrap returns an empty list", emptyJoinError{}, false),
+		Entry("Aborted joined with a node whose Unwrap returns no cause",
+			errors.Join(aborted(), nilCauseError{}), false),
+		Entry("Aborted joined with a node whose Unwrap returns an empty list",
+			errors.Join(aborted(), emptyJoinError{}), false),
 	)
 })
 

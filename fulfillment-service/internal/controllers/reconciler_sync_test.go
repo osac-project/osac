@@ -261,7 +261,8 @@ var _ = Describe("Reconciler", func() {
 	)
 
 	// A failure made only of conflicts is expected under contention and is retried, so it is logged quietly. Any other
-	// failure, including a conflict that comes with another error, is logged as an error.
+	// failure, including a conflict that comes with another error or with a retry interval of its own, is logged as an
+	// error.
 	const (
 		conflictMessage = "Reconciliation conflicted with a concurrent update, will retry"
 		failureMessage  = "Reconciliation failed"
@@ -291,6 +292,9 @@ var _ = Describe("Reconciler", func() {
 			conflictMessage, slog.LevelDebug, failureMessage),
 		Entry("Aborted joined behind another gRPC error",
 			errors.Join(status.Error(codes.Unavailable, "hub down"), status.Error(codes.Aborted, "modified")),
+			failureMessage, slog.LevelError, conflictMessage),
+		Entry("Aborted that already carries a retry interval",
+			controllers.RequeueAfter(status.Error(codes.Aborted, "modified"), time.Second),
 			failureMessage, slog.LevelError, conflictMessage),
 		Entry("an error that is not a conflict",
 			status.Error(codes.Internal, "boom"), failureMessage, slog.LevelError, conflictMessage),

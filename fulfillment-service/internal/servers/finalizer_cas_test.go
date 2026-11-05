@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sort"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -50,9 +51,6 @@ var _ = Describe("finalizer CAS", func() {
 		for _, c := range finalizerCases() {
 			covered[c.service] = true
 		}
-		for service := range finalizerCaseSkips {
-			covered[service] = true
-		}
 		expected := map[string]bool{}
 		for _, service := range finalizerBearingServices() {
 			expected[service] = true
@@ -72,8 +70,8 @@ var _ = Describe("finalizer CAS", func() {
 		sort.Strings(missing)
 		sort.Strings(stale)
 		Expect(len(missing)+len(stale)).To(BeZero(),
-			"services missing from the finalizer cases and from finalizerCaseSkips: %v\n"+
-				"services in the finalizer cases or skips that have no finalizer-bearing Update: %v",
+			"services missing from the finalizer cases: %v\n"+
+				"services in the finalizer cases that have no finalizer-bearing Update: %v",
 			missing, stale)
 	})
 
@@ -85,11 +83,13 @@ var _ = Describe("finalizer CAS", func() {
 
 			// Another writer released the hold after that read:
 			t.release(ctx, finalizerController)
+			logs := t.recordLogs()
 
 			// The reconciler writes back its stale view without the lock:
 			err := t.update(ctx, withFinalizers(stale, finalizerHold), finalizersMask(), false)
 
 			t.expectFinalizerConflict(ctx, err, finalizerController)
+			Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty(), "a rejected write must not log a change")
 		},
 		finalizerEntries(),
 	)
@@ -182,7 +182,9 @@ var _ = Describe("finalizer CAS", func() {
 
 	// Candidate preparation callbacks run after the finalizer check, so they must not change the finalizers that it
 	// accepted. The Hub resource has no preparation of its own, so the specs add one and run it through both entry
-	// points. They use real transactions to see that a rejected update undoes what its callback wrote.
+	// points. They use real transactions to see that an update that is rejected for any reason undoes what its
+	// callback wrote: because the callback changed the finalizers, because it failed, or because the candidate it left
+	// is not valid.
 	Describe("candidate preparation", func() {
 		const preparedFinalizer = "test.osac.io/prepared"
 
@@ -213,14 +215,36 @@ var _ = Describe("finalizer CAS", func() {
 			return database.TxIntoContext(context.Background(), tx)
 		}
 
-		DescribeTable("changes the finalizers only when the callback leaves them alone",
-			func(call entryPoint, addFinalizer bool) {
+		// What the callbacks do to the candidate, after they have written the other object:
+		leavesAlone := func(*privatev1.Hub) error {
+			return nil
+		}
+		addsFinalizer := func(candidate *privatev1.Hub) error {
+			candidate.GetMetadata().SetFinalizers(append(candidate.GetMetadata().GetFinalizers(),
+				preparedFinalizer))
+			return nil
+		}
+		fails := func(*privatev1.Hub) error {
+			return status.Error(codes.InvalidArgument, "the callback failed")
+		}
+		changesIdentity := func(candidate *privatev1.Hub) error {
+			candidate.SetId(finalizerName("other"))
+			return nil
+		}
+		leavesInvalidCandidate := func(candidate *privatev1.Hub) error {
+			candidate.GetMetadata().SetLabels(map[string]string{"!!!invalid": "value"})
+			return nil
+		}
+
+		DescribeTable("commits what the callback wrote only when the update is accepted",
+			func(call entryPoint, modify func(*privatev1.Hub) error, code codes.Code) {
 				t := finalizerCaseFor(privatev1.Hubs_ServiceDesc.ServiceName).target([]string{finalizerController})
 				server := t.ops.(*genericFinalizerOps[*privatev1.Hub]).server
+				logs := t.recordLogs()
 				object := withFinalizers(t.get(ctx), finalizerController, finalizerHold).(*privatev1.Hub)
 
-				// The callback writes another object in the transaction of the request, and optionally adds a
-				// finalizer to the candidate:
+				// The callback writes another object in the transaction of the request, and then modifies the
+				// candidate:
 				var sideID string
 				prepare := func(ctx context.Context, current, candidate *privatev1.Hub) error {
 					side, err := fixtureDAO[*privatev1.Hub]().Create().SetObject(privatev1.Hub_builder{
@@ -234,11 +258,7 @@ var _ = Describe("finalizer CAS", func() {
 						return err
 					}
 					sideID = side.GetObject().GetId()
-					if addFinalizer {
-						candidate.GetMetadata().SetFinalizers(append(candidate.GetMetadata().GetFinalizers(),
-							preparedFinalizer))
-					}
-					return nil
+					return modify(candidate)
 				}
 
 				// Commit the fixture, and send the request in a transaction of its own:
@@ -255,28 +275,42 @@ var _ = Describe("finalizer CAS", func() {
 				fresh := freshContext()
 				stored, err := t.ops.get(fresh, t.id)
 				Expect(err).ToNot(HaveOccurred())
+				Expect(sideID).ToNot(BeEmpty(), "the callback must have run and written the other object")
 				_, sideErr := fixtureDAO[*privatev1.Hub]().Get().SetId(sideID).Do(fresh)
-				if addFinalizer {
-					Expect(status.Code(updateErr)).To(Equal(codes.Internal),
-						"a callback that changes the finalizers must be rejected, but the update returned %v", updateErr)
+				Expect(status.Code(updateErr)).To(Equal(code), "the update returned %v", updateErr)
+				if code != codes.OK {
 					Expect(finalizersOf(stored)).To(ConsistOf(finalizerController))
 					var notFound *dao.ErrNotFound
 					Expect(errors.As(sideErr, &notFound)).To(BeTrue(),
 						"what the rejected callback wrote must be rolled back, but reading it returned %v", sideErr)
+					Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty(),
+						"a rejected update must not log a finalizer change")
 				} else {
-					Expect(updateErr).ToNot(HaveOccurred())
 					Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
 					Expect(sideErr).ToNot(HaveOccurred(), "what the callback wrote must be committed")
+					Expect(logs.withMessage(finalizerChangeMessage)).To(HaveLen(1))
 				}
 			},
 			Entry("with UpdateWithCandidatePreparation and a callback that adds a finalizer",
-				entryPoint(withCandidatePreparation), true),
+				entryPoint(withCandidatePreparation), addsFinalizer, codes.Internal),
 			Entry("with UpdateWithValidation and a callback that adds a finalizer",
-				entryPoint(withValidation), true),
+				entryPoint(withValidation), addsFinalizer, codes.Internal),
+			Entry("with UpdateWithCandidatePreparation and a callback that fails",
+				entryPoint(withCandidatePreparation), fails, codes.InvalidArgument),
+			Entry("with UpdateWithValidation and a callback that fails",
+				entryPoint(withValidation), fails, codes.InvalidArgument),
+			Entry("with UpdateWithCandidatePreparation and a callback that changes the identifier",
+				entryPoint(withCandidatePreparation), changesIdentity, codes.PermissionDenied),
+			Entry("with UpdateWithValidation and a callback that changes the identifier",
+				entryPoint(withValidation), changesIdentity, codes.PermissionDenied),
+			Entry("with UpdateWithCandidatePreparation and a callback that leaves an invalid candidate",
+				entryPoint(withCandidatePreparation), leavesInvalidCandidate, codes.InvalidArgument),
+			Entry("with UpdateWithValidation and a callback that leaves an invalid candidate",
+				entryPoint(withValidation), leavesInvalidCandidate, codes.InvalidArgument),
 			Entry("with UpdateWithCandidatePreparation and a callback that leaves the finalizers alone",
-				entryPoint(withCandidatePreparation), false),
+				entryPoint(withCandidatePreparation), leavesAlone, codes.OK),
 			Entry("with UpdateWithValidation and a callback that leaves the finalizers alone",
-				entryPoint(withValidation), false),
+				entryPoint(withValidation), leavesAlone, codes.OK),
 		)
 	})
 
@@ -408,6 +442,92 @@ var _ = Describe("finalizer CAS", func() {
 				Expect(t.update(ctx, object, &fieldmaskpb.FieldMask{}, false)).To(Succeed())
 
 				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController))
+			},
+			finalizerEntries(),
+		)
+	})
+
+	// The generic server logs a finalizer change once it has been written, so that the writer of a finalizer
+	// transition can be found in the server logs.
+	Describe("finalizer change log", func() {
+		// The lists are the ones that the database stored, which are sorted and have no repeated finalizer, and the
+		// version is the one that the change was checked against, not the one that the write produced. The object
+		// is written once before, so that its version is not zero.
+		DescribeTable("logs an accepted finalizer change once",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController})
+				t.bump(ctx)
+				before := t.get(ctx)
+				Expect(finalizerMetadataOf(before).GetVersion()).To(BeNumerically(">", 0))
+				logs := t.recordLogs()
+
+				object := withFinalizers(before, finalizerHold, finalizerController, finalizerHold)
+				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+
+				records := logs.withMessage(finalizerChangeMessage)
+				Expect(records).To(HaveLen(1))
+				Expect(records[0].level).To(Equal(slog.LevelInfo))
+				Expect(records[0].attrs).To(HaveKeyWithValue("id", t.id))
+				Expect(records[0].attrs).To(HaveKeyWithValue("from", Equal([]string{finalizerController})))
+				Expect(records[0].attrs).To(HaveKeyWithValue("to", Equal([]string{finalizerController, finalizerHold})))
+				Expect(records[0].attrs).To(HaveKeyWithValue("version",
+					int64(finalizerMetadataOf(before).GetVersion())))
+				Expect(finalizerMetadataOf(t.get(ctx)).GetVersion()).To(Equal(finalizerMetadataOf(before).GetVersion()+1),
+					"the write must have produced the next version")
+			},
+			finalizerEntries(),
+		)
+
+		DescribeTable("logs the removal of the last finalizer of a deleting object",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController})
+				Expect(t.ops.del(ctx, t.id)).To(Succeed())
+				logs := t.recordLogs()
+
+				object := withFinalizers(t.get(ctx))
+				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+
+				_, err := t.ops.get(ctx, t.id)
+				Expect(status.Code(err)).To(Equal(codes.NotFound), "the object must have been archived")
+				records := logs.withMessage(finalizerChangeMessage)
+				Expect(records).To(HaveLen(1))
+				Expect(records[0].attrs).To(HaveKeyWithValue("from", Equal([]string{finalizerController})))
+				Expect(records[0].attrs).To(HaveKeyWithValue("to", BeEmpty()))
+			},
+			finalizerEntries(),
+		)
+
+		DescribeTable("logs nothing when the finalizers are left as they are",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController, finalizerHold})
+				logs := t.recordLogs()
+
+				object := withMetadata(t.get(ctx), func(metadata *privatev1.Metadata) {
+					metadata.SetLabels(map[string]string{"x": "y"})
+				})
+				Expect(t.update(ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
+
+				Expect(finalizerMetadataOf(t.get(ctx)).GetLabels()).To(HaveKeyWithValue("x", "y"))
+				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty())
+			},
+			finalizerEntries(),
+		)
+
+		// The finalizer check accepts the change, then the validation of the labels rejects the update.
+		DescribeTable("logs nothing when the update is rejected after the finalizer check",
+			func(c finalizerCase) {
+				t := c.target([]string{finalizerController})
+				logs := t.recordLogs()
+
+				object := withMetadata(t.get(ctx), func(metadata *privatev1.Metadata) {
+					metadata.SetFinalizers([]string{finalizerController, finalizerHold})
+					metadata.SetLabels(map[string]string{"!!!invalid": "value"})
+				})
+				err := t.update(ctx, object, finalizerMaskOf("metadata.finalizers", "metadata.labels"), false)
+
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController))
+				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty())
 			},
 			finalizerEntries(),
 		)

@@ -604,7 +604,8 @@ message ThingsUpdateResponse {
 - `lock` enables optimistic locking. When set to `true`, the server rejects the update if the
   current `metadata.version` of the stored object does not match the version in the submitted
   object. A stale locked update returns `Aborted`; read the object again, reapply the intended
-  change, and retry. Locking stays optional for every other field.
+  change, and retry. A request that does not change finalizers may omit `lock`; only finalizer
+  changes are always version-checked.
 - Any change to `metadata.finalizers` is always checked against `metadata.version`, whether or not
   `lock` is set. This applies to the private API only; public updates never change finalizers and
   always keep the stored set. The finalizers are compared as a set, so order, duplicates, and a nil
@@ -613,12 +614,20 @@ message ThingsUpdateResponse {
   the object again, reapply the change, and retry.
   - A private update with no `metadata` that would change the finalizers is always rejected with
     `Aborted`, whatever the stored version.
-  - The check runs before the merged object is validated. A request that is both invalid and stale
-    on its finalizers returns `Aborted`, not `InvalidArgument`; the validation error shows up once
-    the request is retried from the current version.
+  - In the generic update path the check runs before the merged object is validated. A request that
+    is both invalid and stale on its finalizers returns `Aborted`, not `InvalidArgument`; the
+    validation error shows up once the request is retried from the current version. A resource whose
+    server validates the request before it calls the generic update, such as the immutability checks
+    of InstanceTypes and BareMetalInstanceTypes, returns that validation error first.
   - An update without a mask replaces the whole object, so leaving `finalizers` out of it is a
-    finalizer change when the stored object has any. To change other fields of an object that
-    controllers may give finalizers, send an update mask for those fields.
+    finalizer change when the stored object has any. Some resources handle a missing mask
+    differently. DiskImages, InstanceTypes, and BareMetalInstanceTypes merge the request into the
+    stored object, so the stored finalizers stay and any finalizers in the request are added to
+    them. DiskImages and InstanceTypes also ignore a finalizer path in a mask, so their finalizers
+    can only be added through a missing mask; no writer changes the finalizers of these two
+    resources today. ServiceAccounts treat a missing mask as an update of `metadata.labels` (plus
+    `metadata.name` when set), so finalizers are not touched. To change other fields of an object
+    that controllers may give finalizers, send an update mask for those fields.
   - A `metadata` message with an unset `version` counts as version 0. The field is a plain `int32`,
     so unset and 0 cannot be told apart. An object that has never been updated since creation is at
     version 0.

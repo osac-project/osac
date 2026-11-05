@@ -21,10 +21,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+
+	osactesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -119,6 +126,115 @@ func TestConflictLogLevelWarnsOnceBackoffReachesTheCap(t *testing.T) {
 
 	// An object without retry state starts at DEBUG.
 	Expect(reconciler.conflictLogLevel("other")).To(Equal(slog.LevelDebug))
+}
+
+func TestReconcilerLogsRepeatedConflictsAtWarn(t *testing.T) {
+	RegisterTestingT(t)
+
+	server := osactesting.NewServer()
+	defer server.Stop()
+	privatev1.RegisterTenantsServer(server.Registrar(), &tenantGetServer{})
+	server.Start()
+	connection, err := grpc.NewClient(server.Address(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	Expect(err).ToNot(HaveOccurred())
+	defer connection.Close()
+
+	logs := &startLogRecorder{}
+	reconciler, err := NewReconciler[*privatev1.Tenant]().
+		SetLogger(slog.New(logs)).
+		SetName("test").
+		SetClient(connection).
+		SetSync(false).
+		SetWatchInterval(time.Hour).
+		SetFunction(func(context.Context, *privatev1.Tenant) error {
+			return status.Error(codes.Aborted, "object has been modified")
+		}).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+
+	// Six consecutive conflicts have already happened for this object, so the retry that follows the next one is the
+	// first at the one minute cap. Start has not run yet, so the map can be written without the lock.
+	reconciler.retryAttempts["t1"] = 6
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- reconciler.Start(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	select {
+	case reconciler.objectChannel <- privatev1.Tenant_builder{Id: "t1"}.Build():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out sending the object to the reconciler")
+	}
+
+	Eventually(func() []slog.Level {
+		return logs.levels("Reconciliation keeps conflicting with concurrent updates, will retry")
+	}, 5*time.Second).Should(ConsistOf(slog.LevelWarn))
+	Expect(logs.levels("Reconciliation conflicted with a concurrent update, will retry")).To(BeEmpty())
+	Expect(logs.levels("Reconciliation failed")).To(BeEmpty())
+}
+
+// tenantGetServer answers the read that the reconciler makes before each reconciliation.
+type tenantGetServer struct {
+	privatev1.UnimplementedTenantsServer
+}
+
+func (s *tenantGetServer) Get(
+	_ context.Context,
+	request *privatev1.TenantsGetRequest,
+) (*privatev1.TenantsGetResponse, error) {
+	return privatev1.TenantsGetResponse_builder{
+		Object: privatev1.Tenant_builder{Id: request.GetId()}.Build(),
+	}.Build(), nil
+}
+
+// startLogRecorder is a log handler that keeps the level and message of every record, at any level. It mirrors the
+// recording handler of the external test package, which an in-package test cannot import.
+type startLogRecorder struct {
+	mu      sync.Mutex
+	records []startLogRecord
+}
+
+type startLogRecord struct {
+	level   slog.Level
+	message string
+}
+
+func (h *startLogRecorder) Enabled(context.Context, slog.Level) bool {
+	return true
+}
+
+func (h *startLogRecorder) Handle(_ context.Context, record slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, startLogRecord{level: record.Level, message: record.Message})
+	return nil
+}
+
+func (h *startLogRecorder) WithAttrs([]slog.Attr) slog.Handler {
+	return h
+}
+
+func (h *startLogRecorder) WithGroup(string) slog.Handler {
+	return h
+}
+
+// levels returns the level of each record that has the given message.
+func (h *startLogRecorder) levels(message string) []slog.Level {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var result []slog.Level
+	for _, record := range h.records {
+		if record.message == message {
+			result = append(result, record.level)
+		}
+	}
+	return result
 }
 
 func TestReconcilerRequeuesRequestedErrorsOncePerObject(t *testing.T) {

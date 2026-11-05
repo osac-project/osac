@@ -813,6 +813,26 @@ func (s *GenericServer[O]) checkFinalizerChange(requestObject, currentObject, me
 	return nil
 }
 
+// logFinalizerChange records a finalizer change that passed the compare-and-swap check, with the stored
+// version it was checked against, so that every finalizer transition of an object can be traced to the
+// request that made it. Requests that leave the finalizers as they are log nothing.
+func (s *GenericServer[O]) logFinalizerChange(ctx context.Context, id string, currentObject, mergedObject O) {
+	currentMetadata := s.getMetadata(currentObject)
+	before := metadataFinalizers(currentMetadata)
+	after := metadataFinalizers(s.getMetadata(mergedObject))
+	if sameFinalizers(before, after) {
+		return
+	}
+	s.logger.InfoContext(
+		ctx,
+		"Updating finalizers",
+		slog.String("id", id),
+		slog.Any("from", before),
+		slog.Any("to", after),
+		slog.Int("version", int(currentMetadata.GetVersion())),
+	)
+}
+
 func (s *GenericServer[O]) updateWithCandidatePreparation(
 	ctx context.Context,
 	request any,
@@ -908,6 +928,7 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 	if err = s.checkFinalizerChange(requestObject, currentObject, tmpObject); err != nil {
 		return err
 	}
+	s.logFinalizerChange(ctx, requestId, currentObject, tmpObject)
 
 	if !prepareBeforeValidation {
 		// Validate the merged object using protovalidate.

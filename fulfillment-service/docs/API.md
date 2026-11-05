@@ -613,6 +613,9 @@ message ThingsUpdateResponse {
   the object again, reapply the change, and retry.
   - A private update with no `metadata` that would change the finalizers is always rejected with
     `Aborted`, whatever the stored version.
+  - The check runs before the merged object is validated. A request that is both invalid and stale
+    on its finalizers returns `Aborted`, not `InvalidArgument`; the validation error shows up once
+    the request is retried from the current version.
   - An update without a mask replaces the whole object, so leaving `finalizers` out of it is a
     finalizer change when the stored object has any. To change other fields of an object that
     controllers may give finalizers, send an update mask for those fields.

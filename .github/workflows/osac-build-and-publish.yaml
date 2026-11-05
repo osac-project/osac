@@ -3061,7 +3061,10 @@ jobs:
           ["osac-ui"]="osac-ui-chart"
         )
 
-        COMMIT_SHA=$(git rev-parse HEAD)
+        if ! COMMIT_SHA=$(git rev-parse HEAD 2>&1); then
+          echo "::error::Cannot resolve HEAD commit, nothing below can safely identify which tags are ours: ${COMMIT_SHA}" >&2
+          exit 1
+        fi
         FAILED=0
 
         # Distinguishes "this tag was never created" (expected -- e.g. a
@@ -3106,8 +3109,24 @@ jobs:
         delete_tag_if_ours "osac-release/v${VERSION}"
         delete_tag_if_ours "osac-chart-v${VERSION}"
 
-        for COMPONENT in $(jq -r '.[]' <<<"${COMPONENTS_TO_TAG}"); do
-          COMPONENT_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k]' <<<"${COMPONENT_VERSIONS}")
+        # A jq failure here must be recorded and must not silently iterate
+        # zero components: command substitution of a failed command just
+        # produces empty output in bash, so an unguarded `for ... in $(jq
+        # ...)` would look identical to "nothing to tag" instead of "we
+        # don't actually know what to roll back".
+        if ! COMPONENT_LIST=$(jq -r '.[]' <<<"${COMPONENTS_TO_TAG}"); then
+          echo "::error::Failed to parse components-to-tag -- cannot determine which per-component/chart tags to roll back" >&2
+          FAILED=1
+          COMPONENT_LIST=""
+        fi
+        # Intentional word splitting: component names are fixed identifiers
+        # with no spaces, same pattern COMPONENT_CHARTS already uses below.
+        for COMPONENT in ${COMPONENT_LIST}; do
+          if ! COMPONENT_VERSION=$(jq -er --arg k "${COMPONENT}" '.[$k]' <<<"${COMPONENT_VERSIONS}"); then
+            echo "::error::No resolved version for ${COMPONENT} in component-versions -- cannot determine its tag name to roll back" >&2
+            FAILED=1
+            continue
+          fi
           delete_tag_if_ours "${COMPONENT}/v${COMPONENT_VERSION}"
           # Intentional word splitting: some entries list multiple charts.
           for CHART_COMPONENT in ${COMPONENT_CHARTS[$COMPONENT]:-}; do

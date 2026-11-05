@@ -1,5 +1,6 @@
 import {
   CardBody,
+  CardFooter,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
@@ -9,6 +10,7 @@ import VolumeIcon from '@patternfly/react-icons/dist/esm/icons/volume-icon';
 
 import type { Volume } from '@osac/types';
 import ListPageCard from '@osac/ui-components/components/Page/ListPageCard';
+import OsacCardFooterRow from '@osac/ui-components/components/Primitives/OsacCardFooterRow';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
@@ -58,14 +60,14 @@ const VolumeCard = ({ volume }: VolumeCardProps) => {
               <VolumeAccessModeLabel accessMode={volume.spec?.accessMode} />
             </DescriptionListDescription>
           </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Created')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              <Timestamp value={volume.metadata?.creationTimestamp} />
-            </DescriptionListDescription>
-          </DescriptionListGroup>
         </DescriptionList>
       </CardBody>
+      <CardFooter>
+        <OsacCardFooterRow
+          term={t('Created')}
+          description={<Timestamp value={volume.metadata?.creationTimestamp} />}
+        />
+      </CardFooter>
     </ListPageCard>
   );
 };

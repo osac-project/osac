@@ -5,6 +5,7 @@ import { useClusters } from '@osac/ui-components/api/v1/cluster';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 
 import { ClustersTable } from './ClustersTable';
+import { useSession } from '../../hooks/use-session';
 import { useTranslation } from '../../hooks/useTranslation';
 import ListPage from '../Page/ListPage';
 import ListPageBody from '../Page/ListPageBody';
@@ -12,6 +13,7 @@ import ProjectFilter from '../Page/ProjectFilter';
 
 export const ClustersPage = () => {
   const { t } = useTranslation();
+  const isAdmin = useSession().role === 'admin';
   const { data: clusters = [], isLoading, error } = useClusters();
 
   return (
@@ -40,7 +42,7 @@ export const ClustersPage = () => {
             No clusters are provisioned for your organization yet.
           </Alert>
         ) : (
-          <ClustersTable clusters={clusters} />
+          <ClustersTable clusters={clusters} showTenant={isAdmin} />
         )}
       </ListPageBody>
     </ListPage>

@@ -200,40 +200,39 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
             </ShellRoute>
           }
         />
-        {role !== 'admin' && (
-          <>
-            <Route
-              path="/vms/*"
-              element={
-                <ShellRoute>
-                  <ServiceRoute service={ServiceTier.VMAAS}>
-                    <VmRoutes />
-                  </ServiceRoute>
-                </ShellRoute>
-              }
-            />
-            <Route
-              path="/clusters/*"
-              element={
-                <ShellRoute>
-                  <ServiceRoute service={ServiceTier.CAAS}>
-                    <ClusterRoutes />
-                  </ServiceRoute>
-                </ShellRoute>
-              }
-            />
-            <Route
-              path="/bare-metal/*"
-              element={
-                <ShellRoute>
-                  <ServiceRoute service={ServiceTier.BMAAS}>
-                    <BareMetalRoutes />
-                  </ServiceRoute>
-                </ShellRoute>
-              }
-            />
-          </>
-        )}
+        {/* Cloud provider admins provision workloads on behalf of a tenant, so they share these routes. */}
+        <>
+          <Route
+            path="/vms/*"
+            element={
+              <ShellRoute>
+                <ServiceRoute service={ServiceTier.VMAAS}>
+                  <VmRoutes />
+                </ServiceRoute>
+              </ShellRoute>
+            }
+          />
+          <Route
+            path="/clusters/*"
+            element={
+              <ShellRoute>
+                <ServiceRoute service={ServiceTier.CAAS}>
+                  <ClusterRoutes />
+                </ServiceRoute>
+              </ShellRoute>
+            }
+          />
+          <Route
+            path="/bare-metal/*"
+            element={
+              <ShellRoute>
+                <ServiceRoute service={ServiceTier.BMAAS}>
+                  <BareMetalRoutes />
+                </ServiceRoute>
+              </ShellRoute>
+            }
+          />
+        </>
         {role === 'tenant-admin' && (
           <Route
             path="/storage/volumes/*"

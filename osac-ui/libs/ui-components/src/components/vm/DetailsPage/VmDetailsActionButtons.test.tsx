@@ -50,6 +50,13 @@ describe('VmDetailsActionButtons', () => {
     expect(onOpenConsole).toHaveBeenCalledOnce();
   });
 
+  it('leaves out the console action without a callback', () => {
+    renderWithProviders(<VmDetailsActionButtons vm={vm} />);
+
+    expect(screen.queryByRole('button', { name: 'Open console' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+  });
+
   it('disables the console action when the VM is not running', () => {
     renderWithProviders(<VmDetailsActionButtons vm={stoppedVm} onOpenConsole={vi.fn()} />);
 

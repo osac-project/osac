@@ -4,6 +4,7 @@ import * as yup from 'yup';
 import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/network-attachment';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 import { userDataSchema } from '@osac/ui-components/validation/user-data';
+import { workloadTenantSchema } from '@osac/ui-components/validation/workload-tenant';
 
 import { hasBareMetalAuthentication } from './fields';
 import { isValidSshPublicKey } from '../../ProvisioningWizard/credentialValidation';
@@ -63,6 +64,7 @@ const buildBareMetalInstanceFieldDefinitions = (t: TFunction) => {
 export const buildBareMetalInstanceStepSchema = (
   stepId: BareMetalWizardStepId,
   t: TFunction,
+  options: { requireTenant?: boolean } = {},
 ): yup.AnyObjectSchema | undefined => {
   const fields = buildBareMetalInstanceFieldDefinitions(t);
 
@@ -103,10 +105,12 @@ export const buildBareMetalInstanceStepSchema = (
   }
 
   switch (stepId) {
-    case 'catalog':
-      return yup.object({
+    case 'catalog': {
+      const catalog = yup.object({
         catalogItemReference: fields.catalogItemReference,
       });
+      return options.requireTenant ? catalog.concat(workloadTenantSchema(t)) : catalog;
+    }
     case 'general':
       return yup.object({
         metadata: yup.object({

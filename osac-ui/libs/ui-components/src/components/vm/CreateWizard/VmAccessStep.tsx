@@ -9,9 +9,11 @@ import SshPublicKeySecretField from './fields/SshPublicKeySecretField';
 import OsacForm from '../../Form/OsacForm';
 import UserDataField from '../../Form/UserDataField';
 import ProvisioningField from '../../ProvisioningWizard/fields/ProvisioningField';
+import { useWorkloadTenant } from '../../ProvisioningWizard/useWorkloadTenant';
 
 const VmAccessStep = () => {
   const { values } = useFormikContext<ComputeInstanceWizardValues>();
+  const { adminTenant } = useWorkloadTenant();
 
   return (
     <OsacForm>
@@ -20,6 +22,7 @@ const VmAccessStep = () => {
           <SshPublicKeySecretField
             name={valueName}
             project={values.metadata.project}
+            tenant={adminTenant}
             isDisabled={isDisabled}
           />
         )}
@@ -29,6 +32,7 @@ const VmAccessStep = () => {
           <UserDataField
             name={valueName}
             projectName={values.metadata.project}
+            tenant={adminTenant}
             isDisabled={isDisabled}
           />
         )}

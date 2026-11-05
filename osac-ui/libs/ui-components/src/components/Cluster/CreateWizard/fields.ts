@@ -25,6 +25,8 @@ export interface ClusterWizardValues {
   metadata: {
     name: string;
     project: string;
+    /** Chosen by a cloud provider admin; empty for tenant users, who provision in their tenant. */
+    tenant?: ResourceSelectValue;
   };
   spec: {
     sshPublicKey: ProvisioningFieldValue<string>;
@@ -74,7 +76,7 @@ export const createEmptyNodeSetRow = (): ClusterNodeSetRow => ({
 
 export const createEmptyClusterValues = (): ClusterWizardValues => ({
   catalogItemReference: { name: '', id: '' },
-  metadata: { name: '', project: '' },
+  metadata: { name: '', project: '', tenant: emptyResourceSelectValue() },
   spec: {
     sshPublicKey: provisioningFieldValue(''),
     pullSecretSecret: provisioningFieldValue(''),

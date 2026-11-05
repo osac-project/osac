@@ -276,7 +276,7 @@ const matchesStringEqualityFilter = (
     return true;
   }
   const escapedField = field.replaceAll('.', '\\.');
-  const match = filter.match(new RegExp(`${escapedField} == "([^"]+)"`));
+  const match = filter.match(new RegExp(`${escapedField} == "([^"]*)"`));
   return !match || match[1] === value;
 };
 
@@ -290,6 +290,13 @@ const matchesProjectSearchFilter = (filter: string | undefined, project: Project
     (project.metadata?.name ?? '').includes(search) || (project.spec?.title ?? '').includes(search)
   );
 };
+
+const matchesMetadataScopeFilter = (
+  filter: string | undefined,
+  metadata: { tenant?: string; project?: string } | undefined,
+): boolean =>
+  matchesStringEqualityFilter(filter, 'this.metadata.tenant', metadata?.tenant) &&
+  matchesStringEqualityFilter(filter, 'this.metadata.project', metadata?.project);
 
 const matchesVirtualNetworkScopeFilter = (
   filter: string | undefined,
@@ -811,7 +818,8 @@ export const createMockConnectTransport = (
           items: subnets.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
-              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
+              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id) &&
+              matchesMetadataScopeFilter(req.filter, item.metadata),
           ),
         }),
         get: (req) => {
@@ -829,7 +837,8 @@ export const createMockConnectTransport = (
           items: securityGroups.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
-              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
+              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id) &&
+              matchesMetadataScopeFilter(req.filter, item.metadata),
           ),
         }),
       });

@@ -9,13 +9,16 @@ import {
 } from './fields';
 import NameField from '../../Form/NameField';
 import OsacForm from '../../Form/OsacForm';
+import { useWorkloadTenant } from '../../ProvisioningWizard/useWorkloadTenant';
 
 const VmGeneralStep = () => {
   const { values, setFieldValue } = useFormikContext<ComputeInstanceWizardValues>();
+  const { adminTenant } = useWorkloadTenant();
 
   return (
     <OsacForm>
       <ProjectField
+        tenant={adminTenant}
         onSelect={() => {
           if (!values.spec.userData.locked) {
             void setFieldValue(`${VM_USER_DATA_FORM_PATH}.value.secret`, '');

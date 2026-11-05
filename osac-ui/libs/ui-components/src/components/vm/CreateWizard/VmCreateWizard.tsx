@@ -9,11 +9,13 @@ import { useProvisionComputeInstance } from '@osac/ui-components/api/v1/compute-
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/CatalogStep';
+import { withCatalogItemTenant } from '@osac/ui-components/components/ProvisioningWizard/useWorkloadTenant';
 import { OSACWizardFooter } from '@osac/ui-components/components/Wizard/OSACWizardFooter';
+import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import type { ComputeInstanceWizardValues } from './fields';
-import { getComputeInstanceInitialValues } from './fields';
+import { createEmptyComputeInstanceValues, getComputeInstanceInitialValues } from './fields';
 import { buildComputeInstanceCreatePayload } from './payload';
 import { type VmWizardStepId, buildComputeInstanceStepSchema } from './schemas';
 import VmAccessStep from './VmAccessStep';
@@ -30,6 +32,7 @@ interface Props {
 
 const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const { t } = useTranslation();
+  const isAdmin = useSession().role === 'admin';
   const navigate = useNavigate();
   const provision = useProvisionComputeInstance();
   const catalogItemQuery = useGetResource(
@@ -82,10 +85,18 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   );
 
   const initialValues = useMemo(
-    () => getComputeInstanceInitialValues(catalogItemQuery.data?.object),
-    [catalogItemQuery.data?.object],
+    () =>
+      withCatalogItemTenant(
+        getComputeInstanceInitialValues(catalogItemQuery.data?.object),
+        isAdmin,
+        catalogItemQuery.data?.object?.metadata?.tenant,
+      ),
+    [catalogItemQuery.data?.object, isAdmin],
   );
-  const schema = useMemo(() => buildComputeInstanceStepSchema(activeStep, t), [activeStep, t]);
+  const schema = useMemo(
+    () => buildComputeInstanceStepSchema(activeStep, t, { requireTenant: isAdmin }),
+    [activeStep, isAdmin, t],
+  );
   const stepHasErrors = useCallback(
     (_stepId: string, errors: Record<string, unknown>) => {
       return Boolean(schema && Object.keys(errors).length > 0);
@@ -125,6 +136,7 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
                     catalogService={ComputeInstanceCatalogItems}
                     isInitializing={Boolean(initialCatalogItemId) && catalogItemQuery.isPending}
                     getInitialFormValues={getComputeInstanceInitialValues}
+                    getEmptyFormValues={createEmptyComputeInstanceValues}
                     onCatalogItemSelected={setSelectedCatalogItem}
                   />
                 )}

@@ -12,6 +12,8 @@ import { VmStatusLabel } from '../../VmStatusLabel';
 import { Timestamp } from '../Primitives/Timestamp';
 
 interface VmTableProps {
+  /** Adds a Tenant column, for cloud provider admins who see every tenant's workloads. */
+  showTenant?: boolean;
   vms: ComputeInstance[];
   instanceTypes?: InstanceType[];
   isInstanceTypesLoading?: boolean;
@@ -21,6 +23,7 @@ export const VmTable = ({
   vms,
   instanceTypes = [],
   isInstanceTypesLoading = false,
+  showTenant = false,
 }: VmTableProps) => {
   const { t } = useTranslation();
 
@@ -34,6 +37,7 @@ export const VmTable = ({
       <Thead>
         <Tr>
           <Th>{t('Name')}</Th>
+          {showTenant ? <Th>{t('Tenant')}</Th> : null}
           <Th>{t('Status')}</Th>
           <Th>{t('Instance type')}</Th>
           <Th>{t('Internal IP')}</Th>
@@ -59,6 +63,7 @@ export const VmTable = ({
                   detailsUrl={locked ? undefined : `/vms/${encodeURIComponent(vm.id)}`}
                 />
               </Td>
+              {showTenant ? <Td dataLabel={t('Tenant')}>{vm.metadata?.tenant || '—'}</Td> : null}
               <Td dataLabel={t('Status')}>
                 <VmStatusLabel state={state} />
               </Td>

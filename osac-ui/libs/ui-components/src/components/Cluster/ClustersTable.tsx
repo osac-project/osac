@@ -14,10 +14,12 @@ import ExternalLink from '../Primitives/ExternalLink';
 import { Timestamp } from '../Primitives/Timestamp';
 
 interface ClustersTableProps {
+  /** Adds a Tenant column, for cloud provider admins who see every tenant's workloads. */
+  showTenant?: boolean;
   clusters: Cluster[];
 }
 
-export const ClustersTable = ({ clusters }: ClustersTableProps) => {
+export const ClustersTable = ({ clusters, showTenant = false }: ClustersTableProps) => {
   const { t } = useTranslation();
 
   // Only fetch the versions these clusters reference (by spec.version.name),
@@ -48,6 +50,7 @@ export const ClustersTable = ({ clusters }: ClustersTableProps) => {
       <Thead>
         <Tr>
           <Th>{t('Name')}</Th>
+          {showTenant ? <Th>{t('Tenant')}</Th> : null}
           <Th>{t('Status')}</Th>
           <Th>{t('Version')}</Th>
           <Th>{t('Lifecycle')}</Th>
@@ -73,6 +76,9 @@ export const ClustersTable = ({ clusters }: ClustersTableProps) => {
                   detailsUrl={locked ? undefined : `/clusters/${encodeURIComponent(cluster.id)}`}
                 />
               </Td>
+              {showTenant ? (
+                <Td dataLabel={t('Tenant')}>{cluster.metadata?.tenant || '—'}</Td>
+              ) : null}
               <Td dataLabel={t('Status')}>
                 <ClusterStatusLabel state={cluster.status?.state} />
               </Td>

@@ -43,7 +43,11 @@ const clusterVersions = [
   makeClusterVersion('v4.14', '4.14.0', ClusterVersionState.ACTIVE, false),
 ];
 
-const renderTable = (clusters: Cluster[], versions: ClusterVersion[] = clusterVersions) => {
+const renderTable = (
+  clusters: Cluster[],
+  versions: ClusterVersion[] = clusterVersions,
+  showTenant = false,
+) => {
   let callCount = 0;
   let capturedFilter: string | undefined;
   const transport = createMockConnectTransport(
@@ -69,7 +73,9 @@ const renderTable = (clusters: Cluster[], versions: ClusterVersion[] = clusterVe
         createElement(MemoryRouter, null, children),
       ),
     );
-  const result = render(<ClustersTable clusters={clusters} />, { wrapper });
+  const result = render(<ClustersTable clusters={clusters} showTenant={showTenant} />, {
+    wrapper,
+  });
   return {
     ...result,
     getCallCount: () => callCount,
@@ -138,5 +144,16 @@ describe('ClustersTable version join', () => {
 
     expect(container.querySelectorAll('.pf-v6-c-skeleton').length).toBeGreaterThan(0);
     expect(screen.queryByText('4.17.0')).toBeNull();
+  });
+
+  it("shows each cluster's tenant when asked, for cloud provider admins", async () => {
+    renderTable(
+      [create(ClusterSchema, { id: 'c-t', metadata: { name: 'c-t', tenant: 'tenant-1' } })],
+      [],
+      true,
+    );
+
+    expect(await screen.findByRole('columnheader', { name: 'Tenant' })).toBeInTheDocument();
+    expect(screen.getByText('tenant-1')).toBeInTheDocument();
   });
 });

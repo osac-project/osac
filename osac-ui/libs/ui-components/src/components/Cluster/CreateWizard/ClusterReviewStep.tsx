@@ -30,6 +30,7 @@ import { findVersionByName, versionDisplayName } from './versionUtils';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { NetworkAttachmentReviewFields } from '../../ProvisioningWizard/NetworkAttachmentReviewFields';
+import { useWorkloadTenant } from '../../ProvisioningWizard/useWorkloadTenant';
 
 const formatNodeSetsForReview = (
   nodeSetRows: ClusterWizardValues['spec']['nodeSetRows'],
@@ -45,6 +46,7 @@ const formatNodeSetsForReview = (
 export const ClusterReviewStep = () => {
   const { t } = useTranslation();
   const { values } = useFormikContext<ClusterWizardValues>();
+  const { isAdmin, adminTenant } = useWorkloadTenant();
 
   const { data: versions = [] } = useClusterVersions({
     filter: CLUSTER_VERSION_ACTIVE_LIST_FILTER,
@@ -54,7 +56,9 @@ export const ClusterReviewStep = () => {
     data: projects,
     isLoading: projectsLoading,
     error: projectsError,
-  } = useListResource(Projects, { filter: fullProjectPathToQueryFilter(values.metadata.project) });
+  } = useListResource(Projects, {
+    filter: fullProjectPathToQueryFilter(values.metadata.project, adminTenant),
+  });
 
   const isCustomNetwork = !values.spec.networkAttachment.value.useDefaultNetwork;
 
@@ -93,6 +97,14 @@ export const ClusterReviewStep = () => {
             </DescriptionListDescription>
           </DescriptionListGroup>
 
+          {isAdmin ? (
+            <DescriptionListGroup>
+              <DescriptionListTerm>{t('Tenant')}</DescriptionListTerm>
+              <DescriptionListDescription>
+                {values.metadata.tenant?.name || values.metadata.tenant?.id}
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+          ) : null}
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
             <DescriptionListDescription>

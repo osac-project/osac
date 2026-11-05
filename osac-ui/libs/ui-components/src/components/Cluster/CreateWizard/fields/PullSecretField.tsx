@@ -7,15 +7,18 @@ import type { ProvisioningFieldControlProps } from '../../../ProvisioningWizard/
 
 interface PullSecretFieldProps extends ProvisioningFieldControlProps {
   project: string;
+  /** Set for a cloud provider admin: limits the list to the workload's tenant. */
+  tenant?: string;
 }
 
-const PullSecretField = ({ name, project, isDisabled = false }: PullSecretFieldProps) => {
+const PullSecretField = ({ name, project, tenant, isDisabled = false }: PullSecretFieldProps) => {
   const { t } = useTranslation();
 
   return (
     <SecretSelectionField
       filter={cel<Secret>((filter) =>
         filter.and(
+          tenant === undefined ? undefined : filter.field('metadata.tenant').equals(tenant),
           filter.field('metadata.project').equals(project),
           filter.field('type').equals(SecretType.PULL_SECRET),
         ),

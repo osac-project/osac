@@ -14,6 +14,7 @@ import VmDetailsActionButtons from './VmDetailsActionButtons';
 import VmDetailsSections from './VmDetailsSections';
 import { useDiskImage } from '../../../api/v1/disk-image';
 import { useInstanceType } from '../../../api/v1/instance-types';
+import { useSession } from '../../../hooks/use-session';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import { VmStatusLabel } from '../../../VmStatusLabel';
@@ -25,6 +26,8 @@ interface Props {
 
 const VmDetails = ({ vm }: Props) => {
   const { t } = useTranslation();
+  // The console route isn't available to cloud provider admins.
+  const isAdmin = useSession().role === 'admin';
   const {
     data: instanceType,
     isLoading: isInstanceTypeLoading,
@@ -80,7 +83,7 @@ const VmDetails = ({ vm }: Props) => {
                 />
               </FlexItem>
               <FlexItem>
-                <VmDetailsActionButtons vm={vm} onOpenConsole={openConsole} />
+                <VmDetailsActionButtons vm={vm} onOpenConsole={isAdmin ? undefined : openConsole} />
               </FlexItem>
             </Flex>
           </StackItem>

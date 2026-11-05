@@ -125,12 +125,14 @@ export const useListResource = <
 export const useListAllResources = <Input extends DescMessage, Output extends DescMessage>(
   service: PaginatedListService<Input, Output>,
   filter?: string,
+  options: { enabled?: boolean } = {},
 ) => {
   const client = useApiFetch<ResourceService<'list', Input, Output>>(service);
   const listRequest = create(service.method.list.input);
 
   return useQuery<MessageShape<Output>, unknown, PaginatedListItems<Output>>({
     queryKey: [service.typeName, 'list', { filter }, 'all'],
+    enabled: options.enabled ?? true,
     queryFn: async ({ signal }) => {
       const listPage = (offset: number) =>
         client.list(

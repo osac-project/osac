@@ -63,11 +63,13 @@ export const getProjectName = (project: Project, t: TFunction): string => {
   return title && title !== fullName ? title : leafName;
 };
 
-export const fullProjectPathToQueryFilter = (fullProjectPath: string) => {
+/** `tenant` limits the match to one tenant, for callers that see every tenant's projects. */
+export const fullProjectPathToQueryFilter = (fullProjectPath: string, tenant?: string) => {
   if (!fullProjectPath.includes('.')) {
     return cel<Project>((filter) =>
       filter.and(
         filter.field('metadata.tenant').notEquals('shared'),
+        tenant === undefined ? undefined : filter.field('metadata.tenant').equals(tenant),
         filter.field('metadata.name').equals(fullProjectPath),
       ),
     );
@@ -81,6 +83,7 @@ export const fullProjectPathToQueryFilter = (fullProjectPath: string) => {
   return cel<Project>((filter) =>
     filter.and(
       filter.field('metadata.tenant').notEquals('shared'),
+      tenant === undefined ? undefined : filter.field('metadata.tenant').equals(tenant),
       filter.field('metadata.name').equals(name),
       filter.field('metadata.project').equals(parent),
     ),

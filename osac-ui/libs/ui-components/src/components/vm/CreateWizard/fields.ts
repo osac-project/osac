@@ -38,6 +38,8 @@ export interface ComputeInstanceWizardValues {
   metadata: {
     name: string;
     project: string;
+    /** Chosen by a cloud provider admin; empty for tenant users, who provision in their tenant. */
+    tenant?: ResourceSelectValue;
   };
   spec: {
     sshKey: ProvisioningFieldValue<string>;
@@ -56,7 +58,7 @@ export interface ComputeInstanceWizardValues {
 
 export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues => ({
   catalogItemReference: { name: '', id: '' },
-  metadata: { name: '', project: '' },
+  metadata: { name: '', project: '', tenant: emptyResourceSelectValue() },
   spec: {
     sshKey: provisioningFieldValue(''),
     guestOsFamily: undefined,

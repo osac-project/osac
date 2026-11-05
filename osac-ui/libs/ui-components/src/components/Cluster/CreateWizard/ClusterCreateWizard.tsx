@@ -9,14 +9,16 @@ import { useProvisionCluster } from '@osac/ui-components/api/v1/cluster';
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/CatalogStep';
+import { withCatalogItemTenant } from '@osac/ui-components/components/ProvisioningWizard/useWorkloadTenant';
 import { OSACWizardFooter } from '@osac/ui-components/components/Wizard/OSACWizardFooter';
+import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import ClusterConfigurationStep from './ClusterConfigurationStep';
 import ClusterGeneralStep from './ClusterGeneralStep';
 import { ClusterNetworkingStep } from './ClusterNetworkingStep';
 import { ClusterReviewStep } from './ClusterReviewStep';
-import { type ClusterWizardValues, getInitialFormValues } from './fields';
+import { type ClusterWizardValues, createEmptyClusterValues, getInitialFormValues } from './fields';
 import { buildClusterCreatePayload } from './payload';
 import { type ClusterWizardStepId, buildClusterStepSchema } from './schemas';
 
@@ -27,6 +29,7 @@ interface Props {
 
 const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const { t } = useTranslation();
+  const isAdmin = useSession().role === 'admin';
   const navigate = useNavigate();
   const provision = useProvisionCluster();
   const catalogItemQuery = useGetResource(
@@ -60,11 +63,19 @@ const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   );
 
   const initialValues = useMemo(
-    () => getInitialFormValues(catalogItemQuery.data?.object),
-    [catalogItemQuery.data?.object],
+    () =>
+      withCatalogItemTenant(
+        getInitialFormValues(catalogItemQuery.data?.object),
+        isAdmin,
+        catalogItemQuery.data?.object?.metadata?.tenant,
+      ),
+    [catalogItemQuery.data?.object, isAdmin],
   );
 
-  const schema = useMemo(() => buildClusterStepSchema(activeStep, t), [activeStep, t]);
+  const schema = useMemo(
+    () => buildClusterStepSchema(activeStep, t, { requireTenant: isAdmin }),
+    [activeStep, isAdmin, t],
+  );
   const stepHasErrors = useCallback(
     (_stepId: string, errors: Record<string, unknown>) => {
       return Boolean(schema && Object.keys(errors).length > 0);
@@ -104,6 +115,7 @@ const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
                     catalogService={ClusterCatalogItems}
                     isInitializing={Boolean(initialCatalogItemId) && catalogItemQuery.isPending}
                     getInitialFormValues={getInitialFormValues}
+                    getEmptyFormValues={createEmptyClusterValues}
                   />
                 )}
                 {step === 'general' && <ClusterGeneralStep />}

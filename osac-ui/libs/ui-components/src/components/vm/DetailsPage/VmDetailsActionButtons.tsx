@@ -15,7 +15,8 @@ import { useVmPowerAction } from '../useVmPowerAction';
 
 interface VmDetailsActionButtonsProps {
   vm: ComputeInstance;
-  onOpenConsole: VoidFunction;
+  /** Omitted when the user can't open the console, for example a cloud provider admin. */
+  onOpenConsole?: VoidFunction;
 }
 
 const VmDetailsActionButtons = ({ vm, onOpenConsole }: VmDetailsActionButtonsProps) => {
@@ -47,14 +48,16 @@ const VmDetailsActionButtons = ({ vm, onOpenConsole }: VmDetailsActionButtonsPro
         spaceItems={{ default: 'spaceItemsSm' }}
         flexWrap={{ default: 'wrap' }}
       >
-        <Button
-          variant="primary"
-          icon={<ExternalLinkAltIcon />}
-          isDisabled={!canOpenConsole}
-          onClick={onOpenConsole}
-        >
-          Open console
-        </Button>
+        {onOpenConsole ? (
+          <Button
+            variant="primary"
+            icon={<ExternalLinkAltIcon />}
+            isDisabled={!canOpenConsole}
+            onClick={onOpenConsole}
+          >
+            Open console
+          </Button>
+        ) : null}
         <Button
           variant="secondary"
           icon={<PlayIcon />}

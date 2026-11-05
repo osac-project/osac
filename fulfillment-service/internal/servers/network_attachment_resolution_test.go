@@ -21,6 +21,8 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 var _ = Describe("Batched attachment SecurityGroup resolution", func() {
@@ -134,6 +136,58 @@ var _ = Describe("Batched attachment SecurityGroup resolution", func() {
 		Expect(resolveAttachmentSecurityGroups(ctx, nil, r, result)).To(MatchError(ContainSubstring("does not exist")))
 	})
 
+	It("resolves the tenant default group from another project", func() {
+		defaultNetwork := map[string]string{defaultLabel: "true"}
+		vn := seedVirtualNetwork(testTenant, "10.10.0.0/16",
+			privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, defaultNetwork)
+		sg := seedSecurityGroup(vn, "default", privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY, defaultNetwork)
+		r := request(sg.GetId())
+		r.project = "another-project"
+		r.securityGroupsDao = fixtureDAO[*privatev1.SecurityGroup]()
+		result := &networkAttachmentResolution{virtualNetwork: vn, subnet: privatev1.Subnet_builder{Id: "subnet"}.Build()}
+		Expect(resolveAttachmentSecurityGroups(ctx, nil, r, result)).To(Succeed())
+		Expect(result.securityGroupIDs()).To(Equal([]string{sg.GetId()}))
+	})
+
+	It("prefers the tenant default's exact ID over a local group named with that ID", func() {
+		seedProject("another-project")
+		defaultNetwork := map[string]string{defaultLabel: "true"}
+		vn := seedVirtualNetwork(testTenant, "10.11.0.0/16",
+			privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, defaultNetwork)
+		tenantDefault := seedSecurityGroup(vn, "default", privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+			defaultNetwork)
+		seedSecurityGroup(vn, tenantDefault.GetId(), privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY, nil,
+			"another-project")
+		for _, ref := range []*privatev1.SecurityGroupLocalReference{
+			privatev1.SecurityGroupLocalReference_builder{Id: tenantDefault.GetId()}.Build(),
+			privatev1.SecurityGroupLocalReference_builder{
+				Id: tenantDefault.GetId(), Name: tenantDefault.GetMetadata().GetName(),
+			}.Build(),
+		} {
+			r := request()
+			r.securityGroups = []*privatev1.SecurityGroupLocalReference{ref}
+			r.project = "another-project"
+			r.securityGroupsDao = fixtureDAO[*privatev1.SecurityGroup]()
+			result := &networkAttachmentResolution{virtualNetwork: vn, subnet: privatev1.Subnet_builder{Id: "subnet"}.Build()}
+			Expect(resolveAttachmentSecurityGroups(ctx, nil, r, result)).To(Succeed())
+			Expect(result.securityGroupIDs()).To(Equal([]string{tenantDefault.GetId()}))
+		}
+	})
+
+	It("does not resolve a default group outside the tenant default project", func() {
+		seedProject("third-project")
+		vn := seedVirtualNetwork(testTenant, "10.24.0.0/16",
+			privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, nil)
+		sg := seedSecurityGroup(vn, "default", privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+			map[string]string{defaultLabel: "true"}, "third-project")
+		r := request(sg.GetId())
+		r.project = "another-project"
+		r.securityGroupsDao = fixtureDAO[*privatev1.SecurityGroup]()
+		result := &networkAttachmentResolution{virtualNetwork: vn, subnet: privatev1.Subnet_builder{Id: "subnet"}.Build()}
+		Expect(resolveAttachmentSecurityGroups(ctx, nil, r, result)).To(MatchError(
+			ContainSubstring("does not exist")))
+	})
+
 	It("fails closed when the DAO cap truncates matching candidates", func() {
 		vn := seedVirtualNetwork(testTenant, "10.10.0.0/16", privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, nil)
 		first := seedSecurityGroup(vn, "alpha", privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY, nil)
@@ -164,6 +218,38 @@ var _ = Describe("Batched attachment SecurityGroup resolution", func() {
 })
 
 var _ = Describe("Network attachment Subnet resolution", func() {
+	It("prefers the tenant default Subnet's exact ID over a local Subnet named with that ID", func() {
+		seedProject("another-project")
+		defaultNetwork := map[string]string{defaultLabel: "true"}
+		vn := seedVirtualNetwork(testTenant, "10.31.0.0/16",
+			privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, defaultNetwork)
+		tenantDefault := seedSubnet(vn, "default-ipv4", "10.31.1.0/24", privatev1.SubnetState_SUBNET_STATE_READY,
+			defaultNetwork)
+		seedSubnet(vn, tenantDefault.GetId(), "10.31.2.0/24", privatev1.SubnetState_SUBNET_STATE_READY, nil,
+			"another-project")
+		for _, ref := range []*privatev1.SubnetLocalReference{
+			privatev1.SubnetLocalReference_builder{Id: tenantDefault.GetId()}.Build(),
+			privatev1.SubnetLocalReference_builder{
+				Id: tenantDefault.GetId(), Name: tenantDefault.GetMetadata().GetName(),
+			}.Build(),
+		} {
+			request := networkAttachmentRequest{
+				tenant:     testTenant,
+				project:    "another-project",
+				subnetsDao: fixtureDAO[*privatev1.Subnet](),
+				subnet:     ref,
+				source:     "spec.network_attachments[0]",
+			}
+			guards := &networkingGuards{
+				subnets:         fixtureDAO[*privatev1.Subnet](),
+				virtualNetworks: fixtureDAO[*privatev1.VirtualNetwork](),
+			}
+			result := &networkAttachmentResolution{}
+			Expect(resolveAttachmentSubnet(ctx, guards, request, result)).To(Succeed())
+			Expect(result.subnet.GetId()).To(Equal(tenantDefault.GetId()))
+		}
+	})
+
 	It("rejects a reference whose ID and name identify different Subnets", func() {
 		virtualNetwork := seedVirtualNetwork(testTenant, "10.20.0.0/16",
 			privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, nil)
@@ -183,6 +269,102 @@ var _ = Describe("Network attachment Subnet resolution", func() {
 		}
 
 		err := resolveAttachmentSubnet(ctx, guards, request, &networkAttachmentResolution{})
-		Expect(err).To(MatchError(ContainSubstring("id and name do not refer to the same resource")))
+		Expect(err).To(MatchError(ContainSubstring(
+			"Subnet reference in spec.network_attachments[0].subnet: " +
+				"id and name do not refer to the same resource")))
+	})
+
+	DescribeTable("resolves explicit Subnet references from another project",
+		func(labels map[string]string, subnetProject, vnCIDR, subnetCIDR, expectedError string) {
+			if subnetProject != "" {
+				seedProject(subnetProject)
+			}
+			virtualNetwork := seedVirtualNetwork(testTenant, vnCIDR,
+				privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, labels)
+			subnet := seedSubnet(virtualNetwork, "subnet-a", subnetCIDR,
+				privatev1.SubnetState_SUBNET_STATE_READY, labels, subnetProject)
+			request := networkAttachmentRequest{
+				tenant:     testTenant,
+				project:    "another-project",
+				subnetsDao: fixtureDAO[*privatev1.Subnet](),
+				subnet:     privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
+				source:     "spec.network_attachments[0]",
+			}
+			guards := &networkingGuards{
+				subnets:         fixtureDAO[*privatev1.Subnet](),
+				virtualNetworks: fixtureDAO[*privatev1.VirtualNetwork](),
+			}
+			result := &networkAttachmentResolution{}
+
+			err := resolveAttachmentSubnet(ctx, guards, request, result)
+			if expectedError != "" {
+				Expect(err).To(MatchError(ContainSubstring(expectedError)))
+				return
+			}
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.subnet.GetId()).To(Equal(subnet.GetId()))
+			Expect(result.usedDefaults).To(BeFalse())
+		},
+		Entry("tenant default", map[string]string{defaultLabel: "true"}, "", "10.21.0.0/16", "10.21.1.0/24", ""),
+		Entry("not a tenant default", nil, "", "10.22.0.0/16", "10.22.1.0/24", "does not exist"),
+		Entry("default outside the default project", map[string]string{defaultLabel: "true"}, "third-project",
+			"10.23.0.0/16", "10.23.1.0/24", "does not exist"),
+	)
+})
+
+var _ = Describe("Network attachment default networking readiness gate", func() {
+	var (
+		defaults defaultNetworkingFixture
+		guards   *networkingGuards
+		settings NetworkingSettings
+	)
+
+	BeforeEach(func() {
+		defaults = seedReadyDefaultNetworking(testTenant, 0)
+		tenants := fixtureDAO[*privatev1.Tenant]()
+		response, err := tenants.Get().SetId(testTenant).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		tenant := response.GetObject()
+		tenant.GetStatus().SetConditions([]*privatev1.TenantCondition{
+			privatev1.TenantCondition_builder{
+				Type:   privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+				Status: privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+			}.Build(),
+		})
+		_, err = tenants.Update().SetObject(tenant).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		guards, err = newNetworkingGuards(logger)
+		Expect(err).NotTo(HaveOccurred())
+		settings = NetworkingSettings{ProvisioningEnabled: true}
+	})
+
+	It("does not gate a supplied reference to the tenant defaults", func() {
+		result, err := resolveNetworkAttachment(ctx, logger, guards, settings, networkAttachmentRequest{
+			tenant:            testTenant,
+			project:           "another-project",
+			subnetsDao:        fixtureDAO[*privatev1.Subnet](),
+			securityGroupsDao: fixtureDAO[*privatev1.SecurityGroup](),
+			subnet:            privatev1.SubnetLocalReference_builder{Id: defaults.subnetID}.Build(),
+			securityGroups: []*privatev1.SecurityGroupLocalReference{
+				privatev1.SecurityGroupLocalReference_builder{Id: defaults.securityGroupID}.Build(),
+			},
+			source: "spec.network_attachments[0]",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.usedDefaults).To(BeFalse())
+		Expect(result.subnet.GetId()).To(Equal(defaults.subnetID))
+		Expect(result.securityGroupIDs()).To(Equal([]string{defaults.securityGroupID}))
+	})
+
+	It("gates an omitted attachment filled from the tenant defaults", func() {
+		_, err := resolveNetworkAttachment(ctx, logger, guards, settings, networkAttachmentRequest{
+			tenant:            testTenant,
+			project:           "another-project",
+			subnetsDao:        fixtureDAO[*privatev1.Subnet](),
+			securityGroupsDao: fixtureDAO[*privatev1.SecurityGroup](),
+			source:            "spec.network_attachments[0]",
+		})
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal("tenant default networking is not ready"))
 	})
 })

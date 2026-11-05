@@ -128,12 +128,37 @@ var _ = Describe("finalizer CAS", func() {
 		finalizerEntries(),
 	)
 
+	// Most objects have no finalizers. A public nil-mask update of such an object must not give it any, and must not be
+	// rejected for its finalizers. Without metadata in the request the update may still be rejected by validation or
+	// by the database, as for objects that have finalizers, so that part runs in a savepoint.
+	DescribeTable("keeps an object without finalizers as it is on a public nil-mask update",
+		func(c finalizerCase) {
+			t := c.target(nil)
+
+			err := t.update(withPublicAPIView(ctx), t.get(ctx), nil, false)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(t.finalizers(ctx)).To(BeEmpty())
+
+			savepointErr := suiteTx.Savepoint(ctx, func(ctx context.Context) error {
+				err = t.update(withPublicAPIView(ctx), withoutMetadata(t.get(ctx)), nil, false)
+				return err
+			})
+			if err == nil {
+				Expect(savepointErr).ToNot(HaveOccurred())
+			}
+			Expect(status.Code(err)).ToNot(Equal(codes.Aborted),
+				"a public request must not be rejected for its finalizers, but the update returned %v", err)
+			Expect(t.finalizers(ctx)).To(BeEmpty())
+		},
+		finalizerEntries(),
+	)
+
 	DescribeTable("keeps a deleting object on a public nil-mask update",
 		func(c finalizerCase) {
 			t := c.target([]string{finalizerController, finalizerHold})
 
 			// The deletion only marks the object because it has finalizers:
-			Expect(t.ops.del(ctx, t.id)).To(Succeed())
+			t.markDeleting(ctx)
 			object := withFinalizers(t.get(ctx))
 
 			err := t.update(withPublicAPIView(ctx), object, nil, false)
@@ -153,7 +178,7 @@ var _ = Describe("finalizer CAS", func() {
 		func(c finalizerCase, deleting bool) {
 			t := c.target([]string{finalizerController, finalizerHold})
 			if deleting {
-				Expect(t.ops.del(ctx, t.id)).To(Succeed())
+				t.markDeleting(ctx)
 			}
 			before := t.get(ctx)
 
@@ -313,6 +338,66 @@ var _ = Describe("finalizer CAS", func() {
 			Entry("with UpdateWithValidation and a callback that leaves the finalizers alone",
 				entryPoint(withValidation), leavesAlone, codes.OK),
 		)
+
+		// Create runs the same kind of callback, and a create that is rejected after it must also undo what the
+		// callback wrote.
+		DescribeTable("commits what a create callback wrote only when the create is accepted",
+			func(modify func(*privatev1.Hub) error, code codes.Code) {
+				t := finalizerCaseFor(privatev1.Hubs_ServiceDesc.ServiceName).target(nil)
+				server := t.ops.(*genericFinalizerOps[*privatev1.Hub]).server
+
+				var sideID string
+				prepare := func(ctx context.Context, _, candidate *privatev1.Hub) error {
+					side, err := fixtureDAO[*privatev1.Hub]().Create().SetObject(privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   finalizerName("side"),
+							Tenant: testTenant,
+						}.Build(),
+						Spec: privatev1.HubSpec_builder{Kubeconfig: []byte("my_config"), Namespace: "my_ns"}.Build(),
+					}.Build()).Do(ctx)
+					if err != nil {
+						return err
+					}
+					sideID = side.GetObject().GetId()
+					return modify(candidate)
+				}
+
+				// Commit the fixture, and send the request in a transaction of its own:
+				Expect(suiteTx.End(ctx)).To(Succeed())
+				suiteTx = nil
+				tx, err := tm.Begin(context.Background())
+				Expect(err).ToNot(HaveOccurred())
+				request := proto.Clone(server.createRequest).(interface {
+					proto.Message
+					SetObject(*privatev1.Hub)
+				})
+				request.SetObject(privatev1.Hub_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   finalizerName("created"),
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.HubSpec_builder{Kubeconfig: []byte("my_config"), Namespace: "my_ns"}.Build(),
+				}.Build())
+				var response proto.Message
+				createErr := server.CreateWithCandidatePreparation(database.TxIntoContext(context.Background(), tx),
+					request, &response, prepare)
+				Expect(tx.End(context.Background())).To(Succeed())
+
+				Expect(sideID).ToNot(BeEmpty(), "the callback must have run and written the other object")
+				_, sideErr := fixtureDAO[*privatev1.Hub]().Get().SetId(sideID).Do(freshContext())
+				Expect(status.Code(createErr)).To(Equal(code), "the create returned %v", createErr)
+				if code != codes.OK {
+					var notFound *dao.ErrNotFound
+					Expect(errors.As(sideErr, &notFound)).To(BeTrue(),
+						"what the rejected callback wrote must be rolled back, but reading it returned %v", sideErr)
+				} else {
+					Expect(sideErr).ToNot(HaveOccurred(), "what the callback wrote must be committed")
+				}
+			},
+			Entry("with a callback that fails", fails, codes.InvalidArgument),
+			Entry("with a callback that leaves an invalid candidate", leavesInvalidCandidate, codes.InvalidArgument),
+			Entry("with a callback that leaves the candidate alone", leavesAlone, codes.OK),
+		)
 	})
 
 	Describe("controls", func() {
@@ -391,7 +476,7 @@ var _ = Describe("finalizer CAS", func() {
 		DescribeTable("archives a deleting object when its last finalizer is removed from the current version",
 			func(c finalizerCase) {
 				t := c.target([]string{finalizerController})
-				Expect(t.ops.del(ctx, t.id)).To(Succeed())
+				t.markDeleting(ctx)
 
 				object := withFinalizers(t.get(ctx))
 				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
@@ -452,7 +537,7 @@ var _ = Describe("finalizer CAS", func() {
 	// finalizer transition can be found in the server logs. The specs end the suite transaction before they look at
 	// the log.
 	Describe("finalizer change log", func() {
-		// The lists are the ones that the database stored, which are sorted and have no repeated finalizer, and the
+		// The lists are the ones that the DAO wrote, which are sorted and have no repeated finalizer, and the
 		// version is the one that the change was checked against, not the one that the write produced. The object
 		// is written once before, so that its version is not zero.
 		DescribeTable("logs an accepted finalizer change once, when it is committed",
@@ -486,7 +571,7 @@ var _ = Describe("finalizer CAS", func() {
 		DescribeTable("logs the removal of the last finalizer of a deleting object",
 			func(c finalizerCase) {
 				t := c.target([]string{finalizerController})
-				Expect(t.ops.del(ctx, t.id)).To(Succeed())
+				t.markDeleting(ctx)
 				logs := t.recordLogs()
 
 				object := withFinalizers(t.get(ctx))

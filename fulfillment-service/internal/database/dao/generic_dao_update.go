@@ -119,9 +119,9 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		return
 	}
 
-	// Build the SQL statement. It selects the row by identifier and doesn't check any version:
-	// optimistic concurrency checks are done by the server layer, in GenericServer.updateWithCandidatePreparation,
-	// while it holds the row lock.
+	// Build the SQL statement. It selects the row by identifier and doesn't check any version. Updates that go
+	// through the generic server are checked there, in GenericServer.updateWithCandidatePreparation, while it holds
+	// the row lock; code that calls this method directly must read the row with a lock in the same transaction.
 	var buffer strings.Builder
 	fmt.Fprintf(&buffer, `update %s set`, r.dao.table)
 	addColumn := func(name string, value any) {

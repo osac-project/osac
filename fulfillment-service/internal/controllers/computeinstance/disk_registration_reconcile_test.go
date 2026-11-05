@@ -568,6 +568,10 @@ type registrationComputeInstancesClient struct {
 	failAfterUpdateCalls  map[int]error
 	beforeUpdate          func(int)
 	afterUpdate           func(int)
+
+	// checkFinalizers makes the fake apply the rule of the server for finalizer changes: an update whose mask
+	// selects metadata.finalizers must carry the stored version, and then the finalizers are stored.
+	checkFinalizers bool
 }
 
 func (c *registrationComputeInstancesClient) Get(
@@ -610,6 +614,12 @@ func (c *registrationComputeInstancesClient) Update(
 		c.object.SetStatus(&privatev1.ComputeInstanceStatus{})
 	}
 	paths := request.GetUpdateMask().GetPaths()
+	if c.checkFinalizers && slices.Contains(paths, "metadata.finalizers") {
+		if request.GetObject().GetMetadata().GetVersion() != c.object.GetMetadata().GetVersion() {
+			return nil, status.Error(codes.Aborted, "finalizers can only be changed from the current version")
+		}
+		c.object.GetMetadata().SetFinalizers(slices.Clone(request.GetObject().GetMetadata().GetFinalizers()))
+	}
 	if slices.Contains(paths, "status") {
 		c.object.SetStatus(proto.Clone(request.GetObject().GetStatus()).(*privatev1.ComputeInstanceStatus))
 	}

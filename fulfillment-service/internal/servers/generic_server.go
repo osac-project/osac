@@ -533,10 +533,16 @@ func (s *GenericServer[O]) CreateWithCandidatePreparation(
 	if prepareCandidate != nil {
 		preparedID := requestObject.GetId()
 		preparedMetadata := proto.Clone(s.getMetadata(requestObject)).(metadataIface)
-		if err = prepareCandidate(ctx, nilObject, requestObject); err != nil {
-			return err
+		err = prepareCandidate(ctx, nilObject, requestObject)
+		if err == nil {
+			err = s.validatePreparedCandidate(ctx, requestObject, preparedID, preparedMetadata)
 		}
-		if err = s.validatePreparedCandidate(ctx, requestObject, preparedID, preparedMetadata); err != nil {
+		if err != nil {
+			// The callback may have written to the database before failing, or before its candidate was found
+			// invalid, so mark the transaction for rollback instead of relying on the caller to do it.
+			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
+				tx.ReportError(&err)
+			}
 			return err
 		}
 	}
@@ -815,8 +821,8 @@ func (s *GenericServer[O]) checkFinalizerChange(requestObject, currentObject, me
 
 // logFinalizerChange records a finalizer change that has been written, with the stored version it
 // was checked against, so that every finalizer transition of an object can be traced to the request
-// that made it. The lists logged are the ones of the stored object, which is what the database
-// returns after the write. The write belongs to the transaction of the request, and code that runs
+// that made it. The lists logged are the ones that the DAO wrote, which are sorted and have no
+// repeated finalizer. The write belongs to the transaction of the request, and code that runs
 // after it, in the same request, can still roll that transaction back, so the line is only written
 // once the transaction commits. Requests that are rejected, that are rolled back, or that leave the
 // finalizers as they are log nothing.

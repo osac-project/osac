@@ -738,7 +738,7 @@ ifneq ($(strip $(FULFILLMENT_IT_REPORT_DIR)),)
 	rm -f $(foreach phase,$(if $(filter fulfillment,$(SUITE)),service-only networking-operator bmaas-disabled) compute-storage,"$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(phase).json)")
 endif
 # Exercise event-driven reconciliation without full synchronization in every test phase.
-	cd ../fulfillment-service && go test ./it/testdata/computestorageaap
+	cd ../fulfillment-service && go test -race ./it/testdata/computestorageaap
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)

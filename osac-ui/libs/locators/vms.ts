@@ -1,8 +1,10 @@
 import { deleteResourceModalIds } from '../ui-components/src/components/Resource/deleteResourceModalIds';
 
+const id = (value: string): readonly [string] => [`[id="${value}"]`];
+
 type VmsLocator =
   | readonly [
-      role: 'button' | 'checkbox' | 'grid' | 'heading' | 'link' | 'textbox',
+      role: 'button' | 'checkbox' | 'grid' | 'heading' | 'link' | 'radio' | 'switch' | 'textbox',
       options: { name: string; exact: true },
     ]
   | readonly [label: string]
@@ -31,20 +33,20 @@ export const VmDetailsPage = {
 
 export const VmCreatePage = {
   catalogItemCards: ['[id^="catalog-item-card-"]'],
-  catalogItemSelection: ['input[type="radio"]'],
-  project: ['button', { name: 'Project', exact: true }],
-  vmName: ['textbox', { name: 'Name', exact: true }],
-  diskImage: ['button', { name: 'Disk image', exact: true }],
-  diskImageValue: ['input[role="combobox"]'],
-  instanceType: ['button', { name: 'Instance type', exact: true }],
-  bootDisk: ['Boot disk'],
-  storageTier: ['button', { name: 'Storage tier', exact: true }],
+  catalogItemSelection: ['input[id^="selectedCatalogItem-"]'],
+  project: id('metadata.project'),
+  vmName: id('metadata-name'),
+  diskImage: id('disk-image'),
+  instanceType: id('vm-instance-type'),
+  bootDisk: id('vm-boot-disk-size'),
+  bootStorageTier: id('vm-boot-disk-storage-tier'),
+  storageTier: ['[id^="vm-additional-disk-"][id$="-storage-tier"]'],
   addDisk: ['button', { name: 'Add disk', exact: true }],
-  additionalDiskSize: ['Size (GiB)'],
-  useTenantDefaultNetwork: ['checkbox', { name: 'Use tenant default network', exact: true }],
-  autoExternalIp: ['checkbox', { name: 'Auto External IP Attachment', exact: true }],
-  sshPublicKey: ['button', { name: 'SSH public key', exact: true }],
-  cloudInit: ['#inline-user-data'],
+  additionalDiskSize: ['input[id^="vm-additional-disk-"][id$="-size"]'],
+  useTenantDefaultNetwork: id('spec.networking.networkAttachment.value-choice-default'),
+  autoExternalIp: id('spec.networking.autoExternalIpAttachment.value'),
+  sshPublicKey: id('spec-sshKey-value'),
+  cloudInit: id('inline-user-data'),
   next: ['button', { name: 'Next', exact: true }],
   create: ['button', { name: 'Create', exact: true }],
   configurationHeading: ['heading', { name: 'Configuration', exact: true }],

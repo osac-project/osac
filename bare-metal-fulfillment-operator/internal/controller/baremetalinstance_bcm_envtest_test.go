@@ -34,6 +34,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bcmclient"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/bmhsecret"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
@@ -202,7 +203,8 @@ func writeJSON(w http.ResponseWriter, v any) {
 func newBCMReconciler(mock *mockBCM) *BareMetalInstanceReconciler {
 	bcmAPI := bcmclient.NewClientForTest(mock.server.Client(), mock.server.URL)
 	bmhMgr := baremetalhost.NewManager(k8sClient, k8sClient, bcmTestNS)
-	invClient := inventory.NewBCMClient(bcmAPI, bmhMgr, bcmHostClass)
+	secretStore := bmhsecret.NewStore(k8sClient, bcmTestNS)
+	invClient := inventory.NewBCMClient(bcmAPI, bmhMgr, secretStore, bcmHostClass)
 	mgmtClient := management.NewMetal3ClientForTest(k8sClient, bcmTestNS)
 	return NewBareMetalInstanceReconciler(
 		k8sClient,

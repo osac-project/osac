@@ -29,8 +29,8 @@ import (
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bmcdiscovery"
+	bmcCredentials "github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/netboxclient"
-	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
@@ -76,19 +76,6 @@ type NetBoxAPI interface {
 	PatchDevice(ctx context.Context, id string, patch netboxclient.DevicePatch, etag string) (netboxclient.DeviceSnapshot, error)
 }
 
-// SecretAPIClient defines the Secret API operations used by the NetBox inventory.
-type SecretAPIClient interface {
-	List(ctx context.Context, filter secretapi.Filter, limit int32) (secretapi.ListResult, error)
-	Get(ctx context.Context, id string) (secretapi.Secret, error)
-	Close() error
-}
-
-// CredentialsReaderRepository returns BMC credentials for a NetBox device.
-type CredentialsReaderRepository interface {
-	GetCredentials(ctx context.Context, hostID string) (*BMCCredentials, error)
-	Close() error
-}
-
 // NetBoxClientConfig contains the mounted-file and endpoint settings for NetBox.
 type NetBoxClientConfig struct {
 	URL               string `json:"url"`
@@ -127,8 +114,9 @@ func ParseNetBoxOptions(options map[string]any) (*NetBoxClientConfig, error) {
 type NetBoxClient struct {
 	api               NetBoxAPI
 	bmhManager        baremetalhost.BMHLifecycleManager
+	bmcSecretStore    bmcCredentials.BMCSecretStore
 	hostClass         string
-	credentialsReader CredentialsReaderRepository
+	credentialsReader bmcCredentials.Reader
 }
 
 var (
@@ -158,10 +146,17 @@ func NewNetBoxAPI(config *Config) (NetBoxAPI, error) {
 }
 
 // NewNetBoxClient creates a NetBox inventory client with injected dependencies.
-func NewNetBoxClient(api NetBoxAPI, bmhManager baremetalhost.BMHLifecycleManager, hostClass string, credentialsReader CredentialsReaderRepository) *NetBoxClient {
+func NewNetBoxClient(
+	api NetBoxAPI,
+	bmhManager baremetalhost.BMHLifecycleManager,
+	bmcSecretStore bmcCredentials.BMCSecretStore,
+	hostClass string,
+	credentialsReader bmcCredentials.Reader,
+) *NetBoxClient {
 	return &NetBoxClient{
 		api:               api,
 		bmhManager:        bmhManager,
+		bmcSecretStore:    bmcSecretStore,
 		hostClass:         hostClass,
 		credentialsReader: credentialsReader,
 	}
@@ -289,7 +284,7 @@ func (c *NetBoxClient) assignNetBoxDevice(ctx context.Context, namespace, device
 	case netBoxAssignmentReadyToClaim:
 		connection, credentials, err := c.resolveNetBoxHostAccess(ctx, snapshot.Device)
 		if err != nil {
-			if errors.Is(err, ErrCredentialResolutionFailed) {
+			if errors.Is(err, bmcCredentials.ErrResolutionFailed) {
 				ctrllog.FromContext(ctx).Error(err, "NetBox device credentials are invalid; quarantining device", "deviceID", deviceID)
 				return c.markNetBoxDeviceFailed(ctx, deviceID, snapshot.ETag, credentialFailureMessage(err))
 			}
@@ -314,10 +309,10 @@ func (c *NetBoxClient) assignNetBoxDevice(ctx context.Context, namespace, device
 	}
 }
 
-func (c *NetBoxClient) resolveNetBoxHostAccess(ctx context.Context, device netboxclient.Device) (*netBoxConnectionData, *BMCCredentials, error) {
+func (c *NetBoxClient) resolveNetBoxHostAccess(ctx context.Context, device netboxclient.Device) (*netBoxConnectionData, *bmcCredentials.BMC, error) {
 	connection, err := netBoxConnection(device.CustomFields)
 	if err != nil {
-		return nil, nil, credentialResolutionFailure(err)
+		return nil, nil, fmt.Errorf("%w: %w", bmcCredentials.ErrResolutionFailed, err)
 	}
 	if c.credentialsReader == nil {
 		return nil, nil, errors.New("OSAC Secret API client is not configured")
@@ -329,9 +324,9 @@ func (c *NetBoxClient) resolveNetBoxHostAccess(ctx context.Context, device netbo
 	return connection, credentials, nil
 }
 
-func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connection *netBoxConnectionData, credentials *BMCCredentials, bareMetalInstanceID string) (*Host, error) {
+func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connection *netBoxConnectionData, credentials *bmcCredentials.BMC, bareMetalInstanceID string) (*Host, error) {
 	secretName := host.Name + bmcSecretSuffix
-	if err := c.bmhManager.EnsureBMCSecret(ctx, secretName, string(credentials.Username), string(credentials.Password)); err != nil {
+	if err := c.bmcSecretStore.Ensure(ctx, secretName, credentials); err != nil {
 		return nil, fmt.Errorf("failed to ensure BMC credentials Secret for NetBox host: %w", err)
 	}
 
@@ -350,9 +345,9 @@ func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connec
 
 func credentialFailureMessage(err error) string {
 	switch {
-	case errors.Is(err, errMissingNetBoxSecret):
+	case errors.Is(err, bmcCredentials.ErrCredentialsNotFound):
 		return "OSAC: no BMC Secret matches this device. Add the system Secret label, then reset status to staged."
-	case errors.Is(err, errAmbiguousNetBoxSecret):
+	case errors.Is(err, bmcCredentials.ErrAmbiguousCredentials):
 		return "OSAC: multiple BMC Secrets match this device. Fix the labels, then reset status to staged."
 	default:
 		return "OSAC: BMC credentials are missing or invalid. Check the system Secret and device BMC settings; reset status to staged after repair."
@@ -545,7 +540,7 @@ func (c *NetBoxClient) deleteNetBoxResources(ctx context.Context, deviceID strin
 	if err := c.deleteNetBoxBMH(ctx, name); err != nil {
 		return err
 	}
-	return c.bmhManager.DeleteBMCSecret(ctx, name+bmcSecretSuffix)
+	return c.bmcSecretStore.Delete(ctx, name+bmcSecretSuffix)
 }
 
 func (c *NetBoxClient) deleteNetBoxBMH(ctx context.Context, name string) error {
@@ -677,66 +672,14 @@ func (c *NetBoxClient) customFieldLogicalPortMACs(ctx context.Context, deviceID 
 }
 
 const (
-	netBoxDeviceSecretLabelPrefix = "osac.openshift.io/netbox-device-"
-	netBoxBMCAddressField         = "osac_bmc_address"
-	netBoxBootMACField            = "osac_boot_mac"
-	secretListLimit               = 1
+	netBoxBMCAddressField = "osac_bmc_address"
+	netBoxBootMACField    = "osac_boot_mac"
 )
-
-// ErrCredentialResolutionFailed identifies invalid or missing device credentials.
-var ErrCredentialResolutionFailed = errors.New("NetBox BMC credential resolution failed")
 
 // netBoxConnectionData contains validated BMC connection data from one NetBox device.
 type netBoxConnectionData struct {
 	BMCAddress     string
 	BootMACAddress string
-}
-
-// BMCCredentials contains the credentials used to connect to a BMC.
-type BMCCredentials struct {
-	Username []byte
-	Password []byte
-}
-
-// NetBoxCredentialResolver finds the system Secret associated with a NetBox device.
-type NetBoxCredentialResolver struct {
-	secrets SecretAPIClient
-}
-
-var _ CredentialsReaderRepository = (*NetBoxCredentialResolver)(nil)
-
-// NewNetBoxCredentialResolver creates the NetBox-specific Secret resolver.
-func NewNetBoxCredentialResolver(secrets SecretAPIClient) *NetBoxCredentialResolver {
-	return &NetBoxCredentialResolver{secrets: secrets}
-}
-
-// GetCredentials resolves the unique system Secret associated with a NetBox host.
-func (r *NetBoxCredentialResolver) GetCredentials(ctx context.Context, hostID string) (*BMCCredentials, error) {
-	if r == nil || r.secrets == nil {
-		return nil, errors.New("OSAC Secret API client is not configured")
-	}
-	labelKey := netBoxDeviceSecretLabel(hostID)
-	secret, err := r.getDeviceSecret(ctx, labelKey)
-	if err != nil {
-		return nil, err
-	}
-	username, password, err := bmcCredentials(secret)
-	if err != nil {
-		return nil, credentialResolutionFailure(err)
-	}
-	return &BMCCredentials{Username: username, Password: password}, nil
-}
-
-// Close releases resources owned by the Secret API client.
-func (r *NetBoxCredentialResolver) Close() error {
-	if r == nil || r.secrets == nil {
-		return nil
-	}
-	return r.secrets.Close()
-}
-
-func netBoxDeviceSecretLabel(deviceID string) string {
-	return netBoxDeviceSecretLabelPrefix + deviceID
 }
 
 func netBoxConnection(customFields map[string]interface{}) (*netBoxConnectionData, error) {
@@ -763,66 +706,4 @@ func netBoxConnection(customFields map[string]interface{}) (*netBoxConnectionDat
 func netBoxStringField(fields map[string]interface{}, key string) (string, bool) {
 	value, ok := fields[key].(string)
 	return value, ok
-}
-
-func (r *NetBoxCredentialResolver) getDeviceSecret(ctx context.Context, labelKey string) (secretapi.Secret, error) {
-	filter := secretapi.FilterByTenantAndLabel("system", labelKey)
-	result, err := r.secrets.List(ctx, filter, secretListLimit)
-	if err != nil {
-		return secretapi.Secret{}, fmt.Errorf("failed to list OSAC Secrets for NetBox device: %w", err)
-	}
-	secretID, err := uniqueDeviceSecretID(result)
-	if err != nil {
-		if errors.Is(err, errMissingNetBoxSecret) || errors.Is(err, errAmbiguousNetBoxSecret) {
-			return secretapi.Secret{}, credentialResolutionFailure(err)
-		}
-		return secretapi.Secret{}, err
-	}
-	secret, err := r.secrets.Get(ctx, secretID)
-	if err != nil {
-		return secretapi.Secret{}, fmt.Errorf("failed to get OSAC Secret for NetBox device: %w", err)
-	}
-	if !isDeviceSecret(secret, labelKey) {
-		return secretapi.Secret{}, errors.New("OSAC Secret is not a system-scoped Secret associated with the NetBox device")
-	}
-	return secret, nil
-}
-
-func credentialResolutionFailure(err error) error {
-	return fmt.Errorf("%w: %w", ErrCredentialResolutionFailed, err)
-}
-
-var (
-	errMissingNetBoxSecret   = errors.New("no system-scoped OSAC Secret is associated with the NetBox device")
-	errAmbiguousNetBoxSecret = errors.New("multiple system-scoped OSAC Secrets are associated with the NetBox device")
-)
-
-func uniqueDeviceSecretID(result secretapi.ListResult) (string, error) {
-	if result.Total == 0 {
-		return "", errMissingNetBoxSecret
-	}
-	if result.Total > 1 {
-		return "", errAmbiguousNetBoxSecret
-	}
-	if result.Total != 1 || len(result.Items) != 1 {
-		return "", errors.New("inconsistent OSAC Secret list response for NetBox device")
-	}
-	return result.Items[0].ID, nil
-}
-
-func isDeviceSecret(secret secretapi.Secret, labelKey string) bool {
-	if secret.Tenant != "system" {
-		return false
-	}
-	_, found := secret.Labels[labelKey]
-	return found
-}
-
-func bmcCredentials(secret secretapi.Secret) ([]byte, []byte, error) {
-	username := secret.Data["username"]
-	password := secret.Data["password"]
-	if len(username) == 0 || len(password) == 0 {
-		return nil, nil, errors.New("OSAC Secret must contain non-empty username and password values")
-	}
-	return append([]byte(nil), username...), append([]byte(nil), password...), nil
 }

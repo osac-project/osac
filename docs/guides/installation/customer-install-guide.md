@@ -1671,14 +1671,16 @@ aap:
         NETRIS_MGMT_VPC_ID: "<netris_management_vpc_id>"
 ```
 
-Put the password in a separate values file excluded from version control:
+Put the password in a separate values file excluded from version control. Add
+`NETRIS_PASSWORD` under `aap.instanceGroups.networkFulfillment.secret` in that
+local file, using the value from your secret store. Do not commit the populated
+file.
 
 ```yaml
 aap:
   instanceGroups:
     networkFulfillment:
-      secret:
-        NETRIS_PASSWORD: "<netris_password>"
+      secret: {}  # Add NETRIS_PASSWORD locally from your secret store.
 ```
 
 Pass both files to Helm, for example `-f my-values.yaml -f my-secrets.local.yaml`.
@@ -1925,9 +1927,10 @@ that provider's StorageBackend, StorageTier, and tenant storage configuration
 as described in Section 6.1. For development or CI with LVMS, see
 [Section 9.2](#92-evaluation-only).
 
-The chart still requires a non-empty `fabricManager` when provider networking
-is disabled, and VMaaS requires `k8sManager: cudn_evpn`. Use the name of a
-Fabric Manager registration whose `network_types` includes `evpn`.
+The chart still requires a non-empty `fabricManager` value when provider
+networking is disabled, and VMaaS requires `k8sManager: cudn_evpn`. No Fabric
+Manager registration or `evpn` network type is required for this layout. The
+`acme_fabric` value below is only a non-empty placeholder.
 
 Merge these values into `my-values.yaml` to enable VMaaS only and point the
 operator and AAP at the Secret:

@@ -56,6 +56,69 @@ var _ = Describe("Catalog pricing inputs aggregation", func() {
 		Expect(rows).To(BeEmpty())
 	})
 
+	It("emits locked and default image and boot-disk condition dimensions", func() {
+		item := computeItem("c1", "vm-defaults", true, privatev1.ComputeInstanceCatalogItemFields_builder{
+			DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
+				Editable: privatev1.EditableDiskImageReferenceField_builder{
+					DefaultValue: privatev1.DiskImageReference_builder{Id: "image-id", Name: "fedora"}.Build(),
+				}.Build(),
+			}.Build(),
+			BootDisk: privatev1.ComputeInstanceBootDiskFieldPolicies_builder{
+				SizeGib: privatev1.Int32FieldPolicy_builder{
+					Editable: privatev1.EditableInt32Field_builder{DefaultValue: int32Ptr(80)}.Build(),
+				}.Build(),
+				StorageTier: privatev1.StorageTierReferenceFieldPolicy_builder{
+					Locked: privatev1.StorageTierReference_builder{Id: "tier-id", Name: "fast"}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+
+		rows := aggregateCatalogPricingInputs([]*privatev1.ComputeInstanceCatalogItem{item}, nil)
+		Expect(rows).To(HaveLen(5))
+		Expect(findRow(rows, "compute_instance", "image", "").GetAcceptsAnyValue()).To(BeTrue())
+		Expect(findRow(rows, "compute_instance", "image", "fedora").GetAcceptsAnyValue()).To(BeFalse())
+		Expect(findRow(rows, "compute_instance", "boot_disk_size_gib", "").GetAcceptsAnyValue()).To(BeTrue())
+		Expect(findRow(rows, "compute_instance", "boot_disk_size_gib", "80").GetAcceptsAnyValue()).To(BeFalse())
+		Expect(findRow(rows, "compute_instance", "boot_disk_storage_tier", "fast").GetAcceptsAnyValue()).To(BeFalse())
+	})
+
+	It("emits open image and boot-disk dimensions when editable policies have no defaults", func() {
+		item := computeItem("c1", "vm-open", true, privatev1.ComputeInstanceCatalogItemFields_builder{
+			DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
+				Editable: privatev1.EditableDiskImageReferenceField_builder{}.Build(),
+			}.Build(),
+			BootDisk: privatev1.ComputeInstanceBootDiskFieldPolicies_builder{
+				SizeGib: privatev1.Int32FieldPolicy_builder{
+					Editable: privatev1.EditableInt32Field_builder{}.Build(),
+				}.Build(),
+				StorageTier: privatev1.StorageTierReferenceFieldPolicy_builder{
+					Editable: privatev1.EditableStorageTierReferenceField_builder{}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+
+		rows := aggregateCatalogPricingInputs([]*privatev1.ComputeInstanceCatalogItem{item}, nil)
+		Expect(rows).To(HaveLen(3))
+		for _, dimension := range []string{"image", "boot_disk_size_gib", "boot_disk_storage_tier"} {
+			row := findRow(rows, "compute_instance", dimension, "")
+			Expect(row).ToNot(BeNil(), dimension)
+			Expect(row.GetAcceptsAnyValue()).To(BeTrue(), dimension)
+			Expect(row.GetCatalogItems()).To(HaveLen(1), dimension)
+		}
+	})
+
+	It("uses the canonical reference ID when a dimension reference has no name", func() {
+		item := computeItem("c1", "vm-id-reference", true, privatev1.ComputeInstanceCatalogItemFields_builder{
+			DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
+				Locked: privatev1.DiskImageReference_builder{Id: "image-id"}.Build(),
+			}.Build(),
+		}.Build())
+
+		rows := aggregateCatalogPricingInputs([]*privatev1.ComputeInstanceCatalogItem{item}, nil)
+		Expect(rows).To(HaveLen(1))
+		Expect(findRow(rows, "compute_instance", "image", "image-id")).ToNot(BeNil())
+	})
+
 	It("emits a fixed-value row for a locked instance type", func() {
 		item := computeItem("c1", "item-1", true, privatev1.ComputeInstanceCatalogItemFields_builder{
 			InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{

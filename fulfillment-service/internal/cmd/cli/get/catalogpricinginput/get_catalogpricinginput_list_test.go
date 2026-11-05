@@ -100,6 +100,11 @@ var _ = Describe("list", func() {
 		cmd.SetContext(commandCtx)
 		cmd.SetOut(io.Discard)
 		cmd.SetErr(io.Discard)
+		// With no CLI flags the variadic args are nil and cobra then falls back to os.Args, which under the
+		// ginkgo runner carries --test.* flags the command rejects; pass an explicit empty argument list instead.
+		if args == nil {
+			args = []string{}
+		}
 		cmd.SetArgs(args)
 		err = cmd.Execute()
 		return listServer, stdout.String(), err

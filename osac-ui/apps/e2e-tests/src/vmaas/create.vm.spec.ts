@@ -153,7 +153,7 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
     await expect(
       page.getByText('30 GB, ' + storageTierTestData.name, { exact: true }),
     ).toBeVisible();
-    await expect(page.getByText('••••••••', { exact: true })).toBeVisible();
+    await expect(page.getByText('Configured', { exact: true })).toBeVisible();
     await expect(page.getByRole(...VmCreatePage.create)).toBeVisible();
   });
 

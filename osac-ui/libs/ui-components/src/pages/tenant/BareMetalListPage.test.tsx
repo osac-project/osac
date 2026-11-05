@@ -128,6 +128,16 @@ describe('BareMetalListPage', () => {
     localStorage.clear();
   });
 
+  it('shows the tenant on each card for a cloud provider admin', async () => {
+    const tenantInstance = { ...instance, metadata: { ...instance.metadata, tenant: 'tenant-1' } };
+    const { transport } = createTransport([tenantInstance]);
+    renderWithProviders(<BareMetalListPage />, { transport, session: { role: 'admin' } });
+
+    expect(await screen.findByRole('link', { name: 'worker-01' })).toBeInTheDocument();
+    expect(screen.getByText('Tenant')).toBeInTheDocument();
+    expect(screen.getByText('tenant-1')).toBeInTheDocument();
+  });
+
   it('renders instance type from spec.instance_type', async () => {
     const { transport } = createTransport([instance]);
     renderWithProviders(<BareMetalListPage />, { transport, session: tenantSession });

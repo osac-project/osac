@@ -13,9 +13,11 @@ import { ClusterStatusLabel } from './ClusterStatusLabel';
 interface ClusterCardProps {
   cluster: Cluster;
   clusterVersion?: ClusterVersion;
+  /** Shows the tenant, for cloud provider admins who see every tenant's workloads. */
+  showTenant?: boolean;
 }
 
-const ClusterCard = ({ cluster, clusterVersion }: ClusterCardProps) => {
+const ClusterCard = ({ cluster, clusterVersion, showTenant = false }: ClusterCardProps) => {
   const { t } = useTranslation();
 
   const locked = cluster.status?.state === ClusterState.DELETING;
@@ -39,6 +41,18 @@ const ClusterCard = ({ cluster, clusterVersion }: ClusterCardProps) => {
       body={<ClusterResources cluster={cluster} clusterVersion={clusterVersion} />}
       footer={
         <Flex direction={{ default: 'column' }} gap={{ default: 'gapSm' }}>
+          {showTenant ? (
+            <FlexItem>
+              <Flex
+                flexWrap={{ default: 'nowrap' }}
+                gap={{ default: 'gapLg' }}
+                justifyContent={{ default: 'justifyContentSpaceBetween' }}
+              >
+                <FlexItem>{t('Tenant')}</FlexItem>
+                <FlexItem>{cluster.metadata?.tenant || '—'}</FlexItem>
+              </Flex>
+            </FlexItem>
+          ) : null}
           <FlexItem>
             <Flex
               flexWrap={{ default: 'nowrap' }}

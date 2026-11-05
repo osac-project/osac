@@ -10,6 +10,7 @@ import {
 import type { BareMetalInstanceWizardValues } from './fields';
 import { catalogFieldPolicyLocked } from '../../catalog/catalogFieldPolicyDisplay';
 import { getUserDataSourcePayload } from '../../ProvisioningWizard/fields/provisioningFieldValue';
+import { workloadTenantMetadata } from '../../ProvisioningWizard/useWorkloadTenant';
 
 export const buildBareMetalInstanceCreatePayload = (
   values: BareMetalInstanceWizardValues,
@@ -19,7 +20,11 @@ export const buildBareMetalInstanceCreatePayload = (
   const userDataSource = getUserDataSourcePayload(values.spec.userData);
 
   const bmi: MessageInitShape<typeof BareMetalInstanceSchema> = {
-    metadata: { name: values.metadata.name.trim(), project: values.metadata.project },
+    metadata: {
+      name: values.metadata.name.trim(),
+      project: values.metadata.project,
+      ...workloadTenantMetadata(values.metadata.tenant),
+    },
     spec: {
       catalogItem: {
         id: values.catalogItemReference.id,

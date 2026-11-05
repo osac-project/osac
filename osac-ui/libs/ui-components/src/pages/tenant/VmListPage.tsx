@@ -50,7 +50,7 @@ const EMPTY_VMS: ComputeInstance[] = [];
 export const VmListPage = () => {
   const { t } = useTranslation();
   const [, setSearchParams] = useSearchParams();
-  const { projects, setProjects } = useSession();
+  const { projects, setProjects, role } = useSession();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
   const [searchResetKey, setSearchResetKey] = useState(0);
   const [powerStateFilterParam, setPowerStateFilterParam] = usePageFilter(POWER_STATE_FILTER_PARAM);
@@ -213,12 +213,12 @@ export const VmListPage = () => {
               <Gallery hasGutter minWidths={{ default: '400px' }} maxWidths={{ default: '400px' }}>
                 {vms.map((vm) => (
                   <GalleryItem key={vm.id}>
-                    <VmInstanceCard vm={vm} />
+                    <VmInstanceCard vm={vm} showTenant={role === 'admin'} />
                   </GalleryItem>
                 ))}
               </Gallery>
             ) : (
-              <VmTable vms={vms} />
+              <VmTable vms={vms} showTenant={role === 'admin'} />
             )}
           </ListPageBody>
         </StackItem>

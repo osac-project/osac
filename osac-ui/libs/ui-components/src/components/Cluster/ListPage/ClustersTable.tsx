@@ -9,14 +9,21 @@ import { useTranslation } from '../../../hooks/useTranslation';
 interface ClustersTableProps {
   clusters: Cluster[];
   resolveClusterVersion: (cluster: Cluster) => ClusterVersion | undefined;
+  /** Adds a Tenant column, for cloud provider admins who see every tenant's workloads. */
+  showTenant?: boolean;
 }
 
-export const ClustersTable = ({ clusters, resolveClusterVersion }: ClustersTableProps) => {
+export const ClustersTable = ({
+  clusters,
+  resolveClusterVersion,
+  showTenant = false,
+}: ClustersTableProps) => {
   const { t } = useTranslation();
 
   const columnLabels = useMemo(
     () => ({
       name: t('Name'),
+      tenant: t('Tenant'),
       status: t('Status'),
       project: t('Project'),
       configuration: t('Configuration'),
@@ -31,6 +38,7 @@ export const ClustersTable = ({ clusters, resolveClusterVersion }: ClustersTable
       <Thead>
         <Tr>
           <Th>{columnLabels.name}</Th>
+          {showTenant ? <Th>{columnLabels.tenant}</Th> : null}
           <Th>{columnLabels.status}</Th>
           <Th>{columnLabels.project}</Th>
           <Th>{columnLabels.configuration}</Th>
@@ -45,6 +53,7 @@ export const ClustersTable = ({ clusters, resolveClusterVersion }: ClustersTable
             cluster={cluster}
             clusterVersion={resolveClusterVersion(cluster)}
             columnLabels={columnLabels}
+            showTenant={showTenant}
           />
         ))}
       </Tbody>

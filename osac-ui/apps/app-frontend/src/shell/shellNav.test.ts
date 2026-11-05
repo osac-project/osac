@@ -94,8 +94,8 @@ describe('navRowsForRole', () => {
     expect(rows).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'catalog' })]));
   });
 
-  it('excludes Services section for admin (cloud-provider-admin) role', () => {
-    expect(findSection('admin', 'nav-tenant-services')).toBeUndefined();
+  it('includes the Services section for admin (cloud-provider-admin) role', () => {
+    expect(findSection('admin', 'nav-tenant-services')).toBeDefined();
   });
 
   it('includes Catalog and Projects for tenant-admin and tenant roles but not IDP manager', () => {

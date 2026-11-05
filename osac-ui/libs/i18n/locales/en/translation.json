@@ -951,6 +951,7 @@
   "Select a secret type to continue.": "Select a secret type to continue.",
   "Select a secret type, then enter or upload its key(s) and values.": "Select a secret type, then enter or upload its key(s) and values.",
   "Select a storage tier": "Select a storage tier",
+  "Select a tenant to see the catalog items available to it.": "Select a tenant to see the catalog items available to it.",
   "Select a user data secret": "Select a user data secret",
   "Select a version": "Select a version",
   "Select a virtual network": "Select a virtual network",

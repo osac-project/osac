@@ -133,4 +133,35 @@ describe('ProjectField', () => {
     await user.click(screen.getByRole('button', { name: 'Project' }));
     expect(await screen.findByRole('option', { name: 'team-two' })).toBeInTheDocument();
   });
+  it('stops showing Loading projects when the tenant is cleared', async () => {
+    const transport = createRouterTransport((router) => {
+      router.service(Projects, {
+        list: () => ({ items: [makeProject('project-one', 'team-one')], size: 1, total: 1 }),
+      });
+    });
+    const Harness = () => {
+      const [tenant, setTenant] = useState('tenant-1');
+      return (
+        <Formik initialValues={{ metadata: { project: '' } }} onSubmit={() => undefined}>
+          <>
+            <ProjectField tenant={tenant} />
+            <button type="button" onClick={() => setTenant('')}>
+              clear tenant
+            </button>
+          </>
+        </Formik>
+      );
+    };
+    const { user } = renderWithProviders(<Harness />, { transport });
+
+    await user.click(await screen.findByRole('button', { name: 'Project' }));
+    expect(await screen.findByRole('option', { name: 'team-one' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    await user.click(screen.getByRole('button', { name: 'clear tenant' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading projects...')).not.toBeInTheDocument();
+    });
+  });
 });

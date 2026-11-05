@@ -4,6 +4,7 @@ import * as yup from 'yup';
 import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/network-attachment';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 import { userDataSchema } from '@osac/ui-components/validation/user-data';
+import { workloadTenantSchema } from '@osac/ui-components/validation/workload-tenant';
 
 import type { ComputeInstanceWizardValues } from './fields';
 
@@ -107,6 +108,7 @@ const buildComputeInstanceFieldDefinitions = (t: TFunction) => {
 export const buildComputeInstanceStepSchema = (
   stepId: VmWizardStepId,
   t: TFunction,
+  options: { requireTenant?: boolean } = {},
 ): yup.AnyObjectSchema | undefined => {
   // Review has no editable fields; Create provisions without Formik validation.
   if (stepId === 'review') {
@@ -116,10 +118,12 @@ export const buildComputeInstanceStepSchema = (
   const fields = buildComputeInstanceFieldDefinitions(t);
 
   switch (stepId) {
-    case 'catalog':
-      return yup.object({
+    case 'catalog': {
+      const catalog = yup.object({
         catalogItemReference: fields.catalogItemReference,
       });
+      return options.requireTenant ? catalog.concat(workloadTenantSchema(t)) : catalog;
+    }
     case 'general':
       return yup.object({
         metadata: yup.object({

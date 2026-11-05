@@ -8,6 +8,8 @@ import type { ProvisioningFieldControlProps } from '../ProvisioningWizard/fields
 interface SshPublicKeySecretFieldProps extends ProvisioningFieldControlProps {
   project: string;
   placeholder?: string;
+  /** Set for a cloud provider admin: limits the list to the workload's tenant. */
+  tenant?: string;
 }
 
 const SshPublicKeySecretField = ({
@@ -15,6 +17,7 @@ const SshPublicKeySecretField = ({
   project,
   isDisabled = false,
   placeholder,
+  tenant,
 }: SshPublicKeySecretFieldProps) => {
   const { t } = useTranslation();
 
@@ -24,6 +27,7 @@ const SshPublicKeySecretField = ({
         filter.and(
           filter.field('metadata.project').equals(project),
           filter.field('type').equals(SecretType.SSH_PUBLIC_KEY),
+          tenant === undefined ? undefined : filter.field('metadata.tenant').equals(tenant),
         ),
       )}
       label={t('SSH public key')}

@@ -15,12 +15,14 @@ import VirtualNetworkField from './VirtualNetworkField';
 import { useInvalidateServiceQueries } from '../../../api/use-resource';
 import { usePermissions } from '../../../hooks/use-permissions';
 import { useTranslation } from '../../../hooks/useTranslation';
+import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
 import { VirtualNetworkCreateModal } from '../../networking/VirtualNetworkCreateModal';
+import { useWorkloadTenant } from '../useWorkloadTenant';
 
 import './NetworkAttachmentFields.css';
 
 interface NetworkWizardValues {
-  metadata: { project: string };
+  metadata: { project: string; tenant?: ResourceSelectValue };
 }
 
 interface NetworkAttachmentFieldsProps {
@@ -31,6 +33,7 @@ interface NetworkAttachmentFieldsProps {
 const NetworkAttachmentFields = ({ name, isDisabled = false }: NetworkAttachmentFieldsProps) => {
   const { t } = useTranslation();
   const { values } = useFormikContext<NetworkWizardValues>();
+  const { tenant, adminTenant } = useWorkloadTenant();
   const [field, , helpers] = useField<NetworkAttachmentFormFields>(name);
   const { allowed: canCreateVirtualNetwork } = usePermissions(VirtualNetworks, 'create');
   const invalidateServiceQueries = useInvalidateServiceQueries();
@@ -60,7 +63,7 @@ const NetworkAttachmentFields = ({ name, isDisabled = false }: NetworkAttachment
       />
       <div className="network-attachment-fields__details">
         {useDefaultNetwork ? (
-          <DefaultNetworkSummary />
+          <DefaultNetworkSummary tenant={tenant} />
         ) : (
           <>
             {createdNetworkName && (
@@ -85,6 +88,7 @@ const NetworkAttachmentFields = ({ name, isDisabled = false }: NetworkAttachment
               name={`${name}.virtualNetwork`}
               subnetName={`${name}.subnet`}
               securityGroupsName={`${name}.securityGroups`}
+              tenant={adminTenant}
               onCreate={canCreateVirtualNetwork ? () => setIsCreateModalOpen(true) : undefined}
               isRequired
               isDisabled={isDisabled}
@@ -106,6 +110,7 @@ const NetworkAttachmentFields = ({ name, isDisabled = false }: NetworkAttachment
       {isCreateModalOpen && (
         <VirtualNetworkCreateModal
           initialProject={values.metadata.project}
+          initialTenant={adminTenant === undefined ? undefined : values.metadata.tenant}
           onClose={() => setIsCreateModalOpen(false)}
           onCreated={(network) => {
             setIsCreateModalOpen(false);

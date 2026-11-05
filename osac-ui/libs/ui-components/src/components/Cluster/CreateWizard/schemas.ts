@@ -3,6 +3,7 @@ import * as yup from 'yup';
 
 import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/network-attachment';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
+import { workloadTenantSchema } from '@osac/ui-components/validation/workload-tenant';
 
 import type { ClusterNodeSetRow } from './fields';
 import { buildCidrSchema } from '../../../validation/cidr-validation';
@@ -67,6 +68,7 @@ const buildClusterFieldDefinitions = (t: TFunction) => {
 export const buildClusterStepSchema = (
   stepId: ClusterWizardStepId,
   t: TFunction,
+  options: { requireTenant?: boolean } = {},
 ): yup.AnyObjectSchema | undefined => {
   if (stepId === 'review') {
     return undefined;
@@ -75,10 +77,12 @@ export const buildClusterStepSchema = (
   const fields = buildClusterFieldDefinitions(t);
 
   switch (stepId) {
-    case 'catalog':
-      return yup.object({
+    case 'catalog': {
+      const catalog = yup.object({
         catalogItemReference: fields.catalogItemReference,
       });
+      return options.requireTenant ? catalog.concat(workloadTenantSchema(t)) : catalog;
+    }
     case 'general':
       return yup.object({
         metadata: yup.object({

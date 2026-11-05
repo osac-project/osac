@@ -12,9 +12,11 @@ import { Timestamp } from '../../Primitives/Timestamp';
 
 interface VmTableProps {
   vms: ComputeInstance[];
+  /** Adds a Tenant column, for cloud provider admins who see every tenant's workloads. */
+  showTenant?: boolean;
 }
 
-export const VmTable = ({ vms }: VmTableProps) => {
+export const VmTable = ({ vms, showTenant = false }: VmTableProps) => {
   const { t } = useTranslation();
 
   const columnLabels = useMemo(
@@ -35,6 +37,7 @@ export const VmTable = ({ vms }: VmTableProps) => {
       <Thead>
         <Tr>
           <Th>{columnLabels.name}</Th>
+          {showTenant ? <Th>{t('Tenant')}</Th> : null}
           <Th>{columnLabels.status}</Th>
           <Th>{columnLabels.project}</Th>
           <Th>{columnLabels.instanceType}</Th>
@@ -58,6 +61,7 @@ export const VmTable = ({ vms }: VmTableProps) => {
                   detailsUrl={locked ? undefined : `/vms/${encodeURIComponent(vm.id)}`}
                 />
               </Td>
+              {showTenant ? <Td dataLabel={t('Tenant')}>{vm.metadata?.tenant || '—'}</Td> : null}
               <Td dataLabel={columnLabels.status}>
                 <VmStatusLabel state={state} />
               </Td>

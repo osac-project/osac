@@ -18,10 +18,12 @@ import { BareMetalStatusLabel } from '../BareMetalStatusLabel';
 
 interface BareMetalInstanceCardProps {
   instance: BareMetalInstance;
+  /** Shows the tenant, for cloud provider admins who see every tenant's workloads. */
+  showTenant?: boolean;
   instanceTypes?: BareMetalInstanceType[];
 }
 
-const BareMetalInstanceCard = ({ instance }: BareMetalInstanceCardProps) => {
+const BareMetalInstanceCard = ({ instance, showTenant = false }: BareMetalInstanceCardProps) => {
   const { t } = useTranslation();
 
   return (
@@ -55,6 +57,18 @@ const BareMetalInstanceCard = ({ instance }: BareMetalInstanceCardProps) => {
         }
         footer={
           <Flex direction={{ default: 'column' }} gap={{ default: 'gapSm' }}>
+            {showTenant ? (
+              <FlexItem>
+                <Flex
+                  flexWrap={{ default: 'nowrap' }}
+                  gap={{ default: 'gapLg' }}
+                  justifyContent={{ default: 'justifyContentSpaceBetween' }}
+                >
+                  <FlexItem>{t('Tenant')}</FlexItem>
+                  <FlexItem>{instance.metadata?.tenant || '—'}</FlexItem>
+                </Flex>
+              </FlexItem>
+            ) : null}
             <FlexItem>
               <Flex
                 flexWrap={{ default: 'nowrap' }}

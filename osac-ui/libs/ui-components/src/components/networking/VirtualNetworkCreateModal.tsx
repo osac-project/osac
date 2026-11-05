@@ -36,7 +36,13 @@ type VirtualNetworkCreateFormValues = {
   ipv4Cidr: string;
 };
 
-const VirtualNetworkCreateForm = ({ isAdmin }: { isAdmin: boolean }) => {
+const VirtualNetworkCreateForm = ({
+  isAdmin,
+  isTenantLocked,
+}: {
+  isAdmin: boolean;
+  isTenantLocked: boolean;
+}) => {
   const { t } = useTranslation();
   const [tenantField] = useField<ResourceSelectValue>('metadata.tenant');
   const [, , projectHelpers] = useField<string>('metadata.project');
@@ -44,7 +50,12 @@ const VirtualNetworkCreateForm = ({ isAdmin }: { isAdmin: boolean }) => {
 
   return (
     <OsacForm>
-      {isAdmin && <TenantSelectField onSelect={() => void projectHelpers.setValue('', false)} />}
+      {isAdmin && (
+        <TenantSelectField
+          isDisabled={isTenantLocked}
+          onSelect={() => void projectHelpers.setValue('', false)}
+        />
+      )}
       <ProjectField tenant={isAdmin ? tenant : undefined} isDisabled={isAdmin && !tenant} />
       <NameField />
       <InputField
@@ -61,12 +72,18 @@ interface VirtualNetworkCreateModalProps {
   onClose: () => void;
   onCreated?: (network: VirtualNetwork) => void;
   initialProject?: string;
+  /**
+   * Fixes the tenant for a cloud provider admin, for example the tenant of the workload being
+   * provisioned.
+   */
+  initialTenant?: ResourceSelectValue;
 }
 
 export const VirtualNetworkCreateModal = ({
   onClose,
   onCreated,
   initialProject = '',
+  initialTenant,
 }: VirtualNetworkCreateModalProps) => {
   const navigate = useNavigate();
   const { t } = useTranslation();
@@ -91,7 +108,11 @@ export const VirtualNetworkCreateModal = ({
   return (
     <Formik<VirtualNetworkCreateFormValues>
       initialValues={{
-        metadata: { name: '', project: initialProject, tenant: emptyResourceSelectValue() },
+        metadata: {
+          name: '',
+          project: initialProject,
+          tenant: initialTenant ?? emptyResourceSelectValue(),
+        },
         ipv4Cidr: '',
       }}
       validationSchema={validationSchema}
@@ -132,7 +153,10 @@ export const VirtualNetworkCreateModal = ({
           <ModalBody>
             <Stack hasGutter>
               <StackItem>
-                <VirtualNetworkCreateForm isAdmin={isAdmin} />
+                <VirtualNetworkCreateForm
+                  isAdmin={isAdmin}
+                  isTenantLocked={Boolean(initialTenant?.id)}
+                />
               </StackItem>
               {!!error && (
                 <StackItem>

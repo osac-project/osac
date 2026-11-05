@@ -107,6 +107,21 @@ describe('VmTable', () => {
     expect(screen.getByText('-')).toBeInTheDocument();
   });
 
+  it('adds a Tenant column only when asked, for cloud provider admins', () => {
+    const tenantVm = {
+      ...runningVm,
+      metadata: { ...runningVm.metadata, tenant: 'tenant-1' },
+    } as ComputeInstance;
+    const { unmount } = renderWithProviders(<VmTable vms={[tenantVm]} />);
+    expect(screen.queryByRole('columnheader', { name: 'Tenant' })).not.toBeInTheDocument();
+    expect(screen.queryByText('tenant-1')).not.toBeInTheDocument();
+    unmount();
+
+    renderWithProviders(<VmTable vms={[tenantVm]} showTenant />);
+    expect(screen.getByRole('columnheader', { name: 'Tenant' })).toBeInTheDocument();
+    expect(screen.getByText('tenant-1')).toBeInTheDocument();
+  });
+
   it('links the VM name to its details page', () => {
     renderTable();
 

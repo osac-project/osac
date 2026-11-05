@@ -54,7 +54,8 @@ const ProjectField = ({ label, onSelect: onSelectProp, isDisabled, tenant }: Pro
   // After a tenant change, the previous tenant's list stays as placeholder data
   // until the new one arrives; never offer those projects.
   const projects = isPlaceholderData ? [] : data;
-  const isLoading = isListLoading || isPlaceholderData;
+  // A cleared tenant disables the query; its old placeholder data is not a load in progress.
+  const isLoading = isListLoading || (isPlaceholderData && tenant !== '');
 
   return (
     <>

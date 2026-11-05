@@ -45,7 +45,7 @@ const BARE_METAL_LIST_VIEW_KEY = 'bare-metal-list';
 export const BareMetalListPage = () => {
   const { t } = useTranslation();
   const [, setSearchParams] = useSearchParams();
-  const { projects, setProjects } = useSession();
+  const { projects, setProjects, role } = useSession();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
   const [powerStateFilterParam, setPowerStateFilterParam] = usePageFilter(POWER_STATE_FILTER_PARAM);
   const [instanceTypeFilterParam, setInstanceTypeFilterParam] = usePageFilter(
@@ -193,12 +193,12 @@ export const BareMetalListPage = () => {
               <Gallery hasGutter minWidths={{ default: '400px' }} maxWidths={{ default: '400px' }}>
                 {instances.map((instance) => (
                   <GalleryItem key={instance.id}>
-                    <BareMetalInstanceCard instance={instance} />
+                    <BareMetalInstanceCard instance={instance} showTenant={role === 'admin'} />
                   </GalleryItem>
                 ))}
               </Gallery>
             ) : (
-              <BareMetalTable instances={instances} />
+              <BareMetalTable instances={instances} showTenant={role === 'admin'} />
             )}
           </ListPageBody>
         </StackItem>

@@ -63,11 +63,16 @@ const makeResolveClusterVersion = (versions: ClusterVersion[]) => {
   };
 };
 
-const renderTable = (clusters: Cluster[], versions: ClusterVersion[] = clusterVersions) =>
+const renderTable = (
+  clusters: Cluster[],
+  versions: ClusterVersion[] = clusterVersions,
+  showTenant = false,
+) =>
   renderWithProviders(
     <ClustersTable
       clusters={clusters}
       resolveClusterVersion={makeResolveClusterVersion(versions)}
+      showTenant={showTenant}
     />,
   );
 
@@ -88,6 +93,17 @@ describe('ClustersTable version join', () => {
     renderTable([makeCluster('c-missing', 'v-deleted')], []);
 
     expect(screen.getByText('OpenShift v-deleted')).toBeInTheDocument();
+  });
+
+  it("shows each cluster's tenant when asked, for cloud provider admins", async () => {
+    renderTable(
+      [create(ClusterSchema, { id: 'c-t', metadata: { name: 'c-t', tenant: 'tenant-1' } })],
+      [],
+      true,
+    );
+
+    expect(await screen.findByRole('columnheader', { name: 'Tenant' })).toBeInTheDocument();
+    expect(screen.getByText('tenant-1')).toBeInTheDocument();
   });
 
   it('renders clusters without a version reference', () => {

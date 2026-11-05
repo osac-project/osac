@@ -12,13 +12,16 @@ import NameField from '../../Form/NameField';
 import OsacForm from '../../Form/OsacForm';
 import SshKeyField from '../../Form/SshKeyField';
 import ProvisioningField from '../../ProvisioningWizard/fields/ProvisioningField';
+import { useWorkloadTenant } from '../../ProvisioningWizard/useWorkloadTenant';
 
 const ClusterGeneralStep = () => {
   const { values, setFieldValue } = useFormikContext<ClusterWizardValues>();
+  const { adminTenant } = useWorkloadTenant();
 
   return (
     <OsacForm>
       <ProjectField
+        tenant={adminTenant}
         onSelect={() => {
           if (!values.spec.pullSecretSecret.locked) {
             void setFieldValue(`${CLUSTER_PULL_SECRET_FORM_PATH}.value`, '');
@@ -34,6 +37,7 @@ const ClusterGeneralStep = () => {
           <PullSecretField
             name={valueName}
             project={values.metadata.project}
+            tenant={adminTenant}
             isDisabled={isDisabled}
           />
         )}

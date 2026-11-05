@@ -22,10 +22,12 @@ import OsacForm from '../../Form/OsacForm';
 import SshPublicKeySecretField from '../../Form/SshPublicKeySecretField';
 import UserDataField from '../../Form/UserDataField';
 import ProvisioningField from '../../ProvisioningWizard/fields/ProvisioningField';
+import { useWorkloadTenant } from '../../ProvisioningWizard/useWorkloadTenant';
 
 const VmAccessStep = () => {
   const { t } = useTranslation();
   const { values } = useFormikContext<ComputeInstanceWizardValues>();
+  const { adminTenant } = useWorkloadTenant();
   const isLinux =
     values.spec.guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_LINUX ||
     values.spec.guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED;
@@ -55,6 +57,7 @@ const VmAccessStep = () => {
                 <SshPublicKeySecretField
                   name={valueName}
                   project={values.metadata.project}
+                  tenant={adminTenant}
                   isDisabled={isDisabled}
                   placeholder={t('Select an SSH public key')}
                 />
@@ -89,6 +92,7 @@ const VmAccessStep = () => {
                 }
                 name={valueName}
                 projectName={values.metadata.project}
+                tenant={adminTenant}
                 isDisabled={isDisabled}
               />
             )}

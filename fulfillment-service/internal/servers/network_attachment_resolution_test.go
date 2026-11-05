@@ -288,7 +288,9 @@ var _ = Describe("Network attachment Subnet resolution", func() {
 		}
 
 		err := resolveAttachmentSubnet(ctx, guards, request, &networkAttachmentResolution{})
-		Expect(err).To(MatchError(ContainSubstring("id and name do not refer to the same resource")))
+		Expect(err).To(MatchError(ContainSubstring(
+			"Subnet reference in spec.network_attachments[0].subnet: " +
+				"id and name do not refer to the same resource")))
 	})
 
 	DescribeTable("resolves explicit Subnet references from another project",

@@ -276,7 +276,7 @@ const matchesStringEqualityFilter = (
     return true;
   }
   const escapedField = field.replaceAll('.', '\\.');
-  const match = filter.match(new RegExp(`${escapedField} == "([^"]+)"`));
+  const match = filter.match(new RegExp(`${escapedField} == "([^"]*)"`));
   return !match || match[1] === value;
 };
 
@@ -311,6 +311,13 @@ const matchesVirtualNetworkIdInFilter = (
   const ids = JSON.parse(afterIn.slice(0, bracketEnd + 1)) as string[];
   return virtualNetwork !== undefined && ids.includes(virtualNetwork);
 };
+
+const matchesMetadataScopeFilter = (
+  filter: string | undefined,
+  metadata: { tenant?: string; project?: string } | undefined,
+): boolean =>
+  matchesStringEqualityFilter(filter, 'this.metadata.tenant', metadata?.tenant) &&
+  matchesStringEqualityFilter(filter, 'this.metadata.project', metadata?.project);
 
 const matchesVirtualNetworkScopeFilter = (
   filter: string | undefined,
@@ -843,7 +850,8 @@ export const createMockConnectTransport = (
           const items = subnets.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
-              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
+              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id) &&
+              matchesMetadataScopeFilter(req.filter, item.metadata),
           );
           return { items, size: items.length, total: items.length };
         },
@@ -863,7 +871,8 @@ export const createMockConnectTransport = (
           const items = securityGroups.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
-              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
+              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id) &&
+              matchesMetadataScopeFilter(req.filter, item.metadata),
           );
           return { items, size: items.length, total: items.length };
         },

@@ -26,6 +26,8 @@ import { useTranslation } from '../../hooks/useTranslation';
 interface UserDataFieldProps {
   name: string;
   projectName: string;
+  /** Set for a cloud provider admin: limits the list to the workload's tenant. */
+  tenant?: string;
   isDisabled?: boolean;
   isRequired?: boolean;
   labelInfo?: ReactNode;
@@ -42,6 +44,7 @@ interface UserDataSourceOption {
 const UserDataField = ({
   name,
   projectName,
+  tenant,
   isDisabled = false,
   isRequired = false,
   labelInfo,
@@ -146,6 +149,7 @@ const UserDataField = ({
           label={t('User data secret')}
           filter={cel<Secret>((filter) =>
             filter.and(
+              tenant === undefined ? undefined : filter.field('metadata.tenant').equals(tenant),
               filter.field('metadata.project').equals(projectName),
               filter.field('type').equals(SecretType.USER_DATA),
             ),

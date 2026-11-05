@@ -9,9 +9,11 @@ import OsacForm from '../../Form/OsacForm';
 import SshPublicKeySecretField from '../../Form/SshPublicKeySecretField';
 import UserDataField from '../../Form/UserDataField';
 import ProvisioningField from '../../ProvisioningWizard/fields/ProvisioningField';
+import { useWorkloadTenant } from '../../ProvisioningWizard/useWorkloadTenant';
 
 const BareMetalAccessStep = () => {
   const { values } = useFormikContext<BareMetalInstanceWizardValues>();
+  const { adminTenant } = useWorkloadTenant();
 
   return (
     <OsacForm>
@@ -20,6 +22,7 @@ const BareMetalAccessStep = () => {
           <SshPublicKeySecretField
             name={valueName}
             project={values.metadata.project}
+            tenant={adminTenant}
             isDisabled={isDisabled}
           />
         )}
@@ -29,6 +32,7 @@ const BareMetalAccessStep = () => {
           <UserDataField
             name={valueName}
             projectName={values.metadata.project}
+            tenant={adminTenant}
             isDisabled={isDisabled}
           />
         )}

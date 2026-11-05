@@ -38,6 +38,20 @@ const clusterVersion = create(ClusterVersionSchema, {
 });
 
 describe('ClusterCard', () => {
+  it('shows the tenant only when asked, for cloud provider admins', () => {
+    const tenantCluster = create(ClusterSchema, {
+      id: 'cluster-t',
+      metadata: { name: 'ocp-cluster-t', tenant: 'tenant-1' },
+    });
+    const { unmount } = renderWithProviders(<ClusterCard cluster={tenantCluster} showTenant />);
+    expect(screen.getByText('Tenant')).toBeInTheDocument();
+    expect(screen.getByText('tenant-1')).toBeInTheDocument();
+    unmount();
+
+    renderWithProviders(<ClusterCard cluster={tenantCluster} />);
+    expect(screen.queryByText('tenant-1')).not.toBeInTheDocument();
+  });
+
   it('renders cluster details in a card', () => {
     renderWithProviders(<ClusterCard cluster={cluster} clusterVersion={clusterVersion} />);
 

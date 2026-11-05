@@ -11,6 +11,7 @@ import { ClusterStatusLabel } from './ClusterStatusLabel';
 
 export type ClusterTableColumn =
   | 'name'
+  | 'tenant'
   | 'status'
   | 'project'
   | 'configuration'
@@ -21,12 +22,15 @@ interface ClusterTableRowProps {
   cluster: Cluster;
   clusterVersion?: ClusterVersion;
   columnLabels: Record<ClusterTableColumn, string>;
+  /** Adds the Tenant cell, for cloud provider admins who see every tenant's workloads. */
+  showTenant?: boolean;
 }
 
 export const ClusterTableRow = ({
   cluster,
   clusterVersion,
   columnLabels,
+  showTenant = false,
 }: ClusterTableRowProps) => {
   const { t } = useTranslation();
   const locked = cluster.status?.state === ClusterState.DELETING;
@@ -39,6 +43,9 @@ export const ClusterTableRow = ({
           detailsUrl={locked ? undefined : `/clusters/${encodeURIComponent(cluster.id)}`}
         />
       </Td>
+      {showTenant ? (
+        <Td dataLabel={columnLabels.tenant}>{cluster.metadata?.tenant || '—'}</Td>
+      ) : null}
       <Td dataLabel={columnLabels.status}>
         <ClusterStatusLabel state={cluster.status?.state} />
       </Td>

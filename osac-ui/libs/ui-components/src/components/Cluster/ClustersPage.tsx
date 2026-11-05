@@ -52,7 +52,7 @@ const CLUSTERS_LIST_VIEW_KEY = 'clusters-list';
 export const ClustersPage = () => {
   const { t } = useTranslation();
   const [, setSearchParams] = useSearchParams();
-  const { projects, setProjects } = useSession();
+  const { projects, setProjects, role } = useSession();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
   const [statusFilterParam, setStatusFilterParam] = usePageFilter(STATUS_FILTER_PARAM);
   const statusFilter = isClusterStatusFilter(statusFilterParam) ? statusFilterParam : undefined;
@@ -219,12 +219,17 @@ export const ClustersPage = () => {
                     <ClusterCard
                       cluster={cluster}
                       clusterVersion={resolveClusterVersion(cluster)}
+                      showTenant={role === 'admin'}
                     />
                   </GalleryItem>
                 ))}
               </Gallery>
             ) : (
-              <ClustersTable clusters={clusters} resolveClusterVersion={resolveClusterVersion} />
+              <ClustersTable
+                clusters={clusters}
+                resolveClusterVersion={resolveClusterVersion}
+                showTenant={role === 'admin'}
+              />
             )}
           </ListPageBody>
         </StackItem>

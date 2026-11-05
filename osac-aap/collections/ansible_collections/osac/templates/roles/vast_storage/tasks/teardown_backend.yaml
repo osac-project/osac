@@ -97,26 +97,8 @@
       ansible.builtin.set_fact:
         _vast_cleanup_results: {}
 
-    - name: Check if other backends exist for this tenant
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Secret
-        namespace: "{{ vast_storage_config_namespace }}"
-        label_selectors:
-          - "osac.openshift.io/tenant={{ tenant_name }}"
-      register: _vast_tenant_secrets_check
-      ignore_errors: true
-      no_log: true
-
-    - name: Set flag to skip tenant-wide delete if multiple backends exist
-      ansible.builtin.set_fact:
-        _vast_skip_tenant_delete: >-
-          {{
-            _vast_tenant_secrets_check is failed or
-            ((_vast_tenant_secrets_check.resources | default([])
-              | rejectattr('metadata.name', 'equalto', vast_storage_tenant_config_secret_prefix ~ tenant_name ~ '-' ~ _vast_backend_id)
-              | list | length) > 0)
-          }}
+    - name: Check if other backends share this VAST tenant/endpoint
+      ansible.builtin.include_tasks: _check_shared_vast_tenant.yaml
 
     - name: Clean up VMS resources via live tenant_id queries
       when:

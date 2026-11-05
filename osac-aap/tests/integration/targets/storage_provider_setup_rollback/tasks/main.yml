@@ -453,3 +453,226 @@
         - "vast-tenant-config-test-rbmulti-be-a"
         - "vast-tenant-config-test-rbmulti-be-b"
       failed_when: false
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Test: Same-endpoint rollback (critical bug - rollback destroying shared tenant)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- name: "Storage Provider Same-Endpoint Rollback - Prepare"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Reset mock VMS to clear leftover managers from previous runs
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_reset"
+        method: POST
+        validate_certs: false
+      failed_when: false
+
+    - name: Delete any leftover same-endpoint rollback hub Secrets
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: "osac-system"
+      loop:
+        - "vast-tenant-config-test-rbsame-be-a"
+        - "vast-tenant-config-test-rbsame-be-b"
+      failed_when: false
+
+- name: "Storage Provider Same-Endpoint Rollback - Setup backend A"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-rbsame"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-rbsame"
+    _cluster_name: "test-cluster"
+    storage_provider_tiers:
+      - name: tier-a
+        protocol: nfs
+        provider: vast
+        backend_id: be-a
+    storage_provider_backend_connections:
+      be-a:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "{{ _mock_vast_password }}"
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Setup backend A successfully
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+
+- name: "Storage Provider Same-Endpoint Rollback - Force backend B failure"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+    OSAC_MOCK_VMS_FORCE_FAILURE: "manager_creation"
+
+  vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-rbsame"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-rbsame"
+    _cluster_name: "test-cluster"
+    storage_provider_tiers:
+      - name: tier-b
+        protocol: nfs
+        provider: vast
+        backend_id: be-b
+    storage_provider_backend_connections:
+      be-b:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "{{ _mock_vast_password }}"
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Record call log mark before failing setup
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _rbsame_pre_calls
+
+    - name: Save call log offset
+      ansible.builtin.set_fact:
+        _rbsame_mark: "{{ _rbsame_pre_calls.json | length }}"
+
+    - name: Attempt backend B setup (expect failure)
+      block:
+        - name: Run backend B setup
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+
+        - name: Setup should have failed but succeeded
+          ansible.builtin.fail:
+            msg: "Backend B setup should have failed but succeeded"
+      rescue:
+        - name: Backend B setup failed as expected
+          ansible.builtin.debug:
+            msg: "Backend B setup failed as expected (rollback ran)"
+
+- name: "Storage Provider Same-Endpoint Rollback - Verify A survives"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Get call log since backend B failure
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _rbsame_calls
+
+    - name: Check for tenant deletions in rollback window
+      vars:
+        _rbsame_window: "{{ _rbsame_calls.json[_rbsame_mark | int:] }}"
+        _tenant_deletes: >-
+          {{
+            _rbsame_window
+            | selectattr('method', 'equalto', 'DELETE')
+            | selectattr('path', 'search', 'tenants/')
+            | list
+          }}
+      ansible.builtin.assert:
+        that:
+          - _tenant_deletes | length == 0
+        fail_msg: >-
+          Rollback incorrectly deleted shared tenant ({{ _tenant_deletes | length }} DELETE calls found).
+          This destroys backend A's working storage!
+        success_msg: "Rollback correctly skipped tenant deletion (shared with backend A)"
+
+    - name: Verify backend A's hub Secret still exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-rbsame-be-a"
+        namespace: "osac-system"
+      register: _rbsame_hub_a
+
+    - name: Assert backend A hub Secret survived
+      ansible.builtin.assert:
+        that:
+          - _rbsame_hub_a.resources | length == 1
+        fail_msg: "Backend A's hub Secret was deleted - should have survived"
+        success_msg: "Backend A's hub Secret survived rollback"
+
+    - name: Verify backend B's hub Secret was deleted (rollback cleanup)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-rbsame-be-b"
+        namespace: "osac-system"
+      register: _rbsame_hub_b
+
+    - name: Assert backend B hub Secret was cleaned up
+      ansible.builtin.assert:
+        that:
+          - _rbsame_hub_b.resources | length == 0
+        fail_msg: "Backend B's hub Secret should have been deleted in rollback"
+        success_msg: "Backend B's hub Secret correctly deleted"
+
+- name: "Storage Provider Same-Endpoint Rollback - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Teardown backend A
+      block:
+        - name: Run backend A teardown
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: teardown_backend
+            tenant_name: "test-rbsame"
+            tenant_namespace: "osac-system"
+            tenant_uid: "test-uid-rbsame"
+            storage_provider_tiers:
+              - name: tier-a
+                protocol: nfs
+                provider: vast
+                backend_id: be-a
+            storage_provider_backend_connections:
+              be-a:
+                endpoint: "127.0.0.1:18443"
+                username: "admin"
+                password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+            vast_storage_validate_certs: false
+      rescue:
+        - name: Cleanup teardown failures are ignored
+          ansible.builtin.debug:
+            msg: "Backend A teardown failed (cleanup phase - ignored)"
+
+    - name: Delete any remaining Secrets
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: "osac-system"
+      loop:
+        - "vast-tenant-config-test-rbsame-be-a"
+        - "vast-tenant-config-test-rbsame-be-b"
+      failed_when: false

@@ -801,3 +801,249 @@
         - "vast-csi-test-td-2be-be-b"
         - "vast-tenant-config-different-tenant-be-x"
       failed_when: false
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Test: Different endpoints teardown (verify independent cleanup per array)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- name: "Storage Provider Different-Endpoint Teardown - Setup"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-td-diffep"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-diffep"
+    _cluster_name: "test-cluster"
+
+  tasks:
+    - name: Reset both mock VMS servers
+      ansible.builtin.uri:
+        url: "https://{{ item }}/_reset"
+        validate_certs: false
+        method: POST
+      loop:
+        - "127.0.0.1:18443"
+        - "127.0.0.1:18445"
+      failed_when: false
+
+    - name: Setup backend A on endpoint1 (port 18443)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+        storage_provider_tiers:
+          - name: tier-a
+            protocol: nfs
+            provider: vast
+            backend_id: be-a
+        storage_provider_backend_connections:
+          be-a:
+            endpoint: "127.0.0.1:18443"
+            username: "admin"
+            password: "{{ _mock_vast_password }}"
+        vast_storage_validate_certs: false
+
+    - name: Setup backend B on endpoint2 (port 18445)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+        storage_provider_tiers:
+          - name: tier-b
+            protocol: nfs
+            provider: vast
+            backend_id: be-b
+        storage_provider_backend_connections:
+          be-b:
+            endpoint: "127.0.0.1:18445"
+            username: "admin"
+            password: "{{ _mock_vast_password }}"
+        vast_storage_validate_certs: false
+
+- name: "Storage Provider Different-Endpoint Teardown - Teardown backend A"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-td-diffep"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-diffep"
+
+  tasks:
+    - name: Record endpoint1 call log before teardown
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _diffep_pre_ep1
+
+    - name: Save endpoint1 call count
+      ansible.builtin.set_fact:
+        _diffep_mark_ep1: "{{ _diffep_pre_ep1.json | length }}"
+
+    - name: Record endpoint2 call log before teardown
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18445/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _diffep_pre_ep2
+
+    - name: Save endpoint2 call count
+      ansible.builtin.set_fact:
+        _diffep_mark_ep2: "{{ _diffep_pre_ep2.json | length }}"
+
+    - name: Teardown backend A (endpoint1)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_backend
+        storage_provider_tiers:
+          - name: tier-a
+            protocol: nfs
+            provider: vast
+            backend_id: be-a
+        storage_provider_backend_connections:
+          be-a:
+            endpoint: "127.0.0.1:18443"
+            username: "admin"
+            password: "{{ _mock_vast_password }}"
+        vast_storage_validate_certs: false
+
+- name: "Storage Provider Different-Endpoint Teardown - Verify isolation"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Get endpoint1 calls during teardown
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _diffep_post_ep1
+
+    - name: Get endpoint2 calls during teardown
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18445/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _diffep_post_ep2
+
+    - name: Verify endpoint1 tenant was deleted
+      vars:
+        _ep1_window: "{{ _diffep_post_ep1.json[_diffep_mark_ep1 | int:] }}"
+        _tenant_deletes: >-
+          {{
+            _ep1_window
+            | selectattr('method', 'equalto', 'DELETE')
+            | selectattr('path', 'search', 'tenants/')
+            | list
+          }}
+      ansible.builtin.assert:
+        that:
+          - _tenant_deletes | length > 0
+        fail_msg: "Endpoint1 tenant should have been deleted (backend A was last on this array)"
+        success_msg: "Endpoint1 tenant correctly deleted"
+
+    - name: Verify endpoint2 was NOT touched
+      vars:
+        _ep2_window: "{{ _diffep_post_ep2.json[_diffep_mark_ep2 | int:] }}"
+      ansible.builtin.assert:
+        that:
+          - _ep2_window | length == 0
+        fail_msg: >-
+          Teardown of backend A (endpoint1) incorrectly made {{ _ep2_window | length }}
+          API calls to endpoint2. Different endpoints should be independent!
+        success_msg: "Endpoint2 correctly untouched by backend A teardown"
+
+    - name: Verify backend A hub Secret was deleted
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-td-diffep-be-a"
+        namespace: "osac-system"
+      register: _diffep_hub_a
+
+    - name: Assert backend A hub Secret deleted
+      ansible.builtin.assert:
+        that:
+          - _diffep_hub_a.resources | length == 0
+        fail_msg: "Backend A hub Secret should be deleted"
+        success_msg: "Backend A hub Secret correctly deleted"
+
+    - name: Verify backend B hub Secret still exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-td-diffep-be-b"
+        namespace: "osac-system"
+      register: _diffep_hub_b
+
+    - name: Assert backend B hub Secret survived
+      ansible.builtin.assert:
+        that:
+          - _diffep_hub_b.resources | length == 1
+        fail_msg: "Backend B hub Secret should still exist (on different endpoint)"
+        success_msg: "Backend B hub Secret correctly preserved"
+
+- name: "Storage Provider Different-Endpoint Teardown - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+
+  tasks:
+    - name: Teardown backend B
+      block:
+        - name: Run teardown for backend B
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: teardown_backend
+            tenant_name: "test-td-diffep"
+            tenant_namespace: "osac-system"
+            tenant_uid: "test-uid-diffep"
+            storage_provider_tiers:
+              - name: tier-b
+                protocol: nfs
+                provider: vast
+                backend_id: be-b
+            storage_provider_backend_connections:
+              be-b:
+                endpoint: "127.0.0.1:18445"
+                username: "admin"
+                password: "{{ _mock_vast_password }}"
+            vast_storage_validate_certs: false
+            vast_storage_config_namespace: osac-system
+      rescue:
+        - name: Teardown failed but continuing cleanup
+          ansible.builtin.debug:
+            msg: "Teardown failed but continuing with Secret cleanup"
+
+    - name: Delete any remaining Secrets
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: "osac-system"
+      loop:
+        - "vast-tenant-config-test-td-diffep-be-a"
+        - "vast-tenant-config-test-td-diffep-be-b"
+      failed_when: false

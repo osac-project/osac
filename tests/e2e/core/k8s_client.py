@@ -204,8 +204,9 @@ class K8sClient:
         args: list[str] = [*self._base(), "apply", "-f", "-"]
         subprocess.run(args, input=manifest, capture_output=True, text=True, check=True)
 
-    def delete(self, *, resource: str, name: str, wait: bool = True) -> None:
-        args = [*self._base(), "delete", resource, name, "-n", self.namespace]
+    def delete(self, *, resource: str, name: str, namespace: str | None = None, wait: bool = True) -> None:
+        target_namespace = self.namespace if namespace is None else namespace
+        args = [*self._base(), "delete", resource, name, "-n", target_namespace]
         if not wait:
             args.append("--wait=false")
         run(*args, timeout=600)

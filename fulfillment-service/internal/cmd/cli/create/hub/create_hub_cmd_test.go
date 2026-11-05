@@ -40,6 +40,13 @@ var _ = Describe("Create hub command", func() {
 		Expect(cmd.Flags().Lookup("namespace")).NotTo(BeNil())
 	})
 
+	It("should register repeatable --label flag", func() {
+		cmd := Cmd()
+		flag := cmd.Flags().Lookup("label")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.Value.Type()).To(Equal("stringArray"))
+	})
+
 	It("should not register an --id flag", func() {
 		cmd := Cmd()
 		Expect(cmd.Flags().Lookup("id")).To(BeNil())

@@ -159,6 +159,9 @@ def cluster_tenants(namespace: str, k8s_hub_client: K8sClient) -> None:
             f"  namespace: {namespace}\n"
             "spec: {}\n"
         )
+    if os.getenv("OSAC_SKIP_CLUSTER_STORAGE_WAIT", "").lower() in {"1", "true", "yes"}:
+        return
+
     # Per-tenant StorageClasses come from an AAP job; wait for the test
     # tenant's classes so provisioning jobs do not queue behind storage jobs.
     # When the condition never appears the environment has no storage
@@ -177,6 +180,9 @@ def cluster_tenants(namespace: str, k8s_hub_client: K8sClient) -> None:
 
 @pytest.fixture(scope="session")
 def cluster_domain() -> str:
+    configured_domain = os.environ.get("OSAC_CLUSTER_DOMAIN")
+    if configured_domain:
+        return configured_domain
     return run("kubectl", "get", "ingress.config.openshift.io", "cluster", "-o", "jsonpath={.spec.domain}")
 
 
@@ -243,9 +249,7 @@ def grpc(
 
 @pytest.fixture(scope="session")
 def private_grpc(fulfillment_private_address: str, namespace: str, service_account: str) -> GRPCClient:
-    token: str = run(
-        "oc", "create", "token", service_account, "-n", namespace, "--duration", "4h", "--as", "system:admin"
-    )
+    token: str = run(*_service_account_token_args(service_account=service_account, namespace=namespace))
     return GRPCClient(address=fulfillment_private_address, token=token)
 
 
@@ -289,6 +293,9 @@ def _wait_for_default_networking_ready(
     ``list_subnet_ids()`` returns an empty list (``WHERE tenant = $1``
     receives an empty string).
     """
+    if os.getenv("OSAC_SKIP_DEFAULT_SUBNET_WAIT", "").lower() in {"1", "true", "yes"}:
+        return
+
     # OSAC-5564: subnet readiness alone does not guarantee the matching default
     # SecurityGroup is READY, which Cluster Create now requires for defaulting.
     wait_for_tenant_default_networking_ready(grpc=private_grpc, tenant_name=jwt_tenant)
@@ -388,7 +395,10 @@ def setup_organization_memberships(ensure_tenants: None, keycloak_url: str, keyc
 
 @pytest.fixture(scope="session")
 def k8s_hub_client(namespace: str) -> K8sClient:
-    client = K8sClient(namespace=namespace)
+    client = K8sClient(
+        namespace=namespace,
+        as_system_admin=os.getenv("OSAC_TOKEN_IMPERSONATE", "system:admin") == "system:admin",
+    )
     # Fail on broken initial hub access before entering retrying polls.
     client.get_json(resource="namespace", name=namespace)
     return client
@@ -400,7 +410,7 @@ def cli(
 ) -> Iterator[OsacCLI]:
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
-        address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
+        address=f"https://{fulfillment_address}",
         token_script=_make_jwt_token_script(keycloak_url, jwt_username, jwt_password),
         namespace=namespace,
     )
@@ -421,15 +431,24 @@ def pull_secret_name(cli: OsacCLI, pull_secret_path: str) -> Iterator[str]:
 
 @pytest.fixture(scope="session")
 def private_cli(namespace: str, fulfillment_private_address: str, service_account: str) -> Iterator[OsacCLI]:
+    token_script = " ".join(_service_account_token_args(service_account=service_account, namespace=namespace))
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
-        address=f"https://{fulfillment_private_address.rsplit(':', 1)[0]}",
-        token_script=f"oc create token -n {namespace} {service_account} --as system:admin",
+        address=f"https://{fulfillment_private_address}",
+        token_script=token_script,
         namespace=namespace,
         private=True,
     )
     yield instance
     instance.close()
+
+
+def _service_account_token_args(*, service_account: str, namespace: str) -> list[str]:
+    args = ["oc", "create", "token", service_account, "-n", namespace, "--duration", "4h"]
+    impersonate = os.environ.get("OSAC_TOKEN_IMPERSONATE", "system:admin")
+    if impersonate:
+        args.extend(["--as", impersonate])
+    return args
 
 
 @pytest.fixture(scope="session")

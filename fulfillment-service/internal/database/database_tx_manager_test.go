@@ -708,13 +708,25 @@ var _ = Describe("Transaction manager", func() {
 				Expect(output.String()).To(ContainSubstring("my panic"))
 			})
 
+			// Calling a nil function would panic, and that panic would be recovered and logged, so the spec looks
+			// at the log to tell that the function was dropped instead.
 			It("Should ignore a nil function", func() {
-				tx := insert("my_value")
+				var output bytes.Buffer
+				loggingManager, err := NewTxManager().
+					SetLogger(slog.New(slog.NewJSONHandler(&output, nil))).
+					SetPool(pool).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				tx, err := loggingManager.Begin(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tx.Exec(ctx, "insert into my_table (my_column) values ($1)", "my_value")
+				Expect(err).ToNot(HaveOccurred())
 				tx.OnCommit(nil)
 
 				Expect(tx.End(ctx)).To(Succeed())
 
 				Expect(count()).To(Equal(1))
+				Expect(output.String()).ToNot(ContainSubstring("panicked"))
 			})
 
 			It("Should call the functions only once when the transaction is ended twice", func() {

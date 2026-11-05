@@ -569,8 +569,9 @@ type registrationComputeInstancesClient struct {
 	beforeUpdate          func(int)
 	afterUpdate           func(int)
 
-	// checkFinalizers makes the fake apply the rule of the server for finalizer changes: an update whose mask
-	// selects metadata.finalizers must carry the stored version, and then the finalizers are stored.
+	// checkFinalizers makes the fake apply the rule of the server for finalizer changes, for updates whose mask
+	// selects metadata.finalizers: one that changes the set of finalizers must carry the stored version, and the
+	// finalizers of an accepted one are stored.
 	checkFinalizers bool
 }
 
@@ -615,7 +616,12 @@ func (c *registrationComputeInstancesClient) Update(
 	}
 	paths := request.GetUpdateMask().GetPaths()
 	if c.checkFinalizers && slices.Contains(paths, "metadata.finalizers") {
-		if request.GetObject().GetMetadata().GetVersion() != c.object.GetMetadata().GetVersion() {
+		requested := slices.Clone(request.GetObject().GetMetadata().GetFinalizers())
+		stored := slices.Clone(c.object.GetMetadata().GetFinalizers())
+		slices.Sort(requested)
+		slices.Sort(stored)
+		changed := !slices.Equal(slices.Compact(requested), slices.Compact(stored))
+		if changed && request.GetObject().GetMetadata().GetVersion() != c.object.GetMetadata().GetVersion() {
 			return nil, status.Error(codes.Aborted, "finalizers can only be changed from the current version")
 		}
 		c.object.GetMetadata().SetFinalizers(slices.Clone(request.GetObject().GetMetadata().GetFinalizers()))

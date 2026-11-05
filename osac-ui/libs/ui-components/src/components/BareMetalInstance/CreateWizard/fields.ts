@@ -44,12 +44,6 @@ export interface BareMetalInstanceWizardValues {
   };
 }
 
-export const hasBareMetalAuthentication = (
-  sshKey: string | undefined,
-  userData: string | undefined,
-  userDataSecretName?: string,
-): boolean => Boolean(sshKey?.trim() || userData?.trim() || userDataSecretName?.trim());
-
 export const getBareMetalNetworkAttachment = (catalogItem?: BareMetalInstanceCatalogItem) => {
   if (!catalogItem) {
     return networkAttachmentFieldsFromPolicy(undefined);
@@ -88,6 +82,7 @@ export const getBareMetalInstanceInitialValues = (
   if (!catalogItem) {
     return values;
   }
+
   return {
     ...values,
     catalogItemReference: {
@@ -96,7 +91,12 @@ export const getBareMetalInstanceInitialValues = (
     },
     spec: {
       ...values.spec,
-      sshKey: getFieldFromCatalogItemPolicy(catalogItem.fields?.sshPublicKey, ''),
+      sshKey: (() => {
+        const field = getFieldFromCatalogItemPolicy<{ name: string }>(catalogItem.fields?.sshKey, {
+          name: '',
+        });
+        return provisioningFieldValue(field.value.name ?? '', field.locked);
+      })(),
       userData: getUserDataSourceFieldsFromPolicy(catalogItem.fields?.userDataSource),
       instanceType: (() => {
         const field = getFieldFromCatalogItemPolicy(catalogItem.fields?.instanceType, undefined);

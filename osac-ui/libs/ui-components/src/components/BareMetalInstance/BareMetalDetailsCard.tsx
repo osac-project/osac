@@ -13,6 +13,7 @@ import type { BareMetalInstance } from '@osac/types';
 import { useTranslation } from '../../hooks/useTranslation';
 import { displayValue } from '../../utils/detailFormatters';
 import { Timestamp } from '../Primitives/Timestamp';
+import ResourceLink from '../Resource/ResourceLink';
 
 interface Props {
   instance: BareMetalInstance;
@@ -41,7 +42,15 @@ const BareMetalDetailsCard = ({ instance }: Props) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('SSH public key')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {displayValue(instance.spec?.sshPublicKey)}
+              {instance.spec?.sshKey?.id ? (
+                <ResourceLink
+                  basePath="/secrets"
+                  id={instance.spec.sshKey.id}
+                  name={instance.spec.sshKey.name}
+                />
+              ) : (
+                '—'
+              )}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

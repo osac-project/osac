@@ -4,13 +4,13 @@
 
 - name: Set AWS defaults
   ansible.builtin.set_fact:
-    aws_region: "{{ ocp_4_22_aws_gpu_maas_aws_region | default('us-east-1') }}"
-    aws_instance_type: "{{ ocp_4_22_aws_gpu_maas_aws_instance_type | default('g5.xlarge') }}"
-    aws_worker_count: "{{ ocp_4_22_aws_gpu_maas_aws_worker_count | default(2) | int }}"
-    aws_root_volume_size: "{{ ocp_4_22_aws_gpu_maas_aws_root_volume_size | default(120) | int }}"
-    aws_root_volume_type: "{{ ocp_4_22_aws_gpu_maas_aws_root_volume_type | default('gp3') }}"
-    aws_subnet_id: "{{ ocp_4_22_aws_gpu_maas_aws_subnet_id | default('') }}"
-    aws_security_group_id: "{{ ocp_4_22_aws_gpu_maas_aws_security_group_id | default('') }}"
+    aws_region: "{{ ocp_4_22_aws_maas_aws_region | default('us-east-1') }}"
+    aws_instance_type: "{{ ocp_4_22_aws_maas_aws_instance_type | default('g5.xlarge') }}"
+    aws_worker_count: "{{ ocp_4_22_aws_maas_aws_worker_count | default(2) | int }}"
+    aws_root_volume_size: "{{ ocp_4_22_aws_maas_aws_root_volume_size | default(120) | int }}"
+    aws_root_volume_type: "{{ ocp_4_22_aws_maas_aws_root_volume_type | default('gp3') }}"
+    aws_subnet_id: "{{ ocp_4_22_aws_maas_aws_subnet_id | default('') }}"
+    aws_security_group_id: "{{ ocp_4_22_aws_maas_aws_security_group_id | default('') }}"
 
 - name: Verify AWS credentials secret exists
   kubernetes.core.k8s_info:

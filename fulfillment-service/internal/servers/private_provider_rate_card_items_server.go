@@ -65,10 +65,10 @@ type PrivateProviderRateCardItemsServer struct {
 	// admin List does not repeat the provider's paginated service, priceable-attribute and rate-card sweeps on
 	// every request. See ttlCache for the semantics.
 	rateCardCache *ttlCache[rateCardKey, rateCardEntry]
-	// inventoryCache keeps one sweep of the aggregated catalog inventory the cross-reference matches rows against,
-	// for a short TTL, so a List served from the rate-card cache does not still pay a full catalog-table sweep. See
-	// ttlCache for the semantics.
-	inventoryCache *ttlCache[catalogInventoryKey, []*privatev1.CatalogPricingInput]
+	// inventoryCache keeps one sweep of the catalog inventory and the complete per-service catalog item set used by
+	// conditionless provider rows, so a List served from the rate-card cache does not still pay a full catalog-table
+	// sweep. See ttlCache for the semantics.
+	inventoryCache *ttlCache[catalogInventoryKey, catalogPricingInventory]
 }
 
 // NewPrivateProviderRateCardItemsServer starts building the private server.
@@ -154,7 +154,7 @@ func (b *PrivateProviderRateCardItemsServerBuilder) Build() (result *PrivateProv
 		clusterCatalogItemsDao: clusterCatalogItemsDao,
 		unsupportedRowsCounter: counter,
 		rateCardCache:          newRateCardCache(),
-		inventoryCache:         newCatalogInventoryCache(),
+		inventoryCache:         newCatalogPricingInventoryCache(),
 	}
 	return
 }
@@ -208,18 +208,16 @@ func (s *PrivateProviderRateCardItemsServer) List(ctx context.Context,
 		allItems = append(allItems, entry.items...)
 	}
 
-	// Cross-reference every row against the full (service, dimension, value) catalog inventory OSAC-6889's
-	// aggregateCatalogPricingInputs computes (AC5/AC6), across all five documented dimensions, not just
-	// compute_instance/instance_type. The inventory is swept once per this server's cache TTL and the rows are
-	// shared read-only among this server's Lists; the dimension index is rebuilt per request from the cached rows,
-	// which is in-memory work over an already-read slice.
-	inventory, err := s.inventoryCache.get(ctx, catalogInventoryKey{}, func(ctx context.Context) ([]*privatev1.CatalogPricingInput, error) {
-		return sweepCatalogInventory(ctx, s.computeCatalogItemsDao, s.clusterCatalogItemsDao)
+	// Cross-reference every row against all dimensions emitted from catalog field policies, including image and
+	// boot-disk condition dimensions. The inventory is swept once per this server's cache TTL and the snapshot is
+	// shared read-only among this server's Lists; the dimension index is rebuilt per request from that cached snapshot.
+	inventory, err := s.inventoryCache.get(ctx, catalogInventoryKey{}, func(ctx context.Context) (catalogPricingInventory, error) {
+		return sweepProviderRateCardCatalogInventory(ctx, s.computeCatalogItemsDao, s.clusterCatalogItemsDao)
 	})
 	if err != nil {
 		return nil, err
 	}
-	catalogIndex := buildCatalogDimensionIndex(inventory)
+	catalogIndex := buildCatalogDimensionIndex(inventory.inputs, inventory.itemsByService)
 
 	objects := make([]*privatev1.ProviderRateCardItem, 0, len(allItems))
 	for _, item := range allItems {
@@ -241,6 +239,25 @@ func (s *PrivateProviderRateCardItemsServer) List(ctx context.Context,
 		Total: total,
 		Items: objects,
 	}.Build(), nil
+}
+
+// sweepProviderRateCardCatalogInventory keeps all catalog item identities as well as the emitted pricing inputs:
+// conditionless provider rows match the full catalog service, including items with no pricing dimensions.
+func sweepProviderRateCardCatalogInventory(ctx context.Context,
+	computeDao *dao.GenericDAO[*privatev1.ComputeInstanceCatalogItem],
+	clusterDao *dao.GenericDAO[*privatev1.ClusterCatalogItem]) (catalogPricingInventory, error) {
+	computeItems, err := fetchAllPages(ctx, computeDao)
+	if err != nil {
+		return catalogPricingInventory{}, err
+	}
+	clusterItems, err := fetchAllPages(ctx, clusterDao)
+	if err != nil {
+		return catalogPricingInventory{}, err
+	}
+	return catalogPricingInventory{
+		inputs:         aggregateCatalogPricingInputs(computeItems, clusterItems),
+		itemsByService: catalogItemsByService(computeItems, clusterItems),
+	}, nil
 }
 
 // classifyBillingError maps an adapter failure to UNAVAILABLE (AC8): a provider failure never serves a cached or

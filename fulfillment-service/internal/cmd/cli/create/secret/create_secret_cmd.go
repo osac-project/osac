@@ -103,7 +103,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	labels, err := parseLabels(c.args.labels)
+	labels, err := metautil.ParseLabels(c.args.labels)
 	if err != nil {
 		return err
 	}
@@ -222,30 +222,6 @@ func parseFromFileFlags(fromFile []string) (map[string][]byte, error) {
 	}
 
 	return data, nil
-}
-
-// parseLabels parses --label flag values in "key=value" format into a map.
-func parseLabels(labels []string) (map[string]string, error) {
-	if len(labels) == 0 {
-		return nil, nil
-	}
-
-	result := make(map[string]string, len(labels))
-	for _, label := range labels {
-		key, value, ok := strings.Cut(label, "=")
-		if !ok {
-			return nil, fmt.Errorf("invalid label %q: must be in key=value format", label)
-		}
-		if key == "" {
-			return nil, fmt.Errorf("invalid label %q: key must not be empty", label)
-		}
-		if _, exists := result[key]; exists {
-			return nil, fmt.Errorf("duplicate label key %q", key)
-		}
-		result[key] = value
-	}
-
-	return result, nil
 }
 
 const shortHelp = `Create a secret from file contents`

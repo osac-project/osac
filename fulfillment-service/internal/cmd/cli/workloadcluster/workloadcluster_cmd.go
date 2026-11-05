@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -48,11 +49,9 @@ func Cmd() *cobra.Command {
 
 type createArgs struct {
 	name              string
-	sourceHubID       string
+	sourceHub         string
 	managedCluster    string
 	supportedWorkload []string
-	displayName       string
-	description       string
 }
 
 func createCmd() *cobra.Command {
@@ -68,11 +67,9 @@ func createCmd() *cobra.Command {
 	}
 	flags := result.Flags()
 	flags.StringVar(&args.name, "name", "", "_NAME_ - Unique OSAC resource name.")
-	flags.StringVar(&args.sourceHubID, "source-hub-id", "", "_ID_ - OSAC Hub hosting the ManagedCluster.")
+	flags.StringVar(&args.sourceHub, "source-hub", "", "_ID|NAME_ - OSAC Hub hosting the ManagedCluster.")
 	flags.StringVar(&args.managedCluster, "managed-cluster-name", "", "_NAME_ - ManagedCluster name on the Hub.")
 	flags.StringSliceVar(&args.supportedWorkload, "supported-workloads", nil, "_VALUES_ - Supported workloads, currently only `maas`.")
-	flags.StringVar(&args.displayName, "display-name", "", "_NAME_ - Optional human-friendly display name.")
-	flags.StringVar(&args.description, "description", "", "_TEXT_ - Optional resource description.")
 	return result
 }
 
@@ -80,8 +77,8 @@ func runCreate(cmd *cobra.Command, args *createArgs) error {
 	if args.name == "" {
 		return errors.New("name is required")
 	}
-	if args.sourceHubID == "" {
-		return errors.New("source-hub-id is required")
+	if args.sourceHub == "" {
+		return errors.New("source-hub is required")
 	}
 	if args.managedCluster == "" {
 		return errors.New("managed-cluster-name is required")
@@ -101,20 +98,19 @@ func runCreate(cmd *cobra.Command, args *createArgs) error {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
 	defer conn.Close()
+	hub, err := findHub(ctx, privatev1.NewHubsClient(conn), args.sourceHub)
+	if err != nil {
+		return err
+	}
 
 	object := privatev1.WorkloadCluster_builder{
-		Metadata: func() *privatev1.Metadata {
-			metadata := privatev1.Metadata_builder{
-				Name:    args.name,
-				Tenant:  config.TenantFromContext(ctx),
-				Project: config.ProjectFromContext(ctx),
-			}
-			metadata.DisplayName = args.displayName
-			metadata.Description = args.description
-			return metadata.Build()
-		}(),
+		Metadata: privatev1.Metadata_builder{
+			Name:    args.name,
+			Tenant:  config.TenantFromContext(ctx),
+			Project: config.ProjectFromContext(ctx),
+		}.Build(),
 		Spec: privatev1.WorkloadClusterSpec_builder{
-			SourceHubId:        args.sourceHubID,
+			SourceHubId:        hub.GetId(),
 			ManagedClusterName: args.managedCluster,
 			SupportedWorkloads: workloads,
 		}.Build(),
@@ -128,6 +124,19 @@ func runCreate(cmd *cobra.Command, args *createArgs) error {
 
 	terminal.ConsoleFromContext(ctx).Infof(ctx, "Created workload cluster '%s'.\n", response.GetObject().GetId())
 	return nil
+}
+
+func findHub(ctx context.Context, client privatev1.HubsClient, ref string) (*privatev1.Hub, error) {
+	return lookup.Find(ref, "hub", func(filter string, limit int32) ([]*privatev1.Hub, error) {
+		response, err := client.List(ctx, privatev1.HubsListRequest_builder{
+			Filter: proto.String(filter),
+			Limit:  proto.Int32(limit),
+		}.Build())
+		if err != nil {
+			return nil, fmt.Errorf("failed to find hub: %w", err)
+		}
+		return response.GetItems(), nil
+	})
 }
 
 func listCmd() *cobra.Command {
@@ -155,7 +164,15 @@ func listCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to list workload clusters: %w", err)
 			}
-			renderWorkloadClusterList(terminal.ConsoleFromContext(ctx), response.GetItems())
+			hubsResponse, err := privatev1.NewHubsClient(conn).List(ctx, privatev1.HubsListRequest_builder{}.Build())
+			if err != nil {
+				return fmt.Errorf("failed to list hubs: %w", err)
+			}
+			hubNames := make(map[string]string, len(hubsResponse.GetItems()))
+			for _, hub := range hubsResponse.GetItems() {
+				hubNames[hub.GetId()] = hub.GetMetadata().GetName()
+			}
+			renderWorkloadClusterList(terminal.ConsoleFromContext(ctx), response.GetItems(), hubNames)
 			return nil
 		},
 	}
@@ -192,8 +209,6 @@ func describeCmd() *cobra.Command {
 
 type updateArgs struct {
 	supportedWorkload []string
-	displayName       string
-	description       string
 	labels            []string
 	clearLabels       bool
 }
@@ -211,8 +226,6 @@ func updateCmd() *cobra.Command {
 	}
 	flags := result.Flags()
 	flags.StringSliceVar(&args.supportedWorkload, "supported-workloads", nil, "_VALUES_ - Replace supported workloads.")
-	flags.StringVar(&args.displayName, "display-name", "", "_NAME_ - Set the human-friendly display name.")
-	flags.StringVar(&args.description, "description", "", "_TEXT_ - Set the resource description.")
 	flags.StringSliceVar(&args.labels, "label", nil, "_KEY=VALUE_ - Replace user labels; repeat for multiple labels.")
 	flags.BoolVar(&args.clearLabels, "clear-labels", false, "_[BOOLEAN]_ - Clear all user labels.")
 	return result
@@ -222,12 +235,6 @@ func runUpdate(cmd *cobra.Command, ref string, args *updateArgs) error {
 	paths := []string{}
 	if cmd.Flags().Changed("supported-workloads") {
 		paths = append(paths, "spec.supported_workloads")
-	}
-	if cmd.Flags().Changed("display-name") {
-		paths = append(paths, "metadata.display_name")
-	}
-	if cmd.Flags().Changed("description") {
-		paths = append(paths, "metadata.description")
 	}
 	if cmd.Flags().Changed("label") || args.clearLabels {
 		paths = append(paths, "metadata.labels")
@@ -243,7 +250,7 @@ func runUpdate(cmd *cobra.Command, ref string, args *updateArgs) error {
 			return err
 		}
 	}
-	labels, err := parseLabels(args.labels)
+	labels, err := metautil.ParseLabels(args.labels)
 	if err != nil {
 		return err
 	}
@@ -275,12 +282,6 @@ func runUpdate(cmd *cobra.Command, ref string, args *updateArgs) error {
 	}
 	if cmd.Flags().Changed("supported-workloads") {
 		updated.GetSpec().SetSupportedWorkloads(workloads)
-	}
-	if cmd.Flags().Changed("display-name") {
-		updated.GetMetadata().SetDisplayName(args.displayName)
-	}
-	if cmd.Flags().Changed("description") {
-		updated.GetMetadata().SetDescription(args.description)
 	}
 	if cmd.Flags().Changed("label") || args.clearLabels {
 		updated.GetMetadata().SetLabels(labels)
@@ -336,25 +337,17 @@ func parseSupportedWorkloads(values []string) ([]string, error) {
 	return result, nil
 }
 
-func parseLabels(values []string) (map[string]string, error) {
-	labels := map[string]string{}
-	for _, value := range values {
-		key, labelValue, ok := strings.Cut(value, "=")
-		key = strings.TrimSpace(key)
-		if !ok || key == "" {
-			return nil, fmt.Errorf("invalid label %q; expected KEY=VALUE", value)
-		}
-		labels[key] = labelValue
-	}
-	return labels, nil
-}
-
-func renderWorkloadClusterList(w io.Writer, objects []*privatev1.WorkloadCluster) {
+func renderWorkloadClusterList(w io.Writer, objects []*privatev1.WorkloadCluster, hubNames map[string]string) {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(writer, "ID\tNAME\tHUB\tMANAGED CLUSTER\tAVAILABLE\tHUB REACHABLE")
 	for _, object := range objects {
+		hubID := object.GetSpec().GetSourceHubId()
+		hubName := hubNames[hubID]
+		if hubName == "" {
+			hubName = hubID
+		}
 		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			object.GetId(), object.GetMetadata().GetName(), object.GetSpec().GetSourceHubId(),
+			object.GetId(), object.GetMetadata().GetName(), hubName,
 			object.GetSpec().GetManagedClusterName(), conditionValue(object, "Available"), conditionValue(object, "HubReachable"))
 	}
 	_ = writer.Flush()
@@ -364,7 +357,6 @@ func renderWorkloadCluster(w io.Writer, object *privatev1.WorkloadCluster) error
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(writer, "ID:\t%s\n", object.GetId())
 	fmt.Fprintf(writer, "Name:\t%s\n", object.GetMetadata().GetName())
-	fmt.Fprintf(writer, "Display name:\t%s\n", object.GetMetadata().GetDisplayName())
 	fmt.Fprintf(writer, "Source Hub ID:\t%s\n", object.GetSpec().GetSourceHubId())
 	fmt.Fprintf(writer, "ManagedCluster:\t%s\n", object.GetSpec().GetManagedClusterName())
 	fmt.Fprintf(writer, "Supported workloads:\t%s\n", strings.Join(object.GetSpec().GetSupportedWorkloads(), ", "))

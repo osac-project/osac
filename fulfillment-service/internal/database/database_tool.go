@@ -510,7 +510,8 @@ func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result
 				'project_membership_subjects',
 				'schema_migrations',
 				'storage_tier_backends',
-				'tenant_domains'
+				'tenant_domains',
+				'workload_cluster_hub_refs'
 			)
 		order by
 			c.relname

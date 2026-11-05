@@ -20,6 +20,7 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -37,7 +38,7 @@ var _ = Describe("WorkloadCluster command", func() {
 
 	It("registers create flags", func() {
 		cmd := createCmd()
-		for _, name := range []string{"name", "source-hub-id", "managed-cluster-name", "supported-workloads"} {
+		for _, name := range []string{"name", "source-hub", "managed-cluster-name", "supported-workloads"} {
 			Expect(cmd.Flags().Lookup(name)).NotTo(BeNil(), name)
 		}
 	})
@@ -63,14 +64,14 @@ var _ = Describe("WorkloadCluster CLI input", func() {
 	})
 
 	It("parses labels", func() {
-		labels, err := parseLabels([]string{"environment=test", "owner=ai-grid"})
+		labels, err := metautil.ParseLabels([]string{"environment=test", "owner=ai-grid"})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(labels).To(Equal(map[string]string{"environment": "test", "owner": "ai-grid"}))
 	})
 
 	It("rejects malformed labels", func() {
-		_, err := parseLabels([]string{"environment"})
-		Expect(err).To(MatchError("invalid label \"environment\"; expected KEY=VALUE"))
+		_, err := metautil.ParseLabels([]string{"environment"})
+		Expect(err).To(MatchError("invalid label \"environment\": must be in key=value format"))
 	})
 })
 
@@ -116,8 +117,19 @@ var _ = Describe("WorkloadCluster rendering", func() {
 			}.Build(),
 		}.Build()
 		output := &bytes.Buffer{}
-		renderWorkloadClusterList(output, []*privatev1.WorkloadCluster{object})
-		Expect(output.String()).To(MatchRegexp(`wc-1\s+worker-1\s+hub-1\s+worker-1\s+True\s+True`))
+		renderWorkloadClusterList(output, []*privatev1.WorkloadCluster{object}, map[string]string{"hub-1": "ai-grid-hub"})
+		Expect(output.String()).To(MatchRegexp(`wc-1\s+worker-1\s+ai-grid-hub\s+worker-1\s+True\s+True`))
+	})
+
+	It("falls back to the Hub ID when the Hub is not returned", func() {
+		object := privatev1.WorkloadCluster_builder{
+			Id:       "wc-1",
+			Metadata: privatev1.Metadata_builder{Name: "worker-1"}.Build(),
+			Spec:     privatev1.WorkloadClusterSpec_builder{SourceHubId: "hub-1"}.Build(),
+		}.Build()
+		output := &bytes.Buffer{}
+		renderWorkloadClusterList(output, []*privatev1.WorkloadCluster{object}, nil)
+		Expect(output.String()).To(MatchRegexp(`wc-1\s+worker-1\s+hub-1`))
 	})
 })
 

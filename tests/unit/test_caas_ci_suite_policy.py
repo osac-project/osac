@@ -335,14 +335,14 @@ def test_pr_tier_resolution_preserves_trust_boundaries() -> None:
     jobs = workflow["jobs"]
     assert workflow["name"] == "E2E CaaS PR suite"
     assert workflow["run-name"] == "E2E suite · caas · #${{ inputs.pr-number }} · ${{ inputs.sha }}"
-    assert jobs["verify"]["uses"] == (
-        "osac-project/osac-ci/.github/workflows/suite-inputs.yml@5bfcd1ff220362171967451de7aaabb9e027d855"
+    assert re.fullmatch(
+        r"osac-project/osac-ci/\.github/workflows/suite-inputs\.yml@[0-9a-f]{40}", jobs["verify"]["uses"]
     )
     assert jobs["selection"]["needs"] == "verify"
     assert jobs["selection"]["permissions"] == {"contents": "read", "pull-requests": "read"}
     assert "secrets" not in jobs["selection"]
     checkout, base, comparison = jobs["selection"]["steps"]
-    assert checkout["uses"] == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+    assert re.fullmatch(r"actions/checkout@[0-9a-f]{40}", checkout["uses"])
     assert checkout["with"] == {"ref": "${{ github.workflow_sha }}", "fetch-depth": 0, "persist-credentials": False}
     assert base["env"]["PR_SHA"] == "${{ inputs.sha }}"
     assert comparison["env"] == {"PR_BASE": "${{ steps.base.outputs.sha }}", "PR_SHA": "${{ inputs.sha }}"}

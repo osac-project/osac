@@ -40,6 +40,7 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -1055,13 +1056,14 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			}
 
 			By("rotating the remote kubeconfig Secret on the management cluster without modifying the Deployment")
-			podName, initialRestarts := currentOperatorPodRestartCount()
+			initialPod := currentOperatorPod()
+			podName := initialPod.Name
 			restrictedKubeconfigFile := filepath.Join(GinkgoT().TempDir(), "restricted-remote.kubeconfig")
 			writeRemoteInClusterKubeconfig(remoteKubeconfigPath, restrictedKubeconfigFile, remoteRestrictedSAName)
 			updateRemoteKubeconfigSecretAndTriggerSync(restrictedKubeconfigFile, podName)
 
 			By("verifying watchRemoteKubeconfig detects the mounted Secret digest change and restarts the manager container")
-			waitForOperatorContainerRestart(podName, initialRestarts)
+			waitForOperatorContainerRestart(initialPod, restrictedIdentity)
 
 			By("configuring csp-storage-fixture with csp-gold and creating StorageClasses + Tenant while RBAC is forbidden")
 			setCSPFixtureState(cspFixtureState{
@@ -1939,9 +1941,8 @@ func updateRemoteKubeconfigSecretAndTriggerSync(kubeconfigFile, podName string) 
 	Expect(err).NotTo(HaveOccurred())
 }
 
-// currentOperatorPodRestartCount returns the name and current manager container
-// restartCount of the running operator controller-manager Pod.
-func currentOperatorPodRestartCount() (string, int) {
+// currentOperatorPod captures a running, ready manager's Pod and process identity.
+func currentOperatorPod() corev1.Pod {
 	output, err := runMgmtKubectl(
 		"get", "pods",
 		"-l", "control-plane=controller-manager,app.kubernetes.io/name=operator",
@@ -1949,78 +1950,177 @@ func currentOperatorPodRestartCount() (string, int) {
 	)
 	Expect(err).NotTo(HaveOccurred())
 
-	var podList struct {
-		Items []struct {
-			Metadata struct {
-				Name              string     `json:"name"`
-				DeletionTimestamp *time.Time `json:"deletionTimestamp"`
-			} `json:"metadata"`
-			Status struct {
-				ContainerStatuses []struct {
-					Name         string `json:"name"`
-					RestartCount int    `json:"restartCount"`
-				} `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
+	var podList corev1.PodList
 	Expect(json.Unmarshal(output, &podList)).To(Succeed())
 
 	for _, pod := range podList.Items {
-		if pod.Metadata.DeletionTimestamp != nil {
+		if pod.DeletionTimestamp != nil {
 			continue
 		}
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.Name == "manager" {
-				return pod.Metadata.Name, cs.RestartCount
+				Expect(pod.UID).NotTo(BeEmpty())
+				Expect(cs.ContainerID).NotTo(BeEmpty())
+				Expect(pod.Status.Phase).To(Equal(corev1.PodRunning))
+				Expect(cs.State.Running).NotTo(BeNil())
+				Expect(cs.Ready).To(BeTrue())
+				return pod
 			}
 		}
 	}
 	Fail("running operator controller-manager pod not found")
-	return "", 0
+	return corev1.Pod{}
 }
 
-// waitForOperatorContainerRestart waits for watchRemoteKubeconfig to restart the
-// manager container in podName and verifies the previous container log records
-// the kubeconfig digest change.
-func waitForOperatorContainerRestart(podName string, initialRestarts int) {
-	Eventually(func(g Gomega) {
-		output, err := runMgmtKubectl("get", "pod", podName, "-n", operatorNamespace, "-o", "json")
-		g.Expect(err).NotTo(HaveOccurred())
+// waitForOperatorContainerRestart requires a ready new process using the rotated identity.
+func waitForOperatorContainerRestart(initialPod corev1.Pod, restrictedIdentity string) {
+	withOperatorRestartDiagnostics(func() {
+		Eventually(func() error {
+			return verifyOperatorRestart(initialPod, restrictedIdentity, runMgmtKubectl)
+		}, 60*time.Second, 2*time.Second).Should(Succeed())
+	}, func() {
+		_, _ = fmt.Fprintln(GinkgoWriter, operatorRestartDiagnostics(initialPod, runMgmtKubectl))
+	})
+}
 
-		var pod struct {
-			Status struct {
-				Phase             string `json:"phase"`
-				ContainerStatuses []struct {
-					Name         string `json:"name"`
-					Ready        bool   `json:"ready"`
-					RestartCount int    `json:"restartCount"`
-				} `json:"containerStatuses"`
-			} `json:"status"`
+// withOperatorRestartDiagnostics emits diagnostics only if verification does not return normally.
+func withOperatorRestartDiagnostics(verify func(), diagnostics func()) {
+	completed := false
+	defer func() {
+		if !completed {
+			diagnostics()
 		}
-		g.Expect(json.Unmarshal(output, &pod)).To(Succeed())
-		g.Expect(pod.Status.Phase).To(Equal("Running"))
+	}()
+	verify()
+	completed = true
+}
 
-		var managerStatus *struct {
-			Name         string `json:"name"`
-			Ready        bool   `json:"ready"`
-			RestartCount int    `json:"restartCount"`
+// operatorManagerStatus rejects snapshots without an explicit manager status.
+func operatorManagerStatus(pod corev1.Pod) (corev1.ContainerStatus, error) {
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == "manager" {
+			return status, nil
 		}
-		for i := range pod.Status.ContainerStatuses {
-			if pod.Status.ContainerStatuses[i].Name == "manager" {
-				managerStatus = &pod.Status.ContainerStatuses[i]
-				break
+	}
+	return corev1.ContainerStatus{}, fmt.Errorf("manager container status missing for pod %s", pod.Name)
+}
+
+// readOperatorPod reads a status snapshot without exposing kubectl failure output.
+func readOperatorPod(podName string, kubectl func(...string) ([]byte, error)) (corev1.Pod, error) {
+	output, err := kubectl("get", "pod", podName, "-n", operatorNamespace, "-o", "json")
+	if err != nil {
+		return corev1.Pod{}, fmt.Errorf("operator pod %s status unavailable", podName)
+	}
+	var pod corev1.Pod
+	err = json.Unmarshal(output, &pod)
+	return pod, err
+}
+
+// verifyOperatorProcessTransition requires a ready new manager within the same live Pod.
+func verifyOperatorProcessTransition(initialPod, currentPod corev1.Pod) error {
+	if initialPod.UID == "" || currentPod.UID != initialPod.UID {
+		return fmt.Errorf("operator pod UID changed or baseline UID is empty")
+	}
+	if currentPod.DeletionTimestamp != nil || currentPod.Status.Phase != corev1.PodRunning {
+		return fmt.Errorf("operator pod is not running or is terminating")
+	}
+	initialManager, err := operatorManagerStatus(initialPod)
+	if err != nil {
+		return err
+	}
+	currentManager, err := operatorManagerStatus(currentPod)
+	if err != nil {
+		return err
+	}
+	if initialManager.ContainerID == "" || currentManager.ContainerID == "" ||
+		currentManager.ContainerID == initialManager.ContainerID ||
+		currentManager.RestartCount <= initialManager.RestartCount {
+		return fmt.Errorf("manager container identity and restart count do not show a new process")
+	}
+	if !currentManager.Ready || currentManager.State.Running == nil {
+		return fmt.Errorf("restarted manager is not running and ready")
+	}
+	return nil
+}
+
+// verifyOperatorRestart binds rotated-identity Forbidden evidence to one stable new process.
+func verifyOperatorRestart(
+	initialPod corev1.Pod, restrictedIdentity string, kubectl func(...string) ([]byte, error),
+) error {
+	currentPod, err := readOperatorPod(initialPod.Name, kubectl)
+	if err != nil {
+		return err
+	}
+	if err := verifyOperatorProcessTransition(initialPod, currentPod); err != nil {
+		return err
+	}
+	logs, err := kubectl("logs", initialPod.Name, "-n", operatorNamespace, "-c", "manager", "--tail=300")
+	if err != nil {
+		return fmt.Errorf("current manager logs unavailable")
+	}
+	forbidden := fmt.Sprintf("storageclasses.storage.k8s.io is forbidden: User %q cannot ", restrictedIdentity)
+	if restrictedIdentity == "" || !strings.Contains(strings.ReplaceAll(string(logs), `\"`, `"`), forbidden) {
+		return fmt.Errorf("current manager logs lack remote StorageClass Forbidden evidence for the rotated identity")
+	}
+	confirmedPod, err := readOperatorPod(initialPod.Name, kubectl)
+	if err != nil {
+		return err
+	}
+	if err := verifyOperatorProcessTransition(initialPod, confirmedPod); err != nil {
+		return err
+	}
+	currentManager, err := operatorManagerStatus(currentPod)
+	if err != nil {
+		return err
+	}
+	confirmedManager, err := operatorManagerStatus(confirmedPod)
+	if err != nil {
+		return err
+	}
+	if currentManager.ContainerID != confirmedManager.ContainerID ||
+		currentManager.RestartCount != confirmedManager.RestartCount {
+		return fmt.Errorf("manager restarted again while reading current logs")
+	}
+	return nil
+}
+
+// operatorRestartDiagnostics summarizes process status and bounded history without raw logs.
+func operatorRestartDiagnostics(initialPod corev1.Pod, kubectl func(...string) ([]byte, error)) string {
+	var diagnostics strings.Builder
+	for _, label := range []string{"baseline", "current"} {
+		pod := initialPod
+		if label == "current" {
+			var err error
+			pod, err = readOperatorPod(initialPod.Name, kubectl)
+			if err != nil {
+				_, _ = fmt.Fprintf(&diagnostics, "current pod status unavailable: %v\n", err)
+				continue
 			}
 		}
-		g.Expect(managerStatus).NotTo(BeNil())
-		g.Expect(managerStatus.RestartCount).To(BeNumerically(">", initialRestarts))
-		g.Expect(managerStatus.Ready).To(BeTrue())
-
-		prevLogs, logErr := runMgmtKubectl(
-			"logs", podName, "-n", operatorNamespace, "-c", "manager", "--previous",
-		)
-		g.Expect(logErr).NotTo(HaveOccurred())
-		g.Expect(string(prevLogs)).To(ContainSubstring("remote cluster kubeconfig changed; restarting operator"))
-	}, 60*time.Second, 2*time.Second).Should(Succeed())
+		manager, err := operatorManagerStatus(pod)
+		_, _ = fmt.Fprintf(&diagnostics, "%s pod=%s uid=%s phase=%s managerID=%s restarts=%d ready=%t statusError=%v\n",
+			label, pod.Name, pod.UID, pod.Status.Phase, manager.ContainerID, manager.RestartCount, manager.Ready, err)
+		for _, state := range []corev1.ContainerState{manager.State, manager.LastTerminationState} {
+			_, _ = fmt.Fprintf(&diagnostics, "running=%v ", state.Running)
+			if state.Waiting != nil {
+				_, _ = fmt.Fprintf(&diagnostics, "waitingReason=%s ", state.Waiting.Reason)
+			}
+			if state.Terminated != nil {
+				termination := state.Terminated
+				_, _ = fmt.Fprintf(&diagnostics, "terminatedID=%s reason=%s exitCode=%d signal=%d started=%s finished=%s ",
+					termination.ContainerID, termination.Reason, termination.ExitCode, termination.Signal,
+					termination.StartedAt, termination.FinishedAt)
+			}
+			_, _ = fmt.Fprintln(&diagnostics)
+		}
+	}
+	previousLogs, err := kubectl(
+		"logs", initialPod.Name, "-n", operatorNamespace, "-c", "manager", "--previous", "--tail=100",
+	)
+	changeMarker := "remote cluster kubeconfig changed; restarting operator"
+	_, _ = fmt.Fprintf(&diagnostics, "previous manager logs available=%t kubeconfigChangeMarker=%t\n",
+		err == nil, err == nil && strings.Contains(string(previousLogs), changeMarker))
+	return diagnostics.String()
 }
 
 // configureOperatorDeploymentForRemoteMode patches the deployed operator on the

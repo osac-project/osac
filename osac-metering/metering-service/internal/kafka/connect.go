@@ -198,11 +198,15 @@ func ListEventTenants(ctx context.Context, cfg ConnectionConfig, eventPrefix str
 
 // EventTenantsOf maps event topic names to the tenants metering serves, skipping the
 // built-in tenants. Fulfillment creates the system and shared tenants for platform use;
-// metering does not read them. eventPrefix selects which names are event topics; empty
-// uses the default prefix.
+// metering does not read them. Heartbeat and dead-letter topics are metering's own,
+// so a broad event prefix such as osac. must not turn them into tenants. eventPrefix
+// selects which names are event topics; empty uses the default prefix.
 func EventTenantsOf(names []string, eventPrefix string) []string {
 	var tenants []string
 	for _, name := range names {
+		if strings.HasPrefix(name, topics.HeartbeatPrefix) || strings.HasPrefix(name, topics.DeadLetterPrefix) {
+			continue
+		}
 		tenant, ok := topics.TenantOfEventTopic(name, eventPrefix)
 		if !ok || !topics.Metered(tenant) {
 			continue

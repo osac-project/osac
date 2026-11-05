@@ -486,6 +486,65 @@ func TestStoreResourcesWithNewFacts(t *testing.T) {
 	}
 }
 
+func TestNoteEventTopicResetsOffsetWhenTheTopicChanges(t *testing.T) {
+	ctx := context.Background()
+	_, pool := startDatabase(t)
+	store := database.NewStore(pool)
+
+	if err := store.EnsureProgress(ctx, "acme"); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+	tx, err := store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := database.AdvanceEventOffset(ctx, tx, "acme", 12); err != nil {
+		t.Fatalf("advance event offset: %v", err)
+	}
+	if err := database.AdvanceHeartbeatOffset(ctx, tx, "acme", 7); err != nil {
+		t.Fatalf("advance heartbeat offset: %v", err)
+	}
+	if err := database.SetLastRound(ctx, tx, "acme", time.Date(2026, 10, 5, 10, 4, 0, 0, time.UTC), 12); err != nil {
+		t.Fatalf("set last round: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	if err := store.NoteEventTopic(ctx, "acme", "osac.events.acme"); err != nil {
+		t.Fatalf("stamp topic: %v", err)
+	}
+	stamped, err := store.GetTenantProgress(ctx, "acme")
+	if err != nil {
+		t.Fatalf("read stamped progress: %v", err)
+	}
+	if stamped.EventTopic != "osac.events.acme" || stamped.EventOffset != 12 || stamped.LastRoundEventOffset != 12 || stamped.HeartbeatOffset != 7 {
+		t.Fatalf("stamping an unrecorded topic must keep offsets, got %+v", stamped)
+	}
+
+	if err := store.NoteEventTopic(ctx, "acme", "osac.events.acme"); err != nil {
+		t.Fatalf("restamp topic: %v", err)
+	}
+	same, err := store.GetTenantProgress(ctx, "acme")
+	if err != nil {
+		t.Fatalf("read restamped progress: %v", err)
+	}
+	if same.EventOffset != 12 || same.EventTopic != "osac.events.acme" {
+		t.Fatalf("the same topic must keep the offset, got %+v", same)
+	}
+
+	if err := store.NoteEventTopic(ctx, "acme", "custom.events.acme"); err != nil {
+		t.Fatalf("change topic: %v", err)
+	}
+	changed, err := store.GetTenantProgress(ctx, "acme")
+	if err != nil {
+		t.Fatalf("read changed progress: %v", err)
+	}
+	if changed.EventTopic != "custom.events.acme" || changed.EventOffset != 0 || changed.LastRoundEventOffset != 0 || changed.HeartbeatOffset != 7 {
+		t.Fatalf("a new topic must rewind event offsets and keep the heartbeat offset, got %+v", changed)
+	}
+}
+
 func startDatabase(t *testing.T) (*database.Container, *pgxpool.Pool) {
 	t.Helper()
 	container, err := database.NewContainer(logr.Discard())

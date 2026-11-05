@@ -61,6 +61,8 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
       page,
       CatalogCreatePage.template,
       catalogTestData.template,
+      0,
+      true,
     );
     expect(selectedTemplate).toBe(catalogTestData.template);
     await page.getByRole(...CatalogCreatePage.next).click();

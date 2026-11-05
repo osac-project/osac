@@ -10,6 +10,7 @@ export const selectOption = async (
   field: TypeaheadField,
   optionName: string | RegExp,
   index = 0,
+  exact = false,
 ): Promise<string> => {
   const fieldLocator =
     field.length === 1
@@ -17,9 +18,7 @@ export const selectOption = async (
       : page.getByRole(field[0], field[1]).nth(index);
   await expect(fieldLocator).toBeVisible();
   await fieldLocator.click();
-  const option = page
-    .getByRole('option', { name: optionName, exact: typeof optionName === 'string' })
-    .first();
+  const option = page.getByRole('option', { name: optionName, exact }).first();
   await expect(option).toBeVisible();
   const selectedName = (await option.innerText()).trim();
   await option.click();

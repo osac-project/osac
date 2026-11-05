@@ -510,13 +510,64 @@ jobs:
       contents: read
     outputs:
       tag-pushed: ${{ steps.push-tag.outputs.pushed }}
+      already-released: ${{ steps.dedup.outputs.already-released }}
       commit-sha: ${{ steps.push-tag.outputs.commit-sha }}
     env:
       RELEASE_VERSION: ${{ github.event.inputs.release_version }}
 
     steps:
+    - name: Log in to Konflux cluster
+      uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
+      with:
+        openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
+        openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
+        namespace: osac-tenant
+
+    # stamp-prod-chart's own marker tag is always unique per dispatch
+    # (RUN_ID/RUN_ATTEMPT-suffixed), so without this check a re-dispatch
+    # for a version that already has a successful prod chart release
+    # would still push a brand new tag and burn another real ~15-30min,
+    # 11-component Konflux rebuild -- harmless (same source content) but
+    # wasteful, and it would leave a second redundant Release object
+    # around. release-prod-chart's own near-identical dedup check can't
+    # catch this: its resource_name is also unique per dispatch, so it
+    # would never match a prior dispatch's Release either.
+    - name: Check for an existing successful prod chart release
+      id: dedup
+      run: |
+        set -euo pipefail
+        SLUG="${RELEASE_VERSION//./-}"
+        PREFIX="osac-charts-release-v${SLUG}-prod-"
+        MATCHING=$(oc get release -n osac-tenant -o json | jq -c --arg plan "osac-charts-prod" --arg prefix "${PREFIX}" '
+          [.items[] | select(.spec.releasePlan == $plan and (.spec.snapshot | startswith($prefix)))]
+        ')
+        ALREADY_RELEASED=$(jq -r '
+          [.[] | select([.status.conditions[]? | select(.type == "Released" and .status == "True")] | length > 0)] | length > 0
+        ' <<<"${MATCHING}")
+        if [[ "${ALREADY_RELEASED}" == "true" ]]; then
+          echo "::notice::A prod chart release already succeeded for ${RELEASE_VERSION} -- skipping a redundant rebuild" >&2
+          echo "already-released=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # A matching Release that's neither Released=True nor a
+        # confirmed terminal Failed is still in flight -- same
+        # "don't race a second attempt" reasoning as promote-image's
+        # own identical dedup check.
+        IN_FLIGHT=$(jq -r '
+          [.[] | select(
+            ([.status.conditions[]? | select(.type == "Released" and .status == "True")] | length == 0) and
+            ([.status.conditions[]? | select(.type == "Released" and .status == "False" and .reason == "Failed")] | length == 0)
+          )] | length > 0
+        ' <<<"${MATCHING}")
+        if [[ "${IN_FLIGHT}" == "true" ]]; then
+          echo "::error::A prod chart release for ${RELEASE_VERSION} is already in flight -- not starting another. Wait for it to finish or delete it, then re-dispatch." >&2
+          exit 1
+        fi
+        echo "already-released=false" >> "$GITHUB_OUTPUT"
+
     - name: Generate osac-ci app token
       id: app-token
+      if: steps.dedup.outputs.already-released != 'true'
       uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
       with:
         app-id: "4966101"
@@ -532,6 +583,7 @@ jobs:
     # job's own comments on why no separate existence check is added
     # here.
     - name: Checkout stage-stamped chart source commit
+      if: steps.dedup.outputs.already-released != 'true'
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       with:
         ref: refs/tags/osac-charts-release/v${{ github.event.inputs.release_version }}
@@ -539,6 +591,7 @@ jobs:
         token: ${{ steps.app-token.outputs.token }}
 
     - name: Re-stamp chart image refs for registry.redhat.io
+      if: steps.dedup.outputs.already-released != 'true'
       run: |
         set -euo pipefail
         # Every file osac-build-and-publish.yaml's stamp-and-release-
@@ -566,6 +619,7 @@ jobs:
         done
 
     - name: Commit prod-stamped chart image refs
+      if: steps.dedup.outputs.already-released != 'true'
       run: |
         set -euo pipefail
         git config user.name "github-actions[bot]"
@@ -589,6 +643,7 @@ jobs:
     # and any other promote-to-prod dispatch for the same version.
     - name: Push prod charts release marker tag
       id: push-tag
+      if: steps.dedup.outputs.already-released != 'true'
       env:
         RUN_ID: ${{ github.run_id }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -688,10 +743,16 @@ jobs:
                 )
             except subprocess.CalledProcessError as e:
                 stderr = e.stderr or ""
+                # Detail stays in a plain, un-annotated line -- never
+                # inside a ::error::/::warning:: annotation, which
+                # GitHub surfaces prominently (and via its API) -- same
+                # reasoning as resolve-and-verify's own identical stance.
                 if is_permanent_auth_error(stderr):
-                    print(f"::error::oc get snapshots failed with a permanent auth/RBAC error: {stderr.strip()}")
+                    print(f"oc get snapshots error detail: {stderr.strip()}")
+                    print("::error::oc get snapshots failed with a permanent auth/RBAC error -- see the plain-text line just above")
                     raise
-                print(f"::warning::oc get snapshots failed, will retry: {stderr.strip()}", flush=True)
+                print(f"oc get snapshots error detail: {stderr.strip()}")
+                print("::warning::oc get snapshots failed, will retry -- see the plain-text line just above", flush=True)
                 return None
             for item in json.loads(out.stdout)["items"]:
                 ann = item["metadata"].get("annotations", {})
@@ -720,11 +781,12 @@ jobs:
             except subprocess.CalledProcessError as e:
                 stderr = e.stderr or ""
                 if is_permanent_auth_error(stderr):
-                    print(f"::warning::oc get pipelinerun denied ({stderr.strip()}) -- falling back to plain waiting messages for the rest of this poll")
+                    print(f"oc get pipelinerun error detail: {stderr.strip()}")
+                    print("::warning::oc get pipelinerun denied -- falling back to plain waiting messages for the rest of this poll")
                     pipelinerun_rbac_denied[0] = True
                     print(f"Waiting on {COMPONENT}'s Konflux build...", flush=True)
                     return
-                print(f"[{COMPONENT}] Waiting on Konflux build (oc get pipelinerun failed, will retry: {stderr.strip()})", flush=True)
+                print(f"[{COMPONENT}] Waiting on Konflux build (oc get pipelinerun failed, will retry -- detail: {stderr.strip()})", flush=True)
                 return
             items = json.loads(out.stdout)["items"]
             if not items:
@@ -762,7 +824,8 @@ jobs:
                 data = json.loads(out.stdout)
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
                      FileNotFoundError, json.JSONDecodeError) as e:
-                print(f"::warning::check-run lookup for {COMPONENT} failed, will retry: {e}", flush=True)
+                print(f"check-run lookup error detail: {e}")
+                print(f"::warning::check-run lookup for {COMPONENT} failed, will retry -- see the plain-text line just above", flush=True)
                 return False
             for check_run in data.get("check_runs", []):
                 if check_run.get("name") == check_name and check_run.get("status") == "completed":
@@ -939,9 +1002,11 @@ jobs:
             except subprocess.CalledProcessError as e:
                 stderr = e.stderr or ""
                 if is_permanent_auth_error(stderr):
-                    print(f"::error::oc get snapshot failed with a permanent auth/RBAC error: {stderr.strip()}")
+                    print(f"oc get snapshot error detail: {stderr.strip()}")
+                    print("::error::oc get snapshot failed with a permanent auth/RBAC error -- see the plain-text line just above")
                     raise
-                print(f"::warning::oc get snapshot failed, will retry: {stderr.strip()}", flush=True)
+                print(f"oc get snapshot error detail: {stderr.strip()}")
+                print("::warning::oc get snapshot failed, will retry -- see the plain-text line just above", flush=True)
                 time.sleep(POLL_INTERVAL_SECONDS)
                 continue
             conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
@@ -971,12 +1036,15 @@ jobs:
                 except subprocess.CalledProcessError as e:
                     stderr = e.stderr or ""
                     if is_permanent_auth_error(stderr):
-                        print(f"::error::oc apply failed with a permanent auth/RBAC error: {stderr.strip()}")
+                        print(f"oc apply error detail: {stderr.strip()}")
+                        print("::error::oc apply failed with a permanent auth/RBAC error -- see the plain-text line just above")
                         raise
                     if i == max_apply_retries:
-                        print(f"::error::oc apply failed {max_apply_retries} times for {release_name}: {stderr.strip()}")
+                        print(f"oc apply error detail: {stderr.strip()}")
+                        print(f"::error::oc apply failed {max_apply_retries} times for {release_name} -- see the plain-text line just above")
                         raise
-                    print(f"::warning::oc apply failed for {release_name}, retrying same apply: {stderr.strip()}")
+                    print(f"oc apply error detail: {stderr.strip()}")
+                    print(f"::warning::oc apply failed for {release_name}, retrying same apply -- see the plain-text line just above")
                     time.sleep(apply_retry_seconds)
 
         def poll_release(release_name, timeout_seconds):
@@ -990,9 +1058,11 @@ jobs:
                 except subprocess.CalledProcessError as e:
                     stderr = e.stderr or ""
                     if is_permanent_auth_error(stderr):
-                        print(f"::error::oc get release failed with a permanent auth/RBAC error: {stderr.strip()}")
+                        print(f"oc get release error detail: {stderr.strip()}")
+                        print("::error::oc get release failed with a permanent auth/RBAC error -- see the plain-text line just above")
                         raise
-                    print(f"::warning::oc get release failed, will retry: {stderr.strip()}", flush=True)
+                    print(f"oc get release error detail: {stderr.strip()}")
+                    print("::warning::oc get release failed, will retry -- see the plain-text line just above", flush=True)
                     time.sleep(POLL_INTERVAL_SECONDS)
                     continue
                 conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
@@ -1091,7 +1161,7 @@ jobs:
         IMAGE_READY: ${{ needs.resolve-and-verify.outputs.image-ready }}
         CHART_READY: ${{ needs.resolve-and-verify.outputs.chart-ready }}
         IMAGE_RESULT: ${{ needs.promote-image.result }}
-        STAMP_RESULT: ${{ needs.stamp-prod-chart.outputs.tag-pushed == 'true' && 'success' || needs.stamp-prod-chart.result }}
+        STAMP_RESULT: ${{ needs.stamp-prod-chart.result == 'skipped' && 'skipped' || ((needs.stamp-prod-chart.outputs.tag-pushed == 'true' || needs.stamp-prod-chart.outputs.already-released == 'true') && 'success' || 'failure') }}
         CHART_RESULT: ${{ needs.release-prod-chart.outputs.release-outcome || needs.release-prod-chart.result }}
         WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
@@ -1103,9 +1173,14 @@ jobs:
         # stamp-prod-chart has continue-on-error: true, so its own
         # .result always reads 'success' downstream regardless of
         # whether it actually pushed the tag -- STAMP_RESULT above
-        # already resolves that via its own tag-pushed output, same
-        # pattern as the staging pipeline's identical caveat.
-        [[ "${CHART_READY}" == "true" && "${STAMP_RESULT}" != "success" ]] && CHART_TEXT="failure (stamping chart for production failed, see stamp-prod-chart)"
+        # already resolves that via its own tag-pushed/already-released
+        # outputs, same pattern as the staging pipeline's identical
+        # caveat. Checking == 'failure' specifically (not != 'success')
+        # matters: a genuinely skipped stamp-prod-chart (e.g. image
+        # promotion was attempted and failed, so chart promotion is
+        # correctly withheld) must stay "skipped", not get mislabeled as
+        # a stamping failure that never actually happened.
+        [[ "${CHART_READY}" == "true" && "${STAMP_RESULT}" == "failure" ]] && CHART_TEXT="failure (stamping chart for production failed, see stamp-prod-chart)"
 
         HEADER_TEXT=":warning: ${VERSION} - Production promotion incomplete"
         if [[ "${IMAGE_TEXT}" == "success" && "${CHART_TEXT}" == "success" ]]; then

@@ -260,7 +260,7 @@ pygments==2.19.2
     # via rich
 pyjwt==2.15.1
     # via py-pure-client
-pyparsing==3.3.2
+pyparsing==3.3.3
     # via oslo-utils
 pyperclip==1.11.0
     # via cmd2

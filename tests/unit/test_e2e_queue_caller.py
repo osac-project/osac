@@ -90,8 +90,9 @@ def test_the_queue_derives_the_pull_request_number_from_the_queue_branch(tmp_pat
 
 
 def test_every_suite_carries_the_pull_request_number_and_runs_one_capture() -> None:
-    """The queue is the only caller that turns ci-observe on for every run: each attempt leaves one capture, named after
-    the pull request, which the Pull requests dashboard links to. A caller may pass only a secret the workflow declares.
+    """Telemetry is always on for every full-install run: each attempt leaves one capture, named after the pull
+    request, which the Pull requests dashboard links to. The queue passes no ci-observe input; the suite workflows
+    capture unconditionally. A caller may pass only a secret the workflow declares.
     """
     queue = jobs()
     for name in ("vmaas", "caas", "bmaas"):
@@ -101,7 +102,9 @@ def test_every_suite_carries_the_pull_request_number_and_runs_one_capture() -> N
         assert "needs.plan.result == 'success'" in job["if"]
         assert "needs.entry.result == 'success'" not in job["if"]
         assert job["with"]["pr-number"] == "${{ needs.entry.outputs.pr-number }}"
-        assert job["with"]["ci-observe"] is True
+        assert "ci-observe" not in job["with"], (
+            "the suite workflows capture unconditionally and no longer declare the input"
+        )
         assert job["secrets"] == {"CI_OBSERVE_OTLP_PASSWORD": "${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}"}
 
         path = WORKFLOWS / job["uses"].removeprefix("./.github/workflows/")

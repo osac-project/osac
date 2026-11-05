@@ -141,7 +141,10 @@ jobs:
       # caller can turn it off. The capture never changes the test outcome; see
       # osac-test-infra's ci-observe-capture. A run without telemetry is still
       # a run: a failed collector deploy only warns.
-      ci-observe: ${{ inputs.ci-observe }}
+            # On by default, including the scheduled runs. A pull request or a caller
+      # can still turn it off. The capture never changes the test outcome; see
+      # osac-test-infra's ci-observe-capture. A failed collector deploy only warns.
+      ci-observe: ${{ inputs.ci-observe || github.event_name == 'schedule' }}
       test-repository: ${{ inputs.repo || github.repository }}
       test-ref: ${{ inputs.sha || github.sha }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}

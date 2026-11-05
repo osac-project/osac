@@ -801,13 +801,26 @@ You create one values file for the `osac` chart, `my-values.yaml`.
    service:
      auth:
        issuerUrl: https://keycloak.example.com/realms/osac
+     idp:
+       url: https://keycloak.example.com
    ui:
      auth:
        oidcIssuerURL: https://keycloak.example.com/realms/osac
    ```
 
-   Replace both URLs with the realm issuer supplied by your Keycloak
-   administrators. If you keep the default `service.auth.issuerUrl`, set
+   Replace the two realm issuer URLs with the issuer supplied by your
+   Keycloak administrators. Set `service.idp.url` to the external Keycloak
+   base URL; the Fulfillment Service uses it for user and role management.
+   For BMaaS, when `bmf.secretAPI.url` is set, also set its separate issuer
+   value to the same realm issuer:
+
+   ```yaml
+   bmf:
+     secretAPI:
+       issuerUrl: https://keycloak.example.com/realms/osac
+   ```
+
+   If you keep the default `service.auth.issuerUrl`, set
    `ui.auth.oidcIssuerURL` to
    `https://keycloak-keycloak.<cluster-domain>/realms/osac`, replacing
    `<cluster-domain>` with the actual `global.clusterDomain` value.

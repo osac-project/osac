@@ -98,6 +98,17 @@ which must be called (typically via `defer`) by any code path that can produce a
 transaction. If a handler forgets it, its error will not trigger a rollback — this is not enforced
 by the type system.
 
+**Provider-backed billing RPCs are an explicit exception.** Account discovery (`BillingAccounts.List`)
+and assignment writes/revalidation (`TenantBillingAssignments.Create`, `Update`, and private `Signal`)
+are configured with `TxInterceptorBuilder.AddManagerOnlyMethods`. The interceptor supplies the transaction
+manager but no ambient transaction; managed-service-account authorization and JIT provisioning use their
+existing independent transaction paths. Billing handlers use short `database.WithNewTx` scopes, with no
+transaction or pooled connection held during provider I/O. Discovery fetches before its atomic store and
+opens its freshness window only after commit. Assignment operations commit expiring account/tenant/correlation
+leases before provider work and revalidate ownership and current state in the final commit transaction.
+The lease fences local finalization, not the external provider: a provider write and PostgreSQL commit
+cannot be atomic, and a paused owner is not remotely fenced after lease expiry.
+
 ### Event delivery and reconciliation recovery
 
 Watch events notify controllers that an object may need reconciliation. Controllers read the

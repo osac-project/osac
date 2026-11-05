@@ -236,6 +236,9 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 | Component integration | `it/`; `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` | Deployed Fulfillment Service, its database, and the CLI binary built from this checkout. The specs labelled `networking-operator` run in a second phase with the local OSAC Operator image deployed and `global.networking.provisioningEnabled=false`; the first phase excludes them. | CaaS, VMaaS, BMaaS, and external provider workflows unless a specific test exercises them. |
 | Component integration ([DEV] OSAC-6553, OSAC-6554, OSAC-6555) | `it/it_service_accounts*.go`, `it/it_managed_service_account_authorization_test.go`; focused commands in [service-account coverage](#coverage-notes) | Deployed Fulfillment API, PostgreSQL, Keycloak, the controller's IDP management principal, and the configured runtime IDP principal for CRUD, tenant isolation, PENDING-to-READY credential Secret provisioning with client ID and secret retrieval, rotation, client lifecycle, and managed-token role authorization | Failure tests run the service and reconciler in process against PostgreSQL and Keycloak, injecting Keycloak transport and persistence failures; external provider provisioning is out of scope. |
 | Component integration ([DEV] OSAC-6307) | `internal/servers` and `internal/database/migrations/126_hold_external_ip_capacity_until_archive_test.go`; from `fulfillment-service/`, run `go test ./internal/servers ./internal/database/migrations -timeout 20m` | Fulfillment server logic and PostgreSQL test container, including archive-time capacity and exclusivity for terminating consumers | Kubernetes and provider cleanup are not run; release completion is exercised by operator tests with provider fixtures. |
+| Component integration ([DEV] OSAC-6882) | `internal/testing/billingfake`, `internal/testing/billingstub`, `internal/servers`; from `fulfillment-service/`, run `go test ./internal/testing/billingfake ./internal/testing/billingstub ./internal/billing/... && go test ./internal/servers -ginkgo.focus Billing` | Fulfillment billing handlers and guard against the adapter contract; the real `m360` adapter against the stub server | The billing provider is a deterministic in-process fake; no M360 endpoint, token or network. Not wired into the deployed `it/` suite yet, see below. |
+| Component integration ([DEV] OSAC-6883) | `internal/database`, `internal/servers`; focused commands in the [billing coverage notes](#coverage-notes) | Account discovery pagination/deadline, durable all-or-nothing refresh, commit-bound freshness after an invalid List, one-connection-pool availability during provider waits, upsert/UNKNOWN marking/correlation preservation, and public/private List/filter/order/error handling against real PostgreSQL | Provider calls use OSAC-6882 fakes, not M360. Freshness/singleflight remain process-local. Deployed `it/` coverage is disabled-mode only. |
+| Component integration ([DEV] OSAC-6884, OSAC-6885, OSAC-6886) | `internal/billing`, `internal/database`, `internal/servers`; focused commands in the [billing coverage notes](#coverage-notes) | Assignment CRUD/1:1 intervals; real separate-session advisory contention and unique-index insert races; durable operation leases and stale-owner rejection; unpinned provider work, admission control, in-place Update/Signal revalidation, history and tombstone retention against real PostgreSQL. Resolver-only precedence/foreign-carrier tests are Unit tier | Provider calls use OSAC-6882 fakes, not M360; server tenancy is a suite double. No deployed multi-pod, live-provider, immediate-revocation, or new Signal/role journey is claimed. Prior deployed `it/` evidence is disabled-mode only. |
 | E2E | `../tests/e2e/` | Cross-component OSAC user journeys | Depends on the deployed test environment and its configured providers. |
 
 ### ComputeInstance disk handoff (OSAC-6685)
@@ -276,6 +279,112 @@ or ambiguous mapping therefore retains those tracked records and blocks the
 VM job; it does not imply that no Volume record was created. Parent correlation
 uses `ComputeInstance.status.volumes`, CR `spec.diskVolumeIDs`, and stable disk
 record names, rather than a reverse attachment field on Volume.
+
+### Billing provider fake
+
+`internal/testing/billingfake` is a deterministic `billing.Adapter` for tests. It
+implements the adapter contract, not HTTP; keep HTTP fakes for adapter unit
+tests. Selecting it needs no production change: build a `billingfake.Scenario`,
+call `billingfake.New(scenario)`, and inject `fake.Provider()` (a configured
+`billing.Provider` with key `fake`) where a server takes a `*billing.Provider`.
+A disabled deployment is `billing.NewProvider("", fake, nil)`; assert
+`fake.Calls()` is empty.
+
+Every `Fake` owns its scenario and call log (no globals), so suites running in
+parallel cannot see each other's state. `New` copies the scenario.
+
+Scenario fixture (Go struct, or JSON through `billingfake.Load`, which rejects
+unknown fields):
+
+```json
+{
+  "correlationWrite": false,
+  "accounts": [{"id": "a1", "name": "n", "externalId": "ext", "state": "ACTIVE",
+                "rawStatus": "active", "approvalStatus": "Approved"}],
+  "services": [{"id": "s1", "name": "GPU Hours",
+                "attributes": [{"id": "gpu_hours", "name": "gpu_hours"}],
+                "rates": {"USD": {"rows": [{"dimensionId": "gpu_hours",
+                                            "priceMethod": "QUANTITY",
+                                            "unitRate": "0.25"}]}}}],
+  "failures": {"ListAccounts": {"reason": "UNAVAILABLE", "status": 503}}
+}
+```
+
+- Accounts: any `state` (`ACTIVE`, `INACTIVE`, `UNKNOWN`) with its raw status;
+  zero, one or two accounts sharing an `externalId` (the correlation value);
+  `ListAccounts` filters by exact external id and name and pages by token.
+- Correlation write: `correlationWrite` false behaves like M360
+  (`SupportsCorrelationWrite()` false, `SetCorrelationValue` fails UNSUPPORTED);
+  true stores the value.
+- Services and rates: services are found by exact name only; two services with
+  one name give AMBIGUOUS. Rate cards are keyed by requested currency; an
+  unscripted currency gives NOT_FOUND, a card `currency` that differs from the
+  key scripts a currency mismatch. Rows are returned verbatim, so
+  `QUANTITY`, other units, duplicate or missing dimensions script the shapes
+  the consumer must classify.
+- Failures: per method name, with `reason` (`TIMEOUT`, `UNAVAILABLE`, ...),
+  `retryable`, `status` and `times` (first N calls fail, 0 means always),
+  which scripts timeouts, 5xx and retry scenarios.
+- Recording: `Calls()`, `Count(op)` and `Succeeded(op)`. A retried write that
+  failed once has `Count` 2 and `Succeeded` 1, because `Count` includes failed
+  attempts; a write-unsupported fake still records an attempted
+  `SetCorrelationValue`, so assert `Succeeded` is 0.
+
+#### Deployed stub M360 server
+
+The fake is in-process only: the configuration loader accepts only `m360` as
+`OSAC_BILLING_PROVIDER`, and no `fake` provider key is reachable in a
+deployment. The deployed `it/` suite instead uses
+`internal/testing/billingstub`, an HTTP server that speaks the M360 read API
+(`/api/<version>/accounts`, `/accounts/{id}`, `/services?q=`,
+`/services/{id}/priceable-attributes`, `/services/{id}/rate-cards/{currency}`,
+errors as a flat body with `status`, `error`, `message` and `path`), so a real
+M360 configuration (`OSAC_BILLING_PROVIDER=m360`, base URL including the
+full `/api/v1/external` path,
+credential file) runs the real adapter against it.
+
+- Same fixture: the stub is driven by `billingfake.Scenario` (the JSON above,
+  `billingfake.Load`). `accounts`, `services`, `rates` and `failures` apply;
+  `correlationWrite` does not, because the stub is read-only like M360.
+- Failures are keyed by adapter method. `status` sets the HTTP status; when
+  omitted it follows `reason` (`UNAUTHORIZED` 401, `NOT_FOUND` 404,
+  `TIMEOUT` 408, `UNAVAILABLE` 503, otherwise 500). `times` counts failing
+  responses, not logical calls: the adapter retries 5xx, so `"times": 2`
+  recovers within one call. The status probe (a one-item unfiltered
+  `/accounts` page) counts as `HealthCheck`, and a `ListAccounts` failure
+  applies to it too.
+- Recording: `Requests()`, `Count(op)`, `Succeeded(op)`. Every non-GET is
+  answered 405 and recorded; assert `Writes()` is empty to prove no
+  PUT/PATCH. A disabled deployment is proven by `Requests()` being empty.
+- Use: `stub := billingstub.New(scenario)`, `stub.Start("127.0.0.1:0")`,
+  `stub.URL()`, `stub.SetScenario(...)` to change a running stub, `Close()`.
+  Each stub owns its state, so parallel suites do not share scenarios.
+
+`it/it_billing_provider_status_test.go` ("with a stub M360") starts a stub in
+the test process, creates the credential Secret, patches the
+`fulfillment-grpc-server` Deployment in `osac` with the four `OSAC_BILLING_*`
+settings and the Secret volume, waits for the rollout, and expects `AVAILABLE`,
+then `UNAVAILABLE` after `SetScenario` scripts a 503. Cleanup restores the
+original pod spec. The specs are `Serial` and skip unless
+`OSAC_IT_BILLING_STUB_LISTEN` (bind address) and `OSAC_IT_BILLING_STUB_URL`
+(that listener as seen from the cluster, for kind the host side of the docker
+network) are set. No installer or chart setting exists for either variable,
+and the suite does not set them.
+
+What runs where:
+
+| Seam | Run in CI | Notes |
+|---|---|---|
+| `billingfake` and `billingstub` unit specs | Yes, `ginkgo run -r internal` in the fulfillment-service unit leg | No cluster needed. |
+| Real `m360` adapter against the stub (happy path, 5xx, 401) | Yes, in the `billingstub` unit specs | |
+| Deployed stub spec in `it/` | No | Skipped without the two variables, and no CI job sets them. |
+| Default `it/` billing specs | Yes | They cover only the unconfigured, `NOT_CONFIGURED` case: `it_billing_provider_status_test.go`, `it_billing_accounts_test.go` (public List route plus `get billingaccount`), `it_tenant_billing_assignments_test.go` (public List route plus `get tenantbillingassignment`), and the billing-labeled route spec in `it_rest_gateway_test.go` (public and private billing paths answer HTTP 400). |
+
+To run the deployed spec, a developer must start the suite with the two
+variables set and a network path from the kind nodes to the test host. The
+same configured-provider boundary is listed as unresolved in the billing
+provider-status coverage note above; no follow-up ticket exists yet for
+wiring these specs into CI.
 
 ### Fulfillment integration timings
 
@@ -332,6 +441,48 @@ installer command in the tier table remains the component-integration check.
 
 ### Coverage notes
 
+- **Billing account discovery, persistence, and `BillingAccounts.List` ([DEV] [OSAC-6883](https://redhat.atlassian.net/browse/OSAC-6883)):** `internal/billing/m360/accounts_test.go` covers the M360 Status/ApprovalStatus-to-state mapping (an account is ACTIVE only when both signals agree, an INACTIVE signal on either side wins, and every other combination — missing, unmapped, or disagreeing — fails closed to UNKNOWN); the recognized literal lists are OSAC's reading of the M360 API and are unverified against the live service's picklists — an unrecognized value fails closed to UNKNOWN. `internal/database/billing_account_test.go` covers `UpsertBillingAccount` (refresh-only-when-supplied for display_name/base_currency, always-refresh state/status_observed_at, correlation_id written only when locally null with no existing holder, never overwritten once set), `MarkBillingAccountsUnobserved` (including the nil-seen case, which must sweep like an empty list), and `ListBillingAccounts`' allowlist-based filter/order and negative page-bound rejection (a negative limit or offset is an invalid query, not a SQL error) against a real PostgreSQL test container; `internal/database/flat_table_query_test.go` covers the shared page bounds (unset limit serves the default page, oversized limits clamp). `internal/database/migrations/149_create_billing_accounts_table_test.go` covers the table's unique constraints. `internal/servers/private_billing_accounts_server_test.go` and `billing_accounts_server_test.go` cover the private/public delegate end to end against the OSAC-6882 `billingfake` adapter: multi-page discovery bounded by `billing.MaxListPages` (a provider that never reports a last page fails with FAILED_PRECONDITION/MALFORMED) and by an overall discovery deadline (a hanging provider fails the List as UNAVAILABLE rather than pinning the request's transaction), the discovery freshness window (a List within the window serves the stored page without a provider read; only a successful discovery opens a window), the failure backoff (a List inside the window after a failed walk fails fast without a provider read; once the backoff elapses the walk is retried), single-flight discovery (a List that arrives while another's walk is still running fails fast without starting a second walk), vanished-account retention with UNKNOWN re-marking (including a provider whose list has become empty), ingest sanitization of provider display names (a name carrying terminal control characters is stored stripped), FAILED_PRECONDITION/BILLING_NOT_CONFIGURED when disabled, UNAVAILABLE on a provider failure (never a stale list), and the filter-oracle boundary (provider_account_reference, the private-only field, is rejected; provider_key, a public field, is accepted) — the latter is excluded from the generic reflection-driven filter-oracle suite in `register_servers_test.go` because BillingAccounts is registered standalone, not through `RegisterResourceServers`, so this targeted coverage is its replacement (same pattern as the existing `User` exclusion). `it/it_billing_accounts_test.go` covers the deployed boundary in disabled mode only (the public List route and the `get billingaccount` CLI both fail with BILLING_NOT_CONFIGURED); both of its specs were executed and passed on this branch (focused deployed runs on the local Kind cluster, most recently 2026-11-03 — command below). The billing-labeled route spec in `it/it_rest_gateway_test.go` covers both billing surfaces' REST routes — the public `/api/fulfillment/v1/billing/*` paths through the external view and the private `/api/private/v1/billing/*` paths through the internal view, all answering HTTP 400 with the disabled-mode message. No `billingstub`-backed configured-provider journey exists; there is no linked follow-up ticket for that gap yet.
+
+  Focused commands, run from `fulfillment-service/` (Ginkgo focus is a case-sensitive regex, so each pattern matches its suites' exact Describe text):
+
+  ```bash
+  go test ./internal/database -ginkgo.focus 'Billing accounts'
+  go test ./internal/database/migrations -ginkgo.focus 'Create billing accounts table'
+  go test ./internal/servers -ginkgo.focus '(Billing accounts|Private billing accounts) server'
+  ```
+
+  Review-fix qualification on 2026-11-04: `ginkgo run --timeout 25m -r internal` passed all 139 suites in 21m17s. The final oversized-page fix landed while that run was in progress; all billing/fake/stub tests and the affected billing server tests were subsequently re-run successfully, including race checks. Auth and database/assignment/discovery race checks, proto generation/lint, service lint/build, and proto-consumer builds also passed. Deployed Kind/live-provider validation was not re-run for these fixes.
+
+  The deployed specs were executed with the same focused approach, most recently on 2026-11-03 after the fourth review round's changes (assignments List-order index, deleted-tenant assignment rejection, the public Update and ingest-sanitization specs; the third round's discovery and sanitization changes were re-verified earlier the same day), against the Kind deployment the installer's service-only test phase produces (it-image built from this checkout, `service.controller.sync=false`, operator disabled) and with the `README.md` host entries in place:
+
+  ```bash
+  ginkgo run --timeout 30m --label-filter billing it
+  ```
+
+  Seven billing-labeled specs ran and passed in 14.0s: both `it_billing_accounts_test.go` specs, both `it_tenant_billing_assignments_test.go` specs, both default `it_billing_provider_status_test.go` specs (the stub-backed Describe skips without its env vars), and the billing-labeled `it_rest_gateway_test.go` route spec, which now loops the public `/api/fulfillment/v1/billing/*` paths through the external view and the private `/api/private/v1/billing/*` paths through the internal view. The first execution (public paths only) ran on 2026-11-02 in 15.9s, and the post-third-round re-run took 14.5s.
+- **Account correlation-id resolution ([DEV] [OSAC-6885](https://redhat.atlassian.net/browse/OSAC-6885)):** `internal/billing/correlation_test.go` covers the precedence table and measured provider match count, idempotency, duplicate/foreign-carrier rejection, conflict reasons, regeneration, classified provider failures, bounded pagination, and correlation-value error hygiene. The one-foreign-carrier regressions exercise read-only and write-capable adapters and assert zero provider writes; a generated-value collision is also rejected before writing. These are Unit tests using `billingfake`, not live-provider evidence. The resolver is additionally exercised through the assignments server specs below.
+- **Tenant billing assignments CRUD and 1:1 intervals ([DEV] [OSAC-6884](https://redhat.atlassian.net/browse/OSAC-6884)):** `internal/database/tenant_billing_assignment_test.go` exercises interval closing, active lookups, filter/order/presence queries, page bounds, and correlation conflicts against real PostgreSQL. Its separate-transaction contention specs prove the advisory lock actually excludes another session on the same account, leaves another account usable, and releases at transaction end. Raced inserts use distinct PostgreSQL sessions, observe blocking with `pg_blocking_pids`, commit the winner, and assert the actual tenant/account partial-unique-index violation and retained winner. The four contention specs passed; the original acquire-without-error smoke test alone is not concurrency evidence. Winner rollback is not separately covered by the insert-race specs.
+
+  Migration 150 tests the assignment constraints; migration 151 tests the history-order index. The private/public assignment server suites use real PostgreSQL with `billingfake` provider calls for CRUD, connection-state derivation, disabled mode, tenant-liveness guards, and bounded provider work. Their constructed `pgconn.PgError` cases test stable reason mapping only, not real races; the separate-transaction database specs supply that boundary evidence. `authorization_evaluator_test.go` supplies Unit-tier OPA evidence: explicit public/private billing method grants for global admins and the `cloud-provider-admin` realm role, tenant-role/managed-account denials, and private Signal restricted to global admins/controllers. The role adds billing access without removing existing tenant permissions. Signal's absence from the public descriptors is asserted in `tenant_billing_assignments_server_test.go`.
+
+  `it/it_tenant_billing_assignments_test.go` exercises the deployed API/CLI in disabled mode only. Its prior passing run (2026-11-03, command above) does not verify the new transaction, lease, Signal, or role changes against a deployed service. That deployed coverage remains an unresolved gap; no owning follow-up ticket exists.
+
+  **Provider transaction boundary (F2/F3):** account server regressions use independent transactions to verify durable discovery after a later invalid filter, all-or-nothing storage failure, and availability of a one-connection pool while a paginated provider call waits. `billing_operation_lease_test.go`, migration 152, the transaction-interceptor specs, and the private assignment server specs exercise committed account/tenant/correlation reservations, cross-instance contention, expiry/ownership checks, admission before provider work, and short final commits. These are component-integration checks through real PostgreSQL with controlled provider calls, not deployed replicas. Leases fence local finalization only: a remote write cannot be atomic with PostgreSQL and a paused owner is not provider-fenced after expiry.
+
+  Focused commands, run from `fulfillment-service/` (the servers pattern spells `[Tt]enant` because one Describe is private-prefixed):
+
+  ```bash
+  go test ./internal/billing -ginkgo.focus ResolveAccountCorrelationID
+  go test ./internal/database -ginkgo.focus 'Tenant billing assignments|Billing operation leases|Transactions interceptor'
+  go test ./internal/database/migrations -ginkgo.focus 'Create tenant billing assignments table|Add tenant billing assignments effective_from index|Create billing operation leases'
+  go test ./internal/servers -ginkgo.focus '[Tt]enant billing assignments server|Deletes a tenant that has a billing assignment'
+  go test ./internal/auth -count=1
+  ```
+- **Assignment history and tenant-deletion tombstone ([DEV] [OSAC-6886](https://redhat.atlassian.net/browse/OSAC-6886)):** the assignment List/Get and presence-filter specs retain closed intervals; no assignment delete path exists. `internal/servers/private_tenants_server_test.go` ("Deletes a tenant that has a billing assignment without rejecting the delete...") verifies that the archive savepoint defers only `tenant_billing_assignments_tenant_id_fkey`, retains the deletion-marked tenant row without an archived copy, and preserves assignment history. These are real PostgreSQL row-state checks, not authorization checks. Deployed tombstone/history coverage remains unresolved, with no owning follow-up ticket.
+
+  **Accepted access-revocation gap (F5):** deletion does not revoke tokens or enforce tenant liveness at authorization. An already-issued human JWT remains accepted until its expiry plus leeway (up to ~305s with the packaged 300s lifetime and 5s leeway); post-deletion refresh behavior is unverified, so this is not a bound on all subsequent access. Managed service accounts can continue resolving while their own account/credential rows remain active. Assignment writes reject deletion-marked tenants, but immediate platform-wide revocation is not delivered. No stale-token denial test is claimed: it would fail today and belongs with a future platform mechanism. These gaps are accepted and unresolved; no owning follow-up ticket exists.
+
+  **Contract tracking (F10/F13):** the design's assignment API is admin-only; Jira's tenant-self-read clause is not implemented. Billing administrators act deployment-wide; this platform has no per-tenant admin scope. The design's suspension clause constrains a future lifecycle: no tenant suspend/resume mechanism exists to implement or test today. These deviations are tracked here by author decision, without creating a Jira follow-up.
 - **StorageBackend ownership ([DEV] [OSAC-6868](https://redhat.atlassian.net/browse/OSAC-6868)):** `internal/validation/storage_backend_ownership_test.go` covers explicit and omitted ownership through the real validation interceptor. `internal/servers/private_storage_backends_server_test.go` combines that interceptor with the real private server and PostgreSQL, then reads in a separate transaction to verify rejection leaves no backend and supported configurations persist. Run `go test ./internal/validation -count=1` and `go test ./internal/servers -count=1 -timeout=10m -ginkgo.focus='Storage backend ownership|Private storage backends server'` from `fulfillment-service/`. Tenancy and attribution are suite doubles; these tests do not exercise a deployed service. `it/it_storage_backend_ownership_test.go` covers the deployed private API/CLI and database boundary through the Fulfillment installer target above. No operator, AAP, or storage-array provisioning is exercised.
 
 - **Tenant storage onboarding projection ([OSAC-6575](https://redhat.atlassian.net/browse/OSAC-6575), DEV):** `internal/controllers/tenant/tenant_storage_onboarding_test.go` covers exact operator condition projection, missing/unknown evidence, source isolation, timestamps, and unchanged observations through the reconciler with mocked hub and Kubernetes clients. `it/it_tenant_storage_onboarding_test.go` exercises operator Tenant CR status to explicit private Tenant `Signal` to persisted private API status using real Kubernetes, the deployed Fulfillment controller/API, and PostgreSQL. [OSAC-6684](https://redhat.atlassian.net/browse/OSAC-6684) adds repeated reads and signals with unchanged storage evidence; a changed compute-readiness reason in the same response confirms the later hub observation occurred. Run the Fulfillment installer target above, or `ginkgo run --timeout 20m --focus 'Tenant storage onboarding feedback' it` against a compatible deployed environment. The fixture supplies the operator condition; it does not prove automatic feedback-watch delivery, storage readiness calculation ([OSAC-6447](https://redhat.atlassian.net/browse/OSAC-6447)), AAP execution, remote cluster access, real storage-provider behavior, or VM consumption ([OSAC-6596](https://redhat.atlassian.net/browse/OSAC-6596)).
@@ -438,6 +589,7 @@ installer command in the tier table remains the component-integration check.
 - **FabricDomain to Netris lifecycle:** The complete BMaaS E2E journey is tracked by [OSAC-4786](https://redhat.atlassian.net/browse/OSAC-4786). It requires reserved real Netris hosts and owned cleanup; API-only integration cases are not substitutes.
 - **Catalog Items:** `it/` checks creation and update behavior, publication visibility, CLI creation, and the ClusterOrder release image written by Fulfillment. Catalog-backed provisioning journeys that exercise other components remain in the CaaS, VMaaS, BMaaS, and reference E2E suites.
 - **ComputeInstance additional-disk defaults:** the VMaaS regression test `test_compute_instance_empty_additional_disks_disables_catalog_item_default` covers the API contract for omitted and explicitly empty disk lists through provisioning and the resulting operator resource.
+- **Billing provider status ([DEV] [OSAC-6879](https://redhat.atlassian.net/browse/OSAC-6879), [OSAC-6881](https://redhat.atlassian.net/browse/OSAC-6881)):** `internal/servers/billing_provider_statuses_server_test.go` covers the statuses servers against a counting adapter double: one bounded probe per read, the shared last successful check, and failure reasons; authorization (admin group, service accounts, tenant-role denial on the public and private Get) is covered by `internal/auth/authorization_evaluator_test.go` at Unit tier. `it/it_billing_provider_status_test.go` targets the deployed CLI/gRPC boundary in disabled (`NOT_CONFIGURED`) mode only, because the dev deployment configures no billing provider; its two default specs were executed and passed in this branch's focused deployed runs (most recently 2026-11-03, `ginkgo run --label-filter billing it`, command in the OSAC-6883 coverage note), and the stub-backed configured-provider Describe skips itself without its env vars. The CI leg Integration test (fulfillment-service) (`ci-tests.yml`, run by `workflows/tests.yml`) remains the full-suite execution path. The REST gateway routes have no route-level test of their own: the deployed route-level harness `it/it_rest_gateway_test.go` exists and covers other resources (including the billing accounts and assignments routes' disabled-mode rejection), but no provider-status route spec runs there — only handler-list membership in `start_rest_gateway_cmd_test.go` and a simulated gateway error-mapping case in the guard spec cover them. Configured-provider states (AVAILABLE/UNAVAILABLE probes, `lastSuccessfulCheck` retention, provider failure messages), the REST routes, and deployed non-admin denial have no deployed-tier coverage. No owning follow-up ticket exists yet, so these gaps are unresolved.
 
 ## osac-installer
 
@@ -493,6 +645,72 @@ it does not start the hooks or prove a deployed fulfillment endpoint accepts
 the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
+
+The `make billing-render-test` Helm contract renders the umbrella chart with
+and without `global.billing.provider`, and the fulfillment-service subchart on
+its own. It asserts that nothing billing-related renders in the gRPC server
+Deployment without a provider; that a configured provider renders the
+`OSAC_BILLING_*` environment variables and mounts the credential Secret by
+name and key; that `caSecret` adds a read-only CA Secret mount and
+`OSAC_BILLING_CA_FILE` only when it is set; that the standalone subchart falls
+back to its own retry and breaker defaults and keeps a zero instead of
+replacing it; and that the schema rejects a missing provider field, a second
+provider, an inline credential key, an invalid `baseUrl` (a non-http scheme,
+http on a non-loopback host, URL credentials, a nonnumeric port, or a query),
+a `caSecret` without
+`name` or `key`, a negative or non-integer retry count, or an out-of-range breaker value. The chart
+takes only a Secret reference, and the script does not scan the manifests for
+credential text. It checks rendered manifests only: it does not check that a
+referenced Secret exists or that a running pod can read it, does not install
+against a provider (the fulfillment install test is design-doc Story 1.05; no
+Jira ticket exists yet) and does not cover how metering consumes the block; no
+Jira ticket exists yet for that gap. CI runs it in the `helm-lint-installer`
+job.
+
+Not proven by this contract or by any suite that runs in CI today, each
+unresolved with no owning ticket:
+
+- A deployed `fulfillment-grpc-server` reaching `AVAILABLE` over TLS. The
+  deployed stub-based `AVAILABLE` and `UNAVAILABLE` cases in
+  `fulfillment-service/it/it_billing_provider_status_test.go` skip unless
+  `OSAC_IT_BILLING_STUB_LISTEN` and `OSAC_IT_BILLING_STUB_URL` are set, and no
+  CI job sets them.
+- The `Authorization` header and the request paths as sent by a running pod.
+  Only the `m360` and `billingstub` unit specs cover them.
+- The mounted CA Secret reaching the process, in CI. The render test asserts
+  the volume, mount and variable only. The env-gated deployed `AVAILABLE` case
+  above covers it through a hand-patched mount, but no CI job runs it.
+
+The new `global.billing` block is validated by both the umbrella and standalone
+Fulfillment chart schemas; the umbrella `values.schema.json` is also rendered by
+the Enclave Wizard pipeline. Verify that the consuming Enclave plugin version
+picks up the changed schema and that the Wizard renders and validates the
+billing fields before declaring the feature available there; that pipeline is
+outside this repository's chart-render tests and is not verified by them; no
+Jira ticket exists yet for that gap.
+
+The chart hands the block to the fulfillment gRPC server as `OSAC_BILLING_*`
+environment variables. `OSAC_BILLING_PROVIDER`, `_BASE_URL`,
+`_CREDENTIAL_FILE`, the optional `_CA_FILE`, `_RETRY_COUNT` and
+`_PRICING_BREAKER_FAILURE_THRESHOLD`, `_PRICING_BREAKER_FAILURE_WINDOW_SECONDS`
+and `_PRICING_BREAKER_OPEN_SECONDS` are consumed by the fulfillment loader
+`billing.LoadConfig`. `OSAC_BILLING_BASE_URL` carries the whole path to the
+provider API, for example `https://billing.example.com/api/v1/external`; the
+adapter appends only the endpoint paths. It requires HTTPS except for loopback
+HTTP, has no userinfo, query or fragment, forbids percent escapes in the host,
+and permits only well-formed percent escapes in the path. `retryCount` is
+nonnegative, `failureThreshold` is positive, and `failureWindowSeconds` and
+`openSeconds` are each in `1..9223372036` so they fit in a Go `time.Duration`.
+The chart schemas enforce these bounds; the loader additionally requires every
+tuning value to fit in the deployment architecture's Go `int`. Oversized counter
+values remain a schema/runtime validation gap. The per-item timeout, list
+deadline and cache settings are not
+chart values: [OSAC-6894](https://redhat.atlassian.net/browse/OSAC-6894)
+(`[DEV] Catalog pricing timeout, cache, and freshness`, In Progress) adds them
+together with their consumers. [OSAC-6899](https://redhat.atlassian.net/browse/OSAC-6899)
+(`[DEV] Pricing availability classification, retries, and circuit breaker`,
+New) owns the breaker and retry classification. Renaming a variable breaks
+that contract on both sides.
 
 ### Install preflight (OSAC-6561)
 

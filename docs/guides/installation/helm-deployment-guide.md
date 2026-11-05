@@ -171,6 +171,7 @@ Use the same shell session for the remaining commands.
 
 ```bash
 export OSAC_RELEASE_VERSION="<chart_version>"
+export OSAC_CHART="oci://ghcr.io/osac-project/charts/osac"
 git clone https://github.com/osac-project/osac.git
 cd osac
 git checkout "osac/v${OSAC_RELEASE_VERSION}"

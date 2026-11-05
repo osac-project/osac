@@ -777,8 +777,9 @@ You create one values file for the `osac` chart, `my-values.yaml`.
 2. Create `my-values.yaml` for the `osac` chart. Copy the keys you need from
    `$OSAC_CHART_DIR/osac/values-example.yaml`, which demonstrates external
    PostgreSQL and Keycloak settings but uses development `latest` image tags.
-   For production, omit its image blocks so the selected chart's pinned image
-   defaults apply. If you need image overrides, use the pinned values from
+   For production, omit its image blocks and scalar image overrides, including
+   `aap.bootstrap.image`, so the selected chart's pinned image defaults apply.
+   If you need image overrides, use the pinned values from
    `values-upstream.yaml`. Leave out `dbMigrate.dbUrl`, which the chart schema
    rejects. Set `global.osacDeploymentId` to a stable identity for this
    deployment; the install fails without it.

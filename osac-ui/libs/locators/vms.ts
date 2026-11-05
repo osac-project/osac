@@ -40,7 +40,7 @@ export const VmCreatePage = {
   instanceType: id('vm-instance-type'),
   bootDisk: id('vm-boot-disk-size'),
   bootStorageTier: id('vm-boot-disk-storage-tier'),
-  storageTier: ['button[id^="vm-additional-disk-"][id$="-storage-tier"]'],
+  storageTier: ['[id^="vm-additional-disk-"][id$="-storage-tier"]'],
   addDisk: ['button', { name: 'Add disk', exact: true }],
   additionalDiskSize: ['input[id^="vm-additional-disk-"][id$="-size"]'],
   useTenantDefaultNetwork: id('spec.networking.networkAttachment.value-choice-default'),

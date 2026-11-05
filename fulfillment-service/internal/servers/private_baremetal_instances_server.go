@@ -781,7 +781,7 @@ func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(instanceType *
 			return port.GetName(), nil
 		}
 	}
-	return "", grpcstatus.Errorf(grpccodes.FailedPrecondition,
+	return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
 		"bare metal instance type '%s' has no fabric-role network port for default network attachment", instanceType.GetId())
 }
 
@@ -1017,6 +1017,11 @@ func (s *PrivateBareMetalInstancesServer) validateNetworkAttachments(
 	if len(attachments) == 0 {
 		return nil
 	}
+	if bmi.GetMetadata().GetTenant() == auth.SystemTenant {
+		// CaaS workers use the interface authorized on their Cluster. Do not
+		// revalidate it against the current instance-type port roles here.
+		return nil
+	}
 	return validateBareMetalAttachmentsForInstanceType("", attachments, instanceType)
 }
 
@@ -1068,21 +1073,26 @@ func validateBareMetalAttachmentsForInstanceType(
 
 	instanceTypeID := instanceType.GetId()
 	interfaceRoles := make(map[string]string)
-	validInterfaces := make(map[string]bool)
+	fabricInterfaces := make(map[string]bool)
 	for _, port := range instanceType.GetSpec().GetHardware().GetNetworkPorts() {
 		if port == nil {
 			continue
 		}
 		interfaceRoles[port.GetName()] = port.GetRole()
-		if !strings.EqualFold(port.GetRole(), "lifecycle") {
-			validInterfaces[port.GetName()] = true
+		if strings.EqualFold(port.GetRole(), "fabric") {
+			fabricInterfaces[port.GetName()] = true
 		}
 	}
 
-	if len(attachments) > len(validInterfaces) {
+	if len(attachments) > 0 && len(fabricInterfaces) == 0 {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"%snumber of network attachments (%d) exceeds available interfaces (%d) on instance type '%s'",
-			prefix, len(attachments), len(validInterfaces), instanceTypeID)
+			"%sbare metal instance type '%s' has no fabric-role network port for tenant networking",
+			prefix, instanceTypeID)
+	}
+	if len(attachments) > len(fabricInterfaces) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%snumber of network attachments (%d) exceeds available fabric interfaces (%d) on instance type '%s'",
+			prefix, len(attachments), len(fabricInterfaces), instanceTypeID)
 	}
 
 	for i, attachment := range attachments {
@@ -1092,10 +1102,11 @@ func validateBareMetalAttachmentsForInstanceType(
 		}
 		role, found := interfaceRoles[iface]
 		switch {
-		case found && strings.EqualFold(role, "lifecycle"):
+		case found && !strings.EqualFold(role, "fabric"):
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%snetwork_attachments[%d]: interface '%s' has role 'lifecycle' and cannot be used for tenant networking", prefix, i, iface)
-		case !validInterfaces[iface]:
+				"%snetwork_attachments[%d]: interface '%s' has role '%s' and cannot be used for tenant networking; interface must have role 'fabric'",
+				prefix, i, iface, role)
+		case !found:
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"%snetwork_attachments[%d]: interface '%s' not found in instance type '%s'", prefix, i, iface, instanceTypeID)
 		}

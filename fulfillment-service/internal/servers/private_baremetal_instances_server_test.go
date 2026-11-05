@@ -2773,6 +2773,51 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(status.Message()).To(ContainSubstring("bmc-0"))
 		})
 
+		It("Rejects an interface with management role", func() {
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+							privatev1.BareMetalNetworkAttachment_builder{
+								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								Interface: strPtr("mgmt-0"),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("mgmt-0"))
+			Expect(status.Message()).To(ContainSubstring("management"))
+			Expect(status.Message()).To(ContainSubstring("fabric"))
+		})
+
+		It("leaves CaaS worker interfaces to Cluster network authorization", func() {
+			bmi := privatev1.BareMetalInstance_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: auth.SystemTenant}.Build(),
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+						privatev1.BareMetalNetworkAttachment_builder{
+							Subnet:    privatev1.SubnetLocalReference_builder{Id: "cluster-subnet"}.Build(),
+							Interface: strPtr("data-0"),
+						}.Build(),
+					},
+				}.Build(),
+			}.Build()
+			instanceType := bareMetalInstanceTypeFixture("worker-type",
+				bareMetalNetworkPort("data-0", "management"))
+
+			Expect(server.validateNetworkAttachments(bmi, instanceType)).To(Succeed())
+		})
+
 		It("validates interfaces against a user-selected instance type when the template has no default", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
@@ -4252,7 +4297,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("fabric"))
 		})
 	})

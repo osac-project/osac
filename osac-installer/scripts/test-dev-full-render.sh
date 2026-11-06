@@ -37,11 +37,73 @@ osac_render=$(helm template osac charts/osac --namespace osac \
   --values values/dev/kind-instance.yaml \
   --values values/dev/kind-instance-devfull.yaml \
   --set-string global.osacDeploymentId=osac/osac)
+
+rendered_script() {
+  local script_name="$1"
+  awk -v script_name="${script_name}" \
+    '$0 == "  " script_name ": |" { in_script = 1; next }
+     in_script && /^  [^ ]/ { exit }
+     in_script { sub(/^    /, ""); print }' <<<"$chart_render"
+}
+
 if ! awk '/name: OSAC_ENABLE_NETWORKING_PROVISIONING/ { getline; if ($0 ~ /value: "true"/) found = 1 } END { exit !found }' \
   <<<"$osac_render"; then
   echo "Kind dev-full must enable provider networking so AAP creates each tenant's target namespace" >&2
   exit 1
 fi
+
+# The devstack AWX hook uses the same storage TLS policy as the AAP storage
+# instance group. Keep the default secure and verify dev-full's profile opt-out.
+awx_tls_default_render=$(helm template test charts/osac-devstack --namespace osac \
+  --show-only templates/hooks/configure-awx.yaml)
+if ! grep -Fq 'name: VAST_VALIDATE_CERTS' <<<"${awx_tls_default_render}" \
+  || ! grep -Fq 'value: "true"' <<<"${awx_tls_default_render}"; then
+  echo "devstack AWX hook must default VAST certificate validation to enabled" >&2
+  exit 1
+fi
+if ! grep -Fq 'name: VAST_VALIDATE_CERTS' <<<"${chart_render}" \
+  || ! grep -Fq 'value: "false"' <<<"${chart_render}"; then
+  echo "dev-full AWX hook must honor its development VAST certificate override" >&2
+  exit 1
+fi
+if grep -Fq 'name: ENABLE_CERTIFICATE_VALIDATION' <<<"${chart_render}"; then
+  echo "dev-full AWX hook must use the provider-scoped VAST worker variable" >&2
+  exit 1
+fi
+
+# The rendered hook must include and call the AWX_TASK_ENV merge helper. Also
+# exercise the same helper with fixture input: unrelated entries survive and
+# the OSAC storage policy remains authoritative.
+configure_awx_script=$(rendered_script "configure-awx.sh")
+if ! grep -Fq 'build_awx_settings_payload()' <<<"${configure_awx_script}" \
+  || ! grep -Fq 'settings_payload=$(build_awx_settings_payload' <<<"${configure_awx_script}" \
+  || ! grep -Fq '"VAST_VALIDATE_CERTS": sys.argv[3]' <<<"${configure_awx_script}"; then
+  echo "dev-full AWX hook must merge its task environment through the payload helper" >&2
+  exit 1
+fi
+bash -n <<<"${configure_awx_script}"
+source charts/osac-devstack/files/configure-awx.sh
+awx_settings_payload=$(build_awx_settings_payload \
+  '{"AWX_TASK_ENV":{"EXISTING_SETTING":"preserve-me","VAST_VALIDATE_CERTS":"true"}}' \
+  osac false)
+python3 - "${awx_settings_payload}" <<'PY'
+import json
+import sys
+
+settings = json.loads(sys.argv[1])
+task_env = settings["AWX_TASK_ENV"]
+assert task_env["EXISTING_SETTING"] == "preserve-me"
+assert task_env["ANSIBLE_JINJA2_NATIVE"] == "true"
+assert task_env["OSAC_STORAGE_CONFIG_NAMESPACE"] == "osac"
+assert task_env["VAST_VALIDATE_CERTS"] == "false"
+assert settings["AWX_COLLECTIONS_ENABLED"] is False
+assert settings["AWX_ROLES_ENABLED"] is False
+PY
+if build_awx_settings_payload '{"AWX_TASK_ENV":"not-an-object"}' osac false >/dev/null 2>&1; then
+  echo "AWX task environment merge must reject non-object fixture input" >&2
+  exit 1
+fi
+
 if awk 'BEGIN { RS = "---" } /kind: Deployment/ && /name: osac-ui/ { found = 1 } END { exit found ? 0 : 1 }' \
   <<<"$osac_render"; then
   echo "dev-full must keep the umbrella chart's UI disabled to avoid a second release owner" >&2
@@ -254,14 +316,6 @@ if ! grep -Fq 'fulfillment-auth.sh: |' <<<"$chart_render" \
   echo "dev-full Fulfillment callers must exchange service-account credentials for Keycloak tokens" >&2
   exit 1
 fi
-
-rendered_script() {
-  local script_name="$1"
-  awk -v script_name="${script_name}" \
-    '$0 == "  " script_name ": |" { in_script = 1; next }
-     in_script && /^  [^ ]/ { exit }
-     in_script { sub(/^    /, ""); print }' <<<"$chart_render"
-}
 
 seed_catalog_script=$(rendered_script "seed-catalog-simple.sh")
 if ! grep -Fq 'AUTH_TOKEN="$(get_fulfillment_access_token)"' <<<"$seed_catalog_script" \

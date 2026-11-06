@@ -107,6 +107,29 @@ execution_environment_image_json() {
     python3 -c 'import json, os; print(json.dumps({"image": os.environ["OSAC_EE_IMAGE"], "pull": os.environ["OSAC_EE_PULL"]}))'
 }
 
+build_awx_settings_payload() {
+  local settings_json="$1" namespace="$2" vast_validate_certs="$3"
+  python3 -c '
+import json
+import sys
+
+settings = json.loads(sys.argv[1])
+task_env = settings.get("AWX_TASK_ENV") or {}
+if not isinstance(task_env, dict):
+    raise SystemExit("AWX_TASK_ENV must be a JSON object")
+task_env.update({
+    "ANSIBLE_JINJA2_NATIVE": "true",
+    "OSAC_STORAGE_CONFIG_NAMESPACE": sys.argv[2],
+    "VAST_VALIDATE_CERTS": sys.argv[3],
+})
+print(json.dumps({
+    "AWX_COLLECTIONS_ENABLED": False,
+    "AWX_ROLES_ENABLED": False,
+    "AWX_TASK_ENV": task_env,
+}))
+' "${settings_json}" "${namespace}" "${vast_validate_certs}"
+}
+
 ensure_inventory() {
   local inventory_name="$1" api="$2" awx_token="$3" inventory_id
   inventory_id=$(curl -s -X POST "${api}/inventories/" -H "Authorization: Bearer ${awx_token}" \
@@ -142,6 +165,7 @@ for entry in entry_pattern.finditer(section):
 '
 }
 
+# Configure AWX's OSAC project, job templates, credentials, and task environment.
 configure_awx() {
   log "Configuring AWX for OSAC..."
 
@@ -164,23 +188,13 @@ configure_awx() {
 
   # Disable project collection/role sync: OSAC's collections are installed in
   # its dedicated execution environment from osac-aap/collections/requirements.yml.
-  # Set ANSIBLE_JINJA2_NATIVE=true for osac-aap playbooks.
+  # Set OSAC job environment variables while preserving unrelated AWX settings.
   # Local AWX workers may lack a service-account namespace file. Use the
   # release namespace for storage config Secrets through the supported override.
-  local settings_payload
-  settings_payload=$(python3 -c '
-import json
-import sys
-
-print(json.dumps({
-    "AWX_COLLECTIONS_ENABLED": False,
-    "AWX_ROLES_ENABLED": False,
-    "AWX_TASK_ENV": {
-        "ANSIBLE_JINJA2_NATIVE": "true",
-        "OSAC_STORAGE_CONFIG_NAMESPACE": sys.argv[1],
-    },
-}))
- ' "${NS}")
+  local jobs_settings settings_payload
+  jobs_settings=$(curl -fsS -H "Authorization: Bearer ${awx_token}" "${api}/settings/jobs/")
+  settings_payload=$(build_awx_settings_payload \
+    "${jobs_settings}" "${NS}" "${VAST_VALIDATE_CERTS:-true}")
   curl -fsS -X PATCH "${api}/settings/jobs/" -H "Authorization: Bearer ${awx_token}" \
     -H "Content-Type: application/json" \
     -d "${settings_payload}" >/dev/null
@@ -327,4 +341,6 @@ print(json.dumps({
   log "AWX configured for OSAC"
 }
 
-configure_awx
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  configure_awx
+fi

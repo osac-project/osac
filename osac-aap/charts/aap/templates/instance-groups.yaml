@@ -133,7 +133,11 @@ metadata:
     {{- include "osac-aap.labels" . | nindent 4 }}
     osac.openshift.io/project: osac-aap
 data:
+  VAST_VALIDATE_CERTS: {{ printf "%t" .Values.instanceGroups.storageFulfillment.enable_certificate_validation | quote }}
   {{- range $key, $val := .Values.instanceGroups.storageFulfillment.config }}
+  {{- if eq $key "VAST_VALIDATE_CERTS" }}
+  {{- fail (printf "instanceGroups.storageFulfillment.config.%s is managed by instanceGroups.storageFulfillment.enable_certificate_validation" $key) }}
+  {{- end }}
   {{- if $val }}
   {{ $key }}: {{ $val | quote }}
   {{- end }}
@@ -150,6 +154,9 @@ metadata:
 type: Opaque
 data:
   {{- range $key, $val := .Values.instanceGroups.storageFulfillment.secret }}
+  {{- if eq $key "VAST_VALIDATE_CERTS" }}
+  {{- fail (printf "instanceGroups.storageFulfillment.secret.%s is managed by instanceGroups.storageFulfillment.enable_certificate_validation" $key) }}
+  {{- end }}
   {{- if $val }}
   {{ $key }}: {{ $val | b64enc | quote }}
   {{- end }}

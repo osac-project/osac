@@ -309,7 +309,7 @@ observed on OpenShift Container Platform 4.22.6 in September 2026 are listed in
 | [Red Hat Ansible Automation Platform Operator](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/html/installing_on_openshift_container_platform/index) | `stable-2.6-cluster-scoped` | `ansible-aap` | `aapOperator.enabled` | All services |
 | [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | `osac-kafka` | `kafka.enabled` | Fulfillment events and metering; see [Kafka configuration](kafka-configuration.md) for external broker requirements. |
 | [OpenShift Virtualization](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing) | `stable` | `openshift-cnv` | `cnv.enabled` | VMaaS |
-| [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | `lvms.enabled` | VMaaS |
+| [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | `lvms.enabled` | Development/CI VMaaS using OSAC-managed local storage |
 | [MetalLB Operator](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator) | `stable` | `metallb-system` | `metallb.enabled` | CaaS |
 | [multicluster engine for Kubernetes Operator](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview) | `stable-2.17` | `multicluster-engine` | `mce.enabled` | CaaS |
 | Kubernetes NMState Operator | `stable` (`evpn.nmstate.channel`) | `openshift-nmstate` | `evpn.enabled` and `evpn.nmstate.install` | VMaaS with provider networking |
@@ -337,8 +337,11 @@ Notes on individual components:
 - **OpenShift Virtualization** was formerly named Container-native
   Virtualization (CNV).
 - **LVM Storage** uses a channel that tracks the OpenShift Container Platform
-  minor version; the installation sets it. Any dynamic storage class works if
-  you disable `lvms.enabled`.
+  minor version; the installation sets it. The OSAC-managed LVMS path is for
+  development and CI and uses an explicit `optionalPaths` allowlist; it does
+  not create devices. In production, disable `lvms.enabled` and configure the
+  customer-managed LVMS operator and its `LVMCluster` selector yourself; do not
+  rely on dynamic device discovery.
 - **MetalLB Operator** provides a `LoadBalancer`-class implementation. CaaS
   uses it on the hub to give each hosted cluster's API its management VIP.
   Only CaaS needs it. Any solution that provides one works if you disable

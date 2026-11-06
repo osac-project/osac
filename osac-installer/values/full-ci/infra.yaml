@@ -9,6 +9,10 @@ aapOperator:
   enabled: true
 lvms:
   enabled: true
+  # The stretched-Netris OCP VM attaches its LVM disk as vdb.
+  deviceSelector:
+    optionalPaths:
+      - /dev/vdb
 metallb:
   enabled: true
 cnv:

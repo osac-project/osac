@@ -288,7 +288,8 @@
       rescue:
         - name: Mark the incomplete-preparation test as passed
           ansible.builtin.set_fact:
-            _netapp_incomplete_prep_refused: true
+            _netapp_incomplete_prep_refused: >-
+              {{ 'missing one or more required provider_config fields' in (ansible_failed_result.msg | default('')) }}
 
     - name: Assert the role refused the incomplete tenant_preparation
       ansible.builtin.assert:
@@ -324,7 +325,8 @@
       rescue:
         - name: Record Dedicated-SVM tier Shared-TBC field rejection
           ansible.builtin.set_fact:
-            _dedicated_shared_fields_rejected: true
+            _dedicated_shared_fields_rejected: >-
+              {{ 'must not set provider_config.profile' in (ansible_failed_result.msg | default('')) }}
 
     - name: Assert Dedicated-SVM tier with profile/pool_selector was rejected
       ansible.builtin.assert:
@@ -361,7 +363,8 @@
       rescue:
         - name: Record missing QoS policy rejection
           ansible.builtin.set_fact:
-            _dedicated_missing_qos_rejected: true
+            _dedicated_missing_qos_rejected: >-
+              {{ 'names no QoS policy group' in (ansible_failed_result.msg | default('')) }}
 
     - name: Assert Dedicated-SVM QoS tier without a prepared policy group was rejected
       ansible.builtin.assert:
@@ -828,7 +831,8 @@
       rescue:
         - name: Record missing backend_id rejection on teardown_backend
           ansible.builtin.set_fact:
-            _missing_backend_id_teardown_rejected: true
+            _missing_backend_id_teardown_rejected: >-
+              {{ 'must provide a non-empty string backend_id' in (ansible_failed_result.msg | default('')) }}
 
     - name: Assert teardown_backend rejected tier missing backend_id
       ansible.builtin.assert:
@@ -934,7 +938,8 @@
       rescue:
         - name: Record the dependency guard rejection
           ansible.builtin.set_fact:
-            _teardown_guard_rejected: true
+            _teardown_guard_rejected: >-
+              {{ 'Refusing to remove NetApp cluster storage' in (ansible_failed_result.msg | default('')) }}
 
     - name: Read back the tenant TBCs after the guarded attempt
       kubernetes.core.k8s_info:
@@ -1097,7 +1102,8 @@
       rescue:
         - name: Record malformed pool_selector rejection
           ansible.builtin.set_fact:
-            _malformed_selector_rejected: true
+            _malformed_selector_rejected: >-
+              {{ 'Invalid key or value in tier provider_config.pool_selector' in (ansible_failed_result.msg | default('')) }}
 
     - name: Assert malformed pool_selector was rejected
       ansible.builtin.assert:
@@ -1124,7 +1130,8 @@
       rescue:
         - name: Record unknown profile rejection
           ansible.builtin.set_fact:
-            _unknown_profile_rejected: true
+            _unknown_profile_rejected: >-
+              {{ 'referencing a declared profile' in (ansible_failed_result.msg | default('')) }}
 
     - name: Assert unknown profile was rejected
       ansible.builtin.assert:
@@ -1157,7 +1164,8 @@
       rescue:
         - name: Record mutual-exclusion mode rejection
           ansible.builtin.set_fact:
-            _mixed_mode_backend_rejected: true
+            _mixed_mode_backend_rejected: >-
+              {{ 'defines both provider_config.profiles' in (ansible_failed_result.msg | default('')) }}
 
     - name: Assert backend defining both profiles and tenant_preparation was rejected
       ansible.builtin.assert:
@@ -1188,7 +1196,8 @@
       rescue:
         - name: Record Shared-TBC bandwidth QoS rejection
           ansible.builtin.set_fact:
-            _shared_tbc_qos_rejected: true
+            _shared_tbc_qos_rejected: >-
+              {{ 'cannot enforce qos_limits.static_limits' in (ansible_failed_result.msg | default('')) }}
 
     - name: Assert Shared-TBC tier requesting bandwidth QoS was rejected
       ansible.builtin.assert:
@@ -1218,7 +1227,8 @@
       rescue:
         - name: Record duplicate profile name rejection
           ansible.builtin.set_fact:
-            _duplicate_profile_rejected: true
+            _duplicate_profile_rejected: >-
+              {{ 'Duplicate profile name' in (ansible_failed_result.msg | default('')) }}
 
     - name: Assert duplicate profile names were rejected
       ansible.builtin.assert:

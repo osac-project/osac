@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Non-secret test credentials, generated per run so no credential-shaped
 # literal lives in the test source.
 FIXTURE_PASSWORD = secrets.token_hex(8)
-WHITESPACE_PASSWORD = "   "
+FIXTURE_WHITESPACE_PASSWORD = "   "
 NETAPP_ROLE_DIR = (
     REPO_ROOT
     / "collections"
@@ -819,7 +819,7 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
     )["when"]
     for bad_pcfg in (
         {"username": "", "password": FIXTURE_PASSWORD, "svm": "svm1"},
-        {"username": "u", "password": WHITESPACE_PASSWORD, "svm": "svm1"},
+        {"username": "u", "password": FIXTURE_WHITESPACE_PASSWORD, "svm": "svm1"},
         {"username": "u", "password": FIXTURE_PASSWORD, "svm": ""},
     ):
         assert (
@@ -1655,7 +1655,7 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
                     "ded-1": {
                         "endpoint": "10.0.0.1",
                         "tenant_preparation": {
-                            "provider_config": {"svm": "svm1", "username": "u", "password": WHITESPACE_PASSWORD}
+                            "provider_config": {"svm": "svm1", "username": "u", "password": FIXTURE_WHITESPACE_PASSWORD}
                         },
                     },
                 },

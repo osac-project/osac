@@ -12,7 +12,7 @@
 
 - name: Compute the dispatched backend ids
   ansible.builtin.set_fact:
-    _netapp_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
+    _netapp_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique(case_sensitive=true) | list }}"
   no_log: true
 
 - name: Fail if no connection details were provided for a dispatched backend

@@ -37,7 +37,7 @@
       Could not resolve any backend_id from the dispatched tiers. The ONTAP
       provider requires backend_id on every tier.
   when: >-
-    (_provider_tiers | default([]) | map(attribute='backend_id') | select('string') | map('trim') | reject('equalto', '') | unique | list | length) == 0
+    (_provider_tiers | default([]) | map(attribute='backend_id') | select('string') | map('trim') | reject('equalto', '') | unique(case_sensitive=true) | list | length) == 0
   no_log: true
 
 - name: Report retention of pre-provisioned ONTAP backend resources

@@ -79,7 +79,7 @@
           {% set _prefixes = [] -%}
           {# Hash the raw backend_id exactly as provisioning does. -#}
           {% for _bid in (_provider_tiers | default([]) | selectattr('backend_id', 'defined')
-                          | map(attribute='backend_id') | select('string') | unique | list) -%}
+                          | map(attribute='backend_id') | select('string') | unique(case_sensitive=true) | list) -%}
           {% if (_bid | trim) != '' -%}
           {% set _ = _prefixes.append('netapp-' ~ (((_bid ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower) ~ '-') -%}
           {% endif -%}

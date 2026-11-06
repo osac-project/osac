@@ -5,6 +5,7 @@ import { useField } from 'formik';
 import { getVisibleFieldError } from './fieldError';
 import { useShowFieldValidationErrors } from './FieldValidationContext';
 import { FormFieldHelper, getFormFieldHelperDescribedBy } from './FormFieldHelper';
+import { useTranslation } from '../../hooks/useTranslation';
 
 interface FileUploadFieldProps {
   name: string;
@@ -21,6 +22,7 @@ export const FileUploadField = ({
   helperText,
   placeholder,
 }: FileUploadFieldProps) => {
+  const { t } = useTranslation();
   const [field, meta, helpers] = useField<string>(name);
   const [filename, setFilename] = useState('');
   const showValidationErrors = useShowFieldValidationErrors();
@@ -38,6 +40,7 @@ export const FileUploadField = ({
         allowEditingUploadedText
         isDisabled={isDisabled}
         validated={error ? 'error' : 'default'}
+        aria-label={t('File upload')}
         aria-invalid={error ? true : undefined}
         aria-describedby={helperDescribedBy}
         onFileInputChange={(_event, file) => {

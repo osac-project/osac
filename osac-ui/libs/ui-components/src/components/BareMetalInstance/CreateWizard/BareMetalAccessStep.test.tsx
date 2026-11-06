@@ -38,11 +38,11 @@ describe('BareMetalAccessStep', () => {
     );
 
     await screen.findByRole('radiogroup', { name: 'User data' });
-    expect(screen.getByRole('textbox')).toHaveValue('inline data');
+    expect(screen.getByRole('textbox', { name: 'File upload' })).toHaveValue('inline data');
 
     await user.click(screen.getByRole('radio', { name: 'Select secret' }));
 
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'File upload' })).not.toBeInTheDocument();
     const secretSelect = await screen.findByRole('button', {
       name: 'Select a user data secret',
     });
@@ -51,7 +51,7 @@ describe('BareMetalAccessStep', () => {
 
     await user.click(screen.getByRole('radio', { name: 'Enter value' }));
 
-    expect(screen.getByRole('textbox')).toHaveValue('inline data');
+    expect(screen.getByRole('textbox', { name: 'File upload' })).toHaveValue('inline data');
     expect(
       screen.queryByRole('button', { name: 'Select a user data secret' }),
     ).not.toBeInTheDocument();

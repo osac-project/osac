@@ -559,6 +559,7 @@
   "Failed to update storage backend": "Failed to update storage backend",
   "Failed to update storage tier": "Failed to update storage tier",
   "Failed to update the instance type": "Failed to update the instance type",
+  "File upload": "File upload",
   "Filter bare metal by disk image": "Filter bare metal by disk image",
   "Filter bare metal by instance type": "Filter bare metal by instance type",
   "Filter bare metal by power state": "Filter bare metal by power state",

@@ -143,7 +143,9 @@ func installComputeStorageRecorder(ctx context.Context) {
 	Expect(err).NotTo(HaveOccurred(), "build AAP recorder: %s", output)
 	binary, err := os.ReadFile(binaryPath)
 	Expect(err).NotTo(HaveOccurred())
-	stage := exec.CommandContext(buildCtx, "kubectl", "--kubeconfig", tool.kcFile,
+	stageCtx, cancelStage := context.WithTimeout(ctx, time.Minute)
+	defer cancelStage()
+	stage := exec.CommandContext(stageCtx, "kubectl", "--kubeconfig", tool.kcFile,
 		"exec", "-i", "-n", hubNamespace, computeStorageRecorderName, "-c", "recorder", "--", "/bin/sh", "-c",
 		"cat > /work/recorder.tmp && chmod 0755 /work/recorder.tmp && mv /work/recorder.tmp /work/recorder")
 	stage.Stdin = bytes.NewReader(binary)

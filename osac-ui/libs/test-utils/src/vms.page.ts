@@ -117,8 +117,14 @@ export const waitForVmDetailsStatus = async (
   await expect
     .poll(
       async () => {
-        await page.reload();
-        await expectVmDetailsPage(page, name);
+        // A failed reload counts as "not there yet"; expect.poll would
+        // otherwise stop at the first thrown error.
+        try {
+          await page.reload();
+          await expectVmDetailsPage(page, name);
+        } catch {
+          return '';
+        }
         const statusLabel = page
           .locator(...VmDetailsPage.statusLabel)
           .filter({ hasText: exactText(status) });

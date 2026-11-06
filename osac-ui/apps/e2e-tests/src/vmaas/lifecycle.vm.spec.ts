@@ -88,11 +88,21 @@ test(`stops, starts and restarts VM ${vmTestName} from its details page`, async 
   // the controller processed this restart request.
   await testStep('vm-lifecycle', 'Verify the controller processed the restart', () =>
     expect
-      .poll(() => getComputeInstanceLastRestartedAt(tenantName, vmTestName), {
-        message: `Wait for VM '${vmTestName}' status.last_restarted_at to advance`,
-        timeout: 180_000,
-        intervals: [2_000, 5_000],
-      })
+      .poll(
+        async () => {
+          // A failed CLI read counts as "not changed yet", never as a change.
+          try {
+            return await getComputeInstanceLastRestartedAt(tenantName, vmTestName);
+          } catch {
+            return lastRestartedAt;
+          }
+        },
+        {
+          message: `Wait for VM '${vmTestName}' status.last_restarted_at to advance`,
+          timeout: 180_000,
+          intervals: [2_000, 5_000],
+        },
+      )
       .not.toBe(lastRestartedAt),
   );
   await testStep('vm-lifecycle', 'Verify the VM is Running after the restart', async () => {

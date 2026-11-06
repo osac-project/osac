@@ -470,6 +470,19 @@
         validate_certs: false
       failed_when: false
 
+    - name: Inject failure on backend B manager creation
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_inject_failure"
+        validate_certs: false
+        method: POST
+        body_format: json
+        body:
+          resource: managers
+          method: POST
+          status: 500
+          body:
+            error: "injected: simulating backend B manager creation failure"
+
     - name: Delete any leftover same-endpoint rollback hub Secrets
       kubernetes.core.k8s:
         state: absent
@@ -523,7 +536,6 @@
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-    OSAC_MOCK_VMS_FORCE_FAILURE: "manager_creation"
 
   vars:
     _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"

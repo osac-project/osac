@@ -170,6 +170,14 @@
       register: _vast_manager_check
       no_log: true
 
+    - name: Log VMS manager check result
+      ansible.builtin.debug:
+        msg: >-
+          VMS manager check for osac-{{ tenant_name }}-{{ _vast_backend_id }}:
+          {{ 'FOUND ' ~ _vast_manager_check.json | length ~ ' existing manager(s) - will skip creation'
+             if (_vast_manager_check.json | length > 0)
+             else 'NOT FOUND - will create new manager' }}
+
     - name: Create per-tenant manager as TENANT_ADMIN
       when: _vast_manager_check.json | length == 0
       ansible.builtin.uri:

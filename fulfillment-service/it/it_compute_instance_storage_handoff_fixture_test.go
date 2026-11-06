@@ -149,8 +149,9 @@ func installComputeStorageRecorder(ctx context.Context) {
 		"exec", "-i", "-n", hubNamespace, computeStorageRecorderName, "-c", "recorder", "--", "/bin/sh", "-c",
 		"cat > /work/recorder.tmp && chmod 0755 /work/recorder.tmp && mv /work/recorder.tmp /work/recorder")
 	stage.Stdin = bytes.NewReader(binary)
-	output, err = stage.CombinedOutput()
-	Expect(err).NotTo(HaveOccurred(), "stage AAP recorder: %s", output)
+	// Discard kubectl output: connection and credential-plugin errors may contain sensitive data.
+	err = stage.Run()
+	Expect(err).NotTo(HaveOccurred(), "stage AAP recorder")
 	Eventually(func(g Gomega) {
 		_, err := tool.KubeClientSet().CoreV1().Services(hubNamespace).
 			ProxyGet("http", computeStorageRecorderName, "8080", "healthz", nil).DoRaw(ctx)

@@ -1506,6 +1506,13 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
     assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["be-1", "be 2"]}) is True
     assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["be-1", "trail-"]}) is True
     assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["be-1", "Be_2.x"]}) is False
+    # Boundaries: 63 characters is the longest valid label value; an empty ID
+    # is rejected even though an empty label value is legal.
+    assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["x" * 63]}) is False
+    for invalid in ("-be", ".be", "be.", "x" * 64, "", 123, "be\n"):
+        assert (
+            _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["be-1", invalid]}) is True
+        ), invalid
     assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": []}) is False
 
     # Backend IDs that differ only by case are distinct backends.

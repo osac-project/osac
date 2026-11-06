@@ -1495,7 +1495,7 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `service.variant` | `openshift` or `kind`. Use `openshift`. |
 | `service.images.service`, `service.images.envoy` | Fulfillment Service and Envoy sidecar images. |
 | `service.certs.issuerRef.kind`, `service.certs.issuerRef.name` | cert-manager issuer for the service certificates. |
-| `service.certs.caBundle.configMap` | Name of the existing CA-bundle `ConfigMap` in the OSAC release namespace. OSAC components mount it, so it must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap; the default name is `ca-bundle`. When using a custom name, set `operator.fulfillment.tls.caBundle.configMap`, `ui.api.fulfillment.certs.caBundle.configMap`, `ui.auth.certs.caBundle.configMap`, and `metering.certs.caBundle.configMap` to the same name. The bundle must trust the Kafka broker configured for metering. If BMaaS is enabled, also set `bmf.secretAPI.caBundle.configMap` to that name. Ask your platform administrators to make the bundle available under this name. See step 4 of [Section 7](#7-verifying-the-installation). |
+| `service.certs.caBundle.configMap` | Name of the existing CA-bundle `ConfigMap` in the OSAC release namespace. OSAC components mount it, so it must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap; the default name is `ca-bundle`. When using a custom name, set `operator.fulfillment.tls.caBundle.configMap`, `ui.api.fulfillment.certs.caBundle.configMap`, `ui.auth.certs.caBundle.configMap`, and `metering.certs.caBundle.configMap` to the same name. Include the Kafka broker CA and every other CA required by consumers of the bundle, including OSAC service connections and the OIDC/Keycloak endpoint. If BMaaS is enabled, also set `bmf.secretAPI.caBundle.configMap` to that name. Ask your platform administrators to make the bundle available under this name. See step 4 of [Section 7](#7-verifying-the-installation). |
 | `service.auth.issuerUrl` | OIDC issuer. Templated from `global.clusterDomain` by default. |
 | `service.auth.controllerCredentials[]` | Volume sources for the controller OIDC client credentials. |
 | `service.idp.provider`, `service.idp.url`, `service.idp.credentials[]` | Identity provider for user and role management. Only `keycloak` is supported. |
@@ -1982,22 +1982,24 @@ by the preflight:
 oc get crd kubevirts.kubevirt.io
 ```
 
-Ensure OpenShift Virtualization is installed on the workload cluster, not the
-management cluster. Before changing `cnv.enabled` from `true` to `false` on the
-management cluster, check whether its existing infrastructure Helm release
-owns OpenShift Virtualization. Disabling it can remove release-managed
-resources, including the `openshift-cnv` namespace, and disrupt existing
-virtualization workloads. Coordinate with the release owner and plan how to
-preserve or migrate those resources before changing the value.
+Ensure OpenShift Virtualization is installed on the workload cluster. A
+separate workload cluster does not require removing an existing installation
+from the management cluster.
 
 If your platform administrators use Helm-based infrastructure charts, set
-`cnv.enabled: false` in the management cluster's infrastructure values, not in
-OSAC `my-values.yaml`. On the workload cluster, set `cnv.enabled: true` in the
-infrastructure values only if those charts install and manage OpenShift
-Virtualization; keep it `false` when administrators manage an existing
-installation. In OSAC `my-values.yaml`, skip only the `kubevirt-crds` preflight
-check and give the verified reason shown below. Leave the remaining checks
-enabled.
+`cnv.enabled: false` in the management cluster's infrastructure values, not
+in OSAC `my-values.yaml`, for a new release that should not manage OpenShift
+Virtualization. For an existing management-cluster release, keep its current
+setting unless its owner plans a migration. Changing `true` to `false` can remove release-managed resources,
+including the `openshift-cnv` namespace, and disrupt workloads. Check release
+ownership and plan how to preserve or migrate the resources before changing
+the value.
+
+On the workload cluster, set `cnv.enabled: true` in the infrastructure values
+only if those charts install and manage OpenShift Virtualization; keep it
+`false` when administrators manage an existing installation. In OSAC
+`my-values.yaml`, skip only the `kubevirt-crds` preflight check and give the
+verified reason shown below. Leave the remaining checks enabled.
 
 Start with the VMaaS values from [Section 6.1](#61-installing-osac-for-vmaas),
 including the storage registration and networking settings. Select storage

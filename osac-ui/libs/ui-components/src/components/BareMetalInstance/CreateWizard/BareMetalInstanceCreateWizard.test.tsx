@@ -93,11 +93,13 @@ const selectCatalogItemAndFillName = async (
 
 const advanceThroughRemainingSteps = async (user: ReturnType<typeof renderWizard>['user']) => {
   // Configuration, Networking, and Access have valid catalog defaults, so
-  // Next can be clicked without further input.
-  await user.click(screen.getByRole('button', { name: 'Next' }));
-  await user.click(screen.getByRole('button', { name: 'Next' }));
-  await user.click(screen.getByRole('button', { name: 'Next' }));
-  await user.click(screen.getByRole('button', { name: 'Next' }));
+  // Next can be clicked without further input (4 steps: to Review).
+  for (let step = 0; step < 4; step += 1) {
+    await user.click(await screen.findByRole('button', { name: 'Next' }));
+  }
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
+  });
 };
 
 describe('BareMetalInstanceCreateWizard', () => {
@@ -216,12 +218,12 @@ describe('BareMetalInstanceCreateWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await user.click(screen.getByRole('button', { name: 'Next' }));
-    await user.type(await screen.findByRole('textbox', { name: 'Cloud-init' }), '#cloud-config');
+    await user.type(await screen.findByRole('textbox', { name: 'File upload' }), '#cloud-config');
     await user.click(screen.getByRole('button', { name: 'Next' }));
     await screen.findByRole('button', { name: 'Create' });
 
     await user.click(screen.getByRole('button', { name: 'Access & initial run' }));
-    await user.clear(await screen.findByRole('textbox', { name: 'Cloud-init' }));
+    await user.clear(await screen.findByRole('textbox', { name: 'File upload' }));
 
     expect(screen.getByRole('button', { name: 'Review' })).toBeDisabled();
     await user.click(screen.getByRole('button', { name: 'Next' }));

@@ -35,29 +35,38 @@ const PollWait = 200 * time.Millisecond
 // Fold reads a tenant's event topic and folds its events into history. It resumes from the
 // tenant's stored event offset and never creates topics.
 type Fold struct {
-	store     *database.Store
-	extractor *FactExtractor
-	consumer  sarama.Consumer
-	logger    logr.Logger
+	store       *database.Store
+	extractor   *FactExtractor
+	consumer    sarama.Consumer
+	logger      logr.Logger
+	eventPrefix string
 }
 
-// New creates a fold on an open sarama consumer.
-func New(store *database.Store, consumer sarama.Consumer, logger logr.Logger) (*Fold, error) {
+// New creates a fold on an open sarama consumer. eventPrefix is fulfillment's event-topic
+// prefix; empty uses the default.
+func New(store *database.Store, consumer sarama.Consumer, logger logr.Logger, eventPrefix string) (*Fold, error) {
 	extractor, err := NewFactExtractor()
 	if err != nil {
 		return nil, err
 	}
-	return &Fold{store: store, extractor: extractor, consumer: consumer, logger: logger}, nil
+	return &Fold{
+		store: store, extractor: extractor, consumer: consumer, logger: logger,
+		eventPrefix: topics.ResolvePrefix(eventPrefix),
+	}, nil
 }
+
+func (f *Fold) eventTopic(tenant string) string { return f.eventPrefix + tenant }
 
 // RunTenant folds the tenant's events until the context ends. Each transaction takes the
 // tenant's fold lock, writes the facts its events carry, and advances the event offset. Events
 // of types metering does not track only advance the offset.
 func (f *Fold) RunTenant(ctx context.Context, tenant string) error {
-	if err := f.store.EnsureProgress(ctx, tenant); err != nil {
+	topic := f.eventTopic(tenant)
+	// Record the topic before reading the offset. A prefix change clears the offset
+	// taken from the previous topic so this topic is read from the beginning.
+	if err := f.store.NoteEventTopic(ctx, tenant, topic, topics.EventTopic("", tenant)); err != nil {
 		return err
 	}
-	topic := topics.Events(tenant)
 
 	for {
 		if ctx.Err() != nil {
@@ -319,7 +328,7 @@ func (f *Fold) logSkipped(tenant string, skippedFrom, oldest int64) {
 	f.logger.Error(nil,
 		"Kafka retention deleted events before the stored offset; they are gone from history "+
 			"and their usage cannot be billed",
-		"tenant", tenant, "topic", topics.Events(tenant),
+		"tenant", tenant, "topic", f.eventTopic(tenant),
 		"skippedFromOffset", skippedFrom, "oldestRetainedOffset", oldest,
 		"skippedEvents", oldest-skippedFrom,
 	)

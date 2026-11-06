@@ -486,6 +486,138 @@ func TestStoreResourcesWithNewFacts(t *testing.T) {
 	}
 }
 
+func TestNoteEventTopicResetsOffsetWhenTheTopicChanges(t *testing.T) {
+	ctx := context.Background()
+	_, pool := startDatabase(t)
+	store := database.NewStore(pool)
+
+	if err := store.EnsureProgress(ctx, "acme"); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+	if err := store.EnsureProgress(ctx, "globex"); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+	tx, err := store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	for _, tenant := range []string{"acme", "globex"} {
+		if err := database.AdvanceEventOffset(ctx, tx, tenant, 12); err != nil {
+			t.Fatalf("advance event offset: %v", err)
+		}
+		if err := database.AdvanceHeartbeatOffset(ctx, tx, tenant, 7); err != nil {
+			t.Fatalf("advance heartbeat offset: %v", err)
+		}
+		if err := database.SetLastRound(ctx, tx, tenant, time.Date(2026, 10, 5, 10, 4, 0, 0, time.UTC), 12); err != nil {
+			t.Fatalf("set last round: %v", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	if err := store.NoteEventTopic(ctx, "acme", "osac.events.acme", "osac.events.acme"); err != nil {
+		t.Fatalf("stamp topic: %v", err)
+	}
+	stamped, err := store.GetTenantProgress(ctx, "acme")
+	if err != nil {
+		t.Fatalf("read stamped progress: %v", err)
+	}
+	if stamped.EventTopic != "osac.events.acme" || stamped.EventOffset != 12 || stamped.LastRoundEventOffset != 12 || stamped.HeartbeatOffset != 7 || stamped.TopicGeneration != 0 {
+		t.Fatalf("stamping the legacy topic must keep offsets, got %+v", stamped)
+	}
+
+	if err := store.NoteEventTopic(ctx, "acme", "osac.events.acme", "osac.events.acme"); err != nil {
+		t.Fatalf("restamp topic: %v", err)
+	}
+	same, err := store.GetTenantProgress(ctx, "acme")
+	if err != nil {
+		t.Fatalf("read restamped progress: %v", err)
+	}
+	if same.EventOffset != 12 || same.EventTopic != "osac.events.acme" || same.TopicGeneration != 0 {
+		t.Fatalf("the same topic must keep the offset, got %+v", same)
+	}
+
+	if err := store.NoteEventTopic(ctx, "acme", "custom.events.acme", "osac.events.acme"); err != nil {
+		t.Fatalf("change topic: %v", err)
+	}
+	changed, err := store.GetTenantProgress(ctx, "acme")
+	if err != nil {
+		t.Fatalf("read changed progress: %v", err)
+	}
+	if changed.EventTopic != "custom.events.acme" || changed.EventOffset != 0 || changed.LastRoundEventOffset != 0 || changed.HeartbeatOffset != 7 || changed.TopicGeneration != 1 {
+		t.Fatalf("a new topic must rewind event offsets and keep the heartbeat offset, got %+v", changed)
+	}
+
+	// globex still has an empty topic, the shape of a database upgraded onto a new prefix.
+	if err := store.NoteEventTopic(ctx, "globex", "custom.events.globex", "osac.events.globex"); err != nil {
+		t.Fatalf("stamp upgraded topic: %v", err)
+	}
+	upgraded, err := store.GetTenantProgress(ctx, "globex")
+	if err != nil {
+		t.Fatalf("read upgraded progress: %v", err)
+	}
+	if upgraded.EventTopic != "custom.events.globex" || upgraded.EventOffset != 0 || upgraded.LastRoundEventOffset != 0 || upgraded.HeartbeatOffset != 7 || upgraded.TopicGeneration != 1 {
+		t.Fatalf("an unrecorded topic on a new prefix must rewind event offsets and keep the heartbeat offset, got %+v", upgraded)
+	}
+}
+
+func TestLatestFactValuePrefersTheNewTopicGeneration(t *testing.T) {
+	ctx := context.Background()
+	_, pool := startDatabase(t)
+	store := database.NewStore(pool)
+	if err := store.EnsureProgress(ctx, "acme"); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+	base := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	write := func(value string, since time.Time, offset int64) {
+		t.Helper()
+		tx, err := store.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		err = database.InsertFacts(ctx, tx, "acme", []database.Fact{{
+			ResourceType: database.BillingResourceType,
+			ResourceID:   "acme",
+			Field:        database.BillingField,
+			Since:        since,
+			Value:        value,
+		}}, offset)
+		if err != nil {
+			t.Fatalf("insert %s: %v", value, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit %s: %v", value, err)
+		}
+	}
+	latest := func() string {
+		t.Helper()
+		value, ok, err := database.LatestFactValue(
+			ctx, pool, "acme", database.BillingResourceType, "acme", database.BillingField,
+		)
+		if err != nil {
+			t.Fatalf("latest billing id: %v", err)
+		}
+		if !ok {
+			t.Fatal("billing id missing")
+		}
+		return value
+	}
+
+	write("acct-old", base, 12)
+	if got := latest(); got != "acct-old" {
+		t.Fatalf("billing id = %s, want acct-old", got)
+	}
+	if err := store.NoteEventTopic(ctx, "acme", "custom.events.acme", "osac.events.acme"); err != nil {
+		t.Fatalf("change topic: %v", err)
+	}
+	// The new topic's first record is behind the old offset. It is still the latest.
+	write("acct-new", base.Add(time.Minute), 1)
+	if got := latest(); got != "acct-new" {
+		t.Fatalf("billing id = %s, want acct-new", got)
+	}
+}
+
 func startDatabase(t *testing.T) (*database.Container, *pgxpool.Pool) {
 	t.Helper()
 	container, err := database.NewContainer(logr.Discard())

@@ -279,7 +279,7 @@ func TestOnceHoldsRulesGateForWholeTick(t *testing.T) {
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 	})
-	foldLoop, err := fold.New(store, testenv.NewConsumer(t), logr.Discard())
+	foldLoop, err := fold.New(store, testenv.NewConsumer(t), logr.Discard(), "")
 	if err != nil {
 		t.Fatalf("creating fold: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestOnceHoldsRulesGateForWholeTick(t *testing.T) {
 	}
 	gate := &sync.RWMutex{}
 	r, err := round.New(
-		store, probe, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), gate,
+		store, probe, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), gate, "",
 	)
 	if err != nil {
 		t.Fatalf("creating round: %v", err)

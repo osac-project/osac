@@ -130,7 +130,10 @@ The preflight described in
 chart containing `templates/preflight/_engine.tpl`, as in version `0.4.0`.
 Older charts can have a different schema and validation workflow. Keep the
 selected chart's pinned image and AAP content defaults; remove stale image or
-Ansible revision overrides from an older values file.
+Ansible revision overrides from an older values file. The bundled example
+values, combined with the documented external-service and separate-workload
+settings, were rendered successfully with `helm template` against the `0.4.0`
+chart contents.
 
 Use only the chart version, without either tag prefix. For evaluation, set
 `OSAC_RELEASE_VERSION` to the exact nightly version from that successful run.

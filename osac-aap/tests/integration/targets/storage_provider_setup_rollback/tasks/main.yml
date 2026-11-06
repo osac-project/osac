@@ -470,19 +470,6 @@
         validate_certs: false
       failed_when: false
 
-    - name: Inject failure on backend B manager creation
-      ansible.builtin.uri:
-        url: "https://127.0.0.1:18443/_inject_failure"
-        validate_certs: false
-        method: POST
-        body_format: json
-        body:
-          resource: managers
-          method: POST
-          status: 500
-          body:
-            error: "injected: simulating backend B manager creation failure"
-
     - name: Delete any leftover same-endpoint rollback hub Secrets
       kubernetes.core.k8s:
         state: absent
@@ -528,6 +515,19 @@
         name: osac.service.storage_provider
       vars:
         storage_provider_action: setup
+
+    - name: Inject failure for backend B manager creation (after A succeeds)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_inject_failure"
+        validate_certs: false
+        method: POST
+        body_format: json
+        body:
+          resource: managers
+          method: POST
+          status: 500
+          body:
+            error: "injected: simulating backend B manager creation failure"
 
 - name: "Storage Provider Same-Endpoint Rollback - Force backend B failure"
   hosts: localhost

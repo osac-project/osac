@@ -222,13 +222,13 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		objectId := objectHelper.GetId(object)
 		objectName := objectHelper.GetName(object)
 		if objectName != "" {
-			c.console.Infof(
+			_ = c.console.Infof(
 				ctx,
 				"Created %s with name '%s' and identifier '%s'.\n",
 				objectSingular, objectName, objectId,
 			)
 		} else {
-			c.console.Infof(
+			_ = c.console.Infof(
 				ctx,
 				"Created %s with identifier '%s'.\n",
 				objectSingular, objectId,
@@ -237,12 +237,13 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		if tenant, ok := object.(*privatev1.Tenant); ok {
 			if tenant.HasStatus() && tenant.GetStatus().HasBreakGlassCredentials() {
 				creds := tenant.GetStatus().GetBreakGlassCredentials()
-				c.console.Infof(ctx, "\n")
-				c.console.Infof(ctx, "Break-glass account credentials (shown only once, save them now):\n")
-				c.console.Infof(ctx, "  Username: %s\n", creds.GetUsername())
-				c.console.Infof(ctx, "  Password: %s\n", creds.GetPassword())
-				c.console.Infof(ctx, "\n")
-				c.console.Infof(ctx, "This is a temporary password that must be changed on first login.\n")
+				// Best-effort output: the console logs write failures internally.
+				_ = c.console.Infof(ctx, "\n")
+				_ = c.console.Infof(ctx, "Break-glass account credentials (shown only once, save them now):\n")
+				_ = c.console.Infof(ctx, "  Username: %s\n", creds.GetUsername())
+				_ = c.console.Infof(ctx, "  Password: %s\n", creds.GetPassword())
+				_ = c.console.Infof(ctx, "\n")
+				_ = c.console.Infof(ctx, "This is a temporary password that must be changed on first login.\n")
 			}
 		}
 	}

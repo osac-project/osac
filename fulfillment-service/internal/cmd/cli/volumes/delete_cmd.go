@@ -88,7 +88,7 @@ func (c *deleteRunner) run(cmd *cobra.Command, args []string) (err error) {
 		return fmt.Errorf("failed to delete volume: %w", err)
 	}
 
-	c.console.Infof(ctx, "Deleted volume '%s'.\n", volume.GetId())
+	_ = c.console.Infof(ctx, "Deleted volume '%s'.\n", volume.GetId())
 
 	return nil
 }

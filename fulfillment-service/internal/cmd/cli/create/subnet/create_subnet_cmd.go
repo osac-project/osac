@@ -131,7 +131,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create subnet: %w", err)
 	}
 
-	c.console.Infof(ctx, "Created subnet '%s' (ID: %s).\n", response.Object.GetMetadata().GetName(), response.Object.GetId())
+	_ = c.console.Infof(ctx, "Created subnet '%s' (ID: %s).\n", response.Object.GetMetadata().GetName(), response.Object.GetId())
 
 	return nil
 }

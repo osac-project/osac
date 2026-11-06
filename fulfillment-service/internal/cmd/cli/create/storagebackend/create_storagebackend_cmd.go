@@ -148,7 +148,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create storage backend: %w", err)
 	}
 
-	c.console.Infof(ctx, "Created storage backend '%s'.\n", response.GetObject().GetId())
+	_ = c.console.Infof(ctx, "Created storage backend '%s'.\n", response.GetObject().GetId())
 
 	return nil
 }

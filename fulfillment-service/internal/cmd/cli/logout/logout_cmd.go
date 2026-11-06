@@ -74,7 +74,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
 
-	console.Infof(ctx, "Successfully logged out\n")
+	_ = console.Infof(ctx, "Successfully logged out\n")
 	return nil
 }
 

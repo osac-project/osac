@@ -295,7 +295,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Display the result:
-	c.console.Infof(ctx, "Created bare metal instance type '%s'.\n", response.GetObject().GetId())
+	_ = c.console.Infof(ctx, "Created bare metal instance type '%s'.\n", response.GetObject().GetId())
 
 	return nil
 }

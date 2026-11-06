@@ -139,7 +139,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) (runErr error) {
 		return fmt.Errorf("failed to create fabric domain: %w", err)
 	}
 
-	c.console.Infof(ctx, "Created fabric domain '%s' (ID: %s).\n", response.GetObject().GetMetadata().GetName(), response.GetObject().GetId())
+	_ = c.console.Infof(ctx, "Created fabric domain '%s' (ID: %s).\n", response.GetObject().GetMetadata().GetName(), response.GetObject().GetId())
 	return nil
 }
 

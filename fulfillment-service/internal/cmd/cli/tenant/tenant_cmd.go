@@ -101,7 +101,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to save settings: %w", err)
 		}
-		c.console.Render(ctx, "tenant_cleared.txt", nil)
+		_ = c.console.Render(ctx, "tenant_cleared.txt", nil)
 		return nil
 	}
 
@@ -116,12 +116,12 @@ func (c *runnerContext) showCurrentTenant(cmd *cobra.Command, settings *config.S
 	ctx := cmd.Context()
 	tenant := config.TenantFromContext(ctx)
 	if tenant == "" {
-		c.console.Render(ctx, "no_tenant.txt", nil)
+		_ = c.console.Render(ctx, "no_tenant.txt", nil)
 		return nil
 	}
 
 	if c.args.format == "" {
-		c.console.Render(ctx, "current_tenant.txt", map[string]any{
+		_ = c.console.Render(ctx, "current_tenant.txt", map[string]any{
 			"Tenant": tenant,
 		})
 		return nil
@@ -150,7 +150,7 @@ func (c *runnerContext) setTenant(cmd *cobra.Command, settings *config.Settings,
 		return fmt.Errorf("failed to save settings: %w", err)
 	}
 
-	c.console.Render(ctx, "tenant_set.txt", map[string]any{
+	_ = c.console.Render(ctx, "tenant_set.txt", map[string]any{
 		"Tenant": canonicalName,
 	})
 	return nil
@@ -208,9 +208,9 @@ func (c *runnerContext) renderObject(cmd *cobra.Command, object proto.Message) e
 
 	switch c.args.format {
 	case "json":
-		c.console.RenderJson(ctx, value)
+		_ = c.console.RenderJson(ctx, value)
 	case "yaml":
-		c.console.RenderYaml(ctx, value)
+		_ = c.console.RenderYaml(ctx, value)
 	default:
 		return fmt.Errorf("unknown output format '%s', should be 'json' or 'yaml'", c.args.format)
 	}

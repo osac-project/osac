@@ -46,7 +46,7 @@ func (c *runnerContext) detectViewer(ctx context.Context, explicit string) (*vie
 	if explicit != "" {
 		v, err := c.resolveExplicit(ctx, explicit)
 		if err != nil {
-			c.console.Render(ctx, "viewer_error.txt", map[string]any{
+			_ = c.console.Render(ctx, "viewer_error.txt", map[string]any{
 				"Error": err.Error(),
 			})
 			return nil, exit.Error(1)
@@ -66,7 +66,7 @@ func (c *runnerContext) detectViewer(ctx context.Context, explicit string) (*vie
 		if runtime.GOOS == "darwin" {
 			viewers = "TigerVNC or another VNC viewer"
 		}
-		c.console.Render(ctx, "no_viewer_found.txt", map[string]any{
+		_ = c.console.Render(ctx, "no_viewer_found.txt", map[string]any{
 			"Viewers": viewers,
 		})
 		return nil, exit.Error(1)
@@ -91,7 +91,7 @@ func (c *runnerContext) resolveExplicit(ctx context.Context, s string) (*viewer,
 	}
 	af, argf := knownViewerOverrides(path)
 	if af == nil {
-		c.console.Render(ctx, "unrecognized_viewer.txt", map[string]any{
+		_ = c.console.Render(ctx, "unrecognized_viewer.txt", map[string]any{
 			"Viewer":    filepath.Base(path),
 			"Supported": strings.Join([]string{binRemoteViewer, binVNCViewer, binRemmina}, ", "),
 		})

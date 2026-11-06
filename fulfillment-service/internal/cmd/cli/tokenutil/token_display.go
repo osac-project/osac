@@ -50,7 +50,7 @@ func DisplayTokenClaims(ctx context.Context, console *terminal.Console, claims j
 		logger := logging.LoggerFromContext(ctx)
 		claims = replaceTimeClaims(ctx, logger, claims, utc)
 	}
-	console.RenderJson(ctx, claims)
+	_ = console.RenderJson(ctx, claims)
 }
 
 // replaceTimeClaims converts time claims to RFC3339 format for better readability.

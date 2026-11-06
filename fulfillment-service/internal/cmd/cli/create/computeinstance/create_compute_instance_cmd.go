@@ -324,7 +324,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		}
 
 		computeInstance = response.Object
-		c.console.Infof(ctx, "Created compute instance '%s'.\n", computeInstance.Id)
+		_ = c.console.Infof(ctx, "Created compute instance '%s'.\n", computeInstance.Id)
 		return nil
 	}
 
@@ -343,7 +343,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	templateParameterValues, templateParameterIssues := c.parseTemplateParameters(ctx, template)
 	if len(templateParameterIssues) > 0 {
 		validTemplateParameters := c.validTemplateParameters(template)
-		c.console.Render(ctx, "template_parameter_issues.txt", map[string]any{
+		_ = c.console.Render(ctx, "template_parameter_issues.txt", map[string]any{
 			"Template":   c.args.template,
 			"Parameters": validTemplateParameters,
 			"Issues":     templateParameterIssues,
@@ -381,7 +381,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Display the result:
 	computeInstance = response.Object
-	c.console.Infof(ctx, "Created compute instance '%s'.\n", computeInstance.Id)
+	_ = c.console.Infof(ctx, "Created compute instance '%s'.\n", computeInstance.Id)
 
 	return nil
 }
@@ -428,7 +428,7 @@ func (c *runnerContext) findTemplate(ctx context.Context) (result *publicv1.Comp
 
 	// If there are multiple matches, display them and advise to use the identifier:
 	if len(matches) > 1 {
-		c.console.Render(ctx, "template_conflict.txt", map[string]any{
+		_ = c.console.Render(ctx, "template_conflict.txt", map[string]any{
 			"Matches": matches,
 			"Ref":     c.args.template,
 			"Total":   total,
@@ -445,7 +445,7 @@ func (c *runnerContext) findTemplate(ctx context.Context) (result *publicv1.Comp
 		return nil, fmt.Errorf("failed to list templates: %w", err)
 	}
 	examples := response.GetItems()
-	c.console.Render(ctx, "template_not_found.txt", map[string]any{
+	_ = c.console.Render(ctx, "template_not_found.txt", map[string]any{
 		"Examples": examples,
 		"Ref":      c.args.template,
 	})

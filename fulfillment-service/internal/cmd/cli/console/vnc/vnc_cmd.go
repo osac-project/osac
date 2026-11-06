@@ -163,7 +163,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		defer cancel()
 	}
 
-	c.console.Render(ctx, "proxy_listening.txt", map[string]any{
+	_ = c.console.Render(ctx, "proxy_listening.txt", map[string]any{
 		"Address": c.listener.Addr(),
 	})
 
@@ -176,7 +176,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		InstanceID:  instanceID,
 		ConsoleType: publicv1.ConsoleType_CONSOLE_TYPE_VNC,
 		OnConnected: func(ctx context.Context) {
-			c.console.Render(ctx, "connected.txt", map[string]any{
+			_ = c.console.Render(ctx, "connected.txt", map[string]any{
 				"Instance": instanceID,
 			})
 		},
@@ -185,7 +185,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	err = connect.WithRetry(ctx, opts, c.proxyVNC)
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		c.console.Render(ctx, "session_timeout.txt", map[string]any{
+		_ = c.console.Render(ctx, "session_timeout.txt", map[string]any{
 			"Timeout": c.args.timeout,
 		})
 		return nil

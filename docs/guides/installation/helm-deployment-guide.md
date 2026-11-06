@@ -699,11 +699,16 @@ oc label secret config-as-code-manifest-ig \
 ```
 
 Create a separate `my-management-infra-values.yaml` for its prerequisites.
-Keep the certificate stack enabled and OpenShift Virtualization and EVPN
-disabled. Set `keycloak.uiUrl` in this file to the management cluster's actual
-UI Route URL before Phase 1b. With `NS=osac`, its default host is
-`osac-ui-osac.<DOMAIN>`; replace `<DOMAIN>` with the value from the command
-above:
+Keep the certificate stack enabled and EVPN disabled. For a new
+management-cluster release that should not manage OpenShift Virtualization, set
+`cnv.enabled: false` as shown. If you use this file to upgrade an existing
+management-cluster release, retain its current `cnv.enabled` value explicitly.
+Changing `true` to `false` can remove release-managed resources, including the
+`openshift-cnv` namespace, and disrupt workloads. Coordinate with the release
+owner and plan a migration before changing the value. Set `keycloak.uiUrl` in
+this file to the management cluster's actual UI Route URL before Phase 1b. With
+`NS=osac`, its default host is `osac-ui-osac.<DOMAIN>`; replace `<DOMAIN>` with
+the value from the command above:
 
 ```yaml
 certManager:
@@ -713,7 +718,7 @@ trustManager:
 caIssuer:
   enabled: true
 cnv:
-  enabled: false
+  enabled: false # New release only; preserve the existing value on upgrades.
 evpn:
   enabled: false
 keycloak:

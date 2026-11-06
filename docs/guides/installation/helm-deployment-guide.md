@@ -357,14 +357,21 @@ ConfigMap when enabled. If administrators manage the bundle directly or
 in the OSAC release namespace; before Phase 2, provide it with the
 `bundle.pem` key under the name configured by
 `service.certs.caBundle.configMap`. Keep that name aligned with
-`certs.caBundle.configMap`.
+`certs.caBundle.configMap`. For a custom name, also configure the related
+consumer values listed in
+[Section 5 of the customer install guide](customer-install-guide.md#5-helm-chart-configuration-parameters).
 
-Include private OIDC provider CAs in the bundle. With the chart-managed bundle,
-set `keycloak.oidcIdpTrust.caPem`; for an administrator-managed bundle, include
-the provider CA in `bundle.pem`. Keep the bundle current as provider CAs change
-and ensure Keycloak reloads the updated truststore. A Phase 1b upgrade rolls out
-Keycloak when the chart manages the bundle; after updating an administrator-
-managed bundle, restart Keycloak.
+An administrator-managed `bundle.pem` must include every CA its consumers need.
+Include the CA for the OSAC service certificates (`service.certs.issuerRef`)
+and the Kafka broker whenever either is not already trusted by another CA in
+the bundle. Also include private OIDC provider CAs and any other private
+endpoints their consumers use. With the chart-managed bundle, set
+`keycloak.oidcIdpTrust.caPem` to add a private OIDC provider CA; that setting
+does not replace the other roots required by an administrator-managed bundle.
+Keep the bundle current as CA certificates change and ensure Keycloak reloads
+the updated truststore. A Phase 1b upgrade rolls out Keycloak when the chart
+manages the bundle; after updating an administrator-managed bundle, restart
+Keycloak.
 
 Before Phase 1b on OpenShift, set `keycloak.uiUrl` in the values file passed to
 this command to the bundled OSAC UI's HTTPS Route URL on this cluster. For the
@@ -724,12 +731,18 @@ phase-1 releases, inspect their current values and carry each release's
 intentional settings into the values used for its upgrade:
 
 ```bash
+# Recorded user-supplied overrides
+helm get values osac-deps -n osac-deps
+helm get values osac-infra -n osac-infra
+
+# Computed values, including chart defaults
 helm get values osac-deps -n osac-deps --all
 helm get values osac-infra -n osac-infra --all
 ```
 
-These commands show computed values, including defaults from each installed
-chart. Compare them with the target versions' defaults in
+Without `--all`, Helm shows the values recorded as overrides. With `--all`, it
+also shows the installed chart's defaults. Compare computed values with the
+target versions' defaults in
 `osac-installer/charts/osac-deps/values.yaml` and
 `osac-installer/charts/osac-infra/values.yaml` before choosing upgrade values.
 Preserve intentional settings, but do not copy old chart defaults as explicit
@@ -838,7 +851,17 @@ mce:          { enabled: false }
   `default-ca-cert` `Certificate`. This also disables the CA-bundle hook. Before
   Phase 2, provide the ConfigMap named by `service.certs.caBundle.configMap` in
   the OSAC release namespace, and set `service.certs.issuerRef` in
-  `my-values.yaml` to an existing `ClusterIssuer` or `Issuer`.
+  `my-values.yaml` to an existing `ClusterIssuer` or `Issuer` for the OSAC
+  service certificates.
+- `certs.issuerRef` selects the issuer for certificates used by Kafka, bundled
+  PostgreSQL, and OpenBao. If any of these are enabled and no `default-ca`
+  ClusterIssuer will exist, set
+  `certs.issuerRef.kind` and `certs.issuerRef.name` to a `ClusterIssuer`
+  available cluster-wide or an `Issuer` present in each enabled certificate's
+  namespace. Bundled Keycloak certificates always use a `ClusterIssuer` named
+  `default-ca`, regardless of `certs.issuerRef`. When bundled Keycloak is
+  enabled, provide that issuer or leave `caIssuer.enabled: true` so Phase 1b
+  creates it.
 - `keycloak.enabled: false` requires a pre-configured Keycloak with the `osac`
   realm, clients, and roles already set up.
 

@@ -1477,7 +1477,7 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `service.variant` | `openshift` or `kind`. Use `openshift`. |
 | `service.images.service`, `service.images.envoy` | Fulfillment Service and Envoy sidecar images. |
 | `service.certs.issuerRef.kind`, `service.certs.issuerRef.name` | cert-manager issuer for the service certificates. |
-| `service.certs.caBundle.configMap` | Name of the existing CA-bundle `ConfigMap` in the OSAC release namespace. OSAC components mount it, so it must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap; the default name is `ca-bundle`. When using a custom name, set `operator.fulfillment.tls.caBundle.configMap`, `ui.api.fulfillment.certs.caBundle.configMap`, and `ui.auth.certs.caBundle.configMap` to the same name. If BMaaS is enabled, also set `bmf.secretAPI.caBundle.configMap` to that name. Ask your platform administrators to make the bundle available under this name. See step 4 of [Section 7](#7-verifying-the-installation). |
+| `service.certs.caBundle.configMap` | Name of the existing CA-bundle `ConfigMap` in the OSAC release namespace. OSAC components mount it, so it must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap; the default name is `ca-bundle`. When using a custom name, set `operator.fulfillment.tls.caBundle.configMap`, `ui.api.fulfillment.certs.caBundle.configMap`, `ui.auth.certs.caBundle.configMap`, and `metering.certs.caBundle.configMap` to the same name. The bundle must trust the Kafka broker configured for metering. If BMaaS is enabled, also set `bmf.secretAPI.caBundle.configMap` to that name. Ask your platform administrators to make the bundle available under this name. See step 4 of [Section 7](#7-verifying-the-installation). |
 | `service.auth.issuerUrl` | OIDC issuer. Templated from `global.clusterDomain` by default. |
 | `service.auth.controllerCredentials[]` | Volume sources for the controller OIDC client credentials. |
 | `service.idp.provider`, `service.idp.url`, `service.idp.credentials[]` | Identity provider for user and role management. Only `keycloak` is supported. |
@@ -1965,9 +1965,12 @@ oc get crd kubevirts.kubevirt.io
 ```
 
 Ensure OpenShift Virtualization is installed on the workload cluster, not the
-management cluster. If your platform administrators configure infrastructure
-through Helm, `cnv.enabled: false` belongs in their infrastructure values, not
-in the OSAC `my-values.yaml`. In the OSAC `my-values.yaml`, skip only the
+management cluster. If your platform administrators use Helm-based
+infrastructure charts, set `cnv.enabled: false` in the management cluster's
+infrastructure values, not in OSAC `my-values.yaml`. On the workload cluster,
+set `cnv.enabled: true` in the infrastructure values only if those charts
+install and manage OpenShift Virtualization; keep it `false` when administrators
+manage an existing installation. In OSAC `my-values.yaml`, skip only the
 `kubevirt-crds` preflight check and give the verified reason shown below.
 Leave the remaining checks enabled.
 

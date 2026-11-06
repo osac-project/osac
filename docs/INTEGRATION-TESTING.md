@@ -411,7 +411,10 @@ installer command in the tier table remains the component-integration check.
   Projects and Secret references for two tenants, verifies caller-scoped
   Project and Secret-reference listing, confirms Secret-reference results
   contain only reference metadata, and checks list-only Secret Get rejection
-  through the shared safe-error contract. `it_mcp_deployed_test.go` runs in the
+  through the shared safe-error contract. The `mcpserver` unit suite also
+  verifies the shared missing-Secret guidance envelope, the compute Create
+  handler's mapping of Fulfillment's missing-Secret rejection, and the absence
+  of Secret-value or bearer-token fields. `it_mcp_deployed_test.go` runs in the
   Fulfillment Kind CI job with `MCP_TEST_ENABLED=true` and real Keycloak; it
   checks TLS metadata and valid calls, plus rejection of the Fulfillment API
   audience, a wrong issuer, an expired token, and a wrong resource. It also

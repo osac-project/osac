@@ -383,6 +383,32 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		Expect(err.Error()).ToNot(ContainSubstring("private project details"))
 	})
 
+	It("Returns missing-Secret guidance from the create handler", func() {
+		instances := &mockComputeInstancesClient{
+			createFunc: func(
+				_ context.Context, _ *publicv1.ComputeInstancesCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesCreateResponse, error) {
+				return nil, status.Error(
+					codes.InvalidArgument,
+					"there is no secret with identifier or name 'missing-user-data'",
+				)
+			},
+		}
+
+		handler := handleCreateComputeInstance(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+			Name: "demo-vm", CatalogItem: "catalog-item-1",
+		})
+		envelope := decodeToolError(err)
+		Expect(output).To(BeZero())
+		Expect(envelope.Category).To(Equal("not_found"))
+		Expect(envelope.GRPCCode).To(Equal("NotFound"))
+		Expect(envelope.Retryable).To(BeFalse())
+		Expect(envelope.Message).To(ContainSubstring("/secrets/create"))
+		Expect(envelope.Details).To(ConsistOf("Secret reference missing-user-data is missing"))
+		Expect(err.Error()).ToNot(ContainSubstring("there is no secret"))
+	})
+
 	It("Names an unauthorized prerequisite boundary and stops before the dependent create", func() {
 		instances := &mockComputeInstancesClient{
 			createFunc: func(

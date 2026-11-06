@@ -136,6 +136,7 @@ var _ = BeforeEach(func() {
 		suiteTx = nil
 	})
 	ctx = database.TxIntoContext(ctx, suiteTx)
+	ctx = database.TxManagerIntoContext(ctx, tm)
 
 	// Create the testTenant in the database so foreign key constraints are satisfied
 	// when resources are created with the default tenant mock.

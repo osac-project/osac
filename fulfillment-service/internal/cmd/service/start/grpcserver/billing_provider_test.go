@@ -53,7 +53,9 @@ var _ = Describe("newBillingProvider", func() {
 		Expect(p.IsConfigured()).To(BeFalse())
 		adapter, err := p.Adapter()
 		Expect(adapter).To(BeNil())
-		Expect(err).ToNot(HaveOccurred())
+		var e *billing.Error
+		Expect(errors.As(err, &e)).To(BeTrue())
+		Expect(e.Reason).To(Equal(billing.ReasonNotConfigured))
 	})
 
 	It("builds the adapter, without calling the provider, when configuration is complete", func() {

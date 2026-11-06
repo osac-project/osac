@@ -355,6 +355,8 @@ credential file) runs the real adapter against it.
 - Recording: `Requests()`, `Count(op)`, `Succeeded(op)`. Every non-GET is
   answered 405 and recorded; assert `Writes()` is empty to prove no
   PUT/PATCH. A disabled deployment is proven by `Requests()` being empty.
+  `Failed` is also set when the response could not be delivered, so
+  `Succeeded` counts only delivered successes.
 - Use: `stub := billingstub.New(scenario)`, `stub.Start("127.0.0.1:0")`,
   `stub.URL()`, `stub.SetScenario(...)` to change a running stub, `Close()`.
   Each stub owns its state, so parallel suites do not share scenarios.

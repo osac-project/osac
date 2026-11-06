@@ -25,6 +25,12 @@ import (
 // Configurable cache tuning is follow-up work under OSAC-6894.
 const rateCardCacheTTL = 5 * time.Minute
 
+// rateCardCacheFillBudget bounds how long one detached provider read may keep running after every List that waited
+// on it has stopped. It is sized for the resolver's per-attempt 10s timeout, its retries, and its pagination across
+// the provider's services, priceable attributes and rate cards, and it stays well below the 5m rateCardCacheTTL.
+// OSAC-6894 owns future tuning.
+const rateCardCacheFillBudget = 120 * time.Second
+
 // rateCardCacheMaxEntries bounds the cache. Keys come from request parameters (service, currency), so without a
 // bound a client cycling through arbitrary names could grow it without limit.
 const rateCardCacheMaxEntries = 1024
@@ -42,9 +48,11 @@ type rateCardEntry struct {
 	skipped map[string]int
 }
 
-// newRateCardCache builds the rate-card cache over the shared ttlCache skeleton, with the default TTL and capacity.
+// newRateCardCache builds the rate-card cache over the shared ttlCache skeleton, with the default TTL, fill budget,
+// and capacity.
 func newRateCardCache() *ttlCache[rateCardKey, rateCardEntry] {
-	return newTTLCache[rateCardKey, rateCardEntry](rateCardCacheTTL, rateCardCacheMaxEntries, flightKey)
+	return newTTLCache[rateCardKey, rateCardEntry](rateCardCacheTTL, rateCardCacheFillBudget, rateCardCacheMaxEntries,
+		flightKey)
 }
 
 // flightKey encodes key as an injective singleflight string: %q escapes any character that could otherwise let two

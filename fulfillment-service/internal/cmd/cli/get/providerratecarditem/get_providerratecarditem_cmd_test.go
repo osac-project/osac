@@ -15,6 +15,7 @@ package providerratecarditem
 
 import (
 	"bytes"
+	"errors"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
@@ -91,4 +92,43 @@ var _ = Describe("render", func() {
 		Entry("table", "table", "items.table.golden"),
 		Entry("json", "json", "items.json.golden"),
 	)
+
+	It("returns an error when writing the table fails immediately", func() {
+		err := errors.New("write failed")
+		console, buildErr := terminal.NewConsole().SetLogger(logger).SetStdout(failingWriter{err: err}).Build()
+		Expect(buildErr).ToNot(HaveOccurred())
+		Expect(render(ctx, console, "table", items())).To(MatchError(err))
+	})
+
+	It("returns an error when writing the table fails after some output is buffered", func() {
+		err := errors.New("write failed")
+		writer := &delayedFailingWriter{err: err, limit: 16}
+		console, buildErr := terminal.NewConsole().SetLogger(logger).SetStdout(writer).Build()
+		Expect(buildErr).ToNot(HaveOccurred())
+		Expect(render(ctx, console, "table", items())).To(MatchError(err))
+	})
 })
+
+// failingWriter fails every write.
+type failingWriter struct {
+	err error
+}
+
+func (w failingWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+// delayedFailingWriter accepts a limited number of bytes before failing every write, so part of the output is
+// buffered before the failure surfaces while flushing the table.
+type delayedFailingWriter struct {
+	err   error
+	limit int
+}
+
+func (w *delayedFailingWriter) Write(p []byte) (int, error) {
+	if len(p) > w.limit {
+		return 0, w.err
+	}
+	w.limit -= len(p)
+	return len(p), nil
+}

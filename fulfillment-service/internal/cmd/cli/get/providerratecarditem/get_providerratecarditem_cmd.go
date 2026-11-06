@@ -139,8 +139,7 @@ func (c *runnerContext) list(ctx context.Context, client publicv1.ProviderRateCa
 // render writes the rows as a table, JSON or YAML; the JSON and YAML encoding is shared in the output package.
 func render(ctx context.Context, console *terminal.Console, format string, items []*publicv1.ProviderRateCardItem) error {
 	if format == output.Table {
-		renderTable(console, items)
-		return nil
+		return renderTable(console, items)
 	}
 	values, err := output.Messages(items)
 	if err != nil {
@@ -151,15 +150,24 @@ func render(ctx context.Context, console *terminal.Console, format string, items
 }
 
 // renderTable writes one row per rate-card item.
-func renderTable(console *terminal.Console, items []*publicv1.ProviderRateCardItem) {
+func renderTable(console *terminal.Console, items []*publicv1.ProviderRateCardItem) error {
 	writer := tabwriter.NewWriter(console, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(writer, "SERVICE\tCURRENCY\tCONDITIONS\tAMOUNT\tUNIT\tCATALOG ITEMS")
+	var writeErr error
+	printf := func(format string, args ...any) {
+		if writeErr == nil {
+			_, writeErr = fmt.Fprintf(writer, format, args...)
+		}
+	}
+	printf("SERVICE\tCURRENCY\tCONDITIONS\tAMOUNT\tUNIT\tCATALOG ITEMS\n")
 	for _, item := range items {
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		printf("%s\t%s\t%s\t%s\t%s\t%s\n",
 			item.GetService(), item.GetCurrencyCode(), renderConditions(item), item.GetRate().GetAmount(),
 			item.GetRate().GetUnit(), output.OrDash(strings.Join(item.GetCatalogItemMatches(), ", ")))
 	}
-	writer.Flush()
+	if writeErr != nil {
+		return writeErr
+	}
+	return writer.Flush()
 }
 
 // renderConditions renders every resource condition as "dimension=value" (ANY omits the value), joined by "&".

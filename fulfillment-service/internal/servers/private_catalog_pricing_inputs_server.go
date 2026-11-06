@@ -23,6 +23,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -124,9 +125,14 @@ func (b *PrivateCatalogPricingInputsServerBuilder) Build() (result *PrivateCatal
 func (s *PrivateCatalogPricingInputsServer) List(ctx context.Context,
 	request *privatev1.CatalogPricingInputsListRequest) (*privatev1.CatalogPricingInputsListResponse, error) {
 	// One sweep of both catalog tables is reused for the cache's TTL, and concurrent Lists collapse into a single
-	// sweep; the aggregated rows are shared read-only with every caller served from the entry.
+	// sweep; the aggregated rows are shared read-only with every caller served from the entry. The sweep runs in its
+	// own transaction: the fill is detached from every caller's request scope, so it must not borrow the leading
+	// caller's request transaction, whose lifetime no longer bounds the sweep. The sweep's rows are published only
+	// after WithNewTx returns — committing — because the cache stores the value after the load returns.
 	all, err := s.inventoryCache.get(ctx, catalogInventoryKey{}, func(ctx context.Context) ([]*privatev1.CatalogPricingInput, error) {
-		return sweepCatalogInventory(ctx, s.computeInstanceCatalogItemsDao, s.clusterCatalogItemsDao)
+		return database.WithNewTx(ctx, func(ctx context.Context) ([]*privatev1.CatalogPricingInput, error) {
+			return sweepCatalogInventory(ctx, s.computeInstanceCatalogItemsDao, s.clusterCatalogItemsDao)
+		})
 	})
 	if err != nil {
 		return nil, err

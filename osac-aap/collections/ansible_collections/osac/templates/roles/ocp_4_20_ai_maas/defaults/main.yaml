@@ -18,6 +18,10 @@
 ocp_4_20_ai_maas_enable_maas: true
 ocp_4_20_ai_maas_enable_observability: true
 ocp_4_20_ai_maas_enable_dashboard: true
+# INTERNAL (not exposed to the fulfillment form): AI MaaS clusters must stay
+# registered with the ACM hub so they remain importable as WorkloadClusters
+# (OSAC-6488). Regular CaaS clusters exclude ACM registration (OSAC-6313).
+ocp_4_20_ai_maas_enable_acm_registration: true
 # Consumed by playbook_osac_create_maas_deployment.yml (inline verify hook), not by
 # the role's tasks/templates. Kept here so it is settable/validated on the local path.
 ocp_4_20_ai_maas_run_verify: true

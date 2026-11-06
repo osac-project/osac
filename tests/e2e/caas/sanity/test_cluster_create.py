@@ -294,6 +294,37 @@ def _assert_cluster_version_propagated(
     return hosted_cluster_name, hosted_cluster_ns
 
 
+def assert_not_acm_managed(*, k8s: K8sClient, hosted_cluster_name: str, hosted_cluster_ns: str) -> None:
+    """Prove a regular CaaS cluster never becomes an ACM spoke (OSAC-6313).
+
+    ACM registration is opt-in through the AAP template flag: the provisioned
+    HostedCluster must carry no clusterset label, and the hub must hold no
+    ManagedCluster for it. Asserted once the cluster is Ready: with the label
+    present, ACM's HostedCluster import creates the ManagedCluster long
+    before readiness, so absence here is proof, not a race.
+    """
+    clusterset_label = run(
+        *k8s._base(),
+        "get",
+        "hostedcluster",
+        hosted_cluster_name,
+        "-n",
+        hosted_cluster_ns,
+        "-o",
+        "jsonpath={.metadata.labels.cluster\\.open-cluster-management\\.io/clusterset}",
+    )
+    assert clusterset_label == "", (
+        f"HostedCluster {hosted_cluster_name} carries ACM clusterset label {clusterset_label!r}: "
+        "regular CaaS clusters must not be registered with ACM (OSAC-6313)"
+    )
+    # The ManagedCluster shares the HostedCluster's name (the AAP teardown deletes
+    # that exact reference); it is cluster-scoped, so kubectl ignores the namespace.
+    assert k8s.is_absent(resource="managedclusters.cluster.open-cluster-management.io", name=hosted_cluster_name), (
+        f"ManagedCluster {hosted_cluster_name} exists on the hub: a regular CaaS cluster "
+        "must not be imported as an ACM spoke (OSAC-6313)"
+    )
+
+
 def _assert_worker_node_request(
     *, node_sets: dict[str, Any], cluster_order_spec: dict[str, Any]
 ) -> tuple[str, int, str]:
@@ -467,6 +498,7 @@ def assert_cluster_available(
     hosted_cluster_name, hosted_cluster_ns = _assert_cluster_version_propagated(
         k8s=k8s, co_name=co_name, cluster=cluster, cluster_order_spec=cluster_order_spec, version_name=version_name
     )
+    assert_not_acm_managed(k8s=k8s, hosted_cluster_name=hosted_cluster_name, hosted_cluster_ns=hosted_cluster_ns)
     node_sets = cluster.get("object", {}).get("spec", {}).get("nodeSets", {})
     worker_node_set, original_size, worker_instance_type = _assert_worker_node_request(
         node_sets=node_sets, cluster_order_spec=cluster_order_spec
@@ -942,6 +974,11 @@ def assert_cluster_with_two_node_sets_available(
     # success and all NodePools ready), so wait for the phase the billing gate
     # actually keys on before expecting the heartbeat.
     wait_for_cluster_ready(k8s=k8s, name=co_name)
+    assert_not_acm_managed(
+        k8s=k8s,
+        hosted_cluster_name=k8s.get_cluster_order_hosted_cluster_name(name=co_name),
+        hosted_cluster_ns=hosted_cluster_ns,
+    )
     metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=300, resource_kind=WaitResourceKind.CLUSTER_ORDER)
     metering.verify()
 

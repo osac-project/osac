@@ -35,6 +35,26 @@
       {{ dedicated }}
   no_log: true
 
+# Validate every Dedicated-SVM backend_id up front, before the short-circuit
+# Secret reconcile or the per-backend provisioning loop writes anything, so a
+# valid backend is never applied ahead of a later invalid one. The same rule
+# runs per backend in _validate_backend_mode.yaml.
+- name: Fail if any Dedicated-SVM backend_id is not a valid Kubernetes label value
+  ansible.builtin.fail:
+    msg: >-
+      Every Dedicated-SVM backend_id must be a valid Kubernetes label value (at
+      most 63 characters: letters, digits, '-', '_', '.', starting and ending
+      with a letter or digit) because it labels the TridentBackendConfig and CSI
+      Secret. Nothing was applied.
+  when: >-
+    (
+      _netapp_dedicated_backend_ids
+      | select('string')
+      | select('regex', '^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?\Z')
+      | list | length
+    ) != (_netapp_dedicated_backend_ids | length)
+  no_log: true
+
 - name: Build expected StorageClass entries and dedicated backend keys
   ansible.builtin.set_fact:
     _netapp_expected_sc_entries: >-

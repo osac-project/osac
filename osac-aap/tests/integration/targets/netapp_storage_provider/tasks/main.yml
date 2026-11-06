@@ -699,6 +699,67 @@
         fail_msg: "ensure_storage_class must fail closed when netapp_storage_validate_certs is true and CA bundle is missing"
         success_msg: "ensure_storage_class failed closed on missing CA bundle"
 
+# ── Test 3b: an invalid Dedicated-SVM backend_id stops ensure before any write ──
+- name: "ONTAP Storage Provider - Ensure rejects invalid Dedicated-SVM backend IDs before applying"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: "test-netapp-ids"
+    tenant_namespace: "osac-system"
+    netapp_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
+    _valid_key: "{{ (('netapp-be-valid' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _prep: &netapp_ids_prep
+      provider_config:
+        username: "trident_test_ontap"
+        password: "{{ lookup('env', 'OSAC_TEST_NETAPP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+        svm: "customer_acme_svm"
+    storage_provider_tiers:
+      - {name: gold, protocol: block, provider: netapp, backend_id: netapp-be-valid}
+      - {name: silver, protocol: block, provider: netapp, backend_id: "netapp be invalid"}
+    storage_provider_backend_connections:
+      netapp-be-valid:
+        endpoint: "https://10.46.246.90"
+        tenant_preparation: *netapp_ids_prep
+      "netapp be invalid":
+        endpoint: "https://10.46.246.90"
+        tenant_preparation: *netapp_ids_prep
+
+  tasks:
+    - name: Attempt ensure_storage_class with one valid and one invalid Dedicated-SVM backend
+      block:
+        - name: Call storage_provider role with ensure_storage_class action
+          ansible.builtin.include_tasks: dispatch.yaml
+          vars:
+            storage_provider_action: ensure_storage_class
+      rescue:
+        - name: Record the invalid backend_id rejection
+          ansible.builtin.set_fact:
+            _invalid_backend_id_rejected: >-
+              {{ 'Every Dedicated-SVM backend_id must be a valid Kubernetes label value' in (ansible_failed_result.msg | default('')) }}
+
+    - name: Read back resources for the valid backend
+      kubernetes.core.k8s_info:
+        api_version: "{{ item.v }}"
+        kind: "{{ item.k }}"
+        namespace: trident
+        name: "{{ item.n }}"
+      loop:
+        - {v: trident.netapp.io/v1, k: TridentBackendConfig, n: "netapp-{{ _valid_key }}"}
+        - {v: v1, k: Secret, n: "netapp-csi-{{ _valid_key }}"}
+      loop_control:
+        label: "{{ item.k }}"
+      register: _valid_backend_resources
+      no_log: true
+
+    - name: Assert the invalid ID was rejected before anything was applied
+      ansible.builtin.assert:
+        that:
+          - _invalid_backend_id_rejected | default(false) | bool
+          - (_valid_backend_resources.results | map(attribute='resources') | flatten | length) == 0
+        fail_msg: "An invalid Dedicated-SVM backend_id must stop ensure_storage_class before any resource is applied"
+        success_msg: "Invalid Dedicated-SVM backend_id rejected with nothing applied"
+
 # ── Test 4: ensure_storage_class fails fast on a Failed TBC phase ──
 - name: "ONTAP Storage Provider - Ensure fails fast on Failed TBC"
   hosts: localhost

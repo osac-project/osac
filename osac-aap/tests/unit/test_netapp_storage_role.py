@@ -68,15 +68,29 @@ def _render_when(when_expression: str, variables: dict) -> bool:
     return str(result).strip().lower() == "true"
 
 
+def _str_value_preserved(value: str) -> bool:
+    """Report whether str() keeps the value intact, without returning it."""
+    return str(value).strip() == value and len(str(value)) == len(value)
+
+
+def _b64_round_trips(value: str) -> bool:
+    """Report whether the redacted base64 decodes back to value, without returning it."""
+    return base64.b64decode(_redacted_b64(value)).decode() == value
+
+
 def test_fixture_password_is_redacted_in_output():
-    """The fixture password behaves like its value but never prints it."""
+    """The fixture password behaves like its value but never prints it.
+
+    Comparisons that would produce an unredacted string run inside helpers that
+    return only a bool, so pytest's assertion output never shows the value.
+    """
     assert repr(FIXTURE_PASSWORD) == "'<redacted>'"
     assert repr({"password": FIXTURE_PASSWORD}) == "{'password': '<redacted>'}"
-    assert len(str(FIXTURE_PASSWORD)) == 16
-    assert str(FIXTURE_PASSWORD).strip() == FIXTURE_PASSWORD
+    assert len(FIXTURE_PASSWORD) == 16
+    assert _str_value_preserved(FIXTURE_PASSWORD)
     assert _render("{{ p | string | trim | length }}", {"p": FIXTURE_PASSWORD}) == 16
     assert repr(_redacted_b64(FIXTURE_PASSWORD)) == "'<redacted>'"
-    assert base64.b64decode(_redacted_b64(FIXTURE_PASSWORD)).decode() == FIXTURE_PASSWORD
+    assert _b64_round_trips(FIXTURE_PASSWORD)
 
 
 def test_netapp_meta_declares_block_vmaas_only():
@@ -1429,10 +1443,17 @@ def test_netapp_consumes_svm_preparation_without_hub_secrets_or_ontap_http():
         assert "netapp-tenant-" not in content
         assert "netapp_storage_config_namespace" not in content
         assert "kubeconfig: ~" not in content
-        # No direct HTTP from the role: uri module (any FQCN or short name)
-        # and the url lookup/query plugin.
-        assert re.search(r"(^|\s)(ansible\.(builtin|legacy)\.)?uri:", content, re.M) is None, yaml_file
-        assert re.search(r"(lookup|query)\(\s*['\"](ansible\.(builtin|legacy)\.)?url['\"]", content) is None, yaml_file
+        # No direct HTTP from the role: the uri and get_url modules (short or
+        # fully qualified), the url lookup plugin via lookup()/query()/q(), and
+        # curl or wget run through command/shell.
+        assert (
+            re.search(r"(^|\s)(ansible\.(builtin|legacy)\.)?(uri|get_url):", content, re.M) is None
+        ), yaml_file
+        assert (
+            re.search(r"\b(lookup|query|q)\(\s*['\"](ansible\.(builtin|legacy)\.)?url['\"]", content)
+            is None
+        ), yaml_file
+        assert re.search(r"\b(curl|wget)\b", content) is None, yaml_file
         assert "slurp" not in content
 
 
@@ -1474,6 +1495,19 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
     )
     assert backend_ids == ["ded-1", "shared-1"]
     assert dedicated_ids == ["ded-1"]
+    # All Dedicated-SVM backend IDs are validated as label values before the
+    # write block (short-circuit Secret reconcile and per-backend provisioning).
+    all_ids_guard_name = "Fail if any Dedicated-SVM backend_id is not a valid Kubernetes label value"
+    ensure_names = [t.get("name") for t in ensure_tasks]
+    assert ensure_names.index(all_ids_guard_name) < ensure_names.index(
+        "Provision TridentBackendConfig and StorageClasses on target cluster"
+    )
+    all_ids_when = _find_task(ensure_tasks, all_ids_guard_name)["when"]
+    assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["be-1", "be 2"]}) is True
+    assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["be-1", "trail-"]}) is True
+    assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["be-1", "Be_2.x"]}) is False
+    assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": []}) is False
+
     # Backend IDs that differ only by case are distinct backends.
     assert _render(
         subset_task["ansible.builtin.set_fact"]["_netapp_backend_ids"],

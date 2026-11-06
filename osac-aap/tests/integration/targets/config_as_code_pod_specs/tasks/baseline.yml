@@ -123,6 +123,31 @@
           - _storage_pod.spec.serviceAccountName == 'osac-sa'
         fail_msg: Storage-operations pod spec must use osac-sa by default
 
+    - name: Assert storage-operations pod mounts the cluster trust bundle
+      ansible.builtin.assert:
+        that:
+          - >-
+            _storage_pod.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | selectattr('mountPath', 'equalto', '/etc/ca-bundle')
+            | selectattr('readOnly', 'equalto', true)
+            | list | length == 1
+          - >-
+            _storage_pod.spec.volumes
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | map(attribute='configMap')
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | selectattr('optional', 'equalto', true)
+            | list | length == 1
+          - >-
+            (_storage_pod.spec.volumes | selectattr('name', 'equalto', 'ca-bundle')
+             | map(attribute='configMap.items') | first)
+            == [{'key': 'bundle.pem', 'path': 'bundle.pem'}]
+        fail_msg: >-
+          Storage operations must mount the optional trust-manager ca-bundle
+          ConfigMap read-only at /etc/ca-bundle (bundle.pem), which storage
+          provider roles read to verify storage management endpoints.
+
 - name: Storage operations pod spec with remote kubeconfig
   hosts: localhost
   gather_facts: false

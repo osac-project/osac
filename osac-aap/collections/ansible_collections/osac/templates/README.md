@@ -204,38 +204,44 @@ template role with the filtered tier subset.
 
 2. Define storage provider metadata in `roles/my_provider_storage/meta/osac.yaml`:
    ```yaml
+   name: my-provider-storage
    title: My Storage Provider
+   description: >
+     Provisions storage resources for OSAC tenants. Describe what the role
+     creates and the credentials it manages.
    template_type: storage_provider
    implementation_strategy: my_provider
    capabilities:
-     supports_nfs: true
+     supported_protocols:
+       - nfs
+       - block
      provisioning_targets:
        - vmaas
        # Add caas only when this provider implements guest-cluster provisioning.
    ```
 
-3. Implement the three required action task files. Each receives `_provider_tiers`
-   (filtered tier subset for this provider) and `_provisioning_target` via `vars:`
-   from the dispatcher:
-   - `tasks/setup.yaml` — provision storage backend resources per tier.
+3. Implement the four required action task files. Each receives `_provider_tiers`
+   (filtered tier subset for this provider) and `_provider_backend_connections`
+   via `vars:` from the dispatcher:
+   - `tasks/setup.yaml` — provision or claim storage backend resources per tier.
      Must set `storage_provider_tenant_config` output fact (dict).
-   - `tasks/ensure_storage_class.yaml` — JIT K8s StorageClass provisioning per tier.
-     Must set `storage_provider_storage_class_names` (list of SC names, one per tier).
-     Must apply EP #26 labels (`osac.openshift.io/tenant`, `osac.openshift.io/storage-tier`).
-   - `tasks/teardown.yaml` — cleanup in reverse dependency order.
+   - `tasks/ensure_storage_class.yaml` — K8s StorageClass provisioning per tier.
+     Must set `storage_provider_storage_class_names` (list of SC entries, one per tier).
+     Must apply `osac.openshift.io/tenant`, `osac.openshift.io/storage-tier`, and
+     `osac.openshift.io/storage-provider` labels.
+   - `tasks/teardown_cluster_storage.yaml` — remove cluster-side K8s resources
+     (StorageClasses, VolumeSnapshotClasses, CSI Secrets/configs).
+   - `tasks/teardown_backend.yaml` — remove or release backend resources and hub
+     lifecycle Secrets.
 
-4. Add the provider name to the hardcoded allowlist in
-   `osac.service.storage_provider/tasks/main.yaml`. The allowlist is hardcoded
-   (not a variable) to prevent override via extra_vars.
-
-5. **Credential isolation:** Admin credentials (e.g., VAST VMS admin) must NEVER
+4. **Credential isolation:** Admin credentials (e.g., VAST VMS admin) must NEVER
    appear in tenant-namespace K8s Secrets. Provider roles must create per-tenant
    data-plane credentials and use only those in CSI Secrets. Admin credentials
    arrive via the `storage_provider_backend_connections` extra_var (resolved by
    osac-operator from the Tier API and keyed by `backend_id`) — there is no
    env-var or K8s Secret fallback for admin credentials.
 
-6. **Provisioning targets:** Each provider declares only the targets it implements
+5. **Provisioning targets:** Each provider declares only the targets it implements
    via `meta/osac.yaml`. `caas` is currently supported by the `lvms_storage`
    provider (installs LVMS on the guest cluster, creates per-tenant StorageClasses).
    HCP-level targets (`hcp_control_plane`, `hcp_worker_root`, `hcp_data_plane`)
@@ -289,6 +295,72 @@ The vendored `vastdata.vms` collection has no module for managers, roles, QoS po
 or API tokens — these 4 resources use `ansible.builtin.uri` directly. Per-tenant
 credentials are stored in a hub-cluster Secret and used in CSI Secrets. Password
 rotation requires teardown + re-provisioning.
+
+**NetApp provider specifics (`netapp_storage`):** The `netapp_storage` role serves
+OSAC-managed NetApp ONTAP block tiers on VMaaS through NetApp Trident (`ontap-san`
+driver). It never calls the ONTAP API itself: Trident on the target cluster does,
+and Trident must already be installed there. The role writes no hub Secret. The
+service dispatcher currently routes the `netapp` product key to `osac_csi_storage`,
+so routing OSAC-managed VMaaS `netapp` tiers to this role is a separate change.
+Each dispatched `backend_id` uses exactly one of two modes, selected by its
+`storage_provider_backend_connections` entry:
+
+- **Dedicated-SVM mode (`tenant_preparation`):** the tenant is assigned a
+  storage-administrator-prepared SVM. `ensure_storage_class` creates, on the target
+  cluster, a per-tenant CSI `Secret` and `TridentBackendConfig` (one labeled virtual
+  pool per tier, `useREST: true`) in the Trident namespace and one `StorageClass` per
+  tier. Expected input:
+  ```yaml
+  storage_provider_backend_connections:
+    <backend_id>:
+      endpoint: https://<cluster-mgmt-lif>     # fallback management endpoint
+      tenant_preparation:
+        provider_config:
+          svm: <prepared SVM name>              # required
+          username: <SVM runtime account>       # required, used by Trident
+          password: <SVM runtime password>      # required, used by Trident
+          management_lif: <svm-mgmt-lif>        # SVM's own management LIF
+          qos_policies:                         # tier name -> policy group
+            <tier name>: <existing QoS policy group on the SVM>
+  ```
+  `managementLIF` must match the credential scope: an SVM-scoped account (for
+  example `vsadmin`) authenticates only through that SVM's management LIF, so supply
+  `management_lif`; the backend `endpoint` (cluster management LIF) is used only when
+  `management_lif` is absent, which suits cluster-scoped accounts.
+  Trident verifies the management LIF's TLS certificate against
+  `TridentBackendConfig.trustedCACertificate`, which the role fills from the
+  cluster trust bundle (`/etc/ca-bundle/bundle.pem`, the trust-manager `ca-bundle`
+  ConfigMap mounted in the storage-operations instance group). To trust an ONTAP
+  CA, add it as a Secret (key `ca.crt`) labeled `osac.openshift.io/ca-bundle:
+  additional` in the cert-manager namespace. Verification is standard TLS, so the
+  certificate must carry a SAN matching `management_lif` (an IP SAN when the LIF is
+  an address); a Common-Name-only certificate is rejected even when trusted.
+  `NETAPP_VALIDATE_CERTS=false` omits `trustedCACertificate`, and Trident then skips
+  certificate verification; it is an explicit opt-out for lab endpoints only.
+  ONTAP QoS policy groups are created by a cluster administrator, belong to one SVM,
+  and are only referenced by name from Trident virtual pools; Trident does not check
+  they exist until it provisions a volume. A tier that requests bandwidth QoS
+  (non-zero `qos_limits.static_limits`) must therefore have a `qos_policies` entry,
+  or `setup`/`ensure_storage_class` fail. Create those policy groups non-shared
+  (`-is-shared false`); ONTAP enforces a single combined MB/s ceiling, not separate
+  read and write limits.
+- **Shared-TBC mode (`provider_config.profiles`):** the tenant consumes virtual pools
+  of a customer-managed `TridentBackendConfig` shared by several tenants. Expected
+  input: `storage_provider_backend_connections[backend_id].provider_config.profiles`
+  (`[{name, shared: {tbc_namespace, tbc_name}}]`) and, per tier,
+  `provider_config.{profile, pool_selector}`. `ensure_storage_class` checks the
+  referenced `TridentBackendConfig` best-effort (failing fast if it is visibly
+  `Failed` or misconfigured, pinning `parameters.storagePools: "<backendName>:.*"`
+  when `Bound`, and using `parameters.selector` alone when it is `NotFound` or
+  `Forbidden`) and creates per-tenant per-tier `StorageClass`es; it never creates or
+  deletes customer TBCs or Secrets. Bandwidth QoS belongs to the customer's virtual
+  pools, so tiers with non-zero `qos_limits.static_limits` are rejected.
+
+`teardown_cluster_storage` removes only OSAC-managed resources
+(`app.kubernetes.io/managed-by=osac-aap`) and refuses to remove anything while a
+PersistentVolume or PersistentVolumeClaim still uses one of the tenant's
+StorageClasses. `teardown_backend` leaves the prepared SVM, accounts, and QoS policy
+groups untouched.
 
 **Block encryption:** When `spec.blockEncryptionPassphrase` is provided in the Tenant CR
 event payload, the passphrase is persisted to the hub Secret during `setup` and used by

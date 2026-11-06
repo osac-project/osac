@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -15,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -185,6 +187,150 @@ var _ = Describe("Conservative cleanup of ID-less workers", func() {
 			Expect(fc.names).To(BeEmpty(), "lists=%d creates=%v", fc.lists, fc.names)
 		})
 	}
+})
+
+var _ = Describe("Two-observation BMI absence confirmation", func() {
+	It("records first empty observation after grace period", func() {
+		r, _, co := workerReadHarness()
+		co.Status.Workers[0].BareMetalInstance.ID = ""
+		co.Status.Workers[0].BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
+		co.Status.Workers[0].Phase = workerPhaseUnbinding
+		past := metav1.NewTime(time.Now().Add(-6 * time.Minute))
+		co.Status.Workers[0].LastFailureTime = &past
+		Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+		w := co.Status.Workers[0]
+		gone, err := r.cleanupWorker(context.Background(), co, &w)
+		Expect(err).To(HaveOccurred(),
+			"first observation must not release: gone=%v err=%v", gone, err)
+		Expect(gone).To(BeFalse(),
+			"first observation must not release: gone=%v err=%v", gone, err)
+		Expect(w.LastFailureReason).To(
+			Equal(eventReasonBMIAbsenceObserved),
+			"first observation not recorded: %+v", w)
+		Expect(w.LastFailureTime).NotTo(BeNil(),
+			"observation timestamp missing: %+v", w)
+		Expect(time.Since(w.LastFailureTime.Time)).To(
+			BeNumerically("<", 5*time.Second),
+			"observation timestamp not recent: %+v", w)
+	})
+
+	It("rejects when confirm window has not elapsed", func() {
+		r, _, co := workerReadHarness()
+		co.Status.Workers[0].BareMetalInstance.ID = ""
+		co.Status.Workers[0].BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
+		co.Status.Workers[0].Phase = workerPhaseUnbinding
+		recent := metav1.NewTime(time.Now().Add(-30 * time.Second))
+		co.Status.Workers[0].LastFailureTime = &recent
+		co.Status.Workers[0].LastFailureReason = eventReasonBMIAbsenceObserved
+		Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+		w := co.Status.Workers[0]
+		gone, err := r.cleanupWorker(context.Background(), co, &w)
+		Expect(err).To(HaveOccurred(),
+			"insufficient window must not release: gone=%v err=%v",
+			gone, err)
+		Expect(gone).To(BeFalse(),
+			"insufficient window must not release: gone=%v err=%v",
+			gone, err)
+	})
+
+	It("accepts absence after confirmed second observation", func() {
+		r, _, co := workerReadHarness()
+		co.Status.Workers[0].BareMetalInstance.ID = ""
+		co.Status.Workers[0].BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
+		co.Status.Workers[0].Phase = workerPhaseUnbinding
+		old := metav1.NewTime(time.Now().Add(-2 * time.Minute))
+		co.Status.Workers[0].LastFailureTime = &old
+		co.Status.Workers[0].LastFailureReason = eventReasonBMIAbsenceObserved
+		Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+		w := co.Status.Workers[0]
+		gone, err := r.cleanupWorker(context.Background(), co, &w)
+		Expect(err).NotTo(HaveOccurred(),
+			"confirmed absence rejected: gone=%v err=%v worker=%+v",
+			gone, err, w)
+		Expect(gone).To(BeTrue(),
+			"confirmed absence rejected: gone=%v err=%v worker=%+v",
+			gone, err, w)
+	})
+
+	It("does not advance confirmation on List error", func() {
+		r, fc, co := workerReadHarness()
+		co.Status.Workers[0].BareMetalInstance.ID = ""
+		co.Status.Workers[0].BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
+		co.Status.Workers[0].Phase = workerPhaseUnbinding
+		past := metav1.NewTime(time.Now().Add(-6 * time.Minute))
+		co.Status.Workers[0].LastFailureTime = &past
+		Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+		fc.listErr = fmt.Errorf("transient outage")
+		w := co.Status.Workers[0]
+		gone, err := r.cleanupWorker(context.Background(), co, &w)
+		Expect(err).To(HaveOccurred(),
+			"List error must not record observation: gone=%v", gone)
+		Expect(gone).To(BeFalse())
+		Expect(w.LastFailureReason).NotTo(
+			Equal(eventReasonBMIAbsenceObserved),
+			"List error advanced confirmation: %+v", w)
+	})
+
+	It("recovers BMI between observations", func() {
+		r, fc, co := workerReadHarness()
+		co.Status.Workers[0].BareMetalInstance.ID = ""
+		co.Status.Workers[0].BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
+		co.Status.Workers[0].Phase = workerPhaseUnbinding
+		old := metav1.NewTime(time.Now().Add(-2 * time.Minute))
+		co.Status.Workers[0].LastFailureTime = &old
+		co.Status.Workers[0].LastFailureReason = eventReasonBMIAbsenceObserved
+		Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+		bmi := ownedBMIFixture(co,
+			co.Status.Workers[0].BareMetalInstance.Name, "recovered-id")
+		fc.listed = []*privatev1.BareMetalInstance{bmi}
+		// Also populate the Get path so readCleanupBMI finds
+		// the recovered BMI by ID during name verification.
+		fc.bmis = []*privatev1.BareMetalInstance{bmi}
+		w := co.Status.Workers[0]
+		gone, err := r.cleanupWorker(context.Background(), co, &w)
+		Expect(err).NotTo(HaveOccurred(),
+			"recovery failed: gone=%v err=%v worker=%+v", gone, err, w)
+		Expect(gone).To(BeFalse(),
+			"recovery must not release: gone=%v worker=%+v", gone, w)
+		Expect(w.BareMetalInstance.ID).To(Equal("recovered-id"),
+			"ID not recovered: %+v", w)
+	})
+
+	It("before grace period with no prior observation", func() {
+		r, _, co := workerReadHarness()
+		co.Status.Workers[0].BareMetalInstance.ID = ""
+		co.Status.Workers[0].BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
+		co.Status.Workers[0].Phase = workerPhaseUnbinding
+		recent := metav1.NewTime(time.Now().Add(-1 * time.Minute))
+		co.Status.Workers[0].LastFailureTime = &recent
+		Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+		w := co.Status.Workers[0]
+		gone, err := r.cleanupWorker(context.Background(), co, &w)
+		Expect(err).To(HaveOccurred(),
+			"pre-grace must not release: gone=%v err=%v", gone, err)
+		Expect(gone).To(BeFalse())
+		Expect(w.LastFailureReason).NotTo(
+			Equal(eventReasonBMIAbsenceObserved),
+			"pre-grace recorded observation: %+v", w)
+	})
+
+	It("Reserved state ignores grace period", func() {
+		r, fc, co := workerReadHarness()
+		co.Status.Workers[0].BareMetalInstance.ID = ""
+		co.Status.Workers[0].BMICreateState = v1alpha1.WorkerBMICreateStateReserved
+		co.Status.Workers[0].Phase = workerPhaseUnbinding
+		past := metav1.NewTime(time.Now().Add(-6 * time.Minute))
+		co.Status.Workers[0].LastFailureTime = &past
+		Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+		w := co.Status.Workers[0]
+		gone, err := r.cleanupWorker(context.Background(), co, &w)
+		Expect(err).NotTo(HaveOccurred(),
+			"Reserved must release: gone=%v err=%v", gone, err)
+		Expect(gone).To(BeTrue(),
+			"Reserved must release: gone=%v", gone)
+		Expect(fc.lists).To(Equal(0),
+			"Reserved path should not List: lists=%d", fc.lists)
+	})
 })
 
 type lostReservationCreateClient struct{ *workerReadClient }

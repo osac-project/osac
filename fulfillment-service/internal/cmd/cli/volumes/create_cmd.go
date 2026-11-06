@@ -144,7 +144,7 @@ func (c *createRunner) run(cmd *cobra.Command, args []string) (err error) {
 		return fmt.Errorf("failed to create volume: %w", err)
 	}
 
-	c.console.Infof(ctx, "Created volume '%s'.\n", response.GetObject().GetId())
+	_ = c.console.Infof(ctx, "Created volume '%s'.\n", response.GetObject().GetId())
 
 	return nil
 }

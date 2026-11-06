@@ -340,7 +340,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	// Check if the plaintext flag has been explcitly set, and if it conflicts with the result of parsing the
 	// address. If it does conflict, then explain the issue to the user.
 	if c.flags.Changed("plaintext") && c.plaintext != c.args.plaintext {
-		c.console.Render(ctx, "plaintext_conflict.txt", map[string]any{
+		_ = c.console.Render(ctx, "plaintext_conflict.txt", map[string]any{
 			"Address":   c.address,
 			"Plaintext": c.plaintext,
 		})
@@ -514,7 +514,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 // instead of the OS keyring.
 func (c *runnerContext) warnIfUsingFileSecretStore(ctx context.Context, cfg *config.Settings) {
 	if cfg.UsingFileSecretStore() {
-		c.console.Render(ctx, "file_secret_store_fallback.txt", nil)
+		_ = c.console.Render(ctx, "file_secret_store_fallback.txt", nil)
 	}
 }
 
@@ -693,7 +693,7 @@ func (c *runnerContext) inferFlow(ctx context.Context) error {
 	passwordHint := c.flags.Changed("user") || c.flags.Changed("oauth-user") || c.flags.Changed("password") ||
 		c.flags.Changed("oauth-password") || c.flags.Changed("user-file") || c.flags.Changed("password-file")
 	if credentialsHint && passwordHint {
-		c.console.Render(ctx, "ambiguous_flow.txt", nil)
+		_ = c.console.Render(ctx, "ambiguous_flow.txt", nil)
 		return exit.Error(1)
 	}
 	if credentialsHint {
@@ -726,7 +726,7 @@ func (l *oauthFlowListener) Start(ctx context.Context, event oauth.FlowStartEven
 }
 
 func (l *oauthFlowListener) startCodeFlow(ctx context.Context, event oauth.FlowStartEvent) error {
-	l.runner.console.Render(ctx, "start_code_flow.txt", map[string]any{
+	_ = l.runner.console.Render(ctx, "start_code_flow.txt", map[string]any{
 		"AuthorizationUri": event.AuthorizationUri,
 	})
 	return nil
@@ -743,7 +743,7 @@ func (l *oauthFlowListener) startDeviceFlow(ctx context.Context, event oauth.Flo
 	// Calculate the expiration time to show to the user::
 	now := time.Now()
 	expiresIn := humanize.RelTime(now, now.Add(event.ExpiresIn), "from now", "")
-	l.runner.console.Render(ctx, "start_device_flow.txt", map[string]any{
+	_ = l.runner.console.Render(ctx, "start_device_flow.txt", map[string]any{
 		"VerificationUri": verficationUri,
 		"UserCode":        event.UserCode,
 		"ExpiresIn":       expiresIn,
@@ -753,9 +753,9 @@ func (l *oauthFlowListener) startDeviceFlow(ctx context.Context, event oauth.Flo
 
 func (l *oauthFlowListener) End(ctx context.Context, event oauth.FlowEndEvent) error {
 	if event.Outcome {
-		l.runner.console.Render(ctx, "auth_success.txt", nil)
+		_ = l.runner.console.Render(ctx, "auth_success.txt", nil)
 	} else {
-		l.runner.console.Render(ctx, "auth_failure.txt", nil)
+		_ = l.runner.console.Render(ctx, "auth_failure.txt", nil)
 	}
 	return nil
 }

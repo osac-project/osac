@@ -122,7 +122,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		InstanceID:  instanceID,
 		ConsoleType: publicv1.ConsoleType_CONSOLE_TYPE_SERIAL,
 		OnConnected: func(ctx context.Context) {
-			c.console.Infof(ctx, "Connected to %s. Disconnect: Ctrl+] or Enter ~.\n", instanceID)
+			_ = c.console.Infof(ctx, "Connected to %s. Disconnect: Ctrl+] or Enter ~.\n", instanceID)
 		},
 	}
 
@@ -172,13 +172,13 @@ func (c *runnerContext) proxyIO(ctx context.Context, cancel context.CancelFunc, 
 		},
 		InputFilter: func(data []byte) bool {
 			if escape.feed(data) {
-				c.console.Infof(ctx, "\nConnection closed.\n")
+				_ = c.console.Infof(ctx, "\nConnection closed.\n")
 				return true
 			}
 			return false
 		},
 		OnDisconnect: func(msg string) {
-			c.console.Infof(ctx, "\n%s\n", msg)
+			_ = c.console.Infof(ctx, "\n%s\n", msg)
 		},
 	})
 }

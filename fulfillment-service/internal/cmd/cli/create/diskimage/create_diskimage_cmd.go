@@ -160,7 +160,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create disk image: %w", err)
 	}
 
-	c.console.Infof(ctx, "Created disk image '%s'.\n", response.GetObject().GetId())
+	_ = c.console.Infof(ctx, "Created disk image '%s'.\n", response.GetObject().GetId())
 
 	return nil
 }

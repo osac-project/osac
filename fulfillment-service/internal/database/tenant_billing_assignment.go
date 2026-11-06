@@ -183,9 +183,15 @@ func tenantBillingAssignmentFilterSQL(filter string) (string, []any, error) {
 }
 
 // tenantBillingAssignmentOrderSQL translates an order expression into a SQL ORDER BY column (with optional
-// asc/desc), defaulting to "effective_from desc" for an empty order.
+// asc/desc), defaulting to "effective_from desc" for an empty order. withIDTieBreaker then appends an
+// ascending-id tie-breaker so offset/limit pagination stays deterministic across ties on the primary order,
+// preserving latest-first semantics.
 func tenantBillingAssignmentOrderSQL(order string) (string, error) {
-	return translateFlatTableOrder(order, tenantBillingAssignmentOrderColumns, "effective_from desc")
+	translated, err := translateFlatTableOrder(order, tenantBillingAssignmentOrderColumns, "effective_from desc")
+	if err != nil {
+		return "", err
+	}
+	return withIDTieBreaker(translated), nil
 }
 
 // ListTenantBillingAssignments returns the page of tenant_billing_assignments rows matching filter, ordered by

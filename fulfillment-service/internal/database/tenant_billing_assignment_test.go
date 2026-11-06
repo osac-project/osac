@@ -16,6 +16,7 @@ package database
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -279,6 +280,78 @@ var _ = Describe("Tenant billing assignments", func() {
 		It("rejects an unknown filter field", func() {
 			_, _, err := ListTenantBillingAssignments(ctx, tx, 0, 10, `this.spec.message == "x"`, "")
 			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Describe("ListTenantBillingAssignments pagination", func() {
+		// seedHistory inserts count closed assignment intervals for tenant-a and one billing account,
+		// all sharing one effective_from - the append-only history shape the list query pages over.
+		// The rows are written with direct SQL rather than
+		// CloseAndInsertTenantBillingAssignment: that helper can only open one interval at a time and
+		// always stamps a fresh now(), while these specs need many rows that tie on effective_from.
+		// effective_to is set on every row, so the partial unique active-tenant/active-account indexes
+		// are never violated. The zero-padded ids keep Go's string ordering and PostgreSQL's text
+		// collation in agreement, so the expected page sequences are exact.
+		seedHistory := func(count int) []string {
+			account := createAccount("")
+			from := time.Now().UTC().Truncate(time.Second)
+			to := from.Add(time.Hour)
+			ids := make([]string, count)
+			for i := 0; i < count; i++ {
+				ids[i] = fmt.Sprintf("hist-%03d", i)
+				_, err := tx.Exec(ctx, `
+					insert into tenant_billing_assignments (
+						id, name, tenant_id, billing_account_id, effective_from, effective_to, creator
+					) values ($1, $1, 'tenant-a', $2, $3, $4, 'system')`,
+					ids[i], account, from, to)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			return ids
+		}
+
+		idsOf := func(items []TenantBillingAssignmentRow) []string {
+			ids := make([]string, len(items))
+			for i, item := range items {
+				ids[i] = item.ID
+			}
+			return ids
+		}
+
+		It("serves the default page of 100 and continues at offset 100, tie-broken by ascending id", func() {
+			ids := seedHistory(105)
+			first, total, err := ListTenantBillingAssignments(ctx, tx, 0, 0, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(105)))
+			Expect(first).To(HaveLen(100))
+			// Every row ties on effective_from, so the latest-first default order degenerates to the
+			// ascending-id tie-breaker - an arbitrary within-tie order would make the pages unstable.
+			Expect(idsOf(first)).To(Equal(ids[:100]))
+
+			second, total, err := ListTenantBillingAssignments(ctx, tx, 100, 0, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(105)))
+			Expect(second).To(HaveLen(5))
+			Expect(idsOf(second)).To(Equal(ids[100:]))
+
+			union := append(append([]string{}, idsOf(first)...), idsOf(second)...)
+			seen := map[string]bool{}
+			for _, id := range union {
+				Expect(seen[id]).To(BeFalse(), "the two pages must not overlap: %q appears twice", id)
+				seen[id] = true
+			}
+			Expect(seen).To(HaveLen(105), "the two pages must cover all 105 unique ids")
+		})
+
+		It("serves the full default page at exactly 100 rows and an empty page at offset 100", func() {
+			seedHistory(100)
+			page, total, err := ListTenantBillingAssignments(ctx, tx, 0, 0, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(100)))
+			Expect(page).To(HaveLen(100))
+			rest, total, err := ListTenantBillingAssignments(ctx, tx, 100, 0, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(100)))
+			Expect(rest).To(BeEmpty())
 		})
 	})
 

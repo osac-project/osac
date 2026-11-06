@@ -128,7 +128,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Check that the object type has been specified:
 	if len(args) == 0 {
-		c.console.Render(ctx, "no_object.txt", map[string]any{
+		_ = c.console.Render(ctx, "no_object.txt", map[string]any{
 			"Helper": helper,
 		})
 		return nil
@@ -137,7 +137,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	// Get the information about the object type:
 	c.helper = helper.Lookup(args[0])
 	if c.helper == nil {
-		c.console.Render(ctx, "wrong_object.txt", map[string]any{
+		_ = c.console.Render(ctx, "wrong_object.txt", map[string]any{
 			"Helper": helper,
 			"Object": args[0],
 		})
@@ -157,7 +157,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Check that the object identifier or name has been specified:
 	if len(args) < 2 {
-		c.console.Render(ctx, "no_id.txt", map[string]any{})
+		_ = c.console.Render(ctx, "no_id.txt", map[string]any{})
 		return nil
 	}
 	key := args[1]
@@ -333,7 +333,7 @@ func (c *runnerContext) isWatchable() bool {
 
 func (c *runnerContext) showWatchSuggestion(ctx context.Context, object proto.Message) {
 	objectId := c.helper.GetId(object)
-	c.console.Render(ctx, "watch_suggestion.txt", map[string]any{
+	_ = c.console.Render(ctx, "watch_suggestion.txt", map[string]any{
 		"Object": c.helper.Singular(),
 		"Id":     objectId,
 	})

@@ -48,7 +48,7 @@ func Validate(format string) error {
 
 // Render writes message to console as JSON or YAML per format, encoding through protojson with proto field
 // names. The table format is the caller's: every command owns its table renderer and dispatches Table itself,
-// so Render only sees Json or Yaml. label names the entity in encoding error messages.
+// so Render only sees Json or Yaml. label names the entity in encoding and rendering error messages.
 func Render(ctx context.Context, console *terminal.Console, format string, label string, message proto.Message) error {
 	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(message)
 	if err != nil {
@@ -59,9 +59,13 @@ func Render(ctx context.Context, console *terminal.Console, format string, label
 		return fmt.Errorf("failed to encode %s: %w", label, err)
 	}
 	if format == Json {
-		console.RenderJson(ctx, value)
+		if err := console.RenderJson(ctx, value); err != nil {
+			return fmt.Errorf("failed to render %s: %w", label, err)
+		}
 	} else {
-		console.RenderYaml(ctx, value)
+		if err := console.RenderYaml(ctx, value); err != nil {
+			return fmt.Errorf("failed to render %s: %w", label, err)
+		}
 	}
 	return nil
 }

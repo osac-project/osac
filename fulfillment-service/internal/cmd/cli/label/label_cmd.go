@@ -98,7 +98,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Check that the object type has been specified:
 	if len(args) == 0 {
-		c.console.Render(ctx, "no_object.txt", map[string]any{
+		_ = c.console.Render(ctx, "no_object.txt", map[string]any{
 			"Helper": helper,
 		})
 		return nil
@@ -107,7 +107,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	// Get the information about the object type:
 	c.helper = helper.Lookup(args[0])
 	if c.helper == nil {
-		c.console.Render(ctx, "wrong_object.txt", map[string]any{
+		_ = c.console.Render(ctx, "wrong_object.txt", map[string]any{
 			"Helper": helper,
 			"Object": args[0],
 		})
@@ -116,14 +116,14 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Check that the object identifier or name has been specified:
 	if len(args) < 2 {
-		c.console.Render(ctx, "no_id.txt", map[string]any{})
+		_ = c.console.Render(ctx, "no_id.txt", map[string]any{})
 		return nil
 	}
 	ref := args[1]
 
 	// Check that at least one label operation has been specified:
 	if len(args) < 3 {
-		c.console.Render(ctx, "no_labels.txt", map[string]any{})
+		_ = c.console.Render(ctx, "no_labels.txt", map[string]any{})
 		return nil
 	}
 

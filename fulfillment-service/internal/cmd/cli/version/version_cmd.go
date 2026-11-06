@@ -44,7 +44,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	console := terminal.ConsoleFromContext(ctx)
 
 	// Print the version:
-	console.Infof(ctx, "%s\n", version.Get())
+	_ = console.Infof(ctx, "%s\n", version.Get())
 
 	return nil
 }

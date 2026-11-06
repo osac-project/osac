@@ -124,7 +124,7 @@ func (c *updateRunner) run(cmd *cobra.Command, args []string) (err error) {
 		return fmt.Errorf("failed to update volume: %w", err)
 	}
 
-	c.console.Infof(ctx, "Updated volume '%s'.\n", volume.GetId())
+	_ = c.console.Infof(ctx, "Updated volume '%s'.\n", volume.GetId())
 
 	return nil
 }

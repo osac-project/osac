@@ -325,7 +325,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	templateParameterValues, templateParameterIssues := c.parseTemplateParameters(ctx, template)
 	if len(templateParameterIssues) > 0 {
 		validTemplateParameters := c.validTemplateParameters(template)
-		c.console.Render(ctx, "template_parameter_issues.txt", map[string]any{
+		_ = c.console.Render(ctx, "template_parameter_issues.txt", map[string]any{
 			"Template":   c.args.template,
 			"Parameters": validTemplateParameters,
 			"Issues":     templateParameterIssues,
@@ -428,7 +428,7 @@ func (c *runnerContext) createCluster(ctx context.Context, spec *publicv1.Cluste
 		return fmt.Errorf("failed to create cluster: %w", err)
 	}
 	cluster = response.Object
-	c.console.Infof(ctx, "Created cluster '%s'.\n", cluster.Id)
+	_ = c.console.Infof(ctx, "Created cluster '%s'.\n", cluster.Id)
 	return nil
 }
 
@@ -459,7 +459,7 @@ func (c *runnerContext) findTemplate(ctx context.Context) (result *publicv1.Clus
 
 	// If there are multiple matches, display them and advise to use the identifier:
 	if len(matches) > 1 {
-		c.console.Render(ctx, "template_conflict.txt", map[string]any{
+		_ = c.console.Render(ctx, "template_conflict.txt", map[string]any{
 			"Matches": matches,
 			"Ref":     c.args.template,
 			"Total":   total,
@@ -476,7 +476,7 @@ func (c *runnerContext) findTemplate(ctx context.Context) (result *publicv1.Clus
 		return nil, fmt.Errorf("failed to list templates: %w", err)
 	}
 	examples := response.GetItems()
-	c.console.Render(ctx, "template_not_found.txt", map[string]any{
+	_ = c.console.Render(ctx, "template_not_found.txt", map[string]any{
 		"Examples": examples,
 		"Ref":      c.args.template,
 	})
@@ -531,7 +531,7 @@ func (c *runnerContext) findVersion(ctx context.Context) (result *publicv1.Clust
 		return nil, fmt.Errorf("failed to list cluster versions: %w", err)
 	}
 	examples := response.GetItems()
-	c.console.Render(ctx, "version_not_found.txt", map[string]any{
+	_ = c.console.Render(ctx, "version_not_found.txt", map[string]any{
 		"Examples": examples,
 		"Ref":      c.args.version,
 	})

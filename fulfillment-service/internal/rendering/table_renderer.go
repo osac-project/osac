@@ -16,6 +16,7 @@ package rendering
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -147,8 +148,9 @@ func (b *TableRendererBuilder) Build() (result *TableRenderer, err error) {
 }
 
 // Render renders the given objects as a table to stdout. The objects parameter must be a slice of objects that
-// implement the proto.Message interface.
-func (r *TableRenderer) Render(ctx context.Context, objects any) error {
+// implement the proto.Message interface. If rendering fails, the returned error wraps the rendering failure; when
+// flushing the buffered output also fails, both errors are joined so that either is reachable via errors.Is.
+func (r *TableRenderer) Render(ctx context.Context, objects any) (err error) {
 	// Check that the objects parameter is a slice of objects that implement the proto.Message interface:
 	list := reflect.ValueOf(objects)
 	if list.Kind() != reflect.Slice {
@@ -248,8 +250,20 @@ func (r *TableRenderer) Render(ctx context.Context, objects any) error {
 		prgs[i] = prg
 	}
 
-	// Render the table and remember to flush the writer when done:
-	defer r.writer.Flush()
+	// Render the table and remember to flush the writer when done. The flush error must not hide a rendering
+	// error, and a failed render must never be turned into a success, so the two errors are joined when both
+	// happen:
+	defer func() {
+		flushErr := r.writer.Flush()
+		if flushErr != nil {
+			flushErr = fmt.Errorf("failed to flush table output: %w", flushErr)
+			if err != nil {
+				err = errors.Join(err, flushErr)
+			} else {
+				err = flushErr
+			}
+		}
+	}()
 	err = r.renderHeader(table.Columns)
 	if err != nil {
 		return err

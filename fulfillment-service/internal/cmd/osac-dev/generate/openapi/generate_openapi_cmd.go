@@ -185,7 +185,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Write the Swagger UI landing page:
 	indexFile := filepath.Join(filepath.Dir(c.outputDir), "index.html")
-	c.console.Infof(ctx, "Writing Swagger UI to '%s'\n", indexFile)
+	_ = c.console.Infof(ctx, "Writing Swagger UI to '%s'\n", indexFile)
 	err = os.WriteFile(indexFile, swaggerUiHtml, 0644) // #nosec G306 -- generated docs, needs world-read
 	if err != nil {
 		return fmt.Errorf("failed to write Swagger UI file '%s': %w", indexFile, err)
@@ -319,7 +319,7 @@ func (c *runnerContext) generateModule(ctx context.Context, moduleDir string) er
 		return err
 	}
 	v2OutFile := filepath.Join(v2OutDir, moduleName+".json")
-	c.console.Infof(ctx, "Writing version 2 OpenAPI file to '%s'\n", v2OutFile)
+	_ = c.console.Infof(ctx, "Writing version 2 OpenAPI file to '%s'\n", v2OutFile)
 	err = c.copyFile(ctx, v2TmpFile, v2OutFile)
 	if err != nil {
 		return err
@@ -330,7 +330,7 @@ func (c *runnerContext) generateModule(ctx context.Context, moduleDir string) er
 		return err
 	}
 	v3OutFile := filepath.Join(v3OutDir, moduleName+".yaml")
-	c.console.Infof(ctx, "Writing version 3 OpenAPI file to '%s'\n", v3OutFile)
+	_ = c.console.Infof(ctx, "Writing version 3 OpenAPI file to '%s'\n", v3OutFile)
 	err = c.copyFile(ctx, v3TmpFile, v3OutFile)
 	if err != nil {
 		return err
@@ -494,7 +494,7 @@ func (r *runnerContext) downloadFile(ctx context.Context, args downloadFileArgs)
 
 	// We use 'curl' to download files because it supports redirection and other details that we do not wish to
 	// implement ourselves.
-	r.console.Infof(ctx, "Downloading file from '%s' to '%s'\n", args.Url, cacheFile)
+	_ = r.console.Infof(ctx, "Downloading file from '%s' to '%s'\n", args.Url, cacheFile)
 	curlCmd := exec.CommandContext( // #nosec G204 -- binary resolved via exec.LookPath
 		ctx,
 		r.curlPath,

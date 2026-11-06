@@ -63,6 +63,10 @@ func (r *secretResource) Schema(ctx context.Context,
 		attribute.PlanModifiers = append(attribute.PlanModifiers, stringplanmodifier.RequiresReplace())
 		generated.Attributes["type"] = attribute
 	}
+	if attribute, ok := generated.Attributes["id"].(schema.StringAttribute); ok {
+		attribute.PlanModifiers = append(attribute.PlanModifiers, stringplanmodifier.UseStateForUnknown())
+		generated.Attributes["id"] = attribute
+	}
 	response.Schema = generated
 }
 

@@ -12,11 +12,13 @@ argument_specs:
         required: true
         description: >
           List of storage tier definitions. Each tier declares its name, protocol,
-          provider, backend_id, and optional QoS settings. qos_policy is
-          always derived by this role from the tier name — any caller-supplied
-          qos_policy value is ignored and discarded, never used. The dispatcher
-          groups tiers by provider and dispatches to each provider's template
-          role with the filtered tier subset.
+          provider, backend_id, and optional QoS settings. name, protocol,
+          provider and backend_id are all mandatory on every tier — a tier whose
+          backend_id is undefined, null or an empty string is rejected before any
+          dispatch. qos_policy is always derived by this role from the tier name —
+          any caller-supplied qos_policy value is ignored and discarded, never
+          used. The dispatcher groups tiers by (provider, backend_id) pair and
+          dispatches once per pair, with the tier subset filtered to that pair.
           Example: [{name: default, protocol: nfs, provider: vast,
           backend_id: be-001,
           qos_limits: {static_limits: {max_reads_bw_mbps: 100, max_writes_bw_mbps: 100}}}]

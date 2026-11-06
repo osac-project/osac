@@ -1,0 +1,111 @@
+---
+# Resolves the single backend_id this role invocation is scoped to, from the
+# dispatched tier subset, and publishes it as `_vast_backend_id`.
+#
+# EVERY entry point of this role (setup, ensure_storage_class, teardown_backend,
+# teardown_cluster_storage) MUST include this file before using
+# `_vast_backend_id`, because `_vast_backend_id` is a set_fact and set_facts are
+# host-scoped: a stale value left behind by an earlier dispatch in the same play
+# would otherwise be silently reused, naming this backend's Secrets after the
+# PREVIOUS backend. That is exactly the cross-backend credential mix-up the
+# backend-ID contract exists to eliminate, so the resolution is deliberately
+# re-derived per entry point rather than assumed.
+#
+# It is derived from `_provider_tiers` (not from the dispatcher's
+# `_current_backend_id`) so the role stays self-contained and the contract also
+# holds when the role is invoked directly with `_provider_tiers`, without the
+# osac.service.storage_provider dispatcher.
+#
+# Requires:
+#   _provider_tiers — dispatched tier subset, every tier carrying backend_id
+#
+# Sets:
+#   _vast_backend_ids — unique backend_id values seen in _provider_tiers
+#   _vast_backend_id  — the single resolved backend_id
+#
+# Idempotent: safe to include more than once in a single dispatch (for example
+# from ensure_storage_class and again from read_credentials.yaml).
+
+- name: Assert _provider_tiers is available for backend_id resolution
+  ansible.builtin.assert:
+    that:
+      - _provider_tiers is defined
+      - _provider_tiers | length > 0
+    fail_msg: >-
+      _provider_tiers must be provided before the VAST backend_id can be
+      resolved. The osac.service.storage_provider dispatcher sets it per
+      (provider, backend_id) pair; direct callers must pass it explicitly.
+
+- name: Fail if any dispatched tier is missing backend_id
+  block:
+    - name: Fail if tier is missing backend_id
+      ansible.builtin.fail:
+        msg: >-
+          Tier '{{ item.name }}' has no backend_id. Every tier dispatched to the VAST
+          provider must reference the backend_id its connection details are keyed by.
+      loop: "{{ _provider_tiers }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.backend_id is not defined or item.backend_id is none or item.backend_id | string | length == 0
+  rescue:
+    # Ansible loops evaluate every item rather than stopping at the first failure, so
+    # ansible_failed_result.results may contain more than one failed tier here.
+    - name: Build structured failure artifact for missing backend_id
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: >-
+          {% set _tiers = [] -%}
+          {% set _messages = [] -%}
+          {% for _r in (ansible_failed_result.results | default([])) -%}
+          {% if _r.failed | default(false) -%}
+          {% set _ = _tiers.append(_r.item.name) -%}
+          {% set _ = _messages.append(_r.msg | default('')) -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ [{'reason': 'missing_backend_id', 'tiers': _tiers, 'backend_ids': [], 'message': _messages | join(' ')}] }}
+
+    - name: Emit structured failure artifact for missing backend_id
+      ansible.builtin.set_stats:
+        data:
+          osac_storage_provider_failures: "{{ osac_storage_provider_failures }}"
+        aggregate: false
+
+    - name: Re-raise the original missing-backend_id failure
+      ansible.builtin.fail:
+        msg: "{{ osac_storage_provider_failures[0].message }}"
+
+- name: Extract unique backend_id values from the dispatched tier subset
+  ansible.builtin.set_fact:
+    _vast_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
+
+- name: Validate the dispatched tiers reference exactly one backend_id
+  block:
+    - name: Fail if the dispatched tiers reference zero or multiple backend_ids
+      ansible.builtin.fail:
+        msg: >-
+          Expected exactly one backend_id across the dispatched VAST tiers, got
+          {{ _vast_backend_ids | length }}: {{ _vast_backend_ids | to_json }}.
+          This is a dispatcher contract violation — the storage_provider role now always
+          invokes the VAST role with exactly one backend per dispatch.
+      when: _vast_backend_ids | length != 1
+  rescue:
+    - name: Build structured failure artifact for ambiguous backend association
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures:
+          - reason: ambiguous_backend_association
+            tiers: "{{ _provider_tiers | map(attribute='name') | list }}"
+            backend_ids: "{{ _vast_backend_ids }}"
+            message: "{{ ansible_failed_result.msg }}"
+
+    - name: Emit structured failure artifact for ambiguous backend association
+      ansible.builtin.set_stats:
+        data:
+          osac_storage_provider_failures: "{{ osac_storage_provider_failures }}"
+        aggregate: false
+
+    - name: Re-raise the original backend_id ambiguity failure
+      ansible.builtin.fail:
+        msg: "{{ ansible_failed_result.msg }}"
+
+- name: Set the resolved backend_id
+  ansible.builtin.set_fact:
+    _vast_backend_id: "{{ _vast_backend_ids[0] }}"

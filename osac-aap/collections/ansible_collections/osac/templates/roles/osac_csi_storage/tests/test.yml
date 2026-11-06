@@ -11,7 +11,7 @@
 #   Test 3 (setup action sets required storage_provider_tenant_config):
 #     ansible-playbook ... -e test_setup_contract=true
 #
-#   Test 4 (storage_provider dispatcher integration for osac-csi / osac_csi_driver):
+#   Test 4 (storage_provider dispatcher integration for osac-csi / osac-csi-driver):
 #     ansible-playbook ... -e test_dispatcher_integration=true
 #
 #   Test 5 (StorageClass entry and vendor derivation):
@@ -154,6 +154,11 @@
     - name: Run dispatcher integration test for both osac-csi and osac_csi_driver
       when: test_dispatcher_integration | default(false) | bool
       block:
+        # backend_id is mandatory on every tier for every provider family: the
+        # storage_provider dispatcher hard-fails tiers without one and uses
+        # (provider, backend_id) as the dispatch key. The OSAC CSI driver family
+        # writes no backend-scoped hub Secret, but its tiers still reference a
+        # fulfillment-service StorageBackend, so they still carry its id.
         - name: Test storage_provider setup with provider osac-csi
           ansible.builtin.include_role:
             name: osac.service.storage_provider
@@ -163,6 +168,7 @@
               - name: gold
                 protocol: nfs
                 provider: osac-csi
+                backend_id: be-csi-gold
 
         - name: Test storage_provider setup with provider osac_csi_driver
           ansible.builtin.include_role:
@@ -170,16 +176,24 @@
           vars:
             storage_provider_action: setup
             storage_provider_tiers:
+              # Hyphenated: the dispatcher validates provider as a DNS label and
+              # normalizes hyphens to underscores when resolving the role name
+              # (osac-csi-driver -> osac.templates.osac_csi_driver_storage).
               - name: silver
                 protocol: block
-                provider: osac_csi_driver
+                provider: osac-csi-driver
+                backend_id: be-csi-silver
 
-        - name: Verify dispatcher produced merged tenant configs
+        - name: Verify dispatcher keyed the merged tenant configs by backend_id
           ansible.builtin.assert:
             that:
               - storage_provider_tenant_configs is defined
-              - "('osac-csi' in storage_provider_tenant_configs) or ('osac_csi' in storage_provider_tenant_configs) or ('osac_csi_driver' in storage_provider_tenant_configs)"
-            success_msg: "storage_provider successfully dispatched to osac_csi role"
+              - storage_provider_tenant_configs is mapping
+              - "'be-csi-silver' in storage_provider_tenant_configs"
+            fail_msg: >-
+              storage_provider_tenant_configs must be keyed by backend_id, got:
+              {{ storage_provider_tenant_configs | default('undefined') | list }}
+            success_msg: "storage_provider dispatched to osac_csi role and keyed configs by backend_id"
 
 # ──────────────────────────────────────────────────────────────
 # Test 5: StorageClass name and parameter derivation

@@ -179,13 +179,47 @@ CSIEOF
   echo "${MOCK_VMS_PID}" > "${SCRIPT_DIR}/.mock_vms_pid"
 
   # Wait for mock server to be ready
+  SERVER_READY=0
   for i in $(seq 1 10); do
     if curl -sk https://127.0.0.1:18443/api > /dev/null 2>&1; then
       echo "Mock VMS server ready on port 18443 (PID: ${MOCK_VMS_PID})"
+      SERVER_READY=1
       break
     fi
     sleep 1
   done
+  if [ "${SERVER_READY}" -eq 0 ]; then
+    echo "ERROR: First mock VMS server failed to become ready on port 18443"
+    exit 1
+  fi
+
+  # Second mock VMS server: a SEPARATE VAST array, for the multi-backend tests.
+  # Two backends of one tenant are two distinct arrays in production, each with
+  # its own object store (same tenant name, same per-tenant manager username).
+  # Sharing one mock would make the second backend's manager creation collide
+  # with the first's and mask exactly the per-backend isolation under test.
+  echo "Starting second mock VMS server (TLS) for multi-backend tests..."
+  python3 "${SCRIPT_DIR}/mock_vms_server.py" 18445 \
+    --tls --cert "${SCRIPT_DIR}/certs/mock.pem" --key "${SCRIPT_DIR}/certs/mock.key" &
+  MOCK_VMS_PID_B=$!
+  echo "${MOCK_VMS_PID_B}" > "${SCRIPT_DIR}/.mock_vms_pid_b"
+
+  SERVER_READY_B=0
+  for i in $(seq 1 10); do
+    # Check that port 18445 is owned by our mock process and responds successfully
+    PORT_OWNER=$(lsof -ti :18445 2>/dev/null || true)
+    if [ "${PORT_OWNER}" = "${MOCK_VMS_PID_B}" ] && \
+       curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:18445/api 2>/dev/null | grep -q '^2'; then
+      echo "Second mock VMS server ready on port 18445 (PID: ${MOCK_VMS_PID_B})"
+      SERVER_READY_B=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "${SERVER_READY_B}" -eq 0 ]; then
+    echo "ERROR: Second mock VMS server failed to become ready on port 18445"
+    exit 1
+  fi
 
   # Create storage test namespace and ConfigMap
   kubectl create namespace test-tenant-ns || true

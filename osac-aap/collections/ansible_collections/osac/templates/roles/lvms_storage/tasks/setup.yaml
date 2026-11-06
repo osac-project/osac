@@ -26,11 +26,12 @@
       apiVersion: v1
       kind: Secret
       metadata:
-        name: "{{ lvms_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+        name: "{{ lvms_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _current_backend_id }}"
         namespace: "{{ lvms_storage_config_namespace }}"
         labels:
           osac.openshift.io/tenant: "{{ tenant_name }}"
           osac.openshift.io/storage-provider: lvms
+          osac.openshift.io/storage-backend-id: "{{ _current_backend_id }}"
           app.kubernetes.io/managed-by: osac-aap
       stringData:
         provider: lvms

@@ -1,0 +1,84 @@
+---
+# Determines if other backends share this VAST tenant on the same endpoint.
+# Sets _vast_skip_tenant_delete flag for tenant-wide cleanup decisions.
+#
+# CALLER CONTRACT: Must be called with these variables in scope:
+#   tenant_name                       — tenant to check
+#   _vast_backend_id                  — current backend to exclude from check
+#   vast_endpoint                     — endpoint to match against
+#   vast_storage_config_namespace     — namespace where hub Secrets live
+#
+# OUTPUT:
+#   _vast_skip_tenant_delete: true    — Other backends share this tenant/endpoint, skip cleanup
+#                             false   — No other backends, safe to delete tenant-wide resources
+#   _vast_shared_check_failed: true   — Lookup failed, sharing state unknown (preserve Secret for retry)
+#                              false  — Lookup succeeded, sharing state is known
+#
+# LOGIC:
+#   1. Query hub Secrets by tenant + provider labels
+#   2. Filter out current backend using storage-backend-id label
+#   3. For each remaining Secret, decode vast_endpoint and compare
+#   4. Skip cleanup if any matches found (shared tenant/endpoint)
+#
+# EDGE CASES:
+#   - Query failure → skip cleanup (safe default, don't orphan) AND mark check as failed
+#   - Missing endpoint in Secret → ignore that Secret, continue checking
+#   - No Secrets found → don't skip (safe to clean up)
+
+- name: Query hub Secrets for this tenant on VAST provider
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    namespace: "{{ vast_storage_config_namespace }}"
+    label_selectors:
+      - "osac.openshift.io/tenant={{ tenant_name }}"
+      - "osac.openshift.io/storage-provider=vast"
+  register: _vast_shared_check
+  ignore_errors: true
+  no_log: true
+
+- name: Set skip and failure flags on query failure (safe default, preserve Secret)
+  when: _vast_shared_check is failed
+  ansible.builtin.set_fact:
+    _vast_skip_tenant_delete: true
+    _vast_shared_check_failed: true
+
+- name: Filter and check endpoints for other backends
+  when: _vast_shared_check is not failed
+  block:
+    - name: Initialize list of backends on same endpoint and success flag
+      ansible.builtin.set_fact:
+        _vast_same_endpoint_backends: []
+        _vast_shared_check_failed: false
+
+    - name: Check each Secret for matching endpoint (exclude current backend by label)
+      loop: "{{ _vast_shared_check.resources | default([]) }}"
+      loop_control:
+        loop_var: _secret
+        label: "{{ _secret.metadata.name }}"
+      when:
+        - _secret.metadata.labels is defined
+        - _secret.metadata.labels['osac.openshift.io/storage-backend-id'] is defined
+        - _secret.metadata.labels['osac.openshift.io/storage-backend-id'] != (_vast_backend_id | string)
+        - _secret.data.vast_endpoint is defined
+      ansible.builtin.set_fact:
+        _vast_same_endpoint_backends: >-
+          {{
+            _vast_same_endpoint_backends +
+            ([_secret.metadata.name] if (_secret.data.vast_endpoint | b64decode) == vast_endpoint else [])
+          }}
+      no_log: true
+
+    - name: Set skip flag based on endpoint matches
+      ansible.builtin.set_fact:
+        _vast_skip_tenant_delete: "{{ _vast_same_endpoint_backends | length > 0 }}"
+
+    - name: Log shared tenant check result
+      ansible.builtin.debug:
+        msg: >-
+          Shared tenant check for '{{ tenant_name }}' backend '{{ _vast_backend_id }}':
+          {{ 'FAILED - sharing state unknown, will preserve Secret for retry'
+             if (_vast_shared_check_failed | default(false) | bool)
+             else ('SKIP tenant cleanup (other backends found: ' ~ (_vast_same_endpoint_backends | join(', ')) ~ ')'
+                   if (_vast_skip_tenant_delete | bool)
+                   else 'OK to delete tenant-wide resources (no other backends on this endpoint)') }}

@@ -19,8 +19,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
-	grpccodes "google.golang.org/grpc/codes"
-	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -149,9 +147,9 @@ var _ = Describe("Node set removal", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		clusterId := createResponse.Object.Id
-				deferClusterDeletion(createResp.GetObject().GetId(), tool.InternalView().AdminConn())
-				Expect(createResp.GetObject().GetMetadata().GetTenant()).To(Equal(tenantName))
+		clusterId := createResponse.GetObject().GetId()
+		deferClusterDeletion(clusterId, tool.InternalView().AdminConn())
+		Expect(createResponse.GetObject().GetMetadata().GetTenant()).To(Equal(usersGroup))
 
 		// Step 2: Verify cluster has 2 node sets
 		getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{

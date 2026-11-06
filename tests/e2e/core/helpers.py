@@ -1166,6 +1166,8 @@ def wait_for_tenant_default_networking_ready(*, grpc: GRPCClient, tenant_name: s
             retries=120,
             delay=5,
             description=f"Tenant {tenant_name} {condition_type}={expected_status}/{expected_reason}",
+            resource_kind=WaitResourceKind.TENANT,
+            resource_id=tenant_name,
         )
     except TimeoutError:
         status = last_condition.get("status", "") or "<missing>"

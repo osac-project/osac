@@ -61,12 +61,8 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	)
 
 	BeforeEach(func(ctx context.Context) {
-		// NetworkClass is a deployment singleton. Create it before the temporary
-		// tenant so cleanup removes that tenant's defaults before deleting the class.
-		_, networkClassCreated := getOrCreateTenantDefaultNetworkClassFixture(ctx)
 		tenantName, tenantConn := createCatalogItemTenantAdminFixture(ctx)
 		defaultNetworkingFixture = ensureTenantDefaultNetworkingFixture(ctx, tenantName, "")
-		defaultNetworkingFixture.networkClassCreated = networkClassCreated
 
 		// Create clients
 		bareMetalInstancesClient = publicv1.NewBareMetalInstancesClient(tenantConn)

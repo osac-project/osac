@@ -148,37 +148,6 @@ func seedClusterTenantDefaultNetworking(ctx context.Context, tenant, project str
 	subnetID := "tenant-default-subnet-" + suffix
 	sgID := "tenant-default-sg-" + suffix
 
-	networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-		SetLogger(logger).
-		SetTenancyLogic(tenancy).
-		Build()
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	networkClasses, err := networkClassesDao.List().
-		SetFilter("!has(this.metadata.deletion_timestamp)").
-		SetLimit(1).
-		Do(ctx)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	var networkClassID, networkHubID string
-	if items := networkClasses.GetItems(); len(items) > 0 {
-		networkClassID = items[0].GetId()
-		networkHubID = items[0].GetStatus().GetHub()
-		ExpectWithOffset(1, networkHubID).ToNot(BeEmpty())
-	} else {
-		networkClass, createErr := networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
-			Metadata: privatev1.Metadata_builder{
-				Name:   "tenant-default-network-class-" + suffix,
-				Tenant: tenant,
-			}.Build(),
-			Status: privatev1.NetworkClassStatus_builder{
-				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-				Hub:   "network-hub-a",
-			}.Build(),
-		}.Build()).Do(ctx)
-		ExpectWithOffset(1, createErr).ToNot(HaveOccurred())
-		networkClassID = networkClass.GetObject().GetId()
-		networkHubID = networkClass.GetObject().GetStatus().GetHub()
-	}
-
 	vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
 		SetLogger(logger).
 		SetTenancyLogic(tenancy).
@@ -192,12 +161,10 @@ func seedClusterTenantDefaultNetworking(ctx context.Context, tenant, project str
 			Project: project,
 			Labels:  map[string]string{defaultLabel: "true"},
 		}.Build(),
-		Spec: privatev1.VirtualNetworkSpec_builder{
-			NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassID}.Build(),
-		}.Build(),
+		Spec: privatev1.VirtualNetworkSpec_builder{Ipv4Cidr: new("10.200.0.0/16")}.Build(),
 		Status: privatev1.VirtualNetworkStatus_builder{
 			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-			Hub:   networkHubID,
+			Hub:   "network-hub-a",
 		}.Build(),
 	}.Build()).Do(ctx)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
@@ -221,7 +188,7 @@ func seedClusterTenantDefaultNetworking(ctx context.Context, tenant, project str
 		}.Build(),
 		Status: privatev1.SubnetStatus_builder{
 			State: privatev1.SubnetState_SUBNET_STATE_READY,
-			Hub:   networkHubID,
+			Hub:   "network-hub-a",
 		}.Build(),
 	}.Build()).Do(ctx)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
@@ -244,7 +211,7 @@ func seedClusterTenantDefaultNetworking(ctx context.Context, tenant, project str
 		}.Build(),
 		Status: privatev1.SecurityGroupStatus_builder{
 			State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
-			Hub:   networkHubID,
+			Hub:   "network-hub-a",
 		}.Build(),
 	}.Build()).Do(ctx)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())

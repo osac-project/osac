@@ -530,6 +530,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 	})
 
 	It("Keeps an observed version stale while a next version can become current", func() {
+		const testToken = "raw-bearer-value"
 		currentVersion := int32(7)
 		instances := instancesWithCurrent(currentVersion)
 		instances.getFunc = func(
@@ -552,13 +553,13 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 		Expect(err).ToNot(HaveOccurred())
 		observedVersion := response.GetObject().GetMetadata().GetVersion()
 
-		_, advanced, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+		_, advanced, err := handler(context.Background(), requestWithToken(testToken), UpdateComputeInstanceInput{
 			ID: "instance-1", Version: observedVersion, RunStrategy: "HALTED",
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(advanced.Version).To(BeNumerically(">", observedVersion))
 
-		_, accepted, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+		_, accepted, err := handler(context.Background(), requestWithToken(testToken), UpdateComputeInstanceInput{
 			ID: "instance-1", Version: observedVersion + 1, RunStrategy: "HALTED",
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -566,7 +567,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 
 		for range 2 {
 			versionBeforeRejected := currentVersion
-			_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+			_, output, err := handler(context.Background(), requestWithToken(testToken), UpdateComputeInstanceInput{
 				ID: "instance-1", Version: observedVersion, RunStrategy: "HALTED",
 			})
 			Expect(output).To(BeZero())

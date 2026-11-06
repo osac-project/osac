@@ -3,7 +3,7 @@ import type { TFunction } from 'i18next';
 import { StorageBackendState } from '@osac/types/private';
 
 import { useTranslation } from '../../hooks/useTranslation';
-import { ResourceStatusLabel, StatusLabelProps } from '../Resource/ResourceStatusLabel';
+import { ResourceStatusLabel, type StatusLabelProps } from '../Resource/ResourceStatusLabel';
 
 interface StorageBackendStatusLabelProps {
   state?: StorageBackendState;
@@ -20,15 +20,29 @@ const storageBackendStatusMap = (t: TFunction): Record<StorageBackendState, Stat
   },
 });
 
+/**
+ * Resolve the display props for a storage backend state.
+ *
+ * Known enum values are rendered from the map above. Any value the UI
+ * does not recognise — including `undefined` (no status yet) and future
+ * enum additions — falls back to a non-ready "Pending" indicator so the
+ * UI never claims readiness it cannot verify.
+ */
+const resolveStorageBackendStatus = (
+  t: TFunction,
+  state: StorageBackendState | undefined,
+): StatusLabelProps => {
+  const map = storageBackendStatusMap(t);
+  if (state !== undefined && state in map) {
+    return map[state];
+  }
+  return { status: 'progressing', text: t('Pending') };
+};
+
 const StorageBackendStatusLabel = ({ state }: StorageBackendStatusLabelProps) => {
   const { t } = useTranslation();
 
-  const statusMap = storageBackendStatusMap(t);
-
-  const status =
-    state !== undefined ? statusMap[state] : statusMap[StorageBackendState.UNSPECIFIED];
-
-  return <ResourceStatusLabel {...status} />;
+  return <ResourceStatusLabel {...resolveStorageBackendStatus(t, state)} />;
 };
 
 export default StorageBackendStatusLabel;

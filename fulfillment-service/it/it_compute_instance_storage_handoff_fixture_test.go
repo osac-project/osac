@@ -20,7 +20,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -126,12 +128,12 @@ func installComputeStorageRecorder(ctx context.Context) {
 	var nodeName string
 	Eventually(func(g Gomega) {
 		pod, err := tool.KubeClientSet().CoreV1().Pods(hubNamespace).Get(ctx, computeStorageRecorderName, metav1.GetOptions{})
-		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(computeStorageRecorderErrorReason(err)).To(BeEmpty(), "get AAP recorder Pod")
 		g.Expect(pod.Status.Phase).To(Equal(corev1.PodRunning))
 		nodeName = pod.Spec.NodeName
 	}, opTimeout, time.Second).Should(Succeed())
 	node, err := tool.KubeClientSet().CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
-	Expect(err).NotTo(HaveOccurred())
+	Expect(computeStorageRecorderErrorReason(err)).To(BeEmpty(), "get AAP recorder Node")
 	Expect(node.Status.NodeInfo.Architecture).NotTo(BeEmpty())
 	buildCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -155,8 +157,35 @@ func installComputeStorageRecorder(ctx context.Context) {
 	Eventually(func(g Gomega) {
 		_, err := tool.KubeClientSet().CoreV1().Services(hubNamespace).
 			ProxyGet("http", computeStorageRecorderName, "8080", "healthz", nil).DoRaw(ctx)
-		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(computeStorageRecorderErrorReason(err)).To(BeEmpty(), "check AAP recorder health")
 	}, opTimeout, time.Second).Should(Succeed())
+}
+
+// Allowlist diagnostics: raw client errors can contain API endpoints and credentials.
+func computeStorageRecorderErrorReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return "Canceled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "Timeout"
+	}
+	switch reason := apierrors.ReasonForError(err); reason {
+	case metav1.StatusReasonUnauthorized, metav1.StatusReasonForbidden, metav1.StatusReasonNotFound,
+		metav1.StatusReasonTimeout, metav1.StatusReasonServerTimeout, metav1.StatusReasonTooManyRequests,
+		metav1.StatusReasonServiceUnavailable:
+		return string(reason)
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) {
+		if networkError.Timeout() {
+			return "Timeout"
+		}
+		return "ConnectionError"
+	}
+	return "RequestFailed"
 }
 
 func computeStorageRecorderRequest(ctx context.Context, path string, payload any) []byte {

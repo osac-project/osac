@@ -49,7 +49,7 @@ const (
 
 var _ = Describe("ComputeInstance Volume registration API contract", func() {
 	var (
-		network             catalogItemNetworkFixture
+		network             resourceNetworkFixture
 		templateID          string
 		computeInstances    privatev1.ComputeInstancesClient
 		volumes             privatev1.VolumesClient
@@ -59,15 +59,15 @@ var _ = Describe("ComputeInstance Volume registration API contract", func() {
 
 	// Ginkgo cancels this context when BeforeEach returns; each It uses its own.
 	BeforeEach(func(ctx context.Context) {
-		network = createCatalogItemNetworkFixture(ctx, usersGroup, "")
-		instanceTypeID := createCatalogItemComputeInstanceTypeFixture(ctx)
-		diskImage := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+		network = createNetworkFixture(ctx, usersGroup, "")
+		instanceTypeID := createComputeInstanceTypeFixture(ctx)
+		diskImage := createDiskImageFixture(ctx, "shared", resourceFixtureName())
 		storageTierID := createCatalogItemStorageTierFixture(ctx)
 		storageTiers := privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
 		tierResponse, err := storageTiers.Get(ctx, privatev1.StorageTiersGetRequest_builder{Id: storageTierID}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		storageTierName = tierResponse.GetObject().GetMetadata().GetName()
-		templateID = createCatalogItemComputeInstanceTemplateFixture(ctx, privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+		templateID = createComputeInstanceTemplateFixture(ctx, privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceTypeID}.Build(),
 			DiskImage:    privatev1.DiskImageReference_builder{Id: diskImage.GetId()}.Build(),
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
@@ -766,7 +766,7 @@ func createDiskRegistrationAPIContractInstance(ctx context.Context, spec *public
 func createIsolatedDiskRegistrationInstance(
 	ctx context.Context,
 	templateID string,
-	network catalogItemNetworkFixture,
+	network resourceNetworkFixture,
 	diskSpec ...*privatev1.ComputeInstanceSpec,
 ) *privatev1.ComputeInstance {
 	GinkgoHelper()
@@ -790,7 +790,7 @@ func createIsolatedDiskRegistrationInstance(
 	response, err := client.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
 		Object: privatev1.ComputeInstance_builder{
 			Metadata: privatev1.Metadata_builder{
-				Name:       catalogItemFixtureName(),
+				Name:       resourceFixtureName(),
 				Tenant:     usersGroup,
 				Finalizers: []string{finalizers.Controller},
 			}.Build(),

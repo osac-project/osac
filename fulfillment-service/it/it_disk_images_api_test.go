@@ -31,7 +31,7 @@ func createPublicDiskImageFixture(ctx context.Context, client publicv1.DiskImage
 	GinkgoHelper()
 	response, err := client.Create(ctx, publicv1.DiskImagesCreateRequest_builder{
 		Object: publicv1.DiskImage_builder{
-			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: tenant}.Build(),
+			Metadata: publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: tenant}.Build(),
 			Spec: publicv1.DiskImageSpec_builder{
 				SourceType:    publicv1.SourceType_SOURCE_TYPE_REGISTRY,
 				SourceRef:     diskImageAPISourceRef,
@@ -136,7 +136,7 @@ var _ = Describe("DiskImage API", Label("disk-images"), func() {
 	It("resolves template image defaults by name and protects the image until the template is deleted", func(ctx context.Context) {
 		client := publicv1.NewDiskImagesClient(tool.ExternalView().AdminConn())
 		image := createPublicDiskImageFixture(ctx, client, "shared")
-		templateID := createCatalogItemComputeInstanceTemplateFixture(ctx, privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+		templateID := createComputeInstanceTemplateFixture(ctx, privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 			DiskImage: privatev1.DiskImageReference_builder{Name: image.GetMetadata().GetName(), Shared: true}.Build(),
 		}.Build(), nil)
 		templates := privatev1.NewComputeInstanceTemplatesClient(tool.InternalView().AdminConn())

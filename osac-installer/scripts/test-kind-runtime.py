@@ -593,7 +593,7 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
                 if provider == "unset":
                     self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
                     (self.bin / "podman").unlink()
-                    for command in ("bash", "env", "awk", "sed", "basename", "dirname", "grep"):
+                    for command in ("bash", "env", "awk", "sed", "basename", "dirname", "grep", "mktemp", "rm"):
                         (self.bin / command).symlink_to(shutil.which(command))
                     self.env["PATH"] = str(self.bin)
                 else:
@@ -951,7 +951,7 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
         self.assertIn("operator.controllers.tenant=false", result.stdout)
         self.assertIn("operator.aap.url=http://compute-storage-aap.osac.svc.cluster.local:8080/api", result.stdout)
         self.assertIn("IT_TEST_SUITE=compute-storage", result.stdout)
-        self.assertIn("-p test_compute_storage_aap.py", result.stdout)
+        self.assertIn("cd ../fulfillment-service && go test -race ./it/testdata/computestorageaap", result.stdout)
         self.assertIn("--label-filter 'compute-storage'", result.stdout)
         self.assertNotIn("service.enabled=false", result.stdout)
 

@@ -31,9 +31,9 @@ var _ = Describe("CLI Catalog Item descriptions", Label("cli", "catalog-items"),
 		_, stderr, code := tool.LoginCLI(ctx, homeDir, adminUsername, adminsPassword)
 		Expect(code).To(Equal(0), "login failed: %s", stderr)
 
-		template := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
+		template := createComputeInstanceTemplateFixture(ctx, nil, nil)
 		compute := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
-			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: "shared"}.Build(),
+			Metadata: publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: "shared"}.Build(),
 			Title:    "Development VM", Published: true,
 			Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 			Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
@@ -56,7 +56,7 @@ var _ = Describe("CLI Catalog Item descriptions", Label("cli", "catalog-items"),
 
 		clusterTemplate := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 		cluster := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+			Metadata: publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 			Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplate}.Build(),
 			Fields: publicv1.ClusterCatalogItemFields_builder{
 				AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Locked: new(false)}.Build(),
@@ -70,7 +70,7 @@ var _ = Describe("CLI Catalog Item descriptions", Label("cli", "catalog-items"),
 
 		bareTemplate := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
 		bare := createBareMetalInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.BareMetalInstanceCatalogItem_builder{
-			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+			Metadata: publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 			Template: publicv1.BareMetalInstanceTemplateReference_builder{Id: bareTemplate}.Build(),
 			Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
 				SshPublicKey:   publicv1.StringFieldPolicy_builder{Editable: publicv1.EditableStringField_builder{}.Build()}.Build(),

@@ -310,7 +310,7 @@ var _ = Describe("Public clusters", func() {
 
 	It("rejects public updates that change the network attachment", func() {
 		// Reuse the deployment's singleton NetworkClass from BeforeEach.
-		network := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
+		network := createNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{
@@ -446,7 +446,7 @@ var _ = Describe("Public clusters", func() {
 
 	It("rejects a shared ClusterVersion without a disk image without persisting a cluster", func() {
 		versions := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
-		versionName := catalogItemFixtureName()
+		versionName := resourceFixtureName()
 		created, err := versions.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
 			Object: privatev1.ClusterVersion_builder{
 				Metadata: privatev1.Metadata_builder{Name: versionName, Tenant: "shared"}.Build(),
@@ -462,7 +462,7 @@ var _ = Describe("Public clusters", func() {
 		})
 		Expect(created.GetObject().GetSpec().GetDiskImage()).To(BeNil())
 
-		name := catalogItemFixtureName()
+		name := resourceFixtureName()
 		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
@@ -491,8 +491,8 @@ var _ = Describe("Public clusters", func() {
 
 	It("Can create a cluster with explicit version", func() {
 		// Bare-metal workers require the selected version to have a DiskImage.
-		image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
-		network := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
+		image := createDiskImageFixture(ctx, "shared", resourceFixtureName())
+		network := createNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
 		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 		version := nextCVVersion()
 		cvResponse, err := cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{

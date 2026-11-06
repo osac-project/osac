@@ -35,10 +35,10 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 		_, stderr, code := tool.LoginCLI(ctx, home, userUsername, usersPassword)
 		Expect(code).To(Equal(0), stderr)
 
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
-			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+			Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 			Published: true,
 		}.Build())
@@ -64,7 +64,7 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 		if createFromCatalogItem {
 			sourceFlag, sourceID = "--catalog-item", item.GetId()
 		}
-		name := catalogItemFixtureName()
+		name := resourceFixtureName()
 		_, stderr, code = tool.RunCLI(ctx, home, "create", "computeinstance", sourceFlag, sourceID,
 			"--name", name, "--network-attachment",
 			"subnet="+network.subnetID+",security-groups="+network.securityGroupID)
@@ -104,9 +104,9 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 		template := createCatalogItemClusterTemplateFixture(ctx, privatev1.ClusterTemplateSpecDefaults_builder{
 			Version: privatev1.ClusterVersionReference_builder{Id: version}.Build(),
 		}.Build(), nil)
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+			Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 			Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 			Published: true,
 			Fields: publicv1.ClusterCatalogItemFields_builder{
@@ -120,7 +120,7 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 				}.Build()}.Build(),
 			}.Build(),
 		}.Build())
-		name := catalogItemFixtureName()
+		name := resourceFixtureName()
 		_, stderr, code = tool.RunCLI(ctx, home, "create", "cluster", "--catalog-item", item.GetId(), "--name", name)
 		Expect(code).To(Equal(0), stderr)
 

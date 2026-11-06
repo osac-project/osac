@@ -49,7 +49,7 @@ func createComputeInstanceSSHKeySecretFixture(
 	Expect(err).NotTo(HaveOccurred())
 	secret := response.GetObject()
 	id := secret.GetId()
-	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+	deferResourceFixtureDeletion(func(ctx context.Context) error {
 		_, err := client.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: id}.Build())
 		return err
 	}, nil)
@@ -59,7 +59,7 @@ func createComputeInstanceSSHKeySecretFixture(
 func createComputeInstanceSSHKeyProjectFixture(ctx context.Context, tenant string, conn *grpc.ClientConn) string {
 	GinkgoHelper()
 	client := publicv1.NewProjectsClient(conn)
-	name := catalogItemFixtureName()
+	name := resourceFixtureName()
 	result, err := client.Create(ctx, publicv1.ProjectsCreateRequest_builder{
 		Object: publicv1.Project_builder{
 			Metadata: publicv1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
@@ -68,7 +68,7 @@ func createComputeInstanceSSHKeyProjectFixture(ctx context.Context, tenant strin
 	Expect(err).NotTo(HaveOccurred())
 	id := result.GetObject().GetId()
 	cleanupClient := privatev1.NewProjectsClient(tool.InternalView().AdminConn())
-	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+	deferResourceFixtureDeletion(func(ctx context.Context) error {
 		_, err := cleanupClient.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{Id: id}.Build())
 		return err
 	}, nil)
@@ -122,7 +122,7 @@ func grantComputeInstanceSSHKeyProjectAccess(ctx context.Context, tenant, projec
 	response, err := client.Create(ctx, privatev1.ProjectMembershipsCreateRequest_builder{
 		Object: privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
-				Name:    catalogItemFixtureName(),
+				Name:    resourceFixtureName(),
 				Tenant:  tenant,
 				Project: project,
 			}.Build(),
@@ -136,7 +136,7 @@ func grantComputeInstanceSSHKeyProjectAccess(ctx context.Context, tenant, projec
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	id := response.GetObject().GetId()
-	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+	deferResourceFixtureDeletion(func(ctx context.Context) error {
 		_, err := client.Delete(ctx, privatev1.ProjectMembershipsDeleteRequest_builder{Id: id}.Build())
 		return err
 	}, nil)
@@ -213,10 +213,10 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 		ops := createComputeInstanceSSHKeyProjectFixture(ctx, usersGroup, projectAdminConn)
 		grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, apps)
 		grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, ops)
-		name := catalogItemFixtureName()
+		name := resourceFixtureName()
 		appsSecret := createComputeInstanceSSHKeySecretFixture(ctx, usersGroup, apps, name)
 		opsSecret := createComputeInstanceSSHKeySecretFixture(ctx, usersGroup, ops, name)
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		client := publicv1.NewComputeInstancesClient(userConn)
 
@@ -239,7 +239,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 			By("creating a ComputeInstance with an SSH key selected by " + testCase.label)
 			createdResponse, err := client.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
-					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+					Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
 						Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
@@ -262,10 +262,10 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 
 	It("resolves omitted and empty project values in the tenant's unnamed project", func(ctx context.Context) {
 		apps := createCatalogItemProjectFixture(ctx, usersGroup)
-		name := catalogItemFixtureName()
+		name := resourceFixtureName()
 		rootSecret := createComputeInstanceSSHKeySecretFixture(ctx, usersGroup, "", name)
 		_ = createComputeInstanceSSHKeySecretFixture(ctx, usersGroup, apps, name)
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		client := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 
@@ -281,7 +281,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 		Expect(stored.GetObject().GetSpec().GetSshKey().GetProject()).To(BeEmpty())
 
 		body, err := json.Marshal(map[string]any{
-			"metadata": map[string]any{"name": catalogItemFixtureName()},
+			"metadata": map[string]any{"name": resourceFixtureName()},
 			"spec": map[string]any{
 				"template": map[string]any{"id": template},
 				"ssh_key":  map[string]any{"name": name, "project": ""},
@@ -319,14 +319,14 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 		apps := createComputeInstanceSSHKeyProjectFixture(ctx, usersGroup, projectAdminConn)
 		grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, apps)
 		ops := createComputeInstanceSSHKeyProjectFixture(ctx, usersGroup, projectAdminConn)
-		keyName := catalogItemFixtureName()
+		keyName := resourceFixtureName()
 		outOfProject := createComputeInstanceSSHKeySecretFixture(ctx, usersGroup, ops, keyName)
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		client := publicv1.NewComputeInstancesClient(userConn)
 
 		By("rejecting a Secret in a project the user cannot access")
-		instanceName := catalogItemFixtureName()
+		instanceName := resourceFixtureName()
 		_, err := client.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 			Object: publicv1.ComputeInstance_builder{
 				Metadata: publicv1.Metadata_builder{Name: instanceName}.Build(),
@@ -348,7 +348,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 		// Grant access so the remaining out-of-scope case uses a visible Secret.
 		grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, ops)
 		otherTenant, _ := createCatalogItemTenantAdminFixture(ctx)
-		hidden := createComputeInstanceSSHKeySecretFixture(ctx, otherTenant, "", catalogItemFixtureName())
+		hidden := createComputeInstanceSSHKeySecretFixture(ctx, otherTenant, "", resourceFixtureName())
 
 		for _, testCase := range []struct {
 			label string
@@ -362,7 +362,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 			{label: "missing name", ref: publicv1.SecretReference_builder{Name: "missing-ssh-key"}.Build()},
 		} {
 			By("rejecting " + testCase.label)
-			instanceName := catalogItemFixtureName()
+			instanceName := resourceFixtureName()
 			_, err := client.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
 					Metadata: publicv1.Metadata_builder{Name: instanceName}.Build(),
@@ -392,10 +392,10 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 		grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, apps)
 		_, stderr, code := loginComputeInstanceSSHKeyCLI(ctx, home)
 		Expect(code).To(Equal(0), stderr)
-		name := catalogItemFixtureName()
+		name := resourceFixtureName()
 		rootSecret := createComputeInstanceSSHKeySecretFixture(ctx, usersGroup, "", name)
 		appsSecret := createComputeInstanceSSHKeySecretFixture(ctx, usersGroup, apps, name)
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		client := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 
@@ -406,7 +406,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 			{value: name, secret: rootSecret},
 			{value: "name=" + name + ",project=" + apps, secret: appsSecret},
 		} {
-			instanceName := catalogItemFixtureName()
+			instanceName := resourceFixtureName()
 			_, stderr, code = runComputeInstanceSSHKeyCLI(ctx, home, "create", "computeinstance",
 				"--template", template, "--name", instanceName,
 				"--ssh-key", testCase.value,
@@ -434,11 +434,11 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 		grantComputeInstanceSSHKeyProjectAccess(ctx, usersGroup, project)
 		_, stderr, code := loginComputeInstanceSSHKeyCLI(ctx, home)
 		Expect(code).To(Equal(0), stderr)
-		secret := createComputeInstanceSSHKeySecretFixture(ctx, usersGroup, project, catalogItemFixtureName())
+		secret := createComputeInstanceSSHKeySecretFixture(ctx, usersGroup, project, resourceFixtureName())
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
-			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+			Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 			Published: true,
 			Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
@@ -449,7 +449,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 				}.Build(),
 			}.Build(),
 		}.Build())
-		instanceName := catalogItemFixtureName()
+		instanceName := resourceFixtureName()
 		_, stderr, code = runComputeInstanceSSHKeyCLI(ctx, home, "create", "computeinstance", "--catalog-item", item.GetId(),
 			"--name", instanceName,
 			"--network-attachment", "subnet="+network.subnetID+",security-groups="+network.securityGroupID)

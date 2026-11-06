@@ -65,7 +65,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 		Expect(err).NotTo(HaveOccurred())
 		toPrivate, err = servers.NewGenericMapper[*publicv1.BareMetalInstance, *privatev1.BareMetalInstance]().SetLogger(logger).SetStrict(false).Build()
 		Expect(err).NotTo(HaveOccurred())
-		image = createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+		image = createDiskImageFixture(ctx, "shared", resourceFixtureName())
 		typeID := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)
 		selected, err := types.Get(ctx, privatev1.BareMetalInstanceTypesGetRequest_builder{Id: typeID}.Build())
 		Expect(err).NotTo(HaveOccurred())
@@ -78,7 +78,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 	})
 	object := func() *privatev1.BareMetalInstance {
 		return privatev1.BareMetalInstance_builder{
-			Metadata: catalogItemFixtureMetadata(usersGroup, ""),
+			Metadata: resourceFixtureMetadata(usersGroup, ""),
 			Spec: privatev1.BareMetalInstanceSpec_builder{
 				Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: template, Shared: true}.Build(),
 				DiskImage:    privatev1.DiskImageReference_builder{Id: image.GetId(), Shared: true}.Build(),
@@ -111,7 +111,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 		return err
 	}
 	cleanupInstance := func(id string) {
-		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+		deferResourceFixtureDeletion(func(ctx context.Context) error {
 			_, err := instances.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{Id: id}.Build())
 			return err
 		}, func(ctx context.Context) (bool, error) {
@@ -222,12 +222,12 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 			}
 			catalogs := privatev1.NewBareMetalInstanceCatalogItemsClient(tool.InternalView().AdminConn())
 			catalog, err := catalogs.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{Object: privatev1.BareMetalInstanceCatalogItem_builder{
-				Metadata: catalogItemFixtureMetadata(usersGroup, ""), Title: "Protected architecture", Published: true,
+				Metadata: resourceFixtureMetadata(usersGroup, ""), Title: "Protected architecture", Published: true,
 				Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: template, Shared: true}.Build(),
 				Fields:   privatev1.BareMetalInstanceCatalogItemFields_builder{DiskImage: policy}.Build(),
 			}.Build()}.Build())
 			Expect(err).NotTo(HaveOccurred())
-			deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+			deferResourceFixtureDeletion(func(ctx context.Context) error {
 				_, err := catalogs.Delete(ctx, privatev1.BareMetalInstanceCatalogItemsDeleteRequest_builder{Id: catalog.GetObject().GetId()}.Build())
 				return err
 			}, nil)
@@ -312,7 +312,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 			}
 			catalogs := privatev1.NewBareMetalInstanceCatalogItemsClient(tool.InternalView().AdminConn())
 			item := privatev1.BareMetalInstanceCatalogItem_builder{
-				Metadata: catalogItemFixtureMetadata(usersGroup, ""), Title: "Architecture admission", Published: true,
+				Metadata: resourceFixtureMetadata(usersGroup, ""), Title: "Architecture admission", Published: true,
 				Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: template, Shared: true}.Build(),
 				Fields:   privatev1.BareMetalInstanceCatalogItemFields_builder{InstanceType: typePolicy, DiskImage: imagePolicy}.Build(),
 			}.Build()
@@ -327,7 +327,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 				return
 			}
 			Expect(err).NotTo(HaveOccurred())
-			deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+			deferResourceFixtureDeletion(func(ctx context.Context) error {
 				_, err := catalogs.Delete(ctx, privatev1.BareMetalInstanceCatalogItemsDeleteRequest_builder{Id: catalog.GetObject().GetId()}.Build())
 				return err
 			}, nil)
@@ -431,7 +431,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 
 	DescribeTable("hides cross-tenant image architecture", func(ctx context.Context, byName, compatible bool) {
 		tenant, _ := createCatalogItemTenantAdminFixture(ctx)
-		hidden := createCatalogItemDiskImageFixture(ctx, tenant, catalogItemFixtureName())
+		hidden := createDiskImageFixture(ctx, tenant, resourceFixtureName())
 		if !compatible {
 			hidden.GetSpec().SetArchitecture([]privatev1.Architecture{architectures["arm64"]})
 			_, err := images.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{Object: hidden, UpdateMask: catalogItemUpdateMask("spec.architecture")}.Build())

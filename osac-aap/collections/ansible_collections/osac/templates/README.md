@@ -327,6 +327,16 @@ Each dispatched `backend_id` uses exactly one of two modes, selected by its
   example `vsadmin`) authenticates only through that SVM's management LIF, so supply
   `management_lif`; the backend `endpoint` (cluster management LIF) is used only when
   `management_lif` is absent, which suits cluster-scoped accounts.
+  Trident verifies the management LIF's TLS certificate against
+  `TridentBackendConfig.trustedCACertificate`, which the role fills from the
+  cluster trust bundle (`/etc/ca-bundle/bundle.pem`, the trust-manager `ca-bundle`
+  ConfigMap mounted in the storage-operations instance group). To trust an ONTAP
+  CA, add it as a Secret (key `ca.crt`) labeled `osac.openshift.io/ca-bundle:
+  additional` in the cert-manager namespace. Verification is standard TLS, so the
+  certificate must carry a SAN matching `management_lif` (an IP SAN when the LIF is
+  an address); a Common-Name-only certificate is rejected even when trusted.
+  `NETAPP_VALIDATE_CERTS=false` omits `trustedCACertificate`, and Trident then skips
+  certificate verification; it is an explicit opt-out for lab endpoints only.
   ONTAP QoS policy groups are created by a cluster administrator, belong to one SVM,
   and are only referenced by name from Trident virtual pools; Trident does not check
   they exist until it provisions a volume. A tier that requests bandwidth QoS

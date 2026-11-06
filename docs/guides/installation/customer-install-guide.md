@@ -1299,10 +1299,13 @@ Read the `NetworkClass` through the private API of the Fulfillment Service.
 
    If the shared bundle does not trust the Route, use the Route CA bundle
    provided by your platform administrators. For a publicly trusted Route,
-   leave `CA_FILE` unset so requests use the system trust store.
+   run `unset CA_FILE` so requests use the system trust store.
 
-2. In the same Bash session, initialize optional CA arguments from `CA_FILE`.
-   When it is unset, the request uses the system trust store:
+2. In the same Bash session, initialize optional CA arguments from `CA_FILE`
+   after you set or unset it. Changing `CA_FILE` does not update an existing
+   `CURL_CA_ARGS` array. Repeat this initialization before later requests
+   whenever `CA_FILE` changes. When it is unset, curl uses the system trust
+   store:
 
    ```console
    CURL_CA_ARGS=()
@@ -1339,7 +1342,8 @@ tenant onboarding waits for a `READY` pool.
 
 - For each pool, run the following command with the variables, including
   `CURL_CA_ARGS`, from [Section 4.4.6](#446-checking-the-networkclass). Each
-  pool has exactly one IPv4 CIDR:
+  pool has exactly one IPv4 CIDR. If you changed `CA_FILE` since that section,
+  repeat its step 2 before these requests to refresh `CURL_CA_ARGS`:
 
   ```console
   curl --fail-with-body "${CURL_CA_ARGS[@]}" --request POST \
@@ -1383,7 +1387,9 @@ address plan, for example to enable CaaS on a plan without `lbVip`: once the
    recorded managers' tasks, so the image must still hold the recorded roles.
 2. Delete every ExternalIPPool, then the `NetworkClass`, with the variables,
    including `CURL_CA_ARGS`, from
-   [Section 4.4.6](#446-checking-the-networkclass):
+   [Section 4.4.6](#446-checking-the-networkclass). If `CA_FILE` changed since
+   that section, repeat its step 2 before these requests to refresh
+   `CURL_CA_ARGS`:
 
    ```console
    curl --fail-with-body "${CURL_CA_ARGS[@]}" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
@@ -2352,11 +2358,14 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
     `TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY` with status
     `CONDITION_STATUS_TRUE`:
 
-    Use `FULFILLMENT_API`, `OSAC_ADMIN_TOKEN`, and `CURL_CA_ARGS` from
-    [Section 4.4.6](#446-checking-the-networkclass). Leave `CA_FILE` unset for
-    a publicly trusted Route so the request uses the system trust store.
+    Use `FULFILLMENT_API` and `CURL_CA_ARGS` from
+    [Section 4.4.6](#446-checking-the-networkclass). For a publicly trusted
+    Route, run `unset CA_FILE`; whenever `CA_FILE` changes, repeat step 2 of
+    Section 4.4.6 before reusing `CURL_CA_ARGS`. Create a fresh token
+    immediately before the request:
 
     ```console
+    OSAC_ADMIN_TOKEN="$(oc create token admin -n "$NS" --duration 1h)"
     curl -s "${CURL_CA_ARGS[@]}" -H "Authorization: Bearer $OSAC_ADMIN_TOKEN" \
       "${FULFILLMENT_API}/api/private/v1/tenants" \
       | jq '.items[] | select(.metadata.name=="<tenant_name>") | .status.conditions'

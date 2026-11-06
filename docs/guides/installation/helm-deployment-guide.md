@@ -348,6 +348,24 @@ that namespace earlier to store the AAP license secret, so pass
 chart skips this namespace resource, so this particular ownership reason does
 not apply.
 
+When bundled Keycloak is enabled, it mounts the ConfigMap named by
+`certs.caBundle.configMap` from the `keycloak` namespace and reads its
+`bundle.pem` key. The Phase 1b CA-bundle hook creates and synchronizes this
+ConfigMap when enabled. If administrators manage the bundle directly or
+`caIssuer.enabled: false` disables the hook, provide the ConfigMap in the
+`keycloak` namespace before Phase 1b. The OSAC chart uses a separate ConfigMap
+in the OSAC release namespace; before Phase 2, provide it with the
+`bundle.pem` key under the name configured by
+`service.certs.caBundle.configMap`. Keep that name aligned with
+`certs.caBundle.configMap`.
+
+Include private OIDC provider CAs in the bundle. With the chart-managed bundle,
+set `keycloak.oidcIdpTrust.caPem`; for an administrator-managed bundle, include
+the provider CA in `bundle.pem`. Keep the bundle current as provider CAs change
+and ensure Keycloak reloads the updated truststore. A Phase 1b upgrade rolls out
+Keycloak when the chart manages the bundle; after updating an administrator-
+managed bundle, restart Keycloak.
+
 Before Phase 1b on OpenShift, set `keycloak.uiUrl` in the values file passed to
 this command to the bundled OSAC UI's HTTPS Route URL on this cluster. For the
 default `osac` namespace, the URL is
@@ -706,9 +724,16 @@ phase-1 releases, inspect their current values and carry each release's
 intentional settings into the values used for its upgrade:
 
 ```bash
-helm get values osac-deps -n osac-deps
-helm get values osac-infra -n osac-infra
+helm get values osac-deps -n osac-deps --all
+helm get values osac-infra -n osac-infra --all
 ```
+
+These commands show computed values, including defaults from each installed
+chart. Compare them with the target versions' defaults in
+`osac-installer/charts/osac-deps/values.yaml` and
+`osac-installer/charts/osac-infra/values.yaml` before choosing upgrade values.
+Preserve intentional settings, but do not copy old chart defaults as explicit
+overrides when you want the target chart's defaults to take effect.
 
 If the releases' current values differ, use a separate values file for each
 release. Do not replace existing release values with the defaults in this

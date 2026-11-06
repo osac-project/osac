@@ -1291,6 +1291,8 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
         "_netapp_stale_dedicated_sc_names",
     ):
         assert fact_name in cleared_facts
+    # The runtime password fact is dropped (null), not overwritten with a literal.
+    assert cleared_facts["_runtime_password"] is None
 
     # _setup_backend.yaml rendered tenant config in Shared-TBC and Dedicated-SVM modes
     setup_backend_tasks = _load_yaml(NETAPP_ROLE_DIR / "tasks" / "_setup_backend.yaml")

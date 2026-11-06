@@ -73,9 +73,9 @@ func lookupIdentifier(ctx context.Context, kind, name, id string,
 	return ids[0], nil
 }
 
-// markSensitive marks the given attributes of a generated data source schema as sensitive. The generator can't
-// express sensitivity for map attributes, so the data source glue marks them.
-func markSensitive(generated schema.Schema, names ...string) schema.Schema {
+// markSensitiveDataSource marks the given attributes of a generated data source schema as sensitive. The generator
+// can't express sensitivity for map attributes, so the data source glue marks them.
+func markSensitiveDataSource(generated schema.Schema, names ...string) schema.Schema {
 	for _, name := range names {
 		if attribute, ok := generated.Attributes[name].(schema.MapAttribute); ok {
 			attribute.Sensitive = true

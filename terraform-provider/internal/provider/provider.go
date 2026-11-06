@@ -151,6 +151,7 @@ func (p *osacProvider) DataSources(ctx context.Context) []func() datasource.Data
 func (p *osacProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewBareMetalInstanceResource,
+		NewSecretResource,
 	}
 }
 

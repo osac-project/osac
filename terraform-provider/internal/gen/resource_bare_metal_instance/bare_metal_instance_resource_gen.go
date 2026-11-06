@@ -54,18 +54,6 @@ func BareMetalInstanceResourceSchema(ctx context.Context) schema.Schema {
 						Description:         "Time of deletion of the object.",
 						MarkdownDescription: "Time of deletion of the object.",
 					},
-					"description": schema.StringAttribute{
-						Optional:            true,
-						Computed:            true,
-						Description:         "Optional human-friendly description. Opaque string; clients may\ntreat content as Markdown. Not unique, mutable.",
-						MarkdownDescription: "Optional human-friendly description. Opaque string; clients may\ntreat content as Markdown. Not unique, mutable.",
-					},
-					"display_name": schema.StringAttribute{
-						Optional:            true,
-						Computed:            true,
-						Description:         "Human-friendly display name. Optional, not unique, mutable.\nNot constrained to DNS-label format.",
-						MarkdownDescription: "Human-friendly display name. Optional, not unique, mutable.\nNot constrained to DNS-label format.",
-					},
 					"labels": schema.MapAttribute{
 						ElementType:         types.StringType,
 						Optional:            true,
@@ -294,11 +282,40 @@ func BareMetalInstanceResourceSchema(ctx context.Context) schema.Schema {
 						},
 						Default: stringdefault.StaticString("BARE_METAL_INSTANCE_RUN_STRATEGY_UNSPECIFIED"),
 					},
+					"ssh_key": schema.SingleNestedAttribute{
+						Attributes: map[string]schema.Attribute{
+							"id": schema.StringAttribute{
+								Optional: true,
+								Computed: true,
+							},
+							"name": schema.StringAttribute{
+								Optional: true,
+								Computed: true,
+							},
+							"project": schema.StringAttribute{
+								Optional: true,
+								Computed: true,
+							},
+							"shared": schema.BoolAttribute{
+								Optional: true,
+								Computed: true,
+							},
+						},
+						CustomType: SshKeyType{
+							ObjectType: types.ObjectType{
+								AttrTypes: SshKeyValue{}.AttributeTypes(ctx),
+							},
+						},
+						Optional:            true,
+						Computed:            true,
+						Description:         "Reference to a Secret resource.",
+						MarkdownDescription: "Reference to a Secret resource.",
+					},
 					"ssh_public_key": schema.StringAttribute{
 						Optional:            true,
 						Computed:            true,
-						Description:         "SSH public key injected into the OS at provisioning time. Immutable after creation.\nMust be a valid SSH public key in OpenSSH format (ssh-rsa, ssh-ed25519, etc.).\nInvalid keys are rejected at create time with a 400 error.",
-						MarkdownDescription: "SSH public key injected into the OS at provisioning time. Immutable after creation.\nMust be a valid SSH public key in OpenSSH format (ssh-rsa, ssh-ed25519, etc.).\nInvalid keys are rejected at create time with a 400 error.",
+						Description:         "SSH public key injected into the OS at provisioning time. Immutable after creation.\nMust be a valid SSH public key in OpenSSH format (ssh-rsa, ssh-ed25519, etc.).\nInvalid keys are rejected at create time with a 400 error.\n\nDeprecated: use `ssh_key` with a registered SSH public-key Secret instead.\nMutually exclusive with `ssh_key`.",
+						MarkdownDescription: "SSH public key injected into the OS at provisioning time. Immutable after creation.\nMust be a valid SSH public key in OpenSSH format (ssh-rsa, ssh-ed25519, etc.).\nInvalid keys are rejected at create time with a 400 error.\n\nDeprecated: use `ssh_key` with a registered SSH public-key Secret instead.\nMutually exclusive with `ssh_key`.",
 					},
 					"template": schema.SingleNestedAttribute{
 						Attributes: map[string]schema.Attribute{
@@ -708,42 +725,6 @@ func (t MetadataType) ValueFromObject(ctx context.Context, in basetypes.ObjectVa
 			fmt.Sprintf(`deletion_timestamp expected to be basetypes.StringValue, was: %T`, deletionTimestampAttribute))
 	}
 
-	descriptionAttribute, ok := attributes["description"]
-
-	if !ok {
-		diags.AddError(
-			"Attribute Missing",
-			`description is missing from object`)
-
-		return nil, diags
-	}
-
-	descriptionVal, ok := descriptionAttribute.(basetypes.StringValue)
-
-	if !ok {
-		diags.AddError(
-			"Attribute Wrong Type",
-			fmt.Sprintf(`description expected to be basetypes.StringValue, was: %T`, descriptionAttribute))
-	}
-
-	displayNameAttribute, ok := attributes["display_name"]
-
-	if !ok {
-		diags.AddError(
-			"Attribute Missing",
-			`display_name is missing from object`)
-
-		return nil, diags
-	}
-
-	displayNameVal, ok := displayNameAttribute.(basetypes.StringValue)
-
-	if !ok {
-		diags.AddError(
-			"Attribute Wrong Type",
-			fmt.Sprintf(`display_name expected to be basetypes.StringValue, was: %T`, displayNameAttribute))
-	}
-
 	labelsAttribute, ok := attributes["labels"]
 
 	if !ok {
@@ -843,8 +824,6 @@ func (t MetadataType) ValueFromObject(ctx context.Context, in basetypes.ObjectVa
 		CreationTimestamp: creationTimestampVal,
 		Creator:           creatorVal,
 		DeletionTimestamp: deletionTimestampVal,
-		Description:       descriptionVal,
-		DisplayName:       displayNameVal,
 		Labels:            labelsVal,
 		Name:              nameVal,
 		Project:           projectVal,
@@ -989,42 +968,6 @@ func NewMetadataValue(attributeTypes map[string]attr.Type, attributes map[string
 			fmt.Sprintf(`deletion_timestamp expected to be basetypes.StringValue, was: %T`, deletionTimestampAttribute))
 	}
 
-	descriptionAttribute, ok := attributes["description"]
-
-	if !ok {
-		diags.AddError(
-			"Attribute Missing",
-			`description is missing from object`)
-
-		return NewMetadataValueUnknown(), diags
-	}
-
-	descriptionVal, ok := descriptionAttribute.(basetypes.StringValue)
-
-	if !ok {
-		diags.AddError(
-			"Attribute Wrong Type",
-			fmt.Sprintf(`description expected to be basetypes.StringValue, was: %T`, descriptionAttribute))
-	}
-
-	displayNameAttribute, ok := attributes["display_name"]
-
-	if !ok {
-		diags.AddError(
-			"Attribute Missing",
-			`display_name is missing from object`)
-
-		return NewMetadataValueUnknown(), diags
-	}
-
-	displayNameVal, ok := displayNameAttribute.(basetypes.StringValue)
-
-	if !ok {
-		diags.AddError(
-			"Attribute Wrong Type",
-			fmt.Sprintf(`display_name expected to be basetypes.StringValue, was: %T`, displayNameAttribute))
-	}
-
 	labelsAttribute, ok := attributes["labels"]
 
 	if !ok {
@@ -1124,8 +1067,6 @@ func NewMetadataValue(attributeTypes map[string]attr.Type, attributes map[string
 		CreationTimestamp: creationTimestampVal,
 		Creator:           creatorVal,
 		DeletionTimestamp: deletionTimestampVal,
-		Description:       descriptionVal,
-		DisplayName:       displayNameVal,
 		Labels:            labelsVal,
 		Name:              nameVal,
 		Project:           projectVal,
@@ -1207,8 +1148,6 @@ type MetadataValue struct {
 	CreationTimestamp basetypes.StringValue `tfsdk:"creation_timestamp"`
 	Creator           basetypes.StringValue `tfsdk:"creator"`
 	DeletionTimestamp basetypes.StringValue `tfsdk:"deletion_timestamp"`
-	Description       basetypes.StringValue `tfsdk:"description"`
-	DisplayName       basetypes.StringValue `tfsdk:"display_name"`
 	Labels            basetypes.MapValue    `tfsdk:"labels"`
 	Name              basetypes.StringValue `tfsdk:"name"`
 	Project           basetypes.StringValue `tfsdk:"project"`
@@ -1218,7 +1157,7 @@ type MetadataValue struct {
 }
 
 func (v MetadataValue) ToTerraformValue(ctx context.Context) (tftypes.Value, error) {
-	attrTypes := make(map[string]tftypes.Type, 11)
+	attrTypes := make(map[string]tftypes.Type, 9)
 
 	var val tftypes.Value
 	var err error
@@ -1229,8 +1168,6 @@ func (v MetadataValue) ToTerraformValue(ctx context.Context) (tftypes.Value, err
 	attrTypes["creation_timestamp"] = basetypes.StringType{}.TerraformType(ctx)
 	attrTypes["creator"] = basetypes.StringType{}.TerraformType(ctx)
 	attrTypes["deletion_timestamp"] = basetypes.StringType{}.TerraformType(ctx)
-	attrTypes["description"] = basetypes.StringType{}.TerraformType(ctx)
-	attrTypes["display_name"] = basetypes.StringType{}.TerraformType(ctx)
 	attrTypes["labels"] = basetypes.MapType{
 		ElemType: types.StringType,
 	}.TerraformType(ctx)
@@ -1243,7 +1180,7 @@ func (v MetadataValue) ToTerraformValue(ctx context.Context) (tftypes.Value, err
 
 	switch v.state {
 	case attr.ValueStateKnown:
-		vals := make(map[string]tftypes.Value, 11)
+		vals := make(map[string]tftypes.Value, 9)
 
 		val, err = v.Annotations.ToTerraformValue(ctx)
 
@@ -1276,22 +1213,6 @@ func (v MetadataValue) ToTerraformValue(ctx context.Context) (tftypes.Value, err
 		}
 
 		vals["deletion_timestamp"] = val
-
-		val, err = v.Description.ToTerraformValue(ctx)
-
-		if err != nil {
-			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
-		}
-
-		vals["description"] = val
-
-		val, err = v.DisplayName.ToTerraformValue(ctx)
-
-		if err != nil {
-			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
-		}
-
-		vals["display_name"] = val
 
 		val, err = v.Labels.ToTerraformValue(ctx)
 
@@ -1382,8 +1303,6 @@ func (v MetadataValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue
 			"creation_timestamp": basetypes.StringType{},
 			"creator":            basetypes.StringType{},
 			"deletion_timestamp": basetypes.StringType{},
-			"description":        basetypes.StringType{},
-			"display_name":       basetypes.StringType{},
 			"labels": basetypes.MapType{
 				ElemType: types.StringType,
 			},
@@ -1414,8 +1333,6 @@ func (v MetadataValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue
 			"creation_timestamp": basetypes.StringType{},
 			"creator":            basetypes.StringType{},
 			"deletion_timestamp": basetypes.StringType{},
-			"description":        basetypes.StringType{},
-			"display_name":       basetypes.StringType{},
 			"labels": basetypes.MapType{
 				ElemType: types.StringType,
 			},
@@ -1433,8 +1350,6 @@ func (v MetadataValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue
 		"creation_timestamp": basetypes.StringType{},
 		"creator":            basetypes.StringType{},
 		"deletion_timestamp": basetypes.StringType{},
-		"description":        basetypes.StringType{},
-		"display_name":       basetypes.StringType{},
 		"labels": basetypes.MapType{
 			ElemType: types.StringType,
 		},
@@ -1459,8 +1374,6 @@ func (v MetadataValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue
 			"creation_timestamp": v.CreationTimestamp,
 			"creator":            v.Creator,
 			"deletion_timestamp": v.DeletionTimestamp,
-			"description":        v.Description,
-			"display_name":       v.DisplayName,
 			"labels":             labelsVal,
 			"name":               v.Name,
 			"project":            v.Project,
@@ -1499,14 +1412,6 @@ func (v MetadataValue) Equal(o attr.Value) bool {
 	}
 
 	if !v.DeletionTimestamp.Equal(other.DeletionTimestamp) {
-		return false
-	}
-
-	if !v.Description.Equal(other.Description) {
-		return false
-	}
-
-	if !v.DisplayName.Equal(other.DisplayName) {
 		return false
 	}
 
@@ -1549,8 +1454,6 @@ func (v MetadataValue) AttributeTypes(ctx context.Context) map[string]attr.Type 
 		"creation_timestamp": basetypes.StringType{},
 		"creator":            basetypes.StringType{},
 		"deletion_timestamp": basetypes.StringType{},
-		"description":        basetypes.StringType{},
-		"display_name":       basetypes.StringType{},
 		"labels": basetypes.MapType{
 			ElemType: types.StringType,
 		},
@@ -1712,6 +1615,24 @@ func (t SpecType) ValueFromObject(ctx context.Context, in basetypes.ObjectValue)
 			fmt.Sprintf(`run_strategy expected to be basetypes.StringValue, was: %T`, runStrategyAttribute))
 	}
 
+	sshKeyAttribute, ok := attributes["ssh_key"]
+
+	if !ok {
+		diags.AddError(
+			"Attribute Missing",
+			`ssh_key is missing from object`)
+
+		return nil, diags
+	}
+
+	sshKeyVal, ok := sshKeyAttribute.(basetypes.ObjectValue)
+
+	if !ok {
+		diags.AddError(
+			"Attribute Wrong Type",
+			fmt.Sprintf(`ssh_key expected to be basetypes.ObjectValue, was: %T`, sshKeyAttribute))
+	}
+
 	sshPublicKeyAttribute, ok := attributes["ssh_public_key"]
 
 	if !ok {
@@ -1796,6 +1717,7 @@ func (t SpecType) ValueFromObject(ctx context.Context, in basetypes.ObjectValue)
 		NetworkAttachments:       networkAttachmentsVal,
 		RestartTrigger:           restartTriggerVal,
 		RunStrategy:              runStrategyVal,
+		SshKey:                   sshKeyVal,
 		SshPublicKey:             sshPublicKeyVal,
 		Template:                 templateVal,
 		TemplateParameters:       templateParametersVal,
@@ -1993,6 +1915,24 @@ func NewSpecValue(attributeTypes map[string]attr.Type, attributes map[string]att
 			fmt.Sprintf(`run_strategy expected to be basetypes.StringValue, was: %T`, runStrategyAttribute))
 	}
 
+	sshKeyAttribute, ok := attributes["ssh_key"]
+
+	if !ok {
+		diags.AddError(
+			"Attribute Missing",
+			`ssh_key is missing from object`)
+
+		return NewSpecValueUnknown(), diags
+	}
+
+	sshKeyVal, ok := sshKeyAttribute.(basetypes.ObjectValue)
+
+	if !ok {
+		diags.AddError(
+			"Attribute Wrong Type",
+			fmt.Sprintf(`ssh_key expected to be basetypes.ObjectValue, was: %T`, sshKeyAttribute))
+	}
+
 	sshPublicKeyAttribute, ok := attributes["ssh_public_key"]
 
 	if !ok {
@@ -2077,6 +2017,7 @@ func NewSpecValue(attributeTypes map[string]attr.Type, attributes map[string]att
 		NetworkAttachments:       networkAttachmentsVal,
 		RestartTrigger:           restartTriggerVal,
 		RunStrategy:              runStrategyVal,
+		SshKey:                   sshKeyVal,
 		SshPublicKey:             sshPublicKeyVal,
 		Template:                 templateVal,
 		TemplateParameters:       templateParametersVal,
@@ -2160,6 +2101,7 @@ type SpecValue struct {
 	NetworkAttachments       basetypes.ListValue   `tfsdk:"network_attachments"`
 	RestartTrigger           basetypes.StringValue `tfsdk:"restart_trigger"`
 	RunStrategy              basetypes.StringValue `tfsdk:"run_strategy"`
+	SshKey                   basetypes.ObjectValue `tfsdk:"ssh_key"`
 	SshPublicKey             basetypes.StringValue `tfsdk:"ssh_public_key"`
 	Template                 basetypes.ObjectValue `tfsdk:"template"`
 	TemplateParameters       basetypes.MapValue    `tfsdk:"template_parameters"`
@@ -2168,7 +2110,7 @@ type SpecValue struct {
 }
 
 func (v SpecValue) ToTerraformValue(ctx context.Context) (tftypes.Value, error) {
-	attrTypes := make(map[string]tftypes.Type, 11)
+	attrTypes := make(map[string]tftypes.Type, 12)
 
 	var val tftypes.Value
 	var err error
@@ -2188,6 +2130,9 @@ func (v SpecValue) ToTerraformValue(ctx context.Context) (tftypes.Value, error) 
 	}.TerraformType(ctx)
 	attrTypes["restart_trigger"] = basetypes.StringType{}.TerraformType(ctx)
 	attrTypes["run_strategy"] = basetypes.StringType{}.TerraformType(ctx)
+	attrTypes["ssh_key"] = basetypes.ObjectType{
+		AttrTypes: SshKeyValue{}.AttributeTypes(ctx),
+	}.TerraformType(ctx)
 	attrTypes["ssh_public_key"] = basetypes.StringType{}.TerraformType(ctx)
 	attrTypes["template"] = basetypes.ObjectType{
 		AttrTypes: TemplateValue{}.AttributeTypes(ctx),
@@ -2203,7 +2148,7 @@ func (v SpecValue) ToTerraformValue(ctx context.Context) (tftypes.Value, error) 
 
 	switch v.state {
 	case attr.ValueStateKnown:
-		vals := make(map[string]tftypes.Value, 11)
+		vals := make(map[string]tftypes.Value, 12)
 
 		val, err = v.AutoExternalIpAttachment.ToTerraformValue(ctx)
 
@@ -2260,6 +2205,14 @@ func (v SpecValue) ToTerraformValue(ctx context.Context) (tftypes.Value, error) 
 		}
 
 		vals["run_strategy"] = val
+
+		val, err = v.SshKey.ToTerraformValue(ctx)
+
+		if err != nil {
+			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
+		}
+
+		vals["ssh_key"] = val
 
 		val, err = v.SshPublicKey.ToTerraformValue(ctx)
 
@@ -2414,6 +2367,27 @@ func (v SpecValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue, di
 		)
 	}
 
+	var sshKey basetypes.ObjectValue
+
+	if v.SshKey.IsNull() {
+		sshKey = types.ObjectNull(
+			SshKeyValue{}.AttributeTypes(ctx),
+		)
+	}
+
+	if v.SshKey.IsUnknown() {
+		sshKey = types.ObjectUnknown(
+			SshKeyValue{}.AttributeTypes(ctx),
+		)
+	}
+
+	if !v.SshKey.IsNull() && !v.SshKey.IsUnknown() {
+		sshKey = types.ObjectValueMust(
+			SshKeyValue{}.AttributeTypes(ctx),
+			v.SshKey.Attributes(),
+		)
+	}
+
 	var template basetypes.ObjectValue
 
 	if v.Template.IsNull() {
@@ -2501,7 +2475,10 @@ func (v SpecValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue, di
 		},
 		"restart_trigger": basetypes.StringType{},
 		"run_strategy":    basetypes.StringType{},
-		"ssh_public_key":  basetypes.StringType{},
+		"ssh_key": basetypes.ObjectType{
+			AttrTypes: SshKeyValue{}.AttributeTypes(ctx),
+		},
+		"ssh_public_key": basetypes.StringType{},
 		"template": basetypes.ObjectType{
 			AttrTypes: TemplateValue{}.AttributeTypes(ctx),
 		},
@@ -2531,6 +2508,7 @@ func (v SpecValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue, di
 			"network_attachments":         networkAttachments,
 			"restart_trigger":             v.RestartTrigger,
 			"run_strategy":                v.RunStrategy,
+			"ssh_key":                     sshKey,
 			"ssh_public_key":              v.SshPublicKey,
 			"template":                    template,
 			"template_parameters":         templateParameters,
@@ -2583,6 +2561,10 @@ func (v SpecValue) Equal(o attr.Value) bool {
 		return false
 	}
 
+	if !v.SshKey.Equal(other.SshKey) {
+		return false
+	}
+
 	if !v.SshPublicKey.Equal(other.SshPublicKey) {
 		return false
 	}
@@ -2627,7 +2609,10 @@ func (v SpecValue) AttributeTypes(ctx context.Context) map[string]attr.Type {
 		},
 		"restart_trigger": basetypes.StringType{},
 		"run_strategy":    basetypes.StringType{},
-		"ssh_public_key":  basetypes.StringType{},
+		"ssh_key": basetypes.ObjectType{
+			AttrTypes: SshKeyValue{}.AttributeTypes(ctx),
+		},
+		"ssh_public_key": basetypes.StringType{},
 		"template": basetypes.ObjectType{
 			AttrTypes: TemplateValue{}.AttributeTypes(ctx),
 		},
@@ -5413,6 +5398,495 @@ func (v SubnetValue) AttributeTypes(ctx context.Context) map[string]attr.Type {
 	return map[string]attr.Type{
 		"id":   basetypes.StringType{},
 		"name": basetypes.StringType{},
+	}
+}
+
+var _ basetypes.ObjectTypable = SshKeyType{}
+
+type SshKeyType struct {
+	basetypes.ObjectType
+}
+
+func (t SshKeyType) Equal(o attr.Type) bool {
+	other, ok := o.(SshKeyType)
+
+	if !ok {
+		return false
+	}
+
+	return t.ObjectType.Equal(other.ObjectType)
+}
+
+func (t SshKeyType) String() string {
+	return "SshKeyType"
+}
+
+func (t SshKeyType) ValueFromObject(ctx context.Context, in basetypes.ObjectValue) (basetypes.ObjectValuable, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	attributes := in.Attributes()
+
+	idAttribute, ok := attributes["id"]
+
+	if !ok {
+		diags.AddError(
+			"Attribute Missing",
+			`id is missing from object`)
+
+		return nil, diags
+	}
+
+	idVal, ok := idAttribute.(basetypes.StringValue)
+
+	if !ok {
+		diags.AddError(
+			"Attribute Wrong Type",
+			fmt.Sprintf(`id expected to be basetypes.StringValue, was: %T`, idAttribute))
+	}
+
+	nameAttribute, ok := attributes["name"]
+
+	if !ok {
+		diags.AddError(
+			"Attribute Missing",
+			`name is missing from object`)
+
+		return nil, diags
+	}
+
+	nameVal, ok := nameAttribute.(basetypes.StringValue)
+
+	if !ok {
+		diags.AddError(
+			"Attribute Wrong Type",
+			fmt.Sprintf(`name expected to be basetypes.StringValue, was: %T`, nameAttribute))
+	}
+
+	projectAttribute, ok := attributes["project"]
+
+	if !ok {
+		diags.AddError(
+			"Attribute Missing",
+			`project is missing from object`)
+
+		return nil, diags
+	}
+
+	projectVal, ok := projectAttribute.(basetypes.StringValue)
+
+	if !ok {
+		diags.AddError(
+			"Attribute Wrong Type",
+			fmt.Sprintf(`project expected to be basetypes.StringValue, was: %T`, projectAttribute))
+	}
+
+	sharedAttribute, ok := attributes["shared"]
+
+	if !ok {
+		diags.AddError(
+			"Attribute Missing",
+			`shared is missing from object`)
+
+		return nil, diags
+	}
+
+	sharedVal, ok := sharedAttribute.(basetypes.BoolValue)
+
+	if !ok {
+		diags.AddError(
+			"Attribute Wrong Type",
+			fmt.Sprintf(`shared expected to be basetypes.BoolValue, was: %T`, sharedAttribute))
+	}
+
+	if diags.HasError() {
+		return nil, diags
+	}
+
+	return SshKeyValue{
+		Id:      idVal,
+		Name:    nameVal,
+		Project: projectVal,
+		Shared:  sharedVal,
+		state:   attr.ValueStateKnown,
+	}, diags
+}
+
+func NewSshKeyValueNull() SshKeyValue {
+	return SshKeyValue{
+		state: attr.ValueStateNull,
+	}
+}
+
+func NewSshKeyValueUnknown() SshKeyValue {
+	return SshKeyValue{
+		state: attr.ValueStateUnknown,
+	}
+}
+
+func NewSshKeyValue(attributeTypes map[string]attr.Type, attributes map[string]attr.Value) (SshKeyValue, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	// Reference: https://github.com/hashicorp/terraform-plugin-framework/issues/521
+	ctx := context.Background()
+
+	for name, attributeType := range attributeTypes {
+		attribute, ok := attributes[name]
+
+		if !ok {
+			diags.AddError(
+				"Missing SshKeyValue Attribute Value",
+				"While creating a SshKeyValue value, a missing attribute value was detected. "+
+					"A SshKeyValue must contain values for all attributes, even if null or unknown. "+
+					"This is always an issue with the provider and should be reported to the provider developers.\n\n"+
+					fmt.Sprintf("SshKeyValue Attribute Name (%s) Expected Type: %s", name, attributeType.String()),
+			)
+
+			continue
+		}
+
+		if !attributeType.Equal(attribute.Type(ctx)) {
+			diags.AddError(
+				"Invalid SshKeyValue Attribute Type",
+				"While creating a SshKeyValue value, an invalid attribute value was detected. "+
+					"A SshKeyValue must use a matching attribute type for the value. "+
+					"This is always an issue with the provider and should be reported to the provider developers.\n\n"+
+					fmt.Sprintf("SshKeyValue Attribute Name (%s) Expected Type: %s\n", name, attributeType.String())+
+					fmt.Sprintf("SshKeyValue Attribute Name (%s) Given Type: %s", name, attribute.Type(ctx)),
+			)
+		}
+	}
+
+	for name := range attributes {
+		_, ok := attributeTypes[name]
+
+		if !ok {
+			diags.AddError(
+				"Extra SshKeyValue Attribute Value",
+				"While creating a SshKeyValue value, an extra attribute value was detected. "+
+					"A SshKeyValue must not contain values beyond the expected attribute types. "+
+					"This is always an issue with the provider and should be reported to the provider developers.\n\n"+
+					fmt.Sprintf("Extra SshKeyValue Attribute Name: %s", name),
+			)
+		}
+	}
+
+	if diags.HasError() {
+		return NewSshKeyValueUnknown(), diags
+	}
+
+	idAttribute, ok := attributes["id"]
+
+	if !ok {
+		diags.AddError(
+			"Attribute Missing",
+			`id is missing from object`)
+
+		return NewSshKeyValueUnknown(), diags
+	}
+
+	idVal, ok := idAttribute.(basetypes.StringValue)
+
+	if !ok {
+		diags.AddError(
+			"Attribute Wrong Type",
+			fmt.Sprintf(`id expected to be basetypes.StringValue, was: %T`, idAttribute))
+	}
+
+	nameAttribute, ok := attributes["name"]
+
+	if !ok {
+		diags.AddError(
+			"Attribute Missing",
+			`name is missing from object`)
+
+		return NewSshKeyValueUnknown(), diags
+	}
+
+	nameVal, ok := nameAttribute.(basetypes.StringValue)
+
+	if !ok {
+		diags.AddError(
+			"Attribute Wrong Type",
+			fmt.Sprintf(`name expected to be basetypes.StringValue, was: %T`, nameAttribute))
+	}
+
+	projectAttribute, ok := attributes["project"]
+
+	if !ok {
+		diags.AddError(
+			"Attribute Missing",
+			`project is missing from object`)
+
+		return NewSshKeyValueUnknown(), diags
+	}
+
+	projectVal, ok := projectAttribute.(basetypes.StringValue)
+
+	if !ok {
+		diags.AddError(
+			"Attribute Wrong Type",
+			fmt.Sprintf(`project expected to be basetypes.StringValue, was: %T`, projectAttribute))
+	}
+
+	sharedAttribute, ok := attributes["shared"]
+
+	if !ok {
+		diags.AddError(
+			"Attribute Missing",
+			`shared is missing from object`)
+
+		return NewSshKeyValueUnknown(), diags
+	}
+
+	sharedVal, ok := sharedAttribute.(basetypes.BoolValue)
+
+	if !ok {
+		diags.AddError(
+			"Attribute Wrong Type",
+			fmt.Sprintf(`shared expected to be basetypes.BoolValue, was: %T`, sharedAttribute))
+	}
+
+	if diags.HasError() {
+		return NewSshKeyValueUnknown(), diags
+	}
+
+	return SshKeyValue{
+		Id:      idVal,
+		Name:    nameVal,
+		Project: projectVal,
+		Shared:  sharedVal,
+		state:   attr.ValueStateKnown,
+	}, diags
+}
+
+func NewSshKeyValueMust(attributeTypes map[string]attr.Type, attributes map[string]attr.Value) SshKeyValue {
+	object, diags := NewSshKeyValue(attributeTypes, attributes)
+
+	if diags.HasError() {
+		// This could potentially be added to the diag package.
+		diagsStrings := make([]string, 0, len(diags))
+
+		for _, diagnostic := range diags {
+			diagsStrings = append(diagsStrings, fmt.Sprintf(
+				"%s | %s | %s",
+				diagnostic.Severity(),
+				diagnostic.Summary(),
+				diagnostic.Detail()))
+		}
+
+		panic("NewSshKeyValueMust received error(s): " + strings.Join(diagsStrings, "\n"))
+	}
+
+	return object
+}
+
+func (t SshKeyType) ValueFromTerraform(ctx context.Context, in tftypes.Value) (attr.Value, error) {
+	if in.Type() == nil {
+		return NewSshKeyValueNull(), nil
+	}
+
+	if !in.Type().Equal(t.TerraformType(ctx)) {
+		return nil, fmt.Errorf("expected %s, got %s", t.TerraformType(ctx), in.Type())
+	}
+
+	if !in.IsKnown() {
+		return NewSshKeyValueUnknown(), nil
+	}
+
+	if in.IsNull() {
+		return NewSshKeyValueNull(), nil
+	}
+
+	attributes := map[string]attr.Value{}
+
+	val := map[string]tftypes.Value{}
+
+	err := in.As(&val)
+
+	if err != nil {
+		return nil, err
+	}
+
+	for k, v := range val {
+		a, err := t.AttrTypes[k].ValueFromTerraform(ctx, v)
+
+		if err != nil {
+			return nil, err
+		}
+
+		attributes[k] = a
+	}
+
+	return NewSshKeyValueMust(SshKeyValue{}.AttributeTypes(ctx), attributes), nil
+}
+
+func (t SshKeyType) ValueType(ctx context.Context) attr.Value {
+	return SshKeyValue{}
+}
+
+var _ basetypes.ObjectValuable = SshKeyValue{}
+
+type SshKeyValue struct {
+	Id      basetypes.StringValue `tfsdk:"id"`
+	Name    basetypes.StringValue `tfsdk:"name"`
+	Project basetypes.StringValue `tfsdk:"project"`
+	Shared  basetypes.BoolValue   `tfsdk:"shared"`
+	state   attr.ValueState
+}
+
+func (v SshKeyValue) ToTerraformValue(ctx context.Context) (tftypes.Value, error) {
+	attrTypes := make(map[string]tftypes.Type, 4)
+
+	var val tftypes.Value
+	var err error
+
+	attrTypes["id"] = basetypes.StringType{}.TerraformType(ctx)
+	attrTypes["name"] = basetypes.StringType{}.TerraformType(ctx)
+	attrTypes["project"] = basetypes.StringType{}.TerraformType(ctx)
+	attrTypes["shared"] = basetypes.BoolType{}.TerraformType(ctx)
+
+	objectType := tftypes.Object{AttributeTypes: attrTypes}
+
+	switch v.state {
+	case attr.ValueStateKnown:
+		vals := make(map[string]tftypes.Value, 4)
+
+		val, err = v.Id.ToTerraformValue(ctx)
+
+		if err != nil {
+			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
+		}
+
+		vals["id"] = val
+
+		val, err = v.Name.ToTerraformValue(ctx)
+
+		if err != nil {
+			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
+		}
+
+		vals["name"] = val
+
+		val, err = v.Project.ToTerraformValue(ctx)
+
+		if err != nil {
+			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
+		}
+
+		vals["project"] = val
+
+		val, err = v.Shared.ToTerraformValue(ctx)
+
+		if err != nil {
+			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
+		}
+
+		vals["shared"] = val
+
+		if err := tftypes.ValidateValue(objectType, vals); err != nil {
+			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
+		}
+
+		return tftypes.NewValue(objectType, vals), nil
+	case attr.ValueStateNull:
+		return tftypes.NewValue(objectType, nil), nil
+	case attr.ValueStateUnknown:
+		return tftypes.NewValue(objectType, tftypes.UnknownValue), nil
+	default:
+		panic(fmt.Sprintf("unhandled Object state in ToTerraformValue: %s", v.state))
+	}
+}
+
+func (v SshKeyValue) IsNull() bool {
+	return v.state == attr.ValueStateNull
+}
+
+func (v SshKeyValue) IsUnknown() bool {
+	return v.state == attr.ValueStateUnknown
+}
+
+func (v SshKeyValue) String() string {
+	return "SshKeyValue"
+}
+
+func (v SshKeyValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	attributeTypes := map[string]attr.Type{
+		"id":      basetypes.StringType{},
+		"name":    basetypes.StringType{},
+		"project": basetypes.StringType{},
+		"shared":  basetypes.BoolType{},
+	}
+
+	if v.IsNull() {
+		return types.ObjectNull(attributeTypes), diags
+	}
+
+	if v.IsUnknown() {
+		return types.ObjectUnknown(attributeTypes), diags
+	}
+
+	objVal, diags := types.ObjectValue(
+		attributeTypes,
+		map[string]attr.Value{
+			"id":      v.Id,
+			"name":    v.Name,
+			"project": v.Project,
+			"shared":  v.Shared,
+		})
+
+	return objVal, diags
+}
+
+func (v SshKeyValue) Equal(o attr.Value) bool {
+	other, ok := o.(SshKeyValue)
+
+	if !ok {
+		return false
+	}
+
+	if v.state != other.state {
+		return false
+	}
+
+	if v.state != attr.ValueStateKnown {
+		return true
+	}
+
+	if !v.Id.Equal(other.Id) {
+		return false
+	}
+
+	if !v.Name.Equal(other.Name) {
+		return false
+	}
+
+	if !v.Project.Equal(other.Project) {
+		return false
+	}
+
+	if !v.Shared.Equal(other.Shared) {
+		return false
+	}
+
+	return true
+}
+
+func (v SshKeyValue) Type(ctx context.Context) attr.Type {
+	return SshKeyType{
+		basetypes.ObjectType{
+			AttrTypes: v.AttributeTypes(ctx),
+		},
+	}
+}
+
+func (v SshKeyValue) AttributeTypes(ctx context.Context) map[string]attr.Type {
+	return map[string]attr.Type{
+		"id":      basetypes.StringType{},
+		"name":    basetypes.StringType{},
+		"project": basetypes.StringType{},
+		"shared":  basetypes.BoolType{},
 	}
 }
 

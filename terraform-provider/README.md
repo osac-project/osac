@@ -167,6 +167,29 @@ everything else forces the replacement of the instance, which matches the
 immutability of the API. The resource supports `tofu import` with the
 instance ID.
 
+### `osac_secret`
+
+```hcl
+resource "osac_secret" "userdata" {
+  metadata = {
+    name   = "nginx-userdata"
+    tenant = "tenant1"
+  }
+  type = "SECRET_TYPE_USER_DATA"
+  data = {
+    userdata = base64encode(file("nginx-userdata.yaml"))
+  }
+}
+```
+
+The `data` entries are base64 encoded, like in the REST API, and marked
+sensitive. Only the data entries can be updated in place; the type is
+immutable in the server and forces a replacement. The resource supports
+`tofu import` with the secret ID.
+
+Note: the public Secrets service isn't registered in the REST gateway yet
+(OSAC-7381), so the provider uses the private API paths for secrets.
+
 ## Data sources
 
 All data sources accept exactly one of `name` or `id` and return the object

@@ -63,7 +63,7 @@ func (d *secretDataSource) Schema(ctx context.Context,
 	// The contents are exposed, but marked sensitive: the generator can't express that (the OpenAPI format
 	// that maps to sensitivity doesn't survive the map translation), so it is done here. Note that sensitive is
 	// a display hint: the values are still recorded in the Terraform state.
-	response.Schema = markSensitive(
+	response.Schema = markSensitiveDataSource(
 		withNameLookup(gen.SecretDataSourceSchema(ctx), "secret"),
 		"data",
 	)

@@ -51,16 +51,6 @@ func BareMetalInstanceCatalogItemDataSourceSchema(ctx context.Context) schema.Sc
 						Description:         "Time of deletion of the object.",
 						MarkdownDescription: "Time of deletion of the object.",
 					},
-					"description": schema.StringAttribute{
-						Computed:            true,
-						Description:         "Optional human-friendly description. Opaque string; clients may\ntreat content as Markdown. Not unique, mutable.",
-						MarkdownDescription: "Optional human-friendly description. Opaque string; clients may\ntreat content as Markdown. Not unique, mutable.",
-					},
-					"display_name": schema.StringAttribute{
-						Computed:            true,
-						Description:         "Human-friendly display name. Optional, not unique, mutable.\nNot constrained to DNS-label format.",
-						MarkdownDescription: "Human-friendly display name. Optional, not unique, mutable.\nNot constrained to DNS-label format.",
-					},
 					"labels": schema.MapAttribute{
 						ElementType:         types.StringType,
 						Computed:            true,
@@ -241,42 +231,6 @@ func (t MetadataType) ValueFromObject(ctx context.Context, in basetypes.ObjectVa
 			fmt.Sprintf(`deletion_timestamp expected to be basetypes.StringValue, was: %T`, deletionTimestampAttribute))
 	}
 
-	descriptionAttribute, ok := attributes["description"]
-
-	if !ok {
-		diags.AddError(
-			"Attribute Missing",
-			`description is missing from object`)
-
-		return nil, diags
-	}
-
-	descriptionVal, ok := descriptionAttribute.(basetypes.StringValue)
-
-	if !ok {
-		diags.AddError(
-			"Attribute Wrong Type",
-			fmt.Sprintf(`description expected to be basetypes.StringValue, was: %T`, descriptionAttribute))
-	}
-
-	displayNameAttribute, ok := attributes["display_name"]
-
-	if !ok {
-		diags.AddError(
-			"Attribute Missing",
-			`display_name is missing from object`)
-
-		return nil, diags
-	}
-
-	displayNameVal, ok := displayNameAttribute.(basetypes.StringValue)
-
-	if !ok {
-		diags.AddError(
-			"Attribute Wrong Type",
-			fmt.Sprintf(`display_name expected to be basetypes.StringValue, was: %T`, displayNameAttribute))
-	}
-
 	labelsAttribute, ok := attributes["labels"]
 
 	if !ok {
@@ -376,8 +330,6 @@ func (t MetadataType) ValueFromObject(ctx context.Context, in basetypes.ObjectVa
 		CreationTimestamp: creationTimestampVal,
 		Creator:           creatorVal,
 		DeletionTimestamp: deletionTimestampVal,
-		Description:       descriptionVal,
-		DisplayName:       displayNameVal,
 		Labels:            labelsVal,
 		Name:              nameVal,
 		Project:           projectVal,
@@ -522,42 +474,6 @@ func NewMetadataValue(attributeTypes map[string]attr.Type, attributes map[string
 			fmt.Sprintf(`deletion_timestamp expected to be basetypes.StringValue, was: %T`, deletionTimestampAttribute))
 	}
 
-	descriptionAttribute, ok := attributes["description"]
-
-	if !ok {
-		diags.AddError(
-			"Attribute Missing",
-			`description is missing from object`)
-
-		return NewMetadataValueUnknown(), diags
-	}
-
-	descriptionVal, ok := descriptionAttribute.(basetypes.StringValue)
-
-	if !ok {
-		diags.AddError(
-			"Attribute Wrong Type",
-			fmt.Sprintf(`description expected to be basetypes.StringValue, was: %T`, descriptionAttribute))
-	}
-
-	displayNameAttribute, ok := attributes["display_name"]
-
-	if !ok {
-		diags.AddError(
-			"Attribute Missing",
-			`display_name is missing from object`)
-
-		return NewMetadataValueUnknown(), diags
-	}
-
-	displayNameVal, ok := displayNameAttribute.(basetypes.StringValue)
-
-	if !ok {
-		diags.AddError(
-			"Attribute Wrong Type",
-			fmt.Sprintf(`display_name expected to be basetypes.StringValue, was: %T`, displayNameAttribute))
-	}
-
 	labelsAttribute, ok := attributes["labels"]
 
 	if !ok {
@@ -657,8 +573,6 @@ func NewMetadataValue(attributeTypes map[string]attr.Type, attributes map[string
 		CreationTimestamp: creationTimestampVal,
 		Creator:           creatorVal,
 		DeletionTimestamp: deletionTimestampVal,
-		Description:       descriptionVal,
-		DisplayName:       displayNameVal,
 		Labels:            labelsVal,
 		Name:              nameVal,
 		Project:           projectVal,
@@ -740,8 +654,6 @@ type MetadataValue struct {
 	CreationTimestamp basetypes.StringValue `tfsdk:"creation_timestamp"`
 	Creator           basetypes.StringValue `tfsdk:"creator"`
 	DeletionTimestamp basetypes.StringValue `tfsdk:"deletion_timestamp"`
-	Description       basetypes.StringValue `tfsdk:"description"`
-	DisplayName       basetypes.StringValue `tfsdk:"display_name"`
 	Labels            basetypes.MapValue    `tfsdk:"labels"`
 	Name              basetypes.StringValue `tfsdk:"name"`
 	Project           basetypes.StringValue `tfsdk:"project"`
@@ -751,7 +663,7 @@ type MetadataValue struct {
 }
 
 func (v MetadataValue) ToTerraformValue(ctx context.Context) (tftypes.Value, error) {
-	attrTypes := make(map[string]tftypes.Type, 11)
+	attrTypes := make(map[string]tftypes.Type, 9)
 
 	var val tftypes.Value
 	var err error
@@ -762,8 +674,6 @@ func (v MetadataValue) ToTerraformValue(ctx context.Context) (tftypes.Value, err
 	attrTypes["creation_timestamp"] = basetypes.StringType{}.TerraformType(ctx)
 	attrTypes["creator"] = basetypes.StringType{}.TerraformType(ctx)
 	attrTypes["deletion_timestamp"] = basetypes.StringType{}.TerraformType(ctx)
-	attrTypes["description"] = basetypes.StringType{}.TerraformType(ctx)
-	attrTypes["display_name"] = basetypes.StringType{}.TerraformType(ctx)
 	attrTypes["labels"] = basetypes.MapType{
 		ElemType: types.StringType,
 	}.TerraformType(ctx)
@@ -776,7 +686,7 @@ func (v MetadataValue) ToTerraformValue(ctx context.Context) (tftypes.Value, err
 
 	switch v.state {
 	case attr.ValueStateKnown:
-		vals := make(map[string]tftypes.Value, 11)
+		vals := make(map[string]tftypes.Value, 9)
 
 		val, err = v.Annotations.ToTerraformValue(ctx)
 
@@ -809,22 +719,6 @@ func (v MetadataValue) ToTerraformValue(ctx context.Context) (tftypes.Value, err
 		}
 
 		vals["deletion_timestamp"] = val
-
-		val, err = v.Description.ToTerraformValue(ctx)
-
-		if err != nil {
-			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
-		}
-
-		vals["description"] = val
-
-		val, err = v.DisplayName.ToTerraformValue(ctx)
-
-		if err != nil {
-			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
-		}
-
-		vals["display_name"] = val
 
 		val, err = v.Labels.ToTerraformValue(ctx)
 
@@ -915,8 +809,6 @@ func (v MetadataValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue
 			"creation_timestamp": basetypes.StringType{},
 			"creator":            basetypes.StringType{},
 			"deletion_timestamp": basetypes.StringType{},
-			"description":        basetypes.StringType{},
-			"display_name":       basetypes.StringType{},
 			"labels": basetypes.MapType{
 				ElemType: types.StringType,
 			},
@@ -947,8 +839,6 @@ func (v MetadataValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue
 			"creation_timestamp": basetypes.StringType{},
 			"creator":            basetypes.StringType{},
 			"deletion_timestamp": basetypes.StringType{},
-			"description":        basetypes.StringType{},
-			"display_name":       basetypes.StringType{},
 			"labels": basetypes.MapType{
 				ElemType: types.StringType,
 			},
@@ -966,8 +856,6 @@ func (v MetadataValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue
 		"creation_timestamp": basetypes.StringType{},
 		"creator":            basetypes.StringType{},
 		"deletion_timestamp": basetypes.StringType{},
-		"description":        basetypes.StringType{},
-		"display_name":       basetypes.StringType{},
 		"labels": basetypes.MapType{
 			ElemType: types.StringType,
 		},
@@ -992,8 +880,6 @@ func (v MetadataValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue
 			"creation_timestamp": v.CreationTimestamp,
 			"creator":            v.Creator,
 			"deletion_timestamp": v.DeletionTimestamp,
-			"description":        v.Description,
-			"display_name":       v.DisplayName,
 			"labels":             labelsVal,
 			"name":               v.Name,
 			"project":            v.Project,
@@ -1032,14 +918,6 @@ func (v MetadataValue) Equal(o attr.Value) bool {
 	}
 
 	if !v.DeletionTimestamp.Equal(other.DeletionTimestamp) {
-		return false
-	}
-
-	if !v.Description.Equal(other.Description) {
-		return false
-	}
-
-	if !v.DisplayName.Equal(other.DisplayName) {
 		return false
 	}
 
@@ -1082,8 +960,6 @@ func (v MetadataValue) AttributeTypes(ctx context.Context) map[string]attr.Type 
 		"creation_timestamp": basetypes.StringType{},
 		"creator":            basetypes.StringType{},
 		"deletion_timestamp": basetypes.StringType{},
-		"description":        basetypes.StringType{},
-		"display_name":       basetypes.StringType{},
 		"labels": basetypes.MapType{
 			ElemType: types.StringType,
 		},

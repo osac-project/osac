@@ -153,8 +153,14 @@ The full-flow projects run in this order:
 1. `vmaas-full-flow-resources` creates the infrastructure resources and tenant.
 2. `vmaas-full-flow-catalog` creates and publishes the catalog item.
 3. `vmaas-full-flow` creates and verifies the VM.
-4. `vmaas-full-flow-vm-delete` deletes the VM as the tenant admin.
-5. `vmaas-full-flow-delete` removes the catalog item, disk image, instance
+4. `vmaas-full-flow-vm-lifecycle` (opt-in) stops, starts, and restarts the VM
+   from its details page as the tenant admin. It checks the success alert, the
+   status, and which power buttons are enabled after each action, and confirms
+   through the CLI that the controller processed the restart. Full-mode runs
+   include it only when `OSAC_VM_POWER_ACTIONS=true` is set; to run it with
+   the creation flow, use `--project=vmaas-full-flow-vm-lifecycle`.
+5. `vmaas-full-flow-vm-delete` deletes the VM as the tenant admin.
+6. `vmaas-full-flow-delete` removes the catalog item, disk image, instance
    type, storage tier, tenant-admin RoleBinding and OSAC User, SSH public-key
    Secret, tenant, and generated credential file as the admin user.
 

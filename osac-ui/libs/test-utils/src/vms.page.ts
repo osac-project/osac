@@ -98,9 +98,41 @@ export const expectVmDetailsPage = async (
 
 /** Verify that the VM details page reports Running. */
 export const expectVmDetailsToBeRunning = async (page: Page, timeout = 15_000): Promise<void> => {
+  // The status is shown both beside the title and in the Overview card.
   await expect(
-    page.locator(...VmDetailsPage.statusLabel).filter({ hasText: exactText('Running') }),
-  ).toHaveCount(1, { timeout });
+    page
+      .locator(...VmDetailsPage.statusLabel)
+      .filter({ hasText: exactText('Running') })
+      .first(),
+  ).toBeVisible({ timeout });
+};
+
+/** Wait for the VM details page to report a status, refreshing the UI between polls. */
+export const waitForVmDetailsStatus = async (
+  page: Page,
+  name: string,
+  status: string,
+  timeout = 180_000,
+): Promise<void> => {
+  await expect
+    .poll(
+      async () => {
+        // A failed reload counts as "not there yet"; expect.poll would
+        // otherwise stop at the first thrown error.
+        try {
+          await page.reload();
+          await expectVmDetailsPage(page, name);
+        } catch {
+          return '';
+        }
+        const statusLabel = page
+          .locator(...VmDetailsPage.statusLabel)
+          .filter({ hasText: exactText(status) });
+        return (await statusLabel.count()) > 0 ? status : '';
+      },
+      { timeout, intervals: [1_000, 2_000, 5_000] },
+    )
+    .toBe(status);
 };
 
 /** Wait for the VM details page to report Running, refreshing the UI between polls. */
@@ -108,20 +140,48 @@ export const waitForVmToBeRunning = async (
   page: Page,
   name: string,
   timeout = 180_000,
+): Promise<void> => waitForVmDetailsStatus(page, name, 'Running', timeout);
+
+export type VmPowerAction = 'start' | 'stop' | 'restart';
+
+const powerActionButtons: Record<
+  VmPowerAction,
+  readonly [role: 'button', options: { name: string; exact: true }]
+> = {
+  start: VmDetailsPage.startButton,
+  stop: VmDetailsPage.stopButton,
+  restart: VmDetailsPage.restartButton,
+};
+
+const powerActionToastTitles: Record<VmPowerAction, string> = {
+  start: 'Start initiated for',
+  stop: 'Stop initiated for',
+  restart: 'Restart initiated for',
+};
+
+/** Verify which power buttons the VM details page enables. */
+export const expectVmPowerButtons = async (
+  page: Page,
+  enabled: Record<VmPowerAction, boolean>,
 ): Promise<void> => {
-  await expect
-    .poll(
-      async () => {
-        await page.reload();
-        await expectVmDetailsPage(page, name);
-        const runningStatus = page
-          .locator(...VmDetailsPage.statusLabel)
-          .filter({ hasText: exactText('Running') });
-        return (await runningStatus.count()) > 0 ? 'Running' : '';
-      },
-      { timeout, intervals: [1_000, 2_000, 5_000] },
-    )
-    .toBe('Running');
+  for (const action of Object.keys(powerActionButtons) as VmPowerAction[]) {
+    const button = page.getByRole(...powerActionButtons[action]);
+    await (enabled[action] ? expect(button).toBeEnabled() : expect(button).toBeDisabled());
+  }
+};
+
+/** Click a power button on the VM details page and verify the success toast. */
+export const runVmPowerAction = async (
+  page: Page,
+  name: string,
+  action: VmPowerAction,
+): Promise<void> => {
+  await expectVmDetailsPage(page, name);
+  const button = page.getByRole(...powerActionButtons[action]);
+  await expect(button).toBeEnabled();
+  await button.click();
+  // The alert title carries a screen-reader prefix, so match a substring.
+  await expect(page.getByText(`${powerActionToastTitles[action]} ${name}`)).toBeVisible();
 };
 
 /** Open a VM details page from its exact row link. */

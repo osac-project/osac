@@ -24,9 +24,14 @@
 # Dependency guard: Trident keeps a TridentBackendConfig in phase Deleting
 # while any volume on its backend still exists, and a deleted StorageClass
 # strands Pending claims. Refuse to remove anything while a PersistentVolume
-# or PersistentVolumeClaim still references one of the tenant's NetApp
-# StorageClasses, so a retry after the workloads are gone can complete cleanly.
-- name: Verify no volumes still use the tenant's NetApp StorageClasses
+# or PersistentVolumeClaim still belongs to the tenant's NetApp storage, so a
+# retry after the workloads are gone can complete cleanly. A volume belongs to
+# the tenant when its StorageClass name is a current tenant class, carries the
+# deterministic prefix of a dispatched backend (netapp-<assignment_key>-, which
+# also covers classes of removed tiers or classes that no longer exist), or,
+# for a bound PV, when its Trident backend is one of the tenant's
+# TridentBackendConfigs.
+- name: Verify no volumes still use the tenant's NetApp storage
   block:
     - name: Find tenant NetApp StorageClasses for the dependency guard
       kubernetes.core.k8s_info:
@@ -39,8 +44,20 @@
       register: _netapp_guard_sc_list
       no_log: true
 
+    # Returns no resources (rather than failing) when the CRD is not installed.
+    - name: Find tenant TridentBackendConfigs for the dependency guard
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        namespace: "{{ netapp_storage_trident_namespace }}"
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "osac.openshift.io/storage-provider=netapp"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _netapp_guard_tbc_list
+      no_log: true
+
     - name: Find PersistentVolumes for the dependency guard
-      when: (_netapp_guard_sc_list.resources | default([]) | length) > 0
       kubernetes.core.k8s_info:
         api_version: v1
         kind: PersistentVolume
@@ -48,39 +65,61 @@
       no_log: true
 
     - name: Find PersistentVolumeClaims for the dependency guard
-      when: (_netapp_guard_sc_list.resources | default([]) | length) > 0
       kubernetes.core.k8s_info:
         api_version: v1
         kind: PersistentVolumeClaim
       register: _netapp_guard_pvc_list
       no_log: true
 
-    - name: Count volumes that still use the tenant's NetApp StorageClasses
+    - name: Count volumes that still use the tenant's NetApp storage
       ansible.builtin.set_fact:
         _netapp_guard_dependents: >-
           {% set _names = _netapp_guard_sc_list.resources | default([]) | map(attribute='metadata.name') | list -%}
-          {% set _pv = (_netapp_guard_pv_list.resources | default([]))
-                       | selectattr('spec.storageClassName', 'defined')
-                       | selectattr('spec.storageClassName', 'in', _names) | list -%}
-          {% set _pvc = (_netapp_guard_pvc_list.resources | default([]))
-                        | selectattr('spec.storageClassName', 'defined')
-                        | selectattr('spec.storageClassName', 'in', _names) | list -%}
-          {{ {'pv': _pv | length, 'pvc': _pvc | length} }}
+          {# Every prefix is 'netapp-' + 16 hex + '-' (24 characters). -#}
+          {% set _prefixes = [] -%}
+          {% for _bid in (_provider_tiers | default([]) | selectattr('backend_id', 'defined')
+                          | map(attribute='backend_id') | select('string') | map('trim')
+                          | reject('equalto', '') | unique | list) -%}
+          {% set _ = _prefixes.append('netapp-' ~ (((_bid ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower) ~ '-') -%}
+          {% endfor -%}
+          {% set _uuids = _netapp_guard_tbc_list.resources | default([])
+                          | map(attribute='status.backendInfo.backendUUID', default='')
+                          | reject('equalto', '') | list -%}
+          {% set _counts = namespace(pv=0, pvc=0) -%}
+          {% for _pv in (_netapp_guard_pv_list.resources | default([])) -%}
+          {% set _sc = (_pv.spec | default({}, true)).storageClassName | default('', true) | string -%}
+          {% set _uuid = (((_pv.spec | default({}, true)).csi | default({}, true)).volumeAttributes | default({}, true)).backendUUID
+                         | default('', true) | string -%}
+          {% if (_sc in _names)
+                or (_sc[:24] in _prefixes)
+                or (_uuid | length > 0 and _uuid in _uuids) -%}
+          {% set _counts.pv = _counts.pv + 1 -%}
+          {% endif -%}
+          {% endfor -%}
+          {% for _pvc in (_netapp_guard_pvc_list.resources | default([])) -%}
+          {% set _sc = (_pvc.spec | default({}, true)).storageClassName | default('', true) | string -%}
+          {% if (_sc in _names)
+                or (_sc[:24] in _prefixes) -%}
+          {% set _counts.pvc = _counts.pvc + 1 -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ {'pv': _counts.pv, 'pvc': _counts.pvc} }}
 
-    - name: Fail while volumes still use the tenant's NetApp StorageClasses
+    - name: Fail while volumes still use the tenant's NetApp storage
       ansible.builtin.fail:
         msg: >-
           Refusing to remove NetApp cluster storage for the tenant:
           {{ _netapp_guard_dependents.pv }} PersistentVolume(s) and
           {{ _netapp_guard_dependents.pvc }} PersistentVolumeClaim(s) still use
-          its StorageClasses. Delete the workloads and their volumes first, then
-          retry; nothing was removed.
+          its StorageClasses or Trident backends. Delete the workloads and their
+          volumes first, then retry; nothing was removed.
       when: (_netapp_guard_dependents.pv | int) > 0 or (_netapp_guard_dependents.pvc | int) > 0
 
   always:
     - name: Clear dependency guard facts
       ansible.builtin.set_fact:
         _netapp_guard_sc_list: {}
+        _netapp_guard_tbc_list: {}
         _netapp_guard_pv_list: {}
         _netapp_guard_pvc_list: {}
 

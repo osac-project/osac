@@ -57,6 +57,30 @@
       when: _netapp_is_shared_tbc | bool
       no_log: true
 
+    # Only NotFound (an empty `resources` list, including a cluster without the
+    # TridentBackendConfig CRD) and Forbidden may fall back to selector-only
+    # StorageClasses. Any other lookup error (API unreachable, timeout, server
+    # error) must not silently drop the storagePools pin. failed_when: false
+    # resets `failed`, so a failed lookup is recognized by its missing
+    # `resources`; kubernetes.core reports Forbidden only in `msg`.
+    - name: Fail when a customer TridentBackendConfig lookup failed for a reason other than Forbidden
+      ansible.builtin.fail:
+        msg: >-
+          Lookup of a referenced shared TridentBackendConfig failed for a
+          reason other than NotFound or Forbidden. Retry when the target
+          cluster API is reachable.
+      when: >-
+        (_netapp_is_shared_tbc | bool) and (
+          (_shared_tbc_lookups.results | default([])
+           | rejectattr('skipped', 'defined')
+           | rejectattr('resources', 'defined')
+           | map(attribute='msg', default='')
+           | map('string')
+           | reject('search', '(?i)forbidden')
+           | list | length) > 0
+        )
+      no_log: true
+
     - name: Fail when a visible customer TridentBackendConfig is in Failed state
       ansible.builtin.fail:
         msg: >-

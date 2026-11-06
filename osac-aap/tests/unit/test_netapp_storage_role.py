@@ -902,6 +902,38 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
     assert lookup_task.get("failed_when") is False
     assert lookup_task.get("no_log") is True
 
+    # Only NotFound (empty resources) and Forbidden fall back to selector-only;
+    # any other lookup error fails instead of dropping the storagePools pin.
+    lookup_error_when = _find_task(
+        block_tasks,
+        "Fail when a customer TridentBackendConfig lookup failed for a reason other than Forbidden",
+    )["when"]
+
+    def _lookup_error(results):
+        return _render_when(
+            lookup_error_when,
+            {"_netapp_is_shared_tbc": True, "_shared_tbc_lookups": {"results": results}},
+        )
+
+    assert _lookup_error([{"item": "p", "resources": []}]) is False
+    assert _lookup_error([{"item": "p", "failed": False, "msg": "403 Forbidden: denied"}]) is False
+    assert _lookup_error([{"item": "p", "skipped": True}]) is False
+    assert (
+        _lookup_error([{"item": "p", "failed": False, "msg": "Failed to get client: timed out"}])
+        is True
+    )
+    assert _lookup_error([{"item": "p", "failed": False}]) is True
+    assert (
+        _render_when(
+            lookup_error_when,
+            {
+                "_netapp_is_shared_tbc": False,
+                "_shared_tbc_lookups": {"results": [{"item": "p", "msg": "boom"}]},
+            },
+        )
+        is False
+    )
+
     resolve_bnames_expr = _find_task(
         block_tasks, "Resolve bound Trident backend names per Shared-TBC profile"
     )["ansible.builtin.set_fact"]["_netapp_profile_backend_names"]
@@ -1846,55 +1878,85 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
         assert _render_when(tenant_dns_when, {"tenant_name": invalid_tenant}) is True
     assert _render_when(tenant_dns_when, {"tenant_name": "acme-tenant-01"}) is False
 
-    # The dependency guard runs before any deletion and counts PVs/PVCs that use
-    # the tenant's NetApp StorageClasses (and only those).
+    # The dependency guard runs before any deletion and counts PVs/PVCs that
+    # belong to the tenant's NetApp storage (and only those).
     guard_names = [t.get("name") for t in teardown_cluster_tasks]
-    assert guard_names.index("Verify no volumes still use the tenant's NetApp StorageClasses") < (
+    assert guard_names.index("Verify no volumes still use the tenant's NetApp storage") < (
         guard_names.index("Clean up cluster-side K8s resources")
     )
     guard_block = _find_task(
-        teardown_cluster_tasks, "Verify no volumes still use the tenant's NetApp StorageClasses"
+        teardown_cluster_tasks, "Verify no volumes still use the tenant's NetApp storage"
     )["block"]
     for lookup_name in (
         "Find tenant NetApp StorageClasses for the dependency guard",
+        "Find tenant TridentBackendConfigs for the dependency guard",
         "Find PersistentVolumes for the dependency guard",
         "Find PersistentVolumeClaims for the dependency guard",
     ):
-        assert _find_task(guard_block, lookup_name).get("no_log") is True, lookup_name
+        lookup = _find_task(guard_block, lookup_name)
+        assert lookup.get("no_log") is True, lookup_name
+        # Lookups always run so classes that no longer exist are still guarded.
+        assert "when" not in lookup, lookup_name
     dependents_expr = _find_task(
-        guard_block, "Count volumes that still use the tenant's NetApp StorageClasses"
+        guard_block, "Count volumes that still use the tenant's NetApp storage"
     )["ansible.builtin.set_fact"]["_netapp_guard_dependents"]
-    guard_sc = {"resources": [{"metadata": {"name": "netapp-k1-t1"}}]}
-    assert _render(
-        dependents_expr,
-        {
-            "_netapp_guard_sc_list": guard_sc,
-            "_netapp_guard_pv_list": {
-                "resources": [
-                    {"spec": {"storageClassName": "netapp-k1-t1"}},
-                    {"spec": {"storageClassName": "other-sc"}},
-                    {"spec": {}},
-                ]
-            },
-            "_netapp_guard_pvc_list": {
-                "resources": [
-                    {"spec": {"storageClassName": "netapp-k1-t1"}},
-                    {"spec": {"storageClassName": "netapp-k1-t1"}},
-                ]
-            },
+    key = (__import__("hashlib").sha256(b"be-1|acme").hexdigest())[:16]
+    removed_tier_sc = f"netapp-{key}-{'0' * 16}"
+    guard_vars = {
+        "tenant_name": "acme",
+        "_provider_tiers": [{"name": "gold", "backend_id": "be-1"}],
+        "_netapp_guard_sc_list": {"resources": [{"metadata": {"name": "custom-current-sc"}}]},
+        "_netapp_guard_tbc_list": {
+            "resources": [{"status": {"backendInfo": {"backendUUID": "uuid-tenant"}}}]
         },
-    ) == {"pv": 1, "pvc": 2}
-    # No tenant StorageClasses: the PV/PVC lookups are skipped and nothing counts.
+        "_netapp_guard_pv_list": {
+            "resources": [
+                # Current tenant class.
+                {"spec": {"storageClassName": "custom-current-sc"}},
+                # Class of a removed tier (no StorageClass object left).
+                {"spec": {"storageClassName": removed_tier_sc}},
+                # Bound PV on a tenant Trident backend under an unknown class.
+                {
+                    "spec": {
+                        "storageClassName": "gone-sc",
+                        "csi": {"volumeAttributes": {"backendUUID": "uuid-tenant"}},
+                    }
+                },
+                # Unrelated volumes.
+                {
+                    "spec": {
+                        "storageClassName": "other-sc",
+                        "csi": {"volumeAttributes": {"backendUUID": "uuid-other"}},
+                    }
+                },
+                {"spec": {"storageClassName": "netapp-ffffffffffffffff-0000000000000000"}},
+                {"spec": {}},
+            ]
+        },
+        "_netapp_guard_pvc_list": {
+            "resources": [
+                {"spec": {"storageClassName": "custom-current-sc"}},
+                {"spec": {"storageClassName": removed_tier_sc}},
+                {"spec": {"storageClassName": "other-sc"}},
+                {"spec": {}},
+            ]
+        },
+    }
+    assert _render(dependents_expr, guard_vars) == {"pv": 3, "pvc": 2}
+    # Nothing tenant-owned: no classes, no TBCs, no dispatched tiers.
     assert _render(
         dependents_expr,
         {
+            "tenant_name": "acme",
+            "_provider_tiers": [],
             "_netapp_guard_sc_list": {"resources": []},
-            "_netapp_guard_pv_list": {"skipped": True},
-            "_netapp_guard_pvc_list": {"skipped": True},
+            "_netapp_guard_tbc_list": {"resources": []},
+            "_netapp_guard_pv_list": {"resources": [{"spec": {"storageClassName": "x"}}]},
+            "_netapp_guard_pvc_list": {"resources": []},
         },
     ) == {"pv": 0, "pvc": 0}
     guard_fail_when = _find_task(
-        guard_block, "Fail while volumes still use the tenant's NetApp StorageClasses"
+        guard_block, "Fail while volumes still use the tenant's NetApp storage"
     )["when"]
     assert _render_when(guard_fail_when, {"_netapp_guard_dependents": {"pv": 0, "pvc": 1}}) is True
     assert _render_when(guard_fail_when, {"_netapp_guard_dependents": {"pv": 1, "pvc": 0}}) is True

@@ -51,21 +51,23 @@ var _ = Describe("Catalog pricing inputs server", func() {
 
 	It("maps the aggregated inventory to the public type, with no price, provider rule, account id, or "+
 		"correlation id field", func() {
-		computeItemsDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceCatalogItem]().
-			SetLogger(logger).SetTenancyLogic(tenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		_, err = computeItemsDao.Create().SetObject(privatev1.ComputeInstanceCatalogItem_builder{
-			Id:        uuid.NewString(),
-			Metadata:  privatev1.Metadata_builder{Name: "vmaas-1", Tenant: testTenant}.Build(),
-			Title:     "VMaaS item",
-			Published: true,
-			Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-				InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
-					Locked: privatev1.InstanceTypeReference_builder{Id: "it1", Name: "m1.small"}.Build(),
+		seedCommittedCatalogFixtures(func(seedCtx context.Context) {
+			computeItemsDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceCatalogItem]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = computeItemsDao.Create().SetObject(privatev1.ComputeInstanceCatalogItem_builder{
+				Id:        uuid.NewString(),
+				Metadata:  privatev1.Metadata_builder{Name: "vmaas-1", Tenant: testTenant}.Build(),
+				Title:     "VMaaS item",
+				Published: true,
+				Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+					InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
+						Locked: privatev1.InstanceTypeReference_builder{Id: "it1", Name: "m1.small"}.Build(),
+					}.Build(),
 				}.Build(),
-			}.Build(),
-		}.Build()).Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
+			}.Build()).Do(seedCtx)
+			Expect(err).ToNot(HaveOccurred())
+		})
 
 		response, err := build().List(ctx, &publicv1.CatalogPricingInputsListRequest{})
 		Expect(err).ToNot(HaveOccurred())
@@ -91,22 +93,24 @@ var _ = Describe("Catalog pricing inputs server", func() {
 	})
 
 	It("forwards offset and limit to the delegate", func() {
-		computeItemsDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceCatalogItem]().
-			SetLogger(logger).SetTenancyLogic(tenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		for _, name := range []string{"m1.small", "m1.large"} {
-			_, err = computeItemsDao.Create().SetObject(privatev1.ComputeInstanceCatalogItem_builder{
-				Id:        uuid.NewString(),
-				Metadata:  privatev1.Metadata_builder{Name: uuid.NewString(), Tenant: testTenant}.Build(),
-				Published: true,
-				Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-					InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
-						Locked: privatev1.InstanceTypeReference_builder{Id: "it1", Name: name}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build()).Do(ctx)
+		seedCommittedCatalogFixtures(func(seedCtx context.Context) {
+			computeItemsDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceCatalogItem]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
 			Expect(err).ToNot(HaveOccurred())
-		}
+			for _, name := range []string{"m1.small", "m1.large"} {
+				_, err = computeItemsDao.Create().SetObject(privatev1.ComputeInstanceCatalogItem_builder{
+					Id:        uuid.NewString(),
+					Metadata:  privatev1.Metadata_builder{Name: uuid.NewString(), Tenant: testTenant}.Build(),
+					Published: true,
+					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+						InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
+							Locked: privatev1.InstanceTypeReference_builder{Id: "it1", Name: name}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build()).Do(seedCtx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+		})
 		response, err := build().List(ctx, publicv1.CatalogPricingInputsListRequest_builder{
 			Offset: proto.Int32(0),
 			Limit:  proto.Int32(1),
@@ -118,20 +122,22 @@ var _ = Describe("Catalog pricing inputs server", func() {
 	})
 
 	It("forwards the filter to the delegate", func() {
-		computeItemsDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceCatalogItem]().
-			SetLogger(logger).SetTenancyLogic(tenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		_, err = computeItemsDao.Create().SetObject(privatev1.ComputeInstanceCatalogItem_builder{
-			Id:        uuid.NewString(),
-			Metadata:  privatev1.Metadata_builder{Name: "vmaas-1", Tenant: testTenant}.Build(),
-			Published: true,
-			Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-				InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
-					Locked: privatev1.InstanceTypeReference_builder{Id: "it1", Name: "m1.small"}.Build(),
+		seedCommittedCatalogFixtures(func(seedCtx context.Context) {
+			computeItemsDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceCatalogItem]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = computeItemsDao.Create().SetObject(privatev1.ComputeInstanceCatalogItem_builder{
+				Id:        uuid.NewString(),
+				Metadata:  privatev1.Metadata_builder{Name: "vmaas-1", Tenant: testTenant}.Build(),
+				Published: true,
+				Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+					InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
+						Locked: privatev1.InstanceTypeReference_builder{Id: "it1", Name: "m1.small"}.Build(),
+					}.Build(),
 				}.Build(),
-			}.Build(),
-		}.Build()).Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
+			}.Build()).Do(seedCtx)
+			Expect(err).ToNot(HaveOccurred())
+		})
 
 		response, err := build().List(ctx, publicv1.CatalogPricingInputsListRequest_builder{
 			Filter: proto.String(`this.service == "cluster"`),

@@ -15,6 +15,7 @@ package servers
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -27,8 +28,18 @@ import (
 // first, and a cache still full of fresh entries bypasses caching rather than evicting a fresh entry. The zero value
 // of V is a cacheable value: an entry's presence in the map, not its content, marks it cached. Cached values are
 // shared with every caller served from an entry, so callers must treat them as read-only.
+//
+// A caller's wait and the fill it triggers have separate lifetimes. A caller that cancels, or whose deadline passes,
+// stops waiting and gets its own context error, while the fill keeps running detached from every caller's
+// cancellation for at most the fill budget, so the callers still waiting — and later gets — still receive the value.
+// A panicking fill is contained and reported to every waiter as an ordinary failed load instead of crashing the
+// process.
 type ttlCache[K comparable, V any] struct {
 	ttl time.Duration
+	// fillBudget bounds how long one fill may run once it has been detached from every caller: the fill context
+	// carries this deadline instead of any caller's. It must stay below the TTL so a fill that completes within
+	// its budget is not born expired.
+	fillBudget time.Duration
 	// maxEntries bounds the cache; keys that can come from request parameters would otherwise grow it without limit.
 	maxEntries int
 	// keyString encodes a key as an injective singleflight string, because singleflight keys by string.
@@ -46,11 +57,13 @@ type ttlEntry[V any] struct {
 	expires time.Time
 }
 
-// newTTLCache builds a cache with the default clock.
-func newTTLCache[K comparable, V any](ttl time.Duration, maxEntries int,
+// newTTLCache builds a cache with the default clock. fillBudget bounds a fill that has been detached from every
+// caller and must stay below ttl, so a fill that completes within its budget is not already expired when stored.
+func newTTLCache[K comparable, V any](ttl, fillBudget time.Duration, maxEntries int,
 	keyString func(K) string) *ttlCache[K, V] {
 	return &ttlCache[K, V]{
 		ttl:        ttl,
+		fillBudget: fillBudget,
 		maxEntries: maxEntries,
 		keyString:  keyString,
 		now:        time.Now,
@@ -59,32 +72,57 @@ func newTTLCache[K comparable, V any](ttl time.Duration, maxEntries int,
 }
 
 // get returns the cached value for key, loading it through load on a miss. Every concurrent caller of one key shares
-// a single load, and only a successful load is cached.
+// a single load, and only a successful load is cached. A fresh entry is served from the snapshot even when ctx is
+// already done. On a miss with ctx already done, get returns ctx's own error without starting a fill. Otherwise get
+// waits for the shared fill until either the fill completes or ctx is done: a caller that gives up returns its own
+// context error promptly, while the fill keeps running for the remaining waiters and later gets. The fill runs under
+// a context derived from the leading caller's — its values (transaction manager, auth metadata) are preserved, but
+// its cancellation and deadline are dropped and replaced by the fill budget, so no caller's departure can cancel or
+// truncate the shared fill. A fill that panics is converted to an error and, like any failure, caches nothing.
 func (c *ttlCache[K, V]) get(ctx context.Context, key K,
 	load func(context.Context) (V, error)) (V, error) {
 	if value, ok := c.snapshot(key); ok {
 		return value, nil
 	}
-	result, err, _ := c.group.Do(c.keyString(key), func() (any, error) {
+	if err := ctx.Err(); err != nil {
+		var zero V
+		return zero, err
+	}
+	flight := c.group.DoChan(c.keyString(key), func() (result any, err error) {
+		// Contain panics: singleflight deliberately re-panics in a goroutine when other callers are waiting on the
+		// flight, which would crash the process, so a panicking fill must become a normal failed load here.
+		defer func() {
+			if p := recover(); p != nil {
+				result = nil
+				err = fmt.Errorf("ttl cache fill panicked: %v", p)
+			}
+		}()
 		// The leader of this flight may have refreshed the entry between the caller's miss and joining it.
 		if value, ok := c.snapshot(key); ok {
 			return value, nil
 		}
-		value, err := load(ctx)
-		if err != nil {
-			var zero V
-			return zero, err
+		fillCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.fillBudget)
+		defer cancel()
+		value, loadErr := load(fillCtx)
+		if loadErr != nil {
+			return nil, loadErr
 		}
 		c.mu.Lock()
 		c.store(key, value)
 		c.mu.Unlock()
 		return value, nil
 	})
-	if err != nil {
+	select {
+	case result := <-flight:
+		if result.Err != nil {
+			var zero V
+			return zero, result.Err
+		}
+		return result.Val.(V), nil
+	case <-ctx.Done():
 		var zero V
-		return zero, err
+		return zero, ctx.Err()
 	}
-	return result.(V), nil
 }
 
 // snapshot returns the entry for key while it is still fresh.

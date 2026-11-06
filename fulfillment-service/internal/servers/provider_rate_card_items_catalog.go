@@ -47,7 +47,8 @@ type catalogPricingInventory struct {
 }
 
 func newCatalogPricingInventoryCache() *ttlCache[catalogInventoryKey, catalogPricingInventory] {
-	return newTTLCache[catalogInventoryKey, catalogPricingInventory](catalogInventoryCacheTTL, 1,
+	return newTTLCache[catalogInventoryKey, catalogPricingInventory](catalogInventoryCacheTTL,
+		catalogInventoryCacheFillBudget, 1,
 		func(catalogInventoryKey) string { return "catalog-inventory" })
 }
 

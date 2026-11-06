@@ -15,14 +15,34 @@ package computeinstance
 
 import (
 	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/pflag"
+	"go.uber.org/mock/gomock"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
+
+func newTestConsole() *terminal.Console {
+	console, err := terminal.NewConsole().
+		SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil))).
+		SetStdout(io.Discard).
+		SetStderr(io.Discard).
+		Build()
+	if err != nil {
+		panic("failed to build test console: " + err.Error())
+	}
+	return console
+}
 
 var _ = Describe("buildSpec", func() {
 	It("should populate a registered SSH key reference from the flag", func() {
@@ -433,5 +453,201 @@ var _ = Describe("--additional-disk flag parsing", func() {
 		_, err := parseAdditionalDisks([]string{"size=100,storage-tier="})
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("value is empty"))
+	})
+})
+
+var _ = Describe("maybeAttachExistingExternalIP", func() {
+	var (
+		ctx      context.Context
+		ctrl     *gomock.Controller
+		runner   *runnerContext
+		mockEIPs *MockExternalIPsClient
+		mockCIs  *MockComputeInstancesClient
+		mockAtts *MockExternalIPAttachmentsClient
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		ctrl = gomock.NewController(GinkgoT())
+		mockEIPs = NewMockExternalIPsClient(ctrl)
+		mockCIs = NewMockComputeInstancesClient(ctrl)
+		mockAtts = NewMockExternalIPAttachmentsClient(ctrl)
+		runner = &runnerContext{
+			console:                     newTestConsole(),
+			externalIPsClient:           mockEIPs,
+			computeInstancesClient:      mockCIs,
+			externalIPAttachmentsClient: mockAtts,
+		}
+		runner.args.timeout = 5 * time.Second
+	})
+
+	AfterEach(func() { ctrl.Finish() })
+
+	ci := func(id, name string) *publicv1.ComputeInstance {
+		return publicv1.ComputeInstance_builder{
+			Id:       id,
+			Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+		}.Build()
+	}
+
+	eip := func(id, name string, state publicv1.ExternalIPState) *publicv1.ExternalIP {
+		return publicv1.ExternalIP_builder{
+			Id:       id,
+			Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+			Status: publicv1.ExternalIPStatus_builder{
+				State:   state,
+				Address: "203.0.113.5",
+			}.Build(),
+		}.Build()
+	}
+
+	attachment := func(id string) *publicv1.ExternalIPAttachment {
+		return publicv1.ExternalIPAttachment_builder{Id: id}.Build()
+	}
+
+	// attachable: RUNNING, READY condition, has a network address.
+	attachable := func(id, name string) *publicv1.ComputeInstance {
+		return publicv1.ComputeInstance_builder{
+			Id:       id,
+			Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+			Status: publicv1.ComputeInstanceStatus_builder{
+				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+				Conditions: []*publicv1.ComputeInstanceCondition{
+					publicv1.ComputeInstanceCondition_builder{
+						Type:   publicv1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_READY,
+						Status: publicv1.ConditionStatus_CONDITION_STATUS_TRUE,
+					}.Build(),
+				},
+				ComputeNetworkAttachmentStatuses: []*publicv1.ComputeNetworkAttachmentStatus{
+					publicv1.ComputeNetworkAttachmentStatus_builder{IpAddress: "192.0.2.10"}.Build(),
+				},
+			}.Build(),
+		}.Build()
+	}
+
+	It("should be a no-op when --externalip is not set", func() {
+		runner.args.externalIP = ""
+		Expect(runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"), nil)).To(Succeed())
+	})
+
+	It("should wait for the CI to be attachable and create the attachment", func() {
+		runner.args.externalIP = "my-ip"
+		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+
+		mockCIs.EXPECT().Get(gomock.Any(), gomock.Any()).Return(
+			publicv1.ComputeInstancesGetResponse_builder{Object: attachable("ci-1", "my-vm")}.Build(), nil)
+		mockAtts.EXPECT().Create(gomock.Any(), gomock.Any()).Return(
+			publicv1.ExternalIPAttachmentsCreateResponse_builder{
+				Object: attachment("att-1"),
+			}.Build(), nil)
+
+		Expect(runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"), allocatedEIP)).To(Succeed())
+	})
+
+	It("should name the attachment after the external IP", func() {
+		runner.args.externalIP = "my-ip"
+		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+
+		mockCIs.EXPECT().Get(gomock.Any(), gomock.Any()).Return(
+			publicv1.ComputeInstancesGetResponse_builder{Object: attachable("ci-1", "my-vm")}.Build(), nil)
+		mockAtts.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, req *publicv1.ExternalIPAttachmentsCreateRequest, _ ...grpc.CallOption) (*publicv1.ExternalIPAttachmentsCreateResponse, error) {
+				Expect(req.GetObject().GetMetadata().GetName()).To(Equal("my-ip-attachment"))
+				return publicv1.ExternalIPAttachmentsCreateResponse_builder{
+					Object: attachment("att-1"),
+				}.Build(), nil
+			})
+
+		Expect(runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"), allocatedEIP)).To(Succeed())
+	})
+
+	It("should fail early when EIP is not ALLOCATED", func() {
+		runner.args.externalIP = "my-ip"
+		pendingEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
+
+		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			publicv1.ExternalIPsListResponse_builder{
+				Items: []*publicv1.ExternalIP{pendingEIP},
+			}.Build(), nil)
+
+		_, err := runner.resolveAttachableExternalIP(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("ALLOCATED"))
+		Expect(err.Error()).To(ContainSubstring("my-ip"))
+	})
+
+	It("should return error when EIP lookup returns empty list", func() {
+		runner.args.externalIP = "missing-ip"
+
+		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			publicv1.ExternalIPsListResponse_builder{Items: nil}.Build(), nil)
+
+		_, err := runner.resolveAttachableExternalIP(ctx)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("should return error when EIP lookup RPC fails", func() {
+		runner.args.externalIP = "my-ip"
+
+		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(nil, errors.New("rpc error"))
+
+		_, err := runner.resolveAttachableExternalIP(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("rpc error"))
+	})
+
+	It("should return error when CI poll returns terminal FAILED state", func() {
+		runner.args.externalIP = "my-ip"
+		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+		failedCI := publicv1.ComputeInstance_builder{
+			Id:       "ci-1",
+			Metadata: publicv1.Metadata_builder{Name: "my-vm"}.Build(),
+			Status: publicv1.ComputeInstanceStatus_builder{
+				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED,
+			}.Build(),
+		}.Build()
+
+		mockCIs.EXPECT().Get(gomock.Any(), gomock.Any()).Return(
+			publicv1.ComputeInstancesGetResponse_builder{Object: failedCI}.Build(), nil)
+
+		err := runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"), allocatedEIP)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("ready for attachment"))
+		Expect(err.Error()).To(ContainSubstring("my-vm"))
+	})
+
+	It("should return error when attachment creation fails", func() {
+		runner.args.externalIP = "my-ip"
+		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+
+		mockCIs.EXPECT().Get(gomock.Any(), gomock.Any()).Return(
+			publicv1.ComputeInstancesGetResponse_builder{Object: attachable("ci-1", "my-vm")}.Build(), nil)
+		mockAtts.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil, errors.New("attach failed"))
+
+		err := runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"), allocatedEIP)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("attach failed"))
+	})
+
+	It("should return error when CI poll times out", func() {
+		runner.args.externalIP = "my-ip"
+		runner.args.timeout = 1 * time.Millisecond
+		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+		pendingCI := publicv1.ComputeInstance_builder{
+			Id:       "ci-1",
+			Metadata: publicv1.Metadata_builder{Name: "my-vm"}.Build(),
+			Status: publicv1.ComputeInstanceStatus_builder{
+				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+			}.Build(),
+		}.Build()
+
+		mockCIs.EXPECT().Get(gomock.Any(), gomock.Any()).AnyTimes().Return(
+			publicv1.ComputeInstancesGetResponse_builder{Object: pendingCI}.Build(), nil)
+
+		err := runner.maybeAttachExistingExternalIP(ctx, ci("ci-1", "my-vm"), allocatedEIP)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("ready for attachment"))
+		Expect(err.Error()).To(ContainSubstring("my-vm"))
+		Expect(err.Error()).To(ContainSubstring("ci-1"))
 	})
 })

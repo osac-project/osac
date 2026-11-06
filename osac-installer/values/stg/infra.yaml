@@ -1,0 +1,91 @@
+# SNO (Single Node OpenShift) + LVMS + VMaaS + CaaS + BMaaS
+# Infrastructure values for osac-deps + osac-infra charts.
+# All required components (Keycloak, Kafka, PostgreSQL, OpenBao) are bundled in-cluster.
+
+# --- OLM Operator Subscriptions (osac-deps) ---
+certManager:
+  enabled: true
+
+trustManager:
+  enabled: true
+
+aapOperator:
+  enabled: true
+
+# LVMS operator is already installed; the LVMCluster is pre-configured manually
+# to target a specific partition. Set lvms-vg1 as the default StorageClass
+# manually before running osac-infra (the configure-lvms hook is skipped when
+# this is false).
+lvms:
+  enabled: false
+
+# MetalLB provides LoadBalancer IPs for CaaS hosted control planes.
+# Set metallb.addresses to free IPs on your network, or enable
+# metallb.derivePoolFromNodeIP to build a range from the node subnet.
+# Chart default addresses: 192.168.100.240-192.168.100.250.
+metallb:
+  enabled: true
+
+# Required for VMaaS (OpenShift Virtualization).
+cnv:
+  enabled: true
+
+# ACM is already installed and ships MCE as a bundled dependency.
+# Disable to avoid a duplicate MCE subscription.
+mce:
+  enabled: false
+  osImages:
+    # Update version and url to match the RHCOS release for your OCP version.
+    # Find ISOs at: mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/
+    - openshiftVersion: "4.22"
+      version: "9.8.20260715-1"
+      url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.22/4.22.20/rhcos-4.22.20-x86_64-live-iso.x86_64.iso"
+      cpuArchitecture: "x86_64"
+
+# --- Infrastructure resources (osac-infra) ---
+caIssuer:
+  enabled: true
+
+keycloak:
+  enabled: true
+  adminUsername: admin
+  adminPassword: ""  # set in values/stg/infra-secrets.yaml
+  # devFixtures seeds fixed, known passwords for built-in realm test users.
+  # Must be false outside of evaluation environments.
+  devFixtures:
+    enabled: false
+  uiUrl: ""  # set in values/stg/infra-secrets.yaml
+
+# Bundled in-cluster Kafka.
+# SNO has a single node: replicas must be 1 (default is 3).
+kafka:
+  enabled: true
+  replicas: 1
+  storage:
+    size: 100Gi
+  version: "4.2.0"
+  metadataVersion: "4.2-IV0"
+
+# Required for BMaaS: enables Ironic for BareMetalHost inventory.
+# Applies the Provisioning CR with no provisioning network and cluster-wide
+# BareMetalHost discovery.
+metal3:
+  enabled: true
+
+# Bundled PostgreSQL — acceptable for initial and evaluation deployments.
+# For production, provision an external PostgreSQL 18+ server and disable this.
+bundledPostgres:
+  enabled: true
+  database:
+    name: service
+    user: service
+
+# Bundled OpenBao — acceptable for initial and evaluation deployments.
+# For production, configure an external Vault-compatible secret store.
+bundledVault:
+  enabled: true
+  keycloakIssuerUrl: ""  # set in values/stg/infra-secrets.yaml
+  # Omit runAsUser/runAsGroup/fsGroup so the OpenShift restricted-v2 SCC
+  # allocates UIDs from the namespace range.
+  podSecurityContext:
+    runAsNonRoot: true

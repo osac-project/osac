@@ -713,7 +713,7 @@ controller_inventory_sources: # noqa: var-naming[no-role-prefix]
     organization: "{{ aap_organization_name }}"
     source: scm
     source_project: "{{ aap_prefix }}"
-    source_path: "inventory/localhost.yml"
+    source_path: "osac-aap/inventory/localhost.yml"
     inventory: "{{ aap_prefix }}-cluster-fulfillment"
     overwrite: true
     overwrite_vars: true
@@ -722,7 +722,7 @@ controller_inventory_sources: # noqa: var-naming[no-role-prefix]
     organization: "{{ aap_organization_name }}"
     source: scm
     source_project: "{{ aap_prefix }}"
-    source_path: "inventory/localhost.yml"
+    source_path: "osac-aap/inventory/localhost.yml"
     inventory: "{{ aap_prefix }}-config-as-code"
     overwrite: true
     overwrite_vars: true
@@ -731,7 +731,7 @@ controller_inventory_sources: # noqa: var-naming[no-role-prefix]
     organization: "{{ aap_organization_name }}"
     source: scm
     source_project: "{{ aap_prefix }}"
-    source_path: "inventory/localhost.yml"
+    source_path: "osac-aap/inventory/localhost.yml"
     inventory: "{{ aap_prefix }}-publish-templates"
     overwrite: true
     overwrite_vars: true
@@ -740,7 +740,7 @@ controller_inventory_sources: # noqa: var-naming[no-role-prefix]
     organization: "{{ aap_organization_name }}"
     source: scm
     source_project: "{{ aap_prefix }}"
-    source_path: "inventory/localhost.yml"
+    source_path: "osac-aap/inventory/localhost.yml"
     inventory: "{{ aap_prefix }}-compute-instance-operations"
     overwrite: true
     overwrite_vars: true
@@ -749,7 +749,7 @@ controller_inventory_sources: # noqa: var-naming[no-role-prefix]
     organization: "{{ aap_organization_name }}"
     source: scm
     source_project: "{{ aap_prefix }}"
-    source_path: "inventory/localhost.yml"
+    source_path: "osac-aap/inventory/localhost.yml"
     inventory: "{{ aap_prefix }}-networking-operations"
     overwrite: true
     overwrite_vars: true
@@ -758,7 +758,7 @@ controller_inventory_sources: # noqa: var-naming[no-role-prefix]
     organization: "{{ aap_organization_name }}"
     source: scm
     source_project: "{{ aap_prefix }}"
-    source_path: "inventory/localhost.yml"
+    source_path: "osac-aap/inventory/localhost.yml"
     inventory: "{{ aap_prefix }}-bare-metal-fulfillment"
     overwrite: true
     overwrite_vars: true
@@ -767,7 +767,7 @@ controller_inventory_sources: # noqa: var-naming[no-role-prefix]
     organization: "{{ aap_organization_name }}"
     source: scm
     source_project: "{{ aap_prefix }}"
-    source_path: "inventory/localhost.yml"
+    source_path: "osac-aap/inventory/localhost.yml"
     inventory: "{{ aap_prefix }}-storage-operations"
     overwrite: true
     overwrite_vars: true

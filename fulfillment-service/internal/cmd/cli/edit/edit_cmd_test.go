@@ -212,7 +212,9 @@ var _ = Describe("Edit command", func() {
 		},
 		Entry("public cluster is watchable", "cluster", map[string]int{"osac.public.v1": 0}, true),
 		Entry("public compute instance is watchable", "computeinstance", map[string]int{"osac.public.v1": 0}, true),
-		Entry("public identity provider is not watchable", "identityprovider", map[string]int{"osac.public.v1": 0}, false),
+		Entry("public identity provider is watchable", "identityprovider", map[string]int{"osac.public.v1": 0}, true),
+		Entry("public external IP is watchable", "externalip", map[string]int{"osac.public.v1": 0}, true),
+		Entry("public volume is not watchable", "volume", map[string]int{"osac.public.v1": 0}, false),
 		Entry("private hub is watchable", "hub", map[string]int{"osac.private.v1": 0}, true),
 	)
 

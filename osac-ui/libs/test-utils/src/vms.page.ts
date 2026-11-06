@@ -98,9 +98,13 @@ export const expectVmDetailsPage = async (
 
 /** Verify that the VM details page reports Running. */
 export const expectVmDetailsToBeRunning = async (page: Page, timeout = 15_000): Promise<void> => {
+  // The status is shown both beside the title and in the Overview card.
   await expect(
-    page.locator(...VmDetailsPage.statusLabel).filter({ hasText: exactText('Running') }),
-  ).toHaveCount(1, { timeout });
+    page
+      .locator(...VmDetailsPage.statusLabel)
+      .filter({ hasText: exactText('Running') })
+      .first(),
+  ).toBeVisible({ timeout });
 };
 
 /** Wait for the VM details page to report Running, refreshing the UI between polls. */

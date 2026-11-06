@@ -630,13 +630,63 @@ cp values/dev/instance.yaml values/<project-name>/instance.yaml
 Prerequisites (cert-manager, AAP, LVMS, MetalLB, CNV, MCE) are installed
 automatically by Phase 1. Each is gated by a values toggle (e.g.,
 `certManager.enabled: true`). See [prerequisites/README.md](prerequisites/README.md)
-for details on what each prerequisite provides.
+for details on what each prerequisite provides. For a custom MetalLB
+**IPAddressPool**, see [MetalLB address pool](#metallb-address-pool) below.
 
 Standalone MCE is disabled by default. Set `mce.enabled: true` in the
 infrastructure values when this installation owns its lifecycle; the `caas-ci`
 profile does so explicitly. Leave it `false` when RHACM or an existing MCE
 installation owns the lifecycle. The disabled state also suppresses the
 temporary Assisted image override resources.
+
+#### MetalLB address pool
+
+MetalLB supplies **LoadBalancer** IPs for CaaS (hosted control planes and
+similar services). Phase 1 installs the operator when `metallb.enabled: true`
+in your infrastructure values; the `osac-infra` chart applies the
+`caas-address-pool` **IPAddressPool** and runs the configure-metallb hook after
+the operator is ready.
+
+**Custom pool (recommended for production):** set explicit addresses in
+`values/<project-name>/infra.yaml`. The chart default is
+`192.168.100.240-192.168.100.250`; replace it with unused IPs on your node
+L2 network. Each entry follows MetalLB `spec.addresses` syntax:
+
+- IPv4 **CIDR** (for example `10.20.30.0/28`)
+- **Inclusive range** (for example `10.20.30.100-10.20.30.110`)
+- A **single** address as **`/32`** (for example `10.20.30.50/32`)
+
+```yaml
+metallb:
+  enabled: true
+  addresses:
+    - 10.20.30.100-10.20.30.110
+    - 10.20.30.200/32
+```
+
+Leave `derivePoolFromNodeIP: false` (the default) so the hook keeps this pool
+after install. Verify the pool on the cluster:
+
+```bash
+oc get ipaddresspool caas-address-pool -n metallb-system -o yaml
+```
+
+**Optional node-derived range (labs and CI):** when every node shares a subnet
+and you want the pool built from the first node's **InternalIP**, set
+`derivePoolFromNodeIP: true` and optionally adjust the last octets (defaults
+`240` and `250`). The hook patches the pool to
+`{subnet}.poolRangeStart-{subnet}.poolRangeEnd`. `poolRangeStart` must be less
+than `poolRangeEnd`. The `caas-ci`, `full-ci`, and `vmaas-ci` profiles enable
+this for automated environments; production installs should use explicit
+`addresses` instead.
+
+```yaml
+metallb:
+  enabled: true
+  derivePoolFromNodeIP: true
+  poolRangeStart: 240
+  poolRangeEnd: 250
+```
 
 #### AAP Configuration
 

@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"fmt"
 
 	"buf.build/go/protovalidate"
@@ -389,6 +390,48 @@ var _ = Describe("Private storage tiers server", func() {
 			st, ok := status.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(st.Code()).To(Equal(codes.NotFound))
+		})
+
+		It("Delete rejects a tier referenced by an active Volume", func() {
+			tier := createStorageTier()
+			volumes, err := NewPrivateVolumesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetTierResolver(func(context.Context, string) (*TierResolution, error) {
+					return &TierResolution{Provider: "vast", Protocol: tier.GetSpec().GetProtocol()}, nil
+				}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			volume, err := volumes.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{Name: "tier-dependent-volume"}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: tier.GetId(),
+						SizeGib:     10,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			err = suiteTx.Savepoint(ctx, func(deleteCtx context.Context) error {
+				_, deleteErr := server.Delete(deleteCtx, privatev1.StorageTiersDeleteRequest_builder{Id: tier.GetId()}.Build())
+				return deleteErr
+			})
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			Expect(status.Convert(err).Message()).To(ContainSubstring("in use"))
+
+			stored, err := server.Get(ctx, privatev1.StorageTiersGetRequest_builder{Id: tier.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
+
+			_, err = volumes.Delete(ctx, privatev1.VolumesDeleteRequest_builder{Id: volume.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{Id: tier.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.Get(ctx, privatev1.StorageTiersGetRequest_builder{Id: tier.GetId()}.Build())
+			Expect(status.Code(err)).To(Equal(codes.NotFound))
 		})
 
 		It("Sets id from metadata.name ignoring caller-provided value", func() {

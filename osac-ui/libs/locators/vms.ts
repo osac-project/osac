@@ -25,6 +25,9 @@ export const VmsMainPage = {
 export const VmDetailsPage = {
   pageTitle: ['h1.pf-v6-c-title'],
   statusLabel: ['.pf-v6-c-label'],
+  startButton: ['button', { name: 'Start', exact: true }],
+  stopButton: ['button', { name: 'Stop', exact: true }],
+  restartButton: ['button', { name: 'Restart', exact: true }],
   deleteButton: ['button', { name: 'Delete', exact: true }],
   deleteDialog: [`[role="dialog"][aria-labelledby="${deleteResourceModalIds.title}"]`],
   deleteTitle: [`#${deleteResourceModalIds.title}`],

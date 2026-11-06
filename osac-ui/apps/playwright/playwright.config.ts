@@ -38,6 +38,9 @@ if (flowMode !== 'create' && flowMode !== 'delete' && flowMode !== 'full') {
   throw new Error('OSAC_VM_FLOW_MODE must be create, delete, or full.');
 }
 
+// The VM Start/Stop/Restart test is opt-in for full-mode runs.
+const runVmPowerActions = process.env.OSAC_VM_POWER_ACTIONS === 'true';
+
 const hasExplicitRunState =
   Boolean(process.env.OSAC_CATALOG_TEST_RUN_ID) &&
   Boolean(process.env.OSAC_DISK_IMAGE_TEST_RUN_ID) &&
@@ -176,14 +179,25 @@ export default defineConfig({
       dependencies: ['vmaas-full-flow-catalog'],
     },
     {
+      name: 'vmaas-full-flow-vm-lifecycle',
+      testDir: vmaasDir,
+      testMatch: /lifecycle\.vm\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-full-flow'],
+    },
+    {
       name: 'vmaas-full-flow-vm-delete',
       testDir: vmaasDir,
       testMatch: /delete\.vm\.spec\.ts/,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       // In delete mode this is the first cleanup project. In full mode it
-      // follows the complete creation chain before deleting the VM.
-      dependencies: flowMode === 'full' ? ['vmaas-full-flow'] : [],
+      // follows the complete creation chain, plus the VM power actions when
+      // OSAC_VM_POWER_ACTIONS=true, before deleting the VM.
+      dependencies:
+        flowMode === 'full'
+          ? [runVmPowerActions ? 'vmaas-full-flow-vm-lifecycle' : 'vmaas-full-flow']
+          : [],
     },
     {
       name: 'vmaas-full-flow-delete',

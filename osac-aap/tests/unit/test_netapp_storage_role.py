@@ -1418,6 +1418,11 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
     )
     assert backend_ids == ["ded-1", "shared-1"]
     assert dedicated_ids == ["ded-1"]
+    # Backend IDs that differ only by case are distinct backends.
+    assert _render(
+        subset_task["ansible.builtin.set_fact"]["_netapp_backend_ids"],
+        {"_provider_tiers": [{"backend_id": "BE-1"}, {"backend_id": "be-1"}]},
+    ) == ["BE-1", "be-1"]
 
     entries_task = _find_task(
         ensure_tasks, "Build expected StorageClass entries and dedicated backend keys"
@@ -1945,6 +1950,25 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
         },
     }
     assert _render(dependents_expr, guard_vars) == {"pv": 3, "pvc": 2}
+    # Case-distinct backend IDs each contribute their own prefix.
+    lower_key = (__import__("hashlib").sha256(b"be-1|acme").hexdigest())[:16]
+    upper_key = (__import__("hashlib").sha256(b"BE-1|acme").hexdigest())[:16]
+    assert _render(
+        dependents_expr,
+        {
+            **guard_vars,
+            "_provider_tiers": [{"backend_id": "BE-1"}, {"backend_id": "be-1"}],
+            "_netapp_guard_sc_list": {"resources": []},
+            "_netapp_guard_tbc_list": {"resources": []},
+            "_netapp_guard_pv_list": {"resources": []},
+            "_netapp_guard_pvc_list": {
+                "resources": [
+                    {"spec": {"storageClassName": f"netapp-{upper_key}-{'1' * 16}"}},
+                    {"spec": {"storageClassName": f"netapp-{lower_key}-{'2' * 16}"}},
+                ]
+            },
+        },
+    ) == {"pv": 0, "pvc": 2}
     # Nothing tenant-owned: no classes, no TBCs, no dispatched tiers.
     assert _render(
         dependents_expr,

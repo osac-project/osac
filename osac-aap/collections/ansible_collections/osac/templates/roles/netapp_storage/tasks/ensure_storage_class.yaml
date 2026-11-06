@@ -19,11 +19,11 @@
 
 - name: Compute the dispatched backend ids and dedicated-SVM backend subset
   ansible.builtin.set_fact:
-    _netapp_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
+    _netapp_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique(case_sensitive=true) | list }}"
     _netapp_dedicated_backend_ids: >-
       {% set dedicated = [] -%}
       {% set conns = _provider_backend_connections | default({}, true) -%}
-      {% for bid in (_provider_tiers | map(attribute='backend_id') | unique | list) -%}
+      {% for bid in (_provider_tiers | map(attribute='backend_id') | unique(case_sensitive=true) | list) -%}
       {% if bid not in conns
             or conns[bid] is not mapping
             or conns[bid].provider_config is not defined

@@ -1,0 +1,7 @@
+provider:
+  name: osac
+data_sources:
+  bare_metal_instance_type:
+    read:
+      path: /api/fulfillment/v1/bare_metal_instance_types/{id}
+      method: GET

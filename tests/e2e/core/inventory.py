@@ -33,9 +33,8 @@ from typing import Any, Protocol
 
 import yaml
 
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import DEFAULT_HOST_LABEL_SELECTOR, GRPCClient
 from tests.e2e.core.helpers import (
-    DEFAULT_BMI_HOST_SELECTOR,
     HostRef,
     wait_for_bmh_available,
     wait_for_bmi_cr,
@@ -44,7 +43,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.netbox_client import NetBoxClient
-from tests.e2e.core.runner import env, poll_until
+from tests.e2e.core.runner import WaitResourceKind, env, poll_until
 
 VALID_INVENTORY_BACKENDS = ("metal3", "netbox")
 
@@ -146,7 +145,7 @@ class Metal3Inventory:
     def default_host_selector(self) -> dict[str, str]:
         # Matches the osac.openshift.io/host-type label the infra backend
         # stamps on the enrolled BMHs.
-        return dict(DEFAULT_BMI_HOST_SELECTOR)
+        return dict(DEFAULT_HOST_LABEL_SELECTOR)
 
     def wait_for_released(self, *, host: HostRef) -> None:
         wait_for_bmh_available(k8s=self.k8s, name=host.name, bmh_namespace=host.namespace)
@@ -226,6 +225,8 @@ class NetBoxInventory:
             retries=120,
             delay=10,
             description=f"NetBox device {device_id} claimed (active, held)",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi_cr_name,
         )
         return HostRef(namespace=bmh_ns, name=bmh_name)
 
@@ -259,6 +260,8 @@ class NetBoxInventory:
             retries=120,
             delay=10,
             description=f"NetBox device {device_id} released (BMH deleted, device staged)",
+            resource_kind=WaitResourceKind.BARE_METAL_HOST,
+            resource_id=host.name,
         )
 
     def ensure_available_hosts(self) -> None:

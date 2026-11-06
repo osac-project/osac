@@ -291,9 +291,10 @@ type Metadata_builder struct {
 	//
 	// An Update that changes this list, compared as a set, must carry the current `version`, whether or not `lock` is
 	// set; otherwise it is rejected with Aborted, and an Update without metadata that would change it is always
-	// rejected. Read the object again, reapply the change, and retry. An Update without a mask replaces the whole
-	// object, so leaving this list out of it is a change when the object has finalizers: send an update mask for the
-	// other fields that you change.
+	// rejected. Read the object again, reapply the change, and retry. What an Update without a mask does depends on the
+	// resource: most replace the whole object, so leaving this list out of it is a change when the object has
+	// finalizers, but some merge the request into the stored object or update only some fields. To change other fields
+	// of an object that may have finalizers, send an update mask for those fields.
 	Finalizers []string
 }
 

@@ -30,7 +30,8 @@
           content: "Hello"
       max_tokens: 10
     status_code: [200, 401, 403, 429]
-    validate_certs: false
+    validate_certs: true
+    ca_path: "{{ _verify_ingress_ca_file.path | default(omit) }}"
   register: _iso_ab
   failed_when: false
   no_log: true
@@ -49,7 +50,8 @@
           content: "Hello"
       max_tokens: 10
     status_code: [200, 401, 403, 429]
-    validate_certs: false
+    validate_certs: true
+    ca_path: "{{ _verify_ingress_ca_file.path | default(omit) }}"
   register: _iso_ba
   failed_when: false
   no_log: true
@@ -86,9 +88,16 @@
       environment:
         KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
       ansible.builtin.command:
-        cmd: >-
-          oc auth can-i create maassubscriptions.maas.opendatahub.io
-          -n {{ _iso_b_govns }} --as=maas-verify --as-group={{ _iso_a_group }}
+        argv:
+          - oc
+          - auth
+          - can-i
+          - create
+          - maassubscriptions.maas.opendatahub.io
+          - -n
+          - "{{ _iso_b_govns }}"
+          - --as=maas-verify
+          - "--as-group={{ _iso_a_group }}"
       register: _iso_rbac_ab
       changed_when: false
       failed_when: false
@@ -97,9 +106,16 @@
       environment:
         KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
       ansible.builtin.command:
-        cmd: >-
-          oc auth can-i create maassubscriptions.maas.opendatahub.io
-          -n {{ _iso_a_govns }} --as=maas-verify --as-group={{ _iso_b_group }}
+        argv:
+          - oc
+          - auth
+          - can-i
+          - create
+          - maassubscriptions.maas.opendatahub.io
+          - -n
+          - "{{ _iso_a_govns }}"
+          - --as=maas-verify
+          - "--as-group={{ _iso_b_group }}"
       register: _iso_rbac_ba
       changed_when: false
       failed_when: false

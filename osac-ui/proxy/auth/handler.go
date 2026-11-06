@@ -24,8 +24,8 @@ type Handler struct {
 	// FulfillmentAPIURL is the internal URL of the fulfillment API.
 	FulfillmentAPIURL string
 	// OIDCHTTPClient is used for all OIDC requests (discovery, token exchange, refresh).
-	// If nil, http.DefaultClient is used. Set to a client with InsecureSkipVerify for dev
-	// environments where the IdP uses a self-signed certificate.
+	// If nil, the proxy's safe OIDC client is used. Tests and development callers may
+	// provide a client with custom TLS roots for private IdP certificates.
 	OIDCHTTPClient *http.Client
 
 	issuerMu      sync.RWMutex
@@ -63,7 +63,7 @@ func (h *Handler) GetLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectURI, err := h.resolveCallbackURI(redirectBase)
+	redirectURI, err := h.resolveCallbackURI(r, redirectBase)
 	if err != nil {
 		log.WithError(err).Error("failed to resolve callback URI")
 		http.Error(w, "invalid redirect_base", http.StatusBadRequest)
@@ -139,7 +139,21 @@ func (h *Handler) PostLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	oidcCfg, err := FetchOIDCConfig(flow.IssuerURL, h.OIDCHTTPClient)
+	issuerURL, err := h.issuerURL()
+	if err != nil {
+		log.WithError(err).Error("failed to get OIDC issuer URL during token exchange")
+		http.Error(w, "could not determine OIDC issuer", http.StatusBadGateway)
+		return
+	}
+	if !sameOIDCIssuer(flow.IssuerURL, issuerURL) {
+		log.Warn("auth flow cookie issuer does not match the configured issuer")
+		http.Error(w, "invalid or expired state", http.StatusBadRequest)
+		return
+	}
+
+	// The flow cookie is client-controlled. Use the issuer advertised by the
+	// Fulfillment service as the request destination after binding the state to it.
+	oidcCfg, err := FetchOIDCConfig(issuerURL, h.OIDCHTTPClient)
 	if err != nil {
 		log.WithError(err).Error("OIDC discovery failed during token exchange")
 		http.Error(w, "OIDC discovery failed", http.StatusBadGateway)
@@ -270,6 +284,7 @@ func (h *Handler) PostLogout(w http.ResponseWriter, r *http.Request) {
 
 		if err := EndSession(oidcCfg, h.ClientID, tokenData.RefreshToken, tokenData.IDToken, h.OIDCHTTPClient); err != nil {
 			log.WithError(err).Error("Keycloak end_session failed")
+			ClearSessionCookies(w, r, h.BaseUIURL)
 			http.Error(w, "logout from identity provider failed", http.StatusBadGateway)
 			return
 		}
@@ -307,21 +322,52 @@ func (h *Handler) issuerURL() (string, error) {
 
 // resolveCallbackURI computes the /callback redirect URI from the SPA's redirect_base.
 // If BaseUIURL is configured, it is used instead (useful behind ingress where the
-// request origin may differ from the public URL).
-func (h *Handler) resolveCallbackURI(redirectBase string) (string, error) {
+// request origin may differ from the public URL). Otherwise the browser-provided
+// origin must match the request origin.
+func (h *Handler) resolveCallbackURI(r *http.Request, redirectBase string) (string, error) {
 	base := h.BaseUIURL
 	if base == "" {
+		redirectURL, err := parseCallbackBase(redirectBase)
+		if err != nil {
+			return "", err
+		}
+		requestURL, err := requestOrigin(r)
+		if err != nil {
+			return "", err
+		}
+		if !sameOrigin(requestURL, redirectURL) {
+			return "", fmt.Errorf("redirect_base must match the request origin")
+		}
 		base = redirectBase
 	}
-	u, err := url.Parse(strings.TrimSuffix(base, "/"))
+	u, err := parseCallbackBase(base)
 	if err != nil {
 		return "", err
-	}
-	if u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("redirect_base must include scheme and host")
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/") + "/callback"
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil
+}
+
+func parseCallbackBase(raw string) (*url.URL, error) {
+	base, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (!strings.EqualFold(base.Scheme, "http") && !strings.EqualFold(base.Scheme, "https")) ||
+		base.Host == "" || base.Hostname() == "" || base.User != nil || base.Opaque != "" ||
+		base.RawQuery != "" || base.ForceQuery || base.Fragment != "" || base.RawFragment != "" {
+		return nil, fmt.Errorf("redirect_base must be an HTTP(S) URL without credentials, query, or fragment")
+	}
+	base.Scheme = strings.ToLower(base.Scheme)
+	return base, nil
+}
+
+func requestOrigin(r *http.Request) (*url.URL, error) {
+	if r == nil || r.Host == "" {
+		return nil, fmt.Errorf("request origin is unavailable")
+	}
+	scheme := "http"
+	if IsSecure(r, "") {
+		scheme = "https"
+	}
+	return &url.URL{Scheme: scheme, Host: r.Host}, nil
 }

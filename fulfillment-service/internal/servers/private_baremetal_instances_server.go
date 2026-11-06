@@ -49,12 +49,13 @@ func validateBareMetalUserData(userData []byte) error {
 }
 
 type PrivateBareMetalInstancesServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
-	filterDesc        protoreflect.MessageDescriptor
-	secretStore       vault.SecretStore
+	logger             *slog.Logger
+	attributionLogic   auth.AttributionLogic
+	tenancyLogic       auth.TenancyLogic
+	metricsRegisterer  prometheus.Registerer
+	filterDesc         protoreflect.MessageDescriptor
+	secretStore        vault.SecretStore
+	networkingSettings *NetworkingSettings
 }
 
 var _ privatev1.BareMetalInstancesServer = (*PrivateBareMetalInstancesServer)(nil)
@@ -77,6 +78,7 @@ type PrivateBareMetalInstancesServer struct {
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 	secretsDao              *dao.GenericDAO[*privatev1.Secret]
 	secretStore             vault.SecretStore
+	settings                NetworkingSettings
 	lifecycle               *externalIPLifecycle
 }
 
@@ -113,6 +115,13 @@ func (b *PrivateBareMetalInstancesServerBuilder) SetFilterDesc(value protoreflec
 
 func (b *PrivateBareMetalInstancesServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateBareMetalInstancesServerBuilder {
 	b.secretStore = value
+	return b
+}
+
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *PrivateBareMetalInstancesServerBuilder) SetNetworkingSettings(value NetworkingSettings) *PrivateBareMetalInstancesServerBuilder {
+	b.networkingSettings = &value
 	return b
 }
 
@@ -263,6 +272,7 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		externalIPAttachmentDao: externalIPAttachmentDao,
 		secretsDao:              secretsDao,
 		secretStore:             b.secretStore,
+		settings:                resolveNetworkingSettings(b.networkingSettings),
 	}
 	result.lifecycle = newExternalIPLifecycle(
 		externalIPDao,
@@ -1119,6 +1129,10 @@ func validateBareMetalAttachmentsForInstanceType(
 func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 	ctx context.Context, bmi *privatev1.BareMetalInstance,
 ) error {
+	if !s.settings.ProvisioningEnabled {
+		return nil
+	}
+
 	pool, err := SelectExternalIPPool(ctx, s.logger, s.externalIPPoolDao, 1)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)

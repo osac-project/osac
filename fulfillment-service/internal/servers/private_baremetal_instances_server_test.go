@@ -2254,6 +2254,61 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(getResponse.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
 		})
 
+		It("skips automatic ExternalIPs and pool reservations when provider networking is disabled", func() {
+			server.settings.ProvisioningEnabled = false
+
+			pools, err := server.externalIPPoolDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pools.GetItems()).To(HaveLen(1))
+			poolID := pools.GetItems()[0].GetId()
+
+			createWithoutExternalIP := func(name string) {
+				response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+					Object: privatev1.BareMetalInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Spec: privatev1.BareMetalInstanceSpec_builder{
+							DiskImage:                privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+							CatalogItem:              privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+							SshPublicKey:             new(testSSHPublicKey),
+							AutoExternalIpAttachment: proto.Bool(true),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+
+				bmiID := response.GetObject().GetId()
+				eips, err := server.externalIPDao.List().
+					SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, bmiID)).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(eips.GetItems()).To(BeEmpty())
+			}
+
+			poolResponse, err := server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			available := poolResponse.GetObject().GetStatus().GetAvailable()
+			allocated := poolResponse.GetObject().GetStatus().GetAllocated()
+
+			createWithoutExternalIP(fmt.Sprintf("disabled-auto-eip-%s", uuid.NewString()[:8]))
+			poolResponse, err = server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(available))
+			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(allocated))
+
+			// A non-READY pool cannot prevent the workload from being created.
+			pool := poolResponse.GetObject()
+			pool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
+			_, err = server.externalIPPoolDao.Update().SetObject(pool).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			createWithoutExternalIP(fmt.Sprintf("disabled-auto-eip-%s", uuid.NewString()[:8]))
+			poolResponse, err = server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(available))
+			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(allocated))
+		})
+
 		It("auto_external_ip_attachment leaves attachment creation to the ready BareMetalInstance reconciler", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{

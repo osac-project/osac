@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class CiFiltersTest(unittest.TestCase):
-    def test_root_coderabbit_config_is_excluded_from_broad_test_filters(self):
+    def test_root_coderabbit_config_is_excluded_from_broad_test_filters(self) -> None:
         filters = yaml.safe_load((ROOT / ".github/filters/ci-filters.yml").read_text())
         for name in (
             "code",

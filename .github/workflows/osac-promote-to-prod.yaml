@@ -596,7 +596,7 @@ jobs:
     # provenance, independent of trusting the git ref alone.
     - name: Checkout stage-stamped chart source commit
       if: steps.dedup.outputs.already-released != 'true'
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: refs/tags/osac-charts-release/v${{ github.event.inputs.release_version }}
         fetch-depth: 0
@@ -1184,7 +1184,7 @@ jobs:
 
     steps:
     - name: Checkout notification action
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         persist-credentials: false
 

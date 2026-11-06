@@ -154,6 +154,9 @@ metadata:
 type: Opaque
 data:
   {{- range $key, $val := .Values.instanceGroups.storageFulfillment.secret }}
+  {{- if eq $key "VAST_VALIDATE_CERTS" }}
+  {{- fail (printf "instanceGroups.storageFulfillment.secret.%s is managed by instanceGroups.storageFulfillment.enable_certificate_validation" $key) }}
+  {{- end }}
   {{- if $val }}
   {{ $key }}: {{ $val | b64enc | quote }}
   {{- end }}

@@ -647,25 +647,26 @@ class AapSettingsTest(unittest.TestCase):
                 self.assertEqual(storage_group["data"].get("VAST_VALIDATE_CERTS"), "false")
 
     def test_storage_certificate_validation_setting_is_managed(self):
-        message = (
-            "instanceGroups.storageFulfillment.config.VAST_VALIDATE_CERTS is managed by "
-            "instanceGroups.storageFulfillment.enable_certificate_validation"
-        )
-        for value in ("true", ""):
-            with self.subTest(value=value):
-                result = aap_helm(
-                    {
-                        "instanceGroups": {
-                            "storageFulfillment": {
-                                "enabled": True,
-                                "enable_certificate_validation": False,
-                                "config": {"VAST_VALIDATE_CERTS": value},
+        for source in ("config", "secret"):
+            message = (
+                f"instanceGroups.storageFulfillment.{source}.VAST_VALIDATE_CERTS is managed by "
+                "instanceGroups.storageFulfillment.enable_certificate_validation"
+            )
+            for value in ("true", ""):
+                with self.subTest(source=source, value=value):
+                    result = aap_helm(
+                        {
+                            "instanceGroups": {
+                                "storageFulfillment": {
+                                    "enabled": True,
+                                    "enable_certificate_validation": False,
+                                    source: {"VAST_VALIDATE_CERTS": value},
+                                }
                             }
                         }
-                    }
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(message, result.stderr)
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(message, result.stderr)
 
     def test_network_fulfillment_settings_written_verbatim(self):
         ca = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"

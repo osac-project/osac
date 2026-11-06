@@ -214,8 +214,10 @@ certificates, values) is in the
 [external services support guide](external-services-support-guide.md).
 The customer install guide also explains how to configure `my-values.yaml` for
 the services you plan to deploy. Check the LVMS device configuration and
-MetalLB address range against your cluster, and set `cnv.enabled: true` if
-your deployment uses VMaaS.
+MetalLB address range against your cluster. For VMaaS, set `cnv.enabled: true`
+when this release should install and manage OpenShift Virtualization. Keep it
+`false` when administrators manage an existing CNV installation, and confirm
+that installation is ready on the workload cluster.
 
 ### Prepare external PostgreSQL
 
@@ -425,7 +427,7 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `caIssuer.enabled` | Creates the `default-ca` `ClusterIssuer` and the `ca-bundle` `ConfigMap`. | `true` |
 | `aapOperator.enabled` | Creates the AAP Operator `Subscription`. | `true` |
 | `aapOperator.channel` | Update channel for the AAP Operator. | `stable-2.6-cluster-scoped` |
-| `cnv.enabled` | Creates the OpenShift Virtualization `Subscription` and the `HyperConverged` custom resource. Required for VMaaS. | `false` |
+| `cnv.enabled` | Creates the OpenShift Virtualization `Subscription` and the `HyperConverged` custom resource when this release manages CNV. For VMaaS, leave it `false` when administrators manage CNV separately. | `false` |
 | `cnv.channel` | Update channel for OpenShift Virtualization. | `stable` |
 | `evpn.enabled` | Configures OpenShift host networking for VMaaS CUDN EVPN; requires OpenShift 4.22 or later. Leave disabled on Kind. | `false` |
 | `lvms.enabled` | Creates the LVM Storage `Subscription` and the `LVMCluster` custom resource. | `false` |
@@ -648,9 +650,16 @@ channel:
 export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
 ```
 
-In `my-workload-infra-values.yaml`, enable `cnv`. Enable `lvms` if LVM Storage
-needs to be installed on that cluster. Keep `evpn.enabled: false` when the
-workload cluster uses the default pod network. If it uses CUDN EVPN, enable
+In `my-workload-infra-values.yaml`, set `cnv.enabled: true` when this release
+should install and manage OpenShift Virtualization on the workload cluster. If
+administrators manage an existing CNV installation, keep `cnv.enabled: false`
+and confirm that installation is ready before proceeding. The Phase 1a command
+uses `--take-ownership`; with CNV enabled, Helm can adopt the rendered
+`openshift-cnv` namespace and other CNV resources. Uninstalling `osac-deps`
+can then delete those resources. Keep CNV disabled to preserve an
+administrator-managed installation. Enable `lvms` if LVM Storage needs to be
+installed on that cluster. Keep `evpn.enabled: false` when the workload cluster
+uses the default pod network. If it uses CUDN EVPN, enable
 `evpn` and configure phase 1b as described in
 [EVPN host networking (VMaaS)](#evpn-host-networking-vmaas). This configures
 host networking only; it does not enable OSAC provider networking across

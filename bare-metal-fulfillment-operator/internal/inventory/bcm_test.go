@@ -916,6 +916,26 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			Expect(host.ManagedBy).To(Equal("baremetal"))
 		})
 
+		It("skips hosts without the selected logical-port MAC", func() {
+			api := NewMockBCMAPI(gomock.NewController(GinkgoT()))
+			api.EXPECT().GetDevices(ctx).Return([]bcmclient.Device{
+				{ChildType: "LiteNode", Hostname: "node-invalid", MAC: "aa:bb:cc:dd:ee:01", ExtraValues: map[string]interface{}{
+					"resource_class": "h100", bcmclient.ExtraValueInterfaceMACs: map[string]interface{}{"other": "52:54:00:16:04:83"},
+				}},
+				{ChildType: "LiteNode", Hostname: "node-valid", MAC: "aa:bb:cc:dd:ee:02", ExtraValues: map[string]interface{}{
+					"resource_class": "h100", bcmclient.ExtraValueInterfaceMACs: map[string]interface{}{"data-0": "52-54-00-AA-BB-CC"},
+				}},
+			}, nil)
+
+			client := NewBCMClient(api, bmhMgr, "bcm")
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100"}, "data-0")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(host.Name).To(Equal("node-valid"))
+			Expect(host.SelectedLogicalPortMAC).To(Equal("52:54:00:aa:bb:cc"))
+		})
+
 		It("should skip PhysicalNode devices", func() {
 			bcmDevices = func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")

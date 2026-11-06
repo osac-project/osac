@@ -560,6 +560,32 @@ var _ = Describe("NetBox selector query", func() {
 			}))
 		})
 
+		It("skips devices without the selected custom-field MAC", func() {
+			api := &selectorQueryTestAPI{
+				devices: []netboxclient.Device{
+					{ID: "46", CustomFields: map[string]interface{}{
+						"osac_interface_macs": map[string]interface{}{"other": "52:54:00:16:04:83"},
+					}},
+					{ID: "47", CustomFields: map[string]interface{}{
+						"osac_interface_macs": map[string]interface{}{"data-0": "52-54-00-AA-BB-CC"},
+					}},
+				},
+			}
+			manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
+			manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
+			client := NewNetBoxClient(api, manager, testNetBoxHostClass, nil)
+
+			host, err := client.FindFreeHost(context.Background(), nil, "data-0")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(host.InventoryHostID).To(Equal("metal3-system/netbox-47"))
+			Expect(host.SelectedLogicalPortMAC).To(Equal("52:54:00:aa:bb:cc"))
+			Expect(api.deviceVisits).To(Equal(2))
+			Expect(api.deviceReadCalls).To(BeZero())
+			Expect(api.interfaceDevice).To(BeEmpty())
+		})
+
 		It("keeps the required managed filter when the selector requests another value", func() {
 			api := &selectorQueryTestAPI{}
 			client := NewNetBoxClient(api, testNetBoxSelectorBMHManager(), testNetBoxHostClass, nil)
@@ -1016,7 +1042,7 @@ var _ = Describe("NetBox GetHostNICs", func() {
 })
 
 var _ = Describe("NetBox GetHostLogicalPortMACs", func() {
-	It("prefers custom values for matching labels and retains aliases", func() {
+	It("uses only the configured custom-field mapping", func() {
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
 		api := &selectorQueryTestAPI{
@@ -1043,10 +1069,8 @@ var _ = Describe("NetBox GetHostLogicalPortMACs", func() {
 			"data-0": "aa:bb:cc:dd:ee:01",
 			"data-1": "52:54:00:16:04:86",
 			"data-2": "52:54:00:16:04:87",
-			"eno1":   "AA:BB:CC:DD:EE:01",
-			"eno2":   "52:54:00:16:04:85",
 		}))
-		Expect(api.interfaceDevice).To(Equal("42"))
+		Expect(api.interfaceDevice).To(BeEmpty())
 		Expect(api.deviceReadIDs).To(Equal([]string{"42"}))
 	})
 
@@ -1085,13 +1109,12 @@ var _ = Describe("NetBox GetHostLogicalPortMACs", func() {
 		Expect(api.deviceReadIDs).To(Equal([]string{"42"}))
 	})
 
-	It("returns native interface lookup errors without reading the custom field", func() {
-		lookupErr := errors.New("interface lookup failed")
+	It("does not consult native interfaces", func() {
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
 		api := &selectorQueryTestAPI{
 			interfaces:   []netboxclient.DeviceInterface{{Name: "native", PrimaryMAC: "52:54:00:00:00:01"}},
-			interfaceErr: lookupErr,
+			interfaceErr: errors.New("interface lookup failed"),
 			deviceSnapshot: netboxclient.DeviceSnapshot{Device: netboxclient.Device{
 				ID: "42",
 				CustomFields: map[string]interface{}{
@@ -1101,9 +1124,11 @@ var _ = Describe("NetBox GetHostLogicalPortMACs", func() {
 		}
 		got, err := NewNetBoxClient(api, manager, testNetBoxHostClass, nil).
 			GetHostLogicalPortMACs(context.Background(), "baremetal/netbox-42")
-		Expect(errors.Is(err, lookupErr)).To(BeTrue())
-		Expect(got).To(BeNil())
-		Expect(api.deviceReadCalls).To(BeZero())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal(map[string]string{"data-0": "52:54:00:16:04:83"}))
+		Expect(api.interfaceDevice).To(BeEmpty())
+		Expect(api.deviceReadIDs).To(Equal([]string{"42"}))
+		Expect(api.deviceReadCalls).To(Equal(1))
 	})
 
 	It("returns an empty map when neither source provides a mapping", func() {

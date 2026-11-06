@@ -860,6 +860,7 @@ Touched-area requirements: [component guide](../bare-metal-fulfillment-operator/
 
 - **Pure inventory, selection, validation, or client logic:** Cover success, no-match, and provider-error paths.
 - **Reconciliation, finalizers, allocation, or status transitions:** Use the public reconciler behavior and the appropriate CRD fixtures.
+- **Selected logical-port MAC status schema:** `test/integration/network_attachment_status_test.go` patches a normalized MAC through the installed BareMetalInstance status subresource and verifies malformed values are rejected by the generated CRD. Run `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf` from the repository root. Envtest covers controller selection and recording; this Kind case checks the deployed schema, not inventory-provider behavior.
 - **Controller deployment, CRDs, pool flows, or Kubernetes wiring:** Envtest alone does not prove the deployed controller path.
 - **Metal3, BCM, Ironic, BMC, power, or hardware semantics:** Static CRDs and HTTP test doubles do not satisfy a real-boundary requirement.
 - **Generated CRDs or Helm CRDs:** Keep generated artifacts synchronized.

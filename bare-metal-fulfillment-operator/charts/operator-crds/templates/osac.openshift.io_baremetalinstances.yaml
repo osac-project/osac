@@ -372,6 +372,11 @@ spec:
                     ipAddress:
                       description: IPAddress is the IP discovered after DHCP assignment.
                       type: string
+                    macAddress:
+                      description: MACAddress is the normalized hardware address selected
+                        for this interface.
+                      pattern: ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$
+                      type: string
                     primary:
                       description: Primary indicates whether this attachment is the
                         default gateway attachment.

@@ -166,7 +166,7 @@ func TestGetHostNICs_OpenStack(t *testing.T) {
 func TestFindFreeHost_PortFilter(t *testing.T) {
 	// osac_labels carries the host selector labels; matchExpressions are now matched
 	// against these rather than resource_class (see OSAC-3578 label filtering).
-	const nodeListResponse = `{"nodes": [{"uuid": "node-1", "name": "host-1", "resource_class": "gpu-node", "provision_state": "available", "extra": {"osac_labels": {"hostType": "gpu-node"}}}]}`
+	const nodeListResponse = `{"nodes": [{"uuid": "node-1", "name": "host-1", "resource_class": "gpu-node", "provision_state": "available", "extra": {"osac_labels": {"hostType": "gpu-node"}, "osac_interface_macs": {"data-0": "52:54:00:16:04:83"}}}]}`
 
 	t.Run("selects node with ports", func(t *testing.T) {
 		fakeServer := th.SetupHTTP()
@@ -198,6 +198,36 @@ func TestFindFreeHost_PortFilter(t *testing.T) {
 		}
 		if host.InventoryHostID != "node-1" {
 			t.Errorf("expected node-1, got %q", host.InventoryHostID)
+		}
+	})
+
+	t.Run("skips nodes without the selected logical-port MAC", func(t *testing.T) {
+		fakeServer := th.SetupHTTP()
+		defer fakeServer.Teardown()
+
+		fakeServer.Mux.HandleFunc("/nodes", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{"nodes":[{"uuid":"node-invalid","name":"host-invalid","provision_state":"available","extra":{"osac_labels":{"hostType":"gpu-node"},"osac_interface_macs":{"other":"52:54:00:16:04:83"}}},{"uuid":"node-valid","name":"host-valid","provision_state":"available","extra":{"osac_labels":{"hostType":"gpu-node"},"osac_interface_macs":{"data-0":"52-54-00-AA-BB-CC"}}}]}`)
+		})
+		fakeServer.Mux.HandleFunc("/ports/detail", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{"ports":[{"address":"aa:bb:cc:dd:ee:01"}]}`)
+		})
+		c := &OpenStackClient{client: fakeclient.ServiceClient(fakeServer), hostClass: "openstack"}
+		host, err := c.FindFreeHost(context.Background(), map[string]string{"hostType": "gpu-node"}, "data-0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if host == nil {
+			t.Fatal("expected the host with the selected-port MAC, got nil")
+		}
+		if host.InventoryHostID != "node-valid" {
+			t.Errorf("InventoryHostID = %q, want node-valid", host.InventoryHostID)
+		}
+		if host.SelectedLogicalPortMAC != "52:54:00:aa:bb:cc" {
+			t.Errorf("SelectedLogicalPortMAC = %q, want normalized MAC", host.SelectedLogicalPortMAC)
 		}
 	})
 

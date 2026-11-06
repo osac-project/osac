@@ -175,11 +175,15 @@ func (c *NetBoxClient) Close() error {
 	return c.credentialsReader.Close()
 }
 
-func (c *NetBoxClient) FindFreeHost(ctx context.Context, selector map[string]string) (*Host, error) {
-	return c.findFreeHost(ctx, buildFreeHostQuery(selector))
+func (c *NetBoxClient) FindFreeHost(ctx context.Context, selector map[string]string, selectedLogicalPorts ...string) (*Host, error) {
+	logicalPort, err := requestedLogicalPort(selectedLogicalPorts)
+	if err != nil {
+		return nil, err
+	}
+	return c.findFreeHost(ctx, buildFreeHostQuery(selector), logicalPort)
 }
 
-func (c *NetBoxClient) findFreeHost(ctx context.Context, query netboxclient.DeviceQuery) (*Host, error) {
+func (c *NetBoxClient) findFreeHost(ctx context.Context, query netboxclient.DeviceQuery, logicalPort string) (*Host, error) {
 	namespace, err := c.metal3Namespace()
 	if err != nil {
 		return nil, err
@@ -187,7 +191,20 @@ func (c *NetBoxClient) findFreeHost(ctx context.Context, query netboxclient.Devi
 
 	var foundHost *Host
 	err = c.api.ForEachDevice(ctx, query, func(device netboxclient.Device) (bool, error) {
-		foundHost = c.netBoxHostFromDevice(namespace, device)
+		host := c.netBoxHostFromDevice(namespace, device)
+		var macs map[string]string
+		var mappingErr error
+		if logicalPort != "" {
+			macs, mappingErr = decodeLogicalPortMACMapping(device.CustomFields["osac_interface_macs"])
+		}
+		eligible, err := hostSupportsLogicalPort(ctx, host, logicalPort, macs, mappingErr)
+		if err != nil {
+			return false, fmt.Errorf("failed to resolve selected logical port MAC: %w", err)
+		}
+		if !eligible {
+			return true, nil
+		}
+		foundHost = host
 		return false, nil
 	})
 	if err != nil {
@@ -635,40 +652,7 @@ func (c *NetBoxClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHost
 		return nil, errNetBoxClientNotImplemented
 	}
 
-	nativeMACs, err := c.nativeLogicalPortMACs(ctx, deviceID)
-	if err != nil {
-		return nil, err
-	}
-	customMACs, err := c.customFieldLogicalPortMACs(ctx, deviceID)
-	if err != nil {
-		return nil, err
-	}
-	return mergeLogicalPortMACs(nativeMACs, customMACs), nil
-}
-
-func mergeLogicalPortMACs(nativeMACs, customMACs map[string]string) map[string]string {
-	macs := make(map[string]string)
-	for name, mac := range nativeMACs {
-		macs[name] = mac
-	}
-	for name, mac := range customMACs {
-		macs[name] = mac
-	}
-	return macs
-}
-
-func (c *NetBoxClient) nativeLogicalPortMACs(ctx context.Context, deviceID string) (map[string]string, error) {
-	interfaces, err := c.api.ListDeviceInterfaces(ctx, deviceID)
-	if err != nil {
-		return nil, err
-	}
-	macs := make(map[string]string, len(interfaces))
-	for _, iface := range interfaces {
-		if iface.PrimaryMAC != "" {
-			macs[iface.Name] = iface.PrimaryMAC
-		}
-	}
-	return macs, nil
+	return c.customFieldLogicalPortMACs(ctx, deviceID)
 }
 
 func (c *NetBoxClient) customFieldLogicalPortMACs(ctx context.Context, deviceID string) (map[string]string, error) {
@@ -677,16 +661,9 @@ func (c *NetBoxClient) customFieldLogicalPortMACs(ctx context.Context, deviceID 
 		return nil, err
 	}
 	value := snapshot.Device.CustomFields["osac_interface_macs"]
-	if value == nil {
-		return nil, nil
-	}
-	raw, err := json.Marshal(value)
+	macs, err := decodeLogicalPortMACMapping(value)
 	if err != nil {
-		return nil, err
-	}
-	macs := map[string]string{}
-	if err := json.Unmarshal(raw, &macs); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse osac_interface_macs custom field: %w", err)
 	}
 	return macs, nil
 }

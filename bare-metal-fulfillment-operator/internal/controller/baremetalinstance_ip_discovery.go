@@ -300,3 +300,20 @@ func (r *BareMetalInstanceReconciler) initNetworkAttachmentStatuses(
 		bareMetalInstance.Status.NetworkAttachmentStatuses[i].Primary = na.Primary
 	}
 }
+
+func (r *BareMetalInstanceReconciler) recordSelectedLogicalPortMAC(
+	bareMetalInstance *v1alpha1.BareMetalInstance,
+	mac string,
+) {
+	r.initNetworkAttachmentStatuses(bareMetalInstance)
+	if len(bareMetalInstance.Status.NetworkAttachmentStatuses) > 0 {
+		bareMetalInstance.Status.NetworkAttachmentStatuses[0].MACAddress = mac
+	}
+}
+
+func selectedLogicalPortMAC(bareMetalInstance *v1alpha1.BareMetalInstance) string {
+	if len(bareMetalInstance.Status.NetworkAttachmentStatuses) == 0 {
+		return ""
+	}
+	return bareMetalInstance.Status.NetworkAttachmentStatuses[0].MACAddress
+}

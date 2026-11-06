@@ -106,7 +106,11 @@ func NewOpenStackClient(ctx context.Context, cfg *Config) (Client, error) {
 	}, nil
 }
 
-func (c *OpenStackClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*Host, error) {
+func (c *OpenStackClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string, selectedLogicalPorts ...string) (*Host, error) {
+	logicalPort, err := requestedLogicalPort(selectedLogicalPorts)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateMatchExpressions(matchExpressions); err != nil {
 		return nil, err
 	}
@@ -148,7 +152,7 @@ func (c *OpenStackClient) FindFreeHost(ctx context.Context, matchExpressions map
 	}
 
 	var foundHost *Host
-	err := nodes.List(c.client, listOpts).EachPage(ctx, func(ctx context.Context, page pagination.Page) (bool, error) {
+	err = nodes.List(c.client, listOpts).EachPage(ctx, func(ctx context.Context, page pagination.Page) (bool, error) {
 		log := ctrllog.FromContext(ctx)
 		nodeList, err := nodes.ExtractNodes(page)
 		if err != nil {
@@ -197,7 +201,7 @@ func (c *OpenStackClient) FindFreeHost(ctx context.Context, matchExpressions map
 			}
 
 			bareMetalPoolID, _ := getNestedLabel(node, shared.OsacBareMetalPoolIDLabel)
-			foundHost = &Host{
+			host := &Host{
 				BareMetalPoolID:     bareMetalPoolID,
 				BareMetalInstanceID: bareMetalInstanceID,
 				InventoryHostID:     node.UUID,
@@ -207,6 +211,19 @@ func (c *OpenStackClient) FindFreeHost(ctx context.Context, matchExpressions map
 				ProvisionState:      node.ProvisionState,
 				ManagedBy:           managedBy,
 			}
+			var macs map[string]string
+			var mappingErr error
+			if logicalPort != "" {
+				macs, mappingErr = decodeLogicalPortMACMapping(node.Extra[OpenStackInterfaceMACsKey])
+			}
+			eligible, err := hostSupportsLogicalPort(ctx, host, logicalPort, macs, mappingErr)
+			if err != nil {
+				return false, fmt.Errorf("failed to resolve selected logical port MAC: %w", err)
+			}
+			if !eligible {
+				continue
+			}
+			foundHost = host
 			return false, nil
 		}
 
@@ -454,16 +471,8 @@ func (c *OpenStackClient) GetHostLogicalPortMACs(ctx context.Context, inventoryH
 		return nil, fmt.Errorf("failed to get Ironic node %s: %w", inventoryHostID, err)
 	}
 
-	value, ok := node.Extra[OpenStackInterfaceMACsKey]
-	if !ok || value == nil {
-		return map[string]string{}, nil
-	}
-	raw, err := json.Marshal(value)
+	macs, err := decodeLogicalPortMACMapping(node.Extra[OpenStackInterfaceMACsKey])
 	if err != nil {
-		return nil, fmt.Errorf("host %s: failed to marshal %s extra: %w", inventoryHostID, OpenStackInterfaceMACsKey, err)
-	}
-	macs := map[string]string{}
-	if err := json.Unmarshal(raw, &macs); err != nil {
 		return nil, fmt.Errorf("host %s: failed to parse %s extra: %w", inventoryHostID, OpenStackInterfaceMACsKey, err)
 	}
 	return macs, nil

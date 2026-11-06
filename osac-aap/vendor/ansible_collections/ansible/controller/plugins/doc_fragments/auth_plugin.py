@@ -17,43 +17,48 @@ options:
     description: The network address of your Automation Platform Controller host.
     env:
     - name: CONTROLLER_HOST
-    - name: TOWER_HOST
       deprecated:
         collection_name: 'awx.awx'
         version: '4.0.0'
         why: Collection name change
-        alternatives: 'CONTROLLER_HOST'
+        alternatives: 'TOWER_HOST, AAP_HOSTNAME'
   username:
     description: The user that you plan to use to access inventories on the controller.
     env:
     - name: CONTROLLER_USERNAME
-    - name: TOWER_USERNAME
       deprecated:
         collection_name: 'awx.awx'
         version: '4.0.0'
         why: Collection name change
-        alternatives: 'CONTROLLER_USERNAME'
+        alternatives: 'TOWER_USERNAME, AAP_USERNAME'
   password:
     description: The password for your controller user.
     env:
     - name: CONTROLLER_PASSWORD
-    - name: TOWER_PASSWORD
       deprecated:
         collection_name: 'awx.awx'
         version: '4.0.0'
         why: Collection name change
-        alternatives: 'CONTROLLER_PASSWORD'
-  oauth_token:
+        alternatives: 'TOWER_PASSWORD, AAP_PASSWORD'
+  aap_token:
     description:
-    - The OAuth token to use.
+    - The OAuth token to use, sent as a Bearer token in the Authorization header.
+    - When connecting through the AAP gateway, use a token issued by the gateway.
     env:
     - name: CONTROLLER_OAUTH_TOKEN
+      deprecated:
+        collection_name: 'awx.awx'
+        version: '4.0.0'
+        why: Collection name change
+        alternatives: 'AAP_TOKEN'
     - name: TOWER_OAUTH_TOKEN
       deprecated:
         collection_name: 'awx.awx'
         version: '4.0.0'
         why: Collection name change
-        alternatives: 'CONTROLLER_OAUTH_TOKEN'
+        alternatives: 'AAP_TOKEN'
+    - name: AAP_TOKEN
+    aliases: [ oauth_token, controller_oauthtoken, tower_oauthtoken ]
   verify_ssl:
     description:
     - Specify whether Ansible should verify the SSL certificate of the controller host.
@@ -61,12 +66,11 @@ options:
     type: bool
     env:
     - name: CONTROLLER_VERIFY_SSL
-    - name: TOWER_VERIFY_SSL
       deprecated:
         collection_name: 'awx.awx'
         version: '4.0.0'
         why: Collection name change
-        alternatives: 'CONTROLLER_VERIFY_SSL'
+        alternatives: 'TOWER_VERIFY_SSL, AAP_VALIDATE_CERTS'
     aliases: [ validate_certs ]
   request_timeout:
     description:
@@ -76,7 +80,30 @@ options:
     type: float
     env:
     - name: CONTROLLER_REQUEST_TIMEOUT
-
+      deprecated:
+        collection_name: 'awx.awx'
+        version: '4.0.0'
+        why: Support for AAP variables
+        alternatives: 'AAP_REQUEST_TIMEOUT'
+    aliases: [ aap_request_timeout ]
+  max_retries:
+    description:
+    - Specify the max retries to be used with some connection issues.
+    - Defaults to 5.
+    - This will not work with the export or import modules.
+    type: int
+    env:
+    - name: AAP_MAX_RETRIES
+    aliases: [ aap_max_retries ]
+  retry_backoff_factor:
+    description:
+    - Backoff factor used when retrying connections.
+    - Defaults to 2.
+    - This will not work with the export or import modules.
+    type: int
+    env:
+    - name: AAP_RETRY_BACKOFF_FACTOR
+    aliases: [ aap_retry_backoff_factor ]
 notes:
 - If no I(config_file) is provided we will attempt to use the tower-cli library
   defaults to find your host information.

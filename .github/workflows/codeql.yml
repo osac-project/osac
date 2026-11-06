@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      # go.work at the repo root requires go >= 1.26.3 (it links
+      # go.work at the repo root requires go >= 1.26.10 (it links
       # fulfillment-service, osac-operator, osac-operator/api, and
       # bare-metal-fulfillment-operator into one workspace); the runner's
       # preinstalled Go is older, so autobuild fails extraction for all

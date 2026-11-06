@@ -1,6 +1,6 @@
 module github.com/osac-project/osac-metering
 
-go 1.26.3
+go 1.26.10
 
 require (
 	github.com/IBM/sarama v1.60.2
@@ -62,7 +62,7 @@ require (
 	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.19.2 // indirect
+	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
@@ -75,19 +75,22 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
+	go.opentelemetry.io/otel/metric v1.45.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.45.0 // indirect
+	go.opentelemetry.io/otel/trace v1.45.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
-	golang.org/x/mod v0.39.0 // indirect
-	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/term v0.45.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/term v0.47.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.49.0 // indirect
+	golang.org/x/tools v0.51.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260825221802-da73d73af1c5 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260911204522-f61a6ca850bd // indirect
 	google.golang.org/grpc v1.83.2 // indirect

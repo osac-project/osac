@@ -133,8 +133,8 @@ options:
             type: str
           throughput:
             description: >
-              The throughput to provision for a gp3 volume, with a maximum of 1,000 MiB/s.
-              Valid Range - Minimum value of V(125). Maximum value of V(1000).
+              The throughput to provision for a gp3 volume, with a maximum of 2,000 MiB/s.
+              Valid Range - Minimum value of V(125). Maximum value of V(2000).
             type: int
             version_added: 9.0.0
   cpu_options:
@@ -1134,9 +1134,9 @@ from typing import Optional
 from typing import Tuple
 from uuid import uuid4
 
-from ansible.module_utils._text import to_text
 from ansible.module_utils.common.dict_transformations import camel_dict_to_snake_dict
 from ansible.module_utils.common.dict_transformations import snake_dict_to_camel_dict
+from ansible.module_utils.common.text.converters import to_text
 
 from ansible_collections.amazon.aws.plugins.module_utils.botocore import normalize_boto3_result
 from ansible_collections.amazon.aws.plugins.module_utils.ec2 import AnsibleEC2Error

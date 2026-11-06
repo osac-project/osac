@@ -1,0 +1,7 @@
+---
+- name: Test playbook
+  hosts: localhost
+  remote_user: root
+  gather_facts: false
+  roles:
+    - vastdata.vms.protectedpath # noqa: syntax-check[specific]

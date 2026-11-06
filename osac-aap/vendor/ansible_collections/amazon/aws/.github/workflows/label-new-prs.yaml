@@ -1,0 +1,28 @@
+---
+name: label new prs
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - converted_to_draft
+      - ready_for_review
+
+jobs:
+  add_label:
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Add 'needs_triage' label if the pr is not a draft
+        uses: actions-ecosystem/action-add-labels@18f1af5e3544586314bbe15c0273249c770b2daf # v1
+        if: github.event.pull_request.draft == false
+        with:
+          labels: needs_triage
+
+      - name: Remove 'needs_triage' label if the pr is a draft
+        uses: actions-ecosystem/action-remove-labels@2ce5d41b4b6aa8503e285553f75ed56e0a40bae0 # v1
+        if: github.event.pull_request.draft == true
+        with:
+          labels: needs_triage

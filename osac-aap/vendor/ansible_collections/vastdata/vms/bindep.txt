@@ -1,0 +1,7 @@
+# bindep dependencies for building/execution environments.
+# https://docs.openstack.org/infra/bindep/
+python3-devel [platform:centos-8 platform:rhel-8 platform:centos-9 platform:rhel-9]
+python3-devel [platform:fedora]
+python3-dev [platform:dpkg]
+libssl-dev [platform:dpkg]
+openssl-devel [platform:rpm]

@@ -35,6 +35,46 @@ def normalize_value(value: Any, set_like: bool = False) -> Any:
     return value
 
 
+def flatten_subresources(resource: Dict[str, Any], keys: Any) -> Dict[str, Any]:
+    """Lift fields from nested sub-objects to the top level.
+
+    This is the canonical mechanism for the case where the API nests a group
+    of *sibling* writable fields under a wrapper object (e.g. AD returns
+    LDAP-delegated fields under ``ldap``) while the user supplies them flat at
+    the top level. Configure it declaratively via the ``flatten_subresources``
+    schema override.
+
+    It is distinct from the ``entity`` handling in
+    ``schema_overrides.normalize_list_by_user_schema``: that reconciles an
+    ``entity`` sub-object *inside list items* and keeps only user-schema keys
+    with a conflict override, whereas this promotes a whole sub-object's keys
+    to top-level siblings. Do not add a third flattening idiom — extend one of
+    these.
+
+    For each key in ``keys`` that maps to a dict in ``resource``, copy its
+    entries onto ``resource`` at the top level (without overwriting existing
+    top-level values) and drop the original nested key.
+
+    Args:
+        resource: The resource dictionary (mutated in place and returned).
+        keys: Iterable of sub-object keys to flatten.
+
+    Returns:
+        The same resource dict with sub-objects flattened.
+    """
+    if not resource or not keys:
+        return resource
+    for key in keys:
+        nested = resource.get(key)
+        if not isinstance(nested, dict):
+            continue
+        for inner_key, inner_value in nested.items():
+            if resource.get(inner_key) is None:
+                resource[inner_key] = inner_value
+        resource.pop(key, None)
+    return resource
+
+
 def normalize_resource(
     resource: Dict[str, Any],
     overrides: Dict[str, Any],
@@ -62,6 +102,10 @@ def normalize_resource(
     """
     if not resource:
         return {}
+
+    flatten_keys = overrides.get("flatten_subresources", set())
+    if flatten_keys:
+        resource = flatten_subresources(dict(resource), flatten_keys)
 
     read_only = overrides.get("read_only_fields", set())
     ephemeral = overrides.get("ephemeral_fields", set())
@@ -96,16 +140,42 @@ def normalize_resource(
     return result
 
 
-def values_equal(current_val: Any, desired_val: Any, set_like: bool = False) -> bool:
-    """Compare two values for equality.
+def values_equal(
+    current_val: Any,
+    desired_val: Any,
+    set_like: bool = False,
+    exact_dict: bool = False,
+) -> bool:
+    """Compare a current API value against a desired (user-supplied) value.
+
+    The comparison is asymmetric by design: the function answers "does the
+    current state already satisfy what the user asked for?", not "are these
+    two values structurally identical". Specifically:
+
+    - For non-empty dict-vs-dict comparisons, ``desired_val`` is treated as a
+      partial spec: every key in ``desired_val`` must match the corresponding
+      key in ``current_val``, but extra keys present in ``current_val`` (e.g.
+      server-injected defaults) are ignored. This avoids spurious patches when
+      the API echoes additional fields the user did not specify.
+    - When ``exact_dict`` is True, dict comparison uses strict equality instead
+      (replace semantics). Use this for maps where omitting a key means removal
+      (e.g. webhook ``headers``).
+    - An empty ``desired_val`` dict bypasses the subset path and falls back to
+      strict equality.
+    - ``None`` on the desired side and ``False`` on the desired side with
+      ``None`` on the current side are both treated as equal, matching APIs
+      that omit booleans when they are ``False``.
 
     Args:
-        current_val: Current value.
-        desired_val: Desired value.
-        set_like: If True, compare lists as sets.
+        current_val: Current value as returned by the API.
+        desired_val: Desired value as supplied by the user.
+        set_like: If True, compare lists as sets (only at the top level —
+            this flag is intentionally not propagated into nested-dict
+            recursion).
+        exact_dict: If True, compare dicts with ``==`` instead of subset match.
 
     Returns:
-        True if values are equal.
+        True if ``current_val`` already satisfies ``desired_val``.
     """
     if current_val is None and desired_val is None:
         return True
@@ -123,6 +193,12 @@ def values_equal(current_val: Any, desired_val: Any, set_like: bool = False) -> 
             # Items not hashable, fall back to sorted comparison
             pass
 
+    if isinstance(current_val, dict) and isinstance(desired_val, dict) and desired_val:
+        if exact_dict:
+            return current_val == desired_val
+        # Subset comparison for nested dicts (API may return extra default keys).
+        return all(values_equal(current_val.get(k), v) for k, v in desired_val.items())
+
     return current_val == desired_val
 
 
@@ -130,6 +206,7 @@ def compute_patch(
     current: Dict[str, Any],
     desired: Dict[str, Any],
     overrides: Optional[Dict[str, Any]] = None,
+    clear_fields: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Compute minimal dict patch from current to desired.
 
@@ -143,8 +220,12 @@ def compute_patch(
 
     Notes:
         - Only includes keys present in desired.
-        - Treats None as "not provided" (omit from patch).
+        - Treats None as "not provided" (omit from patch), EXCEPT for keys in
+          clear_fields, which are emitted as null to reset a currently-set value.
         - Respects set_like_lists from overrides for order-insensitive comparison.
+        - Respects exact_dict_fields from overrides for replace-semantics dicts.
+        - For fields in renamed_on_response, reads current under the response
+          name but keys the patch by the request name
         - Ephemeral fields (e.g. passwords) are excluded from patches to maintain idempotency,
           since they are never returned by the API and cannot be verified for changes.
     """
@@ -152,16 +233,27 @@ def compute_patch(
         overrides = {}
 
     set_like_lists = overrides.get("set_like_lists", set())
+    exact_dict_fields = overrides.get("exact_dict_fields", set())
+    renamed_on_response = overrides.get("renamed_on_response", {})
+    clear_fields = set(clear_fields or ())
 
     patch: Dict[str, Any] = {}
     for key, desired_val in desired.items():
         if desired_val is None:
+            # Explicit clear: emit null only when the field currently has a value
+            # (keeps the operation idempotent when it is already unset).
+            if key in clear_fields:
+                response_field = renamed_on_response.get(key, key)
+                if current.get(response_field) is not None:
+                    patch[key] = None
             continue
 
-        current_val = current.get(key)
-        is_set_like = key in set_like_lists
+        response_field = renamed_on_response.get(key, key)
+        current_val = current.get(response_field)
+        is_set_like = key in set_like_lists or response_field in set_like_lists
+        is_exact_dict = key in exact_dict_fields or response_field in exact_dict_fields
 
-        if not values_equal(current_val, desired_val, set_like=is_set_like):
+        if not values_equal(current_val, desired_val, set_like=is_set_like, exact_dict=is_exact_dict):
             patch[key] = desired_val
 
     return patch

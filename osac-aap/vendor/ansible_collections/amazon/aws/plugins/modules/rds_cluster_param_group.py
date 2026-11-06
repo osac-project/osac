@@ -86,7 +86,7 @@ EXAMPLES = r"""
           Application: parrot
 
 - name: Remove a parameter group
-  amazon.aws.rds_param_group:
+  amazon.aws.rds_cluster_param_group:
       state: absent
       name: test-cluster-group
 """
@@ -128,120 +128,192 @@ db_cluster_parameter_group:
             }
 """
 
-from itertools import zip_longest
 from typing import Any
 from typing import Dict
 from typing import List
-
-try:
-    import botocore
-except ImportError:
-    pass  # Handled by AnsibleAWSModule
+from typing import Optional
 
 from ansible.module_utils.common.dict_transformations import camel_dict_to_snake_dict
 from ansible.module_utils.common.dict_transformations import snake_dict_to_camel_dict
 
 from ansible_collections.amazon.aws.plugins.module_utils.modules import AnsibleAWSModule
+from ansible_collections.amazon.aws.plugins.module_utils.rds import AnsibleRDSError
+from ansible_collections.amazon.aws.plugins.module_utils.rds import create_db_cluster_parameter_group
+from ansible_collections.amazon.aws.plugins.module_utils.rds import delete_db_cluster_parameter_group
 from ansible_collections.amazon.aws.plugins.module_utils.rds import describe_db_cluster_parameter_groups
 from ansible_collections.amazon.aws.plugins.module_utils.rds import describe_db_cluster_parameters
 from ansible_collections.amazon.aws.plugins.module_utils.rds import ensure_tags
 from ansible_collections.amazon.aws.plugins.module_utils.rds import get_tags
+from ansible_collections.amazon.aws.plugins.module_utils.rds import modify_db_cluster_parameter_group
 from ansible_collections.amazon.aws.plugins.module_utils.retries import AWSRetry
 from ansible_collections.amazon.aws.plugins.module_utils.tagging import ansible_dict_to_boto3_tag_list
 
 
-def modify_parameters(
-    module: AnsibleAWSModule, connection: Any, group_name: str, parameters: List[Dict[str, Any]]
+def get_parameter_group(client, group_name: str) -> Optional[Dict[str, Any]]:
+    """Return the RDS cluster parameter group with the given name.
+
+    Args:
+        client: A boto3 RDS client.
+        group_name: Name of the RDS cluster parameter group.
+
+    Returns:
+        The parameter group as returned by the RDS API, or None if it does not exist.
+
+    Raises:
+        AnsibleRDSError: If the parameter groups could not be described.
+    """
+    groups = describe_db_cluster_parameter_groups(client, DBClusterParameterGroupName=group_name)
+    return groups[0] if groups else None
+
+
+def has_changed_parameters(
+    module: AnsibleAWSModule, current_params: List[Dict[str, Any]], desired_params: List[Dict[str, Any]]
 ) -> bool:
-    current_params = describe_db_cluster_parameters(module, connection, group_name)
-    parameters = snake_dict_to_camel_dict(parameters, capitalize_first=True)
-    # compare current resource parameters with the value from module parameters
+    """Compare the desired parameters against their current values.
+
+    Fails the module if a desired parameter is unknown or is not modifiable.
+
+    Args:
+        module: The AnsibleAWSModule instance.
+        current_params: Parameters currently set on the RDS cluster parameter group.
+        desired_params: Desired parameters, camel-cased and capitalized.
+
+    Returns:
+        True if any desired parameter differs from its current value.
+    """
+    current_by_name = {param["ParameterName"]: param for param in current_params}
     changed = False
-    for param in parameters:
-        found = False
-        for current_p in current_params:
-            if param.get("ParameterName") == current_p.get("ParameterName"):
-                found = True
-                if not current_p["IsModifiable"]:
-                    module.fail_json(f"The parameter {param.get('ParameterName')} cannot be modified")
-                changed |= any((current_p.get(k) != v for k, v in param.items()))
-        if not found:
-            module.fail_json(msg=f"Could not find parameter with name: {param.get('ParameterName')}")
-    if changed:
-        if not module.check_mode:
-            # When calling modify_db_cluster_parameter_group() function
-            # A maximum of 20 parameters can be modified in a single request.
-            # This is why we are creating chunk containing at max 20 items
-            for chunk in zip_longest(*[iter(parameters)] * 20, fillvalue=None):
-                non_empty_chunk = [item for item in chunk if item]
-                try:
-                    connection.modify_db_cluster_parameter_group(
-                        aws_retry=True, DBClusterParameterGroupName=group_name, Parameters=non_empty_chunk
-                    )
-                except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
-                    module.fail_json_aws(e, msg="Couldn't update RDS cluster parameters")
+    for param in desired_params:
+        name = param.get("ParameterName")
+        current_param = current_by_name.get(name)
+        if current_param is None:
+            module.fail_json(msg=f"Could not find parameter with name: {name}")
+        if not current_param["IsModifiable"]:
+            module.fail_json(msg=f"The parameter {name} cannot be modified")
+        changed |= any(current_param.get(key) != value for key, value in param.items())
     return changed
 
 
-def ensure_present(module: AnsibleAWSModule, connection: Any) -> None:
-    group_name = module.params["name"]
-    db_parameter_group_family = module.params["db_parameter_group_family"]
-    tags = module.params.get("tags")
-    purge_tags = module.params.get("purge_tags")
-    changed = False
+def modify_parameters(client, module: AnsibleAWSModule, group_name: str, parameters: List[Dict[str, Any]]) -> bool:
+    """Compare desired parameters against current values and apply the ones that changed.
 
-    response = describe_db_cluster_parameter_groups(module=module, connection=connection, group_name=group_name)
-    if not response:
-        # Create RDS cluster parameter group
-        params = dict(
-            DBClusterParameterGroupName=group_name,
-            DBParameterGroupFamily=db_parameter_group_family,
-            Description=module.params["description"],
+    Args:
+        client: A boto3 RDS client.
+        module: The AnsibleAWSModule instance.
+        group_name: Name of the RDS cluster parameter group.
+        parameters: Desired parameters as dicts of parameter_name, parameter_value and apply_method.
+
+    Returns:
+        True if a change was made.
+
+    Raises:
+        AnsibleRDSError: If the parameters could not be described or modified.
+    """
+    current_params = describe_db_cluster_parameters(client, DBClusterParameterGroupName=group_name)
+    desired_params = snake_dict_to_camel_dict(parameters, capitalize_first=True)
+    changed = has_changed_parameters(module, current_params, desired_params)
+    if changed and not module.check_mode:
+        modify_db_cluster_parameter_group(client, group_name, desired_params)
+    return changed
+
+
+def create_parameter_group(client, module: AnsibleAWSModule) -> Dict[str, Any]:
+    """Create an RDS cluster parameter group.
+
+    Args:
+        client: A boto3 RDS client.
+        module: The AnsibleAWSModule instance.
+
+    Returns:
+        The newly created parameter group as returned by the RDS API.
+
+    Raises:
+        AnsibleRDSError: If the parameter group could not be created.
+    """
+    params = dict(
+        DBClusterParameterGroupName=module.params["name"],
+        DBParameterGroupFamily=module.params["db_parameter_group_family"],
+        Description=module.params["description"],
+    )
+    tags = module.params.get("tags")
+    if tags:
+        params["Tags"] = ansible_dict_to_boto3_tag_list(tags)
+    return create_db_cluster_parameter_group(client, **params)["DBClusterParameterGroup"]
+
+
+def update_parameter_group(client, module: AnsibleAWSModule, group: Dict[str, Any]) -> bool:
+    """Update the tags of an existing RDS cluster parameter group.
+
+    Warns if a different parameter group family is requested, as the family is immutable.
+
+    Args:
+        client: A boto3 RDS client.
+        module: The AnsibleAWSModule instance.
+        group: The existing parameter group as returned by the RDS API.
+
+    Returns:
+        True if a change was made.
+    """
+    if module.params["db_parameter_group_family"] != group["DBParameterGroupFamily"]:
+        module.warn(
+            "The RDS cluster parameter group family is immutable and can't be changed when updating a RDS cluster parameter group."
         )
-        if tags:
-            params["Tags"] = ansible_dict_to_boto3_tag_list(tags)
+
+    tags = module.params.get("tags")
+    if not tags:
+        return False
+
+    group_arn = group["DBClusterParameterGroupArn"]
+    existing_tags = get_tags(client, module, group_arn)
+    return ensure_tags(client, module, group_arn, existing_tags, tags, module.params["purge_tags"])
+
+
+def ensure_present(client, module: AnsibleAWSModule) -> None:
+    """Create or update an RDS cluster parameter group, including its tags and parameters.
+
+    Args:
+        client: A boto3 RDS client.
+        module: The AnsibleAWSModule instance.
+
+    Raises:
+        AnsibleRDSError: If the parameter group could not be created or updated.
+    """
+    group_name = module.params["name"]
+    group = get_parameter_group(client, group_name)
+
+    if group is None:
         if module.check_mode:
             module.exit_json(changed=True, msg="Would have create RDS parameter group if not in check mode.")
-        try:
-            response = connection.create_db_cluster_parameter_group(aws_retry=True, **params)
-            changed = True
-        except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
-            module.fail_json_aws(e, msg="Couldn't create parameter group")
+        group = create_parameter_group(client, module)
+        changed = True
     else:
-        group = response[0]
-        if db_parameter_group_family != group["DBParameterGroupFamily"]:
-            module.warn(
-                "The RDS cluster parameter group family is immutable and can't be changed when updating a RDS cluster parameter group."
-            )
+        changed = update_parameter_group(client, module, group)
 
-        if tags:
-            existing_tags = get_tags(connection, module, group["DBClusterParameterGroupArn"])
-            changed = ensure_tags(
-                connection, module, group["DBClusterParameterGroupArn"], existing_tags, tags, purge_tags
-            )
+    if module.params.get("parameters"):
+        changed |= modify_parameters(client, module, group_name, module.params["parameters"])
 
-    parameters = module.params.get("parameters")
-    if parameters:
-        changed |= modify_parameters(module, connection, group_name, parameters)
+    result = camel_dict_to_snake_dict(group)
+    result["tags"] = get_tags(client, module, group["DBClusterParameterGroupArn"])
 
-    response = describe_db_cluster_parameter_groups(module=module, connection=connection, group_name=group_name)
-    group = camel_dict_to_snake_dict(response[0])
-    group["tags"] = get_tags(connection, module, group["db_cluster_parameter_group_arn"])
-
-    module.exit_json(changed=changed, db_cluster_parameter_group=group)
+    module.exit_json(changed=changed, db_cluster_parameter_group=result)
 
 
-def ensure_absent(module: AnsibleAWSModule, connection: Any) -> None:
-    group = module.params["name"]
-    response = describe_db_cluster_parameter_groups(module=module, connection=connection, group_name=group)
-    if not response:
+def ensure_absent(client, module: AnsibleAWSModule) -> None:
+    """Delete an RDS cluster parameter group if it exists.
+
+    Args:
+        client: A boto3 RDS client.
+        module: The AnsibleAWSModule instance.
+
+    Raises:
+        AnsibleRDSError: If the parameter group could not be deleted.
+    """
+    group_name = module.params["name"]
+    if get_parameter_group(client, group_name) is None:
         module.exit_json(changed=False, msg="The RDS cluster parameter group does not exist.")
 
     if not module.check_mode:
-        try:
-            response = connection.delete_db_cluster_parameter_group(aws_retry=True, DBClusterParameterGroupName=group)
-        except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
-            module.fail_json_aws(e, msg="Couldn't delete RDS cluster parameter group")
+        delete_db_cluster_parameter_group(client, group_name)
     module.exit_json(changed=True)
 
 
@@ -269,15 +341,15 @@ def main() -> None:
         supports_check_mode=True,
     )
 
-    try:
-        connection = module.client("rds", retry_decorator=AWSRetry.jittered_backoff())
-    except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
-        module.fail_json_aws(e, msg="Failed to connect to AWS")
+    client = module.client("rds", retry_decorator=AWSRetry.jittered_backoff())
 
-    if module.params.get("state") == "present":
-        ensure_present(module=module, connection=connection)
-    else:
-        ensure_absent(module=module, connection=connection)
+    try:
+        if module.params["state"] == "present":
+            ensure_present(client, module)
+        else:
+            ensure_absent(client, module)
+    except AnsibleRDSError as e:
+        module.fail_json_aws(e, msg="Failed to manage RDS cluster parameter group")
 
 
 if __name__ == "__main__":

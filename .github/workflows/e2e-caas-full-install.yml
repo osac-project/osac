@@ -81,7 +81,10 @@ jobs:
       contents: read
       # See e2e-vmaas-full-install.yml's identical grant for why this is needed.
       id-token: write
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
+    # TEST-ONLY: run the reusable workflow from the unmerged test-infra branch that
+    # derives CI_GUEST_INGRESS_IP_RANGE. Delete this branch after the run; this commit
+    # must never reach main.
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@no-issue/guest-ingress-vip-range
     with:
       # test-source=osac prefixes tests/e2e/. PR/merge_group: full caas suite
       # (sanity + regression). Schedule: regression. workflow_dispatch: honor
@@ -135,7 +138,9 @@ jobs:
       fork-pr-author: ${{ inputs.fork-pr-author }}
       # Checkout upstream test-infra, defaulting to the reusable workflow's main branch.
       test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
+      # TEST-ONLY: the scripts come from the same branch. Hardcoded so the
+      # workflow_dispatch default (main) cannot pull them back to main.
+      test-infra-ref: no-issue/guest-ingress-vip-range
       # Every run captures telemetry: pull request, merge queue, schedule and
       # manual. The capture never changes the test outcome; a failed collector
       # deploy only warns, and the run continues without it.

@@ -63,7 +63,7 @@ describe('buildComputeCatalogStepSchema', () => {
       }),
     ).rejects.toMatchObject({
       path: 'userData.value',
-      message: 'Cloud-init must not exceed 64 KB.',
+      message: 'User data must not exceed 64 KB.',
     });
   });
 

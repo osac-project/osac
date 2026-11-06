@@ -20,7 +20,7 @@ const ExternalIpAttachedTo = ({ attached, target }: ExternalIpAttachedToProps) =
   const kindLabel = attachedTargetKindLabel(t, target.kind);
 
   return (
-    <Content component="small">
+    <Content>
       {kindLabel}{' '}
       <Link to={target.href} aria-label={`${kindLabel}: ${target.name}`}>
         {target.name}

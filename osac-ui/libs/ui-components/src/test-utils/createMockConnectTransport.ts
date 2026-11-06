@@ -1350,16 +1350,19 @@ export const createMockConnectTransport = (
       router.service(ExternalIPs, {
         list: (req) => {
           overrides.onExternalIpList?.(req);
+          const items = externalIps.filter(
+            (item) =>
+              matchesIdInFilter(req.filter, item.id) &&
+              matchesUnallocatedExternalIpFilter(
+                req.filter,
+                item.status?.state,
+                item.status?.attached,
+              ),
+          );
           return {
-            items: externalIps.filter(
-              (item) =>
-                matchesIdInFilter(req.filter, item.id) &&
-                matchesUnallocatedExternalIpFilter(
-                  req.filter,
-                  item.status?.state,
-                  item.status?.attached,
-                ),
-            ),
+            items: req.limit === 0 ? [] : items,
+            size: items.length,
+            total: items.length,
           };
         },
         get: (req) => ({

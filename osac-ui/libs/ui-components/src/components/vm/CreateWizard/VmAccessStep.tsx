@@ -26,7 +26,9 @@ import ProvisioningField from '../../ProvisioningWizard/fields/ProvisioningField
 const VmAccessStep = () => {
   const { t } = useTranslation();
   const { values } = useFormikContext<ComputeInstanceWizardValues>();
-  const isLinux = values.spec.guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_LINUX;
+  const isLinux =
+    values.spec.guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_LINUX ||
+    values.spec.guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED;
   const userDataLabel = isLinux ? t('Cloud-init') : t('Sysprep');
   const userDataDescription = isLinux
     ? t('User data applied when the virtual machine starts.')

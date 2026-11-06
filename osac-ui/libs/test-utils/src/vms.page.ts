@@ -153,22 +153,61 @@ export const waitForVmToBeRunning = async (
   await waitForVmDetailsStatus(page, name, 'Running', timeout);
 };
 
-/** Poll the VM details page until it reports the requested lifecycle state. */
+/**
+ * Poll the VM details page until it reports the requested lifecycle state, or
+ * one of several states, and return the state it reported.
+ */
 export const waitForVmDetailsStatus = async (
   page: Page,
   name: string,
-  status: string,
+  status: string | readonly string[],
   timeout = 180_000,
-): Promise<void> => {
-  await waitForVmDetails(page, name, status, timeout, async () => {
-    const statusLabel = getVmDetailsStatus(page).filter({ hasText: exactText(status) });
-    return (await statusLabel.count()) > 0 ? status : '';
+): Promise<string> => {
+  const statuses = typeof status === 'string' ? [status] : status;
+  return waitForVmDetails(page, name, statuses, timeout, async () => {
+    for (const candidate of statuses) {
+      const statusLabel = getVmDetailsStatus(page).filter({ hasText: exactText(candidate) });
+      if ((await statusLabel.count()) > 0) {
+        return candidate;
+      }
+    }
+    return '';
   });
 };
 
 /** Trigger a VM power action; the caller verifies the resulting lifecycle state. */
 export const runVmPowerAction = async (page: Page, action: VmPowerAction): Promise<void> => {
   await page.getByRole(...vmPowerActionButton(action)).click();
+};
+
+const vmPowerActionToastTitles: Record<VmPowerAction, string> = {
+  start: 'Start initiated for',
+  stop: 'Stop initiated for',
+  restart: 'Restart initiated for',
+};
+
+/** Verify which power buttons the VM details page enables. */
+export const expectVmPowerButtons = async (
+  page: Page,
+  enabled: Record<VmPowerAction, boolean>,
+): Promise<void> => {
+  for (const [action, isEnabled] of Object.entries(enabled) as [VmPowerAction, boolean][]) {
+    const button = page.getByRole(...vmPowerActionButton(action));
+    await (isEnabled ? expect(button).toBeEnabled() : expect(button).toBeDisabled());
+  }
+};
+
+/** Click a power button on the VM details page and verify the success toast. */
+export const runVmPowerActionWithToast = async (
+  page: Page,
+  name: string,
+  action: VmPowerAction,
+): Promise<void> => {
+  await expectVmDetailsPage(page, name);
+  await expect(page.getByRole(...vmPowerActionButton(action))).toBeEnabled();
+  await runVmPowerAction(page, action);
+  // The alert title carries a screen-reader prefix, so match a substring.
+  await expect(page.getByText(`${vmPowerActionToastTitles[action]} ${name}`)).toBeVisible();
 };
 
 const detailValue = (page: Page, label: string): Locator =>
@@ -239,10 +278,12 @@ export const waitForVmConditionStatus = async (
 const waitForVmDetails = async (
   page: Page,
   name: string,
-  status: string,
+  status: string | readonly string[],
   timeout: number,
   assertion: () => Promise<string>,
-): Promise<void> => {
+): Promise<string> => {
+  const statuses = typeof status === 'string' ? [status] : status;
+  let reported = '';
   await expect
     .poll(
       async () => {
@@ -254,14 +295,20 @@ const waitForVmDetails = async (
             await openVmDetailsPage(page, name);
           }
           await expectVmDetailsPage(page, name);
-          return await assertion();
+          reported = await assertion();
         } catch {
-          return '';
+          reported = '';
         }
+        return statuses.includes(reported);
       },
-      { timeout, intervals: [1_000, 2_000, 5_000] },
+      {
+        message: `Wait for VM '${name}' to report ${statuses.join(' or ')}`,
+        timeout,
+        intervals: [1_000, 2_000, 5_000],
+      },
     )
-    .toBe(status);
+    .toBe(true);
+  return reported;
 };
 
 /** Change the VM instance type through the details-page modal. */

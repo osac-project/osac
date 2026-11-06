@@ -27,6 +27,7 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	grpcmetadata "google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -552,6 +553,15 @@ func expectConflictMessage(err error, id string) {
 
 // finalizerChangeMessage is the message that the generic server logs when it has written a finalizer change.
 const finalizerChangeMessage = "Updated finalizers"
+
+// methodStream is the server transport stream of a gRPC call to the given method, which is what grpc.Method reads
+// from the context. It doesn't send anything.
+type methodStream string
+
+func (s methodStream) Method() string                 { return string(s) }
+func (methodStream) SetHeader(grpcmetadata.MD) error  { return nil }
+func (methodStream) SendHeader(grpcmetadata.MD) error { return nil }
+func (methodStream) SetTrailer(grpcmetadata.MD) error { return nil }
 
 // commitSuiteTx commits the suite transaction and starts a new one for the rest of the spec. The generic server writes
 // its finalizer log when the transaction commits, so the specs about that log call this before they look at it. It

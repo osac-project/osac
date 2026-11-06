@@ -635,6 +635,28 @@ var _ = Describe("Transaction manager", func() {
 				Expect(calls).To(Equal([]string{"before", "inside", "after"}))
 			})
 
+			It("Should call a function registered through a savepoint after it was released", func() {
+				tx := insert("outer")
+				var inner Tx
+				err := tx.Savepoint(ctx, func(ctx context.Context) error {
+					var err error
+					inner, err = TxFromContext(ctx)
+					return err
+				})
+				Expect(err).ToNot(HaveOccurred())
+				var calls []string
+				inner.OnCommit(func() {
+					calls = append(calls, "after the release")
+					inner.OnCommit(func() {
+						calls = append(calls, "while the functions run")
+					})
+				})
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(calls).To(Equal([]string{"after the release", "while the functions run"}))
+			})
+
 			It("Should call a function that another one registers while they run", func() {
 				tx := insert("my_value")
 				var calls []string

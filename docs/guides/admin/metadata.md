@@ -107,8 +107,12 @@ every resource.
 
 Optimistic locking is optional. With `lock=true`, submit the current `metadata.version`; if the
 stored version has changed, the server returns `Aborted`. Read the latest object, reapply the
-intended change, and retry. With locking disabled or omitted, the existing update behavior is
-unchanged.
+intended change, and retry. With locking disabled or omitted, the version is not checked, except
+for finalizers: a private update that changes `metadata.finalizers` must always carry the current
+`metadata.version`, or it returns `Aborted`. An update without a mask replaces the whole object, so
+leaving the finalizers out of it changes them when the object has any; send an update mask for the
+fields that you change. See the
+[Update contract](../../../fulfillment-service/docs/API.md#update-when-supported).
 
 ## Public input errors and retry guidance
 

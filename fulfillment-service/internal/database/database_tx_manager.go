@@ -161,12 +161,21 @@ type managedTx struct {
 	real    pgx.Tx
 	errs    []error
 	hooks   []func()
+
+	// parent is the enclosing transaction of a savepoint that has been released. The functions registered after
+	// that go to the parent, because the savepoint no longer runs them.
+	parent *managedTx
 }
 
 func (t *managedTx) OnCommit(fn func()) {
-	if fn != nil {
-		t.hooks = append(t.hooks, fn)
+	if fn == nil {
+		return
 	}
+	if t.parent != nil {
+		t.parent.OnCommit(fn)
+		return
+	}
+	t.hooks = append(t.hooks, fn)
 }
 
 // runCommitHooks calls the functions registered with OnCommit, once, including those that they register themselves.
@@ -259,8 +268,10 @@ func (t *managedTx) Savepoint(ctx context.Context, fn func(ctx context.Context) 
 	}
 
 	// Releasing the savepoint doesn't store anything yet, so the functions registered inside it wait for the
-	// enclosing transaction:
+	// enclosing transaction, and so do those registered later:
 	t.hooks = append(t.hooks, spManaged.hooks...)
+	spManaged.hooks = nil
+	spManaged.parent = t
 	return nil
 }
 

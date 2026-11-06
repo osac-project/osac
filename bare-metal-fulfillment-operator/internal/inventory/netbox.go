@@ -607,16 +607,12 @@ func (c *NetBoxClient) GetHostNICs(ctx context.Context, inventoryHostID string) 
 		return nil, err
 	}
 	bmhName := netBoxHostPrefix + deviceID
-	ready, err := c.bmhManager.IsBMHAvailable(ctx, bmhName)
-	if err != nil {
-		return nil, err
-	}
-	if !ready {
-		return nil, fmt.Errorf("BareMetalHost %s is not ready for NIC metadata", bmhName)
-	}
 	macs, err := c.bmhManager.GetHardwareNICs(ctx, bmhName)
 	if err != nil {
 		return nil, err
+	}
+	if len(macs) == 0 {
+		return nil, fmt.Errorf("BareMetalHost %s has no NIC inventory despite being allocated", bmhName)
 	}
 	nics := make([]HostNIC, len(macs))
 	for i, mac := range macs {

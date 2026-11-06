@@ -21,10 +21,13 @@ This is a POC:
   in-place updatable fields (`run_strategy`, `restart_trigger`), and deleting
   are implemented and were verified against a live cluster. Everything else in
   the spec is immutable and forces replacement, which matches the API.
-- Creation waits for the instance to be ready: `Create` polls until the
-  instance reaches `RUNNING` (or `STOPPED` with `run_strategy` `HALTED`), with
-  a 30 minute timeout, and fails the apply when provisioning fails. Updates
-  don't wait for restarts to complete.
+- Operations wait for the machine: creation polls until the instance
+  reaches `RUNNING` (or `STOPPED` with `run_strategy` `HALTED`, 30 minute
+  timeout, failing the apply when provisioning fails); updates poll until
+  the desired power state is reached and requested restarts have been
+  executed (15 minute timeout); deletions poll until the backend has
+  finished deprovisioning (15 minute timeout), so a new instance with the
+  same name can be created immediately afterwards.
 - `template_parameters` values are always sent as strings (wrapped in
   `google.protobuf.StringValue`).
 - The secret data source exposes the secret entries as a sensitive

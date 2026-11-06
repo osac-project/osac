@@ -18,12 +18,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"slices"
 	"sort"
+	"strings"
+	"sync"
 
 	"buf.build/go/protovalidate"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
+	"github.com/onsi/ginkgo/v2/types"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -320,28 +324,6 @@ func finalizerCases() []finalizerCase {
 	return slices.Concat(leaves, finalizerPlatformCases(), finalizerTenantCases(), finalizerNetworkingCases())
 }
 
-// finalizerEntries returns one table entry per case.
-func finalizerEntries() []TableEntry {
-	cases := finalizerCases()
-	entries := make([]TableEntry, 0, len(cases))
-	for _, c := range cases {
-		entries = append(entries, Entry(c.service, c))
-	}
-	return entries
-}
-
-// finalizerEntriesPerLifecycle returns an entry for each resource, for a live object and for one that is being deleted.
-func finalizerEntriesPerLifecycle() []TableEntry {
-	var entries []TableEntry
-	for _, c := range finalizerCases() {
-		entries = append(entries,
-			Entry(c.service+" live", c, false),
-			Entry(c.service+" deleting", c, true),
-		)
-	}
-	return entries
-}
-
 // finalizerSelectingMask is a named field mask that selects the finalizers.
 type finalizerSelectingMask struct {
 	name string
@@ -362,13 +344,11 @@ func finalizerSelectingMasks() []finalizerSelectingMask {
 	}
 }
 
-// finalizerEntriesPerMask returns an entry for each resource and each way of selecting the finalizers.
-func finalizerEntriesPerMask() []TableEntry {
+// finalizerMaskEntries returns an entry for each way of selecting the finalizers.
+func finalizerMaskEntries() []TableEntry {
 	var entries []TableEntry
-	for _, c := range finalizerCases() {
-		for _, m := range finalizerSelectingMasks() {
-			entries = append(entries, Entry(c.service+" with "+m.name, c, m.mask))
-		}
+	for _, m := range finalizerSelectingMasks() {
+		entries = append(entries, Entry("with "+m.name, m.mask))
 	}
 	return entries
 }
@@ -381,21 +361,6 @@ func publicMaskEntries() []TableEntry {
 		entries = append(entries,
 			Entry("live with "+m.name, m.mask, false),
 			Entry("deleting with "+m.name, m.mask, true),
-		)
-	}
-	return entries
-}
-
-// finalizerEntriesPerVersion returns an entry for each resource, for an object at its creation version and for an
-// object that has been written since, and for a mask on the finalizers and no mask at all.
-func finalizerEntriesPerVersion() []TableEntry {
-	var entries []TableEntry
-	for _, c := range finalizerCases() {
-		entries = append(entries,
-			Entry(c.service+" at version 0 with metadata.finalizers mask", c, false, finalizersMask()),
-			Entry(c.service+" at a later version with metadata.finalizers mask", c, true, finalizersMask()),
-			Entry(c.service+" at version 0 with nil mask", c, false, (*fieldmaskpb.FieldMask)(nil)),
-			Entry(c.service+" at a later version with nil mask", c, true, (*fieldmaskpb.FieldMask)(nil)),
 		)
 	}
 	return entries
@@ -487,13 +452,14 @@ func (t finalizerTarget) update(ctx context.Context, object proto.Message, mask 
 }
 
 // publicUpdateInSavepoint sends a public update of the object with the given mask, and returns its error. A database
-// rejection would abort the suite transaction, so the update runs in a savepoint that is rolled back when it fails, as
-// the transaction of a real request would be.
+// rejection would abort the transaction of the context, so the update runs in a savepoint that is rolled back when it
+// fails, as the transaction of a real request would be.
 func (t finalizerTarget) publicUpdateInSavepoint(ctx context.Context, object proto.Message,
 	mask *fieldmaskpb.FieldMask) error {
 	GinkgoHelper()
-	var err error
-	savepointErr := suiteTx.Savepoint(ctx, func(ctx context.Context) error {
+	tx, err := database.TxFromContext(ctx)
+	Expect(err).ToNot(HaveOccurred())
+	savepointErr := tx.Savepoint(ctx, func(ctx context.Context) error {
 		err = t.update(withPublicAPIView(ctx), object, mask, false)
 		return err
 	})
@@ -569,34 +535,149 @@ func (methodStream) SetTrailer(grpcmetadata.MD) error { return nil }
 // because nothing was committed.
 func commitSuiteTx() {
 	GinkgoHelper()
-	endSuiteTx(true)
-}
-
-// rollBackSuiteTx rolls the suite transaction back, as code that runs after a write in the same request does when it
-// reports an error, and starts a new one for the rest of the spec.
-func rollBackSuiteTx() {
-	GinkgoHelper()
-	endSuiteTx(false)
-}
-
-// endSuiteTx ends the suite transaction, committing it or rolling it back as requested, checks that it ended that
-// way, and starts a new one for the rest of the spec.
-func endSuiteTx(commit bool) {
-	GinkgoHelper()
-	if !commit {
-		laterErr := errors.New("a later step of the request failed")
-		suiteTx.ReportError(&laterErr)
-	}
-	committed := false
-	suiteTx.OnCommit(func() {
-		committed = true
-	})
-	Expect(suiteTx.End(ctx)).To(Succeed())
-	Expect(committed).To(Equal(commit), "the suite transaction must have been committed: %t", commit)
+	endTx(ctx, suiteTx, true)
 	tx, err := tm.Begin(context.Background())
 	Expect(err).ToNot(HaveOccurred())
 	suiteTx = tx
 	ctx = database.TxIntoContext(ctx, suiteTx)
+}
+
+// endTx ends a transaction, committing it or rolling it back as requested, and checks that it ended that way.
+func endTx(ctx context.Context, tx database.Tx, commit bool) {
+	GinkgoHelper()
+	if !commit {
+		laterErr := errors.New("a later step of the request failed")
+		tx.ReportError(&laterErr)
+	}
+	committed := false
+	tx.OnCommit(func() {
+		committed = true
+	})
+	Expect(tx.End(ctx)).To(Succeed())
+	Expect(committed).To(Equal(commit), "the transaction must have been committed: %t", commit)
+}
+
+// finalizerRun holds the transaction in which one case of a concurrent spec runs. It takes the place of the suite
+// transaction for that case: commit and rollBack end the transaction and start a new one, so the scenario reads ctx
+// again after calling them.
+type finalizerRun struct {
+	ctx context.Context
+	tx  database.Tx
+}
+
+// begin starts a new transaction for the case.
+func (r *finalizerRun) begin() {
+	GinkgoHelper()
+	tx, err := tm.Begin(context.Background())
+	Expect(err).ToNot(HaveOccurred())
+	r.tx = tx
+	r.ctx = database.TxIntoContext(context.Background(), tx)
+}
+
+// commit commits the transaction of the case and starts a new one, as commitSuiteTx does for the suite transaction.
+func (r *finalizerRun) commit() {
+	GinkgoHelper()
+	endTx(r.ctx, r.tx, true)
+	r.begin()
+}
+
+// rollBack rolls the transaction of the case back, as code that runs after a write in the same request does when it
+// reports an error, and starts a new one.
+func (r *finalizerRun) rollBack() {
+	GinkgoHelper()
+	endTx(r.ctx, r.tx, false)
+	r.begin()
+}
+
+// finalizerScenario is what a concurrent spec checks for one case, on the object seeded for it.
+type finalizerScenario func(r *finalizerRun, c finalizerCase, t finalizerTarget)
+
+// finalizerFailure is the panic that stops a case of a concurrent spec when one of its assertions fails.
+type finalizerFailure struct {
+	message  string
+	location types.CodeLocation
+}
+
+// runFinalizerCases checks a scenario for every resource in one spec, with runFinalizerCasesFor.
+func runFinalizerCases(finalizers []string, scenario finalizerScenario) {
+	GinkgoHelper()
+	runFinalizerCasesFor(finalizerCases(), finalizers, scenario)
+}
+
+// runFinalizerCasesFor checks a scenario for the given cases in one spec. It seeds an object with the given finalizers
+// for every case in the suite transaction and commits them, then runs the scenario of every case concurrently, each in
+// a transaction of its own. The cases don't share objects, so they don't wait for each other's row locks.
+//
+// A failed assertion stops only its own case. The spec fails after all the cases have finished, with the failures of
+// every case that failed, each with its resource and code location.
+func runFinalizerCasesFor(cases []finalizerCase, finalizers []string, scenario finalizerScenario) {
+	GinkgoHelper()
+	targets := make([]finalizerTarget, len(cases))
+	for i, c := range cases {
+		targets[i] = c.target(finalizers)
+	}
+
+	// The cases run in transactions of their own, so the suite transaction isn't needed any more, and ending it
+	// frees its connection:
+	endTx(ctx, suiteTx, true)
+	suiteTx = nil
+
+	// Ginkgo records only the first failure of a spec, and not the case that it came from, so while the cases run
+	// a failed assertion stops its case with a panic that the case records:
+	RegisterFailHandler(func(message string, callerSkip ...int) {
+		skip := 0
+		if len(callerSkip) > 0 {
+			skip = callerSkip[0]
+		}
+		panic(finalizerFailure{
+			message:  message,
+			location: types.NewCodeLocation(skip + 1),
+		})
+	})
+	defer RegisterFailHandler(Fail)
+
+	var (
+		lock     sync.Mutex
+		failures []string
+		wg       sync.WaitGroup
+	)
+	for i, c := range cases {
+		wg.Go(func() {
+			defer func() {
+				p := recover()
+				if p == nil {
+					return
+				}
+				var failure string
+				if f, ok := p.(finalizerFailure); ok {
+					failure = fmt.Sprintf("%s: %s\n%s", c.service, f.location, f.message)
+				} else {
+					failure = fmt.Sprintf("%s: panic: %v\n%s", c.service, p, debug.Stack())
+				}
+				lock.Lock()
+				failures = append(failures, failure)
+				lock.Unlock()
+			}()
+			r := &finalizerRun{}
+			r.begin()
+			ended := false
+			defer func() {
+				if !ended {
+					_ = r.tx.End(context.Background())
+				}
+			}()
+			scenario(r, c, targets[i])
+			ended = true
+			Expect(r.tx.End(context.Background())).To(Succeed())
+		})
+	}
+	wg.Wait()
+
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		Fail(fmt.Sprintf("%d of %d resources failed:\n\n%s", len(failures), len(cases),
+			strings.Join(failures, "\n\n")))
+	}
 }
 
 // recordLogs replaces the logger of the server behind the target with one that records everything it logs, and returns

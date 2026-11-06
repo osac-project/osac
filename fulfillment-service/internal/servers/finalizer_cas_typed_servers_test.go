@@ -474,43 +474,41 @@ var _ = Describe("typed finalizer updates", func() {
 		// while the update waits for the row lock. The masked paths of the private DiskImages and InstanceTypes
 		// servers ignore metadata.finalizers, and their nil-mask path merges the request over the stored object,
 		// which unions the request finalizers with the stored ones.
-		DescribeTable("keeps the finalizers of the object",
-			func(c publicFinalizerCase) {
-				t := finalizerCaseFor(c.service).target([]string{finalizerController, finalizerHold})
-				public := c.ops()
+		It("keeps the finalizers of the object", func() {
+			runPublicFinalizerCases(publicFinalizerCases(), []string{finalizerController, finalizerHold},
+				func(r *finalizerRun, c publicFinalizerCase, t finalizerTarget) {
+					public := c.ops()
 
-				object, err := public.get(ctx, t.id)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(public.update(ctx, withPublicLabel(object), nil)).To(Succeed())
-
-				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold),
-					"a public update must not clear the finalizers")
-			},
-			publicFinalizerEntries(),
-		)
-
-		DescribeTable("keeps a deleting object",
-			func(c publicFinalizerCase) {
-				t := finalizerCaseFor(c.service).target([]string{finalizerController, finalizerHold})
-				public := c.ops()
-				t.markDeleting(ctx)
-
-				object, err := public.get(ctx, t.id)
-				Expect(err).ToNot(HaveOccurred())
-				err = public.update(ctx, withPublicLabel(object), nil)
-				if c.service == privatev1.SecurityGroups_ServiceDesc.ServiceName {
-					// This server refuses to update a group that is being deleted:
-					Expect(status.Code(err)).To(Equal(codes.FailedPrecondition), "the update returned %v", err)
-				} else {
+					object, err := public.get(r.ctx, t.id)
 					Expect(err).ToNot(HaveOccurred())
-				}
+					Expect(public.update(r.ctx, withPublicLabel(object), nil)).To(Succeed())
 
-				stored, err := t.ops.get(ctx, t.id)
-				Expect(err).ToNot(HaveOccurred(), "a public update must not archive an object with finalizers")
-				Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
-			},
-			publicFinalizerEntries(),
-		)
+					Expect(t.finalizers(r.ctx)).To(ConsistOf(finalizerController, finalizerHold),
+						"a public update must not clear the finalizers")
+				})
+		})
+
+		It("keeps a deleting object", func() {
+			runPublicFinalizerCases(publicFinalizerCases(), []string{finalizerController, finalizerHold},
+				func(r *finalizerRun, c publicFinalizerCase, t finalizerTarget) {
+					public := c.ops()
+					t.markDeleting(r.ctx)
+
+					object, err := public.get(r.ctx, t.id)
+					Expect(err).ToNot(HaveOccurred())
+					err = public.update(r.ctx, withPublicLabel(object), nil)
+					if c.service == privatev1.SecurityGroups_ServiceDesc.ServiceName {
+						// This server refuses to update a group that is being deleted:
+						Expect(status.Code(err)).To(Equal(codes.FailedPrecondition), "the update returned %v", err)
+					} else {
+						Expect(err).ToNot(HaveOccurred())
+					}
+
+					stored, err := t.ops.get(r.ctx, t.id)
+					Expect(err).ToNot(HaveOccurred(), "a public update must not archive an object with finalizers")
+					Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
+				})
+		})
 	})
 
 	Describe("BareMetalInstanceType", func() {
@@ -828,54 +826,56 @@ var _ = Describe("typed finalizer updates", func() {
 		// mask and the request has no metadata. Otherwise GenericServer restores the stored finalizers, like it does
 		// for every public update. These controls pin that the finalizers and the metadata are kept in all cases.
 		DescribeTable("keeps the finalizers and the metadata",
-			func(c publicFinalizerCase, variant string) {
-				t := finalizerCaseFor(c.service).target([]string{finalizerController, finalizerHold})
-				public := c.ops()
-				before := t.get(ctx)
-				if variant == "deleting" {
-					t.markDeleting(ctx)
-				}
+			func(variant string) {
+				runPublicFinalizerCases(catalogItemFinalizerCases(), []string{finalizerController, finalizerHold},
+					func(r *finalizerRun, c publicFinalizerCase, t finalizerTarget) {
+						public := c.ops()
+						before := t.get(r.ctx)
+						if variant == "deleting" {
+							t.markDeleting(r.ctx)
+						}
 
-				object, err := public.get(ctx, t.id)
-				Expect(err).ToNot(HaveOccurred())
-				changed := withPublicLabel(object)
-				if variant == "without metadata" {
-					changed = withPublicDescriptionAndNoMetadata(object)
-				}
-				Expect(public.update(ctx, changed, nil)).To(Succeed())
+						object, err := public.get(r.ctx, t.id)
+						Expect(err).ToNot(HaveOccurred())
+						changed := withPublicLabel(object)
+						if variant == "without metadata" {
+							changed = withPublicDescriptionAndNoMetadata(object)
+						}
+						Expect(public.update(r.ctx, changed, nil)).To(Succeed())
 
-				stored, err := t.ops.get(ctx, t.id)
-				Expect(err).ToNot(HaveOccurred(), "a public update must not archive an object with finalizers")
-				Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
-				Expect(finalizerMetadataOf(stored).GetName()).To(Equal(finalizerMetadataOf(before).GetName()))
-				if variant == "without metadata" {
-					Expect(finalizerMetadataOf(before).GetLabels()).ToNot(BeEmpty(), "the fixture must have labels")
-					Expect(finalizerMetadataOf(stored).GetLabels()).To(Equal(finalizerMetadataOf(before).GetLabels()))
-				}
+						stored, err := t.ops.get(r.ctx, t.id)
+						Expect(err).ToNot(HaveOccurred(), "a public update must not archive an object with finalizers")
+						Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
+						Expect(finalizerMetadataOf(stored).GetName()).To(Equal(finalizerMetadataOf(before).GetName()))
+						if variant == "without metadata" {
+							Expect(finalizerMetadataOf(before).GetLabels()).ToNot(BeEmpty(),
+								"the fixture must have labels")
+							Expect(finalizerMetadataOf(stored).GetLabels()).To(
+								Equal(finalizerMetadataOf(before).GetLabels()))
+						}
+					})
 			},
-			catalogItemEntries(),
+			Entry("with metadata", "with metadata"),
+			Entry("without metadata", "without metadata"),
+			Entry("deleting", "deleting"),
 		)
 	})
 })
 
-// publicFinalizerEntries returns an entry for each public server that sends a nil update mask.
-func publicFinalizerEntries() []TableEntry {
-	var entries []TableEntry
-	for _, c := range publicFinalizerCases() {
-		entries = append(entries, Entry(c.service, c))
+// runPublicFinalizerCases checks a scenario for the given public servers in one spec, on objects seeded through their
+// private cases, as runFinalizerCases does for the private servers.
+func runPublicFinalizerCases(publicCases []publicFinalizerCase, finalizers []string,
+	scenario func(r *finalizerRun, c publicFinalizerCase, t finalizerTarget)) {
+	GinkgoHelper()
+	byService := map[string]publicFinalizerCase{}
+	cases := make([]finalizerCase, 0, len(publicCases))
+	for _, c := range publicCases {
+		byService[c.service] = c
+		cases = append(cases, finalizerCaseFor(c.service))
 	}
-	return entries
-}
-
-// catalogItemEntries returns an entry for each public catalog-items server and each kind of nil-mask update.
-func catalogItemEntries() []TableEntry {
-	var entries []TableEntry
-	for _, c := range catalogItemFinalizerCases() {
-		for _, variant := range []string{"with metadata", "without metadata", "deleting"} {
-			entries = append(entries, Entry(c.service+" "+variant, c, variant))
-		}
-	}
-	return entries
+	runFinalizerCasesFor(cases, finalizers, func(r *finalizerRun, c finalizerCase, t finalizerTarget) {
+		scenario(r, byService[c.service], t)
+	})
 }
 
 // publicFinalizerCases returns every public server that has an Update method, except the catalog-items ones, which

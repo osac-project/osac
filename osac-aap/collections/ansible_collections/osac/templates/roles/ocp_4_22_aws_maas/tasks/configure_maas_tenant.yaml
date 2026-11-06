@@ -1,0 +1,355 @@
+---
+# Per-tenant onboarding — included once per descriptor (loop_var: _t).
+# For custom tenants: create AITenant (gateway/oidc/rbac.admins) then governance.
+# For the default tenant (_t.is_default): the AITenant is operator-owned and
+# already Active; OIDC is merge-patched when configured, then governance
+# (model + policies + subscriptions) is added.
+
+- name: "{{ _t.name }} | Set per-tenant facts"
+  ansible.builtin.set_fact:
+    _t_name: "{{ _t.name }}"
+    _t_is_default: "{{ _t.is_default }}"
+    _t_gateway: "{{ _t.gateway }}"
+    _t_host: "{{ _t.host }}"
+    _t_govns: "{{ _t.govns }}"
+    _t_model: "{{ _t.model }}"
+    _t_tiers: "{{ _t.tiers }}"
+    _t_admin_group: "{{ _t.admin_group | default('') }}"
+
+# --- AITenant (custom tenants only) ---
+
+- name: "{{ _t.name }} | Create AITenant"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'aitenant.yaml.j2') | from_yaml }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: not _t_is_default | bool
+
+- name: "{{ _t.name }} | Patch default AITenant with OIDC"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: maas.opendatahub.io/v1alpha1
+      kind: AITenant
+      metadata:
+        name: "{{ _t_name }}"
+        namespace: ai-tenants
+      spec:
+        oidc:
+          issuerUrl: "{{ ocp_4_20_ai_maas_oidc_issuer }}"
+          clientId: "{{ ocp_4_20_ai_maas_oidc_client_id }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when:
+    - _t_is_default | bool
+    - ocp_4_20_ai_maas_oidc_issuer | default('', true) | length > 0
+
+- name: "{{ _t.name }} | Wait for AITenant Active"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: AITenant
+    name: "{{ _t_name }}"
+    namespace: ai-tenants
+  register: _ait
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _ait.resources is defined
+    - _ait.resources | length > 0
+    - _ait.resources[0].status.phase | default('') == 'Active'
+  when: not _t_is_default | bool
+
+- name: "{{ _t.name }} | Fail if AITenant never became Active"
+  ansible.builtin.fail:
+    msg: "AITenant {{ _t_name }} did not reach Active."
+  when:
+    - not _t_is_default | bool
+    - >-
+      _ait.resources is not defined
+      or _ait.resources | length == 0
+      or _ait.resources[0].status.phase | default('') != 'Active'
+
+- name: "{{ _t.name }} | Wait for tenant namespace"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: v1
+    kind: Namespace
+    name: "{{ _t_govns }}"
+  register: _ns
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _ns.resources is defined
+    - _ns.resources | length > 0
+
+# --- MaasTenantConfig (operator-created; patch telemetry + apiKeys) ---
+
+- name: "{{ _t.name }} | Wait for MaasTenantConfig default-tenant"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaasTenantConfig
+    name: default-tenant
+    namespace: "{{ _t_govns }}"
+  register: _mtc
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _mtc.resources is defined
+    - _mtc.resources | length > 0
+
+- name: "{{ _t.name }} | Patch MaasTenantConfig (telemetry + apiKeys)"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: maas.opendatahub.io/v1alpha1
+      kind: MaasTenantConfig
+      metadata:
+        name: default-tenant
+        namespace: "{{ _t_govns }}"
+      spec:
+        apiKeys:
+          maxExpirationDays: "{{ ocp_4_20_ai_maas_api_key_max_expiration_days }}"
+        telemetry:
+          enabled: "{{ ocp_4_20_ai_maas_telemetry_enabled }}"
+          metrics:
+            captureUser: "{{ ocp_4_20_ai_maas_telemetry_capture_user }}"
+            captureGroup: "{{ ocp_4_20_ai_maas_telemetry_capture_group }}"
+            captureOrganization: "{{ ocp_4_20_ai_maas_telemetry_capture_organization }}"
+            captureModelUsage: "{{ ocp_4_20_ai_maas_telemetry_capture_model_usage }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+# --- Model ---
+
+- name: "{{ _t.name }} | Ensure model namespace"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ ocp_4_20_ai_maas_model_namespace }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: "{{ _t.name }} | Deploy LLMInferenceService"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'model.yaml.j2') | from_yaml }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: "{{ _t.name }} | Wait for LLMInferenceService Ready"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: serving.kserve.io/v1alpha2
+    kind: LLMInferenceService
+    name: "{{ _t_model }}"
+    namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
+  register: _llm
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _llm.resources is defined
+    - _llm.resources | length > 0
+    - >-
+      _llm.resources[0].status.conditions | default([])
+      | selectattr('type', 'equalto', 'Ready')
+      | selectattr('status', 'equalto', 'True')
+      | list | length > 0
+
+- name: "{{ _t.name }} | Fail if LLMInferenceService never became Ready"
+  ansible.builtin.fail:
+    msg: "LLMInferenceService {{ _t_model }} did not become Ready."
+  when: >-
+    _llm.resources is not defined
+    or _llm.resources | length == 0
+    or (_llm.resources[0].status.conditions | default([])
+        | selectattr('type', 'equalto', 'Ready')
+        | selectattr('status', 'equalto', 'True')
+        | list | length) == 0
+
+- name: "{{ _t.name }} | Create MaaSModelRef"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'maas-model-ref.yaml.j2') | from_yaml }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+# --- Test ServiceAccounts (for the verify playbook's SA-token path) ---
+
+- name: "{{ _t.name }} | Create test ServiceAccounts"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: "testuser-{{ item.name | regex_replace('-subscription$', '') }}"
+        namespace: "{{ _t_govns }}"
+  loop: "{{ _t_tiers }}"
+  loop_control:
+    label: "testuser-{{ item.name | regex_replace('-subscription$', '') }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_provision_test_identities | bool
+
+# --- RBAC: bind the tenant admin group to tenant self-service Roles ---
+# On RHOAI 3.5 GA the operator creates the tenant-admin + object-admin Roles but
+# NOT their RoleBindings (spec.rbac.admins is deprecated/no-op), so the role wires
+# the bindings explicitly. Also creates a model-admin Role so tenant admins can
+# self-deploy models in their own governance namespace. Skipped when no admin group.
+#
+# NOTE: rolebindings.yaml.j2 renders 3 bindings — the first two (tenant-admin,
+# object-admin) are PERMANENT (the Slide-7 tenancy model). The third
+# ({name}-namespace-admin-binding, built-in `admin` ClusterRole) is ADDITIONAL /
+# INTERIM (UI-gap): it exists only so tenant admins can view/manage their project
+# via CLI until the Tenant Admin UI is available — TO BE REMOVED then. See the
+# banner in templates/rolebindings.yaml.j2.
+
+- name: "{{ _t.name }} | Create RoleBindings for tenant admin group"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.template', 'rolebindings.yaml.j2') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.kind }}/{{ item.metadata.name }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: _t_admin_group | length > 0
+
+# ADDITIONAL / INTERIM RBAC (UI-gap): this whole task grants tenant admins direct
+# K8s RBAC to self-deploy LLMInferenceServices via the CLI because the Tenant Admin
+# UI is not yet available. TO BE REMOVED when the Tenant Admin UI is available with
+# the required RBAC. See the banner in templates/model-admin-rbac.yaml.j2.
+- name: "{{ _t.name }} | Create model-admin Role and RoleBinding"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.template', 'model-admin-rbac.yaml.j2') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.kind }}/{{ item.metadata.name }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: _t_admin_group | length > 0
+
+# --- Governance: AuthPolicy + Subscriptions ---
+
+- name: "{{ _t.name }} | Create MaaSAuthPolicy"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'maas-auth-policy.yaml.j2') | from_yaml }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: "{{ _t.name }} | Create MaaSSubscriptions"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.template', 'maas-subscriptions.yaml.j2') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: "{{ _t.name }} | Wait for all subscriptions Active"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSSubscription
+    namespace: "{{ _t_govns }}"
+  register: _subs
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _subs.resources is defined
+    - _subs.resources | length > 0
+    - >-
+      _subs.resources
+      | selectattr('status.phase', 'defined')
+      | selectattr('status.phase', 'equalto', 'Active')
+      | list | length == _subs.resources | length
+
+- name: "{{ _t.name }} | Fail if subscriptions never became Active"
+  ansible.builtin.fail:
+    msg: "Not all MaaSSubscriptions for {{ _t_name }} became Active."
+  when: >-
+    _subs.resources is not defined
+    or _subs.resources | length == 0
+    or (_subs.resources
+        | selectattr('status.phase', 'defined')
+        | selectattr('status.phase', 'equalto', 'Active')
+        | list | length != _subs.resources | length)
+
+- name: "{{ _t.name }} | Wait for MaaSModelRef Ready"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSModelRef
+    name: "{{ _t_model }}"
+    namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
+  register: _modelref
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _modelref.resources is defined
+    - _modelref.resources | length > 0
+    - _modelref.resources[0].status.phase | default('') == 'Ready'
+
+- name: "{{ _t.name }} | Fail if MaaSModelRef never became Ready"
+  ansible.builtin.fail:
+    msg: "MaaSModelRef {{ _t_model }} did not become Ready (governance not attached?)."
+  when: >-
+    _modelref.resources is not defined
+    or _modelref.resources | length == 0
+    or _modelref.resources[0].status.phase | default('') != 'Ready'
+
+- name: "{{ _t.name }} | Report tenant onboarding complete"
+  ansible.builtin.debug:
+    msg:
+      - "Tenant {{ _t_name }} onboarded ({{ 'default' if _t_is_default | bool else 'custom' }})"
+      - "Gateway: {{ _t_gateway }} (https://{{ _t_host }})"
+      - "Model: {{ _t_model }} | Governance ns: {{ _t_govns }}"
+      - "Tiers: {{ _t_tiers | map(attribute='name') | join(', ') }}"

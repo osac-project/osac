@@ -1,0 +1,75 @@
+---
+# Shared tenant-descriptor resolver, included by configure_maas.yaml (deploy) and
+# verify.yaml (verification) so both agree on the tenant set. Requires
+# _cluster_domain to be set. Produces:
+#   _resolved_tenants      - raw tenant entries (plural, else singular, else [])
+#   _default_descriptor    - descriptor for the operator-created default tenant
+#   _custom_descriptors    - descriptor per custom tenant
+#   _tenant_descriptors    - custom descriptors, or [_default_descriptor] when none
+#   _gateway_specs         - default gateway always + one per custom tenant
+#
+# Descriptor keys: name, is_default, gateway, host, govns, model, tiers, admin_group
+
+- name: Resolve tenant list (plural wins, else singular, else none)
+  ansible.builtin.set_fact:
+    _resolved_tenants: >-
+      {{ ocp_4_20_ai_maas_tenants
+         if (ocp_4_20_ai_maas_tenants | default([]) | length > 0)
+         else ([{
+                 'name': ocp_4_20_ai_maas_tenant_name,
+                 'admin_group': ocp_4_20_ai_maas_tenant_admin_group | default(''),
+                 'tiers': ocp_4_20_ai_maas_tiers
+               }] if (ocp_4_20_ai_maas_tenant_name | default('', true) | length > 0)
+               else []) }}
+
+- name: Build the default-tenant descriptor
+  ansible.builtin.set_fact:
+    _default_descriptor:
+      name: models-as-a-service
+      is_default: true
+      gateway: maas-default-gateway
+      host: "{{ ocp_4_20_ai_maas_gateway_hostname }}.{{ _cluster_domain }}"
+      govns: models-as-a-service
+      model: "{{ ocp_4_20_ai_maas_model_name_base }}-simulated"
+      tiers: "{{ ocp_4_20_ai_maas_tiers }}"
+      admin_group: ""
+
+- name: Initialise custom-tenant descriptor list
+  ansible.builtin.set_fact:
+    _custom_descriptors: []
+
+- name: Build a descriptor per custom tenant
+  ansible.builtin.set_fact:
+    _custom_descriptors: >-
+      {{ _custom_descriptors + [{
+           'name': item.name,
+           'is_default': false,
+           'gateway': 'maas-' ~ item.name ~ '-gateway',
+           'host': item.name ~ '-' ~ ocp_4_20_ai_maas_gateway_hostname ~ '.' ~ _cluster_domain,
+           'govns': 'ai-tenant-' ~ item.name,
+           'model': ocp_4_20_ai_maas_model_name_base ~ '-' ~ item.name,
+           'tiers': item.tiers | default(ocp_4_20_ai_maas_tiers),
+           'admin_group': item.admin_group | default('')
+         }] }}
+  loop: "{{ _resolved_tenants }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Select final descriptor list (custom tenants, else the default tenant)
+  ansible.builtin.set_fact:
+    _tenant_descriptors: >-
+      {{ _custom_descriptors if (_custom_descriptors | length > 0)
+         else [_default_descriptor] }}
+
+- name: Seed gateway specs with the default gateway
+  ansible.builtin.set_fact:
+    _gateway_specs:
+      - name: maas-default-gateway
+        host: "{{ ocp_4_20_ai_maas_gateway_hostname }}.{{ _cluster_domain }}"
+
+- name: Append a gateway spec per custom tenant
+  ansible.builtin.set_fact:
+    _gateway_specs: "{{ _gateway_specs + [{'name': item.gateway, 'host': item.host}] }}"
+  loop: "{{ _custom_descriptors }}"
+  loop_control:
+    label: "{{ item.gateway }}"

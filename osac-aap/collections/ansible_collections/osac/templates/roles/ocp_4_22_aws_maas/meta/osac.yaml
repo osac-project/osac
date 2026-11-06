@@ -1,0 +1,136 @@
+---
+name: ocp-4-22-aws-maas
+title: OpenShift AI Cluster on AWS with GPU Workers (RHOAI 3.5 GA)
+description: >
+  Builds an OpenShift 4.22 hosted cluster with AWS GPU worker nodes and
+  Red Hat OpenShift AI 3.5, Models-as-a-Service (GA), and observability.
+  Uses HyperShift AWS platform instead of Agent-based bare metal.
+  Supports 0..n tenants. No Keycloak — identity via external OIDC issuer
+  (optional) plus K8s ServiceAccount/TokenReview.
+template_type: cluster
+implementation_strategy: ocp_4_22_aws_maas
+
+spec_defaults:
+  version_name: "4.22.0"
+
+parameters:
+  - name: aws_region
+    title: AWS Region
+    description: AWS region for worker node provisioning.
+    type: string
+    required: false
+    default: us-east-1
+  - name: aws_instance_type
+    title: AWS GPU Instance Type
+    description: >
+      EC2 instance type for GPU worker nodes (e.g. g5.xlarge, g5.2xlarge,
+      p4d.24xlarge).
+    type: string
+    required: false
+    default: g5.xlarge
+  - name: aws_worker_count
+    title: Number of GPU Workers
+    description: Number of AWS GPU worker nodes to provision.
+    type: int
+    required: false
+    default: 2
+  - name: aws_root_volume_size
+    title: Root Volume Size (GiB)
+    description: Root EBS volume size for worker nodes.
+    type: int
+    required: false
+    default: 120
+  - name: aws_root_volume_type
+    title: Root Volume Type
+    description: EBS volume type for worker root volumes.
+    type: string
+    required: false
+    default: gp3
+  - name: aws_subnet_id
+    title: AWS Subnet ID
+    description: >
+      Subnet ID for worker nodes. Must be in the specified region.
+      When empty, HyperShift creates networking automatically.
+    type: string
+    required: false
+    default: ""
+  - name: aws_security_group_id
+    title: AWS Security Group ID
+    description: >
+      Security group for worker nodes. When empty, HyperShift creates one.
+    type: string
+    required: false
+    default: ""
+  - name: enable_maas
+    title: Enable MaaS Gateway
+    description: >
+      Install the MaaS governance layer (auth, rate limiting, API keys).
+      Set to false for inference-only shared clusters.
+    type: bool
+    required: false
+    default: true
+  - name: oidc_issuer
+    title: External OIDC Issuer URL
+    description: >
+      OIDC issuer URL for an external identity provider. Optional — when set it
+      is written to AITenant.spec.oidc. When empty, tenants authenticate via K8s
+      ServiceAccount tokens (TokenReview) only.
+    type: string
+    required: false
+    default: ""
+    validation:
+      pattern: '^(https://\S+)?$'
+  - name: oidc_client_id
+    title: External OIDC Client ID
+    description: >
+      OIDC client ID registered in the external identity provider.
+    type: string
+    required: false
+    default: ""
+  - name: tenant_name
+    title: Tenant Name (single-tenant)
+    description: >
+      Single-tenant convenience input. Leave empty for no-custom-tenant deployment.
+    type: string
+    required: false
+    default: ""
+    validation:
+      pattern: '^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$'
+  - name: tenant_admin_group
+    title: Tenant Admin Group (single-tenant)
+    description: >
+      OpenShift group granted tenant-admin RBAC.
+    type: string
+    required: false
+    default: ""
+  - name: tenants
+    title: Tenants (multi-tenant)
+    description: >
+      List of tenants to onboard. When non-empty, wins over tenant_name.
+    type: list
+    required: false
+    default: []
+  - name: enable_observability
+    title: Enable Observability Stack
+    description: Install COO, OTel, and Perses dashboards for model monitoring.
+    type: bool
+    required: false
+    default: true
+  - name: enable_dashboard
+    title: Enable OpenShift AI Dashboard
+    description: Deploy the RHOAI web console.
+    type: bool
+    required: false
+    default: true
+  - name: hardware_profiles
+    title: Hardware Profiles
+    description: List of HardwareProfile CRs to create.
+    type: list
+    required: false
+    default: []
+  - name: external_models
+    title: External Models
+    description: List of external models for upstream clusters.
+    type: list
+    required: false
+    default: []

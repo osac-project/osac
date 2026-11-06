@@ -34,7 +34,7 @@ parameters:
     description: >
       Install the MaaS governance layer (auth, rate limiting, API keys).
       Set to false for inference-only shared clusters.
-    type: boolean
+    type: bool
     required: false
     default: true
   - name: oidc_issuer
@@ -92,7 +92,7 @@ parameters:
     title: Enable Observability Stack
     description: >
       Install COO (stable channel), OTel, and Perses dashboards for model monitoring.
-    type: boolean
+    type: bool
     required: false
     default: true
   - name: enable_dashboard
@@ -100,7 +100,7 @@ parameters:
     description: >
       Deploy the RHOAI web console. Set to false for headless clusters managed
       via API only.
-    type: boolean
+    type: bool
     required: false
     default: true
   - name: hardware_profiles

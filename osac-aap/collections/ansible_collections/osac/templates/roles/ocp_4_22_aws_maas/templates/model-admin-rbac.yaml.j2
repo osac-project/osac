@@ -1,0 +1,37 @@
+---
+# ============================================================================
+# ADDITIONAL RBAC — INTERIM WORKAROUND (NOT part of the Slide-7 tenancy model).
+# TO BE REMOVED when the Tenant Admin UI is available with the required RBAC.
+# Why: no Tenant Admin UI yet, so the tenant admin group needs direct K8s RBAC
+# to self-deploy LLMInferenceServices via the CLI. The maas-controller only
+# creates the tenant-admin/object-admin Roles (MaaS subscriptions/authpolicies);
+# this Role + binding is EXTRA (KServe model CRUD) and should be retired once the
+# UI provides equivalent scoped RBAC. Applies to BOTH objects in this file.
+# ============================================================================
+# Role: model-admin in the tenant governance namespace. Lets the tenant admin
+# group self-deploy and manage their own LLMInferenceServices inside their own
+# (namespace-isolated) governance namespace ai-tenant-{name}. The role's shared
+# smoke-test model lives in the `llm` namespace and is NOT covered by this Role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: "{{ _t_name }}-model-admin"
+  namespace: "{{ _t_govns }}"
+rules:
+- apiGroups: ["serving.kserve.io"]
+  resources: ["llminferenceservices"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "{{ _t_name }}-model-admin-binding"
+  namespace: "{{ _t_govns }}"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: "{{ _t_name }}-model-admin"
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: "{{ _t_admin_group }}"

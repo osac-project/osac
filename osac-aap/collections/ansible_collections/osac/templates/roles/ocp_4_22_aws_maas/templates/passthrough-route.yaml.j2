@@ -1,0 +1,19 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: "{{ _gw_name }}"
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/name: maas
+    app.kubernetes.io/instance: "{{ _gw_name }}"
+spec:
+  host: "{{ _gw_host }}"
+  to:
+    kind: Service
+    name: "{{ _gw_name }}-data-science-gateway-class"
+    weight: 100
+  port:
+    targetPort: https
+  tls:
+    termination: passthrough
+    insecureEdgeTerminationPolicy: Redirect

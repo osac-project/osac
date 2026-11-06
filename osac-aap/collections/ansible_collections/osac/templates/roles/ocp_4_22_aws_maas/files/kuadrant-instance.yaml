@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kuadrant-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: authorino-authorino-authorization
+  namespace: kuadrant-system
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: authorino-server-cert
+spec:
+  selector:
+    authorino-resource: authorino
+  ports:
+  - name: grpc
+    port: 50051
+    targetPort: 50051
+  - name: http
+    port: 5001
+    targetPort: 5001
+  type: ClusterIP
+---
+apiVersion: kuadrant.io/v1beta1
+kind: Kuadrant
+metadata:
+  name: kuadrant
+  namespace: kuadrant-system
+spec:
+  observability:
+    enable: true
+---
+apiVersion: operator.authorino.kuadrant.io/v1beta1
+kind: Authorino
+metadata:
+  name: authorino
+  namespace: kuadrant-system
+spec:
+  clusterWide: true
+  replicas: 1
+  listener:
+    tls:
+      enabled: true
+      certSecretRef:
+        name: authorino-server-cert
+  oidcServer:
+    tls:
+      enabled: false

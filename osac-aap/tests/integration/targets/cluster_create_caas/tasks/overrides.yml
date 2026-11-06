@@ -6,7 +6,7 @@
     - ../../../common_vars.yml
 
   vars:
-    ssh_key_launch_value: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILaunchVariableKeyForCaaSOvrrides test@example.com"
+    ssh_key_launch_value: "ssh-ed25519 launch-input"
 
   tasks:
     - name: Read CaaS ClusterOrder fixture
@@ -47,7 +47,7 @@
     - ../../../common_vars.yml
 
   vars:
-    ssh_key_launch_value: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILaunchVariableKeyForCaaSOvrrides test@example.com"
+    ssh_key_launch_value: "ssh-ed25519 launch-input"
 
   tasks:
     - name: Record the launch-variable override in the harness log

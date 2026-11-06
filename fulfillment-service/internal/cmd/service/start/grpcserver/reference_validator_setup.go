@@ -38,10 +38,11 @@ import (
 // a NATGateway for a tenant-default VirtualNetwork.
 // RoleBinding handlers validate service-account references in the request's
 // tenant scope.
-// BMI ssh_key references are resolved by the private handler using the same
-// tenant-scoped project selection as ComputeInstance; shared Secrets are rejected.
-// Cluster ssh_key references follow the same rule and are resolved by the
-// private handler after catalog/template defaults.
+// Workload ssh_key references are resolved by their private handlers after
+// tenant assignment and catalog/template defaults. Those handlers enforce the
+// tenant-only SSH-key contract, validate key material, and store canonical
+// Secret references. Update exclusions also leave immutable-field handling to
+// the merged candidate rather than resolving a replacement in the interceptor.
 // Other references continue through the interceptor's registered lookups.
 func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, registerer prometheus.Registerer) (*references.ReferenceValidator, error) {
 	validator, err := references.NewReferenceValidator().SetLogger(logger).SetMetricsRegisterer(registerer).
@@ -107,9 +108,9 @@ func clusterTemplateSshKeyMethods() []string {
 	}
 }
 
-// clusterSshKeyMethods covers the request fields whose SSH-key Secret
-// references are resolved by the private Cluster handler under its custom
-// project rule on create and preserved by its immutability check on update.
+// clusterSshKeyMethods covers the request fields whose effective SSH-key Secret
+// references are resolved by the private Cluster handler after defaults on
+// create and preserved by its immutability check on update.
 func clusterSshKeyMethods() []string {
 	return []string{
 		publicv1.Clusters_Create_FullMethodName,
@@ -126,10 +127,10 @@ func bareMetalInstanceCreationMethods() []string {
 	}
 }
 
-// bareMetalInstanceSSHKeyMethods covers the request fields whose SSH-key Secret
-// references are resolved by the private handler under tenant-scoped project selection.
-// Updates are included so the handler's immutability check answers changes to
-// the immutable ssh_key field instead of an interceptor lookup.
+// bareMetalInstanceSSHKeyMethods covers the request fields whose effective
+// SSH-key Secret references are resolved by the private handler after ownership
+// assignment and defaults. Updates are included so the handler's immutability
+// check answers changes to ssh_key instead of an interceptor lookup.
 func bareMetalInstanceSSHKeyMethods() []string {
 	return []string{
 		publicv1.BareMetalInstances_Create_FullMethodName,

@@ -13,6 +13,7 @@ def test_update_compute_instance_instance_type_updates_only_instance_type(monkey
     response = {"object": {"id": "compute-instance-id"}}
 
     def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Capture the generated update request for an exact contract assertion."""
         calls.append({"service": service, "data": data})
         return response
 

@@ -2537,9 +2537,9 @@ func (p *extraVarsCaptureProvider) GetProvisionStatusWithExtraVars(_ context.Con
 	}, nil
 }
 
-// launchTestKey represents the already-validated material returned by
+// launchTestKey is a short stand-in for already-validated material returned by
 // Fulfillment for transient AAP launch input.
-const launchTestKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEdFQ1JFREVSQURMSUZLRUExMjM0NTY3ODkwYWJjZGVm test@example.com"
+const launchTestKey = "ssh-ed25519 launch-key"
 
 // stubSSHKeyClient resolves any requested ID to a fixed key or error.
 type stubSSHKeyClient struct {

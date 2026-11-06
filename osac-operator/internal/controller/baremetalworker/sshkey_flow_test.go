@@ -33,7 +33,7 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-const sshFlowKeyMaterial = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn flow@example.com"
+const sshFlowKeyMaterial = "ssh-ed25519 flow-key"
 
 // stubWorkerSecretsClient resolves any requested ID to fixed material or an error.
 type stubWorkerSecretsClient struct {

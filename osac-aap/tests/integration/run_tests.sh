@@ -322,6 +322,7 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     "storage_provider_setup_rollback"
     "storage_provider_rollback_no_log"
     "storage_provider_teardown_retry_state"
+    "storage_provider_teardown_same_endpoint"
     # Playbook-level wiring tests for osac.service.csi_driver_install (stub the
     # real Helm install via csi_driver_install_override, run the real
     # storage_provider dispatch after it) -- share this gate/mock server since

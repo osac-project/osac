@@ -31,9 +31,82 @@ _VIRTUAL_NETWORK_READY_STATE = "VIRTUAL_NETWORK_STATE_READY"
 _SECURITY_GROUP_READY_STATE = "SECURITY_GROUP_STATE_READY"
 _BMI_RUNNING_RETRIES = 180
 _BMI_RUNNING_DELAY = 10
-# Initial check plus ten retries: five minutes of scheduled waits after hub Ready.
-_WORKLOAD_HEALTH_RETRIES = 11
+# Initial check plus thirty retries: fifteen minutes of scheduled waits after
+# hub Ready. Guests settle slowly on shared lab hardware, and an operator that
+# degrades late (insights reports only after five failed uploads) must still be
+# attributed to the operator rather than to a generic timeout.
+_WORKLOAD_HEALTH_RETRIES = 31
 _WORKLOAD_HEALTH_DELAY = 30
+# Every ClusterOperator the guest reports must satisfy all of these.
+_CLUSTER_OPERATOR_CONDITIONS = {"Available": "True", "Progressing": "False", "Degraded": "False"}
+# Node provider IDs come from CAP-Agent, which sets them when the Agent finishes
+# installing, so they are observable before ClusterOperator health settles.
+_AGENT_PROVIDER_ID_PREFIX = "agent://"
+_NODE_PROVIDER_ID_RETRIES = 11
+_NODE_PROVIDER_ID_DELAY = 30
+# CVO bubbles its conditions up to the HostedCluster, and a fresh one reports the
+# install as failing and progressing, so allow it to settle before asserting.
+_HOSTED_CLUSTER_VERSION_RETRIES = 21
+_HOSTED_CLUSTER_VERSION_DELAY = 30
+# CVO's own view of the install, as HyperShift splits it across two resources:
+# the HostedCluster gains Succeeding but never records Failing, which only the
+# HostedControlPlane publishes. Both are read, since neither alone is complete.
+_HOSTED_CLUSTER_VERSION_CONDITIONS = {
+    "ClusterVersionSucceeding": "True",
+    "ClusterVersionAvailable": "True",
+    "ClusterVersionProgressing": "False",
+}
+_HOSTED_CONTROL_PLANE_VERSION_CONDITIONS = {"ClusterVersionFailing": "False"}
+# Bring-up happens in long, mostly silent steps: Agents register, install, then
+# the workers join. Each step gets its own budget and its own log line so a run
+# reads as named phases instead of undifferentiated polling. Assisted Service
+# assigns a worker's host during installation, so registration alone is not
+# binding progress and the install state is the only evidence a run is moving.
+_WORKER_AGENT_RETRIES = 61
+_WORKER_AGENT_DELAY = 10
+_WORKER_INSTALL_RETRIES = 121
+_WORKER_INSTALL_DELAY = 10
+_WORKER_AGGREGATE_RETRIES = 120
+_WORKER_AGGREGATE_DELAY = 10
+# Only log known Agent states and install stages, never Agent statusInfo or the
+# full resource (which may contain inventory and other sensitive data).
+_AGENT_SAFE_STATES = frozenset(
+    {
+        "discovering",
+        "discovering-unbound",
+        "known",
+        "known-unbound",
+        "insufficient",
+        "insufficient-unbound",
+        "disconnected",
+        "disconnected-unbound",
+        "disabled",
+        "disabled-unbound",
+        "pending-for-input",
+        "binding",
+        "preparing-for-installation",
+        "preparing-failed",
+        "preparing-successful",
+        "installing",
+        "installing-in-progress",
+        "installing-pending-user-action",
+        "installed",
+        "error",
+    }
+)
+_AGENT_SAFE_STAGES = frozenset(
+    {
+        "Starting installation",
+        "Installing",
+        "Writing image to disk",
+        "Waiting for control plane",
+        "Rebooting",
+        "Waiting for ignition",
+        "Configuring",
+        "Joined",
+        "Done",
+    }
+)
 
 
 def unique_name(prefix: str) -> str:
@@ -693,6 +766,139 @@ def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
         raise
 
 
+def cluster_order_agents(*, k8s: K8sClient, co_name: str, namespace: str) -> list[dict[str, Any]]:
+    """Find this ClusterOrder's Agents, bound or not, from the InfraEnv label Assisted sets."""
+    items = k8s.list_json(resource="agents.agent-install.openshift.io", namespace=namespace).get("items", [])
+    return [
+        agent
+        for agent in items
+        if agent.get("metadata", {}).get("namespace") == namespace
+        and agent.get("metadata", {}).get("labels", {}).get("infraenvs.agent-install.openshift.io")
+        == f"{co_name}-infraenv"
+    ]
+
+
+def wait_for_worker_agents(
+    *, k8s: K8sClient, co_name: str, namespace: str, expected_agents: int
+) -> list[dict[str, Any]]:
+    """Report each worker Agent as it registers, so binding progress is visible."""
+    logger.info("CaaS phase: Agents binding")
+    reported = 0
+
+    def _check() -> list[dict[str, Any]]:
+        nonlocal reported
+        agents = cluster_order_agents(k8s=k8s, co_name=co_name, namespace=namespace)
+        if len(agents) > reported:
+            logger.info("CaaS: %d of %d worker Agent(s) registered", len(agents), expected_agents)
+            reported = len(agents)
+        return agents
+
+    agents = poll_until(
+        fn=_check,
+        until=lambda found: len(found) >= expected_agents,
+        retries=_WORKER_AGENT_RETRIES,
+        delay=_WORKER_AGENT_DELAY,
+        description=f"{co_name} worker Agents registering",
+        retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
+    )
+    logger.info("CaaS: Agents bound: %d worker Agent(s) registered", len(agents))
+    return agents
+
+
+def _agent_install_progress(agent: dict[str, Any]) -> str:
+    """Describe one Agent's install from the fields that are safe to log."""
+    status = agent.get("status", {})
+    state = status.get("debugInfo", {}).get("state", "")
+    progress = status.get("progress", {})
+    parts = [state if state in _AGENT_SAFE_STATES else "unknown"]
+    stage = progress.get("currentStage", "")
+    if stage in _AGENT_SAFE_STAGES:
+        parts.append(stage)
+    percentage = progress.get("installationPercentage")
+    if isinstance(percentage, int):
+        parts.append(f"{percentage}%")
+    return ", ".join(parts)
+
+
+def _agent_installed(agent: dict[str, Any]) -> bool:
+    """Whether the Agent reports an Installed condition with status True."""
+    return any(
+        condition.get("type") == "Installed" and condition.get("status") == "True"
+        for condition in agent.get("status", {}).get("conditions", [])
+    )
+
+
+def wait_for_worker_installation(*, k8s: K8sClient, co_name: str, namespace: str, expected_agents: int) -> None:
+    """Report install progress until every worker Agent reports itself installed."""
+    logger.info("CaaS phase: starting install")
+    previous = ""
+
+    def _check() -> int:
+        nonlocal previous
+        agents = cluster_order_agents(k8s=k8s, co_name=co_name, namespace=namespace)
+        installed = sum(1 for agent in agents if _agent_installed(agent))
+        pending = sorted({_agent_install_progress(agent) for agent in agents if not _agent_installed(agent)})
+        current = "; ".join(pending)
+        if current != previous:
+            if current:
+                logger.info("CaaS: installing, %d of %d done (%s)", installed, expected_agents, current)
+            previous = current
+        return installed
+
+    poll_until(
+        fn=_check,
+        until=lambda installed: installed >= expected_agents,
+        retries=_WORKER_INSTALL_RETRIES,
+        delay=_WORKER_INSTALL_DELAY,
+        description=f"{co_name} worker Agents installing",
+        retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
+    )
+    logger.info("CaaS phase: install done")
+    logger.info("CaaS: installation finished on %d worker Agent(s)", expected_agents)
+
+
+def _progressing_phase(cluster_order: dict[str, Any]) -> str:
+    """Return the ClusterOrder's Progressing reason, spelled the way it logs it."""
+    for condition in cluster_order.get("status", {}).get("conditions", []):
+        if condition.get("type") == "Progressing":
+            return sanitize_text(str(condition.get("reason", ""))) or "unknown"
+    return "unknown"
+
+
+def wait_for_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers: int) -> None:
+    """Report the ClusterOrder's phase and worker counts while the workers join."""
+    logger.info("CaaS phase: waiting for workers to join")
+    previous = ""
+
+    def _check() -> bool:
+        nonlocal previous
+        cluster_order = k8s.get_json(resource="clusterorder", name=co_name)
+        status = cluster_order.get("status", {})
+        counts = tuple(int(status.get(key, -1)) for key in ("desiredWorkers", "currentWorkers", "readyWorkers"))
+        observed = f"desired {counts[0]}, current {counts[1]}, ready {counts[2]} ({_progressing_phase(cluster_order)})"
+        if observed != previous:
+            logger.info("CaaS: workers %s", observed)
+            previous = observed
+        return counts == (expected_workers,) * 3
+
+    poll_until(
+        fn=_check,
+        until=lambda ready: ready is True,
+        retries=_WORKER_AGGREGATE_RETRIES,
+        delay=_WORKER_AGGREGATE_DELAY,
+        description=f"{co_name} worker aggregates",
+        retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
+    )
+    logger.info("CaaS phase: workers joined")
+    logger.info("CaaS: %d worker(s) joined and ready", expected_workers)
+
+
 def wait_for_hosted_cluster_kubeconfig(
     *, k8s: K8sClient, hosted_cluster_namespace: str, hosted_cluster_name: str
 ) -> bytes:
@@ -732,6 +938,29 @@ def _condition_status(resource: dict[str, Any], condition_type: str) -> str:
     return ""
 
 
+def _condition(resource: dict[str, Any], condition_type: str) -> dict[str, Any]:
+    """The condition of one type, or an empty dict when it is not carried."""
+    conditions = resource.get("status", {}).get("conditions", [])
+    return next((condition for condition in conditions if condition.get("type") == condition_type), {})
+
+
+def _one_line(text: str, limit: int = 300) -> str:
+    """Flatten an operator's prose onto one log line without losing its point.
+
+    Scrubbed before it is flattened and truncated: an operator that quotes the
+    request it failed on can quote the Authorization header with it, and this
+    text reaches the log and the failure message the run raises.
+    """
+    return " ".join(sanitize_text(str(text)).split())[:limit]
+
+
+def _condition_detail(resource: dict[str, Any], condition_type: str) -> str:
+    """The reason and message a condition carries, which say why it is not met."""
+    condition = _condition(resource, condition_type)
+    parts = (condition.get("reason") or "", condition.get("message") or "")
+    return _one_line(": ".join(part for part in parts if part))
+
+
 def node_pool_ready_node_count(node_pool: dict[str, Any]) -> int:
     """Return the ready node count reported by a HyperShift NodePool."""
     node_versions = node_pool.get("status", {}).get("nodesInfo", {}).get("nodeVersions", [])
@@ -746,52 +975,273 @@ def node_pool_ready(node_pool: dict[str, Any], *, expected_ready_nodes: int) -> 
     )
 
 
+def _worker_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The Nodes carrying the worker role label, which the pool must fill."""
+    return [node for node in nodes if "node-role.kubernetes.io/worker" in node.get("metadata", {}).get("labels", {})]
+
+
+def workload_cluster_provider_ids(*, nodes: list[dict[str, Any]]) -> dict[str, str]:
+    """Map each worker Node name to the provider ID it reports, empty when unset."""
+    return {
+        node.get("metadata", {}).get("name", ""): node.get("spec", {}).get("providerID", "")
+        for node in _worker_nodes(nodes)
+    }
+
+
+def workload_cluster_provider_ids_assigned(*, nodes: list[dict[str, Any]], expected_workers: int) -> bool:
+    """Every expected worker carries the Agent that CAP-Agent bound it to.
+
+    A Node with an empty spec.providerID was never claimed through the machine
+    API: it can be Ready and still be unowned, which is what a later scale-down
+    or teardown has nothing to look up.
+    """
+    provider_ids = workload_cluster_provider_ids(nodes=nodes)
+    if len(provider_ids) < expected_workers:
+        return False
+    return all(
+        provider_id.startswith(_AGENT_PROVIDER_ID_PREFIX) and len(provider_id) > len(_AGENT_PROVIDER_ID_PREFIX)
+        for provider_id in provider_ids.values()
+    )
+
+
+def workload_cluster_unhealthy(
+    *, nodes: list[dict[str, Any]], operators: list[dict[str, Any]], expected_workers: int
+) -> list[str]:
+    """Describe why the guest cluster is not healthy; empty when every part is.
+
+    Returned instead of a bare boolean so a timeout can name the Node or
+    ClusterOperator that was not ready, which is otherwise only visible in the
+    cluster it is about to be torn down.
+    """
+    problems: list[str] = []
+    worker_nodes = _worker_nodes(nodes)
+    not_ready = sorted(
+        node.get("metadata", {}).get("name", "") for node in worker_nodes if _condition_status(node, "Ready") != "True"
+    )
+    if not_ready:
+        problems.append(f"worker nodes not Ready: {not_ready}")
+    if len(worker_nodes) < expected_workers:
+        problems.append(f"saw {len(worker_nodes)} worker node(s), expected {expected_workers}")
+    if not operators:
+        problems.append("no ClusterOperators reported")
+    for operator in operators:
+        unmet = []
+        for condition, expected in _CLUSTER_OPERATOR_CONDITIONS.items():
+            status = _condition_status(operator, condition) or "missing"
+            if status == expected:
+                continue
+            # The status alone says which operator is the holdout; its reason and
+            # message say why, which is the whole diagnosis when the cluster is
+            # torn down a moment later.
+            detail = _condition_detail(operator, condition)
+            unmet.append(f"{condition}={status}" + (f" ({detail})" if detail else ""))
+        if unmet:
+            problems.append(f"ClusterOperator {operator.get('metadata', {}).get('name', '')}: {', '.join(unmet)}")
+    return problems
+
+
 def workload_cluster_health_ready(
     *, nodes: list[dict[str, Any]], operators: list[dict[str, Any]], expected_workers: int
 ) -> bool:
-    worker_nodes = [
-        node for node in nodes if "node-role.kubernetes.io/worker" in node.get("metadata", {}).get("labels", {})
-    ]
-    ready_workers = [node for node in worker_nodes if _condition_status(node, "Ready") == "True"]
-    if len(ready_workers) < expected_workers or len(ready_workers) != len(worker_nodes):
-        return False
+    return not workload_cluster_unhealthy(nodes=nodes, operators=operators, expected_workers=expected_workers)
 
-    if not operators:
-        return False
 
-    required_operator_conditions = {"Available": "True", "Progressing": "False", "Degraded": "False"}
-    for operator in operators:
-        if any(
-            _condition_status(operator, condition) != expected
-            for condition, expected in required_operator_conditions.items()
-        ):
-            return False
+def wait_for_workload_node_provider_ids(*, k8s: K8sClient, cluster_name: str, expected_workers: int) -> None:
+    """Require the guest workers to report the provider ID CAP-Agent assigned.
 
-    return True
+    Asserted before the operator and Node readiness checks: it is the fact that
+    proves the machine API bound each worker, and it is already observable while
+    ClusterOperators are still settling.
+    """
+    observed: dict[str, str] = {}
+    nodes_read = False
+    logger.info("CaaS phase: waiting for worker provider IDs")
+
+    def _check() -> bool:
+        nonlocal nodes_read
+        nodes = k8s.list_json(resource="nodes").get("items", [])
+        nodes_read = True
+        observed.clear()
+        observed.update(workload_cluster_provider_ids(nodes=nodes))
+        return workload_cluster_provider_ids_assigned(nodes=nodes, expected_workers=expected_workers)
+
+    try:
+        poll_until(
+            fn=_check,
+            until=lambda assigned: assigned is True,
+            retries=_NODE_PROVIDER_ID_RETRIES,
+            delay=_NODE_PROVIDER_ID_DELAY,
+            description="workload cluster worker provider IDs",
+            retry_on_error=True,
+            resource_kind=WaitResourceKind.CLUSTER,
+            resource_id=cluster_name,
+        )
+    except TimeoutError as timeout:
+        if not nodes_read:
+            # An empty summary can also be a healthy read of zero workers, so it
+            # cannot say why nothing was seen. A read that never completed can:
+            # the StuckState message ends with the sanitized last read failure.
+            raise AssertionError(f"guest cluster Nodes were never readable ({timeout})") from None
+        missing = sorted(name for name, provider_id in observed.items() if not provider_id)
+        raise AssertionError(
+            f"guest cluster workers do not carry an '{_AGENT_PROVIDER_ID_PREFIX}' provider ID: "
+            f"saw {len(observed)} worker node(s), expected {expected_workers}, missing on {missing}, "
+            f"observed {observed}"
+        ) from None
+    logger.info("CaaS phase: provider IDs assigned")
+    logger.info("CaaS: worker provider IDs: %s", _provider_id_summary(observed))
+
+
+def _provider_id_summary(observed: dict[str, str]) -> str:
+    """One name=provider-ID pair per worker, sorted by node name."""
+    return ", ".join(f"{name}={provider_id}" for name, provider_id in sorted(observed.items()))
+
+
+def wait_for_hosted_cluster_reference(*, k8s: K8sClient, co_name: str) -> tuple[str, str]:
+    """Return the HostedCluster name and control-plane namespace a ClusterOrder owns."""
+    return poll_until(
+        fn=lambda: (
+            k8s.get_cluster_order_hosted_cluster_name(name=co_name),
+            k8s.get_cluster_order_namespace(name=co_name),
+        ),
+        until=lambda reference: all(reference),
+        retries=30,
+        delay=5,
+        description=f"{co_name} HostedCluster reference",
+        retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=co_name,
+    )
+
+
+def _version_conditions(resource: dict[str, Any], expected: dict[str, str]) -> dict[str, str]:
+    """The observed statuses of the expected version conditions, per type."""
+    return {condition_type: _condition_status(resource, condition_type) for condition_type in expected}
+
+
+def hosted_cluster_version_conditions(hosted_cluster: dict[str, Any]) -> dict[str, str]:
+    """The CVO conditions HyperShift publishes on the HostedCluster."""
+    return _version_conditions(hosted_cluster, _HOSTED_CLUSTER_VERSION_CONDITIONS)
+
+
+def hosted_control_plane_version_conditions(hosted_control_plane: dict[str, Any]) -> dict[str, str]:
+    """The CVO conditions HyperShift publishes only on the HostedControlPlane."""
+    return _version_conditions(hosted_control_plane, _HOSTED_CONTROL_PLANE_VERSION_CONDITIONS)
+
+
+def hosted_cluster_version_conditions_settled(
+    hosted_cluster: dict[str, Any], hosted_control_plane: dict[str, Any]
+) -> bool:
+    """Whether both resources' version conditions match the expected set."""
+    return (
+        hosted_cluster_version_conditions(hosted_cluster) == _HOSTED_CLUSTER_VERSION_CONDITIONS
+        and hosted_control_plane_version_conditions(hosted_control_plane) == _HOSTED_CONTROL_PLANE_VERSION_CONDITIONS
+    )
+
+
+def wait_for_hosted_cluster_version_health(*, k8s: K8sClient, name: str, namespace: str) -> None:
+    """Require CVO's install conditions, bubbled up by HyperShift, to be healthy."""
+    control_plane_namespace = f"{namespace}-{name}"
+    want = _HOSTED_CLUSTER_VERSION_CONDITIONS | _HOSTED_CONTROL_PLANE_VERSION_CONDITIONS
+    observed: dict[str, str] = {}
+    logger.info("CaaS phase: waiting for control plane version health")
+
+    def _check() -> bool:
+        hosted_cluster = k8s.get_json(resource="hostedcluster", name=name, namespace=namespace)
+        hosted_control_plane = k8s.get_json(resource="hostedcontrolplane", name=name, namespace=control_plane_namespace)
+        observed.clear()
+        observed.update(hosted_cluster_version_conditions(hosted_cluster))
+        observed.update(hosted_control_plane_version_conditions(hosted_control_plane))
+        return hosted_cluster_version_conditions_settled(hosted_cluster, hosted_control_plane)
+
+    try:
+        poll_until(
+            fn=_check,
+            until=lambda settled: settled is True,
+            retries=_HOSTED_CLUSTER_VERSION_RETRIES,
+            delay=_HOSTED_CLUSTER_VERSION_DELAY,
+            description=f"{name} ClusterVersion conditions",
+            retry_on_error=True,
+            resource_kind=WaitResourceKind.HOSTED_CONTROL_PLANE,
+            resource_id=name,
+        )
+    except TimeoutError:
+        raise AssertionError(
+            f"{name} ClusterVersion conditions did not settle: observed {observed}, want {want} "
+            f"(Succeeding/Available/Progressing from the HostedCluster, Failing from the "
+            f"HostedControlPlane in {control_plane_namespace})"
+        ) from None
+    logger.info("CaaS phase: control plane version healthy")
+    logger.info("CaaS: %s ClusterVersion conditions: %s", name, observed)
+
+
+def wait_for_guest_cluster_health(*, k8s: K8sClient, co_name: str, expected_workers: int) -> None:
+    """Guest health for flows that never hold a workload kubeconfig themselves."""
+    hosted_cluster_name, hosted_cluster_ns = wait_for_hosted_cluster_reference(k8s=k8s, co_name=co_name)
+    workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
+        k8s=k8s, hosted_cluster_namespace=hosted_cluster_ns, hosted_cluster_name=hosted_cluster_name
+    )
+    with tempfile.NamedTemporaryFile(prefix="osac-workload-", suffix=".kubeconfig") as kubeconfig_file:
+        kubeconfig_file.write(workload_kubeconfig)
+        kubeconfig_file.flush()
+        workload_k8s = K8sClient(namespace=hosted_cluster_ns, kubeconfig=kubeconfig_file.name, as_system_admin=False)
+        wait_for_workload_cluster_health(
+            k8s=workload_k8s, cluster_name=hosted_cluster_name, expected_workers=expected_workers
+        )
+    wait_for_hosted_cluster_version_health(k8s=k8s, name=hosted_cluster_name, namespace=hosted_cluster_ns)
 
 
 def wait_for_workload_cluster_health(*, k8s: K8sClient, cluster_name: str, expected_workers: int) -> None:
+    # Provider IDs first: they prove the machine API bound each worker, and they
+    # are observable before ClusterOperator health settles.
+    wait_for_workload_node_provider_ids(k8s=k8s, cluster_name=cluster_name, expected_workers=expected_workers)
+    logger.info("CaaS phase: waiting for a healthy guest cluster")
     attempts = 0
+    observed: list[str] = []
+    last_reported: list[str] = []
+    counts = {"nodes": 0, "operators": 0}
 
     def _check() -> bool:
-        nonlocal attempts
+        nonlocal attempts, last_reported
         attempts += 1
         nodes = k8s.list_json(resource="nodes").get("items", [])
         operators = k8s.list_json(resource="clusteroperators.config.openshift.io").get("items", [])
-        return workload_cluster_health_ready(nodes=nodes, operators=operators, expected_workers=expected_workers)
+        counts["nodes"], counts["operators"] = len(nodes), len(operators)
+        observed[:] = workload_cluster_unhealthy(nodes=nodes, operators=operators, expected_workers=expected_workers)
+        # The timeout names these too, but only once it gives up: reporting each
+        # change while waiting shows which operator is the holdout.
+        if observed and observed != last_reported:
+            logger.info("guest cluster not healthy yet: %s", "; ".join(observed))
+            last_reported = list(observed)
+        return not observed
 
-    poll_until(
-        fn=_check,
-        until=lambda value: value is True,
-        retries=_WORKLOAD_HEALTH_RETRIES,
-        delay=_WORKLOAD_HEALTH_DELAY,
-        description="workload cluster worker and ClusterOperator health",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER,
-        resource_id=cluster_name,
+    try:
+        poll_until(
+            fn=_check,
+            until=lambda value: value is True,
+            retries=_WORKLOAD_HEALTH_RETRIES,
+            delay=_WORKLOAD_HEALTH_DELAY,
+            description="workload cluster worker and ClusterOperator health",
+            retry_on_error=True,
+            resource_kind=WaitResourceKind.CLUSTER,
+            resource_id=cluster_name,
+        )
+    except TimeoutError as timeout:
+        details = "; ".join(observed)
+        if not details:
+            # No read ever completed, so the problems list cannot say why. The
+            # StuckState message can: it ends with the sanitized summary of the
+            # last failed read, and every part of it is sanitized already.
+            details = f"no Nodes or ClusterOperators were readable ({timeout})"
+        raise AssertionError(f"guest cluster did not become healthy: {details}") from None
+    logger.info("CaaS phase: all ClusterOperators healthy")
+    logger.info(
+        "CaaS: guest cluster healthy: %d worker node(s) and %d ClusterOperators available, not progressing, "
+        "not degraded (%d check(s))",
+        counts["nodes"],
+        counts["operators"],
+        attempts,
     )
-    if attempts > 1:
-        logger.info("Guest health became ready after %d checks", attempts)
 
 
 def wait_for_cluster_guest_readiness(
@@ -805,6 +1255,7 @@ def wait_for_cluster_guest_readiness(
     expected_ready_nodes: int,
     node_pool_description: str,
     node_pool_id: str,
+    hosted_cluster_namespace: str,
 ) -> dict[str, Any]:
     wait_for_cluster_ready(k8s=k8s, name=name)
     # Hub Ready can precede usable guest access; retain bounded guest retries.
@@ -819,6 +1270,7 @@ def wait_for_cluster_guest_readiness(
         resource_kind=WaitResourceKind.NODE_POOL,
         resource_id=node_pool_id,
     )
+    wait_for_hosted_cluster_version_health(k8s=k8s, name=cluster_name, namespace=hosted_cluster_namespace)
     return node_pool
 
 

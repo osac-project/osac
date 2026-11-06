@@ -30,7 +30,12 @@ from tests.e2e.core.helpers import (
     wait_for_cluster_order_cr,
     wait_for_cluster_progressing,
     wait_for_cluster_ready,
+    wait_for_guest_cluster_health,
     wait_for_hosted_cluster_kubeconfig,
+    wait_for_hosted_cluster_reference,
+    wait_for_worker_agents,
+    wait_for_worker_aggregates,
+    wait_for_worker_installation,
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
@@ -50,30 +55,6 @@ _WORKER_METRICS = ("osac_caas_worker_desired", "osac_caas_worker_ready", "osac_c
 _WORKER_LEVEL_METRICS = _WORKER_METRICS[:2]
 _WORKER_FAILURE_METRIC = _WORKER_METRICS[2]
 _WORKER_METRIC_LABELS = {"tenant", "worker_type", "instance_type"}
-_INSTALLING_AGENT_STATES = {"installing", "installing-in-progress"}
-# Only log known phase names, never Agent statusInfo or the full resource (which may contain sensitive data).
-_SAFE_AGENT_STATES = {
-    "discovering",
-    "discovering-unbound",
-    "known",
-    "known-unbound",
-    "insufficient",
-    "insufficient-unbound",
-    "disconnected",
-    "disconnected-unbound",
-    "disabled",
-    "disabled-unbound",
-    "pending-for-input",
-    "binding",
-    "preparing-for-installation",
-    "preparing-failed",
-    "preparing-successful",
-    "installing",
-    "installing-in-progress",
-    "installing-pending-user-action",
-    "installed",
-    "error",
-}
 logger = logging.getLogger(__name__)
 
 
@@ -115,22 +96,6 @@ def _list_owned_worker_bmis(*, grpc: GRPCClient, co_name: str, tenant: str) -> d
         assert metadata["annotations"]["osac.openshift.io/owner-reference"] == f"ClusterOrder/{co_name}"
         workers[bmi_id] = bmi
     return workers
-
-
-def _cluster_order_agents(*, k8s: K8sClient, co_name: str, namespace: str) -> list[dict[str, Any]]:
-    """Find even unbound Agents using the InfraEnv label assigned by Assisted Service."""
-    items = k8s.list_json(resource="agents.agent-install.openshift.io", namespace=namespace).get("items", [])
-    return [
-        agent
-        for agent in items
-        if agent.get("metadata", {}).get("namespace") == namespace
-        and agent.get("metadata", {}).get("labels", {}).get("infraenvs.agent-install.openshift.io")
-        == f"{co_name}-infraenv"
-    ]
-
-
-def _agent_is_installing(agent: dict[str, Any]) -> bool:
-    return agent.get("status", {}).get("debugInfo", {}).get("state") in _INSTALLING_AGENT_STATES
 
 
 def _wait_for_cluster_and_infraenv_deletion(
@@ -182,49 +147,10 @@ class _AvailableCluster(_ClusterResources):
     original_size: int
 
 
-def _assert_worker_agent_installing(*, k8s: K8sClient, co_name: str, namespace: str) -> None:
-    logger.info("CaaS: waiting for Agent in ClusterOrder namespace")
-    agents = poll_until(
-        fn=lambda: _cluster_order_agents(k8s=k8s, co_name=co_name, namespace=namespace),
-        until=bool,
-        retries=180,
-        delay=10,
-        description="CaaS worker Agent registration",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
-    agent_name = agents[0]["metadata"]["name"]
-    logger.info("CaaS: Agent found; waiting for installing state")
-    previous_state: str | None = None
-
-    def _current_agent() -> dict[str, Any] | None:
-        nonlocal previous_state
-        agent = next(
-            (
-                item
-                for item in _cluster_order_agents(k8s=k8s, co_name=co_name, namespace=namespace)
-                if item.get("metadata", {}).get("name") == agent_name
-            ),
-            None,
-        )
-        state = agent.get("status", {}).get("debugInfo", {}).get("state", "") if agent else ""
-        if state != previous_state:
-            logger.info("CaaS Agent state: %s", state if state in _SAFE_AGENT_STATES else "unknown")
-            previous_state = state
-        return agent
-
-    poll_until(
-        fn=_current_agent,
-        until=lambda agent: agent is not None and _agent_is_installing(agent),
-        retries=180,
-        delay=10,
-        description="CaaS worker Agent installing state",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
-    logger.info("CaaS: Agent entered installing state")
+def _assert_worker_agents_and_installation(*, k8s: K8sClient, co_name: str, namespace: str, expected: int) -> None:
+    """Report registration and installation as separate, named bring-up phases."""
+    wait_for_worker_agents(k8s=k8s, co_name=co_name, namespace=namespace, expected_agents=expected)
+    wait_for_worker_installation(k8s=k8s, co_name=co_name, namespace=namespace, expected_agents=expected)
 
 
 def _assert_operator_worker_metrics(*, k8s: K8sClient, co_name: str) -> None:
@@ -265,19 +191,8 @@ def _assert_cluster_version_propagated(
     co_release_image = cluster_order_spec.get("releaseImage", "")
     assert co_release_image, "ClusterOrder should have a resolved releaseImage"
 
-    hosted_cluster_name, hosted_cluster_ns = poll_until(
-        fn=lambda: (
-            k8s.get_cluster_order_hosted_cluster_name(name=co_name),
-            k8s.get_cluster_order_namespace(name=co_name),
-        ),
-        until=lambda reference: all(reference),
-        retries=30,
-        delay=5,
-        description=f"{co_name} HostedCluster reference",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
+    hosted_cluster_name, hosted_cluster_ns = wait_for_hosted_cluster_reference(k8s=k8s, co_name=co_name)
+
     hosted_cluster_image = run(
         *k8s._base(),
         "get",
@@ -355,6 +270,7 @@ def _assert_guest_workers_ready(
             # nodepool_prefix + '-' + node_set with prefix
             # "nodepool-{hosted_cluster_name}" -- not the NodeSet label.
             node_pool_id=f"nodepool-{hosted_cluster_name}-{worker_node_set}",
+            hosted_cluster_namespace=hosted_cluster_ns,
         )
     assert node_pool is not None, f"No NodePool found for NodeSet {worker_node_set!r}"
     assert node_pool.get("metadata", {}).get("name") == f"nodepool-{hosted_cluster_name}-{worker_node_set}"
@@ -418,6 +334,7 @@ def _assert_worker_provisioning(
     logger.info("CaaS: waiting for ClusterOrder to progress")
     wait_for_cluster_progressing(k8s=k8s, name=co_name)
     cluster_tenant = grpc.get_cluster(cluster_id=uuid)["object"]["metadata"]["tenant"]
+    logger.info("CaaS phase: BareMetalInstances binding")
     logger.info("CaaS: waiting for tenant-visible child BareMetalInstance")
     candidate_bmis = poll_until(
         fn=lambda: _list_owned_worker_bmis(grpc=grpc, co_name=co_name, tenant=cluster_tenant),
@@ -434,7 +351,10 @@ def _assert_worker_provisioning(
     assert co["metadata"]["annotations"]["osac.openshift.io/tenant"] == cluster_tenant
     namespace = co["metadata"]["namespace"]
     assert namespace == k8s.namespace
-    _assert_worker_agent_installing(k8s=k8s, co_name=co_name, namespace=namespace)
+    _assert_worker_agents_and_installation(
+        k8s=k8s, co_name=co_name, namespace=namespace, expected=_expected_worker_count(co)
+    )
+    _assert_worker_aggregates(k8s=k8s, co_name=co_name, expected_workers=_expected_worker_count(co))
     _assert_operator_worker_metrics(k8s=k8s, co_name=co_name)
     return cluster_tenant, candidate_bmis
 
@@ -777,21 +697,14 @@ def _assert_two_node_set_requests(
     return expected_replicas
 
 
-def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers: int) -> None:
-    def _get_worker_counts() -> tuple[int, int, int]:
-        status = k8s.get_json(resource="clusterorder", name=co_name).get("status", {})
-        return tuple(int(status.get(key, -1)) for key in ("desiredWorkers", "currentWorkers", "readyWorkers"))
+def _expected_worker_count(cluster_order: dict[str, Any]) -> int:
+    """The number of workers the order asked for, readable before any Agent exists."""
+    requests = cluster_order.get("spec", {}).get("nodeRequests") or []
+    return sum(int(request.get("numberOfNodes", 0)) for request in requests)
 
-    poll_until(
-        fn=_get_worker_counts,
-        until=lambda value: value == (expected_workers, expected_workers, expected_workers),
-        retries=120,
-        delay=10,
-        description=f"{co_name} worker aggregates before NodePool isolation check",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
+
+def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers: int) -> None:
+    wait_for_worker_aggregates(k8s=k8s, co_name=co_name, expected_workers=expected_workers)
 
 
 def _agent_is_installed(agent: dict[str, Any]) -> bool:
@@ -920,6 +833,9 @@ def assert_cluster_with_two_node_sets_available(
         cluster_order=cluster_order, cluster_node_sets=cluster["spec"]["nodeSets"], instance_types=instance_types
     )
     hosted_cluster_ns = k8s.get_cluster_order_namespace(name=co_name)
+    _assert_worker_agents_and_installation(
+        k8s=k8s, co_name=co_name, namespace=k8s.namespace, expected=sum(expected_replicas.values())
+    )
     _assert_worker_aggregates(k8s=k8s, co_name=co_name, expected_workers=sum(expected_replicas.values()))
     _assert_installed_agents_by_node_set(
         k8s=k8s, co_name=co_name, expected_replicas=expected_replicas, instance_types=instance_types
@@ -931,6 +847,9 @@ def assert_cluster_with_two_node_sets_available(
         expected_replicas=expected_replicas,
         instance_types=instance_types,
     )
+    # Both node sets' workers must be bound through CAP-Agent and healthy in the
+    # guest cluster, not just counted as ready Nodes by their NodePools.
+    wait_for_guest_cluster_health(k8s=k8s, co_name=co_name, expected_workers=sum(expected_replicas.values()))
 
     # The cluster was created without a project, so its heartbeats must carry
     # no project dimension: the engine emits only the facts a resource carries.

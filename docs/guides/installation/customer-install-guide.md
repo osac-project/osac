@@ -1297,19 +1297,17 @@ Read the `NetworkClass` through the private API of the Fulfillment Service.
 
    If the shared bundle does not trust the Route, use the Route CA bundle
    provided by your platform administrators. For a publicly trusted Route,
-   use the system trust store and omit `--cacert` from the request.
+   leave `CA_FILE` unset so requests use the system trust store.
 
-2. Read the status. For a private CA, use the bundle set in `CA_FILE`:
-
-   ```console
-   curl --fail-with-body --cacert "$CA_FILE" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
-       "${FULFILLMENT_API}/api/private/v1/network_classes" | jq '.items[0].status'
-   ```
-
-   For a publicly trusted Route, use the system trust store:
+2. In the same Bash session, initialize optional CA arguments from `CA_FILE`.
+   When it is unset, the request uses the system trust store:
 
    ```console
-   curl --fail-with-body --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
+   CURL_CA_ARGS=()
+   if [ -n "${CA_FILE:-}" ]; then
+     CURL_CA_ARGS=(--cacert "$CA_FILE")
+   fi
+   curl --fail-with-body "${CURL_CA_ARGS[@]}" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
        "${FULFILLMENT_API}/api/private/v1/network_classes" | jq '.items[0].status'
    ```
 
@@ -1337,12 +1335,12 @@ tenant onboarding waits for a `READY` pool.
 
 **Procedure**
 
-- For each pool, run the following command with the variables of
-  [Section 4.4.6](#446-checking-the-networkclass). Each pool has exactly one
-  IPv4 CIDR:
+- For each pool, run the following command with the variables, including
+  `CURL_CA_ARGS`, from [Section 4.4.6](#446-checking-the-networkclass). Each
+  pool has exactly one IPv4 CIDR:
 
   ```console
-  curl --fail-with-body --cacert "$CA_FILE" --request POST \
+  curl --fail-with-body "${CURL_CA_ARGS[@]}" --request POST \
       "${FULFILLMENT_API}/api/private/v1/external_ip_pools" \
       --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" --header "Content-Type: application/json" \
       --data '{"metadata": {"name": "pool-public-1"}, "spec": {"cidrs": ["198.51.100.0/24"], "ipFamily": "IP_FAMILY_IPV4"}}'
@@ -1361,7 +1359,7 @@ tenant onboarding waits for a `READY` pool.
 - The pool becomes `READY` when the Fabric Manager's pool task succeeds:
 
   ```console
-  curl --fail-with-body --cacert "$CA_FILE" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
+  curl --fail-with-body "${CURL_CA_ARGS[@]}" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
       "${FULFILLMENT_API}/api/private/v1/external_ip_pools" | jq '.items[] | {id, status}'
   ```
 
@@ -1381,13 +1379,14 @@ address plan, for example to enable CaaS on a plan without `lbVip`: once the
    default, then every Tenant, which deletes its defaults. The reserved tenants
    `system` and `shared` have no defaults; keep them. Each delete runs the
    recorded managers' tasks, so the image must still hold the recorded roles.
-2. Delete every ExternalIPPool, then the `NetworkClass`, with the variables of
+2. Delete every ExternalIPPool, then the `NetworkClass`, with the variables,
+   including `CURL_CA_ARGS`, from
    [Section 4.4.6](#446-checking-the-networkclass):
 
    ```console
-   curl --fail-with-body --cacert "$CA_FILE" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
+   curl --fail-with-body "${CURL_CA_ARGS[@]}" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
        --request DELETE "${FULFILLMENT_API}/api/private/v1/external_ip_pools/<pool_id>"
-   curl --fail-with-body --cacert "$CA_FILE" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
+   curl --fail-with-body "${CURL_CA_ARGS[@]}" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
        --request DELETE "${FULFILLMENT_API}/api/private/v1/network_classes/<network_class_id>"
    ```
 3. Roll out the new Helm values. The installer creates the new
@@ -2144,8 +2143,10 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    under the name configured by `service.certs.caBundle.configMap`. Set this
    value in `my-values.yaml` to the name they provide; it defaults to
    `ca-bundle`. Changing the value does not create or rename a ConfigMap. For
-   customer-managed trust, ensure that the ConfigMap already exists in the
-   OSAC release namespace.
+   a custom name, set the related CA-bundle values listed in
+   [Section 5](#5-helm-chart-configuration-parameters) to the same name before
+   installation. For customer-managed trust, ensure that the ConfigMap already
+   exists in the OSAC release namespace.
 
    Replace `<ca_bundle_configmap>` below with that shared name and
    `<namespace>` with the OSAC release namespace:
@@ -2342,8 +2343,12 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
     `TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY` with status
     `CONDITION_STATUS_TRUE`:
 
+    Use `FULFILLMENT_API`, `OSAC_ADMIN_TOKEN`, and `CURL_CA_ARGS` from
+    [Section 4.4.6](#446-checking-the-networkclass). Leave `CA_FILE` unset for
+    a publicly trusted Route so the request uses the system trust store.
+
     ```console
-    curl -s --cacert "$CA_FILE" -H "Authorization: Bearer $OSAC_ADMIN_TOKEN" \
+    curl -s "${CURL_CA_ARGS[@]}" -H "Authorization: Bearer $OSAC_ADMIN_TOKEN" \
       "${FULFILLMENT_API}/api/private/v1/tenants" \
       | jq '.items[] | select(.metadata.name=="<tenant_name>") | .status.conditions'
     ```

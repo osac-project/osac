@@ -13,6 +13,17 @@ argument_specs:
       hosted_cluster_namespace:
         type: str
         required: true
+      hosted_cluster_enable_acm_registration:
+        type: bool
+        required: false
+        default: false
+        description: >
+          When true, the HostedCluster is labeled with
+          cluster.open-cluster-management.io/clusterset: default so ACM
+          imports it as a ManagedCluster spoke. Default false: regular CaaS
+          clusters are not registered with ACM (OSAC-6313); hub-registration
+          is reserved for templates that need it (e.g. AI MaaS workload
+          clusters, OSAC-6488).
       hosted_cluster_node_requests:
         type: list
         elements: dict

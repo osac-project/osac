@@ -34,7 +34,7 @@
       metadata:
         name: "{{ hosted_cluster_name }}"
         namespace: "{{ hosted_cluster_namespace }}"
-        labels: "{{ {'cluster.open-cluster-management.io/clusterset': 'default'} | combine(hosted_cluster_default_cluster_order_label) }}"
+        labels: "{{ hosted_cluster_acm_clusterset_label | combine(hosted_cluster_default_cluster_order_label) }}"
       spec:
         release:
           image: "{{ ocp_release_image }}"

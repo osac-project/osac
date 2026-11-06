@@ -2,6 +2,17 @@
 hosted_cluster_base_domain: box.massopen.cloud
 hosted_cluster_default_agent_namespace: "hardware-inventory"
 hosted_cluster_default_cluster_order_label: "{{ {cluster_order_label: hosted_cluster_name} }}"
+# Opt-in ACM registration. When false (default), the HostedCluster is created
+# without the cluster.open-cluster-management.io/clusterset label, so ACM does
+# not import it and it never becomes a ManagedCluster spoke (OSAC-6313).
+# Templates that must stay hub-registered (e.g. ocp_4_20_ai_maas for
+# WorkloadCluster import, OSAC-6488) set this to true.
+hosted_cluster_enable_acm_registration: false
+# Lazily resolved from hosted_cluster_enable_acm_registration at use time,
+# so template overrides of the flag are respected.
+hosted_cluster_acm_clusterset_label: >-
+  {{ {'cluster.open-cluster-management.io/clusterset': 'default'}
+  if hosted_cluster_enable_acm_registration | bool else {} }}
 hosted_cluster_node_requests: []
 hosted_cluster_order_annotations: >-
   {{ (cluster_order | default({})).get('metadata', {}).get('annotations', {}) }}

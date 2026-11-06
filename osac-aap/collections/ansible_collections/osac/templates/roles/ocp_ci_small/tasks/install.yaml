@@ -45,6 +45,7 @@
       ovn_kubernetes_mtu: 1400
     hosted_cluster_node_requests: "{{ cluster_order.spec.nodeRequests }}"
     hosted_cluster_state: present
+    hosted_cluster_enable_acm_registration: "{{ ocp_ci_small_enable_acm_registration | bool }}"
     hosted_cluster_infrastructure_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY', default='SingleReplica') }}"
 
 - name: Step - Configure external access

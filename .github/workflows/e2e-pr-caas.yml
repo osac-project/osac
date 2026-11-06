@@ -2,8 +2,8 @@
 # The CaaS suite of a pull request, as a run of its own. The decision of e2e-pr.yml (osac-ci) starts it with
 # workflow_dispatch for the commit that was approved, because the policy names this file for the suite
 # (`workflow: e2e-pr-caas.yml` in .github/e2e-policy.yml). It is a run of its own so that a failed CaaS suite can be run
-# again at once (GitHub's "Re-run" of this run, or `/test caas`) without waiting for the other suites. It does
-# what the `caas` job of e2e-pr.yml did: it calls e2e-caas-full-install.yml with the same arguments; nothing else runs here.
+# again at once (GitHub's "Re-run" of this run, or `/test caas`) without waiting for the other suites. It
+# calls e2e-caas-full-install.yml, selecting the full tier when CaaS regression tests changed.
 #
 # The inputs are given by the decision and checked by `verify` (osac-ci) against the pull request: anyone with write
 # access can start this workflow with any inputs, and the fork author and association, which decide whether a fork's code
@@ -32,7 +32,7 @@ on:
       tier:
         description: >-
           "full" when the box "CaaS Full Install · sanity + regression" (a variant of this suite in the policy) started
-          it, empty for the sanity tests. Sent by the decision only for a suite asked for through a variant.
+          it. Otherwise defaults to sanity, unless a current or previous changed path is under tests/e2e/caas/regression/.
         required: false
         type: string
         default: ""
@@ -62,15 +62,60 @@ jobs:
       sha: ${{ inputs.sha }}
       pr-number: ${{ inputs.pr-number }}
 
+  # Resolve the suite tier only after the dispatch inputs have been verified.
+  selection:
+    needs: verify
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    outputs:
+      tier: ${{ (inputs.tier == 'full' || steps.comparison.outputs.changed == 'true') && 'full' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Read the verified PR base
+        id: base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          PR_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          pull_json="$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}")"
+          base="$(jq -er --arg sha "$PR_SHA" '
+            select(.head.sha == $sha) | .base.sha | select(test("^[0-9a-f]{40}$"))
+          ' <<<"$pull_json")"
+          printf 'sha=%s\n' "$base" >> "$GITHUB_OUTPUT"
+      - name: Check for CaaS regression changes without checking out PR code
+        id: comparison
+        env:
+          PR_BASE: ${{ steps.base.outputs.sha }}
+          PR_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$PR_BASE" "$PR_SHA"
+          base="$(git merge-base "$PR_BASE" "$PR_SHA")"
+          git diff --no-renames --name-only -z "$base" "$PR_SHA" -- tests/e2e/caas/regression/ > "$RUNNER_TEMP/caas-regression-paths"
+          if [[ -s "$RUNNER_TEMP/caas-regression-paths" ]]; then
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          fi
+
   # Named after the suite id of .github/e2e-policy.yml: the line of the suite follows the deepest job of this run.
   caas:
-    needs: [verify]
+    needs: [verify, selection]
     permissions:
       contents: read
       id-token: write
     uses: ./.github/workflows/e2e-caas-full-install.yml
     with:
-      tier: ${{ inputs.tier }}
+      tier: ${{ needs.selection.outputs.tier }}
       repo: ${{ inputs.repo }}
       sha: ${{ inputs.sha }}
       pr-number: ${{ inputs.pr-number }}

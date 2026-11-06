@@ -11,6 +11,8 @@
 # OUTPUT:
 #   _vast_skip_tenant_delete: true    — Other backends share this tenant/endpoint, skip cleanup
 #                             false   — No other backends, safe to delete tenant-wide resources
+#   _vast_shared_check_failed: true   — Lookup failed, sharing state unknown (preserve Secret for retry)
+#                              false  — Lookup succeeded, sharing state is known
 #
 # LOGIC:
 #   1. Query hub Secrets by tenant + provider labels
@@ -19,7 +21,7 @@
 #   4. Skip cleanup if any matches found (shared tenant/endpoint)
 #
 # EDGE CASES:
-#   - Query failure → skip cleanup (safe default, don't orphan)
+#   - Query failure → skip cleanup (safe default, don't orphan) AND mark check as failed
 #   - Missing endpoint in Secret → ignore that Secret, continue checking
 #   - No Secrets found → don't skip (safe to clean up)
 
@@ -35,17 +37,19 @@
   ignore_errors: true
   no_log: true
 
-- name: Set skip flag on query failure (safe default)
+- name: Set skip and failure flags on query failure (safe default, preserve Secret)
   when: _vast_shared_check is failed
   ansible.builtin.set_fact:
     _vast_skip_tenant_delete: true
+    _vast_shared_check_failed: true
 
 - name: Filter and check endpoints for other backends
   when: _vast_shared_check is not failed
   block:
-    - name: Initialize list of backends on same endpoint
+    - name: Initialize list of backends on same endpoint and success flag
       ansible.builtin.set_fact:
         _vast_same_endpoint_backends: []
+        _vast_shared_check_failed: false
 
     - name: Check each Secret for matching endpoint (exclude current backend by label)
       loop: "{{ _vast_shared_check.resources | default([]) }}"
@@ -73,6 +77,8 @@
       ansible.builtin.debug:
         msg: >-
           Shared tenant check for '{{ tenant_name }}' backend '{{ _vast_backend_id }}':
-          {{ 'SKIP tenant cleanup (other backends found: ' ~ (_vast_same_endpoint_backends | join(', ')) ~ ')'
-             if (_vast_skip_tenant_delete | bool)
-             else 'OK to delete tenant-wide resources (no other backends on this endpoint)' }}
+          {{ 'FAILED - sharing state unknown, will preserve Secret for retry'
+             if (_vast_shared_check_failed | default(false) | bool)
+             else ('SKIP tenant cleanup (other backends found: ' ~ (_vast_same_endpoint_backends | join(', ')) ~ ')'
+                   if (_vast_skip_tenant_delete | bool)
+                   else 'OK to delete tenant-wide resources (no other backends on this endpoint)') }}

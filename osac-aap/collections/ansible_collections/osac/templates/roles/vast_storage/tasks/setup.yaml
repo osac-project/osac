@@ -375,6 +375,7 @@
             namespace: "{{ vast_storage_config_namespace }}"
           register: _vast_rollback_secret_check
           ignore_errors: true
+          no_log: true
 
         - name: Log Secret existence before rollback deletion
           ansible.builtin.debug:
@@ -391,6 +392,7 @@
             namespace: "{{ vast_storage_config_namespace }}"
           register: _vast_rollback_secret_delete
           ignore_errors: true  # noqa: ignore-errors
+          no_log: true
 
         - name: Log Secret deletion result
           ansible.builtin.debug:

@@ -516,6 +516,61 @@
       vars:
         storage_provider_action: setup
 
+    - name: Get backend A's hub Secret to extract tenant_id
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-rbsame-be-a"
+        namespace: "osac-system"
+      register: _rbsame_a_secret
+      no_log: true
+
+    - name: Extract tenant_id and admin credentials from backend A's Secret
+      ansible.builtin.set_fact:
+        _rbsame_tenant_id: "{{ _rbsame_a_secret.resources[0].data.vast_tenant_id | b64decode }}"
+        _rbsame_endpoint: "{{ _rbsame_a_secret.resources[0].data.vast_endpoint | b64decode }}"
+
+    - name: Authenticate to VMS to create test views
+      ansible.builtin.uri:
+        url: "https://{{ _rbsame_endpoint }}/api/token/"
+        method: POST
+        body_format: json
+        body:
+          username: "admin"
+          password: "{{ _mock_vast_password }}"
+        validate_certs: false
+        status_code: [200, 201]
+      register: _rbsame_admin_auth
+      no_log: true
+
+    - name: Create test view for backend A (to verify rollback protection)
+      ansible.builtin.uri:
+        url: "https://{{ _rbsame_endpoint }}/api/views/"
+        method: POST
+        body_format: json
+        body:
+          name: "test-view-be-a"
+          path: "/test-view-be-a"
+          tenant_id: "{{ _rbsame_tenant_id | int }}"
+          protocols: ["NFS"]
+        headers:
+          Authorization: "Bearer {{ _rbsame_admin_auth.json.access }}"
+        validate_certs: false
+        status_code: [200, 201]
+      register: _rbsame_test_view
+
+    - name: Query backend A's views after creating test view
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/api/views/?tenant_id={{ _rbsame_tenant_id }}"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _rbsame_a_views
+
+    - name: Save backend A's view count for later verification
+      ansible.builtin.set_fact:
+        _rbsame_a_view_count: "{{ _rbsame_a_views.json | length }}"
+
     - name: Inject failure for backend B manager creation (after A succeeds)
       ansible.builtin.uri:
         url: "https://127.0.0.1:18443/_inject_failure"
@@ -645,6 +700,25 @@
           - _rbsame_hub_b.resources | length == 0
         fail_msg: "Backend B's hub Secret should have been deleted in rollback"
         success_msg: "Backend B's hub Secret correctly deleted"
+
+    - name: Query backend A's views after backend B rollback
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/api/views/?tenant_id={{ _rbsame_tenant_id }}"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _rbsame_a_views_after
+
+    - name: Assert backend A's views survived backend B rollback
+      ansible.builtin.assert:
+        that:
+          - (_rbsame_a_views_after.json | length) == (_rbsame_a_view_count | int)
+          - (_rbsame_a_view_count | int) > 0
+        fail_msg: >-
+          Backend A's views were deleted during backend B rollback
+          (expected {{ _rbsame_a_view_count }}, found {{ _rbsame_a_views_after.json | length }}).
+          This proves the shared-tenant detection failed.
+        success_msg: "Backend A's {{ _rbsame_a_view_count }} view(s) survived rollback — shared tenant protection works"
 
 - name: "Storage Provider Same-Endpoint Rollback - Cleanup"
   hosts: localhost

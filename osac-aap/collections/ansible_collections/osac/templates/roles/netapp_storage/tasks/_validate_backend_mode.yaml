@@ -289,6 +289,25 @@
     )
   no_log: true
 
+# Dedicated-SVM backends label their TridentBackendConfig and CSI Secret with
+# osac.openshift.io/storage-backend-id, so the backend_id must be a valid
+# Kubernetes label value. Shared-TBC backends create no labeled resources from
+# it, so they are not restricted here.
+- name: Fail if a Dedicated-SVM backend_id is not a valid Kubernetes label value
+  ansible.builtin.fail:
+    msg: >-
+      Dedicated-SVM backend_id must be a valid Kubernetes label value (at most
+      63 characters: letters, digits, '-', '_', '.', starting and ending with a
+      letter or digit) because it labels the TridentBackendConfig and CSI
+      Secret.
+  when: >-
+    not (_netapp_is_shared_tbc | bool) and
+    (
+      _netapp_backend_id is not string or
+      _netapp_backend_id is not regex('^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?\Z')
+    )
+  no_log: true
+
 # QoS policy groups are created by a cluster administrator, owned by one SVM,
 # and only referenced by name from Trident virtual pools (Trident never creates
 # them and does not verify they exist until a PVC is provisioned). The prepared

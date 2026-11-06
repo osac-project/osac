@@ -412,7 +412,7 @@
                   'credentials': {'name': 'netapp-csi-' ~ _assignment_key},
                   'storage': _virtual_pools
                 }
-                | combine({'trustedCACertificate': _trusted_ca_b64} if (_trusted_ca_b64 | default('') | length > 0) else {})
+                | combine({'trustedCACertificate': (_trusted_ca_b64 if (_trusted_ca_b64 | default('') | length > 0) else none)})
               )
             } }}
       when: not (_netapp_is_shared_tbc | bool)

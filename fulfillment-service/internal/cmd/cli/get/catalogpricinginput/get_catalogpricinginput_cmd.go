@@ -122,8 +122,7 @@ func (c *runnerContext) list(ctx context.Context, client publicv1.CatalogPricing
 func render(ctx context.Context, console *terminal.Console, format string,
 	items []*publicv1.CatalogPricingInput) error {
 	if format == output.Table {
-		renderTable(console, items)
-		return nil
+		return renderTable(console, items)
 	}
 	values, err := output.Messages(items)
 	if err != nil {
@@ -134,9 +133,15 @@ func render(ctx context.Context, console *terminal.Console, format string,
 }
 
 // renderTable writes one row per (service, dimension, value) tuple.
-func renderTable(console *terminal.Console, items []*publicv1.CatalogPricingInput) {
+func renderTable(console *terminal.Console, items []*publicv1.CatalogPricingInput) error {
 	writer := tabwriter.NewWriter(console, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(writer, "SERVICE\tDIMENSION\tVALUE\tACCEPTS ANY VALUE\tCATALOG ITEMS\n")
+	var writeErr error
+	printf := func(format string, args ...any) {
+		if writeErr == nil {
+			_, writeErr = fmt.Fprintf(writer, format, args...)
+		}
+	}
+	printf("SERVICE\tDIMENSION\tVALUE\tACCEPTS ANY VALUE\tCATALOG ITEMS\n")
 	for _, item := range items {
 		value := item.GetValue()
 		if item.GetAcceptsAnyValue() && value == "" {
@@ -146,10 +151,13 @@ func renderTable(console *terminal.Console, items []*publicv1.CatalogPricingInpu
 		for _, catalogItem := range item.GetCatalogItems() {
 			names = append(names, catalogItem.GetName())
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%t\t%s\n",
+		printf("%s\t%s\t%s\t%t\t%s\n",
 			item.GetService(), item.GetDimension(), value, item.GetAcceptsAnyValue(), strings.Join(names, ", "))
 	}
-	writer.Flush()
+	if writeErr != nil {
+		return writeErr
+	}
+	return writer.Flush()
 }
 
 const shortHelp = `Show the metered catalog pricing input inventory`

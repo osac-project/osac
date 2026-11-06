@@ -14,6 +14,8 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
+
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -63,7 +65,7 @@ var _ = Describe("Private catalog pricing inputs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		createComputeItem := func(id, name string, published bool) {
+		createComputeItem := func(ctx context.Context, id, name string, published bool) {
 			_, err := computeItemsDao.Create().SetObject(privatev1.ComputeInstanceCatalogItem_builder{
 				Id:        id,
 				Metadata:  privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
@@ -78,7 +80,7 @@ var _ = Describe("Private catalog pricing inputs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		}
 
-		createClusterItem := func(id, name string, published bool) {
+		createClusterItem := func(ctx context.Context, id, name string, published bool) {
 			_, err := clusterItemsDao.Create().SetObject(privatev1.ClusterCatalogItem_builder{
 				Id:        id,
 				Metadata:  privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
@@ -111,9 +113,11 @@ var _ = Describe("Private catalog pricing inputs server", func() {
 		})
 
 		It("aggregates across both VMaaS and CaaS catalog items, draft and published", func() {
-			createComputeItem(uuid.NewString(), "vmaas-published", true)
-			createComputeItem(uuid.NewString(), "vmaas-draft", false)
-			createClusterItem(uuid.NewString(), "caas-published", true)
+			seedCommittedCatalogFixtures(func(seedCtx context.Context) {
+				createComputeItem(seedCtx, uuid.NewString(), "vmaas-published", true)
+				createComputeItem(seedCtx, uuid.NewString(), "vmaas-draft", false)
+				createClusterItem(seedCtx, uuid.NewString(), "caas-published", true)
+			})
 
 			response, err := server.List(ctx, &privatev1.CatalogPricingInputsListRequest{})
 			Expect(err).ToNot(HaveOccurred())
@@ -138,8 +142,10 @@ var _ = Describe("Private catalog pricing inputs server", func() {
 		})
 
 		It("paginates the deterministic aggregated list", func() {
-			createComputeItem(uuid.NewString(), "vmaas-1", true)
-			createClusterItem(uuid.NewString(), "caas-1", true)
+			seedCommittedCatalogFixtures(func(seedCtx context.Context) {
+				createComputeItem(seedCtx, uuid.NewString(), "vmaas-1", true)
+				createClusterItem(seedCtx, uuid.NewString(), "caas-1", true)
+			})
 
 			full, err := server.List(ctx, &privatev1.CatalogPricingInputsListRequest{})
 			Expect(err).ToNot(HaveOccurred())
@@ -156,8 +162,10 @@ var _ = Describe("Private catalog pricing inputs server", func() {
 		})
 
 		It("applies the CEL filter to the aggregated rows", func() {
-			createComputeItem(uuid.NewString(), "vmaas-1", true)
-			createClusterItem(uuid.NewString(), "caas-1", true)
+			seedCommittedCatalogFixtures(func(seedCtx context.Context) {
+				createComputeItem(seedCtx, uuid.NewString(), "vmaas-1", true)
+				createClusterItem(seedCtx, uuid.NewString(), "caas-1", true)
+			})
 
 			response, err := server.List(ctx, privatev1.CatalogPricingInputsListRequest_builder{
 				Filter: proto.String(`this.service == "cluster"`),

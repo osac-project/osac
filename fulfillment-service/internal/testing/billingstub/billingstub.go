@@ -26,6 +26,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -43,7 +44,8 @@ import (
 )
 
 // Request is one recorded request. Op is the adapter method name that scripts its failures, empty for a request
-// the stub does not serve. Failed is true when the stub answered with an error status.
+// the stub does not serve. Failed is true when the stub answered with an error status or the response could not be
+// delivered.
 type Request struct {
 	Method        string
 	Path          string
@@ -83,20 +85,36 @@ func (s *Stub) StartTLS(addr, host string) ([]byte, error) {
 	return caPEM, s.start(addr, &tls.Config{Certificates: []tls.Certificate{certificate}})
 }
 
+// newUnstartedServer builds the server httptest starts for the stub. It is a seam so a test can capture the loopback
+// listener httptest allocates before start replaces it.
+var newUnstartedServer = httptest.NewUnstartedServer
+
 // start listens on addr and serves plain HTTP, or TLS when config is set.
 func (s *Stub) start(addr string, config *tls.Config) error {
+	// Retire a previous server first: one Stub owns at most one live server, and a restart can rebind its address.
+	if s.server != nil {
+		s.server.Close()
+		s.server = nil
+	}
+	server := newUnstartedServer(s)
+	// httptest allocated a loopback listener this stub does not serve on: close it before serving so it cannot leak.
+	if err := server.Listener.Close(); err != nil {
+		server.Close()
+		return fmt.Errorf("closing the displaced httptest listener: %w", err)
+	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	s.server = httptest.NewUnstartedServer(s)
-	s.server.Listener = listener
+	server.Listener = listener
+	// Store the server before starting it, so a panic still leaves the listener reachable through Close.
+	s.server = server
 	if config == nil {
-		s.server.Start()
+		server.Start()
 		return nil
 	}
-	s.server.TLS = config
-	s.server.StartTLS()
+	server.TLS = config
+	server.StartTLS()
 	return nil
 }
 
@@ -205,15 +223,31 @@ func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		status, body = s.route(&request, r)
 	}
-	request.Failed = status >= 300
-	s.requests = append(s.requests, request)
 	if status >= 300 {
 		// M360 answers errors with a flat body, not the success envelope.
-		body = map[string]any{"status": status, "error": http.StatusText(status), "message": "scripted", "path": r.URL.Path}
+		body = errorBody(status, r.URL.Path, "scripted")
 	}
+	// Serialize before committing the status: a body that cannot be encoded must not leave a success status with no
+	// payload. The flat error body holds only a status, strings and a path, so its fallback marshal cannot fail.
+	payload, err := json.Marshal(body)
+	if err != nil {
+		// Never echo the encoder error or the scenario value: answer the same flat shape with a generic message.
+		status = http.StatusInternalServerError
+		payload, _ = json.Marshal(errorBody(status, r.URL.Path, "response encoding failed"))
+	}
+	request.Failed = status >= 300
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	if _, err := w.Write(payload); err != nil {
+		// The response never reached the client, so the request did not succeed on the wire either.
+		request.Failed = true
+	}
+	s.requests = append(s.requests, request)
+}
+
+// errorBody is the flat M360 error shape. Message is fixed text, never scenario data.
+func errorBody(status int, path, message string) map[string]any {
+	return map[string]any{"status": status, "error": http.StatusText(status), "message": message, "path": path}
 }
 
 // route answers a GET, applying the scripted failure of the op it maps to.

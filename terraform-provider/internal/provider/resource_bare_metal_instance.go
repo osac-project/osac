@@ -59,6 +59,16 @@ func (o *instanceObject) state() string {
 	return status.State
 }
 
+// restartTrigger returns the echo of the spec restart trigger reported in the status, set by the controller once a
+// requested restart has been executed.
+func (o *instanceObject) restartTrigger() string {
+	var status struct {
+		RestartTrigger string `json:"restart_trigger"`
+	}
+	_ = json.Unmarshal(o.Status, &status)
+	return status.RestartTrigger
+}
+
 // bareMetalInstanceResource manages BareMetalInstance resources. The schema and the models are generated from the
 // API definitions; this file contains only the CRUD glue: the reference resolution, the tenant placement and the
 // update mask handling, which are policy and can't be generated. Requests and responses are JSON, in the same shape
@@ -207,7 +217,7 @@ func (r *bareMetalInstanceResource) Update(ctx context.Context,
 		"id":   state.Id.ValueString(),
 		"spec": update,
 	}
-	data, err := r.client.update(ctx, bareMetalInstancesPath, state.Id.ValueString(), body,
+	_, err = r.client.update(ctx, bareMetalInstancesPath, state.Id.ValueString(), body,
 		[]string{"spec.run_strategy", "spec.restart_trigger"},
 	)
 	if err != nil {
@@ -218,8 +228,22 @@ func (r *bareMetalInstanceResource) Update(ctx context.Context,
 		return
 	}
 
-	var object instanceObject
-	_ = json.Unmarshal(data, &object)
+	// Wait until the machine reaches the power state desired by the run strategy, and until a requested restart
+	// has been executed, so that the apply reflects the actual state of the machine:
+	object, waitErr := r.waitForStable(ctx, state.Id.ValueString(),
+		plan.Spec.RunStrategy.ValueString(), update)
+	if waitErr != nil {
+		response.Diagnostics.AddError(
+			"Failed to update bare metal instance",
+			fmt.Sprintf(
+				"The bare metal instance '%s' was updated, but hasn't reached the desired state: %s. "+
+					"The instance may still be transitioning; check its state with 'osac get baremetalinstances'.",
+				state.Id.ValueString(), waitErr,
+			),
+		)
+		return
+	}
+
 	plan.Id = types.StringValue(state.Id.ValueString())
 	plan.Status = valueOfJSON(ctx, object.Status, gen.StatusValue{})
 	settleModel(ctx, &plan)
@@ -239,6 +263,22 @@ func (r *bareMetalInstanceResource) Delete(ctx context.Context,
 		response.Diagnostics.AddError(
 			"Failed to delete bare metal instance",
 			fmt.Sprintf("Failed to delete the bare metal instance '%s': %s", state.Id.ValueString(), err),
+		)
+		return
+	}
+
+	// Wait until the backend finishes deprovisioning the machine, so that a new instance with the same name can
+	// be created immediately afterwards:
+	err = r.waitForDeleted(ctx, state.Id.ValueString())
+	if err != nil {
+		response.Diagnostics.AddError(
+			"Failed to delete bare metal instance",
+			fmt.Sprintf(
+				"The bare metal instance '%s' was deleted, but the machine is still being deprovisioned: %s. "+
+					"The instance no longer exists; creating a new one with the same name may be rejected "+
+					"until the deprovisioning finishes.",
+				state.Id.ValueString(), err,
+			),
 		)
 	}
 }
@@ -335,6 +375,13 @@ func (r *bareMetalInstanceResource) buildBody(ctx context.Context,
 // Bare metal provisioning is slow: allocating the host and installing the OS takes minutes.
 const createWaitTimeout = 30 * time.Minute
 
+// updateWaitTimeout is the maximum time an update waits for the machine to reach the desired power state. Power
+// operations on physical machines aren't instantaneous.
+const updateWaitTimeout = 15 * time.Minute
+
+// deleteWaitTimeout is the maximum time a deletion waits for the backend to finish deprovisioning the machine.
+const deleteWaitTimeout = 15 * time.Minute
+
 // waitInterval is the polling interval used while waiting for the instance to be ready.
 const waitInterval = 10 * time.Second
 
@@ -370,6 +417,73 @@ func (r *bareMetalInstanceResource) waitForReady(ctx context.Context,
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		case <-time.After(waitInterval):
+		}
+	}
+}
+
+// waitForStable polls the instance until it reaches the power state desired by the run strategy and, when a
+// restart was requested, until the controller reports having executed it.
+func (r *bareMetalInstanceResource) waitForStable(ctx context.Context,
+	id, runStrategy string, update map[string]any) (*instanceObject, error) {
+	// An unspecified run strategy means no particular power state is desired:
+	desired := ""
+	switch runStrategy {
+	case "BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS":
+		desired = "BARE_METAL_INSTANCE_STATE_RUNNING"
+	case "BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED":
+		desired = "BARE_METAL_INSTANCE_STATE_STOPPED"
+	}
+	requestedRestart, _ := update["restart_trigger"].(string)
+	deadline := time.Now().Add(updateWaitTimeout)
+	for {
+		data, err := r.client.get(ctx, bareMetalInstancesPath, id)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read the instance state: %w", err)
+		}
+		var object instanceObject
+		_ = json.Unmarshal(data, &object)
+		restartDone := requestedRestart == "" || object.restartTrigger() == requestedRestart
+		switch {
+		case (desired == "" || object.state() == desired) && restartDone:
+			return &object, nil
+		case object.state() == "BARE_METAL_INSTANCE_STATE_FAILED":
+			return nil, fmt.Errorf("the instance failed, state is 'FAILED'")
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf(
+				"timed out after %s, instance state is '%s'", updateWaitTimeout, object.state(),
+			)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(waitInterval):
+		}
+	}
+}
+
+// waitForDeleted polls the instance until the backend finishes removing it.
+func (r *bareMetalInstanceResource) waitForDeleted(ctx context.Context, id string) error {
+	deadline := time.Now().Add(deleteWaitTimeout)
+	for {
+		data, err := r.client.get(ctx, bareMetalInstancesPath, id)
+		if isNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read the instance state: %w", err)
+		}
+		var object instanceObject
+		_ = json.Unmarshal(data, &object)
+		if time.Now().After(deadline) {
+			return fmt.Errorf(
+				"timed out after %s, instance state is '%s'", deleteWaitTimeout, object.state(),
+			)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-time.After(waitInterval):
 		}
 	}

@@ -285,9 +285,10 @@ Notes on individual components:
   `cert-manager-operator` namespace and creates its operands in the
   `cert-manager` namespace. The `certificates.cert-manager.io` CRD is a
   mandatory install preflight check.
-- **trust-manager** distributes the CA bundle. Ensure the CA-bundle
-  `ConfigMap` named by `service.certs.caBundle.configMap` exists in the OSAC
-  release namespace.
+- trust-manager is a required prerequisite for every installation. It can
+  distribute the CA bundle, but administrators may also provide the CA-bundle
+  `ConfigMap` named by `service.certs.caBundle.configMap` directly. The
+  ConfigMap must exist in the OSAC release namespace in either case.
 - **Certificate issuer:** `service.certs.issuerRef` defaults to the
   `default-ca` `ClusterIssuer`. Select an existing, ready `Issuer` or
   `ClusterIssuer` for your deployment.
@@ -863,8 +864,9 @@ Use this procedure when the cluster already meets the prerequisites.
   CA-bundle `ConfigMap` named by `service.certs.caBundle.configMap`, Keycloak
   with the `osac` realm, and the credential Secrets exist. The ConfigMap must
   exist in the OSAC release namespace and is required even when the API
-  certificates use public trust. Confirm its name and contents with your
-  platform administrators; see step 4 of
+  certificates use public trust. trust-manager is required even when
+  administrators provide the ConfigMap directly. Confirm its name and contents
+  with your platform administrators; see step 4 of
   [Section 7](#7-verifying-the-installation).
 - For a production deployment, the external PostgreSQL server is ready for
   the chart's client-certificate authentication, and `dbInit.host` is set
@@ -2138,10 +2140,12 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    installations, check the CA-bundle `ConfigMap` in the OSAC release
    namespace.
 
-   For trust managed by your platform administrators, confirm that
-   trust-manager distributes the CA bundle to the OSAC release namespace
-   under the name configured by `service.certs.caBundle.configMap`. Set this
-   value in `my-values.yaml` to the name they provide; it defaults to
+   Confirm that trust-manager is installed in the `cert-manager` namespace.
+   If administrators use it to distribute the CA bundle, confirm that it
+   distributes the ConfigMap to the OSAC release namespace under the name
+   configured by `service.certs.caBundle.configMap`. Administrators may
+   provide the ConfigMap directly, but trust-manager is still required. Set
+   this value in `my-values.yaml` to the name they provide; it defaults to
    `ca-bundle`. Changing the value does not create or rename a ConfigMap. For
    a custom name, set the related CA-bundle values listed in
    [Section 5](#5-helm-chart-configuration-parameters) to the same name before

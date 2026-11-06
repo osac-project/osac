@@ -523,9 +523,10 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 
 If administrators separately prepare EVPN host networking on a workload
 cluster using this procedure, pass these `evpn` values to its phase 1b install.
-Keep `evpn.enabled: false` on the management cluster. This host preparation is
-optional for the separate-cluster layout documented below, which runs with
-provider networking disabled. See
+For a new management-cluster release, keep `evpn.enabled: false`. For an
+existing release, preserve its current EVPN settings until the release owner
+plans a change. This host preparation is optional for the separate-cluster
+layout documented below, which runs with provider networking disabled. See
 [Separate VMaaS workload cluster](#separate-vmaas-workload-cluster).
 
 OSAC provider networking with VMs on a separate cluster is not supported in
@@ -699,16 +700,32 @@ oc label secret config-as-code-manifest-ig \
 ```
 
 Create a separate `my-management-infra-values.yaml` for its prerequisites.
-Keep the certificate stack enabled and EVPN disabled. For a new
-management-cluster release that should not manage OpenShift Virtualization, set
-`cnv.enabled: false` as shown. If you use this file to upgrade an existing
-management-cluster release, retain its current `cnv.enabled` value explicitly.
-Changing `true` to `false` can remove release-managed resources, including the
-`openshift-cnv` namespace, and disrupt workloads. Coordinate with the release
-owner and plan a migration before changing the value. Set `keycloak.uiUrl` in
-this file to the management cluster's actual UI Route URL before Phase 1b. With
-`NS=osac`, its default host is `osac-ui-osac.<DOMAIN>`; replace `<DOMAIN>` with
-the value from the command above:
+The values below are an example for a new management-cluster release, with the
+certificate stack enabled and CNV and EVPN disabled. Before upgrading existing
+phase-1 releases, inspect their current values and carry each release's
+intentional settings into the values used for its upgrade:
+
+```bash
+helm get values osac-deps -n osac-deps
+helm get values osac-infra -n osac-infra
+```
+
+If the releases' current values differ, use a separate values file for each
+release. Do not replace existing release values with the defaults in this
+example. In particular, retain `lvms.enabled: true` in phase-1 values if it is
+enabled. Plan intentional toggle changes with the release owner. For an
+existing management-cluster release, retain its current `cnv.enabled` and
+`evpn.enabled` values unless its owner plans a migration. Changing
+`cnv.enabled` from `true` to `false` can remove release-managed resources,
+including the `openshift-cnv` namespace, and disrupt workloads. Before
+disabling EVPN on an existing release, check whether its `osac-deps` release
+manages NMState (`evpn.enabled: true` and `evpn.nmstate.install: true`).
+Disabling EVPN in this case can remove the `openshift-nmstate` namespace and
+Subscription. Inspect other NMState consumers, including management-cluster
+workloads, and coordinate any change with the release owner. Set
+`keycloak.uiUrl` in this file to the management cluster's actual UI Route URL
+before Phase 1b. With `NS=osac`, its default host is `osac-ui-osac.<DOMAIN>`;
+replace `<DOMAIN>` with the value from the command above:
 
 ```yaml
 certManager:
@@ -720,31 +737,39 @@ caIssuer:
 cnv:
   enabled: false # New release only; preserve the existing value on upgrades.
 evpn:
-  enabled: false
+  enabled: false # New release only; preserve the existing value on upgrades.
 keycloak:
   uiUrl: https://osac-ui-osac.apps.example.com
 ```
 
-Run phase 1a and phase 1b, replacing `-f my-infra-values.yaml` with
-`-f my-management-infra-values.yaml` in both commands. Then run phase 2 with
-the remote kubeconfig values from the customer install guide. The Secret must
-exist in the OSAC namespace before `helm upgrade --install osac`. For
-production, keep `lvms.enabled: false` in the phase-2 `my-values.yaml`, including
-when the workload cluster uses LVMS. Storage administrators must prepare the
-StorageBackend, StorageTier, and tenant storage configuration; installing the
-LVM Storage Operator and its operand does not register an OSAC storage offering.
-The automatic local-storage registration hook is for development and CI only;
-see [Evaluation only](customer-install-guide.md#92-evaluation-only).
+For a new release, run phase 1a and phase 1b, replacing
+`-f my-infra-values.yaml` with `-f my-management-infra-values.yaml` in both
+commands. When upgrading existing releases, pass the values files that preserve
+each release's settings. Then run phase 2 with the remote kubeconfig values
+from the customer install guide. The Secret must exist in the OSAC namespace
+before `helm upgrade --install osac`. For production, keep `lvms.enabled: false`
+in the phase-2 `my-values.yaml`, including when the workload cluster uses LVMS.
+Storage administrators must prepare the StorageBackend, StorageTier, and tenant
+storage configuration; installing the LVM Storage Operator and its operand does
+not register an OSAC storage offering. The automatic local-storage registration
+hook is for development and CI only; see
+[Evaluation only](customer-install-guide.md#92-evaluation-only).
 
 ## When Prerequisites Already Exist
 
-If some or all of the prerequisite Operators and infrastructure already exist
-on the cluster, set the corresponding toggle to `false` in
-`my-infra-values.yaml` and run the phase-1 installs anyway — they're
-idempotent, so running them with most toggles `false` is safe. If every
-component listed below already exists, skip phase 1 entirely and install only
-the `osac` chart — see the
+If prerequisite Operators or infrastructure already exist outside the
+phase-1 Helm releases and will remain administrator-managed, set their
+toggles to `false` in `my-infra-values.yaml` before the first install. For an
+existing `osac-deps` or `osac-infra` release, preserve its current values
+instead of applying the defaults below. Disabling an enabled toggle removes
+resources managed by that release. In particular, retain
+`lvms.enabled: true` in phase-1 values when it is enabled, and plan intentional
+changes with the release owner. If every component listed below already exists,
+skip phase 1 entirely and install only the `osac` chart — see the
 [customer install guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md).
+
+For an initial install where these prerequisites remain administrator-managed,
+use:
 
 ```yaml
 certManager:  { enabled: false }

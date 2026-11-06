@@ -959,6 +959,11 @@ dev-full-render-test: helm-deps helm-infra-deps ## Check dev-full TLS and Helm p
 openbao-security-context-test: helm-infra-deps ## Check OpenBao securityContext renders numeric UID on Kind, omits on OpenShift
 	./scripts/test-openbao-security-context.sh
 
+.PHONY: ensure-inotify
+ensure-inotify: override export _INOTIFY_PROVIDER := $(KIND_RUNTIME_PROVIDER)
+ensure-inotify: ## Opt in to native Linux host inotify preparation (floor 512)
+	@source scripts/lib.sh && ensure_inotify_instances
+
 .PHONY: infra-ready-wait-test
 infra-ready-wait-test: ## Check install-infra waits for the issuer, PostgreSQL and Kafka when the profile creates them (stub kubectl)
 	bash scripts/test-infra-ready-wait.sh

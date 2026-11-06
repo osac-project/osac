@@ -609,23 +609,48 @@ var _ = Describe("Transaction manager", func() {
 
 			It("Should pass the functions of a released savepoint to the enclosing transaction", func() {
 				tx := insert("outer")
-				called := false
+				var calls []string
+				tx.OnCommit(func() {
+					calls = append(calls, "before")
+				})
 				err := tx.Savepoint(ctx, func(ctx context.Context) error {
 					inner, err := TxFromContext(ctx)
 					if err != nil {
 						return err
 					}
 					inner.OnCommit(func() {
-						called = true
+						calls = append(calls, "inside")
 					})
 					return nil
 				})
 				Expect(err).ToNot(HaveOccurred())
-				Expect(called).To(BeFalse(), "releasing the savepoint must not call the function")
+				Expect(calls).To(BeEmpty(), "releasing the savepoint must not call the function")
+				tx.OnCommit(func() {
+					calls = append(calls, "after")
+				})
 
 				Expect(tx.End(ctx)).To(Succeed())
 
-				Expect(called).To(BeTrue())
+				// The function of the savepoint joins the transaction when the savepoint is released:
+				Expect(calls).To(Equal([]string{"before", "inside", "after"}))
+			})
+
+			It("Should call a function that another one registers while they run", func() {
+				tx := insert("my_value")
+				var calls []string
+				tx.OnCommit(func() {
+					calls = append(calls, "first")
+					tx.OnCommit(func() {
+						calls = append(calls, "registered by the first")
+					})
+				})
+				tx.OnCommit(func() {
+					calls = append(calls, "second")
+				})
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(calls).To(Equal([]string{"first", "second", "registered by the first"}))
 			})
 
 			It("Should drop the functions of a savepoint that is rolled back", func() {

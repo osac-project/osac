@@ -70,10 +70,7 @@ func (s *GenericServer[O]) restoreProtectedMetadataForPublicAPIView(ctx context.
 	}
 	restoreReservedMetadata(current, candidate)
 
-	var stored []string
-	if currentMetadata := s.getMetadata(current); currentMetadata != nil {
-		stored = slices.Clone(currentMetadata.GetFinalizers())
-	}
+	stored := slices.Clone(metadataFinalizers(s.getMetadata(current)))
 	candidateMetadata := s.getMetadata(candidate)
 	if candidateMetadata == nil {
 		if len(stored) == 0 {

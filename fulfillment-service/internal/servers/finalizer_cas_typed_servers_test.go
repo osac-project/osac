@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -25,9 +26,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	osactesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -92,11 +95,25 @@ type publicFinalizerOps struct {
 	update func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error
 }
 
-// publicUpdateRequest is implemented by the generated public update request of a resource whose public type is P.
-type publicUpdateRequest[P any] interface {
+// typedUpdateRequest is implemented by the generated update request, public or private, of a resource whose object
+// type is O.
+type typedUpdateRequest[O any] interface {
 	proto.Message
-	SetObject(P)
+	SetObject(O)
 	SetUpdateMask(*fieldmaskpb.FieldMask)
+}
+
+// privateUpdater adapts the Update method of a typed private server whose object type is O.
+func privateUpdater[O proto.Message, U typedUpdateRequest[O], V any](
+	update func(ctx context.Context, request U) (V, error),
+) typedUpdater {
+	return func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error {
+		request := newRequestOf[U]()
+		request.SetObject(object.(O))
+		request.SetUpdateMask(mask)
+		_, err := update(ctx, request)
+		return err
+	}
 }
 
 // newRequestOf returns an empty request of the given generated type.
@@ -107,7 +124,7 @@ func newRequestOf[T proto.Message]() T {
 
 // newPublicFinalizerOps adapts the Get and Update methods of a public server. The object function extracts the public
 // object from the response of Get, which is the GetObject method of the response type.
-func newPublicFinalizerOps[P proto.Message, G finalizerIDRequest, R any, U publicUpdateRequest[P], V any](
+func newPublicFinalizerOps[P proto.Message, G finalizerIDRequest, R any, U typedUpdateRequest[P], V any](
 	get func(ctx context.Context, request G) (R, error),
 	update func(ctx context.Context, request U) (V, error),
 	object func(R) P,
@@ -204,13 +221,7 @@ func newBareMetalInstanceTypesUpdater() typedUpdater {
 		SetTenancyLogic(tenancy).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
-	return func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error {
-		_, err := server.Update(ctx, privatev1.BareMetalInstanceTypesUpdateRequest_builder{
-			Object:     object.(*privatev1.BareMetalInstanceType),
-			UpdateMask: mask,
-		}.Build())
-		return err
-	}
+	return privateUpdater[*privatev1.BareMetalInstanceType](server.Update)
 }
 
 // newInstanceTypesUpdater returns an updater that sends requests through the private InstanceTypes server.
@@ -222,13 +233,7 @@ func newInstanceTypesUpdater() typedUpdater {
 		SetTenancyLogic(tenancy).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
-	return func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error {
-		_, err := server.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
-			Object:     object.(*privatev1.InstanceType),
-			UpdateMask: mask,
-		}.Build())
-		return err
-	}
+	return privateUpdater[*privatev1.InstanceType](server.Update)
 }
 
 // newDiskImagesUpdater returns an updater that sends requests through the private DiskImages server.
@@ -240,13 +245,19 @@ func newDiskImagesUpdater() typedUpdater {
 		SetTenancyLogic(tenancy).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
-	return func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error {
-		_, err := server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
-			Object:     object.(*privatev1.DiskImage),
-			UpdateMask: mask,
-		}.Build())
-		return err
-	}
+	return privateUpdater[*privatev1.DiskImage](server.Update)
+}
+
+// newServiceAccountsUpdater returns an updater that sends requests through the private ServiceAccounts server.
+func newServiceAccountsUpdater() typedUpdater {
+	GinkgoHelper()
+	server, err := NewPrivateServiceAccountsServer().
+		SetLogger(logger).
+		SetAttributionLogic(attribution).
+		SetTenancyLogic(tenancy).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+	return privateUpdater[*privatev1.ServiceAccount](server.Update)
 }
 
 // finalizerRaceResult is the outcome of a write that raced against the release of a finalizer.
@@ -366,7 +377,7 @@ func expectStaleTypedWriteRejected(t finalizerTarget, update typedUpdater) {
 	stale := t.get(ctx)
 	t.release(ctx, finalizerController)
 
-	err := update(ctx, withFinalizers(stale, finalizerHold), finalizerMaskOf("metadata.finalizers"))
+	err := update(ctx, withFinalizers(stale, finalizerHold), finalizersMask())
 
 	t.expectFinalizerConflict(ctx, err, finalizerController)
 }
@@ -376,39 +387,20 @@ var _ = Describe("typed finalizer updates", func() {
 		// Volume reads the stored object, merges the request and checks immutable fields before calling the generic
 		// update. It ignores the metadata paths when merging, so a metadata.finalizers mask is safe.
 		It("rejects a stale finalizer write through the Volumes server", func() {
-			server := newFinalizerPrivateVolumesServer()
+			update := privateUpdater[*privatev1.Volume](newFinalizerPrivateVolumesServer().Update)
 			t := finalizerCaseFor(privatev1.Volumes_ServiceDesc.ServiceName).
 				target([]string{finalizerController, finalizerHold})
 
-			expectStaleTypedWriteRejected(t, func(ctx context.Context, object proto.Message,
-				mask *fieldmaskpb.FieldMask) error {
-				_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
-					Object:     object.(*privatev1.Volume),
-					UpdateMask: mask,
-				}.Build())
-				return err
-			})
+			expectStaleTypedWriteRejected(t, update)
 		})
 
 		// ServiceAccount skips its preparation callback when the mask is exactly metadata.finalizers.
 		It("rejects a stale finalizer write through the ServiceAccounts server", func() {
-			server, err := NewPrivateServiceAccountsServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
+			update := newServiceAccountsUpdater()
 			t := finalizerCaseFor(privatev1.ServiceAccounts_ServiceDesc.ServiceName).
 				target([]string{finalizerController, finalizerHold})
 
-			expectStaleTypedWriteRejected(t, func(ctx context.Context, object proto.Message,
-				mask *fieldmaskpb.FieldMask) error {
-				_, err := server.Update(ctx, privatev1.ServiceAccountsUpdateRequest_builder{
-					Object:     object.(*privatev1.ServiceAccount),
-					UpdateMask: mask,
-				}.Build())
-				return err
-			})
+			expectStaleTypedWriteRejected(t, update)
 		})
 
 		// Cluster validates and prepares the candidate on every update, so its fixture has to be a valid cluster.
@@ -422,23 +414,66 @@ var _ = Describe("typed finalizer updates", func() {
 			t := finalizerCaseFor(privatev1.Clusters_ServiceDesc.ServiceName).
 				target([]string{finalizerController, finalizerHold})
 
-			expectStaleTypedWriteRejected(t, func(ctx context.Context, object proto.Message,
-				mask *fieldmaskpb.FieldMask) error {
-				_, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
-					Object:     object.(*privatev1.Cluster),
-					UpdateMask: mask,
-				}.Build())
-				return err
-			})
+			expectStaleTypedWriteRejected(t, privateUpdater[*privatev1.Cluster](server.Update))
 		})
 	})
 
 	Describe("public servers that send a nil update mask", func() {
+		// Every public Update ends in the generic update with the public API view, which is what keeps the stored
+		// finalizers, so a public server that has no case here fails this guard. The public Tenants and
+		// BareMetalInstanceTemplates servers don't implement Update, and the guard checks that they still don't.
+		It("covers every public server that has an Update method", func() {
+			covered := map[string]bool{}
+			for _, c := range slices.Concat(publicFinalizerCases(), catalogItemFinalizerCases()) {
+				covered[string(protoreflect.FullName(c.service).Name())] = true
+			}
+			unimplemented := map[string]func() error{
+				"Tenants": func() error {
+					server, err := NewTenantsServer().
+						SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+					Expect(err).ToNot(HaveOccurred())
+					_, err = server.Update(ctx, &publicv1.TenantsUpdateRequest{})
+					return err
+				},
+				"BareMetalInstanceTemplates": func() error {
+					server, err := NewBareMetalInstanceTemplatesServer().
+						SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+					Expect(err).ToNot(HaveOccurred())
+					_, err = server.Update(ctx, &publicv1.BareMetalInstanceTemplatesUpdateRequest{})
+					return err
+				},
+			}
+
+			var missing, checked []string
+			publicPackage := (&publicv1.Metadata{}).ProtoReflect().Descriptor().ParentFile().Package()
+			protoregistry.GlobalFiles.RangeFilesByPackage(publicPackage, func(file protoreflect.FileDescriptor) bool {
+				services := file.Services()
+				for i := range services.Len() {
+					service := services.Get(i)
+					name := string(service.Name())
+					switch {
+					case service.Methods().ByName("Update") == nil || covered[name]:
+					case unimplemented[name] != nil:
+						Expect(status.Code(unimplemented[name]())).To(Equal(codes.Unimplemented),
+							"the public %s server implements Update now, so it needs a case", name)
+						checked = append(checked, name)
+					default:
+						missing = append(missing, name)
+					}
+				}
+				return true
+			})
+			Expect(missing).To(BeEmpty(), "public servers with an Update method that have no finalizer case")
+			Expect(checked).To(ConsistOf("Tenants", "BareMetalInstanceTemplates"))
+		})
+
 		// The public API has no finalizers. Most of these servers map the public object into an empty private one,
-		// so what they forward has none. DiskImages and InstanceTypes map it over the stored object that they read
-		// from the private server: the forwarded object already carries the stored finalizers, the masked paths of
-		// their private servers ignore metadata.finalizers, and the nil-mask path merges the request over the stored
-		// object, which unions the request finalizers with the stored ones.
+		// so what they forward has none. Volumes, Clusters, BareMetalInstances, ProjectMemberships, DiskImages and
+		// InstanceTypes map it over the object that they read from the private server, so the object that they
+		// forward already carries the stored finalizers; the specs that follow cover what happens when those change
+		// while the update waits for the row lock. The masked paths of the private DiskImages and InstanceTypes
+		// servers ignore metadata.finalizers, and their nil-mask path merges the request over the stored object,
+		// which unions the request finalizers with the stored ones.
 		DescribeTable("keeps the finalizers of the object",
 			func(c publicFinalizerCase) {
 				t := finalizerCaseFor(c.service).target([]string{finalizerController, finalizerHold})
@@ -462,7 +497,13 @@ var _ = Describe("typed finalizer updates", func() {
 
 				object, err := public.get(ctx, t.id)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(public.update(ctx, withPublicLabel(object), nil)).To(Succeed())
+				err = public.update(ctx, withPublicLabel(object), nil)
+				if c.service == privatev1.SecurityGroups_ServiceDesc.ServiceName {
+					// This server refuses to update a group that is being deleted:
+					Expect(status.Code(err)).To(Equal(codes.FailedPrecondition), "the update returned %v", err)
+				} else {
+					Expect(err).ToNot(HaveOccurred())
+				}
 
 				stored, err := t.ops.get(ctx, t.id)
 				Expect(err).ToNot(HaveOccurred(), "a public update must not archive an object with finalizers")
@@ -485,7 +526,7 @@ var _ = Describe("typed finalizer updates", func() {
 				target([]string{finalizerController})
 
 			object := withFinalizers(t.get(ctx), finalizerController, finalizerHold)
-			Expect(update(ctx, object, finalizerMaskOf("metadata.finalizers"))).To(Succeed())
+			Expect(update(ctx, object, finalizersMask())).To(Succeed())
 
 			Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
 		})
@@ -527,7 +568,7 @@ var _ = Describe("typed finalizer updates", func() {
 					t.bump(ctx)
 				}
 
-				err := update(ctx, withoutMetadata(t.get(ctx)), finalizerMaskOf("metadata.finalizers"))
+				err := update(ctx, withoutMetadata(t.get(ctx)), finalizersMask())
 
 				t.expectFinalizerConflict(ctx, err, finalizerController, finalizerHold)
 			},
@@ -561,7 +602,7 @@ var _ = Describe("typed finalizer updates", func() {
 					t.bump(ctx)
 				}
 
-				err := update(ctx, withoutMetadata(t.get(ctx)), finalizerMaskOf("metadata.finalizers"))
+				err := update(ctx, withoutMetadata(t.get(ctx)), finalizersMask())
 
 				Expect(err).ToNot(HaveOccurred())
 				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
@@ -623,11 +664,11 @@ var _ = Describe("typed finalizer updates", func() {
 				t := finalizerCaseFor(service).target([]string{finalizerController, finalizerHold})
 
 				removed := withFinalizers(t.get(ctx), finalizerController)
-				Expect(update(ctx, removed, finalizerMaskOf("metadata.finalizers"))).To(Succeed())
+				Expect(update(ctx, removed, finalizersMask())).To(Succeed())
 				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
 
 				added := withFinalizers(t.get(ctx), finalizerController, finalizerHold, finalizerForeign)
-				Expect(update(ctx, added, finalizerMaskOf("metadata.finalizers"))).To(Succeed())
+				Expect(update(ctx, added, finalizersMask())).To(Succeed())
 				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
 			},
 			Entry("InstanceTypes", privatev1.InstanceTypes_ServiceDesc.ServiceName, newInstanceTypesUpdater),
@@ -639,25 +680,13 @@ var _ = Describe("typed finalizer updates", func() {
 		// A missing mask is rewritten into an update of the labels, so the finalizers of the request are not looked
 		// at, even when the request is stale and carries a finalizer that another writer has released.
 		It("leaves the finalizers alone when the mask is missing", func() {
-			server, err := NewPrivateServiceAccountsServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
+			update := newServiceAccountsUpdater()
 			t := finalizerCaseFor(privatev1.ServiceAccounts_ServiceDesc.ServiceName).
 				target([]string{finalizerController, finalizerHold})
 			stale := t.get(ctx)
 			t.release(ctx, finalizerController)
 
-			changed := withMetadata(stale, func(metadata *privatev1.Metadata) {
-				metadata.SetLabels(map[string]string{"x": "y"})
-			})
-			_, err = server.Update(ctx, privatev1.ServiceAccountsUpdateRequest_builder{
-				Object: changed.(*privatev1.ServiceAccount),
-			}.Build())
-
-			Expect(err).ToNot(HaveOccurred())
+			Expect(update(ctx, withLabel(stale, "x", "y"), nil)).To(Succeed())
 			stored := t.get(ctx)
 			Expect(finalizersOf(stored)).To(ConsistOf(finalizerController))
 			Expect(finalizerMetadataOf(stored).GetLabels()).To(HaveKeyWithValue("x", "y"))
@@ -670,7 +699,7 @@ var _ = Describe("typed finalizer updates", func() {
 		var (
 			store  *storeFailingSecretStore
 			server *PrivateSecretsServer
-			logs   *finalizerLogRecorder
+			logs   *osactesting.LogRecorder
 			id     string
 		)
 
@@ -693,7 +722,7 @@ var _ = Describe("typed finalizer updates", func() {
 			Expect(err).ToNot(HaveOccurred())
 			id = created.GetObject().GetId()
 			commitSuiteTx()
-			logs = &finalizerLogRecorder{}
+			logs = &osactesting.LogRecorder{}
 			server.generic.logger = slog.New(logs)
 		})
 
@@ -730,17 +759,17 @@ var _ = Describe("typed finalizer updates", func() {
 			commitSuiteTx()
 
 			Expect(storedFinalizers()).To(BeEmpty(), "the finalizer change must have been rolled back")
-			Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty())
+			Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty())
 		})
 
 		It("logs the finalizer change once the Vault store succeeds and the transaction commits", func() {
 			Expect(update()).To(Succeed())
-			Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty(),
+			Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty(),
 				"nothing must be logged before the transaction commits")
 			commitSuiteTx()
 
 			Expect(storedFinalizers()).To(ConsistOf(finalizerHold))
-			Expect(logs.withMessage(finalizerChangeMessage)).To(HaveLen(1))
+			Expect(logs.WithMessage(finalizerChangeMessage)).To(HaveLen(1))
 		})
 	})
 
@@ -749,9 +778,9 @@ var _ = Describe("typed finalizer updates", func() {
 		// The window is between that read and the locked read of the generic server, so a sequential spec can't
 		// cover it: the other writer has to commit while the public update waits for the row lock.
 		DescribeTable("does not restore a finalizer that was released while waiting for the row lock",
-			func(service, table string, newOps func() publicFinalizerOps) {
+			func(service, table string) {
 				t := finalizerCaseFor(service).target([]string{finalizerController, finalizerHold})
-				public := newOps()
+				public := publicFinalizerCaseFor(service).ops()
 				object, err := public.get(ctx, t.id)
 				Expect(err).ToNot(HaveOccurred())
 				changed := withPublicLabel(object)
@@ -764,35 +793,24 @@ var _ = Describe("typed finalizer updates", func() {
 				finalizers, _, _ := t.committedState(table)
 				Expect(finalizers).To(ConsistOf(finalizerController), "the public update restored the released hold")
 			},
-			Entry("Volumes", privatev1.Volumes_ServiceDesc.ServiceName, "volumes", func() publicFinalizerOps {
-				return newPublicVolumesOps()
-			}),
-			Entry("Clusters", privatev1.Clusters_ServiceDesc.ServiceName, "clusters", func() publicFinalizerOps {
-				return newPublicClustersOps()
-			}),
-			Entry("DiskImages", privatev1.DiskImages_ServiceDesc.ServiceName, "disk_images", func() publicFinalizerOps {
-				return publicFinalizerCaseFor(privatev1.DiskImages_ServiceDesc.ServiceName).ops()
-			}),
-			Entry("InstanceTypes", privatev1.InstanceTypes_ServiceDesc.ServiceName, "instance_types",
-				func() publicFinalizerOps {
-					return publicFinalizerCaseFor(privatev1.InstanceTypes_ServiceDesc.ServiceName).ops()
-				}),
+			Entry("Volumes", privatev1.Volumes_ServiceDesc.ServiceName, "volumes"),
+			Entry("Clusters", privatev1.Clusters_ServiceDesc.ServiceName, "clusters"),
+			Entry("DiskImages", privatev1.DiskImages_ServiceDesc.ServiceName, "disk_images"),
+			Entry("InstanceTypes", privatev1.InstanceTypes_ServiceDesc.ServiceName, "instance_types"),
+			Entry("BareMetalInstances", privatev1.BareMetalInstances_ServiceDesc.ServiceName, "bare_metal_instances"),
+			Entry("ProjectMemberships", privatev1.ProjectMemberships_ServiceDesc.ServiceName, "project_memberships"),
 		)
 	})
 
 	Describe("two transactions", func() {
 		It("rejects a stale finalizer write that waited for the row lock and leaves no trace of it", func() {
-			server := newFinalizerPrivateVolumesServer()
+			update := privateUpdater[*privatev1.Volume](newFinalizerPrivateVolumesServer().Update)
 			t := finalizerCaseFor(privatev1.Volumes_ServiceDesc.ServiceName).
 				target([]string{finalizerController, finalizerHold})
 			stale := withFinalizers(t.get(ctx), finalizerHold)
 
 			result := t.raceAgainstRelease("volumes", func(ctx context.Context) error {
-				_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
-					Object:     stale.(*privatev1.Volume),
-					UpdateMask: finalizerMaskOf("metadata.finalizers"),
-				}.Build())
-				return err
+				return update(ctx, stale, finalizersMask())
 			})
 
 			finalizers, version, updates := t.committedState("volumes")
@@ -860,10 +878,96 @@ func catalogItemEntries() []TableEntry {
 	return entries
 }
 
-// publicFinalizerCases returns the public servers that send a nil update mask with an object that has no finalizers
-// of its own.
+// publicFinalizerCases returns every public server that has an Update method, except the catalog-items ones, which
+// have their own cases.
 func publicFinalizerCases() []publicFinalizerCase {
 	return []publicFinalizerCase{
+		{privatev1.Volumes_ServiceDesc.ServiceName, newPublicVolumesOps},
+		{privatev1.Clusters_ServiceDesc.ServiceName, newPublicClustersOps},
+		{privatev1.BareMetalInstances_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewBareMetalInstancesServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.BareMetalInstancesGetResponse).GetObject,
+			)
+		}},
+		{privatev1.ComputeInstances_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewComputeInstancesServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.ComputeInstancesGetResponse).GetObject,
+			)
+		}},
+		{privatev1.ClusterTemplates_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewClusterTemplatesServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.ClusterTemplatesGetResponse).GetObject,
+			)
+		}},
+		{privatev1.ClusterVersions_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewClusterVersionsServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.ClusterVersionsGetResponse).GetObject,
+			)
+		}},
+		{privatev1.ComputeInstanceTemplates_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewComputeInstanceTemplatesServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.ComputeInstanceTemplatesGetResponse).GetObject,
+			)
+		}},
+		{privatev1.ProjectMemberships_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewProjectMembershipsServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.ProjectMembershipsGetResponse).GetObject,
+			)
+		}},
+		{privatev1.SecurityGroups_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewSecurityGroupsServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			// The public update request of this resource has no mask: the server always updates the rule lists
+			// only.
+			return publicFinalizerOps{
+				get: func(ctx context.Context, id string) (proto.Message, error) {
+					response, err := server.Get(ctx, publicv1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+					return response.GetObject(), err
+				},
+				update: func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error {
+					Expect(mask).To(BeNil(), "the public SecurityGroups update has no mask")
+					_, err := server.Update(ctx, publicv1.SecurityGroupsUpdateRequest_builder{
+						Object: object.(*publicv1.SecurityGroup),
+					}.Build())
+					return err
+				},
+			}
+		}},
+		{privatev1.ServiceAccounts_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewServiceAccountsServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.ServiceAccountsGetResponse).GetObject,
+			)
+		}},
 		{privatev1.Projects_ServiceDesc.ServiceName, func() publicFinalizerOps {
 			GinkgoHelper()
 			server, err := NewProjectsServer().

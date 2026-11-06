@@ -169,13 +169,16 @@ func (t *managedTx) OnCommit(fn func()) {
 	}
 }
 
-// runCommitHooks calls the functions registered with OnCommit, once. The transaction is already committed when they
-// run, so a panic in one of them must not turn the request into a failure: it is logged, and the others still run.
+// runCommitHooks calls the functions registered with OnCommit, once, including those that they register themselves.
+// The transaction is already committed when they run, so a panic in one of them must not turn the request into a
+// failure: it is logged, and the others still run.
 func (t *managedTx) runCommitHooks(ctx context.Context) {
-	hooks := t.hooks
-	t.hooks = nil
-	for _, hook := range hooks {
-		t.runCommitHook(ctx, hook)
+	for len(t.hooks) > 0 {
+		hooks := t.hooks
+		t.hooks = nil
+		for _, hook := range hooks {
+			t.runCommitHook(ctx, hook)
+		}
 	}
 }
 

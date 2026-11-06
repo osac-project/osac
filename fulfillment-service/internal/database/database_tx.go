@@ -88,7 +88,7 @@ type Tx interface {
 	// the transaction is rolled back, or if the commit fails; note that a commit that reaches the database but
 	// whose reply is lost also counts as failed. A function registered inside a savepoint joins the enclosing
 	// transaction when the savepoint is released, and is dropped when the savepoint is rolled back. Functions run
-	// in the order in which they join the transaction, and a panic in one of them is logged and doesn't stop the
-	// others.
+	// in the order in which they join the transaction, followed by those that they register themselves, and a panic
+	// in one of them is logged and doesn't stop the others.
 	OnCommit(fn func())
 }

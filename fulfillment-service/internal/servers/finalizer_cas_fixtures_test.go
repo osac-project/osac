@@ -18,8 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
-	"sync"
 
 	"buf.build/go/protovalidate"
 	"github.com/google/uuid"
@@ -36,6 +36,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	osactesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -222,6 +223,20 @@ func (c finalizerCase) afterCreate(hook func(id string)) finalizerCase {
 	return c
 }
 
+// testHub returns a valid hub of the test tenant with the given name.
+func testHub(name string) *privatev1.Hub {
+	return privatev1.Hub_builder{
+		Metadata: privatev1.Metadata_builder{
+			Name:   name,
+			Tenant: testTenant,
+		}.Build(),
+		Spec: privatev1.HubSpec_builder{
+			Kubeconfig: []byte("my_config"),
+			Namespace:  "my_ns",
+		}.Build(),
+	}.Build()
+}
+
 // finalizerName returns a unique name for a fixture.
 func finalizerName(prefix string) string {
 	return fmt.Sprintf("%s-%s", prefix, uuid.NewString()[:8])
@@ -230,7 +245,7 @@ func finalizerName(prefix string) string {
 // finalizerCases returns the cases for all the resources that the specs cover. The leaf resources come first: they
 // need no parent objects. The rest are in the groups below.
 func finalizerCases() []finalizerCase {
-	return append(append(append([]finalizerCase{
+	leaves := []finalizerCase{
 		newFinalizerCase(privatev1.BareMetalInstanceTemplates_ServiceDesc,
 			func() *privatev1.BareMetalInstanceTemplate {
 				return privatev1.BareMetalInstanceTemplate_builder{
@@ -247,15 +262,7 @@ func finalizerCases() []finalizerCase {
 		),
 		newFinalizerCase(privatev1.Hubs_ServiceDesc,
 			func() *privatev1.Hub {
-				return privatev1.Hub_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: finalizerName("hub"),
-					}.Build(),
-					Spec: privatev1.HubSpec_builder{
-						Kubeconfig: []byte("my_config"),
-						Namespace:  "my_ns",
-					}.Build(),
-				}.Build()
+				return testHub(finalizerName("hub"))
 			},
 			func(b *GenericServerBuilder[*privatev1.Hub]) {
 				b.AddAllowedTenants(auth.SharedTenant)
@@ -308,7 +315,8 @@ func finalizerCases() []finalizerCase {
 				b.AddAllowedTenants(auth.SharedTenant)
 			},
 		),
-	}, finalizerPlatformCases()...), finalizerTenantCases()...), finalizerNetworkingCases()...)
+	}
+	return slices.Concat(leaves, finalizerPlatformCases(), finalizerTenantCases(), finalizerNetworkingCases())
 }
 
 // finalizerEntries returns one table entry per case.
@@ -321,9 +329,85 @@ func finalizerEntries() []TableEntry {
 	return entries
 }
 
+// finalizerEntriesPerLifecycle returns an entry for each resource, for a live object and for one that is being deleted.
+func finalizerEntriesPerLifecycle() []TableEntry {
+	var entries []TableEntry
+	for _, c := range finalizerCases() {
+		entries = append(entries,
+			Entry(c.service+" live", c, false),
+			Entry(c.service+" deleting", c, true),
+		)
+	}
+	return entries
+}
+
+// finalizerSelectingMask is a named field mask that selects the finalizers.
+type finalizerSelectingMask struct {
+	name string
+	mask *fieldmaskpb.FieldMask
+}
+
+// finalizerSelectingMasks returns every way of selecting the finalizers in an update. The indexed path replaces a
+// single entry of the stored list, so a write through it changes the finalizer set as well. The overlapping masks
+// select the finalizers twice, or together with the version.
+func finalizerSelectingMasks() []finalizerSelectingMask {
+	return []finalizerSelectingMask{
+		{"metadata mask", finalizerMaskOf("metadata")},
+		{"nil mask", nil},
+		{"metadata.finalizers mask", finalizersMask()},
+		{"metadata.finalizers.0 mask", finalizerMaskOf("metadata.finalizers.0")},
+		{"metadata and metadata.finalizers mask", finalizerMaskOf("metadata", "metadata.finalizers")},
+		{"metadata.finalizers and metadata.version mask", finalizerMaskOf("metadata.finalizers", "metadata.version")},
+	}
+}
+
+// finalizerEntriesPerMask returns an entry for each resource and each way of selecting the finalizers.
+func finalizerEntriesPerMask() []TableEntry {
+	var entries []TableEntry
+	for _, c := range finalizerCases() {
+		for _, m := range finalizerSelectingMasks() {
+			entries = append(entries, Entry(c.service+" with "+m.name, c, m.mask))
+		}
+	}
+	return entries
+}
+
+// publicMaskEntries returns an entry for each way of selecting the finalizers, for a live object and for one that is
+// being deleted.
+func publicMaskEntries() []TableEntry {
+	var entries []TableEntry
+	for _, m := range finalizerSelectingMasks() {
+		entries = append(entries,
+			Entry("live with "+m.name, m.mask, false),
+			Entry("deleting with "+m.name, m.mask, true),
+		)
+	}
+	return entries
+}
+
+// finalizerEntriesPerVersion returns an entry for each resource, for an object at its creation version and for an
+// object that has been written since, and for a mask on the finalizers and no mask at all.
+func finalizerEntriesPerVersion() []TableEntry {
+	var entries []TableEntry
+	for _, c := range finalizerCases() {
+		entries = append(entries,
+			Entry(c.service+" at version 0 with metadata.finalizers mask", c, false, finalizersMask()),
+			Entry(c.service+" at a later version with metadata.finalizers mask", c, true, finalizersMask()),
+			Entry(c.service+" at version 0 with nil mask", c, false, (*fieldmaskpb.FieldMask)(nil)),
+			Entry(c.service+" at a later version with nil mask", c, true, (*fieldmaskpb.FieldMask)(nil)),
+		)
+	}
+	return entries
+}
+
 // finalizerMaskOf returns a field mask with the given paths.
 func finalizerMaskOf(paths ...string) *fieldmaskpb.FieldMask {
 	return &fieldmaskpb.FieldMask{Paths: paths}
+}
+
+// finalizersMask returns a field mask that selects only the finalizers.
+func finalizersMask() *fieldmaskpb.FieldMask {
+	return finalizerMaskOf("metadata.finalizers")
 }
 
 // finalizerMetadataOf returns the metadata of an object, which is nil when the object has none.
@@ -355,6 +439,13 @@ func withMetadata(object proto.Message, change func(*privatev1.Metadata)) proto.
 func withFinalizers(object proto.Message, finalizers ...string) proto.Message {
 	return withMetadata(object, func(metadata *privatev1.Metadata) {
 		metadata.SetFinalizers(finalizers)
+	})
+}
+
+// withLabel returns a copy of the object whose labels are exactly the given one.
+func withLabel(object proto.Message, key, value string) proto.Message {
+	return withMetadata(object, func(metadata *privatev1.Metadata) {
+		metadata.SetLabels(map[string]string{key: value})
 	})
 }
 
@@ -394,11 +485,28 @@ func (t finalizerTarget) update(ctx context.Context, object proto.Message, mask 
 	return t.ops.update(ctx, object, mask, lock)
 }
 
+// publicUpdateInSavepoint sends a public update of the object with the given mask, and returns its error. A database
+// rejection would abort the suite transaction, so the update runs in a savepoint that is rolled back when it fails, as
+// the transaction of a real request would be.
+func (t finalizerTarget) publicUpdateInSavepoint(ctx context.Context, object proto.Message,
+	mask *fieldmaskpb.FieldMask) error {
+	GinkgoHelper()
+	var err error
+	savepointErr := suiteTx.Savepoint(ctx, func(ctx context.Context) error {
+		err = t.update(withPublicAPIView(ctx), object, mask, false)
+		return err
+	})
+	if err == nil {
+		Expect(savepointErr).ToNot(HaveOccurred())
+	}
+	return err
+}
+
 // release replaces the finalizers as a concurrent writer would: from a fresh read, with the lock, and so with the
 // current version. It fails the spec if the update doesn't succeed.
 func (t finalizerTarget) release(ctx context.Context, finalizers ...string) {
 	GinkgoHelper()
-	err := t.ops.update(ctx, withFinalizers(t.get(ctx), finalizers...), finalizerMaskOf("metadata.finalizers"), true)
+	err := t.ops.update(ctx, withFinalizers(t.get(ctx), finalizers...), finalizersMask(), true)
 	Expect(err).ToNot(HaveOccurred(), "the concurrent finalizer write must succeed")
 }
 
@@ -445,60 +553,6 @@ func expectConflictMessage(err error, id string) {
 // finalizerChangeMessage is the message that the generic server logs when it has written a finalizer change.
 const finalizerChangeMessage = "Updated finalizers"
 
-// finalizerLogRecord is a record kept by finalizerLogRecorder, with its attributes by key.
-type finalizerLogRecord struct {
-	level   slog.Level
-	message string
-	attrs   map[string]any
-}
-
-// finalizerLogRecorder is a log handler that keeps every record, at any level, together with its attributes.
-type finalizerLogRecorder struct {
-	mu      sync.Mutex
-	records []finalizerLogRecord
-}
-
-func (r *finalizerLogRecorder) Enabled(context.Context, slog.Level) bool {
-	return true
-}
-
-func (r *finalizerLogRecorder) Handle(_ context.Context, record slog.Record) error {
-	attrs := map[string]any{}
-	record.Attrs(func(attr slog.Attr) bool {
-		attrs[attr.Key] = attr.Value.Any()
-		return true
-	})
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.records = append(r.records, finalizerLogRecord{
-		level:   record.Level,
-		message: record.Message,
-		attrs:   attrs,
-	})
-	return nil
-}
-
-func (r *finalizerLogRecorder) WithAttrs([]slog.Attr) slog.Handler {
-	return r
-}
-
-func (r *finalizerLogRecorder) WithGroup(string) slog.Handler {
-	return r
-}
-
-// withMessage returns the records that have the given message.
-func (r *finalizerLogRecorder) withMessage(message string) []finalizerLogRecord {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var result []finalizerLogRecord
-	for _, record := range r.records {
-		if record.message == message {
-			result = append(result, record)
-		}
-	}
-	return result
-}
-
 // commitSuiteTx commits the suite transaction and starts a new one for the rest of the spec. The generic server writes
 // its finalizer log when the transaction commits, so the specs about that log call this before they look at it. It
 // fails the spec if the transaction was rolled back instead, so that a spec that expects no log line can't pass only
@@ -515,6 +569,8 @@ func rollBackSuiteTx() {
 	endSuiteTx(false)
 }
 
+// endSuiteTx ends the suite transaction, committing it or rolling it back as requested, checks that it ended that
+// way, and starts a new one for the rest of the spec.
 func endSuiteTx(commit bool) {
 	GinkgoHelper()
 	if !commit {
@@ -535,8 +591,8 @@ func endSuiteTx(commit bool) {
 
 // recordLogs replaces the logger of the server behind the target with one that records everything it logs, and returns
 // the recorder. Call it after the target has been created, so the seeding isn't recorded.
-func (t finalizerTarget) recordLogs() *finalizerLogRecorder {
-	recorder := &finalizerLogRecorder{}
+func (t finalizerTarget) recordLogs() *osactesting.LogRecorder {
+	recorder := &osactesting.LogRecorder{}
 	t.ops.setLogger(slog.New(recorder))
 	return recorder
 }

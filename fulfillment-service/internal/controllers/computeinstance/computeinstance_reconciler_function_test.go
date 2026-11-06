@@ -2157,6 +2157,134 @@ var _ = Describe("delete", func() {
 	})
 })
 
+// This guard covers a deletion pass whose final finalizer write is rejected with Aborted after the same pass already
+// bumped the object version through a locked registration update. The rejected write must surface as a conflict so the
+// reconciler loop retries it, and the retry, which starts from a fresh read, must converge without repeating the
+// registration write.
+var _ = Describe("finalizer removal conflict on delete", func() {
+	It("retries a rejected finalizer removal from a fresh read and converges", func() {
+		ctx := context.Background()
+		const recoveredID = "volume-original"
+		t, computeInstancesClient, volumesClient := newVolumeCleanupTask(nil, []*privatev1.ComputeInstanceVolumeRegistration{
+			privatev1.ComputeInstanceVolumeRegistration_builder{
+				DiskKey: "boot",
+				State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+			}.Build(),
+		})
+		f := t.r
+		f.maskCalculator = masks.NewCalculator().Build()
+
+		prepared, err := prepareDiskRegistrations(t.computeInstance)
+		Expect(err).NotTo(HaveOccurred())
+		recovered := registrationTestVolume(prepared[0].request, recoveredID, "system")
+		recovered.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		volumesClient.list = func(context.Context, *privatev1.VolumesListRequest) (*privatev1.VolumesListResponse, error) {
+			return registrationTestListResponse([]*privatev1.Volume{recovered}, 1), nil
+		}
+		// The first pass finds and deletes the recovered Volume, the second pass finds it already gone.
+		volumesClient.get = volumeCleanupGetSequence(
+			volumeCleanupGetResult{volume: recovered},
+			volumeCleanupGetResult{err: status.Error(codes.NotFound, "Volume is absent")},
+			volumeCleanupGetResult{err: status.Error(codes.NotFound, "Volume is absent")},
+		)
+		volumesClient.delete = func(context.Context, *privatev1.VolumesDeleteRequest) (*privatev1.VolumesDeleteResponse, error) {
+			return privatev1.VolumesDeleteResponse_builder{}.Build(), nil
+		}
+
+		// Update 1 is the locked registration resolution made while recovering the uncertain registration. Update 2
+		// is the final finalizer removal, which the server rejects as it would if another writer had changed the
+		// object in between. The rejection is injected.
+		computeInstancesClient.failBeforeUpdateCalls = map[int]error{
+			2: status.Error(codes.Aborted, "object has been modified"),
+		}
+
+		// Pass 1:
+		startVersion := t.computeInstance.GetMetadata().GetVersion()
+		err = f.run(ctx, t.computeInstance)
+		Expect(err).To(HaveOccurred())
+		Expect(controllers.IsConflict(err)).To(BeTrue())
+		Expect(computeInstancesClient.updateRequests).To(HaveLen(2))
+		Expect(computeInstancesClient.updateRequests[0].GetLock()).To(BeTrue())
+		Expect(computeInstancesClient.updateRequests[1].GetUpdateMask().GetPaths()).To(Equal([]string{"metadata.finalizers"}))
+		Expect(computeInstancesClient.updateRequests[1].GetObject().GetMetadata().GetVersion()).To(
+			Equal(computeInstancesClient.object.GetMetadata().GetVersion()),
+			"the removal must carry the version of the read that followed the recovery")
+		Expect(computeInstancesClient.updateRequests[1].GetObject().GetMetadata().GetFinalizers()).ToNot(
+			ContainElement(finalizers.Controller))
+
+		// Pass 2 starts from a fresh read, which has the version bumped by the registration update and the
+		// registration resolved with its Volume ID persisted:
+		freshResponse, err := computeInstancesClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{
+			Id: t.computeInstance.GetId(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		fresh := freshResponse.GetObject()
+		Expect(fresh.GetMetadata().GetVersion()).To(BeNumerically(">", startVersion))
+		Expect(fresh.GetStatus().GetVolumeRegistration()[0].GetState()).To(
+			Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
+		Expect(fresh.GetStatus().GetVolumes()).To(HaveLen(1))
+
+		err = f.run(ctx, fresh)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(computeInstancesClient.updateRequests).To(HaveLen(3))
+		final := computeInstancesClient.updateRequests[2]
+		Expect(final.GetUpdateMask().GetPaths()).To(ContainElement("metadata.finalizers"))
+		Expect(final.GetUpdateMask().GetPaths()).ToNot(ContainElement(HavePrefix("status.volume")))
+		Expect(final.GetObject().GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(final.GetObject().GetMetadata().GetVersion()).To(Equal(fresh.GetMetadata().GetVersion()))
+		Expect(volumesClient.createCalls).To(BeZero())
+	})
+
+	// The recovery writes the ComputeInstance, and another writer may have added a finalizer after this pass read
+	// it. The release must be applied to the list of the read that follows the recovery, with its version, so the
+	// server accepts it in the same pass and the other finalizer is kept.
+	It("removes the finalizer in the pass that recovers a registration, from the list read after the recovery", func() {
+		ctx := context.Background()
+		const (
+			recoveredID = "volume-original"
+			foreign     = "test.osac.io/foreign"
+		)
+		t, computeInstancesClient, volumesClient := newVolumeCleanupTask(nil, []*privatev1.ComputeInstanceVolumeRegistration{
+			privatev1.ComputeInstanceVolumeRegistration_builder{
+				DiskKey: "boot",
+				State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+			}.Build(),
+		})
+		f := t.r
+		f.maskCalculator = masks.NewCalculator().Build()
+		computeInstancesClient.checkFinalizers = true
+
+		prepared, err := prepareDiskRegistrations(t.computeInstance)
+		Expect(err).NotTo(HaveOccurred())
+		recovered := registrationTestVolume(prepared[0].request, recoveredID, "system")
+		recovered.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		volumesClient.list = func(context.Context, *privatev1.VolumesListRequest) (*privatev1.VolumesListResponse, error) {
+			return registrationTestListResponse([]*privatev1.Volume{recovered}, 1), nil
+		}
+		volumesClient.get = volumeCleanupGetSequence(
+			volumeCleanupGetResult{volume: recovered},
+			volumeCleanupGetResult{err: status.Error(codes.NotFound, "Volume is absent")},
+			volumeCleanupGetResult{err: status.Error(codes.NotFound, "Volume is absent")},
+		)
+		volumesClient.delete = func(context.Context, *privatev1.VolumesDeleteRequest) (*privatev1.VolumesDeleteResponse, error) {
+			return privatev1.VolumesDeleteResponse_builder{}.Build(), nil
+		}
+
+		// Another writer adds its finalizer after the pass read the object:
+		stored := computeInstancesClient.object.GetMetadata()
+		stored.SetFinalizers([]string{finalizers.Controller, foreign})
+		stored.SetVersion(stored.GetVersion() + 1)
+
+		err = f.run(ctx, t.computeInstance)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(computeInstancesClient.updateRequests).To(HaveLen(2))
+		Expect(computeInstancesClient.updateRequests[0].GetLock()).To(BeTrue())
+		Expect(computeInstancesClient.updateRequests[1].GetUpdateMask().GetPaths()).To(Equal([]string{"metadata.finalizers"}))
+		Expect(computeInstancesClient.object.GetMetadata().GetFinalizers()).To(ConsistOf(foreign))
+	})
+})
+
 var _ = Describe("buildSpec network attachments", func() {
 	It("copies the API IDs of the Subnet and SecurityGroups to the CR", func() {
 		ctrl := gomock.NewController(GinkgoT())

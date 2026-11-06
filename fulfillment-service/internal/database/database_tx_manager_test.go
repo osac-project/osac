@@ -1,9 +1,11 @@
 package database
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	. "github.com/onsi/ginkgo/v2"
@@ -503,6 +505,398 @@ var _ = Describe("Transaction manager", func() {
 			err = row.Scan(&value)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(value).To(Equal("tx_run_ctx"))
+		})
+	})
+
+	Describe("Commit functions", func() {
+		var manager TxManager
+
+		BeforeEach(func() {
+			var err error
+			manager, err = NewTxManager().
+				SetLogger(logger).
+				SetPool(pool).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		// insert starts a transaction and inserts a row into the table.
+		insert := func(value string) Tx {
+			GinkgoHelper()
+			tx, err := manager.Begin(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tx.Exec(ctx, "insert into my_table (my_column) values ($1)", value)
+			Expect(err).ToNot(HaveOccurred())
+			return tx
+		}
+
+		// count returns the number of rows of the table, as seen from outside the transaction.
+		count := func() int {
+			GinkgoHelper()
+			var result int
+			err := pool.QueryRow(ctx, "select count(*) from my_table").Scan(&result)
+			Expect(err).ToNot(HaveOccurred())
+			return result
+		}
+
+		Context("with a plain table", func() {
+			BeforeEach(func() {
+				_, err := pool.Exec(ctx, "create table my_table (my_column text)")
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Should call the functions after the commit, in order, when the changes are visible", func() {
+				tx := insert("my_value")
+				var calls []string
+				var visible []int
+				tx.OnCommit(func() {
+					calls = append(calls, "first")
+					visible = append(visible, count())
+				})
+				tx.OnCommit(func() {
+					calls = append(calls, "second")
+				})
+				Expect(calls).To(BeEmpty(), "nothing must be called before the transaction ends")
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(calls).To(Equal([]string{"first", "second"}))
+				Expect(visible).To(Equal([]int{1}), "the change must be stored when the function runs")
+			})
+
+			It("Should not call the functions when the transaction is rolled back", func() {
+				tx := insert("my_value")
+				called := false
+				tx.OnCommit(func() {
+					called = true
+				})
+				err := errors.New("my error")
+				tx.ReportError(&err)
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(called).To(BeFalse())
+				Expect(count()).To(BeZero())
+			})
+
+			It("Should call the functions of a transaction that sent nothing to the database", func() {
+				tx, err := manager.Begin(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				called := false
+				tx.OnCommit(func() {
+					called = true
+				})
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(called).To(BeTrue())
+			})
+
+			It("Should not call the functions of a transaction that sent nothing but has errors", func() {
+				tx, err := manager.Begin(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				called := false
+				tx.OnCommit(func() {
+					called = true
+				})
+				reportErr := errors.New("my error")
+				tx.ReportError(&reportErr)
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(called).To(BeFalse())
+			})
+
+			It("Should pass the functions of a released savepoint to the enclosing transaction", func() {
+				tx := insert("outer")
+				var calls []string
+				tx.OnCommit(func() {
+					calls = append(calls, "before")
+				})
+				err := tx.Savepoint(ctx, func(ctx context.Context) error {
+					inner, err := TxFromContext(ctx)
+					if err != nil {
+						return err
+					}
+					inner.OnCommit(func() {
+						calls = append(calls, "inside")
+					})
+					return nil
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(calls).To(BeEmpty(), "releasing the savepoint must not call the function")
+				tx.OnCommit(func() {
+					calls = append(calls, "after")
+				})
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				// The function of the savepoint joins the transaction when the savepoint is released:
+				Expect(calls).To(Equal([]string{"before", "inside", "after"}))
+			})
+
+			It("Should call a function registered through a savepoint after it was released", func() {
+				tx := insert("outer")
+				var inner Tx
+				err := tx.Savepoint(ctx, func(ctx context.Context) error {
+					var err error
+					inner, err = TxFromContext(ctx)
+					return err
+				})
+				Expect(err).ToNot(HaveOccurred())
+				var calls []string
+				inner.OnCommit(func() {
+					calls = append(calls, "after the release")
+					inner.OnCommit(func() {
+						calls = append(calls, "while the functions run")
+					})
+				})
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(calls).To(Equal([]string{"after the release", "while the functions run"}))
+			})
+
+			It("Should call a function that another one registers while they run", func() {
+				tx := insert("my_value")
+				var calls []string
+				tx.OnCommit(func() {
+					calls = append(calls, "first")
+					tx.OnCommit(func() {
+						calls = append(calls, "registered by the first")
+					})
+				})
+				tx.OnCommit(func() {
+					calls = append(calls, "second")
+				})
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(calls).To(Equal([]string{"first", "second", "registered by the first"}))
+			})
+
+			It("Should drop the functions of a savepoint that is rolled back", func() {
+				tx := insert("outer")
+				var calls []string
+				tx.OnCommit(func() {
+					calls = append(calls, "outer")
+				})
+				savepointErr := errors.New("my error")
+				err := tx.Savepoint(ctx, func(ctx context.Context) error {
+					inner, err := TxFromContext(ctx)
+					if err != nil {
+						return err
+					}
+					_, err = inner.Exec(ctx, "insert into my_table (my_column) values ($1)", "inner")
+					if err != nil {
+						return err
+					}
+					inner.OnCommit(func() {
+						calls = append(calls, "inner")
+					})
+					return savepointErr
+				})
+				Expect(err).To(BeIdenticalTo(savepointErr))
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(calls).To(Equal([]string{"outer"}))
+				Expect(count()).To(Equal(1), "only the row inserted outside the savepoint must be stored")
+			})
+
+			It("Should not call the functions of a released savepoint when the enclosing transaction is rolled back",
+				func() {
+					tx := insert("outer")
+					called := false
+					err := tx.Savepoint(ctx, func(ctx context.Context) error {
+						inner, err := TxFromContext(ctx)
+						if err != nil {
+							return err
+						}
+						inner.OnCommit(func() {
+							called = true
+						})
+						return nil
+					})
+					Expect(err).ToNot(HaveOccurred())
+					reportErr := errors.New("my error")
+					tx.ReportError(&reportErr)
+
+					Expect(tx.End(ctx)).To(Succeed())
+
+					Expect(called).To(BeFalse())
+				})
+
+			It("Should log a panic, keep calling the functions and succeed when one of them panics", func() {
+				var output bytes.Buffer
+				loggingManager, err := NewTxManager().
+					SetLogger(slog.New(slog.NewJSONHandler(&output, nil))).
+					SetPool(pool).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				tx, err := loggingManager.Begin(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tx.Exec(ctx, "insert into my_table (my_column) values ($1)", "my_value")
+				Expect(err).ToNot(HaveOccurred())
+				var calls []string
+				tx.OnCommit(func() {
+					calls = append(calls, "first")
+					panic("my panic")
+				})
+				tx.OnCommit(func() {
+					calls = append(calls, "second")
+				})
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(calls).To(Equal([]string{"first", "second"}))
+				Expect(count()).To(Equal(1))
+				Expect(output.String()).To(ContainSubstring("Function registered to run after commit panicked"))
+				Expect(output.String()).To(ContainSubstring("my panic"))
+			})
+
+			// Calling a nil function would panic, and that panic would be recovered and logged, so the spec looks
+			// at the log to tell that the function was dropped instead.
+			It("Should ignore a nil function", func() {
+				var output bytes.Buffer
+				loggingManager, err := NewTxManager().
+					SetLogger(slog.New(slog.NewJSONHandler(&output, nil))).
+					SetPool(pool).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				tx, err := loggingManager.Begin(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tx.Exec(ctx, "insert into my_table (my_column) values ($1)", "my_value")
+				Expect(err).ToNot(HaveOccurred())
+				tx.OnCommit(nil)
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(count()).To(Equal(1))
+				Expect(output.String()).ToNot(ContainSubstring("panicked"))
+			})
+
+			It("Should call the functions only once when the transaction is ended twice", func() {
+				tx := insert("my_value")
+				calls := 0
+				tx.OnCommit(func() {
+					calls++
+				})
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(tx.End(ctx)).ToNot(Succeed(), "the transaction is already closed")
+
+				Expect(calls).To(Equal(1))
+			})
+
+			It("Should drop the functions of a released savepoint inside a savepoint that is rolled back", func() {
+				tx := insert("outer")
+				called := false
+				outerErr := errors.New("my error")
+				err := tx.Savepoint(ctx, func(ctx context.Context) error {
+					middle, err := TxFromContext(ctx)
+					if err != nil {
+						return err
+					}
+					err = middle.Savepoint(ctx, func(ctx context.Context) error {
+						inner, err := TxFromContext(ctx)
+						if err != nil {
+							return err
+						}
+						inner.OnCommit(func() {
+							called = true
+						})
+						return nil
+					})
+					if err != nil {
+						return err
+					}
+					return outerErr
+				})
+				Expect(err).To(BeIdenticalTo(outerErr))
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(called).To(BeFalse())
+			})
+
+			It("Should call the functions of nested released savepoints once the transaction commits", func() {
+				tx := insert("outer")
+				called := false
+				err := tx.Savepoint(ctx, func(ctx context.Context) error {
+					middle, err := TxFromContext(ctx)
+					if err != nil {
+						return err
+					}
+					return middle.Savepoint(ctx, func(ctx context.Context) error {
+						inner, err := TxFromContext(ctx)
+						if err != nil {
+							return err
+						}
+						inner.OnCommit(func() {
+							called = true
+						})
+						return nil
+					})
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(called).To(BeFalse())
+
+				Expect(tx.End(ctx)).To(Succeed())
+
+				Expect(called).To(BeTrue())
+			})
+
+			It("Should call the functions when the manager runs a task that succeeds", func() {
+				called := false
+				err := manager.Run(ctx, func(tx Tx) error {
+					tx.OnCommit(func() {
+						called = true
+					})
+					_, err := tx.Exec(ctx, "insert into my_table (my_column) values ($1)", "my_value")
+					return err
+				})
+				Expect(err).ToNot(HaveOccurred())
+
+				Expect(called).To(BeTrue())
+			})
+
+			It("Should not call the functions when the manager runs a task that fails", func() {
+				called := false
+				taskErr := errors.New("my error")
+				err := manager.Run(ctx, func(tx Tx) error {
+					tx.OnCommit(func() {
+						called = true
+					})
+					_, err := tx.Exec(ctx, "insert into my_table (my_column) values ($1)", "my_value")
+					if err != nil {
+						return err
+					}
+					return taskErr
+				})
+				Expect(err).To(BeIdenticalTo(taskErr))
+
+				Expect(called).To(BeFalse())
+				Expect(count()).To(BeZero())
+			})
+		})
+
+		It("Should not call the functions when the commit fails", func() {
+			// A deferred constraint is only checked when the transaction commits, so the commit fails:
+			_, err := pool.Exec(ctx, "create table my_table (my_column text unique deferrable initially deferred)")
+			Expect(err).ToNot(HaveOccurred())
+			tx := insert("my_value")
+			_, err = tx.Exec(ctx, "insert into my_table (my_column) values ($1)", "my_value")
+			Expect(err).ToNot(HaveOccurred())
+			called := false
+			tx.OnCommit(func() {
+				called = true
+			})
+
+			Expect(tx.End(ctx)).ToNot(Succeed())
+
+			Expect(called).To(BeFalse())
+			Expect(count()).To(BeZero())
 		})
 	})
 })

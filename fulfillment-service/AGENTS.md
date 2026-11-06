@@ -67,8 +67,8 @@ uv run ruff check # Lint Python.
 helm lint charts/service -f charts/service/ci-values.yaml
 helm template test charts/service -f charts/service/ci-values.yaml
 go build ./cmd/fulfillment-service ./cmd/osac
-ginkgo run --timeout 10m internal/servers # Focused server unit tests.
-ginkgo run --timeout 20m -r internal # All unit suites. Slow, run only when necessary.
+ginkgo run --timeout 40m internal/servers # Server unit tests, about 20 minutes.
+ginkgo run --timeout 1h -r internal # All unit suites, as CI runs them. Slow, run only when necessary.
 ```
 
 ### Integration tests

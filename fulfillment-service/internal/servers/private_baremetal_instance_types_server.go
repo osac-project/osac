@@ -186,6 +186,16 @@ func (s *PrivateBareMetalInstanceTypesServer) Update(ctx context.Context,
 		return
 	}
 
+	// The merged object always has metadata, so the generic update cannot tell that the caller sent
+	// none. A request without metadata cannot carry a version, so apply the finalizer
+	// compare-and-swap rule to it here, before the merged metadata hides that.
+	if request.GetObject().GetMetadata() == nil {
+		err = s.generic.checkFinalizerChange(request.GetObject(), existing, merged)
+		if err != nil {
+			return
+		}
+	}
+
 	// Set the merged object back into the request for the generic update. Feeding the merged
 	// metadata (rather than the caller's partial metadata) lets the generic update preserve
 	// unspecified fields and lets the database check_immutable_columns trigger reject changes to

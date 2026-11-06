@@ -163,7 +163,7 @@ jobs:
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
           # The upload below takes this directory, so the diagnostics go to a file in it as well as to the log.
-          mkdir -p fulfillment-service/logs
+          mkdir -p fulfillment-service/logs/pods
           {
             echo "=== Pods ==="
             kubectl get pods -n osac -o wide
@@ -176,6 +176,28 @@ jobs:
             echo "=== Events ==="
             kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
           } 2>&1 | tee fulfillment-service/logs/diagnostics.txt
+          # The complete log of every pod goes to the artifact only. A spec that fails in the middle of the
+          # suite is far outside the 100 lines above by the time this step runs, and the controller's writes
+          # are only visible here. Kind keeps up to 64Mi per container since its last rotation, see osac-installer/kind-config.yaml.
+          # One listing gives every container that has started, with its restart count. Then one request per
+          # container: kubectl stops at the first container that fails, which would lose the logs of the others,
+          # and only a container that restarted has a previous log to ask for. A failure here must not fail the
+          # step.
+          if pods=$(kubectl get pods -n osac -o json); then
+            jq -r '
+              .items[] | .metadata.name as $pod
+              | ((.status.initContainerStatuses // []) + (.status.containerStatuses // []))[]
+              | "\($pod) \(.name) \(.restartCount)"
+            ' <<<"$pods" | while read -r pod container restarts; do
+              file="fulfillment-service/logs/pods/${pod}_${container}"
+              kubectl logs -n osac "$pod" -c "$container" --tail=-1 > "${file}.log" 2>&1 || echo "Failed to get logs for ${pod}/${container}"
+              if [ "$restarts" -gt 0 ]; then
+                kubectl logs -n osac "$pod" -c "$container" --previous --tail=-1 > "${file}-previous.log" 2>&1 || echo "Failed to get previous logs for ${pod}/${container}"
+              fi
+            done
+          else
+            echo "Failed to list the pods"
+          fi
       - if: inputs.kind == 'it-fulfillment-service' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:

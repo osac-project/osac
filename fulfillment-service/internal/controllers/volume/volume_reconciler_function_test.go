@@ -23,6 +23,9 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1378,5 +1381,84 @@ var _ = Describe("create status population", func() {
 
 		Expect(f.run(ctx, volume)).To(Succeed())
 		Expect(statusUpdateCalled).To(BeFalse())
+	})
+})
+
+// These specs guard the contract that the server enforces for finalizer changes: the reconciler writes the finalizer
+// list it read, with the version it read, so that a concurrent finalizer change makes the server reject the write
+// with Aborted instead of silently losing the other writer's finalizer.
+var _ = Describe("finalizer removal on delete", func() {
+	const (
+		foreignFinalizer = "test.osac.io/hold"
+		readVersion      = int32(7)
+	)
+
+	var volumesClient *MockVolumesClient
+
+	newDeletingVolume := func(list ...string) *privatev1.Volume {
+		return privatev1.Volume_builder{
+			Id: "vol-finalizer-guard",
+			Metadata: privatev1.Metadata_builder{
+				DeletionTimestamp: timestamppb.Now(),
+				Finalizers:        list,
+				Tenant:            "test-tenant",
+				Version:           readVersion,
+			}.Build(),
+		}.Build()
+	}
+
+	newFunction := func() *function {
+		return &function{
+			logger:         logger,
+			volumesClient:  volumesClient,
+			maskCalculator: masks.NewCalculator().Build(),
+		}
+	}
+
+	BeforeEach(func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		volumesClient = NewMockVolumesClient(ctrl)
+	})
+
+	It("preserves foreign finalizers and sends the version it read", func() {
+		var requests []*privatev1.VolumesUpdateRequest
+		volumesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.VolumesUpdateRequest, opts ...grpc.CallOption) (*privatev1.VolumesUpdateResponse, error) {
+				requests = append(requests, proto.Clone(req).(*privatev1.VolumesUpdateRequest))
+				return &privatev1.VolumesUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			Times(1)
+
+		volume := newDeletingVolume(finalizers.Controller, foreignFinalizer)
+		Expect(newFunction().run(context.Background(), volume)).To(Succeed())
+
+		Expect(requests).To(HaveLen(1))
+		Expect(requests[0].GetObject().GetMetadata().GetFinalizers()).To(Equal([]string{foreignFinalizer}))
+		Expect(requests[0].GetUpdateMask().GetPaths()).To(Equal([]string{"metadata.finalizers"}))
+		Expect(requests[0].GetObject().GetMetadata().GetVersion()).To(Equal(readVersion))
+	})
+
+	It("returns a conflict error when the server rejects the write with Aborted", func() {
+		volumesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.Aborted, "object has been modified")).
+			Times(1)
+
+		volume := newDeletingVolume(finalizers.Controller, foreignFinalizer)
+		err := newFunction().run(context.Background(), volume)
+
+		Expect(err).To(HaveOccurred())
+		Expect(controllers.IsConflict(err)).To(BeTrue())
+	})
+
+	It("doesn't write when the controller finalizer is already absent", func() {
+		volumesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			Times(0)
+
+		volume := newDeletingVolume(foreignFinalizer)
+		Expect(newFunction().run(context.Background(), volume)).To(Succeed())
 	})
 })

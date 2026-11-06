@@ -64,6 +64,55 @@ func ClassifyHubError(err error) error {
 	return err
 }
 
+// IsConflict reports whether err is, or contains, an optimistic-concurrency conflict reported by the server as a gRPC
+// Aborted status. The whole error tree is searched, including errors joined with others, because grpcstatus.Code
+// stops at the first gRPC status it finds and would miss a conflict joined behind a failure that carries another
+// status, such as an Unavailable from the hub.
+func IsConflict(err error) bool {
+	found, _ := scanConflicts(err)
+	return found
+}
+
+// isOnlyConflict reports whether err contains an Aborted status and every leaf error of the tree is an Aborted
+// status, so that there is no independent failure hidden behind the conflict. Only leaves are classified: a wrapper
+// that reports its own non-Aborted status but wraps an Aborted error does not count as an independent failure.
+func isOnlyConflict(err error) bool {
+	found, other := scanConflicts(err)
+	return found && !other
+}
+
+// scanConflicts walks the error tree depth first. It reports whether any node carries an Aborted gRPC status, and
+// whether any leaf is something else. Each node is asserted directly for GRPCStatus rather than through errors.As,
+// because errors.As stops at the first match, and the first status in the tree may not be the Aborted one. Cyclic
+// error graphs are not supported, as with errors.Is.
+func scanConflicts(err error) (found, other bool) {
+	if err == nil {
+		return false, false
+	}
+	if node, ok := err.(interface{ GRPCStatus() *status.Status }); ok {
+		if st := node.GRPCStatus(); st != nil && st.Code() == codes.Aborted {
+			return true, false
+		}
+	}
+	if node, ok := err.(interface{ Unwrap() error }); ok {
+		if cause := node.Unwrap(); cause != nil {
+			return scanConflicts(cause)
+		}
+	}
+	if node, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := node.Unwrap()
+		for _, cause := range causes {
+			causeFound, causeOther := scanConflicts(cause)
+			found = found || causeFound
+			other = other || causeOther
+		}
+		if len(causes) > 0 {
+			return found, other
+		}
+	}
+	return false, true
+}
+
 // HandleK8sWriteError classifies a Kubernetes write error as permanent or transient.
 // If the error is an apierrors.IsInvalid validation failure, it logs a warning, calls
 // markFailed to let the reconciler set resource-specific FAILED state, and returns nil

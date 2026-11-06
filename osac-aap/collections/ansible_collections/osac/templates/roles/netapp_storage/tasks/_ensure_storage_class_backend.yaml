@@ -528,7 +528,7 @@
       ansible.builtin.set_fact:
         _trusted_ca_b64: ""
         _runtime_username: ""
-        _runtime_password: ""
+        _runtime_password: null
         _svm_name: ""
         _assignment_key: ""
         _tbc_name: ""

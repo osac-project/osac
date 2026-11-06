@@ -77,10 +77,12 @@
           {% set _names = _netapp_guard_sc_list.resources | default([]) | map(attribute='metadata.name') | list -%}
           {# Every prefix is 'netapp-' + 16 hex + '-' (24 characters). -#}
           {% set _prefixes = [] -%}
+          {# Hash the raw backend_id exactly as provisioning does. -#}
           {% for _bid in (_provider_tiers | default([]) | selectattr('backend_id', 'defined')
-                          | map(attribute='backend_id') | select('string') | map('trim')
-                          | reject('equalto', '') | unique | list) -%}
+                          | map(attribute='backend_id') | select('string') | unique | list) -%}
+          {% if (_bid | trim) != '' -%}
           {% set _ = _prefixes.append('netapp-' ~ (((_bid ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower) ~ '-') -%}
+          {% endif -%}
           {% endfor -%}
           {% set _uuids = _netapp_guard_tbc_list.resources | default([])
                           | map(attribute='status.backendInfo.backendUUID', default='')

@@ -7,12 +7,14 @@ import type { ProvisioningFieldControlProps } from '../ProvisioningWizard/fields
 
 interface SshPublicKeySecretFieldProps extends ProvisioningFieldControlProps {
   project: string;
+  placeholder?: string;
 }
 
 const SshPublicKeySecretField = ({
   name,
   project,
   isDisabled = false,
+  placeholder,
 }: SshPublicKeySecretFieldProps) => {
   const { t } = useTranslation();
 
@@ -28,6 +30,7 @@ const SshPublicKeySecretField = ({
       name={name}
       fieldId={name.replace(/\./g, '-')}
       isDisabled={isDisabled}
+      placeholder={placeholder}
     />
   );
 };

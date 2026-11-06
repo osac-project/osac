@@ -16,11 +16,10 @@ import { useField } from 'formik';
 import { Secret, SecretType } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
 
-import { CATALOG_PROVISION_MULTILINE_TEXTAREA } from './constants';
 import { getVisibleFieldError } from './fieldError';
 import { useShowFieldValidationErrors } from './FieldValidationContext';
+import { FileUploadField } from './FileUploadField';
 import { FormFieldHelper } from './FormFieldHelper';
-import { InputField } from './InputField';
 import SecretSelectionField from './SecretSelectionField';
 import { useTranslation } from '../../hooks/useTranslation';
 
@@ -30,6 +29,8 @@ interface UserDataFieldProps {
   isDisabled?: boolean;
   isRequired?: boolean;
   labelInfo?: ReactNode;
+  label?: string;
+  inlinePlaceholder?: string;
 }
 
 interface UserDataSourceOption {
@@ -44,6 +45,8 @@ const UserDataField = ({
   isDisabled = false,
   isRequired = false,
   labelInfo,
+  label,
+  inlinePlaceholder,
 }: UserDataFieldProps) => {
   const { t } = useTranslation();
   const sourceName = `${name}.source`;
@@ -57,7 +60,7 @@ const UserDataField = ({
     {
       value: 'inline',
       title: t('Enter value'),
-      description: t('Paste cloud-init user data'),
+      description: t('Upload or paste user data'),
     },
     {
       value: 'secret',
@@ -74,7 +77,7 @@ const UserDataField = ({
     <>
       <FormGroup
         role="radiogroup"
-        label={t('User data')}
+        label={label || t('User data')}
         fieldId="user-data-source"
         isRequired={isRequired}
         labelInfo={labelInfo}
@@ -153,16 +156,12 @@ const UserDataField = ({
           asFormGroup={false}
         />
       ) : (
-        <InputField
-          label={t('Cloud-init')}
+        <FileUploadField
           name={inlineName}
           fieldId="inline-user-data"
-          multiline
-          rows={CATALOG_PROVISION_MULTILINE_TEXTAREA.rows}
-          resizeOrientation={CATALOG_PROVISION_MULTILINE_TEXTAREA.resizeOrientation}
-          helperText={t('Optional cloud-init user data (max 64 KB).')}
+          placeholder={inlinePlaceholder}
+          helperText={t('Optional')}
           isDisabled={isDisabled}
-          asFormGroup={false}
         />
       )}
     </>

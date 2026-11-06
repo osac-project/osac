@@ -15,6 +15,7 @@ language governing permissions and limitations under the License.
 //go:generate mockgen -destination=tenants_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 TenantsClient
 //go:generate mockgen -destination=users_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 UsersClient
 //go:generate mockgen -destination=project_memberships_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 ProjectMembershipsClient
+//go:generate mockgen -destination=secrets_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 SecretsClient
 
 package project
 
@@ -44,6 +45,7 @@ import (
 
 const (
 	defaultNetworkingDeleteRetryDelay = time.Second
+	projectChildDeleteRetryDelay      = time.Second
 	projectGroupRetryDelay            = 10 * time.Second
 )
 
@@ -105,6 +107,7 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		projectsClient:           privatev1.NewProjectsClient(b.connection),
 		tenantsClient:            privatev1.NewTenantsClient(b.connection),
 		projectMembershipsClient: privatev1.NewProjectMembershipsClient(b.connection),
+		secretsClient:            privatev1.NewSecretsClient(b.connection),
 		projectGroupManager:      b.projectGroupManager,
 		defaultNetwork:           b.defaultNetwork,
 		maskCalculator:           masks.NewCalculator().Build(),
@@ -118,6 +121,7 @@ type function struct {
 	projectsClient           privatev1.ProjectsClient
 	tenantsClient            privatev1.TenantsClient
 	projectMembershipsClient privatev1.ProjectMembershipsClient
+	secretsClient            privatev1.SecretsClient
 	projectGroupManager      *idp.ProjectGroupManager
 	defaultNetwork           defaultnetworking.Manager
 	maskCalculator           *masks.Calculator
@@ -179,6 +183,9 @@ func (r *function) Run(ctx context.Context, project *privatev1.Project) error {
 			return err
 		}
 	}
+	if task.retryErr != nil {
+		return task.retryErr
+	}
 
 	// Updating a deleting project with no finalizers archives it. Signal the
 	// tenant only after that update succeeds so tenant deletion waits until the
@@ -195,8 +202,9 @@ func (r *function) Run(ctx context.Context, project *privatev1.Project) error {
 
 // task contains the data needed to reconcile a single project.
 type task struct {
-	r       *function
-	project *privatev1.Project
+	r        *function
+	project  *privatev1.Project
+	retryErr error
 }
 
 // update performs the reconciliation logic for creating or updating a project.
@@ -447,9 +455,11 @@ func (t *task) delete(ctx context.Context) error {
 		}
 
 		if allChildrenDeleting {
-			t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_DELETING)
-			t.project.GetStatus().SetMessage(fmt.Sprintf(
-				"Waiting for %d child project(s) to be deleted.", listResp.GetTotal()))
+			message := fmt.Sprintf("Waiting for %d child project(s) to be deleted.", listResp.GetTotal())
+			t.setPendingDeletion(message, controllers.RequeueAtInterval(
+				errors.New("child projects are still pending deletion"),
+				projectChildDeleteRetryDelay,
+			))
 		} else {
 			t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED)
 			t.project.GetStatus().SetMessage(fmt.Sprintf(
@@ -491,12 +501,28 @@ func (t *task) delete(ctx context.Context) error {
 	}
 
 	if existingMemberships {
-		if !t.project.HasStatus() {
-			t.project.SetStatus(&privatev1.ProjectStatus{})
-		}
-		t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_DELETING)
-		t.project.GetStatus().SetMessage("Pending ProjectMembership deletion prior to project deletion")
+		t.setPendingDeletion("Pending ProjectMembership deletion prior to project deletion", controllers.RequeueAtInterval(
+			errors.New("project memberships are still pending deletion"),
+			projectChildDeleteRetryDelay,
+		))
 		return nil
+	}
+
+	// Secrets are scoped to projects and reference the project with a foreign key.
+	// Delete them before removing the project finalizer so this project's secrets
+	// cannot prevent it from being archived.
+	if t.r.secretsClient != nil {
+		pendingSecrets, err := t.deleteProjectSecrets(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to delete project secrets: %w", err)
+		}
+		if pendingSecrets {
+			t.setPendingDeletion("Pending Secret deletion prior to project deletion", controllers.RequeueAtInterval(
+				errors.New("project secrets are still pending deletion"),
+				projectChildDeleteRetryDelay,
+			))
+			return nil
+		}
 	}
 
 	// Default networking belongs to the tenant root project. The controller
@@ -506,7 +532,9 @@ func (t *task) delete(ctx context.Context) error {
 		if err := t.r.defaultNetwork.Delete(ctx, t.project.GetMetadata().GetTenant()); err != nil {
 			wrapped := fmt.Errorf("failed to delete default networking resources: %w", err)
 			if errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
-				return controllers.RequeueAtInterval(wrapped, defaultNetworkingDeleteRetryDelay)
+				t.setPendingDeletion("Pending default networking deletion prior to project deletion",
+					controllers.RequeueAtInterval(wrapped, defaultNetworkingDeleteRetryDelay))
+				return nil
 			}
 			return wrapped
 		}
@@ -523,14 +551,55 @@ func (t *task) delete(ctx context.Context) error {
 			slog.String("project_name", t.project.GetMetadata().GetName()),
 			slog.Any("error", err),
 		)
-		return controllers.RequeueAfter(
-			fmt.Errorf("failed to delete Keycloak groups: %w", err),
-			projectGroupRetryDelay,
-		)
+		t.setPendingDeletion("Pending Keycloak group deletion prior to project deletion",
+			controllers.RequeueAfter(
+				fmt.Errorf("failed to delete Keycloak groups: %w", err),
+				projectGroupRetryDelay,
+			))
+		return nil
 	}
 
 	t.removeFinalizer()
 	return nil
+}
+
+func (t *task) setPendingDeletion(message string, retryErr error) {
+	if !t.project.HasStatus() {
+		t.project.SetStatus(&privatev1.ProjectStatus{})
+	}
+	t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_DELETING)
+	t.project.GetStatus().SetMessage(message)
+	t.retryErr = retryErr
+}
+
+// deleteProjectSecrets lists and deletes all Secrets scoped to this project.
+// Secret deletion archives synchronously unless the Secret has a finalizer.
+func (t *task) deleteProjectSecrets(ctx context.Context) (bool, error) {
+	projectName := t.project.GetMetadata().GetName()
+	tenant := t.project.GetMetadata().GetTenant()
+	secretFilter := fmt.Sprintf(
+		"this.metadata.tenant == %q && this.metadata.project == %q",
+		tenant, projectName,
+	)
+	listResp, err := t.r.secretsClient.List(ctx, privatev1.SecretsListRequest_builder{
+		Filter: &secretFilter,
+	}.Build())
+	if err != nil {
+		return false, fmt.Errorf("failed to query for project secrets: %w", err)
+	}
+	if listResp == nil {
+		return false, errors.New("secret list returned no response")
+	}
+
+	return controllers.CascadeDeleteItems(ctx, controllers.CascadeDeleteItemsOptions[*privatev1.Secret]{
+		Items: listResp.GetItems(),
+		Delete: func(ctx context.Context, id string) error {
+			_, err := t.r.secretsClient.Delete(ctx, privatev1.SecretsDeleteRequest_builder{
+				Id: id,
+			}.Build())
+			return err
+		},
+	})
 }
 
 // deleteProjectMemberships lists all ProjectMemberships scoped to this project, marks each for
@@ -550,32 +619,22 @@ func (t *task) deleteProjectMemberships(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to query for project memberships: %w", err)
 	}
-
+	if listResp == nil {
+		return false, errors.New("project membership list returned no response")
+	}
 	if listResp.GetTotal() == 0 {
 		return false, nil
 	}
 
-	var deletedAny bool
-	for _, membership := range listResp.GetItems() {
-		if membership.HasMetadata() && membership.GetMetadata().HasDeletionTimestamp() {
-			// Already being deleted, will signal us when done
-			continue
-		}
-		t.r.logger.InfoContext(ctx, "Cascade-deleting project membership",
-			slog.String("project_id", t.project.GetId()),
-			slog.String("membership_id", membership.GetId()),
-		)
-		_, err := t.r.projectMembershipsClient.Delete(ctx, privatev1.ProjectMembershipsDeleteRequest_builder{
-			Id: membership.GetId(),
-		}.Build())
-		if err != nil && status.Code(err) != codes.NotFound {
-			return true, fmt.Errorf("failed to delete project membership %s: %w", membership.GetId(), err)
-		}
-		deletedAny = true
-	}
-
-	// Only wait if we actually triggered new deletions
-	return deletedAny, nil
+	return controllers.CascadeDeleteItems(ctx, controllers.CascadeDeleteItemsOptions[*privatev1.ProjectMembership]{
+		Items: listResp.GetItems(),
+		Delete: func(ctx context.Context, id string) error {
+			_, err := t.r.projectMembershipsClient.Delete(ctx, privatev1.ProjectMembershipsDeleteRequest_builder{
+				Id: id,
+			}.Build())
+			return err
+		},
+	})
 }
 
 // setDefaults sets default values for the project.

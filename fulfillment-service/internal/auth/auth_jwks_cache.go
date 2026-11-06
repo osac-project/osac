@@ -87,6 +87,11 @@ var ErrBadKey = errors.New("bad key")
 // ErrBadIssuer is returned when the issuer URL is not trusted.
 var ErrBadIssuer = errors.New("bad issuer")
 
+// ErrIssuerUnavailable is returned when a trusted issuer's
+// JWKS endpoint cannot be reached. Callers should treat this as
+// a temporary infrastructure failure, not an invalid token.
+var ErrIssuerUnavailable = errors.New("issuer unavailable")
+
 // jwksCacheIssuerInfo holds discovered information about a trusted issuer.
 type jwksCacheIssuerInfo struct {
 	// issuerUrl is the URL of the issuer.
@@ -397,6 +402,9 @@ func (c *jwksCache) Get(ctx context.Context, issuerUrl string, keyId string) (re
 	// If the key is not in the cache, try to refresh synchronously:
 	err = c.refresh(ctx, issuerInfo)
 	if err != nil {
+		err = fmt.Errorf(
+			"%w: %w", ErrIssuerUnavailable, err,
+		)
 		return
 	}
 

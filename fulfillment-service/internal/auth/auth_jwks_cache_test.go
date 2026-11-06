@@ -19,6 +19,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"math/big"
 	"net/http"
 	"os"
@@ -530,9 +531,10 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		// Verify that the error is returned:
+		// Verify that the error is returned and wraps ErrIssuerUnavailable:
 		_, err = cache.Get(ctx, issuerUrl, "123")
 		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, ErrIssuerUnavailable)).To(BeTrue())
 	})
 
 	It("Returns error when JWKS endpoint fails", func(ctx context.Context) {
@@ -570,9 +572,10 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		// Verify that the error is returned:
+		// Verify that the error is returned and wraps ErrIssuerUnavailable:
 		_, err = cache.Get(ctx, issuerUrl, "123")
 		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, ErrIssuerUnavailable)).To(BeTrue())
 	})
 
 	It("Returns error when discovery document has no 'jwks_uri' value", func(ctx context.Context) {
@@ -603,9 +606,10 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		// Verify that the error is returned:
+		// Verify that the error wraps ErrIssuerUnavailable:
 		_, err = cache.Get(ctx, issuerUrl, "123")
 		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, ErrIssuerUnavailable)).To(BeTrue())
 		Expect(err.Error()).To(ContainSubstring("does not contain a 'jwks_uri' value"))
 	})
 
@@ -639,9 +643,10 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		// Verify that the error is returned:
+		// Verify that the error wraps ErrIssuerUnavailable:
 		_, err = cache.Get(ctx, issuerUrl, "123")
 		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, ErrIssuerUnavailable)).To(BeTrue())
 		Expect(err.Error()).To(ContainSubstring("must use the HTTPS scheme"))
 	})
 
@@ -761,9 +766,10 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		// Verify that the error is returned:
+		// Verify that the error wraps ErrIssuerUnavailable:
 		_, err = cache.Get(ctx, issuerUrl, "123")
 		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, ErrIssuerUnavailable)).To(BeTrue())
 		Expect(err.Error()).To(ContainSubstring("failed to parse discovery document"))
 	})
 
@@ -801,9 +807,10 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		// Verify that the error is returned:
+		// Verify that the error wraps ErrIssuerUnavailable:
 		_, err = cache.Get(ctx, issuerUrl, "123")
 		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, ErrIssuerUnavailable)).To(BeTrue())
 	})
 
 	It("Returns error when token file is unreadable at refresh time", func(ctx context.Context) {
@@ -844,9 +851,10 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 		err = os.Remove(tokenFile)
 		Expect(err).ToNot(HaveOccurred())
 
-		// Verify that Get returns an error about the unreadable token file:
+		// Verify that Get wraps ErrIssuerUnavailable:
 		_, err = cache.Get(ctx, issuerUrl, "123")
 		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, ErrIssuerUnavailable)).To(BeTrue())
 		Expect(err.Error()).To(ContainSubstring("failed to read token from file"))
 	})
 

@@ -126,6 +126,7 @@ var _ = Describe("deployed MCP server", func() {
 
 		_, original, err := getKeycloakClient(ctx, "osac-mcp-client")
 		Expect(err).ToNot(HaveOccurred())
+
 		shortLived, err := cloneJSONMap(original)
 		Expect(err).ToNot(HaveOccurred())
 		testClientName := "mcp-expired-" + uuid.New()
@@ -164,11 +165,10 @@ var _ = Describe("deployed MCP server", func() {
 		claims, err := parseJWTClaims(token)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(jwtAudiences(claims)).To(ContainElement(resourceURL))
-		issuedAt, err := claims.GetIssuedAt()
-		Expect(err).ToNot(HaveOccurred())
-		expiresAt, err := claims.GetExpirationTime()
-		Expect(err).ToNot(HaveOccurred())
-		Expect(expiresAt.Time.Sub(issuedAt.Time)).To(BeNumerically("<=", 3*time.Second))
+		Expect(mcpTokenLifetime(token)).To(
+			BeNumerically("<=", 3*time.Second),
+			"token lifespan should reflect the 1-second override",
+		)
 
 		Eventually(func() int {
 			statusCode, err := postMCPAuthorizationProbe(ctx, endpoint, token)
@@ -293,6 +293,20 @@ var _ = Describe("deployed MCP server", func() {
 		resourceURL := endpoint + "/"
 		token, err := tool.SimulateMCPLogin(ctx, resourceURL, userUsername, usersPassword)
 		Expect(err).ToNot(HaveOccurred())
+
+		// Guard: verify the token carries a normal lifetime.
+		// If a prior spec leaked a short access.token.lifespan
+		// into the MCP OAuth client, the token would expire
+		// before the Keycloak-down window and produce a 401
+		// instead of the expected structured unavailable error.
+		tokenLifetime := mcpTokenLifetime(token)
+		Expect(tokenLifetime).To(
+			BeNumerically(">=", 30*time.Second),
+			"token lifetime too short — the MCP OAuth client "+
+				"may still carry a leaked short lifespan "+
+				"(exp-iat=%s)", tokenLifetime,
+		)
+
 		_, err = callDeployedMCPTool[mcpserver.CheckConnectionOutput](
 			ctx, endpoint, token, "check_connection", mcpserver.CheckConnectionInput{},
 		)
@@ -583,6 +597,27 @@ func setKeycloakReplicas(ctx context.Context, replicas int32) error {
 	deployment.Spec.Replicas = &replicas
 	_, err = deployments.Update(ctx, deployment, metav1.UpdateOptions{})
 	return err
+}
+
+// mcpTokenLifetime parses a JWT access token without
+// verification and returns exp − iat. It fails the current
+// Ginkgo spec when the token is malformed or the claims are
+// missing, without logging the token content itself.
+func mcpTokenLifetime(token string) time.Duration {
+	claims, err := parseJWTClaims(token)
+	Expect(err).ToNot(HaveOccurred(),
+		"failed to parse MCP token claims")
+	iat, err := claims.GetIssuedAt()
+	Expect(err).ToNot(HaveOccurred(),
+		"MCP token missing or invalid 'iat' claim")
+	Expect(iat).ToNot(BeNil(),
+		"MCP token 'iat' claim is absent")
+	exp, err := claims.GetExpirationTime()
+	Expect(err).ToNot(HaveOccurred(),
+		"MCP token missing or invalid 'exp' claim")
+	Expect(exp).ToNot(BeNil(),
+		"MCP token 'exp' claim is absent")
+	return exp.Sub(iat.Time)
 }
 
 type bearerRoundTripper struct {

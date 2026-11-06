@@ -309,7 +309,7 @@ def test_netbox_host_for_bmi_waits_for_the_inventory_claim(monkeypatch: pytest.M
     netbox = FakeNetBox([{"id": "42", "status": "staged", "custom_fields": {"osac_instance_id": ""}}])
     backend = _netbox(netbox, k8s=FakeDeviceK8s("host-inventory/netbox-42"))
 
-    with pytest.raises(TimeoutError, match="timed out"):
+    with pytest.raises(TimeoutError, match="not reached"):
         backend.host_for_bmi(bmi_cr_name="bmi-cr")
 
     netbox.devices[0]["status"] = "active"
@@ -368,7 +368,7 @@ def test_netbox_wait_for_released_requires_bmh_deleted_and_device_staged(monkeyp
     backend = _netbox(netbox, k8s=k8s)
     host = HostRef(namespace="host-inventory", name="netbox-42")
 
-    with pytest.raises(TimeoutError, match="timed out"):
+    with pytest.raises(TimeoutError, match="not reached"):
         backend.wait_for_released(host=host)
 
     k8s.bmh_present = False

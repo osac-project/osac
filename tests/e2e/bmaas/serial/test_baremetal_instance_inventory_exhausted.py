@@ -20,7 +20,6 @@ from tests.e2e.core.inventory import InventoryBackend, assert_bmi_lifecycle_on_r
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
-from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.serial
 

@@ -112,7 +112,7 @@
   kubernetes.core.k8s_info:
     api_version: trident.netapp.io/v1
     kind: TridentBackendConfig
-    namespace: "{{ netapp_storage_trident_namespace }}"
+    namespace: "{{ netapp_storage_csi_namespace }}"
     label_selectors:
       - "osac.openshift.io/tenant={{ tenant_name }}"
       - "osac.openshift.io/storage-provider=netapp"
@@ -125,7 +125,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Secret
-    namespace: "{{ netapp_storage_trident_namespace }}"
+    namespace: "{{ netapp_storage_csi_namespace }}"
     label_selectors:
       - "osac.openshift.io/tenant={{ tenant_name }}"
       - "osac.openshift.io/storage-provider=netapp"
@@ -236,7 +236,7 @@
           kind: Secret
           metadata:
             name: "netapp-csi-{{ ((item ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
-            namespace: "{{ netapp_storage_trident_namespace }}"
+            namespace: "{{ netapp_storage_csi_namespace }}"
             labels:
               app.kubernetes.io/managed-by: osac-aap
               osac.openshift.io/tenant: "{{ tenant_name }}"

@@ -343,7 +343,7 @@
           kind: Secret
           metadata:
             name: "netapp-csi-{{ _assignment_key }}"
-            namespace: "{{ netapp_storage_trident_namespace }}"
+            namespace: "{{ netapp_storage_csi_namespace }}"
             labels:
               app.kubernetes.io/managed-by: osac-aap
               osac.openshift.io/tenant: "{{ tenant_name }}"
@@ -391,7 +391,7 @@
               'kind': 'TridentBackendConfig',
               'metadata': {
                 'name': _tbc_name,
-                'namespace': netapp_storage_trident_namespace,
+                'namespace': netapp_storage_csi_namespace,
                 'labels': {
                   'app.kubernetes.io/managed-by': 'osac-aap',
                   'osac.openshift.io/tenant': tenant_name,
@@ -424,7 +424,7 @@
         api_version: trident.netapp.io/v1
         kind: TridentBackendConfig
         name: "{{ _tbc_name }}"
-        namespace: "{{ netapp_storage_trident_namespace }}"
+        namespace: "{{ netapp_storage_csi_namespace }}"
       register: _tbc_status
       until: >-
         (_tbc_status.resources | default([]) | length > 0) and (

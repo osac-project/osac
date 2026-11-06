@@ -12,8 +12,16 @@
     - name: Check if the working cluster namespace is found
       ansible.builtin.fail:
         msg: "Working cluster namespace was not found."
-      when: cluster_working_namespace_list.resources | length != 1
+      when:
+        - cluster_working_namespace_list.resources | length != 1
+        - >-
+          cluster_working_namespace_list.resources | length > 1
+          or not (cluster_working_namespace_allow_missing
+                  | default(false))
 
     - name: Set working cluster namespace as result
       ansible.builtin.set_fact:
-        cluster_working_namespace: "{{ cluster_working_namespace_list.resources[0].metadata.name }}"
+        cluster_working_namespace: >-
+          {{ cluster_working_namespace_list.resources[0]
+             .metadata.name }}
+      when: cluster_working_namespace_list.resources | length == 1

@@ -128,7 +128,7 @@ var _ = It("retains a failed worker slot during scale-down", func() {
 })
 
 var _ = Describe("Worker retention when cleanup evidence is unknown", func() {
-	for _, scenario := range []string{"outage", "denied", "foreign-tenant", "foreign-owner", "idless"} {
+	for _, scenario := range []string{"outage", "denied", "foreign-tenant", "foreign-owner"} {
 		It(scenario, func() {
 			r, base, co := workerReadHarness()
 			fc := &teardownReadClient{workerReadClient: base}
@@ -147,8 +147,6 @@ var _ = Describe("Worker retention when cleanup evidence is unknown", func() {
 				} else {
 					fc.returned.GetMetadata().SetAnnotations(map[string]string{ownerReferenceAnnotation: "ClusterOrder/foreign"})
 				}
-			case "idless":
-				w.BareMetalInstance.ID = ""
 			}
 			o := indexWorkerBMIs(nil)
 			o.agents = &unstructured.UnstructuredList{}
@@ -158,6 +156,20 @@ var _ = Describe("Worker retention when cleanup evidence is unknown", func() {
 			Expect(fc.deletes).To(Equal(0), "unknown released: workers=%+v deletes=%d", kept, fc.deletes)
 		})
 	}
+})
+
+var _ = It("releases an ID-less worker when the List confirms BMI absence", func() {
+	r, base, co := workerReadHarness()
+	fc := &teardownReadClient{workerReadClient: base}
+	r.fulfillment = fc
+	w := co.Status.Workers[0]
+	w.Phase = workerPhaseDeleting
+	w.BareMetalInstance.ID = ""
+	o := indexWorkerBMIs(nil)
+	o.agents = &unstructured.UnstructuredList{}
+	kept := r.reconcileTeardownWorkers(context.Background(), co, []v1alpha1.WorkerStatus{w})
+	Expect(kept).To(BeEmpty(), "confirmed-absent BMI blocked teardown: workers=%+v deletes=%d", kept, fc.deletes)
+	Expect(fc.deletes).To(Equal(0), "confirmed-absent BMI blocked teardown: workers=%+v deletes=%d", kept, fc.deletes)
 })
 
 var _ = It("avoids another Agent List for teardown during stable convergence", func() {

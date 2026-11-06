@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -321,11 +322,53 @@ func (r *Reconciler) createSelectedWorker(
 	if err != nil || !res.IsZero() {
 		return res, err
 	}
-	if err := r.writeSelectedWorker(ctx, co, prev); err != nil {
-		return ctrl.Result{}, err
+	if writeErr := r.writeSelectedWorker(ctx, co, prev); writeErr != nil {
+		// The BMI was created externally but the identity write failed.
+		// Most write failures are transient or conflicts: the order still
+		// exists and the next reconcile recovers the identity via List.
+		// Only a NotFound error proves the order was deleted/finalized
+		// and the identity can never be persisted; compensate only then
+		// to avoid deleting a BMI that a subsequent reconcile can adopt.
+		if prev.BareMetalInstance.ID != "" && apierrors.IsNotFound(writeErr) {
+			r.compensateOrphanedBMI(ctx, co, prev.BareMetalInstance.ID, writeErr)
+		}
+		return ctrl.Result{}, writeErr
 	}
 	// Observe the external action next time, even if its response was a no-op.
 	return workerBoundaryRequeue(), nil
+}
+
+// compensateOrphanedBMI deletes a successfully created BMI whose identity
+// could not be persisted into the ClusterOrder status, preventing a resource
+// leak. The original write error is always returned to the caller unchanged;
+// a compensation failure is logged explicitly so it is observable rather
+// than silently lost.
+func (r *Reconciler) compensateOrphanedBMI(
+	ctx context.Context, co *v1alpha1.ClusterOrder,
+	bmiID string, writeErr error,
+) {
+	log := ctrllog.FromContext(ctx)
+	log.Error(writeErr, "identity write failed after BMI creation; "+
+		"compensating by deleting the orphaned BMI",
+		"bmiID", bmiID, "clusterOrder", co.Name)
+	if delErr := r.fulfillment.DeleteBareMetalInstance(ctx, bmiID); delErr != nil {
+		log.Error(delErr,
+			"CRITICAL: failed to delete orphaned BMI after identity "+
+				"write failure; manual cleanup required",
+			"bmiID", bmiID, "clusterOrder", co.Name)
+		r.recorder.Eventf(co, nil, corev1.EventTypeWarning,
+			"OrphanedBMI", "CompensationFailed",
+			"BMI %s created but identity write failed; compensating "+
+				"delete also failed: %v", bmiID, delErr)
+	} else {
+		log.Info("successfully deleted orphaned BMI after "+
+			"identity write failure",
+			"bmiID", bmiID, "clusterOrder", co.Name)
+		r.recorder.Eventf(co, nil, corev1.EventTypeWarning,
+			"OrphanedBMI", "Compensated",
+			"BMI %s created but identity write failed; "+
+				"compensating delete succeeded", bmiID)
+	}
 }
 
 // recordBMICreateAttempt fences Create against cancellation on the same

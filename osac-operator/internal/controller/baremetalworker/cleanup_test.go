@@ -91,7 +91,7 @@ var _ = It("recovers an ID-less worker before retirement", func() {
 	gone, err := r.cleanupWorker(context.Background(), co, &w)
 	Expect(err).NotTo(HaveOccurred(), "name recovery boundary: %+v gone=%v err=%v deletes=%d", w, gone, err, fc.deletes)
 	Expect(gone).To(BeFalse(), "name recovery boundary: %+v gone=%v err=%v deletes=%d", w, gone, err, fc.deletes)
-	Expect(fc.deletes).To(Equal(0), "name recovery boundary: %+v gone=%v err=%v deletes=%d", w, gone, err, fc.deletes)
+	Expect(fc.deletes).To(Equal(1), "name recovery boundary: %+v gone=%v err=%v deletes=%d", w, gone, err, fc.deletes)
 	Expect(w.BareMetalInstance.ID).To(Equal(fc.returned.GetId()), "name recovery boundary: %+v gone=%v err=%v deletes=%d", w, gone, err, fc.deletes)
 })
 

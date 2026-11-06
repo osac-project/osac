@@ -487,11 +487,10 @@ administrators, using the administrator procedure for your environment. The
 [Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md#evpn-host-networking-vmaas)
 provides one example procedure for preparing the required host configuration.
 
-Before installation, confirm these inputs with the administrators preparing
-the VMaaS cluster and fabric. When using the Helm Deployment Guide, the
-platform administrator sets them in the infra values file passed to
-`osac-deps` and `osac-infra`; otherwise, confirm the resulting host
-configuration and BGP readiness with the responsible administrators.
+Before installation, confirm these inputs and the administrator procedure
+with the teams preparing the VMaaS cluster and fabric. Ask them where to
+provide the values and how they will verify the resulting host configuration
+and BGP readiness.
 
 | Value | Information to confirm | Owner or source |
 |---|---|---|
@@ -861,11 +860,11 @@ Use this procedure when the cluster already meets the prerequisites.
 - The prerequisite Operators from
   [Table 2.1](#table-21-platform-operators-and-components) are installed.
 - The issuer configured by `service.certs.issuerRef`, trust-manager, the
-  `ConfigMap` named by `service.certs.caBundle.configMap`, Keycloak with the
-  `osac` realm, and the credential Secrets exist. The `ConfigMap` is required
-  even when the API certificates use public trust. When `osac-infra` creates
-  the bundle, its `certs.caBundle.configMap` must match the phase-2
-  `service.certs.caBundle.configMap` value; see step 4 of
+  CA-bundle `ConfigMap` named by `service.certs.caBundle.configMap`, Keycloak
+  with the `osac` realm, and the credential Secrets exist. The ConfigMap must
+  exist in the OSAC release namespace and is required even when the API
+  certificates use public trust. Confirm its name and contents with your
+  platform administrators; see step 4 of
   [Section 7](#7-verifying-the-installation).
 - For a production deployment, the external PostgreSQL server is ready for
   the chart's client-certificate authentication, and `dbInit.host` is set
@@ -1475,13 +1474,13 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `service.variant` | `openshift` or `kind`. Use `openshift`. |
 | `service.images.service`, `service.images.envoy` | Fulfillment Service and Envoy sidecar images. |
 | `service.certs.issuerRef.kind`, `service.certs.issuerRef.name` | cert-manager issuer for the service certificates. |
-| `service.certs.caBundle.configMap` | Existing CA-bundle `ConfigMap` mounted by the OSAC hooks. It must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap. The shared CA-bundle ConfigMap values default to `ca-bundle`; when using a custom name, set `operator.fulfillment.tls.caBundle.configMap`, `ui.api.fulfillment.certs.caBundle.configMap`, and `ui.auth.certs.caBundle.configMap` to the same name. If BMaaS is enabled, also set `bmf.secretAPI.caBundle.configMap` to that name. For OSAC-managed trust, also match `certs.caBundle.configMap` in the phase-1 `osac-infra` values. Set this to the existing ConfigMap name in the OSAC release namespace; see step 4 of [Section 7](#7-verifying-the-installation). |
+| `service.certs.caBundle.configMap` | Name of the existing CA-bundle `ConfigMap` in the OSAC release namespace. OSAC components mount it, so it must contain the PEM bundle under the fixed `bundle.pem` key. This value does not create or rename the ConfigMap; the default name is `ca-bundle`. When using a custom name, set `operator.fulfillment.tls.caBundle.configMap`, `ui.api.fulfillment.certs.caBundle.configMap`, and `ui.auth.certs.caBundle.configMap` to the same name. If BMaaS is enabled, also set `bmf.secretAPI.caBundle.configMap` to that name. Ask your platform administrators to make the bundle available under this name. See step 4 of [Section 7](#7-verifying-the-installation). |
 | `service.auth.issuerUrl` | OIDC issuer. Templated from `global.clusterDomain` by default. |
 | `service.auth.controllerCredentials[]` | Volume sources for the controller OIDC client credentials. |
 | `service.idp.provider`, `service.idp.url`, `service.idp.credentials[]` | Identity provider for user and role management. Only `keycloak` is supported. |
 | `service.database.connection[]` | Volume sources for the database URL and client certificate, for example `osac-db-config` and `osac-db-client-cert`. |
 | `service.log.level`, `service.log.headers`, `service.log.bodies` | Log verbosity. Keep `headers` and `bodies` set to `false` in production. |
-| `service.vault.endpoint` | Required Vault-compatible API URL. The default targets bundled OpenBao in `osac-infra`; in production, set it to a reachable Vault or OpenBao endpoint. See the [secrets management configuration guide](secrets-management-configuration.md). |
+| `service.vault.endpoint` | Required Vault-compatible API URL. The default targets the bundled OpenBao service; in production, set it to a reachable Vault or OpenBao endpoint. See the [secrets management configuration guide](secrets-management-configuration.md). |
 | `service.vault.namespace`, `service.vault.kvMountPath`, `service.vault.lifecycleRole`, `service.vault.lifecycleMountPath`, `service.vault.keycloakClientId`, `service.vault.keycloakIssuerUrl`, `service.vault.keycloakAudience`, `service.vault.caBundle`, `service.vault.credentials` | Vault namespace, mount paths, JWT role, Keycloak client and audience, CA bundle, and client credentials. Configure these for an external store as described in the [secrets management configuration guide](secrets-management-configuration.md). |
 
 **Table 5.5. AAP (`aap.*`, all `schema`)**
@@ -1962,9 +1961,9 @@ by the preflight:
 oc get crd kubevirts.kubevirt.io
 ```
 
-Keep `cnv.enabled: false` on the management cluster. In the phase-2
-`my-values.yaml`, skip only this preflight check and give the verified reason;
-the remaining preflight checks stay enabled.
+Keep `cnv.enabled: false` on the management cluster. In the `my-values.yaml`
+used to install OSAC, skip only this preflight check and give the verified
+reason; the remaining preflight checks stay enabled.
 
 Start with the VMaaS values from [Section 6.1](#61-installing-osac-for-vmaas),
 including the storage registration and networking settings. Select storage
@@ -2017,8 +2016,8 @@ workers, and Console Proxy. Workstation-only access is insufficient; use direct
 connectivity or a supported proxy or tunnel configured for those workloads.
 
 Before installing OSAC, point `KUBECONFIG` back to the management cluster and
-confirm that the active API server is its endpoint. The Phase 2 Helm command
-uses the active cluster context:
+confirm that the active API server is its endpoint. The OSAC Helm command uses
+the active cluster context:
 
 ```console
 export KUBECONFIG=/path/to/management-kubeconfig
@@ -2104,29 +2103,27 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    installations, check the CA-bundle `ConfigMap` in the OSAC release
    namespace.
 
-   For OSAC-managed trust, `certs.caBundle.configMap` in the phase-1
-   `my-infra-values.yaml` names the trust-manager `Bundle` and the
-   ConfigMaps it distributes. The hook targets the infrastructure release
-   namespace and the phase-2 namespace configured by `osacNamespace`.
-   Set `service.certs.caBundle.configMap` in the phase-2 `my-values.yaml`
-   to the same name. Both default to `ca-bundle`. Changing only the phase-2
-   value does not create or rename a ConfigMap; the OSAC hooks would mount
-   a ConfigMap that does not exist. For customer-managed trust, ensure that
-   the configured ConfigMap already exists in the OSAC release namespace.
+   For trust managed by your platform administrators, confirm that
+   trust-manager distributes the CA bundle to the OSAC release namespace
+   under the name configured by `service.certs.caBundle.configMap`. Set this
+   value in `my-values.yaml` to the name they provide; it defaults to
+   `ca-bundle`. Changing the value does not create or rename a ConfigMap. For
+   customer-managed trust, ensure that the ConfigMap already exists in the
+   OSAC release namespace.
 
    Replace `<ca_bundle_configmap>` below with that shared name and
-   `<namespace>` with the phase-2 OSAC release namespace:
+   `<namespace>` with the OSAC release namespace:
 
    ```console
    oc get configmap <ca_bundle_configmap> -n <namespace> -o yaml
    ```
 
-   For OSAC-managed trust, also check the fully qualified trust-manager
-   `Bundle` resource. It is cluster-scoped and needs no namespace flag;
-   the hook Job that creates it runs in the infrastructure namespace:
+   If your administrators use trust-manager to distribute the bundle, ask
+   them for the corresponding `Bundle` name and verify it. The resource is
+   cluster-scoped and needs no namespace flag:
 
    ```console
-   oc get bundles.trust.cert-manager.io <ca_bundle_configmap>
+   oc get bundles.trust.cert-manager.io <bundle_name>
    ```
 
    The ConfigMap must contain the CA bundle under the fixed `bundle.pem` key
@@ -2143,8 +2140,8 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    uses a different CA, obtain the matching PEM bundle from its
    administrator and use that file for that endpoint.
 
-   When `kafka.enabled` is `true` in `osac-infra`, also confirm that the
-   bundled Kafka resource reports `Ready=True` before proceeding.
+   If this installation uses the bundled Kafka service, also confirm that its
+   Kafka resource reports `Ready=True` before proceeding.
 
 5. Check the prerequisite services with your platform administrators:
 
@@ -2634,7 +2631,7 @@ StorageTier, and tenant storage configuration as described in
   and IPv6 or dual-stack networking.
 - Provider networking for VMs in a cluster other than the hub. Platform
   administrators can prepare EVPN host networking on a separate workload
-  cluster using the Helm Phase 1b EVPN procedure in the [Helm Deployment
+  cluster using the administrator procedure in the [Helm Deployment
   Guide](helm-deployment-guide.md#evpn-host-networking-vmaas). This configures
   host networking only; OSAC provider networking with VMs on a separate
   cluster is not supported in this release. VMaaS with provider

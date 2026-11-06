@@ -5,6 +5,8 @@ import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/ne
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 import { userDataSchema } from '@osac/ui-components/validation/user-data';
 
+import type { ComputeInstanceWizardValues } from './fields';
+
 export type VmWizardStepId =
   | 'catalog'
   | 'general'
@@ -43,16 +45,6 @@ const buildComputeInstanceFieldDefinitions = (t: TFunction) => {
       yup.object({
         id: yup.string().required(t('Instance type is required')),
         name: yup.string(),
-      }),
-    ),
-    specUserData: lockedField(
-      yup.object({
-        source: yup.string().oneOf(['inline', 'secret']).required(),
-        inline: yup.string().when('source', {
-          is: 'inline',
-          then: () => userDataSchema(t),
-        }),
-        secret: yup.string(),
       }),
     ),
     specBootDisk: yup.object({
@@ -160,10 +152,21 @@ export const buildComputeInstanceStepSchema = (
       });
     case 'access':
       return yup.object({
-        spec: yup.object({
-          sshKey: lockedField(yup.string()),
-          userData: fields.specUserData,
-        }),
+        spec: yup.lazy((spec: ComputeInstanceWizardValues['spec'] | undefined) =>
+          yup.object({
+            sshKey: lockedField(yup.string()),
+            userData: lockedField(
+              yup.object({
+                source: yup.string().oneOf(['inline', 'secret']).required(),
+                inline: yup.string().when('source', {
+                  is: 'inline',
+                  then: () => userDataSchema(t, spec?.guestOsFamily),
+                }),
+                secret: yup.string(),
+              }),
+            ),
+          }),
+        ),
       });
     default:
       return undefined;

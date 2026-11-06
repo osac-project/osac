@@ -70,7 +70,13 @@ export const buildComputeCatalogStepSchema = (
     case 'access-init':
       return yup
         .object({
-          userData: yup.object({ locked: yup.boolean(), value: userDataSchema(t) }),
+          userData: yup.lazy((_value, options) => {
+            const root = options.parent as ComputeCatalogItemValues | undefined;
+            return yup.object({
+              locked: yup.boolean(),
+              value: userDataSchema(t, root?.guestOsFamily),
+            });
+          }),
           userDataSecret: yup.object({ value: yup.string() }),
         })
         .test(

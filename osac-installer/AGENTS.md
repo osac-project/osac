@@ -50,6 +50,7 @@ respective areas.
 | Kind runtime selection, sudo authentication, image loading, device-mapper permissions, cluster/storage lifecycle, or devstack Helm apply flags | Unit with command stubs | `make kind-runtime-test` |
 | Deployed dev-full OSAC UI Gateway reachability | Component integration | `./scripts/test-ui-gateway.sh` |
 | TopoLVM chart dependency download, cache reuse, build scoping, or install preparation | Unit with command stubs | `make kind-runtime-test` |
+| `install-infra` readiness waits for the CA issuer, bundled PostgreSQL, or Kafka | Unit with command stubs | `make infra-ready-wait-test` |
 | Fulfillment integration report opt-in and output paths | Unit with expanded Makefile commands | `make kind-runtime-test` |
 | Combined ComputeInstance disk handoff runner and AAP recorder | Unit and component integration | `make kind-runtime-test`; `python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py`; `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage`. Real Fulfillment APIs/PostgreSQL, operator and target StorageClass lookup; AAP execution is a recording double. See [coverage boundaries](../docs/INTEGRATION-TESTING.md#computeinstance-disk-handoff-osac-6685). |
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |

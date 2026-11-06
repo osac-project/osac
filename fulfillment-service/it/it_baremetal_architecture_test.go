@@ -80,9 +80,11 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 		return privatev1.BareMetalInstance_builder{
 			Metadata: catalogItemFixtureMetadata(usersGroup, ""),
 			Spec: privatev1.BareMetalInstanceSpec_builder{
-				Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: template, Shared: true}.Build(),
-				DiskImage:    privatev1.DiskImageReference_builder{Id: image.GetId(), Shared: true}.Build(),
-				SshPublicKey: new(catalogItemFixtureSSHPublicKey),
+				Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: template, Shared: true}.Build(),
+				DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId(), Shared: true}.Build(),
+				UserDataSource: privatev1.UserDataSource_builder{
+					Inline: new("#cloud-config\n"),
+				}.Build(),
 			}.Build(),
 		}.Build()
 	}

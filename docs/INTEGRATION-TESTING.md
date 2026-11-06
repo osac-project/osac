@@ -345,6 +345,7 @@ installer command in the tier table remains the component-integration check.
   ```
 
   Secret rotation and deployed cross-component journeys are covered by the [OSAC-6557](https://redhat.atlassian.net/browse/OSAC-6557) regression suite in `tests/e2e/regression/test_tenant_service_accounts.py`.
+- **Service-account CLI ([DEV] OSAC-6556):** `it_cli_service_accounts_test.go` covers the API, CLI, and service-account token portion of the tenant lifecycle: create from a file, JSON get/list/update/delete output without credential bytes, RoleBinding grants and revocations, client-credentials authentication, and CLI secret rotation. Run it through the Fulfillment Kind target above. It does not cover the UI walkthrough; that remains with the separately owned UI implementation.
 - **BareMetalInstanceType architecture:** Unit validation is in `internal/validation/baremetal_hardware_spec_contract_test.go`. PostgreSQL component-integration tests cover Create validation/persistence in `internal/servers/baremetal_instance_type_architecture_test.go` and canonicalization, preservation, idempotence and rollback in `internal/database/migrations/125_canonicalize_bare_metal_type_architectures_test.go`. Create tests use in-process handlers with mocked tenancy/attribution.
 - **ComputeInstance disk status ([OSAC-6608](https://redhat.atlassian.net/browse/OSAC-6608), DEV):** `internal/controllers/computeinstance/computeinstance_reconciler_function_test.go` verifies ordinary reconciliation and deletion-finalizer updates preserve both status lists in the request while omitting them from the calculated mask. Run `go test ./internal/controllers/computeinstance` from `fulfillment-service/`; these unit tests use controlled Kubernetes and Fulfillment clients. `internal/servers/private_compute_instances_server_test.go` covers empty, partial, and complete correlation lists; all four registration outcomes; a single masked update that commits an ID and its resolved state together; missing fields in a legacy JSONB row; and two independent PostgreSQL writers preserving both status lists. `internal/servers/compute_instances_server_test.go` covers public update rejection and maskless preservation, public JSON/log projection, and owning, project-limited same-tenant, and foreign-tenant Get/List. Run `ginkgo run --timeout 10m internal/servers` from `fulfillment-service/`. This suite runs the in-process Fulfillment servers against real PostgreSQL in a test container; tenancy and external APIs are controlled, and no Volume API, AAP, operator, or provider is started. These tests verify Unit and server/PostgreSQL behavior, not deployed service behavior or Volume creation/recovery.
 - **ComputeInstance disk Volume ID handoff ([OSAC-6612](https://redhat.atlassian.net/browse/OSAC-6612), DEV):** `internal/controllers/computeinstance/computeinstance_reconciler_function_test.go` verifies that the managed CR builder copies only durable `status.volumes` IDs into optional `spec.diskVolumeIDs`, including a partial map. Run `ginkgo run --timeout 20m ./internal/controllers/computeinstance` from `fulfillment-service/`. The test uses controlled clients; it does not exercise Volume API/database recovery, AAP, or a provider. Readiness before AAP dispatch belongs to [OSAC-6613](https://redhat.atlassian.net/browse/OSAC-6613).
@@ -449,6 +450,16 @@ enablement, configuration, Assisted image overrides, compatibility RBAC,
 explicit disabled-state suppression, enabled empty-override behavior, and the
 CaaS profile's explicit enablement with inherited defaults. It does not install
 MCE or call an Operator catalog or cluster API.
+
+The `make -C osac-installer infra-ready-wait-test` unit suite checks the waits
+that end `make install-infra`. `helm upgrade --install osac-infra --wait-for-jobs`
+waits for hook Jobs but not for Deployments, so the CA issuer, the bundled
+PostgreSQL and Kafka can still be starting when `make install-osac` begins. The
+suite uses a stub `kubectl` to check that each is waited for only when the
+profile created it, with the right namespace, condition and timeout, and that a
+resource that does not become ready fails the step with its name. It does not
+start a cluster; the wait was also exercised once by hand against a Kind API
+server with a slow-starting and a never-ready Deployment.
 
 The `make -C osac-installer kind-runtime-test` unit suite is owned by installer
 implementation work. It uses command stubs to check runtime selection, sudo

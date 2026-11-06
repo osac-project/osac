@@ -7,11 +7,13 @@
       ansible.builtin.set_fact:
         cluster_order:
           spec:
-            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa AAAA"}'
+            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa legacy-template-value"}'
 
     - name: Resolve cluster settings without node requests
       ansible.builtin.include_role:
         name: osac.service.cluster_settings
+      vars:
+        ssh_public_key: "ssh-ed25519 launch-input"
 
     - name: Verify missing node requests stay missing
       ansible.builtin.assert:
@@ -26,7 +28,7 @@
       ansible.builtin.set_fact:
         cluster_order:
           spec:
-            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa AAAA"}'
+            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa legacy-template-value"}'
             nodeRequests:
               - nodeSet: workers
                 numberOfNodes: 2
@@ -36,8 +38,51 @@
     - name: Resolve cluster settings with node requests
       ansible.builtin.include_role:
         name: osac.service.cluster_settings
+      vars:
+        ssh_public_key: "ssh-ed25519 launch-input"
 
     - name: Verify requested hardware remains unchanged
       ansible.builtin.assert:
         that:
           - "cluster_order.spec.nodeRequests == [{'nodeSet': 'workers', 'numberOfNodes': 2, 'bareMetal': {'instanceType': 'bm.large'}}]"
+
+- name: Launch SSH key beats legacy template parameters
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Provide a legacy inline template value
+      ansible.builtin.set_fact:
+        cluster_order:
+          spec:
+            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa legacy-template-value"}'
+
+    - name: Resolve cluster settings with an explicit launch key
+      ansible.builtin.include_role:
+        name: osac.service.cluster_settings
+      vars:
+        ssh_public_key: "ssh-ed25519 launch-input"
+
+    - name: Verify the launch key wins and is materialized for provider roles
+      ansible.builtin.assert:
+        that:
+          - cluster_settings_ssh_public_key == "ssh-ed25519 launch-input"
+          - cluster_settings_template_parameters.ssh_public_key == "ssh-ed25519 launch-input"
+
+- name: Legacy template SSH key alone is ignored
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Provide only a legacy inline template value
+      ansible.builtin.set_fact:
+        cluster_order:
+          spec:
+            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa legacy-template-value"}'
+
+    - name: Resolve cluster settings without launch input
+      ansible.builtin.include_role:
+        name: osac.service.cluster_settings
+
+    - name: Verify the legacy value was not consumed as the key
+      ansible.builtin.assert:
+        that:
+          - cluster_settings_ssh_public_key == ''

@@ -310,10 +310,6 @@ func materializedBareMetalSSHKey(object *bmfov1alpha1.BareMetalInstance) string 
 }
 
 func (t *task) resolveSSHKey(ctx context.Context, object *bmfov1alpha1.BareMetalInstance) error {
-	if raw := t.bareMetalInstance.GetSpec().GetSshPublicKey(); raw != "" {
-		t.sshPublicKey = raw
-		return nil
-	}
 	ref := t.bareMetalInstance.GetSpec().GetSshKey()
 	if ref == nil {
 		t.sshPublicKey = ""
@@ -940,8 +936,6 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 
 	if t.sshPublicKey != "" {
 		params["sshPublicKey"] = t.sshPublicKey
-	} else if t.bareMetalInstance.GetSpec().HasSshPublicKey() {
-		params["sshPublicKey"] = t.bareMetalInstance.GetSpec().GetSshPublicKey()
 	}
 	if t.userDataSecretName != "" {
 		params["userDataSecret"] = t.userDataSecretName

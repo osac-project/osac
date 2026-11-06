@@ -4,8 +4,8 @@
 # Namespace where Trident is installed on the target hosting cluster.
 # The TridentBackendConfig CRD is namespaced and Trident only reconciles TBCs
 # (and their credentials Secrets) in its own install namespace, so both the
-# CSI Secret and the TBC must live here. Configurable via NETAPP_TRIDENT_NAMESPACE.
-netapp_storage_trident_namespace: "{{ lookup('env', 'NETAPP_TRIDENT_NAMESPACE') | default('trident', true) }}"
+# CSI Secret and the TBC must live here. Configurable via NETAPP_CSI_NAMESPACE.
+netapp_storage_csi_namespace: "{{ lookup('env', 'NETAPP_CSI_NAMESPACE') | default('trident', true) }}"
 
 # SAN transport for the ontap-san driver. Valid values: iscsi, fcp, nvme.
 # Must match what the prepared SVM's LIFs actually carry; Trident validates

@@ -77,10 +77,10 @@
   when: netapp_storage_san_type not in ['iscsi', 'fcp', 'nvme']
   no_log: true
 
-- name: Fail if the trident namespace is empty
+- name: Fail if the CSI namespace is empty
   ansible.builtin.fail:
     msg: >-
-      netapp_storage_trident_namespace resolved to an empty value. Set
-      NETAPP_TRIDENT_NAMESPACE to a valid namespace name (default: trident).
-  when: netapp_storage_trident_namespace | default('') | length == 0
+      netapp_storage_csi_namespace resolved to an empty value. Set
+      NETAPP_CSI_NAMESPACE to a valid namespace name (default: trident).
+  when: netapp_storage_csi_namespace | default('') | length == 0
   no_log: true

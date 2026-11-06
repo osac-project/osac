@@ -1817,7 +1817,7 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
         for task in teardown_backend_tasks
     )
 
-    # Verify remaining _validate_tiers.yaml failure guards (tenant_name DNS label, protocol, sanType, trident namespace).
+    # Verify remaining _validate_tiers.yaml failure guards (tenant_name DNS label, protocol, sanType, CSI namespace).
     tier_tenant_when = _find_task(
         validate_tiers_tasks, "Validate tenant_name is a valid DNS label"
     )["when"]
@@ -1849,11 +1849,11 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
         assert _render_when(tier_san_when, {"netapp_storage_san_type": valid_san}) is False
 
     tier_ns_when = _find_task(
-        validate_tiers_tasks, "Fail if the trident namespace is empty"
+        validate_tiers_tasks, "Fail if the CSI namespace is empty"
     )["when"]
-    assert _render_when(tier_ns_when, {"netapp_storage_trident_namespace": ""}) is True
+    assert _render_when(tier_ns_when, {"netapp_storage_csi_namespace": ""}) is True
     assert _render_when(tier_ns_when, {}) is True
-    assert _render_when(tier_ns_when, {"netapp_storage_trident_namespace": "trident"}) is False
+    assert _render_when(tier_ns_when, {"netapp_storage_csi_namespace": "trident"}) is False
 
     # Tier names must be complete DNS labels (a trailing newline is rejected).
     tier_name_when = _find_task(

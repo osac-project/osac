@@ -49,7 +49,7 @@
       kubernetes.core.k8s_info:
         api_version: trident.netapp.io/v1
         kind: TridentBackendConfig
-        namespace: "{{ netapp_storage_trident_namespace }}"
+        namespace: "{{ netapp_storage_csi_namespace }}"
         label_selectors:
           - "osac.openshift.io/tenant={{ tenant_name }}"
           - "osac.openshift.io/storage-provider=netapp"
@@ -162,7 +162,7 @@
       kubernetes.core.k8s_info:
         api_version: trident.netapp.io/v1
         kind: TridentBackendConfig
-        namespace: "{{ netapp_storage_trident_namespace }}"
+        namespace: "{{ netapp_storage_csi_namespace }}"
         label_selectors:
           - "osac.openshift.io/tenant={{ tenant_name }}"
           - "osac.openshift.io/storage-provider=netapp"
@@ -177,7 +177,7 @@
         api_version: trident.netapp.io/v1
         kind: TridentBackendConfig
         name: "{{ item.metadata.name }}"
-        namespace: "{{ netapp_storage_trident_namespace }}"
+        namespace: "{{ netapp_storage_csi_namespace }}"
       loop: "{{ _netapp_cleanup_tbc_list.resources | default([]) }}"
       loop_control:
         label: "trident-backend-config"
@@ -188,7 +188,7 @@
       kubernetes.core.k8s_info:
         api_version: trident.netapp.io/v1
         kind: TridentBackendConfig
-        namespace: "{{ netapp_storage_trident_namespace }}"
+        namespace: "{{ netapp_storage_csi_namespace }}"
         label_selectors:
           - "osac.openshift.io/tenant={{ tenant_name }}"
           - "osac.openshift.io/storage-provider=netapp"
@@ -206,7 +206,7 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        namespace: "{{ netapp_storage_trident_namespace }}"
+        namespace: "{{ netapp_storage_csi_namespace }}"
         label_selectors:
           - "osac.openshift.io/tenant={{ tenant_name }}"
           - "osac.openshift.io/storage-provider=netapp"
@@ -223,7 +223,7 @@
         api_version: v1
         kind: Secret
         name: "{{ item.metadata.name }}"
-        namespace: "{{ netapp_storage_trident_namespace }}"
+        namespace: "{{ netapp_storage_csi_namespace }}"
       loop: "{{ _netapp_cleanup_csi_list.resources | default([]) }}"
       loop_control:
         label: "csi-secret"

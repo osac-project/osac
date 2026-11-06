@@ -102,6 +102,11 @@ for control-loop boundaries and cross-component dependencies.
 - Follow the [testing policy](docs/INTEGRATION-TESTING.md). Add meaningful
   behavior or regression coverage where needed, preferably in an existing suite;
   do not add tests or harnesses merely because a file changed.
+- Avoid low-value tests that merely restate the edit without independently
+  checking meaningful behavior or a documented external contract—for example,
+  asserting that a newly added exclusion string appears in YAML. Prefer existing
+  coverage or proportionate behavioral validation; do not add a test solely
+  because a file changed.
 - Keep PR summaries concise: changes, checks performed and relevant limitations.
   Detailed test plans belong to design work that needs them.
 - Check staged changes for secrets. `pre-commit run --all-files` is not a full

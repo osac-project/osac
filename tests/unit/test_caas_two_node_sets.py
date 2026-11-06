@@ -162,6 +162,28 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
         getattr(two_node_set_clients["k8s_hub_client"], name).assert_not_called()
 
 
+def test_two_node_set_create_passes_network_attachment_with_security_group(
+    monkeypatch: pytest.MonkeyPatch, two_node_set_clients: dict[str, Mock]
+) -> None:
+    """Regression: OSAC-5561 requires security groups on BMI creation.
+
+    The two-node-set test must supply an explicit --network-attachment with
+    security-groups so the baremetalworker controller can create BMIs.  Without
+    it, the fulfillment API rejects BMI creation with InvalidArgument and the
+    cluster times out waiting for workers that never arrive.
+    """
+    scenario_poll = Mock(wraps=runner.poll_until)
+    monkeypatch.setattr(scenario, "poll_until", scenario_poll)
+    monkeypatch.setattr(helpers, "poll_until", Mock(wraps=runner.poll_until))
+
+    _run_scenario(two_node_set_clients)
+
+    cli = two_node_set_clients["cli"]
+    cli.create_cluster.assert_called_once()
+    create_kwargs = cli.create_cluster.call_args.kwargs
+    assert create_kwargs.get("network_attachment") == "subnet=default-ipv4,security-groups=default"
+
+
 def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_set_clients: dict[str, Mock]) -> None:
     grpc = two_node_set_clients["grpc"]
     lookup: Callable[..., dict[str, Any]] = grpc.get_baremetal_instance.side_effect
@@ -176,3 +198,92 @@ def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_s
     scenario.wait_for_cluster_deleting.assert_not_called()
     helpers.wait_for_cluster_deletion.assert_not_called()
     two_node_set_clients["k8s_hub_client"].is_absent.assert_not_called()
+
+
+def test_default_sg_readiness_wait_targets_only_default_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the ACTUAL _wait_for_default_subnets_ready fixture's SG block.
+
+    The production conftest fixture polls for the tenant-default SecurityGroup
+    (name "default") and must supply resource_kind=SECURITY_GROUP and a
+    non-empty resource_id to poll_until. Custom groups must not satisfy the
+    poll or block readiness.
+    """
+    from tests.e2e import conftest as e2e_conftest
+    from tests.e2e.core.wait_kinds import WaitResourceKind
+
+    grpc = Mock()
+    # Mix of custom + default SGs; subnet already ready.
+    grpc.list_subnet_ids.return_value = ["subnet-1"]
+    grpc.get_subnet.return_value = {"object": {"status": {"state": "SUBNET_STATE_READY"}}}
+    grpc.list_security_group_ids.return_value = ["custom-id", "default-id"]
+    grpc.get_security_group.side_effect = lambda *, sg_id: {
+        "custom-id": {"object": {"metadata": {"name": "my-custom"}, "status": {"state": "SECURITY_GROUP_STATE_READY"}}},
+        "default-id": {"object": {"metadata": {"name": "default"}, "status": {"state": "SECURITY_GROUP_STATE_READY"}}},
+    }[sg_id]
+
+    # Record every poll_until call with its real signature binding, then
+    # execute the production callback once (simulating instant success).
+    poll_calls: list[dict[str, object]] = []
+
+    def recording_poll_until(
+        *,
+        fn: object,
+        until: object,
+        retries: int = 60,
+        delay: int = 5,
+        description: str,
+        retry_on_error: bool = False,
+        resource_kind: WaitResourceKind,
+        resource_id: str,
+    ) -> object:
+        result = fn()  # type: ignore[operator]
+        poll_calls.append(
+            {
+                "description": description,
+                "resource_kind": resource_kind,
+                "resource_id": resource_id,
+                "result": result,
+                "fn": fn,
+                "until": until,
+            }
+        )
+        return result
+
+    monkeypatch.setattr(e2e_conftest, "poll_until", recording_poll_until)
+    monkeypatch.setattr(e2e_conftest, "wait_for_grpc_subnet_ready", Mock())
+
+    sg_ready_calls: list[str] = []
+    monkeypatch.setattr(
+        e2e_conftest, "wait_for_grpc_security_group_ready", lambda *, grpc, sg_id: sg_ready_calls.append(sg_id)
+    )
+
+    # Call the ACTUAL production fixture function (unwrapped from pytest).
+    e2e_conftest._wait_for_default_subnets_ready.__wrapped__(
+        ensure_jwt_users=None, setup_organization_memberships=None, grpc=grpc, jwt_tenant="tenant1"
+    )
+
+    # The SG poll must supply the mandatory resource_kind and resource_id.
+    sg_poll = next(c for c in poll_calls if "security group" in c["description"])
+    assert sg_poll["resource_kind"] is WaitResourceKind.SECURITY_GROUP
+    assert sg_poll["resource_id"] == "tenant1"
+
+    # Only the default group's ID must be selected, not the custom one.
+    assert sg_poll["result"] == "default-id"
+
+    # Readiness wait must target only the default group.
+    assert sg_ready_calls == ["default-id"]
+
+    # Exercise the production callback and until predicate with no default SG.
+    sg_fn = sg_poll["fn"]
+    sg_until = sg_poll["until"]
+    grpc.list_security_group_ids.return_value = ["custom-id"]
+    assert sg_fn() == ""  # type: ignore[operator]  # production callback returns empty
+    assert not sg_until("")  # type: ignore[operator]  # predicate rejects empty → retry
+
+    # Restore default and verify the predicate accepts it.
+    grpc.list_security_group_ids.return_value = ["custom-id", "default-id"]
+    assert sg_fn() == "default-id"  # type: ignore[operator]
+    assert sg_until("default-id")  # type: ignore[operator]  # predicate accepts → stop
+
+    # No additional readiness calls from the callback-only invocations above.
+    assert sg_ready_calls == ["default-id"]

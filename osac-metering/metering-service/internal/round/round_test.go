@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -1835,6 +1836,49 @@ func TestRoundCarriesTheLatestExternalBillingAccountID(t *testing.T) {
 	}
 	if !sawNew {
 		t.Fatal("the round after the billing id change wrote no new heartbeat")
+	}
+}
+
+type failingFoldConsumer struct {
+	sarama.Consumer
+}
+
+func (consumer failingFoldConsumer) ConsumePartition(string, int32, int64) (sarama.PartitionConsumer, error) {
+	return nil, errors.New("injected fold partition error")
+}
+
+func TestFoldAllReportsWorkerError(t *testing.T) {
+	if os.Getenv("OSAC_FOLD_ERROR_HELPER") == "1" {
+		store := testenv.Database(t)
+		worker, err := fold.New(store, failingFoldConsumer{}, logr.Discard())
+		if err != nil {
+			t.Fatal(err)
+		}
+		pipeline := &pipelinetest.Pipeline{Tenant: "fold-error", Store: store, Fold: worker}
+		pipeline.FoldAll(t, 1)
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, executable, "-test.run=^TestFoldAllReportsWorkerError$", "-test.v")
+	command.Env = append(os.Environ(), "OSAC_FOLD_ERROR_HELPER=1")
+	output, err := command.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("fold error helper did not finish: %v", ctx.Err())
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() != 1 {
+		t.Fatalf("fold error helper exit = %v, want test failure", err)
+	}
+	if !strings.Contains(string(output), "folding events: consuming osac.events.fold-error: injected fold partition error") {
+		t.Fatal("FoldAll did not report the original partition-consumption error")
+	}
+	if strings.Contains(string(output), "fold did not reach offset") {
+		t.Fatal("FoldAll reported an offset timeout instead of the worker error")
 	}
 }
 

@@ -20,6 +20,7 @@ from tests.e2e.caas.deletion_diagnostics import snapshot_cluster_deletion
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
+    node_pools_by_node_set,
     unique_name,
     wait_for_cluster_deleting,
     wait_for_cluster_deletion_without_cleanup,
@@ -28,6 +29,7 @@ from tests.e2e.core.helpers import (
     wait_for_cluster_guest_readiness,
     wait_for_cluster_order_condition,
     wait_for_cluster_order_cr,
+    wait_for_cluster_order_hosted_cluster_reference,
     wait_for_cluster_progressing,
     wait_for_cluster_ready,
     wait_for_hosted_cluster_kubeconfig,
@@ -265,19 +267,7 @@ def _assert_cluster_version_propagated(
     co_release_image = cluster_order_spec.get("releaseImage", "")
     assert co_release_image, "ClusterOrder should have a resolved releaseImage"
 
-    hosted_cluster_name, hosted_cluster_ns = poll_until(
-        fn=lambda: (
-            k8s.get_cluster_order_hosted_cluster_name(name=co_name),
-            k8s.get_cluster_order_namespace(name=co_name),
-        ),
-        until=lambda reference: all(reference),
-        retries=30,
-        delay=5,
-        description=f"{co_name} HostedCluster reference",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
+    hosted_cluster_name, hosted_cluster_ns = wait_for_cluster_order_hosted_cluster_reference(k8s=k8s, name=co_name)
     hosted_cluster_image = run(
         *k8s._base(),
         "get",
@@ -849,15 +839,9 @@ def _assert_isolated_node_pools(
     old_label = "osac.openshift.io/resource_class"
 
     def _get_node_pools() -> dict[str, dict[str, Any]]:
-        items = k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=hosted_cluster_ns).get(
-            "items", []
+        return node_pools_by_node_set(
+            k8s=k8s, namespace=hosted_cluster_ns, co_name=co_name, expected_node_sets=set(expected_replicas)
         )
-        return {
-            item.get("metadata", {}).get("labels", {}).get(node_set_label, ""): item
-            for item in items
-            if item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/clusterorder") == co_name
-            and item.get("metadata", {}).get("labels", {}).get(node_set_label) in expected_replicas
-        }
 
     node_pools = poll_until(
         fn=_get_node_pools,

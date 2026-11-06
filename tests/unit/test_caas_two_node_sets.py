@@ -102,6 +102,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
 
     k8s.get_json.side_effect = get_resource
     k8s.get_cluster_order_namespace.return_value = "osac"
+    k8s.get_cluster_order_hosted_cluster_name.return_value = "order-a"
     k8s.get_baremetal_instance_name.side_effect = lambda *, uuid, checked: f"{uuid}-cr"
     k8s.get_cluster_order_infra_env_name.return_value = "order-a-infraenv"
     k8s.is_absent.side_effect = [False, True, False, True]
@@ -116,6 +117,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     ):
         monkeypatch.setattr(scenario, name, Mock())
     monkeypatch.setattr(scenario, "snapshot_cluster_deletion", Mock(return_value=[]))
+    monkeypatch.setattr(regression.diagnostics, "monitor_post_install_health", Mock())
     monkeypatch.setattr(runner.time, "sleep", Mock())
     monkeypatch.setattr(
         helpers,

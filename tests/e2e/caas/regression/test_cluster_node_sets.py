@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+from tests.e2e.caas.regression import cluster_installation_diagnostics as diagnostics
 from tests.e2e.caas.sanity.test_cluster_create import (
     RHCOS_IMAGE,
     TEST_RELEASE_IMAGE,
@@ -63,6 +64,10 @@ def test_cluster_create_with_two_node_sets(
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client, require_metering=True)
             assert_cluster_trust(k8s_hub_client, cluster.co_name)
+        refs = diagnostics.cluster_references(
+            k8s=k8s_hub_client, uuid=uuid, co_name=cluster.co_name, expected_node_sets=set(instance_types)
+        )
+        diagnostics.monitor_post_install_health(k8s=k8s_hub_client, grpc=grpc, refs=refs)
         cli.delete_cluster(uuid=uuid)
         _assert_cluster_deleted(grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, cluster=cluster)
     finally:

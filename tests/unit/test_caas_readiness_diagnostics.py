@@ -30,7 +30,10 @@ def test_snapshot_reports_readiness_facts_without_resource_payloads(monkeypatch:
             "items": [
                 {
                     "metadata": {"name": "order-x"},
-                    "status": {"conditions": [{"type": "Available", "status": "False", "reason": "WaitingForPods"}]},
+                    "status": {
+                        "conditions": [{"type": "Available", "status": "False", "reason": "WaitingForPods"}],
+                        "kubeConfig": {"name": "order-x-kubeconfig", "key": "kubeconfig"},
+                    },
                 }
             ]
         },
@@ -40,6 +43,44 @@ def test_snapshot_reports_readiness_facts_without_resource_payloads(monkeypatch:
                     "metadata": {"labels": {"osac.openshift.io/clusterorder": "order-x"}},
                     "spec": {"replicas": 2},
                     "status": {"nodesInfo": {"nodeVersions": [{"readyNodeCount": 1}]}},
+                }
+            ]
+        },
+        ("secret", "osac-e2e-ci-order-x-order-x", "order-x-kubeconfig"): {"data": {"kubeconfig": "a3ViZWNvbmZpZw=="}},
+        ("clusteroperators.config.openshift.io", None, None): {
+            "items": [
+                {
+                    "metadata": {"name": "console"},
+                    "status": {
+                        "conditions": [
+                            {"type": "Available", "status": "False", "reason": "ClusterOperatorNotAvailable"},
+                            {"type": "Progressing", "status": "True", "reason": "SyncLoopRefresh_InProgress"},
+                            {"type": "Degraded", "status": "False", "reason": "AsExpected"},
+                        ]
+                    },
+                }
+            ]
+        },
+        ("pods", "osac-e2e-ci", None): {
+            "items": [
+                {
+                    "metadata": {"name": "osac-aap-controller-task-abc"},
+                    "status": {
+                        "phase": "Failed",
+                        "reason": "Evicted",
+                        "containerStatuses": [
+                            {"restartCount": 3, "state": {"waiting": {"reason": "ImagePullBackOff"}}}
+                        ],
+                    },
+                }
+            ]
+        },
+        ("events", "osac-e2e-ci", None): {"items": [{"type": "Warning", "reason": "Evicted"}]},
+        ("nodes", None, None): {
+            "items": [
+                {
+                    "metadata": {"name": "master-0"},
+                    "status": {"conditions": [{"type": "DiskPressure", "status": "True"}]},
                 }
             ]
         },
@@ -62,9 +103,12 @@ def test_snapshot_reports_readiness_facts_without_resource_payloads(monkeypatch:
 
     def fake_run(*args: str, timeout: int = 300) -> tuple[str, int]:
         resource = args[args.index("get") + 1]
-        namespace = args[args.index("-n") + 1]
+        try:
+            namespace = args[args.index("-n") + 1]
+        except ValueError:
+            namespace = None
         name = None
-        if args[args.index("get") + 2] != "-n":
+        if args[args.index("get") + 2] not in ("-n", "-o"):
             name = args[args.index("get") + 2]
         value = objects.get((resource, namespace, name), {"items": []})
         return json.dumps(value), 0
@@ -78,6 +122,16 @@ def test_snapshot_reports_readiness_facts_without_resource_payloads(monkeypatch:
     assert "agents count=2 installed=1" in output
     assert "agent state=installing count=1" in output
     assert "must-not-log" not in output
+    assert "guest clusteroperator name=console available=False progressing=True degraded=False" in output
+    assert (
+        "guest clusteroperator name=console condition=Available status=False reason=ClusterOperatorNotAvailable"
+    ) in output
+    assert (
+        "pod namespace=osac-e2e-ci name=osac-aap-controller-task-abc phase=Failed "
+        "restarts=3 waiting=ImagePullBackOff reason=Evicted"
+    ) in output
+    assert "warning event namespace=osac-e2e-ci reason=Evicted count=1" in output
+    assert "node name=master-0 DiskPressure=True" in output
 
 
 def test_snapshot_omits_untrusted_condition_and_agent_state_values(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -693,6 +693,35 @@ def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
         raise
 
 
+def node_pools_by_node_set(
+    *, k8s: K8sClient, namespace: str, co_name: str, expected_node_sets: set[str]
+) -> dict[str, dict[str, Any]]:
+    """Return this ClusterOrder's NodePools keyed by NodeSet label."""
+    items = k8s.list_json(resource="nodepools.hypershift.openshift.io", namespace=namespace).get("items", [])
+    return {
+        item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/node-set", ""): item
+        for item in items
+        if item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/clusterorder") == co_name
+        and item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/node-set", "") in expected_node_sets
+    }
+
+
+def wait_for_cluster_order_hosted_cluster_reference(
+    *, k8s: K8sClient, name: str, retries: int = 30, delay: int = 5
+) -> tuple[str, str]:
+    """Wait for a ClusterOrder to expose its HostedCluster reference."""
+    return poll_until(
+        fn=lambda: (k8s.get_cluster_order_hosted_cluster_name(name=name), k8s.get_cluster_order_namespace(name=name)),
+        until=lambda reference: all(reference),
+        retries=retries,
+        delay=delay,
+        description=f"{name} HostedCluster reference",
+        retry_on_error=True,
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=name,
+    )
+
+
 def wait_for_hosted_cluster_kubeconfig(
     *, k8s: K8sClient, hosted_cluster_namespace: str, hosted_cluster_name: str
 ) -> bytes:

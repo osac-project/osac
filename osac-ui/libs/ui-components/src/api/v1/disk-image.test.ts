@@ -145,7 +145,7 @@ describe('useDiskImages', () => {
       },
     );
     const callerFilter = cel<DiskImage>((filter) =>
-      filter.field('spec.architecture').someEquals(Architecture.AMD64),
+      filter.field('spec.architecture').includes(Architecture.AMD64),
     );
     const { wrapper } = makeWrapper(transport);
     const { result } = renderHook(() => useDiskImages({ filter: callerFilter }), { wrapper });
@@ -172,12 +172,12 @@ describe('buildDiskImageListFilter', () => {
     [
       'single architecture value',
       { architecture: [Architecture.AMD64] },
-      `this.spec.architecture.exists(a, a == ${Architecture.AMD64})`,
+      `${Architecture.AMD64} in this.spec.architecture`,
     ],
     [
       'multiple architecture values',
       { architecture: [Architecture.AMD64, Architecture.ARM64] },
-      `this.spec.architecture.exists(a, a == ${Architecture.AMD64} || a == ${Architecture.ARM64})`,
+      `(${Architecture.AMD64} in this.spec.architecture || ${Architecture.ARM64} in this.spec.architecture)`,
     ],
     ['scope global', { scope: 'global' as const }, 'this.metadata.tenant == "shared"'],
     ['scope tenant', { scope: 'tenant' as const }, 'this.metadata.tenant != "shared"'],
@@ -212,6 +212,36 @@ describe('buildDiskImageListFilter', () => {
     ],
   ])('%s', (_name, criteria, expected) => {
     expect(buildDiskImageListFilter(criteria)).toBe(expected);
+  });
+
+  it('produces a backend-compatible filter when architecture is the only criterion (OSAC-6283)', () => {
+    const filter = buildDiskImageListFilter({ architecture: [Architecture.S390X] });
+
+    // The filter must use CEL `in` (not `exists()`) so the backend can
+    // translate it without hitting "unsupported expression kind 2".
+    expect(filter).toBe(`${Architecture.S390X} in this.spec.architecture`);
+    expect(filter).not.toContain('.exists(');
+  });
+
+  it('returns an empty result rather than an error when no disk images match the architecture filter (OSAC-6283)', async () => {
+    let capturedFilter: string | undefined;
+    const transport = createMockConnectTransport(
+      { diskImages: [] },
+      {
+        onDiskImageList: (req) => {
+          capturedFilter = req.filter;
+          return { items: [] };
+        },
+      },
+    );
+    const archFilter = buildDiskImageListFilter({ architecture: [Architecture.S390X] });
+    const { wrapper } = makeWrapper(transport);
+    const { result } = renderHook(() => useDiskImages({ filter: archFilter }), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual([]);
+    expect(capturedFilter).toBeDefined();
+    expect(capturedFilter).not.toContain('.exists(');
   });
 
   it('is not double-excluded by the default lifecycle filter when passed through useDiskImages', async () => {

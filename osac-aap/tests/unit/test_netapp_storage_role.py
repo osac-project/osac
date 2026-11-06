@@ -1,6 +1,7 @@
 """Unit and contract tests for the netapp_storage provider role."""
 
 import base64
+import secrets
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
@@ -8,6 +9,10 @@ from ansible.parsing.dataloader import DataLoader  # type: ignore[import-not-fou
 from ansible.template import Templar  # type: ignore[import-not-found]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Non-secret test credentials, generated per run so no credential-shaped
+# literal lives in the test source.
+FIXTURE_PASSWORD = secrets.token_hex(8)
+WHITESPACE_PASSWORD = "   "
 NETAPP_ROLE_DIR = (
     REPO_ROOT
     / "collections"
@@ -813,9 +818,9 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
         "Validate operator-supplied tenant preparation fields for Dedicated-SVM backend",
     )["when"]
     for bad_pcfg in (
-        {"username": "", "password": "p", "svm": "svm1"},
-        {"username": "u", "password": "   ", "svm": "svm1"},
-        {"username": "u", "password": "p", "svm": ""},
+        {"username": "", "password": FIXTURE_PASSWORD, "svm": "svm1"},
+        {"username": "u", "password": WHITESPACE_PASSWORD, "svm": "svm1"},
+        {"username": "u", "password": FIXTURE_PASSWORD, "svm": ""},
     ):
         assert (
             _render_when(
@@ -839,7 +844,7 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
                 "_provider_backend_connections": {
                     "b1": {
                         "tenant_preparation": {
-                            "provider_config": {"username": "u", "password": "p", "svm": "svm1"}
+                            "provider_config": {"username": "u", "password": FIXTURE_PASSWORD, "svm": "svm1"}
                         }
                     }
                 },
@@ -1361,7 +1366,7 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
     conns = {
         "ded-1": {
             "endpoint": "10.0.0.1",
-            "tenant_preparation": {"provider_config": {"svm": "svm1", "username": "u", "password": "p"}},
+            "tenant_preparation": {"provider_config": {"svm": "svm1", "username": "u", "password": FIXTURE_PASSWORD}},
         },
         "shared-1": {
             "provider_config": {
@@ -1507,7 +1512,7 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
                     "metadata": {"name": csi_names[0]},
                     "data": {
                         "username": base64.b64encode(b"u").decode("ascii"),
-                        "password": base64.b64encode(b"p").decode("ascii"),
+                        "password": base64.b64encode(FIXTURE_PASSWORD.encode()).decode("ascii"),
                     },
                 }
             ]
@@ -1534,7 +1539,7 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
     qos_prep = {
         "svm": "svm1",
         "username": "u",
-        "password": "p",
+        "password": FIXTURE_PASSWORD,
         "management_lif": "https://10.0.0.9",
         "qos_policies": {"ded-gold": "pg_gold"},
     }
@@ -1631,7 +1636,7 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
                             "metadata": {"name": csi_names[0]},
                             "data": {
                                 "username": base64.b64encode(b"stale-user").decode("ascii"),
-                                "password": base64.b64encode(b"p").decode("ascii"),
+                                "password": base64.b64encode(FIXTURE_PASSWORD.encode()).decode("ascii"),
                             },
                         }
                     ]
@@ -1650,7 +1655,7 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
                     "ded-1": {
                         "endpoint": "10.0.0.1",
                         "tenant_preparation": {
-                            "provider_config": {"svm": "svm1", "username": "u", "password": "   "}
+                            "provider_config": {"svm": "svm1", "username": "u", "password": WHITESPACE_PASSWORD}
                         },
                     },
                 },
@@ -1811,6 +1816,27 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
     assert _render_when(tier_ns_when, {}) is True
     assert _render_when(tier_ns_when, {"netapp_storage_trident_namespace": "trident"}) is False
 
+    # Tier names must be complete DNS labels (a trailing newline is rejected).
+    tier_name_when = _find_task(
+        validate_tiers_tasks, "Fail if any dispatched tier name is not a complete DNS label"
+    )["when"]
+    for bad_tiers in (
+        [{"name": "gold\n"}],
+        [{"name": "Gold"}],
+        [{"name": "-gold"}],
+        [{"name": "a" * 64}],
+        [{"name": 7}],
+        [{}],
+        [{"name": "gold"}, {"name": "silver "}],
+    ):
+        assert _render_when(tier_name_when, {"_provider_tiers": bad_tiers}) is True, bad_tiers
+    assert (
+        _render_when(
+            tier_name_when, {"_provider_tiers": [{"name": "gold"}, {"name": "tier-2"}]}
+        )
+        is False
+    )
+
     # Verify teardown_cluster_storage.yaml tenant_name DNS label guard, CRD/TBC/CSI Secret ordering guards, and always cleanup.
     teardown_cluster_tasks = _load_yaml(NETAPP_ROLE_DIR / "tasks" / "teardown_cluster_storage.yaml")
     tenant_dns_when = _find_task(
@@ -1829,6 +1855,12 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
     guard_block = _find_task(
         teardown_cluster_tasks, "Verify no volumes still use the tenant's NetApp StorageClasses"
     )["block"]
+    for lookup_name in (
+        "Find tenant NetApp StorageClasses for the dependency guard",
+        "Find PersistentVolumes for the dependency guard",
+        "Find PersistentVolumeClaims for the dependency guard",
+    ):
+        assert _find_task(guard_block, lookup_name).get("no_log") is True, lookup_name
     dependents_expr = _find_task(
         guard_block, "Count volumes that still use the tenant's NetApp StorageClasses"
     )["ansible.builtin.set_fact"]["_netapp_guard_dependents"]

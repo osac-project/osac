@@ -49,6 +49,25 @@
     ) != (_provider_tiers | default([]) | length)
   no_log: true
 
+# Tier names become StorageClass label values and virtual-pool labels, so each
+# must be a complete DNS label. The \Z anchor rejects a trailing newline, which
+# a `$` anchor would accept.
+- name: Fail if any dispatched tier name is not a complete DNS label
+  ansible.builtin.fail:
+    msg: >-
+      A dispatched tier name is missing, not a string, or not a DNS label
+      (1-63 lowercase alphanumeric characters or hyphens, not starting or
+      ending with a hyphen).
+  when: >-
+    (
+      _provider_tiers | default([])
+      | selectattr('name', 'defined')
+      | selectattr('name', 'string')
+      | selectattr('name', 'regex', '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z')
+      | list | length
+    ) != (_provider_tiers | default([]) | length)
+  no_log: true
+
 - name: Fail if sanType is not a valid Trident SAN transport
   ansible.builtin.fail:
     msg: >-

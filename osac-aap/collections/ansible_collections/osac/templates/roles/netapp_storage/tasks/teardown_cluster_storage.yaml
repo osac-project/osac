@@ -37,6 +37,7 @@
           - "osac.openshift.io/storage-provider=netapp"
           - "app.kubernetes.io/managed-by=osac-aap"
       register: _netapp_guard_sc_list
+      no_log: true
 
     - name: Find PersistentVolumes for the dependency guard
       when: (_netapp_guard_sc_list.resources | default([]) | length) > 0
@@ -44,6 +45,7 @@
         api_version: v1
         kind: PersistentVolume
       register: _netapp_guard_pv_list
+      no_log: true
 
     - name: Find PersistentVolumeClaims for the dependency guard
       when: (_netapp_guard_sc_list.resources | default([]) | length) > 0
@@ -51,6 +53,7 @@
         api_version: v1
         kind: PersistentVolumeClaim
       register: _netapp_guard_pvc_list
+      no_log: true
 
     - name: Count volumes that still use the tenant's NetApp StorageClasses
       ansible.builtin.set_fact:

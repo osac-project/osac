@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -269,7 +268,7 @@ var _ = Describe("Reconciler", func() {
 	)
 	DescribeTable("Logs a failed reconciliation at the level that matches its cause",
 		func(firstErr error, wantMessage string, wantLevel slog.Level, otherMessage string) {
-			logs := &recordingLogHandler{}
+			logs := &testing.LogRecorder{}
 			builder.SetLogger(slog.New(logs))
 			objects, _ := recordCalls(func(call int32, _ *privatev1.Tenant) error {
 				if call == 1 {
@@ -281,9 +280,9 @@ var _ = Describe("Reconciler", func() {
 			pushTenantEvent("t1")
 			Eventually(objects, 5*time.Second).Should(Receive())
 
-			Eventually(func() []slog.Level { return logs.levels(wantMessage) }, 5*time.Second).Should(
+			Eventually(func() []slog.Level { return logs.Levels(wantMessage) }, 5*time.Second).Should(
 				ConsistOf(wantLevel))
-			Expect(logs.levels(otherMessage)).To(BeEmpty())
+			Expect(logs.Levels(otherMessage)).To(BeEmpty())
 		},
 		Entry("bare Aborted",
 			status.Error(codes.Aborted, "object has been modified"), conflictMessage, slog.LevelDebug, failureMessage),
@@ -368,83 +367,7 @@ var _ = Describe("Reconciler", func() {
 	It("replays an unmutated object when the fresh read fails (requeueable)", func() {
 		replaysUnmutated(controllers.RequeueAfter(errors.New("x"), time.Second))
 	})
-
-	It("clears retry state when the object disappears", func() {
-		service.get = func(req *privatev1.TenantsGetRequest) (*privatev1.TenantsGetResponse, error) {
-			if service.getCalls.Load() == 2 {
-				return nil, status.Error(codes.NotFound, "archived")
-			}
-			return privatev1.TenantsGetResponse_builder{
-				Object: privatev1.Tenant_builder{Id: req.GetId()}.Build(),
-			}.Build(), nil
-		}
-		objects, _ := recordCalls(func(call int32, _ *privatev1.Tenant) error {
-			if call <= 2 {
-				return status.Error(codes.Aborted, "modified")
-			}
-			return nil
-		})
-		start()
-		pushTenantEvent("t1")
-		Eventually(objects, 5*time.Second).Should(Receive())
-
-		// The retry of the first attempt reads the object again and finds it gone. Wait for that read before
-		// sending the next event, otherwise the event could consume the NotFound response, and no new retry is
-		// scheduled while one is pending.
-		Eventually(service.getCalls.Load, 5*time.Second).Should(Equal(int32(2)))
-
-		// A new attempt for the same ID starts from the initial delay of one second. If the attempt counter had
-		// survived the NotFound the backoff would give two seconds.
-		pushTenantEvent("t1")
-		var second, third received
-		Eventually(objects, 5*time.Second).Should(Receive(&second))
-		Eventually(objects, 5*time.Second).Should(Receive(&third))
-		Expect(third.at.Sub(second.at)).To(BeNumerically("<", 1900*time.Millisecond))
-	})
 })
-
-// recordingLogHandler is a log handler that keeps the level and message of every record, at any level.
-type recordingLogHandler struct {
-	mu      sync.Mutex
-	records []recordedLog
-}
-
-type recordedLog struct {
-	level   slog.Level
-	message string
-}
-
-func (h *recordingLogHandler) Enabled(context.Context, slog.Level) bool {
-	return true
-}
-
-func (h *recordingLogHandler) Handle(_ context.Context, record slog.Record) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.records = append(h.records, recordedLog{level: record.Level, message: record.Message})
-	return nil
-}
-
-func (h *recordingLogHandler) WithAttrs([]slog.Attr) slog.Handler {
-	return h
-}
-
-func (h *recordingLogHandler) WithGroup(string) slog.Handler {
-	return h
-}
-
-// levels returns the level of each record that has the given message.
-func (h *recordingLogHandler) levels(message string) []slog.Level {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	var result []slog.Level
-	for _, record := range h.records {
-		if record.message == message {
-			result = append(result, record.level)
-		}
-	}
-	return result
-}
 
 type reconcilerTestServer struct {
 	privatev1.UnimplementedTenantsServer

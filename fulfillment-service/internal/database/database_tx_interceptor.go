@@ -95,21 +95,12 @@ func (i *TxInterceptor) UnaryServer(ctx context.Context, request any, info *grpc
 	// transaction fails, then we will return an internal error.
 	defer func() {
 		// A method that panics must not commit what it wrote, so the panic is reported to the transaction, which
-		// rolls it back, and then it goes on to the interceptors outside this one, which turn it into an error.
-		if fault := recover(); fault != nil {
-			panicErr := fmt.Errorf("method panicked: %v", fault)
-			tx.ReportError(&panicErr)
-			txErr := tx.End(ctx)
-			if txErr != nil {
-				i.logger.ErrorContext(
-					ctx,
-					"Failed to end transaction",
-					slog.String("method", info.FullMethod),
-					slog.Any("method_error", panicErr),
-					slog.Any("tx_error", txErr),
-				)
-			}
-			panic(fault)
+		// rolls it back, and once the transaction has ended it goes on to the interceptors outside this one, which
+		// turn it into an error.
+		fault := recover()
+		if fault != nil {
+			err = fmt.Errorf("method panicked: %v", fault)
+			tx.ReportError(&err)
 		}
 
 		// Try to end the transaction:
@@ -132,6 +123,10 @@ func (i *TxInterceptor) UnaryServer(ctx context.Context, request any, info *grpc
 		// transaction error.
 		if err == nil && txErr != nil {
 			err = grpcstatus.Errorf(grpccodes.Internal, "failed to end transaction")
+		}
+
+		if fault != nil {
+			panic(fault)
 		}
 	}()
 

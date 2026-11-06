@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"testing"
 	"time"
 
@@ -131,110 +130,114 @@ func TestConflictLogLevelWarnsOnceBackoffReachesTheCap(t *testing.T) {
 func TestReconcilerLogsRepeatedConflictsAtWarn(t *testing.T) {
 	RegisterTestingT(t)
 
+	logs := &osactesting.LogRecorder{}
+	conflict := func(context.Context, *privatev1.Tenant) error {
+		return status.Error(codes.Aborted, "object has been modified")
+	}
+
+	// Six consecutive conflicts have already happened for this object, so the retry that follows the next one is the
+	// first at the one minute cap.
+	startTenantReconciler(t, &tenantGetServer{}, slog.New(logs), conflict, func(r *Reconciler[*privatev1.Tenant]) {
+		r.retryAttempts["t1"] = 6
+	})
+
+	Eventually(func() []slog.Level {
+		return logs.Levels("Reconciliation keeps conflicting with concurrent updates, will retry")
+	}, 5*time.Second).Should(ConsistOf(slog.LevelWarn))
+	Expect(logs.Levels("Reconciliation conflicted with a concurrent update, will retry")).To(BeEmpty())
+	Expect(logs.Levels("Reconciliation failed")).To(BeEmpty())
+}
+
+func TestReconcilerClearsRetryStateWhenTheObjectIsGone(t *testing.T) {
+	RegisterTestingT(t)
+
+	unexpected := func(context.Context, *privatev1.Tenant) error {
+		t.Error("the reconciler function must not run for an object that is gone")
+		return nil
+	}
+
+	// A conflict has already been retried three times for this object, and the next retry is pending. Without the
+	// cleanup, a later object with the same identifier would start from the backoff of the fourth attempt.
+	pending := &scheduledRetry{timer: time.NewTimer(time.Hour), cancel: make(chan struct{})}
+	defer pending.timer.Stop()
+	reconciler := startTenantReconciler(t, &tenantGetServer{gone: true}, slog.New(&osactesting.LogRecorder{}),
+		unexpected, func(r *Reconciler[*privatev1.Tenant]) {
+			r.retryAttempts["t1"] = 3
+			r.retryTimers["t1"] = pending
+		})
+
+	Eventually(pending.cancel, 5*time.Second).Should(BeClosed())
+	reconciler.retryMu.Lock()
+	defer reconciler.retryMu.Unlock()
+	Expect(reconciler.retryAttempts).ToNot(HaveKey("t1"))
+	Expect(reconciler.retryTimers).ToNot(HaveKey("t1"))
+}
+
+// startTenantReconciler builds a reconciler of tenants that reads them from the given server and calls the given
+// function, lets prepare set up its state before it starts, starts it, and sends it the tenant 't1'. The reconciler
+// is stopped when the test ends.
+func startTenantReconciler(t *testing.T, tenants privatev1.TenantsServer, logger *slog.Logger,
+	function func(context.Context, *privatev1.Tenant) error,
+	prepare func(*Reconciler[*privatev1.Tenant])) *Reconciler[*privatev1.Tenant] {
+	t.Helper()
 	server := osactesting.NewServer()
-	defer server.Stop()
-	privatev1.RegisterTenantsServer(server.Registrar(), &tenantGetServer{})
+	t.Cleanup(server.Stop)
+	privatev1.RegisterTenantsServer(server.Registrar(), tenants)
 	server.Start()
 	connection, err := grpc.NewClient(server.Address(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	Expect(err).ToNot(HaveOccurred())
-	defer connection.Close()
+	t.Cleanup(func() {
+		_ = connection.Close()
+	})
 
-	logs := &startLogRecorder{}
 	reconciler, err := NewReconciler[*privatev1.Tenant]().
-		SetLogger(slog.New(logs)).
+		SetLogger(logger).
 		SetName("test").
 		SetClient(connection).
 		SetSync(false).
 		SetWatchInterval(time.Hour).
-		SetFunction(func(context.Context, *privatev1.Tenant) error {
-			return status.Error(codes.Aborted, "object has been modified")
-		}).
+		SetFunction(function).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
 
-	// Six consecutive conflicts have already happened for this object, so the retry that follows the next one is the
-	// first at the one minute cap. Start has not run yet, so the map can be written without the lock.
-	reconciler.retryAttempts["t1"] = 6
+	// Start has not run yet, so the state can be written without the lock:
+	prepare(reconciler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
 		done <- reconciler.Start(ctx)
 	}()
-	defer func() {
+	t.Cleanup(func() {
 		cancel()
 		<-done
-	}()
+	})
 
 	select {
 	case reconciler.objectChannel <- privatev1.Tenant_builder{Id: "t1"}.Build():
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out sending the object to the reconciler")
 	}
-
-	Eventually(func() []slog.Level {
-		return logs.levels("Reconciliation keeps conflicting with concurrent updates, will retry")
-	}, 5*time.Second).Should(ConsistOf(slog.LevelWarn))
-	Expect(logs.levels("Reconciliation conflicted with a concurrent update, will retry")).To(BeEmpty())
-	Expect(logs.levels("Reconciliation failed")).To(BeEmpty())
+	return reconciler
 }
 
-// tenantGetServer answers the read that the reconciler makes before each reconciliation.
+// tenantGetServer answers the read that the reconciler makes before each reconciliation. When gone is set it answers
+// that the object doesn't exist.
 type tenantGetServer struct {
 	privatev1.UnimplementedTenantsServer
+	gone bool
 }
 
 func (s *tenantGetServer) Get(
 	_ context.Context,
 	request *privatev1.TenantsGetRequest,
 ) (*privatev1.TenantsGetResponse, error) {
+	if s.gone {
+		return nil, status.Error(codes.NotFound, "archived")
+	}
 	return privatev1.TenantsGetResponse_builder{
 		Object: privatev1.Tenant_builder{Id: request.GetId()}.Build(),
 	}.Build(), nil
-}
-
-// startLogRecorder is a log handler that keeps the level and message of every record, at any level. It mirrors the
-// recording handler of the external test package, which an in-package test cannot import.
-type startLogRecorder struct {
-	mu      sync.Mutex
-	records []startLogRecord
-}
-
-type startLogRecord struct {
-	level   slog.Level
-	message string
-}
-
-func (h *startLogRecorder) Enabled(context.Context, slog.Level) bool {
-	return true
-}
-
-func (h *startLogRecorder) Handle(_ context.Context, record slog.Record) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.records = append(h.records, startLogRecord{level: record.Level, message: record.Message})
-	return nil
-}
-
-func (h *startLogRecorder) WithAttrs([]slog.Attr) slog.Handler {
-	return h
-}
-
-func (h *startLogRecorder) WithGroup(string) slog.Handler {
-	return h
-}
-
-// levels returns the level of each record that has the given message.
-func (h *startLogRecorder) levels(message string) []slog.Level {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	var result []slog.Level
-	for _, record := range h.records {
-		if record.message == message {
-			result = append(result, record.level)
-		}
-	}
-	return result
 }
 
 func TestReconcilerRequeuesRequestedErrorsOncePerObject(t *testing.T) {

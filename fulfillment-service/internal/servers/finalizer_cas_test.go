@@ -35,10 +35,6 @@ import (
 // another writer stored after the snapshot was taken. The concurrency is logical: the specs run in the suite
 // transaction and order the writes explicitly, except where they say otherwise.
 var _ = Describe("finalizer CAS", func() {
-	finalizersMask := func() *fieldmaskpb.FieldMask {
-		return finalizerMaskOf("metadata.finalizers")
-	}
-
 	// The guard proves coverage of the RPCs at the level of the bare GenericServer, not of the production typed
 	// wrappers: a wrapper that rebuilds the request from the stored object without restoring the version of the
 	// client would defeat the compare-and-swap without failing these specs. DiskImage and InstanceType rebuild the
@@ -90,7 +86,7 @@ var _ = Describe("finalizer CAS", func() {
 
 			t.expectFinalizerConflict(ctx, err, finalizerController)
 			commitSuiteTx()
-			Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty(), "a rejected write must not log a change")
+			Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty(), "a rejected write must not log a change")
 		},
 		finalizerEntries(),
 	)
@@ -139,13 +135,7 @@ var _ = Describe("finalizer CAS", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(t.finalizers(ctx)).To(BeEmpty())
 
-			savepointErr := suiteTx.Savepoint(ctx, func(ctx context.Context) error {
-				err = t.update(withPublicAPIView(ctx), withoutMetadata(t.get(ctx)), nil, false)
-				return err
-			})
-			if err == nil {
-				Expect(savepointErr).ToNot(HaveOccurred())
-			}
+			err = t.publicUpdateInSavepoint(ctx, withoutMetadata(t.get(ctx)), nil)
 			Expect(status.Code(err)).ToNot(Equal(codes.Aborted),
 				"a public request must not be rejected for its finalizers, but the update returned %v", err)
 			Expect(t.finalizers(ctx)).To(BeEmpty())
@@ -182,16 +172,7 @@ var _ = Describe("finalizer CAS", func() {
 			}
 			before := t.get(ctx)
 
-			// A database rejection aborts the transaction, so the update runs in a savepoint that is rolled back
-			// when it fails, as the transaction of a real request would be:
-			var err error
-			savepointErr := suiteTx.Savepoint(ctx, func(ctx context.Context) error {
-				err = t.update(withPublicAPIView(ctx), withoutMetadata(before), nil, false)
-				return err
-			})
-			if err == nil {
-				Expect(savepointErr).ToNot(HaveOccurred())
-			}
+			err := t.publicUpdateInSavepoint(ctx, withoutMetadata(before), nil)
 
 			Expect(status.Code(err)).ToNot(Equal(codes.Aborted),
 				"a public request must not be rejected for its finalizers, but the update returned %v", err)
@@ -204,6 +185,31 @@ var _ = Describe("finalizer CAS", func() {
 			}
 		},
 		finalizerEntriesPerLifecycle(),
+	)
+
+	// A public request can also carry a mask that selects the finalizers, directly or through the whole metadata.
+	// The stored finalizers are restored after the mask is applied, so such a request is not rejected for its
+	// finalizers and doesn't change them, even from a stale version. The restore is the same code for every resource,
+	// and the tables above run the nil mask for every resource, so one resource is enough here.
+	DescribeTable("keeps finalizers on a stale public update with a mask that selects them",
+		func(mask *fieldmaskpb.FieldMask, deleting bool) {
+			t := finalizerCaseFor(privatev1.Hubs_ServiceDesc.ServiceName).
+				target([]string{finalizerController, finalizerHold})
+			if deleting {
+				t.markDeleting(ctx)
+			}
+			stale := withFinalizers(t.get(ctx))
+			t.bump(ctx)
+
+			err := t.publicUpdateInSavepoint(ctx, stale, mask)
+
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := t.ops.get(ctx, t.id)
+			Expect(err).ToNot(HaveOccurred(), "a public update must not archive an object with finalizers")
+			Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold),
+				"a public update must not change the finalizers")
+		},
+		publicMaskEntries(),
 	)
 
 	// Candidate preparation callbacks run after the finalizer check, so they must not change the finalizers that it
@@ -262,6 +268,20 @@ var _ = Describe("finalizer CAS", func() {
 			return nil
 		}
 
+		// writesSideObject returns a callback that writes another object in the transaction of the request, saves its
+		// identifier, and then modifies the candidate.
+		writesSideObject := func(sideID *string,
+			modify func(*privatev1.Hub) error) PrepareCandidateFunc[*privatev1.Hub] {
+			return func(ctx context.Context, _, candidate *privatev1.Hub) error {
+				side, err := fixtureDAO[*privatev1.Hub]().Create().SetObject(testHub(finalizerName("side"))).Do(ctx)
+				if err != nil {
+					return err
+				}
+				*sideID = side.GetObject().GetId()
+				return modify(candidate)
+			}
+		}
+
 		DescribeTable("commits what the callback wrote only when the update is accepted",
 			func(call entryPoint, modify func(*privatev1.Hub) error, code codes.Code) {
 				t := finalizerCaseFor(privatev1.Hubs_ServiceDesc.ServiceName).target([]string{finalizerController})
@@ -269,23 +289,8 @@ var _ = Describe("finalizer CAS", func() {
 				logs := t.recordLogs()
 				object := withFinalizers(t.get(ctx), finalizerController, finalizerHold).(*privatev1.Hub)
 
-				// The callback writes another object in the transaction of the request, and then modifies the
-				// candidate:
 				var sideID string
-				prepare := func(ctx context.Context, current, candidate *privatev1.Hub) error {
-					side, err := fixtureDAO[*privatev1.Hub]().Create().SetObject(privatev1.Hub_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name:   finalizerName("side"),
-							Tenant: testTenant,
-						}.Build(),
-						Spec: privatev1.HubSpec_builder{Kubeconfig: []byte("my_config"), Namespace: "my_ns"}.Build(),
-					}.Build()).Do(ctx)
-					if err != nil {
-						return err
-					}
-					sideID = side.GetObject().GetId()
-					return modify(candidate)
-				}
+				prepare := writesSideObject(&sideID, modify)
 
 				// Commit the fixture, and send the request in a transaction of its own:
 				Expect(suiteTx.End(ctx)).To(Succeed())
@@ -309,12 +314,12 @@ var _ = Describe("finalizer CAS", func() {
 					var notFound *dao.ErrNotFound
 					Expect(errors.As(sideErr, &notFound)).To(BeTrue(),
 						"what the rejected callback wrote must be rolled back, but reading it returned %v", sideErr)
-					Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty(),
+					Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty(),
 						"a rejected update must not log a finalizer change")
 				} else {
 					Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
 					Expect(sideErr).ToNot(HaveOccurred(), "what the callback wrote must be committed")
-					Expect(logs.withMessage(finalizerChangeMessage)).To(HaveLen(1))
+					Expect(logs.WithMessage(finalizerChangeMessage)).To(HaveLen(1))
 				}
 			},
 			Entry("with UpdateWithCandidatePreparation and a callback that adds a finalizer",
@@ -347,20 +352,7 @@ var _ = Describe("finalizer CAS", func() {
 				server := t.ops.(*genericFinalizerOps[*privatev1.Hub]).server
 
 				var sideID string
-				prepare := func(ctx context.Context, _, candidate *privatev1.Hub) error {
-					side, err := fixtureDAO[*privatev1.Hub]().Create().SetObject(privatev1.Hub_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name:   finalizerName("side"),
-							Tenant: testTenant,
-						}.Build(),
-						Spec: privatev1.HubSpec_builder{Kubeconfig: []byte("my_config"), Namespace: "my_ns"}.Build(),
-					}.Build()).Do(ctx)
-					if err != nil {
-						return err
-					}
-					sideID = side.GetObject().GetId()
-					return modify(candidate)
-				}
+				prepare := writesSideObject(&sideID, modify)
 
 				// Commit the fixture, and send the request in a transaction of its own:
 				Expect(suiteTx.End(ctx)).To(Succeed())
@@ -371,13 +363,7 @@ var _ = Describe("finalizer CAS", func() {
 					proto.Message
 					SetObject(*privatev1.Hub)
 				})
-				request.SetObject(privatev1.Hub_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name:   finalizerName("created"),
-						Tenant: testTenant,
-					}.Build(),
-					Spec: privatev1.HubSpec_builder{Kubeconfig: []byte("my_config"), Namespace: "my_ns"}.Build(),
-				}.Build())
+				request.SetObject(testHub(finalizerName("created")))
 				var response proto.Message
 				createErr := server.CreateWithCandidatePreparation(database.TxIntoContext(context.Background(), tx),
 					request, &response, prepare)
@@ -401,6 +387,14 @@ var _ = Describe("finalizer CAS", func() {
 	})
 
 	Describe("controls", func() {
+		It("compares finalizers as sets, ignoring order, duplicates, and nil versus empty", func() {
+			Expect(sameFinalizers(nil, []string{})).To(BeTrue())
+			Expect(sameFinalizers([]string{finalizerHold, finalizerController, finalizerHold},
+				[]string{finalizerController, finalizerHold})).To(BeTrue())
+			Expect(sameFinalizers(nil, []string{finalizerHold})).To(BeFalse())
+			Expect(sameFinalizers([]string{finalizerHold}, []string{finalizerHold, finalizerController})).To(BeFalse())
+		})
+
 		DescribeTable("accepts a finalizer change made from the current version",
 			func(c finalizerCase) {
 				t := c.target([]string{finalizerController})
@@ -419,9 +413,7 @@ var _ = Describe("finalizer CAS", func() {
 				stale := t.get(ctx)
 				t.bump(ctx)
 
-				object := withMetadata(stale, func(metadata *privatev1.Metadata) {
-					metadata.SetLabels(map[string]string{"x": "y"})
-				})
+				object := withLabel(stale, "x", "y")
 				Expect(t.update(ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
 
 				stored := t.get(ctx)
@@ -493,9 +485,7 @@ var _ = Describe("finalizer CAS", func() {
 				stale := t.get(ctx)
 				t.bump(ctx)
 
-				object := withMetadata(stale, func(metadata *privatev1.Metadata) {
-					metadata.SetLabels(map[string]string{"x": "y"})
-				})
+				object := withLabel(stale, "x", "y")
 				err := t.update(ctx, object, finalizerMaskOf("metadata.labels"), true)
 
 				Expect(status.Code(err)).To(Equal(codes.Aborted))
@@ -550,17 +540,17 @@ var _ = Describe("finalizer CAS", func() {
 
 				object := withFinalizers(before, finalizerHold, finalizerController, finalizerHold)
 				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
-				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty(),
+				Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty(),
 					"nothing must be logged before the transaction commits")
 				commitSuiteTx()
 
-				records := logs.withMessage(finalizerChangeMessage)
+				records := logs.WithMessage(finalizerChangeMessage)
 				Expect(records).To(HaveLen(1))
-				Expect(records[0].level).To(Equal(slog.LevelInfo))
-				Expect(records[0].attrs).To(HaveKeyWithValue("id", t.id))
-				Expect(records[0].attrs).To(HaveKeyWithValue("from", Equal([]string{finalizerController})))
-				Expect(records[0].attrs).To(HaveKeyWithValue("to", Equal([]string{finalizerController, finalizerHold})))
-				Expect(records[0].attrs).To(HaveKeyWithValue("version",
+				Expect(records[0].Level).To(Equal(slog.LevelInfo))
+				Expect(records[0].Attrs).To(HaveKeyWithValue("id", t.id))
+				Expect(records[0].Attrs).To(HaveKeyWithValue("from", Equal([]string{finalizerController})))
+				Expect(records[0].Attrs).To(HaveKeyWithValue("to", Equal([]string{finalizerController, finalizerHold})))
+				Expect(records[0].Attrs).To(HaveKeyWithValue("version",
 					int64(finalizerMetadataOf(before).GetVersion())))
 				Expect(finalizerMetadataOf(t.get(ctx)).GetVersion()).To(Equal(finalizerMetadataOf(before).GetVersion()+1),
 					"the write must have produced the next version")
@@ -580,10 +570,10 @@ var _ = Describe("finalizer CAS", func() {
 
 				_, err := t.ops.get(ctx, t.id)
 				Expect(status.Code(err)).To(Equal(codes.NotFound), "the object must have been archived")
-				records := logs.withMessage(finalizerChangeMessage)
+				records := logs.WithMessage(finalizerChangeMessage)
 				Expect(records).To(HaveLen(1))
-				Expect(records[0].attrs).To(HaveKeyWithValue("from", Equal([]string{finalizerController})))
-				Expect(records[0].attrs).To(HaveKeyWithValue("to", BeEmpty()))
+				Expect(records[0].Attrs).To(HaveKeyWithValue("from", Equal([]string{finalizerController})))
+				Expect(records[0].Attrs).To(HaveKeyWithValue("to", BeEmpty()))
 			},
 			finalizerEntries(),
 		)
@@ -593,14 +583,12 @@ var _ = Describe("finalizer CAS", func() {
 				t := c.target([]string{finalizerController, finalizerHold})
 				logs := t.recordLogs()
 
-				object := withMetadata(t.get(ctx), func(metadata *privatev1.Metadata) {
-					metadata.SetLabels(map[string]string{"x": "y"})
-				})
+				object := withLabel(t.get(ctx), "x", "y")
 				Expect(t.update(ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
 				commitSuiteTx()
 
 				Expect(finalizerMetadataOf(t.get(ctx)).GetLabels()).To(HaveKeyWithValue("x", "y"))
-				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty())
+				Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty())
 			},
 			finalizerEntries(),
 		)
@@ -620,7 +608,7 @@ var _ = Describe("finalizer CAS", func() {
 				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 				commitSuiteTx()
 				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController))
-				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty())
+				Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty())
 			},
 			finalizerEntries(),
 		)
@@ -639,7 +627,7 @@ var _ = Describe("finalizer CAS", func() {
 				rollBackSuiteTx()
 
 				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController), "the write must have been rolled back")
-				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty())
+				Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty())
 			},
 			finalizerEntries(),
 		)
@@ -663,7 +651,7 @@ var _ = Describe("finalizer CAS", func() {
 				commitSuiteTx()
 
 				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController), "the write must have been rolled back")
-				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty())
+				Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty())
 			})
 
 			It("logs the change once the enclosing transaction commits", func() {
@@ -675,12 +663,12 @@ var _ = Describe("finalizer CAS", func() {
 					return t.update(ctx, object, finalizersMask(), false)
 				})
 				Expect(err).ToNot(HaveOccurred())
-				Expect(logs.withMessage(finalizerChangeMessage)).To(BeEmpty(),
+				Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty(),
 					"releasing the savepoint must not log the change")
 				commitSuiteTx()
 
 				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
-				Expect(logs.withMessage(finalizerChangeMessage)).To(HaveLen(1))
+				Expect(logs.WithMessage(finalizerChangeMessage)).To(HaveLen(1))
 			})
 		})
 	})
@@ -719,55 +707,3 @@ var _ = Describe("finalizer CAS", func() {
 		)
 	})
 })
-
-// finalizerEntriesPerLifecycle returns an entry for each resource, for a live object and for one that is being deleted.
-func finalizerEntriesPerLifecycle() []TableEntry {
-	var entries []TableEntry
-	for _, c := range finalizerCases() {
-		entries = append(entries,
-			Entry(c.service+" live", c, false),
-			Entry(c.service+" deleting", c, true),
-		)
-	}
-	return entries
-}
-
-// finalizerEntriesPerMask returns an entry for each resource and each way of selecting the finalizers. The indexed path
-// replaces a single entry of the stored list, so a stale write through it changes the finalizer set as well. The
-// overlapping masks select the finalizers twice, or together with the version.
-func finalizerEntriesPerMask() []TableEntry {
-	masks := []struct {
-		name string
-		mask *fieldmaskpb.FieldMask
-	}{
-		{"metadata mask", finalizerMaskOf("metadata")},
-		{"nil mask", nil},
-		{"metadata.finalizers mask", finalizerMaskOf("metadata.finalizers")},
-		{"metadata.finalizers.0 mask", finalizerMaskOf("metadata.finalizers.0")},
-		{"metadata and metadata.finalizers mask", finalizerMaskOf("metadata", "metadata.finalizers")},
-		{"metadata.finalizers and metadata.version mask", finalizerMaskOf("metadata.finalizers", "metadata.version")},
-	}
-	var entries []TableEntry
-	for _, c := range finalizerCases() {
-		for _, m := range masks {
-			entries = append(entries, Entry(c.service+" with "+m.name, c, m.mask))
-		}
-	}
-	return entries
-}
-
-// finalizerEntriesPerVersion returns an entry for each resource, for an object at its creation version and for an
-// object that has been written since, and for a mask on the finalizers and no mask at all.
-func finalizerEntriesPerVersion() []TableEntry {
-	var entries []TableEntry
-	for _, c := range finalizerCases() {
-		entries = append(entries,
-			Entry(c.service+" at version 0 with metadata.finalizers mask", c, false, finalizerMaskOf("metadata.finalizers")),
-			Entry(c.service+" at a later version with metadata.finalizers mask", c, true,
-				finalizerMaskOf("metadata.finalizers")),
-			Entry(c.service+" at version 0 with nil mask", c, false, (*fieldmaskpb.FieldMask)(nil)),
-			Entry(c.service+" at a later version with nil mask", c, true, (*fieldmaskpb.FieldMask)(nil)),
-		)
-	}
-	return entries
-}

@@ -4,3 +4,8 @@
 
 - name: Clear published CaaS endpoints from ClusterOrder
   ansible.builtin.include_tasks: clear.yaml
+
+# Last, so a release never precedes DNS removal or the guest cluster teardown
+# waits performed by hosted_cluster.
+- name: Release the guest ingress VIP
+  ansible.builtin.include_tasks: caas_vip_release.yaml

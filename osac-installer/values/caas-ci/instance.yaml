@@ -180,6 +180,16 @@ aap:
       config:
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "SingleReplica"
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
+        # Each CaaS ClusterOrder claims one guest ingress VIP from this
+        # provider-reserved range. Left unset here on purpose: a literal range
+        # cannot be right for every run, because cluster-tool gives each CI
+        # clone its own 192.168.<subnet>.0/24 network. The CaaS install
+        # workflows in osac-test-infra derive a free block from the clone's
+        # libvirt network definition (guest_ingress_vip_range.py) and patch
+        # this ConfigMap with the result, so CI always supplies its own range.
+        # A local install must set one by hand; CaaS guest provisioning fails
+        # loudly instead of inventing an address when it is missing.
+        # CI_GUEST_INGRESS_IP_RANGE: "10.10.0.240-10.10.0.243"
     networkFulfillment:
       enabled: true
 

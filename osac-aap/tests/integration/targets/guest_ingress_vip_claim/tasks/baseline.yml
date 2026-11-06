@@ -1,0 +1,295 @@
+---
+# Guest ingress VIP claims against a real hub API server.
+#
+# Two child Ansible processes claim at the same time from a two-address range:
+# the ConfigMap resourceVersion compare-and-swap must give each one its own
+# address, and a third claim must fail loudly instead of over-committing. Every
+# later step runs in its own child process too, so the assertions describe what
+# a real AAP job would observe: a retried claim keeps its address without a
+# write, release is idempotent and returns the address to the pool, and a claim
+# whose ClusterOrder no longer exists is only reclaimed when pruning is on.
+- name: Verify guest ingress VIP claims against a real API server
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    fixture_id: >-
+      {{ lookup('env', 'POD_UID') | default('local', true)
+      | regex_replace('[^a-z0-9]', '') | truncate(8, true, '') }}
+    fixture_namespace: "osac-vip-{{ fixture_id }}"
+    main_range: "198.51.100.10-198.51.100.11"
+    prune_range: "198.51.100.20-198.51.100.21"
+    main_registry: guest-ingress-vip-main
+    prune_registry: guest-ingress-vip-prune
+    child_playbook: "{{ playbook_dir }}/run_claim.yml"
+
+  tasks:
+    - name: Exercise the claim registry
+      block:
+        - name: Create the fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: present
+
+        - name: Allocate result files for the concurrent claims
+          ansible.builtin.tempfile:
+            state: file
+            prefix: osac-vip-concurrent-
+            suffix: .json
+          loop: [concurrent-a, concurrent-b]
+          register: vip_concurrent_files
+
+        - name: Start two claims at the same time
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - ansible-playbook
+              - -e
+              - "ansible_python_interpreter={{ ansible_python_interpreter }}"
+              - -e
+              - "{{ {'vip_state': 'present',
+                       'vip_range': main_range,
+                       'vip_registry_namespace': fixture_namespace,
+                       'vip_registry_name': main_registry,
+                       'vip_owner_uid': item.uid,
+                       'vip_result_path': item.path} | to_json }}"
+              - "{{ child_playbook }}"
+          environment:
+            ANSIBLE_COLLECTIONS_PATH: >-
+              {{ playbook_dir }}/../../../../../collections:{{
+              playbook_dir }}/../../../../../vendor
+          loop:
+            - uid: concurrent-a
+              path: "{{ vip_concurrent_files.results[0].path }}"
+            - uid: concurrent-b
+              path: "{{ vip_concurrent_files.results[1].path }}"
+          loop_control:
+            label: "{{ item.uid }}"
+          async: 300
+          poll: 0
+          register: vip_concurrent_jobs
+          changed_when: true
+
+        - name: Wait for both concurrent claims
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ vip_concurrent_jobs.results }}"
+          loop_control:
+            label: "{{ item.item.uid }}"
+          register: vip_concurrent_status
+          until: vip_concurrent_status.finished
+          retries: 120
+          delay: 2
+
+        - name: Read the concurrent claim results
+          ansible.builtin.slurp:
+            src: "{{ item.path }}"
+          loop: "{{ vip_concurrent_files.results }}"
+          loop_control:
+            label: osac-vip-concurrent
+          register: vip_concurrent_output
+
+        - name: Save the concurrent claim results in loop order
+          ansible.builtin.set_fact:
+            vip_concurrent: >-
+              {{ vip_concurrent_output.results | map(attribute='content')
+                 | map('b64decode') | map('from_json') | list }}
+
+        - name: Both concurrent claims took distinct addresses
+          ansible.builtin.assert:
+            that:
+              - vip_concurrent | rejectattr('failed') | list | length == 2
+              - vip_concurrent | map(attribute='address') | unique | list | length == 2
+              - >-
+                vip_concurrent | map(attribute='address') | sort
+                == ['198.51.100.10', '198.51.100.11']
+            fail_msg: >-
+              Concurrent claims must take distinct addresses from the reserved
+              range, got {{ vip_concurrent }}.
+
+        - name: Read the registry after the concurrent claims
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ main_registry }}"
+          register: vip_registry_after_claim
+
+        - name: The registry holds one record per ClusterOrder
+          ansible.builtin.assert:
+            that:
+              - vip_registry_after_claim.resources | length == 1
+              - vip_registry_after_claim.resources[0].data | length == 2
+              - >-
+                vip_registry_after_claim.resources[0].metadata.labels[
+                'osac.openshift.io/guest-ingress-vip-claim'] == 'true'
+            fail_msg: >-
+              The registry must key one record per ClusterOrder UID, got
+              {{ vip_registry_after_claim.resources | default([]) }}.
+
+        - name: Describe the remaining claim and release steps
+          ansible.builtin.set_fact:
+            vip_steps:
+              - label: retried claim of the first owner
+                state: present
+                range: "{{ main_range }}"
+                registry: "{{ main_registry }}"
+                owner: concurrent-a
+                expect_failed: false
+                expect_changed: false
+                expect_address: "{{ vip_concurrent[0].address }}"
+              - label: third claim of a two-address range
+                state: present
+                range: "{{ main_range }}"
+                registry: "{{ main_registry }}"
+                owner: third-owner
+                expect_failed: true
+                expect_message: exhausted
+              - label: release of the first owner
+                state: absent
+                range: "{{ main_range }}"
+                registry: "{{ main_registry }}"
+                owner: concurrent-a
+                expect_failed: false
+                expect_changed: true
+              - label: repeated release of the first owner
+                state: absent
+                range: "{{ main_range }}"
+                registry: "{{ main_registry }}"
+                owner: concurrent-a
+                expect_failed: false
+                expect_changed: false
+              - label: claim after the release
+                state: present
+                range: "{{ main_range }}"
+                registry: "{{ main_registry }}"
+                owner: reclaimer
+                expect_failed: false
+                expect_address: "{{ vip_concurrent[0].address }}"
+              - label: claim of an owner that does not exist, without pruning
+                state: present
+                range: "{{ prune_range }}"
+                registry: "{{ prune_registry }}"
+                owner: vanished-owner
+                prune_stale: false
+                expect_failed: false
+              - label: claim of a live owner with pruning enabled
+                state: present
+                range: "{{ prune_range }}"
+                registry: "{{ prune_registry }}"
+                owner: live-owner
+                prune_stale: true
+                expect_failed: false
+
+        - name: Allocate a result file per step
+          ansible.builtin.tempfile:
+            state: file
+            prefix: osac-vip-step-
+            suffix: .json
+          loop: "{{ vip_steps }}"
+          loop_control:
+            label: "{{ item.label }}"
+          register: vip_step_files
+
+        - name: Run each step in its own Ansible process
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - ansible-playbook
+              - -e
+              - "ansible_python_interpreter={{ ansible_python_interpreter }}"
+              - -e
+              - "{{ {'vip_state': item.0.state,
+                       'vip_range': item.0.range,
+                       'vip_registry_namespace': fixture_namespace,
+                       'vip_registry_name': item.0.registry,
+                       'vip_owner_uid': item.0.owner,
+                       'vip_prune_stale': item.0.prune_stale | default(false),
+                       'vip_result_path': item.1.path} | to_json }}"
+              - "{{ child_playbook }}"
+          environment:
+            ANSIBLE_COLLECTIONS_PATH: >-
+              {{ playbook_dir }}/../../../../../collections:{{
+              playbook_dir }}/../../../../../vendor
+          loop: "{{ vip_steps | zip(vip_step_files.results) | list }}"
+          loop_control:
+            label: "{{ item.0.label }}"
+          register: vip_steps_run
+          changed_when: true
+
+        - name: Read each step result
+          ansible.builtin.slurp:
+            src: "{{ item.path }}"
+          loop: "{{ vip_step_files.results }}"
+          loop_control:
+            label: osac-vip-step
+          register: vip_steps_output
+
+        - name: Save the step results with their expectations
+          ansible.builtin.set_fact:
+            vip_step_results: >-
+              {{ vip_steps_output.results | map(attribute='content')
+                 | map('b64decode') | map('from_json') | list
+                 | zip(vip_steps) | map('combine') | list }}
+
+        - name: Each step behaved as a real job would observe it
+          ansible.builtin.assert:
+            that:
+              - item.failed == item.expect_failed
+              - >-
+                item.expect_changed is not defined
+                or item.changed == item.expect_changed
+              - >-
+                item.expect_address is not defined
+                or item.address == item.expect_address
+              - >-
+                item.expect_message is not defined
+                or item.expect_message in item.msg
+            fail_msg: >-
+              {{ item.label }} did not behave as expected: {{ item }}
+            quiet: true
+          loop: "{{ vip_step_results }}"
+          loop_control:
+            label: "{{ item.label }}"
+
+        - name: Read the registry after pruning
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ prune_registry }}"
+          register: vip_registry_after_prune
+
+        - name: A claim whose ClusterOrder is gone does not survive pruning
+          ansible.builtin.assert:
+            that:
+              - vip_registry_after_prune.resources | length == 1
+              - vip_registry_after_prune.resources[0].data['live-owner'] is defined
+              - >-
+                vip_registry_after_prune.resources[0].data['vanished-owner']
+                is undefined
+            fail_msg: >-
+              A claim whose ClusterOrder is gone must not survive a pruning
+              allocation, got {{ vip_registry_after_prune.resources | default([]) }}.
+
+      always:
+        - name: Remove the fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: absent
+          failed_when: false
+
+        - name: Remove the result files
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop: >-
+            {{ (vip_concurrent_files.results | default([]) | map(attribute='path') | list)
+               + (vip_step_files.results | default([]) | map(attribute='path') | list) }}
+          failed_when: false

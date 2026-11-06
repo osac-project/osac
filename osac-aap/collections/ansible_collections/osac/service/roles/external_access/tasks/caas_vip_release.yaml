@@ -1,0 +1,54 @@
+---
+# Release the ClusterOrder's guest ingress VIP.
+#
+# This runs after the shared DNS records are gone and after hosted_cluster's
+# teardown waits, and it re-checks both guarantees itself: a release before the
+# guest cluster can no longer advertise the address would hand a live address
+# to another cluster. When either guarantee is missing the claim is retained and
+# reported instead of released; the next delete run retries it.
+- name: Read the ClusterOrder after the guest cluster teardown
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: ClusterOrder
+    namespace: "{{ cluster_order.metadata.namespace }}"
+    name: "{{ cluster_order.metadata.name }}"
+  register: external_access_release_cluster_order
+  no_log: true
+
+- name: Read the HostedCluster after the guest cluster teardown
+  kubernetes.core.k8s_info:
+    api_version: hypershift.openshift.io/v1beta1
+    kind: HostedCluster
+    namespace: "{{ cluster_working_namespace }}"
+    name: "{{ cluster_order.metadata.name }}"
+  register: external_access_release_hosted_cluster
+  no_log: true
+
+- name: Set whether the guest ingress VIP can be released
+  ansible.builtin.set_fact:
+    external_access_vip_release_safe: >-
+      {{ (external_access_release_cluster_order.resources | length == 0
+          or 'osac.openshift.io/baremetalworker-finalizer' not in
+             (external_access_release_cluster_order.resources[0].metadata.finalizers | default([])))
+         and external_access_release_hosted_cluster.resources | length == 0 }}
+
+- name: Report a retained guest ingress VIP
+  when: not (external_access_vip_release_safe | bool)
+  ansible.builtin.debug:
+    msg: >-
+      Retaining the guest ingress VIP claim for
+      {{ cluster_order.metadata.namespace }}/{{ cluster_order.metadata.name }}:
+      the guest cluster may still advertise it (baremetalworker finalizer or
+      HostedCluster still present). Re-run the delete flow to release it.
+
+- name: Release the guest ingress VIP
+  when: external_access_vip_release_safe | bool
+  osac.service.ingress_vip_claim:
+    state: absent
+    registry_namespace: "{{ external_access_vip_registry_namespace }}"
+    registry_name: "{{ external_access_vip_registry_name }}"
+    owner_uid: "{{ cluster_order.metadata.uid }}"
+    owner_namespace: "{{ cluster_order.metadata.namespace }}"
+    owner_name: "{{ cluster_order.metadata.name }}"
+  register: external_access_vip_release
+  no_log: true

@@ -5,6 +5,9 @@
   register: wait_for_dns_info
   changed_when: false
   no_log: true
-  until: (wait_for_dns_info.stdout | length > 0)
+  until: >-
+    (wait_for_dns_info.stdout | length > 0) and
+    ((wait_for_dns_address | default('') | length == 0) or
+     (wait_for_dns_address in wait_for_dns_info.stdout))
   retries: "{{ wait_for_dns_retries }}"
   delay: "{{ wait_for_dns_delay }}"

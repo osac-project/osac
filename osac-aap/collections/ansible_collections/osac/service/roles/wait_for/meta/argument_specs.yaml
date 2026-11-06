@@ -4,6 +4,13 @@ argument_specs:
       wait_for_dns_record:
         type: str
         required: true
+      wait_for_dns_address:
+        type: str
+        description: >-
+          Address the record must resolve to. Empty (default) accepts any
+          non-empty answer; when set, the wait keeps retrying until the answer
+          contains this address, so a stale answer for another cluster cannot
+          pass the wait.
       wait_for_dns_server:
         type: str
         description: >-

@@ -20,9 +20,30 @@ argument_specs:
         type: str
         required: false
         description: "Ansible collection providing generic network-specific steps"
-      external_access_agent_namespace:
+      external_access_metallb_ingress_range:
         type: str
         required: false
+        description: >-
+          Provider-reserved IPv4 range (for example 10.10.0.240-10.10.0.243)
+          from which each CaaS ClusterOrder claims exactly one guest ingress
+          VIP. Defaults to the CI_GUEST_INGRESS_IP_RANGE environment variable.
+          There is no default range on purpose: it must be an address range the
+          CI fabric routes to guest workers and endpoint consumers.
+      external_access_vip_registry_namespace:
+        type: str
+        required: false
+        description: >-
+          Namespace of the hub ConfigMap holding guest ingress VIP claims.
+          Defaults to the AAP pod namespace.
+      external_access_vip_registry_name:
+        type: str
+        required: false
+        description: Name of the hub ConfigMap holding guest ingress VIP claims.
+      external_access_vip_prune_stale:
+        type: bool
+        required: false
+        description: >-
+          Reclaim claims whose ClusterOrder no longer exists before allocating.
       external_access_resource_wait_retries:
         type: int
         required: false

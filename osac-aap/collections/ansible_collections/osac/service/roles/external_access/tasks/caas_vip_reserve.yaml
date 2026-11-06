@@ -1,0 +1,44 @@
+---
+# Reserve the ClusterOrder's guest ingress VIP from the provider-owned CI range.
+#
+# The range is an input, never a default: it must be a range the CI fabric
+# routes to guest workers and to whoever consumes the endpoint. The claim is
+# keyed by ClusterOrder UID and kept until caas_vip_release.yaml removes it, so
+# a failed install or cleanup cannot hand a still-advertised address to another
+# cluster.
+- name: Set the guest ingress VIP range
+  ansible.builtin.set_fact:
+    external_access_metallb_ingress_range: >-
+      {{ external_access_metallb_ingress_range
+         | default(lookup('env', 'CI_GUEST_INGRESS_IP_RANGE'), true)
+         | default('', true) }}
+  no_log: true
+
+- name: Require a provider-reserved guest ingress VIP range
+  ansible.builtin.assert:
+    that:
+      - external_access_metallb_ingress_range | length > 0
+      - cluster_order.metadata.uid is defined
+    fail_msg: >-
+      CI_GUEST_INGRESS_IP_RANGE must hold the provider-reserved IPv4 range for
+      guest ingress VIPs, for example 10.10.0.240-10.10.0.243. Obtain the range
+      from the CI fabric owner; do not invent one.
+    quiet: true
+
+- name: Reserve the guest ingress VIP
+  osac.service.ingress_vip_claim:
+    state: present
+    ip_range: "{{ external_access_metallb_ingress_range }}"
+    registry_namespace: "{{ external_access_vip_registry_namespace }}"
+    registry_name: "{{ external_access_vip_registry_name }}"
+    owner_uid: "{{ cluster_order.metadata.uid }}"
+    owner_namespace: "{{ cluster_order.metadata.namespace }}"
+    owner_name: "{{ cluster_order.metadata.name }}"
+    prune_stale: "{{ external_access_vip_prune_stale }}"
+  register: external_access_vip_claim
+  no_log: true
+
+- name: Set the reserved guest ingress VIP
+  ansible.builtin.set_fact:
+    external_access_metallb_ingress_ip: "{{ external_access_vip_claim.address }}"
+  no_log: true

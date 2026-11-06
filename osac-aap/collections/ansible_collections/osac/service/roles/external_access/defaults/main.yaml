@@ -1,4 +1,10 @@
 external_access_resource_wait_retries: 360
 external_access_resource_wait_delay: 5
 external_access_dns_ttl: 1800
-external_access_agent_namespace: "hardware-inventory"
+# Guest ingress VIP claims are kept in a hub ConfigMap, keyed by ClusterOrder
+# UID. The AAP service account runs with cluster-admin, so the AAP namespace is
+# a usable default registry location.
+external_access_vip_registry_namespace: "{{ lookup('env', 'POD_NAMESPACE') | default('osac-aap', true) }}"
+external_access_vip_registry_name: "osac-ci-guest-ingress-vip-claims"
+# Reclaim claims whose ClusterOrder no longer exists before allocating.
+external_access_vip_prune_stale: true

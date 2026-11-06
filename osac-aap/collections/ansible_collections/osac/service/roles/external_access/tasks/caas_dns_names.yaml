@@ -1,0 +1,9 @@
+---
+# DNS names for the guest cluster's API and ingress endpoints. Both publication
+# stages derive the same names, so they are set in exactly one place.
+- name: Set DNS names
+  ansible.builtin.set_fact:
+    external_access_api_domain: "api.{{ external_access_name }}.{{ external_access_base_domain }}"
+    external_access_api_int_domain: "api-int.{{ external_access_name }}.{{ external_access_base_domain }}"
+    external_access_ingress_domain: "apps.{{ external_access_name }}.{{ external_access_base_domain }}"
+  no_log: true

@@ -1,5 +1,9 @@
-- name: Run shared CaaS DNS discovery and record lifecycle
-  ansible.builtin.include_tasks: caas_dns_create.yaml
+---
+- name: Publish the API bootstrap DNS records
+  ansible.builtin.include_tasks: caas_api_dns_create.yaml
+
+- name: Configure the guest ingress VIP and publish its wildcard DNS record
+  ansible.builtin.include_tasks: caas_ingress_create.yaml
 
 - name: Publish CaaS endpoints to ClusterOrder
   ansible.builtin.include_tasks: publish.yaml

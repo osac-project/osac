@@ -338,6 +338,65 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(
 				Equal(readyStamp.AsTime().Add(time.Microsecond)))
 		})
+
+		It("maps the DeleteFailed phase to DELETE_FAILED on the update path", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-2 * time.Hour))
+			phaseStamp := metav1.NewTime(time.Now().Add(-time.Hour).UTC())
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_DELETING, oldStamp)
+			clusterOrder := &osacv1alpha1.ClusterOrder{Status: osacv1alpha1.ClusterOrderStatus{
+				Phase:               osacv1alpha1.ClusterOrderPhaseDeleteFailed,
+				PhaseTransitionTime: &phaseStamp,
+			}}
+
+			syncClusterOrderPhase(testCtx, clusterOrder, remote)
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(phaseStamp.Time))
+		})
+
+		It("reports DELETE_FAILED on the delete path when the deprovision failed", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-2 * time.Hour))
+			phaseStamp := metav1.NewTime(time.Now().Add(-time.Hour).UTC())
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_DELETING, oldStamp)
+			clusterOrder := &osacv1alpha1.ClusterOrder{Status: osacv1alpha1.ClusterOrderStatus{
+				Phase:               osacv1alpha1.ClusterOrderPhaseDeleteFailed,
+				PhaseTransitionTime: &phaseStamp,
+			}}
+
+			Expect(syncClusterOrderDelete(testCtx, clusterOrder, remote)).To(Succeed())
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED))
+			// The copied time is the CR's recorded transition, not the feedback moment.
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(phaseStamp.Time))
+		})
+
+		It("keeps the stored transition time when DELETE_FAILED is unchanged", func() {
+			oldStamp := timestamppb.New(time.Now().Add(-time.Hour))
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED, oldStamp)
+			clusterOrder := &osacv1alpha1.ClusterOrder{Status: osacv1alpha1.ClusterOrderStatus{
+				Phase: osacv1alpha1.ClusterOrderPhaseDeleteFailed,
+			}}
+
+			Expect(syncClusterOrderDelete(testCtx, clusterOrder, remote)).To(Succeed())
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(oldStamp.AsTime()))
+		})
+
+		It("returns to DELETING on the delete path when the CR records the retry", func() {
+			failedStamp := timestamppb.New(time.Now().Add(-2 * time.Hour))
+			retryStamp := metav1.NewTime(time.Now().Add(-time.Minute).UTC())
+			remote := remoteWithState(privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED, failedStamp)
+			clusterOrder := &osacv1alpha1.ClusterOrder{Status: osacv1alpha1.ClusterOrderStatus{
+				Phase:               osacv1alpha1.ClusterOrderPhaseDeleting,
+				PhaseTransitionTime: &retryStamp,
+			}}
+
+			Expect(syncClusterOrderDelete(testCtx, clusterOrder, remote)).To(Succeed())
+
+			Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_DELETING))
+			Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(retryStamp.Time))
+		})
 	})
 
 	Context("When reconciling a resource that doesn't exist", func() {
@@ -1774,6 +1833,69 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				}
 			}
 			Expect(hasNodeSetsPath).To(BeTrue())
+		})
+
+		It("should propagate per-node-set ready sizes to fulfillment", func() {
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			now := metav1.Now()
+			clusterOrder.Status.NodeRequests = []osacv1alpha1.NodeRequestStatus{
+				{NodeSet: "workers", NumberOfNodes: 3,
+					BareMetal: &osacv1alpha1.BareMetalNodeSpec{InstanceType: "m5.xlarge"}},
+				{NodeSet: "gpu", NumberOfNodes: 2,
+					BareMetal: &osacv1alpha1.BareMetalNodeSpec{InstanceType: "m5.xlarge"}},
+			}
+			clusterOrder.Status.Workers = []osacv1alpha1.WorkerStatus{
+				{NodeSet: "workers", Name: "w-0", Kind: "BareMetalInstance",
+					Phase: "Ready", AttemptCount: 1, CreationTimestamp: now},
+				{NodeSet: "workers", Name: "w-1", Kind: "BareMetalInstance",
+					Phase: "Provisioning", AttemptCount: 1, CreationTimestamp: now},
+				{NodeSet: "workers", Name: "w-2", Kind: "BareMetalInstance",
+					Phase: "Failed", AttemptCount: 2, CreationTimestamp: now},
+				{NodeSet: "gpu", Name: "g-0", Kind: "BareMetalInstance",
+					Phase: "Ready", AttemptCount: 1, CreationTimestamp: now},
+				{NodeSet: "gpu", Name: "g-1", Kind: "BareMetalInstance",
+					Phase: "WaitingForAgent", AttemptCount: 1, CreationTimestamp: now},
+			}
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
+			instanceType := func() *privatev1.BareMetalInstanceTypeReference {
+				return privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit-id", Name: "m5.xlarge"}.Build()
+			}
+			mockClient.getResponse.GetObject().GetSpec().SetNodeSets(map[string]*privatev1.ClusterNodeSet{
+				"workers": {BaremetalInstanceType: instanceType()},
+				"gpu":     {BaremetalInstanceType: instanceType()},
+			})
+
+			_, err := reconciler.Reconcile(testCtx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+
+			workers := mockClient.lastUpdate.GetStatus().GetNodeSets()["workers"]
+			Expect(workers.GetReadySize()).To(Equal(int32(1)))
+			Expect(workers.HasReadySize()).To(BeTrue())
+			gpu := mockClient.lastUpdate.GetStatus().GetNodeSets()["gpu"]
+			Expect(gpu.GetReadySize()).To(Equal(int32(1)))
+		})
+
+		It("reports a zero ready size for a node set with no ready workers", func() {
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			now := metav1.Now()
+			clusterOrder.Status.Workers = []osacv1alpha1.WorkerStatus{
+				{NodeSet: "workers", Name: "w-0", Kind: "BareMetalInstance",
+					Phase: "Provisioning", AttemptCount: 1, CreationTimestamp: now},
+				{NodeSet: "workers", Name: "w-1", Kind: "BareMetalInstance",
+					Phase: "Failed", AttemptCount: 2, CreationTimestamp: now},
+			}
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
+
+			_, err := reconciler.Reconcile(testCtx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+
+			workers := mockClient.lastUpdate.GetStatus().GetNodeSets()["workers"]
+			Expect(workers.GetReadySize()).To(Equal(int32(0)))
+			Expect(workers.HasReadySize()).To(BeTrue())
 		})
 
 		It("repairs a status node set missing its BMIT reference", func() {

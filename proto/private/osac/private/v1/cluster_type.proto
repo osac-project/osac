@@ -537,6 +537,12 @@ message ClusterNodeSet {
 
   // OpenShift version observed on this node set. Populated only in Cluster status.
   string observed_version = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Number of nodes of the set that are ready. Unlike `size`, which is the
+  // desired count, this is the observed count of workers that reached the
+  // ready phase. Populated only in Cluster status; it is zero while the nodes
+  // are still provisioning or are unhealthy.
+  optional int32 ready_size = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Local reference to a Cluster resource.

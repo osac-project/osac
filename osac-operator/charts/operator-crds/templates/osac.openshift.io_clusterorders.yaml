@@ -549,6 +549,7 @@ spec:
                 - Failed
                 - Ready
                 - Deleting
+                - DeleteFailed
                 type: string
               phaseTransitionTime:
                 description: |-

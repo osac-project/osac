@@ -727,6 +727,13 @@ workloads, and coordinate any change with the release owner. Set
 before Phase 1b. With `NS=osac`, its default host is `osac-ui-osac.<DOMAIN>`;
 replace `<DOMAIN>` with the value from the command above:
 
+The Phase 1 commands also have `--set` arguments, which override values from
+the files passed with `-f`. When preparing upgrades, check `lvms.channel` and
+the Keycloak hostname and Route settings (`keycloak.hostname`,
+`keycloak.route.publicIngress`, and `keycloak.route.hostname`). Remove any
+conflicting `--set` arguments or change them to match the settings you intend
+to preserve. Confirm these effective values before running Phase 2.
+
 ```yaml
 certManager:
   enabled: true
@@ -774,6 +781,7 @@ use:
 ```yaml
 certManager:  { enabled: false }
 trustManager: { enabled: false }
+caIssuer:     { enabled: false }
 aapOperator:  { enabled: false }
 cnv:          { enabled: false }
 lvms:         { enabled: false }
@@ -800,8 +808,12 @@ mce:          { enabled: false }
   disabled state also suppresses the default Assisted image override
   `ConfigMap` and its MCE 5.0 compatibility RBAC; the chart does not modify the
   existing installation.
-- `caIssuer.enabled: false` requires you to provide a `ClusterIssuer` and set
-  `service.certs.issuerRef` in the phase-2 `my-values.yaml`.
+- When `default-ca` is administrator-managed, set `caIssuer.enabled: false` so
+  `osac-infra` does not render or adopt the `default-ca` `ClusterIssuer` and
+  `default-ca-cert` `Certificate`. This also disables the CA-bundle hook. Before
+  Phase 2, provide the ConfigMap named by `service.certs.caBundle.configMap` in
+  the OSAC release namespace, and set `service.certs.issuerRef` in
+  `my-values.yaml` to an existing `ClusterIssuer` or `Issuer`.
 - `keycloak.enabled: false` requires a pre-configured Keycloak with the `osac`
   realm, clients, and roles already set up.
 

@@ -2164,8 +2164,13 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    cluster-scoped and needs no namespace flag:
 
    ```console
-   oc get bundles.trust.cert-manager.io <bundle_name>
+   oc get bundles.trust.cert-manager.io <bundle_name> -o yaml
    ```
+
+   In `status.conditions`, find the condition with `type: Synced`. Confirm its
+   `status` is `True` and its `observedGeneration` matches the Bundle's
+   `metadata.generation` before using the ConfigMap. This verifies that
+   trust-manager has processed the current Bundle configuration.
 
    The ConfigMap must contain the CA bundle under the fixed `bundle.pem` key
    required by the OSAC hooks. Extract it once for the client checks below:

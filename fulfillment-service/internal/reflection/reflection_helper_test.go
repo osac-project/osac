@@ -187,6 +187,7 @@ var _ = Describe("Reflection helper", func() {
 				"user",
 				"virtualnetwork",
 				"volume",
+				"workloadcluster",
 			))
 		})
 
@@ -221,6 +222,7 @@ var _ = Describe("Reflection helper", func() {
 				"users",
 				"virtualnetworks",
 				"volumes",
+				"workloadclusters",
 			))
 		})
 

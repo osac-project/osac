@@ -62,12 +62,38 @@ class OsacCLI:
 
     @staticmethod
     def _parse_uuid(stdout: str) -> str:
-        match: re.Match[str] | None = re.search(r"'([^']+)'", stdout)
+        match: re.Match[str] | None = re.search(r"(?:'|`)([^'`]+)(?:'|`)", stdout)
         assert match is not None, f"Failed to parse UUID from CLI output: {stdout}"
         return match.group(1)
 
-    def create_hub(self, *, hub_id: str, kubeconfig: str) -> None:
-        self._run("create", "hub", "--id", hub_id, "--kubeconfig", kubeconfig, "--namespace", self.namespace)
+    def create_hub(self, *, hub_id: str, kubeconfig: str) -> str:
+        return self._parse_uuid(
+            self._run("create", "hub", "--name", hub_id, "--kubeconfig", kubeconfig, "--namespace", self.namespace)
+        )
+
+    def create_workload_cluster(
+        self, *, name: str, source_hub_id: str, managed_cluster_name: str, supported_workloads: list[str]
+    ) -> str:
+        return self._parse_uuid(
+            self._run(
+                "workload-cluster",
+                "create",
+                "--name",
+                name,
+                "--source-hub",
+                source_hub_id,
+                "--managed-cluster-name",
+                managed_cluster_name,
+                "--supported-workloads",
+                ",".join(supported_workloads),
+            )
+        )
+
+    def list_workload_clusters(self) -> str:
+        return self._run("workload-cluster", "list")
+
+    def describe_workload_cluster(self, reference: str) -> str:
+        return self._run("workload-cluster", "describe", reference)
 
     def create_compute_instance(
         self,

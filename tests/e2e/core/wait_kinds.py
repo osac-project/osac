@@ -43,3 +43,6 @@ class WaitResourceKind(StrEnum):
     KEYCLOAK_REALM = "KeycloakRealm"
     KEYCLOAK_ORGANIZATION = "KeycloakOrganization"
     HEARTBEAT = "Heartbeat"
+    HUB = "Hub"
+    MANAGED_CLUSTER = "ManagedCluster"
+    WORKLOAD_CLUSTER = "WorkloadCluster"

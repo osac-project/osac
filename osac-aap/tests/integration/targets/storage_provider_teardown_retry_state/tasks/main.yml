@@ -1,0 +1,248 @@
+---
+- name: Teardown retry state - Setup backend
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_name: test-retrystate
+    tenant_namespace: osac-system
+    tenant_uid: "test-uid-retrystate"
+    vast_storage_validate_certs: false
+    vast_storage_config_namespace: osac-system
+    storage_provider_backend_connections:
+      be-retry:
+        endpoint: "127.0.0.1:18443"
+        username: admin
+        password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    storage_provider_tiers:
+      - name: nfs-tier
+        backend_id: be-retry
+        protocol: nfs
+        provider: vast
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+  tasks:
+    - name: Reset mock VMS state
+      ansible.builtin.uri:
+        url: https://127.0.0.1:18443/_reset
+        method: POST
+        validate_certs: false
+      failed_when: false
+
+    - name: Delete any stale Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: vast-tenant-config-test-retrystate-be-retry
+        namespace: osac-system
+      failed_when: false
+
+    - name: Setup backend
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+
+    - name: Verify Secret was created
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: vast-tenant-config-test-retrystate-be-retry
+        namespace: osac-system
+      register: _setup_secret
+
+    - name: Assert Secret exists
+      ansible.builtin.assert:
+        that:
+          - _setup_secret.resources | length == 1
+        fail_msg: "Setup did not create the hub Secret — later assertions would be meaningless"
+
+- name: Teardown retry state - Build list-denied kubeconfig
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Build RBAC and kubeconfig
+      ansible.builtin.shell: |
+        set -euo pipefail
+        KC=/tmp/osac_limited_kubeconfig
+        kubectl delete sa osac-teardown-limited -n osac-system --ignore-not-found
+        kubectl delete role osac-teardown-limited -n osac-system --ignore-not-found
+        kubectl delete rolebinding osac-teardown-limited -n osac-system --ignore-not-found
+        kubectl create sa osac-teardown-limited -n osac-system
+        kubectl create role osac-teardown-limited -n osac-system \
+          --verb=get --verb=delete --resource=secrets
+        kubectl create rolebinding osac-teardown-limited -n osac-system \
+          --role=osac-teardown-limited \
+          --serviceaccount=osac-system:osac-teardown-limited
+        TOKEN=$(kubectl create token osac-teardown-limited -n osac-system --duration=1h)
+        SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+        rm -f "$KC"
+        kubectl config set-cluster kind --server="$SERVER" \
+          --insecure-skip-tls-verify=true --kubeconfig="$KC"
+        kubectl config set-credentials limited --token="$TOKEN" --kubeconfig="$KC"
+        kubectl config set-context limited --cluster=kind --user=limited \
+          --namespace=osac-system --kubeconfig="$KC"
+        kubectl config use-context limited --kubeconfig="$KC"
+
+    - name: Verify get works with limited kubeconfig
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/tmp/osac_limited_kubeconfig get secret vast-tenant-config-test-retrystate-be-retry -n osac-system
+      register: _rbac_get_test
+      failed_when: false
+      changed_when: false
+
+    - name: Assert get is allowed
+      ansible.builtin.assert:
+        that:
+          - _rbac_get_test.rc == 0
+
+    - name: Verify list is denied with limited kubeconfig
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/tmp/osac_limited_kubeconfig get secrets -n osac-system
+      register: _rbac_list_test
+      failed_when: false
+      changed_when: false
+
+    - name: Assert list is forbidden
+      ansible.builtin.assert:
+        that:
+          - _rbac_list_test.rc != 0
+          - "'forbidden' in _rbac_list_test.stderr | lower"
+        fail_msg: "list is not denied — the test would not exercise the failure path"
+
+- name: Teardown retry state - Teardown with list denied
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_name: test-retrystate
+    tenant_namespace: osac-system
+    tenant_uid: "test-uid-retrystate"
+    vast_storage_validate_certs: false
+    vast_storage_config_namespace: osac-system
+    storage_provider_backend_connections:
+      be-retry:
+        endpoint: "127.0.0.1:18443"
+        username: admin
+        password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    storage_provider_tiers:
+      - name: nfs-tier
+        backend_id: be-retry
+        protocol: nfs
+        provider: vast
+  environment:
+    K8S_AUTH_KUBECONFIG: "/tmp/osac_limited_kubeconfig"
+    KUBECONFIG: "/tmp/osac_limited_kubeconfig"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+  tasks:
+    - name: Run teardown with list-denied kubeconfig
+      block:
+        - name: Teardown backend
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: teardown_backend
+      rescue:
+        - name: Teardown failed
+          ansible.builtin.set_fact:
+            _retry_teardown_failed: true
+
+- name: Teardown retry state - Verify Secret preserved
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Check if Secret still exists (admin kubeconfig)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: vast-tenant-config-test-retrystate-be-retry
+        namespace: osac-system
+      register: _retry_secret
+
+    - name: Assert Secret survived lookup failure
+      ansible.builtin.assert:
+        that:
+          - _retry_secret.resources | length == 1
+        fail_msg: >-
+          Hub Secret was deleted even though the sharing-state lookup failed.
+          VAST tenant and views remain with no Secret to drive a retry —
+          _vast_shared_check_failed is not reaching _vast_teardown_clean.
+        success_msg: "Hub Secret preserved for retry after sharing-state lookup failure"
+
+    - name: Verify VAST tenant also survived
+      ansible.builtin.uri:
+        url: https://127.0.0.1:18443/api/tenants/?name=test-retrystate
+        method: GET
+        validate_certs: false
+      register: _retry_tenant
+
+    - name: Assert tenant exists
+      ansible.builtin.assert:
+        that:
+          - _retry_tenant.json | length == 1
+        fail_msg: "Tenant was deleted — Secret preservation is correct but incomplete cleanup"
+
+- name: Teardown retry state - Cleanup
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_name: test-retrystate
+    tenant_namespace: osac-system
+    tenant_uid: "test-uid-retrystate"
+    vast_storage_validate_certs: false
+    vast_storage_config_namespace: osac-system
+    storage_provider_backend_connections:
+      be-retry:
+        endpoint: "127.0.0.1:18443"
+        username: admin
+        password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    storage_provider_tiers:
+      - name: nfs-tier
+        backend_id: be-retry
+        protocol: nfs
+        provider: vast
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+  tasks:
+    - name: Delete RoleBinding
+      ansible.builtin.shell: |
+        kubectl delete rolebinding osac-teardown-limited -n osac-system --ignore-not-found
+      failed_when: false
+
+    - name: Delete Role
+      ansible.builtin.shell: |
+        kubectl delete role osac-teardown-limited -n osac-system --ignore-not-found
+      failed_when: false
+
+    - name: Delete ServiceAccount
+      ansible.builtin.shell: |
+        kubectl delete sa osac-teardown-limited -n osac-system --ignore-not-found
+      failed_when: false
+
+    - name: Remove limited kubeconfig
+      ansible.builtin.file:
+        path: /tmp/osac_limited_kubeconfig
+        state: absent
+      failed_when: false
+
+    - name: Run teardown with admin kubeconfig to clear VAST state
+      block:
+        - name: Teardown backend to clear VAST state
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: teardown_backend
+      rescue:
+        - name: Teardown failed in cleanup (ignored)
+          ansible.builtin.debug:
+            msg: "Teardown failed but continuing cleanup"
+
+    - name: Delete test Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: vast-tenant-config-test-retrystate-be-retry
+        namespace: osac-system
+      failed_when: false

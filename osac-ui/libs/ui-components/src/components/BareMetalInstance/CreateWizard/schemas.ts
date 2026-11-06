@@ -5,14 +5,14 @@ import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/ne
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 import { userDataSchema } from '@osac/ui-components/validation/user-data';
 
-import { hasBareMetalAuthentication } from './fields';
-import { isValidSshPublicKey } from '../../ProvisioningWizard/credentialValidation';
+import type { BareMetalInstanceWizardValues } from './fields';
 
 export type BareMetalWizardStepId =
   | 'catalog'
   | 'general'
   | 'configuration'
   | 'networking'
+  | 'access'
   | 'review';
 
 const lockedField = (valueSchema: yup.AnySchema) =>
@@ -21,6 +21,12 @@ const lockedField = (valueSchema: yup.AnySchema) =>
     locked: yup.boolean(),
   });
 
+const hasAuthentication = (spec: BareMetalInstanceWizardValues['spec'] | undefined): boolean => {
+  const userData = spec?.userData?.value;
+  const selectedUserData = userData?.source === 'secret' ? userData.secret : userData?.inline;
+  return Boolean(spec?.sshKey?.value || selectedUserData);
+};
+
 const buildBareMetalInstanceFieldDefinitions = (t: TFunction) => {
   return {
     catalogItemReference: yup.object({
@@ -28,22 +34,6 @@ const buildBareMetalInstanceFieldDefinitions = (t: TFunction) => {
       id: yup.string().required(t('catalogProvision.validation.catalogItemRequired')),
     }),
     metadataName: resourceNameSchema(t),
-    specSshKey: lockedField(
-      yup
-        .string()
-        .test(
-          'ssh-public-key',
-          t(
-            'SSH public key must be in the form "[TYPE] key [[EMAIL]]". Supported types are ssh-rsa, ssh-ed25519, and ecdsa-sha2-nistp256/384/521.',
-          ),
-          (value) => isValidSshPublicKey(value),
-        ),
-    ),
-    specUserData: lockedField(yup.string()).when('userDataSource', {
-      is: (source: { value?: string }) => source?.value !== 'secret',
-      then: () => lockedField(userDataSchema(t)),
-      otherwise: () => lockedField(yup.string()),
-    }),
   };
 };
 
@@ -59,43 +49,6 @@ export const buildBareMetalInstanceStepSchema = (
   stepId: BareMetalWizardStepId,
   t: TFunction,
 ): yup.AnyObjectSchema | undefined => {
-  if (stepId === 'review') {
-    return yup
-      .object({
-        spec: yup.object({
-          sshKey: lockedField(yup.string()),
-          userDataSource: lockedField(yup.string()),
-          userData: lockedField(yup.string()),
-          userDataSecret: lockedField(yup.string()),
-        }),
-      })
-      .test(
-        'authentication-method',
-        t('Provide either an SSH public key or user data containing access credentials.'),
-        function (values) {
-          const spec = values?.spec as
-            | {
-                sshKey?: { value?: string };
-                userDataSource?: { value?: string };
-                userData?: { value?: string };
-                userDataSecret?: { value?: string };
-              }
-            | undefined;
-          const isSecretSource = spec?.userDataSource?.value === 'secret';
-          if (
-            hasBareMetalAuthentication(
-              spec?.sshKey?.value,
-              isSecretSource ? undefined : spec?.userData?.value,
-              isSecretSource ? spec?.userDataSecret?.value : undefined,
-            )
-          ) {
-            return true;
-          }
-          return this.createError({ path: 'spec.sshKey.value' });
-        },
-      );
-  }
-
   const fields = buildBareMetalInstanceFieldDefinitions(t);
 
   switch (stepId) {
@@ -108,16 +61,10 @@ export const buildBareMetalInstanceStepSchema = (
         metadata: yup.object({
           name: fields.metadataName,
         }),
-        spec: yup.object({
-          sshKey: fields.specSshKey,
-        }),
       });
     case 'configuration':
       return yup.object({
         spec: yup.object({
-          userDataSource: lockedField(yup.string()),
-          userData: fields.specUserData,
-          userDataSecret: lockedField(yup.string()),
           instanceType: lockedField(yup.string()),
           diskImage: lockedField(
             yup.object({
@@ -128,6 +75,35 @@ export const buildBareMetalInstanceStepSchema = (
       });
     case 'networking':
       return buildNetworkingSchema(t);
+    case 'access': {
+      const authenticationMessage = t('Provide either an SSH public key or user data.');
+      return yup.object({
+        spec: yup.lazy((spec: BareMetalInstanceWizardValues['spec'] | undefined) => {
+          const authenticationValid = hasAuthentication(spec);
+          return yup.object({
+            sshKey: lockedField(
+              yup
+                .string()
+                .test('authentication-method', authenticationMessage, () => authenticationValid),
+            ),
+            userData: lockedField(
+              yup.object({
+                source: yup
+                  .string()
+                  .oneOf(['inline', 'secret'])
+                  .required()
+                  .test('authentication-method', authenticationMessage, () => authenticationValid),
+                inline: yup.string().when('source', {
+                  is: 'inline',
+                  then: () => userDataSchema(t, spec?.guestOsFamily),
+                }),
+                secret: yup.string(),
+              }),
+            ),
+          });
+        }),
+      });
+    }
     default:
       return undefined;
   }

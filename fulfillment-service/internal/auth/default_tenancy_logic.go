@@ -113,9 +113,16 @@ func (p *DefaultTenancyLogic) DetermineVisibility(ctx context.Context) (result *
 	builder := NewVisibility()
 	builder.AddVisibleTenant(SharedTenant)
 	builder.AddVisibleTenants(subject.Tenants.Inclusions()...)
+	if subject.ManagedServiceAccount {
+		for _, tenant := range subject.Tenants.Inclusions() {
+			builder.SetTotalProjectVisibility(tenant)
+		}
+		result, err = builder.Build()
+		return
+	}
 
 	// Check if the user has the tenant-admin role. If so, grant full access to all projects in their tenants.
-	if p.isTenantAdmin(ctx) {
+	if IsTenantAdmin(ctx) {
 		for _, tenant := range subject.Tenants.Inclusions() {
 			builder.SetTotalProjectVisibility(tenant)
 		}
@@ -233,40 +240,4 @@ func extractProjectPathFromGroup(groupStr string) string {
 
 	// Convert slash-separated path to dot-separated (e.g., "/bens-project/prj1" -> "bens-project.prj1")
 	return strings.Join(parts[1:len(parts)-1], ".")
-}
-
-// isTenantAdmin checks if the current user has the tenant-admin role.
-func (p *DefaultTenancyLogic) isTenantAdmin(ctx context.Context) bool {
-	token := TokenFromContext(ctx)
-	if token == nil {
-		return false
-	}
-
-	authContext, err := ExtractAuthContext(token)
-	if err != nil {
-		return false
-	}
-
-	// Check realm_access.roles for "tenant-admin"
-	if authContext.RealmAccess == nil {
-		return false
-	}
-
-	rolesValue, ok := authContext.RealmAccess["roles"]
-	if !ok {
-		return false
-	}
-
-	roles, ok := rolesValue.([]any)
-	if !ok {
-		return false
-	}
-
-	for _, role := range roles {
-		if roleStr, ok := role.(string); ok && roleStr == "tenant-admin" {
-			return true
-		}
-	}
-
-	return false
 }

@@ -14,12 +14,10 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_state
     StateStore,
 )
 
-POOL_UID = "10000000-0000-4000-8000-000000000001"
-POOL_ID = "10000000-0000-4000-8000-000000000002"
-VNET_UID = "10000000-0000-4000-8000-000000000003"
-SUBNET_UID = "10000000-0000-4000-8000-000000000004"
-EIP_UID = "10000000-0000-4000-8000-000000000005"
-EIP_ID = "10000000-0000-4000-8000-000000000006"
+POOL_ID = "10000000-0000-4000-8000-000000000040"
+VNET_ID = "10000000-0000-4000-8000-000000000020"
+SUBNET_ID = "10000000-0000-4000-8000-000000000050"
+EIP_ID = "10000000-0000-4000-8000-000000000030"
 
 
 def prepare_provider_network_state(
@@ -30,24 +28,30 @@ def prepare_provider_network_state(
     """Seed the pool, VirtualNetwork, Subnet, and ExternalIP shared by tests."""
     store = StateStore(state_path)
     store.ensure_external_ip_pool(
-        POOL_UID,
         POOL_ID,
-        tenant,
+        POOL_ID,
+        "shared",
         "IPv4",
         ["198.51.100.0/30"],
     )
     store._ensure_virtual_network(
-        VNET_UID,
+        VNET_ID,
         "10.20.0.0/16",
         tenant,
         reconcile=False,
     )
     subnet, _ = store.reserve_subnet(
-        SUBNET_UID,
-        VNET_UID,
+        SUBNET_ID,
+        VNET_ID,
         tenant,
         "10.20.1.0/24",
         "eth1",
+        {
+            "gateway_ipv4": "10.20.1.1",
+            "overlay_ipv4_cidrs": [],
+            "physical_ipv4_cidrs": ["10.20.1.0/24"],
+            "lb_vip_ipv4_cidrs": [],
+        },
         observed_vlan_ids=set(),
     )
     ready_subnet = {**subnet, "phase": "ready"}
@@ -57,16 +61,16 @@ def prepare_provider_network_state(
             (
                 "ready",
                 json.dumps(ready_subnet, sort_keys=True, separators=(",", ":")),
-                SUBNET_UID,
+                SUBNET_ID,
             ),
         )
     external_ip, _ = store.reserve_external_ip(
-        EIP_UID,
+        EIP_ID,
         EIP_ID,
         tenant,
-        POOL_UID,
         POOL_ID,
-        tenant,
+        POOL_ID,
+        "shared",
         "198.51.100.0/30",
     )
     if external_ip["address"] != "198.51.100.1":

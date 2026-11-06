@@ -23,6 +23,7 @@ on:
   pull_request:
     branches:
     - main
+    - 'release-*'
   merge_group:
 
 permissions: {}

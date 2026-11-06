@@ -78,7 +78,6 @@ var _ = Describe("Service account creation", func() {
 		Expect(response.GetObject().GetStatus().GetState()).To(Equal(publicv1.ServiceAccountState_SERVICE_ACCOUNT_STATE_PENDING))
 		Expect(response.GetObject().GetStatus().GetClientSecret()).To(BeNil())
 		Expect(response.GetObject().GetStatus().GetMessage()).To(BeEmpty())
-		Expect(response.GetObject().GetMetadata().GetDisplayName()).To(BeEmpty())
 		Expect(response.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 		Expect(response.GetObject().GetMetadata().GetAnnotations()).To(HaveKeyWithValue("osac.openshift.io/tenant", testTenant))
 		Expect(request.GetObject().GetStatus().GetState()).To(Equal(publicv1.ServiceAccountState_SERVICE_ACCOUNT_STATE_READY), "input must remain unmodified")
@@ -88,6 +87,17 @@ var _ = Describe("Service account creation", func() {
 		Expect(count).To(Equal(1))
 		Expect(testPool.QueryRow(ctx, `select count(*) from changes where "table"='service_accounts' and data->>'id'=$1`, response.GetObject().GetId()).Scan(&count)).To(Succeed())
 		Expect(count).To(BeNumerically(">", 0))
+	})
+	It("allows cloud administrators to create a service account in the system tenant", func() {
+		systemCaller := auth.ContextWithSubject(context.Background(), &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+		request.GetObject().GetMetadata().SetTenant(auth.SystemTenant)
+		response, err := create(systemCaller, request)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SystemTenant))
+		var count int
+		Expect(testPool.QueryRow(ctx, `select count(*) from service_accounts where id=$1 and tenant=$2`,
+			response.GetObject().GetId(), auth.SystemTenant).Scan(&count)).To(Succeed())
+		Expect(count).To(Equal(1))
 	})
 	It("validates a dry run without creating a row", func() {
 		dry := metadata.NewIncomingContext(caller, metadata.Pairs(DryRunMetadataKey, "true"))
@@ -109,9 +119,8 @@ var _ = Describe("Service account creation", func() {
 		Expect(count).To(BeZero())
 	}, Entry("caller ID", func(o *publicv1.ServiceAccount) { o.SetId("chosen") }),
 		Entry("tenant mismatch", func(o *publicv1.ServiceAccount) { o.GetMetadata().SetTenant("foreign") }),
+		Entry("system tenant", func(o *publicv1.ServiceAccount) { o.GetMetadata().SetTenant(auth.SystemTenant) }),
 		Entry("project", func(o *publicv1.ServiceAccount) { o.GetMetadata().SetProject("team") }),
-		Entry("display name", func(o *publicv1.ServiceAccount) { o.GetMetadata().SetDisplayName("Build robot") }),
-		Entry("description", func(o *publicv1.ServiceAccount) { o.GetMetadata().SetDescription("Automation identity") }),
 		Entry("bad name", func(o *publicv1.ServiceAccount) { o.GetMetadata().SetName("Invalid_name") }))
 	It("rejects a duplicate name", func() {
 		_, err := create(caller, request)

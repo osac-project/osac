@@ -4,36 +4,30 @@
 # OSAC_UI_BASE_URL, OSAC_ADMIN_USERNAME, and OSAC_ADMIN_PASSWORD.
 
 tenant_name: 'tenant1'
+# The break-glass password is replaced with tenant_password, or tenant_name
+# when tenant_password is not set.
 
 catalog:
   name: 'catalog-item-e2e'
-  template: 'osac.templates.ocp_virt_vm'
-  title: 'CLI catalog item'
-  description: 'CLI-created catalog item for E2E testing.'
+  # The UI displays the template metadata.name, not its resource ID.
+  template: 'ocp-virt-vm'
+  description: 'Catalog item created through the UI for E2E testing.'
   type: 'Virtual Machine'
   status: 'Live'
   usage: 'Global public'
   fields:
     instance_type:
-      name: 'u1-medium'
-      shared: true
-      vcpus: 4
-      memory_gib: 8
+      name: 'instance-type-e2e'
     boot_disk:
       size_gib: 80
     disk_image:
-      name: 'fedora'
-      shared: true
+      name: 'disk-image-e2e'
 
 instance_type:
   name: 'instance-type-e2e'
   description: 'Instance type created by e2e test'
   vcpus: 4
-  memory_gib: 16
-  gpu:
-    count: 1
-    resource_name: 'nvidia.com/A100'
-    pci_device_selector: '10DE:20B0'
+  memory_gib: 8
 
 disk_image:
   # Playwright appends a per-run suffix so teardown only targets this run's image.

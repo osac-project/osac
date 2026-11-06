@@ -205,6 +205,9 @@ the Keycloak bootstrap passwords, and disable `bundledPostgres` and
 an external database and Vault-compatible secret store; see the [customer
 install guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md)
 and [secrets management configuration guide](secrets-management-configuration.md).
+The full external-PostgreSQL/-OpenBao wiring (connection Secrets, mTLS
+certificates, values) is in the
+[external services support guide](external-services-support-guide.md).
 The customer install guide also explains how to configure `my-values.yaml` for
 the services you plan to deploy. Check the LVMS device configuration and
 MetalLB address range against your cluster, and set `cnv.enabled: true` if
@@ -487,7 +490,9 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 
 For a multicluster VMaaS deployment, `make install-multicluster` uses the
 infra values to configure EVPN on the workload cluster. The management-cluster
-overlay keeps `evpn.enabled` disabled.
+overlay keeps `evpn.enabled` disabled. OSAC provider networking with VMs on a
+separate cluster is not supported in this release (see "Not supported" in the
+customer installation guide).
 
 Add a node by adding it to `evpn.nodes` and rerunning `make install`. Remove a
 node by deleting its entry and rerunning `make install`; the installer deletes
@@ -503,13 +508,49 @@ and RBAC resources on uninstall. To remove the labeled EVPN resources manually:
 oc delete routeadvertisements,vteps -l osac.openshift.io/evpn=true
 oc delete frrconfigurations -n openshift-frr-k8s -l osac.openshift.io/evpn=true
 oc delete nncp -l osac.openshift.io/evpn=true
+oc delete nmstate -l osac.openshift.io/evpn=true
 ```
 
 Restore the cluster network operator settings separately if the cluster no
-longer needs them. The VTEP range and uplink ranges must not overlap tenant
-address space. Add these infrastructure ranges to
-`global.networking.excludedIpv4Cidrs` in the `osac` chart when that value is
-available in the installed chart.
+longer needs them. The VTEP range, the fabric loopback ranges and the uplink
+ranges must not overlap tenant address space. Add them to
+`global.networking.excludedIpv4Cidrs` in the `osac` chart.
+
+### Adding CA roots to the shared bundle at runtime
+
+The `ca-bundle` trust-manager Bundle includes the `ca.crt` key from every
+Secret in the `cert-manager` namespace labeled
+`osac.openshift.io/ca-bundle=additional`. Create one Secret per CA root:
+
+```bash
+oc create secret generic partner-ca \
+    --namespace cert-manager \
+    --from-file=ca.crt=/path/to/partner-root.pem
+oc label secret partner-ca osac.openshift.io/ca-bundle=additional \
+    --namespace cert-manager
+```
+
+Trust-manager adds matching Secrets to the `ca-bundle` ConfigMaps in the
+`osac-infra` and OSAC namespaces, and in `keycloak` when Keycloak is enabled.
+The next `osac-infra` install or upgrade applies the selector to the Bundle.
+After that, creating, updating, labeling, or deleting a matching Secret
+updates the bundle without another Helm upgrade. The source must contain only
+public CA certificates in `ca.crt`; the Bundle selects that key specifically.
+During CA rotation, keep both roots in the source until certificates and
+clients have moved to the new root.
+
+For Keycloak's outbound OIDC provider trust, set
+`keycloak.oidcIdpTrust.caPem` with `--set-file` when installing or upgrading
+`osac-infra`. The chart creates a labeled Secret in `cert-manager` from that
+value. On install or upgrade, the CA bundle hook waits for trust-manager to
+publish the current bundle before updating Keycloak's truststore checksum and
+waiting for its rollout. Trust-manager updates from labeled Secret changes
+outside Helm do not restart Keycloak automatically; apply them with an
+`osac-infra` upgrade or restart Keycloak after the bundle updates:
+
+```bash
+oc rollout restart deployment/keycloak-service --namespace keycloak
+```
 
 ## When Prerequisites Already Exist
 

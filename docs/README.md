@@ -17,13 +17,25 @@ To get started with tenant and provider credentials, see
 For Kafka broker requirements, connection settings, and a Strimzi example,
 see [Configuring an external Kafka cluster](guides/installation/kafka-configuration.md).
 
+To run PostgreSQL, OpenBao, Keycloak, or Kafka outside the cluster,
+see the [external services support guide](guides/installation/external-services-support-guide.md).
+
+For tenant machine identities, see the [Tenant Service Accounts Guide](guides/tenant-service-accounts.md)
+for account administration, access grants, credential rotation, and workload authentication.
+
 - [Ethernet FabricDomains](guides/admin/fabric-domains.md): hardware bindings,
   inventory onboarding, membership changes, cleanup, and troubleshooting.
 - [Labels and annotations](guides/admin/metadata.md): reserved metadata,
   private/public API behavior, permissions, filters, and compatibility.
+- [Metering and billing](guides/admin/metering-and-billing.md): what metering
+  publishes, granting a billing reader, the reading rule, and billing
+  integration.
 - [Storage](storage/): concepts and configuration for tenant storage:
   StorageBackends, StorageTiers, ownership models, tenancy models, provider
   integrations, and tenant onboarding.
+- [NetBox inventory backend](guides/admin/netbox-backend.md): preparing the device
+  pool, configuring BMC credentials and the installer, managing allocation and
+  release, draining, and recovery.
 
 This directory also contains concise, hand-maintained guidance for
 architecture and conventions that span component or repository boundaries

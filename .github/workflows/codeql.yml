@@ -3,7 +3,7 @@ name: CodeQL
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'release-*']
   # Invoked as a parallel "box" by nightly-build.yaml.
   workflow_call:
 

@@ -107,7 +107,7 @@
     },
     "cliImage": {
       "type": "string",
-      "description": "Default OpenShift CLI image used by hook jobs"
+      "description": "Default OpenShift CLI image used by hook jobs. When Netris CA validation is enabled it must provide kubectl, sh, grep, mktemp, rm and openssl."
     },
     "dbInit": {
       "type": "object",
@@ -1750,6 +1750,26 @@
           },
           "additionalProperties": false
         },
+        "readers": {
+          "type": "array",
+          "description": "Outside systems that read every tenant's heartbeat topics. Each entry names one reader and no tenant, and renders one Strimzi KafkaUser with a read and describe ACL on the osac.metering.heartbeat. topic prefix and a read ACL on a consumer group named after the reader. The prefix covers tenants created after the grant. Grant and revoke a reader with a helm upgrade; neither restarts metering. Set through values; the Enclave Wizard renders no control for this list, so operators add entries in their values file",
+          "default": [],
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Reader name, also its KafkaUser name and consumer group name; must be unique",
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                "maxLength": 253
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
         "echoAdapter": {
           "type": "object",
           "description": "Echo adapter for metering (test/development only)",
@@ -1870,7 +1890,7 @@
         },
         "prometheusRule": {
           "type": "object",
-          "description": "PrometheusRule with alert rules over the metering metrics: stalled rounds, round failures, outbox backlog, skipped events, dead-letter depth",
+          "description": "PrometheusRule with alert rules over the metering metrics: stalled rounds, round failures, outbox backlog, skipped events, and dead-letter depth",
           "properties": {
             "enabled": {
               "type": "boolean",
@@ -2446,6 +2466,27 @@
         "fabricManager"
       ],
       "properties": {
+        "caBundle": {
+          "type": "object",
+          "description": "Protection settings for the customer-managed Netris CA ConfigMap named by aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP. The chart never creates, rotates, or deletes that object.",
+          "properties": {
+            "adminGroups": {
+              "type": "array",
+              "description": "Groups allowed to create, update, or delete the active Netris CA ConfigMap. Defaults to the break-glass group system:masters and the OpenShift cluster administrator group system:cluster-admins. Identity-provider groups bound directly to cluster-admin are in neither and must be listed here.",
+              "minItems": 1,
+              "default": [
+                "system:masters",
+                "system:cluster-admins"
+              ],
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        },
         "provisioningEnabled": {
           "type": "boolean",
           "description": "Run networking jobs through the network managers. Set at installation; the fulfillment service refuses to start when it changes later. With false, VirtualNetworks, Subnets, SecurityGroups, ExternalIPPools and FabricDomains become READY without provider work, and ExternalIPs, ExternalIPAttachments and NATGateways are not offered.",

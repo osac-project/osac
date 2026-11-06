@@ -141,7 +141,7 @@ export const bareMetalCatalogDiskImageLabel = (
   diskImage: DiskImage | undefined,
   reference: DiskImageReference | undefined,
 ): string => {
-  return diskImage?.metadata?.name || diskImage?.metadata?.displayName || reference?.name || '—';
+  return diskImage?.metadata?.name || reference?.name || '—';
 };
 
 export const diskImageGuestOsIconType = (diskImage: DiskImage | undefined): OsType | undefined => {
@@ -151,7 +151,7 @@ export const diskImageGuestOsIconType = (diskImage: DiskImage | undefined): OsTy
   if (diskImage.spec?.guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_WINDOWS) {
     return 'windows';
   }
-  const name = (diskImage.metadata?.name ?? diskImage.metadata?.displayName ?? '').toLowerCase();
+  const name = (diskImage.metadata?.name ?? '').toLowerCase();
   if (name.includes('rhel') || name.includes('red hat')) {
     return 'rhel';
   }

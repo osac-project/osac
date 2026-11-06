@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://osac-project.org/metering/usage-event.schema.json",
+  "title": "OSAC metering usage event",
+  "description": "One usage event on a tenant's metering usage topic. The CloudEvent type names the published schema version.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/v1"
+    }
+  ],
+  "$defs": {
+    "v1": {
+      "title": "osac.resource.heartbeat.v1 usage event",
+      "x-osac-version": "v1",
+      "x-osac-effective-at": "1970-01-01T00:00:00Z",
+      "x-osac-source-file": "osac-metering/schema/versions/v1.json",
+      "x-osac-source-sha256": "6f691f271e178162b4b5c0ad4e0049ac69d68214951bb812b723ac2ec5602988",
+      "type": "object",
+      "required": [
+        "data",
+        "datacontenttype",
+        "id",
+        "osacresourceid",
+        "osacresourcetype",
+        "osactenant",
+        "source",
+        "specversion",
+        "time",
+        "type"
+      ],
+      "properties": {
+        "data": {
+          "additionalProperties": false,
+          "properties": {
+            "billing_dimensions": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Dimension name to value for the interval. Each event carries its meter's dimensions plus deployment, tenant, project, catalog, template, and meter_type.",
+              "type": "object"
+            },
+            "component": {
+              "description": "Billable line the meter feeds. It is the meter name unless the rule revision sets another.",
+              "type": "string"
+            },
+            "external_billing_account_id": {
+              "description": "Tenant's external billing account id, when the tenant has one. The provider supplies it; OSAC copies it as given. M360 keeps its own mapping. The event omits it otherwise.",
+              "type": "string"
+            },
+            "heartbeat_time": {
+              "description": "Round time that produced the event. It is part of the deduplication key.",
+              "format": "date-time",
+              "type": "string"
+            },
+            "last_applied_offset": {
+              "description": "Position in the tenant's event topic the round had folded.",
+              "type": "integer"
+            },
+            "meter": {
+              "description": "Meter name from the default rule revision, for example compute.",
+              "type": "string"
+            },
+            "resource_id": {
+              "description": "Id of the resource the usage belongs to.",
+              "type": "string"
+            },
+            "resource_type": {
+              "description": "Resource type value the usage belongs to, for example cluster_order. The resources section lists every value.",
+              "enum": [
+                "bare_metal_instance",
+                "cluster_order",
+                "compute_instance",
+                "external_ip",
+                "nat_gateway",
+                "volume"
+              ],
+              "type": "string"
+            },
+            "rules_revision": {
+              "description": "Rule revision that produced the event, for example 0001.",
+              "type": "string"
+            },
+            "tenant_id": {
+              "description": "Tenant the usage belongs to.",
+              "type": "string"
+            },
+            "usage": {
+              "additionalProperties": false,
+              "description": "One measured interval. From is inclusive and to is exclusive.",
+              "properties": {
+                "from": {
+                  "description": "Start of the interval, inclusive.",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "precision": {
+                  "const": "second",
+                  "description": "Source clock precision. Always second; every timestamp is whole seconds.",
+                  "type": "string"
+                },
+                "quantity": {
+                  "description": "Measured quantity as fixed-point text with exactly six decimals. Negative for a correction.",
+                  "pattern": "^-?[0-9]+\\.[0-9]{6}$",
+                  "type": "string"
+                },
+                "semantics": {
+                  "const": "interval",
+                  "description": "Always interval: the quantity covers one interval and is never cumulative.",
+                  "type": "string"
+                },
+                "to": {
+                  "description": "End of the interval, exclusive.",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "unit": {
+                  "description": "Meter unit, for example second or gibibyte_second.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from",
+                "precision",
+                "quantity",
+                "semantics",
+                "to",
+                "unit"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "billing_dimensions",
+            "component",
+            "heartbeat_time",
+            "last_applied_offset",
+            "meter",
+            "resource_id",
+            "resource_type",
+            "rules_revision",
+            "tenant_id",
+            "usage"
+          ],
+          "type": "object"
+        },
+        "datacontenttype": {
+          "const": "application/json",
+          "description": "Media type of the payload. Always application/json.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Deduplication key: lower-case hex SHA-256 of the tenant, resource type, resource id, meter, component, billing dimensions, interval start, interval end, and heartbeat time. It leaves out the quantity and the external billing account id, so a resend carries the same id.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "osacresourceid": {
+          "description": "Resource id the usage belongs to. Equal to data.resource_id.",
+          "type": "string"
+        },
+        "osacresourcetype": {
+          "description": "Resource type value the usage belongs to. Equal to data.resource_type.",
+          "enum": [
+            "bare_metal_instance",
+            "cluster_order",
+            "compute_instance",
+            "external_ip",
+            "nat_gateway",
+            "volume"
+          ],
+          "type": "string"
+        },
+        "osactenant": {
+          "description": "Tenant the usage belongs to. Equal to data.tenant_id.",
+          "type": "string"
+        },
+        "source": {
+          "const": "osac-metering",
+          "description": "Producer of the event. Always osac-metering.",
+          "type": "string"
+        },
+        "specversion": {
+          "const": "1.0",
+          "description": "CloudEvents specification version. Always 1.0.",
+          "type": "string"
+        },
+        "time": {
+          "description": "CloudEvents time. Equal to the interval start in data.usage.from.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "type": {
+          "const": "osac.resource.heartbeat.v1",
+          "description": "CloudEvents type. Always osac.resource.heartbeat.v1; the suffix is the schema version.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

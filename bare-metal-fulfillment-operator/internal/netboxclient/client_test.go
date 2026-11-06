@@ -38,6 +38,13 @@ import (
 
 const testToken = "test-netbox-api-token"
 
+var (
+	testNetBoxV1Token                       = strings.Repeat("0", netBoxV1TokenLength)
+	testNetBoxV1TokenWithNBTPrefix          = "nbt_" + strings.Repeat("a", netBoxV1TokenLength-len("nbt_"))
+	testNetBoxV1TokenWithNBTPrefixAndPeriod = "nbt_" + strings.Repeat("a", 12) + "." + strings.Repeat("b", 23)
+	testNetBoxV2Token                       = "nbt_" + strings.Repeat("a", 12) + "." + strings.Repeat("b", 40)
+)
+
 var _ = Describe("NetBox client", func() {
 	Describe("endpoint normalization", func() {
 		DescribeTable("normalizes or rejects endpoints",
@@ -157,6 +164,22 @@ var _ = Describe("NetBox client", func() {
 		Expect(snapshot.Device.Status).To(Equal("active"))
 		Expect(snapshot.Device.CustomFields["osac_instance_id"]).To(Equal("instance-42"))
 	})
+
+	DescribeTable("uses the authorization scheme for the token format",
+		func(token, wantHeader string) {
+			_, client := newTrustedClientWithToken(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				Expect(r.Header.Get("Authorization")).To(Equal(wantHeader))
+				writeJSON(w, http.StatusOK, json.RawMessage(deviceResponse(42, "host-42", "active")))
+			}), token)
+
+			_, err := client.GetDevice(context.Background(), "42")
+			Expect(err).NotTo(HaveOccurred())
+		},
+		Entry("legacy v1 token", testNetBoxV1Token, "Token "+testNetBoxV1Token),
+		Entry("legacy v1 token with v2 prefix", testNetBoxV1TokenWithNBTPrefix, "Token "+testNetBoxV1TokenWithNBTPrefix),
+		Entry("legacy v1 token with v2 prefix and period", testNetBoxV1TokenWithNBTPrefixAndPeriod, "Token "+testNetBoxV1TokenWithNBTPrefixAndPeriod),
+		Entry("NetBox v2 token", testNetBoxV2Token, "Bearer "+testNetBoxV2Token),
+	)
 
 	It("lists native interfaces for a device", func() {
 		_, client := newTrustedClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -725,6 +748,10 @@ var _ = Describe("NetBox client", func() {
 })
 
 func newTrustedClient(handler http.Handler) (*httptest.Server, *Client) {
+	return newTrustedClientWithToken(handler, testToken)
+}
+
+func newTrustedClientWithToken(handler http.Handler, token string) (*httptest.Server, *Client) {
 	server := httptest.NewTLSServer(ginkgoRequestHandler(handler))
 	DeferCleanup(server.Close)
 
@@ -732,7 +759,7 @@ func newTrustedClient(handler http.Handler) (*httptest.Server, *Client) {
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
 	Expect(os.WriteFile(caFile, caPEM, 0o600)).To(Succeed())
 
-	client, err := New(Config{Endpoint: server.URL + "/", TokenFile: writeTestToken(), CAFile: caFile})
+	client, err := New(Config{Endpoint: server.URL + "/", TokenFile: writeToken(token), CAFile: caFile})
 	Expect(err).NotTo(HaveOccurred())
 	return server, client
 }
@@ -745,8 +772,12 @@ func ginkgoRequestHandler(handler http.Handler) http.Handler {
 }
 
 func writeTestToken() string {
+	return writeToken(testToken)
+}
+
+func writeToken(token string) string {
 	path := filepath.Join(GinkgoT().TempDir(), "netbox-token")
-	Expect(os.WriteFile(path, []byte(testToken+"\n"), 0o600)).To(Succeed())
+	Expect(os.WriteFile(path, []byte(token+"\n"), 0o600)).To(Succeed())
 	return path
 }
 

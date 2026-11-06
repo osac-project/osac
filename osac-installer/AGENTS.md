@@ -50,7 +50,9 @@ respective areas.
 | Kind runtime selection, sudo authentication, image loading, device-mapper permissions, cluster/storage lifecycle, or devstack Helm apply flags | Unit with command stubs | `make kind-runtime-test` |
 | Deployed dev-full OSAC UI Gateway reachability | Component integration | `./scripts/test-ui-gateway.sh` |
 | TopoLVM chart dependency download, cache reuse, build scoping, or install preparation | Unit with command stubs | `make kind-runtime-test` |
+| `install-infra` readiness waits for the CA issuer, bundled PostgreSQL, or Kafka | Unit with command stubs | `make infra-ready-wait-test` |
 | Fulfillment integration report opt-in and output paths | Unit with expanded Makefile commands | `make kind-runtime-test` |
+| Combined ComputeInstance disk handoff runner and AAP recorder | Unit and component integration | `make kind-runtime-test`; `python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py`; `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage`. Real Fulfillment APIs/PostgreSQL, operator and target StorageClass lookup; AAP execution is a recording double. See [coverage boundaries](../docs/INTEGRATION-TESTING.md#computeinstance-disk-handoff-osac-6685). |
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |
 | Fulfillment token helper or dev-full hook credential wiring | Unit and Helm contract | `make fulfillment-auth-test` and `make dev-full-render-test` |
 | Service-account IDP credential mount and Keycloak management roles | Helm contract | `make service-account-idp-render-test` |
@@ -62,8 +64,10 @@ respective areas.
 | NetworkClass step (`files/network-class-step.py`) | Unit with a fake fulfillment API | `make network-class-step-test` |
 | OpenBao security context, podSecurityContext, or Kind/OpenShift UID handling | Helm contract | `make openbao-security-context-test` |
 | `evpn` values, EVPN ConfigMap, or configure-evpn hook | Helm contract | `make evpn-render-test` |
+| Kafka exporter, its PodMonitor, its consumer lag rule, `kafka.exporter.*` values, or the PodMonitor labels | Unit (mocked cluster) | `make helm-infra-deps && helm unittest charts/osac-infra` (helm-unittest plugin; CI pins v1.2.1 and runs the suite in the `helm-unit` leg) renders `spec.kafkaExporter` only when `kafka.exporter.enabled` is on, renders the PodMonitor and `MeteringConsumerLag` rule, merges `kafka.exporter.podMonitor.labels`, and asserts all three are absent without Kafka, the exporter value, or the monitoring CRDs; a live exporter is not checked |
 | Install preflight engine, catalog, report schema, or `preflight.*` values | Unit (mocked cluster) | `helm unittest charts/osac` (helm-unittest plugin; CI pins v1.2.1) |
 | Upfront input-validation gate, its Makefile wiring, or `scripts/test-input-validation.sh` | Unit with command stubs + Helm contract | `make input-validation-test` |
+| `metering.readers` values (reader name only, all tenants), schema, umbrella passthrough, or reserved names | Unit (mocked cluster) | `helm unittest -f 'tests/metering_readers*_test.yaml' charts/osac` (the suites also run in the full `helm unittest charts/osac`) |
 | Install preflight rendering contract, hook log policy, or CSI hook deadlines | Helm contract | `uv run --script scripts/test-preflight-render.py` |
 | Install preflight against a real API server, upgrade behavior, or failed-hook logs | Component integration | `uv run --script scripts/test-preflight-kind.py` against a Kind context; see [install preflight](../docs/INTEGRATION-TESTING.md#install-preflight-osac-6561) |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
@@ -86,6 +90,9 @@ make mce-render-test
 make fulfillment-trust-render-test
 helm unittest charts/osac
 make input-validation-test
+make helm-infra-deps   # the infra chart suites need its vendored dependencies
+helm unittest charts/osac-infra
+helm unittest ../osac-metering/charts/osac-metering
 uv run --script scripts/test-preflight-render.py
 ```
 
@@ -101,5 +108,5 @@ make install-osac PLATFORM=kind PROFILE=dev NS=osac
 make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 ```
 
-Supported test suites are `all`, `fulfillment`, `operator`, and `bmf`; see the
+Supported test suites are `all`, `fulfillment`, `compute-storage`, `operator`, and `bmf`; see the
 Makefile and README for profile-specific prerequisites and cleanup.

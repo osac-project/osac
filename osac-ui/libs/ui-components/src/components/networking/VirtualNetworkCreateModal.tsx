@@ -13,6 +13,8 @@ import {
 import { Formik } from 'formik';
 import * as Yup from 'yup';
 
+import type { VirtualNetwork } from '@osac/types';
+
 import { useCreateVirtualNetwork } from '../../api/v1/networking';
 import { InputField } from '../../components/Form/InputField';
 import OsacForm from '../../components/Form/OsacForm';
@@ -49,9 +51,15 @@ const VirtualNetworkCreateForm = () => {
 
 interface VirtualNetworkCreateModalProps {
   onClose: () => void;
+  onCreated?: (network: VirtualNetwork) => void;
+  initialProject?: string;
 }
 
-export const VirtualNetworkCreateModal = ({ onClose }: VirtualNetworkCreateModalProps) => {
+export const VirtualNetworkCreateModal = ({
+  onClose,
+  onCreated,
+  initialProject = '',
+}: VirtualNetworkCreateModalProps) => {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { mutateAsync: create, error } = useCreateVirtualNetwork();
@@ -70,21 +78,27 @@ export const VirtualNetworkCreateModal = ({ onClose }: VirtualNetworkCreateModal
   return (
     <Formik<VirtualNetworkCreateFormValues>
       initialValues={{
-        metadata: { name: '', project: '' },
+        metadata: { name: '', project: initialProject },
         ipv4Cidr: '',
       }}
       validationSchema={validationSchema}
       onSubmit={async (values) => {
+        let result: VirtualNetwork;
         try {
-          const result = await create({
+          result = await create({
             metadata: values.metadata,
             spec: {
               ipv4Cidr: values.ipv4Cidr || undefined,
             },
           });
-          navigate(`/networking/virtual-networks/${result.id}`);
         } catch {
           // tanstack handles the error
+          return;
+        }
+        if (onCreated) {
+          onCreated(result);
+        } else {
+          navigate(`/networking/virtual-networks/${result.id}`);
         }
       }}
     >

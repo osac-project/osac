@@ -12,6 +12,7 @@ package rules_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -574,5 +575,34 @@ func TestRevisionRejectsRootWithoutMeters(t *testing.T) {
 `)
 	if err == nil || !strings.Contains(err.Error(), "provide the inherited gate") {
 		t.Fatalf("expected the rootless revision to be rejected, got %v", err)
+	}
+}
+
+// TestIdentityDimensionsAreTheEventDimensions pins the one exported source the engine and the
+// generated contract both read, so renaming a dimension cannot leave the reference stale.
+func TestIdentityDimensionsAreTheEventDimensions(t *testing.T) {
+	want := map[string]string{
+		"deployment": "",
+		"tenant":     "",
+		"meter_type": "",
+		"project":    "metadata.project",
+		"catalog":    "spec.catalog_item",
+		"template":   "spec.template",
+	}
+	got := map[string]string{}
+	for _, dimension := range rules.IdentityDimensions {
+		got[dimension.Name] = dimension.Field
+		if dimension.Description == "" {
+			t.Errorf("dimension %s has no description for the reference", dimension.Name)
+		}
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("identity dimensions are %v, want %v", got, want)
+	}
+	if !rules.Computed("ip_family") {
+		t.Fatal("ip_family must be known as a computed dimension")
+	}
+	if rules.Computed("instance_type") {
+		t.Fatal("instance_type is read from history, not computed")
 	}
 }

@@ -12,10 +12,10 @@ import ListPageCard from '@osac/ui-components/components/Page/ListPageCard';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
-import { formatSizeGib } from './utils';
 import { VolumeAccessModeLabel } from './VolumeAccessModeLabel';
 import VolumeActionsMenu from './VolumeActionsMenu';
 import { VolumeStatusLabel } from './VolumeStatusLabel';
+import { formatSizeGib } from '../../utils/detailFormatters';
 import { Timestamp } from '../Primitives/Timestamp';
 
 interface VolumeCardProps {

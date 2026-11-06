@@ -44,12 +44,16 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_subne
     dhcp_lease_path,
     ensure_subnet_data_plane,
     find_active_dhcp_lease,
+    normalize_subnet_ipam,
     preflight_dhcp_supervisor,
     prepare_subnet_delete_data_plane,
     read_lease_file_read_only,
+    reconcile_virtual_network_dhcp,
+    validate_physical_attachment_address,
 )
 
 SCHEMA_VERSION = 1
+STATE_CONTRACT = "network-manager-api-id-v1"
 EXTERNAL_IP_ALLOCATOR_PROBE_LIMIT = 256
 SCHEMA_TABLES = {
     "virtual_networks",
@@ -58,9 +62,11 @@ SCHEMA_TABLES = {
     "external_ips",
     "attachments",
     "nat_gateways",
+    "network_attachments",
+    "network_attachment_ports",
+    "deleted_resources",
+    "state_metadata",
 }
-PREVIOUS_V1_SCHEMA_TABLES = SCHEMA_TABLES - {"attachments", "nat_gateways"}
-PRE_NAT_GATEWAY_V1_SCHEMA_TABLES = SCHEMA_TABLES - {"nat_gateways"}
 LOCK_WAIT_SECONDS = 60
 LOCK_POLL_SECONDS = 0.05
 RESOURCE_LOCK_SHARDS = 256
@@ -81,16 +87,13 @@ SUBNET_KEYS = {
     "vlan_id",
     "vlan_interface",
     "trunk_interface",
-    "gateway_ipv4",
-    "dhcp_range_start",
-    "dhcp_range_end",
-    "vip_cidr",
+    "ipam",
     "phase",
 }
 SAFE_INTERFACE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
 SUBNET_PHASES = {"provisioning", "ready", "deleting"}
 ATTACHMENT_PHASES = {"provisioning", "ready", "deleting"}
-ATTACHMENT_CONTEXT_KEYS = {"external_ip", "target", "subnet", "virtual_network"}
+ATTACHMENT_CONTEXT_KEYS = {"external_ip", "destination"}
 ATTACHMENT_PROVIDER_KEYS = {
     "namespace_name",
     "namespace_interface",
@@ -130,18 +133,62 @@ NAT_GATEWAY_KEYS = {
     "context",
     "provider",
 }
+NETWORK_ATTACHMENT_PHASES = {"provisioning", "ready", "deleting"}
+NETWORK_ATTACHMENT_KEYS = {
+    "uid",
+    "tenant_id",
+    "virtual_network_uid",
+    "subnet_uid",
+    "host_name",
+    "interface_name",
+    "mac_address",
+    "address",
+    "phase",
+    "ports",
+}
+DELETED_RESOURCE_KINDS = {
+    "VirtualNetwork",
+    "Subnet",
+    "ExternalIPPool",
+    "ExternalIP",
+    "ExternalIPAttachment",
+    "NATGateway",
+    "NetworkAttachment",
+}
 
 
 class StateError(Exception):
     """A requested state transition is invalid."""
 
+    retryable = False
+
+
+class RetryableStateError(StateError):
+    """A provider or concurrent-operation failure that can succeed on retry."""
+
+    retryable = True
+
+
+class PublicStateError(StateError):
+    """An authored, value-free diagnostic safe for OSAC job artifacts."""
+
+    MESSAGES = {
+        "pool_exhausted": "ExternalIPPool has no available addresses",
+        "pool_not_registered": "ExternalIPPool is not registered",
+        "attachment_conflict": "physical address or switch port was reserved concurrently",
+    }
+
+    def __init__(self, code: str):
+        self.public_message = self.MESSAGES[code]
+        super().__init__(self.public_message)
+
+
+class PublicRetryableStateError(PublicStateError, RetryableStateError):
+    """An authored safe diagnostic for a retryable state conflict."""
+
 
 class StateCorrupt(StateError):
     """The state file is missing or does not contain a supported generation."""
-
-
-class _LegacySchemaNeedsMigration(Exception):
-    """A read-only open found the previous v1 table layout."""
 
 
 def _is_canonical_uuid(value: Any) -> bool:
@@ -165,6 +212,55 @@ def _parse_canonical_ipv4_network(value: Any) -> ipaddress.IPv4Network:
     )
 
 
+def _normalize_ipam(value: Any, subnet: ipaddress.IPv4Network) -> dict[str, Any]:
+    try:
+        return normalize_subnet_ipam(value, subnet, error_type=StateError)
+    except StateError:
+        raise
+    except (TypeError, ValueError) as error:
+        raise StateError("Subnet IPAM is invalid") from error
+
+
+def _validate_network_attachment_entry(entry: Any) -> None:
+    if not isinstance(entry, dict) or set(entry) != NETWORK_ATTACHMENT_KEYS:
+        raise StateCorrupt("NetworkAttachment state has an invalid shape")
+    for key in ("uid", "virtual_network_uid", "subnet_uid"):
+        if not _is_canonical_uuid(entry[key]):
+            raise StateCorrupt(f"NetworkAttachment {key} must be a canonical API ID")
+    if not _is_valid_tenant_id(entry["tenant_id"]):
+        raise StateCorrupt("NetworkAttachment tenant ID is invalid")
+    if not isinstance(entry["host_name"], str) or not entry["host_name"].strip():
+        raise StateCorrupt("NetworkAttachment host name is invalid")
+    for key in ("interface_name",):
+        if not isinstance(entry[key], str) or not SAFE_INTERFACE_NAME.fullmatch(entry[key]):
+            raise StateCorrupt(f"NetworkAttachment {key} is invalid")
+    if not isinstance(entry["mac_address"], str) or not DHCP_MAC_RE.fullmatch(entry["mac_address"]):
+        raise StateCorrupt("NetworkAttachment MAC address is invalid")
+    if entry["mac_address"] != entry["mac_address"].lower():
+        raise StateCorrupt("NetworkAttachment MAC address is not lowercase")
+    try:
+        address = validate_ipv4_address(
+            entry["address"], "NetworkAttachment address", error_type=StateCorrupt
+        )
+    except StateCorrupt as error:
+        raise StateCorrupt("NetworkAttachment address is invalid") from error
+    if not isinstance(entry["phase"], str) or entry["phase"] not in NETWORK_ATTACHMENT_PHASES:
+        raise StateCorrupt("NetworkAttachment phase is invalid")
+    StateStore._normalize_attachment_ports(entry["ports"], error_type=StateCorrupt)
+
+
+def _validate_network_attachment_for_subnet(
+    attachment: dict[str, Any], subnet: dict[str, Any]
+) -> None:
+    if attachment["subnet_uid"] != subnet["uid"]:
+        raise StateError("NetworkAttachment Subnet identity does not match saved state")
+    validate_physical_attachment_address(
+        subnet,
+        attachment["address"],
+        error_type=StateError,
+    )
+
+
 def _external_ip_pool_entry(
     uid: Any,
     fulfillment_id: Any,
@@ -176,8 +272,8 @@ def _external_ip_pool_entry(
         raise StateError("ExternalIPPool UID must be a canonical UUID")
     if not _is_canonical_uuid(fulfillment_id):
         raise StateError("ExternalIPPool Fulfillment UUID must be a canonical UUID")
-    if not _is_valid_tenant_id(tenant_id):
-        raise StateError("ExternalIPPool tenant ID is required")
+    if tenant_id != "shared":
+        raise StateError("ExternalIPPool owner must use the shared global marker")
     if ip_family != "IPv4":
         raise StateError("ExternalIPPool IP family must be IPv4")
     if not isinstance(cidrs, list) or len(cidrs) != 1:
@@ -233,59 +329,26 @@ def _external_ip_entry(
 
 
 def _external_ip_attachment_context(value: Any, tenant_id: str) -> dict[str, Any]:
-    expected_keys = {
-        "external_ip": {
-            "name", "namespace", "fulfillment_id", "kubernetes_uid",
-            "tenant_id", "address", "state", "phase",
-        },
-        "target": {
-            "kind", "name", "namespace", "fulfillment_id", "kubernetes_uid",
-            "tenant_id", "ip_address", "ready",
-        },
-        "subnet": {
-            "name", "namespace", "fulfillment_id", "kubernetes_uid",
-            "tenant_id", "ipv4_cidr", "virtual_network_id", "phase",
-        },
-        "virtual_network": {
-            "name", "namespace", "fulfillment_id", "kubernetes_uid",
-            "tenant_id", "phase",
-        },
-    }
     if not isinstance(value, dict) or set(value) != ATTACHMENT_CONTEXT_KEYS:
         raise StateError("ExternalIPAttachment context has an invalid shape")
-    context = {}
-    for section, keys in expected_keys.items():
-        item = value[section]
-        if not isinstance(item, dict) or set(item) != keys:
-            raise StateError(f"ExternalIPAttachment {section} context has an invalid shape")
-        for key in keys - {"ready"}:
-            field = item[key]
-            if not isinstance(field, str) or not field or field != field.strip():
-                raise StateError(f"ExternalIPAttachment {section} {key} is required")
-        if item["tenant_id"] != tenant_id:
-            raise StateError(f"ExternalIPAttachment {section} tenant does not match")
-        for key in ("fulfillment_id", "kubernetes_uid"):
-            if not _is_canonical_uuid(item[key]):
-                raise StateError(f"ExternalIPAttachment {section} {key} must be a canonical UUID")
-        context[section] = dict(item)
-
-    external_ip = context["external_ip"]
-    target = context["target"]
-    subnet = context["subnet"]
-    virtual_network = context["virtual_network"]
-    if external_ip["state"] != "Allocated" or external_ip["phase"] != "Ready":
-        raise StateError("ExternalIPAttachment requires an allocated, Ready ExternalIP")
-    if target["kind"] != "BareMetalInstance" or target["ready"] is not True:
-        raise StateError("AgentlessNet ExternalIPAttachment requires a Ready BareMetalInstance")
-    if subnet["phase"] != "Ready" or virtual_network["phase"] != "Ready":
-        raise StateError("ExternalIPAttachment requires a Ready Subnet and VirtualNetwork")
-    if subnet["virtual_network_id"] != virtual_network["fulfillment_id"]:
-        raise StateError("ExternalIPAttachment Subnet does not reference the supplied VirtualNetwork")
-    if (
-        external_ip["namespace"] != subnet["namespace"]
-        or subnet["namespace"] != virtual_network["namespace"]
-    ):
-        raise StateError("ExternalIPAttachment networking resources must share a namespace")
+    external_ip = value["external_ip"]
+    destination = value["destination"]
+    if not isinstance(external_ip, dict) or set(external_ip) != {"id", "address"}:
+        raise StateError("ExternalIPAttachment ExternalIP input has an invalid shape")
+    if not _is_canonical_uuid(external_ip["id"]):
+        raise StateError("ExternalIPAttachment ExternalIP ID must be a canonical API ID")
+    if not isinstance(destination, dict) or set(destination) != {"address", "routing_domain"}:
+        raise StateError("ExternalIPAttachment destination has an invalid shape")
+    domain = destination["routing_domain"]
+    if not isinstance(domain, dict) or set(domain) != {
+        "type", "virtual_network_id", "subnet_id"
+    }:
+        raise StateError("AgentlessNet supports only tenant VirtualNetwork destinations")
+    if domain["type"] != "tenant_virtual_network":
+        raise StateError("AgentlessNet supports only tenant VirtualNetwork destinations")
+    for key in ("virtual_network_id", "subnet_id"):
+        if not _is_canonical_uuid(domain[key]):
+            raise StateError(f"ExternalIPAttachment {key} must be a canonical API ID")
     try:
         external_address = validate_ipv4_address(
             external_ip["address"],
@@ -298,25 +361,23 @@ def _external_ip_attachment_context(value: Any, tenant_id: str) -> dict[str, Any
             "ExternalIPAttachment ExternalIP address must be canonical IPv4"
         ) from error
     try:
-        target_address = validate_ipv4_address(
-            target["ip_address"],
-            "ExternalIPAttachment target address",
+        destination_address = validate_ipv4_address(
+            destination["address"],
+            "ExternalIPAttachment destination address",
             reject_unspecified=True,
             error_type=StateError,
         )
     except StateError as error:
-        raise StateError(
-            "ExternalIPAttachment target address must be canonical IPv4"
-        ) from error
-    try:
-        subnet_network = parse_canonical_ipv4_network(
-            subnet["ipv4_cidr"], context="ExternalIPAttachment Subnet CIDR"
-        )
-    except (TypeError, ValueError) as error:
-        raise StateError("ExternalIPAttachment addresses or Subnet CIDR are invalid") from error
-    if subnet_network.prefixlen > 30 or target_address not in subnet_network:
-        raise StateError("ExternalIPAttachment target address is outside its canonical IPv4 Subnet")
-    return context
+        raise StateError("ExternalIPAttachment destination must be canonical IPv4") from error
+    if not _is_valid_tenant_id(tenant_id):
+        raise StateError("ExternalIPAttachment tenant is required")
+    return {
+        "external_ip": {"id": external_ip["id"], "address": str(external_address)},
+        "destination": {
+            "address": str(destination_address),
+            "routing_domain": dict(domain),
+        },
+    }
 
 
 def _external_ip_attachment_entry(
@@ -354,9 +415,9 @@ def _external_ip_attachment_entry(
         "uid": uid,
         "fulfillment_id": fulfillment_id,
         "tenant_id": tenant_id,
-        "external_ip_uid": normalized_context["external_ip"]["kubernetes_uid"],
-        "virtual_network_uid": normalized_context["virtual_network"]["kubernetes_uid"],
-        "subnet_uid": normalized_context["subnet"]["kubernetes_uid"],
+        "external_ip_uid": normalized_context["external_ip"]["id"],
+        "virtual_network_uid": normalized_context["destination"]["routing_domain"]["virtual_network_id"],
+        "subnet_uid": normalized_context["destination"]["routing_domain"]["subnet_id"],
         "external_address": normalized_context["external_ip"]["address"],
         "phase": phase,
         "context": normalized_context,
@@ -390,9 +451,9 @@ def _validate_external_ip_attachment_entry(entry: Any) -> None:
     except StateError as error:
         raise StateCorrupt("ExternalIPAttachment context is malformed") from error
     if (
-        entry["external_ip_uid"] != context["external_ip"]["kubernetes_uid"]
-        or entry["virtual_network_uid"] != context["virtual_network"]["kubernetes_uid"]
-        or entry["subnet_uid"] != context["subnet"]["kubernetes_uid"]
+        entry["external_ip_uid"] != context["external_ip"]["id"]
+        or entry["virtual_network_uid"] != context["destination"]["routing_domain"]["virtual_network_id"]
+        or entry["subnet_uid"] != context["destination"]["routing_domain"]["subnet_id"]
         or entry["external_address"] != context["external_ip"]["address"]
     ):
         raise StateCorrupt("ExternalIPAttachment indexed identity does not match its context")
@@ -491,8 +552,8 @@ def _validate_nat_gateway_entry(entry: Any) -> None:
     except StateError as error:
         raise StateCorrupt("NATGateway context is malformed") from error
     if any((
-        entry["external_ip_uid"] != context["external_ip"]["kubernetes_uid"],
-        entry["virtual_network_uid"] != context["virtual_network"]["kubernetes_uid"],
+        entry["external_ip_uid"] != context["external_ip"]["fulfillment_id"],
+        entry["virtual_network_uid"] != context["virtual_network"]["fulfillment_id"],
         entry["external_address"] != context["external_ip"]["address"],
     )):
         raise StateCorrupt("NATGateway indexed identity does not match its context")
@@ -538,7 +599,7 @@ def _subnet_payload(
     cidr: str,
     trunk_interface: str,
     vlan_id: int,
-    vip_cidr: str,
+    ipam: dict[str, Any],
 ) -> dict[str, Any]:
     if not _is_canonical_uuid(uid):
         raise StateError("Subnet UID must be a canonical UUID")
@@ -552,9 +613,9 @@ def _subnet_payload(
         raise StateError(
             "Subnet CIDR must be a canonical IPv4 prefix of /30 or shorter for gateway and DHCP support"
         ) from error
-    if network.prefixlen > 30:
+    if network.prefixlen > 28:
         raise StateError(
-            "Subnet CIDR must be a canonical IPv4 prefix of /30 or shorter for gateway and DHCP support"
+            "Subnet CIDR is too small for the configured address plan"
         )
     if not isinstance(trunk_interface, str) or not SAFE_INTERFACE_NAME.fullmatch(
         trunk_interface
@@ -567,23 +628,7 @@ def _subnet_payload(
     ):
         raise StateError("Subnet VLAN ID is outside the supported range")
 
-    gateway = network.network_address + 1
-    dhcp_start = network.network_address + 2
-    dhcp_end = network.broadcast_address - 1
-    if vip_cidr:
-        try:
-            vip_network = parse_canonical_ipv4_network(vip_cidr, context="Subnet VIP CIDR")
-        except (TypeError, ValueError) as error:
-            raise StateError("Subnet VIP CIDR must be a canonical upper-end IPv4 block") from error
-        if (
-            vip_network.prefixlen <= network.prefixlen
-            or not vip_network.subnet_of(network)
-            or vip_network.broadcast_address != network.broadcast_address
-        ):
-            raise StateError("Subnet VIP CIDR must be a canonical upper-end IPv4 block")
-        dhcp_end = vip_network.network_address - 1
-    if dhcp_start > dhcp_end:
-        raise StateError("Subnet VIP reservation leaves no DHCP address")
+    normalized_ipam = _normalize_ipam(ipam, network)
 
     return {
         "uid": uid,
@@ -593,10 +638,7 @@ def _subnet_payload(
         "vlan_id": vlan_id,
         "vlan_interface": f"s{hashlib.sha256(uid.encode()).hexdigest()[:12]}",
         "trunk_interface": trunk_interface,
-        "gateway_ipv4": str(gateway),
-        "dhcp_range_start": str(dhcp_start),
-        "dhcp_range_end": str(dhcp_end),
-        "vip_cidr": vip_cidr,
+        "ipam": normalized_ipam,
         "phase": "provisioning",
     }
 
@@ -648,14 +690,7 @@ class StateStore:
         if create:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         if read_only:
-            try:
-                connection = self._open_database(create=False, read_only=True)
-            except _LegacySchemaNeedsMigration:
-                with _locked_path(self.lock_path):
-                    migrated = self._open_database(create=False)
-                    if migrated is not None:
-                        migrated.close()
-                connection = self._open_database(create=False, read_only=True)
+            connection = self._open_database(create=False, read_only=True)
             try:
                 yield connection
             except sqlite3.DatabaseError as error:
@@ -758,6 +793,14 @@ class StateStore:
                     self._create_external_ip_schema(connection)
                     self._create_external_ip_attachment_schema(connection)
                     self._create_nat_gateway_schema(connection)
+                    self._create_network_attachment_schema(connection)
+                    self._create_network_attachment_ports_schema(connection)
+                    self._create_deleted_resources_schema(connection)
+                    self._create_state_metadata_schema(connection)
+                    connection.execute(
+                        "INSERT INTO state_metadata (key, value) VALUES (?, ?)",
+                        ("contract", STATE_CONTRACT),
+                    )
                     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                     connection.commit()
                 except BaseException:
@@ -766,70 +809,24 @@ class StateStore:
                 tables = set(SCHEMA_TABLES)
                 version = SCHEMA_VERSION
 
-            if version == SCHEMA_VERSION and tables in (
-                PREVIOUS_V1_SCHEMA_TABLES,
-                PRE_NAT_GATEWAY_V1_SCHEMA_TABLES,
-            ):
-                if read_only:
-                    raise _LegacySchemaNeedsMigration
-                connection.execute("BEGIN IMMEDIATE")
-                try:
-                    tables = {
-                        row[0]
-                        for row in connection.execute(
-                            "SELECT name FROM sqlite_master WHERE type = 'table'"
-                        )
-                    }
-                    version = connection.execute("PRAGMA user_version").fetchone()[0]
-                    if version == SCHEMA_VERSION and tables in (
-                        PREVIOUS_V1_SCHEMA_TABLES,
-                        PRE_NAT_GATEWAY_V1_SCHEMA_TABLES,
-                    ):
-                        self._validate_virtual_network_table(connection)
-                        self._validate_subnet_table(connection)
-                        self._validate_external_ip_pool_schema(connection)
-                        self._validate_external_ip_schema(connection)
-                        if "attachments" not in tables:
-                            self._create_external_ip_attachment_schema(connection)
-                        else:
-                            self._validate_external_ip_attachment_schema(connection)
-                        self._create_nat_gateway_schema(connection)
-                    elif version != SCHEMA_VERSION or tables != SCHEMA_TABLES:
-                        raise StateCorrupt(
-                            "AgentlessNet state database changed during schema migration"
-                        )
-                    connection.commit()
-                except BaseException:
-                    connection.rollback()
-                    raise
-                tables = {
-                    row[0]
-                    for row in connection.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'table'"
-                    )
-                }
-                version = connection.execute("PRAGMA user_version").fetchone()[0]
-
             if version != SCHEMA_VERSION:
                 raise StateCorrupt(f"unsupported state schema: {version!r}")
             if tables != SCHEMA_TABLES:
-                raise StateCorrupt("AgentlessNet state database has an invalid schema")
+                raise StateCorrupt(
+                    "AgentlessNet state uses an incompatible layout; use a fresh database"
+                )
+            self._validate_state_metadata(connection)
             self._validate_virtual_network_table(connection)
             self._validate_subnet_table(connection)
             self._validate_external_ip_pool_schema(connection)
             self._validate_external_ip_schema(connection)
             self._validate_external_ip_attachment_schema(connection)
             self._validate_nat_gateway_schema(connection)
-            if not read_only:
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS external_ips_by_pool "
-                    "ON external_ips(pool_uid)"
-                )
-                address_value_sql = self._external_ip_address_value_sql()
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS external_ips_by_pool_address_value "
-                    f"ON external_ips(pool_uid, {address_value_sql})"
-                )
+            self._validate_network_attachment_schema(connection)
+            self._validate_network_attachment_ports_schema(connection)
+            self._validate_deleted_resources_schema(connection)
+            self._validate_custom_indexes(connection)
+            self._validate_all_state_payloads(connection)
             return connection
         except (sqlite3.DatabaseError, OSError) as error:
             connection.close()
@@ -881,6 +878,14 @@ class StateStore:
                 UNIQUE (pool_uid, address)
             )"""
         )
+        connection.execute(
+            "CREATE INDEX external_ips_by_pool ON external_ips(pool_uid)"
+        )
+        connection.execute(
+            "CREATE INDEX external_ips_by_pool_address_value "
+            "ON external_ips(pool_uid, "
+            f"{StateStore._external_ip_address_value_sql()})"
+        )
 
     @staticmethod
     def _create_external_ip_attachment_schema(connection: sqlite3.Connection) -> None:
@@ -921,6 +926,80 @@ class StateStore:
         connection.execute(
             "CREATE INDEX nat_gateways_by_vn ON nat_gateways(virtual_network_uid)"
         )
+
+    @staticmethod
+    def _create_network_attachment_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """CREATE TABLE network_attachments (
+                uid TEXT NOT NULL PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                virtual_network_uid TEXT NOT NULL REFERENCES virtual_networks(uid),
+                subnet_uid TEXT NOT NULL REFERENCES subnets(uid),
+                host_name TEXT NOT NULL,
+                interface_name TEXT NOT NULL,
+                mac_address TEXT NOT NULL,
+                address TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                UNIQUE (subnet_uid, mac_address),
+                UNIQUE (subnet_uid, address)
+            )"""
+        )
+        connection.execute(
+            "CREATE INDEX network_attachments_by_vn "
+            "ON network_attachments(virtual_network_uid)"
+        )
+        connection.execute(
+            "CREATE INDEX network_attachments_by_subnet "
+            "ON network_attachments(subnet_uid)"
+        )
+
+    @staticmethod
+    def _create_network_attachment_ports_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """CREATE TABLE network_attachment_ports (
+                switch_name TEXT NOT NULL,
+                port_name TEXT NOT NULL,
+                attachment_uid TEXT NOT NULL
+                    REFERENCES network_attachments(uid) ON DELETE CASCADE,
+                PRIMARY KEY (switch_name, port_name)
+            )"""
+        )
+        connection.execute(
+            "CREATE INDEX network_attachment_ports_by_attachment "
+            "ON network_attachment_ports(attachment_uid)"
+        )
+
+    @staticmethod
+    def _create_deleted_resources_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """CREATE TABLE deleted_resources (
+                kind TEXT NOT NULL,
+                uid TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                PRIMARY KEY (kind, uid)
+            )"""
+        )
+
+    @staticmethod
+    def _create_state_metadata_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """CREATE TABLE state_metadata (
+                key TEXT NOT NULL PRIMARY KEY,
+                value TEXT NOT NULL
+            )"""
+        )
+
+    @staticmethod
+    def _validate_state_metadata(connection: sqlite3.Connection) -> None:
+        rows = connection.execute(
+            "SELECT key, value FROM state_metadata ORDER BY key"
+        ).fetchall()
+        if rows != [("contract", STATE_CONTRACT)]:
+            raise StateCorrupt(
+                "AgentlessNet state uses an incompatible ownership contract; "
+                "use a fresh database"
+            )
 
     @staticmethod
     def _external_ip_address_value_sql() -> str:
@@ -998,6 +1077,14 @@ class StateStore:
         }
         if ("external_ip_pools", "pool_uid", "uid") not in foreign_keys:
             raise StateCorrupt("AgentlessNet ExternalIP pool foreign key is missing")
+        if connection.execute("PRAGMA index_info(external_ips_by_pool)").fetchall() != [
+            (0, 3, "pool_uid")
+        ]:
+            raise StateCorrupt("AgentlessNet ExternalIP pool index is invalid")
+        if connection.execute(
+            "PRAGMA index_info(external_ips_by_pool_address_value)"
+        ).fetchall() != [(0, 3, "pool_uid"), (1, -2, None)]:
+            raise StateCorrupt("AgentlessNet ExternalIP address index is invalid")
 
     @staticmethod
     def _validate_external_ip_pool_schema(connection: sqlite3.Connection) -> None:
@@ -1085,6 +1172,188 @@ class StateStore:
             (0, 4, "virtual_network_uid")
         ]:
             raise StateCorrupt("AgentlessNet NATGateway index is invalid")
+
+    @staticmethod
+    def _validate_network_attachment_schema(connection: sqlite3.Connection) -> None:
+        columns = {
+            row[1]: row for row in connection.execute("PRAGMA table_info(network_attachments)")
+        }
+        expected = {
+            "uid", "tenant_id", "virtual_network_uid", "subnet_uid", "host_name",
+            "interface_name", "mac_address", "address", "phase", "payload",
+        }
+        if set(columns) != expected or columns["uid"][5] != 1 or any(
+            columns[name][3] != 1 for name in expected - {"uid"}
+        ):
+            raise StateCorrupt("AgentlessNet NetworkAttachment table has an invalid schema")
+        unique_indexes = set()
+        for index in connection.execute("PRAGMA index_list(network_attachments)"):
+            if index[2]:
+                quoted = "'" + index[1].replace("'", "''") + "'"
+                unique_indexes.add(tuple(
+                    row[2] for row in connection.execute(f"PRAGMA index_info({quoted})")
+                ))
+        if not {
+            ("uid",), ("subnet_uid", "mac_address"), ("subnet_uid", "address")
+        }.issubset(unique_indexes):
+            raise StateCorrupt("AgentlessNet NetworkAttachment uniqueness constraints are missing")
+        foreign_keys = {
+            (row[2], row[3], row[4])
+            for row in connection.execute("PRAGMA foreign_key_list(network_attachments)")
+        }
+        if not {
+            ("virtual_networks", "virtual_network_uid", "uid"),
+            ("subnets", "subnet_uid", "uid"),
+        }.issubset(foreign_keys):
+            raise StateCorrupt("AgentlessNet NetworkAttachment foreign keys are missing")
+        for name, column in (
+            ("network_attachments_by_vn", "virtual_network_uid"),
+            ("network_attachments_by_subnet", "subnet_uid"),
+        ):
+            rows = connection.execute(f"PRAGMA index_info({name})").fetchall()
+            if len(rows) != 1 or rows[0][2] != column:
+                raise StateCorrupt("AgentlessNet NetworkAttachment index is invalid")
+
+    @staticmethod
+    def _validate_network_attachment_ports_schema(connection: sqlite3.Connection) -> None:
+        columns = {
+            row[1]: row
+            for row in connection.execute("PRAGMA table_info(network_attachment_ports)")
+        }
+        if set(columns) != {"switch_name", "port_name", "attachment_uid"}:
+            raise StateCorrupt("AgentlessNet attachment port table has an invalid schema")
+        if columns["switch_name"][5] != 1 or columns["port_name"][5] != 2:
+            raise StateCorrupt("AgentlessNet attachment port primary key is invalid")
+        if connection.execute(
+            "PRAGMA index_info(network_attachment_ports_by_attachment)"
+        ).fetchall() != [(0, 2, "attachment_uid")]:
+            raise StateCorrupt("AgentlessNet attachment port index is invalid")
+        foreign_keys = connection.execute(
+            "PRAGMA foreign_key_list(network_attachment_ports)"
+        ).fetchall()
+        if not any(
+            row[2] == "network_attachments"
+            and row[3] == "attachment_uid"
+            and row[4] == "uid"
+            and row[6] == "CASCADE"
+            for row in foreign_keys
+        ):
+            raise StateCorrupt("AgentlessNet attachment port foreign key is missing")
+
+    @staticmethod
+    def _validate_deleted_resources_schema(connection: sqlite3.Connection) -> None:
+        columns = {
+            row[1]: row for row in connection.execute("PRAGMA table_info(deleted_resources)")
+        }
+        if set(columns) != {"kind", "uid", "tenant_id"}:
+            raise StateCorrupt("AgentlessNet deletion tombstone table has an invalid schema")
+        if columns["kind"][5] != 1 or columns["uid"][5] != 2:
+            raise StateCorrupt("AgentlessNet deletion tombstone primary key is invalid")
+
+    @staticmethod
+    def _validate_custom_indexes(connection: sqlite3.Connection) -> None:
+        expected = {
+            "subnets_by_vn",
+            "external_ips_by_pool",
+            "external_ips_by_pool_address_value",
+            "attachments_by_vn",
+            "attachments_by_subnet",
+            "nat_gateways_by_vn",
+            "network_attachments_by_vn",
+            "network_attachments_by_subnet",
+            "network_attachment_ports_by_attachment",
+        }
+        actual = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex_%'"
+            )
+        }
+        if actual != expected:
+            raise StateCorrupt("AgentlessNet state indexes do not match the supported schema")
+
+    def _validate_all_state_payloads(self, connection: sqlite3.Connection) -> None:
+        for (uid,) in connection.execute("SELECT uid FROM virtual_networks"):
+            self._entry_for_uid(connection, uid)
+        for (uid,) in connection.execute("SELECT uid FROM subnets"):
+            self._subnet_for_uid(connection, uid)
+        for (uid,) in connection.execute("SELECT uid FROM external_ip_pools"):
+            self._external_ip_pool_for_uid(connection, uid)
+        for (uid,) in connection.execute("SELECT uid FROM external_ips"):
+            self._external_ip_for_uid(connection, uid)
+        for (uid,) in connection.execute("SELECT uid FROM attachments"):
+            self._attachment_for_uid(connection, uid)
+        for (uid,) in connection.execute("SELECT uid FROM nat_gateways"):
+            self._nat_gateway_for_uid(connection, uid)
+
+        attachments = []
+        for row in connection.execute(
+            """SELECT uid, tenant_id, virtual_network_uid, subnet_uid,
+                      host_name, interface_name, mac_address, address, phase, payload
+               FROM network_attachments"""
+        ):
+            attachments.append(self._network_attachment_from_row(row))
+
+        expected_claims = {
+            (port["switch_name"], port["port_name"], attachment["uid"])
+            for attachment in attachments
+            for port in attachment["ports"]
+        }
+        actual_claims = set(
+            connection.execute(
+                "SELECT switch_name, port_name, attachment_uid "
+                "FROM network_attachment_ports"
+            ).fetchall()
+        )
+        if actual_claims != expected_claims:
+            raise StateCorrupt("AgentlessNet NetworkAttachment port claims do not match saved state")
+
+        for kind, uid, tenant_id in connection.execute(
+            "SELECT kind, uid, tenant_id FROM deleted_resources"
+        ):
+            valid_tenant = tenant_id == "shared" if kind == "ExternalIPPool" else _is_valid_tenant_id(tenant_id)
+            if (
+                kind not in DELETED_RESOURCE_KINDS
+                or not _is_canonical_uuid(uid)
+                or not valid_tenant
+            ):
+                raise StateCorrupt("AgentlessNet deletion tombstone is malformed")
+
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise StateCorrupt("AgentlessNet state contains a broken foreign-key reference")
+
+    @staticmethod
+    def _reject_deleted(
+        connection: sqlite3.Connection, kind: str, uid: str, tenant_id: str
+    ) -> None:
+        row = connection.execute(
+            "SELECT tenant_id FROM deleted_resources WHERE kind = ? AND uid = ?",
+            (kind, uid),
+        ).fetchone()
+        if row is not None:
+            if row[0] != tenant_id:
+                raise StateError(f"{kind} tenant does not match deleted resource ownership")
+            raise StateError(f"{kind} was deleted and cannot be recreated")
+
+    @staticmethod
+    def _record_deleted(
+        connection: sqlite3.Connection, kind: str, uid: str, tenant_id: str
+    ) -> None:
+        if kind not in DELETED_RESOURCE_KINDS:
+            raise StateError("AgentlessNet resource kind cannot be tombstoned")
+        if not _is_canonical_uuid(uid):
+            raise StateError(f"{kind} API ID must be a canonical UUID")
+        existing = connection.execute(
+            "SELECT tenant_id FROM deleted_resources WHERE kind = ? AND uid = ?",
+            (kind, uid),
+        ).fetchone()
+        if existing is not None and existing[0] != tenant_id:
+            raise StateError(f"{kind} tenant does not match deleted resource ownership")
+        connection.execute(
+            "INSERT OR IGNORE INTO deleted_resources (kind, uid, tenant_id) VALUES (?, ?, ?)",
+            (kind, uid, tenant_id),
+        )
 
     @staticmethod
     def _validate_virtual_network_table(connection: sqlite3.Connection) -> None:
@@ -1249,8 +1518,8 @@ class StateStore:
             )
         except (TypeError, ValueError) as error:
             raise StateCorrupt("Subnet IPv4 CIDR is invalid") from error
-        if network.prefixlen > 30:
-            raise StateCorrupt("Subnet IPv4 CIDR must be canonical and no smaller than /30")
+        if network.prefixlen > 28:
+            raise StateCorrupt("Subnet IPv4 CIDR is too small for the recorded address plan")
         if isinstance(entry["vlan_id"], bool) or not isinstance(entry["vlan_id"], int):
             raise StateCorrupt("Subnet VLAN ID is invalid")
         if not MIN_VLAN_ID <= entry["vlan_id"] <= MAX_VLAN_ID:
@@ -1265,35 +1534,12 @@ class StateStore:
         if not isinstance(entry["phase"], str) or entry["phase"] not in SUBNET_PHASES:
             raise StateCorrupt("Subnet provider phase is invalid")
 
-        gateway = network.network_address + 1
-        dhcp_start = network.network_address + 2
-        dhcp_end = network.broadcast_address - 1
-        vip_cidr = entry["vip_cidr"]
-        if not isinstance(vip_cidr, str):
-            raise StateCorrupt("Subnet VIP CIDR is invalid")
-        if vip_cidr:
-            try:
-                vip_network = parse_canonical_ipv4_network(
-                    vip_cidr, context="Subnet VIP CIDR"
-                )
-            except (TypeError, ValueError) as error:
-                raise StateCorrupt("Subnet VIP CIDR is invalid") from error
-            if (
-                vip_network.prefixlen <= network.prefixlen
-                or not vip_network.subnet_of(network)
-                or vip_network.broadcast_address != network.broadcast_address
-            ):
-                raise StateCorrupt("Subnet VIP CIDR must be a canonical upper-end block")
-            dhcp_end = vip_network.network_address - 1
-        if dhcp_start > dhcp_end:
-            raise StateCorrupt("Subnet VIP reservation leaves no DHCP address")
-        expected = {
-            "gateway_ipv4": str(gateway),
-            "dhcp_range_start": str(dhcp_start),
-            "dhcp_range_end": str(dhcp_end),
-        }
-        if any(entry[key] != value for key, value in expected.items()):
-            raise StateCorrupt("Subnet gateway or DHCP range does not match its CIDR")
+        try:
+            ipam = _normalize_ipam(entry["ipam"], network)
+        except StateError as error:
+            raise StateCorrupt("Subnet address plan is malformed") from error
+        if ipam != entry["ipam"]:
+            raise StateCorrupt("Subnet address plan is not canonical")
 
     @staticmethod
     def _row_for_entry(entry: dict[str, Any]) -> tuple[Any, ...]:
@@ -1350,6 +1596,21 @@ class StateStore:
             json.dumps(entry, sort_keys=True, separators=(",", ":")),
         )
 
+    @staticmethod
+    def _row_for_network_attachment_entry(entry: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            entry["uid"],
+            entry["tenant_id"],
+            entry["virtual_network_uid"],
+            entry["subnet_uid"],
+            entry["host_name"],
+            entry["interface_name"],
+            entry["mac_address"],
+            entry["address"],
+            entry["phase"],
+            json.dumps(entry, sort_keys=True, separators=(",", ":")),
+        )
+
     def _entry_for_uid(self, connection: sqlite3.Connection, uid: str):
         row = connection.execute(
             """
@@ -1390,6 +1651,80 @@ class StateStore:
             (uid,),
         ).fetchone()
         return None if row is None else self._subnet_entry_for_row(row)
+
+    @staticmethod
+    def _network_attachment_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
+        try:
+            entry = json.loads(row[9])
+        except (json.JSONDecodeError, TypeError) as error:
+            raise StateCorrupt("malformed NetworkAttachment state payload") from error
+        _validate_network_attachment_entry(entry)
+        if row != StateStore._row_for_network_attachment_entry(entry):
+            raise StateCorrupt("NetworkAttachment indexed state does not match its payload")
+        return entry
+
+    @staticmethod
+    def _network_attachment_for_uid(connection: sqlite3.Connection, uid: str):
+        row = connection.execute(
+            """SELECT uid, tenant_id, virtual_network_uid, subnet_uid,
+                      host_name, interface_name, mac_address, address, phase, payload
+               FROM network_attachments WHERE uid = ?""",
+            (uid,),
+        ).fetchone()
+        return None if row is None else StateStore._network_attachment_from_row(row)
+
+    def get_network_attachment(
+        self, uid: str, tenant_id: str
+    ) -> dict[str, Any] | None:
+        if not _is_canonical_uuid(uid):
+            raise StateError("NetworkAttachment API ID must be a canonical UUID")
+        if not _is_valid_tenant_id(tenant_id):
+            raise StateError("NetworkAttachment tenant is required")
+        with self._locked_database(create=False, read_only=True) as connection:
+            if connection is None:
+                return None
+            entry = self._network_attachment_for_uid(connection, uid)
+            if entry is not None and entry["tenant_id"] != tenant_id:
+                raise StateError("NetworkAttachment tenant does not match saved state")
+            return entry
+
+    @staticmethod
+    def _network_attachments_for_vn(
+        connection: sqlite3.Connection, virtual_network_uid: str
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            """SELECT uid, tenant_id, virtual_network_uid, subnet_uid,
+                      host_name, interface_name, mac_address, address, phase, payload
+               FROM network_attachments WHERE virtual_network_uid = ? ORDER BY uid""",
+            (virtual_network_uid,),
+        ).fetchall()
+        return [StateStore._network_attachment_from_row(row) for row in rows]
+
+    @staticmethod
+    def _network_attachments_for_subnet(
+        connection: sqlite3.Connection, subnet_uid: str
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            """SELECT uid, tenant_id, virtual_network_uid, subnet_uid,
+                      host_name, interface_name, mac_address, address, phase, payload
+               FROM network_attachments WHERE subnet_uid = ? ORDER BY uid""",
+            (subnet_uid,),
+        ).fetchall()
+        return [StateStore._network_attachment_from_row(row) for row in rows]
+
+    def _network_attachment_context(
+        self, connection: sqlite3.Connection, entry: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        parent = self._entry_for_uid(connection, entry["virtual_network_uid"])
+        subnet = self._subnet_for_uid(connection, entry["subnet_uid"])
+        if parent is None or subnet is None:
+            raise StateError("NetworkAttachment provider dependency state is missing")
+        if parent["tenant_id"] != entry["tenant_id"] or subnet["tenant_id"] != entry["tenant_id"]:
+            raise StateError("NetworkAttachment tenant does not match saved dependencies")
+        if subnet["virtual_network_uid"] != parent["uid"]:
+            raise StateError("NetworkAttachment Subnet belongs to another VirtualNetwork")
+        _validate_network_attachment_for_subnet(entry, subnet)
+        return parent, subnet
 
     @staticmethod
     def _attachment_for_uid(connection: sqlite3.Connection, uid: str):
@@ -1450,23 +1785,22 @@ class StateStore:
             raise StateError("ExternalIPAttachment Subnet provider state is not Ready")
 
         eip_context = context["external_ip"]
-        subnet_context = context["subnet"]
-        vn_context = context["virtual_network"]
-        if any(
-            (
-                eip_context["kubernetes_uid"] != external_ip["uid"],
-                eip_context["fulfillment_id"] != external_ip["fulfillment_id"],
-                eip_context["tenant_id"] != external_ip["tenant_id"],
-                eip_context["address"] != external_ip["address"],
-                subnet_context["kubernetes_uid"] != subnet["uid"],
-                subnet_context["tenant_id"] != subnet["tenant_id"],
-                subnet_context["ipv4_cidr"] != subnet["ipv4_cidr"],
-                subnet_context["virtual_network_id"] != vn_context["fulfillment_id"],
-                vn_context["kubernetes_uid"] != virtual_network["uid"],
-                vn_context["tenant_id"] != virtual_network["tenant_id"],
-            )
-        ):
+        domain = context["destination"]["routing_domain"]
+        if any((
+            eip_context["id"] != external_ip["uid"],
+            eip_context["address"] != external_ip["address"],
+            domain["subnet_id"] != subnet["uid"],
+            domain["virtual_network_id"] != virtual_network["uid"],
+        )):
             raise StateError("ExternalIPAttachment context does not match saved provider dependencies")
+        destination = ipaddress.IPv4Address(context["destination"]["address"])
+        subnet_network = ipaddress.ip_network(subnet["ipv4_cidr"], strict=True)
+        if (
+            destination not in subnet_network
+            or destination in {subnet_network.network_address, subnet_network.broadcast_address}
+            or str(destination) == subnet["ipam"]["gateway_ipv4"]
+        ):
+            raise StateError("ExternalIPAttachment destination is outside usable Subnet addresses")
         provider = entry["provider"]
         expected_provider = {
             "namespace_name": virtual_network["namespace_name"],
@@ -1534,27 +1868,26 @@ class StateStore:
         self,
         uid: str,
         tenant_id: str,
-        mac_address: str,
         *,
         now: int | None = None,
     ) -> dict[str, str] | None:
-        """Read the active DHCP lease for one ready Subnet and NIC MAC."""
+        """Read the active lease for a ready, API-ID-owned physical attachment."""
         if not _is_canonical_uuid(uid):
-            raise StateError("Subnet UID must be a canonical UUID")
+            raise StateError("NetworkAttachment API ID must be a canonical UUID")
         if not _is_valid_tenant_id(tenant_id):
-            raise StateError("Subnet tenant ID is required")
-        if not isinstance(mac_address, str) or not DHCP_MAC_RE.fullmatch(mac_address):
-            raise StateError("DHCP lease query requires a valid NIC MAC address")
+            raise StateError("NetworkAttachment tenant is required")
 
         with self._locked_database(create=False, read_only=True) as connection:
             if connection is None:
                 return None
-            initial_subnet = self._subnet_for_uid(connection, uid)
-            if initial_subnet is None:
+            initial = self._network_attachment_for_uid(connection, uid)
+            if initial is None:
                 return None
-            if initial_subnet["tenant_id"] != tenant_id:
-                raise StateError("Subnet tenant does not match saved state")
-            parent_uid = initial_subnet["virtual_network_uid"]
+            if initial["tenant_id"] != tenant_id:
+                raise StateError("NetworkAttachment tenant does not match saved state")
+            if initial["phase"] != "ready":
+                raise StateError("DHCP lease lookup requires a ready NetworkAttachment")
+            parent_uid = initial["virtual_network_uid"]
 
         # Subnet reconciliation and deletion hold this same parent lock while
         # changing DHCP state and the lease file. Re-read the allocation after
@@ -1564,18 +1897,449 @@ class StateStore:
             with self._locked_database(create=False, read_only=True) as connection:
                 if connection is None:
                     return None
-                subnet = self._subnet_for_uid(connection, uid)
-                if subnet is None:
+                entry = self._network_attachment_for_uid(connection, uid)
+                if entry is None:
                     return None
-                if subnet["tenant_id"] != tenant_id:
-                    raise StateError("Subnet tenant does not match saved state")
-                if subnet["phase"] != "ready":
-                    raise StateError("DHCP lease lookup requires a ready Subnet")
+                if entry["tenant_id"] != tenant_id:
+                    raise StateError("NetworkAttachment tenant does not match saved state")
+                if entry["phase"] != "ready":
+                    raise StateError("DHCP lease lookup requires a ready NetworkAttachment")
+                parent, subnet = self._network_attachment_context(connection, entry)
                 parent = self._entry_for_uid(connection, parent_uid)
                 if parent is None or parent["tenant_id"] != tenant_id:
-                    raise StateError("Subnet parent tenant does not match saved state")
+                    raise StateError("NetworkAttachment parent tenant does not match saved state")
             contents = read_lease_file_read_only(dhcp_lease_path(parent_uid))
-            return find_active_dhcp_lease(contents, subnet, mac_address, now=now)
+            return find_active_dhcp_lease(
+                contents, subnet, entry["mac_address"], entry["address"], now=now
+            )
+
+    @staticmethod
+    def _normalize_attachment_ports(
+        ports: Any,
+        *,
+        error_type: type[Exception] = StateError,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(ports, list) or not ports:
+            raise error_type("NetworkAttachment requires a saved switch-port mapping")
+        normalized = []
+        seen = set()
+        selected = 0
+        for port in ports:
+            if not isinstance(port, dict) or set(port) != {
+                "switch_name", "port_name", "selected", "fabric"
+            }:
+                raise error_type("NetworkAttachment switch-port mapping is malformed")
+            switch_name = port["switch_name"]
+            port_name = port["port_name"]
+            is_selected = port["selected"]
+            is_fabric = port["fabric"]
+            if not isinstance(switch_name, str) or not switch_name.strip():
+                raise error_type("NetworkAttachment switch name is required")
+            if not isinstance(port_name, str) or not re.fullmatch(r"swp[0-9]+", port_name):
+                raise error_type("NetworkAttachment switch port is invalid")
+            if not isinstance(is_selected, bool) or not isinstance(is_fabric, bool):
+                raise error_type("NetworkAttachment port flags must be boolean")
+            identity = (switch_name, port_name)
+            if identity in seen:
+                raise error_type("NetworkAttachment contains a duplicate switch port")
+            seen.add(identity)
+            selected += int(is_selected)
+            normalized.append({
+                "switch_name": switch_name,
+                "port_name": port_name,
+                "selected": is_selected,
+                "fabric": is_fabric,
+            })
+        if selected != 1:
+            raise error_type("NetworkAttachment must select exactly one switch port")
+        return sorted(normalized, key=lambda item: (item["switch_name"], item["port_name"]))
+
+    @staticmethod
+    def _allocate_physical_address(
+        subnet: dict[str, Any], reserved_addresses: set[str]
+    ) -> str:
+        network = ipaddress.ip_network(subnet["ipv4_cidr"], strict=True)
+        gateway = ipaddress.IPv4Address(subnet["ipam"]["gateway_ipv4"])
+        reserved = {int(ipaddress.IPv4Address(value)) for value in reserved_addresses}
+        physical_ranges = sorted(
+            subnet["ipam"]["physical_ipv4_cidrs"],
+            key=lambda cidr: int(ipaddress.ip_network(cidr, strict=True).network_address),
+        )
+        for cidr in physical_ranges:
+            block = ipaddress.ip_network(cidr, strict=True)
+            candidate = max(int(block.network_address) + 1, int(network.network_address) + 1)
+            end = min(int(block.broadcast_address) - 1, int(network.broadcast_address) - 1)
+            while candidate <= end:
+                address = ipaddress.IPv4Address(candidate)
+                if address == gateway or candidate in reserved:
+                    candidate += 1
+                    continue
+                return str(address)
+        raise StateError("physical IPv4 address range is exhausted")
+
+    def _write_network_attachment(
+        self, connection: sqlite3.Connection, entry: dict[str, Any], *, existing: bool
+    ) -> None:
+        row = self._row_for_network_attachment_entry(entry)
+        if existing:
+            connection.execute(
+                """UPDATE network_attachments SET tenant_id = ?, virtual_network_uid = ?,
+                   subnet_uid = ?, host_name = ?, interface_name = ?, mac_address = ?,
+                   address = ?, phase = ?, payload = ? WHERE uid = ?""",
+                (*row[1:], row[0]),
+            )
+            return
+        connection.execute(
+            """INSERT INTO network_attachments
+               (uid, tenant_id, virtual_network_uid, subnet_uid, host_name,
+                interface_name, mac_address, address, phase, payload)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            row,
+        )
+        for port in entry["ports"]:
+            connection.execute(
+                """INSERT INTO network_attachment_ports
+                   (switch_name, port_name, attachment_uid) VALUES (?, ?, ?)""",
+                (port["switch_name"], port["port_name"], entry["uid"]),
+            )
+
+    def _validate_network_attachment_dependencies(
+        self,
+        connection: sqlite3.Connection,
+        entry: dict[str, Any],
+        *,
+        require_ready: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        parent = self._entry_for_uid(connection, entry["virtual_network_uid"])
+        subnet = self._subnet_for_uid(connection, entry["subnet_uid"])
+        if parent is None or subnet is None:
+            raise StateError("NetworkAttachment provider dependency state is missing")
+        if parent["tenant_id"] != entry["tenant_id"] or subnet["tenant_id"] != entry["tenant_id"]:
+            raise StateError("NetworkAttachment tenant does not match saved dependencies")
+        if subnet["virtual_network_uid"] != parent["uid"]:
+            raise StateError("NetworkAttachment Subnet belongs to another VirtualNetwork")
+        if require_ready and subnet["phase"] != "ready":
+            raise StateError("NetworkAttachment Subnet provider state is not Ready")
+        _validate_network_attachment_for_subnet(entry, subnet)
+        return parent, subnet
+
+    def prepare_network_attachment(
+        self,
+        uid: str,
+        tenant_id: str,
+        virtual_network_uid: str,
+        subnet_uid: str,
+        host_name: str,
+        interface_name: str,
+        mac_address: str,
+        ports: Any,
+        dhcp_supervisor: str | None = None,
+        *,
+        check_mode: bool = False,
+    ) -> tuple[dict[str, Any], bool, bool]:
+        for value, label in (
+            (uid, "NetworkAttachment API ID"),
+            (virtual_network_uid, "VirtualNetwork API ID"),
+            (subnet_uid, "Subnet API ID"),
+        ):
+            if not _is_canonical_uuid(value):
+                raise StateError(f"{label} must be a canonical UUID")
+        if not _is_valid_tenant_id(tenant_id):
+            raise StateError("NetworkAttachment tenant is required")
+        if not isinstance(host_name, str) or not host_name.strip():
+            raise StateError("NetworkAttachment host name is required")
+        if not isinstance(interface_name, str) or not SAFE_INTERFACE_NAME.fullmatch(interface_name):
+            raise StateError("NetworkAttachment interface name is invalid")
+        if not isinstance(mac_address, str) or not DHCP_MAC_RE.fullmatch(mac_address):
+            raise StateError("NetworkAttachment MAC address is invalid")
+        mac_address = mac_address.lower()
+        normalized_ports = self._normalize_attachment_ports(ports)
+        if dhcp_supervisor is not None:
+            _validate_dhcp_supervisor(dhcp_supervisor)
+
+        with self._resource_locked(virtual_network_uid):
+            with self._locked_database(create=False, read_only=check_mode) as connection:
+                if connection is None:
+                    raise StateError("AgentlessNet VirtualNetwork state is missing")
+                if not check_mode:
+                    connection.execute("BEGIN IMMEDIATE")
+                try:
+                    self._reject_deleted(connection, "NetworkAttachment", uid, tenant_id)
+                    parent = self._entry_for_uid(connection, virtual_network_uid)
+                    subnet = self._subnet_for_uid(connection, subnet_uid)
+                    if parent is None or subnet is None:
+                        raise StateError("NetworkAttachment provider dependency state is missing")
+                    if parent["tenant_id"] != tenant_id or subnet["tenant_id"] != tenant_id:
+                        raise StateError("NetworkAttachment tenant does not match its dependencies")
+                    if subnet["virtual_network_uid"] != virtual_network_uid:
+                        raise StateError("NetworkAttachment Subnet belongs to another VirtualNetwork")
+                    if subnet["phase"] != "ready":
+                        raise StateError("NetworkAttachment Subnet provider state is not Ready")
+                    if not subnet["ipam"]["physical_ipv4_cidrs"]:
+                        raise StateError("Subnet has no physical IPv4 address range")
+                    existing = self._network_attachment_for_uid(connection, uid)
+                    if existing is not None:
+                        requested_identity = (
+                            existing["tenant_id"], existing["virtual_network_uid"],
+                            existing["subnet_uid"], existing["host_name"],
+                            existing["interface_name"], existing["mac_address"],
+                            existing["ports"],
+                        )
+                        current_identity = (
+                            tenant_id, virtual_network_uid, subnet_uid, host_name,
+                            interface_name, mac_address, normalized_ports,
+                        )
+                        if requested_identity != current_identity:
+                            raise StateError("NetworkAttachment identity does not match saved state")
+                        if existing["phase"] == "deleting":
+                            raise StateError("NetworkAttachment is already deleting")
+                        entry = existing
+                        changed = False
+                    else:
+                        reserved_rows = connection.execute(
+                            "SELECT address FROM network_attachments WHERE subnet_uid = ?",
+                            (subnet_uid,),
+                        ).fetchall()
+                        address = self._allocate_physical_address(
+                            subnet, {row[0] for row in reserved_rows}
+                        )
+                        entry = {
+                            "uid": uid,
+                            "tenant_id": tenant_id,
+                            "virtual_network_uid": virtual_network_uid,
+                            "subnet_uid": subnet_uid,
+                            "host_name": host_name,
+                            "interface_name": interface_name,
+                            "mac_address": mac_address,
+                            "address": address,
+                            "phase": "provisioning",
+                            "ports": normalized_ports,
+                        }
+                        _validate_network_attachment_entry(entry)
+                        _validate_network_attachment_for_subnet(entry, subnet)
+                        changed = True
+                        if not check_mode:
+                            self._write_network_attachment(connection, entry, existing=False)
+                    if check_mode:
+                        return entry, changed, False
+                    connection.commit()
+                except sqlite3.IntegrityError as error:
+                    if connection.in_transaction:
+                        connection.rollback()
+                    raise PublicRetryableStateError("attachment_conflict") from error
+                except BaseException:
+                    if connection.in_transaction:
+                        connection.rollback()
+                    raise
+
+            with self._locked_database(create=False, read_only=True) as connection:
+                if connection is None:
+                    raise StateCorrupt("AgentlessNet state disappeared after NetworkAttachment reservation")
+                parent = self._entry_for_uid(connection, virtual_network_uid)
+                subnet_entries = self._subnets_for_virtual_network(connection, virtual_network_uid)
+                attachments = self._network_attachments_for_vn(connection, virtual_network_uid)
+            if dhcp_supervisor is None:
+                try:
+                    dhcp_supervisor = preflight_dhcp_supervisor(virtual_network_uid)
+                except SubnetProviderError as error:
+                    raise RetryableStateError(str(error)) from error
+            try:
+                dhcp_changed = reconcile_virtual_network_dhcp(
+                    parent, subnet_entries, attachments, dhcp_supervisor
+                )
+            except (SubnetProviderError, NetworkCommandError) as error:
+                raise RetryableStateError(str(error)) from error
+            return entry, changed, dhcp_changed
+
+    def mark_network_attachment_ready(
+        self, uid: str, tenant_id: str, *, check_mode: bool = False
+    ) -> tuple[dict[str, Any] | None, bool]:
+        with self._locked_database(create=False, read_only=True) as connection:
+            if connection is None:
+                if check_mode:
+                    return None, False
+                raise StateError("NetworkAttachment provider state is missing")
+            entry = self._network_attachment_for_uid(connection, uid)
+            if entry is None:
+                if check_mode:
+                    return None, False
+                raise StateError("NetworkAttachment provider state is missing")
+            if entry["tenant_id"] != tenant_id:
+                raise StateError("NetworkAttachment tenant does not match saved state")
+            if check_mode:
+                self._reject_deleted(connection, "NetworkAttachment", uid, tenant_id)
+                self._validate_network_attachment_dependencies(
+                    connection, entry, require_ready=True
+                )
+                ready = {**entry, "phase": "ready"}
+                return ready, entry["phase"] != "ready"
+            virtual_network_uid = entry["virtual_network_uid"]
+        with self._resource_locked(virtual_network_uid):
+            with self._locked_database(create=False) as connection:
+                if connection is None:
+                    raise StateCorrupt("AgentlessNet NetworkAttachment state disappeared")
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    self._reject_deleted(connection, "NetworkAttachment", uid, tenant_id)
+                    current = self._network_attachment_for_uid(connection, uid)
+                    if current is None or current["tenant_id"] != tenant_id:
+                        raise StateError("NetworkAttachment provider state is missing or has another tenant")
+                    parent, subnet = self._validate_network_attachment_dependencies(
+                        connection, current, require_ready=True
+                    )
+                    del parent, subnet
+                    if current["phase"] == "ready":
+                        connection.rollback()
+                        return current, False
+                    ready = {**current, "phase": "ready"}
+                    row = self._row_for_network_attachment_entry(ready)
+                    connection.execute(
+                        """UPDATE network_attachments SET tenant_id = ?, virtual_network_uid = ?,
+                           subnet_uid = ?, host_name = ?, interface_name = ?, mac_address = ?,
+                           address = ?, phase = ?, payload = ? WHERE uid = ?""",
+                        (*row[1:], row[0]),
+                    )
+                    connection.commit()
+                    return ready, True
+                except BaseException:
+                    if connection.in_transaction:
+                        connection.rollback()
+                    raise
+
+    def begin_delete_network_attachment(
+        self,
+        uid: str,
+        tenant_id: str,
+        virtual_network_uid: str,
+        *,
+        check_mode: bool = False,
+    ) -> dict[str, Any] | None:
+        if not _is_canonical_uuid(uid) or not _is_canonical_uuid(virtual_network_uid):
+            raise StateError("NetworkAttachment and VirtualNetwork API IDs must be canonical UUIDs")
+        if not _is_valid_tenant_id(tenant_id):
+            raise StateError("NetworkAttachment tenant is required")
+        if check_mode:
+            with self._locked_database(create=False, read_only=True) as connection:
+                if connection is None:
+                    return None
+                current = self._network_attachment_for_uid(connection, uid)
+                if current is None:
+                    return None
+                if (
+                    current["tenant_id"] != tenant_id
+                    or current["virtual_network_uid"] != virtual_network_uid
+                ):
+                    raise StateError(
+                        "NetworkAttachment delete identity does not match saved state"
+                    )
+                return {**current, "phase": "deleting"}
+        with self._resource_locked(virtual_network_uid):
+            with self._locked_database(create=True) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    self._record_deleted(connection, "NetworkAttachment", uid, tenant_id)
+                    current = self._network_attachment_for_uid(connection, uid)
+                    if current is None:
+                        connection.commit()
+                        return None
+                    if current["tenant_id"] != tenant_id or current["virtual_network_uid"] != virtual_network_uid:
+                        raise StateError("NetworkAttachment delete identity does not match saved state")
+                    deleting = {**current, "phase": "deleting"}
+                    row = self._row_for_network_attachment_entry(deleting)
+                    connection.execute(
+                        """UPDATE network_attachments SET tenant_id = ?, virtual_network_uid = ?,
+                           subnet_uid = ?, host_name = ?, interface_name = ?, mac_address = ?,
+                           address = ?, phase = ?, payload = ? WHERE uid = ?""",
+                        (*row[1:], row[0]),
+                    )
+                    connection.commit()
+                    return deleting
+                except BaseException:
+                    if connection.in_transaction:
+                        connection.rollback()
+                    raise
+
+    def finish_delete_network_attachment(
+        self,
+        uid: str,
+        tenant_id: str,
+        dhcp_supervisor: str | None = None,
+        *,
+        check_mode: bool = False,
+    ) -> tuple[dict[str, Any] | None, bool, bool]:
+        with self._locked_database(create=False, read_only=True) as connection:
+            if connection is None:
+                return None, False, False
+            entry = self._network_attachment_for_uid(connection, uid)
+            if entry is None:
+                return None, False, False
+            if entry["tenant_id"] != tenant_id:
+                raise StateError("NetworkAttachment tenant does not match saved state")
+            virtual_network_uid = entry["virtual_network_uid"]
+        operation_lock = (
+            contextlib.nullcontext()
+            if check_mode
+            else self._resource_locked(virtual_network_uid)
+        )
+        with operation_lock:
+            with self._locked_database(create=False, read_only=True) as connection:
+                if connection is None:
+                    return None, False, False
+                current = self._network_attachment_for_uid(connection, uid)
+                if current is None:
+                    return None, False, False
+                if current["tenant_id"] != tenant_id:
+                    raise StateError("NetworkAttachment tenant does not match saved state")
+                if not check_mode and current["phase"] != "deleting":
+                    raise StateError("NetworkAttachment is not ready for provider cleanup")
+                parent, subnet = self._validate_network_attachment_dependencies(
+                    connection, current, require_ready=False
+                )
+                subnets = self._subnets_for_virtual_network(connection, virtual_network_uid)
+                attachments = self._network_attachments_for_vn(connection, virtual_network_uid)
+                external_attachments = connection.execute(
+                    """SELECT tenant_id, subnet_uid, payload FROM attachments
+                       WHERE tenant_id = ? AND subnet_uid = ?""",
+                    (tenant_id, current["subnet_uid"]),
+                ).fetchall()
+                for row in external_attachments:
+                    try:
+                        external_attachment = json.loads(row[2])
+                    except (TypeError, json.JSONDecodeError) as error:
+                        raise StateCorrupt("malformed ExternalIPAttachment state payload") from error
+                    destination = external_attachment.get("context", {}).get(
+                        "destination", {}
+                    )
+                    if destination.get("address") == current["address"]:
+                        raise StateError("BareMetalInstance still has an ExternalIPAttachment")
+            if check_mode:
+                return {**current, "phase": "deleting"}, True, False
+            if dhcp_supervisor is None:
+                try:
+                    dhcp_supervisor = preflight_dhcp_supervisor(virtual_network_uid)
+                except SubnetProviderError as error:
+                    raise RetryableStateError(str(error)) from error
+            try:
+                dhcp_changed = reconcile_virtual_network_dhcp(
+                    parent, subnets, attachments, dhcp_supervisor
+                )
+            except (SubnetProviderError, NetworkCommandError) as error:
+                raise RetryableStateError(str(error)) from error
+            with self._locked_database(create=False) as connection:
+                if connection is None:
+                    raise StateCorrupt("AgentlessNet NetworkAttachment state disappeared during cleanup")
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    latest = self._network_attachment_for_uid(connection, uid)
+                    if latest != current:
+                        raise StateError("NetworkAttachment state changed during cleanup")
+                    connection.execute("DELETE FROM network_attachments WHERE uid = ?", (uid,))
+                    connection.commit()
+                except BaseException:
+                    if connection.in_transaction:
+                        connection.rollback()
+                    raise
+            return current, True, dhcp_changed
 
     def reserve_subnet(
         self,
@@ -1584,8 +2348,8 @@ class StateStore:
         tenant_id: str,
         subnet_cidr: str,
         trunk_interface: str,
+        ipam: dict[str, Any],
         observed_vlan_ids: set[int] | None = None,
-        vip_cidr: str = "",
         *,
         check_mode: bool = False,
     ) -> tuple[dict[str, Any], bool]:
@@ -1601,8 +2365,6 @@ class StateStore:
             ):
                 raise StateError("Observed Cumulus VLAN ID is outside the supported range")
         observed_vlan_ids = set(observed_vlan_ids)
-        if not isinstance(vip_cidr, str):
-            raise StateError("Subnet VIP CIDR must be text")
         # Validate all caller-controlled fields before opening state.
         requested = _subnet_payload(
             uid,
@@ -1611,7 +2373,7 @@ class StateStore:
             subnet_cidr,
             trunk_interface,
             MIN_VLAN_ID,
-            vip_cidr,
+            ipam,
         )
         operation_lock = (
             contextlib.nullcontext()
@@ -1630,6 +2392,7 @@ class StateStore:
                     raise StateError("AgentlessNet parent VirtualNetwork state is missing")
                 if parent["tenant_id"] != tenant_id:
                     raise StateError("Subnet tenant does not match saved VirtualNetwork state")
+                self._reject_deleted(connection, "Subnet", uid, tenant_id)
                 try:
                     parent_network = _parse_canonical_ipv4_network(
                         parent["virtual_network_cidr"]
@@ -1657,7 +2420,7 @@ class StateStore:
                         "tenant_id",
                         "ipv4_cidr",
                         "trunk_interface",
-                        "vip_cidr",
+                        "ipam",
                     )
                     if any(current[key] != requested[key] for key in immutable):
                         raise StateError("Subnet request does not match its saved allocation")
@@ -1688,7 +2451,7 @@ class StateStore:
                     subnet_cidr,
                     trunk_interface,
                     vlan_id,
-                    vip_cidr,
+                    ipam,
                 )
                 self._validate_subnet_entry(entry)
                 if check_mode:
@@ -1696,6 +2459,7 @@ class StateStore:
 
                 connection.execute("BEGIN IMMEDIATE")
                 try:
+                    self._reject_deleted(connection, "Subnet", uid, tenant_id)
                     connection.execute(
                         """INSERT INTO subnets (
                             uid, virtual_network_uid, tenant_id, vlan_id,
@@ -1744,6 +2508,7 @@ class StateStore:
                     raise StateError("AgentlessNet Subnet reservation is missing")
                 if entry["tenant_id"] != tenant_id:
                     raise StateError("Subnet tenant does not match saved state")
+                self._reject_deleted(connection, "Subnet", uid, tenant_id)
                 if entry["phase"] == "deleting":
                     raise StateError("AgentlessNet Subnet is deleting and cannot be ensured")
                 parent = self._entry_for_uid(connection, virtual_network_uid)
@@ -1752,6 +2517,7 @@ class StateStore:
                 siblings = self._subnets_for_virtual_network(
                     connection, virtual_network_uid
                 )
+                attachments = self._network_attachments_for_vn(connection, virtual_network_uid)
                 active_subnets = [
                     child for child in siblings if child["phase"] != "deleting"
                 ]
@@ -1760,17 +2526,17 @@ class StateStore:
                 try:
                     dhcp_supervisor = preflight_dhcp_supervisor(virtual_network_uid)
                 except SubnetProviderError as error:
-                    raise StateError(str(error)) from error
+                    raise RetryableStateError(str(error)) from error
 
             try:
                 parent_changed = reconcile_virtual_network(
                     parent, firewall_lock_path=self.firewall_lock_path
                 )
                 subnet_changed = ensure_subnet_data_plane(
-                    parent, active_subnets, dhcp_supervisor
+                    parent, active_subnets, attachments, dhcp_supervisor
                 )
             except (SubnetProviderError, NetworkCommandError) as error:
-                raise StateError(str(error)) from error
+                raise RetryableStateError(str(error)) from error
 
             state_changed = False
             if entry["phase"] != "ready":
@@ -1805,15 +2571,20 @@ class StateStore:
         self,
         uid: str,
         tenant_id: str,
+        virtual_network_uid: str | None = None,
         dhcp_supervisor: str | None = None,
         *,
         check_mode: bool = False,
     ) -> tuple[dict[str, Any] | None, bool]:
         if dhcp_supervisor is not None:
             _validate_dhcp_supervisor(dhcp_supervisor)
-        virtual_network_uid = self._parent_uid_for_subnet(
-            uid, tenant_id, check_mode=check_mode
-        )
+        saved_parent_uid = self._parent_uid_for_subnet(uid, tenant_id, check_mode=check_mode)
+        if saved_parent_uid is not None:
+            if virtual_network_uid is not None and virtual_network_uid != saved_parent_uid:
+                raise StateError("Subnet delete parent API ID does not match saved state")
+            virtual_network_uid = saved_parent_uid
+        if virtual_network_uid is not None and not _is_canonical_uuid(virtual_network_uid):
+            raise StateError("Subnet parent VirtualNetwork API ID must be canonical")
         if virtual_network_uid is None:
             return None, False
         if check_mode:
@@ -1824,38 +2595,49 @@ class StateStore:
                 if connection is not None:
                     if connection.execute(
                         "SELECT 1 FROM attachments WHERE subnet_uid = ? LIMIT 1", (uid,)
-                    ).fetchone() is not None:
+                    ).fetchone() is not None or self._network_attachments_for_subnet(connection, uid):
                         raise StateError("Subnet still has an ExternalIPAttachment")
             if entry["phase"] != "deleting":
                 entry = {**entry, "phase": "deleting"}
             return entry, True
 
         with self._resource_locked(virtual_network_uid):
-            with self._locked_database(create=False) as connection:
+            with self._locked_database(create=True) as connection:
                 if connection is None:
                     return None, False
+                connection.execute("BEGIN IMMEDIATE")
                 entry = self._subnet_for_uid(connection, uid)
                 if entry is None:
+                    try:
+                        self._record_deleted(connection, "Subnet", uid, tenant_id)
+                        connection.commit()
+                    except BaseException:
+                        if connection.in_transaction:
+                            connection.rollback()
+                        raise
                     return None, False
                 if entry["tenant_id"] != tenant_id:
+                    connection.rollback()
                     raise StateError("Subnet tenant does not match saved state")
                 if connection.execute(
                     "SELECT 1 FROM attachments WHERE subnet_uid = ? LIMIT 1", (uid,)
-                ).fetchone() is not None:
+                ).fetchone() is not None or self._network_attachments_for_subnet(connection, uid):
+                    connection.rollback()
                     raise StateError("Subnet still has an ExternalIPAttachment")
                 parent = self._entry_for_uid(connection, virtual_network_uid)
                 if parent is None or parent["tenant_id"] != tenant_id:
+                    connection.rollback()
                     raise StateError("AgentlessNet Subnet parent state does not match its reservation")
                 if dhcp_supervisor is None:
                     try:
                         dhcp_supervisor = preflight_dhcp_supervisor(virtual_network_uid)
                     except SubnetProviderError as error:
-                        raise StateError(str(error)) from error
+                        raise RetryableStateError(str(error)) from error
                 state_changed = entry["phase"] != "deleting"
                 deleting_entry = {**entry, "phase": "deleting"}
-                if state_changed:
-                    connection.execute("BEGIN IMMEDIATE")
-                    try:
+                try:
+                    self._record_deleted(connection, "Subnet", uid, tenant_id)
+                    if state_changed:
                         connection.execute(
                             "UPDATE subnets SET phase = ?, payload = ? WHERE uid = ?",
                             (
@@ -1868,13 +2650,14 @@ class StateStore:
                                 uid,
                             ),
                         )
-                        connection.commit()
-                    except BaseException:
-                        connection.rollback()
-                        raise
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
                 siblings = self._subnets_for_virtual_network(
                     connection, virtual_network_uid
                 )
+                attachments = self._network_attachments_for_vn(connection, virtual_network_uid)
                 remaining = [
                     child
                     for child in siblings
@@ -1883,10 +2666,10 @@ class StateStore:
 
             try:
                 provider_changed = prepare_subnet_delete_data_plane(
-                    parent, deleting_entry, remaining, dhcp_supervisor
+                    parent, deleting_entry, remaining, attachments, dhcp_supervisor
                 )
             except (SubnetProviderError, NetworkCommandError) as error:
-                raise StateError(str(error)) from error
+                raise RetryableStateError(str(error)) from error
             return deleting_entry, state_changed or provider_changed
 
     def release_subnet(
@@ -1905,7 +2688,7 @@ class StateStore:
                 if connection is not None:
                     if connection.execute(
                         "SELECT 1 FROM attachments WHERE subnet_uid = ? LIMIT 1", (uid,)
-                    ).fetchone() is not None:
+                    ).fetchone() is not None or self._network_attachments_for_subnet(connection, uid):
                         raise StateError("Subnet still has an ExternalIPAttachment")
             if entry["phase"] != "deleting":
                 raise StateError("AgentlessNet Subnet must be deleting before VLAN release")
@@ -1922,7 +2705,7 @@ class StateStore:
                     raise StateError("Subnet tenant does not match saved state")
                 if connection.execute(
                     "SELECT 1 FROM attachments WHERE subnet_uid = ? LIMIT 1", (uid,)
-                ).fetchone() is not None:
+                ).fetchone() is not None or self._network_attachments_for_subnet(connection, uid):
                     raise StateError("Subnet still has an ExternalIPAttachment")
                 if entry["phase"] != "deleting":
                     raise StateError("AgentlessNet Subnet must be deleting before VLAN release")
@@ -2069,10 +2852,10 @@ class StateStore:
             raise StateError("NATGateway tenant does not match saved dependencies")
         context = entry["context"]
         if any((
-            context["virtual_network"]["kubernetes_uid"] != virtual_network["uid"],
+            context["virtual_network"]["fulfillment_id"] != virtual_network["uid"],
             context["virtual_network"]["tenant_id"] != virtual_network["tenant_id"],
             context["virtual_network"]["ipv4_cidr"] != virtual_network["virtual_network_cidr"],
-            context["external_ip"]["kubernetes_uid"] != external_ip["uid"],
+            context["external_ip"]["fulfillment_id"] != external_ip["uid"],
             context["external_ip"]["fulfillment_id"] != external_ip["fulfillment_id"],
             context["external_ip"]["tenant_id"] != external_ip["tenant_id"],
             context["external_ip"]["address"] != external_ip["address"],
@@ -2135,9 +2918,19 @@ class StateStore:
             "uid", "fulfillment_id", "tenant_id", "external_ip_uid",
             "external_address", "virtual_network_uid", "provider",
         )
-        return all(existing[key] == requested[key] for key in identity_keys) and all(
-            existing["context"][section] == requested["context"][section]
-            for section in ("external_ip", "virtual_network")
+        if not all(existing[key] == requested[key] for key in identity_keys):
+            return False
+        stable_fields = {
+            "external_ip": ("fulfillment_id", "tenant_id", "address", "state"),
+            "virtual_network": ("fulfillment_id", "tenant_id", "ipv4_cidr"),
+        }
+        return all(
+            all(
+                existing["context"][section][key]
+                == requested["context"][section][key]
+                for key in fields
+            )
+            for section, fields in stable_fields.items()
         )
 
     @staticmethod
@@ -2156,18 +2949,7 @@ class StateStore:
         )
         if any(existing[key] != requested[key] for key in identity_keys):
             return False
-        old_context = existing["context"]
-        new_context = requested["context"]
-        old_target = dict(old_context["target"])
-        new_target = dict(new_context["target"])
-        old_target.pop("ip_address")
-        new_target.pop("ip_address")
-        return (
-            old_context["external_ip"] == new_context["external_ip"]
-            and old_target == new_target
-            and old_context["subnet"] == new_context["subnet"]
-            and old_context["virtual_network"] == new_context["virtual_network"]
-        )
+        return existing["context"] == requested["context"]
 
     def ensure_external_ip_attachment(
         self,
@@ -2186,7 +2968,7 @@ class StateStore:
         if not _is_valid_tenant_id(tenant_id):
             raise StateError("ExternalIPAttachment tenant ID is required")
         normalized_context = _external_ip_attachment_context(context, tenant_id)
-        virtual_network_uid = normalized_context["virtual_network"]["kubernetes_uid"]
+        virtual_network_uid = normalized_context["destination"]["routing_domain"]["virtual_network_id"]
 
         with self._resource_locked(virtual_network_uid):
             with self._locked_database(
@@ -2195,12 +2977,13 @@ class StateStore:
             ) as connection:
                 if connection is None:
                     raise StateError("AgentlessNet VirtualNetwork state is missing")
+                self._reject_deleted(connection, "ExternalIPAttachment", uid, tenant_id)
                 virtual_network = self._entry_for_uid(connection, virtual_network_uid)
                 subnet = self._subnet_for_uid(
-                    connection, normalized_context["subnet"]["kubernetes_uid"]
+                    connection, normalized_context["destination"]["routing_domain"]["subnet_id"]
                 )
                 external_ip = self._external_ip_for_uid(
-                    connection, normalized_context["external_ip"]["kubernetes_uid"]
+                    connection, normalized_context["external_ip"]["id"]
                 )
                 if virtual_network is None or subnet is None or external_ip is None:
                     raise StateError("AgentlessNet attachment dependency state is missing")
@@ -2225,6 +3008,7 @@ class StateStore:
                     uid,
                 )
                 existing = self._attachment_for_uid(connection, uid)
+                self._reject_deleted(connection, "ExternalIPAttachment", uid, tenant_id)
                 self._require_unique_attachment_fulfillment_id(
                     connection, uid, fulfillment_id
                 )
@@ -2236,22 +3020,17 @@ class StateStore:
                     if existing["phase"] == "deleting":
                         raise StateError("ExternalIPAttachment is already deleting")
                 if check_mode:
-                    return requested, existing is None or existing["context"] != normalized_context
+                    return requested, existing is None
 
-            if existing is not None and existing["context"] != normalized_context:
-                try:
-                    with _with_firewall_lock(self.firewall_lock_path):
-                        agentless_net_external_ip.delete_external_ip_attachment(existing)
-                except NetworkCommandError as error:
-                    raise StateError(str(error)) from error
-
-            if existing is None or existing["context"] != normalized_context:
+            if existing is None:
                 with self._locked_database(create=False) as connection:
                     if connection is None:
                         raise StateCorrupt("AgentlessNet state disappeared before attachment reservation")
                     connection.execute("BEGIN IMMEDIATE")
                     try:
+                        self._reject_deleted(connection, "ExternalIPAttachment", uid, tenant_id)
                         current = self._attachment_for_uid(connection, uid)
+                        self._reject_deleted(connection, "ExternalIPAttachment", uid, tenant_id)
                         if current != existing:
                             raise StateError("ExternalIPAttachment state changed during reservation")
                         self._require_nat_gateway_external_ip_exclusive(
@@ -2260,26 +3039,14 @@ class StateStore:
                             requested["external_address"],
                             uid,
                         )
-                        if current is None:
-                            connection.execute(
-                                """INSERT INTO attachments
-                                   (uid, fulfillment_id, tenant_id, external_ip_uid,
-                                    virtual_network_uid, subnet_uid, external_address,
-                                    phase, payload)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                                self._row_for_attachment_entry(requested),
-                            )
-                        else:
-                            connection.execute(
-                                """UPDATE attachments SET external_address = ?, phase = ?, payload = ?
-                                   WHERE uid = ?""",
-                                (
-                                    requested["external_address"],
-                                    requested["phase"],
-                                    json.dumps(requested, sort_keys=True, separators=(",", ":")),
-                                    uid,
-                                ),
-                            )
+                        connection.execute(
+                            """INSERT INTO attachments
+                               (uid, fulfillment_id, tenant_id, external_ip_uid,
+                                virtual_network_uid, subnet_uid, external_address,
+                                phase, payload)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            self._row_for_attachment_entry(requested),
+                        )
                         connection.commit()
                     except sqlite3.IntegrityError as error:
                         connection.rollback()
@@ -2295,7 +3062,7 @@ class StateStore:
                         virtual_network, subnet, requested
                     )
             except NetworkCommandError as error:
-                raise StateError(str(error)) from error
+                raise RetryableStateError(str(error)) from error
 
             ready = {**requested, "phase": "ready"}
             with self._locked_database(create=False) as connection:
@@ -2303,6 +3070,7 @@ class StateStore:
                     raise StateCorrupt("AgentlessNet state disappeared after attachment setup")
                 connection.execute("BEGIN IMMEDIATE")
                 try:
+                    self._reject_deleted(connection, "ExternalIPAttachment", uid, tenant_id)
                     current = self._attachment_for_uid(connection, uid)
                     if current is None or current["context"] != normalized_context:
                         raise StateError("ExternalIPAttachment state changed during provider reconciliation")
@@ -2318,13 +3086,19 @@ class StateStore:
                 except BaseException:
                     connection.rollback()
                     raise
-            return ready, existing is None or existing["context"] != normalized_context or network_changed or provider_changed
+            return ready, (
+                existing is None
+                or existing["phase"] != "ready"
+                or network_changed
+                or provider_changed
+            )
 
     def delete_external_ip_attachment(
         self,
         uid: str,
         fulfillment_id: str,
         tenant_id: str,
+        context: dict[str, Any] | None = None,
         *,
         check_mode: bool = False,
     ) -> tuple[dict[str, Any] | None, bool]:
@@ -2334,43 +3108,54 @@ class StateStore:
             raise StateError("ExternalIPAttachment Fulfillment UUID must be a canonical UUID")
         if not _is_valid_tenant_id(tenant_id):
             raise StateError("ExternalIPAttachment tenant ID is required")
-        with self._locked_database(create=False, read_only=True) as connection:
+        normalized_context = (
+            _external_ip_attachment_context(context, tenant_id)
+            if context is not None
+            else None
+        )
+        with self._locked_database(create=not check_mode, read_only=check_mode) as connection:
             if connection is None:
                 return None, False
             existing = self._attachment_for_uid(connection, uid)
-            if existing is None:
-                return None, False
-            if any(
+            if existing is not None and any(
                 existing[key] != value
-                for key, value in (
-                    ("fulfillment_id", fulfillment_id),
-                    ("tenant_id", tenant_id),
-                )
+                for key, value in (("fulfillment_id", fulfillment_id), ("tenant_id", tenant_id))
             ):
                 raise StateError("ExternalIPAttachment identity does not match saved state")
-        if check_mode:
-            return existing, True
-
-        virtual_network_uid = existing["virtual_network_uid"]
-        with self._resource_locked(virtual_network_uid):
-            with self._locked_database(create=False) as connection:
-                if connection is None:
-                    raise StateCorrupt("AgentlessNet attachment state disappeared")
+            if existing is None and normalized_context is None:
+                if check_mode:
+                    return None, False
                 connection.execute("BEGIN IMMEDIATE")
                 try:
-                    current = self._attachment_for_uid(connection, uid)
-                    if current is None:
+                    self._record_deleted(connection, "ExternalIPAttachment", uid, tenant_id)
+                    connection.commit()
+                except BaseException:
+                    if connection.in_transaction:
                         connection.rollback()
+                    raise
+                return None, False
+            virtual_network_uid = (
+                existing["virtual_network_uid"] if existing is not None
+                else normalized_context["destination"]["routing_domain"]["virtual_network_id"]
+            )
+        if check_mode:
+            return existing, existing is not None
+
+        with self._resource_locked(virtual_network_uid):
+            with self._locked_database(create=True) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    self._record_deleted(connection, "ExternalIPAttachment", uid, tenant_id)
+                    deleting = self._attachment_for_uid(connection, uid)
+                    if deleting is None:
+                        connection.commit()
                         return None, False
                     if any(
-                        current[key] != value
-                        for key, value in (
-                            ("fulfillment_id", fulfillment_id),
-                            ("tenant_id", tenant_id),
-                        )
+                        deleting[key] != value
+                        for key, value in (("fulfillment_id", fulfillment_id), ("tenant_id", tenant_id))
                     ):
                         raise StateError("ExternalIPAttachment identity does not match saved state")
-                    deleting = {**current, "phase": "deleting"}
+                    deleting = {**deleting, "phase": "deleting"}
                     connection.execute(
                         "UPDATE attachments SET phase = ?, payload = ? WHERE uid = ?",
                         (
@@ -2381,14 +3166,15 @@ class StateStore:
                     )
                     connection.commit()
                 except BaseException:
-                    connection.rollback()
+                    if connection.in_transaction:
+                        connection.rollback()
                     raise
 
             try:
                 with _with_firewall_lock(self.firewall_lock_path):
                     agentless_net_external_ip.delete_external_ip_attachment(deleting)
             except NetworkCommandError as error:
-                raise StateError(str(error)) from error
+                raise RetryableStateError(str(error)) from error
 
             with self._locked_database(create=False) as connection:
                 if connection is None:
@@ -2401,7 +3187,8 @@ class StateStore:
                     connection.execute("DELETE FROM attachments WHERE uid = ?", (uid,))
                     connection.commit()
                 except BaseException:
-                    connection.rollback()
+                    if connection.in_transaction:
+                        connection.rollback()
                     raise
             return deleting, True
 
@@ -2446,8 +3233,8 @@ class StateStore:
         if not _is_valid_tenant_id(tenant_id):
             raise StateError("NATGateway tenant ID is required")
         normalized_context = _nat_gateway_context(context, tenant_id)
-        virtual_network_uid = normalized_context["virtual_network"]["kubernetes_uid"]
-        external_ip_uid = normalized_context["external_ip"]["kubernetes_uid"]
+        virtual_network_uid = normalized_context["virtual_network"]["fulfillment_id"]
+        external_ip_uid = normalized_context["external_ip"]["fulfillment_id"]
         external_address = normalized_context["external_ip"]["address"]
         lock = contextlib.nullcontext() if check_mode else self._resource_locked(virtual_network_uid)
 
@@ -2458,6 +3245,7 @@ class StateStore:
                 if not check_mode:
                     connection.execute("BEGIN IMMEDIATE")
                 try:
+                    self._reject_deleted(connection, "NATGateway", uid, tenant_id)
                     virtual_network = self._entry_for_uid(connection, virtual_network_uid)
                     external_ip = self._external_ip_for_uid(connection, external_ip_uid)
                     if virtual_network is None or external_ip is None:
@@ -2520,7 +3308,7 @@ class StateStore:
                         virtual_network, entry
                     )
             except (agentless_net_nat_gateway.NATGatewayProviderError, NetworkCommandError) as error:
-                raise StateError(str(error)) from error
+                raise RetryableStateError(str(error)) from error
 
             ready = {
                 **entry,
@@ -2531,6 +3319,7 @@ class StateStore:
                     raise StateCorrupt("AgentlessNet state disappeared after NATGateway setup")
                 connection.execute("BEGIN IMMEDIATE")
                 try:
+                    self._reject_deleted(connection, "NATGateway", uid, tenant_id)
                     current = self._nat_gateway_for_uid(connection, uid)
                     if current != entry:
                         raise StateError("NATGateway state changed during provider reconciliation")
@@ -2546,6 +3335,7 @@ class StateStore:
         uid: str,
         fulfillment_id: str,
         tenant_id: str,
+        context: Any = None,
         *,
         check_mode: bool = False,
     ) -> tuple[dict[str, Any] | None, bool]:
@@ -2555,27 +3345,43 @@ class StateStore:
             raise StateError("NATGateway Fulfillment UUID must be a canonical UUID")
         if not _is_valid_tenant_id(tenant_id):
             raise StateError("NATGateway tenant ID is required")
-        with self._locked_database(create=False, read_only=True) as connection:
+        normalized_context = _nat_gateway_context(context, tenant_id) if context is not None else None
+        with self._locked_database(create=not check_mode, read_only=check_mode) as connection:
             if connection is None:
                 return None, False
             existing = self._nat_gateway_for_uid(connection, uid)
             if existing is None:
-                return None, False
-            if (existing["fulfillment_id"], existing["tenant_id"]) != (fulfillment_id, tenant_id):
+                if normalized_context is None:
+                    if not check_mode:
+                        connection.execute("BEGIN IMMEDIATE")
+                        try:
+                            self._record_deleted(connection, "NATGateway", uid, tenant_id)
+                            connection.commit()
+                        except BaseException:
+                            if connection.in_transaction:
+                                connection.rollback()
+                            raise
+                    return None, False
+                virtual_network_uid = normalized_context["virtual_network"]["fulfillment_id"]
+            else:
+                virtual_network_uid = existing["virtual_network_uid"]
+            if existing is not None and (
+                existing["fulfillment_id"], existing["tenant_id"]
+            ) != (fulfillment_id, tenant_id):
                 raise StateError("NATGateway identity does not match saved provider state")
         if check_mode:
             return existing, True
 
-        virtual_network_uid = existing["virtual_network_uid"]
         with self._resource_locked(virtual_network_uid):
-            with self._locked_database(create=False) as connection:
+            with self._locked_database(create=True) as connection:
                 if connection is None:
                     raise StateCorrupt("AgentlessNet NATGateway state disappeared")
                 connection.execute("BEGIN IMMEDIATE")
                 try:
+                    self._record_deleted(connection, "NATGateway", uid, tenant_id)
                     current = self._nat_gateway_for_uid(connection, uid)
                     if current is None:
-                        connection.rollback()
+                        connection.commit()
                         return None, False
                     if (current["fulfillment_id"], current["tenant_id"]) != (fulfillment_id, tenant_id):
                         raise StateError("NATGateway identity does not match saved provider state")
@@ -2601,7 +3407,7 @@ class StateStore:
                 with _with_firewall_lock(self.firewall_lock_path):
                     agentless_net_nat_gateway.delete_nat_gateway(parent, deleting)
             except (agentless_net_nat_gateway.NATGatewayProviderError, NetworkCommandError) as error:
-                raise StateError(str(error)) from error
+                raise RetryableStateError(str(error)) from error
 
             with self._locked_database(create=False) as connection:
                 if connection is None:
@@ -2647,6 +3453,7 @@ class StateStore:
                 if not check_mode:
                     connection.execute("BEGIN IMMEDIATE")
                 try:
+                    self._reject_deleted(connection, "ExternalIPPool", uid, tenant_id)
                     existing = self._external_ip_pool_for_uid(connection, uid)
                     if existing is not None:
                         if existing != requested:
@@ -2702,7 +3509,7 @@ class StateStore:
         )
         with operation_lock:
             with self._locked_database(
-                create=False,
+                create=not check_mode,
                 read_only=check_mode,
             ) as connection:
                 if connection is None:
@@ -2716,13 +3523,13 @@ class StateStore:
                             "ExternalIPPool identity does not match saved state"
                         )
 
-                    self._require_unique_external_ip_pool_fulfillment_id(
-                        connection, uid, fulfillment_id
-                    )
                     if existing is None:
-                        if not check_mode:
-                            connection.rollback()
+                        if check_mode:
+                            return None, False
+                        self._record_deleted(connection, "ExternalIPPool", uid, tenant_id)
+                        connection.commit()
                         return None, False
+                    self._require_unique_external_ip_pool_fulfillment_id(connection, uid, fulfillment_id)
                     if connection.execute(
                         "SELECT 1 FROM external_ips WHERE pool_uid = ? LIMIT 1",
                         (uid,),
@@ -2731,6 +3538,7 @@ class StateStore:
                     if check_mode:
                         return existing, True
 
+                    self._record_deleted(connection, "ExternalIPPool", uid, tenant_id)
                     connection.execute(
                         "DELETE FROM external_ip_pools WHERE uid = ?", (uid,)
                     )
@@ -2764,14 +3572,17 @@ class StateStore:
         with operation_lock:
             with self._locked_database(create=False, read_only=check_mode) as connection:
                 if connection is None:
-                    raise StateError("ExternalIPPool is not registered")
+                    raise PublicStateError("pool_not_registered")
                 if not check_mode:
                     connection.execute("BEGIN IMMEDIATE")
                 try:
                     saved_pool = self._external_ip_pool_for_uid(connection, pool_uid)
+                    if saved_pool is None:
+                        raise PublicStateError("pool_not_registered")
                     if saved_pool != pool:
                         raise StateError("ExternalIPPool identity does not match saved state")
 
+                    self._reject_deleted(connection, "ExternalIP", uid, tenant_id)
                     existing = self._external_ip_for_uid(connection, uid)
                     if existing is not None:
                         if any(
@@ -2835,9 +3646,7 @@ class StateStore:
                             (pool_uid,),
                         ).fetchone()[0]
                         if reservation_count >= host_count:
-                            raise StateError(
-                                "ExternalIPPool has no available addresses"
-                            )
+                            raise PublicStateError("pool_exhausted")
 
                         pool_end = first_host + host_count
                         start_address = first_host + (
@@ -2869,9 +3678,7 @@ class StateStore:
                         if available_address is None and start_address > first_host:
                             available_address = first_gap(first_host, start_address)
                         if available_address is None:
-                            raise StateError(
-                                "ExternalIPPool has no available addresses"
-                            )
+                            raise PublicStateError("pool_exhausted")
                         address = str(ipaddress.IPv4Address(available_address))
                     reservation = _external_ip_entry(
                         uid, fulfillment_id, tenant_id, pool_uid, address
@@ -2910,7 +3717,7 @@ class StateStore:
         _external_ip_identity(uid, fulfillment_id, tenant_id, pool_uid)
         operation_lock = contextlib.nullcontext() if check_mode else self._resource_locked(uid)
         with operation_lock:
-            with self._locked_database(create=False, read_only=check_mode) as connection:
+            with self._locked_database(create=not check_mode, read_only=check_mode) as connection:
                 if connection is None:
                     return None, False
                 if not check_mode:
@@ -2918,8 +3725,10 @@ class StateStore:
                 try:
                     existing = self._external_ip_for_uid(connection, uid)
                     if existing is None:
-                        if not check_mode:
-                            connection.rollback()
+                        if check_mode:
+                            return None, False
+                        self._record_deleted(connection, "ExternalIP", uid, tenant_id)
+                        connection.commit()
                         return None, False
                     if any(
                         existing[key] != value
@@ -2945,6 +3754,7 @@ class StateStore:
                     if check_mode:
                         return existing, True
 
+                    self._record_deleted(connection, "ExternalIP", uid, tenant_id)
                     connection.execute("DELETE FROM external_ips WHERE uid = ?", (uid,))
                     connection.commit()
                     return existing, True
@@ -3005,6 +3815,7 @@ class StateStore:
             with self._locked_database(create=True) as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 try:
+                    self._reject_deleted(connection, "VirtualNetwork", uid, tenant_id)
                     entry = self._entry_for_uid(connection, uid)
                     if entry is not None:
                         self._require_tenant_ownership(entry, tenant_id)
@@ -3129,14 +3940,11 @@ class StateStore:
         if dhcp_supervisor is not None:
             _validate_dhcp_supervisor(dhcp_supervisor)
         with self._resource_locked(uid):
-            with self._locked_database(create=False) as connection:
-                entry = (
-                    self._entry_for_uid(connection, uid)
-                    if connection is not None
-                    else None
-                )
+            with self._locked_database(create=True) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                entry = self._entry_for_uid(connection, uid)
                 self._require_tenant_ownership(entry, tenant_id)
-                if connection is not None:
+                try:
                     has_attachments = connection.execute(
                         "SELECT 1 FROM attachments WHERE virtual_network_uid = ? LIMIT 1",
                         (uid,),
@@ -3161,18 +3969,22 @@ class StateStore:
                         raise StateError(
                             "VirtualNetwork cannot be deleted while saved Subnets remain"
                         )
+                    self._record_deleted(connection, "VirtualNetwork", uid, tenant_id)
+                    connection.commit()
+                except BaseException:
+                    if connection.in_transaction:
+                        connection.rollback()
+                    raise
                 provider_entry = (
                     entry if entry is not None else self._identity_entry(uid)
                 )
-                remaining_virtual_network = False
-                if connection is not None:
-                    remaining_virtual_network = (
-                        connection.execute(
-                            "SELECT 1 FROM virtual_networks WHERE uid <> ? LIMIT 1",
-                            (uid,),
-                        ).fetchone()
-                        is not None
-                    )
+                remaining_virtual_network = (
+                    connection.execute(
+                        "SELECT 1 FROM virtual_networks WHERE uid <> ? LIMIT 1",
+                        (uid,),
+                    ).fetchone()
+                    is not None
+                )
 
             try:
                 dhcp_changed = cleanup_virtual_network_dhcp(
@@ -3182,7 +3994,7 @@ class StateStore:
                     remove_leases=True,
                 )
             except SubnetProviderError as error:
-                raise StateError(str(error)) from error
+                raise RetryableStateError(str(error)) from error
 
             provider_changed = delete_virtual_network(
                 provider_entry,
@@ -3217,7 +4029,7 @@ def _run(command: list[str], check: bool = True):
     try:
         return run_command(command, check=check)
     except NetworkCommandError as error:
-        raise StateError(str(error)) from error
+        raise RetryableStateError(str(error)) from error
 
 
 def _assert_transit_route_available(entry: dict[str, Any]) -> None:
@@ -3307,12 +4119,12 @@ def _verify_host_forwarding_isolation() -> None:
         try:
             agentless_net_external_ip.verify_external_forwarding_chain()
         except NetworkCommandError as error:
-            raise StateError(str(error)) from error
+            raise RetryableStateError(str(error)) from error
     if nat_gateway_hook_count == 1:
         try:
             agentless_net_nat_gateway.verify_snat_forwarding_hook()
         except NetworkCommandError as error:
-            raise StateError(str(error)) from error
+            raise RetryableStateError(str(error)) from error
     for direction in ("-i", "-o"):
         expected = _host_forwarding_isolation_rule(direction)
         try:
@@ -3334,7 +4146,7 @@ def _ensure_host_forwarding_isolation() -> bool:
         try:
             agentless_net_external_ip.verify_external_forwarding_chain()
         except NetworkCommandError as error:
-            raise StateError(str(error)) from error
+            raise RetryableStateError(str(error)) from error
         if rules[0] != hook:
             _run(["iptables", "-w", "-t", "filter", "-D", "FORWARD", "-j", agentless_net_external_ip.EXTERNAL_FORWARD_CHAIN])
             _run(["iptables", "-w", "-t", "filter", "-I", "FORWARD", "1", "-j", agentless_net_external_ip.EXTERNAL_FORWARD_CHAIN])
@@ -3345,7 +4157,7 @@ def _ensure_host_forwarding_isolation() -> bool:
         try:
             agentless_net_nat_gateway.verify_snat_forwarding_hook()
         except NetworkCommandError as error:
-            raise StateError(str(error)) from error
+            raise RetryableStateError(str(error)) from error
         expected_index = 1 if hook in rules else 0
         if rules.index(nat_gateway_hook) != expected_index:
             _run([
@@ -3488,7 +4300,7 @@ def reconcile_virtual_network(
                 _remove_host_forwarding_isolation()
                 raise
     except NetworkCommandError as error:
-        raise StateError(str(error)) from error
+        raise RetryableStateError(str(error)) from error
 
     # Keep this namespace isolated even when the node already has forwarding
     # enabled for other workloads. Do not change the host-wide forwarding sysctl.
@@ -3506,7 +4318,7 @@ def reconcile_virtual_network(
         )
         changed = ensure_ipv4_forwarding(namespace) or changed
     except NetworkCommandError as error:
-        raise StateError(str(error)) from error
+        raise RetryableStateError(str(error)) from error
 
     forward_policy = _run(
         ["ip", "netns", "exec", namespace, "iptables", "-w", "-t", "filter", "-S", "FORWARD"]
@@ -3544,7 +4356,7 @@ def reconcile_virtual_network(
     try:
         _verify_virtual_network(entry)
     except NetworkCommandError as error:
-        raise StateError(str(error)) from error
+        raise RetryableStateError(str(error)) from error
     return changed
 
 
@@ -3630,5 +4442,5 @@ def delete_virtual_network(
                 remaining_virtual_network=remaining_virtual_network
             )
     except NetworkCommandError as error:
-        raise StateError(str(error)) from error
+        raise RetryableStateError(str(error)) from error
     return uplink_changed or firewall_changed

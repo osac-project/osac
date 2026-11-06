@@ -7,61 +7,83 @@ import { type BareMetalInstanceWizardValues, createEmptyBareMetalInstanceValues 
 import { buildBareMetalInstanceStepSchema } from './schemas';
 import { emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 
-const authenticationError =
-  'Provide either an SSH public key or user data containing access credentials.';
+const authenticationError = 'Provide either an SSH public key or user data.';
+const authenticationErrors = [
+  { path: 'spec.sshKey.value', message: authenticationError },
+  { path: 'spec.userData.value.source', message: authenticationError },
+];
 
-const validateReview = async (values: BareMetalInstanceWizardValues) => {
-  const schema = buildBareMetalInstanceStepSchema('review', tIdentity);
+const validateAccess = async (values: BareMetalInstanceWizardValues) => {
+  const schema = buildBareMetalInstanceStepSchema('access', tIdentity);
   if (!schema) {
-    throw new Error('Review schema is required for Bare Metal');
+    throw new Error('Access schema is required for Bare Metal');
   }
 
   try {
-    await schema.validate(values);
+    await schema.validate(values, { abortEarly: false });
     return undefined;
   } catch (error) {
     if (!(error instanceof ValidationError)) {
       throw error;
     }
-    return error.message;
+    return (error.inner.length ? error.inner : [error])
+      .map(({ path, message }) => ({ path, message }))
+      .sort((left, right) => (left.path ?? '').localeCompare(right.path ?? ''));
   }
 };
 
-const valuesWithAuth = (sshKey: string, userData: string): BareMetalInstanceWizardValues => ({
-  ...createEmptyBareMetalInstanceValues(),
-  spec: {
-    ...createEmptyBareMetalInstanceValues().spec,
-    sshKey: { value: sshKey, locked: false },
-    userData: { value: userData, locked: false },
-  },
-});
+const valuesWithAuth = (sshKey: string, userData: string): BareMetalInstanceWizardValues => {
+  const values = createEmptyBareMetalInstanceValues();
+  values.spec.sshKey.value = sshKey;
+  values.spec.userData.value.inline = userData;
+  values.spec.diskImage.value.id = 'disk-image-id';
+  return values;
+};
 
-describe('Bare Metal review validation', () => {
+describe('Bare Metal access authentication validation', () => {
   it.each([
-    ['SSH key only', 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample', ''],
+    ['SSH key only', 'ssh-public-key-secret', ''],
     ['user data only', '', '#cloud-config\nusers: []'],
-    [
-      'both authentication methods',
-      'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample',
-      '#cloud-config',
-    ],
+    ['both authentication methods', 'ssh-public-key-secret', '#cloud-config'],
   ])('accepts %s', async (_label, sshKey, userData) => {
-    await expect(validateReview(valuesWithAuth(sshKey, userData))).resolves.toBeUndefined();
+    await expect(validateAccess(valuesWithAuth(sshKey, userData))).resolves.toBeUndefined();
   });
 
   it('rejects neither authentication method', async () => {
-    await expect(validateReview(valuesWithAuth('', ''))).resolves.toBe(authenticationError);
+    await expect(validateAccess(valuesWithAuth('', ''))).resolves.toEqual(authenticationErrors);
   });
 
-  it('rejects whitespace-only authentication values', async () => {
-    await expect(validateReview(valuesWithAuth(' \n ', '\t'))).resolves.toBe(authenticationError);
-  });
+  it.each(['spec.sshKey.value', 'spec.userData.value.source'])(
+    'validates %s independently',
+    async (path) => {
+      const schema = buildBareMetalInstanceStepSchema('access', tIdentity);
+      if (!schema) {
+        throw new Error('Access schema is required for Bare Metal');
+      }
 
-  it('accepts a USER_DATA Secret as the authentication method', async () => {
-    const values = createEmptyBareMetalInstanceValues();
-    values.spec.userDataSource = { value: 'secret', locked: false };
-    values.spec.userDataSecret = { value: 'user-data-secret', locked: false };
-    await expect(validateReview(values)).resolves.toBeUndefined();
+      await expect(schema.validateAt(path, valuesWithAuth('', ''))).rejects.toMatchObject({
+        path,
+        message: authenticationError,
+      });
+    },
+  );
+
+  it('ignores user data in the inactive source', async () => {
+    const values = valuesWithAuth('', 'stale-inline-data');
+    values.spec.userData.value.source = 'secret';
+
+    await expect(validateAccess(values)).resolves.toEqual(authenticationErrors);
+  });
+});
+
+describe('Bare Metal configuration validation', () => {
+  it('allows Next without authentication when a disk image is selected', async () => {
+    const schema = buildBareMetalInstanceStepSchema('configuration', tIdentity);
+    if (!schema) {
+      throw new Error('Configuration schema is required for Bare Metal');
+    }
+
+    await expect(schema.validate(valuesWithAuth('', ''))).resolves.toBeDefined();
   });
 });
 

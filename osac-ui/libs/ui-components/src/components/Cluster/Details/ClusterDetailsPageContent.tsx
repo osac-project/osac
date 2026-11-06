@@ -32,7 +32,7 @@ import DetachExternalIpModal from './DetachExternalIpModal';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceConditionsTable } from '../../Resource/ResourceConditionsTable';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
-import { ClusterStatusLabel } from '../ClusterStatusLabel';
+import { ClusterStatusLabel } from '../ListPage/ClusterStatusLabel';
 
 interface ClusterDetailViewProps {
   cluster: Cluster;
@@ -67,8 +67,12 @@ const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
             >
               <FlexItem>
                 <ResourceDetailHeader
-                  parentTo="/clusters"
-                  parentLabel={t('Clusters')}
+                  parents={[
+                    {
+                      to: '/clusters',
+                      label: t('Clusters'),
+                    },
+                  ]}
                   resourceName={cluster.metadata?.name ?? cluster.id}
                   titleAddon={<ClusterStatusLabel state={cluster.status?.state} />}
                 />

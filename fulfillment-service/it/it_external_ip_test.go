@@ -219,6 +219,7 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		client = privatev1.NewExternalIPPoolsClient(tool.InternalView().AdminConn())
+		ndReadyNetworkClass(ctx, newNDClients())
 	})
 
 	It("Can create, get, and list an ExternalIPPool", func() {

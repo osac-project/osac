@@ -4,7 +4,8 @@ One ordered module, four phases:
 
 - A and B (test_00..08): connectivity, isolation, DNS and SecurityGroup enforcement. No external path.
 - C (test_09..13): NATGateway egress and ExternalIP ingress for two tenants. The routed ExternalIPPool is
-  checked by the `netris_external_path` fixture, so a lab without a routed pool errors the phase.
+  checked by the `netris_external_path` fixture, so a lab without a routed pool errors the phase. test_12b..12d
+  bill an ExternalIP and a NATGateway on the same VMs, network and pool, and skip without a metering echo adapter.
 - D (test_14): one teardown test, ordered stages, that must leave nothing behind.
 
 Setup runs the independent resources at the same time (`stack.run_parallel`), but a child never starts
@@ -25,6 +26,7 @@ from collections.abc import Callable, Iterator, Sequence
 from functools import partial
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -42,12 +44,13 @@ from tests.e2e.core.helpers import (
     wait_for_security_group_update,
 )
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import StuckState, poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking import cidrs
 from tests.e2e.networking.teardown import nat_gateway_ids, teardown_nat, teardown_nat_eip, wait_owned_gone
-from tests.e2e.networking.vmaas import guest_ssh, stack
+from tests.e2e.networking.vmaas import billing, guest_ssh, stack
 from tests.e2e.networking.vmaas.cleanup import _run_cleanup
 from tests.e2e.vmaas.conftest import DEFAULT_DISK_IMAGE_SOURCE_REF
 
@@ -526,7 +529,8 @@ def _teardown_pool(pool: dict[str, Any], private_grpc: GRPCClient, k8s_hub_clien
 # The most ExternalIPs the serial tests hold at once. test_09 holds the tenant1 NAT address; test_10 adds a
 # manual one, which test_11 releases; test_12 adds an automatic one for its own lifetime; test_13 holds the
 # tenant1 and tenant2 NAT addresses and tenant2's attached one. That last state is the peak: 3. (With the
-# removed tenant2 automatic-address test it was 4.)
+# removed tenant2 automatic-address test it was 4.) The billing tests run before test_13 for this reason: each
+# adds one address to the tenant1 NAT address, and tenant default ExternalIPs share this small pool.
 _EXTERNAL_IP_PEAK = 3
 
 
@@ -659,6 +663,48 @@ def netris_external_path(
             errors=errors,
         )
         _raise_cleanup_errors(errors)
+
+
+@pytest.fixture
+def billing_project(grpc: GRPCClient) -> Iterator[str]:
+    """A project the billed ExternalIP is attributed to, so the project dimension is a real attribution check."""
+    name = f"netris-vm-billing-{uuid4().hex[:8]}"
+    project_id = grpc.create_project(name=name)
+    yield name
+    with contextlib.suppress(Exception):
+        grpc.delete_project(project_id=project_id)
+
+
+@pytest.fixture
+def billing_external_ip(
+    grpc: GRPCClient, k8s_hub_client: K8sClient, netris_external_path: dict[str, Any], billing_project: str
+) -> Iterator[tuple[str, str]]:
+    """An ALLOCATED ExternalIP in `billing_project`, as (id, CR name). It is removed even when the test fails."""
+    pool = netris_external_path["pool"]
+    ip_id = grpc.create_external_ip(
+        name=f"netris-vm-billing-{uuid4().hex[:8]}", pool=pool["id"], project=billing_project
+    )
+    pool.setdefault("suite_eip_ids", set()).add(ip_id)
+    cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=ip_id)
+    wait_for_external_ip_allocated(k8s=k8s_hub_client, name=cr_name)
+    yield ip_id, cr_name
+    if k8s_hub_client.is_present(resource="externalip", name=cr_name):
+        try:
+            grpc.delete_external_ip(external_ip_id=ip_id)
+        except subprocess.CalledProcessError as exc:
+            _LOG.warning("ExternalIP %s gRPC delete failed in teardown: %s", ip_id, (exc.stderr or "").strip())
+        wait_for_external_ip_deletion(k8s=k8s_hub_client, name=cr_name)
+
+
+@pytest.fixture
+def billing_attachments(
+    grpc: GRPCClient, k8s_hub_client: K8sClient, billing_external_ip: tuple[str, str]
+) -> Iterator[list[str]]:
+    """Attachments of `billing_external_ip`. One left by a failed test blocks the ExternalIP and the VM deletion."""
+    attachments: list[str] = []
+    yield attachments
+    for attachment_id in attachments:
+        _teardown_ingress_record({"label": "billing", "client": grpc, "attachment_id": attachment_id}, k8s_hub_client)
 
 
 def _drop_nat(client: GRPCClient, k8s_hub_client: K8sClient, network: dict[str, str]) -> None:
@@ -1534,6 +1580,64 @@ class TestVmaasNetworking:
             instance_type=default_instance_type,
             disk_image=default_disk_image,
             storage_tier=default_storage_tier,
+        )
+
+    def test_12b_external_ip_bills_allocation_through_deletion(
+        self,
+        billing_metering: MeteringCollector,
+        grpc: GRPCClient,
+        private_grpc: GRPCClient,
+        k8s_hub_client: K8sClient,
+        netris_external_path: dict[str, Any],
+    ) -> None:
+        billing.external_ip_bills_allocation_through_deletion(
+            metering=billing_metering,
+            grpc=grpc,
+            private_grpc=private_grpc,
+            k8s_hub_client=k8s_hub_client,
+            pool=netris_external_path["pool"],
+        )
+
+    def test_12c_external_ip_attach_detach_reattach_billing(
+        self,
+        billing_metering: MeteringCollector,
+        billing_external_ip: tuple[str, str],
+        billing_attachments: list[str],
+        billing_project: str,
+        grpc: GRPCClient,
+        private_grpc: GRPCClient,
+        k8s_hub_client: K8sClient,
+        netris_vm_network: dict[str, Any],
+        netris_external_path: dict[str, Any],
+    ) -> None:
+        billing.external_ip_attach_detach_reattach(
+            metering=billing_metering,
+            pool_id=netris_external_path["pool"]["id"],
+            external_ip=billing_external_ip,
+            ci1_uuid=netris_vm_network["vm_a1"]["id"],
+            ci2_uuid=netris_vm_network["vm_a2"]["id"],
+            attachments=billing_attachments,
+            grpc=grpc,
+            private_grpc=private_grpc,
+            k8s_hub_client=k8s_hub_client,
+            ip_project=billing_project,
+        )
+
+    def test_12d_nat_gateway_billing(
+        self,
+        billing_metering: MeteringCollector,
+        grpc: GRPCClient,
+        k8s_hub_client: K8sClient,
+        netris_vm_network: dict[str, Any],
+        netris_external_path: dict[str, Any],
+    ) -> None:
+        # Network b: test_09 and test_13 hold the NATGateways of network a and of tenant2.
+        billing.nat_gateway_bills_allocation(
+            metering=billing_metering,
+            grpc=grpc,
+            k8s_hub_client=k8s_hub_client,
+            virtual_network=netris_vm_network["network_b"]["vnet_name"],
+            pool=netris_external_path["pool"],
         )
 
     def test_13_tenant2_nat_egress_and_ingress(

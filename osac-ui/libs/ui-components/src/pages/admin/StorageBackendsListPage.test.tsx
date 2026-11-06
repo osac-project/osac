@@ -60,9 +60,10 @@ describe('StorageBackendsListPage', () => {
     await waitFor(() => {
       expect(screen.getByText('vast-prod')).toBeInTheDocument();
     });
-    expect(screen.getByText('vast')).toBeInTheDocument();
+    expect(screen.getByText('VAST Data')).toBeInTheDocument();
     expect(screen.getByText('vast.example.com')).toBeInTheDocument();
     expect(screen.getByText('ceph-dev')).toBeInTheDocument();
+    expect(screen.getByText('ceph')).toBeInTheDocument();
   });
 
   it('links the backend name to its details page', async () => {

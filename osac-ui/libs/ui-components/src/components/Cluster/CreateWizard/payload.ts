@@ -36,7 +36,7 @@ export const buildClusterCreatePayload = (
     >;
     for (const row of values.spec.nodeSetRows.value) {
       const nodeSetId = row.name.trim();
-      const hostTypeId = row.hostType;
+      const hostTypeId = row.hostType.id;
       const size = Number(row.size);
       if (!nodeSetId || !hostTypeId || !Number.isFinite(size) || size <= 0) {
         continue;
@@ -67,11 +67,12 @@ export const buildClusterCreatePayload = (
   ) {
     const subnetId = values.spec.networkAttachment.value.subnet.id.trim();
     if (subnetId) {
+      const securityGroups = values.spec.networkAttachment.value.securityGroups
+        .filter((group) => group.id.trim())
+        .map((group) => ({ id: group.id }));
       spec.networkAttachment = {
         subnet: { id: subnetId },
-        securityGroups: values.spec.networkAttachment.value.securityGroups
-          .filter((sg) => sg.id.trim())
-          .map((sg) => ({ id: sg.id })),
+        ...(securityGroups.length > 0 ? { securityGroups } : {}),
       };
     }
   }

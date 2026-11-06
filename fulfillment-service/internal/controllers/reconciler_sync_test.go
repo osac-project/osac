@@ -129,6 +129,22 @@ var _ = Describe("Reconciler", func() {
 		Entry("an event without an object payload", &privatev1.Event{}),
 	)
 
+	It("Closes the watch stream when a full sync fails", func() {
+		service.failList.Store(true)
+		builder.SetSync(false)
+		start()
+
+		// An event of a related resource starts a full sync, which fails and ends the watch.
+		service.events <- privatev1.Event_builder{
+			VirtualNetwork: privatev1.VirtualNetwork_builder{Id: "default-network"}.Build(),
+		}.Build()
+		Eventually(service.watchCalls.Load).Should(BeNumerically(">=", 2))
+
+		// The server sees one consumer: an abandoned stream would keep its partitions and swallow events.
+		Eventually(service.activeWatches.Load).Should(Equal(int32(1)))
+		Consistently(service.activeWatches.Load, 100*time.Millisecond).Should(Equal(int32(1)))
+	})
+
 	It("skips stale provisioning and deletion events after NotFound and processes the next fresh object", func() {
 		fresh := privatev1.Tenant_builder{
 			Id:       "valid",
@@ -182,16 +198,21 @@ var _ = Describe("Reconciler", func() {
 type reconcilerTestServer struct {
 	privatev1.UnimplementedTenantsServer
 	privatev1.UnimplementedEventsServer
-	events     chan *privatev1.Event
-	items      []*privatev1.Tenant
-	listCalls  atomic.Int32
-	watchCalls atomic.Int32
-	getCalls   atomic.Int32
-	get        func(*privatev1.TenantsGetRequest) (*privatev1.TenantsGetResponse, error)
+	events        chan *privatev1.Event
+	items         []*privatev1.Tenant
+	failList      atomic.Bool
+	listCalls     atomic.Int32
+	watchCalls    atomic.Int32
+	activeWatches atomic.Int32
+	getCalls      atomic.Int32
+	get           func(*privatev1.TenantsGetRequest) (*privatev1.TenantsGetResponse, error)
 }
 
 func (s *reconcilerTestServer) List(context.Context, *privatev1.TenantsListRequest) (*privatev1.TenantsListResponse, error) {
 	s.listCalls.Add(1)
+	if s.failList.Load() {
+		return nil, status.Error(codes.Unavailable, "server is restarting")
+	}
 	return &privatev1.TenantsListResponse{Items: s.items}, nil
 }
 
@@ -207,6 +228,8 @@ func (s *reconcilerTestServer) Get(_ context.Context, request *privatev1.Tenants
 
 func (s *reconcilerTestServer) Watch(_ *privatev1.EventsWatchRequest, stream grpc.ServerStreamingServer[privatev1.EventsWatchResponse]) error {
 	s.watchCalls.Add(1)
+	s.activeWatches.Add(1)
+	defer s.activeWatches.Add(-1)
 	for {
 		select {
 		case <-stream.Context().Done():

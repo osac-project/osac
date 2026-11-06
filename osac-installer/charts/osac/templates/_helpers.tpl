@@ -271,3 +271,17 @@ cannot express.
 {{- define "osac.validateValues" -}}
 {{- include "osac.networking.validate" . -}}
 {{- end -}}
+
+{{/*
+Name of the customer-managed Netris CA ConfigMap, or "" when no CA bundle is
+configured. aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP is
+the single source of truth: AAP config-as-code mounts bundle.pem from the same
+ConfigMap, so validation and protection must use the same name.
+*/}}
+{{- define "osac.netrisCaConfigMapName" -}}
+{{- $aap := default dict .Values.aap -}}
+{{- $config := dig "instanceGroups" "networkFulfillment" "config" dict $aap -}}
+{{- if hasKey $config "NETRIS_CA_CONFIGMAP" -}}
+{{- index $config "NETRIS_CA_CONFIGMAP" | toString -}}
+{{- end -}}
+{{- end -}}

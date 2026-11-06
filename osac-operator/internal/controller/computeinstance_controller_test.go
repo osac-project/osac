@@ -152,6 +152,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 					},
 					Spec: newTestComputeInstanceSpec("test_template"),
 				}
+				resource.Spec.DiskVolumeIDs = map[string]string{
+					"boot":   "volume-boot",
+					"disk-1": "volume-data-1",
+				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 
@@ -210,6 +214,10 @@ var _ = Describe("ComputeInstance Controller", func() {
 				g.Expect(vm.Status.TenantReference).NotTo(BeNil())
 				g.Expect(vm.Status.TenantReference.Name).To(Equal(tenantName))
 				g.Expect(vm.Status.TenantReference.Namespace).To(Equal(namespaceName))
+				g.Expect(vm.Spec.DiskVolumeIDs).To(Equal(map[string]string{
+					"boot":   "volume-boot",
+					"disk-1": "volume-data-1",
+				}))
 			}, 10*time.Second, 200*time.Millisecond).Should(Succeed())
 
 			By("Verifying the finalizer is set on the ComputeInstance resource")

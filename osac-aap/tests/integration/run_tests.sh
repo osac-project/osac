@@ -63,13 +63,11 @@ ROLE_TESTS=(
   "finalizer"
   "fulfillment_trust_sync"
   "lease"
+  "bmaas_metal3"
   "agentless_net_stub"
-  "agentless_net_external_ip_pool"
-  "agentless_net_external_ip"
-  "agentless_net_external_ip_attachment"
   "agentless_net_nat_gateway"
-  "agentless_net_subnet"
   "agentless_net_attachment"
+  "agentless_net_contract"
   "compute_instance_delete_vmi_recovery"
   "metallb_l2_detach_annotation"
   "netris_protected_launch"
@@ -83,8 +81,11 @@ ROLE_SCENARIO_TESTS=(
   "cluster_working_namespace:test_predefined"
   "cluster_working_namespace:test_found"
   "compute_instance_create:sysprep_secret_copy"
+  "compute_instance_create:volume_id_validation"
+  "compute_instance_create:volume_id_annotations"
   "compute_instance_create:storage_tier_mapping"
   "compute_instance_create:csp_storage_tiers"
+  "bmaas_metal3:lifecycle"
 )
 
 echo "=== Running Workflow Integration Tests ==="
@@ -177,7 +178,12 @@ for entry in "${ROLE_SCENARIO_TESTS[@]}"; do
   echo "Testing role: $role ($scenario)"
   echo "----------------------------------------"
 
-  if run_ansible_playbook "targets/${role}/tasks/${scenario}.yml" -e "@common_vars.yml" -v; then
+  if (
+    if [ "$entry" = "compute_instance_create:volume_id_annotations" ]; then
+      export ANSIBLE_JINJA2_NATIVE=true
+    fi
+    run_ansible_playbook "targets/${role}/tasks/${scenario}.yml" -e "@common_vars.yml" -v
+  ); then
     echo "  ✓ Passed"
     PASSED+=("$role:$scenario")
   else

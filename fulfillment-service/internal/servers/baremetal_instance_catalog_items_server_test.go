@@ -420,10 +420,10 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: bareMetalInstanceTypeReference("referenced-type"),
-						SshPublicKey: new(testSSHPublicKey),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType:   bareMetalInstanceTypeReference("referenced-type"),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

@@ -81,7 +81,7 @@ var _ = Describe("BareMetalWorker tenant safety", Label("baremetalworker"), func
 				Annotations: map[string]string{"osac.openshift.io/tenant": tenant},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID: "test", PullSecret: `{"auths":{}}`, SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test", PullSecret: `{"auths":{}}`,
 				NodeRequests:      []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard", NumberOfNodes: count, FabricInterface: "data-0", BareMetal: &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"}}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "my-subnet", SecurityGroupRefs: []string{"sg-default"}},
 			},

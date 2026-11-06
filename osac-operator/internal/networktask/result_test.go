@@ -338,3 +338,42 @@ func TestSnapshotAndInput(t *testing.T) {
 		t.Fatal("launch keys leaked into the stored input")
 	}
 }
+
+func TestAcceptSubnetEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw string
+		supported bool
+		reason    string
+		invalid   bool
+	}{
+		{"older manager", `{}`, true, "", false},
+		{"owner", `{"compute_instance_supported":true,"compute_instance_unsupported_reason":""}`, true, "", false},
+		{"sibling", `{"compute_instance_supported":false,"compute_instance_unsupported_reason":"owner only"}`, false, "owner only", false},
+		{"string boolean", `{"compute_instance_supported":"false"}`, false, "", true},
+		{"null boolean", `{"compute_instance_supported":null}`, false, "", true},
+		{"wrong reason type", `{"compute_instance_supported":false,"compute_instance_unsupported_reason":5}`, false, "", true},
+		{"inconsistent reason", `{"compute_instance_supported":true,"compute_instance_unsupported_reason":"owner only"}`, false, "", true},
+		{"unknown output", `{"unknown":true}`, false, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sn := &v1alpha1.Subnet{}
+			err := AcceptSubnetEligibility(sn, result(t, tc.raw))
+			if tc.invalid {
+				var rejected *RejectError
+				if !errors.As(err, &rejected) {
+					t.Fatalf("expected rejection, got %v", err)
+				}
+				if sn.Status.ComputeInstanceSupported != nil {
+					t.Fatal("rejected output changed eligibility")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sn.Status.ComputeInstanceSupported == nil || *sn.Status.ComputeInstanceSupported != tc.supported || sn.Status.ComputeInstanceUnsupportedReason != tc.reason {
+				t.Fatalf("incorrect eligibility: %+v", sn.Status)
+			}
+		})
+	}
+}

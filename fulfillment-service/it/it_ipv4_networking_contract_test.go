@@ -837,6 +837,7 @@ var _ = Describe("IPv4-only ExternalIPPool gRPC contract", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		client = privatev1.NewExternalIPPoolsClient(tool.InternalView().AdminConn())
+		ndReadyNetworkClass(ctx, newNDClients())
 	})
 
 	It("supports one canonical IPv4 CIDR through CRUD and preserves it on metadata update", func() {

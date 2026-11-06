@@ -29,7 +29,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/service_account_type.proto.
  */
 export const file_osac_private_v1_service_account_type: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvc2VydmljZV9hY2NvdW50X3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKlAgoOU2VydmljZUFjY291bnQSCgoCaWQYASABKAkSMwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGFCBrpIA8gBARIxCgRzcGVjGAMgASgLMiMub3NhYy5wcml2YXRlLnYxLlNlcnZpY2VBY2NvdW50U3BlYxI1CgZzdGF0dXMYBCABKAsyJS5vc2FjLnByaXZhdGUudjEuU2VydmljZUFjY291bnRTdGF0dXM6aLpIZRpjChdzZXJ2aWNlX2FjY291bnQucHJvamVjdBIrc2VydmljZSBhY2NvdW50cyBjYW5ub3QgYmVsb25nIHRvIGEgcHJvamVjdBobdGhpcy5tZXRhZGF0YS5wcm9qZWN0ID09ICcnIhQKElNlcnZpY2VBY2NvdW50U3BlYyKdAgoUU2VydmljZUFjY291bnRTdGF0dXMSPAoNY2xpZW50X3NlY3JldBgBIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5TZWNyZXRMb2NhbFJlZmVyZW5jZRIzCgVzdGF0ZRgCIAEoDjIkLm9zYWMucHJpdmF0ZS52MS5TZXJ2aWNlQWNjb3VudFN0YXRlEhQKB21lc3NhZ2UYAyABKAlIAIgBARIkChRrZXljbG9ha19jbGllbnRfdXVpZBgEIAEoCUIGirUYAggBEkoKE3JlZ2lzdHJhdGlvbl9zZWNyZXQYBSABKAsyJS5vc2FjLnByaXZhdGUudjEuU2VjcmV0TG9jYWxSZWZlcmVuY2VCBoq1GAIIAUIKCghfbWVzc2FnZSqiAQoTU2VydmljZUFjY291bnRTdGF0ZRIlCiFTRVJWSUNFX0FDQ09VTlRfU1RBVEVfVU5TUEVDSUZJRUQQABIhCh1TRVJWSUNFX0FDQ09VTlRfU1RBVEVfUEVORElORxABEh8KG1NFUlZJQ0VfQUNDT1VOVF9TVEFURV9SRUFEWRACEiAKHFNFUlZJQ0VfQUNDT1VOVF9TVEFURV9GQUlMRUQQA0IUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type, file_osac_private_v1_secret_type]);
+  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvc2VydmljZV9hY2NvdW50X3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKlAgoOU2VydmljZUFjY291bnQSCgoCaWQYASABKAkSMwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGFCBrpIA8gBARIxCgRzcGVjGAMgASgLMiMub3NhYy5wcml2YXRlLnYxLlNlcnZpY2VBY2NvdW50U3BlYxI1CgZzdGF0dXMYBCABKAsyJS5vc2FjLnByaXZhdGUudjEuU2VydmljZUFjY291bnRTdGF0dXM6aLpIZRpjChdzZXJ2aWNlX2FjY291bnQucHJvamVjdBIrc2VydmljZSBhY2NvdW50cyBjYW5ub3QgYmVsb25nIHRvIGEgcHJvamVjdBobdGhpcy5tZXRhZGF0YS5wcm9qZWN0ID09ICcnIhQKElNlcnZpY2VBY2NvdW50U3BlYyKkAwoUU2VydmljZUFjY291bnRTdGF0dXMSPAoNY2xpZW50X3NlY3JldBgBIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5TZWNyZXRMb2NhbFJlZmVyZW5jZRIzCgVzdGF0ZRgCIAEoDjIkLm9zYWMucHJpdmF0ZS52MS5TZXJ2aWNlQWNjb3VudFN0YXRlEhQKB21lc3NhZ2UYAyABKAlIAIgBARJZChVzZWNyZXRfcm90YXRpb25fc3RhdGUYBCABKA4yMi5vc2FjLnByaXZhdGUudjEuU2VydmljZUFjY291bnRTZWNyZXRSb3RhdGlvblN0YXRlQgaKtRgCCAESJAoUa2V5Y2xvYWtfY2xpZW50X3V1aWQYBSABKAlCBoq1GAIIARJKChNyZWdpc3RyYXRpb25fc2VjcmV0GAYgASgLMiUub3NhYy5wcml2YXRlLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlQgaKtRgCCAESKgoac2VjcmV0X3JvdGF0aW9uX2dlbmVyYXRpb24YByABKAlCBoq1GAIIAUIKCghfbWVzc2FnZSqiAQoTU2VydmljZUFjY291bnRTdGF0ZRIlCiFTRVJWSUNFX0FDQ09VTlRfU1RBVEVfVU5TUEVDSUZJRUQQABIhCh1TRVJWSUNFX0FDQ09VTlRfU1RBVEVfUEVORElORxABEh8KG1NFUlZJQ0VfQUNDT1VOVF9TVEFURV9SRUFEWRACEiAKHFNFUlZJQ0VfQUNDT1VOVF9TVEFURV9GQUlMRUQQAyr7AQohU2VydmljZUFjY291bnRTZWNyZXRSb3RhdGlvblN0YXRlEjUKMVNFUlZJQ0VfQUNDT1VOVF9TRUNSRVRfUk9UQVRJT05fU1RBVEVfVU5TUEVDSUZJRUQQABIxCi1TRVJWSUNFX0FDQ09VTlRfU0VDUkVUX1JPVEFUSU9OX1NUQVRFX1BFTkRJTkcQARIzCi9TRVJWSUNFX0FDQ09VTlRfU0VDUkVUX1JPVEFUSU9OX1NUQVRFX0NPTVBMRVRFRBACEi8KK1NFUlZJQ0VfQUNDT1VOVF9TRUNSRVRfUk9UQVRJT05fU1RBVEVfRVJST1IQAxoGirUYAggBQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type, file_osac_private_v1_secret_type]);
 
 /**
  * A tenant-owned machine identity. Its client credential is stored in a separate Secret resource.
@@ -117,18 +117,32 @@ export type ServiceAccountStatus = Message<"osac.private.v1.ServiceAccountStatus
   message?: string | undefined;
 
   /**
+   * State of the most recent client-secret rotation request.
+   *
+   * @generated from field: osac.private.v1.ServiceAccountSecretRotationState secret_rotation_state = 4;
+   */
+  secretRotationState: ServiceAccountSecretRotationState;
+
+  /**
    * Internal Keycloak client identifier used for lifecycle operations.
    *
-   * @generated from field: string keycloak_client_uuid = 4;
+   * @generated from field: string keycloak_client_uuid = 5;
    */
   keycloakClientUuid: string;
 
   /**
    * Internal Secret reference holding the registration credentials used for client cleanup.
    *
-   * @generated from field: osac.private.v1.SecretLocalReference registration_secret = 5;
+   * @generated from field: osac.private.v1.SecretLocalReference registration_secret = 6;
    */
   registrationSecret?: SecretLocalReference | undefined;
+
+  /**
+   * Internal identifier that makes a rotation request and its staged credential idempotent.
+   *
+   * @generated from field: string secret_rotation_generation = 7;
+   */
+  secretRotationGeneration: string;
 };
 
 /**
@@ -178,4 +192,45 @@ export enum ServiceAccountState {
  */
 export const ServiceAccountStateSchema: GenEnum<ServiceAccountState> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_service_account_type, 0);
+
+/**
+ * Progress of a service-account client-secret rotation.
+ *
+ * @generated from enum osac.private.v1.ServiceAccountSecretRotationState
+ */
+export enum ServiceAccountSecretRotationState {
+  /**
+   * No rotation has been requested.
+   *
+   * @generated from enum value: SERVICE_ACCOUNT_SECRET_ROTATION_STATE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * The controller is rotating the Keycloak client secret and publishing it to the tenant Secret.
+   *
+   * @generated from enum value: SERVICE_ACCOUNT_SECRET_ROTATION_STATE_PENDING = 1;
+   */
+  PENDING = 1,
+
+  /**
+   * The replacement credential is available from the referenced tenant Secret.
+   *
+   * @generated from enum value: SERVICE_ACCOUNT_SECRET_ROTATION_STATE_COMPLETED = 2;
+   */
+  COMPLETED = 2,
+
+  /**
+   * The latest attempt failed. The controller will retry the same rotation request.
+   *
+   * @generated from enum value: SERVICE_ACCOUNT_SECRET_ROTATION_STATE_ERROR = 3;
+   */
+  ERROR = 3,
+}
+
+/**
+ * Describes the enum osac.private.v1.ServiceAccountSecretRotationState.
+ */
+export const ServiceAccountSecretRotationStateSchema: GenEnum<ServiceAccountSecretRotationState> = /*@__PURE__*/
+  enumDesc(file_osac_private_v1_service_account_type, 1);
 

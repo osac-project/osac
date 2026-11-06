@@ -181,6 +181,53 @@ for validating the release *mechanism* itself (e.g. after a change to
 - A real **staging release** to Red Hat's registry — see "Staging release
   (Konflux)" below.
 
+## Release branches and code freeze
+
+For a release that needs a stabilization period instead of shipping
+straight off `main`, cut a release branch named `release-X.Y` (e.g.
+`release-0.4`) and push it directly to `upstream` — not a fork, since
+every contributor opens PRs against it for the duration of the freeze,
+the same way they would against `main`:
+
+```bash
+git fetch upstream
+git checkout -b release-0.4 upstream/main
+git push upstream release-0.4
+```
+
+GitHub's required checks (`CI`, CodeQL, `jira-reference`, Component Hooks
+Smoke) and Konflux's build/Enterprise-Contract triggers both already
+match any `release-*`-named branch the same way they match `main` — this
+was made generic once, so no workflow/`.tekton` changes are needed per
+release branch. `osac-release.yaml` itself needs no `ref` input either:
+dispatch it against the release branch directly via GitHub's own "Use
+workflow from" selector or `--ref`.
+
+**Landing fixes during the freeze:** land every fix on `main` first via a
+normal PR, then cherry-pick that commit onto the release branch via a
+second PR targeting it (`git cherry-pick -x <sha>`, same review bar and
+required checks). This direction — forward from `main`, never backward —
+keeps `main` from falling behind a short-lived branch and avoids a later
+back-merge silently reintroducing an already-superseded fix. Resolve
+cherry-pick conflicts by hand rather than dropping the fix.
+
+**Branch protection:** ask whoever has GitHub org admin access to add a
+branch-protection rule for `release-X.Y` (or a `release-*` wildcard rule,
+if the org's UI supports one) mirroring `main`'s current rule — same
+required approvals, same required status checks, no force-push/delete —
+*before* the first PR lands on it.
+
+**Dispatching the release** at the end of the freeze is the same
+`osac-release.yaml` dispatch as above, just with `--ref release-X.Y`
+instead of `main`.
+
+**Cleanup:** delete the release branch a few days after the release ships
+and no hotfix need has surfaced — the authoritative record of what
+shipped is the `osac/vX.Y.Z` tag and the published artifacts, not the
+branch. If a patch release (e.g. `0.4.1`) becomes necessary before then,
+dispatch it from the still-live `release-0.4` branch directly rather than
+re-deriving a new branch from the tag.
+
 ## Staging release (Konflux)
 
 Every release run also triggers a separate, independent build through
@@ -194,8 +241,19 @@ whole set together to the **staging** registry
 (`registry.stage.redhat.io`, under `cloud-extensions/<component>-rhel10`).
 This wait set is fixed regardless of what `component_versions` actually
 bumped this run; `osac-aap` has no Konflux image component yet and is
-never included. This is currently staging only — there is no automated
-path to a production release yet.
+never included.
+
+A separate, manually-dispatched workflow, `osac-promote-to-prod.yaml`,
+promotes an already-staged release to `registry.redhat.io` once it's
+ready. Images promote with no rebuild — the same built digest is
+multi-homed into `registry.redhat.io` by `cloud-extensions-prod`'s own
+`ReleasePlanAdmission`. The chart cannot: its own `values.yaml` has
+`registry.stage.redhat.io` baked into every component image reference at
+build time, so the already-built staging chart is only ever correct for
+stage. Promoting it re-stamps that exact same source commit with
+`registry.redhat.io` (only the hostname changes) and pushes it through a
+real, independent Konflux build — expect the chart side of a production
+promotion to take meaningfully longer than the image side as a result.
 
 A component only reaches staging if its Konflux build passes Red Hat's
 Enterprise Contract policy — a set of supply-chain and security checks
@@ -246,6 +304,26 @@ explicitly excluded from Latest. Cancellation prevents the umbrella release
 and success notification jobs from starting; a release publication failure
 reaches the failure notification instead of a success message. Optional
 Konflux staging remains independent of this GHCR publication path.
+
+**GitHub's "Re-run failed jobs" does not recover a confirmed staging
+failure.** GHCR image and chart publication (`promote-and-publish`,
+`publish-umbrella`) runs before Konflux staging even starts, so those
+artifacts can remain published after a confirmed staging failure — only
+the GitHub Releases (component and umbrella) and fulfillment-service's
+binaries/proto wait for the real Konflux image staging release to have
+actually succeeded, never on a cancelled or timed-out run, only on a
+confirmed failure of `trigger-konflux-staging-release` itself. Rolling
+tags back after a
+confirmed failure, combined with `cleanup` always deleting the temp branch
+once `tag` succeeds, means a "Re-run failed jobs" attempt afterward has
+neither the tags `create-component-releases` would reference nor the
+branch `stamp-and-release-charts` would need to check out. Dispatch a fresh
+`osac-release.yaml` run with a new `release_version` instead — don't retry
+a release whose staging has already confirmed failed. A cancelled or
+timed-out staging attempt is left alone on purpose (the underlying Konflux
+Release it created may still be progressing and could still succeed) and
+needs manual reconciliation: check whether that Release actually completed
+before deciding to delete anything by hand.
 
 The version inventory is not an upgrade compatibility guarantee. Before an
 upgrade, compare the installed and target inventories, read the affected

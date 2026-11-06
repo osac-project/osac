@@ -19,6 +19,7 @@ package auth
 import (
 	"context"
 
+	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 )
@@ -68,5 +69,56 @@ var _ = Describe("Subject inside context", func() {
 			ctx := ContextWithSubject(context.Background(), &Subject{User: "service-account-osac-admin"})
 			Expect(IsControllerServiceAccount(ctx)).To(BeFalse())
 		})
+	})
+
+	Describe("tenant admin detection", func() {
+		It("recognizes the tenant-admin realm role", func() {
+			token := &jwt.Token{Claims: jwt.MapClaims{
+				"realm_access": map[string]any{"roles": []any{"tenant-admin"}},
+			}}
+			Expect(IsTenantAdmin(ContextWithToken(context.Background(), token))).To(BeTrue())
+		})
+
+		It("does not grant tenant-admin access to another role or missing token", func() {
+			token := &jwt.Token{Claims: jwt.MapClaims{
+				"realm_access": map[string]any{"roles": []any{"is_client"}},
+			}}
+			Expect(IsTenantAdmin(ContextWithToken(context.Background(), token))).To(BeFalse())
+			Expect(IsTenantAdmin(context.Background())).To(BeFalse())
+		})
+	})
+})
+
+var _ = Describe("Managed service-account JWT claims", func() {
+	It("recognizes a generated client ID with one tenant claim", func() {
+		authContext, err := ExtractAuthContext(&jwt.Token{Claims: jwt.MapClaims{
+			"azp":         "osac-sa-tenant-a-d3c4e3db-95b8-481d-8b5c-963da477da12",
+			"osac_tenant": "tenant-a",
+			"username":    "osac-sa-user",
+		}})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(authContext.ManagedServiceAccountCandidate).To(BeTrue())
+		Expect(authContext.ManagedServiceAccountClaimsValid).To(BeTrue())
+		Expect(authContext.ManagedServiceAccountClientID).To(Equal(
+			"osac-sa-tenant-a-d3c4e3db-95b8-481d-8b5c-963da477da12"))
+		Expect(authContext.ManagedServiceAccountTenantClaim).To(Equal("tenant-a"))
+	})
+
+	It("marks malformed managed claims as a candidate that must fail closed", func() {
+		authContext, err := ExtractAuthContext(&jwt.Token{Claims: jwt.MapClaims{
+			"azp":         "osac-sa-tenant-a-d3c4e3db-95b8-481d-8b5c-963da477da12",
+			"osac_tenant": []any{"tenant-a", "tenant-b"},
+		}})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(authContext.ManagedServiceAccountCandidate).To(BeTrue())
+		Expect(authContext.ManagedServiceAccountClaimsValid).To(BeFalse())
+	})
+
+	It("does not classify ordinary client tokens as managed service accounts", func() {
+		authContext, err := ExtractAuthContext(&jwt.Token{Claims: jwt.MapClaims{
+			"azp": "osac-web-client",
+		}})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(authContext.ManagedServiceAccountCandidate).To(BeFalse())
 	})
 })

@@ -1,4 +1,5 @@
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ComputeInstance } from '@osac/types';
@@ -11,28 +12,35 @@ vi.mock('../../../api/v1/instance-types', () => ({
   useInstanceType: vi.fn(),
 }));
 
+vi.mock('../../../api/v1/disk-image', () => ({
+  useDiskImage: vi.fn(),
+}));
+
 vi.mock('./VmDetailsActionButtons', () => ({
-  default: () => <div>Action buttons</div>,
+  default: ({ onOpenConsole }: { onOpenConsole: VoidFunction }) => (
+    <button type="button" onClick={onOpenConsole}>
+      Open console
+    </button>
+  ),
 }));
 
-vi.mock('./VmDetailsSummary', () => ({
-  default: () => <div>VM summary</div>,
-}));
-
-vi.mock('./VmDetailsOverviewTab', () => ({
-  default: () => <div>Overview tab</div>,
-}));
-
-vi.mock('./VmNetworkingTab', () => ({
-  default: () => <div>Networking tab</div>,
-}));
-
-vi.mock('../console/VmConsoleTab', () => ({
-  default: () => <div>Console tab</div>,
+vi.mock('./VmDetailsSections', () => ({
+  default: () => <div>VM detail sections</div>,
 }));
 
 vi.mock('../../Resource/ResourceDetailHeader', () => ({
-  ResourceDetailHeader: ({ resourceName }: { resourceName: string }) => <h1>{resourceName}</h1>,
+  ResourceDetailHeader: ({
+    resourceName,
+    description,
+  }: {
+    resourceName: string;
+    description?: string;
+  }) => (
+    <>
+      <h1>{resourceName}</h1>
+      {description ? <p>{description}</p> : null}
+    </>
+  ),
 }));
 
 vi.mock('../../../VmStatusLabel', () => ({
@@ -40,6 +48,7 @@ vi.mock('../../../VmStatusLabel', () => ({
 }));
 
 const { useInstanceType } = await import('../../../api/v1/instance-types');
+const { useDiskImage } = await import('../../../api/v1/disk-image');
 
 const vm = {
   id: 'vm-1',
@@ -57,14 +66,30 @@ describe('VmDetails', () => {
       isLoading: false,
       error: null,
     } as ReturnType<typeof useInstanceType>);
+    vi.mocked(useDiskImage).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useDiskImage>);
   });
 
-  it('renders the Console tab alongside Overview and Networking', () => {
+  it('renders the continuous VM details page without a tab strip', () => {
     renderDetails();
 
-    expect(screen.getByRole('tab', { name: 'Overview' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Networking' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Console' })).toBeInTheDocument();
+    expect(screen.getByText('VM detail sections')).toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('separator')).toHaveLength(1);
+  });
+
+  it('opens the dedicated console route in a new tab from the header action', async () => {
+    const user = userEvent.setup();
+    const openWindow = vi.spyOn(window, 'open').mockReturnValue(null);
+    renderDetails();
+
+    await user.click(screen.getByRole('button', { name: 'Open console' }));
+
+    expect(openWindow).toHaveBeenCalledWith('/vms/vm-1/console', '_blank', 'noopener,noreferrer');
+    openWindow.mockRestore();
   });
 
   it('shows an alert and still renders the page when instance type lookup fails', () => {
@@ -79,6 +104,27 @@ describe('VmDetails', () => {
     expect(screen.getByText('Could not load instance types')).toBeInTheDocument();
     expect(screen.getByText('Instance type unavailable')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'web-01' })).toBeInTheDocument();
-    expect(screen.getByText('VM summary')).toBeInTheDocument();
+    expect(screen.queryByText('VM icon')).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Review configuration, networking, storage, and utilization for this virtual machine.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('VM detail sections')).toBeInTheDocument();
+  });
+
+  it('shows an alert and still renders the page when disk image lookup fails', () => {
+    vi.mocked(useDiskImage).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('Disk image unavailable'),
+    } as ReturnType<typeof useDiskImage>);
+
+    renderDetails();
+
+    expect(screen.getByText('Could not load disk image')).toBeInTheDocument();
+    expect(screen.getByText('Disk image unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'web-01' })).toBeInTheDocument();
+    expect(screen.getByText('VM detail sections')).toBeInTheDocument();
   });
 });

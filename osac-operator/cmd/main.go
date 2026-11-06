@@ -459,13 +459,17 @@ func setupClusterControllers(
 	if err != nil {
 		return err
 	}
-	if err := baremetalworker.NewReconciler(
+	baremetalworkerReconciler := baremetalworker.NewReconciler(
 		localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
 		bmwFulfillment,
 		ignitionFetcher,
 		localMgr.GetEventRecorder("baremetalworker"),
 		os.Getenv(envClusterOrderNamespace),
-	).SetupWithManager(mgr); err != nil {
+	)
+	if grpcConn != nil {
+		baremetalworkerReconciler.SetSecretsClient(privatev1.NewSecretsClient(grpcConn))
+	}
+	if err := baremetalworkerReconciler.SetupWithManager(mgr); err != nil {
 		return err
 	}
 
@@ -495,6 +499,7 @@ func setupClusterControllers(
 			if grpcConn != nil {
 				reconciler.ClustersClient = privatev1.NewClustersClient(grpcConn)
 				reconciler.ExternalIPAttachmentsClient = privatev1.NewExternalIPAttachmentsClient(grpcConn)
+				reconciler.SecretsClient = privatev1.NewSecretsClient(grpcConn)
 			}
 			if err := reconciler.SetupWithManager(mgr); err != nil {
 				return err
@@ -1202,12 +1207,15 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 
 	fulfillmentTrustSourceName := controller.DefaultFulfillmentTrustSourceName
 	managerOptions := manager.Options{
-		Scheme:                        localScheme,
-		Metrics:                       metricsServerOptions,
-		WebhookServer:                 webhookServer,
-		HealthProbeBindAddress:        probeAddr,
-		LeaderElection:                enableLeaderElection,
-		LeaderElectionID:              "95f7e044.openshift.io",
+		Scheme:                 localScheme,
+		Metrics:                metricsServerOptions,
+		WebhookServer:          webhookServer,
+		HealthProbeBindAddress: probeAddr,
+		LeaderElection:         enableLeaderElection,
+		LeaderElectionID:       "95f7e044.openshift.io",
+		// main() exits immediately after startComponentsWithRemoteKubeconfigWatch returns,
+		// so releasing the lease on context cancellation is safe and avoids waiting
+		// LeaseDuration (35s) during rollouts and watchRemoteKubeconfig restarts.
 		LeaderElectionReleaseOnCancel: true,
 		LeaseDuration:                 ptr.To(35 * time.Second),
 		RenewDeadline:                 ptr.To(25 * time.Second),

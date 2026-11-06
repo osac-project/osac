@@ -15,12 +15,14 @@ package it
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	bmfv1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 	"google.golang.org/grpc/codes"
@@ -75,6 +77,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			otherNetwork := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", network.networkClassID)
 			instanceType := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+			sshKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, bareMetalInstanceCatalogItemParameterDefinitions())
 			fields := publicv1.BareMetalInstanceCatalogItemFields_builder{
 				InstanceType: publicv1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
@@ -83,8 +86,10 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
 					Locked: publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
 				}.Build(),
-				SshPublicKey: publicv1.StringFieldPolicy_builder{
-					Editable: publicv1.EditableStringField_builder{DefaultValue: new(catalogItemFixtureSSHPublicKey)}.Build(),
+				SshKey: publicv1.FullSecretReferenceFieldPolicy_builder{
+					Editable: publicv1.EditableFullSecretReferenceField_builder{
+						DefaultValue: publicv1.SecretReference_builder{Id: sshKeySecret}.Build(),
+					}.Build(),
 				}.Build(),
 				UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{Locked: publicv1.UserDataSource_builder{Inline: new("")}.Build()}.Build(),
 				RunStrategy: publicv1.BareMetalInstanceRunStrategyFieldPolicy_builder{
@@ -125,7 +130,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 
 			Expect(spec.GetDiskImage().GetId()).To(Equal(image.GetId()))
 			Expect(spec.GetDiskImage().GetShared()).To(BeTrue())
-			Expect(spec.GetSshPublicKey()).To(Equal(catalogItemFixtureSSHPublicKey))
+			Expect(spec.GetSshKey().GetId()).To(Equal(sshKeySecret))
 			Expect(spec.GetUserDataSource().HasInline()).To(BeTrue())
 			Expect(spec.GetUserDataSource().GetInline()).To(BeEmpty())
 			Expect(spec.GetRunStrategy()).To(Equal(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED))
@@ -203,6 +208,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			otherNetwork := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", network.networkClassID)
 			instanceType := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+			sshKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, bareMetalInstanceCatalogItemParameterDefinitions())
 			item := createBareMetalInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.BareMetalInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
@@ -215,8 +221,10 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 					DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
 						Locked: publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
 					}.Build(),
-					SshPublicKey: publicv1.StringFieldPolicy_builder{
-						Editable: publicv1.EditableStringField_builder{DefaultValue: new(catalogItemFixtureSSHPublicKey)}.Build(),
+					SshKey: publicv1.FullSecretReferenceFieldPolicy_builder{
+						Editable: publicv1.EditableFullSecretReferenceField_builder{
+							DefaultValue: publicv1.SecretReference_builder{Id: sshKeySecret}.Build(),
+						}.Build(),
 					}.Build(),
 					NetworkAttachments: publicv1.BareMetalNetworkAttachmentListFieldPolicy_builder{
 						Editable: publicv1.EditableBareMetalNetworkAttachmentList_builder{
@@ -274,10 +282,11 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			beforeExternalIPs, err := externalIPs.List(ctx, privatev1.ExternalIPsListRequest_builder{}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			dry := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
+			sshKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
 			spec := publicv1.BareMetalInstanceSpec_builder{
 				CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
 				InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceType, Shared: true}.Build(),
-				SshPublicKey: new(catalogItemFixtureSSHPublicKey),
+				SshKey:       publicv1.SecretReference_builder{Id: sshKeySecret}.Build(),
 			}.Build()
 			name := catalogItemFixtureName()
 			By("validating a dry-run instance without storing it or allocating an external IP")
@@ -314,9 +323,9 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				}.Build(),
 			}.Build())
 			expectCatalogItemStatusCode(e, codes.InvalidArgument)
-			By("rejecting a request without an SSH public key")
+			By("rejecting a request without an SSH key")
 			spec.ClearTemplate()
-			spec.ClearSshPublicKey()
+			spec.ClearSshKey()
 			_, e = client.Create(dry, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
@@ -327,7 +336,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			By("creating directly from the Template without catalog provenance")
 			spec.ClearCatalogItem()
 			spec.SetTemplate(publicv1.BareMetalInstanceTemplateReference_builder{Id: template}.Build())
-			spec.SetSshPublicKey(catalogItemFixtureSSHPublicKey)
+			spec.SetSshKey(publicv1.SecretReference_builder{Id: sshKeySecret}.Build())
 			spec.SetAutoExternalIpAttachment(false)
 			spec.SetDiskImage(publicv1.DiskImageReference_builder{Id: overrideImage.GetId()}.Build())
 			direct, e := createBareMetalInstanceFixture(ctx, tool.ExternalView().UserConn(), spec)
@@ -367,7 +376,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
 				DiskImage:    publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
 				InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup), Shared: true}.Build(),
-				SshPublicKey: new(catalogItemFixtureSSHPublicKey),
+				SshKey:       publicv1.SecretReference_builder{Id: createCatalogItemSSHKeySecretFixture(ctx, usersGroup)}.Build(),
 			}.Build()
 			client := publicv1.NewBareMetalInstancesClient(tool.ExternalView().UserConn())
 			dry := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
@@ -433,6 +442,55 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).To(Equal(secret))
 			Expect(response.GetObject().GetSpec().GetUserDataSource().HasInline()).To(BeFalse())
 		})
+
+		It("canonicalizes a registered ssh_key policy and locks it into created instances", func(ctx context.Context) {
+			ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
+			instanceType := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)
+			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
+
+			secretName := fmt.Sprintf("it-bmi-cat-ssh-key-%s", uuid.New()[24:32])
+			secrets := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+			secretResp, err := secrets.Create(ctx, privatev1.SecretsCreateRequest_builder{
+				Object: privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{Name: secretName, Tenant: usersGroup}.Build(),
+					Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					Data:     map[string][]byte{"public_key": []byte(catalogItemFixtureSSHPublicKey)},
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			secret := secretResp.GetObject()
+			DeferCleanup(func(ctx context.Context) {
+				_, err := secrets.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: secret.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			item := createBareMetalInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.BareMetalInstanceCatalogItem_builder{
+				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: template}.Build(),
+				Published: true,
+				Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
+					DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
+						Locked: publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+					}.Build(),
+					SshKey: publicv1.FullSecretReferenceFieldPolicy_builder{
+						Locked: publicv1.SecretReference_builder{Name: secretName}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			locked := item.GetFields().GetSshKey().GetLocked()
+			Expect(locked).ToNot(BeNil())
+			Expect(locked.GetId()).To(Equal(secret.GetId()), "the locked policy must store the canonical Secret ID")
+			Expect(locked.GetName()).To(Equal(secretName))
+
+			created, err := createBareMetalInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.BareMetalInstanceSpec_builder{
+				CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceType, Shared: true}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(created.GetSpec().GetSshKey().GetId()).To(Equal(secret.GetId()),
+				"the locked registered key must be applied without caller input")
+		})
 	})
 	Context("Template parameters", func() {
 		It("distinguishes editable required input from Template defaults and invalid values", func(ctx context.Context) {
@@ -462,7 +520,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 						CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
 						DiskImage:          publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
 						NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
-						SshPublicKey:       new(catalogItemFixtureSSHPublicKey),
+						SshKey:             publicv1.SecretReference_builder{Id: createCatalogItemSSHKeySecretFixture(ctx, usersGroup)}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build()

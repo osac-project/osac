@@ -59,6 +59,9 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	if err := validateBareMetalInstanceCatalogItemInstanceTypePolicy(ctx, fields.GetInstanceType(), bareMetalInstanceTypesDao); err != nil {
 		return nil, err
 	}
+	if err := validateCatalogItemSSHKeyPolicy(ctx, scope, fields.GetSshKey(), secretsDao); err != nil {
+		return nil, err
+	}
 
 	warnings, err := validateBareMetalInstanceCatalogItemDiskImagePolicy(ctx, scope, fields, template, bareMetalInstanceTypesDao, diskImagesDao)
 	if err != nil {
@@ -132,9 +135,6 @@ func applyBareMetalInstanceCatalogItemPolicies(
 	if spec == nil || fields == nil {
 		return nil
 	}
-	if err := applyPolicy(fields.GetSshPublicKey(), spec.HasSshPublicKey(), spec.SetSshPublicKey, decodeStringPolicy, identity[string]); err != nil {
-		return fmt.Errorf("ssh_public_key: %w", err)
-	}
 	if err := applyPolicy(fields.GetUserDataSource(), spec.GetUserDataSource() != nil, spec.SetUserDataSource, decodeUserDataSourcePolicy, cloneMessage[*privatev1.UserDataSource]); err != nil {
 		return fmt.Errorf("user_data_source: %w", err)
 	}
@@ -153,14 +153,14 @@ func applyBareMetalInstanceCatalogItemPolicies(
 	if err := applyPolicy(fields.GetDiskImage(), spec.GetDiskImage() != nil, spec.SetDiskImage, decodeDiskImageReferencePolicy, cloneMessage[*privatev1.DiskImageReference]); err != nil {
 		return fmt.Errorf("disk_image: %w", err)
 	}
+	if err := applyPolicy(fields.GetSshKey(), spec.GetSshKey() != nil, spec.SetSshKey, decodeFullSecretReferencePolicy, cloneMessage[*privatev1.SecretReference]); err != nil {
+		return fmt.Errorf("ssh_key: %w", err)
+	}
 	return nil
 }
 
 // validateBareMetalInstanceCatalogItemScalarPolicies checks supported scalar values and returns the first invalid policy.
 func validateBareMetalInstanceCatalogItemScalarPolicies(fields *privatev1.BareMetalInstanceCatalogItemFields) error {
-	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", validateOpenSSHPublicKey); err != nil {
-		return err
-	}
 	if _, err := decodeBareMetalInstanceRunStrategyPolicy(fields.GetRunStrategy()); err != nil {
 		return catalogItemPolicyError("fields.run_strategy", err.Error())
 	}

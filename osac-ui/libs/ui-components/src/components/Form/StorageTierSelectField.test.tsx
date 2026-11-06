@@ -16,14 +16,13 @@ import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const makeTier = (
   name: string,
-  displayName: string,
   description: string,
   state: StorageTierState = StorageTierState.ACTIVE,
   protocol: StorageProtocol = StorageProtocol.NFS,
 ) =>
   create(StorageTierSchema, {
     id: `id-${name}`,
-    metadata: { name, displayName },
+    metadata: { name },
     spec: { description, protocol },
     status: { state },
   });
@@ -57,10 +56,7 @@ describe('StorageTierSelectField', () => {
   it('stores id and name when a tier is selected', async () => {
     const { user } = renderField({
       apiFixtures: {
-        publicStorageTiers: [
-          makeTier('fast', 'Fast SSD', 'low latency'),
-          makeTier('bulk', 'Bulk', 'cheap'),
-        ],
+        publicStorageTiers: [makeTier('fast', 'low latency'), makeTier('bulk', 'cheap')],
       },
     });
 
@@ -80,9 +76,9 @@ describe('StorageTierSelectField', () => {
     const { user } = renderField({
       apiFixtures: {
         publicStorageTiers: [
-          makeTier('fast', 'Fast SSD', 'low latency'),
-          makeTier('bulk', 'Bulk', 'cheap'),
-          makeTier('gone', 'Retired', '', StorageTierState.UNSPECIFIED),
+          makeTier('fast', 'low latency'),
+          makeTier('bulk', 'cheap'),
+          makeTier('gone', '', StorageTierState.UNSPECIFIED),
         ],
       },
     });
@@ -99,18 +95,11 @@ describe('StorageTierSelectField', () => {
     let capturedFilter: string | undefined;
     const blockTier = makeTier(
       'block',
-      'Block',
       'block storage',
       StorageTierState.ACTIVE,
       StorageProtocol.BLOCK,
     );
-    const nfsTier = makeTier(
-      'nfs',
-      'NFS',
-      'file storage',
-      StorageTierState.ACTIVE,
-      StorageProtocol.NFS,
-    );
+    const nfsTier = makeTier('nfs', 'file storage', StorageTierState.ACTIVE, StorageProtocol.NFS);
 
     renderWithProviders(
       <Formik initialValues={{ tier: emptyResourceSelectValue() }} onSubmit={() => undefined}>
@@ -140,21 +129,13 @@ describe('StorageTierSelectField', () => {
   it('lists only active tiers for the requested storage protocol', async () => {
     const blockTier = makeTier(
       'block',
-      'Block',
       'block storage',
       StorageTierState.ACTIVE,
       StorageProtocol.BLOCK,
     );
-    const nfsTier = makeTier(
-      'nfs',
-      'NFS',
-      'file storage',
-      StorageTierState.ACTIVE,
-      StorageProtocol.NFS,
-    );
+    const nfsTier = makeTier('nfs', 'file storage', StorageTierState.ACTIVE, StorageProtocol.NFS);
     const retiredBlockTier = makeTier(
       'retired-block',
-      'Retired block',
       'retired block storage',
       StorageTierState.UNSPECIFIED,
       StorageProtocol.BLOCK,
@@ -201,7 +182,7 @@ describe('StorageTierSelectField', () => {
 
   it('does not show a lock badge by default', async () => {
     renderField({
-      apiFixtures: { publicStorageTiers: [makeTier('fast', 'Fast SSD', 'low latency')] },
+      apiFixtures: { publicStorageTiers: [makeTier('fast', 'low latency')] },
     });
 
     await screen.findByLabelText(/^Storage tier/);
@@ -210,7 +191,7 @@ describe('StorageTierSelectField', () => {
 
   it('shows the catalog value read-only with a lock badge when locked', async () => {
     renderField(
-      { apiFixtures: { publicStorageTiers: [makeTier('fast', 'Fast SSD', 'low latency')] } },
+      { apiFixtures: { publicStorageTiers: [makeTier('fast', 'low latency')] } },
       { id: 'id-fast', name: 'fast' },
       true,
     );

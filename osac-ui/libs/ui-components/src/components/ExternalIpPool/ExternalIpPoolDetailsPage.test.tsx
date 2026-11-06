@@ -1,9 +1,10 @@
 import { Route, Routes } from 'react-router-dom';
+import { create } from '@bufbuild/protobuf';
 import { screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ExternalIPPoolSchema, ExternalIPPoolState, IPFamily } from '@osac/types/private';
 import type { ExternalIPPool } from '@osac/types/private';
-import { ExternalIPPoolState, IPFamily } from '@osac/types/private';
 
 import { ExternalIpPoolDetailsPage } from './ExternalIpPoolDetailsPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
@@ -23,14 +24,12 @@ const makePool = (
   ipFamily: IPFamily,
   cidrs: string[],
   tenant = 'shared',
-  description?: string,
 ): ExternalIPPool =>
-  ({
+  create(ExternalIPPoolSchema, {
     id,
     metadata: {
       name,
       tenant,
-      description,
       creationTimestamp: { seconds: BigInt(1700000000), nanos: 0 },
     },
     spec: { cidrs, ipFamily },
@@ -40,7 +39,7 @@ const makePool = (
       allocated: 56n,
       available: 200n,
     },
-  }) as ExternalIPPool;
+  });
 
 const renderPage = (id: string, pools: ExternalIPPool[]) =>
   renderWithProviders(
@@ -119,24 +118,6 @@ describe('ExternalIpPoolDetailsPage', () => {
     });
     expect(screen.getByText('acme')).toBeInTheDocument();
     expect(screen.queryByText('Shared')).not.toBeInTheDocument();
-  });
-
-  it('renders the header description from pool metadata', async () => {
-    renderPage('p-5', [
-      makePool(
-        'p-5',
-        'described-pool',
-        IPFamily.IP_FAMILY_IPV4,
-        ['10.0.0.0/24'],
-        'shared',
-        'Edge addresses for production.',
-      ),
-    ]);
-
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'described-pool' })).toBeInTheDocument();
-    });
-    expect(screen.getByText('Edge addresses for production.')).toBeInTheDocument();
   });
 
   it('renders a not-found state when the pool does not exist', async () => {

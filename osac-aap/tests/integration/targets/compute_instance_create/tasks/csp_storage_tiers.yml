@@ -43,7 +43,11 @@
                     'sizeGiB': 40,
                     'storageTier': 'fast'
                   }
-                ]
+                ],
+                'diskVolumeIDs': {
+                  'boot': 'volume-csp-boot',
+                  'disk-1': 'volume-osac-data-1'
+                }
               }),
               'status': {
                 'desiredConfigVersion': '1',

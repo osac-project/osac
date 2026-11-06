@@ -1273,12 +1273,15 @@ Read the `NetworkClass` through the private API of the Fulfillment Service.
 **Procedure**
 
 1. Set the API address, an admin token of the `admin` service account that
-   the OSAC chart creates, and the CA file:
+   the OSAC chart creates, and the CA file. Replace `<ca_bundle_configmap>`
+   with the value of `service.certs.caBundle.configMap`:
 
    ```console
    FULFILLMENT_API="https://$(oc get route fulfillment-internal-api -n "$NS" -o jsonpath='{.spec.host}')"
    OSAC_ADMIN_TOKEN="$(oc create token admin -n "$NS" --duration 1h)"
-   oc get configmap ca-bundle -n "$NS" -o jsonpath='{.data.bundle\.pem}' > ca-bundle.crt
+   CA_BUNDLE_CONFIGMAP="<ca_bundle_configmap>"
+   oc get configmap "$CA_BUNDLE_CONFIGMAP" -n "$NS" \
+     -o jsonpath='{.data.bundle\.pem}' > ca-bundle.crt
    CA_FILE=ca-bundle.crt
    ```
 
@@ -1961,9 +1964,12 @@ by the preflight:
 oc get crd kubevirts.kubevirt.io
 ```
 
-Keep `cnv.enabled: false` on the management cluster. In the `my-values.yaml`
-used to install OSAC, skip only this preflight check and give the verified
-reason; the remaining preflight checks stay enabled.
+Ensure OpenShift Virtualization is installed on the workload cluster, not the
+management cluster. If your platform administrators configure infrastructure
+through Helm, `cnv.enabled: false` belongs in their infrastructure values, not
+in the OSAC `my-values.yaml`. In the OSAC `my-values.yaml`, skip only the
+`kubevirt-crds` preflight check and give the verified reason shown below.
+Leave the remaining checks enabled.
 
 Start with the VMaaS values from [Section 6.1](#61-installing-osac-for-vmaas),
 including the storage registration and networking settings. Select storage

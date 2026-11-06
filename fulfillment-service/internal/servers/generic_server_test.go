@@ -118,6 +118,77 @@ var _ = Describe("Generic server", func() {
 		Expect(privateUpdateResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{"ordinary": "private"}))
 	})
 
+	It("rejects private creator updates selected by the update mask", func() {
+		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
+			SetLogger(logger).
+			SetService(privatev1.BareMetalInstanceTemplates_ServiceDesc.ServiceName).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		createResponse := &privatev1.BareMetalInstanceTemplatesCreateResponse{}
+		err = server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceTemplate_builder{
+				Id:          "private_creator_update",
+				Metadata:    privatev1.Metadata_builder{Name: "private-creator-update"}.Build(),
+				Description: "original description",
+			}.Build(),
+		}.Build(), &createResponse)
+		Expect(err).ToNot(HaveOccurred())
+		created := createResponse.GetObject()
+		originalCreator := created.GetMetadata().GetCreator()
+
+		for _, testCase := range []struct {
+			name          string
+			mask          *fieldmaskpb.FieldMask
+			updateCreator bool
+			description   string
+			rejected      bool
+		}{
+			{name: "creator path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.creator"}}, updateCreator: true, rejected: true},
+			{name: "normalized creator path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata..creator"}}, updateCreator: true, rejected: true},
+			{name: "parent metadata path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata"}}, updateCreator: true, rejected: true},
+			{name: "missing mask preserves ordinary updates", description: "updated without mask"},
+			{name: "empty mask is a no-op", mask: &fieldmaskpb.FieldMask{}, updateCreator: true},
+		} {
+			By(testCase.name)
+			updateObject := proto.Clone(created).(*privatev1.BareMetalInstanceTemplate)
+			if testCase.updateCreator {
+				updateObject.GetMetadata().SetCreator("attacker-user")
+			}
+			if testCase.description != "" {
+				updateObject.SetDescription(testCase.description)
+			}
+			var updateResponse *privatev1.BareMetalInstanceTemplatesUpdateResponse
+			err = server.Update(ctx, privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
+				Object:     updateObject,
+				UpdateMask: testCase.mask,
+			}.Build(), &updateResponse)
+
+			if testCase.rejected {
+				Expect(err).To(HaveOccurred())
+				Expect(updateResponse).To(BeNil())
+				grpcStatus, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(grpcStatus.Code()).To(Equal(codes.InvalidArgument))
+				Expect(grpcStatus.Message()).To(Equal("field 'metadata.creator' is immutable"))
+			} else {
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResponse).ToNot(BeNil())
+				Expect(updateResponse.GetObject().GetMetadata().GetCreator()).To(Equal(originalCreator))
+				if testCase.description != "" {
+					Expect(updateResponse.GetObject().GetDescription()).To(Equal(testCase.description))
+				}
+			}
+
+			getResponse := &privatev1.BareMetalInstanceTemplatesGetResponse{}
+			err = server.Get(ctx, privatev1.BareMetalInstanceTemplatesGetRequest_builder{Id: created.GetId()}.Build(), &getResponse)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetMetadata().GetCreator()).To(Equal(originalCreator))
+		}
+	})
+
 	It("rejects a stale version when public update locking is requested", func() {
 		server, err := NewGenericServer[*privatev1.BareMetalInstanceTemplate]().
 			SetLogger(logger).

@@ -677,6 +677,12 @@ func (s *GenericServer[O]) applyMaskAndRestoreProtectedFields(
 	requestMask *fieldmaskpb.FieldMask,
 ) (O, error) {
 	var tmpObject O
+	// Public ComputeInstances already reject creator changes in their own update validation.
+	// This guard closes the private API gap without changing public handling.
+	if !isPublicAPIView(ctx) && requestMask != nil && len(requestMask.GetPaths()) > 0 &&
+		updateIncludesField(requestMask, "metadata.creator") {
+		return tmpObject, grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.creator' is immutable")
+	}
 
 	if requestMask != nil {
 		// Reject public API requests that attempt to modify status fields via update mask.

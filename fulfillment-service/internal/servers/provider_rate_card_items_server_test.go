@@ -656,28 +656,30 @@ var _ = Describe("Provider rate card items server catalog cross-reference", func
 	})
 
 	It("cross-references a CaaS row end-to-end through the server's List, using both catalog DAOs", func() {
-		clusterItemsDao, err := dao.NewGenericDAO[*privatev1.ClusterCatalogItem]().
-			SetLogger(logger).SetTenancyLogic(tenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		_, err = clusterItemsDao.Create().SetObject(privatev1.ClusterCatalogItem_builder{
-			Id:       uuid.NewString(),
-			Metadata: privatev1.Metadata_builder{Name: "caas-large", Tenant: testTenant}.Build(),
-			Fields: privatev1.ClusterCatalogItemFields_builder{
-				NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
-					Locked: privatev1.ClusterNodeSetMap_builder{
-						Items: map[string]*privatev1.ClusterCatalogNodeSet{
-							"workers": privatev1.ClusterCatalogNodeSet_builder{
-								Size: 3,
-								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
-									Id: "bt1", Name: "large",
+		seedCommittedCatalogFixtures(func(seedCtx context.Context) {
+			clusterItemsDao, err := dao.NewGenericDAO[*privatev1.ClusterCatalogItem]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = clusterItemsDao.Create().SetObject(privatev1.ClusterCatalogItem_builder{
+				Id:       uuid.NewString(),
+				Metadata: privatev1.Metadata_builder{Name: "caas-large", Tenant: testTenant}.Build(),
+				Fields: privatev1.ClusterCatalogItemFields_builder{
+					NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
+						Locked: privatev1.ClusterNodeSetMap_builder{
+							Items: map[string]*privatev1.ClusterCatalogNodeSet{
+								"workers": privatev1.ClusterCatalogNodeSet_builder{
+									Size: 3,
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+										Id: "bt1", Name: "large",
+									}.Build(),
 								}.Build(),
-							}.Build(),
-						},
+							},
+						}.Build(),
 					}.Build(),
 				}.Build(),
-			}.Build(),
-		}.Build()).Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
+			}.Build()).Do(seedCtx)
+			Expect(err).ToNot(HaveOccurred())
+		})
 
 		scenario := billingfake.Scenario{
 			Services: []billingfake.ServiceSpec{{

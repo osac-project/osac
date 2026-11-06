@@ -24,10 +24,10 @@ import (
 )
 
 var _ = Describe("Billing TTL cache", func() {
-	// newTestCache returns a string-keyed cache with a one-minute TTL whose clock is the addressable variable now,
-	// so a spec can advance time.
+	// newTestCache returns a string-keyed cache with a one-minute TTL and a fill budget below it, whose clock is the
+	// addressable variable now, so a spec can advance time.
 	newTestCache := func(maxEntries int) (cache *ttlCache[string, int], now *time.Time) {
-		cache = newTTLCache[string, int](time.Minute, maxEntries, func(key string) string { return key })
+		cache = newTTLCache[string, int](time.Minute, 30*time.Second, maxEntries, func(key string) string { return key })
 		current := time.Unix(0, 0)
 		cache.now = func() time.Time { return current }
 		return cache, &current
@@ -164,5 +164,191 @@ var _ = Describe("Billing TTL cache", func() {
 		Expect(value).To(Equal(7))
 		_, cached := cache.entries["key"]
 		Expect(cached).To(BeFalse(), "a full cache must not store a new entry")
+	})
+
+	// newCountingKeyString builds a keyString that counts its calls: get evaluates it after its cancellation check,
+	// immediately before the caller joins the flight, and a pending fill keeps the flight joinable, so a counted
+	// second call proves the second caller committed to the in-flight fill.
+	newCountingKeyString := func(calls *atomic.Int32) func(string) string {
+		return func(key string) string {
+			calls.Add(1)
+			return key
+		}
+	}
+
+	It("keeps filling when the leading caller cancels", func() {
+		var keyStringCalls atomic.Int32
+		cache := newTTLCache[string, int](time.Minute, 30*time.Second, 8, newCountingKeyString(&keyStringCalls))
+		started := make(chan struct{})
+		mayFinish := make(chan struct{})
+		var loads atomic.Int32
+		var fillCtxErr error
+		load := func(ctx context.Context) (int, error) {
+			loads.Add(1)
+			close(started)
+			<-mayFinish
+			fillCtxErr = ctx.Err() // read after the leader cancelled: the fill context must still be live
+			return 7, nil
+		}
+		type outcome struct {
+			value int
+			err   error
+		}
+		leaderCtx, cancelLeader := context.WithCancel(context.Background())
+		defer cancelLeader()
+		leaderDone := make(chan error, 1)
+		go func() {
+			_, err := cache.get(leaderCtx, "key", load)
+			leaderDone <- err
+		}()
+		<-started
+		cancelLeader()
+		select {
+		case err := <-leaderDone:
+			Expect(err).To(MatchError(context.Canceled))
+		case <-time.After(5 * time.Second):
+			Fail("the cancelled leader did not return")
+		}
+		followerDone := make(chan outcome, 1)
+		go func() {
+			value, err := cache.get(context.Background(), "key", load)
+			followerDone <- outcome{value: value, err: err}
+		}()
+		Eventually(keyStringCalls.Load).Should(Equal(int32(2)))
+		close(mayFinish)
+		select {
+		case result := <-followerDone:
+			Expect(result.err).ToNot(HaveOccurred())
+			Expect(result.value).To(Equal(7))
+		case <-time.After(5 * time.Second):
+			Fail("the follower did not receive the fill's value")
+		}
+		Expect(fillCtxErr).ToNot(HaveOccurred(), "the leader's cancellation must not reach the fill context")
+		value, err := cache.get(context.Background(), "key", load)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(7))
+		Expect(loads.Load()).To(Equal(int32(1)))
+	})
+
+	It("keeps filling when a following caller cancels", func() {
+		var keyStringCalls atomic.Int32
+		cache := newTTLCache[string, int](time.Minute, 30*time.Second, 8, newCountingKeyString(&keyStringCalls))
+		release := make(chan struct{})
+		var loads atomic.Int32
+		load := func(context.Context) (int, error) {
+			loads.Add(1)
+			<-release
+			return 7, nil
+		}
+		type outcome struct {
+			value int
+			err   error
+		}
+		leaderDone := make(chan outcome, 1)
+		go func() {
+			value, err := cache.get(context.Background(), "key", load)
+			leaderDone <- outcome{value: value, err: err}
+		}()
+		Eventually(loads.Load).Should(Equal(int32(1)))
+		followerCtx, cancelFollower := context.WithCancel(context.Background())
+		defer cancelFollower()
+		followerDone := make(chan error, 1)
+		go func() {
+			_, err := cache.get(followerCtx, "key", load)
+			followerDone <- err
+		}()
+		Eventually(keyStringCalls.Load).Should(Equal(int32(2)))
+		cancelFollower()
+		select {
+		case err := <-followerDone:
+			Expect(err).To(MatchError(context.Canceled))
+		case <-time.After(5 * time.Second):
+			Fail("the cancelled follower did not return")
+		}
+		close(release)
+		select {
+		case result := <-leaderDone:
+			Expect(result.err).ToNot(HaveOccurred())
+			Expect(result.value).To(Equal(7))
+		case <-time.After(5 * time.Second):
+			Fail("the leader did not receive the fill's value")
+		}
+		Expect(loads.Load()).To(Equal(int32(1)))
+	})
+
+	It("completes and caches a fill whose every caller cancelled", func() {
+		cache, _ := newTestCache(8)
+		release := make(chan struct{})
+		var loads atomic.Int32
+		load := func(context.Context) (int, error) {
+			loads.Add(1)
+			<-release
+			return 7, nil
+		}
+		callerCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		callerDone := make(chan error, 1)
+		go func() {
+			_, err := cache.get(callerCtx, "key", load)
+			callerDone <- err
+		}()
+		Eventually(loads.Load).Should(Equal(int32(1)))
+		cancel()
+		select {
+		case err := <-callerDone:
+			Expect(err).To(MatchError(context.Canceled))
+		case <-time.After(5 * time.Second):
+			Fail("the cancelled caller did not return")
+		}
+		close(release)
+		Eventually(func() bool {
+			_, cached := cache.snapshot("key")
+			return cached
+		}).Should(BeTrue(), "the detached fill should still complete and publish its value")
+		value, err := cache.get(context.Background(), "key", load)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(7))
+		Expect(loads.Load()).To(Equal(int32(1)))
+	})
+
+	It("fails an over-budget fill with its deadline and caches nothing", func() {
+		cache := newTTLCache[string, int](time.Minute, 50*time.Millisecond, 8, func(key string) string { return key })
+		var loads atomic.Int32
+		load := func(ctx context.Context) (int, error) {
+			loads.Add(1)
+			<-ctx.Done() // hold the fill until its own budget expires
+			return 0, ctx.Err()
+		}
+		_, err := cache.get(context.Background(), "key", load)
+		Expect(err).To(MatchError(context.DeadlineExceeded))
+		_, cached := cache.snapshot("key")
+		Expect(cached).To(BeFalse(), "an over-budget fill must not be cached")
+		value, err := cache.get(context.Background(), "key", func(context.Context) (int, error) {
+			loads.Add(1)
+			return 7, nil
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(7))
+		Expect(loads.Load()).To(Equal(int32(2)))
+	})
+
+	It("returns a fill panic as an error and caches nothing", func() {
+		cache, _ := newTestCache(8)
+		var loads atomic.Int32
+		load := func(context.Context) (int, error) {
+			if loads.Add(1) == 1 {
+				panic("boom")
+			}
+			return 7, nil
+		}
+		_, err := cache.get(context.Background(), "key", load)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("boom"))
+		_, cached := cache.snapshot("key")
+		Expect(cached).To(BeFalse(), "a panicked fill must not be cached")
+		value, err := cache.get(context.Background(), "key", load)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(7))
+		Expect(loads.Load()).To(Equal(int32(2)))
 	})
 })

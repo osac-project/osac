@@ -26,6 +26,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing/pricing"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -208,8 +209,13 @@ func (s *PrivateProviderRateCardItemsServer) List(ctx context.Context,
 	// Cross-reference every row against all dimensions emitted from catalog field policies, including image and
 	// boot-disk condition dimensions. The inventory is swept once per this server's cache TTL and the snapshot is
 	// shared read-only among this server's Lists; the dimension index is rebuilt per request from that cached snapshot.
+	// The sweep runs in its own transaction: the fill is detached from every caller's request scope, so it must not
+	// borrow the leading caller's request transaction, whose lifetime no longer bounds the sweep. The inventory is
+	// published only after WithNewTx returns — committing — because the cache stores the value after the load returns.
 	inventory, err := s.inventoryCache.get(ctx, catalogInventoryKey{}, func(ctx context.Context) (catalogPricingInventory, error) {
-		return sweepProviderRateCardCatalogInventory(ctx, s.computeCatalogItemsDao, s.clusterCatalogItemsDao)
+		return database.WithNewTx(ctx, func(ctx context.Context) (catalogPricingInventory, error) {
+			return sweepProviderRateCardCatalogInventory(ctx, s.computeCatalogItemsDao, s.clusterCatalogItemsDao)
+		})
 	})
 	if err != nil {
 		return nil, err

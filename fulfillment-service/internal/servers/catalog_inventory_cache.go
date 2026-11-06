@@ -24,6 +24,12 @@ import (
 // only bounds how long a List can keep reflecting a catalog state older than the last sweep, so it stays short.
 const catalogInventoryCacheTTL = 30 * time.Second
 
+// catalogInventoryCacheFillBudget bounds how long one detached catalog sweep may keep running after every List that
+// waited on it has stopped. It stays below the 30s catalogInventoryCacheTTL so a sweep that completes within its
+// budget is never born expired, and it covers a normal paged sweep of both catalog tables. OSAC-6894 owns future
+// tuning.
+const catalogInventoryCacheFillBudget = 15 * time.Second
+
 // catalogInventoryKey is the fixed key of the single aggregated inventory entry: every List of one server instance
 // reads the same inventory, whatever the caller's request parameters.
 type catalogInventoryKey struct{}
@@ -34,6 +40,7 @@ type catalogInventoryKey struct{}
 // (total visibility), which their authorization DescribeTables pin, so a cached sweep is never served across
 // visibility scopes; the cached rows are shared read-only among that server's callers.
 func newCatalogInventoryCache() *ttlCache[catalogInventoryKey, []*privatev1.CatalogPricingInput] {
-	return newTTLCache[catalogInventoryKey, []*privatev1.CatalogPricingInput](catalogInventoryCacheTTL, 1,
+	return newTTLCache[catalogInventoryKey, []*privatev1.CatalogPricingInput](catalogInventoryCacheTTL,
+		catalogInventoryCacheFillBudget, 1,
 		func(catalogInventoryKey) string { return "catalog-inventory" })
 }

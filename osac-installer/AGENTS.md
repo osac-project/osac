@@ -68,6 +68,7 @@ respective areas.
 | Install preflight engine, catalog, report schema, or `preflight.*` values | Unit (mocked cluster) | `helm unittest charts/osac` (helm-unittest plugin; CI pins v1.2.1) |
 | `metering.readers` values (reader name only, all tenants), schema, umbrella passthrough, or reserved names | Unit (mocked cluster) | `helm unittest -f 'tests/metering_readers*_test.yaml' charts/osac` (the suites also run in the full `helm unittest charts/osac`) |
 | Install preflight rendering contract, hook log policy, or CSI hook deadlines | Helm contract | `uv run --script scripts/test-preflight-render.py` |
+| Kind preflight harness readiness or fixture restoration | Unit (mocked commands) | `uv run --script scripts/test-preflight-harness.py` |
 | Install preflight against a real API server, upgrade behavior, or failed-hook logs | Component integration | `uv run --script scripts/test-preflight-kind.py` against a Kind context; see [install preflight](../docs/INTEGRATION-TESTING.md#install-preflight-osac-6561) |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
 

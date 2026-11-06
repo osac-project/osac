@@ -593,7 +593,7 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
                 if provider == "unset":
                     self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
                     (self.bin / "podman").unlink()
-                    for command in ("bash", "env", "awk", "sed", "basename", "dirname", "grep"):
+                    for command in ("bash", "env", "awk", "sed", "basename", "dirname", "grep", "mktemp", "rm"):
                         (self.bin / command).symlink_to(shutil.which(command))
                     self.env["PATH"] = str(self.bin)
                 else:

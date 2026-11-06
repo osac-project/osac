@@ -45,6 +45,7 @@ JSON_LINE = re.compile(r"(?m)^OSAC-PREFLIGHT-JSON v1: (\{.*\})$")
 RELEASE = "osac"
 MARKER = "OSAC-HOOK-LOG-MARKER"
 FAST_FAIL_SECONDS = 60
+RESTORATION_LABELS = ("uncordon", "StorageClass reset", "prerequisite creation", "CRD apply", "CRD readiness")
 
 
 class Cluster:
@@ -58,17 +59,48 @@ class Cluster:
         self.restore: list[tuple[str, ...]] = []
         self.extra_ns: list[str] = []  # namespaces created by cases that need their own release
 
-    def run(self, *cmd: str, check: bool = True, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-        proc = subprocess.run(cmd, capture_output=True, text=True, input=stdin)
+    def run(self, *cmd: str, check: bool = True, stdin: str | None = None,
+            timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+        """Capture command results and enforce any caller-supplied remaining budget."""
+        proc = subprocess.run(cmd, capture_output=True, text=True, input=stdin, timeout=timeout)
         if check and proc.returncode != 0:
             raise AssertionError(f"{' '.join(cmd)} failed ({proc.returncode}):\n{proc.stdout}\n{proc.stderr}")
         return proc
 
-    def kubectl(self, *args: str, check: bool = True, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-        return self.run("kubectl", "--context", self.context, *args, check=check, stdin=stdin)
+    def kubectl(self, *args: str, check: bool = True, stdin: str | None = None,
+                timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+        return self.run("kubectl", "--context", self.context, *args, check=check, stdin=stdin, timeout=timeout)
 
-    def apply(self, manifest: str) -> None:
-        self.kubectl("apply", "-f", "-", stdin=manifest)
+    def wait_for_crd(self, name: str) -> None:
+        """Wait within one deadline for an Established condition that is not generation-stale."""
+        deadline = time.monotonic() + 60
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            proc = self.kubectl("get", "crd", name, "-o", "json", timeout=remaining)
+            document = json.loads(proc.stdout)
+            status = document.get("status") or {}
+            conditions = status.get("conditions") or []
+            if time.monotonic() >= deadline:
+                break
+            generation = (document.get("metadata") or {}).get("generation")
+            for condition in conditions:
+                if condition.get("type") != "Established" or condition.get("status") != "True":
+                    continue
+                observed = condition.get("observedGeneration")
+                if type(observed) is not int or not -(2**63) <= observed < 2**63:
+                    observed = status.get("observedGeneration")
+                if (type(generation) is int and -(2**63) <= generation < 2**63
+                        and type(observed) is int and -(2**63) <= observed < 2**63
+                        and observed < generation):
+                    continue
+                return
+            time.sleep(min(1, max(0, deadline - time.monotonic())))
+        raise AssertionError(f"timed out waiting for crd/{name} to become Established (60s)")
+
+    def apply(self, manifest: str, *, timeout: float | None = None) -> None:
+        self.kubectl("apply", "-f", "-", stdin=manifest, timeout=timeout)
 
     def helm(self, *args: str, check: bool = False) -> subprocess.CompletedProcess[str]:
         return self.run("helm", "--kube-context", self.context, *args, check=check)
@@ -174,7 +206,7 @@ def create_prerequisites(c: Cluster) -> None:
     for crd in STUB_CRDS:
         c.apply(CRD.format(**crd))
     for name in [f"{crd['plural']}.{crd['group']}" for crd in STUB_CRDS]:
-        c.kubectl("wait", "--for=condition=Established", f"crd/{name}", "--timeout=60s")
+        c.wait_for_crd(name)
     ready = '{"status":{"conditions":[{"type":"Ready","status":"True"}]}}'
     c.apply("apiVersion: cert-manager.io/v1\nkind: ClusterIssuer\nmetadata: {name: default-ca}\nspec: {}\n")
     c.kubectl("patch", "clusterissuer", "default-ca", "--subresource=status", "--type=merge", "-p", ready)
@@ -193,14 +225,15 @@ def create_prerequisites(c: Cluster) -> None:
     create_namespace_prerequisites(c)
 
 
-def create_namespace_prerequisites(c: Cluster, ns: str | None = None) -> None:
+def create_namespace_prerequisites(c: Cluster, ns: str | None = None, *, timeout: float | None = None) -> None:
     ns = ns or c.ns
     c.apply(
         f"apiVersion: v1\nkind: ConfigMap\nmetadata: {{name: ca-bundle, namespace: {ns}}}\ndata: {{bundle.pem: stub}}\n---\n"
         f"apiVersion: v1\nkind: Secret\nmetadata: {{name: fulfillment-controller-credentials, namespace: {ns}}}\n"
         "stringData: {client-id: id, client-secret: secret}\n---\n"
         f"apiVersion: v1\nkind: Secret\nmetadata: {{name: vault-credentials, namespace: {ns}}}\n"
-        "stringData: {client-secret: secret}\n"
+        "stringData: {client-secret: secret}\n",
+        timeout=timeout,
     )
 
 
@@ -226,9 +259,9 @@ def default_storageclass(c: Cluster) -> str:
     raise AssertionError("the Kind cluster has no default StorageClass")
 
 
-def set_default_storageclass(c: Cluster, name: str, value: str | None) -> None:
+def set_default_storageclass(c: Cluster, name: str, value: str | None, *, timeout: float | None = None) -> None:
     ann = "storageclass.kubernetes.io/is-default-class"
-    c.kubectl("annotate", "storageclass", name, f"{ann}={value}" if value else f"{ann}-", "--overwrite")
+    c.kubectl("annotate", "storageclass", name, f"{ann}={value}" if value else f"{ann}-", "--overwrite", timeout=timeout)
 
 
 # -------------------------------------------------------------------- cases
@@ -300,30 +333,50 @@ def case_fresh_install_lists_every_fault_once(c: Cluster) -> None:
     c.kubectl("delete", "configmap", f"{RELEASE}-preflight-report", "-n", c.ns, "--ignore-not-found")
     sc = default_storageclass(c)
     node = c.kubectl("get", "nodes", "-o", "jsonpath={.items[0].metadata.name}").stdout
-    set_default_storageclass(c, sc, None)
-    c.kubectl("cordon", node)
-    c.kubectl("delete", "secret", "fulfillment-controller-credentials", "-n", c.ns)
-    c.kubectl("delete", "crd", CERT_MANAGER_CRD)
+    case_error = None
     try:
+        set_default_storageclass(c, sc, None)
+        c.kubectl("cordon", node)
+        c.kubectl("delete", "secret", "fulfillment-controller-credentials", "-n", c.ns)
+        c.kubectl("delete", "crd", CERT_MANAGER_CRD)
         started = time.monotonic()
         proc = c.install("--wait")
         elapsed = time.monotonic() - started
         report = failure_report(proc)
+        assert elapsed < FAST_FAIL_SECONDS, f"the preflight took {elapsed:.0f}s"
+        assert blocking_ids(report) == {"default-storageclass", "nodes-schedulable", "controller-credentials", "cert-manager-crds"}, blocking_ids(report)
+        issuer = result(report, "cert-issuer-ready")
+        assert issuer["status"] == "unknown" and issuer["dependsOn"] == ["cert-manager-crds"], issuer
+        assert "Nothing was changed" in proc.stderr
+        for fix in ("oc patch storageclass", "Uncordon a node", "Install the cert-manager Operator", "Create the controller credential Secret"):
+            assert fix in proc.stderr, f"missing fix text: {fix}"
+        assert c.releases() == [], "a failed render must not leave a release behind"
+        assert c.report_configmap() is None, "a failed render must not create the report"
+    except Exception as error:
+        case_error = error
+        raise
     finally:
-        c.kubectl("uncordon", node)
-        set_default_storageclass(c, sc, "true")
-        create_namespace_prerequisites(c)
-        c.apply(CRD.format(**STUB_CRDS[0]))
-        c.kubectl("wait", "--for=condition=Established", f"crd/{CERT_MANAGER_CRD}", "--timeout=60s")
-    assert elapsed < FAST_FAIL_SECONDS, f"the preflight took {elapsed:.0f}s"
-    assert blocking_ids(report) == {"default-storageclass", "nodes-schedulable", "controller-credentials", "cert-manager-crds"}, blocking_ids(report)
-    issuer = result(report, "cert-issuer-ready")
-    assert issuer["status"] == "unknown" and issuer["dependsOn"] == ["cert-manager-crds"], issuer
-    assert "Nothing was changed" in proc.stderr
-    for fix in ("oc patch storageclass", "Uncordon a node", "Install the cert-manager Operator", "Create the controller credential Secret"):
-        assert fix in proc.stderr, f"missing fix text: {fix}"
-    assert c.releases() == [], "a failed render must not leave a release behind"
-    assert c.report_configmap() is None, "a failed render must not create the report"
+        errors = []
+        timeout = 60
+        actions = (
+            lambda: c.kubectl("uncordon", node, timeout=timeout),
+            lambda: set_default_storageclass(c, sc, "true", timeout=timeout),
+            lambda: create_namespace_prerequisites(c, timeout=timeout),
+            lambda: c.apply(CRD.format(**STUB_CRDS[0]), timeout=timeout),
+            lambda: c.wait_for_crd(CERT_MANAGER_CRD),
+        )
+        for label, action in zip(RESTORATION_LABELS, actions, strict=True):
+            try:
+                action()
+            except Exception as error:
+                errors.append(ExceptionGroup(label, [error]))
+        if errors:
+            labels = ", ".join(error.message for error in errors)
+            cleanup_error = ExceptionGroup(f"fixture restoration failed: {labels}", errors)
+            if case_error is not None:
+                print(f"Fixture restoration also failed: {labels}")
+                raise case_error from cleanup_error
+            raise cleanup_error
 
 
 def hook_report(stdout: str) -> dict:
@@ -637,6 +690,7 @@ CASES = [
 
 
 def main() -> int:
+    """Prepare a disposable Kind fixture, run selected cases and always attempt final cleanup."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--context", help="kubeconfig context of a Kind cluster (default: the current context)")
     parser.add_argument("--only", action="append", default=[], help="run only the cases whose name contains this text (repeatable)")

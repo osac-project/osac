@@ -81,7 +81,8 @@ message Metadata {
 
   // Version is a numeric field that is automatically incremented with every change to the object. Set `lock` to true
   // on an Update request to require this version to match the stored version; a stale version is rejected with
-  // Aborted. If `lock` is omitted or false, the Update proceeds without an optimistic version check.
+  // Aborted. If `lock` is omitted or false, the version is only checked for the changes that always require the
+  // current version.
   int32 version = 8;
 
   // Full name of the project that the object is assigned to. It can be empty, which means the object belongs to

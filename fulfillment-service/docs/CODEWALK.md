@@ -96,7 +96,12 @@ Known footgun: rollback is driven by `Tx.ReportError(&err)`
 ([`internal/database/database_tx.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/database/database_tx.go)),
 which must be called (typically via `defer`) by any code path that can produce an error inside the
 transaction. If a handler forgets it, its error will not trigger a rollback — this is not enforced
-by the type system.
+by the type system. A handler that panics is rolled back: the interceptor reports the panic to the
+transaction, ends it, and then lets the panic go on to the outer interceptors.
+
+Work that must only happen for changes that are really stored, such as logging them, goes in
+`Tx.OnCommit`: the function runs after the commit, never after a rollback or a failed commit, and a
+function registered inside a savepoint waits for the enclosing transaction.
 
 ### Event delivery and reconciliation recovery
 

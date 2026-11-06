@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -547,6 +548,7 @@ var _ = Describe("finalizer CAS", func() {
 				records := logs.WithMessage(finalizerChangeMessage)
 				Expect(records).To(HaveLen(1))
 				Expect(records[0].Level).To(Equal(slog.LevelInfo))
+				Expect(records[0].Attrs).To(HaveKeyWithValue("service", c.service))
 				Expect(records[0].Attrs).To(HaveKeyWithValue("id", t.id))
 				Expect(records[0].Attrs).To(HaveKeyWithValue("from", Equal([]string{finalizerController})))
 				Expect(records[0].Attrs).To(HaveKeyWithValue("to", Equal([]string{finalizerController, finalizerHold})))
@@ -659,7 +661,10 @@ var _ = Describe("finalizer CAS", func() {
 				logs := t.recordLogs()
 				object := withFinalizers(t.get(ctx), finalizerController, finalizerHold)
 
+				// The update arrives through gRPC, so the log line names the method:
+				const method = "/osac.private.v1.Hubs/Update"
 				err := suiteTx.Savepoint(ctx, func(ctx context.Context) error {
+					ctx = grpc.NewContextWithServerTransportStream(ctx, methodStream(method))
 					return t.update(ctx, object, finalizersMask(), false)
 				})
 				Expect(err).ToNot(HaveOccurred())
@@ -668,7 +673,9 @@ var _ = Describe("finalizer CAS", func() {
 				commitSuiteTx()
 
 				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
-				Expect(logs.WithMessage(finalizerChangeMessage)).To(HaveLen(1))
+				records := logs.WithMessage(finalizerChangeMessage)
+				Expect(records).To(HaveLen(1))
+				Expect(records[0].Attrs).To(HaveKeyWithValue("method", method))
 			})
 		})
 	})

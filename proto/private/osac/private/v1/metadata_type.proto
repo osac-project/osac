@@ -84,7 +84,8 @@ message Metadata {
 
   // Version is a numeric field that is automatically incremented with every change to the object. Set `lock` to true
   // on an Update request to require this version to match the stored version; a stale version is rejected with
-  // Aborted. If `lock` is omitted or false, the Update proceeds without an optimistic version check.
+  // Aborted. If `lock` is omitted or false, the version is only checked for the changes that always require the
+  // current version.
   int32 version = 8;
 
   // Full name of the project that the object is assigned to. It can be empty, which means the object belongs to
@@ -111,5 +112,11 @@ message Metadata {
 
   // Finalizers indicate tasks that need to be completed before the object can be completely deleted. When the object
   // has been deleted and this list is empty the system will automatically archive the object.
+  //
+  // An Update that changes this list, compared as a set, must carry the current `version`, whether or not `lock` is
+  // set; otherwise it is rejected with Aborted, and an Update without metadata that would change it is always
+  // rejected. Read the object again, reapply the change, and retry. An Update without a mask replaces the whole
+  // object, so leaving this list out of it is a change when the object has finalizers: send an update mask for the
+  // other fields that you change.
   repeated string finalizers = 12 [(cleanapi.field).private = true];
 }

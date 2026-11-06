@@ -25,6 +25,7 @@ import (
 
 	"buf.build/go/protovalidate"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcmetadata "google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
@@ -816,9 +817,10 @@ func (s *GenericServer[O]) checkFinalizerChange(requestObject, currentObject, me
 	return nil
 }
 
-// logFinalizerChange records a finalizer change that has been written, with the stored version it
-// was checked against, so that every finalizer transition of an object can be traced to the request
-// that made it. The lists logged are the ones that the DAO wrote, which are sorted and have no
+// logFinalizerChange records a finalizer change that has been written, with the service of the
+// object, the gRPC method that made the change when there is one, and the stored version that the
+// change was checked against, so that every finalizer transition of an object can be traced to the
+// call that made it. The lists logged are the ones that the DAO wrote, which are sorted and have no
 // repeated finalizer. The write belongs to the transaction of the request, and code that runs
 // after it, in the same request, can still roll that transaction back, so the line is only written
 // once the transaction commits. Requests that are rejected, that are rolled back, or that leave the
@@ -831,16 +833,18 @@ func (s *GenericServer[O]) logFinalizerChange(ctx context.Context, id string, cu
 		return
 	}
 	logger := s.logger
-	version := currentMetadata.GetVersion()
+	fields := []any{
+		slog.String("service", s.service),
+		slog.String("id", id),
+		slog.Any("from", before),
+		slog.Any("to", after),
+		slog.Int("version", int(currentMetadata.GetVersion())),
+	}
+	if method, ok := grpc.Method(ctx); ok {
+		fields = append(fields, slog.String("method", method))
+	}
 	log := func() {
-		logger.InfoContext(
-			ctx,
-			"Updated finalizers",
-			slog.String("id", id),
-			slog.Any("from", before),
-			slog.Any("to", after),
-			slog.Int("version", int(version)),
-		)
+		logger.InfoContext(ctx, "Updated finalizers", fields...)
 	}
 	// The DAO can't write without a transaction in the context, so there is always one here:
 	tx, err := database.TxFromContext(ctx)

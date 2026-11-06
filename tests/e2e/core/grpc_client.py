@@ -741,6 +741,8 @@ class GRPCClient:
     def create_baremetal_instance_type(
         self, *, name: str, fabric_port: str, host_label_selector: dict[str, str] | None = None
     ) -> str:
+        """Create a BareMetalInstanceType via the private API."""
+        selector = host_label_selector or DEFAULT_HOST_LABEL_SELECTOR
         response = self.call(
             service=f"{PRIVATE_API}.BareMetalInstanceTypes/Create",
             data={

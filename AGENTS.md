@@ -20,7 +20,9 @@ The nearest component `AGENTS.md` adds rules for files under that component.
   the applicable accepted designs it links. Identify overlap with existing commitments.
 - Do not hand-edit generated or vendored files. Change their source and run the owning component's documented generator.
 - For proto changes, run the component's validation and generation commands and review all generated diffs.
-- When editing code, **always run** the affected unit tests and applicable pre-commit checks before finishing; report why if a check cannot run.
+- When editing non-prose code, **always run** the affected unit tests and applicable pre-commit checks before finishing; report why if a check cannot run.
+- Prose-only documentation changes, including ordinary explanatory comments and docstrings, do not require unit tests. Review the diff, run applicable documentation, formatting, and pre-commit checks, and briefly report that no unit tests are affected and why.
+- Executable examples, tool directives/annotations, and docstrings or other text actually consumed at runtime are not prose-only; run relevant consumer validation, including affected unit tests. Base validation on actual consumers, not hypothetical ones or unrelated unit suites.
 - Never commit credentials, tokens, private keys, or confidential infrastructure data.
 - `skills/` and `.osac-ai-skills/` are bootstrap-managed. Edit OSAC skills only in `osac-project/osac-ai-skills`, bump the skill's `metadata.version`, and refresh the local copy through the bootstrap process.
 - `pre-commit run --all-files` is not a complete secret scan; the gitleaks hook examines staged changes. The repository CI secret check scans the PR diff, not the complete repository.

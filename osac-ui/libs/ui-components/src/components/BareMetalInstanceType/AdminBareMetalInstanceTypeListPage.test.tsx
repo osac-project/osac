@@ -1,32 +1,33 @@
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   BareMetalInstanceTypeSchema,
+  BareMetalInstanceTypes,
   BareMetalInstanceTypesDeleteResponseSchema,
+  type BareMetalInstanceTypesListResponse,
+  BareMetalInstanceTypesListResponseSchema,
   type BareMetalInstanceType as PrivateBareMetalInstanceType,
 } from '@osac/types/private';
+import { useListResource } from '@osac/ui-components/api/use-resource';
+import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
 import { mockQueryResult } from '@osac/ui-components/test-utils/query';
 
 import AdminBareMetalInstanceTypeListPage from './AdminBareMetalInstanceTypeListPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
-vi.mock('@osac/ui-components/api/v1/private/baremetal-instance-type', async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import('@osac/ui-components/api/v1/private/baremetal-instance-type')
-    >();
-  return { ...actual, useAdminBareMetalInstanceTypes: vi.fn() };
+vi.mock('@osac/ui-components/api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@osac/ui-components/api/use-resource')>();
+  return { ...actual, useListResource: vi.fn() };
 });
 
-const { useAdminBareMetalInstanceTypes } =
-  await import('@osac/ui-components/api/v1/private/baremetal-instance-type');
-const { useAdminBareMetalInstanceTypes: useAdminBareMetalInstanceTypesActual } =
-  await vi.importActual<
-    typeof import('@osac/ui-components/api/v1/private/baremetal-instance-type')
-  >('@osac/ui-components/api/v1/private/baremetal-instance-type');
+const { useListResource: useListResourceActual } = await vi.importActual<
+  typeof import('@osac/ui-components/api/use-resource')
+>('@osac/ui-components/api/use-resource');
+
+const VIEW_PREF_KEY = getViewTypePrefKey('admin-bare-metal-instance-types-list');
 
 const makeBareMetalInstanceType = (
   id: string,
@@ -53,22 +54,54 @@ const makeBareMetalInstanceType = (
     },
   });
 
+const makeListResponse = (
+  items: PrivateBareMetalInstanceType[],
+  total = items.length,
+): BareMetalInstanceTypesListResponse =>
+  create(BareMetalInstanceTypesListResponseSchema, {
+    items,
+    size: items.length,
+    total,
+  });
+
+const mockListSuccess = (items: PrivateBareMetalInstanceType[], total?: number) =>
+  mockQueryResult<BareMetalInstanceTypesListResponse>({
+    data: makeListResponse(items, total),
+    isLoading: false,
+    error: null,
+  });
+
+const mockTotalsSuccess = (total: number) =>
+  mockQueryResult<BareMetalInstanceTypesListResponse>({
+    data: makeListResponse([], total),
+    isLoading: false,
+    error: null,
+  });
+
+const setupDefaultListMocks = (items: PrivateBareMetalInstanceType[], total?: number) => {
+  vi.mocked(useListResource).mockImplementation((_service, request) => {
+    const limit = (request as { limit?: number })?.limit;
+    return limit === 0 ? mockTotalsSuccess(total ?? items.length) : mockListSuccess(items, total);
+  });
+};
+
 const renderPage = () => renderWithProviders(<AdminBareMetalInstanceTypeListPage />);
 
 describe('AdminBareMetalInstanceTypeListPage', () => {
+  beforeEach(() => {
+    localStorage.setItem(VIEW_PREF_KEY, 'list');
+  });
+
   afterEach(() => {
-    vi.mocked(useAdminBareMetalInstanceTypes).mockReset();
+    vi.mocked(useListResource).mockReset();
+    localStorage.removeItem(VIEW_PREF_KEY);
   });
 
   it('renders the required columns and values for populated data', () => {
-    vi.mocked(useAdminBareMetalInstanceTypes).mockReturnValue(
-      mockQueryResult<PrivateBareMetalInstanceType[]>({
-        data: [
-          makeBareMetalInstanceType('gpu-1', { acceleratorCount: 4 }),
-          makeBareMetalInstanceType('cpu-1', { withHardware: false }),
-        ],
-      }),
-    );
+    setupDefaultListMocks([
+      makeBareMetalInstanceType('gpu-1', { acceleratorCount: 4 }),
+      makeBareMetalInstanceType('cpu-1', { withHardware: false }),
+    ]);
 
     renderPage();
 
@@ -84,15 +117,15 @@ describe('AdminBareMetalInstanceTypeListPage', () => {
     expect(screen.getByText('64 (x86_64)')).toBeInTheDocument();
     expect(screen.getByText('256')).toBeInTheDocument();
     expect(screen.getByText('4')).toBeInTheDocument();
-    // The hardware-less row renders em dashes for CPU, memory and accelerators.
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3);
   });
 
   it('shows a loading spinner while the query is in flight', () => {
-    vi.mocked(useAdminBareMetalInstanceTypes).mockReturnValue(
-      mockQueryResult<PrivateBareMetalInstanceType[]>({
+    vi.mocked(useListResource).mockReturnValue(
+      mockQueryResult<BareMetalInstanceTypesListResponse>({
         data: undefined,
         isLoading: true,
+        error: null,
       }),
     );
 
@@ -102,23 +135,32 @@ describe('AdminBareMetalInstanceTypeListPage', () => {
   });
 
   it('shows the empty state when no bare metal instance types are returned', () => {
-    vi.mocked(useAdminBareMetalInstanceTypes).mockReturnValue(
-      mockQueryResult<PrivateBareMetalInstanceType[]>({ data: [] }),
-    );
+    setupDefaultListMocks([]);
 
     renderPage();
 
-    expect(screen.getByText('No bare metal instance types yet.')).toBeInTheDocument();
-    expect(screen.getByRole('grid', { name: 'Bare metal instance types' })).toBeInTheDocument();
+    expect(screen.getByText('No bare metal instance types found')).toBeInTheDocument();
+    expect(screen.getByText('No bare metal instance types are available yet.')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('grid', { name: 'Bare metal instance types' }),
+    ).not.toBeInTheDocument();
   });
 
   it('uses the page-level error state when the query fails', () => {
-    vi.mocked(useAdminBareMetalInstanceTypes).mockReturnValue(
-      mockQueryResult<PrivateBareMetalInstanceType[]>({
-        data: [],
-        error: new Error('Bare metal instance types unavailable'),
-      }),
-    );
+    vi.mocked(useListResource).mockImplementation((service) => {
+      if (service === BareMetalInstanceTypes) {
+        return mockQueryResult<BareMetalInstanceTypesListResponse>({
+          data: makeListResponse([]),
+          isLoading: false,
+          error: new Error('Bare metal instance types unavailable'),
+        });
+      }
+      return mockQueryResult<BareMetalInstanceTypesListResponse>({
+        data: makeListResponse([]),
+        isLoading: false,
+        error: null,
+      });
+    });
 
     renderPage();
 
@@ -128,9 +170,7 @@ describe('AdminBareMetalInstanceTypeListPage', () => {
   });
 
   it('sends the delete request and removes the row after the list re-fetches', async () => {
-    vi.mocked(useAdminBareMetalInstanceTypes).mockImplementation(
-      useAdminBareMetalInstanceTypesActual,
-    );
+    vi.mocked(useListResource).mockImplementation(useListResourceActual);
     const items = [makeBareMetalInstanceType('gpu-1')];
     let deleteCalled = false;
 
@@ -156,13 +196,11 @@ describe('AdminBareMetalInstanceTypeListPage', () => {
 
     await waitFor(() => expect(screen.queryByText('bm-type-gpu-1')).not.toBeInTheDocument());
     expect(deleteCalled).toBe(true);
-    expect(screen.getByText('No bare metal instance types yet.')).toBeInTheDocument();
+    expect(screen.getByText('No bare metal instance types found')).toBeInTheDocument();
   });
 
   it('shows an inline error alert when the delete request fails', async () => {
-    vi.mocked(useAdminBareMetalInstanceTypes).mockImplementation(
-      useAdminBareMetalInstanceTypesActual,
-    );
+    vi.mocked(useListResource).mockImplementation(useListResourceActual);
     const items = [makeBareMetalInstanceType('gpu-1')];
 
     const { user } = renderWithProviders(<AdminBareMetalInstanceTypeListPage />, {

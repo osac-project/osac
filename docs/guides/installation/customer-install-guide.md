@@ -1272,26 +1272,44 @@ Read the `NetworkClass` through the private API of the Fulfillment Service.
 
 **Procedure**
 
-1. Set the API address, an admin token of the `admin` service account that
-   the OSAC chart creates, and the CA file. Replace `<ca_bundle_configmap>`
-   with the value of `service.certs.caBundle.configMap`:
+1. Set the API address and a short-lived token for the `admin` service
+   account that the OSAC chart creates:
 
    ```console
    FULFILLMENT_API="https://$(oc get route fulfillment-internal-api -n "$NS" -o jsonpath='{.spec.host}')"
    OSAC_ADMIN_TOKEN="$(oc create token admin -n "$NS" --duration 1h)"
-   CA_BUNDLE_CONFIGMAP="<ca_bundle_configmap>"
-   oc get configmap "$CA_BUNDLE_CONFIGMAP" -n "$NS" \
-     -o jsonpath='{.data.bundle\.pem}' > ca-bundle.crt
-   CA_FILE=ca-bundle.crt
    ```
 
    `admin` is the emergency administrator account of the private API;
    restrict who can mint its tokens.
 
-2. Read the status:
+   For a Route certificate signed by a private CA, set `CA_FILE` to a PEM
+   bundle that trusts the internal API Route. If the shared bundle configured
+   by `service.certs.caBundle.configMap` contains that CA, replace
+   `<ca_bundle_configmap>` with its name and extract it:
+
+   ```console
+   CA_BUNDLE_CONFIGMAP="<ca_bundle_configmap>"
+   oc get configmap "$CA_BUNDLE_CONFIGMAP" -n "$NS" \
+     -o jsonpath='{.data.bundle\.pem}' > route-ca-bundle.crt
+   CA_FILE=route-ca-bundle.crt
+   ```
+
+   If the shared bundle does not trust the Route, use the Route CA bundle
+   provided by your platform administrators. For a publicly trusted Route,
+   use the system trust store and omit `--cacert` from the request.
+
+2. Read the status. For a private CA, use the bundle set in `CA_FILE`:
 
    ```console
    curl --fail-with-body --cacert "$CA_FILE" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
+       "${FULFILLMENT_API}/api/private/v1/network_classes" | jq '.items[0].status'
+   ```
+
+   For a publicly trusted Route, use the system trust store:
+
+   ```console
+   curl --fail-with-body --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
        "${FULFILLMENT_API}/api/private/v1/network_classes" | jq '.items[0].status'
    ```
 
@@ -1965,14 +1983,21 @@ oc get crd kubevirts.kubevirt.io
 ```
 
 Ensure OpenShift Virtualization is installed on the workload cluster, not the
-management cluster. If your platform administrators use Helm-based
-infrastructure charts, set `cnv.enabled: false` in the management cluster's
-infrastructure values, not in OSAC `my-values.yaml`. On the workload cluster,
-set `cnv.enabled: true` in the infrastructure values only if those charts
-install and manage OpenShift Virtualization; keep it `false` when administrators
-manage an existing installation. In OSAC `my-values.yaml`, skip only the
-`kubevirt-crds` preflight check and give the verified reason shown below.
-Leave the remaining checks enabled.
+management cluster. Before changing `cnv.enabled` from `true` to `false` on the
+management cluster, check whether its existing infrastructure Helm release
+owns OpenShift Virtualization. Disabling it can remove release-managed
+resources, including the `openshift-cnv` namespace, and disrupt existing
+virtualization workloads. Coordinate with the release owner and plan how to
+preserve or migrate those resources before changing the value.
+
+If your platform administrators use Helm-based infrastructure charts, set
+`cnv.enabled: false` in the management cluster's infrastructure values, not in
+OSAC `my-values.yaml`. On the workload cluster, set `cnv.enabled: true` in the
+infrastructure values only if those charts install and manage OpenShift
+Virtualization; keep it `false` when administrators manage an existing
+installation. In OSAC `my-values.yaml`, skip only the `kubevirt-crds` preflight
+check and give the verified reason shown below. Leave the remaining checks
+enabled.
 
 Start with the VMaaS values from [Section 6.1](#61-installing-osac-for-vmaas),
 including the storage registration and networking settings. Select storage

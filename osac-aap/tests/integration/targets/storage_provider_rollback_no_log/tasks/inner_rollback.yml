@@ -1,0 +1,34 @@
+---
+- name: Rollback no_log - Inner playbook (subject)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    vast_storage_validate_certs: false
+    vast_storage_config_namespace: osac-system
+    tenant_name: test-nolog
+    tenant_namespace: osac-system
+    storage_provider_backend_connections:
+      be-nolog:
+        endpoint: "127.0.0.1:18443"
+        username: admin
+        password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    storage_provider_tiers:
+      - name: nfs-tier
+        backend_id: be-nolog
+        protocol: nfs
+        provider: vast
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+  tasks:
+    - name: Run setup (will fail and trigger rollback)
+      block:
+        - name: Include storage_provider role
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+      rescue:
+        - name: Rollback triggered
+          ansible.builtin.debug:
+            msg: "Setup failed and rolled back (expected for this test)"

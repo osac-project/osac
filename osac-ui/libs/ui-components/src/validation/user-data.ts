@@ -10,23 +10,7 @@ const isWellFormedXml = (value: string): boolean => {
   return document.getElementsByTagName('parsererror').length === 0;
 };
 
-interface GuestOsFamilyContextValue {
-  guestOsFamily?: GuestOSFamily;
-}
-
-const isGuestOsFamilyContextValue = (value: unknown): value is GuestOsFamilyContextValue =>
-  typeof value === 'object' && value !== null && 'guestOsFamily' in value;
-
-const guestOsFamilyFromContext = (from: Yup.TestContext['from']): GuestOSFamily | undefined => {
-  for (const { value } of from ?? []) {
-    if (isGuestOsFamilyContextValue(value)) {
-      return value.guestOsFamily;
-    }
-  }
-  return undefined;
-};
-
-export const userDataSchema = (t: TFunction) =>
+export const userDataSchema = (t: TFunction, guestOsFamily: GuestOSFamily | undefined) =>
   Yup.string()
     .test('user-data-max-bytes', t('User data must not exceed 64 KB.'), (value) => {
       if (!value) {
@@ -34,12 +18,12 @@ export const userDataSchema = (t: TFunction) =>
       }
       return new TextEncoder().encode(value).byteLength <= USER_DATA_MAX_BYTES;
     })
-    .test('user-data-xml', t('Enter valid XML.'), function (value) {
-      if (guestOsFamilyFromContext(this.from) !== GuestOSFamily.GUEST_OS_FAMILY_WINDOWS) {
+    .test('user-data-xml', t('Enter valid XML.'), (value) => {
+      if (guestOsFamily !== GuestOSFamily.GUEST_OS_FAMILY_WINDOWS) {
         return true;
       }
       if (!value) {
         return true;
       }
-      return isWellFormedXml(value?.trim() ?? '');
+      return isWellFormedXml(value.trim());
     });

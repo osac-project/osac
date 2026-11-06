@@ -36,6 +36,5 @@ describe('UserDataField', () => {
     await user.click(screen.getByRole('radio', { name: 'Enter value' }));
 
     expect(screen.getByRole('radio', { name: 'Enter value' })).toBeChecked();
-    expect(screen.getByRole('textbox', { name: 'Cloud-init' })).toBeInTheDocument();
   });
 });

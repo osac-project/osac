@@ -21,6 +21,7 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const (
@@ -38,6 +39,7 @@ const (
 	eventReasonStaleIgnition         = "StaleIgnition"
 	reasonInfraEnvRecreated          = "InfraEnvRecreated"
 	reasonStaleIgnitionWorkersMarked = "StaleIgnitionWorkersMarked"
+	sshKeyResolutionRetry            = time.Minute
 )
 
 var infraEnvGVK = schema.GroupVersionKind{Group: "agent-install.openshift.io", Version: agentInstallAPIVersion, Kind: "InfraEnv"}
@@ -62,7 +64,7 @@ type infraEnvEvidence struct {
 // returned as evidence.err for the caller to merge, never as a global gate on
 // existing-worker work.
 func (r *Reconciler) observeInfraEnvEvidence(
-	ctx context.Context, co *v1alpha1.ClusterOrder,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 ) (infraEnvEvidence, ctrl.Result, bool, error) {
 	infraEnv, err := r.observeInfraEnvObject(ctx, co)
 	if err != nil {
@@ -71,7 +73,7 @@ func (r *Reconciler) observeInfraEnvEvidence(
 		return infraEnvEvidence{err: err}, ctrl.Result{}, false, nil
 	}
 	if infraEnv == nil {
-		return r.createMissingInfraEnv(ctx, co)
+		return r.createMissingInfraEnv(ctx, co, cluster)
 	}
 	// Current artifact evidence replaces a stale Ready claim. A published URL is
 	// not itself a claim: only the create stage's validated fetch reports Ready. A
@@ -186,7 +188,7 @@ func (r *Reconciler) deriveInfraEnvPending(
 // deterministically named InfraEnv are then created; that Create is the durable
 // boundary. A missing prerequisite is returned as held evidence instead.
 func (r *Reconciler) createMissingInfraEnv(
-	ctx context.Context, co *v1alpha1.ClusterOrder,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 ) (infraEnvEvidence, ctrl.Result, bool, error) {
 	key := client.ObjectKey{Name: co.Name + infraEnvNameSuffix, Namespace: co.Namespace}
 	if apimeta.IsStatusConditionTrue(co.Status.Conditions, v1alpha1.ConditionInfraEnvReady) {
@@ -205,7 +207,19 @@ func (r *Reconciler) createMissingInfraEnv(
 	if err := r.ensurePullSecret(ctx, co); err != nil {
 		return infraEnvEvidence{err: fmt.Errorf("ensuring pull secret: %w", err)}, ctrl.Result{}, false, nil
 	}
-	infraEnv, err := r.buildInfraEnv(co, key.Name)
+	// Resolve the Cluster's registered SSH-key Secret only now, immediately
+	// before the InfraEnv Create. Key material goes into the InfraEnv spec and
+	// nowhere else. A resolution failure holds creation with a recoverable
+	// condition identifying the Secret by ID only.
+	sshAuthorizedKey, keyErr := r.resolveClusterSSHAuthorizedKey(ctx, co, cluster)
+	if keyErr != nil {
+		if condErr := r.setInfraEnvReady(ctx, co, metav1.ConditionFalse, v1alpha1.ReasonSSHKeyResolutionPending,
+			keyErr.Error()); condErr != nil {
+			return infraEnvEvidence{}, ctrl.Result{}, false, condErr
+		}
+		return infraEnvEvidence{err: keyErr}, ctrl.Result{RequeueAfter: sshKeyResolutionRetry}, false, nil
+	}
+	infraEnv, err := r.buildInfraEnv(co, key.Name, sshAuthorizedKey)
 	if err != nil {
 		return infraEnvEvidence{err: err}, ctrl.Result{}, false, nil
 	}
@@ -310,26 +324,37 @@ func (r *Reconciler) ensurePullSecret(ctx context.Context, co *v1alpha1.ClusterO
 	return nil
 }
 
-// resolveSSHPublicKey extracts the SSH public key from co.Spec.SSHPublicKey,
-// falling back to co.Spec.TemplateParameters["ssh_public_key"] if unset.
-func (r *Reconciler) resolveSSHPublicKey(co *v1alpha1.ClusterOrder) string {
-	if co.Spec.SSHPublicKey != "" {
-		return co.Spec.SSHPublicKey
+// resolveClusterSSHAuthorizedKey resolves the Cluster's registered SSH-key
+// Secret through the fulfillment private API and returns its public-key
+// material for the InfraEnv. The tenant comes from the ClusterOrder
+// annotation. A nil Cluster reference or an empty Secret ID returns an empty
+// string so the provider default remains available. Resolution failures are
+// returned so the caller can hold creation with a recoverable condition; error
+// messages identify the Secret by ID only and never carry key material.
+func (r *Reconciler) resolveClusterSSHAuthorizedKey(
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
+) (string, error) {
+	if cluster == nil || cluster.GetSpec().GetSshKey().GetId() == "" {
+		return "", nil
 	}
-	if co.Spec.TemplateParameters != "" {
-		var params map[string]interface{}
-		if err := json.Unmarshal([]byte(co.Spec.TemplateParameters), &params); err == nil {
-			if key, ok := params["ssh_public_key"].(string); ok && key != "" {
-				return key
-			}
-		}
+	if r.secrets == nil {
+		return "", fmt.Errorf("ssh key secret resolution is not configured")
 	}
-	return ""
+	id := cluster.GetSpec().GetSshKey().GetId()
+	response, err := r.secrets.Get(ctx, privatev1.SecretsGetRequest_builder{Id: id}.Build())
+	if err != nil {
+		return "", err
+	}
+	key := string(response.GetObject().GetData()["public_key"])
+	if key == "" {
+		return "", fmt.Errorf("SSH key Secret %q has no public_key data", id)
+	}
+	return key, nil
 }
 
 // buildInfraEnv constructs the (unstructured) InfraEnv object: late binding (no clusterRef),
 // owned by the ClusterOrder, referencing the cluster pull secret and SSH key.
-func (r *Reconciler) buildInfraEnv(co *v1alpha1.ClusterOrder, name string) (*unstructured.Unstructured, error) {
+func (r *Reconciler) buildInfraEnv(co *v1alpha1.ClusterOrder, name, sshAuthorizedKey string) (*unstructured.Unstructured, error) {
 	infraEnv := &unstructured.Unstructured{}
 	infraEnv.SetGroupVersionKind(infraEnvGVK)
 	infraEnv.SetName(name)
@@ -341,8 +366,8 @@ func (r *Reconciler) buildInfraEnv(co *v1alpha1.ClusterOrder, name string) (*uns
 	spec := map[string]interface{}{
 		"pullSecretRef": map[string]interface{}{"name": co.Name + pullSecretNameSuffix},
 	}
-	if sshKey := r.resolveSSHPublicKey(co); sshKey != "" {
-		spec["sshAuthorizedKey"] = sshKey
+	if sshAuthorizedKey != "" {
+		spec["sshAuthorizedKey"] = sshAuthorizedKey
 	}
 	if err := unstructured.SetNestedMap(infraEnv.Object, spec, "spec"); err != nil {
 		return nil, fmt.Errorf("building infraenv spec: %w", err)

@@ -149,7 +149,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create cluster version: %w", err)
 	}
 
-	c.console.Infof(ctx, "Created cluster version '%s'.\n", response.GetObject().GetId())
+	_ = c.console.Infof(ctx, "Created cluster version '%s'.\n", response.GetObject().GetId())
 
 	return nil
 }

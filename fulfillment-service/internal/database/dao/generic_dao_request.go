@@ -118,6 +118,10 @@ const archiveDeferredConstraint = "tenant_billing_assignments_tenant_id_fkey"
 // run inside a savepoint so that archiveDeferredConstraint can be rolled back without poisoning the
 // caller's outer transaction: the deletion_timestamp/finalizer update already applied outside this
 // savepoint stays committed, and the row simply stays live-but-deleted instead of being archived.
+//
+// When archiveDeferredConstraint is the violation, the savepoint rollback discards the delete, so the row
+// is still live: only then is checkDeferredArchiveBlockers run to decide whether the live-but-deleted
+// tombstone is really the intended final state. Any other error is translated as usual.
 func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 	deferred := false
 	outerTx := r.tx
@@ -187,10 +191,58 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 		}
 		return nil
 	})
-	if err == nil || deferred {
+	if err == nil {
 		return nil
 	}
+	if deferred {
+		return r.checkDeferredArchiveBlockers(ctx, args)
+	}
 	return r.translateArchiveError(ctx, args.tenant, err)
+}
+
+// checkDeferredArchiveBlockers runs after archiveDeferredConstraint rolled the archive savepoint back, so
+// the row is still live and the caller's outer transaction is still usable. The deferred assignment
+// constraint alone must not turn that state into an unconditional success: projects are the only live
+// blocker that rejectDeleteWhileResourcesExist intentionally lets through (they are deleted on their own),
+// so a tenant that still has projects must be rejected here, exactly as the non-deferred projects_tenant_fk
+// violation would have rejected it.
+//
+// The check is also the recovery probe for the savepoint rollback: a broken transaction or connection
+// fails the query and therefore fails closed instead of silently accepting the tombstone.
+//
+// Both callers hold a row lock on the tenant from their earlier statements (the Delete path's soft-delete
+// update, and the Update path's locked get), so the check observes a stable tenant row.
+//
+// The scope is deliberately narrow: archiveDeferredConstraint references tenants(name), so observing it
+// while archiving anything other than a tenant is unexpected and must fail closed rather than guess.
+func (r *request[O]) checkDeferredArchiveBlockers(ctx context.Context, args archiveArgs) error {
+	if r.dao.table != "tenants" {
+		return fmt.Errorf(
+			"deferred archive constraint '%s' is only expected while archiving a tenant, but the table is '%s'",
+			archiveDeferredConstraint,
+			r.dao.table,
+		)
+	}
+	var exists bool
+	err := r.queryRow(
+		ctx,
+		existsOpType,
+		`select exists(select 1 from projects where tenant = $1)`,
+		args.name,
+	).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to check projects for tenant '%s' after deferred archive: %w",
+			args.name,
+			err,
+		)
+	}
+	if exists {
+		return &ErrInUse{
+			Reason: fmt.Sprintf("tenant '%s' cannot be deleted because it still has projects", args.name),
+		}
+	}
+	return nil
 }
 
 // isArchiveDeferred reports whether err is archiveDeferredConstraint's violation: a "not yet", not a

@@ -16,6 +16,7 @@ package rendering
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,18 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
+
+// failingWriter is an io.Writer that fails every write with a persistent error, to simulate a broken output stream.
+// Note that the table renderer writes through a tabwriter, which buffers everything and only touches the underlying
+// writer when it is flushed.
+type failingWriter struct {
+	err error
+}
+
+// Write is the implementation of the io.Writer interface.
+func (w *failingWriter) Write(p []byte) (int, error) {
+	return 0, w.err
+}
 
 var _ = Describe("Table renderer", func() {
 	var ctrl *gomock.Controller
@@ -364,5 +377,93 @@ var _ = Describe("Table renderer", func() {
 				tableFile,
 			)
 		}
+	})
+
+	Describe("Error handling", func() {
+		It("Returns the write error when flushing the table output fails", func(ctx context.Context) {
+			sentinel := errors.New("broken writer")
+
+			// Create the object helpers for the type of the table and for lookups:
+			objectHelper := makeObjectHelper(&publicv1.Subnet{})
+			lookupHelper := makeLookupHelper()
+
+			// Create the helper:
+			helper := reflection.NewMockHelper(ctrl)
+			helper.EXPECT().
+				Lookup(objectHelper.String()).
+				Return(objectHelper).
+				AnyTimes()
+			helper.EXPECT().
+				Lookup(gomock.Any()).
+				Return(lookupHelper).
+				AnyTimes()
+
+			// Try to render the table to a writer that fails:
+			renderer, err := NewTableRenderer().
+				SetLogger(logger).
+				SetHelper(helper).
+				SetWriter(&failingWriter{err: sentinel}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			err = renderer.Render(ctx, []*publicv1.Subnet{
+				publicv1.Subnet_builder{
+					Id: "subnet-1",
+					Metadata: publicv1.Metadata_builder{
+						Name: "my-subnet",
+					}.Build(),
+				}.Build(),
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, sentinel)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("failed to flush table output"))
+		})
+
+		It("Joins a render error and a flush error, keeping both reachable", func(ctx context.Context) {
+			sentinel := errors.New("broken writer")
+
+			// Create the object helper for the type of the table. The helper for the type referenced by the
+			// 'lookup' call of the cluster table is deliberately missing, so evaluating the VERSION column
+			// fails while the table is being rendered:
+			objectHelper := makeObjectHelper(&publicv1.Cluster{})
+			lookupHelper := makeLookupHelper()
+
+			helper := reflection.NewMockHelper(ctrl)
+			helper.EXPECT().
+				Lookup(objectHelper.String()).
+				Return(objectHelper).
+				AnyTimes()
+			helper.EXPECT().
+				Lookup("osac.public.v1.ClusterVersion").
+				Return(nil).
+				AnyTimes()
+			helper.EXPECT().
+				Lookup(gomock.Any()).
+				Return(lookupHelper).
+				AnyTimes()
+
+			renderer, err := NewTableRenderer().
+				SetLogger(logger).
+				SetHelper(helper).
+				SetWriter(&failingWriter{err: sentinel}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			err = renderer.Render(ctx, []*publicv1.Cluster{
+				publicv1.Cluster_builder{
+					Id: "cluster-1",
+					Spec: publicv1.ClusterSpec_builder{
+						Version: publicv1.ClusterVersionReference_builder{
+							Id: "cv-1",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			})
+
+			// The primary render error must not be replaced by the flush error, and the flush error must not
+			// be dropped, so both are part of the joined error:
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to evaluate CEL expression"))
+			Expect(err.Error()).To(ContainSubstring("failed to flush table output"))
+			Expect(errors.Is(err, sentinel)).To(BeTrue())
+		})
 	})
 })

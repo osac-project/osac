@@ -75,14 +75,13 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 func render(ctx context.Context, console *terminal.Console, format string,
 	status *publicv1.BillingProviderStatus) error {
 	if format == output.Table {
-		renderTable(console, status)
-		return nil
+		return renderTable(console, status)
 	}
 	return output.Render(ctx, console, format, "billing provider status", status)
 }
 
 // renderTable writes the status fields as aligned key/value rows.
-func renderTable(console *terminal.Console, status *publicv1.BillingProviderStatus) {
+func renderTable(console *terminal.Console, status *publicv1.BillingProviderStatus) error {
 	capabilities := make([]string, 0, len(status.GetSupportedCapabilities()))
 	for _, capability := range status.GetSupportedCapabilities() {
 		capabilities = append(capabilities, strings.TrimPrefix(capability.String(), "BILLING_PROVIDER_CAPABILITY_"))
@@ -92,14 +91,26 @@ func renderTable(console *terminal.Console, status *publicv1.BillingProviderStat
 		lastCheck = status.GetLastSuccessfulCheck().AsTime().Format(time.RFC3339)
 	}
 	writer := tabwriter.NewWriter(console, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(writer, "State:\t%s\n", strings.TrimPrefix(status.GetState().String(), "BILLING_PROVIDER_STATE_"))
-	fmt.Fprintf(writer, "Provider:\t%s\n", output.OrDash(status.GetProviderKey()))
-	fmt.Fprintf(writer, "Message:\t%s\n", output.OrDash(status.GetMessage()))
-	fmt.Fprintf(writer, "Capabilities:\t%s\n", output.OrDash(strings.Join(capabilities, ", ")))
-	fmt.Fprintf(writer, "Last successful check:\t%s\n", lastCheck)
-	fmt.Fprintf(writer, "Usage delivery:\t%s\n",
-		strings.TrimPrefix(status.GetUsageDeliveryState().String(), "BILLING_USAGE_DELIVERY_STATE_"))
-	writer.Flush()
+	rows := []struct {
+		label string
+		value string
+	}{
+		{"State:", strings.TrimPrefix(status.GetState().String(), "BILLING_PROVIDER_STATE_")},
+		{"Provider:", output.OrDash(status.GetProviderKey())},
+		{"Message:", output.OrDash(status.GetMessage())},
+		{"Capabilities:", output.OrDash(strings.Join(capabilities, ", "))},
+		{"Last successful check:", lastCheck},
+		{"Usage delivery:", strings.TrimPrefix(status.GetUsageDeliveryState().String(), "BILLING_USAGE_DELIVERY_STATE_")},
+	}
+	for _, row := range rows {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\n", row.label, row.value); err != nil {
+			return fmt.Errorf("failed to render billing provider status table row: %w", err)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("failed to flush billing provider status table: %w", err)
+	}
+	return nil
 }
 
 const shortHelp = `Show the billing provider status`

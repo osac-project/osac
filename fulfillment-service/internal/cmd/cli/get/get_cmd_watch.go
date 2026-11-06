@@ -56,7 +56,7 @@ func (c *runnerContext) watch(ctx context.Context, keys []string) error {
 	}
 
 	// Start watching
-	c.console.Infof(ctx, "Watching for changes (Ctrl+C to stop)...\n\n")
+	_ = c.console.Infof(ctx, "Watching for changes (Ctrl+C to stop)...\n\n")
 
 	// Create the appropriate event stream based on the object's API package
 	stream, err := c.createEventStream(ctx, filter)
@@ -201,7 +201,7 @@ func (c *runnerContext) displayEvent(ctx context.Context, event proto.Message, o
 
 	objectId := c.getObjectId(object)
 
-	c.console.Infof(ctx, "[%s] %s %s '%s'\n", timestamp, eventType, c.objectHelper.Singular(), objectId)
+	_ = c.console.Infof(ctx, "[%s] %s %s '%s'\n", timestamp, eventType, c.objectHelper.Singular(), objectId)
 
 	var render func(context.Context, []proto.Message) error
 	switch c.args.format {
@@ -223,7 +223,7 @@ func (c *runnerContext) displayEvent(ctx context.Context, event proto.Message, o
 		)
 	}
 
-	c.console.Infof(ctx, "\n")
+	_ = c.console.Infof(ctx, "\n")
 }
 
 // getObjectId extracts the ID from an object.

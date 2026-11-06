@@ -101,7 +101,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Check that the object type has been specified:
 	if len(args) == 0 {
-		c.console.Render(ctx, "no_object.txt", map[string]any{
+		_ = c.console.Render(ctx, "no_object.txt", map[string]any{
 			"Helper": helper,
 		})
 		return nil
@@ -109,14 +109,14 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Check that at least one object identifier or name has been specified:
 	if len(args) < 2 {
-		c.console.Render(ctx, "no_id.txt", map[string]any{})
+		_ = c.console.Render(ctx, "no_id.txt", map[string]any{})
 		return nil
 	}
 
 	// Get the object helper:
 	c.helper = helper.Lookup(args[0])
 	if c.helper == nil {
-		c.console.Render(ctx, "wrong_object.txt", map[string]any{
+		_ = c.console.Render(ctx, "wrong_object.txt", map[string]any{
 			"Helper": helper,
 			"Object": args[0],
 		})
@@ -137,7 +137,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		matches := matches[ref]
 		switch len(matches) {
 		case 0:
-			c.console.Render(ctx, "no_matches.txt", map[string]any{
+			_ = c.console.Render(ctx, "no_matches.txt", map[string]any{
 				"Object": c.helper.Singular(),
 				"Ref":    ref,
 			})
@@ -145,7 +145,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		case 1:
 			objects = append(objects, matches[0])
 		default:
-			c.console.Render(ctx, "multiple_matches.txt", map[string]any{
+			_ = c.console.Render(ctx, "multiple_matches.txt", map[string]any{
 				"Matches": matches,
 				"Object":  c.helper.Singular(),
 				"Ref":     ref,
@@ -178,7 +178,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			}
 			continue
 		}
-		c.console.Infof(ctx, "Deleted %s '%s'.\n", args[0], id)
+		_ = c.console.Infof(ctx, "Deleted %s '%s'.\n", args[0], id)
 	}
 	if hadErrors {
 		return exit.Error(1)

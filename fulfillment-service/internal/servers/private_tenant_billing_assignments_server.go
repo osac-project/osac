@@ -52,8 +52,8 @@ const (
 	tbaAccountInactiveReason     = "ACCOUNT_INACTIVE"
 	tbaAccountStateUnknownReason = "ACCOUNT_STATE_UNKNOWN"
 
-	// billingOperationRetryReason reports a retryable conflict on a billing operation lease; the
-	// caller retries, it is not a permanent failure.
+	// billingOperationRetryReason reports a retryable conflict on a billing operation lease (the concurrency guard a
+	// concurrent assign or discovery holds); the caller retries, it is not a permanent failure.
 	billingOperationRetryReason = "BILLING_OPERATION_RETRY"
 )
 

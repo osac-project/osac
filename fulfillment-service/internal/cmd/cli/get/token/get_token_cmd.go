@@ -137,12 +137,12 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	// Print the token:
 	switch {
 	case c.header:
-		c.console.RenderJson(ctx, parsed.Header)
+		_ = c.console.RenderJson(ctx, parsed.Header)
 	case c.payload:
 		claims := *parsed.Claims.(*jwt.MapClaims)
 		tokenutil.DisplayTokenClaims(ctx, c.console, claims, c.rfc3339, c.utc)
 	default:
-		c.console.Infof(ctx, "%s\n", selected)
+		_ = c.console.Infof(ctx, "%s\n", selected)
 	}
 	return nil
 }

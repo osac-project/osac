@@ -77,7 +77,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to list external IP pools: %w", err)
 		}
 		if len(resp.GetItems()) == 0 {
-			c.console.Infof(ctx, "No external IP pools found.\n")
+			_ = c.console.Infof(ctx, "No external IP pools found.\n")
 			return nil
 		}
 		renderPoolTable(c.console, resp.GetItems())

@@ -131,30 +131,30 @@ func (c *runnerContext) displayUserInfo(ctx context.Context, token *auth.Token) 
 	claims, err := tokenutil.ParseTokenClaims(token.Access)
 	if err != nil {
 		// If we can't parse the token, just show generic authentication message
-		c.console.Infof(ctx, "Logged in (unable to read token details)\n")
+		_ = c.console.Infof(ctx, "Logged in (unable to read token details)\n")
 		if c.args.showToken {
-			c.console.Infof(ctx, "\nAccess token:\n%s\n", token.Access)
+			_ = c.console.Infof(ctx, "\nAccess token:\n%s\n", token.Access)
 		}
 		return nil
 	}
 
 	if len(claims) == 0 {
-		c.console.Infof(ctx, "Logged in (unable to read token claims)\n")
+		_ = c.console.Infof(ctx, "Logged in (unable to read token claims)\n")
 		if c.args.showToken {
-			c.console.Infof(ctx, "\nAccess token:\n%s\n", token.Access)
+			_ = c.console.Infof(ctx, "\nAccess token:\n%s\n", token.Access)
 		}
 		return nil
 	}
 
 	// Extract and display user information from claims
 	if username, ok := claims["username"].(string); ok && username != "" {
-		c.console.Infof(ctx, "Logged in as: %s\n", username)
+		_ = c.console.Infof(ctx, "Logged in as: %s\n", username)
 	}
 
 	// Show tenant
 	tenant := config.TenantFromContext(ctx)
 	if tenant != "" {
-		c.console.Infof(ctx, "Tenant: %s\n", tenant)
+		_ = c.console.Infof(ctx, "Tenant: %s\n", tenant)
 	} else if orgMap, ok := claims["organization"].(map[string]interface{}); ok && len(orgMap) > 0 {
 		// Organization in JWT is a map where keys are org names
 		// Collect and sort to ensure deterministic selection
@@ -164,7 +164,7 @@ func (c *runnerContext) displayUserInfo(ctx context.Context, token *auth.Token) 
 		}
 		if len(orgNames) > 0 {
 			sort.Strings(orgNames)
-			c.console.Infof(ctx, "Tenant: %s\n", orgNames[0])
+			_ = c.console.Infof(ctx, "Tenant: %s\n", orgNames[0])
 		}
 	}
 
@@ -178,19 +178,19 @@ func (c *runnerContext) displayUserInfo(ctx context.Context, token *auth.Token) 
 				}
 			}
 			if len(roles) > 0 {
-				c.console.Infof(ctx, "Roles: %s\n", strings.Join(roles, ", "))
+				_ = c.console.Infof(ctx, "Roles: %s\n", strings.Join(roles, ", "))
 			}
 		}
 	}
 
 	// Show the access token if requested
 	if c.args.showToken {
-		c.console.Infof(ctx, "\nAccess token:\n%s\n", token.Access)
+		_ = c.console.Infof(ctx, "\nAccess token:\n%s\n", token.Access)
 	}
 
 	// Show token claims if requested
 	if c.args.showTokenClaims {
-		c.console.Infof(ctx, "\nToken claims:\n")
+		_ = c.console.Infof(ctx, "\nToken claims:\n")
 		tokenutil.DisplayTokenClaims(ctx, c.console, claims, c.args.rfc3339, c.args.utc)
 	}
 

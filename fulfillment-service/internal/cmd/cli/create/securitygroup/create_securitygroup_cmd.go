@@ -145,7 +145,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create security group: %w", err)
 	}
 
-	c.console.Infof(ctx, "Created security group '%s' (ID: %s).\n", response.Object.GetMetadata().GetName(), response.Object.GetId())
+	_ = c.console.Infof(ctx, "Created security group '%s' (ID: %s).\n", response.Object.GetMetadata().GetName(), response.Object.GetId())
 
 	return nil
 }

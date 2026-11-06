@@ -52,11 +52,27 @@ REMOTE_STORAGE_CLASS ?= lvms-vg1
 REMOTE_KUBECONFIG_SECRET_NAME ?= osac-remote-kubeconfig
 REMOTE_KUBECONFIG_SECRET_KEY ?= kubeconfig
 # Freeze command-line values without expanding Make expressions in them. The
-# shell scripts validate them before using them, and the Helm args below are
-# built as a quoted Bash array.
+# gate's validate_remote_kubeconfig_secret check (and install-osac's re-check)
+# receive them through the environment and validate them before the shared
+# Helm args below are expanded; the DNS-subdomain and Secret-key grammars
+# cannot produce shell metacharacters, so those args expand as a word list.
 override REMOTE_KUBECONFIG_SECRET_NAME := $(value REMOTE_KUBECONFIG_SECRET_NAME)
 override REMOTE_KUBECONFIG_SECRET_KEY := $(value REMOTE_KUBECONFIG_SECRET_KEY)
 export REMOTE_KUBECONFIG_SECRET_NAME REMOTE_KUBECONFIG_SECRET_KEY
+
+# Remote-cluster kubeconfig Helm flags, shared by the input-validation gate's
+# osac-chart render and install-osac's upgrade so both see the same merged
+# values. They only name Secret metadata; the kubeconfig file itself is
+# staged by scripts/stage-remote-cluster-secret.sh at install time.
+REMOTE_CLUSTER_HELM_ARGS :=
+ifneq ($(strip $(REMOTE_KUBECONFIG)),)
+REMOTE_CLUSTER_HELM_ARGS := \
+	--set-string operator.remoteClusterKubeconfig=/var/run/secrets/remote/$(REMOTE_KUBECONFIG_SECRET_KEY) \
+	--set-string operator.remoteClusterKubeconfigSecretName=$(REMOTE_KUBECONFIG_SECRET_NAME) \
+	--set-string operator.remoteClusterKubeconfigSecretKey=$(REMOTE_KUBECONFIG_SECRET_KEY) \
+	--set-string aap.configAsCode.remoteClusterKubeconfigSecretName=$(REMOTE_KUBECONFIG_SECRET_NAME) \
+	--set-string aap.configAsCode.remoteClusterKubeconfigSecretKey=$(REMOTE_KUBECONFIG_SECRET_KEY)
+endif
 
 # Work around HTTP/2 stream resets from proxy.golang.org during container
 # builds (see osac-test-infra#543).  Override with `make test GODEBUG=` to
@@ -67,7 +83,7 @@ TOPOLVM_BACKING_SIZE ?= 20G
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
+ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack validate-inputs kind-load-images test
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -118,6 +134,14 @@ $(error install-multicluster requires PROFILE=vmaas-ci)
 endif
 ifndef REMOTE_KUBECONFIG
 $(error REMOTE_KUBECONFIG is required (workload cluster kubeconfig))
+endif
+endif
+ifneq ($(filter install-devstack,$(MAKECMDGOALS)),)
+ifneq ($(PLATFORM),kind)
+$(error install-devstack requires PLATFORM=kind)
+endif
+ifneq ($(PROFILE),dev-full)
+$(error install-devstack requires PROFILE=dev-full)
 endif
 endif
 ifneq ($(filter install-osac,$(MAKECMDGOALS)),)
@@ -228,6 +252,17 @@ else ifdef PROFILE
 INFRA_VALUES    := values/$(PROFILE)/infra.yaml
 INSTANCE_VALUES := values/$(PROFILE)/instance.yaml
 endif
+
+# install-multicluster's recipe passes the multicluster infra overlay to its
+# recursive install-infra; the gate must see the same effective values, or an
+# invalid overlay would only surface after prepare-remote-cluster has already
+# changed the remote workload cluster. `override` keeps the append even when
+# INFRA_VALUES_EXTRA is set on the command line, matching the install's
+# unconditional overlay.
+ifneq ($(filter install-multicluster,$(MAKECMDGOALS)),)
+override INFRA_VALUES_EXTRA += -f values/vmaas-ci/multicluster-infra.yaml
+endif
+
 # Kind cluster create/delete routing. dev-full needs a rootful runtime (KubeVirt
 # chowns /dev/kvm), so it goes through the cross-platform wrapper. Apple Silicon
 # also uses the wrapper for both Kind profiles, keeping image build/load and Kind
@@ -370,7 +405,7 @@ kind-load-images: ## Load previously built dev-full images into Kind (PLATFORM=k
 ##@ Entity: Infra
 
 .PHONY: install-infra
-install-infra: helm-infra-deps ## Install infrastructure (PLATFORM= PROFILE= NS= required)
+install-infra: validate-inputs helm-infra-deps ## Install infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_CMD) check
@@ -446,6 +481,7 @@ else
 		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.route.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
+		$(INFRA_HELM_ARGS) \
 		2>/dev/null \
 		| awk \
 			-e '/^kind: Job$$/ { job=1 }' \
@@ -465,6 +501,7 @@ else
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.uiUrl=https://$(UI_HOSTNAME) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
+		$(INFRA_HELM_ARGS) \
 		$(OIDC_IDP_CA_HELM_ARGS) \
 		--timeout "$${helm_timeout_seconds}s" --wait-for-jobs \
 	|| { \
@@ -530,8 +567,125 @@ else
 	@[ -z "$(OSAC_CHART_OCI_VERSION)" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION is set without OSAC_CHART_OCI_REF -- this would silently install the local checkout's chart, ignoring the version" >&2; exit 1; }
 endif
 
+# The BMF subchart requires netbox.tokenValue when the named token Secret is
+# absent; profiles like bmaas-netbox-ci rely on the infra chart's
+# netbox-token-seed hook to create that Secret during a real install. Offline
+# rendering cannot see cluster Secrets (helm template's lookup returns nil),
+# so the gate's osac-chart renders go through render_osac_chart_offline
+# (scripts/lib.sh): only the specific "tokenValue is required" lookup failure
+# is retried with this render-only placeholder, which is never passed to an
+# installation -- and only when netbox_seed_check (run in the same recipe
+# line, right before the render) saw this install's infra values deploy the
+# seed hook; without it nothing creates the Secret, so a missing token is a
+# real input error. A token supplied by the caller through any channel
+# (--set, --set-string, or a values file) renders without the placeholder,
+# so the gate validates the caller's actual value.
+NETBOX_OFFLINE_TOKEN := offline-validation-placeholder
+
+.PHONY: validate-inputs
+# An OCI-ref install renders the pulled chart, so the local osac chart's
+# dependencies are not built for it (mirrors the install-osac guard below).
+ifneq ($(OSAC_CHART_OCI_REF),)
+validate-inputs: helm-infra-deps validate-osac-chart-oci-ref
+else
+validate-inputs: helm-osac-deps helm-infra-deps validate-osac-chart-oci-ref ## Render every applicable chart offline, rejecting invalid inputs before any cluster change
+endif
+# dev-full is the only profile whose gate renders the devstack chart. Its
+# dependencies are a prerequisite, not a recipe step, so make shares (and
+# deduplicates) the build with install-devstack's own even under make -j.
+ifeq ($(PLATFORM),kind)
+ifeq ($(PROFILE),dev-full)
+validate-inputs: helm-devstack-deps
+endif
+endif
+# Remote-cluster identifiers are static inputs: the gate rejects an invalid
+# REMOTE_KUBECONFIG_SECRET_NAME/KEY before any cluster mutation. install-osac
+# re-checks them, but only after install-infra and namespace creation have
+# already changed the cluster. The identifiers reach the validator through
+# the exported environment, never through Make expansion into the quoted
+# bash -c string, so a value cannot break out of the quoting.
+ifneq ($(strip $(REMOTE_KUBECONFIG)),)
+	@bash -c 'source scripts/lib.sh && \
+		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"' \
+	|| { echo "ERROR: invalid remote-cluster inputs; no cluster changes were made. Fix REMOTE_KUBECONFIG_SECRET_NAME/KEY and retry." >&2; exit 1; }
+endif
+ifeq ($(PLATFORM),kind)
+	@helm template osac-infra $(INFRA_CHART) \
+		--namespace osac-infra \
+		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
+		--set osacNamespace=$(NS) \
+		$(INFRA_HELM_ARGS) >/dev/null \
+	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+	@source scripts/lib.sh && netbox_seed_check osac-infra $(INFRA_CHART) \
+		--namespace osac-infra \
+		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
+		--set osacNamespace=$(NS) \
+		$(INFRA_HELM_ARGS) && \
+	render_osac_chart_offline "$(NETBOX_OFFLINE_TOKEN)" \
+		osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
+		--namespace $(NS) \
+		--set-string global.osacDeploymentId=$(NS)/osac \
+		$(INSTANCE_HELM_ARGS) \
+		$(EXTRA_HELM_ARGS) \
+		$(REMOTE_CLUSTER_HELM_ARGS) \
+	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+ifeq ($(PROFILE),dev-full)
+	@helm template osac-devstack $(CHARTS)/osac-devstack \
+		--namespace $(NS) \
+		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
+		--set osacNamespace=$(NS) \
+		--set kindClusterName=$(KIND_CLUSTER_NAME) \
+		--set ui.enabled=true \
+		$(DEVSTACK_HELM_ARGS) >/dev/null \
+	|| { echo "ERROR: invalid installer inputs for osac-devstack; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+endif
+else
+	$(eval OCP_VERSION := $(shell oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2))
+	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
+	@[ -n "$(OCP_VERSION)" ] || { echo "ERROR: could not determine the OpenShift version for input validation. Is oc logged in?" >&2; exit 1; }
+	@[ -n "$(DOMAIN)" ] || { echo "ERROR: could not determine cluster domain for input validation. Is oc logged in?" >&2; exit 1; }
+	@helm template osac-deps $(DEPS_CHART) \
+		--namespace osac-deps \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
+		--set lvms.channel=stable-$(OCP_VERSION) \
+		$(INFRA_HELM_ARGS) >/dev/null \
+	|| { echo "ERROR: invalid installer inputs for osac-deps; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+	@helm template osac-infra $(INFRA_CHART) \
+		--namespace osac-infra \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
+		--set osacNamespace=$(NS) \
+		--set lvms.channel=stable-$(OCP_VERSION) \
+		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
+		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
+		--set keycloak.uiUrl=https://$(UI_HOSTNAME) \
+		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
+		$(INFRA_HELM_ARGS) >/dev/null \
+	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+	@source scripts/lib.sh && netbox_seed_check osac-infra $(INFRA_CHART) \
+		--namespace osac-infra \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
+		--set osacNamespace=$(NS) \
+		$(INFRA_HELM_ARGS) && \
+	render_osac_chart_offline "$(NETBOX_OFFLINE_TOKEN)" \
+		osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
+		--namespace $(NS) \
+		--set-string global.osacDeploymentId=$(NS)/osac \
+		--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) \
+		--set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) \
+		--set global.clusterDomain=$(DOMAIN) \
+		--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac \
+		--set ui.externalHostname=$(UI_HOSTNAME) \
+		$(INSTANCE_HELM_ARGS) \
+		$(EXTRA_HELM_ARGS) \
+		$(REMOTE_CLUSTER_HELM_ARGS) \
+	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+endif
+	@echo "Installer input validation passed."
+
 .PHONY: install-osac
-install-osac: validate-osac-chart-oci-ref ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
+install-osac: validate-inputs validate-osac-chart-oci-ref ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
 ifndef OSAC_CHART_OCI_REF
 	rm -rf $(OSAC_CHART)/charts
 	helm --repository-config $(LOCAL_HELM_REPOSITORY_CONFIG) dependency build $(OSAC_CHART)
@@ -559,17 +713,9 @@ ifneq ($(PLATFORM),kind)
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }
 endif
-	@remote_cluster_helm_args=(); \
-	if [[ -n "$${REMOTE_KUBECONFIG:-}" ]]; then \
+	@if [[ -n "$${REMOTE_KUBECONFIG:-}" ]]; then \
 		source scripts/lib.sh; \
 		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"; \
-		remote_cluster_helm_args=( \
-			--set-string "operator.remoteClusterKubeconfig=/var/run/secrets/remote/$${REMOTE_KUBECONFIG_SECRET_KEY}" \
-			--set-string "operator.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME}" \
-			--set-string "operator.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY}" \
-			--set-string "aap.configAsCode.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME}" \
-			--set-string "aap.configAsCode.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY}" \
-		); \
 	fi; \
 	helm upgrade --install osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
@@ -577,7 +723,7 @@ endif
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac --set ui.externalHostname=$(UI_HOSTNAME)) \
 		$(INSTANCE_HELM_ARGS) \
-		$(EXTRA_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) "$${remote_cluster_helm_args[@]}" \
+		$(EXTRA_HELM_ARGS) $(OSAC_HELM_FORCE_CONFLICTS) $(REMOTE_CLUSTER_HELM_ARGS) \
 		--wait --timeout 40m
 .PHONY: uninstall-osac
 uninstall-osac: ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= required)
@@ -586,7 +732,7 @@ uninstall-osac: ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= required)
 ##@ Entity: Dev Stack (kind PROFILE=dev-full only)
 
 .PHONY: install-devstack
-install-devstack: helm-devstack-deps ## Install dev-full extras: KubeVirt/CDI/Multus + AWX + UI Gateway route + seeded catalog
+install-devstack: validate-inputs helm-devstack-deps ## Install dev-full extras: KubeVirt/CDI/Multus + AWX + UI Gateway route + seeded catalog
 ifneq ($(PLATFORM)/$(PROFILE),kind/dev-full)
 	@echo "ERROR: install-devstack requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1
 endif
@@ -644,11 +790,11 @@ ifeq ($(PLATFORM),kind)
 else
 	helm template osac-deps $(DEPS_CHART) \
 		--namespace osac-deps \
-		--values $(INFRA_VALUES) \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION)
 	helm template osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
-		--values $(INFRA_VALUES) \
+		--values $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
 		--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION) \
 		--set keycloak.hostname=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
@@ -673,7 +819,7 @@ ifeq ($(PROFILE),dev-full)
 endif
 
 .PHONY: install-multicluster
-install-multicluster: ## Prepare a VMaaS workload cluster, then install OSAC on management in remote mode
+install-multicluster: validate-inputs ## Prepare a VMaaS workload cluster, then install OSAC on management in remote mode
 	@test -r "$(KUBECONFIG)" || { echo "ERROR: KUBECONFIG is not readable: $(KUBECONFIG)" >&2; exit 1; }
 	@test -r "$(REMOTE_KUBECONFIG)" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $(REMOTE_KUBECONFIG)" >&2; exit 1; }
 	@test -f "$(AAP_LICENSE_FILE)" || { echo "ERROR: AAP_LICENSE_FILE not found at $(AAP_LICENSE_FILE)" >&2; exit 1; }
@@ -696,7 +842,7 @@ install-multicluster: ## Prepare a VMaaS workload cluster, then install OSAC on 
 		EVPN_VALUES="$(INFRA_VALUES)"
 	$(MAKE) install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
 		KUBECONFIG="$(KUBECONFIG)" \
-		INFRA_VALUES_EXTRA="-f values/vmaas-ci/multicluster-infra.yaml"
+		INFRA_VALUES_EXTRA="$(INFRA_VALUES_EXTRA)"
 	$(MAKE) install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
 		KUBECONFIG="$(KUBECONFIG)" \
 		REMOTE_KUBECONFIG="$(REMOTE_KUBECONFIG)" \
@@ -980,7 +1126,7 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \
@@ -1008,3 +1154,7 @@ helm-networking-test: helm-deps ## Test global.networking values, validation, an
 .PHONY: network-class-step-test
 network-class-step-test: ## Test the installer NetworkClass step against a fake fulfillment API
 	python3 scripts/test-network-class-step.py
+
+.PHONY: input-validation-test
+input-validation-test: helm-deps helm-infra-deps ## Test the upfront input-validation gate wiring and schema rejections
+	./scripts/test-input-validation.sh

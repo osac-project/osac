@@ -176,6 +176,10 @@ jobs:
       working-directory: osac-installer
       run: python3 scripts/test-network-class-step.py
 
+    - name: Test input validation gate
+      working-directory: osac-installer
+      run: ./scripts/test-input-validation.sh
+
     - name: Test Netris CA lifecycle contracts
       working-directory: osac-installer
       run: uv run --project .. python scripts/test-netris-ca-lifecycle.py

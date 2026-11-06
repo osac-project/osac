@@ -56,6 +56,67 @@ validate_remote_kubeconfig_secret() {
     return 0
 }
 
+# Render the osac chart offline for the input-validation gate, bridging the
+# NetBox lookup branch. helm template cannot see cluster Secrets (lookup
+# returns nil offline), so a profile relying on the install-time
+# netbox-token-seed hook to create the token Secret fails the render with a
+# specific "tokenValue is required" error. Only that failure is retried with
+# a render-only placeholder token (never passed to an installation), and
+# only when netbox_seed_check (same shell) exported NETBOX_TOKEN_SEEDED=1:
+# without the seed hook nothing creates the Secret, so the missing token is
+# a real input error the install would hit only after the cluster changed.
+# Every other failure -- including a caller-supplied token that violates
+# the schema, however it was supplied (--set, --set-string, or a values
+# file) -- aborts with Helm's own error, so the gate always validates the
+# caller's actual merged value, never a placeholder masking it.
+#
+# Usage: render_osac_chart_offline PLACEHOLDER_TOKEN RELEASE CHART [HELM_ARGS...]
+render_osac_chart_offline() {
+    local placeholder_token="$1"
+    shift
+    local err
+    if err=$(helm template "$@" 2>&1 >/dev/null); then
+        return 0
+    fi
+    case "${err}" in
+        *"netbox.tokenValue is required when Secret"*)
+            if [ "${NETBOX_TOKEN_SEEDED:-0}" = "1" ]; then
+                helm template "$@" --set "bmf.netbox.tokenValue=${placeholder_token}" >/dev/null
+                return
+            fi
+            ;;
+    esac
+    printf '%s\n' "${err}" >&2
+    return 1
+}
+
+# Export NETBOX_TOKEN_SEEDED=1 when the given infra-chart render deploys the
+# netbox-token-seed hook: the post-install Job that creates the NetBox token
+# Secret during install-infra, before install-osac renders. render_osac_chart_offline
+# may bridge a missing NetBox token only when this is set. Never fails: the
+# gate renders the infra chart itself with full error reporting right before
+# this runs, so here a render failure simply counts as not seeded. Must run
+# in the same shell as render_osac_chart_offline -- make recipe lines are
+# separate shells, so the gate calls both in one recipe line.
+#
+# The release-prefixed names ("-netbox-token-seed", from
+# {{ .Release.Name }}-netbox-token-seed) are the discriminator: the hook's
+# script ConfigMap key "netbox-token-seed.sh" renders unconditionally, while
+# the Job, ServiceAccount, and RBAC carrying the prefixed name are gated on
+# netbox.enabled.
+#
+# Usage: netbox_seed_check RELEASE CHART [HELM_ARGS...]
+netbox_seed_check() {
+    local render
+    NETBOX_TOKEN_SEEDED=0
+    if render=$(helm template "$@" 2>/dev/null); then
+        case "${render}" in
+            *-netbox-token-seed*) NETBOX_TOKEN_SEEDED=1 ;;
+        esac
+    fi
+    export NETBOX_TOKEN_SEEDED
+}
+
 # Retry a condition until it succeeds or times out, optionally running a command each iteration
 # Usage: retry_until <timeout_seconds> <interval_seconds> <condition_command> [loop_command]
 # Returns: 0 on success, 1 on timeout

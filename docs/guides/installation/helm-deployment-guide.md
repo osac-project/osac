@@ -1013,20 +1013,20 @@ manual install plan; approve its `InstallPlan` in the `osac-kafka` namespace.
 
 ### `helm dependency build` or an OCI Pull Fails
 
-Run dependency commands from `osac-installer/` and pass the chart directory.
-For the Phase 1b TopoLVM and NetBox dependencies, use
-`helm dependency build ./charts/osac-infra`. Helm downloads the declared
-dependencies from `topolvm.github.io` and `netbox-community.github.io` during
-this step, even when `topolvm.enabled` and `netbox.enabled` are `false`. The
-disabled dependencies are not installed. This repository access is needed
-from the machine running Helm, not from the cluster at runtime. The Phase 2
-`osac` chart uses `file://` subcharts and requires a full monorepo checkout;
-the install procedure updates those with
-`helm dependency update ./charts/osac`. OCI chart pulls require outbound
-access to `ghcr.io`. A `not found` error on
-`oci://ghcr.io/osac-project/charts/*` usually means an incorrect `--version`.
-Confirm that `OSAC_RELEASE_VERSION` matches the selected umbrella release
-and that its chart is available:
+For Phase 1b's TopoLVM and NetBox dependencies, run
+`helm dependency build ./charts/osac-infra` from `osac-installer/`. Helm
+downloads the declared dependencies from `topolvm.github.io` and
+`netbox-community.github.io` during this step, even when `topolvm.enabled` and
+`netbox.enabled` are `false`. The disabled dependencies are not installed.
+This repository access is needed from the machine running Helm, not from the
+cluster at runtime.
+
+Phase 2 installs the published `osac` chart from GHCR; it does not use the
+local chart directory or require a monorepo checkout. OCI pulls require
+outbound access to `ghcr.io`. A `not found` error on
+`oci://ghcr.io/osac-project/charts/osac` usually means an incorrect or
+unavailable version. Confirm that `OSAC_RELEASE_VERSION` matches the selected
+umbrella release and check whether Helm can retrieve that chart:
 
 ```bash
 helm show chart "$OSAC_CHART" --version "$OSAC_RELEASE_VERSION"

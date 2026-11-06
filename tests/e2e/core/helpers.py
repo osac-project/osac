@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -88,9 +88,7 @@ def bmi_instance_type_for_tests(
         return
 
     name = unique_name("e2e-bmi-type")
-    type_id = grpc.create_baremetal_instance_type(
-        name=name, host_label_selector=host_selector, fabric_port="data-0"
-    )
+    type_id = grpc.create_baremetal_instance_type(name=name, host_label_selector=host_selector, fabric_port="data-0")
     try:
         yield name
     finally:
@@ -1326,6 +1324,8 @@ def wait_for_host_powered(*, k8s: K8sClient, host: HostRef, on: bool) -> None:
         retries=60,
         delay=5,
         description=f"{host.name} powered {'on' if on else 'off'}",
+        resource_kind=WaitResourceKind.BARE_METAL_HOST,
+        resource_id=host.name,
     )
 
 

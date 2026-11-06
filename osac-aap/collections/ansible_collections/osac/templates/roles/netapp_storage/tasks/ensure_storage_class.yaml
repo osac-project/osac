@@ -201,8 +201,8 @@
             and (((_espec.credentials | default({}, true)).name | default('')) == _sec_name)
             and ((_espec.storage | default([])) == _pools)
             and (not (netapp_storage_validate_certs is defined or netapp_storage_ca_bundle_path is defined)
-                 or (not _ca_required and ((_espec.trustedCACertificate | default('')) | length == 0))
-                 or (_ca_required and (_ca_b64 | length > 0) and ((_espec.trustedCACertificate | default('')) == _ca_b64))) -%}
+                 or (not _ca_required and ((_espec.trustedCACertificate | default('', true)) | length == 0))
+                 or (_ca_required and (_ca_b64 | length > 0) and ((_espec.trustedCACertificate | default('', true)) == _ca_b64))) -%}
       {% set _ = matching_tbc_names.append(_tbc_name) -%}
       {% endif -%}
       {% endif -%}

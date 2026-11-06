@@ -606,6 +606,42 @@
         success_msg: "Short-circuit run preserved the output fact"
       no_log: true
 
+    # ── Cert validation override on an existing TBC: the CA set above is removed in place ──
+    - name: Read the TBC UID before disabling certificate validation
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "netapp-{{ _t_assignment_key }}"
+        namespace: trident
+      register: _tbc_with_cert
+      no_log: true
+
+    - name: Re-run ensure_storage_class with netapp_storage_validate_certs=false on the existing TBC
+      ansible.builtin.include_tasks: dispatch.yaml
+      vars:
+        storage_provider_action: ensure_storage_class
+        netapp_storage_validate_certs: false
+
+    - name: Read back the updated TBC
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "netapp-{{ _t_assignment_key }}"
+        namespace: trident
+      register: _tbc_cert_removed
+      no_log: true
+
+    - name: Assert disabling validation removed trustedCACertificate without recreating the TBC
+      ansible.builtin.assert:
+        that:
+          - _tbc_with_cert.resources[0].spec.trustedCACertificate | default('') | length > 0
+          - _tbc_cert_removed.resources | length == 1
+          - _tbc_cert_removed.resources[0].spec.trustedCACertificate | default('', true) | length == 0
+          - _tbc_cert_removed.resources[0].metadata.uid == _tbc_with_cert.resources[0].metadata.uid
+        fail_msg: "Disabling validation must remove trustedCACertificate from the existing TBC in place"
+        success_msg: "trustedCACertificate removed from the existing TBC in place"
+      no_log: true
+
     # ── Cert validation override: netapp_storage_validate_certs=false omits trustedCACertificate ──
     - name: Delete TBC to test netapp_storage_validate_certs=false recreation
       kubernetes.core.k8s:
@@ -635,7 +671,7 @@
       ansible.builtin.assert:
         that:
           - _tbc_no_cert.resources | length == 1
-          - _tbc_no_cert.resources[0].spec.trustedCACertificate is not defined
+          - _tbc_no_cert.resources[0].spec.trustedCACertificate | default('', true) | length == 0
         fail_msg: "trustedCACertificate should be omitted when netapp_storage_validate_certs is false"
         success_msg: "trustedCACertificate omitted when netapp_storage_validate_certs is false"
       no_log: true

@@ -1,6 +1,7 @@
 """Unit and contract tests for the netapp_storage provider role."""
 
 import base64
+import re
 import secrets
 from pathlib import Path
 
@@ -9,9 +10,24 @@ from ansible.parsing.dataloader import DataLoader  # type: ignore[import-not-fou
 from ansible.template import Templar  # type: ignore[import-not-found]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+class _Redacted(str):
+    """A string that compares, hashes, and encodes like its value but never
+    prints it, so password-bearing test inputs stay out of assertion output."""
+
+    def __repr__(self) -> str:
+        return "'<redacted>'"
+
+
+def _redacted_b64(value: str) -> str:
+    """Return the base64 encoding of value, redacted in test output."""
+    return _Redacted(base64.b64encode(str.encode(value)).decode("ascii"))
+
+
 # Non-secret test credentials, generated per run so no credential-shaped
 # literal lives in the test source.
-FIXTURE_PASSWORD = secrets.token_hex(8)
+FIXTURE_PASSWORD = _Redacted(secrets.token_hex(8))
 FIXTURE_WHITESPACE_PASSWORD = "   "
 NETAPP_ROLE_DIR = (
     REPO_ROOT
@@ -50,6 +66,17 @@ def _render_when(when_expression: str, variables: dict) -> bool:
     if isinstance(result, bool):
         return result
     return str(result).strip().lower() == "true"
+
+
+def test_fixture_password_is_redacted_in_output():
+    """The fixture password behaves like its value but never prints it."""
+    assert repr(FIXTURE_PASSWORD) == "'<redacted>'"
+    assert repr({"password": FIXTURE_PASSWORD}) == "{'password': '<redacted>'}"
+    assert len(str(FIXTURE_PASSWORD)) == 16
+    assert str(FIXTURE_PASSWORD).strip() == FIXTURE_PASSWORD
+    assert _render("{{ p | string | trim | length }}", {"p": FIXTURE_PASSWORD}) == 16
+    assert repr(_redacted_b64(FIXTURE_PASSWORD)) == "'<redacted>'"
+    assert base64.b64decode(_redacted_b64(FIXTURE_PASSWORD)).decode() == FIXTURE_PASSWORD
 
 
 def test_netapp_meta_declares_block_vmaas_only():
@@ -813,6 +840,32 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
         is False
     )
 
+    # Dedicated-SVM backend IDs label the TBC and CSI Secret, so they must be
+    # valid label values; Shared-TBC backend IDs are not restricted.
+    backend_label_when = _find_task(
+        validate_tasks, "Fail if a Dedicated-SVM backend_id is not a valid Kubernetes label value"
+    )["when"]
+    for bad_id in ("has space", "-lead", "trail.", "a" * 64, "be-1\n", "x/y"):
+        assert (
+            _render_when(
+                backend_label_when, {"_netapp_is_shared_tbc": False, "_netapp_backend_id": bad_id}
+            )
+            is True
+        ), bad_id
+    for good_id in ("be-1", "3f2a9c1e-7b4d-4e8a-9c2f-1d5e6a7b8c9d", "Backend_1.v2", "a" * 63):
+        assert (
+            _render_when(
+                backend_label_when, {"_netapp_is_shared_tbc": False, "_netapp_backend_id": good_id}
+            )
+            is False
+        ), good_id
+    assert (
+        _render_when(
+            backend_label_when, {"_netapp_is_shared_tbc": True, "_netapp_backend_id": "has space"}
+        )
+        is False
+    )
+
     prep_fields_when = _find_task(
         validate_tasks,
         "Validate operator-supplied tenant preparation fields for Dedicated-SVM backend",
@@ -1376,7 +1429,10 @@ def test_netapp_consumes_svm_preparation_without_hub_secrets_or_ontap_http():
         assert "netapp-tenant-" not in content
         assert "netapp_storage_config_namespace" not in content
         assert "kubeconfig: ~" not in content
-        assert "ansible.builtin.uri" not in content
+        # No direct HTTP from the role: uri module (any FQCN or short name)
+        # and the url lookup/query plugin.
+        assert re.search(r"(^|\s)(ansible\.(builtin|legacy)\.)?uri:", content, re.M) is None, yaml_file
+        assert re.search(r"(lookup|query)\(\s*['\"](ansible\.(builtin|legacy)\.)?url['\"]", content) is None, yaml_file
         assert "slurp" not in content
 
 
@@ -1551,7 +1607,7 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
                     "metadata": {"name": csi_names[0]},
                     "data": {
                         "username": base64.b64encode(b"u").decode("ascii"),
-                        "password": base64.b64encode(FIXTURE_PASSWORD.encode()).decode("ascii"),
+                        "password": _redacted_b64(FIXTURE_PASSWORD),
                     },
                 }
             ]
@@ -1675,7 +1731,7 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
                             "metadata": {"name": csi_names[0]},
                             "data": {
                                 "username": base64.b64encode(b"stale-user").decode("ascii"),
-                                "password": base64.b64encode(FIXTURE_PASSWORD.encode()).decode("ascii"),
+                                "password": _redacted_b64(FIXTURE_PASSWORD),
                             },
                         }
                     ]

@@ -25,7 +25,13 @@ export const buildBareMetalCatalogStepSchema = (
         .object({
           instanceType: catalogLockedResourceField(t('Instance type is required when locked')),
           diskImage: catalogLockedResourceField(t('Disk image is required when locked')),
-          userData: yup.object({ locked: yup.boolean(), value: userDataSchema(t) }),
+          userData: yup.lazy((_value, options) => {
+            const root = options.parent as BareMetalCatalogItemValues | undefined;
+            return yup.object({
+              locked: yup.boolean(),
+              value: userDataSchema(t, root?.guestOsFamily),
+            });
+          }),
           userDataSecret: yup.object({ value: yup.string() }),
         })
         .test(

@@ -76,11 +76,7 @@ const renderWizard = (
 
 const fillGeneralStep = async (user: ReturnType<typeof renderWizard>['user'], name: string) => {
   await user.type(screen.getByRole('textbox', { name: 'Name' }), name);
-  const templateInput = within(
-    screen.getByRole('button', { name: 'Provisioning template' }).closest('.pf-v6-c-menu-toggle') ??
-      document.body,
-  ).getByRole('combobox');
-  await user.click(templateInput);
+  await user.click(screen.getByPlaceholderText('Select a provisioning template'));
   await user.click(await screen.findByText('Cluster template'));
 };
 

@@ -95,7 +95,7 @@ export const buildBareMetalInstanceStepSchema = (
                   .test('authentication-method', authenticationMessage, () => authenticationValid),
                 inline: yup.string().when('source', {
                   is: 'inline',
-                  then: () => userDataSchema(t),
+                  then: () => userDataSchema(t, spec?.guestOsFamily),
                 }),
                 secret: yup.string(),
               }),

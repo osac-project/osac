@@ -212,7 +212,7 @@ describe('VolumeWizardPage', () => {
     });
 
     rejectFirstAttempt(new ConnectError('temporary failure', Code.Internal));
-    expect(await screen.findByText('Unexpected error occurred')).toBeInTheDocument();
+    expect(await screen.findByText('temporary failure')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create volume' })).toBeEnabled();
 
     await user.click(screen.getByRole('button', { name: 'Create volume' }));

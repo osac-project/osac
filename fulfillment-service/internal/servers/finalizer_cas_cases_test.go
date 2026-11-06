@@ -413,8 +413,15 @@ func finalizerTenantCases() []finalizerCase {
 		newFinalizerCase(privatev1.Clusters_ServiceDesc,
 			func() *privatev1.Cluster {
 				GinkgoHelper()
+				// The template of the shared seed helper has a fixed name, which the catalog item case uses already,
+				// and every case of a concurrent spec is seeded in the same database:
 				templateID := fmt.Sprintf("finalizer_cas_%s", uuid.NewString()[:8])
-				Expect(seedClusterCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
+				_, err := fixtureDAO[*privatev1.ClusterTemplate]().Create().SetObject(privatev1.ClusterTemplate_builder{
+					Id:       templateID,
+					Metadata: privatev1.Metadata_builder{Name: finalizerName("cluster-template"), Tenant: testTenant}.Build(),
+					Title:    "Cluster test template",
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
 				return privatev1.Cluster_builder{
 					Metadata: privatev1.Metadata_builder{Name: finalizerName("cluster")}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
@@ -426,8 +433,18 @@ func finalizerTenantCases() []finalizerCase {
 		newFinalizerCase(privatev1.BareMetalInstances_ServiceDesc,
 			func() *privatev1.BareMetalInstance {
 				GinkgoHelper()
+				// As for clusters, the template needs a name that the catalog item case doesn't use:
 				templateID := fmt.Sprintf("finalizer_cas_%s", uuid.NewString()[:8])
-				Expect(seedBareMetalCatalogItemTemplate(ctx, testTenant, "", templateID)).To(Succeed())
+				_, err := fixtureDAO[*privatev1.BareMetalInstanceTemplate]().Create().SetObject(
+					privatev1.BareMetalInstanceTemplate_builder{
+						Id: templateID,
+						Metadata: privatev1.Metadata_builder{
+							Name:   finalizerName("bare-metal-template"),
+							Tenant: testTenant,
+						}.Build(),
+						Title: "Bare metal test template",
+					}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
 				return privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: finalizerName("bmi")}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{

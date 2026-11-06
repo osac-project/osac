@@ -33,8 +33,9 @@ import (
 )
 
 // These specs check that a writer that holds a stale snapshot of an object can't overwrite the finalizers that
-// another writer stored after the snapshot was taken. The concurrency is logical: the specs run in the suite
-// transaction and order the writes explicitly, except where they say otherwise.
+// another writer stored after the snapshot was taken. The concurrency is logical: each scenario orders its writes
+// explicitly in one transaction, except where it says otherwise. The specs that cover every resource run the scenario
+// of each resource concurrently, on its own object and in its own transaction, with runFinalizerCases.
 var _ = Describe("finalizer CAS", func() {
 	// The guard proves coverage of the RPCs at the level of the bare GenericServer, not of the production typed
 	// wrappers: a wrapper that rebuilds the request from the stored object without restoring the version of the
@@ -72,126 +73,122 @@ var _ = Describe("finalizer CAS", func() {
 			missing, stale)
 	})
 
-	DescribeTable("rejects a stale private finalizer write",
-		func(c finalizerCase) {
-			// The reconciler read the object while a hold was present:
-			t := c.target([]string{finalizerController, finalizerHold})
-			stale := t.get(ctx)
+	It("rejects a stale private finalizer write", func() {
+		runFinalizerCases([]string{finalizerController, finalizerHold},
+			func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+				// The reconciler read the object while a hold was present:
+				stale := t.get(r.ctx)
 
-			// Another writer released the hold after that read:
-			t.release(ctx, finalizerController)
-			logs := t.recordLogs()
+				// Another writer released the hold after that read:
+				t.release(r.ctx, finalizerController)
+				logs := t.recordLogs()
 
-			// The reconciler writes back its stale view without the lock:
-			err := t.update(ctx, withFinalizers(stale, finalizerHold), finalizersMask(), false)
+				// The reconciler writes back its stale view without the lock:
+				err := t.update(r.ctx, withFinalizers(stale, finalizerHold), finalizersMask(), false)
 
-			t.expectFinalizerConflict(ctx, err, finalizerController)
-			commitSuiteTx()
-			Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty(), "a rejected write must not log a change")
-		},
-		finalizerEntries(),
-	)
+				t.expectFinalizerConflict(r.ctx, err, finalizerController)
+				r.commit()
+				Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty(),
+					"a rejected write must not log a change")
+			})
+	})
 
-	DescribeTable("keeps finalizers on a public nil-mask update",
-		func(c finalizerCase) {
-			// Public objects have no finalizers, so the object that a public server forwards has none:
-			t := c.target([]string{finalizerController, finalizerHold})
-			object := withFinalizers(t.get(ctx))
+	It("keeps finalizers on a public nil-mask update", func() {
+		runFinalizerCases([]string{finalizerController, finalizerHold},
+			func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+				// Public objects have no finalizers, so the object that a public server forwards has none:
+				object := withFinalizers(t.get(r.ctx))
 
-			err := t.update(withPublicAPIView(ctx), object, nil, false)
-			Expect(err).ToNot(HaveOccurred())
+				err := t.update(withPublicAPIView(r.ctx), object, nil, false)
+				Expect(err).ToNot(HaveOccurred())
 
-			Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold),
-				"a public update must not clear the finalizers")
-		},
-		finalizerEntries(),
-	)
+				Expect(t.finalizers(r.ctx)).To(ConsistOf(finalizerController, finalizerHold),
+					"a public update must not clear the finalizers")
+			})
+	})
 
 	// A public request has no finalizers and no way to prove a version for them, so the server restores the stored
 	// ones before it checks anything else. A stale public request therefore succeeds and never gets the Aborted
 	// error that private finalizer changes get.
-	DescribeTable("keeps finalizers on a stale public nil-mask update",
-		func(c finalizerCase) {
-			t := c.target([]string{finalizerController, finalizerHold})
-			stale := t.get(ctx)
-			t.bump(ctx)
+	It("keeps finalizers on a stale public nil-mask update", func() {
+		runFinalizerCases([]string{finalizerController, finalizerHold},
+			func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+				stale := t.get(r.ctx)
+				t.bump(r.ctx)
 
-			err := t.update(withPublicAPIView(ctx), withFinalizers(stale), nil, false)
-			Expect(err).ToNot(HaveOccurred(), "a public request must not be rejected for its finalizers")
+				err := t.update(withPublicAPIView(r.ctx), withFinalizers(stale), nil, false)
+				Expect(err).ToNot(HaveOccurred(), "a public request must not be rejected for its finalizers")
 
-			Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold),
-				"a stale public update must not clear the finalizers")
-		},
-		finalizerEntries(),
-	)
+				Expect(t.finalizers(r.ctx)).To(ConsistOf(finalizerController, finalizerHold),
+					"a stale public update must not clear the finalizers")
+			})
+	})
 
 	// Most objects have no finalizers. A public nil-mask update of such an object must not give it any, and must not be
 	// rejected for its finalizers. Without metadata in the request the update may still be rejected by validation or
 	// by the database, as for objects that have finalizers, so that part runs in a savepoint.
-	DescribeTable("keeps an object without finalizers as it is on a public nil-mask update",
-		func(c finalizerCase) {
-			t := c.target(nil)
-
-			err := t.update(withPublicAPIView(ctx), t.get(ctx), nil, false)
+	It("keeps an object without finalizers as it is on a public nil-mask update", func() {
+		runFinalizerCases(nil, func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+			err := t.update(withPublicAPIView(r.ctx), t.get(r.ctx), nil, false)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(t.finalizers(ctx)).To(BeEmpty())
+			Expect(t.finalizers(r.ctx)).To(BeEmpty())
 
-			err = t.publicUpdateInSavepoint(ctx, withoutMetadata(t.get(ctx)), nil)
+			err = t.publicUpdateInSavepoint(r.ctx, withoutMetadata(t.get(r.ctx)), nil)
 			Expect(status.Code(err)).ToNot(Equal(codes.Aborted),
 				"a public request must not be rejected for its finalizers, but the update returned %v", err)
-			Expect(t.finalizers(ctx)).To(BeEmpty())
-		},
-		finalizerEntries(),
-	)
+			Expect(t.finalizers(r.ctx)).To(BeEmpty())
+		})
+	})
 
-	DescribeTable("keeps a deleting object on a public nil-mask update",
-		func(c finalizerCase) {
-			t := c.target([]string{finalizerController, finalizerHold})
+	It("keeps a deleting object on a public nil-mask update", func() {
+		runFinalizerCases([]string{finalizerController, finalizerHold},
+			func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+				// The deletion only marks the object because it has finalizers:
+				t.markDeleting(r.ctx)
+				object := withFinalizers(t.get(r.ctx))
 
-			// The deletion only marks the object because it has finalizers:
-			t.markDeleting(ctx)
-			object := withFinalizers(t.get(ctx))
+				err := t.update(withPublicAPIView(r.ctx), object, nil, false)
+				Expect(err).ToNot(HaveOccurred())
 
-			err := t.update(withPublicAPIView(ctx), object, nil, false)
-			Expect(err).ToNot(HaveOccurred())
-
-			stored, err := t.ops.get(ctx, t.id)
-			Expect(err).ToNot(HaveOccurred(), "a public update must not archive an object with finalizers")
-			Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
-		},
-		finalizerEntries(),
-	)
+				stored, err := t.ops.get(r.ctx, t.id)
+				Expect(err).ToNot(HaveOccurred(), "a public update must not archive an object with finalizers")
+				Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
+			})
+	})
 
 	// A public request can also arrive without any metadata. The server then has no metadata to restore the stored
 	// finalizers into, so it creates it. The merged object may still be rejected afterwards, for example by its
 	// validation or by the database, but never for its finalizers, and a rejected update must not write anything.
 	DescribeTable("keeps finalizers on a public nil-mask update that has no metadata",
-		func(c finalizerCase, deleting bool) {
-			t := c.target([]string{finalizerController, finalizerHold})
-			if deleting {
-				t.markDeleting(ctx)
-			}
-			before := t.get(ctx)
+		func(deleting bool) {
+			runFinalizerCases([]string{finalizerController, finalizerHold},
+				func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+					if deleting {
+						t.markDeleting(r.ctx)
+					}
+					before := t.get(r.ctx)
 
-			err := t.publicUpdateInSavepoint(ctx, withoutMetadata(before), nil)
+					err := t.publicUpdateInSavepoint(r.ctx, withoutMetadata(before), nil)
 
-			Expect(status.Code(err)).ToNot(Equal(codes.Aborted),
-				"a public request must not be rejected for its finalizers, but the update returned %v", err)
-			stored, getErr := t.ops.get(ctx, t.id)
-			Expect(getErr).ToNot(HaveOccurred(), "a public update must not archive an object with finalizers")
-			Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold),
-				"a public update must not clear the finalizers")
-			if err != nil {
-				Expect(proto.Equal(stored, before)).To(BeTrue(), "a rejected update must not write anything")
-			}
+					Expect(status.Code(err)).ToNot(Equal(codes.Aborted),
+						"a public request must not be rejected for its finalizers, but the update returned %v", err)
+					stored, getErr := t.ops.get(r.ctx, t.id)
+					Expect(getErr).ToNot(HaveOccurred(), "a public update must not archive an object with finalizers")
+					Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold),
+						"a public update must not clear the finalizers")
+					if err != nil {
+						Expect(proto.Equal(stored, before)).To(BeTrue(), "a rejected update must not write anything")
+					}
+				})
 		},
-		finalizerEntriesPerLifecycle(),
+		Entry("for a live object", false),
+		Entry("for a deleting object", true),
 	)
 
 	// A public request can also carry a mask that selects the finalizers, directly or through the whole metadata.
 	// The stored finalizers are restored after the mask is applied, so such a request is not rejected for its
 	// finalizers and doesn't change them, even from a stale version. The restore is the same code for every resource,
-	// and the tables above run the nil mask for every resource, so one resource is enough here.
+	// and the specs above run the nil mask for every resource, so one resource is enough here.
 	DescribeTable("keeps finalizers on a stale public update with a mask that selects them",
 		func(mask *fieldmaskpb.FieldMask, deleting bool) {
 			t := finalizerCaseFor(privatev1.Hubs_ServiceDesc.ServiceName).
@@ -396,154 +393,139 @@ var _ = Describe("finalizer CAS", func() {
 			Expect(sameFinalizers([]string{finalizerHold}, []string{finalizerHold, finalizerController})).To(BeFalse())
 		})
 
-		DescribeTable("accepts a finalizer change made from the current version",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController})
+		It("accepts a finalizer change made from the current version", func() {
+			runFinalizerCases([]string{finalizerController}, func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+				object := withFinalizers(t.get(r.ctx), finalizerController, finalizerHold)
+				Expect(t.update(r.ctx, object, finalizersMask(), false)).To(Succeed())
 
-				object := withFinalizers(t.get(ctx), finalizerController, finalizerHold)
-				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+				Expect(t.finalizers(r.ctx)).To(ConsistOf(finalizerController, finalizerHold))
+			})
+		})
 
-				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
-			},
-			finalizerEntries(),
-		)
+		It("accepts a stale update that doesn't change the finalizers", func() {
+			runFinalizerCases([]string{finalizerController, finalizerHold},
+				func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+					stale := t.get(r.ctx)
+					t.bump(r.ctx)
 
-		DescribeTable("accepts a stale update that doesn't change the finalizers",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController, finalizerHold})
-				stale := t.get(ctx)
-				t.bump(ctx)
+					object := withLabel(stale, "x", "y")
+					Expect(t.update(r.ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
 
-				object := withLabel(stale, "x", "y")
-				Expect(t.update(ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
+					stored := t.get(r.ctx)
+					Expect(finalizerMetadataOf(stored).GetLabels()).To(HaveKeyWithValue("x", "y"))
+					Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
+				})
+		})
 
-				stored := t.get(ctx)
-				Expect(finalizerMetadataOf(stored).GetLabels()).To(HaveKeyWithValue("x", "y"))
-				Expect(finalizersOf(stored)).To(ConsistOf(finalizerController, finalizerHold))
-			},
-			finalizerEntries(),
-		)
+		It("treats the same finalizers in another order, or repeated, as unchanged", func() {
+			runFinalizerCases([]string{finalizerController, finalizerHold},
+				func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+					stale := t.get(r.ctx)
+					t.bump(r.ctx)
 
-		DescribeTable("treats the same finalizers in another order, or repeated, as unchanged",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController, finalizerHold})
-				stale := t.get(ctx)
-				t.bump(ctx)
+					object := withFinalizers(stale, finalizerHold, finalizerController, finalizerHold)
+					snapshot := proto.Clone(object)
+					Expect(t.update(r.ctx, object, finalizersMask(), false)).To(Succeed())
 
-				object := withFinalizers(stale, finalizerHold, finalizerController, finalizerHold)
-				snapshot := proto.Clone(object)
-				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+					Expect(t.finalizers(r.ctx)).To(ConsistOf(finalizerController, finalizerHold))
+					Expect(proto.Equal(object, snapshot)).To(BeTrue(), "the request object must not be modified")
+				})
+		})
 
-				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
-				Expect(proto.Equal(object, snapshot)).To(BeTrue(), "the request object must not be modified")
-			},
-			finalizerEntries(),
-		)
-
-		DescribeTable("accepts a stale finalizer write that leaves an object without finalizers as it is",
-			func(c finalizerCase) {
-				t := c.target(nil)
-				stale := t.get(ctx)
-				t.bump(ctx)
+		It("accepts a stale finalizer write that leaves an object without finalizers as it is", func() {
+			runFinalizerCases(nil, func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+				stale := t.get(r.ctx)
+				t.bump(r.ctx)
 
 				object := withFinalizers(stale)
-				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+				Expect(t.update(r.ctx, object, finalizersMask(), false)).To(Succeed())
 
-				Expect(t.finalizers(ctx)).To(BeEmpty())
-			},
-			finalizerEntries(),
-		)
+				Expect(t.finalizers(r.ctx)).To(BeEmpty())
+			})
+		})
 
-		DescribeTable("keeps a foreign finalizer when another one is removed from the current version",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController, finalizerHold, finalizerForeign})
+		It("keeps a foreign finalizer when another one is removed from the current version", func() {
+			runFinalizerCases([]string{finalizerController, finalizerHold, finalizerForeign},
+				func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+					object := withFinalizers(t.get(r.ctx), finalizerController, finalizerForeign)
+					Expect(t.update(r.ctx, object, finalizersMask(), false)).To(Succeed())
 
-				object := withFinalizers(t.get(ctx), finalizerController, finalizerForeign)
-				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+					Expect(t.finalizers(r.ctx)).To(ConsistOf(finalizerController, finalizerForeign))
+				})
+		})
 
-				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerForeign))
-			},
-			finalizerEntries(),
-		)
+		It("archives a deleting object when its last finalizer is removed from the current version", func() {
+			runFinalizerCases([]string{finalizerController}, func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+				t.markDeleting(r.ctx)
 
-		DescribeTable("archives a deleting object when its last finalizer is removed from the current version",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController})
-				t.markDeleting(ctx)
+				object := withFinalizers(t.get(r.ctx))
+				Expect(t.update(r.ctx, object, finalizersMask(), false)).To(Succeed())
 
-				object := withFinalizers(t.get(ctx))
-				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
-
-				_, err := t.ops.get(ctx, t.id)
+				_, err := t.ops.get(r.ctx, t.id)
 				Expect(status.Code(err)).To(Equal(codes.NotFound))
-			},
-			finalizerEntries(),
-		)
+			})
+		})
 
-		DescribeTable("still rejects a stale update that asks for the lock",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController, finalizerHold})
-				stale := t.get(ctx)
-				t.bump(ctx)
+		It("still rejects a stale update that asks for the lock", func() {
+			runFinalizerCases([]string{finalizerController, finalizerHold},
+				func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+					stale := t.get(r.ctx)
+					t.bump(r.ctx)
 
-				object := withLabel(stale, "x", "y")
-				err := t.update(ctx, object, finalizerMaskOf("metadata.labels"), true)
+					object := withLabel(stale, "x", "y")
+					err := t.update(r.ctx, object, finalizerMaskOf("metadata.labels"), true)
 
-				Expect(status.Code(err)).To(Equal(codes.Aborted))
-			},
-			finalizerEntries(),
-		)
+					Expect(status.Code(err)).To(Equal(codes.Aborted))
+				})
+		})
 
-		DescribeTable("accepts an update without metadata that doesn't change the finalizers",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController, finalizerHold})
-				t.bump(ctx)
+		It("accepts an update without metadata that doesn't change the finalizers", func() {
+			runFinalizerCases([]string{finalizerController, finalizerHold},
+				func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+					t.bump(r.ctx)
 
-				// The mask selects the labels, so the finalizers of the stored object are untouched:
-				object := withoutMetadata(t.get(ctx))
-				Expect(t.update(ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
+					// The mask selects the labels, so the finalizers of the stored object are untouched:
+					object := withoutMetadata(t.get(r.ctx))
+					Expect(t.update(r.ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
 
-				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController, finalizerHold))
-			},
-			finalizerEntries(),
-		)
+					Expect(t.finalizers(r.ctx)).To(ConsistOf(finalizerController, finalizerHold))
+				})
+		})
 
-		DescribeTable("leaves the finalizers alone when the update mask is empty",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController, finalizerHold})
-				stale := t.get(ctx)
-				t.release(ctx, finalizerController)
+		It("leaves the finalizers alone when the update mask is empty", func() {
+			runFinalizerCases([]string{finalizerController, finalizerHold},
+				func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+					stale := t.get(r.ctx)
+					t.release(r.ctx, finalizerController)
 
-				// An empty mask is not the nil mask: nothing is applied.
-				object := withFinalizers(stale, finalizerHold)
-				Expect(t.update(ctx, object, &fieldmaskpb.FieldMask{}, false)).To(Succeed())
+					// An empty mask is not the nil mask: nothing is applied.
+					object := withFinalizers(stale, finalizerHold)
+					Expect(t.update(r.ctx, object, &fieldmaskpb.FieldMask{}, false)).To(Succeed())
 
-				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController))
-			},
-			finalizerEntries(),
-		)
+					Expect(t.finalizers(r.ctx)).To(ConsistOf(finalizerController))
+				})
+		})
 	})
 
 	// The generic server logs a finalizer change once the transaction that wrote it commits, so that the writer of a
-	// finalizer transition can be found in the server logs. The specs end the suite transaction before they look at
-	// the log.
+	// finalizer transition can be found in the server logs. The specs end the transaction before they look at the
+	// log.
 	Describe("finalizer change log", func() {
 		// The lists are the ones that the DAO wrote, which are sorted and have no repeated finalizer, and the
 		// version is the one that the change was checked against, not the one that the write produced. The object
 		// is written once before, so that its version is not zero.
-		DescribeTable("logs an accepted finalizer change once, when it is committed",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController})
-				t.bump(ctx)
-				before := t.get(ctx)
+		It("logs an accepted finalizer change once, when it is committed", func() {
+			runFinalizerCases([]string{finalizerController}, func(r *finalizerRun, c finalizerCase, t finalizerTarget) {
+				t.bump(r.ctx)
+				before := t.get(r.ctx)
 				Expect(finalizerMetadataOf(before).GetVersion()).To(BeNumerically(">", 0))
 				logs := t.recordLogs()
 
 				object := withFinalizers(before, finalizerHold, finalizerController, finalizerHold)
-				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
+				Expect(t.update(r.ctx, object, finalizersMask(), false)).To(Succeed())
 				Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty(),
 					"nothing must be logged before the transaction commits")
-				commitSuiteTx()
+				r.commit()
 
 				records := logs.WithMessage(finalizerChangeMessage)
 				Expect(records).To(HaveLen(1))
@@ -551,88 +533,81 @@ var _ = Describe("finalizer CAS", func() {
 				Expect(records[0].Attrs).To(HaveKeyWithValue("service", c.service))
 				Expect(records[0].Attrs).To(HaveKeyWithValue("id", t.id))
 				Expect(records[0].Attrs).To(HaveKeyWithValue("from", Equal([]string{finalizerController})))
-				Expect(records[0].Attrs).To(HaveKeyWithValue("to", Equal([]string{finalizerController, finalizerHold})))
+				Expect(records[0].Attrs).To(HaveKeyWithValue("to",
+					Equal([]string{finalizerController, finalizerHold})))
 				Expect(records[0].Attrs).To(HaveKeyWithValue("version",
 					int64(finalizerMetadataOf(before).GetVersion())))
-				Expect(finalizerMetadataOf(t.get(ctx)).GetVersion()).To(Equal(finalizerMetadataOf(before).GetVersion()+1),
+				Expect(finalizerMetadataOf(t.get(r.ctx)).GetVersion()).To(
+					Equal(finalizerMetadataOf(before).GetVersion()+1),
 					"the write must have produced the next version")
-			},
-			finalizerEntries(),
-		)
+			})
+		})
 
-		DescribeTable("logs the removal of the last finalizer of a deleting object",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController})
-				t.markDeleting(ctx)
+		It("logs the removal of the last finalizer of a deleting object", func() {
+			runFinalizerCases([]string{finalizerController}, func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+				t.markDeleting(r.ctx)
 				logs := t.recordLogs()
 
-				object := withFinalizers(t.get(ctx))
-				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
-				commitSuiteTx()
+				object := withFinalizers(t.get(r.ctx))
+				Expect(t.update(r.ctx, object, finalizersMask(), false)).To(Succeed())
+				r.commit()
 
-				_, err := t.ops.get(ctx, t.id)
+				_, err := t.ops.get(r.ctx, t.id)
 				Expect(status.Code(err)).To(Equal(codes.NotFound), "the object must have been archived")
 				records := logs.WithMessage(finalizerChangeMessage)
 				Expect(records).To(HaveLen(1))
 				Expect(records[0].Attrs).To(HaveKeyWithValue("from", Equal([]string{finalizerController})))
 				Expect(records[0].Attrs).To(HaveKeyWithValue("to", BeEmpty()))
-			},
-			finalizerEntries(),
-		)
+			})
+		})
 
-		DescribeTable("logs nothing when the finalizers are left as they are",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController, finalizerHold})
-				logs := t.recordLogs()
+		It("logs nothing when the finalizers are left as they are", func() {
+			runFinalizerCases([]string{finalizerController, finalizerHold},
+				func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+					logs := t.recordLogs()
 
-				object := withLabel(t.get(ctx), "x", "y")
-				Expect(t.update(ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
-				commitSuiteTx()
+					object := withLabel(t.get(r.ctx), "x", "y")
+					Expect(t.update(r.ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
+					r.commit()
 
-				Expect(finalizerMetadataOf(t.get(ctx)).GetLabels()).To(HaveKeyWithValue("x", "y"))
-				Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty())
-			},
-			finalizerEntries(),
-		)
+					Expect(finalizerMetadataOf(t.get(r.ctx)).GetLabels()).To(HaveKeyWithValue("x", "y"))
+					Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty())
+				})
+		})
 
 		// The finalizer check accepts the change, then the validation of the labels rejects the update.
-		DescribeTable("logs nothing when the update is rejected after the finalizer check",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController})
+		It("logs nothing when the update is rejected after the finalizer check", func() {
+			runFinalizerCases([]string{finalizerController}, func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
 				logs := t.recordLogs()
 
-				object := withMetadata(t.get(ctx), func(metadata *privatev1.Metadata) {
+				object := withMetadata(t.get(r.ctx), func(metadata *privatev1.Metadata) {
 					metadata.SetFinalizers([]string{finalizerController, finalizerHold})
 					metadata.SetLabels(map[string]string{"!!!invalid": "value"})
 				})
-				err := t.update(ctx, object, finalizerMaskOf("metadata.finalizers", "metadata.labels"), false)
+				err := t.update(r.ctx, object, finalizerMaskOf("metadata.finalizers", "metadata.labels"), false)
 
 				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-				commitSuiteTx()
-				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController))
+				r.commit()
+				Expect(t.finalizers(r.ctx)).To(ConsistOf(finalizerController))
 				Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty())
-			},
-			finalizerEntries(),
-		)
+			})
+		})
 
 		// Code that runs after the generic update in the same request, like the settlement of the parent of an
 		// ExternalIPAttachment, can report an error that rolls the whole transaction back. The fixture is committed
-		// first, so that the rollback only undoes the update.
-		DescribeTable("logs nothing when the transaction is rolled back after the write",
-			func(c finalizerCase) {
-				t := c.target([]string{finalizerController})
-				commitSuiteTx()
+		// before the scenario starts, so the rollback only undoes the update.
+		It("logs nothing when the transaction is rolled back after the write", func() {
+			runFinalizerCases([]string{finalizerController}, func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
 				logs := t.recordLogs()
 
-				object := withFinalizers(t.get(ctx), finalizerController, finalizerHold)
-				Expect(t.update(ctx, object, finalizersMask(), false)).To(Succeed())
-				rollBackSuiteTx()
+				object := withFinalizers(t.get(r.ctx), finalizerController, finalizerHold)
+				Expect(t.update(r.ctx, object, finalizersMask(), false)).To(Succeed())
+				r.rollBack()
 
-				Expect(t.finalizers(ctx)).To(ConsistOf(finalizerController), "the write must have been rolled back")
+				Expect(t.finalizers(r.ctx)).To(ConsistOf(finalizerController), "the write must have been rolled back")
 				Expect(logs.WithMessage(finalizerChangeMessage)).To(BeEmpty())
-			},
-			finalizerEntries(),
-		)
+			})
+		})
 
 		// Secrets updates the object inside a savepoint and then stores the data in Vault. When that fails the
 		// savepoint is rolled back, but the enclosing transaction can still commit.
@@ -684,33 +659,40 @@ var _ = Describe("finalizer CAS", func() {
 		// A stale writer that changes the finalizers must be rejected whichever way it selects them: a mask for the
 		// whole metadata, no mask at all, or the finalizers themselves.
 		DescribeTable("rejects a stale finalizer change",
-			func(c finalizerCase, mask *fieldmaskpb.FieldMask) {
-				t := c.target([]string{finalizerController, finalizerHold})
-				stale := t.get(ctx)
-				t.release(ctx, finalizerController)
+			func(mask *fieldmaskpb.FieldMask) {
+				runFinalizerCases([]string{finalizerController, finalizerHold},
+					func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+						stale := t.get(r.ctx)
+						t.release(r.ctx, finalizerController)
 
-				err := t.update(ctx, withFinalizers(stale, finalizerHold), mask, false)
+						err := t.update(r.ctx, withFinalizers(stale, finalizerHold), mask, false)
 
-				t.expectFinalizerConflict(ctx, err, finalizerController)
+						t.expectFinalizerConflict(r.ctx, err, finalizerController)
+					})
 			},
-			finalizerEntriesPerMask(),
+			finalizerMaskEntries(),
 		)
 
 		// A private write without metadata can't prove which version it started from, so it is rejected whatever the
 		// stored version is, and whether it selects the finalizers with a mask or replaces the whole object. The
 		// finalizer check runs before the validation of the object, so every resource gets the conflict.
 		DescribeTable("rejects a finalizer change that has no metadata",
-			func(c finalizerCase, bumpFirst bool, mask *fieldmaskpb.FieldMask) {
-				t := c.target([]string{finalizerController, finalizerHold})
-				if bumpFirst {
-					t.bump(ctx)
-				}
+			func(bumpFirst bool, mask *fieldmaskpb.FieldMask) {
+				runFinalizerCases([]string{finalizerController, finalizerHold},
+					func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
+						if bumpFirst {
+							t.bump(r.ctx)
+						}
 
-				err := t.update(ctx, withoutMetadata(t.get(ctx)), mask, false)
+						err := t.update(r.ctx, withoutMetadata(t.get(r.ctx)), mask, false)
 
-				t.expectFinalizerConflict(ctx, err, finalizerController, finalizerHold)
+						t.expectFinalizerConflict(r.ctx, err, finalizerController, finalizerHold)
+					})
 			},
-			finalizerEntriesPerVersion(),
+			Entry("at version 0 with metadata.finalizers mask", false, finalizersMask()),
+			Entry("at a later version with metadata.finalizers mask", true, finalizersMask()),
+			Entry("at version 0 with nil mask", false, (*fieldmaskpb.FieldMask)(nil)),
+			Entry("at a later version with nil mask", true, (*fieldmaskpb.FieldMask)(nil)),
 		)
 	})
 })

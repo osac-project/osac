@@ -401,9 +401,12 @@ helm upgrade --install osac \
 ```
 
 On Helm 4, every later upgrade of the `osac` release, including
-`helm upgrade --install`, must include `--force-conflicts`. After installation,
-the AAP operator owns `app.kubernetes.io/managed-by` on the `osac-aap` custom
-resource. Helm 3 does not support this option.
+`helm upgrade --install`, must include `--server-side=true --force-conflicts`.
+This also applies when upgrading a release installed with Helm 3: Helm 4's
+default `--server-side=auto` follows the previous release's client-side apply
+method, while `--force-conflicts` requires server-side apply. After
+installation, the AAP operator owns `app.kubernetes.io/managed-by` on the `osac-aap` custom
+resource. Helm 3 does not support `--force-conflicts`.
 
 `my-infra-values.yaml` configures `osac-deps` and `osac-infra`; see
 [Phase-1 Parameters](#phase-1-parameters) below. For Phase 2,

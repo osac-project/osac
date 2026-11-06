@@ -1,6 +1,6 @@
 # Installing OSAC on OpenShift Container Platform (WIP)
 
-**Last Updated**: 2026-11-03
+**Last Updated**: 2026-11-06
 **Audience**: Cloud administrators
 **Status**: WIP — see the TBD note in [Section 10](#10-uninstalling-osac)
 for what's still open
@@ -404,9 +404,10 @@ Required for networking, for every service:
   provider networking disabled, OSAC reads no registration, and you need none
   of these. See [Section 4.4](#44-installing-with-provider-networking) and the
   [Fabric Manager Guide](../networking/customer-fabric-manager-guide.md).
-- **A connected deployment.** OSAC networking supports connected deployments
-  only, not air-gapped or disconnected ones: the hub, the AAP job pods, and the
-  provider's networking services and APIs reach each other.
+- **A connected deployment for OSAC `0.4.0`.** The networking procedures in
+  this guide require the hub, the AAP job pods, and the provider's networking
+  services and APIs to reach each other. This guide does not cover air-gapped
+  or disconnected deployments.
 
 Required for BMaaS with the Metal3 or NetBox backend:
 
@@ -528,8 +529,8 @@ With the Netris Fabric Manager, also note:
 
 - SecurityGroups are documented no-ops on Netris. `cudn_evpn` enforces them
   with NetworkPolicy on the hub.
-- Netris allocates the VNIs itself (the VPC's VNI is the `l3_vni`, the V-Net's
-  VXLAN ID the `l2_vni`), so no OSAC VNI range applies.
+- Netris allocates both VNIs: the VPC's VNI maps to `l3_vni`, and the
+  V-Net's VXLAN ID maps to `l2_vni`; OSAC has no VNI range to configure.
 - Netris reserves its private IP allocation (by default `10.0.0.0/8`). Add it
   to `global.networking.excludedIpv4Cidrs`, so no VirtualNetwork, Subnet or
   ExternalIPPool takes an address from it; use another private range such as
@@ -899,10 +900,13 @@ Use this procedure when the cluster already meets the prerequisites.
   Helm does not return until it and, for CaaS, the `osac-publish-templates`
   hook have finished.
 
-  On Helm 4, later `helm upgrade` (or re-running `helm upgrade --install`)
-  must include `--force-conflicts`. The AAP operator takes field ownership of
-  `app.kubernetes.io/managed-by` on the `osac-aap` custom resource, and Helm
-  4 server-side apply fails without that flag. Helm 3 does not accept it.
+  On Helm 4, every later upgrade of the `osac` release, including
+  `helm upgrade --install`, must include `--server-side=true --force-conflicts`.
+  This also applies when upgrading a release installed with Helm 3: Helm 4's
+  default `--server-side=auto` follows the previous release's client-side apply
+  method, while `--force-conflicts` requires server-side apply. The AAP operator
+  takes field ownership of `app.kubernetes.io/managed-by` on the `osac-aap`
+  custom resource. Helm 3 does not accept `--force-conflicts`.
 
   Add `-f` for every other values file, such as the networking secrets file of
   [Section 4.4.3](#443-setting-the-networking-helm-values), at install and at
@@ -2626,8 +2630,8 @@ StorageTier, and tenant storage configuration as described in
 
 ### 9.4 Not supported
 
-- OSAC networking in air-gapped or disconnected deployments, and IPv6 or
-  dual-stack networking.
+- OSAC networking in air-gapped or disconnected deployments for this release,
+  and IPv6 or dual-stack networking.
 - Provider networking for VMs in a cluster other than the hub. Platform
   administrators can prepare EVPN host networking on a separate workload
   cluster using the Helm Phase 1b EVPN procedure in the [Helm Deployment
@@ -2962,9 +2966,11 @@ oc get csr | grep -c Pending
   ```
 
 - a field-ownership conflict on `app.kubernetes.io/managed-by` owned by the
-  AAP operator (Helm 4): add `--force-conflicts` to the `helm upgrade`
-  command. The operator takes ownership of that field on the `osac-aap`
-  custom resource after install.
+  AAP operator (Helm 4): add `--server-side=true --force-conflicts` to the
+  `helm upgrade` command. The server-side option is required if the release was
+  installed with Helm 3, because Helm 4's `--server-side=auto` follows that
+  release's client-side apply method. The operator takes ownership of the field
+  on the `osac-aap` custom resource after install.
 
 ### 11.8 The `osac-aap-bootstrap` job fails
 

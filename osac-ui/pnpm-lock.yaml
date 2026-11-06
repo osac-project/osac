@@ -184,8 +184,8 @@ importers:
         specifier: 1.64.0
         version: 1.64.0
       '@types/node':
-        specifier: 20.19.41
-        version: 20.19.41
+        specifier: 20.19.43
+        version: 20.19.43
 
   libs/test-utils:
     devDependencies:
@@ -193,8 +193,8 @@ importers:
         specifier: 1.64.0
         version: 1.64.0
       '@types/node':
-        specifier: 20.19.41
-        version: 20.19.41
+        specifier: 20.19.43
+        version: 20.19.43
 
   libs/types:
     dependencies:
@@ -1261,9 +1261,6 @@ packages:
 
   '@types/json5@0.0.29':
     resolution: {integrity: sha512-dRLjCWHYg4oaA77cxO64oO+7JwCwnIzkZPdrrC71jQmQtlhM556pwKo5bUzqvZndkVbeFLIIi+9TC40JNF5hNQ==}
-
-  '@types/node@20.19.41':
-    resolution: {integrity: sha512-ECymXOukMnOoVkC2bb1Vc/w/836DXncOg5m8Xj1RH7xSHZJWNYY6Zh7EH477vcnD5egKNNfy2RpNOmuChhFPgQ==}
 
   '@types/node@20.19.43':
     resolution: {integrity: sha512-6oYBAi5ikg4Pl+kGsoYtawUMBT2zZMCvPNF7pVLnHZfd1zf38DRiWn/gT01RYCdUqkv7Fhr+C9ot4/tb+2sVvA==}
@@ -4381,10 +4378,6 @@ snapshots:
   '@types/json-schema@7.0.15': {}
 
   '@types/json5@0.0.29': {}
-
-  '@types/node@20.19.41':
-    dependencies:
-      undici-types: 6.21.0
 
   '@types/node@20.19.43':
     dependencies:

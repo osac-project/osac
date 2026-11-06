@@ -111,6 +111,21 @@ func translateFlatTableOrder(order string, columns map[string]string, defaultOrd
 	return column, nil
 }
 
+// withIDTieBreaker appends ", id" to orderSQL unless the ordering is already on id alone. Both flat billing
+// tables carry a unique text id primary key, so the appended key turns any otherwise-partial ordering into a
+// total one: without it, rows that tie on the primary order expression can come back in any order, which makes
+// offset/limit pagination unstable - a row can repeat on one page and be skipped from another. The tie-breaker
+// is always ascending id and preserves the primary order and its direction; it never rewrites the caller's
+// ordering. orderSQL comes from translateFlatTableOrder, so it is already an allowlisted "column" or
+// "column asc|desc" - appending the literal ", id" needs no further validation.
+func withIDTieBreaker(orderSQL string) string {
+	switch orderSQL {
+	case "id", "id asc", "id desc":
+		return orderSQL
+	}
+	return orderSQL + ", id"
+}
+
 // listFlatTable runs the shared flat-table list query: it counts the rows matching whereSQL/args, then selects
 // selectColumns from table ordered by orderSQL with the normalized limit and offset, scanning each row with
 // scanRow (which wraps its own scan errors). table names the SQL table; label names it in the count/list error

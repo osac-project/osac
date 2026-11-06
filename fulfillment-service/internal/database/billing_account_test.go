@@ -16,6 +16,7 @@ package database
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -245,6 +246,94 @@ var _ = Describe("Billing accounts", func() {
 		It("rejects an order on a private or unknown field", func() {
 			_, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "provider_account_reference")
 			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Describe("ListBillingAccounts pagination", func() {
+		// seedAccounts inserts count accounts with unique provider references and, when non-empty, one
+		// shared display_name. The ids are zero-padded and fixed-shape, so Go's string ordering and
+		// PostgreSQL's text collation agree on them and the expected page sequences are exact.
+		seedAccounts := func(count int, displayName string) []string {
+			ids := make([]string, count)
+			for i := 0; i < count; i++ {
+				ids[i] = fmt.Sprintf("seed-%03d", i)
+				upsert(BillingAccountUpsert{
+					ID: ids[i], ProviderKey: "m360",
+					ProviderAccountReference: fmt.Sprintf("acct-%03d", i),
+					DisplayName:              displayName, State: "ACTIVE",
+				})
+			}
+			return ids
+		}
+
+		idsOf := func(items []BillingAccountRow) []string {
+			ids := make([]string, len(items))
+			for i, item := range items {
+				ids[i] = item.ID
+			}
+			return ids
+		}
+
+		It("serves the default page of 100 and continues at offset 100 without overlap or loss", func() {
+			ids := seedAccounts(105, "Acme")
+			first, total, err := ListBillingAccounts(ctx, tx, 0, 0, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(105)))
+			Expect(first).To(HaveLen(100))
+			// The default order is the unique id, so page one is exactly the first 100 ids ascending.
+			Expect(idsOf(first)).To(Equal(ids[:100]))
+
+			second, total, err := ListBillingAccounts(ctx, tx, 100, 0, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(105)))
+			Expect(second).To(HaveLen(5))
+			Expect(idsOf(second)).To(Equal(ids[100:]))
+
+			union := append(append([]string{}, idsOf(first)...), idsOf(second)...)
+			seen := map[string]bool{}
+			for _, id := range union {
+				Expect(seen[id]).To(BeFalse(), "the two pages must not overlap: %q appears twice", id)
+				seen[id] = true
+			}
+			Expect(seen).To(HaveLen(105), "the two pages must cover all 105 unique ids")
+		})
+
+		It("breaks ties on an explicit non-unique order with ascending id across pages", func() {
+			ids := seedAccounts(6, "Same Name")
+			first, total, err := ListBillingAccounts(ctx, tx, 0, 3, "", "display_name")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(6)))
+			Expect(first).To(HaveLen(3))
+			// All six rows tie on display_name, so the pages must fall back to the ascending-id
+			// tie-breaker rather than an arbitrary within-tie order.
+			Expect(idsOf(first)).To(Equal(ids[:3]))
+
+			second, total, err := ListBillingAccounts(ctx, tx, 3, 3, "", "display_name")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(6)))
+			Expect(second).To(HaveLen(3))
+			Expect(idsOf(second)).To(Equal(ids[3:]))
+			Expect(append(idsOf(first), idsOf(second)...)).To(Equal(ids),
+				"the concatenation must be the full ascending-id sequence")
+		})
+
+		It("serves the full default page at exactly 100 rows and an empty page at offset 100", func() {
+			seedAccounts(100, "Acme")
+			page, total, err := ListBillingAccounts(ctx, tx, 0, 0, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(100)))
+			Expect(page).To(HaveLen(100))
+			rest, total, err := ListBillingAccounts(ctx, tx, 100, 0, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(100)))
+			Expect(rest).To(BeEmpty())
+		})
+
+		It("returns no items and total 0 for an empty collection", func() {
+			items, total, err := ListBillingAccounts(ctx, tx, 0, 0, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(0)))
+			Expect(items).To(BeEmpty())
 		})
 	})
 })

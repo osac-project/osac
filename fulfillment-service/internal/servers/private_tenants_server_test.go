@@ -621,6 +621,315 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			"the deferred assignment FK must leave the tenant live-but-deleted, not archived")
 	})
 
+	// insertBillingHistory gives the tenant one closed and one current billing assignment, so both a
+	// past and the active row reference it. It mirrors the helpers of the assignment-only spec above.
+	insertBillingHistory := func(tenant string) (closed, current string) {
+		GinkgoHelper()
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		account1, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
+			ID: uuid.New(), ProviderKey: "m360", ProviderAccountReference: uuid.New(), State: "ACTIVE",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		account2, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
+			ID: uuid.New(), ProviderKey: "m360", ProviderAccountReference: uuid.New(), State: "ACTIVE",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		closed, err = database.CloseAndInsertTenantBillingAssignment(ctx, tx, "",
+			database.TenantBillingAssignmentInsert{
+				ID: uuid.New(), Name: tenant + "-account-1", TenantID: tenant,
+				BillingAccountID: account1, ConnectionState: "CONNECTED",
+			})
+		Expect(err).ToNot(HaveOccurred())
+		current, err = database.CloseAndInsertTenantBillingAssignment(ctx, tx, closed,
+			database.TenantBillingAssignmentInsert{
+				ID: uuid.New(), Name: tenant + "-account-2", TenantID: tenant,
+				BillingAccountID: account2, ConnectionState: "CONNECTED",
+			})
+		Expect(err).ToNot(HaveOccurred())
+		return
+	}
+
+	// deferProjectsFK makes projects_tenant_fk deferrable initially deferred, so the immediate
+	// billing assignment FK is the violation reported when the tenant row is deleted.
+	deferProjectsFK := func() {
+		GinkgoHelper()
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tx.Exec(ctx, `alter table projects drop constraint projects_tenant_fk`)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tx.Exec(ctx, `
+			alter table projects add constraint projects_tenant_fk
+			foreign key (tenant) references tenants (name) deferrable initially deferred`)
+		Expect(err).ToNot(HaveOccurred())
+	}
+
+	// expectIntactTenant asserts, inside the current transaction, that the tenant row is still live,
+	// that both billing assignment rows survived, and that nothing was archived.
+	expectIntactTenant := func(tenant, closed, current string) {
+		GinkgoHelper()
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		var count int
+		err = tx.QueryRow(ctx, "select count(*) from tenants where name = $1", tenant).Scan(&count)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(count).To(Equal(1))
+		closedRow, err := database.GetTenantBillingAssignment(ctx, tx, closed)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(closedRow.TenantID).To(Equal(tenant))
+		Expect(closedRow.EffectiveTo).ToNot(BeNil())
+		currentRow, err := database.GetTenantBillingAssignment(ctx, tx, current)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(currentRow.TenantID).To(Equal(tenant))
+		Expect(currentRow.EffectiveTo).To(BeNil())
+		err = tx.QueryRow(ctx, "select count(*) from archived_tenants where name = $1", tenant).Scan(&count)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(count).To(BeZero())
+	}
+
+	It("Cannot delete a tenant that has projects and billing assignments (default constraint order)", func() {
+		// Create a tenant with no finalizers, so deletion immediately attempts the archive. The
+		// default project remains, and both a closed and a current billing assignment reference the
+		// tenant, so the archive delete violates both foreign keys.
+		createResponse, err := tenantsServer.Create(
+			ctx,
+			privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "blocked-tenant",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		)
+		Expect(err).ToNot(HaveOccurred())
+		tenant := createResponse.GetObject()
+
+		closed, current := insertBillingHistory("blocked-tenant")
+
+		// The delete must be rejected because of the project, not accepted because of the
+		// assignment history:
+		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+			Id: tenant.GetId(),
+		}.Build())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+		Expect(status.Message()).To(Equal(
+			"tenant 'blocked-tenant' cannot be deleted because it still has projects",
+		))
+
+		expectIntactTenant("blocked-tenant", closed, current)
+	})
+
+	It("Cannot delete a tenant that has projects and billing assignments when the assignment FK is "+
+		"the reported violation", func() {
+		// Same shape as the default-order spec, but with projects_tenant_fk deferrable initially
+		// deferred. The deferred project check is rolled back with the savepoint, so the assignment
+		// FK is the reported violation and only the explicit projects check can catch the project
+		// blocker: without it the tenant would end up live-but-deleted while still owning projects.
+		createResponse, err := tenantsServer.Create(
+			ctx,
+			privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "forced-tenant",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		)
+		Expect(err).ToNot(HaveOccurred())
+		tenant := createResponse.GetObject()
+
+		closed, current := insertBillingHistory("forced-tenant")
+		deferProjectsFK()
+
+		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+			Id: tenant.GetId(),
+		}.Build())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+		Expect(status.Message()).To(Equal(
+			"tenant 'forced-tenant' cannot be deleted because it still has projects",
+		))
+
+		expectIntactTenant("forced-tenant", closed, current)
+	})
+
+	It("Cannot archive a soft-deleted tenant through a finalizer-clearing update while it still has "+
+		"projects and billing assignments", func() {
+		// Create a tenant with finalizers, so Delete only soft-deletes it:
+		createResponse, err := tenantsServer.Create(
+			ctx,
+			privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:       "finalizer-tenant",
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		)
+		Expect(err).ToNot(HaveOccurred())
+		id := createResponse.GetObject().GetId()
+
+		closed, current := insertBillingHistory("finalizer-tenant")
+		deferProjectsFK()
+
+		// The soft delete succeeds because the finalizers are present:
+		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+			Id: id,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// Commit the soft-deleted state and run the finalizer-clearing update in its own
+		// transaction, so its rejection rolls back completely and can be verified against the
+		// committed state below:
+		Expect(suiteTx.End(ctx)).To(Succeed())
+		suiteTx = nil
+		ctx = database.TxManagerIntoContext(context.Background(), tm)
+
+		// Clearing the last finalizers triggers the archive attempt, which the project blocker
+		// must reject even though the assignment FK is the reported violation:
+		_, err = database.WithNewTx(ctx, func(ctx context.Context) (*privatev1.TenantsUpdateResponse, error) {
+			getResponse, getErr := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{
+				Id: id,
+			}.Build())
+			if getErr != nil {
+				return nil, getErr
+			}
+			object := proto.Clone(getResponse.GetObject()).(*privatev1.Tenant)
+			object.GetMetadata().SetFinalizers(nil)
+			return tenantsServer.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
+				Lock:       true,
+			}.Build())
+		})
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+		Expect(status.Message()).To(Equal(
+			"tenant 'finalizer-tenant' cannot be deleted because it still has projects",
+		))
+
+		// From an independent transaction the tenant is still present, still soft-deleted, with
+		// its finalizers intact (the clearing update rolled back) and no archived copy:
+		read, err := database.WithNewTx(ctx, func(ctx context.Context) (*privatev1.TenantsGetResponse, error) {
+			return tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{
+				Id: id,
+			}.Build())
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(read.GetObject().GetMetadata().GetFinalizers()).To(ConsistOf(
+			finalizers.TenantLifecycle, finalizers.TenantOnboarding,
+		))
+		Expect(read.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+
+		var archived int
+		_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
+			tx, txErr := database.TxFromContext(ctx)
+			if txErr != nil {
+				return struct{}{}, txErr
+			}
+			var count int
+			err := tx.QueryRow(ctx,
+				"select count(*) from archived_tenants where name = 'finalizer-tenant'").Scan(&count)
+			if err != nil {
+				return struct{}{}, err
+			}
+			archived = count
+			closedRow, err := database.GetTenantBillingAssignment(ctx, tx, closed)
+			if err != nil {
+				return struct{}{}, err
+			}
+			Expect(closedRow.TenantID).To(Equal("finalizer-tenant"))
+			currentRow, err := database.GetTenantBillingAssignment(ctx, tx, current)
+			if err != nil {
+				return struct{}{}, err
+			}
+			Expect(currentRow.TenantID).To(Equal("finalizer-tenant"))
+			return struct{}{}, nil
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(archived).To(BeZero())
+	})
+
+	It("Leaves no committed damage when a deferred-order delete is rejected", func() {
+		// Same forced-order setup, but committed before the delete so the rejection can be verified
+		// from an independent transaction: the failed delete runs in its own transaction, which
+		// rolls back completely.
+		createResponse, err := tenantsServer.Create(
+			ctx,
+			privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "committed-tenant",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		)
+		Expect(err).ToNot(HaveOccurred())
+		tenant := createResponse.GetObject()
+
+		closed, current := insertBillingHistory("committed-tenant")
+		deferProjectsFK()
+
+		// Commit the setup and release the suite transaction, following the pattern of the tenant
+		// billing assignments specs:
+		Expect(suiteTx.End(ctx)).To(Succeed())
+		suiteTx = nil
+		ctx = database.TxManagerIntoContext(context.Background(), tm)
+
+		_, err = database.WithNewTx(ctx, func(ctx context.Context) (*privatev1.TenantsDeleteResponse, error) {
+			return tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+				Id: tenant.GetId(),
+			}.Build())
+		})
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+		Expect(status.Message()).To(Equal(
+			"tenant 'committed-tenant' cannot be deleted because it still has projects",
+		))
+
+		// From an independent transaction the tenant is still there without a deletion timestamp
+		// (the rejected delete left no trace), both assignments remain, and nothing was archived:
+		_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
+			tx, txErr := database.TxFromContext(ctx)
+			if txErr != nil {
+				return struct{}{}, txErr
+			}
+			var deletedAt time.Time
+			err := tx.QueryRow(ctx,
+				"select deletion_timestamp from tenants where name = 'committed-tenant'").Scan(&deletedAt)
+			if err != nil {
+				return struct{}{}, err
+			}
+			Expect(deletedAt.After(time.Unix(1, 0))).To(BeFalse(),
+				"the tenant must not carry a deletion timestamp after the rejected delete")
+			closedRow, err := database.GetTenantBillingAssignment(ctx, tx, closed)
+			if err != nil {
+				return struct{}{}, err
+			}
+			Expect(closedRow.TenantID).To(Equal("committed-tenant"))
+			currentRow, err := database.GetTenantBillingAssignment(ctx, tx, current)
+			if err != nil {
+				return struct{}{}, err
+			}
+			Expect(currentRow.TenantID).To(Equal("committed-tenant"))
+			var count int
+			err = tx.QueryRow(ctx,
+				"select count(*) from archived_tenants where name = 'committed-tenant'").Scan(&count)
+			if err != nil {
+				return struct{}{}, err
+			}
+			Expect(count).To(BeZero())
+			return struct{}{}, nil
+		})
+		Expect(err).ToNot(HaveOccurred())
+	})
+
 	Describe("External billing id", func() {
 		createTenant := func(name, billingID string) *privatev1.Tenant {
 			GinkgoHelper()

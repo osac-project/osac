@@ -125,13 +125,13 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	if !c.args.quiet {
 		if allowed {
-			c.console.Infof(ctx, "yes\n")
+			_ = c.console.Infof(ctx, "yes\n")
 		} else {
-			c.console.Infof(ctx, "no")
+			_ = c.console.Infof(ctx, "no")
 			if reason := result.GetStatus().GetReason(); reason != "" {
-				c.console.Infof(ctx, " - %s", reason)
+				_ = c.console.Infof(ctx, " - %s", reason)
 			}
-			c.console.Infof(ctx, "\n")
+			_ = c.console.Infof(ctx, "\n")
 		}
 	}
 

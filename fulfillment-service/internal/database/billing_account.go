@@ -168,9 +168,15 @@ func billingAccountFilterSQL(filter string) (string, []any, error) {
 }
 
 // billingAccountOrderSQL translates an order expression into a SQL ORDER BY column (with optional
-// asc/desc), defaulting to "id" for an empty order.
+// asc/desc), defaulting to "id" for an empty order. withIDTieBreaker then appends an ascending-id
+// tie-breaker so offset/limit pagination stays deterministic across ties on the primary order; the
+// default "id" order is already unique and passes through unchanged.
 func billingAccountOrderSQL(order string) (string, error) {
-	return translateFlatTableOrder(order, billingAccountColumns, "id")
+	translated, err := translateFlatTableOrder(order, billingAccountColumns, "id")
+	if err != nil {
+		return "", err
+	}
+	return withIDTieBreaker(translated), nil
 }
 
 // ListBillingAccounts returns the page of billing_accounts rows matching filter, ordered by

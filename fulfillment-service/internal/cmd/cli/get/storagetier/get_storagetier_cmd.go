@@ -70,7 +70,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to list storage tiers: %w", err)
 		}
 		if len(resp.GetItems()) == 0 {
-			c.console.Infof(ctx, "No storage tiers found.\n")
+			_ = c.console.Infof(ctx, "No storage tiers found.\n")
 			return nil
 		}
 		renderTierTable(c.console, resp.GetItems())

@@ -134,7 +134,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create secret: %w", err)
 	}
 
-	c.console.Infof(ctx, "Created secret '%s' (ID: %s).\n",
+	_ = c.console.Infof(ctx, "Created secret '%s' (ID: %s).\n",
 		response.GetObject().GetMetadata().GetName(), response.GetObject().GetId())
 
 	return nil

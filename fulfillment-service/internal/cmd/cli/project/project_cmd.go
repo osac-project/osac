@@ -105,7 +105,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to save settings: %w", err)
 		}
-		c.console.Render(ctx, "project_cleared.txt", nil)
+		_ = c.console.Render(ctx, "project_cleared.txt", nil)
 		return nil
 	}
 
@@ -120,12 +120,12 @@ func (c *runnerContext) showCurrentProject(cmd *cobra.Command, settings *config.
 	ctx := cmd.Context()
 	project := config.ProjectFromContext(ctx)
 	if project == "" {
-		c.console.Render(ctx, "no_project.txt", nil)
+		_ = c.console.Render(ctx, "no_project.txt", nil)
 		return nil
 	}
 
 	if c.args.format == "" {
-		c.console.Render(ctx, "current_project.txt", map[string]any{
+		_ = c.console.Render(ctx, "current_project.txt", map[string]any{
 			"Project": project,
 		})
 		return nil
@@ -152,7 +152,7 @@ func (c *runnerContext) setProject(cmd *cobra.Command, settings *config.Settings
 		if err != nil {
 			return fmt.Errorf("failed to save settings: %w", err)
 		}
-		c.console.Render(ctx, "project_cleared.txt", nil)
+		_ = c.console.Render(ctx, "project_cleared.txt", nil)
 		return nil
 	}
 
@@ -191,7 +191,7 @@ func (c *runnerContext) setProject(cmd *cobra.Command, settings *config.Settings
 		return fmt.Errorf("failed to save settings: %w", err)
 	}
 
-	c.console.Render(ctx, "project_set.txt", map[string]any{
+	_ = c.console.Render(ctx, "project_set.txt", map[string]any{
 		"Project": canonicalName,
 	})
 	return nil
@@ -201,7 +201,7 @@ func (c *runnerContext) setProject(cmd *cobra.Command, settings *config.Settings
 // where error templates should not be displayed.
 type noOpRenderer struct{}
 
-func (noOpRenderer) Render(context.Context, string, any) {}
+func (noOpRenderer) Render(context.Context, string, any) error { return nil }
 
 // findProjectQuiet is like findProject but uses a no-op renderer so that "not found" and
 // "multiple matches" templates are not displayed. It is used for speculative lookups
@@ -320,9 +320,9 @@ func (c *runnerContext) renderObject(cmd *cobra.Command, object proto.Message) e
 
 	switch c.args.format {
 	case "json":
-		c.console.RenderJson(ctx, value)
+		_ = c.console.RenderJson(ctx, value)
 	case "yaml":
-		c.console.RenderYaml(ctx, value)
+		_ = c.console.RenderYaml(ctx, value)
 	default:
 		return fmt.Errorf("unknown output format '%s', should be 'json' or 'yaml'", c.args.format)
 	}

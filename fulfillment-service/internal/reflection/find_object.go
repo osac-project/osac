@@ -25,7 +25,7 @@ import (
 // Renderer is a minimal interface satisfied by *terminal.Console.
 // Using an interface avoids a circular import (terminal imports reflection for table rendering).
 type Renderer interface {
-	Render(ctx context.Context, name string, data any)
+	Render(ctx context.Context, name string, data any) error
 }
 
 // FindObject resolves ref to exactly one object by building a CEL filter and calling List.
@@ -52,20 +52,26 @@ func (h *objectHelper) FindObject(ctx context.Context, ref string, console Rende
 	total := response.Total
 	switch len(items) {
 	case 0:
-		console.Render(ctx, "no_matches.txt", map[string]any{
+		if renderErr := console.Render(ctx, "no_matches.txt", map[string]any{
 			"Object": h.Singular(),
 			"Ref":    ref,
-		})
+		}); renderErr != nil {
+			err = fmt.Errorf("failed to render the 'no_matches' template: %w", renderErr)
+			return
+		}
 		err = exit.Error(1)
 	case 1:
 		result = items[0]
 	default:
-		console.Render(ctx, "multiple_matches.txt", map[string]any{
+		if renderErr := console.Render(ctx, "multiple_matches.txt", map[string]any{
 			"Matches": items,
 			"Object":  h.Singular(),
 			"Ref":     ref,
 			"Total":   total,
-		})
+		}); renderErr != nil {
+			err = fmt.Errorf("failed to render the 'multiple_matches' template: %w", renderErr)
+			return
+		}
 		err = exit.Error(1)
 	}
 	return

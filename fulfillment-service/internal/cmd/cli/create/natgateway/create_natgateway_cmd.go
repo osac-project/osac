@@ -137,7 +137,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create NAT gateway: %w", err)
 	}
 
-	c.console.Infof(ctx, "Created NAT gateway '%s' (ID: %s).\n", response.Object.GetMetadata().GetName(), response.Object.GetId())
+	_ = c.console.Infof(ctx, "Created NAT gateway '%s' (ID: %s).\n", response.Object.GetMetadata().GetName(), response.Object.GetId())
 
 	return nil
 }

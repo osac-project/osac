@@ -155,8 +155,9 @@ func (c *Console) SetHelper(value reflection.Helper) {
 	c.helper = value
 }
 
-// Infof writes a message to the standard output stream of the console.
-func (c *Console) Infof(ctx context.Context, format string, args ...any) {
+// Infof writes a message to the standard output stream of the console. It returns an error if writing the message
+// to the standard output stream fails.
+func (c *Console) Infof(ctx context.Context, format string, args ...any) error {
 	text := fmt.Sprintf(format, args...)
 	c.logger.DebugContext(
 		ctx,
@@ -173,7 +174,9 @@ func (c *Console) Infof(ctx context.Context, format string, args ...any) {
 			slog.String("text", text),
 			slog.Any("error", err),
 		)
+		return fmt.Errorf("failed to write info output: %w", err)
 	}
+	return nil
 }
 
 // Errorf writes a message to the standard error stream of the console.
@@ -204,8 +207,9 @@ func (c *Console) Stderr() io.Writer {
 }
 
 // Render renders the given template with the given data to stdout. The template should be a template file name that
-// was added via AddTemplatesFS. If no template file systems have been added, this method will log an error.
-func (c *Console) Render(ctx context.Context, template string, data any) {
+// was added via AddTemplatesFS. If no template file systems have been added, this method will log an error. It returns
+// an error if executing the template or writing the result to the standard output stream fails.
+func (c *Console) Render(ctx context.Context, template string, data any) error {
 	var buffer bytes.Buffer
 	err := c.engine.Execute(&buffer, template, data)
 	if err != nil {
@@ -215,7 +219,7 @@ func (c *Console) Render(ctx context.Context, template string, data any) {
 			slog.String("template", template),
 			slog.Any("error", err),
 		)
-		return
+		return fmt.Errorf("failed to execute template %q: %w", template, err)
 	}
 	text := buffer.String()
 	lines := strings.Split(text, "\n")
@@ -231,6 +235,7 @@ func (c *Console) Render(ctx context.Context, template string, data any) {
 						"Failed to write empty line",
 						slog.Any("error", err),
 					)
+					return fmt.Errorf("failed to write template output: %w", err)
 				}
 				previousEmpty = true
 			}
@@ -243,14 +248,17 @@ func (c *Console) Render(ctx context.Context, template string, data any) {
 					slog.String("line", line),
 					slog.Any("error", err),
 				)
+				return fmt.Errorf("failed to write template output: %w", err)
 			}
 			previousEmpty = false
 		}
 	}
+	return nil
 }
 
-// RenderJson writes JSON to stdout, using syntax highlighting when color is enabled.
-func (c *Console) RenderJson(ctx context.Context, data any) {
+// RenderJson writes JSON to stdout, using syntax highlighting when color is enabled. It returns an error if encoding
+// the data or writing the result to the standard output stream fails.
+func (c *Console) RenderJson(ctx context.Context, data any) error {
 	bytes, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		c.logger.ErrorContext(
@@ -258,16 +266,19 @@ func (c *Console) RenderJson(ctx context.Context, data any) {
 			"Failed to encode JSON",
 			slog.Any("error", err),
 		)
-		return
+		return fmt.Errorf("failed to encode JSON: %w", err)
 	}
 	text := string(bytes) + "\n"
 	if err := c.renderColored(ctx, text, "json"); err != nil {
 		c.logger.ErrorContext(ctx, "Failed to render JSON", slog.Any("error", err))
+		return fmt.Errorf("failed to render JSON: %w", err)
 	}
+	return nil
 }
 
-// RenderYaml writes YAML to stdout, using syntax highlighting when color is enabled.
-func (c *Console) RenderYaml(ctx context.Context, data any) {
+// RenderYaml writes YAML to stdout, using syntax highlighting when color is enabled. It returns an error if encoding
+// the data or writing the result to the standard output stream fails.
+func (c *Console) RenderYaml(ctx context.Context, data any) error {
 	buffer := &bytes.Buffer{}
 	encoder := yaml.NewEncoder(buffer)
 	encoder.SetIndent(2)
@@ -278,12 +289,14 @@ func (c *Console) RenderYaml(ctx context.Context, data any) {
 			"Failed to encode YAML",
 			slog.Any("error", err),
 		)
-		return
+		return fmt.Errorf("failed to encode YAML: %w", err)
 	}
 	encoder.Close()
 	if err := c.renderColored(ctx, buffer.String(), "yaml"); err != nil {
 		c.logger.ErrorContext(ctx, "Failed to render YAML", slog.Any("error", err))
+		return fmt.Errorf("failed to render YAML: %w", err)
 	}
+	return nil
 }
 
 // renderColored renders the given text to stdout with syntax highlighting when color is enabled.
@@ -326,7 +339,32 @@ func (c *Console) renderColored(ctx context.Context, text string, format string)
 	if file, ok := writer.(*os.File); ok && isatty.IsTerminal(file.Fd()) {
 		writer = colorable.NewColorable(file)
 	}
-	return formatter.Format(writer, style, iterator)
+
+	// The chroma formatters discard write errors, so pass a writer that remembers the first failure and report it
+	// when the formatter doesn't return an error of its own. The wrapper writes exactly the same bytes as the
+	// original writer, so successful output is unchanged.
+	capturing := &errorCapturingWriter{writer: writer}
+	err = formatter.Format(capturing, style, iterator)
+	if err == nil {
+		err = capturing.err
+	}
+	return err
+}
+
+// errorCapturingWriter is an io.Writer that wraps another writer and remembers the first write error, so that write
+// failures discarded by the chroma formatters can still be reported to the caller.
+type errorCapturingWriter struct {
+	writer io.Writer
+	err    error
+}
+
+// Write is the implementation of the io.Writer interface.
+func (w *errorCapturingWriter) Write(p []byte) (n int, err error) {
+	n, err = w.writer.Write(p)
+	if err != nil && w.err == nil {
+		w.err = err
+	}
+	return
 }
 
 // Write is an implementation of the io.Write interface that allows the console to be used as a writer if needed.

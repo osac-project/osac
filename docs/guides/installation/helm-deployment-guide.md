@@ -350,12 +350,16 @@ not apply.
 
 When bundled Keycloak is enabled, it mounts the ConfigMap named by
 `certs.caBundle.configMap` from the `keycloak` namespace and reads its
-`bundle.pem` key. The Phase 1b CA-bundle hook creates and synchronizes this
-ConfigMap when enabled. If administrators manage the bundle directly or
-`caIssuer.enabled: false` disables the hook, provide the ConfigMap in the
-`keycloak` namespace before Phase 1b. The OSAC chart uses a separate ConfigMap
-in the OSAC release namespace; before Phase 2, provide it with the
-`bundle.pem` key under the name configured by
+`bundle.pem` key. When `caIssuer.enabled: true`, the Phase 1b hook applies a
+trust-manager `Bundle` that reconciles same-named ConfigMaps in the
+`osac-infra`, `keycloak`, and OSAC release namespaces. This can replace roots
+in directly managed ConfigMaps. If administrators manage these ConfigMaps
+directly, set `caIssuer.enabled: false` before Phase 1b and remove or change any
+existing `Bundle` so it no longer targets those ConfigMaps. Provide a
+`bundle.pem` ConfigMap in the `keycloak` and `osac-infra` namespaces before
+Phase 1b when the enabled services consume it. The OSAC chart uses a separate
+ConfigMap in the OSAC release namespace; before Phase 2, provide it under the
+name configured by
 `service.certs.caBundle.configMap`. Keep that name aligned with
 `certs.caBundle.configMap`. For a custom name, also configure the related
 consumer values listed in
@@ -848,11 +852,13 @@ mce:          { enabled: false }
   existing installation.
 - When `default-ca` is administrator-managed, set `caIssuer.enabled: false` so
   `osac-infra` does not render or adopt the `default-ca` `ClusterIssuer` and
-  `default-ca-cert` `Certificate`. This also disables the CA-bundle hook. Before
-  Phase 2, provide the ConfigMap named by `service.certs.caBundle.configMap` in
-  the OSAC release namespace, and set `service.certs.issuerRef` in
-  `my-values.yaml` to an existing `ClusterIssuer` or `Issuer` for the OSAC
-  service certificates.
+  `default-ca-cert` `Certificate`. This also disables the chart-managed
+  self-signed `Issuer`, CA-bundle hook, and Keycloak Route patch hook when
+  `keycloak.route.publicIngress` is enabled. Provide any required issuer
+  separately. Before Phase 2, provide the ConfigMap named by
+  `service.certs.caBundle.configMap` in the OSAC release namespace, and set
+  `service.certs.issuerRef` in `my-values.yaml` to an existing `ClusterIssuer`
+  or `Issuer` for the OSAC service certificates.
 - `certs.issuerRef` selects the issuer for certificates used by Kafka, bundled
   PostgreSQL, and OpenBao. If any of these are enabled and no `default-ca`
   ClusterIssuer will exist, set
@@ -957,6 +963,12 @@ above sets the same public hostname and enables `publicIngress`.
   bundle.
 - The `osac-infra-patch-keycloak-route` hook Job automatically sets
   `destinationCACertificate` at install/upgrade time.
+
+When `caIssuer.enabled: false`, the chart does not render this Route patch
+hook. For a `reencrypt` Route, set `destinationCACertificate` to the CA
+certificate that signs Keycloak's serving certificate. Keep it current and
+update it whenever that certificate or its issuer changes; the chart will not
+set or refresh it in this mode.
 
 **When to use:**
 

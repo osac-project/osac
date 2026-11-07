@@ -2176,10 +2176,18 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    In `status.conditions`, find the condition with `type: Synced`. Confirm its
    `status` is `True` and its `observedGeneration` matches the Bundle's
    `metadata.generation` before using the ConfigMap. This verifies that
-   trust-manager has processed the current Bundle configuration.
+   trust-manager has processed the current Bundle configuration, but not that
+   a changed source Secret has reached the target ConfigMap; Secret updates do
+   not change the Bundle generation. After a CA source changes, repeat the
+   ConfigMap command above and confirm that `bundle.pem` contains the expected
+   CA, for example by comparing its subject or SHA-256 fingerprint with the
+   certificate provided by your administrators.
 
-   The ConfigMap must contain the CA bundle under the fixed `bundle.pem` key
-   required by the OSAC hooks. Extract it once for the client checks below:
+   The target ConfigMap must store the bundle under the fixed `bundle.pem` key
+   required by the OSAC hooks. After it contains the expected CA, extract
+   `bundle.pem` for the client checks below. Repeat the ConfigMap check and
+   extraction after every later CA source change; use the refreshed file for
+   client checks.
 
    ```console
    oc get configmap <ca_bundle_configmap> -n <namespace> \

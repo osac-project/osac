@@ -102,8 +102,8 @@ importers:
         specifier: ^16.2.0
         version: 16.4.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       victory:
-        specifier: ^37.3.6
-        version: 37.3.6(react@19.2.5)
+        specifier: ^38.0.0
+        version: 38.0.0(react@19.2.5)
     devDependencies:
       '@testing-library/jest-dom':
         specifier: ^6.6.0
@@ -3206,11 +3206,21 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
+  victory-area@38.0.0:
+    resolution: {integrity: sha512-+e4FI4BTlWXwiZYeDj9z717cmwSMQdteZK0OehWZie5674jro3KeSLYGdPJ9h12LuVmQ01CHzlCQMFA+pY8MSg==}
+    peerDependencies:
+      react: '>=18'
+
   victory-axis@37.3.6:
     resolution: {integrity: sha512-Vi0dZvgmXmnCdoqc49WckeG5cMXnl7FTtqVhXu9JweA9cgCnkZabBd5mRvAjblb3Lo4j0HZCSPKHYWUPW70qZg==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       react: '>=16.6.0'
+
+  victory-axis@38.0.0:
+    resolution: {integrity: sha512-2CdxD/YVcNsldQGJ+PvZUe5QeC276oee4wevGFqLXnMMDT+KGV/3dv5d5egGIv6JjZTNDXWcTzkrZhVRC7rpJw==}
+    peerDependencies:
+      react: '>=18'
 
   victory-bar@37.3.6:
     resolution: {integrity: sha512-jdATFRWL1LUW/yEpKWx/aId2BiU2o1pPF9+Kh1TFISBduJoI4ZqvZD90H1QK4f/z50PikqiqiDECaKoKM1jfOQ==}
@@ -3218,11 +3228,21 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
+  victory-bar@38.0.0:
+    resolution: {integrity: sha512-Nm06vXVRFmpA85perR56/uVlUjpkpYCl+PvPEcJUYvWKlY7vVmWC+Bs8h6enYFPS53fs6tHkf3TORrqgOTbCkg==}
+    peerDependencies:
+      react: '>=18'
+
   victory-box-plot@37.3.6:
     resolution: {integrity: sha512-GOucnD63h14ScBuISC/nd1GBTEx6gIZfLE+0P0gyeH1poBKq0trTTvpQDvAMuGR8zICfEETG3ltmUMCwRrFyUg==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       react: '>=16.6.0'
+
+  victory-box-plot@38.0.0:
+    resolution: {integrity: sha512-EJSCwZ2F8MLgqhxBgsa2QXHdvD6SPA0m9h/xzv0xmRuI8tu0TOIvAnOCZzgRujUTUVdQGkpn+jObZLA4W2eH7Q==}
+    peerDependencies:
+      react: '>=18'
 
   victory-brush-container@37.3.6:
     resolution: {integrity: sha512-LfZ2CgX1cYAqCtYxcSB68OfZS2v0T2VLXoEArd0lCXfRBY1Gya7GacCUcuo7GoK9XOXeslx7S/U95aVutt1VLg==}
@@ -3230,23 +3250,25 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
-  victory-brush-line@37.3.6:
-    resolution: {integrity: sha512-zsZJfF1fUj4F7mUoIMV+h73qoTClPA4bKM1terlYrDBD8l/c/f0KBbEotu3E1X+n4QMmDRruswaB/YUdqK5QLA==}
-    engines: {node: '>=18.0.0'}
+  victory-brush-container@38.0.0:
+    resolution: {integrity: sha512-4gwwEB+2fOHV40bMKxMVXnYedMEQCu+Pg/OTrUArYyfdnPebRrwYdg13i6ZILtys1K3b2nV1s901nYMKpcfSnw==}
     peerDependencies:
-      react: '>=16.6.0'
+      react: '>=18'
 
-  victory-candlestick@37.3.6:
-    resolution: {integrity: sha512-h/mOmkCrsWrirn4dFnpLxJPXpxT+uHxuYxnXGrAyH+YUOrVj3iKaDJlEiVlz5vy30syE5j5hzTQCMsZ/hzHNdg==}
-    engines: {node: '>=18.0.0'}
+  victory-brush-line@38.0.0:
+    resolution: {integrity: sha512-uTbnjp0PlIv2O+D7qeU/aJt8dNPl7H+FsN2MKk+TGt8IEmn7rSam9p1kuClUkeEG8pzA7OBvDUVsCWyRQHQPPA==}
     peerDependencies:
-      react: '>=16.6.0'
+      react: '>=18'
 
-  victory-canvas@37.3.6:
-    resolution: {integrity: sha512-1CD4S0uZ92sUGGSIEQferEfSqd/z9EXw9G6zkzPIoJeTKFshpfqCjUkNRx9Iu9Upxt3fUpId8Qwl1YfchmbrFg==}
-    engines: {node: '>=18.0.0'}
+  victory-candlestick@38.0.0:
+    resolution: {integrity: sha512-KPwqemBsr5GkazWZ8GhJ7tmcEDQShP8rj1F6ZwFwL7uMhc9IaTqYkOMel+fEgIYOqF9Dionytd599+mr6lpQFA==}
     peerDependencies:
-      react: '>=16.6.0'
+      react: '>=18'
+
+  victory-canvas@38.0.0:
+    resolution: {integrity: sha512-ULy0eaND2xqfPyPuLjARBjrbhBWcuI1i6DuDLVnj64XULltLy3Jg4LG+/4WEPwSthkBvM/A6RxTnRvtNrobtDg==}
+    peerDependencies:
+      react: '>=18'
 
   victory-chart@37.3.6:
     resolution: {integrity: sha512-IkPo/W4AJ7bPu902TGER09OseR9ODm+FQAKfOBw4JsdEhZZ7BiG9zgd/25+x0r5EsTLu81CYGQVkBa+ZazcOlA==}
@@ -3254,11 +3276,21 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
+  victory-chart@38.0.0:
+    resolution: {integrity: sha512-et5bLBlBj6nxO/jEavCcjfHjkFtoyI/JSmzX20Rp0Cl0hpH2d56J9Rjxwi6nMLMXZo5gsUT8Mqw0CEIfuH0/QA==}
+    peerDependencies:
+      react: '>=18'
+
   victory-core@37.3.6:
     resolution: {integrity: sha512-aFgO6KokxPbUCPznZP5UPhOdI22pMuwDXKDt6eoQOnkVim66Ia+K95TQar2nwVKGYV5j26aKVf/n9blwphGJRw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       react: '>=16.6.0'
+
+  victory-core@38.0.0:
+    resolution: {integrity: sha512-kJGrOdmf8bl+Hmjj38eLE72Rc1cdwHiGXJeodyaeURwTh9UmWidQxMpPFkNG/Ll6sKAmkKQPq5nJCZhu1lz9/Q==}
+    peerDependencies:
+      react: '>=18'
 
   victory-create-container@37.3.6:
     resolution: {integrity: sha512-Uf5bFQvqUsXCjqpvBW4LhrdrHkM6dBqxYgub6FCsBb86f84xZQ3vY7jFkg/JfvF0oGKMoWXYYrYLC1sk+fcWVA==}
@@ -3266,17 +3298,26 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
+  victory-create-container@38.0.0:
+    resolution: {integrity: sha512-X+JvAJuCOtnx3N7J2VLJfIQJuccbiee3BCgnfO1IvSYBp1P6q+DM6xj0SthPy9xta/hPaYOwX2xoB416I1yi9A==}
+    peerDependencies:
+      react: '>=18'
+
   victory-cursor-container@37.3.6:
     resolution: {integrity: sha512-+Oiw57d5nE+iq8As8RvepknzmNtKq1Gsc50u1X3IRd4jXtX8zqZrgXGlVZ+BP/tkLsWnGYVjKulwKBf2oaEUuw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       react: '>=16.6.0'
 
-  victory-errorbar@37.3.6:
-    resolution: {integrity: sha512-WGAv/qizOlfmwKv+Yfxr4q6pDgTfloNQwi3Z3M0h8povjMZt74tHYkvi/TASSRYr3zv5kjUqUJ28qAyGMWwryQ==}
-    engines: {node: '>=18.0.0'}
+  victory-cursor-container@38.0.0:
+    resolution: {integrity: sha512-tOBj5Vek1qdl6h7dDPViOaRvLd0JCsm/evwkc0eb4EGNhTdRhlvA/uvsvrBRqpeGphRVBp9x/F2B2GstMoiKnA==}
     peerDependencies:
-      react: '>=16.6.0'
+      react: '>=18'
+
+  victory-errorbar@38.0.0:
+    resolution: {integrity: sha512-7WzdaSQIKE98S6mDH5OACKnH9+VDmOisVDdh4TJDud+bcOL0E8/hVvo8s1FRfXW4EPKD7iT/PNcz6FJUHJunKw==}
+    peerDependencies:
+      react: '>=18'
 
   victory-group@37.3.6:
     resolution: {integrity: sha512-kgy/Azl5BxwlJAV0KDPGypv35TMrOD1J2ZxnJW2Wyyq+e8i0GGBIv5MoBzou64BRsDlS9V0CYRIjnkHgrBpB5w==}
@@ -3284,11 +3325,15 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
-  victory-histogram@37.3.6:
-    resolution: {integrity: sha512-K4d43MpXHYnGCLEMzfRpJ+lCRRDKALPi/juxfMGVzBPzSMgjC8h9x6hKdxaejiTd/E04UdzNO7J24plL3Uz8rA==}
-    engines: {node: '>=18.0.0'}
+  victory-group@38.0.0:
+    resolution: {integrity: sha512-uFoB9XfWH57Cz7cEWiVQm50bA0HlYJ5inHjsjwKv5OvkK0ffgcMNCcAdTCKGsT9uydHplaXYNrvdCv4wQFMP8w==}
     peerDependencies:
-      react: '>=16.6.0'
+      react: '>=18'
+
+  victory-histogram@38.0.0:
+    resolution: {integrity: sha512-XLGKAekVon+67Tbq/Y/ITAOrwADII+jYi3g+Xft1gBJ4xmY296e60eHObYgNEAyYGKbufOAM2UncuHHuaG+Gig==}
+    peerDependencies:
+      react: '>=18'
 
   victory-legend@37.3.6:
     resolution: {integrity: sha512-vRRrhj3/ENqKVLdaBMzEmR83N6BOjox1bthYT1eJjN2H5SIK35bxn30IkiV/Pz3y627EqZe4TAWaxc0jiJlCiA==}
@@ -3296,11 +3341,21 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
+  victory-legend@38.0.0:
+    resolution: {integrity: sha512-OQTmAU5OrrDlFCWN3/qCz6C8VcOCYjiruIHLkGm/Lr9ZeadoUYh+Ow7e2E1Amq10LmV+2rySsezhWZtoU2vdvQ==}
+    peerDependencies:
+      react: '>=18'
+
   victory-line@37.3.6:
     resolution: {integrity: sha512-Ke817uf/qFbN9jU7Dba7CrcHXYO5wAZuKKnyeHJmLDeQeFST0773xejnIuC+dBgZipjFr4KIbSd+VcUafFNE1g==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       react: '>=16.6.0'
+
+  victory-line@38.0.0:
+    resolution: {integrity: sha512-MET8MwR/D3KsJ+L1ZWppOvK6C26g561SWXCMTQD92OqZHNk2V0DhvHEU0X5lzgSV4CJLAx/DyxqQ+NxqigXKbQ==}
+    peerDependencies:
+      react: '>=18'
 
   victory-pie@37.3.6:
     resolution: {integrity: sha512-tvdgAZ/HQWlo3KDDe0XAVbizHuaNMbgkkiF7zfA7Ww+3bHSs+0P9dsDtK2xP365D8gBCOv8pWmuzvKRhzNbqeA==}
@@ -3308,11 +3363,21 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
+  victory-pie@38.0.0:
+    resolution: {integrity: sha512-lvxRsv8pzyEOFsndlFA+BtNoW+nZVKFOVVrYFTc6J4xFTUzzoxX7W6N75cVb/MjF44XnaIc7gtLcF04xNPu14w==}
+    peerDependencies:
+      react: '>=18'
+
   victory-polar-axis@37.3.6:
     resolution: {integrity: sha512-RpFsCkzHezJq5P+C/wtVdjEHX25JIFsSgs6qYSnfr/hayaFbWgK5HhRFpriQm5hg61cx47WxAOLyHvzf0nasvw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       react: '>=16.6.0'
+
+  victory-polar-axis@38.0.0:
+    resolution: {integrity: sha512-eRL8xoX1aTodw4SLksG2jMDEP7UfGD0618xGHVJdMDj/l7gBO+kKXQ+xKFSFhivcYmoYAB4TLcEcG928K9IT1w==}
+    peerDependencies:
+      react: '>=18'
 
   victory-scatter@37.3.6:
     resolution: {integrity: sha512-fp95zMTPXgW1cmTowzDXhn+KxePMVDrzU0lotsHQMdBV7eB+ioXdu9hORlx4VHmMYg2ihsGwRTF+VAZ7rGxphA==}
@@ -3320,11 +3385,21 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
+  victory-scatter@38.0.0:
+    resolution: {integrity: sha512-fL/PJu/j5dNy4xAawdcfeQDoGwtJslDQrcagc52eHX27CPWcbPrY4aOTyM+Yw1/fIJ3oCAu8XDMnvylIT5CBFg==}
+    peerDependencies:
+      react: '>=18'
+
   victory-selection-container@37.3.6:
     resolution: {integrity: sha512-gd3qODDlBtLEJM7+2jCXk2YcLBUmIpYEEHswytMhwc6zihxXipGBUHRulhLj/I05mKay2gaOAg5ewiJHd4Awgw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       react: '>=16.6.0'
+
+  victory-selection-container@38.0.0:
+    resolution: {integrity: sha512-7wuzzzV0d+Z8OW2kXKz1h0zI9nUaal+xSeNpJYPQ4Bx/R8eglPjxaf5T/YqnL4ZYU/lt9M/wDM8iKvWaOiti1w==}
+    peerDependencies:
+      react: '>=18'
 
   victory-shared-events@37.3.6:
     resolution: {integrity: sha512-ygrbOtzLUTbtKebacZKyQRekhSAROnAvMkVI/PKsAGsz0ClY9P7qDEJG7eTUUygjO6ax0tI6WNE6JogQzeD1gw==}
@@ -3332,11 +3407,21 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
+  victory-shared-events@38.0.0:
+    resolution: {integrity: sha512-DQxk50Ynx3fUwoEMSEBCkSYOdZZCJfJIkP/zMGPfPUjO7Vnqob3GRMv2lLvoem5GY681OovkiTyeqoWTv6SvIA==}
+    peerDependencies:
+      react: '>=18'
+
   victory-stack@37.3.6:
     resolution: {integrity: sha512-ldod04RdqGJGH5p5eWXCofdTkbhZqIp3iwW7NpxSbMDLs8zPQIVvDFVtuJgMwQiC5vnIpbhMmxVeFbr8m64ZKA==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       react: '>=16.6.0'
+
+  victory-stack@38.0.0:
+    resolution: {integrity: sha512-JfNGj6XbwTpGpLqiJj9GiI1r5wOaIrTFPBBv+u7HHPtslwY/cklBT27oauEsVicUHy2CeE872uwYqL4Dl+sNSw==}
+    peerDependencies:
+      react: '>=18'
 
   victory-tooltip@37.3.6:
     resolution: {integrity: sha512-vqaJS9noauOqDDBBAV9Ln9duOY/i17h1DCfCPAqhwPFyvFbwKvAub9zPTeYWAm/14VvWX5O/0yekFCVbcC7hjg==}
@@ -3344,8 +3429,16 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
+  victory-tooltip@38.0.0:
+    resolution: {integrity: sha512-0PMP2nL2EoV+Ug/WWLJDSy+DysFU/uLmSeCgrEix1kznvKkLXcOg6CL3g2vyhsrGUCApqD5odfJWpSa2M9apPg==}
+    peerDependencies:
+      react: '>=18'
+
   victory-vendor@37.3.6:
     resolution: {integrity: sha512-SbPDPdDBYp+5MJHhBCAyI7wKM3d5ivekigc2Dk2s7pgbZ9wIgIBYGVw4zGHBml/qTFbexrofXW6Gu4noGxrOwQ==}
+
+  victory-vendor@38.0.0:
+    resolution: {integrity: sha512-eW8mBWJcF5uwLzqRtXFB7eH2s3pGX05oxYYWvD3R4HJkflnIrdMkjsrc6gduX2+gJL80GruCUQb6DkzjYZKzkw==}
 
   victory-voronoi-container@37.3.6:
     resolution: {integrity: sha512-qAAG0rMuK7A4EoJ4cyUk5wNdOW+HuCXNKPOko+hYK6wWOYXJvFhiglYyA85a695YyAXECc6JyJS/crm4IOEFag==}
@@ -3353,11 +3446,15 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
-  victory-voronoi@37.3.6:
-    resolution: {integrity: sha512-Q+1FWHp8IAbmDL9pGWS0y0N4Cb5qmD9OOgxoxCfIDsLlhGvd6LddhRoknWsN7WnreaK+XiwjSfQkdMTCZ4hdhQ==}
-    engines: {node: '>=18.0.0'}
+  victory-voronoi-container@38.0.0:
+    resolution: {integrity: sha512-YJUTsn4+yFrpsVI0PLugwfsxZobxzCM+Lxfid9v2anJDj3wFpbmvmXbxtFHSJeMQEZD5FdvpWpCBwpdBklagsg==}
     peerDependencies:
-      react: '>=16.6.0'
+      react: '>=18'
+
+  victory-voronoi@38.0.0:
+    resolution: {integrity: sha512-hcS4cFPJTzRpFMtyFF2BjZjMfIeRN9DDvknC95qQpq3DrjqtOP54Oa+kxwPrmSit4Qd2ln9o+GQZcg7U/Qb1UQ==}
+    peerDependencies:
+      react: '>=18'
 
   victory-zoom-container@37.3.6:
     resolution: {integrity: sha512-AGL+k20mI44OL5b0VgIxlmnNSefIoFmbbim5NraPmIxbtns9qQW/56ivIncJcYomBungIx99gUpsEpcQaMNHgQ==}
@@ -3365,11 +3462,15 @@ packages:
     peerDependencies:
       react: '>=16.6.0'
 
-  victory@37.3.6:
-    resolution: {integrity: sha512-CZ1vjvra0R1U3T2dMI4EsjI8Ng+JmQ2ox/EweSzjkTnHfW/Vn5ylryadawDiYjDMcBvABjO3uODsIlSEm4d/Sw==}
-    engines: {node: '>=18.0.0'}
+  victory-zoom-container@38.0.0:
+    resolution: {integrity: sha512-jK+6bS8wLMjKtZc8mE8ZHKr9eNNGx4Hpm3FYKxIwqqqh6JlNDzhNKDkryHYp6YdUR35Ig3ZIYMUioNKI9E2xsw==}
     peerDependencies:
-      react: '>=16.6.0'
+      react: '>=18'
+
+  victory@38.0.0:
+    resolution: {integrity: sha512-hA4E+9dCyLwUrYxFlRriktXCHzUI8kpy4sWeRYEnpGyQmuVlvZB/IcyZ2sgZAF9YxpOyz3X98euo86GwtmacKg==}
+    peerDependencies:
+      react: '>=18'
 
   vite-plugin-static-copy@3.4.0:
     resolution: {integrity: sha512-ekryzCw0ouAOE8tw4RvVL/dfqguXzumsV3FBKoKso4MQ1MUUrUXtl5RI4KpJQUNGqFEsg9kxl4EvDl02YtA9VQ==}
@@ -6560,12 +6661,27 @@ snapshots:
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
       victory-vendor: 37.3.6
+    optional: true
+
+  victory-area@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
+      victory-vendor: 38.0.0
 
   victory-axis@37.3.6(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
+    optional: true
+
+  victory-axis@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
 
   victory-bar@37.3.6(react@19.2.5):
     dependencies:
@@ -6573,6 +6689,14 @@ snapshots:
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
       victory-vendor: 37.3.6
+    optional: true
+
+  victory-bar@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
+      victory-vendor: 38.0.0
 
   victory-box-plot@37.3.6(react@19.2.5):
     dependencies:
@@ -6580,6 +6704,14 @@ snapshots:
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
       victory-vendor: 37.3.6
+    optional: true
+
+  victory-box-plot@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
+      victory-vendor: 38.0.0
 
   victory-brush-container@37.3.6(react@19.2.5):
     dependencies:
@@ -6587,26 +6719,33 @@ snapshots:
       react: 19.2.5
       react-fast-compare: 3.2.2
       victory-core: 37.3.6(react@19.2.5)
+    optional: true
 
-  victory-brush-line@37.3.6(react@19.2.5):
+  victory-brush-container@38.0.0(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
       react-fast-compare: 3.2.2
-      victory-core: 37.3.6(react@19.2.5)
+      victory-core: 38.0.0(react@19.2.5)
 
-  victory-candlestick@37.3.6(react@19.2.5):
+  victory-brush-line@38.0.0(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
-      victory-core: 37.3.6(react@19.2.5)
+      react-fast-compare: 3.2.2
+      victory-core: 38.0.0(react@19.2.5)
 
-  victory-canvas@37.3.6(react@19.2.5):
+  victory-candlestick@38.0.0(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
-      victory-bar: 37.3.6(react@19.2.5)
-      victory-core: 37.3.6(react@19.2.5)
+      victory-core: 38.0.0(react@19.2.5)
+
+  victory-canvas@38.0.0(react@19.2.5):
+    dependencies:
+      react: 19.2.5
+      victory-bar: 38.0.0(react@19.2.5)
+      victory-core: 38.0.0(react@19.2.5)
 
   victory-chart@37.3.6(react@19.2.5):
     dependencies:
@@ -6617,6 +6756,17 @@ snapshots:
       victory-core: 37.3.6(react@19.2.5)
       victory-polar-axis: 37.3.6(react@19.2.5)
       victory-shared-events: 37.3.6(react@19.2.5)
+    optional: true
+
+  victory-chart@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      react-fast-compare: 3.2.2
+      victory-axis: 38.0.0(react@19.2.5)
+      victory-core: 38.0.0(react@19.2.5)
+      victory-polar-axis: 38.0.0(react@19.2.5)
+      victory-shared-events: 38.0.0(react@19.2.5)
 
   victory-core@37.3.6(react@19.2.5):
     dependencies:
@@ -6624,6 +6774,14 @@ snapshots:
       react: 19.2.5
       react-fast-compare: 3.2.2
       victory-vendor: 37.3.6
+    optional: true
+
+  victory-core@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      react-fast-compare: 3.2.2
+      victory-vendor: 38.0.0
 
   victory-create-container@37.3.6(react@19.2.5):
     dependencies:
@@ -6635,18 +6793,37 @@ snapshots:
       victory-selection-container: 37.3.6(react@19.2.5)
       victory-voronoi-container: 37.3.6(react@19.2.5)
       victory-zoom-container: 37.3.6(react@19.2.5)
+    optional: true
+
+  victory-create-container@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-brush-container: 38.0.0(react@19.2.5)
+      victory-core: 38.0.0(react@19.2.5)
+      victory-cursor-container: 38.0.0(react@19.2.5)
+      victory-selection-container: 38.0.0(react@19.2.5)
+      victory-voronoi-container: 38.0.0(react@19.2.5)
+      victory-zoom-container: 38.0.0(react@19.2.5)
 
   victory-cursor-container@37.3.6(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
+    optional: true
 
-  victory-errorbar@37.3.6(react@19.2.5):
+  victory-cursor-container@38.0.0(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
-      victory-core: 37.3.6(react@19.2.5)
+      victory-core: 38.0.0(react@19.2.5)
+
+  victory-errorbar@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
 
   victory-group@37.3.6(react@19.2.5):
     dependencies:
@@ -6655,21 +6832,36 @@ snapshots:
       react-fast-compare: 3.2.2
       victory-core: 37.3.6(react@19.2.5)
       victory-shared-events: 37.3.6(react@19.2.5)
+    optional: true
 
-  victory-histogram@37.3.6(react@19.2.5):
+  victory-group@38.0.0(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
       react-fast-compare: 3.2.2
-      victory-bar: 37.3.6(react@19.2.5)
-      victory-core: 37.3.6(react@19.2.5)
-      victory-vendor: 37.3.6
+      victory-core: 38.0.0(react@19.2.5)
+      victory-shared-events: 38.0.0(react@19.2.5)
+
+  victory-histogram@38.0.0(react@19.2.5):
+    dependencies:
+      react: 19.2.5
+      react-fast-compare: 3.2.2
+      victory-bar: 38.0.0(react@19.2.5)
+      victory-core: 38.0.0(react@19.2.5)
+      victory-vendor: 38.0.0
 
   victory-legend@37.3.6(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
+    optional: true
+
+  victory-legend@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
 
   victory-line@37.3.6(react@19.2.5):
     dependencies:
@@ -6677,6 +6869,14 @@ snapshots:
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
       victory-vendor: 37.3.6
+    optional: true
+
+  victory-line@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
+      victory-vendor: 38.0.0
 
   victory-pie@37.3.6(react@19.2.5):
     dependencies:
@@ -6684,24 +6884,52 @@ snapshots:
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
       victory-vendor: 37.3.6
+    optional: true
+
+  victory-pie@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
+      victory-vendor: 38.0.0
 
   victory-polar-axis@37.3.6(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
+    optional: true
+
+  victory-polar-axis@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
 
   victory-scatter@37.3.6(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
+    optional: true
+
+  victory-scatter@38.0.0(react@19.2.5):
+    dependencies:
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
 
   victory-selection-container@37.3.6(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
+    optional: true
+
+  victory-selection-container@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
 
   victory-shared-events@37.3.6(react@19.2.5):
     dependencies:
@@ -6710,6 +6938,15 @@ snapshots:
       react: 19.2.5
       react-fast-compare: 3.2.2
       victory-core: 37.3.6(react@19.2.5)
+    optional: true
+
+  victory-shared-events@38.0.0(react@19.2.5):
+    dependencies:
+      json-stringify-safe: 5.0.1
+      lodash: 4.18.1
+      react: 19.2.5
+      react-fast-compare: 3.2.2
+      victory-core: 38.0.0(react@19.2.5)
 
   victory-stack@37.3.6(react@19.2.5):
     dependencies:
@@ -6718,14 +6955,48 @@ snapshots:
       react-fast-compare: 3.2.2
       victory-core: 37.3.6(react@19.2.5)
       victory-shared-events: 37.3.6(react@19.2.5)
+    optional: true
+
+  victory-stack@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      react-fast-compare: 3.2.2
+      victory-core: 38.0.0(react@19.2.5)
+      victory-shared-events: 38.0.0(react@19.2.5)
 
   victory-tooltip@37.3.6(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
+    optional: true
+
+  victory-tooltip@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
 
   victory-vendor@37.3.6:
+    dependencies:
+      '@types/d3-array': 3.2.2
+      '@types/d3-ease': 3.0.2
+      '@types/d3-interpolate': 3.0.4
+      '@types/d3-scale': 4.0.9
+      '@types/d3-shape': 3.1.8
+      '@types/d3-time': 3.0.4
+      '@types/d3-timer': 3.0.2
+      d3-array: 3.2.4
+      d3-ease: 3.0.1
+      d3-interpolate: 3.0.1
+      d3-scale: 4.0.2
+      d3-shape: 3.2.0
+      d3-time: 3.1.0
+      d3-timer: 3.0.1
+    optional: true
+
+  victory-vendor@38.0.0:
     dependencies:
       '@types/d3-array': 3.2.2
       '@types/d3-ease': 3.0.2
@@ -6750,50 +7021,67 @@ snapshots:
       react-fast-compare: 3.2.2
       victory-core: 37.3.6(react@19.2.5)
       victory-tooltip: 37.3.6(react@19.2.5)
+    optional: true
 
-  victory-voronoi@37.3.6(react@19.2.5):
+  victory-voronoi-container@38.0.0(react@19.2.5):
+    dependencies:
+      delaunay-find: 0.0.6
+      lodash: 4.18.1
+      react: 19.2.5
+      react-fast-compare: 3.2.2
+      victory-core: 38.0.0(react@19.2.5)
+      victory-tooltip: 38.0.0(react@19.2.5)
+
+  victory-voronoi@38.0.0(react@19.2.5):
     dependencies:
       d3-voronoi: 1.1.4
       lodash: 4.18.1
       react: 19.2.5
-      victory-core: 37.3.6(react@19.2.5)
+      victory-core: 38.0.0(react@19.2.5)
 
   victory-zoom-container@37.3.6(react@19.2.5):
     dependencies:
       lodash: 4.18.1
       react: 19.2.5
       victory-core: 37.3.6(react@19.2.5)
+    optional: true
 
-  victory@37.3.6(react@19.2.5):
+  victory-zoom-container@38.0.0(react@19.2.5):
+    dependencies:
+      lodash: 4.18.1
+      react: 19.2.5
+      victory-core: 38.0.0(react@19.2.5)
+
+  victory@38.0.0(react@19.2.5):
     dependencies:
       react: 19.2.5
-      victory-area: 37.3.6(react@19.2.5)
-      victory-axis: 37.3.6(react@19.2.5)
-      victory-bar: 37.3.6(react@19.2.5)
-      victory-box-plot: 37.3.6(react@19.2.5)
-      victory-brush-container: 37.3.6(react@19.2.5)
-      victory-brush-line: 37.3.6(react@19.2.5)
-      victory-candlestick: 37.3.6(react@19.2.5)
-      victory-canvas: 37.3.6(react@19.2.5)
-      victory-chart: 37.3.6(react@19.2.5)
-      victory-core: 37.3.6(react@19.2.5)
-      victory-create-container: 37.3.6(react@19.2.5)
-      victory-cursor-container: 37.3.6(react@19.2.5)
-      victory-errorbar: 37.3.6(react@19.2.5)
-      victory-group: 37.3.6(react@19.2.5)
-      victory-histogram: 37.3.6(react@19.2.5)
-      victory-legend: 37.3.6(react@19.2.5)
-      victory-line: 37.3.6(react@19.2.5)
-      victory-pie: 37.3.6(react@19.2.5)
-      victory-polar-axis: 37.3.6(react@19.2.5)
-      victory-scatter: 37.3.6(react@19.2.5)
-      victory-selection-container: 37.3.6(react@19.2.5)
-      victory-shared-events: 37.3.6(react@19.2.5)
-      victory-stack: 37.3.6(react@19.2.5)
-      victory-tooltip: 37.3.6(react@19.2.5)
-      victory-voronoi: 37.3.6(react@19.2.5)
-      victory-voronoi-container: 37.3.6(react@19.2.5)
-      victory-zoom-container: 37.3.6(react@19.2.5)
+      victory-area: 38.0.0(react@19.2.5)
+      victory-axis: 38.0.0(react@19.2.5)
+      victory-bar: 38.0.0(react@19.2.5)
+      victory-box-plot: 38.0.0(react@19.2.5)
+      victory-brush-container: 38.0.0(react@19.2.5)
+      victory-brush-line: 38.0.0(react@19.2.5)
+      victory-candlestick: 38.0.0(react@19.2.5)
+      victory-canvas: 38.0.0(react@19.2.5)
+      victory-chart: 38.0.0(react@19.2.5)
+      victory-core: 38.0.0(react@19.2.5)
+      victory-create-container: 38.0.0(react@19.2.5)
+      victory-cursor-container: 38.0.0(react@19.2.5)
+      victory-errorbar: 38.0.0(react@19.2.5)
+      victory-group: 38.0.0(react@19.2.5)
+      victory-histogram: 38.0.0(react@19.2.5)
+      victory-legend: 38.0.0(react@19.2.5)
+      victory-line: 38.0.0(react@19.2.5)
+      victory-pie: 38.0.0(react@19.2.5)
+      victory-polar-axis: 38.0.0(react@19.2.5)
+      victory-scatter: 38.0.0(react@19.2.5)
+      victory-selection-container: 38.0.0(react@19.2.5)
+      victory-shared-events: 38.0.0(react@19.2.5)
+      victory-stack: 38.0.0(react@19.2.5)
+      victory-tooltip: 38.0.0(react@19.2.5)
+      victory-voronoi: 38.0.0(react@19.2.5)
+      victory-voronoi-container: 38.0.0(react@19.2.5)
+      victory-zoom-container: 38.0.0(react@19.2.5)
 
   vite-plugin-static-copy@3.4.0(vite@8.0.8(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0)):
     dependencies:

@@ -348,6 +348,13 @@ that namespace earlier to store the AAP license secret, so pass
 chart skips this namespace resource, so this particular ownership reason does
 not apply.
 
+Before upgrading an existing `osac-infra` release, check its current
+`osacNamespace` with `helm get values osac-infra -n osac-infra` and preserve
+that value. If no override is listed, the chart default is `osac`. Set `NS` to
+that value before running the command below. Changing `osacNamespace` makes
+Helm remove the old namespace from the release, and Kubernetes deletes its
+contents.
+
 When bundled Keycloak is enabled, it mounts the ConfigMap named by
 `certs.caBundle.configMap` from the `keycloak` namespace and reads its
 `bundle.pem` key. When `caIssuer.enabled: true`, the Phase 1b hook applies a
@@ -366,11 +373,13 @@ Although Phase 1b can create `osac-infra` with `--create-namespace`, create it
 beforehand so its ConfigMap is available before installation. The Phase 1b
 command uses `--take-ownership` to adopt the chart-rendered `keycloak`
 namespace. Before adoption, check whether an existing `keycloak` namespace is
-owned or used by another integration. When `osac-infra` owns this namespace,
-setting `keycloak.enabled: false` or uninstalling `osac-infra` can delete the
-namespace and its contents, including administrator-managed ConfigMaps. Plan
-how to preserve those resources and check for other consumers before changing
-ownership or disabling Keycloak. Provide a `bundle.pem` ConfigMap in both
+owned or used by another integration. An existing release with Keycloak
+enabled manages both the `keycloak` namespace and the namespace named by
+`osacNamespace`. Disabling `keycloak.enabled` or uninstalling the release
+removes these namespaces, and Kubernetes deletes their contents, including
+administrator-managed ConfigMaps. Preserve those resources and check for other
+consumers before changing ownership or disabling Keycloak. Provide a
+`bundle.pem` ConfigMap in both
 namespaces before Phase 1b when the enabled services consume it. The OSAC chart
 uses a separate ConfigMap in the OSAC release namespace; before Phase 2, provide
 it under the name configured by
@@ -786,9 +795,10 @@ before Phase 1b. With `NS=osac`, its default host is `osac-ui-osac.<DOMAIN>`;
 replace `<DOMAIN>` with the value from the command above:
 
 The Phase 1 commands also have `--set` arguments, which override values from
-the files passed with `-f`. When preparing upgrades, check `lvms.channel` and
-the Keycloak hostname and Route settings (`keycloak.hostname`,
-`keycloak.route.publicIngress`, and `keycloak.route.hostname`). Remove any
+the files passed with `-f`. When preparing upgrades, check `osacNamespace`,
+`lvms.channel`, and the Keycloak hostname and Route settings
+(`keycloak.hostname`, `keycloak.route.publicIngress`, and
+`keycloak.route.hostname`). Remove any
 conflicting `--set` arguments or change them to match the settings you intend
 to preserve. Confirm these effective values before running Phase 2.
 

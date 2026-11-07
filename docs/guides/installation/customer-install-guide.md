@@ -297,6 +297,11 @@ Notes on individual components:
   renewal. See [CA bundle and issuer guidance](helm-deployment-guide.md#when-prerequisites-already-exist).
   This also disables the chart's issuer, so provide any issuer you need. The
   ConfigMap must exist in the OSAC release namespace.
+  Disabling `caIssuer.enabled` also disables the automatic Keycloak Route
+  update. If your public-ingress Keycloak Route uses `reencrypt`, set
+  `destinationCACertificate` to the CA that signs Keycloak's serving
+  certificate and keep it current. See
+  [Keycloak Route with Public Ingress Certificates](helm-deployment-guide.md#keycloak-route-with-public-ingress-certificates).
 - **Certificate issuer:** `service.certs.issuerRef` defaults to the
   `default-ca` `ClusterIssuer`. Select an existing, ready `Issuer` or
   `ClusterIssuer` for your deployment.

@@ -817,8 +817,11 @@ values file. The Phase 1a command uses `--take-ownership`; with
 For a new release, run phase 1a and phase 1b, replacing
 `-f my-infra-values.yaml` with `-f my-management-infra-values.yaml` in both
 commands. When upgrading existing releases, pass the values files that preserve
-each release's settings. Then run phase 2 with the remote kubeconfig values
-from the customer install guide. The Secret must exist in the OSAC namespace
+each release's settings. For Phase 2 upgrades, also preserve the existing
+`global.networking.provisioningEnabled` value in `my-values.yaml`. Changing it
+after installation prevents the Fulfillment Service from starting. Then run
+Phase 2 with the remote kubeconfig values from the customer install guide. The
+Secret must exist in the OSAC namespace
 before `helm upgrade --install osac`. For production, keep `lvms.enabled: false`
 in the phase-2 `my-values.yaml`, including when the workload cluster uses LVMS.
 Storage administrators must prepare the StorageBackend, StorageTier, and tenant
@@ -839,6 +842,12 @@ resources managed by that release. In particular, retain
 changes with the release owner. If every component listed below already exists,
 skip phase 1 entirely and install only the `osac` chart — see the
 [customer install guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md).
+
+`keycloak.enabled` defaults to `true` and is omitted from the values example
+below. Leave it enabled for a fresh bundled Keycloak installation. If an
+external Keycloak will remain administrator-managed, set
+`keycloak.enabled: false` in the phase-1 values before Phase 1b; otherwise,
+Phase 1b adopts the `keycloak` namespace with `--take-ownership`.
 
 For an initial install where these prerequisites remain administrator-managed,
 use:
@@ -878,7 +887,9 @@ mce:          { enabled: false }
   `default-ca-cert` `Certificate`. This also disables the chart-managed
   self-signed `Issuer`, CA-bundle hook, and Keycloak Route patch hook when
   `keycloak.route.publicIngress` is enabled. Provide any required issuer
-  separately. Before Phase 2, provide the ConfigMap named by
+  separately. If an existing trust-manager `Bundle` still targets
+  administrator-managed ConfigMaps, remove or change it so it no longer
+  reconciles those ConfigMaps. Before Phase 2, provide the ConfigMap named by
   `service.certs.caBundle.configMap` in the OSAC release namespace, and set
   `service.certs.issuerRef` in `my-values.yaml` to an existing `ClusterIssuer`
   or `Issuer` for the OSAC service certificates.

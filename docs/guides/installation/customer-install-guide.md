@@ -285,15 +285,18 @@ Notes on individual components:
   `cert-manager-operator` namespace and creates its operands in the
   `cert-manager` namespace. The `certificates.cert-manager.io` CRD is a
   mandatory install preflight check.
-- trust-manager is a required prerequisite for every installation. It can
-  distribute the CA bundle. When `caIssuer.enabled: true` (the default), the
-  Phase 1b chart-managed `Bundle` reconciles the ConfigMap named by
-  `certs.caBundle.configMap` (default `ca-bundle`) and can overwrite its
-  contents. Administrators who provide the ConfigMap named by
-  `service.certs.caBundle.configMap` directly must set `caIssuer.enabled: false`
-  in the Phase 1b values before installation. This also disables the
-  chart-managed issuer, so provide any required issuer separately. The
-  ConfigMap must exist in the OSAC release namespace in either case.
+- trust-manager is required for every installation and can distribute the CA
+  bundle. `caIssuer.enabled` is `true` by default, so the chart's `Bundle`
+  manages the ConfigMap named by `certs.caBundle.configMap` (normally
+  `ca-bundle`) and can overwrite it. If you provide the ConfigMap named by
+  `service.certs.caBundle.configMap` yourself, remove or change any existing
+  `Bundle` that still manages it, then set `caIssuer.enabled: false` before
+  installation. On an existing installation, check who owns `default-ca` and
+  which certificates use it before turning this off;
+  it removes the issuer and CA certificate and may stop Keycloak certificate
+  renewal. See [CA bundle and issuer guidance](helm-deployment-guide.md#when-prerequisites-already-exist).
+  This also disables the chart's issuer, so provide any issuer you need. The
+  ConfigMap must exist in the OSAC release namespace.
 - **Certificate issuer:** `service.certs.issuerRef` defaults to the
   `default-ca` `ClusterIssuer`. Select an existing, ready `Issuer` or
   `ClusterIssuer` for your deployment.
@@ -2214,8 +2217,8 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
 
    Refreshing this local file does not update bundled Keycloak's truststore.
    If Keycloak uses the changed CA to connect to an outbound OIDC provider,
-   after the `keycloak` namespace bundle updates, run an `osac-infra` upgrade
-   when the chart manages the bundle. When an administrator manages the bundle,
+   after the `keycloak` namespace bundle updates, rerun the OSAC installation or
+   upgrade when the chart manages the bundle. If you manage the bundle yourself,
    restart Keycloak to reload its truststore. See
    [Adding CA roots to the shared bundle at runtime](helm-deployment-guide.md#adding-ca-roots-to-the-shared-bundle-at-runtime).
 

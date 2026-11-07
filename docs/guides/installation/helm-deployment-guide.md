@@ -169,6 +169,17 @@ release-only marker. Nightly source tags also use `osac/v`. If you already set
 `OSAC_RELEASE_VERSION` while following that guide, keep the same value. Use the
 same shell session for the remaining commands.
 
+Before setup for an existing `osac-infra` release, check its installed values:
+
+```console
+helm get values osac-infra -n osac-infra
+```
+
+Set `NS` below to the recorded `osacNamespace`; if no override is listed, the
+chart default is `osac`. The setup creates the AAP license Secret in `NS`, so
+set the correct value first. Changing `osacNamespace` during an upgrade makes
+Helm remove the old namespace and Kubernetes deletes its contents.
+
 ```bash
 export OSAC_RELEASE_VERSION="<chart_version>"
 export OSAC_CHART="oci://ghcr.io/osac-project/charts/osac"
@@ -177,6 +188,7 @@ cd osac
 git checkout "osac/v${OSAC_RELEASE_VERSION}"
 cd osac-installer
 
+# For an upgrade, use the installed osacNamespace (default: osac).
 export NS=osac
 export DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
 export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
@@ -348,15 +360,10 @@ that namespace earlier to store the AAP license secret, so pass
 chart skips this namespace resource, so this particular ownership reason does
 not apply.
 
-Before upgrading an existing `osac-infra` release, inspect its installed
-overrides with `helm get values osac-infra -n osac-infra`. Preserve
-`osacNamespace`, `lvms.channel`, `keycloak.hostname`,
-`keycloak.route.publicIngress`, and `keycloak.route.hostname` in
-`my-infra-values.yaml`. The `--set` options below override that file, so remove
-or change those options to match the installed values. If no `osacNamespace`
-override is listed, the chart default is `osac`. Set `NS` to that value before
-running the command below. Changing `osacNamespace` makes Helm remove the old
-namespace from the release, and Kubernetes deletes its contents.
+Use the installed values from the earlier check to preserve `lvms.channel`,
+`keycloak.hostname`, `keycloak.route.publicIngress`, and
+`keycloak.route.hostname` in `my-infra-values.yaml`. The `--set` options below
+override that file, so remove or change them to match the installed values.
 
 When bundled Keycloak is enabled, it mounts the ConfigMap named by
 `certs.caBundle.configMap` from the `keycloak` namespace and reads its

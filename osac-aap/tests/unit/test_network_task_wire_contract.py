@@ -73,6 +73,7 @@ def test_every_golden_is_used_by_a_test() -> None:
         "create_subnet.kubernetes.json",
         "create_virtual_network.fabric.json",
         "create_virtual_network.kubernetes.json",
+        "reserve_cluster_ingress_ip.fabric.json",
     ]
     results = sorted(p.name for p in (GOLDEN / "results").glob("*.json"))
     assert results == [
@@ -80,6 +81,7 @@ def test_every_golden_is_used_by_a_test() -> None:
         "create_external_ip.fabric.json",
         "create_subnet.fabric.json",
         "create_virtual_network.fabric.json",
+        "reserve_cluster_ingress_ip.fabric.json",
     ]
 
 
@@ -93,6 +95,10 @@ def test_fabric_goldens_produce_the_result_goldens(tmp_path, netris) -> None:
     assert fabric(tmp_path, netris, "apply_network_attachment") == {}
     assert fabric(tmp_path, netris, "attach_external_ip") == {}
     assert fabric(tmp_path, netris, "create_nat_gateway") == {}
+    same(
+        fabric(tmp_path, netris, "reserve_cluster_ingress_ip"),
+        golden_result("reserve_cluster_ingress_ip", "fabric"),
+    )
 
 
 def test_the_kubernetes_goldens_are_valid_cudn_evpn_inputs_with_the_accepted_vnis() -> None:

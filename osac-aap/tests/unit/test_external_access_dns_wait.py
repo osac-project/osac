@@ -26,7 +26,7 @@ WAIT_FOR_ROLE = COLLECTIONS / "osac" / "service" / "roles" / "wait_for"
 WAIT_FOR_DNS_TASKS = WAIT_FOR_ROLE / "tasks" / "wait_for_dns.yaml"
 WAIT_FOR_DEFAULTS = WAIT_FOR_ROLE / "defaults" / "main.yaml"
 
-# Every network-class caller that runs the external_access DNS wait.
+# Every remaining provider-step, CI, or NICo caller that runs the DNS wait.
 CALLER_CREATE_FILES = {
     "osac": COLLECTIONS / "osac" / "steps" / "roles" / "external_access" / "tasks" / "create.yaml",
     "ci": COLLECTIONS
@@ -36,7 +36,6 @@ CALLER_CREATE_FILES = {
     / "external_access"
     / "tasks"
     / "caas_dns_create.yaml",
-    "netris": COLLECTIONS / "netris" / "steps" / "roles" / "external_access" / "tasks" / "create.yaml",
     "nico": COLLECTIONS / "nico" / "steps" / "roles" / "external_access" / "tasks" / "create.yaml",
     "ocp_ci_small": COLLECTIONS
     / "osac"
@@ -45,13 +44,6 @@ CALLER_CREATE_FILES = {
     / "external_access"
     / "tasks"
     / "caas_dns_create.yaml",
-    "agentless_net": COLLECTIONS
-    / "agentless_net"
-    / "steps"
-    / "roles"
-    / "external_access"
-    / "tasks"
-    / "create.yaml",
 }
 
 # A representative negative-cache (SOA minimum) TTL, in seconds. The DNS wait
@@ -118,6 +110,18 @@ def _dig_command():
     return task["ansible.builtin.command"]
 
 
+def test_dns_wait_task_name_does_not_log_the_record_name():
+    task = find_task(load_tasks(WAIT_FOR_DNS_TASKS), "Wait for DNS record")
+
+    assert task["name"] == "Wait for DNS record"
+    assert task["no_log"] is True
+
+
+def _dns_wait_until():
+    task = find_task(load_tasks(WAIT_FOR_DNS_TASKS), "Wait for DNS record")
+    return task["until"]
+
+
 def test_dig_uses_server_when_set():
     command = render(
         _dig_command(),
@@ -135,6 +139,37 @@ def test_dig_omits_server_when_empty():
     assert "@" not in command
     assert command.split()[0] == "dig"
     assert "+noall +answer api.example.com" in command
+
+
+def test_dns_wait_can_require_the_expected_a_record_value():
+    until = _dns_wait_until()
+    stale = {
+        "wait_for_dns_info": {
+            "stdout": "api.example.com. 1800 IN A 192.0.2.10",
+            "stdout_lines": ["api.example.com. 1800 IN A 192.0.2.10"],
+        },
+        "wait_for_dns_expected_value": "192.0.2.11",
+    }
+    current = {
+        "wait_for_dns_info": {
+            "stdout": "api.example.com. 1800 IN A 192.0.2.11",
+            "stdout_lines": ["api.example.com. 1800 IN A 192.0.2.11"],
+        },
+        "wait_for_dns_expected_value": "192.0.2.11",
+    }
+    assert render_when(until, stale) is False
+    assert render_when(until, current) is True
+
+
+def test_dns_wait_keeps_nonempty_answer_behavior_without_expected_value():
+    until = _dns_wait_until()
+    variables = {
+        "wait_for_dns_info": {
+            "stdout": "api.example.com. 1800 IN A 192.0.2.10",
+            "stdout_lines": ["api.example.com. 1800 IN A 192.0.2.10"],
+        }
+    }
+    assert render_when(until, variables) is True
 
 
 # --------------------------------------------------------------------------- #

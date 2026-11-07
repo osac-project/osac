@@ -1638,6 +1638,8 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			string(osacv1alpha1.ClusterOrderConditionClusterStorageReady),
 			string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady),
 			string(osacv1alpha1.ClusterOrderConditionFulfillmentTrustReady),
+			string(osacv1alpha1.ClusterOrderConditionManagementPublicationReady),
+			string(osacv1alpha1.ClusterOrderConditionEndpointsReady),
 			osacv1alpha1.ConditionProgressing,
 			osacv1alpha1.ConditionDeleting,
 		}

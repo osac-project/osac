@@ -1,6 +1,6 @@
 # Environment variables override these defaults (see each value).
 # Comma-separated lists: EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS
-# JSON dict: NETRIS_RESOURCE_CLASS_MAP (required when using Netris network class)
+# JSON dict: NETRIS_RESOURCE_CLASS_MAP (used by Netris create_fabric_domain)
 # external access configuration
 external_access_base_domain: "{{ lookup('env', 'EXTERNAL_ACCESS_BASE_DOMAIN', default='box.massopen.cloud') }}"
 
@@ -20,14 +20,6 @@ external_access_api_internal_network: "{{ lookup('env', 'EXTERNAL_ACCESS_API_INT
 hosted_cluster_base_domain: "{{ lookup('env', 'HOSTED_CLUSTER_BASE_DOMAIN', default='box.massopen.cloud') }}"
 hosted_cluster_controller_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY', default='HighlyAvailable') }}"
 hosted_cluster_infrastructure_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY', default='HighlyAvailable') }}"
-
-# Network class to use (netris or agentless_net).
-network_class: "{{ lookup('env', 'NETWORK_CLASS', default='') }}"
-
-# Ansible collection that provides the network-class-specific steps
-# (cluster_infra and external_access roles). Override this to use a
-# different network backend without changing osac.service.
-network_steps_collection: "{{ lookup('env', 'NETWORK_STEPS_COLLECTION', default='') }}"
 
 # Netris controller connection
 netris_controller_url: "{{ lookup('env', 'NETRIS_CONTROLLER_URL') }}"

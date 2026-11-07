@@ -17,6 +17,7 @@ from test_netris_role import GOOD_ENV, MANAGER, VN, nc  # noqa: E402
 from test_netris_vn_subnet import CIDR, err, netris, ok, run, snap, vn_job  # noqa: E402,F401
 
 FD = "6e1d2c3b-4a59-4f68-8b7a-9c0d1e2f3a4b"
+CLUSTER_ORDER = "9f8e7d6c-5b4a-4321-8765-4c3b2a109876"
 
 # Settings removed with the per-resource DNS; a job that still sets them must behave the same.
 REMOVED_NETRIS_SETTINGS = {"NETRIS_DNS_RESOLVERS": "not-an-address", "NETRIS_DNS_SNAT_CIDR": "not-a-cidr"}
@@ -298,16 +299,48 @@ def test_delete_fabric_domain_with_a_bad_input_is_final(tmp_path, netris) -> Non
 
 
 def ingress_job(task: str) -> dict:
-    return {"manager": MANAGER, "task": task, "resource": snap("Subnet", FD),
-            "virtual_network": snap("VirtualNetwork", VN, {"ipv4Cidr": CIDR})}
+    subnet = snap("Subnet", FD)
+    subnet["metadata"]["name"] = "cluster-subnet"
+    subnet["spec"] = {"ipv4Cidr": CIDR}
+    return {
+        "manager": MANAGER,
+        "task": task,
+        "cluster_id": CLUSTER_ORDER,
+        "resource": snap("ClusterOrder", CLUSTER_ORDER, {
+            "networkAttachment": {"subnetRef": "cluster-subnet"},
+        }),
+        "subnet": subnet,
+        "virtual_network": snap("VirtualNetwork", VN, {"ipv4Cidr": CIDR}),
+        "ipam": {
+            "gateway_ipv4": "10.20.1.1",
+            "lb_vip_ipv4_cidrs": ["10.20.1.16/28"],
+        },
+    }
 
 
-def test_reserve_cluster_ingress_ip_is_a_final_error(tmp_path, netris) -> None:
-    message = err(*run(tmp_path, netris, ingress_job("reserve_cluster_ingress_ip")), retryable=False)
-    assert "not supported by the Netris Fabric Manager yet" in message
-    assert netris.calls == []
+def test_reserve_cluster_ingress_ip_is_idempotent_and_uses_the_lb_vip_range(tmp_path, netris) -> None:
+    ok(*run(tmp_path, netris, vn_job("create_virtual_network")))
+    job = ingress_job("reserve_cluster_ingress_ip")
+    assert ok(*run(tmp_path, netris, job)) == {"cluster_ingress": {"address": "10.20.1.16"}}
+    assert netris.state["ipam_subnets"][0]["name"] == f"osac-ci-{CLUSTER_ORDER}"
+    assert netris.state["ipam_subnets"][0]["prefix"] == "10.20.1.16/32"
+    assert netris.state["ipam_subnets"][0]["vpc"] == {"id": 101}
+
+    netris.calls.clear()
+    assert ok(*run(tmp_path, netris, job)) == {"cluster_ingress": {"address": "10.20.1.16"}}
+    assert netris.writes() == []
 
 
-def test_release_cluster_ingress_ip_is_a_noop(tmp_path, netris) -> None:
+def test_release_cluster_ingress_ip_only_removes_the_cluster_reservation(tmp_path, netris) -> None:
+    ok(*run(tmp_path, netris, vn_job("create_virtual_network")))
+    ok(*run(tmp_path, netris, ingress_job("reserve_cluster_ingress_ip")))
+    netris.state["ipam_subnets"].append({
+        "id": 999, "name": "osac-ci-some-other-cluster", "prefix": "10.20.1.18/32",
+        "purpose": "nat", "sites": [{"id": 1}], "tenant": {"id": 2},
+        "vpc": {"id": 101},
+    })
+    netris.calls.clear()
+
     assert ok(*run(tmp_path, netris, ingress_job("release_cluster_ingress_ip"))) == {}
-    assert netris.calls == []
+    assert len(netris.state["ipam_subnets"]) == 1
+    assert netris.state["ipam_subnets"][0]["name"] == "osac-ci-some-other-cluster"

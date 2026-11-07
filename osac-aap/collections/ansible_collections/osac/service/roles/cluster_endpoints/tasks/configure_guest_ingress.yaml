@@ -1,0 +1,57 @@
+---
+- name: Require the reserved ingress address and HostedControlPlane namespace
+  ansible.builtin.assert:
+    that:
+      - ingress_allocated_address is defined
+      - ingress_allocated_address | ansible.utils.ipaddr('ipv4')
+      - hosted_control_plane_namespace is defined
+      - hosted_control_plane_namespace | length > 0
+
+- name: Read the service-network admin kubeconfig
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    namespace: "{{ hosted_control_plane_namespace }}"
+    name: service-network-admin-kubeconfig
+  register: _cluster_endpoint_kubeconfig_secret
+  no_log: true
+
+- name: Require the service-network admin kubeconfig Secret
+  ansible.builtin.assert:
+    that:
+      - _cluster_endpoint_kubeconfig_secret.resources | length == 1
+    fail_msg: >-
+      Secret service-network-admin-kubeconfig was not found.
+
+- name: Decode the service-network admin kubeconfig
+  ansible.builtin.set_fact:
+    _cluster_endpoint_admin_kubeconfig: >-
+      {{ _cluster_endpoint_kubeconfig_secret.resources[0].data.kubeconfig
+         | b64decode | from_yaml }}
+  no_log: true
+
+- name: Configure guest ingress with the reserved address
+  ansible.builtin.include_role:
+    name: osac.service.metallb_ingress
+    tasks_from: configure_metallb_ingress.yml
+  vars:
+    metallb_ingress_admin_kubeconfig: "{{ _cluster_endpoint_admin_kubeconfig }}"
+    metallb_ingress_ip: "{{ ingress_allocated_address }}"
+
+- name: Wait for the guest ingress Service to report the reserved address
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ _cluster_endpoint_admin_kubeconfig }}"
+    api_version: v1
+    kind: Service
+    namespace: openshift-ingress
+    name: external-ingress
+  register: _cluster_endpoint_ingress_service
+  until:
+    - _cluster_endpoint_ingress_service.resources | length > 0
+    - >-
+      _cluster_endpoint_ingress_service.resources[0].status.loadBalancer.ingress
+      | default([]) | selectattr('ip', 'defined') | map(attribute='ip')
+      | select('equalto', ingress_allocated_address) | list | length == 1
+  retries: 60
+  delay: 10
+  no_log: true

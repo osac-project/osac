@@ -1,10 +1,16 @@
-- name: Wait for DNS record {{ wait_for_dns_record }}
+- name: Wait for DNS record
   ansible.builtin.command: >-
     dig {{ ('@' ~ wait_for_dns_server) if (wait_for_dns_server | default('') | length > 0) else '' }}
     +noall +answer {{ wait_for_dns_record }}
   register: wait_for_dns_info
   changed_when: false
   no_log: true
-  until: (wait_for_dns_info.stdout | length > 0)
+  until: >-
+    wait_for_dns_info.stdout | length > 0 and (
+      wait_for_dns_expected_value | default('') | length == 0 or
+      wait_for_dns_info.stdout_lines
+      | select('search', '\sIN\s+A\s+' ~ (wait_for_dns_expected_value | regex_escape) ~ '$')
+      | list | length > 0
+    )
   retries: "{{ wait_for_dns_retries }}"
   delay: "{{ wait_for_dns_delay }}"

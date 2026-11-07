@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/assistedservice"
 )
 
 // listAgents returns the union of both supported Agent selectors, scoped to the
@@ -20,7 +21,7 @@ import (
 // matched first. If either List fails the observation is unknown: a partial list
 // is never treated as complete absence evidence.
 func (r *Reconciler) listAgents(ctx context.Context, co *v1alpha1.ClusterOrder) (*unstructured.UnstructuredList, error) {
-	infraEnvName := co.Name + infraEnvNameSuffix
+	infraEnvName := assistedservice.InfraEnvName(co.Name)
 	selectors := []client.MatchingLabels{
 		{infraEnvAgentLabel: infraEnvName},
 		{clusterOrderLabel: co.Name},

@@ -43,6 +43,7 @@ import (
 	"google.golang.org/grpc/credentials/oauth"
 	experimentalcredentials "google.golang.org/grpc/experimental/credentials"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -389,10 +390,20 @@ func targetClusterFromManager(mgr mcmanager.Manager) multicluster.ClusterName {
 // newDiscoveryIgnitionFetcher verifies Assisted Service URLs with system roots and,
 // when configured, the OpenShift ingress CA used for the re-encrypt Route.
 func newDiscoveryIgnitionFetcher(reader client.Reader) (baremetalworker.IgnitionFetcher, error) {
-	if !helpers.GetEnvWithDefault(envIgnitionTrustIngressCA, false) {
-		return baremetalworker.NewIgnitionFetcher(nil), nil
+	roots, err := newIgnitionTrustRootCAs(reader)
+	if err != nil {
+		return nil, err
 	}
+	return newDiscoveryIgnitionFetcherWithRoots(roots)
+}
 
+func newIgnitionTrustRootCAs(reader client.Reader) (*x509.CertPool, error) {
+	if !helpers.GetEnvWithDefault(envIgnitionTrustIngressCA, false) {
+		return nil, nil
+	}
+	if reader == nil {
+		return nil, fmt.Errorf("cannot load OpenShift ingress CA bundle without a Kubernetes reader")
+	}
 	var bundle corev1.ConfigMap
 	key := client.ObjectKey{Name: "default-ingress-cert", Namespace: "openshift-config-managed"}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -406,6 +417,40 @@ func newDiscoveryIgnitionFetcher(reader client.Reader) (baremetalworker.Ignition
 	}
 	if !roots.AppendCertsFromPEM([]byte(bundle.Data["ca-bundle.crt"])) {
 		return nil, fmt.Errorf("OpenShift ingress CA bundle %s has no valid certificates", key)
+	}
+	return roots, nil
+}
+
+// newManagementTrustRootCAs adds the OpenShift ingress CA to the system roots
+// for ClusterOrder management Route probes. The bundle is optional on clusters
+// that do not publish it; those probes still verify against system roots.
+func newManagementTrustRootCAs(reader client.Reader) (*x509.CertPool, error) {
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, fmt.Errorf("loading system certificates: %w", err)
+	}
+	if reader == nil {
+		return roots, nil
+	}
+	var bundle corev1.ConfigMap
+	key := client.ObjectKey{Name: "default-ingress-cert", Namespace: "openshift-config-managed"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := reader.Get(ctx, key, &bundle); err != nil {
+		if apierrors.IsNotFound(err) {
+			return roots, nil
+		}
+		return nil, fmt.Errorf("reading OpenShift ingress CA bundle %s: %w", key, err)
+	}
+	if !roots.AppendCertsFromPEM([]byte(bundle.Data["ca-bundle.crt"])) {
+		return nil, fmt.Errorf("OpenShift ingress CA bundle %s has no valid certificates", key)
+	}
+	return roots, nil
+}
+
+func newDiscoveryIgnitionFetcherWithRoots(roots *x509.CertPool) (baremetalworker.IgnitionFetcher, error) {
+	if roots == nil {
+		return baremetalworker.NewIgnitionFetcher(nil), nil
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{RootCAs: roots}
@@ -455,7 +500,18 @@ func setupClusterControllers(
 	if grpcConn != nil {
 		bmwFulfillment = baremetalworker.NewFulfillmentClientFromConn(grpcConn)
 	}
-	ignitionFetcher, err := newDiscoveryIgnitionFetcher(localMgr.GetAPIReader())
+	ignitionRoots, err := newIgnitionTrustRootCAs(localMgr.GetAPIReader())
+	if err != nil {
+		return err
+	}
+	managementRoots := ignitionRoots
+	if managementRoots == nil {
+		managementRoots, err = newManagementTrustRootCAs(localMgr.GetAPIReader())
+		if err != nil {
+			return err
+		}
+	}
+	ignitionFetcher, err := newDiscoveryIgnitionFetcherWithRoots(ignitionRoots)
 	if err != nil {
 		return err
 	}
@@ -494,6 +550,8 @@ func setupClusterControllers(
 				os.Getenv(envNetworkingNamespace),
 				provider, pollInterval, maxJobHistory,
 			)
+			reconciler.ManagementRootCAs = managementRoots
+			reconciler.Engine = engine
 			reconciler.StallThresholds = clusterOrderStallThresholdsFromEnv()
 			reconciler.Recorder = localMgr.GetEventRecorder(controller.ClusterOrderControllerName)
 			if grpcConn != nil {

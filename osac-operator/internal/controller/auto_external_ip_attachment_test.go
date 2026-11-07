@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -76,6 +77,39 @@ func TestReconcileAutomaticExternalIPAttachmentsWaitsForAllocation(t *testing.T)
 	}
 	if len(c.created) != 0 {
 		t.Fatalf("created %d attachments while the ExternalIP was pending", len(c.created))
+	}
+}
+
+func TestReconcileAutomaticExternalIPAttachmentsReusesClusterLookup(t *testing.T) {
+	autoExternalIPAttachment := true
+	cluster := privatev1.Cluster_builder{
+		Metadata: privatev1.Metadata_builder{Tenant: "tenant-1"}.Build(),
+		Spec:     privatev1.ClusterSpec_builder{AutoExternalIpAttachment: &autoExternalIPAttachment}.Build(),
+	}.Build()
+	clustersClient := &mockClustersClient{
+		getResponse: privatev1.ClustersGetResponse_builder{Object: cluster}.Build(),
+	}
+	k8sClient := testAutomaticExternalIPClient(t)
+	attachmentsClient := &testExternalIPAttachmentsClient{}
+	reconciler := &ClusterOrderReconciler{
+		Client:                      k8sClient,
+		Engine:                      networktask.New(k8sClient, k8sClient, nil, networktask.Config{ProvisioningEnabled: true}),
+		ClustersClient:              clustersClient,
+		ExternalIPAttachmentsClient: attachmentsClient,
+		NetworkingNamespace:         "networking",
+		StatusPollInterval:          time.Second,
+	}
+	instance := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
+		Labels: map[string]string{osacClusterOrderIDLabel: "cluster-1"},
+	}}
+	lookup := &fulfillmentClusterLookup{loaded: true, cluster: cluster}
+
+	_, err := reconciler.reconcileAutomaticExternalIPAttachmentsWithLookup(context.Background(), instance, lookup)
+	if err != nil {
+		t.Fatalf("reconcile automatic attachments: %v", err)
+	}
+	if clustersClient.getCount != 0 {
+		t.Fatalf("ClustersClient.Get called %d times despite a loaded reconcile lookup", clustersClient.getCount)
 	}
 }
 

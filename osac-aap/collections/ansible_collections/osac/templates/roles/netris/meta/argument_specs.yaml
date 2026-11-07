@@ -102,7 +102,6 @@ argument_specs:
         description: >-
           Network manager task input (resource, virtual_network, network_type);
           its content is checked by tasks/_input.yaml.
-
   delete_fabric_domain:
     short_description: Delete the Server Cluster of a FabricDomain
     options:
@@ -114,23 +113,25 @@ argument_specs:
           its content is checked by tasks/_input.yaml.
 
   reserve_cluster_ingress_ip:
-    short_description: Final error, cluster ingress is not supported yet
+    short_description: Reserve an address from the Subnet LB VIP range
     options:
       osac_job_vars:
         type: dict
         required: true
         description: >-
-          Network manager task input (resource, virtual_network, network_type);
+          Network manager task input (resource, virtual_network, subnet, ipam,
+          cluster_id);
           its content is checked by tasks/_input.yaml.
 
   release_cluster_ingress_ip:
-    short_description: No-op, nothing is reserved on Netris
+    short_description: Release the ClusterOrder ingress address reservation
     options:
       osac_job_vars:
         type: dict
         required: true
         description: >-
-          Network manager task input (resource, virtual_network, network_type);
+          Network manager task input (resource, virtual_network, subnet, ipam,
+          cluster_id);
           its content is checked by tasks/_input.yaml.
 
   create_external_ip_pool:

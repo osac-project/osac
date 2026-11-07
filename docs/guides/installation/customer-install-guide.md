@@ -2205,6 +2205,12 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    Before the tenant check in step 13, repeat step 2 of Section 4.4.6 to rebuild
    `CURL_CA_ARGS` from the refreshed bundle.
 
+   Refreshing this local file does not update bundled Keycloak's truststore.
+   If Keycloak uses the changed CA to connect to an outbound OIDC provider,
+   after the `keycloak` namespace bundle updates, apply the change with an
+   `osac-infra` upgrade or restart Keycloak. See
+   [Adding CA roots to the shared bundle at runtime](helm-deployment-guide.md#adding-ca-roots-to-the-shared-bundle-at-runtime).
+
    Keep this file for the OIDC, API, and hub-registration checks. It must
    contain the CA that signs the endpoint's certificate. If an endpoint
    uses a different CA, obtain the matching PEM bundle from its

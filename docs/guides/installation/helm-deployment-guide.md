@@ -365,10 +365,15 @@ targets those ConfigMaps. On a clean cluster, create the `keycloak` and
 Although Phase 1b can create `osac-infra` with `--create-namespace`, create it
 beforehand so its ConfigMap is available before installation. The Phase 1b
 command uses `--take-ownership` to adopt the chart-rendered `keycloak`
-namespace. Provide a `bundle.pem` ConfigMap in both namespaces before Phase 1b
-when the enabled services consume it. The OSAC chart uses a separate
-ConfigMap in the OSAC release namespace; before Phase 2, provide it under the
-name configured by
+namespace. Before adoption, check whether an existing `keycloak` namespace is
+owned or used by another integration. When `osac-infra` owns this namespace,
+setting `keycloak.enabled: false` or uninstalling `osac-infra` can delete the
+namespace and its contents, including administrator-managed ConfigMaps. Plan
+how to preserve those resources and check for other consumers before changing
+ownership or disabling Keycloak. Provide a `bundle.pem` ConfigMap in both
+namespaces before Phase 1b when the enabled services consume it. The OSAC chart
+uses a separate ConfigMap in the OSAC release namespace; before Phase 2, provide
+it under the name configured by
 `service.certs.caBundle.configMap`. Keep that name aligned with
 `certs.caBundle.configMap`. For a custom name, also configure the related
 consumer values listed in
@@ -559,12 +564,14 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 | `evpn.nodes[].uplinks[].peerAddress` | IPv4 address of the connected fabric BGP peer, supplied by the fabric admin. |
 | `evpn.nodes[].uplinks[].peerASN` | ASN of the connected fabric peer, supplied by the fabric admin. |
 
-If administrators separately prepare EVPN host networking on a workload
-cluster using this procedure, pass these `evpn` values to its phase 1b install.
-For a new management-cluster release, keep `evpn.enabled: false`. For an
-existing release, preserve its current EVPN settings until the release owner
-plans a change. This host preparation is optional for the separate-cluster
-layout documented below, which runs with provider networking disabled. See
+When the management cluster runs VMs and this procedure prepares its EVPN host
+networking, set `evpn.enabled: true` in the phase-1 values used on that cluster.
+For the separate-cluster layout documented below, provider networking is
+disabled on the management cluster; set `evpn.enabled: false` for a new release
+and preserve the current settings on upgrades until the release owner plans a
+change. EVPN host preparation on the workload cluster is optional in this
+layout. If administrators use this procedure there, pass its `evpn` values to
+the workload cluster's Phase 1b install. See
 [Separate VMaaS workload cluster](#separate-vmaas-workload-cluster).
 
 OSAC provider networking with VMs on a separate cluster is not supported in
@@ -883,7 +890,14 @@ mce:          { enabled: false }
   namespace. Bundled Keycloak certificates always use a `ClusterIssuer` named
   `default-ca`, regardless of `certs.issuerRef`. When bundled Keycloak is
   enabled, provide that issuer or leave `caIssuer.enabled: true` so Phase 1b
-  creates it.
+  creates it. An administrator-managed `default-ca` must issue the chart's
+  Keycloak certificates for their requested names: the database server
+  certificate for `localhost` and `keycloak-database`, the TLS certificate for
+  `keycloak`, `keycloak.keycloak.svc.cluster.local`, and the configured Route
+  hostname, and a database client certificate with client-auth usage. The
+  `keycloak-database-server-cert` Secret must include `ca.crt`, which PostgreSQL
+  uses to trust the client certificate; issue that client certificate from a
+  CA trusted by this `ca.crt`.
 - `keycloak.enabled: false` requires a pre-configured Keycloak with the `osac`
   realm, clients, and roles already set up.
 

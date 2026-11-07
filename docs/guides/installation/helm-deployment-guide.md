@@ -395,10 +395,15 @@ the bundle. Also include private OIDC provider CAs and any other private
 endpoints their consumers use. With the chart-managed bundle, set
 `keycloak.oidcIdpTrust.caPem` to add a private OIDC provider CA; that setting
 does not replace the other roots required by an administrator-managed bundle.
-Keep the bundle current as CA certificates change and ensure Keycloak reloads
-the updated truststore. A Phase 1b upgrade rolls out Keycloak when the chart
-manages the bundle; after updating an administrator-managed bundle, restart
-Keycloak.
+Keep the bundle current as CA certificates change. After updating an
+administrator-managed bundle, wait until the OSAC release namespace's ConfigMap
+contains the new `bundle.pem`, then restart the OSAC operator before switching
+certificates. The operator loads this CA bundle at startup for Fulfillment API
+TLS regardless of `global.fulfillmentTrust.enabled`, which only controls the
+separate trust reconciler. If Keycloak uses the changed CA for an outbound OIDC
+provider, ensure it reloads its truststore. A Phase 1b upgrade rolls out
+Keycloak when the chart manages the bundle; after updating an
+administrator-managed bundle, restart Keycloak.
 
 Before Phase 1b on OpenShift, set `keycloak.uiUrl` in the values file passed to
 this command to the bundled OSAC UI's HTTPS Route URL on this cluster. For the
@@ -439,6 +444,11 @@ Keycloak, use `https://keycloak-keycloak.<cluster-domain>/realms/osac`,
 replacing `<cluster-domain>` with the actual cluster domain. For external
 Keycloak, use the realm issuer URL configured in `service.auth.issuerUrl`. See
 the [customer install guide](customer-install-guide.md#42-configuring-the-helm-values).
+
+Before upgrading an existing release, check its current API hostnames with
+`helm get values osac -n "$NS" --all`. The `--set` options below override the
+hostnames in `my-values.yaml`; remove or adjust them to preserve the existing
+API endpoints.
 
 ```bash
 helm upgrade --install osac \

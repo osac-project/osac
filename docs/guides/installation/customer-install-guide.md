@@ -2180,8 +2180,8 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    a changed source Secret has reached the target ConfigMap; Secret updates do
    not change the Bundle generation. After a CA source changes, repeat the
    ConfigMap command above and confirm that `bundle.pem` contains the expected
-   CA, for example by comparing its subject or SHA-256 fingerprint with the
-   certificate provided by your administrators.
+   CA by comparing its SHA-256 fingerprint with the fingerprint of the
+   administrator-provided certificate.
 
    The target ConfigMap must store the bundle under the fixed `bundle.pem` key
    required by the OSAC hooks. After it contains the expected CA, extract
@@ -2194,6 +2194,11 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
      -o jsonpath='{.data.bundle\.pem}' > osac-ca-bundle.pem
    test -s osac-ca-bundle.pem
    ```
+
+   If Section 4.4.6 uses this shared bundle for the internal API Route, set
+   `CA_FILE=osac-ca-bundle.pem` in that same Bash session after extraction.
+   Before the tenant check in step 13, repeat step 2 of Section 4.4.6 to rebuild
+   `CURL_CA_ARGS` from the refreshed bundle.
 
    Keep this file for the OIDC, API, and hub-registration checks. It must
    contain the CA that signs the endpoint's certificate. If an endpoint

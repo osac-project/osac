@@ -791,6 +791,13 @@ keycloak:
   uiUrl: https://osac-ui-osac.apps.example.com
 ```
 
+If cert-manager is already installed and will remain administrator-managed,
+follow [When Prerequisites Already Exist](#when-prerequisites-already-exist)
+before the first Phase 1a install and set `certManager.enabled: false` in this
+values file. The Phase 1a command uses `--take-ownership`; with
+`certManager.enabled: true`, Helm can adopt the existing `cert-manager` and
+`cert-manager-operator` namespaces and the rendered operator resources.
+
 For a new release, run phase 1a and phase 1b, replacing
 `-f my-infra-values.yaml` with `-f my-management-infra-values.yaml` in both
 commands. When upgrading existing releases, pass the values files that preserve

@@ -1312,6 +1312,11 @@ Read the `NetworkClass` through the private API of the Fulfillment Service.
    if [ -n "${CA_FILE:-}" ]; then
      CURL_CA_ARGS=(--cacert "$CA_FILE")
    fi
+   ```
+
+3. Check the `NetworkClass`:
+
+   ```console
    curl --fail-with-body "${CURL_CA_ARGS[@]}" --header "Authorization: Bearer ${OSAC_ADMIN_TOKEN}" \
        "${FULFILLMENT_API}/api/private/v1/network_classes" | jq '.items[0].status'
    ```

@@ -353,11 +353,20 @@ When bundled Keycloak is enabled, it mounts the ConfigMap named by
 `bundle.pem` key. When `caIssuer.enabled: true`, the Phase 1b hook applies a
 trust-manager `Bundle` that reconciles same-named ConfigMaps in the
 `osac-infra`, `keycloak`, and OSAC release namespaces. This can replace roots
-in directly managed ConfigMaps. If administrators manage these ConfigMaps
-directly, set `caIssuer.enabled: false` before Phase 1b and remove or change any
-existing `Bundle` so it no longer targets those ConfigMaps. Provide a
-`bundle.pem` ConfigMap in the `keycloak` and `osac-infra` namespaces before
-Phase 1b when the enabled services consume it. The OSAC chart uses a separate
+in directly managed ConfigMaps. Before changing `caIssuer.enabled` on an
+existing `osac-infra` release, check whether it owns the `default-ca`
+`ClusterIssuer` and `default-ca-cert` `Certificate`. Disabling the toggle
+removes those resources; if Keycloak certificates use `default-ca`, plan an
+issuer migration first to avoid interrupting certificate renewal. If
+administrators manage these ConfigMaps directly, set `caIssuer.enabled: false`
+before Phase 1b and remove or change any existing `Bundle` so it no longer
+targets those ConfigMaps. On a clean cluster, create the `keycloak` and
+`osac-infra` namespaces before applying their administrator-managed ConfigMaps.
+Although Phase 1b can create `osac-infra` with `--create-namespace`, create it
+beforehand so its ConfigMap is available before installation. The Phase 1b
+command uses `--take-ownership` to adopt the chart-rendered `keycloak`
+namespace. Provide a `bundle.pem` ConfigMap in both namespaces before Phase 1b
+when the enabled services consume it. The OSAC chart uses a separate
 ConfigMap in the OSAC release namespace; before Phase 2, provide it under the
 name configured by
 `service.certs.caBundle.configMap`. Keep that name aligned with

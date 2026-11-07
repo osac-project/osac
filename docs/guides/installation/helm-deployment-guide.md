@@ -348,12 +348,15 @@ that namespace earlier to store the AAP license secret, so pass
 chart skips this namespace resource, so this particular ownership reason does
 not apply.
 
-Before upgrading an existing `osac-infra` release, check its current
-`osacNamespace` with `helm get values osac-infra -n osac-infra` and preserve
-that value. If no override is listed, the chart default is `osac`. Set `NS` to
-that value before running the command below. Changing `osacNamespace` makes
-Helm remove the old namespace from the release, and Kubernetes deletes its
-contents.
+Before upgrading an existing `osac-infra` release, inspect its installed
+overrides with `helm get values osac-infra -n osac-infra`. Preserve
+`osacNamespace`, `lvms.channel`, `keycloak.hostname`,
+`keycloak.route.publicIngress`, and `keycloak.route.hostname` in
+`my-infra-values.yaml`. The `--set` options below override that file, so remove
+or change those options to match the installed values. If no `osacNamespace`
+override is listed, the chart default is `osac`. Set `NS` to that value before
+running the command below. Changing `osacNamespace` makes Helm remove the old
+namespace from the release, and Kubernetes deletes its contents.
 
 When bundled Keycloak is enabled, it mounts the ConfigMap named by
 `certs.caBundle.configMap` from the `keycloak` namespace and reads its
@@ -445,16 +448,17 @@ replacing `<cluster-domain>` with the actual cluster domain. For external
 Keycloak, use the realm issuer URL configured in `service.auth.issuerUrl`. See
 the [customer install guide](customer-install-guide.md#42-configuring-the-helm-values).
 
-Before upgrading an existing release, check its installed values with
-`helm get values osac -n "$NS" --all`, including `global.clusterDomain`,
-`service.externalHostname`, and `service.internalHostname`. The default
-`service.auth.issuerUrl` and `service.idp.url` derive from
-`global.clusterDomain`; preserve its installed value by setting it in
-`my-values.yaml` or making `$DOMAIN` match it. The `--set` options below
-override values in `my-values.yaml`. Remove or adjust
-`--set global.clusterDomain="$DOMAIN"` and the hostname options to preserve the
-existing issuer, IdP URL, and API endpoints. Keep `ui.auth.oidcIssuerURL`
-aligned with the resolved `service.auth.issuerUrl`.
+Before upgrading an existing release, compare its recorded overrides from
+`helm get values osac -n "$NS"` with `my-values.yaml`. Carry every intentional
+override into the file, including any `service.vault.endpoint` override and
+the installed `global.clusterDomain`, `service.externalHostname`, and
+`service.internalHostname`. The default `service.auth.issuerUrl` and
+`service.idp.url` derive from `global.clusterDomain`, so preserve that value.
+The `--set` options below override values in the file. Make `$DOMAIN` match the
+installed domain or remove the domain option and keep its value in
+`my-values.yaml`; remove or adjust the hostname options to preserve existing
+API endpoints. Keep `ui.auth.oidcIssuerURL` aligned with the resolved
+`service.auth.issuerUrl`.
 
 ```bash
 helm upgrade --install osac \

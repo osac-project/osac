@@ -288,15 +288,19 @@ Notes on individual components:
 - trust-manager is required for every installation and can distribute the CA
   bundle. `caIssuer.enabled` is `true` by default, so the chart's `Bundle`
   manages the ConfigMap named by `certs.caBundle.configMap` (normally
-  `ca-bundle`) and can overwrite it. If you provide the ConfigMap named by
-  `service.certs.caBundle.configMap` yourself, remove or change any existing
-  `Bundle` that still manages it, then set `caIssuer.enabled: false` before
-  installation. On an existing installation, check who owns `default-ca` and
-  which certificates use it before turning this off;
-  it removes the issuer and CA certificate and may stop Keycloak certificate
-  renewal. See [CA bundle and issuer guidance](helm-deployment-guide.md#when-prerequisites-already-exist).
-  This also disables the chart's issuer, so provide any issuer you need. The
-  ConfigMap must exist in the OSAC release namespace.
+  `ca-bundle`) and can overwrite it. If
+  `service.certs.caBundle.configMap` and `certs.caBundle.configMap` name the
+  same ConfigMap and you manage it directly, remove or change the `Bundle` so
+  it no longer targets the ConfigMap, then set
+  `caIssuer.enabled: false` before installation. If
+  `service.certs.caBundle.configMap` uses a different name, you can provide
+  that ConfigMap directly and leave `caIssuer.enabled: true`. On an existing
+  installation, check who owns `default-ca` and which certificates use it
+  before disabling `caIssuer`; it removes the issuer and CA certificate and
+  may stop Keycloak certificate renewal. See [CA bundle and issuer guidance](helm-deployment-guide.md#when-prerequisites-already-exist).
+  Disabling `caIssuer.enabled` also disables the chart's issuer, so provide any
+  issuer you need. The ConfigMap must exist in the namespace where OSAC is
+  installed.
   Disabling `caIssuer.enabled` also disables the automatic Keycloak Route
   update. If your public-ingress Keycloak Route uses `reencrypt`, set
   `destinationCACertificate` to the CA that signs Keycloak's serving
@@ -2222,11 +2226,10 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    Before the tenant check in step 13, repeat step 2 of Section 4.4.6 to rebuild
    `CURL_CA_ARGS` from the refreshed bundle.
 
-   Refreshing this local file does not update bundled Keycloak's truststore.
-   If Keycloak uses the changed CA to connect to an outbound OIDC provider,
-   after the `keycloak` namespace bundle updates, rerun the OSAC installation or
-   upgrade when the chart manages the bundle. If you manage the bundle yourself,
-   restart Keycloak to reload its truststore. See
+   Refreshing this local file or running an OSAC installation or upgrade does
+   not update Keycloak's truststore. If Keycloak uses the changed CA to connect
+   to an outbound OIDC provider, restart Keycloak after the updated bundle
+   reaches the ConfigMap it uses. See
    [Adding CA roots to the shared bundle at runtime](helm-deployment-guide.md#adding-ca-roots-to-the-shared-bundle-at-runtime).
 
    Keep this file for the OIDC, API, and hub-registration checks. It must

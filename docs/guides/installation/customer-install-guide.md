@@ -286,8 +286,13 @@ Notes on individual components:
   `cert-manager` namespace. The `certificates.cert-manager.io` CRD is a
   mandatory install preflight check.
 - trust-manager is a required prerequisite for every installation. It can
-  distribute the CA bundle, but administrators may also provide the CA-bundle
-  `ConfigMap` named by `service.certs.caBundle.configMap` directly. The
+  distribute the CA bundle. When `caIssuer.enabled: true` (the default), the
+  Phase 1b chart-managed `Bundle` reconciles the ConfigMap named by
+  `certs.caBundle.configMap` (default `ca-bundle`) and can overwrite its
+  contents. Administrators who provide the ConfigMap named by
+  `service.certs.caBundle.configMap` directly must set `caIssuer.enabled: false`
+  in the Phase 1b values before installation. This also disables the
+  chart-managed issuer, so provide any required issuer separately. The
   ConfigMap must exist in the OSAC release namespace in either case.
 - **Certificate issuer:** `service.certs.issuerRef` defaults to the
   `default-ca` `ClusterIssuer`. Select an existing, ready `Issuer` or
@@ -2186,7 +2191,9 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    not change the Bundle generation. After a CA source changes, repeat the
    ConfigMap command above and confirm that `bundle.pem` contains the expected
    CA by comparing its SHA-256 fingerprint with the fingerprint of the
-   administrator-provided certificate.
+   administrator-provided certificate. Compare the SHA-256 fingerprint of
+   each CA that should no longer be trusted with the fingerprints of the
+   certificates in the updated `bundle.pem`; none should match.
 
    The target ConfigMap must store the bundle under the fixed `bundle.pem` key
    required by the OSAC hooks. After it contains the expected CA, extract
@@ -2207,8 +2214,9 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
 
    Refreshing this local file does not update bundled Keycloak's truststore.
    If Keycloak uses the changed CA to connect to an outbound OIDC provider,
-   after the `keycloak` namespace bundle updates, apply the change with an
-   `osac-infra` upgrade or restart Keycloak. See
+   after the `keycloak` namespace bundle updates, run an `osac-infra` upgrade
+   when the chart manages the bundle. When an administrator manages the bundle,
+   restart Keycloak to reload its truststore. See
    [Adding CA roots to the shared bundle at runtime](helm-deployment-guide.md#adding-ca-roots-to-the-shared-bundle-at-runtime).
 
    Keep this file for the OIDC, API, and hub-registration checks. It must

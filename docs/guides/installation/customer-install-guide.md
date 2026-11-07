@@ -2204,9 +2204,11 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    certificates in the updated `bundle.pem`; none should match.
 
    The target ConfigMap must store the bundle under the fixed `bundle.pem` key
-   required by the OSAC hooks. After it contains the expected CA, extract
-   `bundle.pem` for the client checks below. Repeat the ConfigMap check and
-   extraction after every later CA source change; use the refreshed file for
+   required by OSAC. After it contains the expected CA, extract `bundle.pem`
+   for the client checks below. Repeat the ConfigMap check and extraction after
+   each CA source change. If the Fulfillment certificate will use this CA,
+   restart the OSAC operator after the updated bundle appears in the target
+   ConfigMap and before switching the certificate. Use the refreshed file for
    client checks.
 
    ```console

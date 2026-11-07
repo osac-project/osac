@@ -445,10 +445,16 @@ replacing `<cluster-domain>` with the actual cluster domain. For external
 Keycloak, use the realm issuer URL configured in `service.auth.issuerUrl`. See
 the [customer install guide](customer-install-guide.md#42-configuring-the-helm-values).
 
-Before upgrading an existing release, check its current API hostnames with
-`helm get values osac -n "$NS" --all`. The `--set` options below override the
-hostnames in `my-values.yaml`; remove or adjust them to preserve the existing
-API endpoints.
+Before upgrading an existing release, check its installed values with
+`helm get values osac -n "$NS" --all`, including `global.clusterDomain`,
+`service.externalHostname`, and `service.internalHostname`. The default
+`service.auth.issuerUrl` and `service.idp.url` derive from
+`global.clusterDomain`; preserve its installed value by setting it in
+`my-values.yaml` or making `$DOMAIN` match it. The `--set` options below
+override values in `my-values.yaml`. Remove or adjust
+`--set global.clusterDomain="$DOMAIN"` and the hostname options to preserve the
+existing issuer, IdP URL, and API endpoints. Keep `ui.auth.oidcIssuerURL`
+aligned with the resolved `service.auth.issuerUrl`.
 
 ```bash
 helm upgrade --install osac \

@@ -849,7 +849,14 @@ Phase 1b, even if administrator-managed cert-manager runs elsewhere. When
 `cert-manager`; configure the controller's cluster resource namespace as
 `cert-manager` so it can resolve the `default-ca` Secret referenced by the
 `ClusterIssuer`. The Keycloak Route patch hook also reads that Secret from
-`cert-manager`. This chart has no setting to change the namespace.
+`cert-manager`. This chart has no setting to change the namespace. Changing an
+existing cert-manager controller's cluster resource namespace does not move
+Secrets used by `ClusterIssuer` resources. Copy those Secrets to the new
+namespace before changing the setting, or certificate issuance and renewal may
+fail. If the controller's cluster resource namespace must remain
+different from `cert-manager`, use an administrator-managed `default-ca` issuer
+and set `caIssuer.enabled: false`; see
+[When Prerequisites Already Exist](#when-prerequisites-already-exist).
 
 For a new release, run phase 1a and phase 1b, replacing
 `-f my-infra-values.yaml` with `-f my-management-infra-values.yaml` in both

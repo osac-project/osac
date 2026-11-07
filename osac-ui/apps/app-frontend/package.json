@@ -29,7 +29,7 @@
     "react-i18next": "^15.0.0",
     "react-router-dom": "^7.0.0",
     "react-svg": "^16.2.0",
-    "victory": "^37.3.6"
+    "victory": "^38.0.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.0",

@@ -12,7 +12,7 @@ require (
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.42.1
 	github.com/prometheus/client_golang v1.24.1
-	github.com/xdg-go/scram v1.2.0
+	github.com/xdg-go/scram v1.3.0
 )
 
 require (

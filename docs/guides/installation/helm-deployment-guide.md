@@ -823,17 +823,38 @@ before the first Phase 1a install and set `certManager.enabled: false` in this
 values file. The Phase 1a command uses `--take-ownership`; with
 `certManager.enabled: true`, Helm can adopt the existing `cert-manager` and
 `cert-manager-operator` namespaces and the rendered operator resources.
+With `certManager.enabled: false`, create the `cert-manager` namespace before
+Phase 1b, even if administrator-managed cert-manager runs elsewhere. When
+`caIssuer.enabled: true`, the chart places its `Issuer` and `Certificate` in
+`cert-manager`; configure the controller's cluster resource namespace as
+`cert-manager` so it can resolve the `default-ca` Secret referenced by the
+`ClusterIssuer`. The Keycloak Route patch hook also reads that Secret from
+`cert-manager`. This chart has no setting to change the namespace.
 
 For a new release, run phase 1a and phase 1b, replacing
 `-f my-infra-values.yaml` with `-f my-management-infra-values.yaml` in both
 commands. When upgrading existing releases, pass the values files that preserve
-each release's settings. For Phase 2 upgrades, also preserve the existing
-`global.networking.provisioningEnabled` value in `my-values.yaml`. Changing it
-after installation prevents the Fulfillment Service from starting. Then run
-Phase 2 with the remote kubeconfig values from the customer install guide. The
-Secret must exist in the OSAC namespace
-before `helm upgrade --install osac`. For production, keep `lvms.enabled: false`
-in the phase-2 `my-values.yaml`, including when the workload cluster uses LVMS.
+each release's settings. The Phase 2 `helm upgrade --install osac` command
+upgrades the `osac` Helm release. In-place upgrades are supported for patch
+releases within the same OSAC minor version; see the
+customer install guide's [supported upgrade
+scope](customer-install-guide.md#444-settings-fixed-at-installation). For these
+upgrades, preserve the existing `global.networking.provisioningEnabled`,
+`global.networking.fabricManager`, `global.networking.k8sManager`,
+`global.services.*`, and NetworkClass settings in `my-values.yaml`.
+`provisioningEnabled` cannot change after installation; changing it prevents
+the Fulfillment Service from starting. The `create-network-class` hook rejects
+changed manager selections or NetworkClass defaults, capabilities, or address
+plan. A service-toggle change can also fail the check if it changes the derived
+address plan or violates a service constraint. Before upgrading, compare the
+stored NetworkClass with the networking values in
+`my-values.yaml`; see the customer install guide's
+[NetworkClass check](customer-install-guide.md#446-checking-the-networkclass).
+Use the remote workload kubeconfig values from the customer install guide as
+well; they are separate from the NetworkClass settings. The Secret must exist
+in the OSAC namespace before `helm upgrade --install osac`. For production,
+keep `lvms.enabled: false` in the phase-2 `my-values.yaml`, including when the
+workload cluster uses LVMS.
 Storage administrators must prepare the StorageBackend, StorageTier, and tenant
 storage configuration; installing the LVM Storage Operator and its operand does
 not register an OSAC storage offering. The automatic local-storage registration

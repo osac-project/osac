@@ -68,7 +68,10 @@ def test_delete_instance_type_if_present_propagates_other_errors() -> None:
     assert exc_info.value is error
 
 
-def test_wait_for_tenant_default_networking_ready_waits_for_all_resources(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("success_reason", ["AllResourcesReady", "ProvisioningDisabled"])
+def test_wait_for_tenant_default_networking_ready_waits_for_all_resources(
+    monkeypatch: pytest.MonkeyPatch, success_reason: str
+) -> None:
     grpc = Mock(spec=GRPCClient)
     grpc.get_tenant_by_name.side_effect = [
         {
@@ -89,7 +92,7 @@ def test_wait_for_tenant_default_networking_ready_waits_for_all_resources(monkey
                     {
                         "type": "TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY",
                         "status": "CONDITION_STATUS_TRUE",
-                        "reason": "AllResourcesReady",
+                        "reason": success_reason,
                         "message": "All defaults are ready",
                     }
                 ]

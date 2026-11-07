@@ -1232,9 +1232,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
 						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
 					}.Build()},
-					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
-						Subnet: publicv1.SubnetLocalReference_builder{Id: network.subnetID}.Build(),
-					}.Build(),
+					NetworkAttachment:        network.clusterAttachment(),
 					AutoExternalIpAttachment: &autoAttach,
 				}.Build(),
 			}.Build(),
@@ -1378,9 +1376,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
 						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
 					}.Build()},
-					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
-						Subnet: publicv1.SubnetLocalReference_builder{Id: network.subnetID}.Build(),
-					}.Build(),
+					NetworkAttachment:        network.clusterAttachment(),
 					AutoExternalIpAttachment: &autoAttach,
 				}.Build(),
 			}.Build(),

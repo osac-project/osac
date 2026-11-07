@@ -61,7 +61,8 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	)
 
 	BeforeEach(func(ctx context.Context) {
-		tenantName, tenantConn := createCatalogItemTenantAdminFixture(ctx)
+		createdTenantName, tenantConn := createCatalogItemTenantAdminFixture(ctx)
+		tenantName = createdTenantName
 		defaultNetworkingFixture = ensureTenantDefaultNetworkingFixture(ctx, tenantName, "")
 
 		// Create clients

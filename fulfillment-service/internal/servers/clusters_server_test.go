@@ -350,8 +350,6 @@ var _ = Describe("Clusters server", func() {
 			}.Build())
 			seedAddOnOperator(ctx, "published-operator-id", "published-operator", true)
 			seedAddOnOperator(ctx, "unpublished-operator-id", "unpublished-operator", false)
-			// Cluster Create hard-fails when network_attachment is omitted and no tenant defaults exist.
-			seedClusterTenantDefaultNetworking(ctx, testTenant, "")
 		})
 
 		It("rejects reserved metadata on public create", func() {
@@ -1181,6 +1179,43 @@ var _ = Describe("Clusters server", func() {
 			object = getResponse.GetObject()
 			Expect(object.GetStatus().GetApiUrl()).To(BeEmpty())
 			Expect(object.GetStatus().GetConsoleUrl()).To(BeEmpty())
+		})
+
+		It("Ignores changes to status on an unmasked update with network attachment preserved", func() {
+			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{Name: "test-unmasked-status-update"}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			object := proto.Clone(createResponse.GetObject()).(*publicv1.Cluster)
+			originalAttachment := proto.Clone(object.GetSpec().GetNetworkAttachment()).(*publicv1.ClusterNetworkAttachment)
+			object.GetMetadata().SetLabels(map[string]string{"test": "unmasked-update"})
+			object.SetStatus(publicv1.ClusterStatus_builder{
+				ApiUrl:     "https://forged.api",
+				ConsoleUrl: "https://forged.console",
+			}.Build())
+
+			updateResponse, err := server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+				Object: object,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("test", "unmasked-update"))
+			Expect(proto.Equal(updateResponse.GetObject().GetSpec().GetNetworkAttachment(), originalAttachment)).To(BeTrue())
+			Expect(updateResponse.GetObject().GetStatus().GetApiUrl()).To(BeEmpty())
+			Expect(updateResponse.GetObject().GetStatus().GetConsoleUrl()).To(BeEmpty())
+
+			getResponse, err := server.Get(ctx, publicv1.ClustersGetRequest_builder{
+				Id: object.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(getResponse.GetObject().GetSpec().GetNetworkAttachment(), originalAttachment)).To(BeTrue())
+			Expect(getResponse.GetObject().GetStatus().GetApiUrl()).To(BeEmpty())
+			Expect(getResponse.GetObject().GetStatus().GetConsoleUrl()).To(BeEmpty())
 		})
 
 		It("Delete object", func() {
@@ -2471,7 +2506,6 @@ var _ = Describe("Clusters server", func() {
 					State:     privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_ACTIVE,
 				}.Build(),
 			}.Build())
-			seedClusterTenantDefaultNetworking(ctx, testTenant, "")
 		})
 
 		It("Preserves explicit fields through create and get", func() {

@@ -1127,16 +1127,15 @@ def wait_for_tenant_condition(*, k8s: K8sClient, name: str, condition_type: str,
 def wait_for_tenant_default_networking_ready(*, grpc: GRPCClient, tenant_name: str) -> None:
     """Wait for configured tenant defaults, not merely the Tenant's ready flag.
 
-    A tenant with no NetworkClass defaults can report DefaultNetworkingReady=True
-    with reason NoDefaultNetworking. Workload creation that omits an attachment
-    still requires the actual defaults to be READY, so accept only
-    AllResourcesReady and fail immediately for known terminal setup states.
+    Workload creation that omits an attachment requires the actual defaults to
+    be READY. Both AllResourcesReady and ProvisioningDisabled indicate that
+    configured defaults are ready; fail immediately for known terminal states.
     Fulfillment owns this condition, so read it from the private Tenant API
     rather than the Kubernetes Tenant CR.
     """
     condition_type = "TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY"
     expected_status = "CONDITION_STATUS_TRUE"
-    expected_reason = "AllResourcesReady"
+    successful_reasons = {"AllResourcesReady", "ProvisioningDisabled"}
     terminal_reasons = {"NoDefaultNetworking", "ResourceFailed", "ReservedTenant"}
     last_condition: dict[str, Any] = {}
 
@@ -1161,11 +1160,11 @@ def wait_for_tenant_default_networking_ready(*, grpc: GRPCClient, tenant_name: s
             until=lambda condition: (
                 condition is not None
                 and condition.get("status") == expected_status
-                and condition.get("reason") == expected_reason
+                and condition.get("reason") in successful_reasons
             ),
             retries=120,
             delay=5,
-            description=f"Tenant {tenant_name} {condition_type}={expected_status}/{expected_reason}",
+            description=f"Tenant {tenant_name} {condition_type}={expected_status}/{sorted(successful_reasons)}",
             resource_kind=WaitResourceKind.TENANT,
             resource_id=tenant_name,
         )
@@ -1174,7 +1173,8 @@ def wait_for_tenant_default_networking_ready(*, grpc: GRPCClient, tenant_name: s
         reason = last_condition.get("reason", "") or "<missing>"
         message = last_condition.get("message", "") or "<no message>"
         raise TimeoutError(
-            f"Tenant {tenant_name} did not reach {condition_type}={expected_status}/{expected_reason} "
+            f"Tenant {tenant_name} did not reach {condition_type}={expected_status} "
+            f"with reason in {sorted(successful_reasons)} "
             f"(last status={status}, reason={reason}, message={message})"
         ) from None
 

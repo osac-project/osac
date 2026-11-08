@@ -7,11 +7,13 @@ import VirtualNetworkActionsMenu from '@osac/ui-components/components/networking
 import VirtualNetworkLoadedField from '@osac/ui-components/components/networking/VirtualNetworkLoadedField';
 
 import { CidrDisplay } from './CidrDisplay';
+import NetworkingProjectName from './NetworkingProjectName';
+import NetworkingResourceName from './NetworkingResourceName';
+import StatusWithMessage from './StatusWithMessage';
 import { getVirtualNetworkName } from './virtual-network-list-utils';
 import VirtualNetworkNatGatewayCell from './VirtualNetworkNatGatewayCell';
 import { VirtualNetworkStatusLabel } from './VirtualNetworkStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
-import ResourceNameField from '../Resource/ResourceNameField';
 
 interface VirtualNetworkTableProps {
   virtualNetworks: VirtualNetwork[];
@@ -24,6 +26,8 @@ interface VirtualNetworkTableProps {
   natGatewaysByVirtualNetworkId: Record<string, NatGatewayWithAddress>;
   natGatewaysLoading?: boolean;
   natGatewaysError?: unknown;
+  /** Adds a Tenant column, for cloud provider admins who see every tenant's networks. */
+  tenantName?: (tenantId?: string) => string;
 }
 
 const VirtualNetworkTable = ({
@@ -37,6 +41,7 @@ const VirtualNetworkTable = ({
   natGatewaysByVirtualNetworkId,
   natGatewaysLoading,
   natGatewaysError,
+  tenantName,
 }: VirtualNetworkTableProps) => {
   const { t } = useTranslation();
 
@@ -48,6 +53,7 @@ const VirtualNetworkTable = ({
       subnets: t('Subnets'),
       securityGroups: t('Security groups'),
       natGateway: t('NAT gateway'),
+      project: t('Project'),
       actions: t('Actions'),
     }),
     [t],
@@ -63,6 +69,8 @@ const VirtualNetworkTable = ({
           <Th>{columnLabels.subnets}</Th>
           <Th>{columnLabels.securityGroups}</Th>
           <Th>{columnLabels.natGateway}</Th>
+          <Th>{columnLabels.project}</Th>
+          {tenantName ? <Th>{t('Tenant')}</Th> : null}
           <Th aria-label={columnLabels.actions} />
         </Tr>
       </Thead>
@@ -70,14 +78,16 @@ const VirtualNetworkTable = ({
         {virtualNetworks.map((vn) => (
           <Tr key={vn.id}>
             <Td dataLabel={columnLabels.name}>
-              <ResourceNameField
+              <NetworkingResourceName
                 resource={vn}
                 title={getVirtualNetworkName(vn)}
                 detailsUrl={`/networking/virtual-networks/${vn.id}`}
               />
             </Td>
-            <Td dataLabel={columnLabels.status}>
-              <VirtualNetworkStatusLabel state={vn.status?.state} />
+            <Td dataLabel={columnLabels.status} modifier="nowrap">
+              <StatusWithMessage message={vn.status?.message}>
+                <VirtualNetworkStatusLabel state={vn.status?.state} />
+              </StatusWithMessage>
             </Td>
             <Td dataLabel={columnLabels.ipV4cidr}>
               <CidrDisplay ipv4Cidr={vn.spec?.ipv4Cidr} />
@@ -111,6 +121,14 @@ const VirtualNetworkTable = ({
                 />
               </VirtualNetworkLoadedField>
             </Td>
+            <Td dataLabel={columnLabels.project}>
+              <NetworkingProjectName project={vn.metadata?.project} tenant={vn.metadata?.tenant} />
+            </Td>
+            {tenantName ? (
+              <Td dataLabel={t('Tenant')} modifier="nowrap">
+                {tenantName(vn.metadata?.tenant)}
+              </Td>
+            ) : null}
             <Td dataLabel={columnLabels.actions} isActionCell>
               <VirtualNetworkActionsMenu virtualNetwork={vn} />
             </Td>

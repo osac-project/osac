@@ -16,7 +16,7 @@ describe('ExternalIpAttachedTo', () => {
     expect(screen.queryByText('Yes')).not.toBeInTheDocument();
   });
 
-  it('renders the resource type and a link to the target', () => {
+  it('renders a link to the target followed by its kind', () => {
     renderWithProviders(
       <ExternalIpAttachedTo
         attached
@@ -28,8 +28,8 @@ describe('ExternalIpAttachedTo', () => {
       />,
     );
 
-    expect(screen.getByText('Bare metal')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Bare metal: aaa' })).toHaveAttribute(
+    expect(screen.getByText('(Bare-metal instance)')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Bare-metal instance: aaa' })).toHaveAttribute(
       'href',
       '/bare-metal/bm-1',
     );

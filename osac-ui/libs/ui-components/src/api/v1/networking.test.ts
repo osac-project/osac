@@ -56,15 +56,18 @@ describe('networking list filters', () => {
     );
   });
 
-  it('filters external IPs to allocated and unattached', () => {
+  const pickerLabelExclusions =
+    '!("osac.openshift.io/auto-created" in this.metadata.labels) && !("osac.openshift.io/default" in this.metadata.labels)';
+
+  it('filters external IPs to allocated, unattached, not automatic, and not default', () => {
     expect(unallocatedExternalIpFilter()).toBe(
-      `this.status.state == ${ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED} && this.status.attached == false`,
+      `this.status.state == ${ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED} && this.status.attached == false && ${pickerLabelExclusions}`,
     );
   });
 
   it('filters external IPs to the requested project', () => {
     expect(unallocatedExternalIpFilter('project-a')).toBe(
-      `this.metadata.project == "project-a" && this.status.state == ${ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED} && this.status.attached == false`,
+      `this.metadata.project == "project-a" && this.status.state == ${ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED} && this.status.attached == false && ${pickerLabelExclusions}`,
     );
   });
 

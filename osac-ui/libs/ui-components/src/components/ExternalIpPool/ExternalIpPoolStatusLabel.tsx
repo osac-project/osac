@@ -41,7 +41,7 @@ const ExternalIpPoolStatusLabel = ({ state }: ExternalIpPoolStatusLabelProps) =>
       ? statusMap[state]
       : statusMap[ExternalIPPoolState.EXTERNAL_IP_POOL_STATE_UNSPECIFIED];
 
-  return <ResourceStatusLabel {...status} />;
+  return <ResourceStatusLabel {...status} noIcon={false} />;
 };
 
 export default ExternalIpPoolStatusLabel;

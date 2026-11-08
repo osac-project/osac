@@ -1,19 +1,24 @@
-import { Button } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import type { TFunction } from 'i18next';
 
-import { Protocol, type SecurityRule } from '@osac/types';
-import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
+import { Protocol } from '@osac/types';
 
 import { useTranslation } from '../../hooks/useTranslation';
 import { SubtleContent } from '../SubtleContent/SubtleContent';
 
+/** A rule of the public or private API; both share the field numbers and protocol values. */
+export interface DisplayedSecurityRule {
+  protocol: number;
+  portFrom?: number;
+  portTo?: number;
+  ipv4Cidr?: string;
+}
+
 interface SecurityGroupRulesTableProps {
-  rules: SecurityRule[];
+  rules: DisplayedSecurityRule[];
+  /** Overrides the text shown when there are no rules. */
+  emptyText?: string;
   direction: 'ingress' | 'egress';
-  onAddRule: () => void;
-  onEditRule: (index: number) => void;
-  onDeleteRule: (index: number) => void;
 }
 
 export const protocolToString = (protocol: Protocol, t: TFunction): string => {
@@ -43,63 +48,47 @@ const formatPortRange = (portFrom?: number, portTo?: number): string => {
 
 const formatCidr = (ipv4Cidr?: string): string => ipv4Cidr || '—';
 
+/** The read-only rules of one direction; rules change only through Edit rules. */
 export const SecurityGroupRulesTable = ({
   rules,
   direction,
-  onAddRule,
-  onEditRule,
-  onDeleteRule,
+  emptyText,
 }: SecurityGroupRulesTableProps) => {
   const { t } = useTranslation();
-
   const cidrLabel = direction === 'ingress' ? t('Source CIDR') : t('Destination CIDR');
 
   if (rules.length === 0) {
     return (
-      <div>
-        <SubtleContent component="p">
-          {direction === 'ingress'
-            ? t('No inbound rules yet. Add one to allow incoming traffic.')
-            : t('No outbound rules yet. Add one to allow outgoing traffic.')}
-        </SubtleContent>
-        <Button variant="primary" onClick={onAddRule} style={{ marginTop: '1rem' }}>
-          {t('Add rule')}
-        </Button>
-      </div>
+      <SubtleContent component="p">
+        {emptyText ??
+          (direction === 'ingress'
+            ? t('No inbound rules. Use Edit rules to allow incoming traffic.')
+            : t('No outbound rules. Use Edit rules to allow outgoing traffic.'))}
+      </SubtleContent>
     );
   }
 
   return (
-    <div>
-      <Button variant="primary" onClick={onAddRule} style={{ marginBottom: '1rem' }}>
-        {t('Add rule')}
-      </Button>
-      <Table aria-label={`${direction} rules`} variant="compact" borders>
-        <Thead>
-          <Tr>
-            <Th>{t('Protocol')}</Th>
-            <Th>{t('Port Range')}</Th>
-            <Th>{cidrLabel}</Th>
-            <Th>{t('Actions')}</Th>
+    <Table
+      aria-label={direction === 'ingress' ? t('Inbound rules') : t('Outbound rules')}
+      variant="compact"
+    >
+      <Thead>
+        <Tr>
+          <Th>{t('Protocol')}</Th>
+          <Th>{t('Port range')}</Th>
+          <Th>{cidrLabel}</Th>
+        </Tr>
+      </Thead>
+      <Tbody>
+        {rules.map((rule, index) => (
+          <Tr key={index}>
+            <Td dataLabel={t('Protocol')}>{protocolToString(rule.protocol as Protocol, t)}</Td>
+            <Td dataLabel={t('Port range')}>{formatPortRange(rule.portFrom, rule.portTo)}</Td>
+            <Td dataLabel={cidrLabel}>{formatCidr(rule.ipv4Cidr)}</Td>
           </Tr>
-        </Thead>
-        <Tbody>
-          {rules.map((rule, index) => (
-            <Tr key={index}>
-              <Td dataLabel={t('Protocol')}>{protocolToString(rule.protocol, t)}</Td>
-              <Td dataLabel={t('Port Range')}>{formatPortRange(rule.portFrom, rule.portTo)}</Td>
-              <Td dataLabel={cidrLabel}>{formatCidr(rule.ipv4Cidr)}</Td>
-              <Td dataLabel={t('Actions')}>
-                <Button variant="link" isInline onClick={() => onEditRule(index)}>
-                  {t('Edit')}
-                </Button>
-                {' | '}
-                <DeleteResourceButton variant="link" isInline onClick={() => onDeleteRule(index)} />
-              </Td>
-            </Tr>
-          ))}
-        </Tbody>
-      </Table>
-    </div>
+        ))}
+      </Tbody>
+    </Table>
   );
 };

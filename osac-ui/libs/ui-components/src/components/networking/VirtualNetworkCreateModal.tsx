@@ -125,9 +125,6 @@ export const VirtualNetworkCreateModal = ({
             </Stack>
           </ModalBody>
           <ModalFooter>
-            <Button variant="link" onClick={onClose} isDisabled={isSubmitting}>
-              {t('Cancel')}
-            </Button>
             <Button
               variant="primary"
               onClick={submitForm}
@@ -135,6 +132,9 @@ export const VirtualNetworkCreateModal = ({
               isLoading={isSubmitting}
             >
               {t('Create')}
+            </Button>
+            <Button variant="link" onClick={onClose} isDisabled={isSubmitting}>
+              {t('Cancel')}
             </Button>
           </ModalFooter>
         </Modal>

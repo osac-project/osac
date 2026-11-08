@@ -1,6 +1,6 @@
 export interface AttachNatGatewayVirtualNetwork {
   id: string;
-  metadata?: { name?: string };
+  metadata?: { name?: string; project?: string; tenant?: string };
   spec?: { ipv4Cidr?: string };
 }
 

@@ -43,6 +43,8 @@ export * from './osac/public/v1/external_ip_attribution_type_pb.js'
 
 export * from './osac/public/v1/nat_gateway_type_pb.js'
 export * from './osac/public/v1/nat_gateways_service_pb.js'
+export * from './osac/public/v1/fabric_domain_type_pb.js'
+export * from './osac/public/v1/fabric_domains_service_pb.js'
 
 export * from './osac/public/v1/event_type_pb.js'
 export * from './osac/public/v1/events_service_pb.js'

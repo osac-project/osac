@@ -10,6 +10,7 @@ export const buildExternalIpCreatePayload = (
   metadata: {
     name: values.metadata.name,
     project: values.metadata.project,
+    ...(values.metadata.tenant?.id ? { tenant: values.metadata.tenant.id } : {}),
   },
   spec: {
     pool: {

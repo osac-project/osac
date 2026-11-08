@@ -1,35 +1,46 @@
 import { ExternalIPPools } from '@osac/types/private';
-import { useListResource } from '@osac/ui-components/api/use-resource';
+import { useListAllResources } from '@osac/ui-components/api/use-resource';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
-import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
-import { SubtleContent } from '@osac/ui-components/components/SubtleContent/SubtleContent';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import { ExternalIpPoolsTable } from './ExternalIpPoolsTable';
+import GatedCreateButton from '../networking/GatedCreateButton';
+import NetworkingListEmptyState from '../networking/NetworkingListEmptyState';
+import { useNetworkClassNotReadyReason } from '../networking/useNetworkClassNotReadyReason';
 
 export const ExternalIpPoolsListPage = () => {
   const { t } = useTranslation();
 
-  const { data, isLoading, error } = useListResource(ExternalIPPools);
-  const pools = data?.items ?? [];
+  // The list has no page controls, so it loads every page.
+  const { data: poolsReply, isLoading, error } = useListAllResources(ExternalIPPools);
+  const pools = poolsReply?.items ?? [];
+  // A pool needs a READY network class.
+  const networkClassNotReadyReason = useNetworkClassNotReadyReason();
+  const createButton = (
+    <GatedCreateButton
+      service={ExternalIPPools}
+      to="/admin/infrastructure/external-ip-pools/create"
+      disabledReason={networkClassNotReadyReason}
+    >
+      {t('Create external IP pool')}
+    </GatedCreateButton>
+  );
 
   return (
     <ListPage
       title={t('External IP pools')}
       description={t('Manage external IP address pools for this cloud platform.')}
       error={error}
-      actions={
-        <CreateButton service={ExternalIPPools} to="/admin/infrastructure/external-ip-pools/create">
-          {t('Create pool')}
-        </CreateButton>
-      }
+      actions={createButton}
     >
       <ListPageBody isLoading={isLoading} error={error}>
         {pools.length === 0 ? (
-          <SubtleContent component="p">
-            {t('No external IP pools yet. Create one to get started.')}
-          </SubtleContent>
+          <NetworkingListEmptyState
+            emptyTitle={t('No external IP pools')}
+            emptyBody={t('Create a pool of addresses that tenants allocate external IPs from.')}
+            emptyAction={createButton}
+          />
         ) : (
           <ExternalIpPoolsTable pools={pools} />
         )}

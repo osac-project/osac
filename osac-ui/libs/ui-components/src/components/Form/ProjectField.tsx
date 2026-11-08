@@ -16,11 +16,13 @@ interface ProjectFieldProps {
   label?: string;
   onSelect?: (value: string | number) => void;
   isDisabled?: boolean;
+  /** Lists only this tenant's projects, e.g. after a provider admin picked the tenant. */
+  tenant?: string;
 }
 
 const fieldId = 'metadata.project';
 
-const ProjectField = ({ label, onSelect: onSelectProp, isDisabled }: ProjectFieldProps) => {
+const ProjectField = ({ label, onSelect: onSelectProp, isDisabled, tenant }: ProjectFieldProps) => {
   const { t } = useTranslation();
   const [field, meta, helpers] = useField<string>('metadata.project');
 
@@ -35,7 +37,11 @@ const ProjectField = ({ label, onSelect: onSelectProp, isDisabled }: ProjectFiel
     error: loadError,
   } = useListAllResources(
     Projects,
-    cel<Project>((builder) => builder.field('metadata.tenant').notEquals('shared')),
+    cel<Project>((builder) =>
+      tenant
+        ? builder.field('metadata.tenant').equals(tenant)
+        : builder.field('metadata.tenant').notEquals('shared'),
+    ),
   );
   const projects = projectReply?.items ?? [];
 

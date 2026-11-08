@@ -4,8 +4,9 @@ import { Formik } from 'formik';
 import type { TFunction } from 'i18next';
 import * as Yup from 'yup';
 
-import { ExternalIPs } from '@osac/types';
+import { type ExternalIP, ExternalIPs } from '@osac/types';
 
+import { useExternalIpConsumers } from '../../api/v1/external-ip-data';
 import { unallocatedExternalIpFilter } from '../../api/v1/networking';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
@@ -44,6 +45,7 @@ const ExternalIpAttachModal = ({
 }: ExternalIpAttachModalProps) => {
   const { t } = useTranslation();
   const [submitError, setSubmitError] = useState<unknown>();
+  const consumers = useExternalIpConsumers();
 
   return (
     <Formik<FormValues>
@@ -71,13 +73,21 @@ const ExternalIpAttachModal = ({
         >
           <ModalHeader title={title} labelId="attach-external-ip-modal-title" />
           <ModalBody>
+            {consumers.error ? (
+              <Alert variant="danger" title={t('Error loading external IPs')} isInline>
+                {getErrorMessage(consumers.error)}
+              </Alert>
+            ) : null}
             <OsacForm>
-              <ResourceSelectField
+              <ResourceSelectField<ExternalIP>
                 name="externalIp"
                 label={t('External IP')}
                 fieldId="attach-external-ip"
                 service={ExternalIPs}
                 request={{ filter: unallocatedExternalIpFilter(project) }}
+                filterItems={consumers.isSelectable}
+                loadAllPages
+                isDisabled={consumers.isLoading || Boolean(consumers.error)}
                 isRequired
                 autoSelectSingleOption
                 placeholder={t('Select an external IP')}

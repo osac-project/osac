@@ -1,28 +1,32 @@
 import { SubnetState } from '@osac/types';
 
+import { useTranslation } from '../../hooks/useTranslation';
 import { ResourceStatusLabel, type StatusKind } from '../Resource/ResourceStatusLabel';
 
 interface SubnetStatusLabelProps {
   state?: SubnetState;
 }
 
-const SUBNET_STATUS_MAP: Record<SubnetState, { status: StatusKind; text: string }> = {
-  [SubnetState.UNSPECIFIED]: { status: 'unspecified', text: 'Unknown' },
-  [SubnetState.PENDING]: { status: 'progressing', text: 'Provisioning' },
-  [SubnetState.READY]: { status: 'ready', text: 'Ready' },
-  [SubnetState.FAILED]: { status: 'failed', text: 'Failed' },
-  [SubnetState.DELETING]: { status: 'progressing', text: 'Deleting' },
-};
-
-const resolveSubnetStatus = (state?: SubnetState): { status: StatusKind; text: string } => {
-  if (state !== undefined && state in SUBNET_STATUS_MAP) {
-    return SUBNET_STATUS_MAP[state];
-  }
-  return SUBNET_STATUS_MAP[SubnetState.UNSPECIFIED];
+const STATUS_KIND: Record<SubnetState, StatusKind> = {
+  [SubnetState.UNSPECIFIED]: 'unspecified',
+  [SubnetState.PENDING]: 'progressing',
+  [SubnetState.READY]: 'ready',
+  [SubnetState.FAILED]: 'failed',
+  [SubnetState.DELETING]: 'progressing',
 };
 
 export const SubnetStatusLabel = ({ state }: SubnetStatusLabelProps) => {
-  const { status, text } = resolveSubnetStatus(state);
+  const { t } = useTranslation();
+  const text: Record<SubnetState, string> = {
+    [SubnetState.UNSPECIFIED]: t('Unknown'),
+    [SubnetState.PENDING]: t('Provisioning'),
+    [SubnetState.READY]: t('Ready'),
+    [SubnetState.FAILED]: t('Failed'),
+    [SubnetState.DELETING]: t('Deleting'),
+  };
+  const resolved = state !== undefined && state in STATUS_KIND ? state : SubnetState.UNSPECIFIED;
 
-  return <ResourceStatusLabel status={status} text={text} />;
+  return (
+    <ResourceStatusLabel status={STATUS_KIND[resolved]} text={text[resolved]} noIcon={false} />
+  );
 };

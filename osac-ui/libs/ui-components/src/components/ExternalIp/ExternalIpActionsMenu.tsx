@@ -1,23 +1,27 @@
 import { useState } from 'react';
-import { Dropdown, DropdownList, MenuToggle } from '@patternfly/react-core';
+import { Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/react-core';
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
 import type { ExternalIP } from '@osac/types';
-import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
+import type { ExternalIpAttachedTarget } from '@osac/ui-components/api/v1/external-ip-data';
 
 import ExternalIpDeleteModal from './ExternalIpDeleteModal';
 import { deleteDisabledReason } from './utils';
 import { useTranslation } from '../../hooks/useTranslation';
+import { protectedResourceReason } from '../networking/resourceOrigin';
 
 interface ExternalIpActionsMenuProps {
   externalIp: ExternalIP;
+  consumer?: ExternalIpAttachedTarget;
 }
 
-const ExternalIpActionsMenu = ({ externalIp }: ExternalIpActionsMenuProps) => {
+const ExternalIpActionsMenu = ({ externalIp, consumer }: ExternalIpActionsMenuProps) => {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const deleteDisabledReasonText = deleteDisabledReason(externalIp, t);
+  // Default and automatic external IPs, and ones in use, cannot be deleted.
+  const deleteDisabledReasonText =
+    protectedResourceReason(t, externalIp) ?? deleteDisabledReason(externalIp, t, consumer);
   const canDelete = !deleteDisabledReasonText;
 
   return (
@@ -47,10 +51,9 @@ const ExternalIpActionsMenu = ({ externalIp }: ExternalIpActionsMenuProps) => {
         popperProps={{ position: 'right' }}
       >
         <DropdownList>
-          <DeleteResourceButton
-            isDropdown
-            canDelete={canDelete}
-            description={deleteDisabledReasonText}
+          <DropdownItem
+            isAriaDisabled={!canDelete}
+            tooltipProps={canDelete ? undefined : { content: deleteDisabledReasonText }}
             onClick={() => {
               if (!canDelete) {
                 return;
@@ -58,7 +61,9 @@ const ExternalIpActionsMenu = ({ externalIp }: ExternalIpActionsMenuProps) => {
               setDeleteOpen(true);
               setOpen(false);
             }}
-          />
+          >
+            {t('Delete')}
+          </DropdownItem>
         </DropdownList>
       </Dropdown>
     </>

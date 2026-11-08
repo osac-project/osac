@@ -6,6 +6,9 @@ import {
   Grid,
   GridItem,
   PageSection,
+  Progress,
+  ProgressMeasureLocation,
+  ProgressVariant,
   Stack,
   StackItem,
   Title,
@@ -15,6 +18,7 @@ import type { ExternalIPPool } from '@osac/types/private';
 
 import ExternalIpPoolCidrsSection from './ExternalIpPoolCidrsSection';
 import ExternalIpPoolStatusLabel from './ExternalIpPoolStatusLabel';
+import { poolCapacity } from './poolCapacity';
 import { useTranslation } from '../../hooks/useTranslation';
 import { displayValue } from '../../utils/detailFormatters';
 import { Timestamp } from '../Primitives/Timestamp';
@@ -28,6 +32,7 @@ interface ExternalIpPoolDetailsPageContentProps {
 const ExternalIpPoolDetailsPageContent = ({ pool }: ExternalIpPoolDetailsPageContentProps) => {
   const { t } = useTranslation();
   const cidrs = pool.spec?.cidrs ?? [];
+  const capacity = poolCapacity(pool);
   const tenant = pool.metadata?.tenant;
 
   return (
@@ -75,17 +80,37 @@ const ExternalIpPoolDetailsPageContent = ({ pool }: ExternalIpPoolDetailsPageCon
               </Title>
             </StackItem>
             <StackItem>
+              {capacity ? (
+                <Progress
+                  title={t('Used')}
+                  value={capacity.usedPercent}
+                  measureLocation={ProgressMeasureLocation.outside}
+                  label={t('{{used}} of {{total}} used', {
+                    used: `${capacity.used}`,
+                    total: `${capacity.total}`,
+                  })}
+                  // Nearly full pools stand out before they block new external IPs.
+                  variant={
+                    capacity.available === 0n
+                      ? ProgressVariant.danger
+                      : capacity.usedPercent >= 80
+                        ? ProgressVariant.warning
+                        : undefined
+                  }
+                  aria-label={t('External IP pool capacity')}
+                />
+              ) : null}
               <DescriptionList isCompact aria-label={t('External IP pool capacity')}>
                 <DescriptionListGroup>
                   <DescriptionListTerm>{t('Available')}</DescriptionListTerm>
                   <DescriptionListDescription>
-                    {pool.status ? `${pool.status.available}` : displayValue()}
-                  </DescriptionListDescription>
-                </DescriptionListGroup>
-                <DescriptionListGroup>
-                  <DescriptionListTerm>{t('Total')}</DescriptionListTerm>
-                  <DescriptionListDescription>
-                    {pool.status ? `${pool.status.total}` : displayValue()}
+                    {capacity
+                      ? t('{{available}} of {{total}} ({{percent}}%)', {
+                          available: `${capacity.available}`,
+                          total: `${capacity.total}`,
+                          percent: capacity.availablePercent,
+                        })
+                      : displayValue()}
                   </DescriptionListDescription>
                 </DescriptionListGroup>
               </DescriptionList>

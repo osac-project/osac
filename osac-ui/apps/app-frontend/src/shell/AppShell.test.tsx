@@ -25,12 +25,38 @@ const renderAppShell = (
       enabledServices,
       privateInstanceTypes: [],
       privateBaremetalInstanceTypes: [],
+      networkClasses: [],
     },
     routerEntries: [entry],
     session: { role, tenantId: 'tenant-1' },
   });
 
 describe('AppShell', () => {
+  it.each([
+    ['/networking/subnets', 'Subnets'],
+    ['/networking/nat-gateways', 'NAT gateways'],
+    ['/networking/external-ips?tab=attachments', 'External IPs'],
+  ])('renders the networking route %s for a tenant user', async (entry, heading) => {
+    renderAppShell(entry, 'tenant-user');
+
+    expect(await screen.findByRole('heading', { name: heading, level: 1 })).toBeInTheDocument();
+  });
+
+  it('renders the Network class page for the provider admin', async () => {
+    renderAppShell('/admin/infrastructure/network-class', 'admin');
+
+    expect(
+      await screen.findByRole('heading', { name: 'Network class', level: 1 }),
+    ).toBeInTheDocument();
+  });
+
+  it('does not render the Network class page for a tenant admin', async () => {
+    renderAppShell('/admin/infrastructure/network-class', 'tenant-admin');
+
+    expect(await screen.findByRole('heading', { name: 'Catalog', level: 1 })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Network class' })).toBeNull();
+  });
+
   it('renders the storage route through the admin shell', async () => {
     renderAppShell('/admin/infrastructure/storage/backends');
 

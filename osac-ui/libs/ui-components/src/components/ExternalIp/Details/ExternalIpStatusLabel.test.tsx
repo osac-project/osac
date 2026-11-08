@@ -7,15 +7,20 @@ import ExternalIpStatusLabel from './ExternalIpStatusLabel';
 
 describe('ExternalIpStatusLabel', () => {
   it.each([
-    [ExternalIPState.EXTERNAL_IP_STATE_PENDING, false, 'Provisioning'],
-    [ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED, false, 'Allocated'],
-    [ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED, true, 'In use'],
-    [ExternalIPState.EXTERNAL_IP_STATE_FAILED, false, 'Failed'],
-    [ExternalIPState.EXTERNAL_IP_STATE_DELETING, false, 'Deleting'],
-    [ExternalIPState.EXTERNAL_IP_STATE_UNSPECIFIED, false, 'Unknown'],
-  ])('renders the label text for state %s attached=%s', (state, attached, expected) => {
-    render(<ExternalIpStatusLabel state={state} attached={attached} />);
+    [ExternalIPState.EXTERNAL_IP_STATE_PENDING, 'Provisioning'],
+    [ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED, 'Allocated'],
+    [ExternalIPState.EXTERNAL_IP_STATE_FAILED, 'Failed'],
+    [ExternalIPState.EXTERNAL_IP_STATE_DELETING, 'Deleting'],
+    [ExternalIPState.EXTERNAL_IP_STATE_UNSPECIFIED, 'Unknown'],
+  ])('renders the API state %s as %s', (state, expected) => {
+    render(<ExternalIpStatusLabel state={state} />);
     expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
+  it('shows Allocated, not a usage, for an attached external IP', () => {
+    render(<ExternalIpStatusLabel state={ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED} />);
+    expect(screen.getByText('Allocated')).toBeInTheDocument();
+    expect(screen.queryByText('In use')).not.toBeInTheDocument();
   });
 
   it('falls back to the unspecified label when state is undefined', () => {

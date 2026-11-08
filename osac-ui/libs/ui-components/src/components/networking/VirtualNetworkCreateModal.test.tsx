@@ -72,6 +72,14 @@ describe('VirtualNetworkCreateModal', () => {
     expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument();
   });
 
+  it('puts the primary Create before Cancel, as the other create modals do', () => {
+    renderModal(mockOnClose);
+
+    const create = screen.getByRole('button', { name: 'Create' });
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    expect(create.compareDocumentPosition(cancel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('Create button stays enabled', () => {
     renderModal(mockOnClose);
 

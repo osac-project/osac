@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { Alert, Content, FormGroup, Stack, StackItem } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
@@ -8,6 +9,7 @@ import type {
 } from './AttachNatGatewayWizard.types';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
+import { EXTERNAL_IPS_LIST_PATH } from '../ExternalIp/CreatePage/values';
 import NameField from '../Form/NameField';
 import OsacForm from '../Form/OsacForm';
 import { SelectField } from '../Form/SelectField';
@@ -38,13 +40,22 @@ const AttachNatGatewayStep = ({
     <Stack hasGutter>
       <StackItem>
         <Content component="p">
-          {t('Provides outbound internet access for workloads in this virtual network.')}
+          {t(
+            'Gives workloads in this virtual network outbound access to destinations outside the virtual network.',
+          )}
         </Content>
       </StackItem>
       {noExternalIpsAvailable && (
         <StackItem>
-          <Alert variant="warning" title={t('No unallocated external IPs')} isInline>
-            {t('Allocate an External IP that is not in use, or contact your administrator.')}
+          <Alert
+            variant="warning"
+            title={t('No external IP available')}
+            isInline
+            actionLinks={
+              <Link to={`${EXTERNAL_IPS_LIST_PATH}/create`}>{t('Create external IP')}</Link>
+            }
+          >
+            {t('A NAT gateway needs an allocated external IP that nothing else uses.')}
           </Alert>
         </StackItem>
       )}
@@ -86,7 +97,9 @@ const AttachNatGatewayStep = ({
             isLoading={isLoadingExternalIps}
             isDisabled={noExternalIpsAvailable || Boolean(externalIpsError)}
             placeholder={t('Select an external IP')}
-            helperText={t('Standard edge NAT for outbound internet access.')}
+            helperText={t(
+              'Outbound traffic leaves from this address. Reachable where your provider routes it.',
+            )}
             options={externalIpOptions}
             autoSelectSingleOption
           />

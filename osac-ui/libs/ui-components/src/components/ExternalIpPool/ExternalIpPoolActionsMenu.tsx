@@ -7,6 +7,7 @@ import type { ExternalIPPool } from '@osac/types/private';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import ExternalIpPoolDeleteConfirmModal from './ExternalIpPoolDeleteConfirmModal';
+import { poolDeleteDisabledReason } from './poolDelete';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface ExternalIpPoolActionsMenuProps {
@@ -20,6 +21,7 @@ const ExternalIpPoolActionsMenu = ({ pool }: ExternalIpPoolActionsMenuProps) => 
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const poolName = pool.metadata?.name ?? pool.id;
+  const deleteDisabledReason = poolDeleteDisabledReason(t, pool);
 
   return (
     <>
@@ -57,7 +59,12 @@ const ExternalIpPoolActionsMenu = ({ pool }: ExternalIpPoolActionsMenuProps) => 
           <Divider component="li" />
           <DeleteResourceButton
             isDropdown
+            canDelete={!deleteDisabledReason}
+            tooltipProps={deleteDisabledReason ? { content: deleteDisabledReason } : undefined}
             onClick={() => {
+              if (deleteDisabledReason) {
+                return;
+              }
               setDeleteOpen(true);
               setOpen(false);
             }}

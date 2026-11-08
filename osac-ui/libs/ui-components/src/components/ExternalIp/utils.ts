@@ -2,7 +2,10 @@ import type { TFunction } from 'i18next';
 
 import { type ExternalIP, ExternalIPState } from '@osac/types';
 import { type CelFilter, cel } from '@osac/ui-components/api/cel';
-import type { ExternalIpAttachedTargetKind } from '@osac/ui-components/api/v1/external-ip-data';
+import type {
+  ExternalIpAttachedTarget,
+  ExternalIpAttachedTargetKind,
+} from '@osac/ui-components/api/v1/external-ip-data';
 
 export const STATE_FILTER_VALUES = ['pending', 'allocated', 'inuse', 'failed', 'deleting'] as const;
 
@@ -77,7 +80,7 @@ export const attachedTargetKindLabel = (
 ): string => {
   switch (kind) {
     case 'baremetalInstance':
-      return t('Bare metal');
+      return t('Bare-metal instance');
     case 'cluster':
       return t('Cluster');
     case 'natGateway':
@@ -87,9 +90,26 @@ export const attachedTargetKindLabel = (
   }
 };
 
-export const deleteDisabledReason = (externalIp: ExternalIP, t: TFunction): string | undefined => {
+/**
+ * Why an ExternalIP cannot be deleted yet. `consumer` is the NATGateway or
+ * ExternalIPAttachment that references it; `status.attached` misses NATGateway consumers.
+ */
+export const deleteDisabledReason = (
+  externalIp: ExternalIP,
+  t: TFunction,
+  consumer?: ExternalIpAttachedTarget,
+): string | undefined => {
   if (externalIp.status?.state === ExternalIPState.EXTERNAL_IP_STATE_DELETING) {
     return t('This external IP is being deleted.');
+  }
+  if (consumer) {
+    // A NAT gateway keeps its external IP for life; an attachment is deleted on its own.
+    return consumer.kind === 'natGateway'
+      ? t('Delete NAT gateway {{name}} first.', { name: consumer.name })
+      : t('Delete its attachment to {{kind}} {{name}} first.', {
+          kind: attachedTargetKindLabel(t, consumer.kind).toLowerCase(),
+          name: consumer.name,
+        });
   }
   return externalIp.status?.attached === true
     ? t('Detach this external IP before deleting it.')

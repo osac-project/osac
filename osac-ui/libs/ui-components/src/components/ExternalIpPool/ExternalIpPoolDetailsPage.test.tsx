@@ -24,6 +24,7 @@ const makePool = (
   ipFamily: IPFamily,
   cidrs: string[],
   tenant = 'shared',
+  allocated = 56n,
 ): ExternalIPPool =>
   create(ExternalIPPoolSchema, {
     id,
@@ -36,8 +37,8 @@ const makePool = (
     status: {
       state: ExternalIPPoolState.EXTERNAL_IP_POOL_STATE_READY,
       total: 256n,
-      allocated: 56n,
-      available: 200n,
+      allocated,
+      available: 256n - allocated,
     },
   });
 
@@ -80,15 +81,38 @@ describe('ExternalIpPoolDetailsPage', () => {
     expect(screen.queryByText('IP family')).not.toBeInTheDocument();
     expect(screen.queryByText('IPv4')).not.toBeInTheDocument();
     expect(screen.getByText('Available')).toBeInTheDocument();
-    expect(screen.getByText('200')).toBeInTheDocument();
-    expect(screen.getByText('Total')).toBeInTheDocument();
-    expect(screen.getByText('256')).toBeInTheDocument();
+    expect(screen.getByText('200 of 256 (78%)')).toBeInTheDocument();
+    // Usage as a progress bar: 56 of 256 addresses are used.
+    expect(screen.getByText('56 of 256 used')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '21.875');
     expect(screen.queryByText('Allocated')).not.toBeInTheDocument();
     expect(screen.queryByText('Implementation strategy')).not.toBeInTheDocument();
     expect(screen.getByText('Ready')).toBeInTheDocument();
     expect(screen.getByText('Shared')).toBeInTheDocument();
     expect(screen.getByText('Shared').closest('.pf-v6-c-label')).toBeNull();
   });
+
+  it.each([
+    ['warning', 205n, 'pf-m-warning'],
+    ['danger', 256n, 'pf-m-danger'],
+  ])(
+    'marks the usage bar %s when the pool is nearly or completely used',
+    async (_, allocated, modifier) => {
+      renderPage('p-1', [
+        makePool(
+          'p-1',
+          'prod-v4',
+          IPFamily.IP_FAMILY_IPV4,
+          ['192.168.1.0/24'],
+          'shared',
+          allocated,
+        ),
+      ]);
+
+      const bar = await screen.findByRole('progressbar');
+      expect(bar.closest('.pf-v6-c-progress')).toHaveClass(modifier);
+    },
+  );
 
   it('shows one CIDR and a more button when the pool has more than one CIDR', async () => {
     renderPage('p-3', [
@@ -142,9 +166,22 @@ describe('ExternalIpPoolDetailsPage', () => {
     expect(screen.getByRole('button', { name: 'Delete' })).toHaveClass('pf-m-danger');
   });
 
-  it('navigates to the list after a successful delete', async () => {
+  it('disables Delete while the pool has allocated addresses', async () => {
     const { user } = renderPage('p-1', [
       makePool('p-1', 'prod-v4', IPFamily.IP_FAMILY_IPV4, ['192.168.1.0/24']),
+    ]);
+
+    const deleteButton = await screen.findByRole('button', { name: 'Delete' });
+    expect(deleteButton).toHaveAttribute('aria-disabled', 'true');
+    await user.hover(deleteButton);
+    expect(await screen.findByText('Delete its 56 external IPs first.')).toBeInTheDocument();
+    await user.click(deleteButton);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('navigates to the list after a successful delete', async () => {
+    const { user } = renderPage('p-1', [
+      makePool('p-1', 'prod-v4', IPFamily.IP_FAMILY_IPV4, ['192.168.1.0/24'], 'shared', 0n),
     ]);
 
     await waitFor(() => {

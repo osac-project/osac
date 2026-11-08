@@ -43,5 +43,5 @@ export const NatGatewayStatusLabel = ({ state }: NatGatewayStatusLabelProps) => 
   const { t } = useTranslation();
   const { status, text } = resolveNatGatewayStatus(t, state);
 
-  return <ResourceStatusLabel status={status} text={text} />;
+  return <ResourceStatusLabel status={status} text={text} noIcon={false} />;
 };

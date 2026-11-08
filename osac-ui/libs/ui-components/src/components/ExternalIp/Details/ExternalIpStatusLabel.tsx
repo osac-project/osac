@@ -7,18 +7,10 @@ import { ResourceStatusLabel, type StatusLabelProps } from '../../Resource/Resou
 
 interface ExternalIpStatusLabelProps {
   state?: ExternalIPState;
-  attached?: boolean;
 }
 
-const allocatedStatus = (t: TFunction, attached?: boolean): StatusLabelProps =>
-  attached
-    ? { status: 'ready', text: t('In use'), color: 'blue' }
-    : { status: 'ready', text: t('Allocated'), color: 'green' };
-
-const externalIpStatusMap = (
-  t: TFunction,
-  attached?: boolean,
-): Record<ExternalIPState, StatusLabelProps> => ({
+/** The API state of an ExternalIP; the Used by column says what uses it. */
+const externalIpStatusMap = (t: TFunction): Record<ExternalIPState, StatusLabelProps> => ({
   [ExternalIPState.EXTERNAL_IP_STATE_UNSPECIFIED]: {
     status: 'unspecified',
     text: t('Unknown'),
@@ -27,7 +19,10 @@ const externalIpStatusMap = (
     status: 'progressing',
     text: t('Provisioning'),
   },
-  [ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED]: allocatedStatus(t, attached),
+  [ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED]: {
+    status: 'ready',
+    text: t('Allocated'),
+  },
   [ExternalIPState.EXTERNAL_IP_STATE_FAILED]: {
     status: 'failed',
     text: t('Failed'),
@@ -38,15 +33,15 @@ const externalIpStatusMap = (
   },
 });
 
-const ExternalIpStatusLabel = ({ state, attached }: ExternalIpStatusLabelProps) => {
+const ExternalIpStatusLabel = ({ state }: ExternalIpStatusLabelProps) => {
   const { t } = useTranslation();
-  const statusMap = externalIpStatusMap(t, attached);
+  const statusMap = externalIpStatusMap(t);
   const status =
     state !== undefined && state in statusMap
       ? statusMap[state]
       : statusMap[ExternalIPState.EXTERNAL_IP_STATE_UNSPECIFIED];
 
-  return <ResourceStatusLabel {...status} />;
+  return <ResourceStatusLabel {...status} noIcon={false} />;
 };
 
 export default ExternalIpStatusLabel;

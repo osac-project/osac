@@ -22,7 +22,7 @@ export const DetachNatGatewayModal = ({ natGateway, onClose }: DetachNatGatewayM
     <DeleteResourceModal
       resourceName={natGateway.metadata?.name ?? natGateway.id}
       label={t(
-        'This removes outbound internet access provided by {{name}} from the virtual network.',
+        'Workloads in the virtual network lose the outbound access to destinations outside the virtual network that {{name}} provides.',
         { name: natGateway.metadata?.name ?? natGateway.id },
       )}
       errorLabel={t('Failed to delete NAT gateway')}

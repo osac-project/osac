@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom';
-import { Content } from '@patternfly/react-core';
 
 import type { ExternalIpAttachedTarget } from '../../../api/v1/external-ip-data';
 import { useTranslation } from '../../../hooks/useTranslation';
@@ -19,13 +18,14 @@ const ExternalIpAttachedTo = ({ attached, target }: ExternalIpAttachedToProps) =
 
   const kindLabel = attachedTargetKindLabel(t, target.kind);
 
+  // One line: the name links to the resource, its kind follows in parentheses.
   return (
-    <Content>
-      {kindLabel}{' '}
+    <span className="pf-v6-u-text-nowrap">
       <Link to={target.href} aria-label={`${kindLabel}: ${target.name}`}>
         {target.name}
       </Link>
-    </Content>
+      <span>{` (${kindLabel})`}</span>
+    </span>
   );
 };
 

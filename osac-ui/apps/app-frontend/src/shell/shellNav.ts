@@ -24,6 +24,8 @@ export type NavSection = {
 
 export type NavRow = NavSection | NavLink;
 
+export const NETWORK_CLASS_PATH = '/admin/infrastructure/network-class';
+
 export const filterNavRowsByServices = (
   rows: NavRow[],
   enabledServices: readonly ServiceTier[],
@@ -87,12 +89,6 @@ const getAdminNav = (t: TFunction): NavRow[] => [
       },
       {
         kind: 'link',
-        id: 'external-ip-pools',
-        label: t('External IP pools'),
-        path: '/admin/infrastructure/external-ip-pools',
-      },
-      {
-        kind: 'link',
         id: 'baremetal-instance-types',
         label: t('Bare metal instance types'),
         path: '/admin/infrastructure/baremetal-instance-types',
@@ -106,7 +102,7 @@ const getAdminNav = (t: TFunction): NavRow[] => [
       },
     ],
   },
-  getNetworkNav(t),
+  getNetworkNav(t, true),
   getSecretsNav(t),
 ];
 
@@ -175,7 +171,8 @@ const getStorageNav = (t: TFunction): NavRow => ({
   children: [{ kind: 'link', id: 'volumes', label: t('Volumes'), path: '/storage/volumes' }],
 });
 
-const getNetworkNav = (t: TFunction): NavRow => ({
+/** Networking for every role but the IDP manager; the provider admin also gets pools and the network class. */
+const getNetworkNav = (t: TFunction, isProviderAdmin = false): NavRow => ({
   kind: 'section',
   id: 'nav-tenant-networking',
   label: t('Networking'),
@@ -188,9 +185,21 @@ const getNetworkNav = (t: TFunction): NavRow => ({
     },
     {
       kind: 'link',
+      id: 'subnets',
+      label: t('Subnets'),
+      path: '/networking/subnets',
+    },
+    {
+      kind: 'link',
       id: 'security-groups',
       label: t('Security groups'),
       path: '/networking/security-groups',
+    },
+    {
+      kind: 'link',
+      id: 'nat-gateways',
+      label: t('NAT gateways'),
+      path: '/networking/nat-gateways',
     },
     {
       kind: 'link',
@@ -198,6 +207,22 @@ const getNetworkNav = (t: TFunction): NavRow => ({
       label: t('External IPs'),
       path: '/networking/external-ips',
     },
+    ...(isProviderAdmin
+      ? ([
+          {
+            kind: 'link',
+            id: 'external-ip-pools',
+            label: t('External IP pools'),
+            path: '/admin/infrastructure/external-ip-pools',
+          },
+          {
+            kind: 'link',
+            id: 'network-class',
+            label: t('Network class'),
+            path: NETWORK_CLASS_PATH,
+          },
+        ] satisfies NavLink[])
+      : []),
   ],
 });
 

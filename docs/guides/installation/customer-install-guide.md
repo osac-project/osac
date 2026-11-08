@@ -2214,10 +2214,11 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    The target ConfigMap must store the bundle under the fixed `bundle.pem` key
    required by OSAC. After it contains the expected CA, extract `bundle.pem`
    for the client checks below. Repeat the ConfigMap check and extraction after
-   each CA source change. If the Fulfillment certificate will use this CA,
-   restart the OSAC operator after the updated bundle appears in the target
-   ConfigMap and before switching the certificate. Use the refreshed file for
-   client checks.
+   each CA source change. If a bundle change affects the Fulfillment
+   certificate CA or the CA used to reach the OIDC issuer, restart the OSAC
+   operator after the updated bundle appears in the target ConfigMap and before
+   switching certificates. The operator loads the bundle at startup for both
+   connections. Use the refreshed file for client checks.
 
    ```console
    oc get configmap <ca_bundle_configmap> -n <namespace> \
@@ -2231,9 +2232,20 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    `CURL_CA_ARGS` from the refreshed bundle.
 
    Refreshing this local file or running an OSAC installation or upgrade does
-   not update Keycloak's truststore. If Keycloak uses the changed CA to connect
-   to an outbound OIDC provider, restart Keycloak after the updated bundle
-   reaches the ConfigMap it uses. See
+   not reload Keycloak's truststore. After removing any CA from a bundle
+   Keycloak uses, wait for the updated bundle to reach its ConfigMap. Restart
+   Keycloak and verify that the truststore contains the needed roots and no
+   longer contains the removed CA. For bundled Keycloak, run:
+
+   ```console
+   oc rollout restart deployment/keycloak-service -n keycloak
+   oc rollout status deployment/keycloak-service -n keycloak
+   oc exec deployment/keycloak-service -n keycloak -- \
+     cat /etc/keycloak/truststore/ca-bundle.pem > keycloak-truststore.pem
+   ```
+
+   Compare the CA fingerprints in `keycloak-truststore.pem` with the updated
+   bundle. See
    [Adding CA roots to the shared bundle at runtime](helm-deployment-guide.md#adding-ca-roots-to-the-shared-bundle-at-runtime).
 
    Keep this file for the OIDC, API, and hub-registration checks. It must

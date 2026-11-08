@@ -320,25 +320,32 @@ with the current LVMS Subscription channel:
 
 ```bash
 helm get values osac-deps -n osac-deps
-oc get sub lvms-operator -n openshift-storage -o jsonpath='channel={.spec.channel}{"\n"}'
+oc get sub lvms-operator -n openshift-storage --ignore-not-found \
+    -o jsonpath='channel={.spec.channel}{"\n"}'
 ```
 
 The commands below use the existing Subscription channel when one is present.
 For a new installation, they use `stable-$OCP_VERSION`.
 
-If LVMS is already installed and the cluster already has the
-`openshift-storage` namespace, set `lvms.enabled: false` in
-`my-infra-values.yaml` before installing `osac-deps`. This prevents Helm from
-rendering resources in that namespace. The same values file is used for
-`osac-infra`, so this also skips its LVMS configuration hook and leaves the
-existing `LVMCluster` in place. Use `--take-ownership` only for existing
-resources that this release is intended to manage. With LVMS disabled, the
-chart does not render resources in `openshift-storage`.
+Set `lvms.enabled: false` only when LVMS is installed and managed outside the
+existing `osac-deps` release. This prevents Helm from rendering resources in
+`openshift-storage`. When upgrading an existing release, preserve its current
+`lvms.enabled` value; disabling LVMS when the release manages it removes its
+namespace and Subscription and can disrupt storage. The same values file is
+used for `osac-infra`, so disabling LVMS also skips its configuration hook and
+leaves the existing `LVMCluster` in place. Use `--take-ownership` only for
+existing resources this release is intended to manage.
 
 ```bash
-LVMS_CHANNEL=$(oc get sub lvms-operator -n openshift-storage \
-    -o jsonpath='{.spec.channel}' 2>/dev/null || true)
-LVMS_CHANNEL=${LVMS_CHANNEL:-stable-$OCP_VERSION}
+LVMS_SUBSCRIPTION=$(oc get sub lvms-operator -n openshift-storage \
+    --ignore-not-found -o name) || exit 1
+if [ -n "$LVMS_SUBSCRIPTION" ]; then
+    LVMS_CHANNEL=$(oc get sub lvms-operator -n openshift-storage \
+        -o jsonpath='{.spec.channel}') || exit 1
+    test -n "$LVMS_CHANNEL" || exit 1
+else
+    LVMS_CHANNEL="stable-$OCP_VERSION"
+fi
 ```
 
 ```bash
@@ -470,6 +477,11 @@ Keycloak, use `https://keycloak-keycloak.<cluster-domain>/realms/osac`,
 replacing `<cluster-domain>` with the actual cluster domain. For external
 Keycloak, use the realm issuer URL configured in `service.auth.issuerUrl`. See
 the [customer install guide](customer-install-guide.md#42-configuring-the-helm-values).
+
+In-place upgrades are supported only between patch releases within the same
+OSAC minor version. Do not use this command for a minor-version change; follow
+the customer install guide's
+[minor-version migration requirements](customer-install-guide.md#444-settings-fixed-at-installation).
 
 Before upgrading an existing release, compare its recorded overrides from
 `helm get values osac -n "$NS"` with `my-values.yaml`. Carry every intentional
@@ -750,9 +762,15 @@ Subscription channel for an existing release, as described in Phase 1a.
 
 ```bash
 export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
-LVMS_CHANNEL=$(oc get sub lvms-operator -n openshift-storage \
-    -o jsonpath='{.spec.channel}' 2>/dev/null || true)
-LVMS_CHANNEL=${LVMS_CHANNEL:-stable-$OCP_VERSION}
+LVMS_SUBSCRIPTION=$(oc get sub lvms-operator -n openshift-storage \
+    --ignore-not-found -o name) || exit 1
+if [ -n "$LVMS_SUBSCRIPTION" ]; then
+    LVMS_CHANNEL=$(oc get sub lvms-operator -n openshift-storage \
+        -o jsonpath='{.spec.channel}') || exit 1
+    test -n "$LVMS_CHANNEL" || exit 1
+else
+    LVMS_CHANNEL="stable-$OCP_VERSION"
+fi
 ```
 
 In `my-workload-infra-values.yaml`, set `cnv.enabled: true` when this release
@@ -786,9 +804,15 @@ Phase 1a and Phase 1b commands:
 ```bash
 export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
 export DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
-LVMS_CHANNEL=$(oc get sub lvms-operator -n openshift-storage \
-    -o jsonpath='{.spec.channel}' 2>/dev/null || true)
-LVMS_CHANNEL=${LVMS_CHANNEL:-stable-$OCP_VERSION}
+LVMS_SUBSCRIPTION=$(oc get sub lvms-operator -n openshift-storage \
+    --ignore-not-found -o name) || exit 1
+if [ -n "$LVMS_SUBSCRIPTION" ]; then
+    LVMS_CHANNEL=$(oc get sub lvms-operator -n openshift-storage \
+        -o jsonpath='{.spec.channel}') || exit 1
+    test -n "$LVMS_CHANNEL" || exit 1
+else
+    LVMS_CHANNEL="stable-$OCP_VERSION"
+fi
 ```
 
 For an existing release, compare its recorded values and the LVMS Subscription

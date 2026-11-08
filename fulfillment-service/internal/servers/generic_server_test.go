@@ -138,19 +138,22 @@ var _ = Describe("Generic server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		created := createResponse.GetObject()
 		originalCreator := created.GetMetadata().GetCreator()
+		originalDescription := created.GetDescription()
 
 		for _, testCase := range []struct {
-			name          string
-			mask          *fieldmaskpb.FieldMask
-			updateCreator bool
-			description   string
-			rejected      bool
+			name                string
+			mask                *fieldmaskpb.FieldMask
+			updateCreator       bool
+			description         string
+			expectedDescription string
+			rejected            bool
 		}{
 			{name: "creator path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.creator"}}, updateCreator: true, rejected: true},
 			{name: "normalized creator path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata..creator"}}, updateCreator: true, rejected: true},
 			{name: "parent metadata path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata"}}, updateCreator: true, rejected: true},
-			{name: "missing mask preserves ordinary updates", description: "updated without mask"},
-			{name: "empty mask is a no-op", mask: &fieldmaskpb.FieldMask{}, updateCreator: true},
+			{name: "empty mask is a no-op", mask: &fieldmaskpb.FieldMask{}, updateCreator: true,
+				description: "updated with empty mask", expectedDescription: originalDescription},
+			{name: "missing mask preserves ordinary updates", description: "updated without mask", expectedDescription: "updated without mask"},
 		} {
 			By(testCase.name)
 			updateObject := proto.Clone(created).(*privatev1.BareMetalInstanceTemplate)
@@ -177,8 +180,8 @@ var _ = Describe("Generic server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(updateResponse).ToNot(BeNil())
 				Expect(updateResponse.GetObject().GetMetadata().GetCreator()).To(Equal(originalCreator))
-				if testCase.description != "" {
-					Expect(updateResponse.GetObject().GetDescription()).To(Equal(testCase.description))
+				if testCase.expectedDescription != "" {
+					Expect(updateResponse.GetObject().GetDescription()).To(Equal(testCase.expectedDescription))
 				}
 			}
 
@@ -186,6 +189,9 @@ var _ = Describe("Generic server", func() {
 			err = server.Get(ctx, privatev1.BareMetalInstanceTemplatesGetRequest_builder{Id: created.GetId()}.Build(), &getResponse)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetMetadata().GetCreator()).To(Equal(originalCreator))
+			if testCase.expectedDescription != "" {
+				Expect(getResponse.GetObject().GetDescription()).To(Equal(testCase.expectedDescription))
+			}
 		}
 	})
 

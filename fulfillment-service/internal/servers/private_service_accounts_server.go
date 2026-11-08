@@ -239,19 +239,23 @@ func (s *PrivateServiceAccountsServer) update(ctx context.Context, request *priv
 		}
 		request.SetUpdateMask(mask)
 	}
-	for _, path := range mask.GetPaths() {
-		switch path {
-		case "metadata.name", "metadata.labels":
-		case "status.keycloak_client_uuid", "status.client_secret",
-			"status.state", "status.message", "status.registration_secret",
-			"status.secret_rotation_state", "status.secret_rotation_generation":
-			// GenericServer rejects public status writes; keep these paths writable for private callers.
-		case "metadata.finalizers":
-			if isPublicAPIView(ctx) {
-				return nil, status.Error(codes.InvalidArgument, "finalizers are server-owned")
+	// Let GenericServer return the shared creator-immutability error for these masks.
+	creatorUpdate := !isPublicAPIView(ctx) && len(mask.GetPaths()) > 0 && updateIncludesField(mask, "metadata.creator")
+	if !creatorUpdate {
+		for _, path := range mask.GetPaths() {
+			switch path {
+			case "metadata.name", "metadata.labels":
+			case "status.keycloak_client_uuid", "status.client_secret",
+				"status.state", "status.message", "status.registration_secret",
+				"status.secret_rotation_state", "status.secret_rotation_generation":
+				// GenericServer rejects public status writes; keep these paths writable for private callers.
+			case "metadata.finalizers":
+				if isPublicAPIView(ctx) {
+					return nil, status.Error(codes.InvalidArgument, "finalizers are server-owned")
+				}
+			default:
+				return nil, status.Errorf(codes.InvalidArgument, "field %q is not mutable", path)
 			}
-		default:
-			return nil, status.Errorf(codes.InvalidArgument, "field %q is not mutable", path)
 		}
 	}
 	var response *privatev1.ServiceAccountsUpdateResponse

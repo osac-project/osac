@@ -870,6 +870,34 @@ You create one values file for the `osac` chart, `my-values.yaml`.
 6. Add the networking values from
    [Section 4.4.3](#443-setting-the-networking-helm-values).
 
+For AAP-backed provider provisioning, configure the Operator to read the token
+Secret created by the `create-api-token` hook:
+
+```yaml
+operator:
+  aap:
+    tokenSecret:
+      name: osac-aap-api-token
+      key: token
+```
+
+The hook creates this Secret and restarts `deploy/osac-operator`. The
+Deployment reads the hook-created token only when this reference is set. Without
+the reference or a direct `operator.aap.token` value, the Operator starts
+without `OSAC_AAP_TOKEN`; see [Section 4.3](#43-installing-osac).
+
+When the Fulfillment Service and hub run on the same cluster, set the top-level
+`hubAccess.enabled` value before installing:
+
+```yaml
+hubAccess:
+  enabled: true
+```
+
+This enables the local hub access resources and registration hook. It is
+separate from `operator.hubAccess.enabled`; see
+[Section 8.3](#83-registering-the-hub) for the automatic registration behavior.
+
 For a full parameter reference, see
 [Section 5](#5-helm-chart-configuration-parameters).
 
@@ -896,6 +924,18 @@ Use this procedure when the cluster already meets the prerequisites.
   according to the [secrets management configuration guide](secrets-management-configuration.md).
 - You completed [Section 4.1](#41-preparing-the-cluster) and
   [Section 4.2](#42-configuring-the-helm-values).
+- For AAP-backed provider provisioning, `my-values.yaml` sets
+  `operator.aap.tokenSecret` to the `osac-aap-api-token` Secret created by the
+  `create-api-token` hook. The hook restarts the Operator, but the Deployment
+  reads this Secret only when the reference is set. Without it or a direct
+  `operator.aap.token` value, the Operator starts without `OSAC_AAP_TOKEN` and
+  AAP requests can fail with HTTP 401. See
+  [Section 4.2](#42-configuring-the-helm-values).
+- When the Fulfillment Service and hub run on the same cluster,
+  `my-values.yaml` sets top-level `hubAccess.enabled: true` before installation.
+  This runs the local hub registration hook; see
+  [Section 8.3](#83-registering-the-hub). `operator.hubAccess.enabled` is a
+  separate setting and does not replace it.
 - With provider networking enabled, you completed the networking prerequisites
   in [Section 4.4.2](#442-prerequisites-for-provider-networking).
 - With VMaaS and provider networking enabled, EVPN host networking is
@@ -1462,14 +1502,17 @@ subchart's own `values.yaml` file.
 |---|---|---|
 | `operator.image.repository`, `operator.image.tag`, `operator.image.pullPolicy` | schema | Operator image. Use a release tag for production. |
 | `operator.replicaCount`, `operator.resources.*` | schema | Operator sizing. |
-| `operator.aap.url`, `operator.aap.token`, `operator.aap.insecureSkipVerify`, `operator.aap.statusPollInterval`, `operator.aap.templatePrefix` | schema | How the Operator reaches AAP. Set `insecureSkipVerify: "true"` for self-signed AAP routes. |
+| `operator.aap.url`, `operator.aap.insecureSkipVerify`, `operator.aap.statusPollInterval`, `operator.aap.templatePrefix` | schema | How the Operator reaches AAP. Set `insecureSkipVerify: "true"` for self-signed AAP routes. |
+| `operator.aap.token` | schema | Direct AAP token value. Prefer the Secret reference below when the `create-api-token` hook creates the token. |
+| `operator.aap.tokenSecret.name` | schema | Secret containing the AAP API token. Set to `osac-aap-api-token` when using the `create-api-token` hook. |
+| `operator.aap.tokenSecret.key` | schema | Key in the referenced Secret containing the AAP token. The hook-created Secret uses `token`. |
 | `operator.fulfillment.serverAddress` | schema | Fulfillment gRPC endpoint. When configured, the Operator uses it to verify the saved installation networking setting before reconciliation; it can be empty for standalone runs. |
 | `operator.fulfillment.tls.caBundle.configMap` | schema | ConfigMap with the PEM bundle used by the Operator's Fulfillment TLS client. Keep this name aligned with `service.certs.caBundle.configMap` when using a custom bundle name. The default is `ca-bundle`; the key defaults to `bundle.pem`. |
 | `operator.fulfillment.credentials.secretName`, `clientIdKey`, `clientSecretKey` | schema | Name and keys of the Kubernetes Secret holding the `osac-controller` Keycloak service-account credentials. Provide this Secret before installation; the OSAC chart only references it. |
 | `operator.controllers.tenant`, `operator.controllers.networking`, `operator.controllers.storage` | schema | Enable or disable individual reconcilers. Which services run is driven by `global.services.*`. |
 | `operator.controllers.volume` | subchart | Enables the Volume reconciler. |
 | `operator.configSecret.name`, `operator.configSecret.optional` | schema | Additional Operator configuration Secret. |
-| `operator.hubAccess.enabled` | schema | Creates the hub-access `ClusterRole` that the Fulfillment Service binds to. |
+| `operator.hubAccess.enabled` | schema | Creates only the hub-access `ClusterRole` that the Fulfillment Service binds to. It is separate from the top-level `hubAccess.enabled`, which creates local hub access resources and registers the local hub. |
 | `operator.stall.preparingInfrastructureThreshold`, `operator.stall.controlPlaneStartingThreshold`, `operator.stall.workersJoiningThreshold` | schema | How long a cluster provisioning phase can wait before the Operator marks it stalled. |
 | `operator.tenants[]` | subchart | Tenants pre-created at installation. `shared` is the built-in tenant. |
 | `operator.networkManagers.enabled` | subchart | Controls legacy operator-subchart registrations. Set `false` in the Netris/CUDN EVPN examples to suppress those registrations. The umbrella chart automatically creates the selected `netris` and `cudn_evpn` registrations from `global.networking`; do not register those managers again here. |
@@ -1584,7 +1627,7 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `validation.enabled` | schema | Runs the install preflight. When `false`, every check is skipped and recorded as skipped in the report. | `true` |
 | `preflight.mode` | schema | `enforce` stops the installation on a blocking problem. `report` records problems without stopping. `strict` also stops on warnings. See [Section 11.1](#111-the-install-preflight-stops-the-installation). | `enforce` |
 | `preflight.skip.<check_id>` | schema | Skips one preflight check. The value is the reason, which the report records. | `{}` |
-| `hubAccess.enabled` | schema | Creates hub-access RBAC and registers the local cluster as its own hub. Single-cluster development only. | `false` |
+| `hubAccess.enabled` | schema | Creates hub-access resources and registers the local cluster as its own hub. Set to `true` before installation when the Fulfillment Service and hub run on the same cluster; see [Section 8.3](#83-registering-the-hub). | `false` |
 | `dbInit.host` | schema | Host that the `db-init` pre-installation hook connects to, to create the databases. Set it to your external PostgreSQL host for a production deployment. | Development default; override for production |
 | `clusterVersions.enabled`, `clusterVersions.versions[]` | schema | OpenShift Container Platform release images offered to hosted clusters. Each entry has `version`, `image`, and an optional `default`. A default entry also requires `diskImage.name` and `diskImage.sourceRef`, an OCI operating-system disk artifact. | `false` and `[]` |
 
@@ -2260,16 +2303,17 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    test -s keycloak-ca-bundle.pem
    ```
 
-   Compare its CA fingerprints with `keycloak-truststore.pem` to confirm that
-   Keycloak has loaded the mounted bundle. For externally managed Keycloak,
-   compare with the CA bundle configured for that deployment. The mounted file
-   does not show every CA Keycloak trusts. Check
+   Compare its CA fingerprints with `keycloak-truststore.pem` to check that the
+   mounted file matches the ConfigMap. This does not prove Keycloak has reloaded
+   its running truststore. For externally managed Keycloak, compare with the CA
+   bundle configured for that deployment. The mounted file does not show every
+   CA Keycloak trusts. Check
    `KC_TRUSTSTORE_PATHS`, any JVM truststore setting, and Java's default
-   truststore too. In an isolated test, connect Keycloak to a test OIDC provider
-   with a valid certificate signed only by the new CA and confirm it succeeds
-   before switching providers. After removing a CA, test with a valid
-   certificate signed only by that CA and confirm Keycloak rejects the TLS
-   connection. See
+   truststore too. Use isolated TLS tests to verify effective trust: connect
+   Keycloak to a test OIDC provider with a valid certificate signed only by the
+   new CA and confirm it succeeds before switching providers. After removing a
+   CA, test with a valid certificate signed only by that CA and confirm Keycloak
+   rejects the TLS connection. See
    [Adding CA roots to the shared bundle at runtime](helm-deployment-guide.md#adding-ca-roots-to-the-shared-bundle-at-runtime).
 
    Keep this file for the OIDC, API, and hub-registration checks. It must
@@ -2367,7 +2411,8 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
 
     ```console
     ROUTE=$(oc get route fulfillment-api -n <namespace> -o jsonpath='{.spec.host}')
-    curl --fail-with-body --cacert osac-ca-bundle.pem "https://$ROUTE/healthz"
+    curl --fail-with-body --cacert osac-ca-bundle.pem \
+      "https://$ROUTE/.well-known/jwks.json"
     oc get serviceaccount admin -n <namespace>
     osac login \
       --address "$ROUTE" \
@@ -2380,7 +2425,7 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
 
     ```console
     ROUTE=$(oc get route fulfillment-api -n <namespace> -o jsonpath='{.spec.host}')
-    curl --fail-with-body "https://$ROUTE/healthz"
+    curl --fail-with-body "https://$ROUTE/.well-known/jwks.json"
     oc get serviceaccount admin -n <namespace>
     osac login \
       --address "$ROUTE" \

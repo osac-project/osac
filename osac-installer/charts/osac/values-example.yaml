@@ -78,9 +78,10 @@ operator:
     # Example: https://osac-aap.osac.apps.mycluster.example.com/api/controller
     url: ""
 
-    # [REQUIRED for provisioning] AAP API token for authentication.
-    # Created by create-api-token Helm hook from the AAP admin credentials.
-    token: ""
+    # [REQUIRED for provisioning] Secret created by the create-api-token hook.
+    tokenSecret:
+      name: osac-aap-api-token
+      key: token
 
     # Skip TLS verification for AAP connection. Set to "false" in production
     # if using trusted certificates.

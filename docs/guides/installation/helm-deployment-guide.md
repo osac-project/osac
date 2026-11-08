@@ -418,9 +418,11 @@ chart skips this namespace resource, so this particular ownership reason does
 not apply.
 
 Use the installed values from the earlier check to preserve `lvms.channel`,
-`keycloak.hostname`, `keycloak.route.publicIngress`, and
-`keycloak.route.hostname` in `my-infra-values.yaml`. The `--set` options below
-override that file, so remove or change them to match the installed values.
+`keycloak.hostname`, `keycloak.route.publicIngress`, `keycloak.route.hostname`,
+and `bundledVault.keycloakIssuerUrl` in `my-infra-values.yaml`. The `--set`
+options below override that file, so remove or change them to match the
+installed values. When bundled OpenBao is enabled, its issuer URL must match
+Keycloak's external issuer, including any custom hostname.
 
 When bundled Keycloak is enabled, it mounts the ConfigMap named by
 `certs.caBundle.configMap` from the `keycloak` namespace and reads its
@@ -494,6 +496,7 @@ helm upgrade --install osac-infra ./charts/osac-infra \
     --set keycloak.hostname="https://keycloak-keycloak.$DOMAIN" \
     --set keycloak.route.publicIngress=true \
     --set keycloak.route.hostname="keycloak-keycloak.$DOMAIN" \
+    --set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$DOMAIN/realms/osac" \
     --take-ownership \
     --wait-for-jobs --timeout 30m
 ```
@@ -607,7 +610,8 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `bundledPostgres.enabled` | Deploys bundled PostgreSQL for development and evaluation. It is not intended for production. | `false` |
 | `bundledPostgres.database.name` | Bundled database name. | `service` |
 | `bundledPostgres.database.user` | Bundled database owner. | `service` |
-| `bundledVault.enabled` | Deploys an in-cluster OpenBao secret store for development and evaluation. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
+| `bundledVault.enabled` | Deploys an in-cluster OpenBao secret store for development and evaluation. Disabled by default; enable only with `bundledVault.keycloakIssuerUrl` set. Not intended for production. | `false` |
+| `bundledVault.keycloakIssuerUrl` | Keycloak OIDC issuer URL used to configure OpenBao JWT authentication. Required when `bundledVault.enabled` is `true`; on OpenShift, use the external Route URL that matches the issuer in Keycloak tokens. | `""` |
 | `bundledVault.podSecurityContext` | Pod-level `securityContext` for the OpenBao deployment. Defaults to `{runAsNonRoot: true}` with no hardcoded UID so OpenShift's restricted-v2 SCC can allocate from the namespace range. Override with a fixed UID (e.g. `runAsUser: 100`) on platforms that require one. | `{runAsNonRoot: true}` |
 | `cliImage` | The `oc` image that the chart hook jobs use. | `origin-cli:4.20.0` |
 
@@ -822,10 +826,14 @@ uses the default pod network. If it uses CUDN EVPN, enable
 [EVPN host networking (VMaaS)](#evpn-host-networking-vmaas). This configures
 host networking only; it does not enable OSAC provider networking across
 clusters.
-Disable the other phase-1 toggles. Set `certManager.enabled`,
-`trustManager.enabled`, and `caIssuer.enabled` to `false`; the latter two remain enabled by default even
-when `certManager` is disabled. Also disable `aapOperator`, `keycloak`,
-`mce`, `kafka`, and `bundledVault`. Run
+For a new workload-cluster release, set `certManager.enabled`,
+`trustManager.enabled`, and `caIssuer.enabled` to `false`; the latter two remain
+enabled by default even when `certManager` is disabled. For an existing release,
+inspect and preserve its installed values for these three settings. Disable the
+release-managed certificate stack only as part of a planned migration; changing
+`certManager.enabled` can remove its managed namespaces and disrupt certificate
+issuance. Also disable `aapOperator`, `keycloak`, `mce`, `kafka`, and
+`bundledVault`. Run
 [Phase 1a](#phase-1a-install-prerequisite-operators) and
 [Phase 1b](#phase-1b-install-shared-infrastructure) against that kubeconfig,
 replacing `-f my-infra-values.yaml` with `-f my-workload-infra-values.yaml`
@@ -1104,7 +1112,8 @@ Disable these for any real deployment.
 | Value | Default | What it does |
 |-------|---------|-------------|
 | `bundledPostgres.enabled` | `false` | Deploys bundled PostgreSQL for development and evaluation. It is not intended for production. |
-| `bundledVault.enabled` | `true` | Deploys an in-cluster OpenBao secret store for development and evaluation. Set to `false` for production and follow the [secrets management configuration guide](secrets-management-configuration.md). |
+| `bundledVault.enabled` | `false` | Deploys an in-cluster OpenBao secret store for development and evaluation. Development profiles enable it. For a manual evaluation install, also set `bundledVault.keycloakIssuerUrl`. |
+| `bundledVault.keycloakIssuerUrl` | `""` | External Keycloak issuer URL used by OpenBao JWT authentication. Required when bundled OpenBao is enabled; it must match the `iss` claim in Keycloak tokens. |
 | `topolvm.enabled` | `false` | Installs the pinned TopoLVM CSI chart for Kind `dev-full`. Keep it disabled when using an existing cluster `StorageClass`. It uses an external `lvmd` service and disposable `vg1`; the profile exposes the non-default `topolvm-provisioner` StorageClass. |
 | `netbox.enabled` | `false` | Deploys the NetBox community chart as a bare-metal inventory backend for the `bmaas_netbox` development and CI flavor. Not for production. On OpenShift it also creates an edge-terminated `Route` named `netbox` in the `osac-infra` namespace. OpenShift assigns the host, and HTTP is redirected to HTTPS. A post-install hook seeds the API token Secret in the OSAC namespace. |
 
@@ -1117,6 +1126,30 @@ Back up any data you need before upgrading.
 |-------|---------|-------------|
 | `hubAccess.enabled` | `false` | Creates hub-access SA/RBAC and registers local cluster as a hub. Only for environments where fulfillment-service and hub are the same cluster. |
 | `lvms.enabled` | `false` | Development and CI only. Registers the `local` LVMS StorageBackend and StorageTier in Fulfillment. Keep `false` in production; administrators prepare storage registration and tenant configuration. This instance-chart value is separate from the infrastructure toggle that installs LVM Storage. |
+
+For an evaluation install with bundled OpenBao, pair the Phase 1b `osac-infra`
+values with the Phase 2 `osac` values. Replace `<cluster-domain>` with the
+cluster ingress domain and keep both issuer URLs aligned with Keycloak's
+external issuer:
+
+```yaml
+# my-infra-values.yaml (osac-infra)
+bundledVault:
+  enabled: true
+  keycloakIssuerUrl: https://keycloak-keycloak.<cluster-domain>/realms/osac
+```
+
+```yaml
+# my-values.yaml (osac)
+service:
+  vault:
+    keycloakIssuerUrl: https://keycloak-keycloak.<cluster-domain>/realms/osac
+    keycloakClientId: osac-controller
+```
+
+The `osac` chart defaults `service.vault.keycloakClientId` to empty. The
+evaluation installation provides the `osac-controller` Keycloak client and its
+credentials; set the client ID in the `osac` values file.
 
 ## Infrastructure Configuration
 

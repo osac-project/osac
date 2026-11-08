@@ -8,12 +8,16 @@ Inspect the actual suite and test source before adding tests or claiming coverag
 ## Maintaining testing guidance
 
 Keep this file focused on shared policy and links. Component suite guides record
-stable commands, prerequisites, dependency boundaries and known gaps. Individual
+suite roles, prerequisites, dependency boundaries and known gaps. They do not
+copy exact command lines or individual test file names: discover commands from
+the owning source of truth (`make -C <component> help` or the Makefile `test*`
+targets, the component `AGENTS.md`, suite READMEs and fixtures, and the CI jobs
+under `.github/workflows/`) and cite that source as evidence. Individual
 test scenarios and assertions belong in test source; per-change execution results
 belong in the PR or linked task, and feature coverage matrices belong in the
 reviewed test plan.
 
-Update the affected suite guide when its command, prerequisites, dependency
+Update the affected suite guide when its suite role, prerequisites, dependency
 boundary, coverage scope or known gap changes. Update the component's touched-area
 map only when its required validation changes. Routine additions or changes to
 tests within an existing suite do not require a documentation inventory update.

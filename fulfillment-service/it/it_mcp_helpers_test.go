@@ -2,12 +2,16 @@ package it
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/ghttp"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/start/mcpserver"
@@ -45,4 +49,44 @@ func startInProcessMCPServer(ctx context.Context, userAgent string) *httptest.Se
 	server := httptest.NewServer(handler)
 	DeferCleanup(server.Close)
 	return server
+}
+
+func connectMCPCaller(ctx context.Context, endpoint, clientName, username string) *mcp.ClientSession {
+	tokenSource, err := tool.makeKeycloakTokenSource(ctx, username, usersPassword)
+	ExpectWithOffset(2, err).ToNot(HaveOccurred())
+	return connectMCPCallerWithTokenSource(ctx, endpoint, clientName, tokenSource)
+}
+
+func connectMCPCallerWithTokenSource(
+	ctx context.Context, endpoint, clientName string, tokenSource auth.TokenSource,
+) *mcp.ClientSession {
+	httpClient := &http.Client{Transport: ghttp.RoundTripperFunc(func(
+		request *http.Request,
+	) (*http.Response, error) {
+		token, err := tokenSource.Token(request.Context())
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
+		return http.DefaultTransport.RoundTrip(request)
+	})}
+	client := mcp.NewClient(&mcp.Implementation{Name: clientName, Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: endpoint, HTTPClient: httpClient,
+	}, nil)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	DeferCleanup(func() { ExpectWithOffset(1, session.Close()).To(Succeed()) })
+	return session
+}
+
+func expectMCPSafeError(err error, category, grpcCode string, fragments ...string) {
+	GinkgoHelper()
+	ExpectWithOffset(1, err).To(HaveOccurred())
+	errorText := err.Error()
+	ExpectWithOffset(1, errorText).To(ContainSubstring(fmt.Sprintf(`"category":"%s"`, category)))
+	ExpectWithOffset(1, errorText).To(ContainSubstring(fmt.Sprintf(`"grpc_code":"%s"`, grpcCode)))
+	ExpectWithOffset(1, errorText).To(ContainSubstring(`"retryable":false`))
+	for _, fragment := range fragments {
+		ExpectWithOffset(1, errorText).To(ContainSubstring(fragment))
+	}
 }

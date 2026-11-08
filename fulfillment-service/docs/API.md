@@ -161,8 +161,6 @@ The `Metadata` message is shared by all object types and contains the following 
 | `labels`               | `map<string, string>`        | Indexed key-value pairs for organizing objects. Public API responses omit administrator-only reserved keys; see [Administrator-only metadata](#administrator-only-metadata). |
 | `annotations`          | `map<string, string>`        | Arbitrary user-controlled metadata, plus administrator-only reserved keys on the private API. Public API responses omit reserved keys; see [Administrator-only metadata](#administrator-only-metadata). |
 | `version`              | `int32`                      | Auto-incremented on every change.                |
-| `display_name`         | `string`                     | Optional friendly label (max 63, not unique, not DNS-constrained). |
-| `description`          | `string`                     | Optional description (max 256, not unique).      |
 
 The private API adds a `finalizers` field (`repeated string`) that is not exposed in the public API.
 
@@ -290,7 +288,7 @@ do not necessarily follow them.
   metadata fields. Omitted fields stay unchanged; clearing a scalar or an empty
   map requires an explicit mask path.
 - **Explicit mask selects writable fields only.** Permitted metadata paths are
-  `labels`, `annotations`, `display_name`, and `description`; spec paths are
+  `labels` and `annotations`; spec paths are
   accepted and validated by the field-path compiler. Any other root — including
   `name`, `tenant`, and `project`, which are server-assigned and immutable once
   the object is created, and private metadata such as `version`, timestamps,
@@ -649,11 +647,16 @@ not supported for service accounts. Projects are not supported.
 `Create` returns the account in `PENDING` before its Keycloak client is provisioned. The controller
 provisions the client asynchronously and creates a tenant-scoped Secret containing both `client_id`
 and `client_secret`. `status.client_secret` references that Secret, and `status.state` becomes
-`READY` only after the Secret is available. Clients can read it with `Secrets/Get`; Secret data is
-omitted from list and mutation responses. Dry-run creation creates no account, client, or Secret.
-`status.message` explains a `FAILED` state, including when a Keycloak client exists without
-recoverable registration credentials. Remove that client from Keycloak; the controller then retries
-provisioning or completes deletion.
+`READY` only after the Secret is available. Tenant administrators can read the Secret with
+`Secrets/Get`; ordinary client users receive `PERMISSION_DENIED`. Secret data is omitted from list
+and mutation responses. Dry-run creation creates no account, client, or Secret.
+`status.message` explains a `FAILED` provisioning state and reports rotation errors while automatic
+retry is in progress. A rotation failure leaves the account `READY` while its existing credential
+remains usable. If the Keycloak update may have applied but the replacement credential could not be
+published, or Keycloak reports that the client is missing, the controller marks the account
+`FAILED` until it is usable again. If a Keycloak client exists without recoverable registration
+credentials, remove that client from Keycloak; the controller then retries provisioning or completes
+deletion.
 
 Role assignments are managed through tenant-scoped RoleBindings; service accounts do not accept
 role references. A binding can include service-account IDs in `spec.service_accounts`. Fulfillment
@@ -664,8 +667,88 @@ The shared Role catalog includes `tenant-admin`, `tenant-automation`, and `tenan
 Migration 139 seeds `tenant-idp-manager`; migration 145 seeds `tenant-automation` and
 `osac-csi-driver`. Migration 141 creates the ServiceAccount tables.
 
-Secret rotation is tracked separately by
-[OSAC-6555](https://redhat.atlassian.net/browse/OSAC-6555).
+Tenant admins can request secret rotation with `RegenerateSecret`. The action records a pending
+rotation and returns an empty response. Callers can watch the referenced Secret or poll `Secrets/Get`
+until its `client_secret` changes. Before updating Keycloak,
+the controller stores a generated replacement client secret and the current registration token in the
+system-scoped registration Secret. It uses that token to authorize the Keycloak client-secret update,
+persists any returned registration token, and then publishes the replacement through the tenant-scoped
+credential Secret. The controller records rotation progress privately and marks rotation complete
+only after publication. The installer configures a Keycloak Client Policy to disable
+registration-token rotation for these updates, so retries can reuse the stored token and staged
+secret. Repeated requests while a rotation is pending or retrying return that rotation instead of
+starting another one. Rotation has no grace period: the old secret stops working when the Keycloak
+update applies, while already-issued tokens retain their normal expiry.
+
+`RegenerateSecret` is available to tenant admins for accounts in their tenant. Its REST route is
+`POST /api/fulfillment/v1/service_accounts/{id}/regenerate_secret`; the private route is
+`POST /api/private/v1/service_accounts/{id}/regenerate_secret`.
+
+### CLI
+
+Service-account create, get, list, edit, and delete use the generic `osac` commands. Edit opens the
+resource in the configured editor. Secret rotation uses `osac regenerate`:
+
+```shell
+osac create -f service-account.json
+osac get serviceaccounts batch-worker -o json
+osac get serviceaccounts --filter "this.metadata.labels['team'] == 'data'" -o json
+osac edit serviceaccounts batch-worker
+osac delete serviceaccounts batch-worker
+osac regenerate serviceaccount batch-worker
+```
+
+For administrator and workload procedures, see the
+[Tenant Service Accounts guide](../../docs/guides/tenant-service-accounts.md).
+
+The create file uses the public type URL and tenant-owned fields:
+
+```json
+{
+  "@type": "type.googleapis.com/osac.public.v1.ServiceAccount",
+  "metadata": {
+    "name": "batch-worker",
+    "labels": { "team": "data" }
+  }
+}
+```
+
+Generic `osac create` reports the created account; provisioning then completes asynchronously.
+After the account is `READY`, tenant admins can read the credential Secret by following the ID in
+`status.client_secret`, for example with `osac get secrets <client-secret-id> -o json`; the
+Secret's byte values are base64-encoded in JSON. The API Create and RegenerateSecret responses do not
+return secret bytes. `osac regenerate serviceaccount`
+waits for rotation to complete, reads the replacement through `Secrets/Get`, and emits the new
+`client_id` and `client_secret` once as JSON. Treat that output as a credential and keep it out of
+source files, shell history, and logs.
+
+Get and list output the account and its tenant-scoped Secret reference, never credential bytes.
+Updates may change `metadata.labels`. `ServiceAccountSpec` has no role grants. To grant API
+access, create a RoleBinding whose `spec.role.id` is a catalog role ID and whose
+`spec.service_accounts` includes the service-account ID. To revoke that grant, delete its
+RoleBinding. Use a separate binding per account when you want revocation to be a single
+non-interactive delete:
+
+```json
+{
+  "@type": "type.googleapis.com/osac.public.v1.RoleBinding",
+  "metadata": { "name": "batch-worker-automation" },
+  "spec": {
+    "role": { "id": "<tenant-automation-role-id>" },
+    "service_accounts": [{ "id": "<service-account-id>" }]
+  }
+}
+```
+
+```shell
+osac create -f service-account-role-binding.json
+osac delete rolebindings batch-worker-automation
+```
+
+An ordinary service-account user cannot read raw Secrets or watch managed Events. Its API calls
+are limited to the role on its active tenant RoleBinding. A tenant admin can retrieve the
+service-account credential through the authorized `Secrets/Get` API; do not expose that operation
+or the CLI's one-time credential output to the service-account workload itself.
 
 ## REST transcoding
 

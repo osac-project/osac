@@ -39,8 +39,6 @@ const runningVm: ComputeInstance = {
   metadata: {
     name: 'web-01',
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     annotations: {},
     creator: 'foo',
     labels: {},
@@ -73,6 +71,7 @@ const runningVm: ComputeInstance = {
     internalIpAddress: '10.0.0.5',
     externalIpAddress: '203.0.113.1',
     computeNetworkAttachmentStatuses: [],
+    volumes: [],
   },
 };
 

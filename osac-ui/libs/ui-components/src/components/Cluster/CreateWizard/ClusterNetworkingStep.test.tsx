@@ -26,14 +26,13 @@ const virtualNetworks = [
     id: 'vn-default',
     metadata: {
       name: 'tenant-workload',
-      description: 'Primary tenant compute network',
       labels: { 'osac.openshift.io/default': 'true' },
     },
     status: { state: VirtualNetworkState.READY },
   }),
   create(VirtualNetworkSchema, {
     id: 'vn-isolated',
-    metadata: { name: 'isolated', description: 'Private team network' },
+    metadata: { name: 'isolated' },
     status: { state: VirtualNetworkState.READY },
   }),
 ];
@@ -61,7 +60,6 @@ const securityGroups = [
     id: 'sg-default',
     metadata: {
       name: 'allow-ssh-https',
-      description: 'SSH + HTTPS ingress',
       labels: { 'osac.openshift.io/default': 'true' },
     },
     spec: { virtualNetwork: { id: 'vn-default' } },
@@ -69,13 +67,13 @@ const securityGroups = [
   }),
   create(SecurityGroupSchema, {
     id: 'sg-isolated',
-    metadata: { name: 'isolated-group', description: 'Private ingress' },
+    metadata: { name: 'isolated-group' },
     spec: { virtualNetwork: { id: 'vn-isolated' } },
     status: { state: SecurityGroupState.READY },
   }),
   create(SecurityGroupSchema, {
     id: 'sg-isolated-strict',
-    metadata: { name: 'isolated-strict', description: 'Restricted ingress' },
+    metadata: { name: 'isolated-strict' },
     spec: { virtualNetwork: { id: 'vn-isolated' } },
     status: { state: SecurityGroupState.READY },
   }),

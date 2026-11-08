@@ -74,4 +74,17 @@ var _ = Describe("ClusterOrder upgrade contract", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(withImage).NotTo(Equal(hash))
 	})
+
+	It("serializes the SSH key reference as an ID-only secret", func() {
+		spec := v1alpha1.ClusterOrderSpec{
+			SSHKey: &v1alpha1.FulfillmentSecretReference{ID: "key-id"},
+		}
+		encoded, err := json.Marshal(spec)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(encoded)).To(Equal(`{"sshKey":{"id":"key-id"}}`))
+
+		empty, err := json.Marshal(v1alpha1.ClusterOrderSpec{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(empty)).To(Equal(`{}`))
+	})
 })

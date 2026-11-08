@@ -1,46 +1,32 @@
-/* :-webkit-full-screen mirrors :fullscreen for browsers where useConsoleFullscreen
-   falls back to webkitRequestFullscreen (see useConsoleFullscreen.ts). */
-.vm-console-fullscreen-container:fullscreen,
-.vm-console-fullscreen-container:-webkit-full-screen {
-  box-sizing: border-box;
+.vm-console-tab {
   display: flex;
   flex-direction: column;
-  gap: var(--pf-t--global--spacer--md);
   width: 100%;
-  height: 100%;
-  padding: var(--pf-t--global--spacer--md);
-  /* primary--default follows light/dark; background--color--100 stays white in dark theme. */
-  background-color: var(--pf-t--global--background--color--primary--default);
-}
-
-.vm-console-fullscreen-container:fullscreen .vm-console-fullscreen-stack,
-.vm-console-fullscreen-container:-webkit-full-screen .vm-console-fullscreen-stack {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  height: 0;
   min-height: 0;
 }
 
-.vm-console-fullscreen-container:fullscreen .vm-console-stack,
-.vm-console-fullscreen-container:-webkit-full-screen .vm-console-stack {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
+.vm-console-toolbar-section {
+  flex: 0 0 auto;
+  margin-block-start: var(--pf-t--global--spacer--md);
 }
 
-/* Overrides the viewer's own fixed height (see VncConsoleViewer.css) so it fills the
-   fullscreen container instead. */
-.vm-console-fullscreen-container:fullscreen .vm-console-viewport,
-.vm-console-fullscreen-container:-webkit-full-screen .vm-console-viewport {
-  flex: 1 1 auto;
-  width: 100%;
-  height: auto;
+.vm-console-view-section {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  height: 0;
   min-height: 0;
 }
 
 .vm-console-stack {
   position: relative;
-  /* Reserve space before the viewer mounts so the connecting overlay is visible. */
-  min-height: 50vh;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  height: 0;
+  min-height: 0;
 }
 
 .vm-console-connecting-overlay {

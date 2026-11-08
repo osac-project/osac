@@ -226,6 +226,10 @@ See [BMF cleanup setup and boundaries](testing/bare-metal-fulfillment-operator.m
 
 See [worker cleanup boundaries](testing/osac-operator.md#r03-unified-worker-cleanup-implementation-checkpoint).
 
+### ComputeInstance disk handoff (OSAC-6685)
+
+See [Fulfillment disk handoff setup and boundaries](testing/fulfillment-service.md#computeinstance-disk-handoff-osac-6685).
+
 ## Multi-branch test isolation
 
 See [Multi-branch test isolation](MULTI-BRANCH-ISOLATION.md) for cluster names,

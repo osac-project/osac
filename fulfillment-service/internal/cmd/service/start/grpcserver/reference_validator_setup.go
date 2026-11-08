@@ -38,6 +38,11 @@ import (
 // a NATGateway for a tenant-default VirtualNetwork.
 // RoleBinding handlers validate service-account references in the request's
 // tenant scope.
+// Workload ssh_key references are resolved by their private handlers after
+// tenant assignment and catalog/template defaults. Those handlers enforce the
+// tenant-only SSH-key contract, validate key material, and store canonical
+// Secret references. Update exclusions also leave immutable-field handling to
+// the merged candidate rather than resolving a replacement in the interceptor.
 // Other references continue through the interceptor's registered lookups.
 func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, registerer prometheus.Registerer) (*references.ReferenceValidator, error) {
 	validator, err := references.NewReferenceValidator().SetLogger(logger).SetMetricsRegisterer(registerer).
@@ -51,6 +56,9 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 			"object.status.client_secret", "object.status.registration_secret").
 		SetExcludedReferencePaths(natGatewayCreationMethods(), "object.spec.external_ip").
 		SetExcludedReferencePaths(roleBindingServiceAccountMethods(), "object.spec.service_accounts").
+		SetExcludedReferencePaths(bareMetalInstanceSSHKeyMethods(), "object.spec.ssh_key").
+		SetExcludedReferencePaths(clusterSshKeyMethods(), "object.spec.ssh_key").
+		SetExcludedReferencePaths(clusterTemplateSshKeyMethods(), "object.spec_defaults.ssh_key").
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reference validator: %w", err)
@@ -88,10 +96,47 @@ func roleBindingServiceAccountMethods() []string {
 	}
 }
 
+// clusterTemplateSshKeyMethods covers the request fields whose SSH-key Secret
+// default references are resolved and canonicalized by the private
+// ClusterTemplates handler at authoring time.
+func clusterTemplateSshKeyMethods() []string {
+	return []string{
+		publicv1.ClusterTemplates_Create_FullMethodName,
+		privatev1.ClusterTemplates_Create_FullMethodName,
+		publicv1.ClusterTemplates_Update_FullMethodName,
+		privatev1.ClusterTemplates_Update_FullMethodName,
+	}
+}
+
+// clusterSshKeyMethods covers the request fields whose effective SSH-key Secret
+// references are resolved by the private Cluster handler after defaults on
+// create and preserved by its immutability check on update.
+func clusterSshKeyMethods() []string {
+	return []string{
+		publicv1.Clusters_Create_FullMethodName,
+		privatev1.Clusters_Create_FullMethodName,
+		publicv1.Clusters_Update_FullMethodName,
+		privatev1.Clusters_Update_FullMethodName,
+	}
+}
+
 func bareMetalInstanceCreationMethods() []string {
 	return []string{
 		publicv1.BareMetalInstances_Create_FullMethodName,
 		privatev1.BareMetalInstances_Create_FullMethodName,
+	}
+}
+
+// bareMetalInstanceSSHKeyMethods covers the request fields whose effective
+// SSH-key Secret references are resolved by the private handler after ownership
+// assignment and defaults. Updates are included so the handler's immutability
+// check answers changes to ssh_key instead of an interceptor lookup.
+func bareMetalInstanceSSHKeyMethods() []string {
+	return []string{
+		publicv1.BareMetalInstances_Create_FullMethodName,
+		privatev1.BareMetalInstances_Create_FullMethodName,
+		publicv1.BareMetalInstances_Update_FullMethodName,
+		privatev1.BareMetalInstances_Update_FullMethodName,
 	}
 }
 

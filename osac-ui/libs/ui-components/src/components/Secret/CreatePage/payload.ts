@@ -21,7 +21,6 @@ export const buildSecretCreatePayload = (
   metadata: {
     name: values.metadata.name,
     project: values.metadata.project,
-    description: values.metadata.description,
   },
   type: values.type,
   data: buildSecretData(values.data),
@@ -30,8 +29,5 @@ export const buildSecretCreatePayload = (
 export const buildSecretUpdatePayload = (
   values: SecretValues,
 ): MessageInitShape<typeof SecretSchema> => ({
-  metadata: {
-    description: values.metadata.description,
-  },
   data: buildSecretData(values.data),
 });

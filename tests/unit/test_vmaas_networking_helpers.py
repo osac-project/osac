@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ipaddress
 import subprocess
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,47 +10,8 @@ import pytest
 from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking import teardown
 from tests.e2e.networking.cidrs import TENANT_SECOND_OCTETS, run_offset, subnet_cidr, tenant_vn_cidr
-from tests.e2e.networking.vmaas import conftest as vmaas_conftest
 from tests.e2e.networking.vmaas import stack
 from tests.e2e.networking.vmaas import test_vmaas_networking as test_module
-
-SUITE = Path(vmaas_conftest.__file__).parent
-
-
-def _item(path: Path, name: str) -> SimpleNamespace:
-    markers: list[object] = []
-    return SimpleNamespace(path=path, name=name, add_marker=markers.append, markers=markers)
-
-
-def _collect() -> list[Any]:
-    items = [
-        _item(SUITE / "test_nat_gateway_billing.py", "nat"),
-        _item(Path("/elsewhere/tests/e2e/vmaas/test_other.py"), "other-before"),
-        _item(SUITE / "test_external_ip_billing.py", "billing"),
-        _item(SUITE / "test_vmaas_networking.py", "main-0"),
-        _item(Path("/elsewhere/tests/e2e/vmaas/test_later.py"), "other-after"),
-        _item(SUITE / "test_external_ip_reattach_billing.py", "reattach"),
-        _item(SUITE / "test_vmaas_networking.py", "main-1"),
-    ]
-    vmaas_conftest.pytest_collection_modifyitems(config=SimpleNamespace(), items=items)
-    return items
-
-
-def test_main_suite_runs_before_the_billing_tests() -> None:
-    inside = [item.name for item in _collect() if item.path.is_relative_to(SUITE)]
-
-    assert inside == ["main-0", "main-1", "nat", "billing", "reattach"]
-
-
-def test_items_outside_the_suite_keep_their_positions() -> None:
-    assert [(i, item.name) for i, item in enumerate(_collect()) if not item.path.is_relative_to(SUITE)] == [
-        (1, "other-before"),
-        (4, "other-after"),
-    ]
-
-
-def test_every_billing_file_named_for_the_order_exists() -> None:
-    assert all(path.is_file() for path in vmaas_conftest._AFTER_MAIN_SUITE)
 
 
 @pytest.mark.parametrize(

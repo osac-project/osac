@@ -99,6 +99,15 @@ var _ = Describe("Create cluster flag registration", func() {
 		Expect(flag).NotTo(BeNil())
 		Expect(flag.Usage).To(ContainSubstring("Node set configuration"))
 	})
+
+	It("should register --add-on-operator flag", func() {
+		cmd := Cmd()
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		flag := cmd.Flags().Lookup("add-on-operator")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.Usage).To(ContainSubstring("Add-on operator"))
+	})
 })
 
 var _ = Describe("Parse cluster node set flag", func() {
@@ -327,6 +336,41 @@ var _ = Describe("Create cluster pull secret flags", func() {
 
 })
 
+var _ = Describe("Create cluster SSH key flags", func() {
+	It("should register --ssh-key flag", func() {
+		cmd := Cmd()
+		flag := cmd.Flags().Lookup("ssh-key")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.DefValue).To(Equal(""))
+	})
+
+	It("sets --ssh-key as a registered Secret reference", func() {
+		runner := &runnerContext{}
+		runner.args.template = "sandbox"
+		runner.args.sshKey = "tenant-login"
+
+		specBuilder := &publicv1.ClusterSpec_builder{}
+		err := runner.applyOptionalSpecFields(specBuilder)
+		Expect(err).ToNot(HaveOccurred())
+		spec := specBuilder.Build()
+		Expect(spec.GetSshKey()).NotTo(BeNil())
+		Expect(spec.GetSshKey().GetName()).To(Equal("tenant-login"))
+	})
+
+	It("sets a project-qualified --ssh-key reference", func() {
+		runner := &runnerContext{}
+		runner.args.template = "sandbox"
+		runner.args.sshKey = "name=tenant-login,project=platform-access"
+
+		specBuilder := &publicv1.ClusterSpec_builder{}
+		err := runner.applyOptionalSpecFields(specBuilder)
+		Expect(err).ToNot(HaveOccurred())
+		spec := specBuilder.Build()
+		Expect(spec.GetSshKey().GetName()).To(Equal("tenant-login"))
+		Expect(spec.GetSshKey().GetProject()).To(Equal("platform-access"))
+	})
+})
+
 var _ = Describe("Create cluster networking flags", func() {
 	It("should register --network-attachment flag", func() {
 		cmd := Cmd()
@@ -541,5 +585,62 @@ var _ = Describe("Create cluster node sets", func() {
 		Expect(nodeSets["compute"].GetBaremetalInstanceType().GetName()).To(Equal("compute-bm"))
 		Expect(nodeSets["accelerator"].GetSize()).To(Equal(int32(1)))
 		Expect(nodeSets["accelerator"].GetBaremetalInstanceType().GetName()).To(Equal("accelerator-bm"))
+	})
+})
+
+var _ = Describe("Create cluster add-on operators", func() {
+	It("passes repeated add-on operator names to cluster creation", func() {
+		logger := slog.New(slog.NewTextHandler(GinkgoWriter, nil))
+		console, err := terminal.NewConsole().
+			SetLogger(logger).
+			SetStdout(GinkgoWriter).
+			SetStderr(GinkgoWriter).
+			Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		settings, err := config.NewSettings().
+			SetLogger(logger).
+			SetDir(GinkgoT().TempDir()).
+			Build()
+		Expect(err).NotTo(HaveOccurred())
+		settings.SetTenant("tenant-a")
+		settings.SetPlaintext(true)
+
+		server := testutils.NewServer()
+		DeferCleanup(server.Stop)
+		publicv1.RegisterClusterCatalogItemsServer(server.Registrar(), mockClusterCatalogItemsServer{})
+		createRequests := make(chan *publicv1.ClustersCreateRequest, 1)
+		publicv1.RegisterClustersServer(server.Registrar(), &testutils.ClustersServerFuncs{
+			CreateFunc: func(_ context.Context, request *publicv1.ClustersCreateRequest) (*publicv1.ClustersCreateResponse, error) {
+				createRequests <- request
+				return publicv1.ClustersCreateResponse_builder{
+					Object: publicv1.Cluster_builder{Id: "created-cluster"}.Build(),
+				}.Build(), nil
+			},
+		})
+		server.Start()
+		settings.SetAddress(server.Address())
+
+		ctx := logging.LoggerIntoContext(context.Background(), logger)
+		ctx = terminal.ConsoleIntoContext(ctx, console)
+		ctx = config.SettingsIntoContext(ctx, settings)
+		ctx = config.TenantIntoContext(ctx, settings.Tenant())
+
+		cmd := Cmd()
+		cmd.SetArgs([]string{
+			"--catalog-item", "catalog-item-id",
+			"--name", "test-cluster",
+			"--add-on-operator", "cert-manager",
+			"--add-on-operator", "gpu-operator",
+		})
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		Expect(cmd.ExecuteContext(ctx)).To(Succeed())
+
+		request := <-createRequests
+		operators := request.GetObject().GetSpec().GetAddOnOperators()
+		Expect(operators).To(HaveLen(2))
+		Expect(operators[0].GetName()).To(Equal("cert-manager"))
+		Expect(operators[1].GetName()).To(Equal("gpu-operator"))
 	})
 })

@@ -328,7 +328,8 @@ export enum VolumeState {
   DELETING = 4,
 
   /**
-   * The volume has been fully deprovisioned and the record is archived.
+   * The volume has been fully deprovisioned from the storage backend. The record may remain visible
+   * until finalizers are removed and it is archived.
    *
    * @generated from enum value: VOLUME_STATE_DELETED = 5;
    */

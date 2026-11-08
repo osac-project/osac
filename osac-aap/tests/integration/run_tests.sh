@@ -63,13 +63,11 @@ ROLE_TESTS=(
   "finalizer"
   "fulfillment_trust_sync"
   "lease"
+  "bmaas_metal3"
   "agentless_net_stub"
-  "agentless_net_external_ip_pool"
-  "agentless_net_external_ip"
-  "agentless_net_external_ip_attachment"
   "agentless_net_nat_gateway"
-  "agentless_net_subnet"
   "agentless_net_attachment"
+  "agentless_net_contract"
   "compute_instance_delete_vmi_recovery"
   "metallb_l2_detach_annotation"
   "netris_protected_launch"
@@ -87,6 +85,7 @@ ROLE_SCENARIO_TESTS=(
   "compute_instance_create:volume_id_annotations"
   "compute_instance_create:storage_tier_mapping"
   "compute_instance_create:csp_storage_tiers"
+  "bmaas_metal3:lifecycle"
 )
 
 echo "=== Running Workflow Integration Tests ==="

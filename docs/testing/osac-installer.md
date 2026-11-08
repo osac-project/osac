@@ -10,6 +10,7 @@ Run `make -C osac-installer help` to list the test targets.
 | Tier | Suite | Real | Faked or omitted |
 |---|---|---|---|
 | Unit | `make kind-runtime-test` | Makefile/runtime routing and shell behavior | Container engines, Helm, host privilege changes and downloads are command stubs |
+| Unit | `make infra-ready-wait-test` | The waits that end `make install-infra`: each profile-created dependency (CA issuer, bundled PostgreSQL, Kafka) is waited for with the right namespace, condition and timeout, and a resource that never becomes ready fails the step naming the resource | Commands and time are mocked through a stub `kubectl`; no cluster is started |
 | Contract (Helm render) | `make mce-render-test`, `make fulfillment-trust-render-test`, `make helm-networking-test` | Production chart templates and their configuration contracts | No Kubernetes API, running hooks, MCE catalog, deployed TLS or provider calls |
 | Component integration | `make test` (suite selection in `make help`) | Current images and chart wiring in Kind | Depends on the selected suite; provider networking is disabled in the standard profile |
 
@@ -18,6 +19,12 @@ deployed installer release and its idempotent upgrade: Kubernetes/API
 configuration and admission with provider networking disabled. It does not
 establish the enabled AAP path. Read the script and its registration in the
 repository-root `.github/ci-tests.yml` for the current checks.
+
+`helm upgrade --install --wait-for-jobs` waits for hook Jobs but not for
+Deployments, so the CA issuer, bundled PostgreSQL and Kafka can still be
+starting when `make install-osac` begins; the `infra-ready-wait-test` suite
+guards that gap. The wait was also exercised once by hand against a Kind API
+server with a slow-starting and a never-ready Deployment.
 
 ## Install preflight (OSAC-6561)
 
@@ -29,6 +36,7 @@ non-Kind context.
 | Tier | Real | Faked or not covered |
 |---|---|---|
 | Unit ([DEV] OSAC-6566, OSAC-6562) | Helm rendering of the real chart, the engine, catalog, report and failure message | The cluster: `lookup`, capabilities, release revision are mocked. The plugin's fake client rejects a LIST of a kind with no objects, so empty-list branches are not covered |
+| Harness unit | CRD readiness deadlines and fixture-error diagnostics, through the preflight harness script under `scripts/` | Commands and time are mocked; does not replace the Kind tier. Runs in the installer unit-test CI leg |
 | Helm contract | Offline `helm template` of the umbrella and CSI charts, report schema validation, catalog consistency, the packaged archive | No cluster. Asserts the log policy on every hook Job, CSI hook deadlines, that an offline render never blocks, that `preflight.*` values are closed by the schema, and that `helm package` ships the catalog, schema and preflight templates |
 | Component integration ([DEV] OSAC-6566) | Multiple Helm majors, a real API server, real `lookup`, release Secrets, hooks, failed-hook logs | A preflight-only chart copy (no workloads); stub CRDs, a Service with an EndpointSlice, Secrets; OpenShift-only checks run as `skipped: not OpenShift` |
 
@@ -49,6 +57,16 @@ Coverage gaps:
   report mode, because Helm maps every rendered kind first. On Helm 3,
   `helm template --dry-run=server -s templates/preflight/report.yaml` works
   anywhere; on Helm 4 the failing render's JSON line is the portable channel.
+
+The `helm unittest` suites for the `osac-infra` chart run in the same
+helm-unit CI leg as the umbrella-chart unit tier. They render the Kafka
+resource with Strimzi's Kafka Exporter, the PodMonitor that scrapes it, and
+the `MeteringConsumerLag` rule, and assert that none of the three renders
+when Kafka is disabled, the exporter value is off, or the monitoring CRD is
+absent. Vendor the chart dependencies first with `make helm-infra-deps`. They
+do not check a live exporter's metrics or evaluate the rule against a live
+Prometheus; see the [osac-metering guide](osac-metering.md) for the reader
+boundaries and remaining gaps.
 
 ## OSAC-5343 deployed enablement coverage
 

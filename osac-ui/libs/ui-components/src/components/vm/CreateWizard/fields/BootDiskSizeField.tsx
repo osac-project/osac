@@ -10,17 +10,20 @@ const BootDiskSizeField = ({
   name,
   fieldId = 'vm-boot-disk-size',
   isDisabled = false,
+  isRequired = true,
+  labelInfo,
 }: BootDiskSizeFieldProps) => {
   const { t } = useTranslation();
 
   return (
     <InputField
       name={name}
-      label={t('Boot disk')}
+      label={t('Boot disk size')}
       fieldId={fieldId}
       type="number"
-      isRequired
+      isRequired={isRequired}
       isDisabled={isDisabled}
+      labelInfo={labelInfo}
       helperText={t('Size in GiB')}
     />
   );

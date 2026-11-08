@@ -1,6 +1,7 @@
 import { type Locator, type Page, expect } from '@playwright/test';
 
-import { CatalogMainPage } from '../../locators/catalog';
+import { confirmDetailDeletion } from './general/row_assertions';
+import { CatalogCreatePage, CatalogDeletePage, CatalogMainPage } from '../../locators/catalog';
 
 const getCatalogItemCard = (page: Page, name: string): Locator =>
   page.locator(...CatalogMainPage.catalogItemCards).filter({
@@ -8,17 +9,21 @@ const getCatalogItemCard = (page: Page, name: string): Locator =>
   });
 
 export interface ExpectedCatalogItemResources {
-  vcpus: number;
-  memoryGib: number;
-  storageGib: number;
+  instanceType: string;
   diskImage: string;
 }
+
+/** Open the VM catalog item creation wizard. */
+export const openCreateCatalogItemPage = async (page: Page): Promise<void> => {
+  await page.getByRole(...CatalogMainPage.createVmCatalogItem).click();
+  await expect(page).toHaveURL((url) => url.pathname === '/catalog/vm/create');
+  await expect(page.getByRole(...CatalogCreatePage.pageTitle)).toBeVisible();
+};
 
 /** Verify that a catalog item is shown with its expected card values. */
 export const expectCatalogItemListed = async (
   page: Page,
   name: string,
-  expectedType: string,
   expectedStatus: string,
   expectedUsage: string,
   expectedResources: ExpectedCatalogItemResources,
@@ -27,18 +32,15 @@ export const expectCatalogItemListed = async (
 
   await expect(catalogItemCard).toHaveCount(1);
   await expect(catalogItemCard.getByRole('link', { name, exact: true })).toBeVisible();
-  await expect(catalogItemCard.locator(...CatalogMainPage.catalogItemLabels)).toHaveText([
-    expectedType,
+  await expect(catalogItemCard.locator(...CatalogMainPage.catalogItemLabels)).toHaveText(
     expectedStatus,
-  ]);
+  );
   await expect(catalogItemCard.locator(...CatalogMainPage.catalogItemVisibility)).toHaveText(
     expectedUsage,
   );
 
   const expectedResourceValues = [
-    ['vCPU', `${expectedResources.vcpus} vCPU`],
-    ['Memory', `${expectedResources.memoryGib} GiB`],
-    ['Storage', `${expectedResources.storageGib} GiB`],
+    ['Instance type', expectedResources.instanceType],
     ['Disk image', expectedResources.diskImage],
   ] as const;
 
@@ -48,14 +50,58 @@ export const expectCatalogItemListed = async (
       .filter({ hasText: label });
 
     await expect(resourceGroup).toHaveCount(1);
-    await expect(resourceGroup.locator(...CatalogMainPage.catalogItemResourceValue)).toHaveText(
-      value,
-    );
+    await expect(
+      resourceGroup
+        .locator(...CatalogMainPage.catalogItemResourceValue)
+        .getByText(value, { exact: true }),
+    ).toHaveText(value);
   }
+
+  await expect(catalogItemCard.getByText('Storage', { exact: true })).toHaveCount(0);
 };
 
 /** Verify that a catalog item is absent from the Catalog page. */
 export const expectCatalogItemNotListed = async (page: Page, name: string): Promise<void> => {
   await expect(page.getByRole(...CatalogMainPage.catalogLoadingIndicator)).toHaveCount(0);
   await expect(getCatalogItemCard(page, name)).toHaveCount(0);
+};
+
+/** Open a published catalog item from the tenant Catalog page. */
+export const openCatalogItemDetails = async (page: Page, name: string): Promise<void> => {
+  const catalogItemCard = getCatalogItemCard(page, name);
+
+  await expect(catalogItemCard).toHaveCount(1);
+  await expect(catalogItemCard.getByRole('link', { name, exact: true })).toBeVisible();
+  await catalogItemCard.getByRole('link', { name, exact: true }).click();
+  await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
+};
+
+/** Delete a catalog item through its UI details page. */
+export const deleteCatalogItem = async (page: Page, name: string): Promise<void> => {
+  await openCatalogItemDetails(page, name);
+  await page.getByRole(...CatalogDeletePage.delete).click();
+
+  const dialog = page.locator(...CatalogDeletePage.dialog);
+  await confirmDetailDeletion(
+    dialog,
+    dialog.locator(...CatalogDeletePage.dialogTitle),
+    dialog.getByText(...CatalogDeletePage.warning),
+    dialog.getByRole(...CatalogDeletePage.delete),
+    name,
+  );
+  await expect(page).toHaveURL((url) => url.pathname === '/catalog');
+  await expect(page.getByRole(...CatalogMainPage.pageTitle)).toBeVisible();
+};
+
+/** Launch the published VM catalog item from its details page. */
+export const launchCatalogItem = async (page: Page): Promise<void> => {
+  const launchButton = page.getByRole('button', { name: 'Launch instance', exact: true });
+
+  await expect(launchButton).toBeVisible();
+  await expect(launchButton).toBeEnabled();
+  await launchButton.click();
+  await expect(page).toHaveURL((url) => url.pathname.startsWith('/vms/create/'));
+  await expect(
+    page.getByRole('heading', { name: 'Create a virtual machine', exact: true }),
+  ).toBeVisible();
 };

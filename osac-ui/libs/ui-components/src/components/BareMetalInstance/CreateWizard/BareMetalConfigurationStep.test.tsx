@@ -7,18 +7,11 @@ import {
   BareMetalInstanceCatalogItemSchema,
   DiskImageLifecycle,
   DiskImageSchema,
-  SecretSchema,
-  SecretType,
 } from '@osac/types';
 
 import BareMetalConfigurationStep from './BareMetalConfigurationStep';
 import { createEmptyBareMetalInstanceValues, getBareMetalInstanceInitialValues } from './fields';
-import {
-  expectResourceSelectDisabled,
-  getResourceSelectCombobox,
-} from '../../../test-utils/resourceSelect';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
-import { provisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
 const diskImages = [
   create(DiskImageSchema, {
@@ -47,15 +40,17 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    const diskImageSelect = await screen.findByLabelText(/^Disk image/);
-    await user.click(diskImageSelect);
+    const diskImageToggle = await screen.findByRole('button', {
+      name: 'Select the image reference',
+    });
+    await user.click(diskImageToggle);
 
     expect(screen.getByRole('option', { name: /fedora/ })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /rhel/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole('option', { name: /rhel/ }));
 
-    await waitFor(() => expect(getResourceSelectCombobox(/^Disk image/)).toHaveValue('rhel'));
+    await waitFor(() => expect(screen.getByRole('combobox')).toHaveValue('rhel'));
   });
 
   it('shows the catalog item disk image when the wizard opens', async () => {
@@ -86,14 +81,26 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    await screen.findByLabelText(/^Disk image/);
-    await waitFor(() => expect(getResourceSelectCombobox(/^Disk image/)).toHaveValue('rhel'));
-    expectResourceSelectDisabled(/^Disk image/);
+    await waitFor(() => expect(screen.getByRole('combobox')).toHaveValue('rhel'));
   });
 
   it('disables instance type selection when the catalog item locks its value', async () => {
+    const catalogItem = create(BareMetalInstanceCatalogItemSchema, {
+      fields: {
+        instanceType: {
+          behavior: {
+            case: 'locked',
+            value: { name: 'worker' },
+          },
+        },
+      },
+    });
+
     renderWithProviders(
-      <Formik initialValues={createEmptyBareMetalInstanceValues()} onSubmit={() => undefined}>
+      <Formik
+        initialValues={getBareMetalInstanceInitialValues(catalogItem)}
+        onSubmit={() => undefined}
+      >
         <BareMetalConfigurationStep />
       </Formik>,
       {
@@ -104,54 +111,9 @@ describe('BareMetalConfigurationStep', () => {
       },
     );
 
-    await screen.findByLabelText('Instance type');
-    expectResourceSelectDisabled('Instance type');
-  });
-
-  it('lets the user switch between inline user data and a USER_DATA Secret', async () => {
-    const values = createEmptyBareMetalInstanceValues();
-    values.spec.userData = provisioningFieldValue('inline data');
-    values.spec.userDataSecret = provisioningFieldValue('stale-secret');
-
-    const { user } = renderWithProviders(
-      <Formik initialValues={values} onSubmit={() => undefined}>
-        <BareMetalConfigurationStep />
-      </Formik>,
-      {
-        apiFixtures: {
-          secrets: [
-            create(SecretSchema, {
-              id: 'user-data-secret-id',
-              metadata: { name: 'user-data-secret', project: '' },
-              data: {},
-              type: SecretType.USER_DATA,
-            }),
-          ],
-          diskImages,
-        },
-        transportOverrides: {
-          onBaremetalInstanceTypeList: () => ({ items: [], size: 0, total: 0 }),
-        },
-      },
-    );
-
-    await screen.findByRole('radiogroup', { name: 'User data' });
-    expect(screen.getByRole('textbox')).toHaveValue('inline data');
-
-    await user.click(screen.getByRole('radio', { name: 'Select secret' }));
-
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
-    const secretSelect = await screen.findByRole('button', {
-      name: 'Select a user data secret',
+    const instanceTypeSelect = await screen.findByRole('button', {
+      name: 'Instance type',
     });
-    await user.click(secretSelect);
-    await user.click(screen.getByRole('option', { name: 'user-data-secret' }));
-
-    await user.click(screen.getByRole('radio', { name: 'Enter value' }));
-
-    expect(screen.getByRole('textbox')).toHaveValue('inline data');
-    expect(
-      screen.queryByRole('button', { name: 'Select a user data secret' }),
-    ).not.toBeInTheDocument();
+    expect(instanceTypeSelect).toBeDisabled();
   });
 });

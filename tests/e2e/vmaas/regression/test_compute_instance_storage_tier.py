@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from typing import Any
 
 import pytest
 
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import assert_grpc_rejected, unique_name, wait_for_cr, wait_for_deletion, wait_for_provision
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
+from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.regression
 
@@ -96,6 +99,7 @@ def test_compute_instance_explicit_boot_disk_tier(
 def test_compute_instance_multiple_disks_different_tiers(
     cli: OsacCLI,
     grpc: GRPCClient,
+    private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
     vm_template: str,
@@ -122,6 +126,7 @@ def test_compute_instance_multiple_disks_different_tiers(
     )
 
     ci_name = None
+    volume_ids: dict[str, str] = {}
     try:
         ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
         wait_for_provision(k8s=k8s_hub_client, name=ci_name)
@@ -136,10 +141,51 @@ def test_compute_instance_multiple_disks_different_tiers(
         verify_datavolume_storage_classes(
             k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
         )
+
+        saved_volumes = grpc.get_compute_instance(ci_id=uuid)["object"]["status"]["volumes"]
+        assert len(saved_volumes) == 3, f"Expected three disk Volume IDs, got {len(saved_volumes)}"
+        volume_ids = {volume["diskKey"]: volume["volumeId"] for volume in saved_volumes}
+        assert set(volume_ids) == {"boot", "disk-1", "disk-2"}
+        assert all(volume_ids.values()) and len(set(volume_ids.values())) == 3
+        assert cr["spec"]["diskVolumeIDs"] == volume_ids
+
+        vm_namespace = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
+        assert vm_namespace, f"ComputeInstance {ci_name} has no VM namespace"
+        dv_names = {"boot": f"{ci_name}-root-disk", "disk-1": f"{ci_name}-disk-1", "disk-2": f"{ci_name}-disk-2"}
+        for key, dv_name in dv_names.items():
+            volume = private_grpc.call(service=f"{PRIVATE_API}.Volumes/Get", data={"id": volume_ids[key]})["object"]
+            assert volume["id"] == volume_ids[key]
+
+            dv = k8s_virt_client.get_json(resource="datavolume", name=dv_name, namespace=vm_namespace)
+            assert dv["metadata"]["annotations"]["osac.openshift.io/storage-volume-id"] == volume_ids[key]
     finally:
         grpc.delete_compute_instance(ci_id=uuid)
         if ci_name is not None:
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+
+    def instance_is_absent() -> bool:
+        try:
+            grpc.get_compute_instance(ci_id=uuid)
+        except subprocess.CalledProcessError as exc:
+            output = (exc.stderr or "") + "\n" + (exc.stdout or "")
+            if re.search(r"(?m)^[ \t]*Code:[ \t]*NotFound[ \t]*$", output):
+                return True
+            raise
+        return False
+
+    poll_until(
+        fn=instance_is_absent,
+        until=lambda gone: gone is True,
+        retries=30,
+        delay=2,
+        description=f"ComputeInstance {uuid} API deletion",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=uuid,
+    )
+    for volume_id in volume_ids.values():
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            private_grpc.call(service=f"{PRIVATE_API}.Volumes/Get", data={"id": volume_id})
+        assert_grpc_rejected(exc_info, "NotFound")
 
 
 def test_compute_instance_nonexistent_tier_rejected(

@@ -1,0 +1,39 @@
+---
+- name: Mark AgentlessNet task input invalid until validation completes
+  ansible.builtin.set_fact:
+    _agentless_net_input_valid: false
+    _agentless_net_failure_retryable: false
+  no_log: true
+
+- name: Validate AgentlessNet manager contract input
+  ansible.builtin.assert:
+    that:
+      - osac_job_vars is mapping
+      - osac_job_vars.manager is mapping
+      - osac_job_vars.manager.name == 'agentless_net'
+      - osac_job_vars.manager.type == 'fabric'
+      - osac_job_vars.manager.ansible_role == 'osac.templates.agentless_net'
+      - osac_job_vars.task is string
+      - osac_job_vars.task | length > 0
+      - osac_job_vars.resource is mapping
+      - osac_job_vars.resource.id is string
+      - osac_job_vars.resource.id is match('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+      - osac_job_vars.resource.metadata is mapping
+      - osac_job_vars.resource.metadata.uid is string
+      - osac_job_vars.resource.metadata.generation is number
+      - osac_job_vars.resource.kind == agentless_net_expected_kind
+      - >-
+        osac_job_vars.task in agentless_net_expected_tasks
+      - >-
+        agentless_net_expected_kind == 'ExternalIPPool'
+        or (osac_job_vars.tenant is string and osac_job_vars.tenant | length > 0)
+      - >-
+        osac_job_vars.get('network_type', '') == ''
+    fail_msg: >-
+      AgentlessNet received an invalid or unsupported network-manager task input.
+  no_log: true
+
+- name: Mark AgentlessNet task input valid
+  ansible.builtin.set_fact:
+    _agentless_net_input_valid: true
+  no_log: true

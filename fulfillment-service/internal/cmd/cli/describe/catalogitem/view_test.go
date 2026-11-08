@@ -100,7 +100,7 @@ var _ = Describe("Catalog item views", func() {
 			Template: publicv1.ClusterTemplateReference_builder{Id: "template-id", Shared: true, Project: "infra"}.Build(),
 			Fields: publicv1.ClusterCatalogItemFields_builder{
 				Version:          publicv1.ClusterVersionReferenceFieldPolicy_builder{Editable: publicv1.EditableClusterVersionReferenceField_builder{DefaultValue: publicv1.ClusterVersionReference_builder{Name: "4-20", Shared: true}.Build()}.Build()}.Build(),
-				SshPublicKey:     publicv1.StringFieldPolicy_builder{Editable: publicv1.EditableStringField_builder{}.Build()}.Build(),
+				SshKey:           publicv1.FullSecretReferenceFieldPolicy_builder{Editable: publicv1.EditableFullSecretReferenceField_builder{}.Build()}.Build(),
 				PullSecretSecret: publicv1.SecretReferenceFieldPolicy_builder{Locked: publicv1.SecretLocalReference_builder{Name: "pull"}.Build()}.Build(),
 				Network: publicv1.ClusterNetworkFieldPolicies_builder{
 					PodCidr:     publicv1.StringFieldPolicy_builder{Locked: new("10.0.0.0/16")}.Build(),
@@ -109,6 +109,10 @@ var _ = Describe("Catalog item views", func() {
 				NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{Locked: publicv1.ClusterNodeSetMap_builder{Items: map[string]*publicv1.ClusterCatalogNodeSet{
 					"workers": publicv1.ClusterCatalogNodeSet_builder{Size: 3, BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Name: "compute", Shared: true}.Build()}.Build(),
 				}}.Build()}.Build(),
+				AddOnOperators: publicv1.AddOnOperatorReferenceListFieldPolicy_builder{Locked: publicv1.AddOnOperatorReferenceList_builder{Items: []*publicv1.AddOnOperatorReference{
+					publicv1.AddOnOperatorReference_builder{Name: "cert-manager", Shared: true}.Build(),
+					publicv1.AddOnOperatorReference_builder{Name: "openshift-ai", Shared: true}.Build(),
+				}}.Build()}.Build(),
 				AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Editable: publicv1.EditableBoolField_builder{DefaultValue: new(false)}.Build()}.Build(),
 				NetworkAttachment:        publicv1.ClusterNetworkAttachmentFieldPolicy_builder{Locked: publicv1.ClusterNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Name: "net"}.Build()}.Build()}.Build(),
 			}.Build(),
@@ -116,9 +120,35 @@ var _ = Describe("Catalog item views", func() {
 		output := printView(clusterView(item), false)
 		requireContains(output, "Scope:      Tenant (project: platform)", "template-id (shared, project: infra)", "default: 4-20 (shared)",
 			"LOCKED    pull", `"10.0.0.0/16"`, `default: "172.30.0.0/16"`, "workers: 3 nodes; bare metal instance type: compute (shared)",
-			"default: false", "subnet: net", "Published:  No",
+			"LOCKED    2 items", "cert-manager (shared)", "openshift-ai (shared)", "default: false", "subnet: net", "Published:  No",
 			"Full catalog item definition: osac get clustercatalogitem cluster-item -o yaml")
 		Expect(output).NotTo(ContainSubstring("--tenant shared"))
+	})
+
+	It("renders editable add-on operators with their default", func() {
+		item := publicv1.ClusterCatalogItem_builder{
+			Fields: publicv1.ClusterCatalogItemFields_builder{
+				AddOnOperators: publicv1.AddOnOperatorReferenceListFieldPolicy_builder{Editable: publicv1.EditableAddOnOperatorReferenceList_builder{
+					DefaultValue: publicv1.AddOnOperatorReferenceList_builder{Items: []*publicv1.AddOnOperatorReference{
+						publicv1.AddOnOperatorReference_builder{Name: "cert-manager", Shared: true}.Build(),
+					}}.Build(),
+				}.Build()}.Build(),
+			}.Build(),
+		}.Build()
+
+		output := printView(clusterView(item), false)
+		requireContains(output, "Add-on operators", "EDITABLE  default: 1 item", "cert-manager (shared)")
+	})
+
+	It("renders editable add-on operators without a default", func() {
+		item := publicv1.ClusterCatalogItem_builder{
+			Fields: publicv1.ClusterCatalogItemFields_builder{
+				AddOnOperators: publicv1.AddOnOperatorReferenceListFieldPolicy_builder{Editable: publicv1.EditableAddOnOperatorReferenceList_builder{}.Build()}.Build(),
+			}.Build(),
+		}.Build()
+
+		output := printView(clusterView(item), false)
+		Expect(output).To(MatchRegexp(`Add-on operators\s+EDITABLE\s*\n`))
 	})
 
 	It("renders editable cluster node sets in sorted order with unresolved references", func() {
@@ -147,8 +177,8 @@ var _ = Describe("Catalog item views", func() {
 			Id: "bm-id", Metadata: publicv1.Metadata_builder{Name: "bm", Tenant: "org"}.Build(),
 			Template: publicv1.BareMetalInstanceTemplateReference_builder{Name: "baremetal"}.Build(),
 			Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-				SshPublicKey:   publicv1.StringFieldPolicy_builder{Locked: new("")}.Build(),
-				UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{Editable: publicv1.EditableUserDataSourceField_builder{DefaultValue: publicv1.UserDataSource_builder{Secret: publicv1.SecretLocalReference_builder{Name: "bm-cloud-init"}.Build()}.Build()}.Build()}.Build(),
+				UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{Editable: publicv1.EditableUserDataSourceField_builder{DefaultValue: publicv1.UserDataSource_builder{Inline: new("#cloud-config\nfoo: bar")}.Build()}.Build()}.Build(),
+				SshKey:         publicv1.FullSecretReferenceFieldPolicy_builder{Locked: publicv1.SecretReference_builder{Name: "bm-key"}.Build()}.Build(),
 				RunStrategy:    publicv1.BareMetalInstanceRunStrategyFieldPolicy_builder{Locked: new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED)}.Build(),
 				NetworkAttachments: publicv1.BareMetalNetworkAttachmentListFieldPolicy_builder{Locked: publicv1.BareMetalNetworkAttachmentList_builder{Items: []*publicv1.BareMetalNetworkAttachment{
 					publicv1.BareMetalNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Name: "bm-subnet"}.Build(), Interface: new("eno1"), Primary: new(false)}.Build(),
@@ -159,7 +189,7 @@ var _ = Describe("Catalog item views", func() {
 			}.Build(),
 		}.Build()
 		output := printView(bareMetalView(item), false)
-		requireContains(output, "LOCKED    \"\"", "default: Secret: bm-cloud-init", "LOCKED    HALTED", "bm-subnet; interface: eno1; primary: false", "bm-type-id (shared)", "default: rhel (shared)",
+		requireContains(output, "SSH key", "bm-key", "default: #cloud-config (2 lines; see get -o yaml)", "LOCKED    HALTED", "bm-subnet; interface: eno1; primary: false", "bm-type-id (shared)", "default: rhel (shared)",
 			"Full catalog item definition: osac get baremetalinstancecatalogitem bm -o yaml")
 		Expect(output).NotTo(ContainSubstring("--tenant shared"))
 		Expect(output).To(ContainSubstring("User data source"))
@@ -167,7 +197,7 @@ var _ = Describe("Catalog item views", func() {
 
 	It("sanitizes terminal controls without changing the colored layout", func() {
 		v := view{name: "a\x1b[31m\tname\u202e", id: "id", title: "title\x1b[31m", description: "hello\rworld", kind: "clustercatalogitem",
-			fields: []row{{label: "Disk image", state: "LOCKED", value: "image"}, {label: "SSH public key", state: "EDITABLE"}}}
+			fields: []row{{label: "Disk image", state: "LOCKED", value: "image"}, {label: "SSH key", state: "EDITABLE"}}}
 		plain := printView(v, false)
 		for _, control := range []string{"\x1b", "\t", "\r", "\u202e"} {
 			Expect(plain).NotTo(ContainSubstring(control))

@@ -6,6 +6,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: ""
     _template_path: >-
       {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/compute-instance-operations-ig.j2
@@ -51,11 +52,18 @@
           - "_pod_spec is search('storage-operations-ig')"
         fail_msg: Expected storage-operations-ig references in pod spec
 
+    - name: Assert compute-instance pod spec uses the default service account
+      ansible.builtin.assert:
+        that:
+          - _pod.spec.serviceAccountName == 'osac-sa'
+        fail_msg: Compute-instance pod spec must use osac-sa by default
+
 - name: Compute-instance pod spec with remote kubeconfig
   hosts: localhost
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
     remote_cluster_kubeconfig_secret_key: kubeconfig
     _template_path: >-
@@ -78,6 +86,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: ""
     remote_cluster_kubeconfig_secret_key: kubeconfig
     _template_path: >-
@@ -108,11 +117,18 @@
           Storage operations must keep their isolated optional credentials and
           omit the remote kubeconfig mount when no secret is configured.
 
+    - name: Assert storage-operations pod spec uses the default service account
+      ansible.builtin.assert:
+        that:
+          - _storage_pod.spec.serviceAccountName == 'osac-sa'
+        fail_msg: Storage-operations pod spec must use osac-sa by default
+
 - name: Storage operations pod spec with remote kubeconfig
   hosts: localhost
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
     remote_cluster_kubeconfig_secret_key: kubeconfig
     _template_path: >-
@@ -155,6 +171,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
     remote_cluster_kubeconfig_secret_key: kubeconfig
     # Config-as-code defines these for cluster fulfillment; the networking
@@ -211,6 +228,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     netris_controller_url: https://managed.example
     netris_ca_config_map_name: ""
     netris_validate_certs: true
@@ -282,6 +300,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     netris_controller_url: https://managed.example
     netris_ca_config_map_name: customer-netris-ca
     netris_validate_certs: true
@@ -357,6 +376,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     netris_controller_url: https://managed.example
     netris_ca_config_map_name: customer-netris-ca
     netris_validate_certs: false
@@ -389,3 +409,43 @@
         fail_msg: >-
           Cluster fulfillment must preserve the configured CA while propagating
           NETRIS_VALIDATE_CERTS=false.
+
+- name: Config-as-code pod specs honor the configured OSAC service account
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: customer-aap-sa
+    remote_cluster_kubeconfig_secret_name: ""
+    remote_cluster_kubeconfig_secret_key: kubeconfig
+    netris_controller_url: https://managed.example
+    netris_ca_config_map_name: ""
+    netris_validate_certs: true
+    netris_ca_path: ""
+    _templates_dir: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates
+
+  tasks:
+    - name: Render every config-as-code pod spec with a configured service account
+      ansible.builtin.set_fact:
+        _sa_pod_specs: >-
+          {{ _sa_pod_specs | default([]) + [
+             {'name': item,
+              'pod': lookup('ansible.builtin.template', _templates_dir ~ '/' ~ item) | from_yaml}
+          ] }}
+      loop:
+        - cluster-fulfillment-ig.j2
+        - compute-instance-operations-ig.j2
+        - networking-operations-ig.j2
+        - storage-operations-ig.j2
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert every pod spec uses the configured service account
+      ansible.builtin.assert:
+        that:
+          - item.pod.spec.serviceAccountName == 'customer-aap-sa'
+        fail_msg: "{{ item.name }} must use the configured OSAC service account"
+      loop: "{{ _sa_pod_specs }}"
+      loop_control:
+        label: "{{ item.name }}"

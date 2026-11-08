@@ -8,7 +8,8 @@ const typesDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
 const sourceDirectory = join(typesDirectory, 'src');
 const bufConfigTemplatePath = join(typesDirectory, 'buf.gen.yaml.template');
 const bufApiVersionPath = join(typesDirectory, '.buf-api-version');
-const apiVersionPattern = /^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/;
+const apiVersionPattern =
+  /^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 const readApiVersion = () => {
   const lines = readFileSync(bufApiVersionPath, 'utf8').split(/\r?\n/);
@@ -18,7 +19,7 @@ const readApiVersion = () => {
 
   const [version] = lines;
   if (lines.length !== 1 || !apiVersionPattern.test(version)) {
-    throw new Error(`Expected one stable API version in ${bufApiVersionPath}`);
+    throw new Error(`Expected one valid API version in ${bufApiVersionPath}`);
   }
 
   return version;

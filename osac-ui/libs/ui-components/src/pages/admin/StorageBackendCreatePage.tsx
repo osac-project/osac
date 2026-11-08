@@ -37,6 +37,10 @@ import {
 } from '@osac/ui-components/components/Form/SelectField';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
+import {
+  getStorageBackendProviderLabel,
+  selectableStorageBackendProviders,
+} from '@osac/ui-components/utils/storageBackendProvider';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 
 const BACKENDS_LIST_PATH = '/admin/infrastructure/storage/backends';
@@ -111,12 +115,14 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
   const { mutateAsync: update, error: updateError } = useUpdateStorageBackend();
   const error = isEdit ? updateError : createError;
 
-  const providerOptions: SelectFieldOption[] = [
-    { value: 'vast', label: t('VAST') },
-    { value: 'ceph', label: t('Ceph') },
-    { value: 'pure', label: t('Pure') },
-    { value: 'netapp', label: t('NetApp') },
-  ];
+  const providerOptions: SelectFieldOption[] = selectableStorageBackendProviders.map(({ key }) => ({
+    value: key,
+    label: getStorageBackendProviderLabel(key, t),
+  }));
+  const currentProvider = backend?.spec?.provider;
+  if (currentProvider && !providerOptions.some(({ value }) => value === currentProvider)) {
+    providerOptions.push({ value: currentProvider, label: currentProvider });
+  }
 
   const onSubmit = async (values: StorageBackendFormValues) => {
     const credentials =

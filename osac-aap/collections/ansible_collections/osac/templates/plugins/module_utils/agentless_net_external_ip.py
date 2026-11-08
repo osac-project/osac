@@ -345,7 +345,7 @@ def reconcile_external_ip_attachment(
     context = attachment["context"]
     namespace = parent["namespace_name"]
     external_ip = _ipv4(context["external_ip"]["address"], "ExternalIP address")
-    target_ip = _ipv4(context["target"]["ip_address"], "BareMetalInstance address")
+    target_ip = _ipv4(context["destination"]["address"], "ExternalIP destination address")
     provider = attachment["provider"]
     _interface(provider["namespace_interface"], "VirtualNetwork namespace interface")
     _interface(provider["host_interface"], "VirtualNetwork host interface")
@@ -394,7 +394,7 @@ def delete_external_ip_attachment(attachment: dict[str, Any]) -> bool:
     prefix = ["ip", "netns", "exec", namespace, "iptables", "-w", "-t", "nat"]
     nat_rule = [
         "-d", f"{external_ip}/32", "-m", "comment", "--comment", f"{owner}:dnat",
-        "-j", "DNAT", "--to-destination", context["target"]["ip_address"],
+        "-j", "DNAT", "--to-destination", context["destination"]["address"],
     ]
     if network.namespace_exists(namespace):
         changed = _delete_iptables_rule(

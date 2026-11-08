@@ -248,7 +248,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(reconciler.TryLockFailPollIntervalDuration).To(Equal(DefaultTryLockFailPollIntervalDuration))
 				Expect(reconciler.ManagementRecheckIntervalDuration).To(Equal(DefaultManagementRecheckIntervalDuration))
 				Expect(reconciler.ProvisionPollIntervalDuration).To(Equal(DefaultProvisionPollIntervalDuration))
-				Expect(reconciler.HostReadinessPollIntervalDuration).To(Equal(DefaultHostReadinessPollIntervalDuration))
+				Expect(reconciler.HostAvailabilityPollIntervalDuration).To(Equal(DefaultHostAvailabilityPollIntervalDuration))
 			})
 		})
 
@@ -274,7 +274,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(customReconciler.TryLockFailPollIntervalDuration).To(Equal(2 * time.Second))
 				Expect(customReconciler.ManagementRecheckIntervalDuration).To(Equal(15 * time.Second))
 				Expect(customReconciler.ProvisionPollIntervalDuration).To(Equal(60 * time.Second))
-				Expect(customReconciler.HostReadinessPollIntervalDuration).To(Equal(90 * time.Second))
+				Expect(customReconciler.HostAvailabilityPollIntervalDuration).To(Equal(90 * time.Second))
 			})
 		})
 	})
@@ -476,7 +476,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					return &inventory.Host{
 						InventoryHostID: inventoryHostID,
 						HostClass:       hostClass,
-						Ready:           true,
+						Available:       true,
 					}, nil
 				}
 			})
@@ -500,7 +500,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					return &inventory.Host{
 						InventoryHostID: inventoryHostID,
 						HostClass:       hostClass,
-						Ready:           false,
+						Available:       false,
 					}, nil
 				}
 				// When the host is not ready the controller must requeue *before*
@@ -513,7 +513,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				result, err := reconciler.reconcileInventory(ctx, bareMetalInstance)
 
 				Expect(err).NotTo(HaveOccurred())
-				Expect(result.RequeueAfter).To(Equal(reconciler.HostReadinessPollIntervalDuration))
+				Expect(result.RequeueAfter).To(Equal(reconciler.HostAvailabilityPollIntervalDuration))
 			})
 		})
 
@@ -654,7 +654,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					return &inventory.Host{
 						InventoryHostID: "existing-host-123",
 						HostClass:       hostClass,
-						Ready:           true,
+						Available:       true,
 					}, nil
 				}
 			})

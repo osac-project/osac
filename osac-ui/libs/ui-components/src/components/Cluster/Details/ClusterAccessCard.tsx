@@ -13,7 +13,7 @@ import {
 import type { Cluster } from '@osac/types';
 
 import ExternalLink from '../../Primitives/ExternalLink';
-import { ClusterStatusLabel } from '../ClusterStatusLabel';
+import { ClusterStatusLabel } from '../ListPage/ClusterStatusLabel';
 
 interface ClusterStatusCardProps {
   cluster: Cluster;

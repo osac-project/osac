@@ -1,0 +1,10 @@
+---
+- name: Save one host interface's switch and port mapping
+  ansible.builtin.set_fact:
+    _agentless_net_host_port_inventory: >-
+      {{ _agentless_net_host_port_inventory + [{
+           'interface_name': _agentless_net_host_interface.key,
+           'switch_name': _agentless_net_host_interface.value.switch,
+           'port_name': _agentless_net_host_interface.value.port
+         }] }}
+  no_log: true

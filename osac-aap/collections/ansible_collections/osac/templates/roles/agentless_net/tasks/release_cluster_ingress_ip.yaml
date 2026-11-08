@@ -1,0 +1,6 @@
+---
+- name: Validate the ClusterOrder ingress release task
+  ansible.builtin.include_tasks: _validate_task_input.yaml
+  vars:
+    agentless_net_expected_kind: ClusterOrder
+    agentless_net_expected_tasks: [release_cluster_ingress_ip]

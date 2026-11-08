@@ -82,7 +82,9 @@ const buildUpdateRequest = <Input extends DescMessage, Output extends DescMessag
     updateMask: {
       paths:
         explicitPaths ??
-        buildUpdateMaskPaths(requestRecord.object, { schema: objectField.message }),
+        buildUpdateMaskPaths(requestRecord.object, { schema: objectField.message }).filter(
+          (path) => path !== 'id',
+        ),
     },
   };
 };
@@ -120,14 +122,20 @@ export const useListResource = <
 };
 
 /** Loads every item matching the filter, managing offset and limit internally. */
-export const useListAllResources = <Input extends DescMessage, Output extends DescMessage>(
+export const useListAllResources = <
+  Input extends DescMessage,
+  Output extends DescMessage,
+  SelectedData = MessageShape<Output>,
+>(
   service: PaginatedListService<Input, Output>,
   filter?: string,
+  options: ResourceQueryOptions<Output, SelectedData> = {},
 ) => {
   const client = useApiFetch<ResourceService<'list', Input, Output>>(service);
   const listRequest = create(service.method.list.input);
 
   return useQuery<MessageShape<Output>, unknown, PaginatedListItems<Output>>({
+    ...options,
     queryKey: [service.typeName, 'list', { filter }, 'all'],
     queryFn: async ({ signal }) => {
       const listPage = (offset: number) =>

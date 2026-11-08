@@ -1,7 +1,10 @@
 import { expect, test } from '@playwright/test';
 import { access } from 'node:fs/promises';
 
+import { removeVmaasFullFlowRunState } from './run_state';
 import { tenantNameOrSkip } from './test_data';
+import { deleteTenantSshKey } from '../../../../libs/osac-cli/src/secret';
+import { deleteTenantAdmin } from '../../../../libs/osac-cli/src/tenant_admin';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openTenantsPage } from '../../../../libs/test-utils/src/main.page';
@@ -9,12 +12,13 @@ import {
   deleteTenant,
   expectTenantNotToExist,
   expectTenantToExist,
+  readTenantCredentials,
   tenantCredentialsFilePath,
 } from '../../../../libs/test-utils/src/tenants.page';
 
 test('deletes the requested tenant', async ({ page }) => {
-  // Allow the 120-second backend deletion wait plus login and UI actions to complete.
-  test.setTimeout(180_000);
+  // Allow the 300-second backend deletion wait plus login and UI actions to complete.
+  test.setTimeout(420_000);
   const configuredTenantName = tenantNameOrSkip();
   if (!configuredTenantName) {
     logProgress('tenant-delete', 'Skipped: tenant_name is not configured.');
@@ -42,6 +46,21 @@ test('deletes the requested tenant', async ({ page }) => {
     `Verify tenant "${configuredTenantName}" exists before deletion`,
     () => expectTenantToExist(page, configuredTenantName),
   );
+  const tenantCredentials = await testStep(
+    'tenant-delete',
+    'Read tenant credentials for tenant-admin cleanup',
+    () => readTenantCredentials(credentialsFile),
+  );
+  await testStep(
+    'tenant-delete',
+    `Remove tenant-admin user and role binding for "${configuredTenantName}"`,
+    () => deleteTenantAdmin(configuredTenantName, tenantCredentials.username),
+  );
+  await testStep(
+    'tenant-delete',
+    `Delete SSH public-key Secret for tenant "${configuredTenantName}"`,
+    () => deleteTenantSshKey(configuredTenantName),
+  );
   await testStep('tenant-delete', `Delete tenant "${configuredTenantName}"`, () =>
     deleteTenant(page, configuredTenantName),
   );
@@ -53,4 +72,7 @@ test('deletes the requested tenant', async ({ page }) => {
   await testStep('tenant-delete', `Verify tenant credential file is removed after deletion`, () =>
     expect(access(credentialsFile)).rejects.toThrow(),
   );
+  await testStep('tenant-delete', 'Remove VMaaS full-flow run state', async () => {
+    await removeVmaasFullFlowRunState();
+  });
 });

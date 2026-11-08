@@ -62,7 +62,10 @@ func clusterView(item *publicv1.ClusterCatalogItem) view {
 		appendPolicyRow(&v.fields, "Cluster version", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
 			formatFullRef(p.GetLocked()), formatFullRef(p.GetEditable().GetDefaultValue()))
 	}
-	addString(&v.fields, "SSH public key", fields.GetSshPublicKey())
+	if p := fields.GetSshKey(); p != nil {
+		appendPolicyRow(&v.fields, "SSH key", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
+			formatFullRef(p.GetLocked()), formatFullRef(p.GetEditable().GetDefaultValue()))
+	}
 	if p := fields.GetPullSecretSecret(); p != nil {
 		appendPolicyRow(&v.fields, "Pull secret", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
 			formatRef(p.GetLocked()), formatRef(p.GetEditable().GetDefaultValue()))
@@ -71,6 +74,7 @@ func clusterView(item *publicv1.ClusterCatalogItem) view {
 	addString(&v.fields, "Pod CIDR", network.GetPodCidr())
 	addString(&v.fields, "Service CIDR", network.GetServiceCidr())
 	addNodeSets(&v.fields, fields.GetNodeSets())
+	addOnOperators(&v.fields, fields.GetAddOnOperators())
 	addBool(&v.fields, "Auto external IP attachment", fields.GetAutoExternalIpAttachment())
 	if p := fields.GetNetworkAttachment(); p != nil {
 		appendPolicyRow(&v.fields, "Network attachment", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
@@ -99,6 +103,21 @@ func addNodeSets(rows *[]row, p *publicv1.ClusterNodeSetMapPolicy) {
 		addCollection(rows, "Node sets", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
 			nodeSetDetails(p.GetLocked().GetItems()), nodeSetDetails(p.GetEditable().GetDefaultValue().GetItems()))
 	}
+}
+
+func addOnOperators(rows *[]row, p *publicv1.AddOnOperatorReferenceListFieldPolicy) {
+	if p != nil {
+		addCollection(rows, "Add-on operators", p.HasLocked(), p.GetEditable().GetDefaultValue() != nil,
+			addOnOperatorDetails(p.GetLocked().GetItems()), addOnOperatorDetails(p.GetEditable().GetDefaultValue().GetItems()))
+	}
+}
+
+func addOnOperatorDetails(items []*publicv1.AddOnOperatorReference) []string {
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		result = append(result, formatFullRef(item))
+	}
+	return result
 }
 
 func clusterAttachment(attachment *publicv1.ClusterNetworkAttachment) string {

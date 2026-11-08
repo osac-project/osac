@@ -13,7 +13,7 @@ GOTOOLCHAIN ?= go$(GO_VERSION)
 
 include $(shell git rev-parse --show-toplevel)/tools/golangci-lint.mk
 
-.PHONY: build test lint generate image-build image-push clean
+.PHONY: build test lint generate contract contract-check image-build image-push clean
 
 build:
 	go build -o bin/$(BINARY_NAME) ./cmd/metering-service
@@ -23,6 +23,15 @@ test:
 
 lint: golangci-lint
 	$(GOLANGCI_LINT) run ./...
+
+# Writes the contract reference and checkable schema file into
+# osac-metering/docs/contract/.
+contract:
+	go run ./cmd/metering-contract
+
+# Fails when the committed contract files are stale.
+contract-check:
+	go test ./tools/contract
 
 # Proto codegen is no longer per-module. Regenerate the shared
 # tree once from the repo-root proto/ module: `make -C ../../proto generate`.

@@ -1,4 +1,4 @@
-# MCP resource tools
+# MCP tools
 
 The Fulfillment MCP server exposes bounded, typed resource discovery and
 supported writes. It does not provide a generic RPC proxy, method-name
@@ -37,6 +37,25 @@ summary can contain only an ID, DNS-safe name, version, deterministic state,
 and, where applicable, a typed reference kind. It never returns free-text
 titles or descriptions, annotations, status messages, credentials, provider
 data, or raw protobuf JSON.
+
+## Supported network writes
+
+`create_network_resource` creates exactly one `virtual_network`, `subnet`, or
+`security_group` through the existing public Create API as the MCP caller. It
+accepts only the typed fields for the selected resource, requires canonical
+IPv4 CIDRs, and rejects edit-shaped input containing an existing resource ID
+with `unsupported_in_place` before any public mutation. Subnet and
+SecurityGroup creation passes the named parent VirtualNetwork to the public
+Create call. A missing or inaccessible parent is rejected there and returns a
+named prerequisite error without creating a dependent resource. NetworkClass
+remains provider-managed and is never exposed
+as a tenant write. SecurityGroup creation accepts at most 100 rules in total
+across `ingress_rules` and `egress_rules`, with the same per-direction schema
+limit.
+
+`delete_network_resource` deletes exactly one explicitly named eligible
+resource. It does not cascade: a parent with active dependents returns a
+conflict, and callers must delete dependents first.
 
 ## Registry extension contract
 

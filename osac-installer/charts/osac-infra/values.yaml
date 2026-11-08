@@ -61,6 +61,11 @@ keycloak:
   # Use this for SPI overrides that must be set at the server level (e.g.
   # KC_SPI_CONNECTIONS_HTTP_CLIENT_DEFAULT_DISABLE_TRUST_MANAGER for Kind).
   extraEnv: []
+  oidcIdpTrust:
+    # PEM-encoded CA bundle for outbound TLS to an external OIDC identity
+    # provider. The chart adds it to the shared trust-manager bundle.
+    # Set with --set-file keycloak.oidcIdpTrust.caPem=/path/to/idp-ca.pem.
+    caPem: ""
   route:
     hostname: ""
     publicIngress: false
@@ -181,6 +186,23 @@ kafka:
     size: 100Gi
   version: "4.2.0"
   metadataVersion: "4.2-IV0"
+  exporter:
+    # Strimzi's Kafka Exporter reports consumer-group lag. It connects with a
+    # certificate Strimzi adds to the broker's super.users, so leave it off
+    # unless lag monitoring is wanted. This one value renders the exporter,
+    # its PodMonitor, and the MeteringConsumerLag rule.
+    enabled: false
+    # Heartbeat records a consumer may fall behind before MeteringConsumerLag
+    # fires. A metered resource sends about one heartbeat per minute, so a
+    # single-VM tenant grows lag by about one record per minute: 15 is about
+    # 15 minutes of growth, and the rule's 15-minute `for` makes a stalled
+    # consumer visible in roughly half an hour. Busy tenants cross it sooner.
+    lagThreshold: 15
+    podMonitor:
+      # Extra labels for the Kafka Exporter PodMonitor, for Prometheus
+      # installations that select monitors by label (for example a
+      # kube-prometheus-stack release label).
+      labels: {}
 
 # --- Shared PostgreSQL (dev/CI only) ---
 bundledPostgres:

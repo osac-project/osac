@@ -36,6 +36,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -47,6 +48,7 @@ type PrivateClustersServerBuilder struct {
 	filterDesc                   protoreflect.MessageDescriptor
 	addOnOperatorResolverFactory addOnOperatorResolverFactory
 	networkingSettings           *NetworkingSettings
+	secretStore                  vault.SecretStore
 }
 
 var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
@@ -67,10 +69,18 @@ type PrivateClustersServer struct {
 	secretsDao                *dao.GenericDAO[*privatev1.Secret]
 	addOnOperators            *addOnOperatorResourceResolver
 	generic                   *GenericServer[*privatev1.Cluster]
+	secretStore               vault.SecretStore
 	lifecycle                 *externalIPLifecycle
 	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
 	tenantsDao                *dao.GenericDAO[*privatev1.Tenant]
 	settings                  NetworkingSettings
+}
+
+// SetSecretStore sets the store used to load Vault-backed SSH-key Secret data
+// during reference validation.
+func (b *PrivateClustersServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateClustersServerBuilder {
+	b.secretStore = value
+	return b
 }
 
 func NewPrivateClustersServer() *PrivateClustersServerBuilder {
@@ -285,6 +295,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		secretsDao:                secretsDao,
 		addOnOperators:            addOnOperators,
 		generic:                   generic,
+		secretStore:               b.secretStore,
 	}
 	result.lifecycle = newExternalIPLifecycle(
 		externalIPDao,
@@ -359,10 +370,13 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	if err := s.validateCreatedNodeSetVersions(ctx, candidate); err != nil {
 		return err
 	}
-	if key := spec.GetSshPublicKey(); key != "" {
-		if err = validateOpenSSHPublicKey(key); err != nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
+	if spec.GetSshKey() != nil {
+		canonical, keyErr := resolveAndCanonicalizeSSHKeyReference(ctx, s.logger, s.secretsDao, s.secretStore,
+			candidate.GetMetadata(), spec.GetSshKey())
+		if keyErr != nil {
+			return keyErr
 		}
+		spec.SetSshKey(canonical)
 	}
 
 	if err = s.validateAndExpandAddOnOperators(ctx, candidate, clusterVersion); err != nil {
@@ -545,11 +559,15 @@ func (s *PrivateClustersServer) initializeAddedNodeSetVersions(ctx context.Conte
 
 func (s *PrivateClustersServer) validateUpdatedClusterSpec(current, candidate *privatev1.Cluster,
 	mask *fieldmaskpb.FieldMask) error {
-	if updateIncludesField(mask, "spec.ssh_public_key") {
-		if key := candidate.GetSpec().GetSshPublicKey(); key != "" {
-			if err := validateOpenSSHPublicKey(key); err != nil {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
-			}
+	if updateIncludesField(mask, "spec.ssh_key") {
+		existingKey := current.GetSpec().GetSshKey()
+		candidateKey := candidate.GetSpec().GetSshKey()
+		if !sameImmutableSSHKeyReference(existingKey, candidateKey) {
+			return grpcstatus.Error(grpccodes.InvalidArgument,
+				"cannot change spec.ssh_key: ssh_key is immutable after creation")
+		}
+		if existingKey != nil {
+			candidate.GetSpec().SetSshKey(cloneMessage(existingKey))
 		}
 	}
 	if err := s.validateAddOnOperatorImmutability(current, candidate, mask); err != nil {
@@ -1131,9 +1149,10 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet")
 	}
 	if subnet == nil {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "tenant default networking is not ready")
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"spec.network_attachment.subnet: a default subnet is required when no subnet is provided")
 	}
-	if err := requireDefaultNetworkingReady(ctx, s.tenantsDao, tenant); err != nil {
+	if err := validateResolvedSubnetReady(subnet, subnet.GetId(), " in spec.network_attachment"); err != nil {
 		return err
 	}
 
@@ -1148,7 +1167,14 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default security group")
 	}
 	if sg == nil {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "tenant default networking is not ready")
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"spec.network_attachment.security_groups: a default security group is required when no security groups are provided")
+	}
+	if err := validateResolvedSecurityGroup(sg, sg.GetId(), " in spec.network_attachment.security_groups[0]", virtualNetworkID); err != nil {
+		return err
+	}
+	if err := requireDefaultNetworkingReady(ctx, s.tenantsDao, tenant); err != nil {
+		return err
 	}
 	attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
 		privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),

@@ -108,9 +108,9 @@ var _ = Describe("inferValue", func() {
 var _ = Describe("ApplyFields", func() {
 	It("sets a simple spec field", func() {
 		spec := &publicv1.ClusterSpec{}
-		err := ApplyFields(spec, []string{"ssh_public_key=my-key"})
+		err := ApplyFields(spec, []string{"network.service_cidr=172.30.0.0/16"})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(spec.GetSshPublicKey()).To(Equal("my-key"))
+		Expect(spec.GetNetwork().GetServiceCidr()).To(Equal("172.30.0.0/16"))
 	})
 
 	It("sets a nested spec field", func() {
@@ -150,11 +150,11 @@ var _ = Describe("ApplyFields", func() {
 	It("applies multiple fields", func() {
 		spec := &publicv1.ClusterSpec{}
 		err := ApplyFields(spec, []string{
-			"ssh_public_key=ssh-ed25519 AAAA",
+			"network.pod_cidr=10.128.0.0/14",
 			"template_parameters.vpc_id=vpc-456",
 		})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(spec.GetSshPublicKey()).To(Equal("ssh-ed25519 AAAA"))
+		Expect(spec.GetNetwork().GetPodCidr()).To(Equal("10.128.0.0/14"))
 		Expect(spec.GetTemplateParameters()).To(HaveKey("vpc_id"))
 	})
 

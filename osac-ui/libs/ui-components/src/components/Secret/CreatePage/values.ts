@@ -8,7 +8,6 @@ export interface SecretValues {
   metadata: {
     project: string;
     name: string;
-    description: string;
   };
   type: SecretType;
   data: SecretDataEntry[];
@@ -66,7 +65,6 @@ const getDefaultValues = (type: SecretType): SecretValues => ({
   metadata: {
     name: '',
     project: '',
-    description: '',
   },
   type,
   data: defaultDataForType(type),
@@ -123,7 +121,6 @@ export const getSecretValues = (
     metadata: {
       project: secret.metadata?.project || '',
       name: secret.metadata?.name || '',
-      description: secret.metadata?.description || '',
     },
     type,
     data: hydrateDataFromApi(type, dataEntries),

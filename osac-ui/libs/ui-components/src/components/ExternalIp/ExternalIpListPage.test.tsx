@@ -148,6 +148,28 @@ describe('ExternalIpListPage', () => {
     expect(screen.getAllByText('12 available').length).toBe(2);
   });
 
+  it('shows the resolved pool name when the reference has only an ID', async () => {
+    const autoCreated = create(ExternalIPSchema, {
+      id: 'eip-auto',
+      metadata: { name: 'auto-ip', project: 'default' },
+      spec: { pool: { id: 'pool-1' } },
+      status: {
+        state: ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED,
+        address: '203.0.113.12',
+        pool: 'pool-1',
+        attached: true,
+      },
+    });
+
+    renderPage([autoCreated], [], []);
+
+    await waitFor(() => {
+      expect(screen.getByText('203.0.113.12')).toBeInTheDocument();
+    });
+    expect(screen.getByText('public-edge')).toBeInTheDocument();
+    expect(screen.getByText('12 available')).toBeInTheDocument();
+  });
+
   it('shows empty state when there are no external IPs', async () => {
     renderPage([]);
 

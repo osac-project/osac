@@ -8,7 +8,6 @@ import type { VolumeFormValues } from './values';
 const values: VolumeFormValues = {
   metadata: {
     name: 'data-volume',
-    description: 'A block volume',
   },
   spec: {
     storageTier: { id: 'gold-block', name: 'gold-block' },
@@ -24,7 +23,6 @@ describe('buildVolumeCreatePayload', () => {
     expect(payload).toEqual({
       metadata: {
         name: 'data-volume',
-        description: 'A block volume',
       },
       spec: {
         storageTier: 'gold-block',

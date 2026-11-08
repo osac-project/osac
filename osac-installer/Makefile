@@ -31,6 +31,10 @@ SHELL := /usr/bin/env bash -o pipefail
 
 # Extra helm --set/--set-string args appended to the OSAC chart command.
 EXTRA_HELM_ARGS ?=
+# Optional PEM CA bundle file for Keycloak's external OIDC identity providers.
+OIDC_IDP_CA_FILE ?=
+export OIDC_IDP_CA_FILE
+OIDC_IDP_CA_HELM_ARGS = $(if $(strip $(OIDC_IDP_CA_FILE)),--set-file keycloak.oidcIdpTrust.caPem="$${OIDC_IDP_CA_FILE}")
 FULFILLMENT_GINKGO_ARGS ?=
 FULFILLMENT_IT_REPORT_DIR ?=
 fulfillment-json-report = $(if $(strip $(FULFILLMENT_IT_REPORT_DIR)),--json-report="$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(1).json)")
@@ -248,6 +252,14 @@ endif
 # keeps its existing direct Kind/container-tool behavior.
 KIND_RUNTIME_REQUIRED := $(if $(filter true,$(HOST_IS_MAC_ARM)),true,$(if $(filter dev-full,$(PROFILE)),true,false))
 
+ifeq ($(PLATFORM)/$(PROFILE)/$(KIND_RUNTIME_REQUIRED),kind/dev/false)
+ifeq ($(strip $(KIND_EXPERIMENTAL_PROVIDER)),)
+ifneq ($(shell command -v podman 2>/dev/null),)
+override export KIND_EXPERIMENTAL_PROVIDER := podman
+endif
+endif
+endif
+
 # Helm 4 moved post-renderers into plugins; Helm 3 still accepts an executable path.
 HELM_MAJOR := $(shell version=$$(helm version --short 2>/dev/null) || exit; printf '%s\n' "$$version" | sed -nE 's/^v([0-9]+).*/\1/p')
 # Only meaningful to compare when HELM_MAJOR is 3 -- Helm 4 always postdates
@@ -372,8 +384,12 @@ else
 	else \
 		echo "Creating Kind cluster '$(KIND_CLUSTER_NAME)'..."; \
 		kind create cluster --name $(KIND_CLUSTER_NAME) --config $(KIND_CONFIG) --wait 60s; \
-	fi
-	@kind export kubeconfig --name $(KIND_CLUSTER_NAME) --kubeconfig $(KIND_KUBECONFIG)
+	fi; \
+	if [[ "$${KIND_EXPERIMENTAL_PROVIDER:-}" == podman ]]; then \
+		source scripts/lib.sh; \
+		ensure_podman_pid_limits "$(KIND_CLUSTER_NAME)" kind podman; \
+	fi; \
+	kind export kubeconfig --name $(KIND_CLUSTER_NAME) --kubeconfig $(KIND_KUBECONFIG)
 endif
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_ENV) $(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)
@@ -395,8 +411,10 @@ endif
 		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
 		$(INFRA_HELM_ARGS) \
+		$(OIDC_IDP_CA_HELM_ARGS) \
 		--wait-for-jobs --timeout 30m \
 	|| { echo "=== osac-infra hook jobs ==="; kubectl get jobs,pods,cm -n osac-infra || true; kubectl logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; kubectl get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
+	@bash -c 'source scripts/lib.sh && wait_for_infra_ready kubectl'
 	@for f in ../osac-operator/config/crd/fakes/*.yaml; do \
 		case "$$(basename "$$f")" in \
 			*osac.openshift.io*|kustomization.*) continue ;; \
@@ -447,6 +465,7 @@ else
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.uiUrl=https://$(UI_HOSTNAME) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
+		$(OIDC_IDP_CA_HELM_ARGS) \
 		--timeout "$${helm_timeout_seconds}s" --wait-for-jobs \
 	|| { \
 		echo "=== osac-infra release status ==="; \
@@ -462,6 +481,7 @@ else
 		oc logs deploy/trust-manager -n cert-manager --tail=100 || true; \
 		exit 1; \
 	}
+	@bash -c 'source scripts/lib.sh && wait_for_infra_ready oc'
 endif
 
 .PHONY: uninstall-infra
@@ -619,7 +639,8 @@ ifeq ($(PLATFORM),kind)
 	helm template osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
 		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
-		--set osacNamespace=$(NS)
+		--set osacNamespace=$(NS) \
+		$(OIDC_IDP_CA_HELM_ARGS)
 else
 	helm template osac-deps $(DEPS_CHART) \
 		--namespace osac-deps \
@@ -633,7 +654,8 @@ else
 		--set keycloak.hostname=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
 		--set keycloak.route.hostname=keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
 		--set keycloak.uiUrl=https://osac-ui-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) \
-		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac"
+		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac" \
+		$(OIDC_IDP_CA_HELM_ARGS)
 endif
 	helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
@@ -936,6 +958,10 @@ dev-full-render-test: helm-deps helm-infra-deps ## Check dev-full TLS and Helm p
 .PHONY: openbao-security-context-test
 openbao-security-context-test: helm-infra-deps ## Check OpenBao securityContext renders numeric UID on Kind, omits on OpenShift
 	./scripts/test-openbao-security-context.sh
+
+.PHONY: infra-ready-wait-test
+infra-ready-wait-test: ## Check install-infra waits for the issuer, PostgreSQL and Kafka when the profile creates them (stub kubectl)
+	bash scripts/test-infra-ready-wait.sh
 
 .PHONY: kind-runtime-test
 kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster cleanup with command stubs

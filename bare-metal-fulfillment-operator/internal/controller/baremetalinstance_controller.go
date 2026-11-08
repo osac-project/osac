@@ -49,19 +49,19 @@ type BareMetalInstanceReconciler struct {
 	// APIReader is a direct, uncached reader (mgr.GetAPIReader) used by the
 	// duplicate-job guard so it does not read the same lagging informer cache it
 	// is meant to bypass. Set in SetupWithManager.
-	APIReader                         client.Reader
-	Scheme                            *runtime.Scheme
-	InventoryClient                   inventory.Client
-	ManagementClient                  management.Client
-	ProvisioningProvider              provisioning.ProvisioningProvider
-	NetworkingProvider                provisioning.ProvisioningProvider
-	IPDiscoveryProvider               provisioning.ProvisioningProvider
-	AAPClient                         *aap.Client
-	NoFreeHostsPollIntervalDuration   time.Duration
-	TryLockFailPollIntervalDuration   time.Duration
-	ManagementRecheckIntervalDuration time.Duration
-	ProvisionPollIntervalDuration     time.Duration
-	HostReadinessPollIntervalDuration time.Duration
+	APIReader                            client.Reader
+	Scheme                               *runtime.Scheme
+	InventoryClient                      inventory.Client
+	ManagementClient                     management.Client
+	ProvisioningProvider                 provisioning.ProvisioningProvider
+	NetworkingProvider                   provisioning.ProvisioningProvider
+	IPDiscoveryProvider                  provisioning.ProvisioningProvider
+	AAPClient                            *aap.Client
+	NoFreeHostsPollIntervalDuration      time.Duration
+	TryLockFailPollIntervalDuration      time.Duration
+	ManagementRecheckIntervalDuration    time.Duration
+	ProvisionPollIntervalDuration        time.Duration
+	HostAvailabilityPollIntervalDuration time.Duration
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
@@ -80,7 +80,7 @@ func NewBareMetalInstanceReconciler(
 	tryLockFailPollIntervalDuration time.Duration,
 	managementRecheckIntervalDuration time.Duration,
 	provisionPollIntervalDuration time.Duration,
-	hostReadinessPollIntervalDuration time.Duration,
+	hostAvailabilityPollIntervalDuration time.Duration,
 ) *BareMetalInstanceReconciler {
 	if noFreeHostsPollIntervalDuration <= 0 {
 		noFreeHostsPollIntervalDuration = DefaultNoFreeHostsPollIntervalDuration
@@ -98,24 +98,24 @@ func NewBareMetalInstanceReconciler(
 		provisionPollIntervalDuration = DefaultProvisionPollIntervalDuration
 	}
 
-	if hostReadinessPollIntervalDuration <= 0 {
-		hostReadinessPollIntervalDuration = DefaultHostReadinessPollIntervalDuration
+	if hostAvailabilityPollIntervalDuration <= 0 {
+		hostAvailabilityPollIntervalDuration = DefaultHostAvailabilityPollIntervalDuration
 	}
 
 	return &BareMetalInstanceReconciler{
-		Client:                            client,
-		Scheme:                            scheme,
-		InventoryClient:                   inventoryClient,
-		NoFreeHostsPollIntervalDuration:   noFreeHostsPollIntervalDuration,
-		TryLockFailPollIntervalDuration:   tryLockFailPollIntervalDuration,
-		ManagementClient:                  managementClient,
-		ProvisioningProvider:              provisioningProvider,
-		NetworkingProvider:                networkingProvider,
-		IPDiscoveryProvider:               ipDiscoveryProvider,
-		AAPClient:                         aapClient,
-		ManagementRecheckIntervalDuration: managementRecheckIntervalDuration,
-		ProvisionPollIntervalDuration:     provisionPollIntervalDuration,
-		HostReadinessPollIntervalDuration: hostReadinessPollIntervalDuration,
+		Client:                               client,
+		Scheme:                               scheme,
+		InventoryClient:                      inventoryClient,
+		NoFreeHostsPollIntervalDuration:      noFreeHostsPollIntervalDuration,
+		TryLockFailPollIntervalDuration:      tryLockFailPollIntervalDuration,
+		ManagementClient:                     managementClient,
+		ProvisioningProvider:                 provisioningProvider,
+		NetworkingProvider:                   networkingProvider,
+		IPDiscoveryProvider:                  ipDiscoveryProvider,
+		AAPClient:                            aapClient,
+		ManagementRecheckIntervalDuration:    managementRecheckIntervalDuration,
+		ProvisionPollIntervalDuration:        provisionPollIntervalDuration,
+		HostAvailabilityPollIntervalDuration: hostAvailabilityPollIntervalDuration,
 	}
 }
 
@@ -359,13 +359,13 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 	}
 
 	// The host is reserved but the inventory backend may report it as not yet
-	// ready for provisioning (e.g. underlying hardware still completing
+	// available for provisioning (e.g. underlying hardware still completing
 	// registration/inspection). Keep the instance in Allocating (don't set
-	// HostClass/Allocated yet) and requeue until the host reports Ready.
-	if !inventoryHost.Ready {
-		log.V(1).Info("Host reserved but not ready yet, requeuing",
+	// HostClass/Allocated yet) and requeue until the host reports Available.
+	if !inventoryHost.Available {
+		log.V(1).Info("Host reserved but not available yet, requeuing",
 			"InventoryHostID", bareMetalInstance.Spec.ExternalHostID)
-		return ctrl.Result{RequeueAfter: r.HostReadinessPollIntervalDuration}, nil
+		return ctrl.Result{RequeueAfter: r.HostAvailabilityPollIntervalDuration}, nil
 	}
 
 	bareMetalInstance.Spec.HostClass = inventoryHost.HostClass
@@ -1153,7 +1153,7 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 
 		err := r.InventoryClient.UnassignHost(ctx, hostID, string(bareMetalInstance.UID), labelsToRemove)
 		if err != nil {
-			log.Error(err, "Failed to unassign host in inventory")
+			log.Error(err, "Failed to unassign host in inventory", "InventoryHostID", hostID)
 			return ctrl.Result{}, err
 		}
 	}

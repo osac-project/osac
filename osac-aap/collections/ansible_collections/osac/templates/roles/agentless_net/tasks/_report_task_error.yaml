@@ -1,12 +1,32 @@
 ---
 - name: Build a sanitized AgentlessNet task error
+  vars:
+    _agentless_net_validation_messages:
+      Require AgentlessNet network-node inventory for provider operations: >-
+        AgentlessNet VirtualNetwork operations require AGENTLESS_NET_VN_INVENTORY
+        in the network-fulfillment-ig ConfigMap.
+      Validate AgentlessNet manager contract input: >-
+        AgentlessNet received an invalid or unsupported network-manager task input.
+      Require one authoritative AgentlessNet network node: >-
+        AgentlessNet VirtualNetwork operations require exactly one host under
+        all.children.net_nodes.hosts in the provider inventory.
+      Validate AgentlessNet network-node connection fields: >-
+        AgentlessNet network-node inventory requires ansible_host, ansible_user,
+        a valid optional ansible_port, and text SSH arguments.
+    _agentless_net_validation_error: >-
+      {{ _agentless_net_validation_messages.get(ansible_failed_task.name, '')
+         if ansible_failed_task.action == 'ansible.builtin.assert' else '' }}
   ansible.builtin.set_fact:
     _agentless_net_error:
       message: >-
-        AgentlessNet {{ osac_job_vars.task | default('network task') }} failed at
-        {{ ansible_failed_task.name | default('a task step') }}. Inspect the AAP
-        job log and correct the provider state before retrying.
-      retryable: "{{ ansible_failed_result.retryable | default(_agentless_net_failure_retryable | default(false)) | bool }}"
+        {{ _agentless_net_validation_error
+           or (ansible_failed_result.public_message | default('')
+               if ansible_failed_task.action == 'osac.templates.agentless_net_state' else '')
+           or 'AgentlessNet network task failed. Inspect the AAP job log and correct the provider state before retrying.' }}
+      retryable: >-
+        {{ (ansible_failed_task.name != 'Validate AgentlessNet manager contract input')
+           if _agentless_net_validation_error else
+           ansible_failed_result.retryable | default(_agentless_net_failure_retryable | default(false)) | bool }}
 
 - name: Report the error to OSAC
   ansible.builtin.set_stats:

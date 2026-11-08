@@ -28,8 +28,6 @@ const mockCluster = (state: ClusterState): Cluster => ({
   id: 'cluster-123',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: 'my-cluster',
     annotations: {},
     creator: 'foo',

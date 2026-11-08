@@ -26,7 +26,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
-	"github.com/onsi/gomega/ghttp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -97,7 +96,6 @@ var _ = Describe("MCP server", func() {
 		projectID                string
 		projectName              string
 		mcpHTTPServer            *httptest.Server
-		mcpClient                *http.Client
 	)
 
 	BeforeEach(func() {
@@ -108,7 +106,7 @@ var _ = Describe("MCP server", func() {
 		storageBackendID, storageTierID, subnetID = "", "", ""
 		virtualNetworkID, networkClassID, securityGroupID = "", "", ""
 		projectID, projectName = "", ""
-		mcpHTTPServer, mcpClient = nil, nil
+		mcpHTTPServer = nil
 		adminConn := tool.InternalView().AdminConn()
 		catalogItemsClient = privatev1.NewComputeInstanceCatalogItemsClient(adminConn)
 		computeInstanceTemplatesClient = privatev1.NewComputeInstanceTemplatesClient(adminConn)
@@ -398,24 +396,10 @@ var _ = Describe("MCP server", func() {
 		DeferCleanup(func() { _ = mcpConn.Close() })
 		computeInstancesClient = publicv1.NewComputeInstancesClient(mcpConn)
 		mcpHTTPServer = startInProcessMCPServer(ctx, "fulfillment-mcp-server-it")
-		mcpClient = &http.Client{
-			Transport: ghttp.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
-				token, err := mcpTokenSource.Token(request.Context())
-				if err != nil {
-					return nil, err
-				}
-				request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
-				return http.DefaultTransport.RoundTrip(request)
-			}),
-		}
 	})
 
 	It("drives ComputeInstance discovery, creation, inspection, and deletion over real HTTP with bearer token forwarding", func() {
-		transport := &mcp.StreamableClientTransport{Endpoint: mcpHTTPServer.URL, HTTPClient: mcpClient}
-		client := mcp.NewClient(&mcp.Implementation{Name: "it-mcp-client", Version: "0.1.0"}, nil)
-		session, err := client.Connect(ctx, transport, nil)
-		Expect(err).ToNot(HaveOccurred())
-		defer func() { Expect(session.Close()).To(Succeed()) }()
+		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-client", userUsername)
 		listedTools, err := session.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listedTools.Tools).To(HaveLen(len(expectedMCPServerToolNames)))
@@ -689,22 +673,7 @@ var _ = Describe("MCP server", func() {
 		Expect(rejectedResponse.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal(deprecatedInstanceTypeID))
 
 		otherNetwork := createCatalogItemNetworkInClassFixture(ctx, "development", "", networkClassID)
-		otherTokenSource, err := tool.makeKeycloakTokenSource(ctx, "ben", usersPassword)
-		Expect(err).ToNot(HaveOccurred())
-		otherHTTPClient := &http.Client{Transport: ghttp.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
-			token, e := otherTokenSource.Token(request.Context())
-			if e != nil {
-				return nil, e
-			}
-			request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
-			return http.DefaultTransport.RoundTrip(request)
-		})}
-		otherClient := mcp.NewClient(&mcp.Implementation{Name: "it-mcp-other-tenant", Version: "0.1.0"}, nil)
-		otherSession, err := otherClient.Connect(ctx, &mcp.StreamableClientTransport{
-			Endpoint: mcpHTTPServer.URL, HTTPClient: otherHTTPClient,
-		}, nil)
-		Expect(err).ToNot(HaveOccurred())
-		defer func() { Expect(otherSession.Close()).To(Succeed()) }()
+		otherSession := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-other-tenant", "ben")
 
 		otherCreated, err := callMCPTool[mcpserver.CreateComputeInstanceOutput](
 			ctx, otherSession, "create_compute_instance", mcpserver.CreateComputeInstanceInput{

@@ -1748,6 +1748,26 @@
           },
           "additionalProperties": false
         },
+        "readers": {
+          "type": "array",
+          "description": "Outside systems that read every tenant's heartbeat topics. Each entry names one reader and no tenant, and renders one Strimzi KafkaUser with a read and describe ACL on the osac.metering.heartbeat. topic prefix and a read ACL on a consumer group named after the reader. The prefix covers tenants created after the grant. Grant and revoke a reader with a helm upgrade; neither restarts metering. Set through values; the Enclave Wizard renders no control for this list, so operators add entries in their values file",
+          "default": [],
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Reader name, also its KafkaUser name and consumer group name; must be unique",
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                "maxLength": 253
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
         "echoAdapter": {
           "type": "object",
           "description": "Echo adapter for metering (test/development only)",
@@ -1868,7 +1888,7 @@
         },
         "prometheusRule": {
           "type": "object",
-          "description": "PrometheusRule with alert rules over the metering metrics: stalled rounds, round failures, outbox backlog, skipped events, dead-letter depth",
+          "description": "PrometheusRule with alert rules over the metering metrics: stalled rounds, round failures, outbox backlog, skipped events, and dead-letter depth",
           "properties": {
             "enabled": {
               "type": "boolean",

@@ -554,6 +554,56 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 		Expect(envelope.Message).To(Equal("The resource version is stale. Retrieve the current version and retry."))
 	})
 
+	It("Keeps an observed version stale while a next version can become current", func() {
+		const testToken = "raw-bearer-value"
+		currentVersion := int32(7)
+		instances := instancesWithCurrent(currentVersion)
+		instances.getFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesGetRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesGetResponse, error) {
+			return publicv1.ComputeInstancesGetResponse_builder{Object: currentInstance(currentVersion)}.Build(), nil
+		}
+		instances.updateFunc = func(
+			_ context.Context, request *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			Expect(request.GetLock()).To(BeTrue())
+			Expect(request.GetObject().GetMetadata().GetVersion()).To(Equal(currentVersion))
+			currentVersion++
+			return publicv1.ComputeInstancesUpdateResponse_builder{Object: currentInstance(currentVersion)}.Build(), nil
+		}
+		handler := handleUpdateComputeInstance(createPrerequisiteClients(instances))
+		response, err := instances.Get(context.Background(), publicv1.ComputeInstancesGetRequest_builder{
+			Id: "instance-1",
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		observedVersion := response.GetObject().GetMetadata().GetVersion()
+
+		_, advanced, err := handler(context.Background(), requestWithToken(testToken), UpdateComputeInstanceInput{
+			ID: "instance-1", Version: observedVersion, RunStrategy: "HALTED",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(advanced.Version).To(BeNumerically(">", observedVersion))
+
+		_, accepted, err := handler(context.Background(), requestWithToken(testToken), UpdateComputeInstanceInput{
+			ID: "instance-1", Version: observedVersion + 1, RunStrategy: "HALTED",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(accepted.Version).To(BeNumerically(">", advanced.Version))
+
+		for range 2 {
+			versionBeforeRejected := currentVersion
+			_, output, err := handler(context.Background(), requestWithToken(testToken), UpdateComputeInstanceInput{
+				ID: "instance-1", Version: observedVersion, RunStrategy: "HALTED",
+			})
+			Expect(output).To(BeZero())
+			envelope := decodeToolError(err)
+			Expect(envelope.Category).To(Equal("conflict"))
+			Expect(envelope.GRPCCode).To(Equal("Aborted"))
+			Expect(currentVersion).To(Equal(versionBeforeRejected))
+			currentVersion++
+		}
+	})
+
 	It("Maps a public optimistic-lock conflict to a stale version error", func() {
 		instances := instancesWithCurrent(7)
 		instances.updateFunc = func(

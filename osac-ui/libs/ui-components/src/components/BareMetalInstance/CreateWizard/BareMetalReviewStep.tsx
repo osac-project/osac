@@ -1,5 +1,4 @@
 import {
-  Alert,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
@@ -9,7 +8,7 @@ import {
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
-import { type BareMetalInstanceWizardValues, hasBareMetalAuthentication } from './fields';
+import type { BareMetalInstanceWizardValues } from './fields';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { NetworkAttachmentReviewFields } from '../../ProvisioningWizard/NetworkAttachmentReviewFields';
@@ -21,28 +20,12 @@ export const BareMetalReviewStep = () => {
   const isSecretSource = userData.source === 'secret';
   const selectedUserData = isSecretSource ? userData.secret : userData.inline;
   const userDataReview = selectedUserData.trim() ? t('Configured') : displayValue();
-  const hasAuthentication = hasBareMetalAuthentication(
-    values.spec.sshKey.value,
-    isSecretSource ? undefined : userData.inline,
-    isSecretSource ? userData.secret : undefined,
-  );
 
   const networkAttachment = values.spec.networkAttachment.value;
   const isCustomNetwork = !networkAttachment.useDefaultNetwork;
 
   return (
     <Stack hasGutter>
-      {!hasAuthentication && (
-        <StackItem>
-          <Alert
-            variant="danger"
-            isInline
-            title={t(
-              'Provide either an SSH public key or user data containing access credentials.',
-            )}
-          />
-        </StackItem>
-      )}
       <StackItem>
         <DescriptionList
           isHorizontal

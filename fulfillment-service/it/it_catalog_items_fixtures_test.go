@@ -538,6 +538,34 @@ func createCatalogItemUserDataSecretFixture(ctx context.Context, tenant string) 
 		map[string][]byte{"userdata": []byte("#cloud-config\n")})
 }
 
+func createCatalogItemSSHKeySecretFixture(ctx context.Context, tenant string) string {
+	GinkgoHelper()
+	return createCatalogItemSecretFixture(ctx, tenant, privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+		map[string][]byte{"public_key": []byte(catalogItemFixtureSSHPublicKey)})
+}
+
+// createCatalogItemSSHKeySecretNameFixture registers an SSH-key Secret and
+// returns its name, for CLI paths that select the key by name.
+func createCatalogItemSSHKeySecretNameFixture(ctx context.Context, tenant string) string {
+	GinkgoHelper()
+	client := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+	name := catalogItemFixtureName()
+	response, err := client.Create(ctx, privatev1.SecretsCreateRequest_builder{
+		Object: privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Data:     map[string][]byte{"public_key": []byte(catalogItemFixtureSSHPublicKey)},
+		}.Build(),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	id := response.GetObject().GetId()
+	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+		_, err := client.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: id}.Build())
+		return err
+	}, nil)
+	return name
+}
+
 func createCatalogItemSecretFixture(ctx context.Context, tenant string, secretType privatev1.SecretType, data map[string][]byte) string {
 	GinkgoHelper()
 	client := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
@@ -670,13 +698,17 @@ func createCatalogItemComputeInstanceTemplateFixture(ctx context.Context, defaul
 	return id
 }
 
-func createCatalogItemClusterTemplateFixture(ctx context.Context, defaults *privatev1.ClusterTemplateSpecDefaults, parameters []*privatev1.ClusterTemplateParameterDefinition) string {
+func createCatalogItemClusterTemplateFixture(ctx context.Context, defaults *privatev1.ClusterTemplateSpecDefaults, parameters []*privatev1.ClusterTemplateParameterDefinition, tenants ...string) string {
 	GinkgoHelper()
+	tenant := auth.SharedTenant
+	if len(tenants) > 0 {
+		tenant = tenants[0]
+	}
 	client := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 	response, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 		Object: privatev1.ClusterTemplate_builder{
 			Id:           "catalog_item_cluster_" + uuid.New()[24:],
-			Metadata:     catalogItemFixtureMetadata("shared", ""),
+			Metadata:     catalogItemFixtureMetadata(tenant, ""),
 			Title:        "Catalog item integration Template",
 			SpecDefaults: defaults,
 			Parameters:   parameters,
@@ -1359,14 +1391,16 @@ func deleteTenantDefaultNetworkingFixture(ctx context.Context, manager defaultne
 	defer deadline.Stop()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	var lastErr error
 	for {
 		err := manager.Delete(ctx, tenant)
-		if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
-			if err != nil {
-				return err
-			}
+		if err == nil {
 			return setTenantDefaultNetworkingCondition(ctx, tenant, false)
 		}
+		if !errors.Is(err, defaultnetworking.ErrResourcesDeleting) && !stillReferencedByActiveResources(err) {
+			return err
+		}
+		lastErr = err
 		if err := clearTenantDefaultNetworkingFinalizers(ctx, tenant); err != nil {
 			return fmt.Errorf("clear terminating default networking fixture finalizers: %w", err)
 		}
@@ -1374,6 +1408,10 @@ func deleteTenantDefaultNetworkingFixture(ctx context.Context, manager defaultne
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
+			if lastErr != nil {
+				return fmt.Errorf("default networking resources for tenant %q remain after delete: %w",
+					tenant, lastErr)
+			}
 			return fmt.Errorf("default networking resources for tenant %q remain after delete", tenant)
 		case <-ticker.C:
 		}
@@ -1541,4 +1579,8 @@ func getTenantDefaultNetworkFixture(ctx context.Context, tenant, project string)
 
 	Fail("tenant default networking fixture is missing a READY subnet, virtual network, and security group")
 	return catalogItemNetworkFixture{}
+}
+
+func stillReferencedByActiveResources(err error) bool {
+	return strings.Contains(err.Error(), "still reference")
 }

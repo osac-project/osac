@@ -582,17 +582,6 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance spec is mandatory")
 	}
 
-	if spec.GetSshPublicKey() != "" && spec.GetSshKey() != nil {
-		return grpcstatus.Error(grpccodes.InvalidArgument,
-			"spec.ssh_public_key and spec.ssh_key are mutually exclusive")
-	}
-
-	if key := spec.GetSshPublicKey(); key != "" {
-		if err := validateOpenSSHPublicKey(key); err != nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
-		}
-	}
-
 	if spec.GetUserDataSource().HasInline() {
 		if err := validateBareMetalUserData([]byte(spec.GetUserDataSource().GetInline())); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.user_data_source.inline: %s", err)
@@ -600,10 +589,10 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 	}
 
 	// If none of the authentication inputs are set, the server cannot be accessed after deployment.
-	if spec.GetSshPublicKey() == "" && spec.GetSshKey() == nil &&
+	if spec.GetSshKey() == nil &&
 		spec.GetUserDataSource().GetInline() == "" && spec.GetUserDataSource().GetSecret() == nil {
 		return grpcstatus.Error(grpccodes.InvalidArgument,
-			"at least one authentication method must be provided: spec.ssh_public_key, spec.ssh_key, spec.user_data_source.inline or spec.user_data_source.secret")
+			"at least one authentication method must be provided: spec.ssh_key, spec.user_data_source.inline or spec.user_data_source.secret")
 	}
 
 	return nil
@@ -666,6 +655,9 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"spec.network_attachments: subnet is required and no tenant default subnet is available")
 		}
+		if err := validateResolvedSubnetReady(defaultSubnet, defaultSubnet.GetId(), " in spec.network_attachments[0]"); err != nil {
+			return err
+		}
 		attachment.SetSubnet(privatev1.SubnetLocalReference_builder{Id: defaultSubnet.GetId()}.Build())
 		resolvedSubnet = defaultSubnet
 	} else if securityGroupsMissing(attachment) {
@@ -691,6 +683,9 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 		if sg == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"spec.network_attachments[0]: security_groups are required and no tenant default security group is available")
+		}
+		if err := validateResolvedSecurityGroup(sg, sg.GetId(), " in spec.network_attachments[0]", subnetVN); err != nil {
+			return err
 		}
 		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
 			privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
@@ -732,6 +727,9 @@ func (s *PrivateBareMetalInstancesServer) injectFullDefaultNetworkAttachment(
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"spec.network_attachments: at least one network attachment is required and no tenant default subnet is available")
 	}
+	if err := validateResolvedSubnetReady(defaultSubnet, defaultSubnet.GetId(), " in spec.network_attachments[0]"); err != nil {
+		return err
+	}
 	subnetVN := refKey(defaultSubnet.GetSpec().GetVirtualNetwork())
 	sg, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, subnetVN, tenantName, project)
 	if err != nil {
@@ -742,6 +740,9 @@ func (s *PrivateBareMetalInstancesServer) injectFullDefaultNetworkAttachment(
 	if sg == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"spec.network_attachments: no tenant default security group is available")
+	}
+	if err := validateResolvedSecurityGroup(sg, sg.GetId(), " in spec.network_attachments[0]", subnetVN); err != nil {
+		return err
 	}
 
 	ifaceName, err := s.resolveDefaultInterface(instanceType)
@@ -854,7 +855,7 @@ func (s *PrivateBareMetalInstancesServer) applyBareMetalTemplate(bmi *privatev1.
 	return nil
 }
 
-// validateBareMetalImmutability ensures template, catalog_item, instance_type, disk_image, ssh_key, ssh_public_key,
+// validateBareMetalImmutability ensures template, catalog_item, instance_type, disk_image, ssh_key,
 // user_data_source.inline, template_parameters,
 // auto_external_ip_attachment, and network_attachments cannot be changed after creation.
 func validateBareMetalImmutability(
@@ -865,7 +866,6 @@ func validateBareMetalImmutability(
 	updatingCatalogItem := updateIncludesField(mask, "spec.catalog_item")
 	updatingInstanceType := updateIncludesField(mask, "spec.instance_type")
 	updatingDiskImage := updateIncludesField(mask, "spec.disk_image")
-	updatingSshPublicKey := updateIncludesField(mask, "spec.ssh_public_key")
 	updatingSshKey := updateIncludesField(mask, "spec.ssh_key")
 	updatingUserDataSource := updateIncludesField(mask, "spec.user_data_source")
 	updatingTemplateParams := updateIncludesField(mask, "spec.template_parameters")
@@ -901,10 +901,6 @@ func validateBareMetalImmutability(
 			refKey(existingSpec.GetDiskImage()), refKey(newSpec.GetDiskImage()))
 	}
 
-	if updatingSshPublicKey && existingSpec.GetSshPublicKey() != newSpec.GetSshPublicKey() {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"cannot change spec.ssh_public_key: ssh_public_key is immutable after creation")
-	}
 	if updatingSshKey {
 		existingKey := existingSpec.GetSshKey()
 		newKey := newSpec.GetSshKey()

@@ -198,7 +198,9 @@ func (m *mockInstanceTypesClient) Get(
 
 type mockSubnetsClient struct {
 	publicv1.SubnetsClient
-	getFunc func(context.Context, *publicv1.SubnetsGetRequest, ...grpc.CallOption) (*publicv1.SubnetsGetResponse, error)
+	getFunc    func(context.Context, *publicv1.SubnetsGetRequest, ...grpc.CallOption) (*publicv1.SubnetsGetResponse, error)
+	createFunc func(context.Context, *publicv1.SubnetsCreateRequest, ...grpc.CallOption) (*publicv1.SubnetsCreateResponse, error)
+	deleteFunc func(context.Context, *publicv1.SubnetsDeleteRequest, ...grpc.CallOption) (*publicv1.SubnetsDeleteResponse, error)
 }
 
 func (m *mockSubnetsClient) Get(
@@ -207,15 +209,41 @@ func (m *mockSubnetsClient) Get(
 	return m.getFunc(ctx, request, options...)
 }
 
+func (m *mockSubnetsClient) Create(
+	ctx context.Context, request *publicv1.SubnetsCreateRequest, options ...grpc.CallOption,
+) (*publicv1.SubnetsCreateResponse, error) {
+	return m.createFunc(ctx, request, options...)
+}
+
+func (m *mockSubnetsClient) Delete(
+	ctx context.Context, request *publicv1.SubnetsDeleteRequest, options ...grpc.CallOption,
+) (*publicv1.SubnetsDeleteResponse, error) {
+	return m.deleteFunc(ctx, request, options...)
+}
+
 type mockSecurityGroupsClient struct {
 	publicv1.SecurityGroupsClient
-	listFunc func(context.Context, *publicv1.SecurityGroupsListRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsListResponse, error)
+	listFunc   func(context.Context, *publicv1.SecurityGroupsListRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsListResponse, error)
+	createFunc func(context.Context, *publicv1.SecurityGroupsCreateRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsCreateResponse, error)
+	deleteFunc func(context.Context, *publicv1.SecurityGroupsDeleteRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsDeleteResponse, error)
 }
 
 func (m *mockSecurityGroupsClient) List(
 	ctx context.Context, request *publicv1.SecurityGroupsListRequest, options ...grpc.CallOption,
 ) (*publicv1.SecurityGroupsListResponse, error) {
 	return m.listFunc(ctx, request, options...)
+}
+
+func (m *mockSecurityGroupsClient) Create(
+	ctx context.Context, request *publicv1.SecurityGroupsCreateRequest, options ...grpc.CallOption,
+) (*publicv1.SecurityGroupsCreateResponse, error) {
+	return m.createFunc(ctx, request, options...)
+}
+
+func (m *mockSecurityGroupsClient) Delete(
+	ctx context.Context, request *publicv1.SecurityGroupsDeleteRequest, options ...grpc.CallOption,
+) (*publicv1.SecurityGroupsDeleteResponse, error) {
+	return m.deleteFunc(ctx, request, options...)
 }
 
 func requestWithToken(rawToken string) *mcp.CallToolRequest {

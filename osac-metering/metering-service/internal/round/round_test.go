@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -1836,6 +1837,132 @@ func TestRoundCarriesTheLatestExternalBillingAccountID(t *testing.T) {
 	if !sawNew {
 		t.Fatal("the round after the billing id change wrote no new heartbeat")
 	}
+}
+
+type failingFoldConsumer struct {
+	sarama.Consumer
+}
+
+func (consumer failingFoldConsumer) ConsumePartition(string, int32, int64) (sarama.PartitionConsumer, error) {
+	return nil, errors.New("injected fold partition error")
+}
+
+func TestFoldAllReportsWorkerError(t *testing.T) {
+	if os.Getenv("OSAC_FOLD_ERROR_HELPER") == "1" {
+		store := testenv.Database(t)
+		worker, err := fold.New(store, failingFoldConsumer{}, logr.Discard())
+		if err != nil {
+			t.Fatal(err)
+		}
+		pipeline := &pipelinetest.Pipeline{Tenant: "fold-error", Store: store, Fold: worker}
+		pipeline.FoldAll(t, 1)
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, executable, "-test.run=^TestFoldAllReportsWorkerError$", "-test.v")
+	command.Env = append(os.Environ(), "OSAC_FOLD_ERROR_HELPER=1")
+	output, err := command.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("fold error helper did not finish: %v", ctx.Err())
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() != 1 {
+		t.Fatalf("fold error helper exit = %v, want test failure", err)
+	}
+	if !strings.Contains(string(output), "folding events: consuming osac.events.fold-error: injected fold partition error") {
+		t.Fatal("FoldAll did not report the original partition-consumption error")
+	}
+	if strings.Contains(string(output), "fold did not reach offset") {
+		t.Fatal("FoldAll reported an offset timeout instead of the worker error")
+	}
+}
+
+type gatedCloseConsumer struct {
+	sarama.Consumer
+	closing chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (consumer *gatedCloseConsumer) ConsumePartition(
+	topic string, partition int32, offset int64,
+) (sarama.PartitionConsumer, error) {
+	actual, err := consumer.Consumer.ConsumePartition(topic, partition, offset)
+	if err != nil {
+		return nil, err
+	}
+	return &gatedClosePartition{PartitionConsumer: actual, owner: consumer}, nil
+}
+
+type gatedClosePartition struct {
+	sarama.PartitionConsumer
+	owner *gatedCloseConsumer
+}
+
+func (partition *gatedClosePartition) Close() error {
+	partition.owner.once.Do(func() { close(partition.owner.closing) })
+	<-partition.owner.release
+	return partition.PartitionConsumer.Close()
+}
+
+func TestFoldAllWaitsForConsumerRelease(t *testing.T) {
+	const tenant = "fold-all-release"
+	pipeline := pipelinetest.NewPipeline(t, tenant)
+	consumer := &gatedCloseConsumer{
+		Consumer: testenv.NewConsumer(t),
+		closing:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(consumer.release) }) }
+	worker, err := fold.New(pipeline.Store, consumer, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipeline.Fold = worker
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "RUNNING", base, "small", base),
+	})
+	returned := make(chan struct{})
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-returned:
+		case <-time.After(5 * time.Second):
+			t.Error("fold worker did not finish during cleanup")
+		}
+	})
+	go func() {
+		defer close(returned)
+		pipeline.FoldAll(t, total)
+	}()
+	select {
+	case <-consumer.closing:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled fold did not start closing its partition")
+	}
+	select {
+	case <-returned:
+		t.Fatal("FoldAll returned before its partition consumer was released")
+	case <-time.After(250 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("FoldAll did not return after releasing its partition consumer")
+	}
+	total += testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			base.Add(time.Minute), base, "web", "RUNNING", base, "small", base),
+	})
+	pipeline.FoldAll(t, total)
 }
 
 // TestRoundCarriesBillingAccountFromLaterEventOffset checks that a later Kafka

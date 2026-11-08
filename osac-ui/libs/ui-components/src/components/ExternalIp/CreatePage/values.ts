@@ -8,7 +8,6 @@ export interface ExternalIpFormValues {
   metadata: {
     name: string;
     project: string;
-    description: string;
   };
   pool: ResourceSelectValue;
 }
@@ -19,7 +18,6 @@ export const getExternalIpValues = (externalIp?: ExternalIP): ExternalIpFormValu
       metadata: {
         name: externalIp.metadata?.name ?? '',
         project: externalIp.metadata?.project ?? '',
-        description: externalIp.metadata?.description ?? '',
       },
       pool: {
         id: externalIp.spec?.pool?.id ?? '',
@@ -32,7 +30,6 @@ export const getExternalIpValues = (externalIp?: ExternalIP): ExternalIpFormValu
     metadata: {
       name: '',
       project: '',
-      description: '',
     },
     pool: emptyResourceSelectValue(),
   };

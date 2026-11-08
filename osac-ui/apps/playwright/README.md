@@ -133,26 +133,28 @@ pnpm --filter @osac/playwright exec playwright test \
 The creation and VM portion of the full-flow journey runs in this order:
 
 1. Create and verify the instance type, disk image, storage tier and its
-   storage-backend readiness, catalog item, and tenant.
-2. Log in with the generated tenant break-glass credentials, set the
+   storage-backend readiness, and tenant.
+2. Create and publish the catalog item using the resources from step 1.
+3. Log in with the generated tenant break-glass credentials, set the
    replacement password from `tenant_password` (or the tenant name), grant
    the identity `tenant-admin` permissions through a private-API RoleBinding,
    log in again as the tenant admin, and create a tenant-scoped SSH public-key
    Secret in the Default project.
-3. Open the published catalog item and exercise the VM wizard: catalog item,
+4. Open the published catalog item and exercise the VM wizard: catalog item,
    project and VM name, disk image, instance type, boot-disk size and storage
    tier, additional disks, default networking, auto external IP, SSH key,
    cloud-init/user-data, and the review page.
-4. Submit the wizard and verify navigation to `/vms/<id>`, the
+5. Submit the wizard and verify navigation to `/vms/<id>`, the
    `ComputeInstance` reaches `Running`, and the VM appears in both the tenant
    VM list and its details page.
 
 The full-flow projects run in this order:
 
 1. `vmaas-full-flow-resources` creates the infrastructure resources and tenant.
-2. `vmaas-full-flow` creates and verifies the VM.
-3. `vmaas-full-flow-vm-delete` deletes the VM as the tenant admin.
-4. `vmaas-full-flow-delete` removes the catalog item, disk image, instance
+2. `vmaas-full-flow-catalog` creates and publishes the catalog item.
+3. `vmaas-full-flow` creates and verifies the VM.
+4. `vmaas-full-flow-vm-delete` deletes the VM as the tenant admin.
+5. `vmaas-full-flow-delete` removes the catalog item, disk image, instance
    type, storage tier, tenant-admin RoleBinding and OSAC User, SSH public-key
    Secret, tenant, and generated credential file as the admin user.
 
@@ -189,8 +191,8 @@ OSAC_VM_FLOW_MODE=full pnpm --filter @osac/playwright exec playwright test \
 ```
 
 The flow uses the same values from `apps/e2e-tests/extravars.yaml` as the
-individual create projects. The catalog item therefore continues to use the
-configured existing template, instance type, and disk image references. The
+individual create projects. The catalog item uses the configured template and
+the per-run instance type and disk image created by the resource project. The
 runner stops after the first failure, including a preflight failure because a
 resource already exists, so the remaining flow steps are not started. Use
 `--headed` when a graphical display is available:
@@ -351,42 +353,30 @@ pnpm --filter @osac/playwright exec playwright test \
   --project=vmaas-storage-tier --project=vmaas-instance-type-lifecycle
 ```
 
-### Catalog CLI flow tests
+### Catalog UI flow tests
 
-The catalog flow runs the `osac` CLI from Playwright, then opens the live UI,
-logs in, and verifies the created item on the Catalog page. Authenticate the
-CLI against the target environment before starting the test, for example with
-`osac login`. Set `OSAC_UI_BASE_URL`, `OSAC_ADMIN_USERNAME`, and `OSAC_ADMIN_PASSWORD` for
-the browser verification.
+The catalog flow uses the admin UI wizard to create and publish the catalog
+item, then verifies it on the Catalog page. Deletion opens the item details
+page and uses its confirmation dialog. Set `OSAC_UI_BASE_URL`,
+`OSAC_ADMIN_USERNAME`, and `OSAC_ADMIN_PASSWORD` before running the tests.
 
 The catalog configuration is in `apps/e2e-tests/extravars.yaml`:
 
-| Parameter                                 | Description                                                       |
-| ----------------------------------------- | ----------------------------------------------------------------- |
-| `catalog.name`                            | Unique catalog item name to create and delete                     |
-| `catalog.template`                        | Existing compute instance template referenced by the catalog item |
-| `catalog.title`                           | Catalog title                                                     |
-| `catalog.description`                     | Catalog description                                               |
-| `catalog.fields.instance_type.name`       | Existing instance type referenced by the catalog item             |
-| `catalog.fields.instance_type.vcpus`      | Expected vCPU value displayed for the referenced instance type    |
-| `catalog.fields.instance_type.memory_gib` | Expected memory value displayed for the referenced instance type  |
-| `catalog.fields.boot_disk.size_gib`       | Boot-disk storage value displayed for the catalog item            |
-| `catalog.fields.disk_image.name`          | Existing disk image referenced by the catalog item                |
+| Parameter                           | Description                                                       |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| `catalog.name`                      | Unique catalog item name to create and delete                     |
+| `catalog.template`                  | Existing compute instance template referenced by the catalog item |
+| `catalog.description`               | Catalog description                                               |
+| `catalog.fields.instance_type.name` | Instance type created for this catalog flow                       |
+| `catalog.fields.boot_disk.size_gib` | Boot-disk storage value displayed for the catalog item            |
+| `catalog.fields.disk_image.name`    | Disk image created for this catalog flow                          |
 
-Optional variables:
-
-| Variable          | Description                                                                             |
-| ----------------- | --------------------------------------------------------------------------------------- |
-| `OSAC_CLI_PATH`   | Path to the `osac` executable; defaults to `osac` from `PATH`                           |
-| `OSAC_CLI_CONFIG` | CLI configuration directory; when unset, the CLI uses its normal configuration location |
-
-Run creation and deletion together. The create project owns the delete project
-as teardown, and each CLI operation is followed by a JSON lookup and a browser
-check of the Catalog page:
+Run creation and deletion together. The catalog project creates its configured
+instance type and disk image as dependencies, then removes them after catalog
+teardown. Both catalog operations verify the Catalog page:
 
 ```bash
 export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
-export OSAC_CLI_CONFIG="$HOME/.config/osac"
 
 pnpm --filter @osac/playwright exec playwright test \
   --project=vmaas-catalog

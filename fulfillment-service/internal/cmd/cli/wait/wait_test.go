@@ -22,6 +22,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/wait"
 )
 
@@ -176,6 +179,34 @@ var _ = Describe("Poll", func() {
 				"expected ErrTimeout, got %T: %v", err, err)
 		})
 
+		It("returns ErrTimeout when Fetch fails with a gRPC deadline status", func() {
+			deadlineFetch := func(c context.Context) (fakeResource, error) {
+				<-c.Done()
+				return fakeResource{}, status.Error(codes.DeadlineExceeded,
+					"context deadline exceeded")
+			}
+			opts := fastOpts(deadlineFetch, "ALLOCATED")
+			_, err := wait.Poll(context.Background(), opts)
+			var toErr *wait.ErrTimeout
+			Expect(errors.As(err, &toErr)).To(BeTrue(),
+				"expected ErrTimeout, got %T: %v", err, err)
+		})
+
+		It("propagates a gRPC deadline error that is not ours", func() {
+			// A deadline status from a fetch whose own context is
+			// still live is the server's problem, not a poll timeout.
+			errFetch := func(_ context.Context) (fakeResource, error) {
+				return fakeResource{}, status.Error(codes.DeadlineExceeded,
+					"server was too slow")
+			}
+			opts := fastOpts(errFetch, "ALLOCATED")
+			_, err := wait.Poll(context.Background(), opts)
+			var toErr *wait.ErrTimeout
+			Expect(errors.As(err, &toErr)).To(BeFalse(),
+				"a foreign deadline must not become ErrTimeout: %v", err)
+			Expect(status.Code(err)).To(Equal(codes.DeadlineExceeded))
+		})
+
 		It("propagates unrelated fetch errors even when the context is done", func() {
 			sentinel := errors.New("connection refused")
 			errFetch := func(_ context.Context) (fakeResource, error) {
@@ -187,13 +218,12 @@ var _ = Describe("Poll", func() {
 		})
 
 		It("caps the initial interval at MaxInterval", func() {
-			// With the cap, Poll waits 5ms between fetches and
-			// fetches dozens of times within the 200ms timeout.
-			// If Poll ignored MaxInterval, the 100ms interval
-			// would allow only ~2 fetches before the timeout.
-			// The generous deadline keeps the test stable under
-			// CI scheduling pauses while the >= 10 threshold
-			// still fails if the initial interval is not clamped.
+			// The uncapped interval is longer than the whole
+			// timeout, so without the clamp Poll fetches once
+			// and then sits in the select until the context
+			// fires. With the clamp it fetches every 5ms. The
+			// threshold of 5 leaves room for CI scheduling
+			// pauses while still failing the single-fetch case.
 			var fetches int
 			steady := func(_ context.Context) (fakeResource, error) {
 				fetches++
@@ -204,15 +234,15 @@ var _ = Describe("Poll", func() {
 				StateOf:     stateOf,
 				TargetState: "ALLOCATED",
 				Timeout:     200 * time.Millisecond,
-				Interval:    100 * time.Millisecond,
+				Interval:    500 * time.Millisecond,
 				MaxInterval: 5 * time.Millisecond,
 			}
 			_, err := wait.Poll(context.Background(), opts)
 			var toErr *wait.ErrTimeout
 			Expect(errors.As(err, &toErr)).To(BeTrue(),
 				"expected ErrTimeout, got %T: %v", err, err)
-			Expect(fetches).To(BeNumerically(">=", 10),
-				"expected many fetches within the timeout; "+
+			Expect(fetches).To(BeNumerically(">=", 5),
+				"expected several fetches within the timeout; "+
 					"only %d happened, so the initial interval "+
 					"was probably not capped at MaxInterval", fetches)
 		})

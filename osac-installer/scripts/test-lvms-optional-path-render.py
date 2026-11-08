@@ -16,10 +16,16 @@ INFRA_CHART = INSTALLER / "charts/osac-infra"
 LVMS_CONFIG = ("ConfigMap", "osac-infra-lvms-config")
 DEFAULT_DEVICE_PATH = "/dev/sample-osac-disk"
 PROFILE_VALUES = {
-    "vmaas-ci": (INSTALLER / "values/vmaas-ci/infra.yaml", "/dev/sdb"),
-    "bmaas-ci": (INSTALLER / "values/bmaas-ci/infra.yaml", "/dev/sdb"),
-    "caas-ci": (INSTALLER / "values/caas-ci/infra.yaml", "/dev/sdb"),
-    "full-ci": (INSTALLER / "values/full-ci/infra.yaml", "/dev/vdb"),
+    "vmaas-ci": (
+        INSTALLER / "values/vmaas-ci/infra.yaml",
+        ["/dev/sdb", "/dev/vdb"],
+    ),
+    "bmaas-ci": (
+        INSTALLER / "values/bmaas-ci/infra.yaml",
+        ["/dev/sdb", "/dev/vdb"],
+    ),
+    "caas-ci": (INSTALLER / "values/caas-ci/infra.yaml", ["/dev/sdb"]),
+    "full-ci": (INSTALLER / "values/full-ci/infra.yaml", ["/dev/vdb"]),
 }
 WORKER_LABEL = "node-role.kubernetes.io/worker"
 
@@ -62,7 +68,9 @@ def main() -> None:
             for doc in disabled
         ), "LVMS configuration must remain disabled by default"
 
-        render_cases = [("chart default", ("--set", "lvms.enabled=true"), DEFAULT_DEVICE_PATH)]
+        render_cases = [
+            ("chart default", ("--set", "lvms.enabled=true"), [DEFAULT_DEVICE_PATH])
+        ]
         render_cases.extend(
             (
                 profile,
@@ -71,7 +79,7 @@ def main() -> None:
             )
             for profile, (values_file, expected_path) in PROFILE_VALUES.items()
         )
-        for profile, values_args, expected_path in render_cases:
+        for profile, values_args, expected_paths in render_cases:
             enabled = render(chart, *values_args)
             config_map = find_resource(enabled, *LVMS_CONFIG)
             lvm_cluster = yaml.safe_load(config_map["data"]["config.yaml"])
@@ -85,8 +93,8 @@ def main() -> None:
                 ]
             }
             assert device_class["deviceSelector"] == {
-                "optionalPaths": [expected_path]
-            }, f"{profile} must use only the explicit optional path {expected_path}"
+                "optionalPaths": expected_paths
+            }, f"{profile} must use only its explicit optional paths {expected_paths}"
     print("LVMS optional-path render checks passed.")
 
 

@@ -9,10 +9,11 @@ aapOperator:
   enabled: true
 lvms:
   enabled: true
-  # BMaaS CI boots the same sno-4-22 cluster flavor as vmaas-ci.
+  # Standard CI exposes sdb; the Netris SNO guest exposes vdb.
   deviceSelector:
     optionalPaths:
       - /dev/sdb
+      - /dev/vdb
 metallb:
   enabled: false
 cnv:

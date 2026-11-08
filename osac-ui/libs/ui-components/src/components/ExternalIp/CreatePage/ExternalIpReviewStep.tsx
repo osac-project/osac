@@ -40,12 +40,6 @@ const ExternalIpReviewStep = () => {
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('Description')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {displayValue(values.metadata.description)}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
             <DescriptionListTerm>{t('IP pool')}</DescriptionListTerm>
             <DescriptionListDescription>
               {displayValue(values.pool.name)}

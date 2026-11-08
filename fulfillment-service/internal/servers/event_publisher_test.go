@@ -448,7 +448,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 			tenant := "machines-" + uuid.New()
 			insertChange("service_accounts", tenant, "sa-1", fmt.Sprintf(`{
 				"id": "sa-1", "name": "robot", "tenant": %q,
-				"data": {"metadata":{"display_name":"Build robot","description":"Build jobs","tenant":"forged"},
+				"data": {"metadata":{"tenant":"forged"},
 				         "client_secret":"event-secret-marker"}
 			}`, tenant))
 			cancel, done := startPublisher(pub)
@@ -456,8 +456,6 @@ var _ = Describe("Event publisher", Ordered, func() {
 			events := collectKafkaEvents(client, DefaultEventTopicPrefix+tenant, 1)
 			account := events[0].event.GetServiceAccount()
 			Expect(account).ToNot(BeNil())
-			Expect(account.GetMetadata().GetDisplayName()).To(BeEmpty())
-			Expect(account.GetMetadata().GetDescription()).To(BeEmpty())
 			Expect(account.GetMetadata().GetTenant()).To(Equal(tenant))
 			Expect(account.GetMetadata().GetName()).To(Equal("robot"))
 			payload, err := protojson.Marshal(events[0].event)
@@ -474,7 +472,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 				"tenant": %q,
 				"project": "web",
 				"data": {
-					"spec": {"ssh_public_key": "ssh-ed25519 AAAA"},
+					"spec": {"ssh_key": {"id": "w-1-key"}},
 					"status": {"cluster": {"id": "c-1"}, "node_set": "compute"}
 				}
 			}`, tenant))
@@ -657,6 +655,127 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(events[0].event.GetTenant()).ToNot(BeNil())
 			Expect(events[0].event.GetTenant().GetId()).To(Equal(tenant))
 			Expect(events[0].event.GetTenant().GetStatus().GetBreakGlassCredentials()).To(BeNil())
+		})
+
+		It("Stamps the current billing id on every event in one batch", func() {
+			withID := "billing-" + uuid.New()
+			withoutRow := "plain-" + uuid.New()
+			withoutID := "empty-" + uuid.New()
+			_, err := pool.Exec(encodeCtx, `
+				insert into tenants (id, name, tenant, creator, data)
+				values
+					($1, $1, $1, 'system', '{"spec":{"external_billing_id":"acct-1"}}'),
+					($2, $2, $2, 'system', '{}')
+			`, withID, withoutID)
+			Expect(err).NotTo(HaveOccurred())
+			insertChange("projects", withID, "p-1", "")
+			insertChange("projects", withID, "p-2", "")
+			insertChange("projects", withoutRow, "p-3", "")
+			insertChange("projects", withoutID, "p-4", "")
+
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+
+			// The tenant insert fires create_default_project and is itself a tracked
+			// change, so the topic carries the default project create, the tenant
+			// create, p-1 and p-2. All four must carry the account.
+			stamped := collectKafkaEvents(client, DefaultEventTopicPrefix+withID, 4)
+			Expect(stamped).To(HaveLen(4))
+			for _, got := range stamped {
+				Expect(got.event.GetExternalBillingId()).To(Equal("acct-1"))
+			}
+			// A tenant insert also creates its default project, so the topic carries
+			// that project create plus the tenant create and p-4.
+			for tenant, count := range map[string]int{withoutRow: 1, withoutID: 3} {
+				for _, got := range collectKafkaEvents(client, DefaultEventTopicPrefix+tenant, count) {
+					Expect(got.event.HasExternalBillingId()).To(BeFalse())
+				}
+			}
+		})
+
+		It("Stamps the events of a tenant deleted in the same batch", func() {
+			tenant := "deleted-" + uuid.New()
+			_, err := pool.Exec(encodeCtx, `
+				insert into tenants (id, name, tenant, creator, data)
+				values ($1, $1, $1, 'system', '{"spec":{"external_billing_id":"acct-gone"}}')
+			`, tenant)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = pool.Exec(encodeCtx, `
+				insert into projects (id, name, tenant, project, creator, data)
+				values ($1, 'p-kept', $2, ''::ltree, 'system', '{}')
+			`, uuid.New(), tenant)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Delete the projects and then the tenant, the order the tenants server uses.
+			// The tenant row is gone when the publisher runs, so the id can only come
+			// from the delete change in this batch.
+			_, err = pool.Exec(encodeCtx, `delete from projects where tenant = $1`, tenant)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = pool.Exec(encodeCtx, `delete from tenants where name = $1`, tenant)
+			Expect(err).NotTo(HaveOccurred())
+
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+
+			// The tenant insert also creates the default project, so both projects and
+			// the tenant produce a create and a delete, six events in one batch.
+			events := collectKafkaEvents(client, DefaultEventTopicPrefix+tenant, 6)
+			Expect(events).To(HaveLen(6))
+			for _, got := range events {
+				Expect(got.event.GetExternalBillingId()).To(Equal("acct-gone"))
+			}
+
+			// The tenant delete event is the one whose id has no other source, because
+			// the tenant row is gone when the publisher runs.
+			var tenantDelete *privatev1.Event
+			for _, got := range events {
+				if got.event.GetTenant() != nil &&
+					got.event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED {
+					tenantDelete = got.event
+				}
+			}
+			Expect(tenantDelete).NotTo(BeNil())
+			Expect(tenantDelete.GetExternalBillingId()).To(Equal("acct-gone"))
+		})
+
+		It("Keeps the billing id when tenant break-glass credentials are redacted", func() {
+			tenant := "billing-secret-" + uuid.New()
+			topic := DefaultEventTopicPrefix + tenant
+			_, err := pool.Exec(encodeCtx, `
+				insert into tenants (id, name, tenant, creator, data)
+				values ($1, $1, $1, 'system', '{"spec":{"external_billing_id":"acct-9"}}')
+			`, tenant)
+			Expect(err).NotTo(HaveOccurred())
+			payload, err := protojson.Marshal(privatev1.Tenant_builder{
+				Status: privatev1.TenantStatus_builder{
+					BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
+						Username: "break-glass-user",
+						Password: "super-secret",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			insertChange("tenants", tenant, tenant, fmt.Sprintf(`{
+				"id": %q,
+				"name": %q,
+				"tenant": %q,
+				"data": %s
+			}`, tenant, tenant, tenant, payload))
+
+			cancel, done := startPublisher(pub)
+			defer stopPublisher(cancel, done)
+
+			// The tenant insert also publishes its default project, so find the tenant
+			// event instead of assuming the first one.
+			var tenantEvent *privatev1.Event
+			for _, got := range collectKafkaEvents(client, topic, 2) {
+				if got.event.GetTenant() != nil {
+					tenantEvent = got.event
+				}
+			}
+			Expect(tenantEvent).NotTo(BeNil())
+			Expect(tenantEvent.GetExternalBillingId()).To(Equal("acct-9"))
+			Expect(tenantEvent.GetTenant().GetStatus().GetBreakGlassCredentials()).To(BeNil())
 		})
 
 		It("Maps each Event payload type to a unique table name", func() {
@@ -919,6 +1038,16 @@ var _ = Describe("Event publisher", Ordered, func() {
 			return count
 		}
 
+		drainPendingChanges := func() {
+			for {
+				more, err := pub.drain(drainCtx)
+				Expect(err).ToNot(HaveOccurred())
+				if !more {
+					return
+				}
+			}
+		}
+
 		Describe("Topic creation", func() {
 			It("Publishes to new topics and reuses them for later events", func() {
 				tenant := "topics-" + uuid.New()
@@ -1022,6 +1151,10 @@ var _ = Describe("Event publisher", Ordered, func() {
 				}
 
 				BeforeEach(func() {
+					// Each test database starts from the migrated template, which may contain
+					// outbox rows for seeded catalog roles. Publish those through the real test
+					// broker before replacing it with the protocol mock below.
+					drainPendingChanges()
 					Expect(pub.Close()).To(Succeed())
 					broker = sarama.NewMockBroker(GinkgoT(), 1)
 					DeferCleanup(broker.Close)
@@ -1203,16 +1336,6 @@ var _ = Describe("Event publisher", Ordered, func() {
 				)
 			})
 		})
-		drainPendingChanges := func() {
-			for {
-				more, err := pub.drain(drainCtx)
-				Expect(err).ToNot(HaveOccurred())
-				if !more {
-					return
-				}
-			}
-		}
-
 		insertTenant := func(id string) {
 			_, err := pool.Exec(drainCtx, `
 				insert into tenants (id, name, tenant, creator, data)
@@ -1368,6 +1491,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 		})
 
 		It("Rolls back the transaction when processing is canceled", func() {
+			drainPendingChanges()
 			tenant := "cancel-" + uuid.New()
 			insertChange(tenant, "obj-1", "INSERT")
 			Expect(pub.Close()).To(Succeed())

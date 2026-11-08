@@ -257,6 +257,8 @@ class UmbrellaReleaseTests(unittest.TestCase):
             "SKIPPED_TESTS": "",
             "IMAGE_BUILDS": "success",
             "IMAGE_RELEASE": "success",
+            "IMAGE_SNAPSHOT": f"osac-release-v{self.version.replace('.', '-')}-attempt1",
+            "CHART_SNAPSHOT": f"osac-charts-release-v{self.version.replace('.', '-')}-attempt1",
             "CHART_TAG_PUSHED": "true",
             "CHART_RELEASE": "success",
             "WORKFLOW_URL": "https://github.com/osac-project/osac/actions/runs/12345",
@@ -619,7 +621,12 @@ class UmbrellaReleaseTests(unittest.TestCase):
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_final_notification_waits_for_every_konflux_stage_and_cleanup_waits_for_it(self) -> None:
-        """Final status must not race any stage, while GHCR publication stays independent."""
+        """Final status must not race any stage; GHCR publication stays independent of chart
+        staging, but is now deliberately gated on image staging (trigger-konflux-staging-release)
+        having actually succeeded -- a GitHub Release/tag must never claim "released" before the
+        content genuinely reached registry.stage.redhat.io. Chart staging stays excluded:
+        trigger-konflux-chart-staging-release runs continue-on-error, so its job result is always
+        'success' regardless of real outcome, making it a no-op gate (see that job's own comment)."""
         jobs = WORKFLOW["jobs"]
         stages = {
             "wait-for-konflux-build",
@@ -632,7 +639,10 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("notify-release", jobs["notify-konflux"]["needs"])
         self.assertIn("notify-konflux", jobs["cleanup"]["needs"])
         self.assertTrue(stages.isdisjoint(jobs["notify-release"]["needs"]))
-        self.assertTrue(stages.isdisjoint(jobs["create-umbrella-release"]["needs"]))
+        self.assertEqual(
+            stages.intersection(jobs["create-umbrella-release"]["needs"]),
+            {"trigger-konflux-staging-release"},
+        )
 
     def test_final_notification_covers_failed_and_skipped_stages_but_not_cancellation(self) -> None:
         """Failure/skip must still report a final outcome; nightly/cancelled runs must not."""
@@ -753,7 +763,11 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("umbrella-artifacts/osac-installer/osac-${{ env.VERSION }}.tgz", script)
         workflow = (ROOT / ".github/workflows/osac-build-and-publish.yaml").read_text()
         self.assertIn("refusing to re-release an already-published version", workflow)
-        self.assertNotIn("trigger-konflux", str(WORKFLOW["jobs"]["create-umbrella-release"]["needs"]))
+        # Deliberately gated on image staging (see
+        # test_final_notification_waits_for_every_konflux_stage_and_cleanup_waits_for_it's
+        # own docstring for why) but never on chart staging specifically.
+        self.assertIn("trigger-konflux-staging-release", WORKFLOW["jobs"]["create-umbrella-release"]["needs"])
+        self.assertNotIn("trigger-konflux-chart-staging-release", WORKFLOW["jobs"]["create-umbrella-release"]["needs"])
 
 
 if __name__ == "__main__":

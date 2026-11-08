@@ -81,6 +81,45 @@ aap:
   group; with a provider Fabric Manager, the provider's image built on
   `aap.bootstrap.image`.
 
+## Shared provider networking provisioning setting
+
+`global.networking.provisioningEnabled` is the shared installation setting for
+provider networking. It defaults to `true`. Choose the value before
+installation and keep it unchanged during upgrades. When migrating from older
+component-specific settings, remove those settings and configure
+`global.networking.provisioningEnabled` once for the whole installation.
+
+Before upgrading an existing installation, check BMF's effective mode in its
+`networking provisioning feature gate` startup log and read Fulfillment's saved
+mode from the `installation_settings` row:
+
+```sql
+select provisioning_enabled from installation_settings where id = 1;
+```
+
+Older BMF charts defaulted `env.enableNetworkingProvisioning` to `"false"` when
+it was not set. The shared setting defaults to `true`. Set
+`global.networking.provisioningEnabled` explicitly to Fulfillment's saved value
+before rollout. One shared value cannot preserve a mixed setup. For example, if
+Fulfillment saved `true` while BMF previously ran with networking disabled, BMF
+will switch to enabled after the upgrade. When BMF's AAP connection is
+configured, its networking workflows can then run.
+
+Fulfillment stores the setting on its first start and rejects a later rollout
+with a different value; changing it requires reinstalling with a fresh
+Fulfillment database. When connected to Fulfillment's private API, the OSAC
+Operator and BMF compare their configured value with the saved value before
+reconciliation. The Fulfillment controller retries transient `Unavailable` and
+`DeadlineExceeded` errors for up to one minute, with a 15-second deadline for
+each request. The Operator and BMF each make one request with a 15-second
+deadline and exit if it fails. A value mismatch stops startup for every
+consumer.
+
+Standalone BMF deployments can set `secretAPI.caBundle.configMap` when the
+Fulfillment API certificate needs a custom CA bundle. The ConfigMap must exist
+in the BMF namespace before BMF starts. The OSAC installer configures its
+shared `ca-bundle` ConfigMap explicitly.
+
 ## Manager registration
 
 The installer chart renders the registration ConfigMaps of the OSAC-shipped
@@ -150,6 +189,98 @@ managed outside Helm in the AAP namespace; cluster-fulfillment jobs load it
 when it exists. Cluster-fulfillment jobs also mount the optional
 `agentless-net-inventory` ConfigMap at `/var/config/agentless-net` for the
 AgentlessNet CaaS steps.
+
+### Netris CA ConfigMap lifecycle
+
+`NETRIS_CA_CONFIGMAP` names a ConfigMap that the platform administrator creates
+and owns. The installer never creates, rotates, or deletes it. The Helm client
+and the chart values never carry the PEM contents; the validation hooks read
+the ConfigMap in-cluster:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: customer-netris-ca
+  namespace: <AAP namespace>
+immutable: true
+data:
+  bundle.pem: |
+    -----BEGIN CERTIFICATE-----
+    ...
+    -----END CERTIFICATE-----
+```
+
+#### Validation and protection
+
+With `validation.enabled` and `NETRIS_CA_CONFIGMAP` set, install and upgrade run
+these checks:
+
+- The pre-install/pre-upgrade hook (`<release>-netris-ca-preflight`) reads the
+  ConfigMap and fails unless it exists, sets `immutable: true`, and has a
+  non-empty `data.bundle.pem` that OpenSSL can parse as a certificate bundle.
+  Each failure uses a stable `ERROR: NETRIS_CA_*` message.
+- Both CA jobs run `.Values.cliImage`. With CA validation enabled that image
+  must provide `kubectl`, `sh`, `grep`, `mktemp`, `rm` and `openssl`. The
+  default `quay.io/openshift/origin-cli` image does; a custom `cliImage` that
+  omits `openssl` fails with `ERROR: NETRIS_CA_OPENSSL_MISSING` instead of
+  skipping the bundle check.
+- The post-install/post-upgrade hook
+  (`<release>-netris-ca-identity-validate`) submits a SubjectAccessReview for
+  `system:serviceaccount:<namespace>:<aap.serviceAccounts.osacSa>` (default
+  `osac-sa`) and fails with `ERROR: NETRIS_CA_IDENTITY_DENIED` unless that
+  identity can `get` the ConfigMap. It runs after the CA read Role exists and
+  before the AAP bootstrap job, so the first upgrade cannot fail on missing
+  RBAC.
+
+Both hooks are gated by `validation.enabled`. Clear `NETRIS_CA_CONFIGMAP` to
+keep the system-trust path unchanged and render no CA validation resources.
+
+A ValidatingAdmissionPolicy protects only the active ConfigMap name. It denies
+`CREATE`, `UPDATE`, and `DELETE` of that name unless the requester is in
+`global.networking.caBundle.adminGroups`, and it fails closed if the policy
+cannot be evaluated. Other ConfigMap names are unaffected, so a new CA version
+can be created before the Helm switch. The default is
+`["system:masters", "system:cluster-admins"]`: `system:masters` is the
+break-glass group of the `system:admin` client certificate, and
+`system:cluster-admins` contains the built-in `cluster-admin` subjects
+(`kubeadmin` and the default cluster administrator binding). An identity
+provider group bound directly to `cluster-admin` is in neither group; add each
+such group to `adminGroups` explicitly. The namespace controller may `DELETE`
+the object during namespace teardown.
+
+The AAP execution ServiceAccount (`osac-sa` by default) is not in
+`adminGroups`, so the policy denies it any write to the active ConfigMap. It
+only needs `get`, which the chart grants through the `<release>-netris-ca-read`
+Role. Its `cluster-admin` binding still lets that identity edit or delete the
+policy itself.
+
+#### Rotation and rollback
+
+Treat each CA version as a separate immutable object:
+
+1. Create a new ConfigMap such as `customer-netris-ca-2026-10` with
+   `immutable: true` and the new `bundle.pem`.
+2. Set `aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP` to the
+   new name and reconcile the release with `helm upgrade`.
+3. Wait for the release hooks to complete, then confirm a new AAP job pod mounts
+   the new ConfigMap at `/etc/netris/ca/bundle.pem` and completes a real HTTPS
+   Netris operation.
+4. Keep the previous ConfigMap for the rollback window. The window closes only
+   when the administrator no longer needs to roll back.
+
+To roll back, restore the previous ConfigMap name and reconcile, then repeat the
+job-pod and Netris operation check. A rollback needs the previous object to
+still exist and remain immutable.
+
+Deleting an old version is safe only after a new job has succeeded against the
+replacement and rollback is no longer required. Delete it as a platform
+administrator. The admission policy protects only the active ConfigMap name, so
+once the Helm switch points at a new name the previous copy has no admission
+protection: any identity with ConfigMap delete permission, including `osac-sa`
+through its `cluster-admin` binding, can remove it. Keep the rollback copy in
+place until the rollback window closes; otherwise a rollback needs the
+administrator to recreate the ConfigMap from the PEM.
 
 ## Checks during a rollout
 

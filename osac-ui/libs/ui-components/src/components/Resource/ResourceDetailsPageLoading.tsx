@@ -22,6 +22,7 @@ interface ResourceDetailsPageLoadingProps {
   tabLabels?: string[];
   tabsId?: string;
   cardCount?: number;
+  sectionClassName?: string;
 }
 
 const tabContentId = (tabsId: string, key: number): string => `${tabsId}-content-${key}`;
@@ -56,6 +57,7 @@ export const ResourceDetailsPageLoading = ({
   tabLabels,
   tabsId = 'resource-detail-tabs-loading',
   cardCount = 2,
+  sectionClassName,
 }: ResourceDetailsPageLoadingProps) => {
   const cards = Array.from({ length: cardCount }, (_, index) => index);
   const gridMd = cardCount === 1 ? 12 : 6;
@@ -73,7 +75,7 @@ export const ResourceDetailsPageLoading = ({
 
   return (
     <>
-      <PageSection hasBodyWrapper={false}>
+      <PageSection hasBodyWrapper={false} className={sectionClassName}>
         <Stack hasGutter>
           <StackItem>
             <ResourceDetailHeaderSkeleton parentTo={parentTo} parentLabel={parentLabel} />
@@ -95,7 +97,7 @@ export const ResourceDetailsPageLoading = ({
         </Stack>
       </PageSection>
 
-      <PageSection hasBodyWrapper={false}>
+      <PageSection hasBodyWrapper={false} className={sectionClassName}>
         {hasTabs ? (
           <TabContent eventKey={0} id={tabContentId(tabsId, 0)} activeKey={0}>
             <TabContentBody>{cardGrid}</TabContentBody>

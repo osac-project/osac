@@ -122,6 +122,26 @@ var _ = BeforeSuite(func() {
 		BinaryAssetsDirectory: filepath.Join("..", "..", "bin", "k8s",
 			fmt.Sprintf("1.31.0-%s-%s", runtime.GOOS, runtime.GOARCH)),
 	}
+	crdOptions := envtest.CRDInstallOptions{
+		Paths: testEnv.CRDDirectoryPaths, ErrorIfPathMissing: true,
+	}
+	Expect(envtest.ReadCRDFiles(&crdOptions)).To(Succeed())
+	// Preserve HostedCluster version status, which the checked-in fake CRD
+	// does not describe.
+	for _, crd := range crdOptions.CRDs {
+		if crd.Name != "hostedclusters.hypershift.openshift.io" {
+			continue
+		}
+		for i := range crd.Spec.Versions {
+			properties := crd.Spec.Versions[i].Schema.OpenAPIV3Schema.Properties
+			status := properties["status"]
+			preserveUnknown := true
+			status.XPreserveUnknownFields = &preserveUnknown
+			properties["status"] = status
+		}
+	}
+	testEnv.CRDs = crdOptions.CRDs
+	testEnv.CRDDirectoryPaths = nil
 
 	var err error
 	// cfg is defined in this file globally.

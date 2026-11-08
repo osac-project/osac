@@ -26,11 +26,6 @@ describe('SecurityGroupStatusLabel', () => {
     expect(screen.getByText('Deleting')).toBeInTheDocument();
   });
 
-  it('maps DELETE_FAILED to failed/Delete Failed', () => {
-    render(<SecurityGroupStatusLabel state={SecurityGroupState.DELETE_FAILED} />);
-    expect(screen.getByText('Delete Failed')).toBeInTheDocument();
-  });
-
   it('maps undefined to unspecified/Unknown', () => {
     render(<SecurityGroupStatusLabel />);
     expect(screen.getByText('Unknown')).toBeInTheDocument();

@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	netbox "github.com/netbox-community/go-netbox/v4"
 )
@@ -121,10 +122,24 @@ func New(config Config) (*Client, error) {
 	configuration := netbox.NewConfiguration()
 	configuration.Servers[0].URL = endpoint
 	configuration.Debug = false
-	configuration.AddDefaultHeader("Authorization", "Token "+token)
+	configuration.AddDefaultHeader("Authorization", netBoxAuthorizationHeader(token))
 	configuration.HTTPClient = httpClient
 
 	return &Client{api: netbox.NewAPIClient(configuration)}, nil
+}
+
+const netBoxV1TokenLength = 40
+
+// netBoxAuthorizationHeader selects the authorization scheme for a NetBox token.
+// V1 tokens are 40 characters, so preserve that format even when a custom token
+// starts with "nbt_" and contains a period.
+func netBoxAuthorizationHeader(token string) string {
+	if strings.HasPrefix(token, "nbt_") &&
+		strings.Contains(token, ".") &&
+		utf8.RuneCountInString(token) != netBoxV1TokenLength {
+		return "Bearer " + token
+	}
+	return "Token " + token
 }
 
 // ForEachDevice visits matching devices page by page. The visitor returns true

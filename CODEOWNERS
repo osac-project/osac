@@ -53,6 +53,21 @@
 .github/workflows/fullsend.yaml @osac-project/wg-infra
 .fullsend/ @osac-project/wg-infra
 
+# Installer and Helm charts
+# The installer composes every component's chart and decides what a deployment looks like, and each component ships its
+# chart from its own folder. A change to them needs review from the infrastructure team. The rules below this block name
+# the paths that a working group owns inside them (CI values, networking templates, CRDs), and the last matching rule wins,
+# so this block has to stay above them. The operator-crds charts are left out: their templates are generated from the
+# operator CRDs and are owned by the working group of each API.
+/osac-installer/ @osac-project/wg-infra
+/osac-operator/charts/operator/ @osac-project/wg-infra
+/bare-metal-fulfillment-operator/charts/operator/ @osac-project/wg-infra
+/fulfillment-service/charts/ @osac-project/wg-infra
+/osac-aap/charts/ @osac-project/wg-infra
+/osac-csi-driver/charts/ @osac-project/wg-infra
+/osac-metering/charts/ @osac-project/wg-infra
+/osac-ui/charts/ @osac-project/wg-infra
+
 # CaaS (Cluster-as-a-Service) working group
 # Tests
 /tests/e2e/caas/ @osac-project/wg-caas
@@ -68,6 +83,42 @@
 # CaaS hosted-cluster service role and workflow
 /osac-aap/collections/ansible_collections/osac/service/roles/hosted_cluster/ @osac-project/wg-caas
 /osac-aap/collections/ansible_collections/osac/workflows/playbooks/cluster/ @osac-project/wg-caas
+# Fulfillment service: cluster reconciler, servers, CLI and integration tests
+/fulfillment-service/internal/controllers/cluster/ @osac-project/wg-caas
+/fulfillment-service/internal/servers/*cluster*.go @osac-project/wg-caas
+/fulfillment-service/internal/cmd/cli/create/cluster/ @osac-project/wg-caas
+/fulfillment-service/internal/cmd/cli/create/clustercatalogitem/ @osac-project/wg-caas
+/fulfillment-service/internal/cmd/cli/create/clusterversion/ @osac-project/wg-caas
+/fulfillment-service/internal/cmd/cli/describe/cluster/ @osac-project/wg-caas
+/fulfillment-service/internal/cmd/cli/describe/clusterversion/ @osac-project/wg-caas
+/fulfillment-service/it/*cluster*.go @osac-project/wg-caas
+/fulfillment-service/it/crds/hostedclusters.hypershift.openshift.io.yaml @osac-project/wg-caas
+# API contracts
+/proto/*/osac/*/v1/*cluster*.proto @osac-project/wg-caas
+# Operator: ClusterOrder API, CRDs, controllers and tests
+/osac-operator/api/v1alpha1/clusterorder_*.go @osac-project/wg-caas
+/osac-operator/config/crd/bases/osac.openshift.io_clusterorders.yaml @osac-project/wg-caas
+/osac-operator/charts/operator-crds/templates/osac.openshift.io_clusterorders.yaml @osac-project/wg-caas
+/osac-operator/config/crd/fakes/hypershift.openshift.io_*.yaml @osac-project/wg-caas
+/osac-operator/internal/controller/clusterorder_*.go @osac-project/wg-caas
+/osac-operator/internal/controller/multicluster_common.go @osac-project/wg-caas
+/osac-operator/test/integration/*clusterorder*.go @osac-project/wg-caas
+# AAP: hosted-cluster playbooks, cluster service roles, fixtures and tests
+/osac-aap/playbook_osac_*hosted_cluster*.yml @osac-project/wg-caas
+/osac-aap/samples/hosted_cluster_extra_vars.yml @osac-project/wg-caas
+/osac-aap/collections/ansible_collections/osac/service/roles/cluster_infra/ @osac-project/wg-caas
+/osac-aap/collections/ansible_collections/osac/service/roles/cluster_network/ @osac-project/wg-caas
+/osac-aap/collections/ansible_collections/osac/service/roles/cluster_settings/ @osac-project/wg-caas
+/osac-aap/collections/ansible_collections/osac/service/roles/cluster_working_namespace/ @osac-project/wg-caas
+/osac-aap/collections/ansible_collections/osac/steps/roles/cluster_infra/ @osac-project/wg-caas
+/osac-aap/tests/integration/fixtures/*clusterorder*.yaml @osac-project/wg-caas
+/osac-aap/tests/unit/*hosted_cluster*.py @osac-project/wg-caas
+/osac-aap/tests/unit/test_cluster_infra_agent_namespace.py @osac-project/wg-caas
+/osac-aap/tests/unit/test_server_cluster_identity.py @osac-project/wg-caas
+/osac-aap/collections/ansible_collections/osac/test_overrides/roles/cluster_hooks/ @osac-project/wg-caas
+# Cluster unit tests and the CaaS E2E helper
+/tests/unit/test_cluster_*.py @osac-project/wg-caas
+/tests/e2e/core/caas_versions.py @osac-project/wg-caas
 
 # VMaaS (VM-as-a-Service) working group
 ## E2E Tests
@@ -228,7 +279,7 @@
 /osac-installer/charts/osac/files/netris-protected-inputs.json @osac-project/wg-connectivity
 /osac-installer/charts/osac/files/network-class-step.py @osac-project/wg-connectivity
 /osac-installer/scripts/*network*.py @osac-project/wg-connectivity
-/osac-installer/scripts/*fabric_domain*.py @osac-project/wg-connectivity
+/osac-installer/scripts/*fabric-domain*.py @osac-project/wg-connectivity
 /osac-installer/values/agentless-net-stub.yaml @osac-project/wg-connectivity
 /osac-installer/values/bmaas-ci/netris.yaml @osac-project/wg-connectivity
 /osac-installer/values/full-ci/netris.yaml @osac-project/wg-connectivity

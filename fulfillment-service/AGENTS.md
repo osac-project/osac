@@ -92,3 +92,7 @@ If setup fails with `failed to lookup host '...'`, read [README.md — Running i
 - Keep cases independent, register cleanup with `DeferCleanup`, and use bounded `Eventually` assertions for asynchronous behavior instead of sleeps.
 - Test observable behavior, including relevant error paths and tenant isolation where applicable. Deployed Fulfillment-only API/CLI workflows belong in `it/`; cross-component provisioning belongs in `tests/e2e/`.
 - Consult [Fulfillment test tiers and coverage](../docs/INTEGRATION-TESTING.md#fulfillment-service) when choosing coverage for a change.
+
+The deployed service-account CLI lifecycle, structured output, credential
+omission, RoleBinding grant/revoke, and client-credentials flow are covered by
+[`it/it_cli_service_accounts_test.go`](it/it_cli_service_accounts_test.go).

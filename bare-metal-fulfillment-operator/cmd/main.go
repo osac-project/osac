@@ -24,6 +24,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -78,13 +79,13 @@ const (
 	envProfileConfigPath    = "OSAC_PROFILE_CONFIG_PATH"
 	envMaxJobHistory        = "OSAC_MAX_JOB_HISTORY"
 
-	envHostReadyPollInterval     = "OSAC_HOST_READY_POLL_INTERVAL"
-	envHostDeletionPollInterval  = "OSAC_HOST_DELETION_POLL_INTERVAL"
-	envNoFreeHostsPollInterval   = "OSAC_NO_FREE_HOSTS_POLL_INTERVAL"
-	envTryLockFailPollInterval   = "OSAC_TRY_LOCK_FAIL_POLL_INTERVAL"
-	envManagementRecheckInterval = "OSAC_MANAGEMENT_RECHECK_INTERVAL"
-	envProvisionPollInterval     = "OSAC_PROVISION_POLL_INTERVAL"
-	envHostReadinessPollInterval = "OSAC_HOST_READINESS_POLL_INTERVAL"
+	envHostReadyPollInterval        = "OSAC_HOST_READY_POLL_INTERVAL"
+	envHostDeletionPollInterval     = "OSAC_HOST_DELETION_POLL_INTERVAL"
+	envNoFreeHostsPollInterval      = "OSAC_NO_FREE_HOSTS_POLL_INTERVAL"
+	envTryLockFailPollInterval      = "OSAC_TRY_LOCK_FAIL_POLL_INTERVAL"
+	envManagementRecheckInterval    = "OSAC_MANAGEMENT_RECHECK_INTERVAL"
+	envProvisionPollInterval        = "OSAC_PROVISION_POLL_INTERVAL"
+	envHostAvailabilityPollInterval = "OSAC_HOST_AVAILABILITY_POLL_INTERVAL"
 
 	envAAPURL                       = "OSAC_AAP_URL"
 	envAAPToken                     = "OSAC_AAP_TOKEN"
@@ -141,8 +142,14 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	networkingProvisioningEnabled := loadNetworkingProvisioning()
+	setupLog.Info("networking provisioning feature gate", "enabled", networkingProvisioningEnabled)
 
 	ctx := ctrl.SetupSignalHandler()
+	if err := checkInstallationProvisioning(ctx, networkingProvisioningEnabled); err != nil {
+		setupLog.Error(err, "unable to verify installation networking setting")
+		os.Exit(1)
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -303,8 +310,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		enableNetworkingProvisioning := helpers.GetEnvWithDefault(envEnableNetworkingProvisioning, false)
-		if enableNetworkingProvisioning {
+		if networkingProvisioningEnabled {
 			// Networking provisioning (onboard) and deprovisioning (offboard) are both a
 			// port move; the single move playbook derives the direction from the CR.
 			networkingProvider = provisioning.NewAAPProvider(
@@ -504,9 +510,9 @@ func setupBareMetalInstanceController(
 		envProvisionPollInterval,
 		controller.DefaultProvisionPollIntervalDuration,
 	)
-	hostReadinessPollInterval := helpers.GetEnvWithDefault(
-		envHostReadinessPollInterval,
-		controller.DefaultHostReadinessPollIntervalDuration,
+	hostAvailabilityPollInterval := helpers.GetEnvWithDefault(
+		envHostAvailabilityPollInterval,
+		controller.DefaultHostAvailabilityPollIntervalDuration,
 	)
 	maxConcurrentReconciles := helpers.GetEnvWithDefault(
 		envBareMetalInstanceMaxConcurrentReconcile,
@@ -527,7 +533,7 @@ func setupBareMetalInstanceController(
 		tryLockFailPollInterval,
 		managementRecheckInterval,
 		provisionPollInterval,
-		hostReadinessPollInterval,
+		hostAvailabilityPollInterval,
 	).SetupWithManager(mgr, maxConcurrentReconciles); err != nil {
 		return fmt.Errorf("baremetalinstance controller: %w", err)
 	}
@@ -614,13 +620,20 @@ func createNetBoxInventoryClientWithManager(
 }
 
 func createSecretAPIClientFromEnv() (inventory.SecretAPIClient, error) {
-	return secretapi.New(secretapi.Config{
+	if strings.TrimSpace(os.Getenv(envSecretAPIURL)) == "" {
+		return nil, fmt.Errorf("%s is required", envSecretAPIURL)
+	}
+	secretsClient, err := secretapi.New(secretapi.Config{
 		Endpoint:         os.Getenv(envSecretAPIURL),
 		IssuerURL:        os.Getenv(envSecretAPIIssuerURL),
 		ClientIDFile:     os.Getenv(envSecretAPIClientIDFile),
 		ClientSecretFile: os.Getenv(envSecretAPIClientSecretFile),
 		CAFile:           os.Getenv(envSecretAPICAFile),
 	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to configure Secret API client (%s): %w", envSecretAPIURL, err)
+	}
+	return secretsClient, nil
 }
 
 func createBCMInventoryClient(

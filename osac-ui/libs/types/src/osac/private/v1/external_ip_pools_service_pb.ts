@@ -333,7 +333,7 @@ export const ExternalIPPools: GenService<{
   },
   /**
    * Updates an existing external IP pool. Only metadata fields (name, labels, annotations) are mutable.
-   * All spec fields (cidrs, ip_family, implementation_strategy) are immutable after creation.
+   * All spec fields (cidrs, ip_family) are immutable after creation.
    *
    * @generated from rpc osac.private.v1.ExternalIPPools.Update
    */

@@ -115,9 +115,12 @@ func New(config Config) (*client, error) {
 
 // parseEndpoint extracts the gRPC authority; the operator Helm chart enforces HTTPS.
 func parseEndpoint(endpoint string) (string, error) {
+	if strings.TrimSpace(endpoint) == "" {
+		return "", errors.New("Secret API endpoint is required")
+	}
 	parsed, err := url.Parse(endpoint)
-	if err != nil || parsed.Host == "" {
-		return "", errors.New("Secret API endpoint must include a host")
+	if err != nil || parsed.Hostname() == "" {
+		return "", errors.New("Secret API endpoint must be a valid URL with a host")
 	}
 	return parsed.Host, nil
 }

@@ -19,21 +19,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
-	"github.com/onsi/gomega/ghttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/start/mcpserver"
-	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -91,40 +86,10 @@ var _ = Describe("MCP authorized discovery", func() {
 		adamSecretID, adamSecretBytes := createMCPDiscoverySecret(ctx, adamConn, "adam")
 		benSecretID, benSecretBytes := createMCPDiscoverySecret(ctx, benConn, "ben")
 
-		jwksCache, err := auth.NewJwksCache().
-			SetLogger(logger).
-			SetCaPool(tool.CaPool()).
-			AddIssuers(keycloakIssuer(ctx)).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-		jwtValidator, err := auth.NewJwtValidator().
-			SetLogger(logger).
-			SetJwksCache(jwksCache).
-			SetExpirationLeeway(5 * time.Second).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-		grpcConn, err := network.NewGrpcClient().
-			SetLogger(logger).
-			SetCaPool(tool.CaPool()).
-			SetAddress(externalServiceAddr).
-			SetUserAgent("fulfillment-mcp-discovery-it").
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() { Expect(grpcConn.Close()).To(Succeed()) })
-		handler, err := mcpserver.NewHandler(
-			mcpserver.NewServerDeps(grpcConn), jwtValidator, "", "",
-			mcpserver.TokenExchangerFunc(func(_ context.Context, subjectToken string, _ *jwt.Token) (string, error) {
-				return subjectToken, nil
-			}),
-		)
-		Expect(err).ToNot(HaveOccurred())
-		httpServer := httptest.NewServer(handler)
-		DeferCleanup(httpServer.Close)
+		httpServer := startInProcessMCPServer(ctx, "fulfillment-mcp-discovery-it")
 
-		adamSession := connectMCPDiscoveryCaller(ctx, httpServer.URL, "adam")
-		DeferCleanup(func() { Expect(adamSession.Close()).To(Succeed()) })
-		benSession := connectMCPDiscoveryCaller(ctx, httpServer.URL, "ben")
-		DeferCleanup(func() { Expect(benSession.Close()).To(Succeed()) })
+		adamSession := connectMCPCaller(ctx, httpServer.URL, "it-mcp-adam-discovery", "adam")
+		benSession := connectMCPCaller(ctx, httpServer.URL, "it-mcp-ben-discovery", "ben")
 
 		adamProjectsList, _ := listMCPDiscoveryResource(ctx, adamSession, mcpserver.ResourceTypeProject, adamProjectID)
 		Expect(resourceIDs(adamProjectsList)).To(ContainElement(adamProjectID))
@@ -210,6 +175,23 @@ var _ = Describe("MCP authorized discovery", func() {
 		Expect(err).To(Succeed())
 		Expect(string(getSecretResultJSON)).ToNot(ContainSubstring(adamSecretBytes))
 		Expect(string(getSecretResultJSON)).ToNot(ContainSubstring(base64.StdEncoding.EncodeToString([]byte(adamSecretBytes))))
+
+		listedTools, err := adamSession.ListTools(ctx, nil)
+		Expect(err).ToNot(HaveOccurred())
+		var getResourceSchema any
+		for _, listedTool := range listedTools.Tools {
+			if listedTool.Name == "get_resource" {
+				getResourceSchema = listedTool.InputSchema
+				break
+			}
+		}
+		schema, ok := getResourceSchema.(map[string]any)
+		Expect(ok).To(BeTrue())
+		properties, ok := schema["properties"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		resourceType, ok := properties["resource_type"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(resourceType["enum"]).ToNot(ContainElement(string(mcpserver.ResourceTypeSecretReference)))
 
 		adamProject, err := adamProjects.Get(ctx, publicv1.ProjectsGetRequest_builder{Id: adamProjectID}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -385,27 +367,6 @@ func createMCPDiscoverySecret(ctx context.Context, conn *grpc.ClientConn, caller
 		}
 	})
 	return secretID, secretBytes
-}
-
-func connectMCPDiscoveryCaller(ctx context.Context, endpoint, username string) *mcp.ClientSession {
-	tokenSource, err := tool.makeKeycloakTokenSource(ctx, username, usersPassword)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	httpClient := &http.Client{Transport: ghttp.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
-		token, err := tokenSource.Token(request.Context())
-		if err != nil {
-			return nil, err
-		}
-		request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
-		return http.DefaultTransport.RoundTrip(request)
-	})}
-	client := mcp.NewClient(&mcp.Implementation{
-		Name: fmt.Sprintf("it-mcp-%s-discovery", username), Version: "0.1.0",
-	}, nil)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: endpoint, HTTPClient: httpClient,
-	}, nil)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	return session
 }
 
 func listMCPDiscoveryResource(

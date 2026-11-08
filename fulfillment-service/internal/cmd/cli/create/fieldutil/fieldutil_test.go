@@ -22,6 +22,48 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
+var _ = Describe("ParseSSHKeyFlag", func() {
+	DescribeTable("parses tenant-scoped SSH Secret references",
+		func(input, wantName, wantProject string) {
+			ref, err := ParseSSHKeyFlag(input)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ref.GetName()).To(Equal(wantName))
+			Expect(ref.GetProject()).To(Equal(wantProject))
+			Expect(ref.GetShared()).To(BeFalse())
+		},
+		Entry("bare name", "login-key", "login-key", ""),
+		Entry("name key", "name=login-key", "login-key", ""),
+		Entry("named project", "name=login-key,project=apps", "login-key", "apps"),
+		Entry("empty project", "name=login-key,project=", "login-key", ""),
+	)
+
+	DescribeTable("rejects malformed SSH key values before API access",
+		func(input string) {
+			_, err := ParseSSHKeyFlag(input)
+			Expect(err).To(HaveOccurred())
+		},
+		Entry("empty value", " "),
+		Entry("empty name", "name="),
+		Entry("duplicate name", "name=first,name=second"),
+		Entry("duplicate project", "name=login-key,project=apps,project=ops"),
+		Entry("unknown key", "name=login-key,tenant=tenant-a"),
+		Entry("fragment without equals", "name=login-key,project"),
+		Entry("empty fragment", "name=login-key,,project=apps"),
+		Entry("bare value with comma", "login-key,apps"),
+	)
+
+	DescribeTable("formats details in malformed SSH key errors",
+		func(input, want string) {
+			_, err := ParseSSHKeyFlag(input)
+			Expect(err).To(MatchError(want))
+		},
+		Entry("malformed fragment", "name=login-key,project",
+			`invalid --ssh-key value "name=login-key,project": fragment "project" must use key=value syntax`),
+		Entry("unknown key", "name=login-key,tenant=tenant-a",
+			`invalid --ssh-key value "name=login-key,tenant=tenant-a": unknown key "tenant"`),
+	)
+})
+
 var _ = Describe("parseField", func() {
 	DescribeTable("valid inputs",
 		func(input, expectedKey, expectedValue string) {
@@ -66,9 +108,9 @@ var _ = Describe("inferValue", func() {
 var _ = Describe("ApplyFields", func() {
 	It("sets a simple spec field", func() {
 		spec := &publicv1.ClusterSpec{}
-		err := ApplyFields(spec, []string{"ssh_public_key=my-key"})
+		err := ApplyFields(spec, []string{"network.service_cidr=172.30.0.0/16"})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(spec.GetSshPublicKey()).To(Equal("my-key"))
+		Expect(spec.GetNetwork().GetServiceCidr()).To(Equal("172.30.0.0/16"))
 	})
 
 	It("sets a nested spec field", func() {
@@ -108,11 +150,11 @@ var _ = Describe("ApplyFields", func() {
 	It("applies multiple fields", func() {
 		spec := &publicv1.ClusterSpec{}
 		err := ApplyFields(spec, []string{
-			"ssh_public_key=ssh-ed25519 AAAA",
+			"network.pod_cidr=10.128.0.0/14",
 			"template_parameters.vpc_id=vpc-456",
 		})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(spec.GetSshPublicKey()).To(Equal("ssh-ed25519 AAAA"))
+		Expect(spec.GetNetwork().GetPodCidr()).To(Equal("10.128.0.0/14"))
 		Expect(spec.GetTemplateParameters()).To(HaveKey("vpc_id"))
 	})
 

@@ -28,7 +28,7 @@ import (
 )
 
 var _ = Describe("ResolveSSHKey", func() {
-	It("does not classify a missing Secret as permanent", func() {
+	It("classifies a missing Secret as permanent", func() {
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 
@@ -44,7 +44,7 @@ var _ = Describe("ResolveSSHKey", func() {
 		)
 
 		Expect(resolutionErr).To(HaveOccurred())
-		Expect(resolutionErr.Permanent).To(BeFalse())
+		Expect(resolutionErr.Permanent).To(BeTrue())
 		Expect(resolutionErr.Reason).To(Equal("SecretNotFound"))
 	})
 })

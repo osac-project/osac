@@ -690,6 +690,12 @@ func (c *Reconciler[O]) watchEvents(ctx context.Context) error {
 		c.syncLoop.Kick()
 	}
 	group := c.name + reconcilerGroupSuffix
+
+	// Close the stream on every return. An abandoned stream keeps its server handler in the consumer group, and
+	// that handler goes on taking partitions and committing offsets for events that nobody reads.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	stream, err := c.eventsClient.Watch(ctx, &privatev1.EventsWatchRequest{
 		Filter: &c.eventFilter,
 		Group:  &group,

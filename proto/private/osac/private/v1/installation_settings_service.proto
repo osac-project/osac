@@ -1,0 +1,25 @@
+// Copyright (c) 2026 Red Hat Inc.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "cleanapi/cleanapi.proto";
+
+option (cleanapi.file).private = true;
+
+// Request for the installation's immutable networking mode.
+message InstallationSettingsGetRequest {}
+
+// The networking mode selected when Fulfillment first started with this schema.
+message InstallationSettingsGetResponse {
+  bool networking_provisioning_enabled = 1;
+}
+
+// Read-only installation configuration for authorized internal clients.
+service InstallationSettings {
+  rpc Get(InstallationSettingsGetRequest) returns (InstallationSettingsGetResponse);
+}

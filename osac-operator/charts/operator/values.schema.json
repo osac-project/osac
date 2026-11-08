@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "global": {
+      "type": "object",
+      "properties": {
+        "networking": {
+          "type": "object",
+          "properties": {
+            "provisioningEnabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Installation-time provider-networking setting. When connected to Fulfillment, the Operator verifies it matches the saved value before reconciliation."
+            }
+          }
+        }
+      }
+    }
+  }
+}

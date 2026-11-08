@@ -8,9 +8,13 @@ import { mockQueryResult } from '@osac/ui-components/test-utils/query';
 import { VmListPage } from './VmListPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
-vi.mock('@osac/ui-components/api/v1/compute-instance', () => ({
-  useComputeInstances: vi.fn(),
-}));
+vi.mock('@osac/ui-components/api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@osac/ui-components/api/use-resource')>();
+  return {
+    ...actual,
+    useListResource: vi.fn(),
+  };
+});
 
 vi.mock('@osac/ui-components/api/v1/instance-types', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@osac/ui-components/api/v1/instance-types')>();
@@ -34,7 +38,7 @@ vi.mock('../../components/vm/VmInstanceTypeLabel', () => ({
   }) => <span>{instanceType?.metadata?.name ?? instanceTypeId ?? '—'}</span>,
 }));
 
-const { useComputeInstances } = await import('@osac/ui-components/api/v1/compute-instance');
+const { useListResource } = await import('@osac/ui-components/api/use-resource');
 const { useInstanceTypes } = await import('@osac/ui-components/api/v1/instance-types');
 
 const vm = {
@@ -52,11 +56,11 @@ const renderPage = () => renderWithProviders(<VmListPage />, { session: { role: 
 
 describe('VmListPage', () => {
   beforeEach(() => {
-    vi.mocked(useComputeInstances).mockReturnValue({
-      data: [vm],
+    vi.mocked(useListResource).mockReturnValue({
+      data: { items: [vm] },
       isLoading: false,
       error: null,
-    } as ReturnType<typeof useComputeInstances>);
+    } as ReturnType<typeof useListResource>);
 
     vi.mocked(useInstanceTypes).mockReturnValue({
       data: [{ id: 'standard-4-8', metadata: { name: 'Standard 4 vCPU / 8 GiB' } }],
@@ -87,9 +91,9 @@ describe('VmListPage', () => {
   });
 
   it('keeps compute instance failures on the page-level error path', async () => {
-    vi.mocked(useComputeInstances).mockReturnValue(
+    vi.mocked(useListResource).mockReturnValue(
       mockQueryResult({
-        data: [],
+        data: { items: [] },
         isLoading: false,
         error: new Error('VMs unavailable'),
       }),

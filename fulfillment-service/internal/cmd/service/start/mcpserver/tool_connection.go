@@ -94,9 +94,9 @@ func handleCheckConnection(
 			tenants = []string{""}
 			permissionTenants = tenants
 		}
-		permissions := make([]CheckConnectionPermission, 0, len(permissionTenants)*2)
+		permissions := make([]CheckConnectionPermission, 0, len(permissionTenants)*3)
 		for _, tenant := range permissionTenants {
-			for _, method := range []string{"List", "Create"} {
+			for _, method := range []string{"List", "Create", "Update"} {
 				allowed, err := checkComputeInstancePermission(ctx, reviewsClient, tenant, method)
 				if err != nil {
 					return nil, CheckConnectionOutput{}, safePublicAPIError(err)

@@ -53,10 +53,13 @@ export const ExternalIpPoolDetailsPage = () => {
                 >
                   <FlexItem>
                     <ResourceDetailHeader
-                      parentTo={POOLS_LIST_PATH}
-                      parentLabel={t('External IP pools')}
+                      parents={[
+                        {
+                          to: POOLS_LIST_PATH,
+                          label: t('External IP pools'),
+                        },
+                      ]}
                       resourceName={pool.metadata?.name || pool.id}
-                      description={pool.metadata?.description}
                     />
                   </FlexItem>
                   <FlexItem>

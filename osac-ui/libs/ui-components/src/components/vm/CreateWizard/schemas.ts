@@ -5,6 +5,8 @@ import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/ne
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 import { userDataSchema } from '@osac/ui-components/validation/user-data';
 
+import type { ComputeInstanceWizardValues } from './fields';
+
 export type VmWizardStepId =
   | 'catalog'
   | 'general'
@@ -39,12 +41,12 @@ const buildComputeInstanceFieldDefinitions = (t: TFunction) => {
       id: yup.string().required(t('catalogProvision.validation.catalogItemRequired')),
     }),
     metadataName: resourceNameSchema(t),
-    specInstanceType: lockedField(yup.string().required(t('Instance type is required'))),
-    specUserData: lockedField(yup.string()).when('userDataSource', {
-      is: (source: { value?: string }) => source?.value !== 'secret',
-      then: () => lockedField(userDataSchema(t)),
-      otherwise: () => lockedField(yup.string()),
-    }),
+    specInstanceType: lockedField(
+      yup.object({
+        id: yup.string().required(t('Instance type is required')),
+        name: yup.string(),
+      }),
+    ),
     specBootDisk: yup.object({
       sizeGib: lockedField(
         yup
@@ -123,17 +125,15 @@ export const buildComputeInstanceStepSchema = (
         metadata: yup.object({
           name: fields.metadataName,
         }),
+      });
+    case 'configuration':
+      return yup.object({
         spec: yup.object({
           diskImage: lockedField(
             yup.object({
               id: yup.string().required(t('Disk image is required')),
             }),
           ),
-        }),
-      });
-    case 'configuration':
-      return yup.object({
-        spec: yup.object({
           instanceType: fields.specInstanceType,
         }),
       });
@@ -152,12 +152,21 @@ export const buildComputeInstanceStepSchema = (
       });
     case 'access':
       return yup.object({
-        spec: yup.object({
-          sshKey: lockedField(yup.string()),
-          userDataSource: lockedField(yup.string()),
-          userData: fields.specUserData,
-          userDataSecret: lockedField(yup.string()),
-        }),
+        spec: yup.lazy((spec: ComputeInstanceWizardValues['spec'] | undefined) =>
+          yup.object({
+            sshKey: lockedField(yup.string()),
+            userData: lockedField(
+              yup.object({
+                source: yup.string().oneOf(['inline', 'secret']).required(),
+                inline: yup.string().when('source', {
+                  is: 'inline',
+                  then: () => userDataSchema(t, spec?.guestOsFamily),
+                }),
+                secret: yup.string(),
+              }),
+            ),
+          }),
+        ),
       });
     default:
       return undefined;

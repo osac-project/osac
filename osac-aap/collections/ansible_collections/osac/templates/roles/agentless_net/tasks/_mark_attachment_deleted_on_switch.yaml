@@ -1,0 +1,21 @@
+---
+- name: Write the NetworkAttachment tombstone on its switch under the NVUE lock
+  ansible.builtin.raw: |
+    flock /tmp/nvue.lock sh -s -- {{ osac_job_vars.resource.id }} <<'SH'
+    set -eu
+    id="$1"
+    directory=/var/lib/osac/agentless-net-v1/tombstones
+    install -d -m 0700 "$directory"
+    umask 077
+    : >"$directory/network-attachment-$id"
+    SH
+  delegate_to: "{{ _agentless_net_switch_name }}"
+  become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port | default(22) }}"
+    ansible_network_os: cumulus
+  changed_when: true
+  no_log: true

@@ -38,9 +38,6 @@ export const getVolumeStatusMap = (
   [VolumeState.DELETED]: { status: 'unspecified', text: t('Deleted') },
 });
 
-export const formatSizeGib = (sizeGib: bigint | undefined): string =>
-  sizeGib === undefined ? '—' : `${sizeGib} GiB`;
-
 export const buildVolumeListFilter = (
   projectFilter: CelFilter<Volume> | undefined,
   stateFilters: VolumeState[],

@@ -10,11 +10,11 @@ describe('buildExternalIpCreatePayload', () => {
   it('sends name, project, and pool on create', () => {
     expect(
       buildExternalIpCreatePayload({
-        metadata: { name: 'edge-ip', project: 'default', description: 'Edge address' },
+        metadata: { name: 'edge-ip', project: 'default' },
         pool: { id: 'pool-1', name: 'public-edge' },
       }),
     ).toEqual({
-      metadata: { name: 'edge-ip', project: 'default', description: 'Edge address' },
+      metadata: { name: 'edge-ip', project: 'default' },
       spec: { pool: { id: 'pool-1', name: 'public-edge' } },
     });
   });
@@ -22,12 +22,12 @@ describe('buildExternalIpCreatePayload', () => {
   it('hydrates form values from an existing external IP', () => {
     const externalIp = create(ExternalIPSchema, {
       id: 'eip-1',
-      metadata: { name: 'edge-ip', project: 'default', description: 'Edge address' },
+      metadata: { name: 'edge-ip', project: 'default' },
       spec: { pool: { id: 'pool-1', name: 'public-edge' } },
     });
 
     expect(getExternalIpValues(externalIp)).toEqual({
-      metadata: { name: 'edge-ip', project: 'default', description: 'Edge address' },
+      metadata: { name: 'edge-ip', project: 'default' },
       pool: { id: 'pool-1', name: 'public-edge' },
     });
   });

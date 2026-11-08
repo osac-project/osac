@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.core import failure_report, failure_snapshot
+from tests.e2e.core import failure_report, failure_snapshot, telemetry
 from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import unique_name, wait_for_grpc_subnet_ready, wait_for_tenant_condition
@@ -103,6 +103,8 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers", "serial: must run alone, not in parallel with other tests (e.g. exhausts a shared resource)"
     )
     failure_report.register(config)
+    # Worker attribution and fixture-reuse spans; inert without OpenTelemetry.
+    telemetry.register(config)
     if config.option.tbstyle == "auto":
         # The long style prints every frame's arguments: tokens, passwords and kubeconfig values. An explicit
         # --tb on the command line is left alone.

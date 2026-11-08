@@ -18,8 +18,8 @@ on:  # yamllint disable-line rule:truthy
         default: ""
       kind:
         description: >-
-          Which tests: go-unit, ui-unit, it-fulfillment-service, it-osac-operator, it-bare-metal-fulfillment-operator,
-          it-osac-aap, it-osac-installer, helm-unit or
+          Which tests: go-unit, ui-unit, metering-contract, it-fulfillment-service, it-osac-operator,
+          it-bare-metal-fulfillment-operator, it-osac-aap, it-osac-installer, helm-unit or
           it-osac-installer-preflight-helm3/-helm322/-helm4
         required: true
         type: string
@@ -53,6 +53,8 @@ jobs:
     name: ${{ inputs.dir || inputs.kind }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout }}
+    env:
+      KIND_EXPERIMENTAL_PROVIDER: docker
     steps:
       # --- unit tests of a Go module (fulfillment-service, osac-metering/...)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -77,7 +79,27 @@ jobs:
             exit 1
           fi
           read -r -a args <<<"${COMMAND}"
-          "${args[@]}"
+          # Bound the runner even when leaked child processes keep test output pipes open.
+          timeout --kill-after=30s 1h "${args[@]}"
+      # --- generated metering contract and the published-schema release gate
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'metering-contract'
+        with:
+          ref: ${{ inputs.commit }}
+          # The immutability checks compare the published files with the newest release tag.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        if: inputs.kind == 'metering-contract'
+        with:
+          working-directory: osac-metering/metering-service
+      # The rule-render check renders the chart, so the leg needs Helm.
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        if: inputs.kind == 'metering-contract'
+      - name: Check the metering contract and published schemas
+        if: inputs.kind == 'metering-contract'
+        working-directory: osac-metering
+        run: make contract-check schemas-unchanged-test rules-render-test rules-unchanged-test
       # --- unit tests of osac-ui
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'ui-unit'
@@ -531,6 +553,14 @@ jobs:
           version: v3.22.0
       - uses: ./.github/actions/setup-python
         if: inputs.kind == 'helm-unit'
+      - name: Test preflight harness
+        if: inputs.kind == 'helm-unit'
+        working-directory: osac-installer
+        run: uv run --script scripts/test-preflight-harness.py
+      - name: Test Kind runtime and suite runner
+        if: inputs.kind == 'helm-unit'
+        working-directory: osac-installer
+        run: make kind-runtime-test
       - name: Build chart dependencies
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
@@ -555,6 +585,12 @@ jobs:
           mkdir -p "${plugin_dir}"
           tar -xzf "${archive}" -C "${plugin_dir}"
           helm unittest charts/osac
+          # The metering chart's reader grants are values an admin sets on the
+          # umbrella chart, and the infra chart owns the Kafka exporter the
+          # reader lag alert reads, so both suites run here too.
+          helm unittest ../osac-metering/charts/osac-metering
+          ../osac-metering/scripts/test-readers-render.sh
+          helm unittest charts/osac-infra
       - name: Test preflight rendering
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer

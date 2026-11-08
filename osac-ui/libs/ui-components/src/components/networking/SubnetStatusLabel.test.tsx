@@ -26,11 +26,6 @@ describe('SubnetStatusLabel', () => {
     expect(screen.getByText('Deleting')).toBeInTheDocument();
   });
 
-  it('maps DELETE_FAILED to failed/Delete Failed', () => {
-    render(<SubnetStatusLabel state={SubnetState.DELETE_FAILED} />);
-    expect(screen.getByText('Delete Failed')).toBeInTheDocument();
-  });
-
   it('maps undefined to unspecified/Unknown', () => {
     render(<SubnetStatusLabel />);
     expect(screen.getByText('Unknown')).toBeInTheDocument();

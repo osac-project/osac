@@ -200,8 +200,7 @@ export type ExternalIPAttachmentStatus = Message<"osac.private.v1.ExternalIPAtta
   /**
    * Allocated IP address from the parent ExternalIP.
    *
-   * Populated for convenience once the attachment reaches READY state. Mirrors the address
-   * field from the referenced ExternalIP's status.
+   * Set at create from the ExternalIP's address; never changes.
    *
    * @generated from field: string external_ip_address = 2;
    */

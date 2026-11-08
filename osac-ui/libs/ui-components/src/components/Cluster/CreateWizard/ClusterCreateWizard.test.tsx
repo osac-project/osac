@@ -98,9 +98,12 @@ const selectCatalogItemAndFillName = async (
 const advanceThroughRemainingSteps = async (user: ReturnType<typeof renderWizard>['user']) => {
   // Configuration and Networking: every governed field is locked with a
   // catalog default, so Next can be clicked without further input.
-  await user.click(screen.getByRole('button', { name: 'Next' }));
-  await user.click(screen.getByRole('button', { name: 'Next' }));
-  await user.click(screen.getByRole('button', { name: 'Next' }));
+  for (let step = 0; step < 3; step += 1) {
+    await user.click(await screen.findByRole('button', { name: 'Next' }));
+  }
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
+  });
 };
 
 describe('ClusterCreateWizard', () => {

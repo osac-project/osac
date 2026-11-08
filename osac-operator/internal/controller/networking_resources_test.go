@@ -34,6 +34,7 @@ import (
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/networktask"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const (
@@ -297,6 +298,30 @@ var _ = Describe("Subnet controller", func() {
 		reconcileNet(r, sn)
 		expectReady(sn, metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
 	})
+
+	DescribeTable("records eligibility without changing lifecycle readiness",
+		func(artifacts string, supported bool, reason string) {
+			h.readyVirtualNetwork("vn-1", true)
+			sn := h.subnet("sn-1", "vn-1", "10.0.1.0/24", testPlan)
+			reconcileNet(r, sn)
+			h.aap.finish(networktask.CreateSubnet, netFabric, "successful",
+				`{"osac_result":{"network_segment":{"type":"evpn","l2_vni":10100}}}`)
+			reconcileNet(r, sn)
+			h.aap.finish(networktask.CreateSubnet, netK8s, "successful", artifacts)
+			reconcileNet(r, sn)
+			expectReady(sn, metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
+			Expect(sn.Status.ComputeInstanceSupported).To(Equal(ptr.To(supported)))
+			Expect(sn.Status.ComputeInstanceUnsupportedReason).To(Equal(reason))
+			remote := privatev1.Subnet_builder{Status: privatev1.SubnetStatus_builder{}.Build()}.Build()
+			Expect(syncSubnetUpdate(ctx, sn, remote)).To(Succeed())
+			Expect(remote.GetStatus().HasComputeInstanceSupported()).To(BeTrue())
+			Expect(remote.GetStatus().GetComputeInstanceSupported()).To(Equal(supported))
+			Expect(remote.GetStatus().GetComputeInstanceUnsupportedReason()).To(Equal(reason))
+		},
+		Entry("owner", `{"osac_result":{"compute_instance_supported":true}}`, true, ""),
+		Entry("sibling", `{"osac_result":{"compute_instance_supported":false,"compute_instance_unsupported_reason":"owner only"}}`, false, "owner only"),
+		Entry("older manager", `{"osac_result":{}}`, true, ""),
+	)
 
 	It("waits for the VirtualNetwork's l3_vni before storing input or launching", func() {
 		vn := h.readyVirtualNetwork("vn-1", true)

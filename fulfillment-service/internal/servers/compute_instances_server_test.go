@@ -14,18 +14,24 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"go.uber.org/mock/gomock"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -350,6 +356,9 @@ var _ = Describe("Compute instances server", func() {
 					}.Build(),
 					Status: publicv1.ComputeInstanceStatus_builder{
 						State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+						Volumes: []*publicv1.ComputeInstanceVolume{
+							publicv1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-spoofed"}.Build(),
+						},
 						ComputeNetworkAttachmentStatuses: []*publicv1.ComputeNetworkAttachmentStatus{
 							publicv1.ComputeNetworkAttachmentStatus_builder{
 								SubnetRef: "spoofed-subnet",
@@ -369,6 +378,7 @@ var _ = Describe("Compute instances server", func() {
 			// statuses are dropped instead of persisted.
 			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED))
 			Expect(object.GetStatus().GetComputeNetworkAttachmentStatuses()).To(BeEmpty())
+			Expect(object.GetStatus().GetVolumes()).To(BeEmpty())
 		})
 
 		It("List objects", func() {
@@ -647,6 +657,15 @@ var _ = Describe("Compute instances server", func() {
 			storedObject.SetStatus(privatev1.ComputeInstanceStatus_builder{
 				State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
 				StateTransitionTime: storedTime,
+				Volumes: []*privatev1.ComputeInstanceVolume{
+					privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-stored"}.Build(),
+				},
+				VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+					privatev1.ComputeInstanceVolumeRegistration_builder{
+						DiskKey: "boot",
+						State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+					}.Build(),
+				},
 			}.Build())
 			_, err = ciDao.Update().SetObject(storedObject).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -660,6 +679,10 @@ var _ = Describe("Compute instances server", func() {
 			tampered := getResponse.GetObject()
 			tampered.GetStatus().SetState(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
 			tampered.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now().Truncate(time.Second)))
+			Expect(tampered.GetStatus().GetVolumes()).To(HaveLen(1))
+			tampered.GetStatus().GetVolumes()[0].SetVolumeId("volume-forged")
+			restartTime := timestamppb.Now()
+			tampered.GetSpec().SetRestartRequestedAt(restartTime)
 			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 				Object: tampered,
 			}.Build())
@@ -670,8 +693,11 @@ var _ = Describe("Compute instances server", func() {
 				Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
 			Expect(updateResponse.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
 				Equal(storedTime.AsTime()))
+			Expect(updateResponse.GetObject().GetStatus().GetVolumes()[0].GetVolumeId()).To(Equal("volume-stored"))
+			Expect(updateResponse.GetObject().GetSpec().GetRestartRequestedAt().AsTime()).To(
+				BeTemporally("~", restartTime.AsTime()))
 
-			// And they survive a round-trip through the database:
+			// The public correlation and private registration state also survive persistence:
 			after, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
 				Id: id,
 			}.Build())
@@ -680,6 +706,199 @@ var _ = Describe("Compute instances server", func() {
 				Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
 			Expect(after.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
 				Equal(storedTime.AsTime()))
+			Expect(after.GetObject().GetStatus().GetVolumes()[0].GetVolumeId()).To(Equal("volume-stored"))
+			Expect(after.GetObject().GetSpec().GetRestartRequestedAt().AsTime()).To(
+				BeTemporally("~", restartTime.AsTime()))
+			persisted, err := ciDao.Get().SetId(id).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(persisted.GetObject().GetStatus().GetVolumeRegistration()[0].GetState()).To(
+				Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
+		})
+
+		It("projects disk correlations without private registration state in responses and logs", func() {
+			createTemplate("public-disk-projection-template")
+			created, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{Name: "public-disk-projection"}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "public-disk-projection-template"}.Build(),
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			ciDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := ciDao.Get().SetId(created.GetObject().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			storedObject := stored.GetObject()
+			condition := func(reason, message string) *privatev1.ComputeInstanceCondition {
+				return privatev1.ComputeInstanceCondition_builder{
+					Type:   privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
+					Status: privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+					Reason: proto.String(reason), Message: proto.String(message),
+				}.Build()
+			}
+			storedObject.SetStatus(privatev1.ComputeInstanceStatus_builder{
+				Conditions: []*privatev1.ComputeInstanceCondition{
+					condition("VolumeRegistrationPending", "Disk Volume IDs persisted: 0/1; blocked disks: boot; registration pending."),
+				},
+			}.Build())
+			_, err = ciDao.Update().SetObject(storedObject).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			pendingGet, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: created.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pendingGet.GetObject().GetStatus().GetVolumes()).To(BeEmpty())
+			Expect(pendingGet.GetObject().GetStatus().GetConditions()).To(ContainElement(WithTransform(
+				func(item *publicv1.ComputeInstanceCondition) string { return item.GetReason() },
+				Equal("VolumeRegistrationPending"))))
+			pendingList, err := server.List(ctx, publicv1.ComputeInstancesListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pendingList.GetItems()).To(ContainElement(WithTransform(
+				func(item *publicv1.ComputeInstance) string {
+					if item.GetId() != created.GetObject().GetId() {
+						return ""
+					}
+					return item.GetStatus().GetConditions()[0].GetReason()
+				}, Equal("VolumeRegistrationPending"))))
+			stored, err = ciDao.Get().SetId(created.GetObject().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			storedObject = stored.GetObject()
+			storedObject.SetStatus(privatev1.ComputeInstanceStatus_builder{
+				Volumes: []*privatev1.ComputeInstanceVolume{
+					privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-public"}.Build(),
+				},
+				VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+					privatev1.ComputeInstanceVolumeRegistration_builder{
+						DiskKey: "boot",
+						State:   privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED,
+					}.Build(),
+				},
+				Conditions: []*privatev1.ComputeInstanceCondition{
+					condition("WaitingForVM", "All disk Volume IDs are registered; waiting for the VM."),
+				},
+			}.Build())
+			_, err = ciDao.Update().SetObject(storedObject).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			getRequest := publicv1.ComputeInstancesGetRequest_builder{Id: created.GetObject().GetId()}.Build()
+			getResponse, err := server.Get(ctx, getRequest)
+			Expect(err).ToNot(HaveOccurred())
+			publicJSON, err := protojson.Marshal(getResponse.GetObject())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(publicJSON)).To(ContainSubstring(`"volumeId":"volume-public"`))
+			Expect(string(publicJSON)).ToNot(ContainSubstring("volumeRegistration"))
+			Expect(string(publicJSON)).ToNot(ContainSubstring("STATE_RESOLVED"))
+
+			ownerGet, err := server.Get(ctx, getRequest)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(ownerGet.GetObject().GetStatus().GetVolumes()).To(HaveLen(1))
+			Expect(ownerGet.GetObject().GetStatus().GetVolumes()[0].GetDiskKey()).To(Equal("boot"))
+			Expect(ownerGet.GetObject().GetStatus().GetVolumes()[0].GetVolumeId()).To(Equal("volume-public"))
+			Expect(ownerGet.GetObject().GetStatus().GetConditions()[0].GetReason()).To(Equal("WaitingForVM"))
+			ownerList, err := server.List(ctx, publicv1.ComputeInstancesListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			var listedInstance *publicv1.ComputeInstance
+			for _, item := range ownerList.GetItems() {
+				if item.GetId() == created.GetObject().GetId() {
+					listedInstance = item
+					break
+				}
+			}
+			Expect(listedInstance).ToNot(BeNil())
+			Expect(listedInstance.GetStatus().GetVolumes()).To(HaveLen(1))
+			Expect(listedInstance.GetStatus().GetVolumes()[0].GetDiskKey()).To(Equal("boot"))
+			Expect(listedInstance.GetStatus().GetVolumes()[0].GetVolumeId()).To(Equal("volume-public"))
+			Expect(listedInstance.GetStatus().GetConditions()[0].GetReason()).To(Equal("WaitingForVM"))
+
+			// A same-tenant caller with access to a different project cannot see this instance.
+			projectName := "hidden-disk-project"
+			projectsDao, err := dao.NewGenericDAO[*privatev1.Project]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = projectsDao.Create().SetObject(privatev1.Project_builder{
+				Id: projectName,
+				Metadata: privatev1.Metadata_builder{
+					Name:   projectName,
+					Tenant: testTenant,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			projectInstance, err := ciDao.Create().SetObject(privatev1.ComputeInstance_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "project-scoped-disk-instance",
+					Tenant:  testTenant,
+					Project: projectName,
+				}.Build(),
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					Template: privatev1.ComputeInstanceTemplateReference_builder{
+						Id: "public-disk-projection-template",
+					}.Build(),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			foreignVisibility, err := auth.NewVisibility().
+				AddVisibleTenant("other-tenant").
+				SetTotalProjectVisibility("other-tenant").
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			foreignTenancy := auth.NewMockTenancyLogic(ctrl)
+			foreignTenancy.EXPECT().DetermineVisibility(gomock.Any()).Return(foreignVisibility, nil).AnyTimes()
+			foreignServer, err := NewComputeInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(foreignTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = foreignServer.Get(ctx, getRequest)
+			Expect(status.Code(err)).To(Equal(codes.NotFound))
+			foreignList, err := foreignServer.List(ctx, publicv1.ComputeInstancesListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(foreignList.GetItems()).To(BeEmpty())
+
+			projectVisibility, err := auth.NewVisibility().
+				AddVisibleProject(testTenant, "another-project").
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			projectTenancy := auth.NewMockTenancyLogic(ctrl)
+			projectTenancy.EXPECT().DetermineVisibility(gomock.Any()).Return(projectVisibility, nil).AnyTimes()
+			projectServer, err := NewComputeInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(projectTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			projectGetRequest := publicv1.ComputeInstancesGetRequest_builder{Id: projectInstance.GetObject().GetId()}.Build()
+			_, err = projectServer.Get(ctx, projectGetRequest)
+			Expect(status.Code(err)).To(Equal(codes.NotFound))
+			projectList, err := projectServer.List(ctx, publicv1.ComputeInstancesListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(projectList.GetItems()).To(ContainElement(HaveField("Id", created.GetObject().GetId())))
+			Expect(projectList.GetItems()).ToNot(ContainElement(HaveField("Id", projectInstance.GetObject().GetId())))
+
+			var logOutput bytes.Buffer
+			debugLogger := slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			interceptor, err := logging.NewInterceptor().SetLogger(debugLogger).SetBodies(true).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = interceptor.UnaryServer(ctx, getRequest, &grpc.UnaryServerInfo{
+				FullMethod: "/osac.public.v1.ComputeInstances/Get",
+			}, func(callCtx context.Context, request any) (any, error) {
+				return server.Get(callCtx, request.(*publicv1.ComputeInstancesGetRequest))
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(logOutput.String()).To(ContainSubstring("volume-public"))
+			Expect(logOutput.String()).ToNot(ContainSubstring("volumeRegistration"))
+			Expect(logOutput.String()).ToNot(ContainSubstring("STATE_RESOLVED"))
 		})
 
 		DescribeTable("Rejects every public status mask path",
@@ -1932,6 +2151,92 @@ var _ = Describe("Compute instances server", func() {
 			Expect(getResponse.GetObject().GetStatus().GetInstanceType()).To(BeNil())
 			Expect(getResponse.GetObject().GetStatus().GetInstanceTypeTransitionTime()).To(BeNil())
 		})
+
+		DescribeTable("Rejects a public update of the output-only running instance type fields",
+			func(path string) {
+				createTemplate("running-type-update-template")
+
+				createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: "test-compute-instance",
+						}.Build(),
+						Spec: publicv1.ComputeInstanceSpec_builder{
+							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "running-type-update-template"}.Build(),
+							NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+								publicv1.ComputeNetworkAttachment_builder{
+									Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Id: createResponse.GetObject().GetId(),
+						Status: publicv1.ComputeInstanceStatus_builder{
+							InstanceType: publicv1.InstanceTypeReference_builder{
+								Id: "standard-4-16", Name: "standard-4-16",
+							}.Build(),
+							InstanceTypeTransitionTime: timestamppb.Now(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{path},
+					},
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring(path + " is output-only"))
+			},
+			Entry("instance type", "status.instance_type"),
+			Entry("instance type transition time", "status.instance_type_transition_time"),
+			Entry("instance type name subpath", "status.instance_type.name"),
+			Entry("instance type transition time subpath", "status.instance_type_transition_time.seconds"),
+		)
+
+		DescribeTable("Rejects public updates of disk registration status fields",
+			func(path string) {
+				createTemplate("disk-status-update-template")
+
+				createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Metadata: publicv1.Metadata_builder{Name: "disk-status-update"}.Build(),
+						Spec: publicv1.ComputeInstanceSpec_builder{
+							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "disk-status-update-template"}.Build(),
+							NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+								publicv1.ComputeNetworkAttachment_builder{
+									Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Id: createResponse.GetObject().GetId(),
+						Status: publicv1.ComputeInstanceStatus_builder{
+							Volumes: []*publicv1.ComputeInstanceVolume{
+								publicv1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-spoofed"}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring(path + " is output-only"))
+			},
+			Entry("public correlation list", "status.volumes"),
+			Entry("public correlation subfield", "status.volumes.volume_id"),
+			Entry("public correlation JSON subfield", "status.volumes.volumeId"),
+			Entry("private registration list", "status.volume_registration"),
+			Entry("private registration subfield", "status.volume_registration.state"),
+			Entry("private registration JSON field", "status.volumeRegistration"),
+			Entry("private registration JSON subfield", "status.volumeRegistration.state"),
+		)
 	})
 })
 

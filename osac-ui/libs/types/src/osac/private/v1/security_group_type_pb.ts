@@ -31,7 +31,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/security_group_type.proto.
  */
 export const file_osac_private_v1_security_group_type: GenFile = /*@__PURE__*/
-  fileDesc("Cilvc2FjL3ByaXZhdGUvdjEvc2VjdXJpdHlfZ3JvdXBfdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxIrwBCg1TZWN1cml0eUdyb3VwEgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEjYKBHNwZWMYAyABKAsyIi5vc2FjLnByaXZhdGUudjEuU2VjdXJpdHlHcm91cFNwZWNCBOJBAQUSOgoGc3RhdHVzGAQgASgLMiQub3NhYy5wcml2YXRlLnYxLlNlY3VyaXR5R3JvdXBTdGF0dXNCBOJBAQMiwQEKEVNlY3VyaXR5R3JvdXBTcGVjEk0KD3ZpcnR1YWxfbmV0d29yaxgBIAEoCzItLm9zYWMucHJpdmF0ZS52MS5WaXJ0dWFsTmV0d29ya0xvY2FsUmVmZXJlbmNlQgXiQQICBRIuCgdpbmdyZXNzGAIgAygLMh0ub3NhYy5wcml2YXRlLnYxLlNlY3VyaXR5UnVsZRItCgZlZ3Jlc3MYAyADKAsyHS5vc2FjLnByaXZhdGUudjEuU2VjdXJpdHlSdWxlIoQBChNTZWN1cml0eUdyb3VwU3RhdHVzEjIKBXN0YXRlGAEgASgOMiMub3NhYy5wcml2YXRlLnYxLlNlY3VyaXR5R3JvdXBTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQESFwoDaHViGAMgASgJQgriQQEDirUYAggBQgoKCF9tZXNzYWdlIjcKG1NlY3VyaXR5R3JvdXBMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJKugBChJTZWN1cml0eUdyb3VwU3RhdGUSJAogU0VDVVJJVFlfR1JPVVBfU1RBVEVfVU5TUEVDSUZJRUQQABIgChxTRUNVUklUWV9HUk9VUF9TVEFURV9QRU5ESU5HEAESHgoaU0VDVVJJVFlfR1JPVVBfU1RBVEVfUkVBRFkQAhIfChtTRUNVUklUWV9HUk9VUF9TVEFURV9GQUlMRUQQAxIhCh1TRUNVUklUWV9HUk9VUF9TVEFURV9ERUxFVElORxAEEiYKIlNFQ1VSSVRZX0dST1VQX1NUQVRFX0RFTEVURV9GQUlMRUQQBUIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_security_rule_type, file_osac_private_v1_virtual_network_type]);
+  fileDesc("Cilvc2FjL3ByaXZhdGUvdjEvc2VjdXJpdHlfZ3JvdXBfdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxIrYBCg1TZWN1cml0eUdyb3VwEgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEjAKBHNwZWMYAyABKAsyIi5vc2FjLnByaXZhdGUudjEuU2VjdXJpdHlHcm91cFNwZWMSOgoGc3RhdHVzGAQgASgLMiQub3NhYy5wcml2YXRlLnYxLlNlY3VyaXR5R3JvdXBTdGF0dXNCBOJBAQMiwQEKEVNlY3VyaXR5R3JvdXBTcGVjEk0KD3ZpcnR1YWxfbmV0d29yaxgBIAEoCzItLm9zYWMucHJpdmF0ZS52MS5WaXJ0dWFsTmV0d29ya0xvY2FsUmVmZXJlbmNlQgXiQQICBRIuCgdpbmdyZXNzGAIgAygLMh0ub3NhYy5wcml2YXRlLnYxLlNlY3VyaXR5UnVsZRItCgZlZ3Jlc3MYAyADKAsyHS5vc2FjLnByaXZhdGUudjEuU2VjdXJpdHlSdWxlIoQBChNTZWN1cml0eUdyb3VwU3RhdHVzEjIKBXN0YXRlGAEgASgOMiMub3NhYy5wcml2YXRlLnYxLlNlY3VyaXR5R3JvdXBTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQESFwoDaHViGAMgASgJQgriQQEDirUYAggBQgoKCF9tZXNzYWdlIjcKG1NlY3VyaXR5R3JvdXBMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJKuoBChJTZWN1cml0eUdyb3VwU3RhdGUSJAogU0VDVVJJVFlfR1JPVVBfU1RBVEVfVU5TUEVDSUZJRUQQABIgChxTRUNVUklUWV9HUk9VUF9TVEFURV9QRU5ESU5HEAESHgoaU0VDVVJJVFlfR1JPVVBfU1RBVEVfUkVBRFkQAhIfChtTRUNVUklUWV9HUk9VUF9TVEFURV9GQUlMRUQQAxIhCh1TRUNVUklUWV9HUk9VUF9TVEFURV9ERUxFVElORxAEIgQIBRAFKiJTRUNVUklUWV9HUk9VUF9TVEFURV9ERUxFVEVfRkFJTEVEQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_security_rule_type, file_osac_private_v1_virtual_network_type]);
 
 /**
  * Represents a virtual firewall controlling network traffic for compute instances.
@@ -72,7 +72,8 @@ export type SecurityGroup = Message<"osac.private.v1.SecurityGroup"> & {
   metadata?: Metadata | undefined;
 
   /**
-   * Desired configuration of the security group, immutable after creation.
+   * Desired configuration. virtual_network is immutable; ingress and egress are replaced only by
+   * SecurityGroups.Update.
    *
    * @generated from field: osac.private.v1.SecurityGroupSpec spec = 3;
    */
@@ -299,18 +300,6 @@ export enum SecurityGroupState {
    * @generated from enum value: SECURITY_GROUP_STATE_DELETING = 4;
    */
   DELETING = 4,
-
-  /**
-   * The security group deletion has failed.
-   *
-   * The deprovision operation encountered an error and could not complete.
-   * The status.message field will contain specific error details.
-   * Manual intervention may be required to resolve the underlying issue
-   * before retrying deletion.
-   *
-   * @generated from enum value: SECURITY_GROUP_STATE_DELETE_FAILED = 5;
-   */
-  DELETE_FAILED = 5,
 }
 
 /**

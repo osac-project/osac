@@ -63,3 +63,18 @@ export const confirmRowDeletion = async (
     );
   }
 };
+
+/** Confirm a detail-page deletion and wait for its dialog to close. */
+export const confirmDetailDeletion = async (
+  deleteDialog: Locator,
+  deleteTitle: Locator,
+  deleteWarning: Locator,
+  deleteButton: Locator,
+  resourceName: string,
+): Promise<void> => {
+  await expect(deleteDialog).toBeVisible();
+  await expect(deleteTitle).toContainText(`Delete ${resourceName}?`);
+  await expect(deleteWarning).toBeVisible();
+  await deleteButton.click();
+  await expect(deleteDialog).toBeHidden();
+};

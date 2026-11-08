@@ -1,8 +1,8 @@
 .vm-console-viewport {
   width: 100%;
-  /* Explicit height so noVNC can measure the container and initialize.
-     PatternFly sizing utilities live in patternfly-addons and are easy to miss. */
-  height: 50vh;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .vm-console-viewport--hidden {

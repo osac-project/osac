@@ -1,4 +1,4 @@
-# MCP resource discovery
+# MCP tools
 
 The Fulfillment MCP server exposes bounded, typed resource discovery. It does
 not provide a generic RPC proxy, method-name dispatch, reflection, or direct
@@ -8,14 +8,47 @@ public Fulfillment API remains the authorization boundary.
 ## Supported resources
 
 `list_resources` supports the baseline compute and networking prerequisites,
-`project`, and `secret_reference`. `get_resource` supports only resources with
-a registered public Get adapter. Secret references are list-only: MCP returns
-the reference's ID, name, and type, and never Secret bytes, credentials,
-tokens, provider data, or the underlying Secret object.
+`project`, and `secret_reference`.
+
+`get_resource` accepts only:
+
+- `compute_instance_catalog_item`
+- `compute_instance_template`
+- `instance_type`
+- `disk_image`
+- `storage_tier`
+- `project`
+- `virtual_network`
+- `subnet`
+- `security_group`
+- `compute_instance`
+
+Secret references are list-only: MCP returns the reference's ID, name, and
+type, and never Secret bytes, credentials, tokens, provider data, or the
+underlying Secret object.
 
 List requests use the explicit `filter` field and bounded pagination. The
 default page size is 50, the maximum is 100, and negative offsets or invalid
 page sizes are rejected before a public API call.
+
+## Supported network writes
+
+`create_network_resource` creates exactly one `virtual_network`, `subnet`, or
+`security_group` through the existing public Create API as the MCP caller. It
+accepts only the typed fields for the selected resource, requires canonical
+IPv4 CIDRs, and rejects edit-shaped input containing an existing resource ID
+with `unsupported_in_place` before any public mutation. Subnet and
+SecurityGroup creation passes the named parent VirtualNetwork to the public
+Create call. A missing or inaccessible parent is rejected there and returns a
+named prerequisite error without creating a dependent resource. NetworkClass
+remains provider-managed and is never exposed
+as a tenant write. SecurityGroup creation accepts at most 100 rules in total
+across `ingress_rules` and `egress_rules`, with the same per-direction schema
+limit.
+
+`delete_network_resource` deletes exactly one explicitly named eligible
+resource. It does not cascade: a parent with active dependents returns a
+conflict, and callers must delete dependents first.
 
 ## Registry extension contract
 
@@ -31,12 +64,11 @@ A resource-family task extends the registry in
    filters, pagination bounds, supported and unsupported methods, and no
    mutation on rejection.
 
-Omit the `get` function when the public API has no safe Get path. The shared
-handler then returns the `invalid_request` safe-error envelope without calling
-Fulfillment. Every registry entry must support List; get-only entries are not
-part of this registry contract. The `get_resource` schema accepts all listed
-types so list-only resources reach the shared handler and receive the safe
-rejection rather than host-side schema validation.
+Omit the `get` function when the public API has no safe Get path. The
+`get_resource` input schema lists only resource types with a registered Get
+adapter, so clients reject list-only types during schema validation. The shared
+handler still returns the `invalid_request` safe-error envelope without calling
+Fulfillment if a request for an unsupported type reaches it.
 
 Registry entries must not add arbitrary method names, reflection, arbitrary
 request messages, in-place edits, or unbounded pagination. If a family lacks

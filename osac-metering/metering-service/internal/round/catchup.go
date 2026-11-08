@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -212,6 +213,13 @@ func (r *Round) readHeartbeats(
 	}
 	defer func() { _ = partition.Close() }()
 
+	// The published versions are read once per batch: decoding one record must not
+	// re-read, parse, and hash the embedded files for every message.
+	versions, err := schema.PublishedVersions()
+	if err != nil {
+		return nil, false, fmt.Errorf("reading the published schema versions: %w", err)
+	}
+
 	caught := make([]caughtHeartbeat, 0, r.catchUpBatch+1)
 	readCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -228,7 +236,7 @@ read:
 			if !ok {
 				break read
 			}
-			heartbeat, err := decodeHeartbeat(message.Value)
+			heartbeat, err := decodeHeartbeat(message.Value, versions)
 			if err != nil {
 				return nil, false, fmt.Errorf(
 					"decoding heartbeat at %s/%d: %w", topic, message.Offset, err,
@@ -388,27 +396,73 @@ func pieceRate(piece database.LedgerPiece) *big.Rat {
 	return new(big.Rat).SetFrac(big.NewInt(piece.QuantityMicro), big.NewInt(duration))
 }
 
-// decodeHeartbeat reads a heartbeat record from the topic.
-func decodeHeartbeat(value []byte) (caughtHeartbeat, error) {
+// decodeHeartbeat reads a heartbeat record from the topic. The record names its schema version
+// in its CloudEvent type. That version is validated, and the record must carry the fields that
+// version requires. The payload is decoded with the current HeartbeatData, so this struct must
+// stay a superset of every published version: published versions are add-only, so no field is
+// removed or given a new type. An unknown version stops the rebuild, and so does a record
+// written before its own version took effect. A record written after a newer version took
+// effect is fine, because a rolling deploy leaves older pods writing the older version for a
+// while.
+func decodeHeartbeat(value []byte, versions []schema.Version) (caughtHeartbeat, error) {
 	event := cloudevents.Event{}
 	if err := event.UnmarshalJSON(value); err != nil {
 		return caughtHeartbeat{}, fmt.Errorf("unmarshaling CloudEvent: %w", err)
+	}
+	published, err := schema.VersionForType(versions, event.Type())
+	if err != nil {
+		return caughtHeartbeat{}, err
+	}
+	if err := published.CheckRequiredPayload(event.Data()); err != nil {
+		return caughtHeartbeat{}, err
 	}
 	data, err := heartbeat.Data(event)
 	if err != nil {
 		return caughtHeartbeat{}, err
 	}
-	from, to, err := heartbeat.Interval(data)
+	if !schema.KnownResourceType(data.ResourceType) {
+		return caughtHeartbeat{}, fmt.Errorf(
+			"record names unknown resource_type %q; events carry one of %s",
+			data.ResourceType, strings.Join(schema.ResourceTypes(), ", "),
+		)
+	}
+	if data.Usage.Semantics != schema.UsageSemanticsInterval {
+		return caughtHeartbeat{}, fmt.Errorf(
+			"record has usage.semantics %q, want %q",
+			data.Usage.Semantics, schema.UsageSemanticsInterval,
+		)
+	}
+	if data.Usage.Precision != schema.UsagePrecisionSecond {
+		return caughtHeartbeat{}, fmt.Errorf(
+			"record has usage.precision %q, want %q",
+			data.Usage.Precision, schema.UsagePrecisionSecond,
+		)
+	}
+	roundTime, err := heartbeat.HeartbeatTime(data)
 	if err != nil {
 		return caughtHeartbeat{}, err
 	}
-	roundTime, err := heartbeat.HeartbeatTime(data)
+	if published.EffectiveAt.After(roundTime) {
+		return caughtHeartbeat{}, fmt.Errorf(
+			"record names schema version %s but was written at %s, before that version took "+
+				"effect at %s: a record cannot carry a version that was not published yet",
+			published.Version, roundTime.Format(time.RFC3339),
+			published.EffectiveAt.Format(time.RFC3339),
+		)
+	}
+	from, to, err := heartbeat.Interval(data)
 	if err != nil {
 		return caughtHeartbeat{}, err
 	}
 	quantity, err := heartbeat.ParseMicro(data.Usage.Quantity)
 	if err != nil {
 		return caughtHeartbeat{}, err
+	}
+	if heartbeat.FormatMicro(quantity) != data.Usage.Quantity {
+		return caughtHeartbeat{}, fmt.Errorf(
+			"record has usage.quantity %q, want six-decimal fixed point",
+			data.Usage.Quantity,
+		)
 	}
 	dimensions, err := json.Marshal(data.BillingDimensions)
 	if err != nil {

@@ -219,6 +219,76 @@ def test_wait_span_carries_resource_identity(exporter: object, monkeypatch: pyte
     assert span.attributes["osac.wait.resource_id"] == "bmi-42"
 
 
+def test_wait_span_classifies_itself_as_wait(exporter: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The wait span self-identifies, so service-call panels can exclude it.
+
+    Dashboards count a span as a service call when ``pytest.span_type`` is
+    unset (pytest-opentelemetry types its own spans "test"/"fixture"/"run").
+    A wait span sets the attribute to "wait" at creation, next to its usual
+    wait attributes, which stay unchanged.
+    """
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+    values = iter(["pending", "ready"])
+
+    assert (
+        runner.poll_until(
+            fn=lambda: next(values),
+            until=lambda value: value == "ready",
+            retries=3,
+            delay=5,
+            description="Subnet subnet-7 to become Ready",
+            resource_kind=WaitResourceKind.SUBNET,
+            resource_id="subnet-7",
+        )
+        == "ready"
+    )
+
+    span = wait_spans(exporter, "Subnet subnet-7 to become Ready")[0]
+    assert span.attributes["pytest.span_type"] == "wait"
+    assert span.attributes["poll.delay"] == 5
+    assert span.attributes["poll.retries"] == 3
+    assert span.attributes["poll.attempts"] == 2
+    assert span.attributes["poll.condition_met"] is True
+    assert span.attributes["osac.wait.resource_kind"] == "Subnet"
+    assert span.attributes["osac.wait.resource_id"] == "subnet-7"
+
+
+def test_timed_out_wait_span_classifies_itself_as_wait(exporter: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A timed-out wait keeps the classification and still raises StuckState."""
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(TimeoutError, match="not reached after"):
+        runner.poll_until(
+            fn=lambda: "pending",
+            until=lambda _: False,
+            retries=2,
+            delay=5,
+            description="Volume vol-9 to become Ready",
+            resource_kind=WaitResourceKind.VOLUME,
+            resource_id="vol-9",
+        )
+
+    span = wait_spans(exporter, "Volume vol-9 to become Ready")[0]
+    assert span.attributes["pytest.span_type"] == "wait"
+    assert span.attributes["poll.attempts"] == 2
+    assert span.attributes["poll.condition_met"] is False
+
+
+def test_no_op_wait_span_stays_inert(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without OpenTelemetry the wait span absorbs writes and stores nothing."""
+    monkeypatch.setattr(runner, "_otel_trace", None)
+
+    with runner._wait_span(
+        "no otel wait", delay=5, retries=3, resource_kind=WaitResourceKind.SUBNET, resource_id="subnet-7"
+    ) as span:
+        span.set_attribute("pytest.span_type", "wait")
+        span.set_attribute("poll.delay", 5)
+        span.set_status(object())
+
+    assert span is runner._NO_OP_WAIT_SPAN
+    assert vars(span) == {}
+
+
 def test_wait_span_timeout_sets_error_status_and_raises(exporter: object, monkeypatch: pytest.MonkeyPatch) -> None:
     from opentelemetry.trace import StatusCode
 
@@ -297,6 +367,7 @@ def test_wait_span_records_no_exception_and_no_command_on_escaping_error(
     spans = wait_spans(exporter, "flaky grpcurl call")
     assert len(spans) == 1
     span = spans[0]
+    assert span.attributes["pytest.span_type"] == "wait"
     assert span.status.status_code is StatusCode.ERROR
     assert span.status.description == "poll failed"
     assert span.events == ()

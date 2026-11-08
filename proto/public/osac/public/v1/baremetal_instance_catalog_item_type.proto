@@ -59,7 +59,10 @@ message BareMetalInstanceCatalogItem {
 
 // Groups the policies for governable bare metal instance fields.
 message BareMetalInstanceCatalogItemFields {
-  StringFieldPolicy ssh_public_key = 1;
+  // Reserved field number and name for the removed inline SSH-key policy.
+  // Callers must use `ssh_key` with a Secret-reference policy instead.
+  reserved 1;
+  reserved "ssh_public_key";
   reserved 2;
   reserved "user_data";
   BareMetalInstanceRunStrategyFieldPolicy run_strategy = 3;
@@ -78,8 +81,10 @@ message BareMetalInstanceCatalogItemFields {
 
   // Governs the complete user data source, including selection of inline content or a Secret.
   UserDataSourceFieldPolicy user_data_source = 10;
-}
 
+  // Optional tenant-scoped SSH public key Secret reference for bare metal access.
+  FullSecretReferenceFieldPolicy ssh_key = 11;
+}
 // Reference to a BareMetalInstanceCatalogItem resource.
 message BareMetalInstanceCatalogItemReference {
   string id = 1;

@@ -52,10 +52,10 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const stepLabels: Record<VmWizardStepId, string> = {
     catalog: t('Catalog item'),
     general: t('General'),
-    configuration: t('Configuration'),
+    configuration: t('Compute configuration'),
     storage: t('Storage'),
     networking: t('Networking'),
-    access: t('Access & initial run'),
+    access: t('Access & Initial run'),
     review: t('Review'),
   };
 

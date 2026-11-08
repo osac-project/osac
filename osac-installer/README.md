@@ -27,6 +27,16 @@ The OSAC platform provides:
 This installer uses Helm to manage deployments via an umbrella chart (`charts/osac/`)
 with per-environment values files under `values/`.
 
+### Podman Kind node PID limits
+
+On creation and reuse, the installer raises configured Podman node PID limits
+below `65536` to `65536`, preserving higher and unlimited settings on every node.
+It verifies updates before installing infrastructure and stops on runtime errors.
+Plain `dev` honors `KIND_EXPERIMENTAL_PROVIDER`; when unset, it selects Podman if
+available, using the invoking user's existing connection. The dev-full/Mac wrapper
+retains its existing runtime and connection handling. Docker and other providers
+receive no PID-limit changes. Host and ancestor cgroup limits are not checked.
+
 ## OSAC Components
 
 The OSAC platform relies on five core components to deliver governed self-service:
@@ -442,8 +452,10 @@ the `osac` and `osac-devstack` releases plus `scripts/dev-full/`:
   its default VirtualNetwork + Subnet + SecurityGroup via tenant onboarding, so those are
   ready without manual seeding.
 
-The Kind profiles set `global.networking.provisioningEnabled: false`, so
-networking resources reconcile to READY without a real fabric (Kind has none).
+The standard Kind profile sets `global.networking.provisioningEnabled: false`,
+so networking resources reconcile to READY without a real fabric. The `dev-full`
+profile enables provisioning so AAP can create each tenant's target namespace;
+Kind's CUDN API placeholder accepts those objects without an OVN dataplane.
 
 **Prerequisites** (beyond the base tools) — enforced by `scripts/dev-full/kind-runtime.sh check`:
 
@@ -700,6 +712,7 @@ make install-osac  PLATFORM=... PROFILE=... NS=...  # OSAC application only
 make kind-load-images PLATFORM=kind PROFILE=dev-full NS=... # Load existing images
 make uninstall     PLATFORM=... PROFILE=... NS=...  # Full uninstall
 make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration tests
+make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage # API/operator disk handoff
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
 make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
@@ -708,6 +721,13 @@ make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm d
 ```
 
 ### Monitor Progress
+
+`SUITE=compute-storage` builds and deploys the current Fulfillment and operator
+images against an existing Kind infrastructure install. It checks disk Volume
+IDs and StorageClass mappings through the API, database, real controllers and
+an AAP HTTP recorder. It runs no playbooks or storage provisioning. This phase
+also runs as part of `SUITE=fulfillment`; see the
+[coverage and prerequisites](../docs/INTEGRATION-TESTING.md#computeinstance-disk-handoff-osac-6685).
 
 ```bash
 # Monitor pod creation and startup

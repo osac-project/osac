@@ -28,8 +28,6 @@ const mockCluster = (state: ClusterState): Cluster => ({
   id: 'cluster-123',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: 'my-cluster',
     annotations: {},
     creator: 'foo',
@@ -58,7 +56,7 @@ const mockCluster = (state: ClusterState): Cluster => ({
       id: 'password-secret-123',
       name: 'my-cluster-password',
     },
-    observedCpVersion: '',
+    observedVersion: '',
     upgradeHistory: [],
   },
   spec: {

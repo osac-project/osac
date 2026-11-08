@@ -289,6 +289,34 @@ var _ = Describe("applyUserDataFlags", func() {
 })
 
 var _ = Describe("buildSpec", func() {
+	It("sets --ssh-key as a registered Secret reference", func() {
+		c := &runnerContext{}
+		c.args.sshKey = "tenant-login"
+
+		spec, err := c.buildSpec("catalog-item-id", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spec.GetSshKey().GetName()).To(Equal("tenant-login"))
+	})
+
+	It("parses a qualified --ssh-key with a project", func() {
+		c := &runnerContext{}
+		c.args.sshKey = "name=tenant-login,project=apps"
+
+		spec, err := c.buildSpec("catalog-item-id", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spec.GetSshKey().GetName()).To(Equal("tenant-login"))
+		Expect(spec.GetSshKey().GetProject()).To(Equal("apps"))
+	})
+
+	It("rejects a malformed --ssh-key before API access", func() {
+		c := &runnerContext{}
+		c.args.sshKey = "tenant-login,apps"
+
+		_, err := c.buildSpec("catalog-item-id", false)
+		Expect(err).To(MatchError(
+			`invalid --ssh-key value "tenant-login,apps": expected a bare name or name=<name>[,project=<project>]`))
+	})
+
 	It("should set disk_image from the disk-image flag", func() {
 		c := &runnerContext{}
 		c.args.diskImage = "rhel-9"

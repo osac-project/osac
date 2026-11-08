@@ -8,6 +8,7 @@ import {
   expectRowNotToExist,
   getTableRowByCellText,
 } from './general/row_assertions';
+import { logProgress } from './general/test_progress';
 import {
   TenantsCreatePage,
   TenantsCredentialsPage,
@@ -48,6 +49,7 @@ const credentialFromFile = (contents: string, label: string, credentialsFile: st
 export const readTenantCredentials = async (
   credentialsFile: string,
 ): Promise<TenantCredentials> => {
+  logProgress('tenant-credentials', `Reading credentials from ${credentialsFile}.`);
   const contents = await readFile(credentialsFile, 'utf8');
   return {
     username: credentialFromFile(contents, 'Username', credentialsFile),
@@ -55,8 +57,34 @@ export const readTenantCredentials = async (
   };
 };
 
+/** Replace a temporary tenant password after the first successful login. */
+export const updateTenantCredentialsPassword = async (
+  credentialsFile: string,
+  password?: string,
+): Promise<void> => {
+  logProgress('tenant-credentials', `Updating credentials in ${credentialsFile}.`);
+  const contents = await readFile(credentialsFile, 'utf8');
+  const tenantName = credentialFromFile(contents, 'Tenant', credentialsFile);
+  const replacementPassword = password?.trim() || tenantName;
+  logProgress(
+    'tenant-credentials',
+    password?.trim()
+      ? 'Using the configured replacement password.'
+      : 'Using the tenant name as the replacement password.',
+  );
+  const updatedContents = contents.replace(
+    /^Password: .*$/m,
+    () => `Password: ${replacementPassword}`,
+  );
+  if (updatedContents === contents) {
+    throw new Error(`Tenant credentials file "${credentialsFile}" is missing Password.`);
+  }
+  await writeFile(credentialsFile, updatedContents, { encoding: 'utf8', mode: 0o600 });
+};
+
 /** Remove the saved credentials for a tenant, if present. */
 export const removeTenantCredentials = async (tenantName: string): Promise<void> => {
+  logProgress('tenant-credentials', `Removing credentials for tenant "${tenantName}".`);
   await rm(tenantCredentialsFilePath(tenantName), { force: true });
   try {
     await rmdir(tenantCredentialsDirectoryPath(tenantName));
@@ -159,7 +187,13 @@ export const createTenant = async (
 
   // Save the generated credentials in a tenant-specific temporary file.
   const credentialsFile = tenantCredentialsFilePath(tenantName);
-  await mkdir(tenantCredentialsDirectoryPath(tenantName), { mode: 0o700 });
+  const credentialsDirectory = tenantCredentialsDirectoryPath(tenantName);
+  logProgress(
+    'tenant-credentials',
+    `Resetting the temporary credentials directory for tenant "${tenantName}".`,
+  );
+  await rm(credentialsDirectory, { force: true, recursive: true });
+  await mkdir(credentialsDirectory, { mode: 0o700 });
   try {
     await writeFile(
       credentialsFile,
@@ -172,7 +206,7 @@ export const createTenant = async (
       { encoding: 'utf8', flag: 'wx', mode: 0o600 },
     );
   } catch (error) {
-    await rmdir(tenantCredentialsDirectoryPath(tenantName)).catch(() => undefined);
+    await rm(credentialsDirectory, { force: true, recursive: true });
     throw error;
   }
 
@@ -247,7 +281,7 @@ export const deleteTenant = async (page: Page, tenantName: string): Promise<void
     deleteDialog.getByRole(...TenantsDeletePage.deleteButton),
     tenantName,
     'Tenant',
-    120_000,
+    300_000,
     tenantRow.locator(...TenantsMainPage.tenantStatusCell),
   );
 

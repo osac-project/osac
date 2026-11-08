@@ -173,8 +173,12 @@ const DiskImageDetailPage = () => {
             >
               <FlexItem>
                 <ResourceDetailHeader
-                  parentTo={DISK_IMAGES_LIST_ROUTE}
-                  parentLabel={t('Disk images')}
+                  parents={[
+                    {
+                      to: DISK_IMAGES_LIST_ROUTE,
+                      label: t('Disk images'),
+                    },
+                  ]}
                   resourceName={diskImage.metadata?.name || diskImage.id}
                 />
               </FlexItem>

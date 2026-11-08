@@ -819,9 +819,12 @@ ifeq ($(SUITE),operator)
 	$(call kind-load-image,localhost/osac-operator:it)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
 	$(call kind-load-image,$(METERING_IT_IMAGE))
+	# The AAP base URL is test configuration, not a credential: the bearer
+	# token is never logged. It is set inline, like the compute-storage phase
+	# above, so the operator phase needs no extra values file.
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
-	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration
+		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.provisioningEnabled=false --set-string operator.aap.url=http://osac-aap-recorder.$(NS).svc.cluster.local:8080/api --set operator.aap.statusPollInterval=1s $(METERING_IT_IMAGE_ARGS)"
+	cd ../osac-operator && IT_TEST_SUITE=operator ginkgo run --timeout 30m -v test/integration
 	# Provisioning-enabled phase: the operator resolves NetworkClass manager
 	# registrations (chart-rendered netris and cudn_evpn), which
 	# it skips when provider networking is disabled. No AAP or networking CR is needed.

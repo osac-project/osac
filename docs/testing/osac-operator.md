@@ -19,7 +19,7 @@ The CI job runs the installer's Kind target with the operator suite
 | Envtest | `internal/controller/` | API, etcd, CRDs, in-process reconcile | Provider/fulfillment responses and external progression test-controlled; not a deployed worker. |
 | Component integration | Deployed `test/integration/` | Installed operator, API, CRDs, console proxy, networking, worker RBAC, startup without LVMS/TopoLVM | No AAP/provider/infra; some tests remove finalizers to bypass provider boundaries. |
 | Component integration (CI) | Installer Kind target, operator suite | Thin Kind install, Fulfillment client disabled | Same provider limits; installation settings need separate deployed coverage. |
-| Component integration ([DEV] [OSAC-6685](https://redhat.atlassian.net/browse/OSAC-6685)) | Installer Kind target, compute-storage suite | Real Fulfillment APIs/PostgreSQL, installed storage and ComputeInstance controllers, CR/status persistence, target StorageClass lookup, and AAP HTTP requests | AAP is a recording double; tenant compute readiness is supplied by the fixture. No provider or VM execution; see the [fulfillment-service guide](fulfillment-service.md#computeinstance-disk-handoff-osac-6685) for the full boundary. |
+| Component integration ([DEV] [OSAC-6685](https://redhat.atlassian.net/browse/OSAC-6685)) | Installer Kind target, compute-storage suite | Real Fulfillment APIs/PostgreSQL, installed storage and ComputeInstance controllers, and target StorageClass lookup | AAP is a recording double; tenant compute readiness is supplied by the fixture. No provider or VM execution; see the [fulfillment-service guide](fulfillment-service.md#computeinstance-disk-handoff-osac-6685) for the boundary. |
 | Contract | `test/contract/` | Helm RBAC templates vs permission contract | No deployed operator/provider. |
 | E2E | `../tests/e2e/` | Cross-component fulfillment journeys | Environment/provider-dependent. |
 
@@ -45,14 +45,11 @@ mounting remain E2E
 ([OSAC-3711](https://redhat.atlassian.net/browse/OSAC-3711)). Remote StorageClass
 coverage needs dual Envtest plus a second Kind cluster.
 
-Subnet compute eligibility is covered at Unit tier (typed manager result
-validation in the network-task suite), Envtest tier (the Subnet cases with a
-fake AAP, including API feedback), and in the Fulfillment servers suite
-(PostgreSQL-backed public API status mapping; see the
-[fulfillment-service guide](fulfillment-service.md)). The `cudn_evpn`
-component-integration target in osac-aap checks that the real manager task
-reports owner/sibling eligibility through its job artifacts against Kind (see
-the [osac-aap guide](osac-aap.md)). These checks do not establish live OVN
+Subnet compute eligibility is covered at Unit and Envtest tier, in the
+Fulfillment servers suite (see the
+[fulfillment-service guide](fulfillment-service.md)), and by the
+`cudn_evpn` component-integration target in osac-aap (see the
+[osac-aap guide](osac-aap.md)). These checks do not establish live OVN
 readiness or packet continuity; deployed provider coverage remains
 [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 

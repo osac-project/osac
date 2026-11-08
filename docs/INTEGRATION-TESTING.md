@@ -21,6 +21,8 @@ Update the affected suite guide when its suite role, prerequisites, dependency
 boundary, coverage scope or known gap changes. Update the component's touched-area
 map only when its required validation changes. Routine additions or changes to
 tests within an existing suite do not require a documentation inventory update.
+Do not add feature-specific sections or scenario lists to suite guides; a
+feature adds at most one boundary or gap line, with its Jira URL.
 Change this shared file only when shared policy or the guide links change.
 Link unresolved gaps to their owning Jira URLs; report missing ownership explicitly.
 

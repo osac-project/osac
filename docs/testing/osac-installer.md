@@ -10,7 +10,7 @@ Run `make -C osac-installer help` to list the test targets.
 | Tier | Suite | Real | Faked or omitted |
 |---|---|---|---|
 | Unit | `make kind-runtime-test` | Makefile/runtime routing and shell behavior | Container engines, Helm, host privilege changes and downloads are command stubs |
-| Unit | `make infra-ready-wait-test` | The waits that end `make install-infra`: each profile-created dependency (CA issuer, bundled PostgreSQL, Kafka) is waited for with the right namespace, condition and timeout, and a resource that never becomes ready fails the step naming the resource | Commands and time are mocked through a stub `kubectl`; no cluster is started |
+| Unit | `make infra-ready-wait-test` | The readiness waits that end `make install-infra` fail the step naming a dependency that never becomes ready | Commands and time are mocked through a stub `kubectl`; no cluster is started |
 | Contract (Helm render) | `make mce-render-test`, `make fulfillment-trust-render-test`, `make helm-networking-test` | Production chart templates and their configuration contracts | No Kubernetes API, running hooks, MCE catalog, deployed TLS or provider calls |
 | Component integration | `make test` (suite selection in `make help`) | Current images and chart wiring in Kind | Depends on the selected suite; provider networking is disabled in the standard profile |
 
@@ -21,10 +21,9 @@ establish the enabled AAP path. Read the script and its registration in the
 repository-root `.github/ci-tests.yml` for the current checks.
 
 `helm upgrade --install --wait-for-jobs` waits for hook Jobs but not for
-Deployments, so the CA issuer, bundled PostgreSQL and Kafka can still be
-starting when `make install-osac` begins; the `infra-ready-wait-test` suite
-guards that gap. The wait was also exercised once by hand against a Kind API
-server with a slow-starting and a never-ready Deployment.
+Deployments, so infra dependencies can still be starting when
+`make install-osac` begins; the `infra-ready-wait-test` suite guards that
+gap.
 
 ## Install preflight (OSAC-6561)
 
@@ -59,14 +58,10 @@ Coverage gaps:
   anywhere; on Helm 4 the failing render's JSON line is the portable channel.
 
 The `helm unittest` suites for the `osac-infra` chart run in the same
-helm-unit CI leg as the umbrella-chart unit tier. They render the Kafka
-resource with Strimzi's Kafka Exporter, the PodMonitor that scrapes it, and
-the `MeteringConsumerLag` rule, and assert that none of the three renders
-when Kafka is disabled, the exporter value is off, or the monitoring CRD is
-absent. Vendor the chart dependencies first with `make helm-infra-deps`. They
-do not check a live exporter's metrics or evaluate the rule against a live
-Prometheus; see the [osac-metering guide](osac-metering.md) for the reader
-boundaries and remaining gaps.
+helm-unit CI leg as the umbrella-chart unit tier. They render-test the
+monitoring and exporter templates only, not a live exporter or Prometheus;
+see the [osac-metering guide](osac-metering.md) for the reader boundaries
+and remaining gaps.
 
 ## OSAC-5343 deployed enablement coverage
 

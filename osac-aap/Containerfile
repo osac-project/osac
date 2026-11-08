@@ -65,7 +65,7 @@ ARG PKGMGR
 COPY osac-aap/execution-environment/ansible-builder-scripts/ /output/scripts/
 COPY osac-aap/execution-environment/ansible-builder-scripts/entrypoint /opt/builder/bin/entrypoint
 RUN dnf update -y --allowerasing glibc glibc-minimal-langpack && dnf clean all
-RUN dnf install -y gcc gcc-c++ python3.12-devel rust cargo openssl-devel libffi-devel && dnf clean all
+RUN dnf install -y gcc gcc-c++ python3.12-devel rust cargo openssl-devel libffi-devel curl && dnf clean all
 RUN $PKGMGR install $PYPKG -y ; if [ -z $PKGMGR_PRESERVE_CACHE ]; then $PKGMGR clean all; fi
 RUN /output/scripts/pip_install $PYCMD
 RUN $PYCMD -m pip install --no-cache-dir $ANSIBLE_INSTALL_REFS
@@ -161,8 +161,20 @@ RUN mkdir -p /runner && chgrp 0 /runner && chmod -R ug+rwx /runner
 WORKDIR /runner
 RUN $PYCMD -m pip install --no-cache-dir 'dumb-init==1.2.5'
 RUN chmod 0755 /opt/builder/bin/entrypoint
-COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/oc /usr/local/bin/
-COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/kubectl /usr/local/bin/
+# Download oc/kubectl from the multi-arch binary tarball instead of copying
+# from quay.io/openshift/origin-cli (amd64-only). TARGETARCH is set
+# automatically by BuildKit / podman buildx for multi-platform builds;
+# standalone single-arch builds default to amd64.
+ARG TARGETARCH=amd64
+RUN set -e; \
+    case "${TARGETARCH}" in \
+      amd64)   OC_ARCH="";; \
+      arm64)   OC_ARCH="-arm64";; \
+      *)       echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1;; \
+    esac; \
+    curl -sL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.19.0/openshift-client-linux${OC_ARCH}.tar.gz" \
+      | tar -xz -C /usr/local/bin/ oc kubectl && \
+    chmod +x /usr/local/bin/oc /usr/local/bin/kubectl
 COPY --from=docker.io/alpine/helm:3.21.4 /usr/bin/helm /usr/local/bin/helm
 RUN rm -rf /output
 LABEL ansible-execution-environment=true

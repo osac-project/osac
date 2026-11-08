@@ -1,4 +1,13 @@
 ---
+# TODO(OSAC-5815): Regenerate with aarch64 packages. Run:
+#   podman run --rm -v "${PWD}:/work:Z" \
+#     localhost/rpm-lockfile-prototype:latest \
+#     --image registry.access.redhat.com/ubi10:10.2 \
+#     --outfile=rpms.lock.yaml rpms.in.yaml
+# (build localhost/rpm-lockfile-prototype from
+# https://github.com/konflux-ci/rpm-lockfile-prototype first.)
+# Until regenerated, hermetic Konflux builds for aarch64 will fail
+# because the lock file has no aarch64 entries.
 lockfileVersion: 1
 lockfileVendor: redhat
 arches:

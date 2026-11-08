@@ -62,3 +62,7 @@ packages:
   - gcc-c++
 arches:
   - x86_64
+  - aarch64
+  # NOTE: After adding aarch64 here, rpms.lock.yaml must be regenerated
+  # with the rpm-lockfile-prototype tool to include aarch64 packages.
+  # See the regeneration command in the rpms.lock.yaml header comment.

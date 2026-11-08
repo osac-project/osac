@@ -1,3 +1,6 @@
+# NOTE(OSAC-5815): The digest pins below resolve to multi-arch OCI indexes
+# that already include arm64 manifests, so dev-full TopoLVM storage works on
+# both amd64 and arm64 Kind clusters without changes.
 ARG TOPOLVM_VERSION=0.41.1
 
 FROM ghcr.io/topolvm/topolvm:${TOPOLVM_VERSION}@sha256:47a2ffbbef09f014aa4c06a143fffa94c5dbf76647c19d8f9fe30bdb5f7f5634 AS topolvm

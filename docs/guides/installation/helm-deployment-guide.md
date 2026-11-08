@@ -828,12 +828,14 @@ host networking only; it does not enable OSAC provider networking across
 clusters.
 For a new workload-cluster release, set `certManager.enabled`,
 `trustManager.enabled`, and `caIssuer.enabled` to `false`; the latter two remain
-enabled by default even when `certManager` is disabled. For an existing release,
-inspect and preserve its installed values for these three settings. Disable the
-release-managed certificate stack only as part of a planned migration; changing
+enabled by default even when `certManager` is disabled. Also disable
+`aapOperator`, `keycloak`, `mce`, `kafka`, and `bundledVault`. For an existing
+release, inspect and preserve its installed values for all these settings,
+especially `aapOperator.enabled` and `mce.enabled`. Changing a release-managed
+setting can remove or alter existing operators, namespaces, and services;
+change it only as part of a planned migration. In particular, changing
 `certManager.enabled` can remove its managed namespaces and disrupt certificate
-issuance. Also disable `aapOperator`, `keycloak`, `mce`, `kafka`, and
-`bundledVault`. Run
+issuance. Run
 [Phase 1a](#phase-1a-install-prerequisite-operators) and
 [Phase 1b](#phase-1b-install-shared-infrastructure) against that kubeconfig,
 replacing `-f my-infra-values.yaml` with `-f my-workload-infra-values.yaml`

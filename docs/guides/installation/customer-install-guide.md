@@ -913,9 +913,15 @@ aap:
 operator:
   aap:
     url: https://<external-aap>/api/controller
+    insecureSkipVerify: "false"
     tokenSecret:
       name: osac-aap-api-token
       key: token
+# Include this block when BMaaS is enabled. BMF has its own AAP URL.
+bmf:
+  env:
+    aapUrl: https://<external-aap>/api/controller
+    aapInsecureSkipVerify: "false"
 ```
 
 Before installation, create `osac-aap-api-token` in the OSAC release namespace
@@ -936,6 +942,23 @@ token must be authorized to launch and read those jobs. Because the chart's
 publication hook targets the chart-managed AAP instance, publish the required
 templates to Fulfillment separately. See
 [Section 5](#5-helm-chart-configuration-parameters) for the related values.
+
+After rotating the external token in the Secret, restart the operators so they
+reload it from their environment:
+
+```console
+oc rollout restart deployment/osac-operator -n <namespace>
+oc rollout status deployment/osac-operator -n <namespace>
+# When BMaaS is enabled:
+oc rollout restart deployment/bmf-operator-controller-manager -n <namespace>
+oc rollout status deployment/bmf-operator-controller-manager -n <namespace>
+```
+
+For production HTTPS connections, the AAP certificate must be trusted by each
+operator's system trust store. The Fulfillment CA bundle does not configure AAP
+trust. Keep `operator.aap.insecureSkipVerify` and, when BMaaS is enabled,
+`bmf.env.aapInsecureSkipVerify` set to `"false"`; set either to `"true"` only
+for temporary evaluation with an untrusted certificate.
 
 When the Fulfillment Service and hub run on the same cluster, set the top-level
 `hubAccess.enabled` value before installing:
@@ -1555,7 +1578,7 @@ subchart's own `values.yaml` file.
 |---|---|---|
 | `operator.image.repository`, `operator.image.tag`, `operator.image.pullPolicy` | schema | Operator image. Use a release tag for production. |
 | `operator.replicaCount`, `operator.resources.*` | schema | Operator sizing. |
-| `operator.aap.url`, `operator.aap.insecureSkipVerify`, `operator.aap.statusPollInterval`, `operator.aap.templatePrefix` | schema | How the Operator reaches AAP. Set `insecureSkipVerify: "true"` for self-signed AAP routes. |
+| `operator.aap.url`, `operator.aap.insecureSkipVerify`, `operator.aap.statusPollInterval`, `operator.aap.templatePrefix` | schema | How the Operator reaches AAP. The chart defaults `insecureSkipVerify` to `"true"`; explicitly set it to `"false"` for production and use an AAP certificate trusted by the Operator's system trust store. `"true"` disables certificate verification and is for temporary evaluation only. The Fulfillment CA bundle does not configure AAP trust. |
 | `operator.aap.token` | schema | Direct AAP token value. If `operator.aap.tokenSecret.name` is set, the Deployment uses that Secret and ignores this value; clear the Secret name when switching to a direct token. |
 | `operator.aap.tokenSecret.name` | schema | Secret containing the AAP API token. Set to `osac-aap-api-token` when using the `create-api-token` hook or when supplying a token for external AAP. |
 | `operator.aap.tokenSecret.key` | schema | Key in the referenced Secret containing the AAP token. The hook-created Secret uses `token`. |
@@ -1667,8 +1690,8 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `ui.auth.oidcIssuerURL` | schema | Required when the web console is enabled. Set explicitly to the fully resolved `service.auth.issuerUrl`; templates are not expanded. | `""` |
 | `ui.images.ui` | schema | Web console image. | Release tag |
 | `bmf.metal3.enabled`, `bmf.metal3.namespace`, `bmf.metal3.hostClass` | schema | Use the Metal3 backend. Set `namespace` to where your `BareMetalHost` resources live. Requires BareMetalOperator and a `Provisioning` custom resource with `spec.watchAllNamespaces: true`. | `false` |
-| `bmf.env.aapInsecureSkipVerify` | schema | Skip TLS verification for AAP API calls. | `"true"` |
-| `bmf.env.aapUrl` | subchart | AAP controller URL that the Bare Metal Fulfillment Operator drives. | Not applicable |
+| `bmf.env.aapInsecureSkipVerify` | schema | Skip TLS verification for BMF's AAP API calls. Set to `"false"` for production and use an AAP certificate trusted by BMF's system trust store; `"true"` is for temporary evaluation only. The Fulfillment CA bundle does not configure AAP trust. | `"true"` |
+| `bmf.env.aapUrl` | subchart | AAP controller URL that the Bare Metal Fulfillment Operator drives. Set it to the external Controller URL when BMaaS uses external AAP; it does not inherit `operator.aap.url`. | Not applicable |
 | `bmf.secretAPI.url`, `bmf.secretAPI.issuerUrl`, `bmf.secretAPI.caBundle.*` | schema | When `bmf.netbox.enabled` is false and `bmf.secretAPI.url` is empty, BMF runs in standalone mode without Fulfillment verification. NetBox requires `bmf.secretAPI.url`. When the URL is set, BMF uses the Fulfillment private API, Keycloak issuer, and optional CA bundle to verify the saved installation networking setting, including when NetBox is disabled. If Keycloak is external, create the `fulfillment-controller-credentials` Secret with `client-id` and `client-secret` keys in the OSAC namespace before starting BMF. | Internal Fulfillment API URL; Keycloak `osac` realm issuer URL; `ca-bundle` ConfigMap (`bundle.pem`) |
 | `bmf.bcm.enabled`, `bmf.bcm.url`, `bmf.bcm.cert`, `bmf.bcm.key`, `bmf.bcm.caCert`, `bmf.bcm.insecureSkipVerify`, `bmf.bcm.hostClass`, `bmf.bcm.bmhNamespace` | subchart | Base Command Manager (BCM) backend. | `false` |
 | `bmf.secrets.inventoryConfig`, `bmf.secrets.managementConfig`, `bmf.secrets.osClouds`, `bmf.configMaps.profiles` | schema | Names of the inventory, management, and `clouds.yaml` Secrets and the profiles `ConfigMap`. | Default names |
@@ -1711,6 +1734,12 @@ the cluster. Every workflow also needs the networking values and steps of
 [Section 4.4](#44-installing-with-provider-networking). Then follow
 [Section 4](#4-installing-osac).
 
+The examples use chart-managed AAP, where template publication is enabled by
+default. For external AAP, keep
+`aap.instanceGroups.publishTemplates.enabled: false` from
+[Section 4.2](#42-configuring-the-helm-values) and do not add a service-level
+override; publish the required templates to Fulfillment separately.
+
 ### 6.1 Installing OSAC for VMaaS
 
 **Prerequisites**
@@ -1742,8 +1771,6 @@ the cluster. Every workflow also needs the networking values and steps of
      enabled: false  # production storage registration is administrator-managed
    aap:
      instanceGroups:
-       publishTemplates:
-         enabled: true
        networkFulfillment:
          enabled: true
          config: {}  # add the selected managers' settings per their owner docs
@@ -1935,8 +1962,6 @@ Manager such as Netris.
            architecture: [ARCHITECTURE_AMD64]
    aap:
      instanceGroups:
-       publishTemplates:
-         enabled: true
        clusterFulfillment:
          enabled: true
          config:
@@ -2041,7 +2066,7 @@ Manager such as Netris.
        hostClass: metal3
      env:
        aapUrl: "http://osac-aap/api/controller"
-       aapInsecureSkipVerify: "true"
+       aapInsecureSkipVerify: "false"
    aap:
      instanceGroups:
        publishTemplates:
@@ -2057,6 +2082,18 @@ Manager such as Netris.
    because a BMaaS-only deployment does not consume templates
    published by this hook. Set `bmf.metal3.namespace` to the
    namespace where your `BareMetalHost` resources live.
+
+   If CaaS or VMaaS is also enabled with chart-managed AAP, set
+   `aap.instanceGroups.publishTemplates.enabled: true` or remove this
+   BMaaS-only `false` override so the hook publishes their required templates.
+   With external AAP, keep it `false` and publish the required templates
+   separately as described in [Section 4.2](#42-configuring-the-helm-values).
+
+   The example URL is for chart-managed AAP. When AAP is external, set
+   `bmf.env.aapUrl` to the external Controller URL from
+   [Section 4.2](#42-configuring-the-helm-values); BMF has a separate URL
+   setting from `operator.aap.url`. Keep
+   `bmf.env.aapInsecureSkipVerify: "false"` for production HTTPS connections.
 
    Also add `networkClass.defaults` from
    [Section 4.4.3](#443-setting-the-networking-helm-values); they apply with

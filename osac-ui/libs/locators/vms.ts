@@ -16,6 +16,7 @@ type VmsLocator =
         | 'textbox',
       options: { name: string; exact: true },
     ]
+  | readonly [role: 'term']
   | readonly [label: string]
   | readonly [selector: string];
 
@@ -33,7 +34,7 @@ export const VmsMainPage = {
 
 export const VmDetailsPage = {
   pageTitle: ['h1.pf-v6-c-title'],
-  statusTerm: ['term', { name: 'Status', exact: true }],
+  statusTerm: ['term'],
   statusLabel: ['.pf-v6-c-label'],
   deleteButton: ['button', { name: 'Delete', exact: true }],
   deleteDialog: [`[role="dialog"][aria-labelledby="${deleteResourceModalIds.title}"]`],

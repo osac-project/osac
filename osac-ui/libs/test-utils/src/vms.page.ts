@@ -99,6 +99,7 @@ export const expectVmDetailsPage = async (
 const getVmDetailsStatus = (page: Page): Locator =>
   page
     .getByRole(...VmDetailsPage.statusTerm)
+    .filter({ hasText: exactText('Status') })
     .locator('..')
     .locator(...VmDetailsPage.statusLabel);
 

@@ -2217,8 +2217,11 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    each CA source change. If a bundle change affects the Fulfillment
    certificate CA or the CA used to reach the OIDC issuer, restart the OSAC
    operator after the updated bundle appears in the target ConfigMap and before
-   switching certificates. The operator loads the bundle at startup for both
-   connections. Use the refreshed file for client checks.
+   switching certificates. The operator's OAuth client loads its CA pool at
+   startup. After removing any CA from this bundle, wait for the updated bundle
+   to appear in the target ConfigMap and restart the operator again, including
+   when removing the old CA after a rotation. Use the refreshed file for client
+   checks.
 
    ```console
    oc get configmap <ca_bundle_configmap> -n <namespace> \
@@ -2246,9 +2249,21 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
      cat /etc/keycloak/truststore/ca-bundle.pem > keycloak-truststore.pem
    ```
 
-   Compare the CA fingerprints in `keycloak-truststore.pem` with
-   `osac-ca-bundle.pem` to confirm the mounted bundle is current. This file
-   shows the mounted bundle, but not every CA Keycloak trusts. Check
+   Compare the CA fingerprints in `keycloak-truststore.pem` with the ConfigMap
+   Keycloak mounts. For bundled Keycloak, use the name set by
+   `certs.caBundle.configMap` in `my-infra-values.yaml` (`ca-bundle` by
+   default) in the `keycloak` namespace. Extract its `bundle.pem`:
+
+   ```console
+   oc get configmap <keycloak_ca_bundle_configmap> -n keycloak \
+     -o jsonpath='{.data.bundle\.pem}' > keycloak-ca-bundle.pem
+   test -s keycloak-ca-bundle.pem
+   ```
+
+   Compare its CA fingerprints with `keycloak-truststore.pem` to confirm that
+   Keycloak has loaded the mounted bundle. For externally managed Keycloak,
+   compare with the CA bundle configured for that deployment. The mounted file
+   does not show every CA Keycloak trusts. Check
    `KC_TRUSTSTORE_PATHS`, any JVM truststore setting, and Java's default
    truststore too. In an isolated test, connect Keycloak to a test OIDC provider
    with a valid certificate signed only by the new CA and confirm it succeeds

@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Stateful fake SSH endpoint for AgentlessNet switch task integration.
+
+The fake answers the commands the network-runner Cumulus provider sends, so
+AgentlessNet tasks can be exercised without SSH, a live switch or nvue. It
+models the bridge VLAN memberships, the global VLAN list, trunk memberships,
+the NVUE reserved VLAN ranges and the deletion guards the provider records.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+
+state_path = Path(os.environ["OSAC_AGENTLESS_SWITCH_STATE_FILE"])
+marker_path = Path(os.environ["OSAC_AGENTLESS_SWITCH_FAIL_MARKER"])
+debug_path = os.environ.get("OSAC_AGENTLESS_SWITCH_DEBUG")
+args = sys.argv[1:]
+remote = args[-1] if args else ""
+
+if debug_path:
+    with open(debug_path, "a", encoding="utf-8") as debug_log:
+        debug_log.write(json.dumps(remote) + "\n")
+
+
+def read_state():
+    state = json.loads(state_path.read_text())
+    state.setdefault("ports", {})
+    state.setdefault("vlans", [])
+    state.setdefault("trunk_ports", [])
+    state.setdefault("trunk_vlans", {})
+    state.setdefault("tombstones", [])
+    return state
+
+
+def write_state(value):
+    state_path.write_text(json.dumps(value, sort_keys=True))
+
+
+def access_membership(vlan):
+    return {"vlan": vlan, "flags": ["PVID", "Egress Untagged"]}
+
+
+def tagged_membership(vlan):
+    return {"vlan": vlan}
+
+
+def port_entry(state, port):
+    access = sorted(state["ports"].get(port, []))
+    explicit = {int(vlan) for vlan in state["trunk_vlans"].get(port, [])}
+    trunk = port in state["trunk_ports"]
+    if not access and not trunk and not explicit:
+        return None
+    memberships = [access_membership(vlan) for vlan in access]
+    inherited = {int(vlan) for vlan in state["vlans"]} if trunk else set()
+    for vlan in sorted((inherited | explicit) - set(access)):
+        memberships.append(tagged_membership(vlan))
+    return {"ifname": port, "vlans": memberships}
+
+
+def bridge_entries(state, port=None):
+    if port is not None:
+        entry = port_entry(state, port)
+        return [] if entry is None else [entry]
+    ports = set(state["ports"]) | set(state["trunk_ports"]) | set(state["trunk_vlans"])
+    entries = [
+        {
+            "ifname": "br_default",
+            "vlans": [tagged_membership(vlan) for vlan in sorted(state["vlans"])],
+        }
+    ]
+    for name in sorted(ports):
+        entry = port_entry(state, name)
+        if entry is not None:
+            entries.append(entry)
+    return entries
+
+
+def apply_mutation(state, command):
+    """Apply one nv set/unset command and return its action name."""
+    match = re.fullmatch(
+        r"nv unset interface (\S+) bridge domain", command
+    )
+    if match:
+        port = match.group(1)
+        state["ports"][port] = []
+        state["trunk_ports"] = [name for name in state["trunk_ports"] if name != port]
+        state["trunk_vlans"].pop(port, None)
+        return "remove"
+    match = re.fullmatch(
+        r"nv set interface (\S+) bridge domain br_default access (\d+)", command
+    )
+    if match:
+        state["ports"][match.group(1)] = [int(match.group(2))]
+        return "apply"
+    match = re.fullmatch(
+        r"nv set interface (\S+) bridge domain br_default", command
+    )
+    if match:
+        port = match.group(1)
+        if port not in state["trunk_ports"]:
+            state["trunk_ports"].append(port)
+        return "trunk"
+    match = re.fullmatch(
+        r"nv (set|unset) interface (\S+) bridge domain br_default vlan (\d+)", command
+    )
+    if match:
+        vlans = {int(vlan) for vlan in state["trunk_vlans"].get(match.group(2), [])}
+        if match.group(1) == "set":
+            vlans.add(int(match.group(3)))
+        else:
+            vlans.discard(int(match.group(3)))
+        state["trunk_vlans"][match.group(2)] = sorted(vlans)
+        return "trunk-vlan"
+    match = re.fullmatch(
+        r"nv (set|unset) bridge domain br_default vlan (\d+)", command
+    )
+    if match:
+        vlans = {int(vlan) for vlan in state["vlans"]}
+        if match.group(1) == "set":
+            vlans.add(int(match.group(2)))
+        else:
+            vlans.discard(int(match.group(2)))
+        state["vlans"] = sorted(vlans)
+        return "vlan"
+    print(f"unsupported fake switch command: {command}", file=sys.stderr)
+    raise SystemExit(64)
+
+
+def handle_nvue_lock(script):
+    state = read_state()
+    guard = re.search(r'if \[ -n "([^"]*)" \] && \[ -e "([^"]*)" \]', script)
+    if guard is not None and guard.group(2):
+        key = guard.group(2).rstrip("/").rsplit("/", 1)[-1]
+        if key in state["tombstones"]:
+            raise SystemExit(73)
+    scope = re.search(r'^\s*scope="([^"]*)"$', script, re.MULTILINE)
+    guard_key = re.search(r'^\s*key="([^"]*)"$', script, re.MULTILINE)
+    if scope is not None and guard_key is not None:
+        if guard_key.group(1) not in state["tombstones"]:
+            state["tombstones"].append(guard_key.group(1))
+            write_state(state)
+        raise SystemExit(0)
+    command = None
+    for line in script.splitlines():
+        line = line.strip()
+        if line.startswith("nv set ") or line.startswith("nv unset "):
+            command = line
+            break
+    if command is None:
+        print("invalid fake switch script: no nv command", file=sys.stderr)
+        raise SystemExit(64)
+    port = None
+    match = re.search(r"\binterface (\S+)", command)
+    if match:
+        port = match.group(1)
+    action = None
+    if command.startswith("nv unset interface"):
+        action = "remove"
+    elif " access " in command:
+        action = "apply"
+    fail_once = os.environ.get("OSAC_AGENTLESS_SWITCH_FAIL_ONCE", "")
+    if action is not None and fail_once == f"{action}:{port}" and not marker_path.exists():
+        marker_path.write_text("failed once\n")
+        raise SystemExit(1)
+    apply_mutation(state, command)
+    write_state(state)
+    raise SystemExit(0)
+
+
+if "bridge -j vlan show" in remote:
+    match = re.search(r"bridge -j vlan show dev (\S+)", remote)
+    port = match.group(1).strip("'\"") if match else None
+    print(json.dumps(bridge_entries(read_state(), port)))
+    raise SystemExit(0)
+
+if "nv show system global reserved vlan" in remote:
+    print(
+        json.dumps(
+            {
+                "internal": {"range": {"operational": "3600-3699", "applied": "3600-3699"}},
+                "l3-vni-vlan": {"begin": 4000, "end": 4064},
+            }
+        )
+    )
+    raise SystemExit(0)
+
+if "resv_vlan_range" in remote:
+    print("")
+    raise SystemExit(0)
+
+if "flock /tmp/nvue.lock" in remote:
+    match = re.search(r"-c '(.*)'\s*$", remote, re.DOTALL)
+    if match is None:
+        print(f"invalid fake NVUE invocation: {remote}", file=sys.stderr)
+        raise SystemExit(64)
+    handle_nvue_lock(match.group(1))
+
+print("unsupported fake SSH command", file=sys.stderr)
+raise SystemExit(64)

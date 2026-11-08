@@ -3,6 +3,9 @@
   raw: |
     flock /tmp/nvue.lock -c '
       set -e
+      if [ -n "{{ _guard_path }}" ] && [ -e "{{ _guard_path }}" ]; then
+        exit 73
+      fi
       nv unset interface {{ port_name }} bridge domain
       if diff="$(nv config diff --output commands)"; then
         diff_status=0

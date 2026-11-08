@@ -20,6 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // FetchFunc retrieves the current state of a resource.
@@ -126,9 +129,10 @@ func Poll[T any](ctx context.Context, opts Options[T]) (T, error) {
 		if err != nil {
 			var zero T
 			// A deadline error caused by the timeout context is a
-			// timeout, whatever the fetch layer returned.
-			if errors.Is(err, context.DeadlineExceeded) &&
-				ctx.Err() == context.DeadlineExceeded {
+			// timeout, whatever the fetch layer returned. A gRPC
+			// call reports the deadline as a status error, which
+			// does not wrap context.DeadlineExceeded.
+			if deadlineExceeded(err) && ctx.Err() == context.DeadlineExceeded {
 				return zero, &ErrTimeout{After: timeout, Current: last}
 			}
 			return zero, err
@@ -164,4 +168,14 @@ func Poll[T any](ctx context.Context, opts Options[T]) (T, error) {
 			}
 		}
 	}
+}
+
+// deadlineExceeded reports whether err represents an expired deadline, either
+// as a bare context error or as the gRPC status error a deadline-expired call
+// returns.
+func deadlineExceeded(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return status.Code(err) == codes.DeadlineExceeded
 }

@@ -37,6 +37,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/externalip"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/wait"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -1004,13 +1005,10 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 	ci = ready
 
 	// The API requires a name, build one from the external IP.
-	attachName := eip.GetMetadata().GetName()
-	if attachName == "" {
-		attachName = fmt.Sprintf("eip-%s", eip.GetId())
-	}
+	attachName := externalip.AttachmentName(eip)
 	attachResp, err := c.externalIPAttachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 		Object: publicv1.ExternalIPAttachment_builder{
-			Metadata: metautil.ForCreate(ctx, attachName+"-attachment").Build(),
+			Metadata: metautil.ForCreate(ctx, attachName).Build(),
 			Spec: publicv1.ExternalIPAttachmentSpec_builder{
 				ExternalIp:      &publicv1.ExternalIPLocalReference{Id: eip.GetId()},
 				ComputeInstance: &publicv1.ComputeInstanceLocalReference{Id: ci.GetId()},
@@ -1058,16 +1056,7 @@ func computeInstanceAttachable(ci *publicv1.ComputeInstance) bool {
 // and verifies the address is ALLOCATED. Call it before creating the compute
 // instance so an unusable external IP fails before any resource exists.
 func (c *runnerContext) resolveAttachableExternalIP(ctx context.Context) (*publicv1.ExternalIP, error) {
-	eip, err := lookup.Find(c.args.externalIP, "external IP", func(filter string, limit int32) ([]*publicv1.ExternalIP, error) {
-		resp, err := c.externalIPsClient.List(ctx, publicv1.ExternalIPsListRequest_builder{
-			Filter: proto.String(filter),
-			Limit:  proto.Int32(limit),
-		}.Build())
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve external IP %q: %w", c.args.externalIP, err)
-		}
-		return resp.GetItems(), nil
-	})
+	eip, err := externalip.Find(ctx, c.externalIPsClient, c.args.externalIP)
 	if err != nil {
 		return nil, err
 	}

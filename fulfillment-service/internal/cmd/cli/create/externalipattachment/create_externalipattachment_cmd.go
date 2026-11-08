@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/externalip"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -118,16 +119,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	eipClient := publicv1.NewExternalIPsClient(conn)
-	eip, err := lookup.Find(c.args.externalIP, "external IP", func(filter string, limit int32) ([]*publicv1.ExternalIP, error) {
-		resp, err := eipClient.List(ctx, publicv1.ExternalIPsListRequest_builder{
-			Filter: proto.String(filter),
-			Limit:  proto.Int32(limit),
-		}.Build())
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve external IP %q: %w", c.args.externalIP, err)
-		}
-		return resp.GetItems(), nil
-	})
+	eip, err := externalip.Find(ctx, eipClient, c.args.externalIP)
 	if err != nil {
 		return err
 	}

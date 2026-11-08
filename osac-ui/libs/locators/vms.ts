@@ -51,4 +51,5 @@ export const VmCreatePage = {
   create: ['button', { name: 'Create', exact: true }],
   configurationHeading: ['heading', { name: 'Configuration', exact: true }],
   storageHeading: ['heading', { name: 'Storage', exact: true }],
+  userDataProvided: ['Provided (hidden)'],
 } as const satisfies Record<string, VmsLocator>;

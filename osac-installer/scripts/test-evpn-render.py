@@ -120,17 +120,21 @@ def node(
 
 def uplink(
     interface: str,
-    peer_address: str,
+    peer_address: str | None,
     peer_asn: int = 4200300002,
     address: str | None = None,
+    unnumbered: bool = False,
 ) -> dict[str, Any]:
     value: dict[str, Any] = {
         "interface": interface,
-        "peerAddress": peer_address,
         "peerASN": peer_asn,
     }
+    if peer_address is not None:
+        value["peerAddress"] = peer_address
     if address is not None:
         value["address"] = address
+    if unnumbered:
+        value["unnumbered"] = True
     return value
 
 
@@ -423,6 +427,31 @@ def test_uplink_without_address() -> None:
     assert all(interface["name"] != "ens6" for interface in interfaces)
     underlay = named(parse_documents(data["frr.yaml"]), "FRRConfiguration", "osac-evpn-worker-0")
     assert "sourceaddress" not in underlay["spec"]["bgp"]["routers"][0]["neighbors"][0]
+
+
+def test_unnumbered_uplink() -> None:
+    values = base_values(
+        [node("worker-0", "10.200.255.1", [uplink("ens6", None, unnumbered=True)])]
+    )
+    with tempfile.TemporaryDirectory(prefix="evpn-unnumbered-") as temp:
+        values_file = write_values(pathlib.Path(temp), "unnumbered.yaml", values)
+        infra = render("osac-infra", INFRA_CHART, "--values", str(values_file))
+
+    data = config_data(infra)
+    assert data["peers.txt"].splitlines() == ["worker-0 ens6"]
+    nncp = named(parse_documents(data["nncp.yaml"]), "NodeNetworkConfigurationPolicy", "osac-evpn-worker-0")
+    ethernet = next(item for item in nncp["spec"]["desiredState"]["interfaces"] if item["name"] == "ens6")
+    assert ethernet["ipv4"] == {"enabled": False}
+    assert ethernet["ipv6"] == {"enabled": True, "dhcp": False, "autoconf": False}
+
+    underlay = named(parse_documents(data["frr.yaml"]), "FRRConfiguration", "osac-evpn-worker-0")
+    neighbor = underlay["spec"]["bgp"]["routers"][0]["neighbors"][0]
+    assert neighbor["interface"] == "ens6"
+    assert "address" not in neighbor
+    assert "ebgpMultiHop" not in neighbor
+    assert "sourceaddress" not in neighbor
+    raw = named(parse_documents(data["frr.yaml"]), "FRRConfiguration", "osac-evpn-raw-worker-0")
+    assert "neighbor ens6 activate" in raw["spec"]["raw"]["rawConfig"]
 
 
 def test_nmstate_install_disabled() -> None:

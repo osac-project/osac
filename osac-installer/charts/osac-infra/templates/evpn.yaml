@@ -1,4 +1,16 @@
 {{- if .Values.evpn.enabled }}
+{{- $bfdProfile := .Values.evpn.bgp.bfdProfile | default "" -}}
+{{- if $bfdProfile }}
+  {{- if or
+      (lt (int .Values.evpn.bgp.bfdReceiveInterval) 10)
+      (gt (int .Values.evpn.bgp.bfdReceiveInterval) 60000)
+      (lt (int .Values.evpn.bgp.bfdTransmitInterval) 10)
+      (gt (int .Values.evpn.bgp.bfdTransmitInterval) 60000)
+      (lt (int .Values.evpn.bgp.bfdDetectMultiplier) 2)
+      (gt (int .Values.evpn.bgp.bfdDetectMultiplier) 255) }}
+    {{- fail "EVPN BFD receive/transmit intervals must be 10..60000 ms and detect multiplier 2..255" }}
+  {{- end }}
+{{- end }}
 {{- $seenNames := dict }}
 {{- $seenVTEPs := dict }}
 {{- range $node := .Values.evpn.nodes }}
@@ -12,10 +24,31 @@
   {{- $_ := set $seenVTEPs $node.vtepIP true }}
   {{- $seenPeers := dict }}
   {{- range $uplink := $node.uplinks }}
-    {{- if hasKey $seenPeers $uplink.peerAddress }}
-      {{- fail (printf "evpn.nodes: node %s has duplicate peerAddress %s" $node.name $uplink.peerAddress) }}
+    {{- $unnumbered := $uplink.unnumbered | default false }}
+    {{- if $unnumbered }}
+      {{- if not $uplink.interface }}
+        {{- fail (printf "evpn.nodes: node %s has an unnumbered uplink without interface" $node.name) }}
+      {{- end }}
+      {{- if hasKey $uplink "peerAddress" }}
+        {{- fail (printf "evpn.nodes: node %s unnumbered uplink %s must omit peerAddress" $node.name $uplink.interface) }}
+      {{- end }}
+      {{- if hasKey $uplink "address" }}
+        {{- fail (printf "evpn.nodes: node %s unnumbered uplink %s must omit address" $node.name $uplink.interface) }}
+      {{- end }}
+      {{- $peerID := $uplink.interface }}
+      {{- if hasKey $seenPeers $peerID }}
+        {{- fail (printf "evpn.nodes: node %s has duplicate unnumbered interface %s" $node.name $peerID) }}
+      {{- end }}
+      {{- $_ := set $seenPeers $peerID true }}
+    {{- else }}
+      {{- if not $uplink.peerAddress }}
+        {{- fail (printf "evpn.nodes: node %s numbered uplink %s requires peerAddress" $node.name $uplink.interface) }}
+      {{- end }}
+      {{- if hasKey $seenPeers $uplink.peerAddress }}
+        {{- fail (printf "evpn.nodes: node %s has duplicate peerAddress %s" $node.name $uplink.peerAddress) }}
+      {{- end }}
+      {{- $_ := set $seenPeers $uplink.peerAddress true }}
     {{- end }}
-    {{- $_ := set $seenPeers $uplink.peerAddress true }}
   {{- end }}
 {{- end }}
 apiVersion: v1
@@ -32,7 +65,7 @@ data:
     WAIT_FOR_ESTABLISHED={{ .Values.evpn.bgp.waitForEstablished }}
     BGP_TIMEOUT_SECONDS={{ int .Values.evpn.bgp.timeoutSeconds }}
   nodes.txt: {{ $nodeNames := list }}{{- range .Values.evpn.nodes }}{{- $nodeNames = append $nodeNames .name }}{{- end }}{{ join "\n" $nodeNames | quote }}
-  peers.txt: {{ $peerLines := list }}{{- range $node := .Values.evpn.nodes }}{{- range $uplink := $node.uplinks }}{{- $peerLines = append $peerLines (printf "%s %s" $node.name $uplink.peerAddress) }}{{- end }}{{- end }}{{ join "\n" $peerLines | quote }}
+  peers.txt: {{ $peerLines := list }}{{- range $node := .Values.evpn.nodes }}{{- range $uplink := $node.uplinks }}{{- $peerID := $uplink.peerAddress | default $uplink.interface }}{{- $peerLines = append $peerLines (printf "%s %s" $node.name $peerID) }}{{- end }}{{- end }}{{ join "\n" $peerLines | quote }}
   cluster-network-patch.json: |
     {"spec":{"additionalRoutingCapabilities":{"providers":["FRR"]},"defaultNetwork":{"ovnKubernetesConfig":{"routeAdvertisements":"Enabled","gatewayConfig":{"routingViaHost":true,"ipForwarding":"Global"}}}}}
   nmstate.yaml: |
@@ -59,7 +92,17 @@ data:
       desiredState:
         interfaces:
     {{- range $uplink := $node.uplinks }}
-      {{- if $uplink.address }}
+      {{- if ($uplink.unnumbered | default false) }}
+        - name: {{ $uplink.interface | quote }}
+          type: ethernet
+          state: up
+          ipv4:
+            enabled: false
+          ipv6:
+            enabled: true
+            dhcp: false
+            autoconf: false
+      {{- else if $uplink.address }}
       {{- $uplinkAddress := split "/" $uplink.address }}
         - name: {{ $uplink.interface | quote }}
           type: ethernet
@@ -117,17 +160,29 @@ data:
         matchLabels:
           kubernetes.io/hostname: {{ $node.name | quote }}
       bgp:
+{{- if $bfdProfile }}
+        bfdProfiles:
+          - name: {{ $bfdProfile | quote }}
+            receiveInterval: {{ int $.Values.evpn.bgp.bfdReceiveInterval }}
+            transmitInterval: {{ int $.Values.evpn.bgp.bfdTransmitInterval }}
+            detectMultiplier: {{ int $.Values.evpn.bgp.bfdDetectMultiplier }}
+{{- end }}
         routers:
           - asn: {{ int64 $nodeASN }}
             prefixes:
               - {{ printf "%s/32" $node.vtepIP | quote }}
             neighbors:
     {{- range $uplink := $node.uplinks }}
-              - address: {{ $uplink.peerAddress | quote }}
+              - {{ if ($uplink.unnumbered | default false) }}interface: {{ $uplink.interface | quote }}{{ else }}address: {{ $uplink.peerAddress | quote }}{{ end }}
                 asn: {{ int64 $uplink.peerASN }}
+{{- if not ($uplink.unnumbered | default false) }}
                 ebgpMultiHop: true
                 port: 179
-    {{- if $uplink.address }}
+{{- end }}
+{{- if $bfdProfile }}
+                bfdProfile: {{ $bfdProfile | quote }}
+{{- end }}
+    {{- if and (not ($uplink.unnumbered | default false)) $uplink.address }}
     {{- $uplinkAddress := split "/" $uplink.address }}
                 sourceaddress: {{ $uplinkAddress._0 | quote }}
     {{- end }}
@@ -162,8 +217,8 @@ data:
           router bgp {{ int64 $nodeASN }}
             address-family l2vpn evpn
     {{- range $uplink := $node.uplinks }}
-              neighbor {{ $uplink.peerAddress }} activate
-              neighbor {{ $uplink.peerAddress }} allowas-in origin
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} activate
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} allowas-in origin
     {{- end }}
               advertise-all-vni
             exit-address-family

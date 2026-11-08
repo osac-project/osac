@@ -138,6 +138,12 @@ evpn:
     # Fail the install when sessions are not Established within the timeout.
     waitForEstablished: true
     timeoutSeconds: 900
+    # Optional FRR-K8s BFD profile name; empty disables BFD. The profile is
+    # attached to every EVPN uplink peer. Intervals are in milliseconds.
+    bfdProfile: ""
+    bfdReceiveInterval: 300
+    bfdTransmitInterval: 300
+    bfdDetectMultiplier: 3
   # [REQUIRED when enabled] One entry per node that runs VMs.
   # nodes:
   #   - name: worker-0            # Kubernetes node name
@@ -148,6 +154,9 @@ evpn:
   #         address: 169.254.133.2/31   # optional; omit if already configured
   #         peerAddress: 169.254.133.1
   #         peerASN: 4200300002
+  #       - interface: ens7
+  #         unnumbered: true       # use FRR's interface-based BGP neighbor
+  #         peerASN: 4200300003    # peerAddress and address are omitted
   nodes: []
 
 mce:

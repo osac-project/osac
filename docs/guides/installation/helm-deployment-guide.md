@@ -480,12 +480,17 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 | `evpn.bgp.acceptPrefixes` | Required fabric loopback IPv4 ranges supplied by the fabric admin. Only /32 routes are accepted. |
 | `evpn.bgp.waitForEstablished` | Fails installation if a configured BGP session does not become Established. |
 | `evpn.bgp.timeoutSeconds` | Maximum wait per BGP session. |
+| `evpn.bgp.bfdProfile` | Optional FRR-K8s BFD profile applied to every EVPN uplink; empty disables BFD. |
+| `evpn.bgp.bfdReceiveInterval` | BFD receive interval in milliseconds. |
+| `evpn.bgp.bfdTransmitInterval` | BFD transmit interval in milliseconds. |
+| `evpn.bgp.bfdDetectMultiplier` | BFD detection multiplier. |
 | `evpn.nodes[].name` | Kubernetes node name from the cluster admin. Add one entry for every VMaaS node. |
 | `evpn.nodes[].vtepIP` | Unique address inside `vtepCIDR`, assigned with the fabric admin and configured on the fabric. |
 | `evpn.nodes[].asn` | Optional node ASN override, assigned by the fabric admin. Defaults to `evpn.bgp.asn`. |
 | `evpn.nodes[].uplinks[].interface` | Node interface name for a cable to a fabric leaf, supplied by the fabric admin. |
 | `evpn.nodes[].uplinks[].address` | Optional IPv4 CIDR for the uplink. Omit it when the address is already configured. The fabric admin supplies it. |
 | `evpn.nodes[].uplinks[].peerAddress` | IPv4 address of the connected fabric BGP peer, supplied by the fabric admin. |
+| `evpn.nodes[].uplinks[].unnumbered` | Set `true` to use an interface-based unnumbered BGP neighbor; omit `address` and `peerAddress`. |
 | `evpn.nodes[].uplinks[].peerASN` | ASN of the connected fabric peer, supplied by the fabric admin. |
 
 For a multicluster VMaaS deployment, `make install-multicluster` uses the

@@ -255,6 +255,32 @@
               "minimum": 60,
               "description": "Maximum wait for each BGP session to become Established.",
               "default": 900
+            },
+            "bfdProfile": {
+              "type": "string",
+              "description": "Optional FRR-K8s BFD profile name; empty disables BFD.",
+              "default": ""
+            },
+            "bfdReceiveInterval": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 60000,
+              "description": "BFD receive interval in milliseconds.",
+              "default": 300
+            },
+            "bfdTransmitInterval": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 60000,
+              "description": "BFD transmit interval in milliseconds.",
+              "default": 300
+            },
+            "bfdDetectMultiplier": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 255,
+              "description": "BFD detection multiplier.",
+              "default": 3
             }
           },
           "required": ["asn", "acceptPrefixes", "waitForEstablished", "timeoutSeconds"]
@@ -304,6 +330,11 @@
                       "format": "ipv4",
                       "description": "Fabric leaf BGP peer IPv4 address."
                     },
+                    "unnumbered": {
+                      "type": "boolean",
+                      "description": "Use FRR's interface-based unnumbered BGP neighbor; omit address and peerAddress.",
+                      "default": false
+                    },
                     "peerASN": {
                       "type": "integer",
                       "minimum": 1,
@@ -311,7 +342,30 @@
                       "description": "Fabric leaf BGP ASN."
                     }
                   },
-                  "required": ["interface", "peerAddress", "peerASN"]
+                  "required": ["interface", "peerASN"],
+                  "oneOf": [
+                    {
+                      "required": ["peerAddress"],
+                      "not": {
+                        "required": ["unnumbered"],
+                        "properties": {
+                          "unnumbered": {"const": true}
+                        }
+                      }
+                    },
+                    {
+                      "required": ["unnumbered"],
+                      "properties": {
+                        "unnumbered": {"const": true}
+                      },
+                      "not": {
+                        "anyOf": [
+                          {"required": ["address"]},
+                          {"required": ["peerAddress"]}
+                        ]
+                      }
+                    }
+                  ]
                 }
               }
             },

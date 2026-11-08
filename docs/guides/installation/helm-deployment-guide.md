@@ -315,6 +315,17 @@ TopoLVM storage class is not the cluster default.
 
 ### Phase 1a: install prerequisite Operators
 
+Before upgrading an existing `osac-deps` release, compare its recorded values
+with the current LVMS Subscription channel:
+
+```bash
+helm get values osac-deps -n osac-deps
+oc get sub lvms-operator -n openshift-storage -o jsonpath='channel={.spec.channel}{"\n"}'
+```
+
+The commands below use the existing Subscription channel when one is present.
+For a new installation, they use `stable-$OCP_VERSION`.
+
 If LVMS is already installed and the cluster already has the
 `openshift-storage` namespace, set `lvms.enabled: false` in
 `my-infra-values.yaml` before installing `osac-deps`. This prevents Helm from
@@ -325,18 +336,23 @@ resources that this release is intended to manage. With LVMS disabled, the
 chart does not render resources in `openshift-storage`.
 
 ```bash
+LVMS_CHANNEL=$(oc get sub lvms-operator -n openshift-storage \
+    -o jsonpath='{.spec.channel}' 2>/dev/null || true)
+LVMS_CHANNEL=${LVMS_CHANNEL:-stable-$OCP_VERSION}
+```
+
+```bash
 helm upgrade --install osac-deps ./charts/osac-deps \
     -n osac-deps --create-namespace \
     -f my-infra-values.yaml \
-    --set lvms.channel="stable-$OCP_VERSION" \
+    --set lvms.channel="$LVMS_CHANNEL" \
     --take-ownership \
     --wait --timeout 30m
 ```
 
-To check a specific Operator, for example LVMS:
+After the command, confirm the LVMS Subscription channel and state:
 
 ```bash
-oc get csv -n openshift-storage lvms-operator.v4.22.0
 oc get sub lvms-operator -n openshift-storage -o jsonpath='channel={.spec.channel} state={.status.state}{"\n"}'
 ```
 
@@ -428,7 +444,7 @@ helm upgrade --install osac-infra ./charts/osac-infra \
     -n osac-infra --create-namespace \
     -f my-infra-values.yaml \
     --set osacNamespace="$NS" \
-    --set lvms.channel="stable-$OCP_VERSION" \
+    --set lvms.channel="$LVMS_CHANNEL" \
     --set keycloak.hostname="https://keycloak-keycloak.$DOMAIN" \
     --set keycloak.route.publicIngress=true \
     --set keycloak.route.hostname="keycloak-keycloak.$DOMAIN" \
@@ -728,11 +744,15 @@ The phase-2 values that mount that Secret are in the
 [customer install guide](customer-install-guide.md#64-installing-vmaas-on-a-separate-workload-cluster).
 
 **Workload cluster.** Point `KUBECONFIG` at the workload cluster and refresh
-`OCP_VERSION` for this cluster before Phase 1a and Phase 1b set the LVMS
-channel:
+`OCP_VERSION` and `LVMS_CHANNEL` for this cluster before running the Phase 1a
+and Phase 1b commands. The LVMS channel is cluster-specific; use the current
+Subscription channel for an existing release, as described in Phase 1a.
 
 ```bash
 export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
+LVMS_CHANNEL=$(oc get sub lvms-operator -n openshift-storage \
+    -o jsonpath='{.spec.channel}' 2>/dev/null || true)
+LVMS_CHANNEL=${LVMS_CHANNEL:-stable-$OCP_VERSION}
 ```
 
 In `my-workload-infra-values.yaml`, set `cnv.enabled: true` when this release
@@ -760,13 +780,19 @@ in both commands.
 Do not install the `osac` chart on this cluster.
 
 **Management cluster.** Point `KUBECONFIG` at the management cluster and
-refresh `OCP_VERSION` for this cluster before Phase 1a and Phase 1b set the
-LVMS channel:
+refresh `OCP_VERSION` and `LVMS_CHANNEL` for this cluster before running the
+Phase 1a and Phase 1b commands:
 
 ```bash
 export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
 export DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
+LVMS_CHANNEL=$(oc get sub lvms-operator -n openshift-storage \
+    -o jsonpath='{.spec.channel}' 2>/dev/null || true)
+LVMS_CHANNEL=${LVMS_CHANNEL:-stable-$OCP_VERSION}
 ```
+
+For an existing release, compare its recorded values and the LVMS Subscription
+channel before upgrading, as described in Phase 1a.
 
 Create the AAP license Secret on the management cluster as well. Set
 `AAP_LICENSE_FILE` to the local path of the license file if needed, then run:
@@ -790,6 +816,7 @@ intentional settings into the values used for its upgrade:
 # Recorded user-supplied overrides
 helm get values osac-deps -n osac-deps
 helm get values osac-infra -n osac-infra
+oc get sub lvms-operator -n openshift-storage -o jsonpath='channel={.spec.channel}{"\n"}'
 
 # Computed values, including chart defaults
 helm get values osac-deps -n osac-deps --all

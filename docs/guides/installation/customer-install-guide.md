@@ -288,11 +288,15 @@ Notes on individual components:
 - trust-manager is required for every installation and can distribute the CA
   bundle. `caIssuer.enabled` is `true` by default, so the chart's `Bundle`
   manages the ConfigMap named by `certs.caBundle.configMap` (normally
-  `ca-bundle`) and can overwrite it. If
+  `ca-bundle`) and can overwrite it. Before removing or changing an existing
+  `Bundle`, copy the full `bundle.pem` data from each ConfigMap it manages to a
+  replacement ConfigMap with a different name in each affected namespace.
+  Update the affected services to use those replacements and verify they are
+  available first; removing a `Bundle` can delete its target ConfigMaps. If
   `service.certs.caBundle.configMap` and `certs.caBundle.configMap` name the
-  same ConfigMap and you manage it directly, remove or change the `Bundle` so
-  it no longer targets the ConfigMap, then set
-  `caIssuer.enabled: false` before installation. If
+  same ConfigMap and you manage it directly, complete this transfer before
+  changing the `Bundle` so it no longer targets that ConfigMap. Then set
+  `caIssuer.enabled: false` before installing or upgrading OSAC. If
   `service.certs.caBundle.configMap` uses a different name, you can provide
   that ConfigMap directly and leave `caIssuer.enabled: true`. On an existing
   installation, check who owns `default-ca` and which certificates use it

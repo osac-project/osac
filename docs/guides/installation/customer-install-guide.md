@@ -870,8 +870,14 @@ You create one values file for the `osac` chart, `my-values.yaml`.
 6. Add the networking values from
    [Section 4.4.3](#443-setting-the-networking-helm-values).
 
-For AAP-backed provider provisioning, configure the Operator to read the token
-Secret created by the `create-api-token` hook:
+Any workflow that uses AAP for provisioning requires an Operator AAP token. This
+includes CaaS `ClusterOrder` and VMaaS `ComputeInstance` provisioning, including
+VMaaS on a separate workload cluster, as well as provider networking. The token
+is required even when provider networking is disabled.
+
+**Chart-managed AAP.** The `create-api-token` hook waits for the chart-managed
+AAP admin Secret and gateway, creates `osac-aap-api-token`, and restarts
+`deploy/osac-operator`. Set the Operator to read that Secret:
 
 ```yaml
 operator:
@@ -881,10 +887,55 @@ operator:
       key: token
 ```
 
-The hook creates this Secret and restarts `deploy/osac-operator`. The
-Deployment reads the hook-created token only when this reference is set. Without
-the reference or a direct `operator.aap.token` value, the Operator starts
-without `OSAC_AAP_TOKEN`; see [Section 4.3](#43-installing-osac).
+The Deployment reads the Secret only when this reference is set. If
+`operator.aap.tokenSecret.name` is set, the Deployment uses the Secret and
+ignores `operator.aap.token`; clear the Secret name when switching to a direct
+token.
+
+**Externally managed AAP.** The chart's bootstrap and token hooks wait for the
+chart-managed AAP admin Secret and gateway. Setting
+`aap.aap.instance.enabled: false` alone does not disable those hooks. Disable
+the chart-managed instance, bootstrap, token creation, and template-publishing
+hook, and configure the external Controller URL and token Secret:
+
+```yaml
+aap:
+  aap:
+    instance:
+      enabled: false
+  bootstrap:
+    enabled: false
+  apiToken:
+    create: false
+  instanceGroups:
+    publishTemplates:
+      enabled: false
+operator:
+  aap:
+    url: https://<external-aap>/api/controller
+    tokenSecret:
+      name: osac-aap-api-token
+      key: token
+```
+
+Before installation, create `osac-aap-api-token` in the OSAC release namespace
+with the external AAP API token under the `token` key. For example, store the
+token in a protected local file and create the Secret with:
+
+```console
+oc create secret generic osac-aap-api-token \
+  --namespace <namespace> \
+  --from-file=token=<path-to-token-file>
+```
+
+Do not put the token in the values file. The external AAP must already be
+reachable and bootstrapped with the release-compatible OSAC configuration,
+including the organizations, projects, job templates, inventories, credentials,
+execution environments, and instance groups required by enabled services. The
+token must be authorized to launch and read those jobs. Because the chart's
+publication hook targets the chart-managed AAP instance, publish the required
+templates to Fulfillment separately. See
+[Section 5](#5-helm-chart-configuration-parameters) for the related values.
 
 When the Fulfillment Service and hub run on the same cluster, set the top-level
 `hubAccess.enabled` value before installing:
@@ -924,13 +975,15 @@ Use this procedure when the cluster already meets the prerequisites.
   according to the [secrets management configuration guide](secrets-management-configuration.md).
 - You completed [Section 4.1](#41-preparing-the-cluster) and
   [Section 4.2](#42-configuring-the-helm-values).
-- For AAP-backed provider provisioning, `my-values.yaml` sets
-  `operator.aap.tokenSecret` to the `osac-aap-api-token` Secret created by the
-  `create-api-token` hook. The hook restarts the Operator, but the Deployment
-  reads this Secret only when the reference is set. Without it or a direct
-  `operator.aap.token` value, the Operator starts without `OSAC_AAP_TOKEN` and
-  AAP requests can fail with HTTP 401. See
-  [Section 4.2](#42-configuring-the-helm-values).
+- For AAP-backed provisioning, `my-values.yaml` sets
+  `operator.aap.tokenSecret` to a Secret containing the AAP token, or sets a
+  direct `operator.aap.token`. This is required for CaaS `ClusterOrder`, VMaaS
+  `ComputeInstance` (including separate-workload deployments), and provider
+  networking, even when provider networking is disabled. For chart-managed AAP,
+  the `create-api-token` hook creates the Secret; for external AAP, create it
+  before installation and disable the chart-managed bootstrap and token hooks
+  as described in [Section 4.2](#42-configuring-the-helm-values). Without a
+  usable token, AAP requests can fail with HTTP 401.
 - When the Fulfillment Service and hub run on the same cluster,
   `my-values.yaml` sets top-level `hubAccess.enabled: true` before installation.
   This runs the local hub registration hook; see
@@ -1503,8 +1556,8 @@ subchart's own `values.yaml` file.
 | `operator.image.repository`, `operator.image.tag`, `operator.image.pullPolicy` | schema | Operator image. Use a release tag for production. |
 | `operator.replicaCount`, `operator.resources.*` | schema | Operator sizing. |
 | `operator.aap.url`, `operator.aap.insecureSkipVerify`, `operator.aap.statusPollInterval`, `operator.aap.templatePrefix` | schema | How the Operator reaches AAP. Set `insecureSkipVerify: "true"` for self-signed AAP routes. |
-| `operator.aap.token` | schema | Direct AAP token value. Prefer the Secret reference below when the `create-api-token` hook creates the token. |
-| `operator.aap.tokenSecret.name` | schema | Secret containing the AAP API token. Set to `osac-aap-api-token` when using the `create-api-token` hook. |
+| `operator.aap.token` | schema | Direct AAP token value. If `operator.aap.tokenSecret.name` is set, the Deployment uses that Secret and ignores this value; clear the Secret name when switching to a direct token. |
+| `operator.aap.tokenSecret.name` | schema | Secret containing the AAP API token. Set to `osac-aap-api-token` when using the `create-api-token` hook or when supplying a token for external AAP. |
 | `operator.aap.tokenSecret.key` | schema | Key in the referenced Secret containing the AAP token. The hook-created Secret uses `token`. |
 | `operator.fulfillment.serverAddress` | schema | Fulfillment gRPC endpoint. When configured, the Operator uses it to verify the saved installation networking setting before reconciliation; it can be empty for standalone runs. |
 | `operator.fulfillment.tls.caBundle.configMap` | schema | ConfigMap with the PEM bundle used by the Operator's Fulfillment TLS client. Keep this name aligned with `service.certs.caBundle.configMap` when using a custom bundle name. The default is `ca-bundle`; the key defaults to `bundle.pem`. |
@@ -1588,7 +1641,8 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `aap.aap.instance.controller.disabled`, `aap.aap.instance.hub.disabled`, `aap.aap.instance.lightspeed.disabled` | Turn off individual AAP components. |
 | `aap.aap.instance.redisMode` | `standalone` or `cluster`. |
 | `aap.aap.instance.routeTlsTerminationMechanism` | `Edge`, `Passthrough`, or `Reencrypt` for the AAP routes. |
-| `aap.bootstrap.enabled`, `aap.bootstrap.image`, `aap.bootstrap.backoffLimit` | The postinstallation bootstrap job that loads config-as-code. `aap.bootstrap.image` is also the base image that a provider builds its execution environment image on. |
+| `aap.bootstrap.enabled`, `aap.bootstrap.image`, `aap.bootstrap.backoffLimit` | The postinstallation bootstrap job that loads config-as-code. Disable the job when AAP is externally managed and bootstrap it separately. `aap.bootstrap.image` is also the base image that a provider builds its execution environment image on. |
+| `aap.apiToken.create` | Creates an API token for Operator provisioning after chart-managed AAP is ready. Set to `false` for externally managed AAP and supply the token Secret yourself. |
 | `aap.configAsCode.eeImage` | The execution environment and job pod image of every OSAC instance group. With a provider Fabric Manager, set the provider's image, built on the release's `aap.bootstrap.image`. See [Section 4.4.3](#443-setting-the-networking-helm-values). |
 | `aap.configAsCode.manifestSecret` | Secret that holds `license.zip`. |
 | `aap.configAsCode.secret` | Secret with config-as-code runtime flags. |
@@ -1598,7 +1652,7 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `aap.instanceGroups.clusterFulfillment.enabled`, `aap.instanceGroups.clusterFulfillment.config`, `aap.instanceGroups.clusterFulfillment.secret` | The `cluster-fulfillment` instance group for CaaS provisioning. See [Section 6.2](#62-installing-osac-for-caas). |
 | `aap.instanceGroups.networkFulfillment.enabled`, `aap.instanceGroups.networkFulfillment.config`, `aap.instanceGroups.networkFulfillment.secret` | The settings (`config`, the `ConfigMap` `network-fulfillment-ig`) and secrets (`secret`, the `Secret` `network-fulfillment-ig`) of the Fabric Manager, which networking jobs read as environment variables. Leave `enabled: true` (the default); `false` writes both empty and is rejected with provider networking enabled. The installer writes both at every rollout. See [Section 4.4.3](#443-setting-the-networking-helm-values). |
 | `aap.instanceGroups.storageFulfillment.config.STORAGE_SNAPSHOTS_ENABLED` | Snapshot toggle for the `storage-operations` instance group. |
-| `aap.instanceGroups.publishTemplates.enabled` | Runs the postinstallation `osac-publish-templates` hook, which publishes cluster templates (CaaS, MaaS), compute instance templates (VMaaS), bare-metal instance templates, and add-on operators (CaaS) to the fulfillment catalog. Default `true`. Set to `false` only when no enabled service depends on hook-published templates — currently a BMaaS-only deployment — or when all required templates are provisioned separately. |
+| `aap.instanceGroups.publishTemplates.enabled` | Runs the postinstallation `osac-publish-templates` hook, which publishes cluster templates (CaaS, MaaS), compute instance templates (VMaaS), bare-metal instance templates, and add-on operators (CaaS) to the fulfillment catalog. Default `true`. Set to `false` when AAP is external; publish required templates to Fulfillment separately. For chart-managed AAP, set it to `false` only when no enabled service depends on hook-published templates or when all required templates are provisioned separately. |
 | `aap.instanceGroups.publishTemplates.config.OSAC_TEMPLATE_COLLECTIONS`, `aap.instanceGroups.publishTemplates.config.OSAC_FULFILLMENT_SERVICE_URI` | The Ansible collections to publish and the internal Fulfillment Service URI. |
 
 **Table 5.6. Web console, BMaaS, and other parameters**

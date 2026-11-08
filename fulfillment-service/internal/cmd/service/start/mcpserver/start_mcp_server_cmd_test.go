@@ -104,7 +104,7 @@ var _ = Describe("newServer", func() {
 
 		response, err := clientSession.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(response.Tools).To(HaveLen(8))
+		Expect(response.Tools).To(HaveLen(10))
 
 		tools := make(map[string]*mcp.Tool, len(response.Tools))
 		for _, tool := range response.Tools {

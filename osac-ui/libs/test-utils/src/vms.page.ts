@@ -96,11 +96,17 @@ export const expectVmDetailsPage = async (
   await expect(page.locator(...VmDetailsPage.pageTitle)).toHaveText(exactText(name), { timeout });
 };
 
+const getVmDetailsStatus = (page: Page): Locator =>
+  page
+    .getByText(...VmDetailsPage.statusTerm)
+    .locator('..')
+    .locator(...VmDetailsPage.statusLabel);
+
 /** Verify that the VM details page reports Running. */
 export const expectVmDetailsToBeRunning = async (page: Page, timeout = 15_000): Promise<void> => {
-  await expect(
-    page.locator(...VmDetailsPage.statusLabel).filter({ hasText: exactText('Running') }),
-  ).toHaveCount(1, { timeout });
+  await expect(getVmDetailsStatus(page).filter({ hasText: exactText('Running') })).toHaveCount(1, {
+    timeout,
+  });
 };
 
 /** Wait for the VM details page to report Running, refreshing the UI between polls. */
@@ -114,9 +120,7 @@ export const waitForVmToBeRunning = async (
       async () => {
         await page.reload();
         await expectVmDetailsPage(page, name);
-        const runningStatus = page
-          .locator(...VmDetailsPage.statusLabel)
-          .filter({ hasText: exactText('Running') });
+        const runningStatus = getVmDetailsStatus(page).filter({ hasText: exactText('Running') });
         return (await runningStatus.count()) > 0 ? 'Running' : '';
       },
       { timeout, intervals: [1_000, 2_000, 5_000] },

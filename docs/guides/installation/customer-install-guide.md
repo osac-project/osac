@@ -2232,10 +2232,12 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    `CURL_CA_ARGS` from the refreshed bundle.
 
    Refreshing this local file or running an OSAC installation or upgrade does
-   not reload Keycloak's truststore. After removing any CA from a bundle
-   Keycloak uses, wait for the updated bundle to reach its ConfigMap. Restart
-   Keycloak and verify that the truststore contains the needed roots and no
-   longer contains the removed CA. For bundled Keycloak, run:
+   not reload Keycloak's truststore. When adding a CA, wait for the updated
+   bundle to reach its ConfigMap and restart Keycloak before switching the
+   outbound OIDC provider to use that CA. After removing any CA from a bundle
+   Keycloak uses, wait for the updated bundle to reach its ConfigMap and restart
+   Keycloak as well.
+   For bundled Keycloak, run:
 
    ```console
    oc rollout restart deployment/keycloak-service -n keycloak
@@ -2244,8 +2246,15 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
      cat /etc/keycloak/truststore/ca-bundle.pem > keycloak-truststore.pem
    ```
 
-   Compare the CA fingerprints in `keycloak-truststore.pem` with the updated
-   bundle. See
+   Compare the CA fingerprints in `keycloak-truststore.pem` with
+   `osac-ca-bundle.pem` to confirm the mounted bundle is current. This file
+   shows the mounted bundle, but not every CA Keycloak trusts. Check
+   `KC_TRUSTSTORE_PATHS`, any JVM truststore setting, and Java's default
+   truststore too. In an isolated test, connect Keycloak to a test OIDC provider
+   with a valid certificate signed only by the new CA and confirm it succeeds
+   before switching providers. After removing a CA, test with a valid
+   certificate signed only by that CA and confirm Keycloak rejects the TLS
+   connection. See
    [Adding CA roots to the shared bundle at runtime](helm-deployment-guide.md#adding-ca-roots-to-the-shared-bundle-at-runtime).
 
    Keep this file for the OIDC, API, and hub-registration checks. It must

@@ -98,7 +98,7 @@ export const expectVmDetailsPage = async (
 
 const getVmDetailsStatus = (page: Page): Locator =>
   page
-    .getByText(...VmDetailsPage.statusTerm)
+    .getByRole(...VmDetailsPage.statusTerm)
     .locator('..')
     .locator(...VmDetailsPage.statusLabel);
 

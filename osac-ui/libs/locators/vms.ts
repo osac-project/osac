@@ -4,7 +4,16 @@ const id = (value: string): readonly [string] => [`[id="${value}"]`];
 
 type VmsLocator =
   | readonly [
-      role: 'button' | 'checkbox' | 'grid' | 'heading' | 'link' | 'radio' | 'switch' | 'textbox',
+      role:
+        | 'button'
+        | 'checkbox'
+        | 'grid'
+        | 'heading'
+        | 'link'
+        | 'radio'
+        | 'switch'
+        | 'term'
+        | 'textbox',
       options: { name: string; exact: true },
     ]
   | readonly [label: string]
@@ -24,7 +33,7 @@ export const VmsMainPage = {
 
 export const VmDetailsPage = {
   pageTitle: ['h1.pf-v6-c-title'],
-  statusTerm: ['Status'],
+  statusTerm: ['term', { name: 'Status', exact: true }],
   statusLabel: ['.pf-v6-c-label'],
   deleteButton: ['button', { name: 'Delete', exact: true }],
   deleteDialog: [`[role="dialog"][aria-labelledby="${deleteResourceModalIds.title}"]`],

@@ -24,12 +24,6 @@
 - gap: "when-never-false osac/templates/roles/netris/tasks/delete_external_ip.yaml: Log in to Netris"
   reason: "dead: no earlier task of the job sets netris_session_cookie and the generic playbook refuses extra vars"
 
-# release_cluster_ingress_ip.yaml: the block holds one debug task.
-- gap: "task-never-ran osac/templates/roles/netris/tasks/release_cluster_ingress_ip.yaml: Report the error"
-  reason: "dead: _noop.yaml is one debug with defaults on every variable, so the block cannot fail"
-- gap: "rescue-never-entered osac/templates/roles/netris/tasks/release_cluster_ingress_ip.yaml: block Release the cluster ingress address on Netris"
-  reason: "dead: _noop.yaml is one debug with defaults on every variable, so the block cannot fail"
-
 # Python branches no input of the public functions reaches.
 - gap: "python-line plugins/module_utils/netris_external_ip.py:132"
   reason: "dead: select_address starts with current <= last_host, and the loop raises at end >= last_host, so current stays <= last_host"

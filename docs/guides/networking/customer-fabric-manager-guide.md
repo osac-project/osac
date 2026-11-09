@@ -1058,7 +1058,7 @@ Rules:
 - Read the lists. Never compute ranges from the Subnet CIDR or the plan.
 - The plan never changes after installation, and a recorded layout never changes, so no address moves.
 - Any list may be `[]`, and every task accepts it. With an empty `physical_ipv4_cidrs`, use no Subnet address for a fabric device.
-- **DHCP.** Serve no DHCP on a VMaaS Subnet. OVN-Kubernetes assigns the VM addresses, and a second server on the shared segment could answer a VM.
+- **DHCP.** Serve no DHCP on a VMaaS Subnet. It has no physical client: OVN-Kubernetes assigns the VM addresses and answers their DHCP inside its logical switch.
 - VMs get their address, the Subnet's prefix, `gateway_ipv4` as router (for example `10.0.1.17/24` via `10.0.1.1`), and the cluster DNS, from `cudn_evpn`'s DHCP. Your manager has no DNS task.
 - Allocate only from your own range. Never use the network address or broadcast address for a fabric device.
 - Use `gateway_ipv4` only to serve the Subnet's gateway under the [Gateway rule](#gateway). Every other address for your own Subnet devices comes from `physical_ipv4_cidrs`.

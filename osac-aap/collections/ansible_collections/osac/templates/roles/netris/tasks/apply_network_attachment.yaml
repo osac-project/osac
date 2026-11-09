@@ -3,8 +3,9 @@
 # Kubernetes manager bound the VM; SecurityGroups are no-ops on Netris). A
 # physical interface moves the host's fabric ports: every port of the host
 # leaves NETRIS_BM_PROVISIONING_VNET and interface.name joins the V-Net
-# osac-sn-<Subnet ID>. Before the move the V-Net gets DHCP over
-# ipam.physical_ipv4_cidrs (EVPN Subnets too; the gateway stays as it is), so
+# osac-sn-<Subnet ID>. create_subnet already turns DHCP on over
+# ipam.physical_ipv4_cidrs; before the move this task makes sure it is on (a
+# V-Net created before DHCP was always on), keeping the gateway as it is, so
 # the host can boot on it. Everything that can fail is checked before the
 # first write. Nothing is published. Rerun-safe: a port already moved stays.
 #
@@ -70,6 +71,7 @@
         - name: Plan DHCP over the physical range on the V-Net
           ansible.builtin.set_fact:
             _netris_dhcp: "{{ netris_vnet_detail | osac.templates.netris_vnet_dhcp_update(osac_job_vars) }}"
+          no_log: true
 
         - name: Stop when the V-Net cannot serve DHCP
           vars:

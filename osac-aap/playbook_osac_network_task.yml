@@ -27,8 +27,6 @@
       - delete_nat_gateway
       - create_fabric_domain
       - delete_fabric_domain
-      - reserve_cluster_ingress_ip
-      - release_cluster_ingress_ip
     osac_network_kubernetes_tasks:
       - create_virtual_network
       - delete_virtual_network

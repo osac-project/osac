@@ -594,8 +594,11 @@ With the Netris Fabric Manager, also note:
   rule is repaired.
 - A FabricDomain is a Netris Server Cluster `osac-fd-<id>`. Its template is
   the one distinct `server_cluster_template_id` in `NETRIS_RESOURCE_CLASS_MAP`
-  (known limitation: two different templates fail as final). Reserving a
-  cluster ingress address is not supported on Netris: the task fails as final.
+  (known limitation: two different templates fail as final).
+- The Netris Fabric Manager has no task for a cluster's ingress address. When
+  CaaS provider networking arrives in a later release, OSAC will assign the
+  address from the Subnet's `lbVip` range, guest MetalLB will announce it, and
+  the V-Net will carry it like any host address.
 - ICMP SecurityGroup rules need the registration capability
   `security_group_icmp`. Netris declares it, although its SecurityGroup tasks
   are no-ops. `cudn_evpn` does not, because a NetworkPolicy cannot match ICMP,

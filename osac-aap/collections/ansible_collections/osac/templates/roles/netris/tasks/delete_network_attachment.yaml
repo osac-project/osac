@@ -3,9 +3,8 @@
 # a physical interface only interface.name leaves the V-Net osac-sn-<Subnet ID>
 # and joins NETRIS_BM_PROVISIONING_VNET again; the host's other ports belong to
 # its other attachments and are not touched. DHCP stays on in the V-Net of the
-# Subnet: other attachments may use it, and the Subnet delete removes the
-# V-Net. A host, VPC or V-Net that is already gone is a success. Nothing is
-# published.
+# Subnet, which create_subnet owns; the Subnet delete removes the V-Net. A
+# host, VPC or V-Net that is already gone is a success. Nothing is published.
 #
 # Known gap: port changes read and write the whole ports list of a V-Net with
 # no lock, so concurrent attachment jobs on the same V-Net can lose a port

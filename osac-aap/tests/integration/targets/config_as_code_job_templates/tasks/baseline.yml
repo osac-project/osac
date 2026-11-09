@@ -1,7 +1,7 @@
 ---
 # Config-as-code AAP job templates of the networking contract (DECISIONS:
 # "Interfaces fixed by the AAP side"; contract §4.3, TC-INVOKE-01):
-#   - 21 networking templates <prefix>-<task with dashes>, one per Fabric task,
+#   - 19 networking templates <prefix>-<task with dashes>, one per Fabric task,
 #     each running playbook_osac_network_task.yml in the networking-operations
 #     instance group, with ask_labels_on_launch and a 3600 s timeout;
 #   - no other template runs the generic playbook and no backend-specific
@@ -43,8 +43,6 @@
       - delete_nat_gateway
       - create_fabric_domain
       - delete_fabric_domain
-      - reserve_cluster_ingress_ip
-      - release_cluster_ingress_ip
     cac_generic_playbook: osac-aap/playbook_osac_network_task.yml
 
   tasks:
@@ -75,7 +73,7 @@
     - name: Check there is one networking template per Fabric task
       ansible.builtin.assert:
         that:
-          - cac_generic_templates | length == 21
+          - cac_generic_templates | length == 19
           - cac_generic_templates | map(attribute='name') | sort == cac_expected_network_names | sort
         fail_msg: >-
           The templates running {{ cac_generic_playbook }} are

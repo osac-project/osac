@@ -273,12 +273,14 @@ def _dhcp_range(net: Any, gateway: Any, physical: list) -> tuple | None:
 def netris_vnet_plan(job: Any, mode: Any = "gateway_ipv4") -> dict:
     """Plan the gateway and DHCP range of the V-Net of a Subnet.
 
-    Returns {error, gateway, dhcp_start, dhcp_end}; "" means none. With a
-    network type DHCP is always off (OVN-K assigns the VM addresses) and
-    ``mode`` picks the gateway: gateway_ipv4 (ipam.gateway_ipv4/prefix, the
-    default), none, or physical_first (first address of the first
-    ipam.physical_ipv4_cidrs block). Without a network type the gateway is
-    ipam.gateway_ipv4/prefix and DHCP serves the physical blocks.
+    Returns {error, gateway, dhcp_start, dhcp_end}; "" means none. DHCP
+    serves the ipam.physical_ipv4_cidrs blocks after the gateway, with or
+    without a network type; VMs on an EVPN Subnet get their address from the
+    DHCP of OVN-Kubernetes, which answers inside the logical switch. With a
+    network type ``mode`` picks the gateway: gateway_ipv4
+    (ipam.gateway_ipv4/prefix, the default), none (no gateway, so no DHCP),
+    or physical_first (first address of the first ipam.physical_ipv4_cidrs
+    block). Without a network type the gateway is ipam.gateway_ipv4/prefix.
     """
     job = job if isinstance(job, dict) else {}
     spec = (job.get("resource") or {}).get("spec") or {}
@@ -300,20 +302,20 @@ def netris_vnet_plan(job: Any, mode: Any = "gateway_ipv4") -> dict:
     if evpn and mode == "physical_first":
         if not physical:
             return _plan("ipam.physical_ipv4_cidrs is empty; the physical_first gateway needs a block")
-        first = next(physical[0].hosts())
-        if first in (net.network_address, net.broadcast_address):
+        gateway = next(physical[0].hosts())
+        if gateway in (net.network_address, net.broadcast_address):
             return _plan("the first host address of ipam.physical_ipv4_cidrs[0] is the Subnet network or broadcast address")
-        return _plan(gateway=f"{first}/{net.prefixlen}")
-    try:
-        gateway = ipaddress.ip_address(ipam.get("gateway_ipv4"))
-    except ValueError:
-        return _plan("ipam.gateway_ipv4 must be an IPv4 address")
-    if gateway.version != 4 or gateway not in net:
-        return _plan("ipam.gateway_ipv4 must be an IPv4 address inside the Subnet CIDR")
-    if gateway in (net.network_address, net.broadcast_address):
-        return _plan("ipam.gateway_ipv4 must not be the Subnet network or broadcast address")
+    else:
+        try:
+            gateway = ipaddress.ip_address(ipam.get("gateway_ipv4"))
+        except ValueError:
+            return _plan("ipam.gateway_ipv4 must be an IPv4 address")
+        if gateway.version != 4 or gateway not in net:
+            return _plan("ipam.gateway_ipv4 must be an IPv4 address inside the Subnet CIDR")
+        if gateway in (net.network_address, net.broadcast_address):
+            return _plan("ipam.gateway_ipv4 must not be the Subnet network or broadcast address")
     gateway_cidr = f"{gateway}/{net.prefixlen}"
-    if evpn or not physical:
+    if not physical:
         return _plan(gateway=gateway_cidr)
     rng = _dhcp_range(net, gateway, physical)
     if rng is None:
@@ -340,21 +342,20 @@ def netris_vni_check(value: Any, what: str = "object") -> dict:
 
 
 def _dhcp_values(gateway: dict) -> tuple[str, str]:
+    """The DHCP start and end of a V-Net gateway, flat or in Netris 4.16 ``dhcp``."""
     nested = gateway.get("dhcp") if isinstance(gateway.get("dhcp"), dict) else {}
     start = nested.get("start") or gateway.get("dhcpStartIp") or ""
     end = nested.get("end") or gateway.get("dhcpEndIp") or ""
     return str(start).strip(), str(end).strip()
 
 
-def netris_vnet_gateway_update(detail: Any, plan: Any, keep_dhcp: bool = False) -> dict:
+def netris_vnet_gateway_update(detail: Any, plan: Any) -> dict:
     """Compare a V-Net read with a plan: {matches, body}.
 
     ``body`` is the full V-Net to PUT: the read detail with ``gateways``
     replaced by the planned gateway. The returned gateway keeps the fields of
     the existing one (ID, nested Netris 4.16 ``dhcp`` metadata) and only sets
-    prefix, dhcpEnabled and the DHCP range. With ``keep_dhcp`` the DHCP of the
-    V-Net is not compared and not changed (a Subnet with a network type: a
-    bare-metal attachment may have switched DHCP on).
+    prefix, dhcpEnabled and the DHCP range.
     """
     detail = detail if isinstance(detail, dict) else {}
     plan = plan if isinstance(plan, dict) else {}
@@ -364,11 +365,6 @@ def netris_vnet_gateway_update(detail: Any, plan: Any, keep_dhcp: bool = False) 
     if not want:
         return {"matches": not gateways, "body": {**detail, "gateways": []}}
     existing = gateways[0] if gateways and isinstance(gateways[0], dict) else {}
-    if keep_dhcp:
-        matches = len(gateways) == 1 and str(existing.get("prefix", "")).strip() == want
-        gateway = {**existing, "prefix": want}
-        gateway.setdefault("dhcpEnabled", False)
-        return {"matches": matches, "body": {**detail, "gateways": [gateway]}}
     matches = (
         len(gateways) == 1
         and str(existing.get("prefix", "")).strip() == want

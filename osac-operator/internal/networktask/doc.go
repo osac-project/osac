@@ -110,8 +110,8 @@ and remove the finalizer once all succeeded (none started: remove it at once).
 Call Forget(uid) after the finalizer is gone.
 
 Results: AcceptNoOutput (default), ParseBackendID, ParseVirtualNetworkResult,
-ParseNetworkSegment and AcceptSegment, ParseDHCPLease, ParseExternalIP,
-ParseClusterIngress and ParseVMAttachment validate the typed outputs of
+ParseNetworkSegment and AcceptSegment, ParseDHCPLease, ParseExternalIP
+and ParseVMAttachment validate the typed outputs of
 contract §4.10; each returns a RejectError naming only the broken rule.
 
 EVPN (EP #427): the Fabric create_virtual_network returns the L3 VNI

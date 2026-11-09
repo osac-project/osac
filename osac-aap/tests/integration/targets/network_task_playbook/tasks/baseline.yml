@@ -2,7 +2,7 @@
 # Network manager contract §4.3 / TC-INVOKE-01 and TC-RESULT-01 for the generic
 # playbook itself, each case in its own child ansible-playbook process launched
 # like an AAP job (`-e @extravars`). Checks:
-#   - the playbook's fixed task sets are exactly the contract's 21 Fabric and
+#   - the playbook's fixed task sets are exactly the contract's 19 Fabric and
 #     8 Kubernetes tasks;
 #   - the playbook includes the registered role's task file named by the job;
 #     a task of the set runs that task file of a real role (the Netris
@@ -13,7 +13,7 @@
 #     (AAP's awx_*/tower_* job metadata is accepted);
 #   - a missing role or task file fails with the retryable osac_error of §4.3.
 # Running every task of each set against a manager is covered by the manager
-# targets: netris_fabric runs all 21 Fabric tasks and cudn_evpn runs all 8
+# targets: netris_fabric runs all 19 Fabric tasks and cudn_evpn runs all 8
 # Kubernetes tasks through this same playbook.
 # No Kubernetes, AAP, or network backend is involved.
 - name: Generic network task playbook
@@ -41,8 +41,6 @@
       - delete_nat_gateway
       - create_fabric_domain
       - delete_fabric_domain
-      - reserve_cluster_ingress_ip
-      - release_cluster_ingress_ip
     ntp_kubernetes_tasks:
       - create_virtual_network
       - delete_virtual_network
@@ -76,10 +74,10 @@
           ansible.builtin.set_fact:
             _ntp_play: "{{ (lookup('ansible.builtin.file', ntp.repo ~ '/playbook_osac_network_task.yml') | from_yaml)[0] }}"
 
-        - name: Check the playbook's Fabric task set is the contract's 21 tasks
+        - name: Check the playbook's Fabric task set is the contract's 19 tasks
           ansible.builtin.assert:
             that:
-              - _ntp_play.vars.osac_network_fabric_tasks | length == 21
+              - _ntp_play.vars.osac_network_fabric_tasks | length == 19
               - _ntp_play.vars.osac_network_fabric_tasks | sort == ntp_fabric_tasks | sort
             fail_msg: >-
               osac_network_fabric_tasks is {{ _ntp_play.vars.osac_network_fabric_tasks }};

@@ -7,7 +7,7 @@
 # in-process fake of the Netris controller, started here as a background
 # process) and an unusable KUBECONFIG, which proves the manager needs no hub
 # access. The target creates no Kubernetes objects. Checks:
-#   - lifecycle: all 21 tasks of the Fabric set run once with valid input and
+#   - lifecycle: all 19 tasks of the Fabric set run once with valid input and
 #     publish their contract result, or nothing for the documented no-ops;
 #   - VirtualNetwork / Subnet: result keys, VNIs, V-Net gateway and DHCP,
 #     reruns that write nothing, a parent l3Vni that differs from the VPC;
@@ -15,7 +15,7 @@
 #     on an EVPN Subnet, DHCP lease lookup by MAC, ports moved back on delete;
 #   - ExternalIPPool / ExternalIP / ExternalIPAttachment / NATGateway names,
 #     /32 address, refused deletes on an address mismatch;
-#   - FabricDomain, cluster ingress (final "not supported" and a no-op);
+#   - FabricDomain;
 #   - ordered, absent-tolerant deletes and the VNIs freed last;
 #   - 5xx is retryable, 4xx is final, error messages carry no response body
 #     and no cookie;
@@ -207,11 +207,6 @@
         metadata: {name: fd, namespace: osac-networking, uid: "{{ nf_uid }}", generation: 1}
         spec: {type: ethernet_ew, servers: [server-a, server-b]}
       virtual_network: "{{ nf_vn_res }}"
-    nf_ingress_job:
-      task: "{{ nf_task }}"
-      tenant: "{{ nf_tenant }}"
-      resource: "{{ nf_subnet_res | combine({'id': nf_ids.fd}) }}"
-      virtual_network: "{{ nf_vn_res }}"
     # Fixtures the fake serves: a registered bare-metal host with two fabric
     # ports on the provisioning V-Net, two servers for a FabricDomain.
     nf_seed_host:
@@ -259,11 +254,9 @@
       - delete_nat_gateway
       - create_fabric_domain
       - delete_fabric_domain
-      - reserve_cluster_ingress_ip
-      - release_cluster_ingress_ip
     nf_overlay: {type: overlay}
     nf_physical: {type: physical, name: eth1, mac_address: "{{ nf_mac }}"}
-    # The 21 tasks, in an order that gives each its parents. The fake hands out
+    # The 19 tasks, in an order that gives each its parents. The fake hands out
     # IDs from fixed counters after a reset, so results are exact.
     nf_lifecycle:
       - {name: create_virtual_network, task: create_virtual_network, job: nf_vn_job, evpn: true,
@@ -281,9 +274,6 @@
       - {name: attach_external_ip, task: attach_external_ip, job: nf_eipa_job, result: {}}
       - {name: create_nat_gateway, task: create_nat_gateway, job: nf_natgw_job, result: {}}
       - {name: create_fabric_domain, task: create_fabric_domain, job: nf_fd_job, result: {backend_id: "601"}}
-      - {name: reserve_cluster_ingress_ip, task: reserve_cluster_ingress_ip, job: nf_ingress_job, expect: final,
-         search: "not supported by the Netris Fabric Manager yet"}
-      - {name: release_cluster_ingress_ip, noreq: true, task: release_cluster_ingress_ip, job: nf_ingress_job, result: {}}
       - {name: delete_nat_gateway, task: delete_nat_gateway, job: nf_natgw_job, result: {}}
       - {name: detach_external_ip, task: detach_external_ip, job: nf_eipa_job, result: {}}
       - {name: delete_external_ip, task: delete_external_ip, job: nf_eip_job, result: {}}
@@ -348,7 +338,7 @@
             use_proxy: false
           tags: [always]
 
-        - name: Case 1 - all 21 Fabric tasks run and publish their contract result
+        - name: Case 1 - all 19 Fabric tasks run and publish their contract result
           ansible.builtin.import_tasks: cases_lifecycle.yaml
           tags: [lifecycle]
 

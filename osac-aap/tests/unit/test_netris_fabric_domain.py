@@ -1,4 +1,4 @@
-"""FabricDomain, cluster ingress and the NAT-free VirtualNetwork tasks of the Netris Fabric Manager.
+"""FabricDomain and the NAT-free VirtualNetwork tasks of the Netris Fabric Manager.
 
 The pure rules (Server Cluster template choice) are tested on the
 filter module. The task files run through the generic networking playbook in a
@@ -290,24 +290,3 @@ def test_delete_fabric_domain_with_a_bad_input_is_final(tmp_path, netris) -> Non
     job["resource"]["id"] = "x"
     err(*run(tmp_path, netris, job), retryable=False)
     assert netris.writes() == []
-
-
-# ---------------------------------------------------------------------------
-# Cluster ingress
-# ---------------------------------------------------------------------------
-
-
-def ingress_job(task: str) -> dict:
-    return {"manager": MANAGER, "task": task, "resource": snap("Subnet", FD),
-            "virtual_network": snap("VirtualNetwork", VN, {"ipv4Cidr": CIDR})}
-
-
-def test_reserve_cluster_ingress_ip_is_a_final_error(tmp_path, netris) -> None:
-    message = err(*run(tmp_path, netris, ingress_job("reserve_cluster_ingress_ip")), retryable=False)
-    assert "not supported by the Netris Fabric Manager yet" in message
-    assert netris.calls == []
-
-
-def test_release_cluster_ingress_ip_is_a_noop(tmp_path, netris) -> None:
-    assert ok(*run(tmp_path, netris, ingress_job("release_cluster_ingress_ip"))) == {}
-    assert netris.calls == []

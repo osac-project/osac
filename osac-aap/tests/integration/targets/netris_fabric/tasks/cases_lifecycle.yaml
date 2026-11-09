@@ -1,16 +1,16 @@
 ---
 # Case 1: every task of the Fabric set runs once through the generic playbook
 # with valid input. Each publishes its contract result; SecurityGroup create and
-# delete, the overlay attachment and the ingress release are documented
-# no-ops that publish nothing; reserve_cluster_ingress_ip is a final error.
+# delete and the overlay attachment are documented no-ops that publish
+# nothing.
 - name: Read the generic playbook
   ansible.builtin.set_fact:
     _nf_play: "{{ (lookup('ansible.builtin.file', nf.repo ~ '/playbook_osac_network_task.yml') | from_yaml)[0] }}"
 
-- name: Check the lifecycle covers the playbook's 21 Fabric tasks
+- name: Check the lifecycle covers the playbook's 19 Fabric tasks
   ansible.builtin.assert:
     that:
-      - _nf_play.vars.osac_network_fabric_tasks | length == 21
+      - _nf_play.vars.osac_network_fabric_tasks | length == 19
       - _nf_play.vars.osac_network_fabric_tasks | sort == nf_fabric_tasks | sort
       - nf_lifecycle | map(attribute='task') | unique | sort == nf_fabric_tasks | sort
     quiet: true

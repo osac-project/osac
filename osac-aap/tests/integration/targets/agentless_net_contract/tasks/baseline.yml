@@ -613,38 +613,6 @@
 
         - name: Run FabricDomain delete through the generic playbook
           ansible.builtin.include_tasks: run_playbook.yaml
-
-        - name: Confirm unsupported cluster ingress reservation is final
-          ansible.builtin.set_fact:
-            agentless_net_contract_job_vars:
-              manager: "{{ agentless_net_contract_manager }}"
-              task: reserve_cluster_ingress_ip
-              tenant: "{{ agentless_net_contract_tenant }}"
-              resource:
-                apiVersion: osac.openshift.io/v1alpha1
-                kind: ClusterOrder
-                id: "a0000000-0000-4000-8000-000000000009"
-                metadata:
-                  name: unsupported-cluster-ingress
-                  namespace: agentless-net-contract
-                  uid: "b0000000-0000-4000-8000-000000000009"
-                  generation: 1
-                spec: {}
-            sft_label: unsupported-ingress-reservation
-            agentless_net_contract_expect: final
-
-        - name: Run unsupported ingress reservation
-          ansible.builtin.include_tasks: run_playbook.yaml
-
-        - name: Confirm cluster ingress release is an absent-tolerant no-op
-          ansible.builtin.set_fact:
-            agentless_net_contract_job_vars: >-
-              {{ agentless_net_contract_job_vars | combine({'task': 'release_cluster_ingress_ip'}) }}
-            sft_label: ingress-release-no-op
-            agentless_net_contract_expect: success
-
-        - name: Run cluster ingress release through the generic playbook
-          ansible.builtin.include_tasks: run_playbook.yaml
       always:
         - name: Remove temporary AgentlessNet contract fixtures
           ansible.builtin.file:

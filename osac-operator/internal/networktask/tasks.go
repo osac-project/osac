@@ -44,11 +44,9 @@ const (
 	DeleteNATGateway        = "delete_nat_gateway"
 	CreateFabricDomain      = "create_fabric_domain"
 	DeleteFabricDomain      = "delete_fabric_domain"
-	ReserveClusterIngressIP = "reserve_cluster_ingress_ip"
-	ReleaseClusterIngressIP = "release_cluster_ingress_ip"
 )
 
-// FabricTasks is the fixed Fabric Manager task set (21 tasks).
+// FabricTasks is the fixed Fabric Manager task set (19 tasks).
 var FabricTasks = map[string]bool{
 	CreateVirtualNetwork: true, DeleteVirtualNetwork: true,
 	CreateSubnet: true, DeleteSubnet: true,
@@ -60,7 +58,6 @@ var FabricTasks = map[string]bool{
 	AttachExternalIP: true, DetachExternalIP: true,
 	CreateNATGateway: true, DeleteNATGateway: true,
 	CreateFabricDomain: true, DeleteFabricDomain: true,
-	ReserveClusterIngressIP: true, ReleaseClusterIngressIP: true,
 }
 
 // KubernetesTasks is the fixed Kubernetes Manager task set (8 tasks).
@@ -91,11 +88,10 @@ func ValidateTask(task string, manager v1alpha1.NetworkJobManager) error {
 	return fmt.Errorf("task %q is not in the fixed task set of the %s manager", task, manager)
 }
 
-// IsCleanupTask reports whether a task is a delete, detach, release or
-// removal. Cleanup tasks are retried after every failure, whatever osac_error
+// IsCleanupTask reports whether a task is a delete, detach or removal. Cleanup tasks are retried after every failure, whatever osac_error
 // says, and may run while the resource is being deleted.
 func IsCleanupTask(task string) bool {
-	for _, prefix := range []string{"delete_", "detach_", "release_", "remove_"} {
+	for _, prefix := range []string{"delete_", "detach_", "remove_"} {
 		if strings.HasPrefix(task, prefix) {
 			return true
 		}

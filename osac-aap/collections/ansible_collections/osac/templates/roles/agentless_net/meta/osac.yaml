@@ -7,7 +7,7 @@ description: >-
   ExternalIP pools and addresses, ExternalIPAttachment DNAT, and NATGateway
   SNAT. SecurityGroups are accepted as a documented physical-policy no-op.
   The Fabric Manager is IPv4-only and does not advertise a Kubernetes network
-  type; VM overlays, EVPN and CaaS guest-ingress reservation are unsupported.
+  type; VM overlays and EVPN are unsupported.
 
 template_type: network
 fabric_manager: agentless_net

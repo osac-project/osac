@@ -249,19 +249,6 @@ func TestParseExternalIP(t *testing.T) {
 	expectReject(t, err, `external_ip.address "198.51.100.19/32" is not a canonical IPv4 address`)
 }
 
-func TestParseClusterIngress(t *testing.T) {
-	ipam := &v1alpha1.SubnetIPAM{GatewayIPv4: "10.0.1.1", LBVIPIPv4CIDRs: []string{"10.0.1.192/26"}}
-	if a, err := ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.193"}}`), "10.0.1.0/24", ipam, ""); err != nil || a != "10.0.1.193" {
-		t.Fatal(a, err)
-	}
-	_, err := ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.255"}}`), "10.0.1.0/24", ipam, "")
-	expectReject(t, err, "cluster_ingress.address is the Subnet's broadcast address")
-	_, err = ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.10"}}`), "10.0.1.0/24", ipam, "")
-	expectReject(t, err, "cluster_ingress.address is not in lb_vip_ipv4_cidrs")
-	_, err = ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.194"}}`), "10.0.1.0/24", ipam, "10.0.1.193")
-	expectReject(t, err, "cluster_ingress.address differs from the address already accepted for the cluster")
-}
-
 func TestParseVMAttachment(t *testing.T) {
 	scheme := testScheme(t)
 	_ = corev1.AddToScheme(scheme)

@@ -42,7 +42,9 @@ fields are treated as **create-only**. When the named object already exists:
 
 Move-network-attachment is a supported mutable operation (port membership).
 The exception to no update-in-place: `create_subnet` and
-`apply_network_attachment` PUT the V-Net gateway and DHCP.
+`apply_network_attachment` PUT the V-Net gateway and DHCP. `create_subnet`
+turns DHCP on over `physical_ipv4_cidrs`, also on EVPN Subnets;
+`apply_network_attachment` only repairs a V-Net where it is still off.
 
 
 Delete operations verify the provider object against the OSAC resource before

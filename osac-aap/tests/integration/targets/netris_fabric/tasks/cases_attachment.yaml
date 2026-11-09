@@ -101,7 +101,7 @@
     that: nf_writes == []
     quiet: true
 
-- name: Attachment - a rerun of create_subnet keeps the DHCP the attachment switched on
+- name: Attachment - a rerun of create_subnet keeps DHCP on
   ansible.builtin.include_tasks: run_task.yaml
   vars:
     nf_task: create_subnet

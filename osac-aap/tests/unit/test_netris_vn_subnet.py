@@ -38,8 +38,13 @@ def plan_job(network_type=None, ipam=IPAM, cidr=SUBNET_CIDR) -> dict:
     return job
 
 
-def test_evpn_default_mode_keeps_the_gateway_and_no_dhcp() -> None:
+def test_evpn_default_mode_keeps_the_gateway_and_serves_dhcp_over_the_physical_ranges() -> None:
     plan = nc.netris_vnet_plan(plan_job("evpn"), "gateway_ipv4")
+    assert plan == {"error": "", "gateway": "10.20.1.1/24", "dhcp_start": "10.20.1.8", "dhcp_end": "10.20.1.31"}
+
+
+def test_evpn_without_physical_ranges_has_no_dhcp() -> None:
+    plan = nc.netris_vnet_plan(plan_job("evpn", {**IPAM, "physical_ipv4_cidrs": []}), "gateway_ipv4")
     assert plan == {"error": "", "gateway": "10.20.1.1/24", "dhcp_start": "", "dhcp_end": ""}
 
 
@@ -49,7 +54,8 @@ def test_evpn_none_mode_has_no_gateway() -> None:
 
 
 def test_evpn_physical_first_mode() -> None:
-    assert nc.netris_vnet_plan(plan_job("evpn"), "physical_first")["gateway"] == "10.20.1.9/24"
+    plan = nc.netris_vnet_plan(plan_job("evpn"), "physical_first")
+    assert plan == {"error": "", "gateway": "10.20.1.9/24", "dhcp_start": "10.20.1.10", "dhcp_end": "10.20.1.31"}
     empty = nc.netris_vnet_plan(plan_job("evpn", {**IPAM, "physical_ipv4_cidrs": []}), "physical_first")
     assert "physical_ipv4_cidrs" in empty["error"]
 
@@ -310,7 +316,8 @@ def test_create_subnet_with_network_type_returns_the_segment(tmp_path, netris) -
     assert ipam["name"] == f"osac-sn-{SUBNET}" and ipam["prefix"] == SUBNET_CIDR and ipam["purpose"] == "common"
     vnet = netris.state["vnets"][0]
     assert vnet["name"] == f"osac-sn-{SUBNET}" and vnet["vpc"] == {"id": 101}
-    assert vnet["gateways"] == [{"prefix": "10.20.1.1/24"}]
+    assert vnet["gateways"] == [{"prefix": "10.20.1.1/24", "dhcpEnabled": True,
+                                 "dhcpStartIp": "10.20.1.8", "dhcpEndIp": "10.20.1.31"}]
 
 
 def test_create_subnet_rerun_makes_no_write(tmp_path, netris) -> None:

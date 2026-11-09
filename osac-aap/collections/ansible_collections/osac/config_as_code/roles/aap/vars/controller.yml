@@ -469,38 +469,6 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     ask_labels_on_launch: true
     timeout: 3600
     verbosity: 0
-  - name: "{{ aap_prefix }}-reserve-cluster-ingress-ip"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    # Every networking task runs the generic playbook (network manager contract §4.3).
-    playbook: "osac-aap/playbook_osac_network_task.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
-    ask_labels_on_launch: true
-    timeout: 3600
-    verbosity: 0
-  - name: "{{ aap_prefix }}-release-cluster-ingress-ip"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    # Every networking task runs the generic playbook (network manager contract §4.3).
-    playbook: "osac-aap/playbook_osac_network_task.yml"
-    inventory: "{{ aap_prefix }}-networking-operations"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-networking-operations-ig"
-    prevent_instance_group_fallback: true
-    allow_simultaneous: true
-    ask_variables_on_launch: true
-    ask_labels_on_launch: true
-    timeout: 3600
-    verbosity: 0
   - name: "{{ aap_prefix }}-create-bare-metal-pool"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"

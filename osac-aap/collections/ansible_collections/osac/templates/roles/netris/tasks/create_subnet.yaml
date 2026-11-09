@@ -3,10 +3,9 @@
 # osac-vn-<VN id>. With a network type the V-Net's vxlanID is returned as the
 # l2_vni of an evpn network segment, after the VPC's VNI is checked against
 # virtual_network.status.l3Vni. The gateway and DHCP follow netris_vnet_plan
-# (see netris_evpn_vnet_gateway_mode in defaults). Get-or-create by name; a
-# V-Net whose gateway or DHCP differs is updated with the full body. With a
-# network type the DHCP of an existing V-Net is left alone: a bare-metal
-# attachment switches it on (apply_network_attachment) and a rerun must keep it.
+# (see netris_evpn_vnet_gateway_mode in defaults): DHCP serves
+# ipam.physical_ipv4_cidrs with or without a network type. Get-or-create by
+# name; a V-Net whose gateway or DHCP differs is updated with the full body.
 - name: Create the Subnet on Netris
   block:
     - name: Check the settings
@@ -28,6 +27,7 @@
     - name: Plan the gateway and DHCP of the V-Net
       ansible.builtin.set_fact:
         _netris_plan: "{{ osac_job_vars | osac.templates.netris_vnet_plan(netris_evpn_vnet_gateway_mode) }}"
+      no_log: true
 
     - name: Stop on an invalid Subnet input
       vars:
@@ -186,7 +186,8 @@
 
     - name: Compare the gateway of the V-Net with the plan
       ansible.builtin.set_fact:
-        _netris_gateway: "{{ netris_vnet_detail | osac.templates.netris_vnet_gateway_update(_netris_plan, netris_network_type == 'evpn') }}"
+        _netris_gateway: "{{ netris_vnet_detail | osac.templates.netris_vnet_gateway_update(_netris_plan) }}"
+      no_log: true
 
     - name: Update the gateway and DHCP of an existing V-Net
       when: not _netris_gateway.matches

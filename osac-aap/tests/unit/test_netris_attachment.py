@@ -122,23 +122,12 @@ def test_dhcp_update_needs_a_gateway() -> None:
     assert "gateway" in nc.netris_vnet_dhcp_update(vnet_detail(gateway=""), att_job(network_type="evpn"))["error"]
 
 
-def test_gateway_update_can_ignore_the_dhcp_of_the_v_net() -> None:
-    plan = {"gateway": "10.20.1.1/24", "dhcp_start": "", "dhcp_end": ""}
-    out = nc.netris_vnet_gateway_update(vnet_detail(dhcp=True), plan, True)
-    assert out["matches"] is True
-    assert out["body"]["gateways"][0]["dhcpEnabled"] is True
-    drift = nc.netris_vnet_gateway_update(vnet_detail(dhcp=True, gateway="10.20.1.5/24"), plan, True)
-    assert drift["matches"] is False
-    assert drift["body"]["gateways"][0]["prefix"] == "10.20.1.1/24"
-    assert drift["body"]["gateways"][0]["dhcpEnabled"] is True
-    assert nc.netris_vnet_gateway_update(vnet_detail(dhcp=True), plan)["matches"] is False
-
-
-def test_gateway_update_that_ignores_dhcp_creates_a_gateway_with_dhcp_off() -> None:
-    plan = {"gateway": "10.20.1.1/24", "dhcp_start": "", "dhcp_end": ""}
-    out = nc.netris_vnet_gateway_update({"id": 1, "gateways": []}, plan, True)
-    assert out["matches"] is False
-    assert out["body"]["gateways"] == [{"prefix": "10.20.1.1/24", "dhcpEnabled": False}]
+def test_dhcp_update_and_the_subnet_plan_agree_on_the_range() -> None:
+    plan = nc.netris_vnet_plan({"resource": {"spec": {"ipv4Cidr": "10.20.1.0/24"}}, "network_type": "evpn",
+                                "ipam": att_job()["ipam"]}, "gateway_ipv4")
+    detail = vnet_detail(dhcp=True)
+    assert nc.netris_vnet_gateway_update(detail, plan)["matches"] is True
+    assert nc.netris_vnet_dhcp_update(detail, att_job(network_type="evpn"))["matches"] is True
 
 
 def test_dhcp_lease_matches_the_mac_in_any_case_and_strips_the_prefix_length() -> None:
@@ -279,9 +268,14 @@ def test_physical_apply_rerun_makes_no_write(tmp_path, netris) -> None:
     assert netris.writes() == []
 
 
-def test_physical_apply_on_an_evpn_subnet_enables_dhcp_before_the_move(tmp_path, netris) -> None:
+def test_physical_apply_on_an_evpn_subnet_turns_dhcp_back_on_before_the_move(tmp_path, netris) -> None:
     prepare(tmp_path, netris, "evpn")
-    assert tenant_vnet(netris)["gateways"][0].get("dhcpEnabled", False) is False
+    gateway = tenant_vnet(netris)["gateways"][0]
+    assert gateway["dhcpEnabled"] is True
+    # A V-Net created while DHCP was off on EVPN Subnets.
+    gateway.update({"dhcpEnabled": False})
+    gateway.pop("dhcpStartIp", None)
+    gateway.pop("dhcpEndIp", None)
     assert ok(*run(tmp_path, netris, att_job(network_type="evpn"))) == {}
     gateway = tenant_vnet(netris)["gateways"][0]
     assert gateway["prefix"] == "10.20.1.1/24" and gateway["dhcpEnabled"] is True

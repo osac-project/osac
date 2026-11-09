@@ -1,6 +1,6 @@
 ---
 # Cases 6 and 7: ExternalIPPool, ExternalIP, ExternalIPAttachment, NATGateway
-# and FabricDomain object names and addresses, refused deletes, cluster ingress.
+# and FabricDomain object names and addresses, refused deletes.
 - name: EIP - start with an EVPN VirtualNetwork
   ansible.builtin.include_tasks: admin.yaml
   vars: {nf_steps: "{{ nf_reset + nf_seed_servers }}"}
@@ -268,7 +268,7 @@
       - nf_state.nats | selectattr('name', 'equalto', 'osac-natgw-' ~ nf_ids.natgw) | list | length == 1
     quiet: true
 
-# Case 7: FabricDomain and cluster ingress.
+# Case 7: FabricDomain.
 - name: FabricDomain - create
   ansible.builtin.include_tasks: run_task.yaml
   vars:
@@ -316,27 +316,4 @@
 - name: FabricDomain - nothing was written
   ansible.builtin.assert:
     that: nf_writes == []
-    quiet: true
-
-- name: Ingress - reserve_cluster_ingress_ip is final and calls Netris not at all
-  ansible.builtin.include_tasks: run_task.yaml
-  vars:
-    nf_task: reserve_cluster_ingress_ip
-    sft_label: ingress-reserve
-    sft_expect: final
-    sft_message_search: "not supported by the Netris Fabric Manager yet"
-    nf_job: "{{ nf_ingress_job }}"
-
-- name: Ingress - release_cluster_ingress_ip is a no-op that calls Netris not at all
-  ansible.builtin.include_tasks: run_task.yaml
-  vars:
-    nf_task: release_cluster_ingress_ip
-    sft_label: ingress-release
-    sft_expect: success
-    nf_job: "{{ nf_ingress_job }}"
-    nf_result: {}
-
-- name: Ingress - neither call reached Netris
-  ansible.builtin.assert:
-    that: nf_calls == []
     quiet: true

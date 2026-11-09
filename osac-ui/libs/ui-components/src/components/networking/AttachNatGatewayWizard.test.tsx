@@ -184,6 +184,8 @@ describe('AttachNatGatewayWizard', () => {
     });
     expect(createRequest?.object?.spec?.virtualNetwork?.id).toBe('vn-1');
     expect(createRequest?.object?.spec?.externalIp?.id).toBe('eip-free');
+    expect(createRequest?.object?.id).toBeFalsy();
+    expect(createRequest?.object?.status).toBeUndefined();
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 

@@ -639,7 +639,8 @@ message ThingsUpdateResponse {
     with exponential backoff capped at 1 minute. Conflict-only failures are logged at DEBUG and at
     WARN once the backoff reaches the cap. An `Aborted` that already carries a retry interval (see
     `RequeueAfter`) keeps that interval and is logged at ERROR, as is a conflict joined with any
-    other failure.
+    other failure. When the other failure has a retry interval of its own, the retry follows that
+    interval and its backoff policy instead of the 1 second conflict delay.
 
 For the `metadata.labels` and `metadata.annotations` map rules, including reserved-entry handling,
 see [Administrator-only metadata](#administrator-only-metadata). The REST gateway normally builds

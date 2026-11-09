@@ -24,6 +24,8 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/runtime"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -164,6 +166,26 @@ var _ = Describe("ComputeInstance networking Hub placement", func() {
 		Expect(reader.resolution.Client.List(context.Background(), list)).To(Succeed())
 		Expect(list.Items).To(BeEmpty())
 	})
+
+	DescribeTable("returns a failed status write together with the retryable networking error",
+		func(writeErr error, expectConflict bool) {
+			t := newNetworkedTask(newReader(controllers.ErrNoNetworkClass), "")
+			computeInstancesClient := NewMockComputeInstancesClient(ctrl)
+			computeInstancesClient.EXPECT().
+				Update(gomock.Any(), gomock.Any(), gomock.Any()).
+				Return(nil, writeErr).
+				Times(1)
+			t.r.computeInstancesClient = computeInstancesClient
+			t.r.maskCalculator = masks.NewCalculator().Build()
+
+			err := t.r.run(context.Background(), t.computeInstance)
+			Expect(errors.Is(err, controllers.ErrNoNetworkClass)).To(BeTrue())
+			Expect(err).To(MatchError(writeErr))
+			Expect(controllers.IsConflict(err)).To(Equal(expectConflict))
+		},
+		Entry("with a conflict", status.Error(codes.Aborted, "object has been modified"), true),
+		Entry("with another error", status.Error(codes.Unavailable, "database unavailable"), false),
+	)
 
 	It("persists a conflicting assignment as failed and does not create a CR", func() {
 		reader := newReader(nil)

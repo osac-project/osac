@@ -268,6 +268,9 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 		return reconcileErr
 	}
 	if updateErr != nil {
+		if hubResolutionRetryErr != nil {
+			return errors.Join(hubResolutionRetryErr, updateErr)
+		}
 		return updateErr
 	}
 	return hubResolutionRetryErr

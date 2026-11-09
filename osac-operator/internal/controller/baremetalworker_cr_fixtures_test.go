@@ -11,6 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/osac-project/osac/osac-operator/internal/controller/assistedservice"
 )
 
 // These fixtures write only the external evidence consumed by the worker.
@@ -32,7 +34,9 @@ func workerFixtureObject(gvk schema.GroupVersionKind, name, namespace string) *u
 }
 
 func setWorkerIgnitionURL(ctx context.Context, name, namespace, url string) error {
-	u := workerFixtureObject(infraEnvGVK, name, namespace)
+	u := assistedservice.NewInfraEnvObject()
+	u.SetName(name)
+	u.SetNamespace(namespace)
 	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(u), u); err != nil {
 		return err
 	}

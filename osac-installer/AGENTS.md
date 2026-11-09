@@ -59,7 +59,7 @@ respective areas.
 | Deployed dev-full hook authentication | Component integration | Coverage gap tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); local `install-devstack` invokes the hooks but does not assert token acceptance. |
 | Fulfillment Volume lifecycle | Component integration | `../fulfillment-service/it/it_volume_lifecycle_test.go` covers Volume creation and deletion, status, hub assignment, and cleanup through `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment`. |
 | `global.networking` values, schema, networking validation, cudn_evpn or Netris registration (`test_cudn_evpn_registration_is_contract_format`, `test_netris_registration_is_contract_format`), admission policy, or `network-fulfillment-ig` rendering | Helm contract | `make helm-networking-test` |
-| CaaS Netris settings of cluster fulfillment (`NETRIS_CONTROLLER_URL`, `NETRIS_VALIDATE_CERTS`, `NETRIS_CA_CONFIGMAP` in `config-as-code-ig`) | Helm contract | `make helm-networking-test` (`AapSettingsTest`) |
+| Netris manager settings, launch protection, CA ConfigMap mount, and cluster-job isolation | Helm contract | `make helm-networking-test` (`AapSettingsTest`) |
 | Netris CI overlays (`values/{vmaas-ci,bmaas-ci,full-ci}/netris.yaml`) | Helm contract | `make helm-networking-test` (`NetrisOverlayTest`) |
 | NetworkClass step (`files/network-class-step.py`) | Unit with a fake fulfillment API | `make network-class-step-test` |
 | OpenBao security context, podSecurityContext, or Kind/OpenShift UID handling | Helm contract | `make openbao-security-context-test` |

@@ -436,6 +436,7 @@ class ClusterTemplate(BaseTemplate):
         default=TemplateTypeEnum.cluster, exclude=True
     )
     spec_defaults: ClusterTemplateSpecDefaults | None = None
+    capabilities: dict[str, bool] = pydantic.Field(default_factory=dict)
 
 
 class ComputeInstanceTemplate(BaseTemplate):
@@ -609,6 +610,7 @@ class Collection(Base):
                         yield ClusterTemplate(
                             **common,
                             spec_defaults=cluster_spec_defaults,
+                            capabilities=metadata.capabilities,
                         )
                     elif metadata.template_type == TemplateTypeEnum.addon_operator:
                         yield AddOnOperatorTemplate(

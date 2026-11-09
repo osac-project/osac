@@ -434,10 +434,11 @@ func (t *task) buildSpec(ctx context.Context) (osacv1alpha1.ClusterOrderSpec, er
 		operatorNames = append(operatorNames, operator.GetName())
 	}
 	spec := osacv1alpha1.ClusterOrderSpec{
-		TemplateID:         controllers.RefKeyStr(t.cluster.GetSpec().GetTemplate()),
-		TemplateParameters: templateParameters,
-		NodeRequests:       t.prepareNodeRequests(),
-		AddOnOperators:     operatorNames,
+		TemplateID:                     controllers.RefKeyStr(t.cluster.GetSpec().GetTemplate()),
+		TemplateParameters:             templateParameters,
+		NodeRequests:                   t.prepareNodeRequests(),
+		AddOnOperators:                 operatorNames,
+		SupportsAutomaticCaaSEndpoints: t.cluster.GetSpec().GetSupportsAutomaticCaasEndpoints(),
 	}
 
 	// Add explicit spec fields if present:

@@ -7,15 +7,15 @@ import {
   SplitItem,
   Stack,
   StackItem,
-  TextInput,
 } from '@patternfly/react-core';
 import MinusCircleIcon from '@patternfly/react-icons/dist/esm/icons/minus-circle-icon';
 import PlusCircleIcon from '@patternfly/react-icons/dist/esm/icons/plus-circle-icon';
-import { FieldArray, getIn, useField, useFormikContext } from 'formik';
+import { FieldArray, useField, useFormikContext } from 'formik';
 
 import { getVisibleFieldError } from './fieldError';
-import { useShowFieldValidationErrors } from './FieldValidationContext';
-import { FormFieldHelper, getFormFieldHelperDescribedBy } from './FormFieldHelper';
+import { FieldValidationProvider, useShowFieldValidationErrors } from './FieldValidationContext';
+import { FormFieldHelper } from './FormFieldHelper';
+import { InputField } from './InputField';
 import { useTranslation } from '../../hooks/useTranslation';
 
 export interface KeyValuePair {
@@ -59,7 +59,7 @@ export const KeyValueMapField = ({
   helperText,
 }: KeyValueMapFieldProps) => {
   const { t } = useTranslation();
-  const { errors, submitCount, touched } = useFormikContext();
+  const { submitCount } = useFormikContext();
   const [field, meta] = useField<KeyValuePair[]>(name);
   const showValidationErrors = useShowFieldValidationErrors();
   const pairs = field.value ?? [];
@@ -69,15 +69,6 @@ export const KeyValueMapField = ({
     typeof meta.error === 'string'
       ? getVisibleFieldError(meta, showValidationErrors || submitCount > 0)
       : undefined;
-  const getPairFieldError = (index: number, fieldName: keyof KeyValuePair) => {
-    const path = `${name}.${index}.${fieldName}`;
-    const nestedError = getIn(errors, path) as unknown;
-    const isFieldTouched = getIn(touched, path) as unknown;
-    return typeof nestedError === 'string' &&
-      (isFieldTouched === true || showValidationErrors || submitCount > 0)
-      ? nestedError
-      : undefined;
-  };
 
   return (
     <FormGroup label={label} fieldId={fieldId} isRequired={isRequired}>
@@ -90,82 +81,56 @@ export const KeyValueMapField = ({
           </StackItem>
         )}
         <StackItem>
-          <FieldArray name={name}>
-            {(helpers) => (
-              <Stack hasGutter>
-                {pairs.map((pair, index) => (
-                  <StackItem key={index}>
-                    <Split hasGutter>
-                      <SplitItem isFilled>
-                        <TextInput
-                          id={`${fieldId}-${index}-key`}
-                          aria-label={t('{{label}} key {{number}}', { label, number: index + 1 })}
-                          placeholder={keyText}
-                          value={pair.key}
-                          onChange={(_event, value) =>
-                            helpers.replace(index, { ...pair, key: value })
-                          }
-                          onBlur={() =>
-                            void helpers.form.setFieldTouched(`${name}.${index}.key`, true)
-                          }
-                          validated={getPairFieldError(index, 'key') ? 'error' : 'default'}
-                          aria-invalid={getPairFieldError(index, 'key') ? true : undefined}
-                          aria-describedby={getFormFieldHelperDescribedBy(
-                            `${fieldId}-${index}-key`,
-                            getPairFieldError(index, 'key'),
-                          )}
-                        />
-                        <FormFieldHelper
-                          error={getPairFieldError(index, 'key')}
-                          fieldId={`${fieldId}-${index}-key`}
-                        />
-                      </SplitItem>
-                      <SplitItem isFilled>
-                        <TextInput
-                          id={`${fieldId}-${index}-value`}
-                          aria-label={t('{{label}} value {{number}}', { label, number: index + 1 })}
-                          placeholder={valueText}
-                          value={pair.value}
-                          onChange={(_event, value) => helpers.replace(index, { ...pair, value })}
-                          onBlur={() =>
-                            void helpers.form.setFieldTouched(`${name}.${index}.value`, true)
-                          }
-                          validated={getPairFieldError(index, 'value') ? 'error' : 'default'}
-                          aria-invalid={getPairFieldError(index, 'value') ? true : undefined}
-                          aria-describedby={getFormFieldHelperDescribedBy(
-                            `${fieldId}-${index}-value`,
-                            getPairFieldError(index, 'value'),
-                          )}
-                        />
-                        <FormFieldHelper
-                          error={getPairFieldError(index, 'value')}
-                          fieldId={`${fieldId}-${index}-value`}
-                        />
-                      </SplitItem>
-                      <SplitItem>
-                        <Button
-                          variant="plain"
-                          aria-label={removeLabel}
-                          onClick={() => helpers.remove(index)}
-                          icon={<MinusCircleIcon />}
-                          isDisabled={isRequired && field.value.length === 1}
-                        />
-                      </SplitItem>
-                    </Split>
+          <FieldValidationProvider showErrors={showValidationErrors || submitCount > 0}>
+            <FieldArray name={name}>
+              {(helpers) => (
+                <Stack hasGutter>
+                  {pairs.map((_pair, index) => (
+                    <StackItem key={index}>
+                      <Split hasGutter>
+                        <SplitItem isFilled>
+                          <InputField
+                            name={`${name}.${index}.key`}
+                            fieldId={`${fieldId}-${index}-key`}
+                            label={t('{{label}} key {{number}}', { label, number: index + 1 })}
+                            placeholder={keyText}
+                            asFormGroup={false}
+                          />
+                        </SplitItem>
+                        <SplitItem isFilled>
+                          <InputField
+                            name={`${name}.${index}.value`}
+                            fieldId={`${fieldId}-${index}-value`}
+                            label={t('{{label}} value {{number}}', { label, number: index + 1 })}
+                            placeholder={valueText}
+                            asFormGroup={false}
+                          />
+                        </SplitItem>
+                        <SplitItem>
+                          <Button
+                            variant="plain"
+                            aria-label={removeLabel}
+                            onClick={() => helpers.remove(index)}
+                            icon={<MinusCircleIcon />}
+                            isDisabled={isRequired && field.value.length === 1}
+                          />
+                        </SplitItem>
+                      </Split>
+                    </StackItem>
+                  ))}
+                  <StackItem>
+                    <Button
+                      variant="link"
+                      icon={<PlusCircleIcon />}
+                      onClick={() => helpers.push({ key: '', value: '' })}
+                    >
+                      {addLabel}
+                    </Button>
                   </StackItem>
-                ))}
-                <StackItem>
-                  <Button
-                    variant="link"
-                    icon={<PlusCircleIcon />}
-                    onClick={() => helpers.push({ key: '', value: '' })}
-                  >
-                    {addLabel}
-                  </Button>
-                </StackItem>
-              </Stack>
-            )}
-          </FieldArray>
+                </Stack>
+              )}
+            </FieldArray>
+          </FieldValidationProvider>
           <FormFieldHelper error={error} fieldId={fieldId} />
         </StackItem>
       </Stack>

@@ -2,6 +2,7 @@
 - name: Get template parameters from cluster order
   ansible.builtin.set_fact:
     cluster_settings_template_parameters: "{{ cluster_order.spec.templateParameters | default('{}') | from_json }}"
+  no_log: true
 
 # Resolve pull_secret: explicit CR field > templateParameters > provider default Secret
 # The second argument (true) ensures empty strings and nulls also fall through.
@@ -54,6 +55,7 @@
     namespace: "{{ cluster_settings_default_credentials_secret_namespace }}"
   failed_when: false
   register: default_cluster_credentials
+  no_log: true
 
 - name: Apply provider defaults for missing credentials
   when: (default_cluster_credentials.resources | default([]) | length > 0)

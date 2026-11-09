@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import secrets
 import subprocess
 import tempfile
 import unittest
@@ -599,6 +600,7 @@ class AapSettingsTest(unittest.TestCase):
                 )
 
     def test_network_fulfillment_netris_settings_are_written_verbatim(self):
+        fixture_netris_password = secrets.token_urlsafe(32)
         config = {
             "NETRIS_CONTROLLER_URL": "https://netris.example.com",
             "NETRIS_VALIDATE_CERTS": "false",
@@ -610,7 +612,7 @@ class AapSettingsTest(unittest.TestCase):
                     "instanceGroups": {
                         "networkFulfillment": {
                             "config": config,
-                            "secret": {"NETRIS_PASSWORD": "test-password"},
+                            "secret": {"NETRIS_PASSWORD": fixture_netris_password},
                         }
                     }
                 }
@@ -621,12 +623,9 @@ class AapSettingsTest(unittest.TestCase):
         secret = find(docs, "Secret", "network-fulfillment-ig")
         self.assertEqual(set(secret["data"]), {"NETRIS_PASSWORD"})
 
-    def test_caas_netris_settings_reach_cluster_fulfillment(self):
-        # CaaS on Netris (NETWORK_CLASS=netris): the installation-owned
-        # connection settings come from the Netris settings under
-        # networkFulfillment and reach config-as-code, which sets them on the
-        # cluster-fulfillment container group; the Netris identity and
-        # password stay in the cluster-fulfillment ConfigMap and Secret.
+    def test_netris_manager_settings_reach_network_fulfillment_only(self):
+        """Keep manager configuration and credentials on the network worker."""
+        fixture_netris_password = secrets.token_urlsafe(32)
         docs = render(
             networking(fabricManager="netris"),
             {
@@ -634,47 +633,84 @@ class AapSettingsTest(unittest.TestCase):
                     "instanceGroups": {
                         "clusterFulfillment": {
                             "enabled": True,
-                            "config": {
-                                "NETWORK_CLASS": "netris",
-                                "NETWORK_STEPS_COLLECTION": "netris.steps",
-                                "NETRIS_USERNAME": "netris",
-                                "NETRIS_SITE_ID": "5",
-                                "NETRIS_TENANT_ID": "1",
-                                "NETRIS_TENANT_NAME": "Admin",
-                            },
-                            "secret": {"NETRIS_PASSWORD": "test-password"},
+                            "config": {"DNS_CLASS": "dns.route53.dns"},
                         },
                         "networkFulfillment": {
                             "config": {
                                 "NETRIS_CONTROLLER_URL": "https://netris.example.com",
                                 "NETRIS_VALIDATE_CERTS": "false",
                                 "NETRIS_CA_CONFIGMAP": "customer.netris-ca",
+                                "NETRIS_USERNAME": "netris",
+                                "NETRIS_SITE_ID": "5",
+                                "NETRIS_TENANT_ID": "1",
+                                "NETRIS_MGMT_VPC_ID": "4",
+                                "NETRIS_RESOURCE_CLASS_MAP": '{"fc430": {}}',
                             },
+                            "secret": {"NETRIS_PASSWORD": fixture_netris_password},
                         },
                     }
                 }
             },
         )
         config_as_code = find(docs, "Secret", "config-as-code-ig")["stringData"]
-        self.assertEqual(config_as_code["NETRIS_CONTROLLER_URL"], "https://netris.example.com")
-        self.assertEqual(config_as_code["NETRIS_VALIDATE_CERTS"], "false")
         self.assertEqual(config_as_code["NETRIS_CA_CONFIGMAP"], "customer.netris-ca")
+        self.assertNotIn("NETRIS_CONTROLLER_URL", config_as_code)
+        self.assertNotIn("NETRIS_VALIDATE_CERTS", config_as_code)
+
+        network_config = find(docs, "ConfigMap", "network-fulfillment-ig")["data"]
+        self.assertEqual(network_config["NETRIS_CONTROLLER_URL"], "https://netris.example.com")
+        self.assertEqual(network_config["NETRIS_USERNAME"], "netris")
+        self.assertEqual(network_config["NETRIS_SITE_ID"], "5")
+        self.assertEqual(network_config["NETRIS_TENANT_ID"], "1")
+        self.assertEqual(network_config["NETRIS_MGMT_VPC_ID"], "4")
+        self.assertEqual(network_config["NETRIS_RESOURCE_CLASS_MAP"], '{"fc430": {}}')
+        network_secret = find(docs, "Secret", "network-fulfillment-ig")
+        self.assertEqual(set(network_secret["data"]), {"NETRIS_PASSWORD"})
+
         cluster = find(docs, "ConfigMap", "cluster-fulfillment-ig")["data"]
-        self.assertEqual(cluster["NETWORK_CLASS"], "netris")
-        self.assertEqual(cluster["NETWORK_STEPS_COLLECTION"], "netris.steps")
-        self.assertEqual(cluster["NETRIS_USERNAME"], "netris")
-        self.assertNotIn("NETRIS_CONTROLLER_URL", cluster)
+        self.assertNotIn("NETWORK_CLASS", cluster)
+        self.assertNotIn("NETWORK_STEPS_COLLECTION", cluster)
+        self.assertFalse(any(key.startswith("NETRIS_") for key in cluster))
         secret = find(docs, "Secret", "cluster-fulfillment-ig")
-        self.assertEqual(set(secret.get("data") or secret.get("stringData")), {"NETRIS_PASSWORD"})
+        self.assertFalse(any(key.startswith("NETRIS_") for key in (secret.get("data") or {})))
 
     def test_cluster_fulfillment_rejects_installation_owned_netris_settings(self):
-        for key in ("NETRIS_CONTROLLER_URL", "NETRIS_VALIDATE_CERTS", "NETRIS_CA_PATH"):
+        for key in (
+            "NETRIS_CONTROLLER_URL",
+            "NETRIS_VALIDATE_CERTS",
+            "NETRIS_CA_PATH",
+            "NETWORK_CLASS",
+            "NETRIS_USERNAME",
+            "NETRIS_SITE_ID",
+            "NETRIS_TENANT_ID",
+            "NETRIS_TENANT_NAME",
+            "NETRIS_MGMT_VPC_ID",
+            "NETRIS_MGMT_VPC_NAME",
+            "NETRIS_RESOURCE_CLASS_MAP",
+            "NETWORK_STEPS_COLLECTION",
+        ):
             with self.subTest(key=key):
                 result = helm(
                     {"aap": {"instanceGroups": {"clusterFulfillment": {"enabled": True, "config": {key: "x"}}}}}
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(key, result.stderr)
+
+        fixture_netris_password = secrets.token_urlsafe(32)
+        result = helm(
+            {
+                "aap": {
+                    "instanceGroups": {
+                        "clusterFulfillment": {
+                            "enabled": True,
+                            "secret": {"NETRIS_PASSWORD": fixture_netris_password},
+                        }
+                    }
+                }
+            }
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("NETRIS_PASSWORD", result.stderr)
 
     def test_invalid_netris_ca_configmap_name_fails(self):
         result = helm(
@@ -689,7 +725,8 @@ class AapSettingsTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("NETRIS_CA_CONFIGMAP must be a ConfigMap name", result.stderr)
 
-    def test_netris_connection_settings_are_validated_for_cluster_fulfillment(self):
+    def test_netris_connection_settings_are_validated_for_network_fulfillment(self):
+        """Reject invalid Netris connection settings before rendering."""
         def nf_config(config: dict) -> dict:
             return {"aap": {"instanceGroups": {"networkFulfillment": {"config": config}}}}
 
@@ -710,9 +747,9 @@ class AapSettingsTest(unittest.TestCase):
         docs = render(
             nf_config({"NETRIS_CONTROLLER_URL": "https://netris.example.com:8443/", "NETRIS_VALIDATE_CERTS": "True"})
         )
-        config_as_code = find(docs, "Secret", "config-as-code-ig")["stringData"]
-        self.assertEqual(config_as_code["NETRIS_CONTROLLER_URL"], "https://netris.example.com:8443/")
-        self.assertEqual(config_as_code["NETRIS_VALIDATE_CERTS"], "true")
+        config = find(docs, "ConfigMap", "network-fulfillment-ig")["data"]
+        self.assertEqual(config["NETRIS_CONTROLLER_URL"], "https://netris.example.com:8443/")
+        self.assertEqual(config["NETRIS_VALIDATE_CERTS"], "True")
 
     def test_setting_names(self):
         result = helm({"aap": {"instanceGroups": {"networkFulfillment": {"config": {"lower_case": "x"}}}}})
@@ -805,7 +842,7 @@ LAB_OVERRIDES = {
         "instanceGroups": {
             "networkFulfillment": {
                 "config": {"NETRIS_CONTROLLER_URL": "https://netris.example.com", "NETRIS_SITE_ID": "1"},
-                "secret": {"NETRIS_PASSWORD": "test"},
+                "secret": {"NETRIS_PASSWORD": secrets.token_urlsafe(32)},
             }
         }
     },

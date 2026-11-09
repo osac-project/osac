@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { Formik } from 'formik';
 import { describe, expect, it } from 'vitest';
 import * as Yup from 'yup';
@@ -18,7 +18,7 @@ const renderField = (
       })}
       onSubmit={() => undefined}
     >
-      {({ submitForm }) => (
+      {({ submitForm, values }) => (
         <>
           <KeyValueMapField
             name="labels"
@@ -32,6 +32,7 @@ const renderField = (
           <button type="button" onClick={() => void submitForm()}>
             Submit
           </button>
+          <output aria-label="Formik labels">{JSON.stringify(values.labels)}</output>
         </>
       )}
     </Formik>,
@@ -70,6 +71,68 @@ describe('KeyValueMapField', () => {
 
     expect(screen.getByRole('textbox', { name: 'Labels value 1' })).toHaveValue('gpu');
     expect(screen.getByRole('textbox', { name: 'Labels value 2' })).toHaveValue('b');
+  });
+
+  it('stores trimmed keys and values while preserving each draft until blur', async () => {
+    const { user } = renderField([{ key: '', value: '' }]);
+    const key = screen.getByRole('textbox', { name: 'Labels key 1' });
+    const value = screen.getByRole('textbox', { name: 'Labels value 1' });
+    const formikLabels = screen.getByLabelText('Formik labels');
+
+    await user.type(key, '  gpu tier  ');
+    expect(key).toHaveValue('  gpu tier  ');
+    expect(formikLabels.textContent).toBe(JSON.stringify([{ key: 'gpu tier', value: '' }]));
+
+    await user.type(value, '  high memory  ');
+    expect(key).toHaveValue('gpu tier');
+    expect(value).toHaveValue('  high memory  ');
+    expect(formikLabels.textContent).toBe(
+      JSON.stringify([{ key: 'gpu tier', value: 'high memory' }]),
+    );
+
+    await user.tab();
+    expect(value).toHaveValue('high memory');
+  });
+
+  it('shows errors on rows added after a failed submit', async () => {
+    const { user } = renderWithProviders(
+      <Formik
+        initialValues={{ labels: [{ key: '', value: '' }] }}
+        validationSchema={Yup.object({
+          labels: Yup.array().of(
+            Yup.object({
+              key: Yup.string().required('Key is required'),
+              value: Yup.string().required('Value is required'),
+            }),
+          ),
+        })}
+        onSubmit={() => undefined}
+      >
+        {({ submitForm }) => (
+          <>
+            <KeyValueMapField
+              name="labels"
+              fieldId="labels"
+              label="Labels"
+              addLabel="Add label"
+              removeLabel="Remove label"
+            />
+            <button type="button" onClick={() => void submitForm()}>
+              Submit
+            </button>
+          </>
+        )}
+      </Formik>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+    expect(await screen.findByText('Key is required')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Add label' }));
+    await waitFor(() => {
+      expect(screen.getAllByText('Key is required')).toHaveLength(2);
+      expect(screen.getAllByText('Value is required')).toHaveLength(2);
+    });
   });
 
   it('removes the targeted pair, leaving the others intact', async () => {

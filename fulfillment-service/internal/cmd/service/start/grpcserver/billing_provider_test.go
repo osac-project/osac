@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"errors"
 	"log/slog"
+	"net/url"
 	"os"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -82,11 +83,16 @@ var _ = Describe("newBillingProvider", func() {
 
 	It("never logs an unrecognized provider value", func() {
 		var buffer bytes.Buffer
-		env["OSAC_BILLING_PROVIDER"] = "https://user:s3cret@evil.example"
+		unrecognized := url.URL{
+			Scheme: "https",
+			Host:   "evil.example",
+			User:   url.UserPassword("test-user", "test-password"),
+		}
+		env["OSAC_BILLING_PROVIDER"] = unrecognized.String()
 		delete(env, "OSAC_BILLING_BASE_URL")
 		newBillingProvider(getenv, readOK, slog.New(slog.NewTextHandler(&buffer, nil)))
 		Expect(buffer.String()).To(ContainSubstring("unrecognized"))
-		Expect(buffer.String()).ToNot(ContainSubstring("s3cret"))
+		Expect(buffer.String()).ToNot(ContainSubstring("test-password"))
 	})
 
 	It("logs the provider key when it is recognized", func() {

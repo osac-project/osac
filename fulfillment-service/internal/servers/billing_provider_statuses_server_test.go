@@ -17,6 +17,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"time"
 
@@ -143,7 +144,12 @@ var _ = Describe("Billing provider statuses server", func() {
 	})
 
 	It("never echoes an unrecognized provider key", func() {
-		status := get(build(billing.NewProvider("https://user:pw@evil.example", nil,
+		unrecognizedKey := url.URL{
+			Scheme: "https",
+			Host:   "evil.example",
+			User:   url.UserPassword("test-user", "test-password"),
+		}
+		status := get(build(billing.NewProvider(unrecognizedKey.String(), nil,
 			&billing.Error{Reason: billing.ReasonNotConfigured, Op: "load config"})))
 		Expect(status.GetState()).To(Equal(publicv1.BillingProviderState_BILLING_PROVIDER_STATE_UNAVAILABLE))
 		Expect(status.GetProviderKey()).To(BeEmpty())

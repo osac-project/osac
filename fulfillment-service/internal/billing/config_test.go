@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/url"
 	"strings"
 	"time"
 
@@ -195,6 +196,14 @@ var _ = Describe("LoadConfig", func() {
 	})
 })
 
+// baseURLWithCredentials is built at runtime so the rejection case exercises
+// URL userinfo without storing a credential-bearing literal in the repository.
+var baseURLWithCredentials = url.URL{
+	Scheme: "https",
+	Host:   "revos.example.com",
+	User:   url.UserPassword("test-user", "test-password"),
+}
+
 var _ = DescribeTable("Config.Validate checks the base URL",
 	func(baseURL string, valid bool) {
 		cfg := billing.Config{BaseURL: baseURL, Credential: "tok"}
@@ -219,7 +228,7 @@ var _ = DescribeTable("Config.Validate checks the base URL",
 	Entry("percent-encoded path", "https://revos.example.com/api%20v1", true),
 	Entry("query", "https://revos.example.com?x=1", false),
 	Entry("fragment", "https://revos.example.com#f", false),
-	Entry("url credentials", "https://user:s3cret@revos.example.com", false),
+	Entry("url credentials", baseURLWithCredentials.String(), false),
 	Entry("empty port", "https://revos.example.com:", false),
 	Entry("uppercase scheme", "HTTPS://revos.example.com", false),
 	Entry("no scheme", "revos.example.com", false),

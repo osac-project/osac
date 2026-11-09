@@ -6,6 +6,7 @@ from __future__ import annotations
 import pathlib
 import subprocess
 import tempfile
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 
@@ -22,6 +23,14 @@ PROVIDER = {
 }
 CA_SECRET = {"caSecret.name": "billing-ca-bundle", "caSecret.key": "ca-bundle"}
 CA_MOUNT_PATH = "/etc/fulfillment-grpc-server/billing-ca"
+
+
+def base_url_with_credentials() -> str:
+    """Build a credential-bearing URL at runtime; no such literal is stored."""
+    base = urlsplit(PROVIDER["baseUrl"])
+    return urlunsplit(
+        (base.scheme, f"test-user:test-password@{base.netloc}", base.path, "", "")
+    )
 
 
 def provider_args(override: dict[str, str | None] | None = None) -> list[str]:
@@ -221,7 +230,7 @@ def check_invalid() -> None:
         "baseUrl",
     )
     check_rejected(
-        provider_args({"baseUrl": "https://user:s3cret@billing.example.com"}),
+        provider_args({"baseUrl": base_url_with_credentials()}),
         "URL credentials",
         "baseUrl",
     )

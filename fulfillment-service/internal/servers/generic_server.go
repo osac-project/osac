@@ -775,7 +775,8 @@ func (s *GenericServer[O]) UpdateWithCandidatePreparation(
 
 // checkFinalizerChange returns Aborted when the merged object, which is what will be written, has
 // different finalizers than the stored one and the request doesn't carry the stored version,
-// whatever the lock flag.
+// whatever the lock flag. A request without metadata has nowhere to carry a version, so it can
+// never make such a change and is rejected as InvalidArgument instead of as a conflict to retry.
 func (s *GenericServer[O]) checkFinalizerChange(requestObject, currentObject, mergedObject O) error {
 	currentMetadata := s.getMetadata(currentObject)
 	if sameFinalizers(metadataFinalizers(s.getMetadata(mergedObject)), metadataFinalizers(currentMetadata)) {
@@ -786,10 +787,10 @@ func (s *GenericServer[O]) checkFinalizerChange(requestObject, currentObject, me
 	requestMetadata := s.getMetadata(requestObject)
 	if requestMetadata == nil {
 		return grpcstatus.Errorf(
-			grpccodes.Aborted,
-			"object with identifier '%s' has been modified: finalizers can only be changed from the "+
-				"current version, but the request has no version and the current version is %d",
-			requestId, currentVersion,
+			grpccodes.InvalidArgument,
+			"finalizers of object with identifier '%s' can only be changed from the current version, "+
+				"but the request has no metadata to carry it",
+			requestId,
 		)
 	}
 	if requestMetadata.GetVersion() != currentVersion {

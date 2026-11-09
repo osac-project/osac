@@ -519,8 +519,10 @@ var _ = Describe("typed finalizer updates", func() {
 			t.expectFinalizerConflict(ctx, err, finalizerController)
 		})
 
-		// Without metadata the forwarded version is zero and the mask clears the finalizers.
-		DescribeTable("rejects a finalizer change that has no metadata",
+		// Without metadata the mask clears the finalizers. The wrapper replaces the request metadata with the merged
+		// one, which would carry version zero, so it applies the generic no-metadata check first: invalid, not a
+		// conflict.
+		DescribeTable("rejects a finalizer change that has no metadata as invalid",
 			func(bumpFirst bool) {
 				t := finalizerCaseFor(privatev1.BareMetalInstanceTypes_ServiceDesc.ServiceName).
 					target([]string{finalizerController, finalizerHold})
@@ -530,7 +532,7 @@ var _ = Describe("typed finalizer updates", func() {
 
 				err := update(ctx, withoutMetadata(t.get(ctx)), finalizersMask())
 
-				t.expectFinalizerConflict(ctx, err, finalizerController, finalizerHold)
+				t.expectFinalizerInvalid(ctx, err, finalizerController, finalizerHold)
 			},
 			Entry("at version 0", false),
 			Entry("at a later version", true),
@@ -764,7 +766,7 @@ var _ = Describe("typed finalizer updates", func() {
 			finalizers, version, updates := t.committedState("volumes")
 			Expect(status.Code(result.writerErr)).To(Equal(codes.Aborted),
 				"the stale write returned %v and the stored finalizers are %v", result.writerErr, finalizers)
-			expectConflictMessage(result.writerErr, t.id)
+			expectRejectionMessage(result.writerErr, t.id)
 			Expect(finalizers).To(ConsistOf(finalizerController))
 			Expect(version).To(Equal(result.releasedVersion), "the rejected write must not bump the version")
 			Expect(updates).To(Equal(1), "only the release may have written a change record")

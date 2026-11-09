@@ -632,9 +632,9 @@ var _ = Describe("finalizer CAS", func() {
 			finalizerMaskEntries(),
 		)
 
-		// Without metadata the write can't prove its version. The finalizer check runs before validation, so every
-		// resource gets the conflict.
-		DescribeTable("rejects a finalizer change that has no metadata",
+		// Without metadata the write has nowhere to carry a version, so it can never succeed: it is invalid, not a
+		// conflict to retry. The finalizer check runs before validation, so every resource gets the same rejection.
+		DescribeTable("rejects a finalizer change that has no metadata as invalid",
 			func(bumpFirst bool, mask *fieldmaskpb.FieldMask) {
 				runFinalizerCases([]string{finalizerController, finalizerHold},
 					func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
@@ -644,7 +644,7 @@ var _ = Describe("finalizer CAS", func() {
 
 						err := t.update(r.ctx, withoutMetadata(t.get(r.ctx)), mask, false)
 
-						t.expectFinalizerConflict(r.ctx, err, finalizerController, finalizerHold)
+						t.expectFinalizerInvalid(r.ctx, err, finalizerController, finalizerHold)
 					})
 			},
 			Entry("at version 0 with metadata.finalizers mask", false, finalizersMask()),

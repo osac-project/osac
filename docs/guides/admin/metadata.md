@@ -109,9 +109,9 @@ Optimistic locking is optional. With `lock=true`, submit the current `metadata.v
 stored version has changed, the server returns `Aborted`. Read the latest object, reapply the
 intended change, and retry. Without locking the version is not checked, except that a private
 update that changes `metadata.finalizers` must carry the current `metadata.version` or it returns
-`Aborted`. An update without a mask usually replaces the whole object, so send a mask when changing
-other fields of an object that may have finalizers. See the
-[Update contract](../../../fulfillment-service/docs/API.md#update-when-supported).
+`Aborted` (`InvalidArgument` when the request has no `metadata` at all). An update without a mask
+usually replaces the whole object, so send a mask when changing other fields of an object that may
+have finalizers. See the [Update contract](../../../fulfillment-service/docs/API.md#update-when-supported).
 
 ## Public input errors and retry guidance
 

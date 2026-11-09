@@ -243,10 +243,6 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 	if !oldComputeInstance.HasStatus() && computeInstance.HasStatus() {
 		oldComputeInstance.SetStatus(&privatev1.ComputeInstanceStatus{})
 	}
-	// The version isn't a change: keep the one this pass last read, so the server checks against it.
-	if oldComputeInstance.HasMetadata() && computeInstance.HasMetadata() {
-		oldComputeInstance.GetMetadata().SetVersion(computeInstance.GetMetadata().GetVersion())
-	}
 	updateMask := r.maskCalculator.Calculate(oldComputeInstance, computeInstance)
 
 	// Only send an update if there are actual changes

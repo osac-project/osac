@@ -608,7 +608,8 @@ message ThingsUpdateResponse {
 - A private update that changes `metadata.finalizers` must carry the current `metadata.version`,
   whether or not `lock` is set, or it returns `Aborted` (HTTP 409). Finalizers are compared as a
   set, so order and duplicates don't count as changes. A request without `metadata` that would
-  change them is always rejected. Public updates keep the stored finalizers.
+  change them has no version to carry, so it returns `InvalidArgument` (HTTP 400) at any stored
+  version. Public updates keep the stored finalizers.
   - An update without a mask replaces the whole object, so omitting `finalizers` changes them if the
     object has any. Send a mask when changing other fields. DiskImages, InstanceTypes, and
     BareMetalInstanceTypes merge a maskless request into the stored object instead, and

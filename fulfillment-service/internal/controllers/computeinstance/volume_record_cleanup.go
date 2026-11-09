@@ -65,9 +65,14 @@ func (t *task) releaseFinalizerAfterVolumeCleanup(ctx context.Context, release f
 			return t.retryVolumeCleanup(err)
 		}
 
-		// The recovery wrote the ComputeInstance, so release the finalizer from the list and version read after it.
-		t.computeInstance.GetMetadata().SetFinalizers(slices.Clone(instance.GetMetadata().GetFinalizers()))
-		t.computeInstance.GetMetadata().SetVersion(instance.GetMetadata().GetVersion())
+		// The recovery wrote the ComputeInstance, so a release must change the finalizers read after it and carry
+		// that version. When the cleanup is still pending nothing is copied, so this pass writes nothing more.
+		releaseFinalizer := release
+		release = func() {
+			t.computeInstance.GetMetadata().SetFinalizers(slices.Clone(instance.GetMetadata().GetFinalizers()))
+			t.computeInstance.GetMetadata().SetVersion(instance.GetMetadata().GetVersion())
+			releaseFinalizer()
+		}
 	}
 
 	return t.reconcileVolumeRecordCleanup(ctx, instance, release)

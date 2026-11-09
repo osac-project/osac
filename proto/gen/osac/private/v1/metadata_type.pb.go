@@ -115,8 +115,9 @@ type Metadata struct {
 	// has been deleted and this list is empty the system will automatically archive the object.
 	//
 	// An Update that changes this list, compared as a set, must carry the current `version`, whether or not `lock` is
-	// set, or it is rejected with Aborted. Most Updates without a mask replace the whole object, so send a mask when
-	// changing other fields of an object that may have finalizers.
+	// set, or it is rejected with Aborted; without `metadata` it has no version to carry and is rejected with
+	// InvalidArgument. Most Updates without a mask replace the whole object, so send a mask when changing other fields
+	// of an object that may have finalizers.
 	Finalizers    []string `protobuf:"bytes,12,rep,name=finalizers,proto3" json:"finalizers,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -353,8 +354,9 @@ type Metadata_builder struct {
 	// has been deleted and this list is empty the system will automatically archive the object.
 	//
 	// An Update that changes this list, compared as a set, must carry the current `version`, whether or not `lock` is
-	// set, or it is rejected with Aborted. Most Updates without a mask replace the whole object, so send a mask when
-	// changing other fields of an object that may have finalizers.
+	// set, or it is rejected with Aborted; without `metadata` it has no version to carry and is rejected with
+	// InvalidArgument. Most Updates without a mask replace the whole object, so send a mask when changing other fields
+	// of an object that may have finalizers.
 	Finalizers []string
 }
 

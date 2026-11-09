@@ -455,6 +455,19 @@ func (t finalizerTarget) bump(ctx context.Context) {
 // expectFinalizerConflict checks that err is Aborted and that the stored finalizers are still want.
 func (t finalizerTarget) expectFinalizerConflict(ctx context.Context, err error, want ...string) {
 	GinkgoHelper()
+	t.expectFinalizerRejection(ctx, err, codes.Aborted, want...)
+}
+
+// expectFinalizerInvalid checks that err is InvalidArgument, says why, and that the stored finalizers are still
+// want.
+func (t finalizerTarget) expectFinalizerInvalid(ctx context.Context, err error, want ...string) {
+	GinkgoHelper()
+	t.expectFinalizerRejection(ctx, err, codes.InvalidArgument, want...)
+	Expect(status.Convert(err).Message()).To(ContainSubstring("no metadata"))
+}
+
+func (t finalizerTarget) expectFinalizerRejection(ctx context.Context, err error, code codes.Code, want ...string) {
+	GinkgoHelper()
 	stored, getErr := t.ops.get(ctx, t.id)
 	var got []string
 	state := fmt.Sprintf("unreadable (%v)", getErr)
@@ -463,16 +476,15 @@ func (t finalizerTarget) expectFinalizerConflict(ctx context.Context, err error,
 		sort.Strings(got)
 		state = fmt.Sprintf("%v", got)
 	}
-	Expect(status.Code(err)).To(Equal(codes.Aborted),
-		"a stale finalizer write must be rejected as a conflict, but the update returned %v and the stored "+
-			"finalizers are now %v", err, state)
+	Expect(status.Code(err)).To(Equal(code),
+		"the update returned %v and the stored finalizers are now %v", err, state)
 	Expect(getErr).ToNot(HaveOccurred(), "the object must still exist")
 	Expect(got).To(ConsistOf(want))
-	expectConflictMessage(err, t.id)
+	expectRejectionMessage(err, t.id)
 }
 
-// expectConflictMessage checks the message names the object but not the finalizers, which belong to controllers.
-func expectConflictMessage(err error, id string) {
+// expectRejectionMessage checks the message names the object but not the finalizers, which belong to controllers.
+func expectRejectionMessage(err error, id string) {
 	GinkgoHelper()
 	message := status.Convert(err).Message()
 	Expect(message).To(ContainSubstring(id))

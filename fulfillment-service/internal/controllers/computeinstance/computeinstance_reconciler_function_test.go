@@ -2347,6 +2347,57 @@ var _ = Describe("finalizer removal conflict on delete", func() {
 		Expect(computeInstancesClient.updateRequests[1].GetUpdateMask().GetPaths()).To(Equal([]string{"metadata.finalizers"}))
 		Expect(computeInstancesClient.object.GetMetadata().GetFinalizers()).To(ConsistOf(foreign))
 	})
+
+	// When the Volume record outlives the recovery the pass has nothing to release, so it writes nothing after the
+	// recovery itself, even though another writer changed the finalizers and the version in the meantime.
+	It("writes nothing after a recovery whose Volume cleanup is still pending", func() {
+		ctx := context.Background()
+		const (
+			recoveredID = "volume-original"
+			foreign     = "test.osac.io/foreign"
+		)
+		t, computeInstancesClient, volumesClient := newVolumeCleanupTask(nil, []*privatev1.ComputeInstanceVolumeRegistration{
+			privatev1.ComputeInstanceVolumeRegistration_builder{
+				DiskKey: "boot",
+				State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+			}.Build(),
+		})
+		f := t.r
+		f.maskCalculator = masks.NewCalculator().Build()
+		computeInstancesClient.checkFinalizers = true
+
+		prepared, err := prepareDiskRegistrations(t.computeInstance)
+		Expect(err).NotTo(HaveOccurred())
+		recovered := registrationTestVolume(prepared[0].request, recoveredID, "system")
+		recovered.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		volumesClient.list = func(context.Context, *privatev1.VolumesListRequest) (*privatev1.VolumesListResponse, error) {
+			return registrationTestListResponse([]*privatev1.Volume{recovered}, 1), nil
+		}
+		// The record stays visible after Delete, so the cleanup is pending.
+		volumesClient.get = volumeCleanupGetSequence(
+			volumeCleanupGetResult{volume: recovered},
+			volumeCleanupGetResult{volume: recovered},
+		)
+		volumesClient.delete = func(context.Context, *privatev1.VolumesDeleteRequest) (*privatev1.VolumesDeleteResponse, error) {
+			return privatev1.VolumesDeleteResponse_builder{}.Build(), nil
+		}
+
+		stored := computeInstancesClient.object.GetMetadata()
+		stored.SetFinalizers([]string{finalizers.Controller, foreign})
+		stored.SetVersion(stored.GetVersion() + 1)
+
+		err = f.run(ctx, t.computeInstance)
+
+		Expect(err).To(MatchError(ContainSubstring("volume records are still present")))
+		Expect(controllers.IsRequeueable(err)).To(BeTrue())
+		Expect(controllers.IsConflict(err)).To(BeFalse())
+		Expect(volumesClient.deleteRequests).To(HaveLen(1), "the cleanup must have asked for the deletion")
+		Expect(computeInstancesClient.updateRequests).To(HaveLen(1), "only the recovery may write")
+		Expect(computeInstancesClient.updateRequests[0].GetLock()).To(BeTrue())
+		Expect(computeInstancesClient.object.GetMetadata().GetFinalizers()).To(ConsistOf(finalizers.Controller, foreign))
+		Expect(t.computeInstance.GetMetadata().GetFinalizers()).To(ConsistOf(finalizers.Controller),
+			"the pass must not copy another writer's finalizers before a release")
+	})
 })
 
 var _ = Describe("buildSpec network attachments", func() {

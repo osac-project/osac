@@ -39,7 +39,8 @@ def test_worker_teardown_precedes_hosted_cluster_removal() -> None:
     for name in (
         "Delete Secret resource containing pull-secret",
         "Delete Secret resource containing ssh-key",
-        "Delete ManagedCluster resource",
+        "Read ManagedCluster registration before teardown",
+        "Delete ManagedCluster registration for this ClusterOrder",
     ):
         assert by_name[name][0] > by_name[names[2]][0]
 

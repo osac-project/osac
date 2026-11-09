@@ -25,6 +25,18 @@ Deployments, so infra dependencies can still be starting when
 `make install-osac` begins; the `infra-ready-wait-test` suite guards that
 gap.
 
+## MCE auto-import policy
+
+`make mce-render-test` also runs `scripts/test-mce-auto-import.py`. The
+command stubs check that the hook applies the policy after MCE becomes available,
+then waits for the configured agent Deployment to roll out with automatic
+import disabled. They also check bounded failure for an absent Deployment and
+immediate failure on a read error. The hook does not require `jq`. To check the hook image, pull `quay.io/openshift/origin-cli:4.20.0`
+and run `MCE_TEST_CONTAINER_IMAGE=quay.io/openshift/origin-cli:4.20.0 python3 scripts/test-mce-auto-import.py`
+(Podman by default; `CONTAINER_TOOL` overrides it). Neither check proves API
+merge semantics or live MCE rollout. See the
+[deployment policy](../guides/installation/helm-deployment-guide.md#caas-acm-registration-policy).
+
 ## Input validation gate (OSAC-7050)
 
 Every installation target (`install`, `install-infra`, `install-osac`,

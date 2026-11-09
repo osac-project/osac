@@ -717,7 +717,13 @@ Standalone MCE is disabled by default. Set `mce.enabled: true` in the
 infrastructure values when this installation owns its lifecycle; the `caas-ci`
 profile does so explicitly. Leave it `false` when RHACM or an existing MCE
 installation owns the lifecycle. The disabled state also suppresses the
-temporary Assisted image override resources.
+temporary Assisted image override resources. With OSAC-owned MCE, the existing
+hook disables agent-wide HyperShift auto-import while preserving other MCE
+settings, then waits for the agent rollout. On existing hubs the administrator
+configures and verifies that policy before enabling CaaS. AAP doesn't read or
+change the policy; it registers only opted-in templates. See
+[CaaS ACM registration policy](../docs/guides/installation/helm-deployment-guide.md#caas-acm-registration-policy)
+for setup and shared-hub implications.
 
 #### MetalLB address pool
 

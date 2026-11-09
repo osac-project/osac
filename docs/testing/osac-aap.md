@@ -20,6 +20,11 @@ in `osac-aap/Makefile`.
 
 ## Focused harness boundaries
 
+- HostedCluster creation without MCE addon APIs, opt-in ACM registration,
+  ownership validation and teardown attribution: run `uv run --group development pytest tests/unit/test_hosted_cluster_acm_workflow.py tests/unit/test_hosted_cluster_acm_registration.py tests/unit/test_hosted_cluster_delete_order.py`.
+  The tests run Ansible with recording Kubernetes modules and check task wiring;
+  they do not exercise a Kubernetes API or a live import controller. See the
+  [CaaS validation boundary](e2e.md#caas-acm-registration).
 - `compute_instance_create` (see its
   [README](../../osac-aap/tests/integration/targets/compute_instance_create/README.md)):
   real Kind StorageClasses, Secrets, VM and DataVolume task execution. The VM

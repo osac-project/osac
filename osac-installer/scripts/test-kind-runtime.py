@@ -498,6 +498,7 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
         self.assertIn("dependency build", self.log.read_text())
 
     def run_direct_infra(self, cluster_name=None, skip_deps=True):
+        """Run install-infra with mocked helm, skipping the dependency targets."""
         self.write_command("helm", '''
 if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >> "$MOCK_LOG"; fi
 ''')

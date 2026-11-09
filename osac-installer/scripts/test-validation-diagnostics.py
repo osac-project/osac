@@ -427,9 +427,11 @@ class ValidationDiagnosticsTests(unittest.TestCase):
         derived = set()
 
         def derive(schema):
+            """Add the open-map roots found in one values schema to derived."""
             defs = schema.get("$defs", {})
 
             def resolve(node):
+                """Follow local $defs references to the node they name."""
                 for _ in range(10):
                     if not (isinstance(node, dict) and "$ref" in node):
                         break
@@ -440,6 +442,7 @@ class ValidationDiagnosticsTests(unittest.TestCase):
                 return node
 
             def walk(node, prefix):
+                """Walk one schema node, recording every validating open map."""
                 node = resolve(node)
                 if not isinstance(node, dict):
                     return
@@ -475,6 +478,7 @@ class ValidationDiagnosticsTests(unittest.TestCase):
             " `make helm-deps helm-infra-deps` first")
 
         def scan_archive(data):
+            """Derive open-map roots from the schemas in one chart archive."""
             with tarfile.open(fileobj=io.BytesIO(data)) as archive:
                 for member in archive.getmembers():
                     if not member.isfile():

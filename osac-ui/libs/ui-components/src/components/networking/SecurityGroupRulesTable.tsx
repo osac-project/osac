@@ -1,4 +1,4 @@
-import { type CSSProperties, useId } from 'react';
+import { useId } from 'react';
 import { Button, Tooltip } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import type { TFunction } from 'i18next';
@@ -55,28 +55,28 @@ export const SecurityGroupRulesTable = ({
 }: SecurityGroupRulesTableProps) => {
   const { t } = useTranslation();
   const reasonId = useId();
-  const disabledReason = editingDisabledReason?.trim() || undefined;
+  const disabledReason = editingDisabledReason || undefined;
   const editingDisabled = disabledReason !== undefined;
 
   const cidrLabel = direction === 'ingress' ? t('Source CIDR') : t('Destination CIDR');
 
-  const addButton = (style: CSSProperties) => (
+  const addButton = (className: string) => (
     <Button
       variant="primary"
       isAriaDisabled={editingDisabled}
       aria-describedby={editingDisabled ? reasonId : undefined}
       onClick={onAddRule}
-      style={style}
+      className={className}
     >
       {t('Add rule')}
     </Button>
   );
 
-  const addAction = (style: CSSProperties) =>
+  const addAction = (className: string) =>
     disabledReason ? (
-      <Tooltip content={disabledReason}>{addButton(style)}</Tooltip>
+      <Tooltip content={disabledReason}>{addButton(className)}</Tooltip>
     ) : (
-      addButton(style)
+      addButton(className)
     );
 
   const reason = disabledReason ? (
@@ -98,7 +98,7 @@ export const SecurityGroupRulesTable = ({
               ? t('No inbound rules yet. Add one to allow incoming traffic.')
               : t('No outbound rules yet. Add one to allow outgoing traffic.')}
         </SubtleContent>
-        {!editingDisabled && addAction({ marginTop: '1rem' })}
+        {!editingDisabled && addAction('pf-v6-u-mt-md')}
       </div>
     );
   }
@@ -106,9 +106,9 @@ export const SecurityGroupRulesTable = ({
   return (
     <div>
       {reason}
-      {addAction({ marginBottom: '1rem' })}
+      {addAction('pf-v6-u-mb-md')}
       <Table
-        aria-label={`${direction} rules`}
+        aria-label={direction === 'ingress' ? t('Ingress rules') : t('Egress rules')}
         aria-describedby={editingDisabled ? reasonId : undefined}
         variant="compact"
         borders

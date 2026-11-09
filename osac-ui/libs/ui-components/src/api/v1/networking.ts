@@ -378,8 +378,8 @@ export const useUpdateSecurityGroup = () => {
   const { t } = useTranslation();
   return useMutation({
     mutationFn: ({ object }: { object: MessageInitShape<typeof SecurityGroupSchema> }) => {
-      const id = object.id?.trim();
-      if (!id) {
+      const id = object.id;
+      if (!id || !/\S/.test(id)) {
         throw new ConnectError(
           t('Network configuration cannot be changed after creation.'),
           Code.FailedPrecondition,

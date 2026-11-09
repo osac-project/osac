@@ -47,6 +47,22 @@ else
     "${IMAGE_OVERRIDES_ANNOTATION}-" --overwrite 2>/dev/null || true
 fi
 
+# Own only the auto-import entry in the name-keyed variables list, preserving
+# MCE's other settings. AAP validates the effective agent rollout before provisioning.
+# Retry like the AgentServiceConfig apply below: admission webhooks may not be
+# ready yet when the MultiClusterEngine phase first reports Available.
+policy_attempts=5
+until oc apply --server-side --force-conflicts --field-manager=osac-acm-policy \
+  -n "${MCE_NAMESPACE}" -f /config/acm-import-policy.yaml; do
+  policy_attempts=$((policy_attempts - 1))
+  if [[ ${policy_attempts} -le 0 ]]; then
+    echo "ACM import policy apply failed after retries" >&2
+    exit 1
+  fi
+  echo "Retrying ACM import policy apply (webhooks may not be ready)..."
+  sleep 5
+done
+
 echo "Applying AgentServiceConfig..."
 until oc apply -n "${MCE_NAMESPACE}" -f /config/config.yaml; do
   echo "Retrying AgentServiceConfig apply (webhooks may not be ready)..."

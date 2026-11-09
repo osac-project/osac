@@ -141,7 +141,11 @@
     name: "sshkey-cluster-{{ hosted_cluster_name }}"
 
 # Delete ManagedCluster resource; ideally this should be automatically deleted when
-# we remove the HostedCluster, as we do not create the ManagedCluster.
+# we remove the HostedCluster, as we do not create the ManagedCluster. Kept
+# unconditional on purpose: ACM registration is opt-in
+# (hosted_cluster_enable_acm_registration), so for clusters provisioned without
+# it this is an idempotent no-op, while clusters registered before the flag
+# (or with the flag enabled) still get cleaned up at teardown (OSAC-6313).
 - name: Delete ManagedCluster resource
   kubernetes.core.k8s:
     state: absent

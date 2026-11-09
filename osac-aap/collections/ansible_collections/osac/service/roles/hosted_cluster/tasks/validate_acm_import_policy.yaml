@@ -1,0 +1,100 @@
+# Shared policy belongs to the hub administrator/installer, never this job.
+- name: Read HyperShift auto-import policy
+  kubernetes.core.k8s_info:
+    api_version: addon.open-cluster-management.io/v1alpha1
+    kind: AddOnDeploymentConfig
+    name: hypershift-addon-deploy-config
+    namespace: "{{ hosted_cluster_acm_config_namespace }}"
+  register: hosted_cluster_acm_import_policy
+  # Hub addon configuration can hold unrelated hub credentials, so never log the
+  # read result. A read error is reported by the assertion's message below.
+  no_log: true
+  failed_when: false
+
+- name: Require explicitly disabled HyperShift auto-import
+  ansible.builtin.assert:
+    that:
+      - hosted_cluster_acm_import_policy.msg is not defined
+      - hosted_cluster_acm_import_policy.resources | default([]) | length == 1
+      - >-
+        (hosted_cluster_acm_import_policy.resources[0].spec.customizedVariables | default([])
+        | selectattr('name', 'equalto', 'autoImportDisabled') | map(attribute='value')
+        | map('lower') | list) == ['true']
+    fail_msg: >-
+      The hub administrator must grant read access to AddOnDeploymentConfig
+      {{ hosted_cluster_acm_config_namespace }}/hypershift-addon-deploy-config and set
+      autoImportDisabled="true" before provisioning CaaS clusters
+      ({{ hosted_cluster_acm_import_policy.msg | default('policy not found') }}).
+      Omitting the clusterset label does not disable import. OSAC configures this only when
+      it owns MCE; this job will not modify shared hub policy.
+
+- name: Read effective HyperShift agent deployments
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    label_selectors:
+      - app=hypershift-addon-agent
+  register: hosted_cluster_acm_agents
+  # Agent deployments carry container environment, so never log the read result.
+  no_log: true
+  failed_when: false
+
+- name: Require readable HyperShift agent deployments
+  ansible.builtin.assert:
+    that:
+      - hosted_cluster_acm_agents.msg is not defined
+    fail_msg: >-
+      Could not read the HyperShift addon agent deployments
+      ({{ hosted_cluster_acm_agents.msg | default('read returned no result') }}). The
+      provisioning identity needs cluster-wide Deployment read access before provisioning
+      CaaS clusters.
+
+# Project the rollout fields the assertions need, so a rejected agent cannot log
+# its container environment, volumes, or image pull secrets.
+- name: Discard agent rollout state from earlier invocations
+  ansible.builtin.set_fact:
+    hosted_cluster_acm_agent_rollout: []
+
+- name: Project effective HyperShift agent rollout state
+  vars:
+    containers: "{{ item.spec.template.spec.containers | default([]) }}"
+    disabled_env: >-
+      {{ containers | selectattr('name', 'equalto', 'hypershift-addon-agent')
+      | map(attribute='env', default=[]) | flatten
+      | selectattr('name', 'equalto', 'DISABLE_AUTO_IMPORT')
+      | map(attribute='value', default='') | map('lower') | list }}
+    status: "{{ item.status | default({}) }}"
+    spec: "{{ item.spec | default({}) }}"
+    rollout:
+      namespace: "{{ item.metadata.namespace | default('') }}"
+      name: "{{ item.metadata.name | default('<unnamed>') }}"
+      auto_import_disabled: "{{ disabled_env == ['true'] }}"
+      generation: "{{ item.metadata.generation | default(0) }}"
+      observed_generation: "{{ status.observedGeneration | default(0) }}"
+      replicas: "{{ spec.replicas | default(1) }}"
+      updated_replicas: "{{ status.updatedReplicas | default(0) }}"
+      available_replicas: "{{ status.availableReplicas | default(0) }}"
+      current_replicas: "{{ status.replicas | default(0) }}"
+  ansible.builtin.set_fact:
+    hosted_cluster_acm_agent_rollout: >-
+      {{ hosted_cluster_acm_agent_rollout + [rollout] }}
+  loop: "{{ hosted_cluster_acm_agents.resources | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.namespace | default('') }}/{{ item.metadata.name | default('<unnamed>') }}"
+  no_log: true
+
+- name: Require disabled agents with no old replicas
+  ansible.builtin.assert:
+    that:
+      - item.auto_import_disabled
+      - item.observed_generation >= item.generation
+      - item.updated_replicas == item.replicas
+      - item.available_replicas == item.replicas
+      - item.current_replicas == item.replicas
+    fail_msg: >-
+      HyperShift agent {{ item.namespace }}/{{ item.name }} has not fully rolled out with
+      DISABLE_AUTO_IMPORT=true. Wait for the hub administrator's policy rollout before
+      provisioning; this job will not change shared agent configuration.
+  loop: "{{ hosted_cluster_acm_agent_rollout | default([]) }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.name }}"

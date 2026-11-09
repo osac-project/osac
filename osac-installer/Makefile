@@ -990,7 +990,7 @@ event-publisher-render-test: helm-deps ## Check the event publisher and metering
 
 .PHONY: billing-render-test
 billing-render-test: helm-osac-deps ## Check billing provider config renders and validates
-	python3 scripts/test-billing-render.py
+	uv run --project .. python scripts/test-billing-render.py
 
 .PHONY: mce-render-test
 mce-render-test: helm-infra-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance

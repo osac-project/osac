@@ -24,6 +24,9 @@ PROVIDER = {
 }
 CA_SECRET = {"caSecret.name": "billing-ca-bundle", "caSecret.key": "ca-bundle"}
 CA_MOUNT_PATH = "/etc/fulfillment-grpc-server/billing-ca"
+# --set-string consumes one escape level, so this literal's two runtime
+# backslashes reach the schema as the single backslash the rejection cases need.
+BACKSLASH_IN_HOST_URL = r"https://billing\\example.com"
 
 
 def base_url_with_credentials() -> str:
@@ -253,7 +256,7 @@ def check_invalid() -> None:
         ("https://%62illing.example.com", "percent-escaped host"),
         ("https://%25billing.example.com", "escaped percent in host"),
         ("https://billing[example.com", "unclosed bracket in host"),
-        (r"https://billing\\example.com", "backslash in host"),
+        (BACKSLASH_IN_HOST_URL, "backslash in host"),
         ("https://billing|example.com", "pipe in host"),
         ("https://[::::]", "invalid IPv6 host"),
         ("https://billing.example.com/api\x01", "control character in path"),
@@ -296,7 +299,7 @@ def check_standalone_base_url_schema() -> None:
         "https://%62illing.example.com",
         "https://%25billing.example.com",
         "https://billing[example.com",
-        r"https://billing\\example.com",
+        BACKSLASH_IN_HOST_URL,
         "https://billing|example.com",
         "https://[::::]",
         "https://billing.example.com/api\x01",

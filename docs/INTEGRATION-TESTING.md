@@ -414,7 +414,11 @@ installer command in the tier table remains the component-integration check.
   through the shared safe-error contract. The `mcpserver` unit suite also
   verifies the shared missing-Secret guidance envelope, the compute Create
   handler's mapping of Fulfillment's missing-Secret rejection, and the absence
-  of Secret-value or bearer-token fields. `it_mcp_deployed_test.go` runs in the
+  of Secret-value or bearer-token fields. `it_mcp_server_test.go` also creates
+  a catalog item whose user-data Secret reference does not resolve and invokes
+  typed MCP Create through the real Fulfillment boundary; it asserts the safe
+  guidance envelope, no persisted ComputeInstance, and no synthetic Secret or
+  bearer-token value. `it_mcp_deployed_test.go` runs in the
   Fulfillment Kind CI job with `MCP_TEST_ENABLED=true` and real Keycloak; it
   checks TLS metadata and valid calls, plus rejection of the Fulfillment API
   audience, a wrong issuer, an expired token, and a wrong resource. It also

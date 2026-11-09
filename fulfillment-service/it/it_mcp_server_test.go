@@ -820,6 +820,91 @@ var _ = Describe("MCP server", func() {
 		waitForMCPComputeInstanceDeletion(ctx, computeInstanceID)
 		computeInstanceID = ""
 	})
+
+	It("returns safe missing-Secret guidance from the real API boundary", func() {
+		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-missing-secret", userUsername)
+		missingSecretCatalogItemID := fmt.Sprintf("mcp-missing-secret-item-%s", uuid.New())
+		_, err := catalogItemsClient.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
+			Object: privatev1.ComputeInstanceCatalogItem_builder{
+				Id:          missingSecretCatalogItemID,
+				Metadata:    privatev1.Metadata_builder{Name: missingSecretCatalogItemID}.Build(),
+				Title:       "MCP missing Secret catalog item",
+				Description: "Catalog item for missing-Secret MCP integration testing",
+				Published:   true,
+				Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+				Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+					InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
+						Editable: privatev1.EditableInstanceTypeReferenceField_builder{}.Build(),
+					}.Build(),
+					BootDisk: privatev1.ComputeInstanceBootDiskFieldPolicies_builder{
+						SizeGib: privatev1.Int32FieldPolicy_builder{
+							Editable: privatev1.EditableInt32Field_builder{}.Build(),
+						}.Build(),
+						StorageTier: privatev1.StorageTierReferenceFieldPolicy_builder{
+							Editable: privatev1.EditableStorageTierReferenceField_builder{}.Build(),
+						}.Build(),
+					}.Build(),
+					RunStrategy: privatev1.ComputeInstanceRunStrategyFieldPolicy_builder{
+						Editable: privatev1.EditableComputeInstanceRunStrategyField_builder{}.Build(),
+					}.Build(),
+					NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
+						Editable: privatev1.EditableComputeNetworkAttachmentList_builder{}.Build(),
+					}.Build(),
+					UserDataSource: privatev1.UserDataSourceFieldPolicy_builder{
+						Editable: privatev1.EditableUserDataSourceField_builder{
+							DefaultValue: privatev1.UserDataSource_builder{
+								Secret: privatev1.SecretLocalReference_builder{
+									Id: "missing-user-data-secret",
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := catalogItemsClient.Delete(
+				ctx, privatev1.ComputeInstanceCatalogItemsDeleteRequest_builder{Id: missingSecretCatalogItemID}.Build(),
+			)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		instanceName := fmt.Sprintf("mcp-missing-secret-instance-%s", uuid.New()[24:32])
+		mockSecretValue := "mock-user-data-secret-value"
+		bootDiskSize := int32(20)
+		_, err = callMCPTool[mcpserver.CreateComputeInstanceOutput](
+			ctx, session, "create_compute_instance", mcpserver.CreateComputeInstanceInput{
+				Name:           instanceName,
+				CatalogItem:    missingSecretCatalogItemID,
+				DiskImageID:    diskImageID,
+				ProjectID:      projectID,
+				InstanceTypeID: instanceTypeID,
+				BootDisk: &mcpserver.ComputeInstanceBootDiskInput{
+					SizeGiB:       &bootDiskSize,
+					StorageTierID: storageTierID,
+				},
+				NetworkAttachments: []mcpserver.ComputeInstanceNetworkAttachmentInput{{
+					SubnetID:         subnetID,
+					SecurityGroupIDs: []string{securityGroupID},
+				}},
+			},
+		)
+		expectMCPSafeError(
+			err, "not_found", "NotFound", "/secrets/create",
+			"Secret reference missing-user-data-secret is missing",
+		)
+		Expect(err.Error()).ToNot(ContainSubstring(mockSecretValue))
+		Expect(err.Error()).ToNot(ContainSubstring("Bearer "))
+		Expect(err.Error()).ToNot(ContainSubstring(`"token"`))
+
+		adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
+		instances, err := adminInstances.List(ctx, privatev1.ComputeInstancesListRequest_builder{
+			Filter: proto.String(fmt.Sprintf("this.metadata.name == %q", instanceName)),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(instances.GetItems()).To(BeEmpty())
+	})
 })
 
 func waitForMCPComputeInstanceDeletion(ctx context.Context, id string) {

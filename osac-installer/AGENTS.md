@@ -67,6 +67,7 @@ respective areas.
 | Kafka exporter, its PodMonitor, its consumer lag rule, `kafka.exporter.*` values, or the PodMonitor labels | Unit (mocked cluster) | `make helm-infra-deps && helm unittest charts/osac-infra` (helm-unittest plugin; CI pins v1.2.1 and runs the suite in the `helm-unit` leg) renders `spec.kafkaExporter` only when `kafka.exporter.enabled` is on, renders the PodMonitor and `MeteringConsumerLag` rule, merges `kafka.exporter.podMonitor.labels`, and asserts all three are absent without Kafka, the exporter value, or the monitoring CRDs; a live exporter is not checked |
 | Install preflight engine, catalog, report schema, or `preflight.*` values | Unit (mocked cluster) | `helm unittest charts/osac` (helm-unittest plugin; CI pins v1.2.1) |
 | `metering.readers` values (reader name only, all tenants), schema, umbrella passthrough, or reserved names | Unit (mocked cluster) | `helm unittest -f 'tests/metering_readers*_test.yaml' charts/osac` (the suites also run in the full `helm unittest charts/osac`) |
+| Upfront input-validation gate, its Makefile wiring, or `scripts/test-input-validation.sh` | Unit with command stubs + Helm contract | `make input-validation-test` |
 | Install preflight rendering contract, hook log policy, or CSI hook deadlines | Helm contract | `uv run --script scripts/test-preflight-render.py` |
 | Kind preflight harness readiness or fixture restoration | Unit (mocked commands) | `uv run --script scripts/test-preflight-harness.py` |
 | Install preflight against a real API server, upgrade behavior, or failed-hook logs | Component integration | `uv run --script scripts/test-preflight-kind.py` against a Kind context; see [install preflight](../docs/INTEGRATION-TESTING.md#install-preflight-osac-6561) |
@@ -92,6 +93,7 @@ helm unittest charts/osac
 make helm-infra-deps   # the infra chart suites need its vendored dependencies
 helm unittest charts/osac-infra
 helm unittest ../osac-metering/charts/osac-metering
+make input-validation-test
 uv run --script scripts/test-preflight-render.py
 ```
 

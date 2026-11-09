@@ -41,7 +41,10 @@ class StepError(Exception):
 
 
 class APIError(Exception):
+    """An HTTP error response from the fulfillment API."""
+
     def __init__(self, status: int, body: dict):
+        """Store the HTTP status and the parsed grpc-gateway error body."""
         self.status = status
         self.code = body.get("code") if isinstance(body, dict) else None
         self.message = body.get("message", "") if isinstance(body, dict) else ""
@@ -49,20 +52,26 @@ class APIError(Exception):
 
     @property
     def retryable(self) -> bool:
+        """Whether the request can succeed again later without new input."""
         return self.status == 409 or self.code in (ALREADY_EXISTS, FAILED_PRECONDITION)
 
     @property
     def failed_precondition(self) -> bool:
+        """Whether the API reported a failed precondition (grpc code 9)."""
         return self.code == FAILED_PRECONDITION
 
 
 class Client:
+    """Minimal JSON-over-HTTPS client for the fulfillment internal API."""
+
     def __init__(self, base_url: str, token: str, ca_file: str | None = None):
+        """Point the client at base_url, authenticating with a bearer token."""
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.context = ssl.create_default_context(cafile=ca_file) if ca_file else None
 
     def request(self, method: str, path: str, body: dict | None = None) -> dict:
+        """Run one request and return the parsed JSON response."""
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(self.base_url + path, data=data, method=method)
         req.add_header("Authorization", f"Bearer {self.token}")
@@ -82,13 +91,17 @@ class Client:
 
 
 def _network(value: str, field: str) -> ipaddress.IPv4Network:
+    """Parse a canonical IPv4 CIDR or fail with the field's path."""
     try:
         return ipaddress.IPv4Network(value, strict=True)
     except (ValueError, TypeError):
-        raise StepError(f"{field} must be a canonical IPv4 CIDR (got {value})") from None
+        # The value stays out of the message: the step's log is collected on
+        # failure, and the CIDR is customer infrastructure data.
+        raise StepError(f"{field} must be a canonical IPv4 CIDR (host bits must be zero)") from None
 
 
 def prefix_limit(plan: dict) -> int:
+    """Return the smallest subnet prefix the address plan can allocate."""
     sixteenths = [round(plan[share] * 16) for share, _ in PLAN_SHARES if plan[share] > 0]
     for exp, m in reversed(list(enumerate((1, 2, 4, 8, 16)))):
         if all(n % m == 0 for n in sixteenths):
@@ -97,6 +110,7 @@ def prefix_limit(plan: dict) -> int:
 
 
 def normalize_plan(plan: dict | None) -> dict:
+    """Fill the plan's missing shares with zero and return it keyed like PLAN_SHARES."""
     plan = plan or {}
     return {share: float(plan.get(share) or 0) for share, _ in PLAN_SHARES}
 
@@ -144,12 +158,15 @@ def validate(inp: dict) -> None:
     excluded = [
         _network(cidr, "global.networking.excludedIpv4Cidrs entry") for cidr in inp.get("excluded_ipv4_cidrs") or []
     ]
-    for cidr in excluded:
+    for i, cidr in enumerate(excluded):
         if cidr.overlaps(vn):
-            raise StepError(f"excludedIpv4Cidrs range {cidr} overlaps the default VirtualNetwork CIDR {vn}")
+            # The CIDRs stay out of the message: the step's log is collected
+            # on failure, and both ranges are customer infrastructure data.
+            raise StepError(f"excludedIpv4Cidrs[{i}] overlaps the default VirtualNetwork CIDR")
 
 
 def _rules(rules: list | None) -> list:
+    """Project security rules to the fields the NetworkClass spec carries."""
     return [
         {
             "protocol": rule.get("protocol", ""),
@@ -162,6 +179,7 @@ def _rules(rules: list | None) -> list:
 
 
 def _defaults(defaults: dict | None) -> dict:
+    """Project defaults to the comparable field set shared by stored and wanted."""
     defaults = defaults or {}
     return {
         "virtual_network_ipv4_cidr": defaults.get("virtual_network_ipv4_cidr", ""),
@@ -172,6 +190,7 @@ def _defaults(defaults: dict | None) -> dict:
 
 
 def changed_fields(stored: dict, inp: dict) -> list[str]:
+    """List the NetworkClass fields the stored class would need changed."""
     spec = stored.get("spec") or {}
     stored_ew = bool((spec.get("east_west_capabilities") or {}).get("supports_east_west_ethernet"))
     wanted_ew = bool(inp["east_west_capabilities"].get("supports_east_west_ethernet"))
@@ -188,6 +207,7 @@ def changed_fields(stored: dict, inp: dict) -> list[str]:
 
 
 def create_body(inp: dict) -> dict:
+    """Build the POST body that creates the NetworkClass from the step input."""
     body = {
         "title": TITLE,
         "description": DESCRIPTION,
@@ -239,6 +259,7 @@ def run(client: Client, inp: dict, attempts: int = 30, delay: float = 10, sleep=
 
 
 def main() -> int:
+    """Run the step from its environment and return the process exit code."""
     inp = json.loads(os.environ["NETWORK_CLASS_STEP_INPUT"])
     client = Client(
         os.environ.get("FULFILLMENT_URL", "https://fulfillment-internal-api:8001"),

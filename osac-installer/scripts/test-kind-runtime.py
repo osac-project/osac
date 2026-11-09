@@ -10,6 +10,7 @@ import socket
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 INSTALLER = Path(__file__).resolve().parents[1]
@@ -476,13 +477,30 @@ check_topolvm_cluster_mounts() {{
 create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
 ''')
 
+    def test_direct_infra_preserves_vendored_dependencies(self):
+        """Check direct infra setup keeps each chart's vendored dependencies."""
+        sandbox = self.directory / "installer"
+        shutil.copytree(INSTALLER, sandbox)
+        sentinels = [sandbox / "charts" / chart / "charts/preservation-sentinel"
+                     for chart in ("osac", "osac-infra")]
+        for sentinel in sentinels:
+            sentinel.parent.mkdir(parents=True, exist_ok=True)
+            sentinel.write_text("preserve vendored dependencies\n")
+        with patch.dict(globals(), INSTALLER=sandbox):
+            result = self.run_direct_infra()
+        self.assert_success(result)
+        for sentinel in sentinels:
+            self.assertTrue(sentinel.is_file(), "direct infra test deleted vendored dependencies")
+        self.assertNotIn("dependency build", self.log.read_text())
+
     def run_direct_infra(self, cluster_name=None):
         self.write_command("helm", '''
 if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >> "$MOCK_LOG"; fi
 ''')
         self.write_command("kubectl", 'printf "kubectl %s\\n" "$*" >> "$MOCK_LOG"')
         return subprocess.run(
-            ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER), "-o", "helm-infra-deps",
+            ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER),
+             "-o", "helm-osac-deps", "-o", "helm-infra-deps",
              "install-infra", "PLATFORM=kind", "PROFILE=dev", "NS=osac",
              f"KIND_CLUSTER_NAME={cluster_name or self.cluster_name}",
              f"KIND_KUBECONFIG={self.directory / 'cluster.kubeconfig'}"],
@@ -970,6 +988,13 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
         infra = installer / "charts/osac-infra"
         infra.mkdir(parents=True)
         shutil.copy(INSTALLER / "Makefile", installer / "Makefile")
+        # install-infra validates NS through validate-ns before its Helm
+        # dependency prerequisites run, so the sandbox needs the library
+        # the Makefile sources for that check (lib.sh also sources oc.sh).
+        scripts = installer / "scripts"
+        scripts.mkdir()
+        shutil.copy(INSTALLER / "scripts/lib.sh", scripts / "lib.sh")
+        shutil.copy(INSTALLER / "scripts/oc.sh", scripts / "oc.sh")
         shutil.copy(INSTALLER / "charts/osac-infra/Chart.yaml", infra / "Chart.yaml")
         # One pinned archive per dependency declared in Chart.yaml; the Makefile
         # derives its build targets from the same list.

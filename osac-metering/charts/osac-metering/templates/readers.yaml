@@ -15,26 +15,31 @@ Names are rejected when they repeat, are not a lowercase DNS name, or collide
 with a KafkaUser OSAC owns. A collision would let a reader replace an OSAC
 user's ACLs or split an adapter's consumer group, so the whole osac- and osac.
 namespaces are reserved.
+
+Rejection messages identify the entry by its index, never by its name: reader
+names are customer-supplied infrastructure identifiers (often internal
+hostnames), and the installer's offline validation gate surfaces this chart's
+render errors in its logs.
 */}}
 {{- $reserved := list "osac-metering" "osac-metering-echo-adapter" "osac-metering-m360-adapter" -}}
 {{- $seen := dict -}}
-{{- range .Values.readers }}
-{{- $name := required "readers[].name is required" .name -}}
+{{- range $index, $reader := .Values.readers }}
+{{- $name := required "readers[].name is required" $reader.name -}}
 {{- if hasKey $seen $name }}
-{{- fail (printf "duplicate metering reader %q: each reader name must be unique" $name) }}
+{{- fail (printf "duplicate metering reader at index %d: each reader name must be unique" $index) }}
 {{- end }}
 {{- $_ := set $seen $name true }}
 {{- if has $name $reserved }}
-{{- fail (printf "metering reader %q is a KafkaUser OSAC owns; pick another name" $name) }}
+{{- fail (printf "metering reader at index %d is a KafkaUser OSAC owns; pick another name" $index) }}
 {{- end }}
 {{- if or (hasPrefix "osac-" $name) (hasPrefix "osac." $name) }}
-{{- fail (printf "metering reader %q uses the reserved osac- or osac. name prefix" $name) }}
+{{- fail (printf "metering reader at index %d uses the reserved osac- or osac. name prefix" $index) }}
 {{- end }}
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $name) }}
-{{- fail (printf "metering reader %q must be a lowercase DNS name: letters, digits, dots, and dashes" $name) }}
+{{- fail (printf "metering reader at index %d must be a lowercase DNS name: letters, digits, dots, and dashes" $index) }}
 {{- end }}
 {{- if gt (len $name) 253 }}
-{{- fail (printf "metering reader %q must be at most 253 characters" $name) }}
+{{- fail (printf "metering reader at index %d must be at most 253 characters" $index) }}
 {{- end }}
 ---
 apiVersion: kafka.strimzi.io/v1

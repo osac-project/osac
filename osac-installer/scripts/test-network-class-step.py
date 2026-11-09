@@ -314,16 +314,35 @@ class ValidationTest(unittest.TestCase):
     def test_cidrs(self):
         self.input["defaults"]["virtual_network_ipv4_cidr"] = "10.200.0.1/16"
         self.assert_invalid(
-            f"{step.DEFAULTS_PATH}.virtualNetworkIPv4CIDR must be a canonical IPv4 CIDR (got 10.200.0.1/16)"
+            f"{step.DEFAULTS_PATH}.virtualNetworkIPv4CIDR must be a canonical IPv4 CIDR (host bits must be zero)"
         )
         self.input["defaults"]["virtual_network_ipv4_cidr"] = "10.201.0.0/16"
         self.assert_invalid(f"{step.DEFAULTS_PATH}.subnetIPv4CIDR must be inside virtualNetworkIPv4CIDR")
 
     def test_virtual_network_overlaps_excluded_range(self):
         self.input["excluded_ipv4_cidrs"] = ["192.0.2.0/24", "10.200.10.0/24"]
-        self.assert_invalid(
-            "excludedIpv4Cidrs range 10.200.10.0/24 overlaps the default VirtualNetwork CIDR 10.200.0.0/16"
-        )
+        self.assert_invalid("excludedIpv4Cidrs[1] overlaps the default VirtualNetwork CIDR")
+
+    def test_validation_errors_do_not_log_cidr_values(self):
+        """Validation errors must not echo the customer's CIDR values."""
+        # The step's log is collected on failure, so validation errors keep
+        # the field and the constraint but never the customer's CIDR value.
+        cases = [
+            ("virtual_network_ipv4_cidr", "10.200.0.1/16", "defaults"),
+            ("excluded_ipv4_cidrs", ["192.0.2.0/24", "10.200.10.0/24"], None),
+        ]
+        for field, value, parent in cases:
+            with self.subTest(field=field):
+                self.input = copy.deepcopy(INPUT)
+                if parent:
+                    self.input["defaults"][field] = value
+                else:
+                    self.input[field] = value
+                with self.assertRaises(step.StepError) as ctx:
+                    step.validate(self.input)
+                message = str(ctx.exception)
+                for cidr in ([value] if isinstance(value, str) else value):
+                    self.assertNotIn(cidr, message)
 
     def test_rule_ports(self):
         self.input["defaults"]["ingress_rules"] = [

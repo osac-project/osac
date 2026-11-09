@@ -710,12 +710,53 @@ make kind-load-images PLATFORM=kind PROFILE=dev-full NS=... # Load existing imag
 make uninstall     PLATFORM=... PROFILE=... NS=...  # Full uninstall
 make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration tests
 make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage # API/operator disk handoff
+make validate-inputs PLATFORM=... PROFILE=... NS=... # Offline input validation (no cluster changes)
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
 make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
+make input-validation-test                             # Test the upfront input-validation gate
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)
 ```
+
+#### Input validation
+
+Every installation target (`install`, `install-infra`, `install-osac`,
+`install-devstack`, `install-multicluster`) first runs `validate-inputs`:
+an offline `helm template` of the installer's own applicable charts:
+`osac-infra` and `osac`, plus `osac-deps` on OpenShift and `osac-devstack`
+for Kind's `dev-full` profile. Each receives the same profile values files
+and chart-specific overrides as the installation (`INFRA_HELM_ARGS`,
+`EXTRA_HELM_ARGS`, or `DEVSTACK_HELM_ARGS` as applicable), including the
+same read-only OpenShift lookups for the cluster domain and version.
+Separate external releases installed on Kind (`cert-manager`, `trust-manager`,
+`envoy-gateway`, and `strimzi-cluster-operator`) are not rendered by this gate.
+(With `DRY_RUN=1`, `install` renders offline via
+`install-dry-run` and skips the gate — the dry run is itself an offline
+render.) Invalid values — wrong types, negative numbers where only
+zero-or-positive is allowed, unknown keys in schema-closed sections —
+fail the install before any namespace, secret, or release is created,
+and before any readiness wait. Unknown-key rejection depends on the
+section, in both charts: some sections are closed (for example
+`global.fulfillmentTrust`), while others — `osac-infra`'s `keycloak`
+and `topolvm`, or resource blocks like `operator.resources.requests`
+— remain open, so a typo there is accepted rather than rejected.
+The failure names the offending field and the violated constraint;
+fix the reported value and retry.
+
+The gate validates static inputs only. It does not check that the cluster is
+ready for the installation: prerequisites that must already exist (issuers,
+storage classes, CRDs) are verified by the render-time install preflight
+during `helm upgrade`, and resources the installer itself creates are allowed
+to become ready afterwards. `make validate-inputs` runs the same validation
+standalone without installing.
+
+Remote-cluster inputs are part of the gate: with `REMOTE_KUBECONFIG` set,
+`REMOTE_KUBECONFIG_SECRET_NAME` and `REMOTE_KUBECONFIG_SECRET_KEY` are
+checked against the Kubernetes Secret name/key grammars before any cluster
+mutation, and the osac-chart render carries the same remote kubeconfig
+`--set-string` arguments the installation applies. The kubeconfig file
+itself is only read (and staged into its Secret) at install time.
 
 ### Monitor Progress
 

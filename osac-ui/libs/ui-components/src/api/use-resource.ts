@@ -10,6 +10,8 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import type { UseMutationOptions, UseQueryOptions } from '@tanstack/react-query';
 
 import { useApiFetch } from './api-context';
+import { assertNetworkUpdateAllowed } from './networking-immutability';
+import { useTranslation } from '../hooks/useTranslation';
 import { buildUpdateMaskPaths } from './v1/update-mask';
 
 export type ResourceService<
@@ -194,10 +196,15 @@ export const useUpdateResource = <Input extends DescMessage, Output extends Desc
 ) => {
   const client = useApiFetch(service);
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
 
   return useMutation({
     ...options,
-    mutationFn: (request) => client.update(buildUpdateRequest(service, request)),
+    mutationFn: (request) => {
+      const updateRequest = buildUpdateRequest(service, request);
+      assertNetworkUpdateAllowed(service.typeName, updateRequest, t);
+      return client.update(updateRequest);
+    },
     onSuccess: async (...args) => {
       await queryClient.invalidateQueries({ queryKey: [service.typeName] });
       await options.onSuccess?.(...args);

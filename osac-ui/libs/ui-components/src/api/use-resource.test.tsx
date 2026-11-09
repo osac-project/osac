@@ -1,14 +1,30 @@
 import React, { type ReactNode, createElement } from 'react';
+import { initReactI18next } from 'react-i18next';
 import { create } from '@bufbuild/protobuf';
-import { type Transport, createRouterTransport } from '@connectrpc/connect';
+import {
+  Code,
+  ConnectError,
+  type Interceptor,
+  type Transport,
+  createRouterTransport,
+} from '@connectrpc/connect';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
+import i18n from 'i18next';
 import { describe, expect, it, vi } from 'vitest';
 
-import { IdentityProviderSchema, IdentityProviders } from '@osac/types';
+import {
+  BareMetalInstances,
+  Clusters,
+  ComputeInstances,
+  type ComputeInstancesUpdateRequest,
+  IdentityProviderSchema,
+  IdentityProviders,
+} from '@osac/types';
 import { TenantSchema, Tenants } from '@osac/types/private';
 
-import { ApiProvider } from './api-context';
+import { ApiProvider, connectErrorInterceptor } from './api-context';
+import { createNetworkingImmutabilityInterceptor } from './networking-immutability';
 import {
   useCreateResource,
   useDeleteResource,
@@ -18,6 +34,15 @@ import {
   useUpdateResource,
 } from './use-resource';
 import { createMockConnectTransport } from '../test-utils/createMockConnectTransport';
+import { UnauthorizedError } from '../utils/unauthorizedError';
+
+i18n.use(initReactI18next).init({
+  initImmediate: false,
+  lng: 'en',
+  fallbackLng: 'en',
+  resources: { en: { translation: {} } },
+  interpolation: { escapeValue: false },
+});
 
 const makeTenant = (id: string) =>
   create(TenantSchema, {
@@ -172,6 +197,139 @@ describe('resource queries', () => {
 });
 
 describe('resource mutations', () => {
+  it('rejects a ComputeInstance attachment update before transport', async () => {
+    const update = vi.fn(() => ({}));
+    const transport = createRouterTransport((router) => {
+      router.service(ComputeInstances, { update });
+    });
+    const { wrapper } = makeWrapper(transport);
+    const { result } = renderHook(() => useUpdateResource(ComputeInstances), { wrapper });
+
+    await expect(
+      result.current.mutateAsync({
+        object: { id: 'vm-1', spec: { networkAttachments: [] } },
+      }),
+    ).rejects.toMatchObject({ code: Code.FailedPrecondition });
+
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a BareMetalInstance attachment update before transport', async () => {
+    const update = vi.fn(() => ({}));
+    const transport = createRouterTransport((router) => {
+      router.service(BareMetalInstances, { update });
+    });
+    const { wrapper } = makeWrapper(transport);
+    const { result } = renderHook(() => useUpdateResource(BareMetalInstances), { wrapper });
+
+    await expect(
+      result.current.mutateAsync({
+        object: { id: 'bmi-1', spec: { autoExternalIpAttachment: true } },
+      }),
+    ).rejects.toMatchObject({ code: Code.FailedPrecondition });
+
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a Cluster attachment update before transport', async () => {
+    const update = vi.fn(() => ({}));
+    const transport = createRouterTransport((router) => {
+      router.service(Clusters, { update });
+    });
+    const { wrapper } = makeWrapper(transport);
+    const { result } = renderHook(() => useUpdateResource(Clusters), { wrapper });
+
+    await expect(
+      result.current.mutateAsync({
+        object: { id: 'cluster-1', spec: { networkAttachment: {} } },
+      }),
+    ).rejects.toMatchObject({ code: Code.FailedPrecondition });
+
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('sends an allowed narrow workload update with its exact mask', async () => {
+    let received: ComputeInstancesUpdateRequest | undefined;
+    const transport = createRouterTransport((router) => {
+      router.service(ComputeInstances, {
+        update: (request) => {
+          received = request;
+          return { object: request.object };
+        },
+      });
+    });
+    const onSuccess = vi.fn();
+    const { wrapper, queryClient } = makeWrapper(transport);
+    const listKey = [ComputeInstances.typeName, 'list', {}] as const;
+    queryClient.setQueryData(listKey, { items: [] });
+    const { result } = renderHook(() => useUpdateResource(ComputeInstances, { onSuccess }), {
+      wrapper,
+    });
+
+    const response = await result.current.mutateAsync({
+      object: { id: 'vm-1', spec: { instanceType: { id: 'standard-4-8' } } },
+      updateMask: { paths: ['spec.instance_type'] },
+    });
+
+    expect(response.object?.id).toBe('vm-1');
+    expect(received?.object?.spec?.instanceType?.id).toBe('standard-4-8');
+    expect(received?.updateMask?.paths).toEqual(['spec.instance_type']);
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
+    expect(onSuccess).toHaveBeenCalled();
+  });
+
+  it('keeps authentication conversion with the networking interceptor in the chain', async () => {
+    const terminal = vi.fn(() =>
+      Promise.reject(new ConnectError('session expired', Code.Unauthenticated)),
+    );
+    const networking = createNetworkingImmutabilityInterceptor(i18n.t.bind(i18n));
+    const withNetworking = networking(terminal as unknown as Parameters<Interceptor>[0]);
+    const chained = connectErrorInterceptor(withNetworking) as unknown as (
+      request: unknown,
+    ) => Promise<unknown>;
+
+    await expect(
+      chained({
+        service: { typeName: ComputeInstances.typeName },
+        method: { name: 'Update' },
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedError);
+  });
+
+  it('decorates immutable workload errors through the full interceptor chain', async () => {
+    const transport = createRouterTransport(
+      (router) => {
+        router.service(ComputeInstances, {
+          update: () => {
+            throw new ConnectError('networkAttachments is immutable', Code.InvalidArgument);
+          },
+        });
+      },
+      {
+        transport: {
+          interceptors: [
+            connectErrorInterceptor,
+            createNetworkingImmutabilityInterceptor(i18n.t.bind(i18n)),
+          ],
+        },
+      },
+    );
+    const { wrapper } = makeWrapper(transport);
+    const { result } = renderHook(() => useUpdateResource(ComputeInstances), { wrapper });
+
+    try {
+      await result.current.mutateAsync({
+        object: { id: 'vm-1', spec: { instanceType: { id: 'standard-4-8' } } },
+      });
+      expect.fail('expected the update to reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConnectError);
+      expect((error as ConnectError).rawMessage).toContain(
+        'Delete and recreate the workload to change its network attachment.',
+      );
+    }
+  });
+
   it('calls create, update, and delete and invalidates every query for the service', async () => {
     const transport = createMockConnectTransport();
     const { wrapper, queryClient } = makeWrapper(transport);

@@ -33,6 +33,7 @@ FAILED_PRECONDITION = 9
 
 DEFAULTS_PATH = "global.networking.networkClass.defaults"
 PLAN_PATH = "global.networking.networkClass.addressPlan"
+EXCLUDED_PATH = "global.networking.excludedIpv4Cidrs"
 PLAN_SHARES = (("overlay", "overlay"), ("fabric", "fabric"), ("lb_vip", "lbVip"))
 
 
@@ -156,13 +157,14 @@ def validate(inp: dict) -> None:
                 )
 
     excluded = [
-        _network(cidr, "global.networking.excludedIpv4Cidrs entry") for cidr in inp.get("excluded_ipv4_cidrs") or []
+        _network(cidr, f"{EXCLUDED_PATH}[{i}]")
+        for i, cidr in enumerate(inp.get("excluded_ipv4_cidrs") or [])
     ]
     for i, cidr in enumerate(excluded):
         if cidr.overlaps(vn):
             # The CIDRs stay out of the message: the step's log is collected
             # on failure, and both ranges are customer infrastructure data.
-            raise StepError(f"excludedIpv4Cidrs[{i}] overlaps the default VirtualNetwork CIDR")
+            raise StepError(f"{EXCLUDED_PATH}[{i}] overlaps the default VirtualNetwork CIDR")
 
 
 def _rules(rules: list | None) -> list:

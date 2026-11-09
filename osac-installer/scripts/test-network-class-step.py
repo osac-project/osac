@@ -321,7 +321,11 @@ class ValidationTest(unittest.TestCase):
 
     def test_virtual_network_overlaps_excluded_range(self):
         self.input["excluded_ipv4_cidrs"] = ["192.0.2.0/24", "10.200.10.0/24"]
-        self.assert_invalid("excludedIpv4Cidrs[1] overlaps the default VirtualNetwork CIDR")
+        self.assert_invalid(f"{step.EXCLUDED_PATH}[1] overlaps the default VirtualNetwork CIDR")
+
+    def test_excluded_range_is_not_canonical(self):
+        self.input["excluded_ipv4_cidrs"] = ["192.0.2.0/24", "10.200.10.1/24"]
+        self.assert_invalid(f"{step.EXCLUDED_PATH}[1] must be a canonical IPv4 CIDR (host bits must be zero)")
 
     def test_validation_errors_do_not_log_cidr_values(self):
         """Validation errors must not echo the customer's CIDR values."""

@@ -889,10 +889,9 @@ example, cluster templates, catalog items, host types, instance types, IP pools,
 Public responses retain the reference field for system-tenant objects but omit its `id`, `name`,
 `project`, `tenant`, and `shared` values.
 
-ExternalIPPools can live in the `shared` tenant or a regular tenant. For a cross-tenant name
-reference, set `tenant` to the pool's actual tenant; use `tenant: "shared"` (or the legacy
-`shared: true`) for a shared pool. With no selector, name lookups use the owner's tenant. An ID
-reference to a shared pool may omit both selectors.
+ExternalIPPools live in the `shared` tenant. Because pools are platform-scoped, a name reference can
+omit the tenant selector. To select the tenant explicitly, set `tenant: "shared"` (or the legacy
+`shared: true` during the compatibility period). An ID reference needs neither selector.
 
 ### Local references
 

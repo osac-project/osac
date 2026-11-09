@@ -37,8 +37,10 @@ func (e *errRefNotFound) IsNotFound() bool {
 	return true
 }
 
-// NewDAOLookupFunc creates a ReferenceLookupFunc backed by a GenericDAO. It queries the DAO
-// using a CEL filter that matches by id or metadata.name and returns the resolved reference metadata.
+// NewDAOLookupFunc creates a ReferenceLookupFunc backed by a GenericDAO. It
+// queries the DAO using a CEL filter that matches by id or metadata.name and
+// returns the resolved reference metadata. It does not filter by tenant or
+// project; the DAO still limits results to objects visible to the caller.
 func NewDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
 	return newDAOLookupFunc(d, false, false, false, false)
 }
@@ -140,4 +142,15 @@ func RegisterDAOLookup[O dao.Object](
 	d *dao.GenericDAO[O],
 ) {
 	v.Register(fullName, newDAOLookupFunc(d, false, true, false, false))
+}
+
+// RegisterPlatformScopedDAOLookup registers a lookup that searches all objects
+// visible to the caller, without filtering by the referencing object's tenant
+// or project. Use it for platform-scoped objects with globally unique names.
+func RegisterPlatformScopedDAOLookup[O dao.Object](
+	v *ReferenceValidator,
+	fullName protoreflect.FullName,
+	d *dao.GenericDAO[O],
+) {
+	v.Register(fullName, NewDAOLookupFunc(d))
 }

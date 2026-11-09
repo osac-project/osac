@@ -182,7 +182,9 @@ jobs:
           # One listing gives every container that has started, with its restart count. Then one request per
           # container: kubectl stops at the first container that fails, which would lose the logs of the others,
           # and only a container that restarted has a previous log to ask for. A failure here must not fail the
-          # step.
+          # step. Cluster-internal host names (*.svc, *.svc.cluster.local, *.localhost) are replaced in each file
+          # before the upload, because the diagnostics need the finalizer values and the gRPC methods, not the names.
+          redact='s/[A-Za-z0-9._-]+\.(svc(\.cluster\.local)?|cluster\.local|localhost)/<redacted-host>/g'
           if pods=$(kubectl get pods -n osac -o json); then
             jq -r '
               .items[] | .metadata.name as $pod
@@ -191,8 +193,10 @@ jobs:
             ' <<<"$pods" | while read -r pod container restarts; do
               file="fulfillment-service/logs/pods/${pod}_${container}"
               kubectl logs -n osac "$pod" -c "$container" --tail=-1 > "${file}.log" 2>&1 || echo "Failed to get logs for ${pod}/${container}"
+              sed -E -i "$redact" "${file}.log"
               if [ "$restarts" -gt 0 ]; then
                 kubectl logs -n osac "$pod" -c "$container" --previous --tail=-1 > "${file}-previous.log" 2>&1 || echo "Failed to get previous logs for ${pod}/${container}"
+                sed -E -i "$redact" "${file}-previous.log"
               fi
             done
           else

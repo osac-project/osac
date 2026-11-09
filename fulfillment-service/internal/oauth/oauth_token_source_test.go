@@ -33,6 +33,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
@@ -56,7 +57,7 @@ var _ = Describe("Token failure reporting", func() {
 	DescribeTable("keeps backend details out of JSON logs", func(status int, transportFailure, closeFailure bool) {
 		const syntheticHost = "synthetic-oauth.example.invalid"
 		const syntheticBody = "synthetic-oauth-body-marker"
-		const syntheticToken = "synthetic-oauth-token-marker"
+		const testToken = "synthetic-oauth-token-marker"
 		var logs bytes.Buffer
 		source := &TokenSource{
 			logger:        slog.New(slog.NewJSONHandler(&logs, nil)),
@@ -64,17 +65,17 @@ var _ = Describe("Token failure reporting", func() {
 			httpClient: &http.Client{Transport: tokenReportingTransport(func(request *http.Request) (*http.Response, error) {
 				Expect(request.Method).To(Equal(http.MethodPost))
 				Expect(request.ParseForm()).To(Succeed())
-				Expect(request.Form.Get("client_secret")).To(Equal(syntheticToken))
+				Expect(request.Form.Get("client_secret")).To(Equal(testToken))
 				if transportFailure {
 					return nil, errors.New(syntheticBody)
 				}
-				content := `{"access_token":"` + syntheticToken + `"}`
+				content := `{"access_token":"` + testToken + `"}`
 				if status == http.StatusBadRequest {
 					content = `{"error":"invalid_client","error_description":"` + syntheticBody + `"}`
 				}
 				var closeErr error
 				if closeFailure {
-					closeErr = errors.New(syntheticBody + " " + syntheticToken)
+					closeErr = errors.New(syntheticBody + " " + testToken)
 				}
 				return &http.Response{
 					StatusCode: status,
@@ -84,11 +85,11 @@ var _ = Describe("Token failure reporting", func() {
 			})},
 		}
 		response, err := source.sendTokenForm(context.Background(), tokenEndpointRequest{
-			GrantType: "client_credentials", ClientSecret: syntheticToken,
+			GrantType: "client_credentials", ClientSecret: testToken,
 		})
 		if closeFailure {
 			Expect(err).ToNot(HaveOccurred())
-			Expect(response.AccessToken).To(Equal(syntheticToken))
+			Expect(response.AccessToken).To(Equal(testToken))
 		} else {
 			Expect(err).To(HaveOccurred())
 			if transportFailure || status == http.StatusServiceUnavailable {
@@ -99,7 +100,7 @@ var _ = Describe("Token failure reporting", func() {
 			}
 		}
 		Expect(logs.Len()).To(BeNumerically(">", 0))
-		for _, sentinel := range []string{syntheticHost, syntheticBody, syntheticToken} {
+		for _, sentinel := range []string{syntheticHost, syntheticBody, testToken} {
 			Expect(logs.String()).ToNot(ContainSubstring(sentinel))
 		}
 		decoder := json.NewDecoder(&logs)
@@ -183,6 +184,63 @@ var _ = Describe("Token source", func() {
 		caPool = loadedCaPool
 
 	})
+
+	DescribeTable("keeps real token execution logs safe with redaction disabled", func(refreshFails bool) {
+		const testAccessToken = "synthetic-refresh-access-marker"
+		const testRefreshToken = "synthetic-refresh-retention-marker"
+		const testClientSecret = "synthetic-refresh-client-marker"
+		const testBody = "synthetic-refresh-failure-marker"
+		var logs bytes.Buffer
+		debugLogger, err := logging.NewLogger().SetWriter(&logs).SetLevel("debug").SetRedact(false).Build()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(store.Save(ctx, &auth.Token{
+			Access: testAccessToken, Refresh: testRefreshToken, Expiry: time.Now().Add(-time.Hour),
+		})).To(Succeed())
+		refreshHandler := CombineHandlers(
+			VerifyFormKV("grant_type", "refresh_token"), VerifyFormKV("refresh_token", testRefreshToken),
+			RespondWithJSONEncoded(http.StatusOK, map[string]any{
+				"access_token": testAccessToken, "expires_in": 300,
+			}, http.Header{"Content-Type": {"application/json"}}),
+		)
+		if refreshFails {
+			refreshHandler = CombineHandlers(
+				VerifyFormKV("grant_type", "refresh_token"), VerifyFormKV("refresh_token", testRefreshToken),
+				RespondWithJSONEncoded(http.StatusBadRequest, map[string]string{
+					"error": "invalid_grant", "error_description": testBody,
+				}, http.Header{"Content-Type": {"application/json"}}),
+			)
+		}
+		server.AppendHandlers(refreshHandler)
+		if refreshFails {
+			server.AppendHandlers(CombineHandlers(
+				VerifyFormKV("grant_type", "client_credentials"), VerifyFormKV("client_secret", testClientSecret),
+				RespondWithJSONEncoded(http.StatusOK, map[string]any{
+					"access_token": testAccessToken, "refresh_token": testRefreshToken, "expires_in": 300,
+				}, http.Header{"Content-Type": {"application/json"}}),
+			))
+		}
+		source, err := NewTokenSource().SetLogger(debugLogger).SetIssuer(server.URL()).SetStore(store).
+			SetFlow(CredentialsFlow).SetClientId("test-client").SetClientSecret(testClientSecret).SetCaPool(caPool).Build()
+		Expect(err).ToNot(HaveOccurred())
+		token, err := source.Token(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(token.Access).To(Equal(testAccessToken))
+		Expect(token.Refresh).To(Equal(testRefreshToken))
+		Expect(token.Expiry.After(time.Now())).To(BeTrue())
+		cached, err := store.Load(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(cached).To(Equal(token))
+		for _, marker := range []string{server.URL(), testAccessToken, testRefreshToken, testClientSecret, testBody} {
+			Expect(logs.String()).ToNot(ContainSubstring(marker))
+		}
+		Expect(logs.String()).To(ContainSubstring("Successfully discovered metadata"))
+		if refreshFails {
+			Expect(logs.String()).To(ContainSubstring("Failed to refresh the token"))
+			Expect(logs.String()).To(ContainSubstring("Successfully obtained token"))
+		} else {
+			Expect(logs.String()).To(ContainSubstring("will keep the old one"))
+		}
+	}, Entry("refresh token retained", false), Entry("refresh failure followed by credentials flow", true))
 
 	It("Can be created with all the mandatory parameters", func() {
 		source, err := NewTokenSource().
@@ -737,10 +795,14 @@ var _ = Describe("Token source", func() {
 	})
 
 	It("It uses the access token that isn't fresh, but not expired, if there is no alternative", func() {
+		const testToken = "synthetic-near-expiry-marker"
+		var logs bytes.Buffer
+		debugLogger, err := logging.NewLogger().SetWriter(&logs).SetLevel("debug").SetRedact(false).Build()
+		Expect(err).ToNot(HaveOccurred())
 		// Prepare the store with a token that isn't fresh (expires in less than 30 seconds) but not
 		// expired yet, and no refresh token.
-		err := store.Save(ctx, &auth.Token{
-			Access: "my_access_token",
+		err = store.Save(ctx, &auth.Token{
+			Access: testToken,
 			Expiry: time.Now().Add(10 * time.Second),
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -748,7 +810,7 @@ var _ = Describe("Token source", func() {
 		// Create the source with a flow that can't be used because it is interactive and interactive mode is
 		// disabled. This should force it to use the token from the store.
 		source, err := NewTokenSource().
-			SetLogger(logger).
+			SetLogger(debugLogger).
 			SetIssuer(server.URL()).
 			SetStore(store).
 			SetFlow(CodeFlow).
@@ -764,7 +826,10 @@ var _ = Describe("Token source", func() {
 
 		// Verify that the token is the old one:
 		Expect(token).ToNot(BeNil())
-		Expect(token.Access).To(Equal("my_access_token"))
+		Expect(token.Access).To(Equal(testToken))
+		Expect(logs.String()).To(ContainSubstring("Using token that expires soon"))
+		Expect(logs.String()).ToNot(ContainSubstring(testToken))
+		Expect(server.ReceivedRequests()).To(BeEmpty())
 	})
 
 	It("Doesn't perform discovery when there is already a valid token", func() {

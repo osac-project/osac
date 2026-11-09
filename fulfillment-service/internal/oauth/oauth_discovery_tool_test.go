@@ -14,13 +14,20 @@ language governing permissions and limitations under the License.
 package oauth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/ghttp"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 var _ = Describe("OAuth discovery tool", func() {
@@ -71,6 +78,73 @@ var _ = Describe("OAuth discovery tool", func() {
 	})
 
 	Describe("Discovery", func() {
+		DescribeTable("keeps discovery logs safe with redaction disabled", func(failure string) {
+			const testIssuer = "https://synthetic-discovery.example.invalid"
+			const testBody = "synthetic-discovery-body-marker"
+			var logs bytes.Buffer
+			debugLogger, err := logging.NewLogger().SetWriter(&logs).SetLevel("debug").SetRedact(false).Build()
+			Expect(err).ToNot(HaveOccurred())
+			tool, err := NewDiscoveryTool().SetLogger(debugLogger).SetIssuer(testIssuer).Build()
+			Expect(err).ToNot(HaveOccurred())
+			calls := 0
+			tool.httpClient.Transport = tokenReportingTransport(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if failure == "transport" {
+					return nil, errors.New(testBody)
+				}
+				status := http.StatusOK
+				content := `{"issuer":"` + testIssuer + `","token_endpoint":"` + testIssuer + `/token","scopes_supported":["` + testBody + `"]}`
+				if failure == "status" || (failure == "fallback" && calls == 1) {
+					status = http.StatusServiceUnavailable
+				}
+				if failure == "parse" {
+					content = `{"` + testBody + `":1,"issuer":[]}`
+				}
+				return &http.Response{
+					StatusCode: status, Status: testBody,
+					Body: io.NopCloser(strings.NewReader(content)),
+				}, nil
+			})
+			if failure == "request" {
+				tool.issuerUrl = "://" + testBody
+			}
+			metadata, err := tool.Discover(ctx)
+			if failure == "success" || failure == "fallback" {
+				Expect(err).ToNot(HaveOccurred())
+				Expect(metadata.TokenEndpoint).To(Equal(testIssuer + "/token"))
+			} else {
+				Expect(err).To(MatchError("failed to discover endpoints using OAuth or OIDC"))
+			}
+			switch failure {
+			case "request":
+				Expect(calls).To(BeZero())
+			case "success":
+				Expect(calls).To(Equal(1))
+			default:
+				Expect(calls).To(Equal(2))
+			}
+			Expect(logs.Len()).To(BeNumerically(">", 0))
+			Expect(logs.String()).ToNot(ContainSubstring(testIssuer))
+			Expect(logs.String()).ToNot(ContainSubstring(testBody))
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var record map[string]any
+				Expect(json.Unmarshal([]byte(line), &record)).To(Succeed())
+				if kind, exists := record["discovery_kind"]; exists {
+					Expect(kind).To(BeElementOf("oauth-authorization-server", "openid-configuration"))
+				}
+				if record["msg"] == "Unexpected metadata response code" {
+					Expect(record["code"]).To(Equal(float64(http.StatusServiceUnavailable)))
+				}
+				if record["msg"] == "Successfully discovered endpoints" {
+					Expect(record["supported_scope_count"]).To(Equal(float64(1)))
+				}
+			}
+		},
+			Entry("transport failure", "transport"), Entry("HTTP status failure", "status"),
+			Entry("request creation failure", "request"), Entry("metadata parse failure", "parse"),
+			Entry("OAuth to OIDC fallback", "fallback"), Entry("successful discovery", "success"),
+		)
+
 		makeServer := func(metadata string, code int) {
 			server.RouteToHandler(
 				http.MethodGet,

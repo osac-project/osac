@@ -551,7 +551,6 @@ func (s *TokenSource) Token(ctx context.Context) (result *auth.Token, err error)
 		s.logger.DebugContext(
 			ctx,
 			"Failed to refresh the token, will try to request a new one",
-			slog.Any("error", err),
 		)
 	}
 
@@ -573,7 +572,6 @@ func (s *TokenSource) Token(ctx context.Context) (result *auth.Token, err error)
 		s.logger.WarnContext(
 			ctx,
 			"Using token that expires soon",
-			slog.String("!access", loaded.Access),
 			slog.Time("expiry", loaded.Expiry),
 		)
 		result = loaded
@@ -626,9 +624,6 @@ func (s *TokenSource) discover(ctx context.Context) error {
 	s.logger.DebugContext(
 		ctx,
 		"Successfully discovered metadata",
-		slog.String("token_url", s.tokenEndpoint),
-		slog.String("auth_url", s.authEndpoint),
-		slog.String("device_url", s.deviceEndpoint),
 	)
 
 	// If no scopes were explicitly configured, set the default scopes based on what the server supports:
@@ -642,9 +637,8 @@ func (s *TokenSource) discover(ctx context.Context) error {
 		s.logger.DebugContext(
 			ctx,
 			"Using default scopes based on server support",
-			slog.Any("supported", metadata.ScopesSupported),
-			slog.Any("default", defaultScopes),
-			slog.Any("selected", s.scopes),
+			slog.Int("supported_scope_count", len(metadata.ScopesSupported)),
+			slog.Int("selected_scope_count", len(s.scopes)),
 		)
 	}
 
@@ -707,7 +701,6 @@ func (s *TokenSource) runRefresh(ctx context.Context, refreshToken string) (resu
 		s.logger.DebugContext(
 			ctx,
 			"Server didn't return a new refresh token, will keep the old one",
-			slog.String("!refresh", refreshToken),
 		)
 		token.Refresh = refreshToken
 	}
@@ -738,8 +731,6 @@ func (s *TokenSource) runFlow(ctx context.Context) (result *auth.Token, err erro
 	s.logger.DebugContext(
 		ctx,
 		"Successfully obtained token",
-		slog.String("!access", token.Access),
-		slog.String("!refresh", token.Refresh),
 		slog.Time("expiry", token.Expiry),
 	)
 
@@ -752,8 +743,6 @@ func (s *TokenSource) runFlow(ctx context.Context) (result *auth.Token, err erro
 	s.logger.DebugContext(
 		ctx,
 		"Successfully saved token",
-		slog.String("!access", token.Access),
-		slog.String("!refresh", token.Refresh),
 		slog.Time("expiry", token.Expiry),
 	)
 

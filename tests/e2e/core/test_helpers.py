@@ -754,8 +754,11 @@ def test_wait_for_worker_installation_reports_the_install_stage(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     installing = _agent(name="agent-0", currentStage="Rebooting", installationPercentage=55)
+    installing["status"]["debugInfo"]["stateInfo"] = "Waiting for reboot"
+    rebooted = _agent(name="agent-0", currentStage="Rebooting", installationPercentage=55)
+    rebooted["status"]["debugInfo"]["stateInfo"] = "Host rebooted"
     finished = _agent(name="agent-0", state="installed", installed=True)
-    observations = iter([[installing], [installing], [finished]])
+    observations = iter([[installing], [installing], [rebooted], [finished]])
     k8s = Mock()
     k8s.list_json.side_effect = lambda **_kwargs: {"items": next(observations)}
     monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
@@ -766,7 +769,8 @@ def test_wait_for_worker_installation_reports_the_install_stage(
     messages = [record.getMessage() for record in caplog.records if record.name == helpers.logger.name]
     assert messages == [
         "CaaS phase: starting install",
-        "CaaS: installing, 0 of 1 done (installing-in-progress, Rebooting, 55%)",
+        "CaaS: installing, 0 of 1 done (installing-in-progress, Waiting for reboot, Rebooting, 55%)",
+        "CaaS: installing, 0 of 1 done (installing-in-progress, Host rebooted, Rebooting, 55%)",
         "CaaS phase: install done",
         "CaaS: installation finished on 1 worker Agent(s)",
     ]

@@ -68,45 +68,6 @@ _WORKER_INSTALL_RETRIES = 121
 _WORKER_INSTALL_DELAY = 10
 _WORKER_AGGREGATE_RETRIES = 120
 _WORKER_AGGREGATE_DELAY = 10
-# Only log known Agent states and install stages, never Agent statusInfo or the
-# full resource (which may contain inventory and other sensitive data).
-_AGENT_SAFE_STATES = frozenset(
-    {
-        "discovering",
-        "discovering-unbound",
-        "known",
-        "known-unbound",
-        "insufficient",
-        "insufficient-unbound",
-        "disconnected",
-        "disconnected-unbound",
-        "disabled",
-        "disabled-unbound",
-        "pending-for-input",
-        "binding",
-        "preparing-for-installation",
-        "preparing-failed",
-        "preparing-successful",
-        "installing",
-        "installing-in-progress",
-        "installing-pending-user-action",
-        "installed",
-        "error",
-    }
-)
-_AGENT_SAFE_STAGES = frozenset(
-    {
-        "Starting installation",
-        "Installing",
-        "Writing image to disk",
-        "Waiting for control plane",
-        "Rebooting",
-        "Waiting for ignition",
-        "Configuring",
-        "Joined",
-        "Done",
-    }
-)
 
 
 def unique_name(prefix: str) -> str:
@@ -808,13 +769,14 @@ def wait_for_worker_agents(
 
 
 def _agent_install_progress(agent: dict[str, Any]) -> str:
-    """Describe one Agent's install from the fields that are safe to log."""
+    """Report Agent install status as supplied, without dumping inventory or secrets."""
     status = agent.get("status", {})
-    state = status.get("debugInfo", {}).get("state", "")
+    debug_info = status.get("debugInfo", {})
     progress = status.get("progress", {})
-    parts = [state if state in _AGENT_SAFE_STATES else "unknown"]
-    stage = progress.get("currentStage", "")
-    if stage in _AGENT_SAFE_STAGES:
+    parts = [debug_info.get("state") or "unknown"]
+    if state_info := debug_info.get("stateInfo"):
+        parts.append(state_info)
+    if stage := progress.get("currentStage"):
         parts.append(stage)
     percentage = progress.get("installationPercentage")
     if isinstance(percentage, int):

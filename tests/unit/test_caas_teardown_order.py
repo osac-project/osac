@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import pathlib
 import subprocess
 import traceback
 from collections.abc import Iterator
@@ -261,6 +260,7 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
             },
         }
     }
+
     # The bring-up phases read the ClusterOrder repeatedly, so key the mock on the
     # resource instead of handing out a fixed sequence.
     def get_json(*, resource: str, **_kwargs: object) -> dict:
@@ -321,7 +321,7 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
                 "osac.openshift.io/clusterorder": "order-a",
                 "osac.openshift.io/node-set": "workers",
                 "osac.openshift.io/instance_type": "ci-worker-bm",
-            }
+            },
         },
         "spec": {
             "platform": {

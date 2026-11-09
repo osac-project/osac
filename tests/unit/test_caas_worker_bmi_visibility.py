@@ -79,7 +79,12 @@ def test_cluster_order_agents_only_returns_agents_from_its_infraenv_and_namespac
 @pytest.mark.parametrize(
     ("status", "expected"),
     [
+        ({}, "unknown"),
         ({"debugInfo": {"state": "installing-in-progress"}}, "installing-in-progress"),
+        (
+            {"debugInfo": {"state": "error", "stateInfo": "Installation failed: disk /dev/sda is too small"}},
+            "error, Installation failed: disk /dev/sda is too small",
+        ),
         (
             {
                 "debugInfo": {"state": "installing-in-progress"},
@@ -87,12 +92,13 @@ def test_cluster_order_agents_only_returns_agents_from_its_infraenv_and_namespac
             },
             "installing-in-progress, Rebooting, 55%",
         ),
-        # Unknown states and stages are never echoed: they are free-form text
-        # that can carry inventory or provider details.
-        ({"debugInfo": {"state": "leaky"}, "progress": {"currentStage": "leaky-stage"}}, "unknown"),
+        (
+            {"debugInfo": {"state": "added-to-existing-cluster"}, "progress": {"currentStage": "Verifying disks"}},
+            "added-to-existing-cluster, Verifying disks",
+        ),
     ],
 )
-def test_agent_install_progress_only_reports_known_states_and_stages(status: dict, expected: str) -> None:
+def test_agent_install_progress_reports_status_without_filtering(status: dict, expected: str) -> None:
     assert helpers._agent_install_progress({"status": status}) == expected
 
 
@@ -160,7 +166,10 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
                     "namespace": "osac",
                     "labels": {"infraenvs.agent-install.openshift.io": "order-a-infraenv"},
                 },
-                "status": {"debugInfo": {"state": "installing-in-progress", "stateInfo": "sensitive-agent-data"}},
+                "status": {
+                    "debugInfo": {"state": "installing-in-progress", "stateInfo": "Waiting for reboot"},
+                    "inventory": {"hostname": "inventory-not-for-logs"},
+                },
             }
         ]
     }
@@ -218,7 +227,7 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
         "CaaS: 1 of 1 worker Agent(s) registered",
         "CaaS: Agents bound: 1 worker Agent(s) registered",
         "CaaS phase: starting install",
-        "CaaS: installing, 0 of 1 done (installing-in-progress)",
+        "CaaS: installing, 0 of 1 done (installing-in-progress, Waiting for reboot)",
         "CaaS phase: install done",
         "CaaS: installation finished on 1 worker Agent(s)",
         "CaaS phase: waiting for workers to join",
@@ -227,4 +236,4 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
         "CaaS: 1 worker(s) joined and ready",
     ]
     assert "sensitive-token" not in caplog.text
-    assert "sensitive-agent-data" not in caplog.text
+    assert "inventory-not-for-logs" not in caplog.text

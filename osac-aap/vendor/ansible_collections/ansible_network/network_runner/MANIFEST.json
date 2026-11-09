@@ -2,7 +2,7 @@
  "collection_info": {
   "namespace": "ansible_network",
   "name": "network_runner",
-  "version": "0.3.9-devel",
+  "version": "0.4.0",
   "authors": [
    "Ansible Network Team",
    "Yoni Bettan <yonibettan@gmail.com>"
@@ -26,7 +26,7 @@
   "name": "FILES.json",
   "ftype": "file",
   "chksum_type": "sha256",
-  "chksum_sha256": "b8de3ade0bdc9621538af826caf1a27523544582967cc07c735b3465d72966c3",
+  "chksum_sha256": "d1be6cde0f23fce7fcdfa6432b55f0bd9d924b91b813f4d27d6983a4f035d45a",
   "format": 1
  },
  "format": 1

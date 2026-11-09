@@ -684,6 +684,72 @@ update applies, while already-issued tokens retain their normal expiry.
 `POST /api/fulfillment/v1/service_accounts/{id}/regenerate_secret`; the private route is
 `POST /api/private/v1/service_accounts/{id}/regenerate_secret`.
 
+### CLI
+
+Service-account create, get, list, edit, and delete use the generic `osac` commands. Edit opens the
+resource in the configured editor. Secret rotation uses `osac regenerate`:
+
+```shell
+osac create -f service-account.json
+osac get serviceaccounts batch-worker -o json
+osac get serviceaccounts --filter "this.metadata.labels['team'] == 'data'" -o json
+osac edit serviceaccounts batch-worker
+osac delete serviceaccounts batch-worker
+osac regenerate serviceaccount batch-worker
+```
+
+For administrator and workload procedures, see the
+[Tenant Service Accounts guide](../../docs/guides/tenant-service-accounts.md).
+
+The create file uses the public type URL and tenant-owned fields:
+
+```json
+{
+  "@type": "type.googleapis.com/osac.public.v1.ServiceAccount",
+  "metadata": {
+    "name": "batch-worker",
+    "labels": { "team": "data" }
+  }
+}
+```
+
+Generic `osac create` reports the created account; provisioning then completes asynchronously.
+After the account is `READY`, tenant admins can read the credential Secret by following the ID in
+`status.client_secret`, for example with `osac get secrets <client-secret-id> -o json`; the
+Secret's byte values are base64-encoded in JSON. The API Create and RegenerateSecret responses do not
+return secret bytes. `osac regenerate serviceaccount`
+waits for rotation to complete, reads the replacement through `Secrets/Get`, and emits the new
+`client_id` and `client_secret` once as JSON. Treat that output as a credential and keep it out of
+source files, shell history, and logs.
+
+Get and list output the account and its tenant-scoped Secret reference, never credential bytes.
+Updates may change `metadata.labels`. `ServiceAccountSpec` has no role grants. To grant API
+access, create a RoleBinding whose `spec.role.id` is a catalog role ID and whose
+`spec.service_accounts` includes the service-account ID. To revoke that grant, delete its
+RoleBinding. Use a separate binding per account when you want revocation to be a single
+non-interactive delete:
+
+```json
+{
+  "@type": "type.googleapis.com/osac.public.v1.RoleBinding",
+  "metadata": { "name": "batch-worker-automation" },
+  "spec": {
+    "role": { "id": "<tenant-automation-role-id>" },
+    "service_accounts": [{ "id": "<service-account-id>" }]
+  }
+}
+```
+
+```shell
+osac create -f service-account-role-binding.json
+osac delete rolebindings batch-worker-automation
+```
+
+An ordinary service-account user cannot read raw Secrets or watch managed Events. Its API calls
+are limited to the role on its active tenant RoleBinding. A tenant admin can retrieve the
+service-account credential through the authorized `Secrets/Get` API; do not expose that operation
+or the CLI's one-time credential output to the service-account workload itself.
+
 ## REST transcoding
 
 All methods of all services must have `google.api.http` options that define the REST transcoding.

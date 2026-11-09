@@ -459,13 +459,17 @@ func setupClusterControllers(
 	if err != nil {
 		return err
 	}
-	if err := baremetalworker.NewReconciler(
+	baremetalworkerReconciler := baremetalworker.NewReconciler(
 		localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
 		bmwFulfillment,
 		ignitionFetcher,
 		localMgr.GetEventRecorder("baremetalworker"),
 		os.Getenv(envClusterOrderNamespace),
-	).SetupWithManager(mgr); err != nil {
+	)
+	if grpcConn != nil {
+		baremetalworkerReconciler.SetSecretsClient(privatev1.NewSecretsClient(grpcConn))
+	}
+	if err := baremetalworkerReconciler.SetupWithManager(mgr); err != nil {
 		return err
 	}
 
@@ -490,11 +494,13 @@ func setupClusterControllers(
 				os.Getenv(envNetworkingNamespace),
 				provider, pollInterval, maxJobHistory,
 			)
+			reconciler.NetworkingProvisioningEnabled = networkingProvisioningEnabled()
 			reconciler.StallThresholds = clusterOrderStallThresholdsFromEnv()
 			reconciler.Recorder = localMgr.GetEventRecorder(controller.ClusterOrderControllerName)
 			if grpcConn != nil {
 				reconciler.ClustersClient = privatev1.NewClustersClient(grpcConn)
 				reconciler.ExternalIPAttachmentsClient = privatev1.NewExternalIPAttachmentsClient(grpcConn)
+				reconciler.SecretsClient = privatev1.NewSecretsClient(grpcConn)
 			}
 			if err := reconciler.SetupWithManager(mgr); err != nil {
 				return err
@@ -1017,6 +1023,7 @@ func setupBareMetalInstanceControllers(
 	reconciler := controller.NewBareMetalInstanceCleanupReconciler(
 		localMgr.GetClient(), bareMetalInstanceNamespace, os.Getenv(envNetworkingNamespace),
 	)
+	reconciler.NetworkingProvisioningEnabled = networkingProvisioningEnabled()
 	if grpcConn != nil {
 		reconciler.BareMetalInstancesClient = privatev1.NewBareMetalInstancesClient(grpcConn)
 		reconciler.ExternalIPAttachmentsClient = privatev1.NewExternalIPAttachmentsClient(grpcConn)

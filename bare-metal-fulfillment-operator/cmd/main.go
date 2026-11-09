@@ -24,6 +24,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -619,13 +620,20 @@ func createNetBoxInventoryClientWithManager(
 }
 
 func createSecretAPIClientFromEnv() (inventory.SecretAPIClient, error) {
-	return secretapi.New(secretapi.Config{
+	if strings.TrimSpace(os.Getenv(envSecretAPIURL)) == "" {
+		return nil, fmt.Errorf("%s is required", envSecretAPIURL)
+	}
+	secretsClient, err := secretapi.New(secretapi.Config{
 		Endpoint:         os.Getenv(envSecretAPIURL),
 		IssuerURL:        os.Getenv(envSecretAPIIssuerURL),
 		ClientIDFile:     os.Getenv(envSecretAPIClientIDFile),
 		ClientSecretFile: os.Getenv(envSecretAPIClientSecretFile),
 		CAFile:           os.Getenv(envSecretAPICAFile),
 	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to configure Secret API client (%s): %w", envSecretAPIURL, err)
+	}
+	return secretsClient, nil
 }
 
 func createBCMInventoryClient(

@@ -1,0 +1,4 @@
+---
+# The switch records deletions under this scope so that a late apply cannot
+# restore a port after its NetworkAttachment was deleted.
+_agentless_net_deletion_guard_scope: osac-agentless-net-v1

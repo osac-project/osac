@@ -25,7 +25,28 @@
    "name": "README.rst",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "d1218a306baec968783ce9ce8446423d34a996d881d49ecdf9bfbcc677cd629c",
+   "chksum_sha256": "2ae27a4b9f8102c74fe93684f35fdb078850eeb2155334d352b551e19c3649ff",
+   "format": 1
+  },
+  {
+   "name": "plugins",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "plugins/filter",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "plugins/filter/switch_state.py",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "998495ee0d4d65a66cb4b041dd59dc527448f9ddb515f577ac5e6c34f8d0c2c0",
    "format": 1
   },
   {
@@ -46,7 +67,7 @@
    "name": "roles/switch/README.md",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "7d16553f28fc0b662b2f1e3a6179c5813cf2edd725c63c99373101a23d506da8",
+   "chksum_sha256": "c8359dd742f6cf5afd22486b1faf3cb048cf5a848d5ffdc568cce98bf28605c4",
    "format": 1
   },
   {
@@ -116,7 +137,7 @@
    "name": "roles/switch/providers/cumulus/conf_access_port.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "aea0f9d4243c671ee19e4b1dc24e5aaa99a79dcce964be0b7662cbd5232eb1e1",
+   "chksum_sha256": "a1abfa9b5e3fd880adca742fbc0ebe0908585dc5df8716aee1bff43fc58694e0",
    "format": 1
   },
   {
@@ -137,14 +158,14 @@
    "name": "roles/switch/providers/cumulus/defaults.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "77210de871634a898af4852a0478f9cda2888d2df860b47e4f9626e309e8d36e",
+   "chksum_sha256": "ced3fa2e7463f4af1bad1a4d2d8881b054fbfaeac1e63e26961041d864622c3b",
    "format": 1
   },
   {
    "name": "roles/switch/providers/cumulus/delete_port.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "91b34d5fef0adc60047426f01031bcdbf980dbacb37df4c8c0ce4fd0cd10692a",
+   "chksum_sha256": "8ddbe90227ecccbf99f4be7fdc12a48b067e6e970498b4a5b545a95a7acb8e39",
    "format": 1
   },
   {
@@ -165,14 +186,21 @@
    "name": "roles/switch/providers/cumulus/get_port_conf.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "b1cd7bd12aef5b8daec085d2cb2ea067546f9bd1f076e9434c1b8fd7c9299770",
+   "chksum_sha256": "09d08a2e71db75fcc794076a445495ec6839a67132195f5fa4d135f4f7b307d0",
    "format": 1
   },
   {
    "name": "roles/switch/providers/cumulus/list_vlans.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "19f7f4215adf78616a4915d295e8d245b5260b1f2b3add6703df1dd1aedab85e",
+   "chksum_sha256": "0170dc54fa3189ad69fb824ced9a2b9bb9523fc9746d7839d1c0d5f3055f24e6",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/cumulus/set_deletion_guard.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "8d97f1f4d8fcb651d3efab9496c542f3158469e24e374de141a979b40764ab24",
    "format": 1
   },
   {
@@ -253,6 +281,13 @@
    "format": 1
   },
   {
+   "name": "roles/switch/providers/dellemc.os9.os9/set_deletion_guard.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "f056a39933edc1625a6d9d5df04c20cd01c5d0a5dd802ca15f657d423c8b7485",
+   "format": 1
+  },
+  {
    "name": "roles/switch/providers/dellos10",
    "ftype": "dir",
    "chksum_type": null,
@@ -327,6 +362,13 @@
    "ftype": "file",
    "chksum_type": "sha256",
    "chksum_sha256": "b7c3e2eaaf6a000c54fc680010902e3b90d012ef633cd01549872fce6806d2cf",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellos10/set_deletion_guard.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "8b6e0ec5bc71d9a78f9108f97078668a674440be3e1e4a8fa9391c599b31f705",
    "format": 1
   },
   {
@@ -407,6 +449,13 @@
    "format": 1
   },
   {
+   "name": "roles/switch/providers/enos/set_deletion_guard.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "e3587c57728dbc775affeb67895d6360f765aa0450820a5b15cf311545f166f1",
+   "format": 1
+  },
+  {
    "name": "roles/switch/providers/eos",
    "ftype": "dir",
    "chksum_type": null,
@@ -481,6 +530,13 @@
    "ftype": "file",
    "chksum_type": "sha256",
    "chksum_sha256": "9ec56e19e19afef8bd380fa840990ce60652774e9aacfe8037b7aec30b1f79fb",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/eos/set_deletion_guard.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "449b8850fba4cd38d4c1b1b27d07238542c52f2205c482144411fd0b15b0d4fd",
    "format": 1
   },
   {
@@ -561,6 +617,13 @@
    "format": 1
   },
   {
+   "name": "roles/switch/providers/fos/set_deletion_guard.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "746549f506edc2259228340ab422bf95df954bc801eadfb03d0eb84808b50085",
+   "format": 1
+  },
+  {
    "name": "roles/switch/providers/junos",
    "ftype": "dir",
    "chksum_type": null,
@@ -635,6 +698,13 @@
    "ftype": "file",
    "chksum_type": "sha256",
    "chksum_sha256": "3ef7c633a79009263f0f10f7e15f6b5d54434a40c76bc8bf7b798691b62b6de0",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/junos/set_deletion_guard.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "c75b8358569abe1c080f426b0d53f0181f998596e303a6c7305f5f0da1660880",
    "format": 1
   },
   {
@@ -715,6 +785,13 @@
    "format": 1
   },
   {
+   "name": "roles/switch/providers/nos/set_deletion_guard.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "e34bf6973c22a2b12cd44ffda1f4989d3fe2836599b4cd84c671afee0311f2f4",
+   "format": 1
+  },
+  {
    "name": "roles/switch/providers/nxos",
    "ftype": "dir",
    "chksum_type": null,
@@ -789,6 +866,13 @@
    "ftype": "file",
    "chksum_type": "sha256",
    "chksum_sha256": "4ebeb5a8e4ef5fa59cf464a5e4ad2d38609040adc70b9a29bd236adb7504ad0e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nxos/set_deletion_guard.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "553b9124c97055f24e4e677501db0f1fe8a7ff6a5b9cac30d46b38e822d62a21",
    "format": 1
   },
   {
@@ -869,6 +953,13 @@
    "format": 1
   },
   {
+   "name": "roles/switch/providers/openvswitch/set_deletion_guard.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "f90cd2812400d5cbaf20ceb46f8e3f45b7af8bfb3b72ea03e4568444517e23f4",
+   "format": 1
+  },
+  {
    "name": "roles/switch/tasks",
    "ftype": "dir",
    "chksum_type": null,
@@ -928,7 +1019,7 @@
    "name": "roles/switch/tasks/get_port_conf.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "cf203382796e2b76cdb962d257090466ba010645f53bfc22a3a16796ac205e9e",
+   "chksum_sha256": "f8f1ca381128d4f66b9a362c24ca8b946311f13327d06f19cd3145b512aa26a2",
    "format": 1
   },
   {
@@ -949,7 +1040,14 @@
    "name": "roles/switch/tasks/run.yaml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "c2ed4e3e27eaba40f8fa3f02c23063c286a45041f832d1e3885ecaa3d636c29c",
+   "chksum_sha256": "5e903cba2152053193a6eda4f2b5ae0faceb5831f71921789138485d6576d07b",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks/set_deletion_guard.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "a321bb7d520c7ca7170f707c98e3b99325167a44bfae1d8edf5a62e2d99787f6",
    "format": 1
   },
   {
@@ -1040,7 +1138,7 @@
    "name": "roles/switch/vars/main.yml",
    "ftype": "file",
    "chksum_type": "sha256",
-   "chksum_sha256": "fb4fb19d064a9c36bb64b0eb962df0317a6bae377b41032b044eaadc2f5baf2b",
+   "chksum_sha256": "ee04cdfa55aefe846a9b210ac24e35f3260c9169eb9bc65700382a742b231427",
    "format": 1
   }
  ],

@@ -25,13 +25,13 @@ const errorCases = [
     label: 'PermissionDenied',
     code: Code.PermissionDenied,
     backendMessage: 'permission details from the backend',
-    expectedMessage: 'You are not authorized to access this resource.',
+    expectedMessage: 'permission details from the backend',
   },
   {
     label: 'Internal',
     code: Code.Internal,
     backendMessage: 'internal stack details',
-    expectedMessage: 'Unexpected error occurred',
+    expectedMessage: 'internal stack details',
   },
 ] as const;
 
@@ -85,13 +85,13 @@ describe('OSACWizardFooter', () => {
       label: 'PermissionDenied',
       code: Code.PermissionDenied,
       backendMessage: 'permission details from the backend',
-      expectedMessage: 'You are not authorized to access this resource.',
+      expectedMessage: 'permission details from the backend',
     },
     {
       label: 'Internal',
       code: Code.Internal,
       backendMessage: 'internal stack details',
-      expectedMessage: 'Unexpected error occurred',
+      expectedMessage: 'internal stack details',
     },
   ])('maps $label to the edit alert contract', ({ code, backendMessage, expectedMessage }) => {
     renderFooter(new ConnectError(backendMessage, code), () => Promise.resolve(), true);

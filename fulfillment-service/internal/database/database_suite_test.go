@@ -54,12 +54,12 @@ var _ = BeforeSuite(func() {
 		SetLogger(logger).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
-	err = server.Start(ctx)
-	Expect(err).ToNot(HaveOccurred())
 	DeferCleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		err = server.Stop(ctx)
 		Expect(err).ToNot(HaveOccurred())
 	})
+	err = server.Start(ctx)
+	Expect(err).ToNot(HaveOccurred())
 })

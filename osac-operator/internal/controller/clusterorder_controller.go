@@ -76,19 +76,25 @@ func (r *ClusterOrderReconciler) components() []component {
 // ClusterOrderReconciler reconciles a ClusterOrder object
 type ClusterOrderReconciler struct {
 	client.Client
-	apiReader                   client.Reader
-	Scheme                      *runtime.Scheme
-	ClusterOrderNamespace       string
-	AgentNamespace              string
-	NetworkingNamespace         string
-	ClustersClient              automaticClustersGetter
-	ExternalIPAttachmentsClient automaticExternalIPAttachmentsClient
-	ProvisioningProvider        provisioning.ProvisioningProvider
-	StatusPollInterval          time.Duration
-	MaxJobHistory               int
-	StallThresholds             ClusterOrderStallThresholds
-	Recorder                    events.EventRecorder
-	now                         func() time.Time
+	apiReader             client.Reader
+	Scheme                *runtime.Scheme
+	ClusterOrderNamespace string
+	AgentNamespace        string
+	NetworkingNamespace   string
+	// NetworkingProvisioningEnabled is global.networking.provisioningEnabled.
+	NetworkingProvisioningEnabled bool
+	ClustersClient                automaticClustersGetter
+	ExternalIPAttachmentsClient   automaticExternalIPAttachmentsClient
+	ProvisioningProvider          provisioning.ProvisioningProvider
+	StatusPollInterval            time.Duration
+	MaxJobHistory                 int
+	StallThresholds               ClusterOrderStallThresholds
+	Recorder                      events.EventRecorder
+	// SecretsClient resolves the Cluster's registered SSH-key Secret through
+	// the fulfillment private API. The resolved material is passed only as an
+	// AAP launch variable; it is never persisted on the ClusterOrder.
+	SecretsClient SecretsClient
+	now           func() time.Time
 }
 
 const (
@@ -140,17 +146,18 @@ func NewClusterOrderReconciler(
 	}
 
 	return &ClusterOrderReconciler{
-		Client:                client,
-		apiReader:             apiReader,
-		Scheme:                scheme,
-		ClusterOrderNamespace: clusterOrderNamespace,
-		NetworkingNamespace:   networkingNamespace,
-		ProvisioningProvider:  provisioningProvider,
-		StatusPollInterval:    statusPollInterval,
-		MaxJobHistory:         maxJobHistory,
-		StallThresholds:       DefaultClusterOrderStallThresholds(),
-		Recorder:              nil,
-		now:                   time.Now,
+		Client:                        client,
+		apiReader:                     apiReader,
+		Scheme:                        scheme,
+		ClusterOrderNamespace:         clusterOrderNamespace,
+		NetworkingNamespace:           networkingNamespace,
+		NetworkingProvisioningEnabled: true,
+		ProvisioningProvider:          provisioningProvider,
+		StatusPollInterval:            statusPollInterval,
+		MaxJobHistory:                 maxJobHistory,
+		StallThresholds:               DefaultClusterOrderStallThresholds(),
+		Recorder:                      nil,
+		now:                           time.Now,
 	}
 }
 
@@ -1197,7 +1204,7 @@ func (r *ClusterOrderReconciler) reconcileAutomaticExternalIPAttachments(
 	ctx context.Context,
 	instance *v1alpha1.ClusterOrder,
 ) (ctrl.Result, error) {
-	if instance.Status.Phase != v1alpha1.ClusterOrderPhaseReady || r.ClustersClient == nil ||
+	if !r.NetworkingProvisioningEnabled || instance.Status.Phase != v1alpha1.ClusterOrderPhaseReady || r.ClustersClient == nil ||
 		r.ExternalIPAttachmentsClient == nil || r.NetworkingNamespace == "" {
 		return ctrl.Result{}, nil
 	}
@@ -1277,7 +1284,7 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 		return ctrl.Result{}, nil
 	}
 
-	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, instance,
+	return provisioning.RunProvisioningLifecycleWithPrepareTrigger(ctx, r.ProvisioningProvider, instance,
 		r.provisionState(instance),
 		r.MaxJobHistory, r.StatusPollInterval,
 		r.provisioningCallbacks(instance),
@@ -1296,7 +1303,51 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 			}
 			return nil
 		},
+		r.prepareSSHKeyLaunch(ctx, instance),
 	)
+}
+
+// sshKeyResolutionRetry bounds the requeue delay while the Cluster's SSH-key
+// Secret cannot be resolved. The controller-runtime backoff provides the
+// retry loop; this delay only prevents a hot loop.
+const sshKeyResolutionRetry = time.Minute
+
+// prepareSSHKeyLaunch resolves the Cluster's registered SSH-key Secret only
+// when a new provisioning job is about to be launched. The resolved material
+// is supplied as a trigger-only AAP variable and never persisted. A nil or
+// empty reference yields no variable so the provider default remains
+// available. A resolution failure holds provisioning with a recoverable
+// condition; the message identifies the Secret by ID only.
+func (r *ClusterOrderReconciler) prepareSSHKeyLaunch(ctx context.Context, instance *v1alpha1.ClusterOrder) provisioning.PrepareTriggerFunc {
+	return func() (map[string]any, bool, time.Duration) {
+		ref := instance.Spec.SSHKey
+		if ref == nil || ref.ID == "" {
+			return nil, true, 0
+		}
+		if r.SecretsClient == nil {
+			r.setSSHKeyResolutionPending(instance, "ssh key secret resolution is not configured")
+			return nil, false, sshKeyResolutionRetry
+		}
+		response, err := r.SecretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: ref.ID}.Build())
+		if err != nil {
+			r.setSSHKeyResolutionPending(instance, err.Error())
+			return nil, false, sshKeyResolutionRetry
+		}
+		key := string(response.GetObject().GetData()["public_key"])
+		if key == "" {
+			r.setSSHKeyResolutionPending(instance,
+				fmt.Sprintf("SSH key Secret %q has no public_key data", ref.ID))
+			return nil, false, sshKeyResolutionRetry
+		}
+		return map[string]any{"ssh_public_key": key}, true, 0
+	}
+}
+
+// setSSHKeyResolutionPending records a recoverable SSH-key resolution failure
+// on the ClusterOrder. The condition never carries key material.
+func (r *ClusterOrderReconciler) setSSHKeyResolutionPending(instance *v1alpha1.ClusterOrder, message string) {
+	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+		message, v1alpha1.ReasonSSHKeyResolutionPending)
 }
 
 func (r *ClusterOrderReconciler) handleDesiredConfigVersion(instance *v1alpha1.ClusterOrder) error {

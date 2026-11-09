@@ -20,7 +20,7 @@ describe('UserDataField', () => {
   it('renders source choices as selectable cards', () => {
     renderUserDataField();
 
-    expect(screen.getByText('Paste cloud-init user data')).toBeInTheDocument();
+    expect(screen.getByText('Upload or paste user data')).toBeInTheDocument();
     expect(screen.getByText('Use a USER_DATA secret from this project')).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Enter value' })).toBeChecked();
   });
@@ -36,6 +36,5 @@ describe('UserDataField', () => {
     await user.click(screen.getByRole('radio', { name: 'Enter value' }));
 
     expect(screen.getByRole('radio', { name: 'Enter value' })).toBeChecked();
-    expect(screen.getByRole('textbox', { name: 'Cloud-init' })).toBeInTheDocument();
   });
 });

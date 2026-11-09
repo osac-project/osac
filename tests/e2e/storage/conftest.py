@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import os
 import textwrap
+from collections.abc import Iterator
 
 import pytest
 
+from tests.e2e.core.helpers import registered_ssh_key_secret
+from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env, run_unchecked
 
 # ---------------------------------------------------------------------------
@@ -126,3 +129,19 @@ def pull_secret_path() -> str:
 def ssh_public_key_path() -> str:
     """Filesystem path to the SSH public key, default ~/.ssh/id_rsa.pub (OSAC_SSH_PUBLIC_KEY_PATH)."""
     return env("OSAC_SSH_PUBLIC_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa.pub"))
+
+
+@pytest.fixture(scope="session")
+def ssh_key_secret(cli: OsacCLI, ssh_public_key_path: str) -> Iterator[str]:
+    """Register the configured SSH public key as a tenant Secret for the storage CaaS journey.
+
+    The Cluster API only accepts a registered SSH-key Secret reference, so the
+    key is registered once per session with the same CLI identity that creates
+    the cluster, and cleaned up afterward.
+    """
+    from pathlib import Path
+    from uuid import uuid4
+
+    public_key = Path(ssh_public_key_path).read_text().strip()
+    with registered_ssh_key_secret(cli, public_key, f"e2e-storage-caas-key-{uuid4().hex[:8]}") as name:
+        yield name

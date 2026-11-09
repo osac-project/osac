@@ -2,17 +2,19 @@ import { Secret, SecretType } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
 import SecretSelectionField from '@osac/ui-components/components/Form/SecretSelectionField';
 
-import { useTranslation } from '../../../../hooks/useTranslation';
-import type { ProvisioningFieldControlProps } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
+import { useTranslation } from '../../hooks/useTranslation';
+import type { ProvisioningFieldControlProps } from '../ProvisioningWizard/fields/provisioningFieldValue';
 
 interface SshPublicKeySecretFieldProps extends ProvisioningFieldControlProps {
   project: string;
+  placeholder?: string;
 }
 
 const SshPublicKeySecretField = ({
   name,
   project,
   isDisabled = false,
+  placeholder,
 }: SshPublicKeySecretFieldProps) => {
   const { t } = useTranslation();
 
@@ -28,6 +30,7 @@ const SshPublicKeySecretField = ({
       name={name}
       fieldId={name.replace(/\./g, '-')}
       isDisabled={isDisabled}
+      placeholder={placeholder}
     />
   );
 };

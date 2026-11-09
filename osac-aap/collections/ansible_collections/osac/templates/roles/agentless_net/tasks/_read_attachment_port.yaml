@@ -1,0 +1,28 @@
+---
+- name: Let the switch converge the access port
+  ansible.builtin.pause:
+    seconds: 2
+  when: _agentless_net_attachment_port_attempt | int > 0
+
+- name: Read the access port's normalized switch state
+  ansible.builtin.include_role:
+    name: ansible_network.network_runner.switch
+    tasks_from: get_port_conf
+    apply:
+      delegate_to: "{{ _agentless_net_attachment_port.switch_name }}"
+      become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_port | default(22) }}"
+    ansible_network_os: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_network_os }}"
+    port_name: "{{ _agentless_net_attachment_port.port_name }}"
+  no_log: true
+
+- name: Detect whether the access port converged
+  ansible.builtin.set_fact:
+    _agentless_net_attachment_port_converged: >-
+      {{ network_runner_port.vlan_ids
+         == _agentless_net_attachment_port_expected_vlans }}
+  no_log: true

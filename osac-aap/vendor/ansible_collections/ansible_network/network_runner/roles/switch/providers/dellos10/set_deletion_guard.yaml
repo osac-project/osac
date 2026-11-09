@@ -1,0 +1,3 @@
+---
+- fail:
+    msg: Deletion guards are not implimented for dellos10

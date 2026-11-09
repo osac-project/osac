@@ -30,7 +30,12 @@ from tests.e2e.core.helpers import (
     wait_for_cluster_order_cr,
     wait_for_cluster_progressing,
     wait_for_cluster_ready,
+    wait_for_guest_cluster_health,
     wait_for_hosted_cluster_kubeconfig,
+    wait_for_hosted_cluster_reference,
+    wait_for_worker_agents,
+    wait_for_worker_aggregates,
+    wait_for_worker_installation,
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
@@ -50,30 +55,6 @@ _WORKER_METRICS = ("osac_caas_worker_desired", "osac_caas_worker_ready", "osac_c
 _WORKER_LEVEL_METRICS = _WORKER_METRICS[:2]
 _WORKER_FAILURE_METRIC = _WORKER_METRICS[2]
 _WORKER_METRIC_LABELS = {"tenant", "worker_type", "instance_type"}
-_INSTALLING_AGENT_STATES = {"installing", "installing-in-progress"}
-# Only log known phase names, never Agent statusInfo or the full resource (which may contain sensitive data).
-_SAFE_AGENT_STATES = {
-    "discovering",
-    "discovering-unbound",
-    "known",
-    "known-unbound",
-    "insufficient",
-    "insufficient-unbound",
-    "disconnected",
-    "disconnected-unbound",
-    "disabled",
-    "disabled-unbound",
-    "pending-for-input",
-    "binding",
-    "preparing-for-installation",
-    "preparing-failed",
-    "preparing-successful",
-    "installing",
-    "installing-in-progress",
-    "installing-pending-user-action",
-    "installed",
-    "error",
-}
 logger = logging.getLogger(__name__)
 
 
@@ -115,22 +96,6 @@ def _list_owned_worker_bmis(*, grpc: GRPCClient, co_name: str, tenant: str) -> d
         assert metadata["annotations"]["osac.openshift.io/owner-reference"] == f"ClusterOrder/{co_name}"
         workers[bmi_id] = bmi
     return workers
-
-
-def _cluster_order_agents(*, k8s: K8sClient, co_name: str, namespace: str) -> list[dict[str, Any]]:
-    """Find even unbound Agents using the InfraEnv label assigned by Assisted Service."""
-    items = k8s.list_json(resource="agents.agent-install.openshift.io", namespace=namespace).get("items", [])
-    return [
-        agent
-        for agent in items
-        if agent.get("metadata", {}).get("namespace") == namespace
-        and agent.get("metadata", {}).get("labels", {}).get("infraenvs.agent-install.openshift.io")
-        == f"{co_name}-infraenv"
-    ]
-
-
-def _agent_is_installing(agent: dict[str, Any]) -> bool:
-    return agent.get("status", {}).get("debugInfo", {}).get("state") in _INSTALLING_AGENT_STATES
 
 
 def _wait_for_cluster_and_infraenv_deletion(
@@ -182,49 +147,10 @@ class _AvailableCluster(_ClusterResources):
     original_size: int
 
 
-def _assert_worker_agent_installing(*, k8s: K8sClient, co_name: str, namespace: str) -> None:
-    logger.info("CaaS: waiting for Agent in ClusterOrder namespace")
-    agents = poll_until(
-        fn=lambda: _cluster_order_agents(k8s=k8s, co_name=co_name, namespace=namespace),
-        until=bool,
-        retries=180,
-        delay=10,
-        description="CaaS worker Agent registration",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
-    agent_name = agents[0]["metadata"]["name"]
-    logger.info("CaaS: Agent found; waiting for installing state")
-    previous_state: str | None = None
-
-    def _current_agent() -> dict[str, Any] | None:
-        nonlocal previous_state
-        agent = next(
-            (
-                item
-                for item in _cluster_order_agents(k8s=k8s, co_name=co_name, namespace=namespace)
-                if item.get("metadata", {}).get("name") == agent_name
-            ),
-            None,
-        )
-        state = agent.get("status", {}).get("debugInfo", {}).get("state", "") if agent else ""
-        if state != previous_state:
-            logger.info("CaaS Agent state: %s", state if state in _SAFE_AGENT_STATES else "unknown")
-            previous_state = state
-        return agent
-
-    poll_until(
-        fn=_current_agent,
-        until=lambda agent: agent is not None and _agent_is_installing(agent),
-        retries=180,
-        delay=10,
-        description="CaaS worker Agent installing state",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
-    logger.info("CaaS: Agent entered installing state")
+def _assert_worker_agents_and_installation(*, k8s: K8sClient, co_name: str, namespace: str, expected: int) -> None:
+    """Report registration and installation as separate, named bring-up phases."""
+    wait_for_worker_agents(k8s=k8s, co_name=co_name, namespace=namespace, expected_agents=expected)
+    wait_for_worker_installation(k8s=k8s, co_name=co_name, namespace=namespace, expected_agents=expected)
 
 
 def _assert_operator_worker_metrics(*, k8s: K8sClient, co_name: str) -> None:
@@ -265,19 +191,8 @@ def _assert_cluster_version_propagated(
     co_release_image = cluster_order_spec.get("releaseImage", "")
     assert co_release_image, "ClusterOrder should have a resolved releaseImage"
 
-    hosted_cluster_name, hosted_cluster_ns = poll_until(
-        fn=lambda: (
-            k8s.get_cluster_order_hosted_cluster_name(name=co_name),
-            k8s.get_cluster_order_namespace(name=co_name),
-        ),
-        until=lambda reference: all(reference),
-        retries=30,
-        delay=5,
-        description=f"{co_name} HostedCluster reference",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
+    hosted_cluster_name, hosted_cluster_ns = wait_for_hosted_cluster_reference(k8s=k8s, co_name=co_name)
+
     hosted_cluster_image = run(
         *k8s._base(),
         "get",
@@ -355,6 +270,7 @@ def _assert_guest_workers_ready(
             # nodepool_prefix + '-' + node_set with prefix
             # "nodepool-{hosted_cluster_name}" -- not the NodeSet label.
             node_pool_id=f"nodepool-{hosted_cluster_name}-{worker_node_set}",
+            hosted_cluster_namespace=hosted_cluster_ns,
         )
     assert node_pool is not None, f"No NodePool found for NodeSet {worker_node_set!r}"
     assert node_pool.get("metadata", {}).get("name") == f"nodepool-{hosted_cluster_name}-{worker_node_set}"
@@ -369,7 +285,13 @@ def _assert_guest_workers_ready(
 
 
 def _assert_worker_bmi_resources(
-    *, k8s: K8sClient, co_name: str, tenant: str, candidate_bmis: dict[str, dict[str, Any]], instance_types: set[str]
+    *,
+    k8s: K8sClient,
+    co_name: str,
+    tenant: str,
+    candidate_bmis: dict[str, dict[str, Any]],
+    instance_types: set[str],
+    ssh_key_id: str,
 ) -> set[str]:
     """Return only verified test-owned IDs for use in deletion assertions."""
     owned_bmi_ids: set[str] = set()
@@ -381,6 +303,12 @@ def _assert_worker_bmi_resources(
         instance_type = spec.get("instanceType", spec.get("instance_type", {}))
         assert instance_type["name"] in instance_types
         assert instance_type["shared"] is True
+        ssh_key_ref = spec.get("sshKey", spec.get("ssh_key", {}))
+        if ssh_key_id:
+            assert ssh_key_ref.get("id") == ssh_key_id, "child BMI must reference the registered Secret"
+        else:
+            assert not ssh_key_ref.get("id"), "child BMI must not carry a key the cluster does not select"
+        assert not spec.get("sshPublicKey") and not spec.get("ssh_public_key"), "inline keys are removed"
         cr_name = poll_until(
             fn=lambda bmi_id=bmi_id: k8s.get_baremetal_instance_name(uuid=bmi_id, checked=False),
             until=bool,
@@ -418,6 +346,7 @@ def _assert_worker_provisioning(
     logger.info("CaaS: waiting for ClusterOrder to progress")
     wait_for_cluster_progressing(k8s=k8s, name=co_name)
     cluster_tenant = grpc.get_cluster(cluster_id=uuid)["object"]["metadata"]["tenant"]
+    logger.info("CaaS phase: BareMetalInstances binding")
     logger.info("CaaS: waiting for tenant-visible child BareMetalInstance")
     candidate_bmis = poll_until(
         fn=lambda: _list_owned_worker_bmis(grpc=grpc, co_name=co_name, tenant=cluster_tenant),
@@ -434,13 +363,22 @@ def _assert_worker_provisioning(
     assert co["metadata"]["annotations"]["osac.openshift.io/tenant"] == cluster_tenant
     namespace = co["metadata"]["namespace"]
     assert namespace == k8s.namespace
-    _assert_worker_agent_installing(k8s=k8s, co_name=co_name, namespace=namespace)
+    _assert_worker_agents_and_installation(
+        k8s=k8s, co_name=co_name, namespace=namespace, expected=_expected_worker_count(co)
+    )
+    _assert_worker_aggregates(k8s=k8s, co_name=co_name, expected_workers=_expected_worker_count(co))
     _assert_operator_worker_metrics(k8s=k8s, co_name=co_name)
     return cluster_tenant, candidate_bmis
 
 
 def assert_cluster_available(
-    *, grpc: GRPCClient, k8s: K8sClient, metering: MeteringCollector, uuid: str, version_name: str
+    *,
+    grpc: GRPCClient,
+    k8s: K8sClient,
+    metering: MeteringCollector,
+    uuid: str,
+    version_name: str,
+    expected_ssh_key: str = "",
 ) -> _AvailableCluster:
     """Verify provisioning, version propagation, guest readiness, and worker ownership."""
     logger.info("CaaS: waiting for ClusterOrder")
@@ -464,6 +402,12 @@ def assert_cluster_available(
 
     cluster = grpc.get_cluster(cluster_id=uuid)
     cluster_order_spec = k8s.get_cluster_order_spec(name=co_name)
+    # The ClusterOrder carries only the canonical Secret ID; key material never
+    # crosses the Fulfillment boundary.
+    ssh_key_id = cluster.get("object", {}).get("spec", {}).get("sshKey", {}).get("id", "")
+    if ssh_key_id:
+        assert cluster_order_spec.get("sshKey", {}).get("id") == ssh_key_id
+        assert "sshPublicKey" not in cluster_order_spec and "ssh_public_key" not in cluster_order_spec
     hosted_cluster_name, hosted_cluster_ns = _assert_cluster_version_propagated(
         k8s=k8s, co_name=co_name, cluster=cluster, cluster_order_spec=cluster_order_spec, version_name=version_name
     )
@@ -486,8 +430,17 @@ def assert_cluster_available(
         tenant=cluster_tenant,
         candidate_bmis=candidate_bmis,
         instance_types={worker_instance_type},
+        ssh_key_id=ssh_key_id,
     )
     infra_env_name = _wait_for_cluster_infra_env_name(k8s=k8s, co_name=co_name)
+    if expected_ssh_key:
+        # The operator materializes the registered Secret's public key into the
+        # InfraEnv at creation; the CR is the only deployed place key bytes
+        # appear, and it must match the key the suite registered.
+        infra_env = k8s.get_json(resource="infraenvs.agent-install.openshift.io", name=infra_env_name)
+        assert infra_env["spec"]["sshAuthorizedKey"] == expected_ssh_key, (
+            "InfraEnv must carry the resolved registered SSH public key"
+        )
     return _AvailableCluster(
         co_name=co_name,
         node_sets=node_sets,
@@ -664,7 +617,7 @@ def _assert_cluster_deleted(
 
 
 def _assert_catalog_created_cluster(
-    *, grpc: GRPCClient, uuid: str, catalog_item_id: str, pull_secret_name: str, ssh_public_key: str
+    *, grpc: GRPCClient, uuid: str, catalog_item_id: str, pull_secret_name: str, ssh_key_secret: str
 ) -> None:
     """Check that the catalog offering, not caller input, materialized the cluster spec."""
     spec = grpc.get_cluster(cluster_id=uuid)["object"]["spec"]
@@ -672,7 +625,9 @@ def _assert_catalog_created_cluster(
     assert catalog_ref.get("id") == catalog_item_id
     template_ref = spec.get("template", {})
     assert template_ref.get("id"), "Catalog-created cluster must materialize its template reference"
-    assert spec.get("ssh_public_key", spec.get("sshPublicKey")) == ssh_public_key
+    ssh_key_ref = spec.get("ssh_key", spec.get("sshKey", {}))
+    assert ssh_key_ref.get("name") == ssh_key_secret, "the cluster must carry the registered Secret reference"
+    assert ssh_key_ref.get("id"), "the reference must be canonicalized to the Secret ID"
     pull_secret_ref = spec.get("pull_secret_secret", spec.get("pullSecretSecret", {}))
     assert pull_secret_ref.get("name") == pull_secret_name
 
@@ -685,6 +640,7 @@ def test_cluster_create(
     k8s_hub_client: K8sClient,
     cluster_template: str,
     pull_secret_name: str,
+    ssh_key_secret: str,
     ssh_public_key_path: str,
     metering: MeteringCollector,
 ) -> None:
@@ -700,17 +656,16 @@ def test_cluster_create(
         version="4.22.0-rhcos", image=TEST_RELEASE_IMAGE, disk_image=disk_image_id
     )
     logger.info("CaaS: ClusterVersion available")
-    ssh_public_key = Path(ssh_public_key_path).read_text().strip()
     logger.info("CaaS: creating ClusterCatalogItem")
-    # The shared offering locks every tenant-independent input (version, node sets, SSH
-    # key); the pull secret stays caller-supplied because a shared catalog item cannot
-    # fix a tenant-local secret for every tenant.
+    # The shared offering locks every tenant-independent input (version, node sets);
+    # the pull secret and the registered SSH-key Secret stay caller-supplied because
+    # a shared catalog item cannot fix tenant-local secrets for every tenant.
     catalog_item_id = private_grpc.create_cluster_catalog_item(
         name=unique_name("e2e-caas-catalog"),
         template=cluster_template,
         fields={
             "version": {"locked": {"id": version["id"]}},
-            "ssh_public_key": {"locked": ssh_public_key},
+            "ssh_key": {"editable": {}},
             "pull_secret_secret": {"editable": {}},
             "node_sets": {
                 "locked": {
@@ -726,7 +681,7 @@ def test_cluster_create(
     try:
         logger.info("CaaS: creating cluster from catalog item")
         uuid = cli.create_cluster_with_catalog_item(
-            catalog_item=catalog_item_id, name=name, pull_secret=pull_secret_name
+            catalog_item=catalog_item_id, name=name, pull_secret=pull_secret_name, ssh_key=ssh_key_secret
         )
         logger.info("CaaS: cluster created")
 
@@ -735,10 +690,15 @@ def test_cluster_create(
             uuid=uuid,
             catalog_item_id=catalog_item_id,
             pull_secret_name=pull_secret_name,
-            ssh_public_key=ssh_public_key,
+            ssh_key_secret=ssh_key_secret,
         )
         cluster = assert_cluster_available(
-            grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, version_name=version["name"]
+            grpc=grpc,
+            k8s=k8s_hub_client,
+            metering=metering,
+            uuid=uuid,
+            version_name=version["name"],
+            expected_ssh_key=Path(ssh_public_key_path).read_text().strip(),
         )
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client, require_metering=True)
@@ -777,21 +737,14 @@ def _assert_two_node_set_requests(
     return expected_replicas
 
 
-def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers: int) -> None:
-    def _get_worker_counts() -> tuple[int, int, int]:
-        status = k8s.get_json(resource="clusterorder", name=co_name).get("status", {})
-        return tuple(int(status.get(key, -1)) for key in ("desiredWorkers", "currentWorkers", "readyWorkers"))
+def _expected_worker_count(cluster_order: dict[str, Any]) -> int:
+    """The number of workers the order asked for, readable before any Agent exists."""
+    requests = cluster_order.get("spec", {}).get("nodeRequests") or []
+    return sum(int(request.get("numberOfNodes", 0)) for request in requests)
 
-    poll_until(
-        fn=_get_worker_counts,
-        until=lambda value: value == (expected_workers, expected_workers, expected_workers),
-        retries=120,
-        delay=10,
-        description=f"{co_name} worker aggregates before NodePool isolation check",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
+
+def _assert_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers: int) -> None:
+    wait_for_worker_aggregates(k8s=k8s, co_name=co_name, expected_workers=expected_workers)
 
 
 def _agent_is_installed(agent: dict[str, Any]) -> bool:
@@ -891,6 +844,7 @@ def _assert_owned_workers_for_node_sets(
     tenant: str,
     expected_replicas: dict[str, int],
     instance_types: set[str],
+    cluster: dict[str, Any],
 ) -> set[str]:
     candidate_bmis = poll_until(
         fn=lambda: _list_owned_worker_bmis(grpc=grpc, co_name=co_name, tenant=tenant),
@@ -901,8 +855,14 @@ def _assert_owned_workers_for_node_sets(
         resource_kind=WaitResourceKind.CLUSTER_ORDER,
         resource_id=co_name,
     )
+    ssh_key_id = cluster.get("spec", {}).get("sshKey", {}).get("id", "")
     return _assert_worker_bmi_resources(
-        k8s=k8s, co_name=co_name, tenant=tenant, candidate_bmis=candidate_bmis, instance_types=instance_types
+        k8s=k8s,
+        co_name=co_name,
+        tenant=tenant,
+        candidate_bmis=candidate_bmis,
+        instance_types=instance_types,
+        ssh_key_id=ssh_key_id,
     )
 
 
@@ -920,6 +880,9 @@ def assert_cluster_with_two_node_sets_available(
         cluster_order=cluster_order, cluster_node_sets=cluster["spec"]["nodeSets"], instance_types=instance_types
     )
     hosted_cluster_ns = k8s.get_cluster_order_namespace(name=co_name)
+    _assert_worker_agents_and_installation(
+        k8s=k8s, co_name=co_name, namespace=k8s.namespace, expected=sum(expected_replicas.values())
+    )
     _assert_worker_aggregates(k8s=k8s, co_name=co_name, expected_workers=sum(expected_replicas.values()))
     _assert_installed_agents_by_node_set(
         k8s=k8s, co_name=co_name, expected_replicas=expected_replicas, instance_types=instance_types
@@ -931,6 +894,9 @@ def assert_cluster_with_two_node_sets_available(
         expected_replicas=expected_replicas,
         instance_types=instance_types,
     )
+    # Both node sets' workers must be bound through CAP-Agent and healthy in the
+    # guest cluster, not just counted as ready Nodes by their NodePools.
+    wait_for_guest_cluster_health(k8s=k8s, co_name=co_name, expected_workers=sum(expected_replicas.values()))
 
     # The cluster was created without a project, so its heartbeats must carry
     # no project dimension: the engine emits only the facts a resource carries.
@@ -955,6 +921,7 @@ def assert_cluster_with_two_node_sets_available(
         tenant=cluster_tenant,
         expected_replicas=expected_replicas,
         instance_types=set(instance_types.values()),
+        cluster=cluster,
     )
     infra_env_name = _wait_for_cluster_infra_env_name(k8s=k8s, co_name=co_name)
     return _ClusterResources(co_name=co_name, owned_bmi_ids=owned_bmi_ids, infra_env_name=infra_env_name)

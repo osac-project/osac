@@ -115,23 +115,6 @@ var _ = Describe("BMaaS registered SSH-key resolution", func() {
 		Expect(t.sshPublicKey).To(Equal("ssh-ed25519 OLD"))
 	})
 
-	It("lets deprecated raw ssh_public_key override a registered reference", func() {
-		ctrl := gomock.NewController(GinkgoT())
-		secrets := NewMockSecretsClient(ctrl)
-		t := &task{
-			r: &function{secretsClient: secrets},
-			bareMetalInstance: privatev1.BareMetalInstance_builder{
-				Spec: privatev1.BareMetalInstanceSpec_builder{
-					SshPublicKey: new("ssh-ed25519 INLINE"),
-					SshKey:       privatev1.SecretReference_builder{Id: "registered-secret"}.Build(),
-				}.Build(),
-			}.Build(),
-		}
-
-		Expect(t.resolveSSHKey(context.Background(), nil)).To(Succeed())
-		Expect(t.sshPublicKey).To(Equal("ssh-ed25519 INLINE"))
-	})
-
 	It("classifies a reference without a canonical ID as permanently invalid", func() {
 		_, err := controllers.ResolveSSHKey(context.Background(), nil,
 			privatev1.SecretReference_builder{Name: "login"}.Build())
@@ -523,10 +506,10 @@ var _ = Describe("mutateBMI", func() {
 				Spec: privatev1.BareMetalInstanceSpec_builder{
 					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
 					Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
-					SshPublicKey: new("ssh-ed25519 AAAA... test@example.com"),
 					InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
 				}.Build(),
 			}.Build(),
+			sshPublicKey:       "ssh-ed25519 AAAA... test@example.com",
 			userDataSecretName: "bmi-test-user-data",
 		}
 
@@ -553,10 +536,10 @@ var _ = Describe("mutateBMI", func() {
 				Spec: privatev1.BareMetalInstanceSpec_builder{
 					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
 					Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
-					SshPublicKey: new(sshPublicKey),
 					InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
 				}.Build(),
 			}.Build(),
+			sshPublicKey: sshPublicKey,
 		}
 
 		var obj bmfov1alpha1.BareMetalInstance
@@ -638,11 +621,11 @@ var _ = Describe("mutateBMI", func() {
 				Spec: privatev1.BareMetalInstanceSpec_builder{
 					CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
 					Template:           privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
-					SshPublicKey:       new("ssh-ed25519 AAAA... test@example.com"),
 					TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
 					InstanceType:       privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
 				}.Build(),
 			}.Build(),
+			sshPublicKey:       "ssh-ed25519 AAAA... test@example.com",
 			userDataSecretName: "bmi-test-user-data",
 		}
 
@@ -672,11 +655,11 @@ var _ = Describe("mutateBMI", func() {
 				Spec: privatev1.BareMetalInstanceSpec_builder{
 					CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
 					Template:           privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
-					SshPublicKey:       new("ssh-ed25519 AAAA... real@example.com"),
 					TemplateParameters: map[string]*anypb.Any{"sshPublicKey": userSshParam},
 					InstanceType:       privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
 				}.Build(),
 			}.Build(),
+			sshPublicKey: "ssh-ed25519 AAAA... real@example.com",
 		}
 
 		var obj bmfov1alpha1.BareMetalInstance
@@ -740,6 +723,7 @@ var _ = Describe("mutateBMI", func() {
 					DiskImage:    privatev1.DiskImageReference_builder{Id: "disk-image-1"}.Build(),
 				}.Build(),
 			}.Build(),
+			sshPublicKey: "ssh-ed25519 AAAA... test@example.com",
 		}
 
 		var obj bmfov1alpha1.BareMetalInstance
@@ -834,10 +818,10 @@ var _ = Describe("mutateBMI", func() {
 				Spec: privatev1.BareMetalInstanceSpec_builder{
 					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
 					Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
-					SshPublicKey: new("ssh-ed25519 AAAA... test@example.com"),
 					InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
 				}.Build(),
 			}.Build(),
+			sshPublicKey: "ssh-ed25519 AAAA... test@example.com",
 		}
 
 		var obj bmfov1alpha1.BareMetalInstance
@@ -883,6 +867,7 @@ var _ = Describe("mutateBMI", func() {
 					DiskImage:          privatev1.DiskImageReference_builder{Id: "disk-image-1"}.Build(),
 				}.Build(),
 			}.Build(),
+			sshPublicKey: "ssh-ed25519 AAAA... test@example.com",
 		}
 
 		var obj bmfov1alpha1.BareMetalInstance
@@ -967,11 +952,11 @@ var _ = Describe("mutateBMI", func() {
 				Spec: privatev1.BareMetalInstanceSpec_builder{
 					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
 					Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
-					SshPublicKey: new("ssh-ed25519 AAAA... test@example.com"),
 					DiskImage:    privatev1.DiskImageReference_builder{Id: "disk-image-1"}.Build(),
 					InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
 				}.Build(),
 			}.Build(),
+			sshPublicKey:       "ssh-ed25519 AAAA... test@example.com",
 			userDataSecretName: "bmi-test-user-data",
 		}
 

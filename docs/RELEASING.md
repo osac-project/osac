@@ -305,6 +305,26 @@ and success notification jobs from starting; a release publication failure
 reaches the failure notification instead of a success message. Optional
 Konflux staging remains independent of this GHCR publication path.
 
+**GitHub's "Re-run failed jobs" does not recover a confirmed staging
+failure.** GHCR image and chart publication (`promote-and-publish`,
+`publish-umbrella`) runs before Konflux staging even starts, so those
+artifacts can remain published after a confirmed staging failure — only
+the GitHub Releases (component and umbrella) and fulfillment-service's
+binaries/proto wait for the real Konflux image staging release to have
+actually succeeded, never on a cancelled or timed-out run, only on a
+confirmed failure of `trigger-konflux-staging-release` itself. Rolling
+tags back after a
+confirmed failure, combined with `cleanup` always deleting the temp branch
+once `tag` succeeds, means a "Re-run failed jobs" attempt afterward has
+neither the tags `create-component-releases` would reference nor the
+branch `stamp-and-release-charts` would need to check out. Dispatch a fresh
+`osac-release.yaml` run with a new `release_version` instead — don't retry
+a release whose staging has already confirmed failed. A cancelled or
+timed-out staging attempt is left alone on purpose (the underlying Konflux
+Release it created may still be progressing and could still succeed) and
+needs manual reconciliation: check whether that Release actually completed
+before deciding to delete anything by hand.
+
 The version inventory is not an upgrade compatibility guarantee. Before an
 upgrade, compare the installed and target inventories, read the affected
 components' release notes and installation guide, back up persistent data and

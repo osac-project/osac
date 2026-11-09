@@ -562,23 +562,8 @@ var _ = Describe("MCP server", func() {
 				publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
 			))
 		}, time.Minute, 100*time.Millisecond).Should(Succeed())
-		currentResponse, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
-			Id: computeInstanceID,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		currentVersion := currentResponse.GetObject().GetMetadata().GetVersion()
-		staleVersion := currentVersion + 1
-
-		_, err = callMCPTool[mcpserver.UpdateComputeInstanceOutput](
-			ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
-				ID: computeInstanceID, Version: staleVersion, RunStrategy: "HALTED",
-			},
-		)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring(`"category":"conflict"`))
-		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"Aborted"`))
-
 		var updated mcpserver.UpdateComputeInstanceOutput
+		var staleVersion int32
 		Eventually(func(g Gomega) {
 			retryResponse, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
 				Id: computeInstanceID,
@@ -596,10 +581,21 @@ var _ = Describe("MCP server", func() {
 				g.Expect(updateErr).ToNot(HaveOccurred())
 				return
 			}
+			staleVersion = retryVersion
 			updated = output
 			g.Expect(updated.Version).To(BeNumerically(">", retryVersion))
 		}, time.Minute, 100*time.Millisecond).Should(Succeed())
 		Expect(updated.ID).To(Equal(computeInstanceID))
+		Expect(staleVersion).To(BeNumerically(">", 0))
+
+		_, err = callMCPTool[mcpserver.UpdateComputeInstanceOutput](
+			ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
+				ID: computeInstanceID, Version: staleVersion, RunStrategy: "HALTED",
+			},
+		)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`"category":"conflict"`))
+		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"Aborted"`))
 
 		updateInstanceTypeWithRetry := func(instanceTypeID string) mcpserver.UpdateComputeInstanceOutput {
 			var output mcpserver.UpdateComputeInstanceOutput

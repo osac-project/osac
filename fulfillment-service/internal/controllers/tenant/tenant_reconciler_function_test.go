@@ -20,14 +20,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sync/atomic"
 	"time"
 
-	vaultapi "github.com/hashicorp/vault/api"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
@@ -97,21 +95,6 @@ func (m *mockSecretsClient) Delete(ctx context.Context, req *privatev1.SecretsDe
 func (m *mockSecretsClient) Signal(context.Context, *privatev1.SecretsSignalRequest, ...grpc.CallOption) (*privatev1.SecretsSignalResponse, error) {
 	return nil, fmt.Errorf("unexpected Signal")
 }
-
-var _ = Describe("Vault provisioning failure classification", func() {
-	DescribeTable("classifies wrapped failures without backend text", func(failure error, category string) {
-		Expect(vaultFailureCategory(fmt.Errorf("synthetic-backend-marker: %w", failure))).To(Equal(category))
-	},
-		Entry("deadline", context.DeadlineExceeded, "timeout"),
-		Entry("cancellation", context.Canceled, "canceled"),
-		Entry("network timeout", &net.DNSError{Name: "synthetic.example.invalid", IsTimeout: true}, "timeout"),
-		Entry("backend response", &vaultapi.ResponseError{
-			StatusCode: http.StatusForbidden, URL: "https://synthetic.example.invalid", Errors: []string{"synthetic-body-marker"},
-		}, "backend_response"),
-		Entry("transport", &url.Error{Op: "Post", URL: "https://synthetic.example.invalid", Err: errors.New("synthetic-body-marker")}, "transport"),
-		Entry("unknown does not parse text", errors.New("timeout canceled 403 synthetic-body-marker"), "unknown"),
-	)
-})
 
 var _ = Describe("Tenant Validation", func() {
 	It("should succeed with a tenant assigned", func() {
@@ -2629,13 +2612,8 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(record).To(HaveKeyWithValue("tenant_id", "synthetic-tenant-id"))
 		Expect(record).To(HaveKeyWithValue("tenant_name", tenantName))
 		Expect(record).To(HaveKeyWithValue("reason", "ProvisionFailed"))
-		if transportFailure {
-			Expect(record).To(HaveKeyWithValue("failure_category", "transport"))
-		} else {
-			Expect(record).To(HaveKeyWithValue("failure_category", "unknown"))
-		}
 		Expect(record).ToNot(HaveKey("error"))
-		Expect(findCondition(persisted).GetMessage()).To(Equal("Vault namespace provisioning failed; verify backend availability and lifecycle configuration"))
+		Expect(findCondition(persisted).GetMessage()).To(Equal("Failed to provision vault namespace"))
 		Expect(reconciler.Run(ctx, proto.Clone(persisted).(*privatev1.Tenant))).To(Succeed())
 		Expect(updates).To(HaveLen(2))
 		Expect(findCondition(persisted).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
@@ -2695,7 +2673,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(cond).ToNot(BeNil())
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 		Expect(cond.GetReason()).To(Equal("ProvisionFailed"))
-		Expect(cond.GetMessage()).To(Equal("Vault namespace provisioning failed; verify backend availability and lifecycle configuration"))
+		Expect(cond.GetMessage()).To(Equal("Failed to provision vault namespace"))
 	})
 
 	It("stays SYNCED with condition FALSE when vault provisioning fails for synced tenant", func() {
@@ -2734,7 +2712,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(cond).ToNot(BeNil())
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 		Expect(cond.GetReason()).To(Equal("ProvisionFailed"))
-		Expect(cond.GetMessage()).To(Equal("Vault namespace provisioning failed; verify backend availability and lifecycle configuration"))
+		Expect(cond.GetMessage()).To(Equal("Failed to provision vault namespace"))
 	})
 
 	It("provisions a vault namespace for the system tenant", func() {

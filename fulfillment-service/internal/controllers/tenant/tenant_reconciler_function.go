@@ -27,13 +27,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	vaultapi "github.com/hashicorp/vault/api"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -905,27 +903,6 @@ func (t *task) isConditionTrue(conditionType privatev1.TenantConditionType) bool
 	return false
 }
 
-func vaultFailureCategory(err error) string {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
-	}
-	if errors.Is(err, context.Canceled) {
-		return "canceled"
-	}
-	var networkErr net.Error
-	if errors.As(err, &networkErr) && networkErr.Timeout() {
-		return "timeout"
-	}
-	var responseErr *vaultapi.ResponseError
-	if errors.As(err, &responseErr) {
-		return "backend_response"
-	}
-	if networkErr != nil {
-		return "transport"
-	}
-	return "unknown"
-}
-
 func (t *task) ensureVaultNamespace(ctx context.Context) error {
 	condType := privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY
 
@@ -940,11 +917,10 @@ func (t *task) ensureVaultNamespace(ctx context.Context) error {
 			slog.String("tenant_id", t.tenant.GetId()),
 			slog.String("tenant_name", tenantName),
 			slog.String("reason", "ProvisionFailed"),
-			slog.String("failure_category", vaultFailureCategory(err)),
 		)
 
 		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-			"ProvisionFailed", "Vault namespace provisioning failed; verify backend availability and lifecycle configuration")
+			"ProvisionFailed", "Failed to provision vault namespace")
 		return nil
 	}
 

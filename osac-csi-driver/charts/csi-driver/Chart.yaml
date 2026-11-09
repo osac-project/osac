@@ -2,4 +2,5 @@ apiVersion: v2
 name: csi-driver
 description: OSAC CSI meta-driver
 type: application
-version: 0.0.0
+version: 0.0.29-nightly.20261109.a76a870.154.1
+appVersion: 0.0.29-nightly.20261109.a76a870.154.1

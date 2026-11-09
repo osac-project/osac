@@ -86,6 +86,7 @@ describe('SecurityGroupRuleModal', () => {
       object: {
         id: 'sg-1',
         spec: {
+          ingress: [{ protocol: Protocol.TCP, portFrom: 80, portTo: 80, ipv4Cidr: '0.0.0.0/0' }],
           egress: [{ protocol: Protocol.ALL, ipv4Cidr: '10.0.0.0/24' }],
         },
       },
@@ -122,10 +123,86 @@ describe('SecurityGroupRuleModal', () => {
       object: {
         id: 'sg-1',
         spec: {
-          ingress: [{ portFrom: 443, portTo: 443 }],
+          ingress: [{ protocol: Protocol.TCP, portFrom: 443, portTo: 443, ipv4Cidr: '0.0.0.0/0' }],
+          egress: [],
         },
       },
     });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('disables Save and Cancel while the update is pending', () => {
+    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+      mutateAsync,
+      isPending: true,
+      error: null,
+    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+
+    render(
+      <SecurityGroupRuleModal
+        onClose={vi.fn()}
+        securityGroup={securityGroup}
+        direction="ingress"
+        ruleIndex={0}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /Save/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Cancel/i })).toBeDisabled();
+  });
+
+  it('calls onClose when Escape is pressed', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+
+    render(
+      <SecurityGroupRuleModal
+        onClose={onClose}
+        securityGroup={securityGroup}
+        direction="ingress"
+        ruleIndex={0}
+      />,
+    );
+
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('keeps an in-flight rule save open when editing becomes unavailable', () => {
+    const onClose = vi.fn();
+    const reason = 'Rules cannot be edited while the security group is updating.';
+    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+      mutateAsync,
+      isPending: true,
+      error: null,
+    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+
+    const view = render(
+      <SecurityGroupRuleModal
+        onClose={onClose}
+        securityGroup={securityGroup}
+        direction="ingress"
+        editingDisabledReason={reason}
+        ruleIndex={0}
+      />,
+    );
+    expect(onClose).not.toHaveBeenCalled();
+
+    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+      error: null,
+    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    view.rerender(
+      <SecurityGroupRuleModal
+        onClose={onClose}
+        securityGroup={securityGroup}
+        direction="ingress"
+        editingDisabledReason={reason}
+        ruleIndex={0}
+      />,
+    );
+
     expect(onClose).toHaveBeenCalled();
   });
 

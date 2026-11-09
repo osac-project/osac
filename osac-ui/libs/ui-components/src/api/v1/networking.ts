@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { type MessageInitShape } from '@bufbuild/protobuf';
+import { Code, ConnectError } from '@connectrpc/connect';
 import { useMutation } from '@tanstack/react-query';
 
 import {
@@ -22,8 +23,10 @@ import {
   VirtualNetworks,
 } from '@osac/types';
 
+import { useTranslation } from '../../hooks/useTranslation';
 import { useApiFetch } from '../api-context';
 import { type CelFilter, cel } from '../cel';
+import { assertNetworkUpdateAllowed } from '../networking-immutability';
 import { type ListParams, apiQueryKey } from '../types';
 import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
 import { useListResource } from '../use-resource';
@@ -372,9 +375,28 @@ export const useCreateSecurityGroup = () => {
 export const useUpdateSecurityGroup = () => {
   const client = useApiFetch(SecurityGroups);
   const qc = useApiQueryClient();
+  const { t } = useTranslation();
   return useMutation({
     mutationFn: ({ object }: { object: MessageInitShape<typeof SecurityGroupSchema> }) => {
-      return client.update({ object });
+      const id = object.id?.trim();
+      if (!id) {
+        throw new ConnectError(
+          t('Network configuration cannot be changed after creation.'),
+          Code.FailedPrecondition,
+        );
+      }
+
+      const projected = {
+        object: {
+          id,
+          spec: {
+            ingress: object.spec?.ingress,
+            egress: object.spec?.egress,
+          },
+        },
+      };
+      assertNetworkUpdateAllowed(SecurityGroups.typeName, projected, t);
+      return client.update(projected);
     },
     onSuccess: () => invalidateSecurityGroupsQueries(qc),
   });

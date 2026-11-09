@@ -404,12 +404,14 @@ describe('buildComputeInstanceCreatePayload — useDefaultNetwork', () => {
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
+    expect(payload.spec?.networkAttachments).toHaveLength(1);
     expect(payload.spec?.networkAttachments).toEqual([
       {
         subnet: { id: 'subnet-1' },
         securityGroups: [{ id: 'sg-1' }],
       },
     ]);
+    expect(payload.spec?.networkAttachments?.[0]).not.toHaveProperty('primary');
   });
 
   it('omits networkAttachments when useDefaultNetwork is false but subnet is empty', () => {

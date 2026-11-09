@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
 import { Route, Routes } from 'react-router-dom';
+import { create } from '@bufbuild/protobuf';
 import { screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ComputeInstances } from '@osac/types';
+import { type ComputeInstance, ComputeInstanceSchema, ComputeInstances } from '@osac/types';
 
 import { VmDetailsPage } from './VmDetailsPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
@@ -44,7 +45,17 @@ vi.mock('../Resource/ResourceDetailsPage', () => ({
 }));
 
 vi.mock('./DetailsPage/VmDetails', () => ({
-  default: () => <div>VM details loaded</div>,
+  default: ({ vm }: { vm: ComputeInstance }) => (
+    <div>
+      <span>VM details loaded</span>
+      {vm.spec?.networkAttachments?.[0]?.subnet?.id ? (
+        <span>Attachment subnet {vm.spec.networkAttachments[0].subnet.id}</span>
+      ) : null}
+      {vm.status?.computeNetworkAttachmentStatuses?.[0]?.ipAddress ? (
+        <span>Attachment address {vm.status.computeNetworkAttachmentStatuses[0].ipAddress}</span>
+      ) : null}
+    </div>
+  ),
 }));
 
 const renderPage = () =>
@@ -90,5 +101,37 @@ describe('VmDetailsPage', () => {
       { id: 'vm-1' },
       { enabled: true },
     );
+  });
+
+  it('passes a loaded VM with its attachment and status address to the details view', async () => {
+    const actual =
+      await vi.importActual<typeof import('../../api/use-resource')>('../../api/use-resource');
+    const vm = create(ComputeInstanceSchema, {
+      id: 'vm-1',
+      metadata: { name: 'web-01' },
+      spec: { networkAttachments: [{ subnet: { id: 'subnet-1' } }] },
+      status: {
+        computeNetworkAttachmentStatuses: [{ subnetRef: 'subnet-1', ipAddress: '10.0.0.5' }],
+      },
+    });
+    mocks.useGetResource.mockImplementation((...args: Parameters<typeof actual.useGetResource>) => {
+      const [service] = args;
+      if (service === ComputeInstances) {
+        return {
+          data: { object: vm },
+          isLoading: false,
+          isError: false,
+          error: null,
+          refetch: vi.fn(),
+        } as unknown as ReturnType<typeof actual.useGetResource>;
+      }
+      return actual.useGetResource(...args);
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('VM details loaded')).toBeInTheDocument();
+    expect(screen.getByText('Attachment subnet subnet-1')).toBeInTheDocument();
+    expect(screen.getByText('Attachment address 10.0.0.5')).toBeInTheDocument();
   });
 });

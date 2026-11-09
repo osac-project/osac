@@ -42,6 +42,26 @@ describe('ClusterNetworkingCard', () => {
     expect(screen.getByText('sg-alpha, sg-beta')).toBeInTheDocument();
   });
 
+  it('renders the fixed attachment references without editing controls', () => {
+    const cluster = create(ClusterSchema, {
+      id: 'cl-readonly',
+      spec: {
+        networkAttachment: {
+          subnet: { id: 'subnet-1', name: 'subnet-a' },
+          securityGroups: [{ id: 'sg-1', name: 'sg-alpha' }],
+        },
+        network: { podCidr: '10.128.0.0/14', serviceCidr: '172.30.0.0/16' },
+      },
+    });
+
+    render(<ClusterNetworkingCard cluster={cluster} />);
+
+    expect(screen.getByText('subnet-a')).toBeInTheDocument();
+    expect(screen.getByText('sg-alpha')).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  });
+
   it('shows a dash for empty networking fields', () => {
     const cluster = create(ClusterSchema, { id: 'cl-3' });
 

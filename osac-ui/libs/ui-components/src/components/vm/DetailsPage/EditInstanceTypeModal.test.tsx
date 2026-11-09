@@ -1,9 +1,11 @@
+import { toJson } from '@bufbuild/protobuf';
 import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   type ComputeInstance,
+  ComputeInstanceSchema,
   ComputeInstanceState,
   ComputeInstances,
   type InstanceType,
@@ -41,8 +43,16 @@ const vm = (state: ComputeInstanceState, instanceTypeId: string): ComputeInstanc
   ({
     id: 'vm-1',
     metadata: { name: 'web-01' },
-    status: { state },
-    spec: { instanceType: { id: instanceTypeId } },
+    status: {
+      state,
+      internalIpAddress: '10.0.0.5',
+      computeNetworkAttachmentStatuses: [{ subnetRef: 'subnet-1', ipAddress: '10.0.0.5' }],
+    },
+    spec: {
+      instanceType: { id: instanceTypeId },
+      networkAttachments: [{ subnet: { id: 'subnet-1' }, securityGroups: [{ id: 'sg-1' }] }],
+      autoExternalIpAttachment: true,
+    },
   }) as ComputeInstance;
 
 const renderWrapper = ({
@@ -219,6 +229,10 @@ describe('EditInstanceTypeModal wrapper', () => {
 
     await waitFor(() => expect(request?.updateMask?.paths).toEqual(['spec.instance_type']));
     expect(request?.object?.spec?.instanceType?.id).toBe('cpu-2');
+    expect(toJson(ComputeInstanceSchema, request?.object as ComputeInstance)).toEqual({
+      id: 'vm-1',
+      spec: { instanceType: { id: 'cpu-2' } },
+    });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });

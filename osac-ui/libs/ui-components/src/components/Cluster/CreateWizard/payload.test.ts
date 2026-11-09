@@ -245,6 +245,9 @@ describe('buildClusterCreatePayload', () => {
       subnet: { id: 'my-subnet' },
       securityGroups: [{ id: 'sg-1' }, { id: 'sg-2' }],
     });
+    expect(payload.spec).not.toHaveProperty('networkAttachments');
+    expect(payload.spec?.networkAttachment).not.toHaveProperty('interface');
+    expect(payload.spec?.networkAttachment).not.toHaveProperty('primary');
   });
 
   it('leaves security group selection to the server when none is chosen', () => {

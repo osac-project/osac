@@ -45,8 +45,8 @@ type Reader interface {
 	Close() error
 }
 
-// BMCSecretStore ensures and deletes the Kubernetes Secret consumed by BMO.
-type BMCSecretStore interface {
+// SecretStore ensures and deletes the Kubernetes Secret consumed by BMO.
+type SecretStore interface {
 	Ensure(ctx context.Context, secretName string, bmc *BMC, ownerUID string) error
 	Delete(ctx context.Context, secretName, ownerUID string) error
 }

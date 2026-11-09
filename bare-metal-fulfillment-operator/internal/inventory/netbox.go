@@ -114,7 +114,7 @@ func ParseNetBoxOptions(options map[string]any) (*NetBoxClientConfig, error) {
 type NetBoxClient struct {
 	api               NetBoxAPI
 	bmhManager        baremetalhost.BMHLifecycleManager
-	bmcSecretStore    bmcCredentials.BMCSecretStore
+	bmcSecretStore    bmcCredentials.SecretStore
 	hostClass         string
 	credentialsReader bmcCredentials.Reader
 }
@@ -149,7 +149,7 @@ func NewNetBoxAPI(config *Config) (NetBoxAPI, error) {
 func NewNetBoxClient(
 	api NetBoxAPI,
 	bmhManager baremetalhost.BMHLifecycleManager,
-	bmcSecretStore bmcCredentials.BMCSecretStore,
+	bmcSecretStore bmcCredentials.SecretStore,
 	hostClass string,
 	credentialsReader bmcCredentials.Reader,
 ) *NetBoxClient {

@@ -46,7 +46,7 @@ const certBaseDir = "/etc/osac/certs"
 // without depending on the bcmclient package.
 //
 //go:generate mockgen -source=$GOFILE -destination=bcm_mock_test.go -package=$GOPACKAGE BCMAPI,BMCDiscoverer
-//go:generate mockgen -destination=bmc_secret_store_mock_test.go -package=$GOPACKAGE github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials BMCSecretStore
+//go:generate mockgen -destination=bmc_secret_store_mock_test.go -package=$GOPACKAGE github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials SecretStore
 type BCMAPI interface {
 	CertWatcher() *certwatcher.CertWatcher
 	GetDevices(ctx context.Context) ([]bcmclient.Device, error)
@@ -128,7 +128,7 @@ func ParseBCMOptions(options map[string]any) (*BCMClientConfig, error) {
 type BCMClient struct {
 	client         BCMAPI
 	bmhManager     baremetalhost.BMHLifecycleManager
-	bmcSecretStore credentials.BMCSecretStore
+	bmcSecretStore credentials.SecretStore
 	bmcDiscoverer  BMCDiscoverer
 	hostClass      string
 }
@@ -137,7 +137,7 @@ type BCMClient struct {
 func NewBCMClient(
 	client BCMAPI,
 	bmhManager baremetalhost.BMHLifecycleManager,
-	bmcSecretStore credentials.BMCSecretStore,
+	bmcSecretStore credentials.SecretStore,
 	hostClass string,
 ) *BCMClient {
 	return &BCMClient{

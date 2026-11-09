@@ -184,14 +184,14 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			ctrl        *gomock.Controller
 			mockAPI     *MockBCMAPI
 			bmhMgr      *baremetalhost.MockBMHLifecycleManager
-			secretStore *MockBMCSecretStore
+			secretStore *MockSecretStore
 		)
 
 		BeforeEach(func() {
 			ctrl = gomock.NewController(GinkgoT())
 			mockAPI = NewMockBCMAPI(ctrl)
 			bmhMgr = baremetalhost.NewMockBMHLifecycleManager(ctrl)
-			secretStore = NewMockBMCSecretStore(ctrl)
+			secretStore = NewMockSecretStore(ctrl)
 			bmhMgr.EXPECT().Namespace().Return(bmhNamespace).AnyTimes()
 		})
 
@@ -336,14 +336,14 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			ctrl        *gomock.Controller
 			mockAPI     *MockBCMAPI
 			bmhMgr      *baremetalhost.MockBMHLifecycleManager
-			secretStore *MockBMCSecretStore
+			secretStore *MockSecretStore
 		)
 
 		BeforeEach(func() {
 			ctrl = gomock.NewController(GinkgoT())
 			mockAPI = NewMockBCMAPI(ctrl)
 			bmhMgr = baremetalhost.NewMockBMHLifecycleManager(ctrl)
-			secretStore = NewMockBMCSecretStore(ctrl)
+			secretStore = NewMockSecretStore(ctrl)
 			bmhMgr.EXPECT().Namespace().Return(bmhNamespace).AnyTimes()
 		})
 
@@ -749,14 +749,14 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			ctrl        *gomock.Controller
 			mockAPI     *MockBCMAPI
 			bmhMgr      *baremetalhost.MockBMHLifecycleManager
-			secretStore *MockBMCSecretStore
+			secretStore *MockSecretStore
 		)
 
 		BeforeEach(func() {
 			ctrl = gomock.NewController(GinkgoT())
 			mockAPI = NewMockBCMAPI(ctrl)
 			bmhMgr = baremetalhost.NewMockBMHLifecycleManager(ctrl)
-			secretStore = NewMockBMCSecretStore(ctrl)
+			secretStore = NewMockSecretStore(ctrl)
 			bmhMgr.EXPECT().Namespace().Return(bmhNamespace).AnyTimes()
 		})
 

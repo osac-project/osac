@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package bmhsecret
+package bmh
 
 import (
 	"context"
@@ -46,19 +46,19 @@ const (
 	testUnmanagedBMCPassword   = "fake-other-value"
 )
 
-func TestBMCSecretStore(t *testing.T) {
+func TestSecretStore(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "BMC Secret Store Suite")
 }
 
 const testNamespace = "osac-baremetal"
 
-func newStore(objects ...client.Object) (*Store, client.Client) {
+func newStore(objects ...client.Object) (*SecretStore, client.Client) {
 	scheme := runtime.NewScheme()
 	Expect(corev1.AddToScheme(scheme)).To(Succeed())
 	Expect(metal3api.AddToScheme(scheme)).To(Succeed())
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
-	return NewStore(k8sClient, testNamespace), k8sClient
+	return NewSecretStore(k8sClient, testNamespace), k8sClient
 }
 
 var _ = Describe("BMC Secret Store", func() {

@@ -53,7 +53,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bcmclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bmcdiscovery"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/controller"
-	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/bmhsecret"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/bmh"
 	netboxcredentials "github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/netbox"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/helpers"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
@@ -605,7 +605,7 @@ func createNetBoxInventoryClientWithManager(
 	ctx context.Context,
 	inventoryCfg *inventory.Config,
 	bmhManager *baremetalhost.Manager,
-	secretStore *bmhsecret.Store,
+	secretStore *bmh.SecretStore,
 ) (inventory.Client, error) {
 	netBoxAPI, err := inventory.NewNetBoxAPI(inventoryCfg)
 	if err != nil {
@@ -704,7 +704,7 @@ func createBCMInventoryClient(
 func createMetal3Managers(
 	managementCfg *management.Config,
 	mgr ctrl.Manager,
-) (*baremetalhost.Manager, *bmhsecret.Store, error) {
+) (*baremetalhost.Manager, *bmh.SecretStore, error) {
 	ns, err := management.ParseMetal3ManagementNamespace(managementCfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse metal3 namespace: %w", err)
@@ -722,5 +722,5 @@ func createMetal3Managers(
 		return nil, nil, fmt.Errorf("failed to create uncached Kubernetes client: %w", err)
 	}
 
-	return baremetalhost.NewManager(mgr.GetClient(), uncachedClient, ns), bmhsecret.NewStore(uncachedClient, ns), nil
+	return baremetalhost.NewManager(mgr.GetClient(), uncachedClient, ns), bmh.NewSecretStore(uncachedClient, ns), nil
 }

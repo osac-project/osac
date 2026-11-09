@@ -98,7 +98,6 @@
 # Operator: ClusterOrder API, CRDs, controllers and tests
 /osac-operator/api/v1alpha1/clusterorder_*.go @osac-project/wg-caas
 /osac-operator/config/crd/bases/osac.openshift.io_clusterorders.yaml @osac-project/wg-caas
-/osac-operator/charts/operator-crds/templates/osac.openshift.io_clusterorders.yaml @osac-project/wg-caas
 /osac-operator/config/crd/fakes/hypershift.openshift.io_*.yaml @osac-project/wg-caas
 /osac-operator/internal/controller/clusterorder_*.go @osac-project/wg-caas
 /osac-operator/internal/controller/multicluster_common.go @osac-project/wg-caas
@@ -130,7 +129,6 @@
 ## Operator
 /osac-operator/config/crd/bases/osac.openshift.io_computeinstances.yaml @osac-project/wg-vmaas
 /osac-operator/internal/controller/computeinstance_*.go @osac-project/wg-vmaas
-/osac-operator/charts/operator-crds/templates/osac.openshift.io_computeinstances.yaml @osac-project/wg-vmaas
 /osac-operator/api/v1alpha1/computeinstance_*.go @osac-project/wg-vmaas
 ## Fulfillment Integration
 /fulfillment-service/it/it_compute_instance_*.go @osac-project/wg-vmaas
@@ -168,12 +166,6 @@
 /osac-operator/config/crd/bases/*natgateway*.yaml @osac-project/wg-connectivity
 /osac-operator/config/crd/bases/*securitygroup*.yaml @osac-project/wg-connectivity
 /osac-operator/config/crd/bases/*fabricdomain*.yaml @osac-project/wg-connectivity
-/osac-operator/charts/operator-crds/templates/*network*.yaml @osac-project/wg-connectivity
-/osac-operator/charts/operator-crds/templates/*subnet*.yaml @osac-project/wg-connectivity
-/osac-operator/charts/operator-crds/templates/*externalip*.yaml @osac-project/wg-connectivity
-/osac-operator/charts/operator-crds/templates/*natgateway*.yaml @osac-project/wg-connectivity
-/osac-operator/charts/operator-crds/templates/*securitygroup*.yaml @osac-project/wg-connectivity
-/osac-operator/charts/operator-crds/templates/*fabricdomain*.yaml @osac-project/wg-connectivity
 /osac-operator/config/samples/network-manager-fabric-netris.yaml @osac-project/wg-connectivity
 ## Operator controllers and fabric backends
 /osac-operator/internal/controller/networking_*.go @osac-project/wg-connectivity

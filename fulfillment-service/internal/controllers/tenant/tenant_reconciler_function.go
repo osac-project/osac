@@ -916,11 +916,11 @@ func (t *task) ensureVaultNamespace(ctx context.Context) error {
 		t.r.logger.ErrorContext(ctx, "Failed to provision vault namespace for tenant",
 			slog.String("tenant_id", t.tenant.GetId()),
 			slog.String("tenant_name", tenantName),
-			slog.Any("error", err),
+			slog.String("reason", "ProvisionFailed"),
 		)
 
 		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-			"ProvisionFailed", fmt.Sprintf("Failed to provision vault namespace: %v", err))
+			"ProvisionFailed", "Vault namespace provisioning failed; verify backend availability and lifecycle configuration")
 		return nil
 	}
 

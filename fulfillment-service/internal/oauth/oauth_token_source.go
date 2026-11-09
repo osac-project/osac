@@ -790,8 +790,7 @@ func (s *TokenSource) sendForm(ctx context.Context, endpoint string, form any, r
 			s.logger.ErrorContext(
 				ctx,
 				"Failed to close response body",
-				slog.String("endpoint", endpoint),
-				slog.Any("error", err),
+				slog.Int("code", response.StatusCode),
 			)
 		}
 	}()
@@ -842,7 +841,6 @@ func (s *TokenSource) sendForm(ctx context.Context, endpoint string, form any, r
 		s.logger.ErrorContext(
 			ctx,
 			"Unexpected response code",
-			slog.String("endpoint", endpoint),
 			slog.Int("code", response.StatusCode),
 		)
 		return fmt.Errorf(
@@ -859,9 +857,6 @@ func (s *TokenSource) sendTokenForm(ctx context.Context,
 		s.logger.ErrorContext(
 			ctx,
 			"Failed to send token form",
-			slog.String("endpoint", s.tokenEndpoint),
-			slog.Any("!request", request),
-			slog.Any("error", err),
 		)
 		return
 	}

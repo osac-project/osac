@@ -14,13 +14,20 @@ language governing permissions and limitations under the License.
 package oauth
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/ghttp"
 	"go.uber.org/mock/gomock"
@@ -29,6 +36,92 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
+
+type tokenReportingTransport func(*http.Request) (*http.Response, error)
+
+func (transport tokenReportingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport(request)
+}
+
+type tokenReportingBody struct {
+	io.Reader
+	closeErr error
+}
+
+func (body tokenReportingBody) Close() error {
+	return body.closeErr
+}
+
+var _ = Describe("Token failure reporting", func() {
+	DescribeTable("keeps backend details out of JSON logs", func(status int, transportFailure, closeFailure bool) {
+		const syntheticHost = "synthetic-oauth.example.invalid"
+		const syntheticBody = "synthetic-oauth-body-marker"
+		const syntheticToken = "synthetic-oauth-token-marker"
+		var logs bytes.Buffer
+		source := &TokenSource{
+			logger:        slog.New(slog.NewJSONHandler(&logs, nil)),
+			tokenEndpoint: "https://" + syntheticHost + "/token",
+			httpClient: &http.Client{Transport: tokenReportingTransport(func(request *http.Request) (*http.Response, error) {
+				Expect(request.Method).To(Equal(http.MethodPost))
+				Expect(request.ParseForm()).To(Succeed())
+				Expect(request.Form.Get("client_secret")).To(Equal(syntheticToken))
+				if transportFailure {
+					return nil, errors.New(syntheticBody)
+				}
+				content := `{"access_token":"` + syntheticToken + `"}`
+				if status == http.StatusBadRequest {
+					content = `{"error":"invalid_client","error_description":"` + syntheticBody + `"}`
+				}
+				var closeErr error
+				if closeFailure {
+					closeErr = errors.New(syntheticBody + " " + syntheticToken)
+				}
+				return &http.Response{
+					StatusCode: status,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       tokenReportingBody{Reader: strings.NewReader(content), closeErr: closeErr},
+				}, nil
+			})},
+		}
+		response, err := source.sendTokenForm(context.Background(), tokenEndpointRequest{
+			GrantType: "client_credentials", ClientSecret: syntheticToken,
+		})
+		if closeFailure {
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.AccessToken).To(Equal(syntheticToken))
+		} else {
+			Expect(err).To(HaveOccurred())
+			if transportFailure || status == http.StatusServiceUnavailable {
+				Expect(err.Error()).To(ContainSubstring(syntheticHost))
+			}
+			if transportFailure || status == http.StatusBadRequest {
+				Expect(err.Error()).To(ContainSubstring(syntheticBody))
+			}
+		}
+		Expect(logs.Len()).To(BeNumerically(">", 0))
+		for _, sentinel := range []string{syntheticHost, syntheticBody, syntheticToken} {
+			Expect(logs.String()).ToNot(ContainSubstring(sentinel))
+		}
+		decoder := json.NewDecoder(&logs)
+		for decoder.More() {
+			var record map[string]any
+			Expect(decoder.Decode(&record)).To(Succeed())
+			Expect(record).To(HaveKeyWithValue("level", "ERROR"))
+			Expect(record).To(HaveKey("msg"))
+			for _, key := range []string{"endpoint", "error", "!request", "request"} {
+				Expect(record).ToNot(HaveKey(key))
+			}
+			if record["msg"] == "Unexpected response code" || record["msg"] == "Failed to close response body" {
+				Expect(record).To(HaveKeyWithValue("code", float64(status)))
+			}
+		}
+	},
+		Entry("transport failure", 0, true, false),
+		Entry("unexpected HTTP status", http.StatusServiceUnavailable, false, false),
+		Entry("OAuth error response", http.StatusBadRequest, false, false),
+		Entry("response body close failure", http.StatusOK, false, true),
+	)
+})
 
 var _ = Describe("Token source", func() {
 	var (

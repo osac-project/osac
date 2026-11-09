@@ -7,7 +7,7 @@ inspect test source for individual cases. Paths are relative to
 
 Discover targets with `make help`; `make test` and `make integration-tests` are
 the public entry points. The CI job runs the installer's Kind target with the BMF
-suite (`make -C osac-installer help`, `.github/workflows/`).
+suite (repository-root `make -C osac-installer help`, `.github/workflows/`).
 
 ## Test tiers
 

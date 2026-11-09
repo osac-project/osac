@@ -3,7 +3,7 @@
 [Shared testing policy](../INTEGRATION-TESTING.md) defines tiers, ownership and
 evidence. Paths are relative to `osac-installer/` unless noted. Touched-area
 requirements: [component guide](../../osac-installer/AGENTS.md#integration-testing).
-Run `make -C osac-installer help` to list the test targets.
+Run `make help` to list the test targets.
 
 ## Test tiers
 
@@ -29,8 +29,13 @@ gap.
 
 Preflight runs while Helm renders the chart. The unit/render/Kind tiers are
 registered in `.github/ci-tests.yml` without a Makefile wrapper; read that
-registration for how each tier is invoked. The Kind harness refuses a
-non-Kind context.
+registration for how each tier is invoked.
+
+Run the Kind tier only on a dedicated, disposable Kind cluster. The harness
+changes cluster-scoped state and restores it only on success, and its cleanup
+deletes the `osac-kafka` and `osac-infra` namespaces and the stub CRDs, even
+after a setup failure. Refusing a non-Kind context does not protect an existing
+Kind development cluster.
 
 | Tier | Real | Faked or not covered |
 |---|---|---|

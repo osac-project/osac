@@ -18,7 +18,7 @@ Touched-area requirements: [component guide](../../fulfillment-service/AGENTS.md
 
 For commands, see the
 [component guide](../../fulfillment-service/AGENTS.md#integration-tests) and
-run `make -C osac-installer help` for the installer targets that drive the
+run `make -C osac-installer help` from the repository root for the installer targets that drive the
 deployed suite.
 
 ## ComputeInstance disk handoff (OSAC-6685)

@@ -17,11 +17,11 @@ Touched-area requirements: [component guide](../../osac-metering/AGENTS.md#integ
 | Component integration (combined pipeline) | `metering-service/internal/pipeline` | Real Kafka and PostgreSQL with fold, round, and relay in one process: envelope, continuation, stop, resize split, delete, and volume billing on the tenant's heartbeat topic | Billing provider and fulfillment are not exercised; events are produced directly and rounds run at fixed times. |
 | Contract | The adapter contract suite, gated on the `M360_TEST_API_URL`, `M360_TEST_API_KEY`, and `M360_TEST_TENANT` variables | A real M360 tenant: adapter submission with synchronous acceptance or rejection asserted | Skips unless all three real-tenant variables are set; the unresolved readback limits are listed under Coverage gaps. |
 | E2E | Deployed cross-component metering deployment | The deployed metering pipeline and its configured Kafka/provider dependencies | Depends on the installer environment and enabled metering path. |
-| Helm render and lint | `make -C osac-metering helm-lint` | Chart templates, the shipped rule revision, and the admission policy that protects it | Deployed behavior. |
-| Helm render | `make -C osac-installer metering-auth-render-test` | Metering Deployment, rules ConfigMap, admission policy and binding, and absence of fulfillment credentials in the CI profiles | Does not verify a deployed metering pipeline. |
+| Helm render and lint | `make helm-lint` | Chart templates, the shipped rule revision, and the admission policy that protects it | Deployed behavior. |
+| Helm render | repository-root `make -C osac-installer metering-auth-render-test` | Metering Deployment, rules ConfigMap, admission policy and binding, and absence of fulfillment credentials in the CI profiles | Does not verify a deployed metering pipeline. |
 | Helm unit (reader grants) | `make helm-test` and `make readers-render-test`, plus the `helm unittest` suites in the helm-unit CI leg | Rendered reader ACLs, grant/revoke render stability, and the exporter and lag-rule templates | Does not prove broker enforcement, revocation timing, or live lag reporting against a deployed Kafka |
 
-From the repository root, `make -C osac-metering test` runs the full component
+`make test` runs the full component
 suite across schema, metering-service, adapters, and rule revision checks; it is
 not a unit-only command. See the `test*` targets in `osac-metering/Makefile`
 for the remaining entry points.

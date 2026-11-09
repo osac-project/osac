@@ -16,7 +16,7 @@ Touched-area requirements: [component guide](../../osac-csi-driver/AGENTS.md#int
 | Contract | No dedicated contract suite; track [OSAC-4845](https://redhat.atlassian.net/browse/OSAC-4845) for vendor and fulfillment-boundary coverage | No deployed fulfillment or real vendor endpoint | Fulfillment and vendor calls use stubs and `fakeVendor`. |
 | E2E | `../tests/e2e/storage/` when enabled | Tenant/CaaS storage-controller lifecycle and StorageClass setup | No PVC through the OSAC CSI driver: no CSI `CreateVolume`, node publish/mount, or pod I/O; depends on the storage tier and environment gates. |
 
-Run `make -C osac-csi-driver help` for the current test targets.
+Run `make help` for the current test targets.
 
 ## Coverage notes
 

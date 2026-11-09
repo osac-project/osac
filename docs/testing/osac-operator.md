@@ -9,7 +9,7 @@ Touched-area requirements:
 Discover targets with `make help`: `make test` (Unit, Envtest, Contract) and
 `make integration-tests` (pre-existing Kind cluster) are the public entry points.
 The CI job runs the installer's Kind target with the operator suite
-(`make -C osac-installer help`, `.github/workflows/`).
+(repository-root `make -C osac-installer help`, `.github/workflows/`).
 
 ## Test tiers
 
@@ -80,7 +80,7 @@ claims hold cleanup at checkpoints, and no AAP or real provider runs. Inspect th
 deployed suite's fixtures.
 
 Run this leg through the installer's Kind target with the operator suite
-(`make -C osac-installer help`), on a dedicated cluster with environment configs
+(repository-root `make -C osac-installer help`), on a dedicated cluster with environment configs
 kept out of the repository; see
 [Multi-branch test isolation](../MULTI-BRANCH-ISOLATION.md). Run NET-CLEAN-08 in
 a separate cluster with its own ports when both suites run in parallel. Deployed

@@ -93,9 +93,7 @@ func newMockNetBox() *mockNetBox {
 }
 
 func (m *mockNetBox) stop() {
-	if m.server != nil {
-		m.server.Close()
-	}
+	m.server.Close()
 }
 
 func (m *mockNetBox) addDevice(id int, status string, fields map[string]any) {
@@ -335,16 +333,12 @@ func newNetBoxCredentialResolver(deviceIDs ...int) inventory.CredentialsReaderRe
 	return inventory.NewNetBoxCredentialResolver(&fakeSecretAPI{secrets: secrets})
 }
 
-// netboxAPIFor builds the NetBox client against the mock server.
-func netboxAPIFor(m *mockNetBox) inventory.NetBoxAPI {
-	return netboxclient.NewClientForTest(m.server.Client(), m.server.URL, netboxTestToken)
-}
-
 // newNetBoxReconciler wires the real NetBox adapter and BMH manager to the
 // shared envtest API server, mirroring newBCMReconciler.
 func newNetBoxReconciler(m *mockNetBox, credentials inventory.CredentialsReaderRepository) *BareMetalInstanceReconciler {
 	bmhManager := baremetalhost.NewManager(k8sClient, k8sClient, netboxTestNS)
-	inventoryClient := inventory.NewNetBoxClient(netboxAPIFor(m), bmhManager, netboxHostClass, credentials)
+	api := netboxclient.NewClientForTest(m.server.Client(), m.server.URL, netboxTestToken)
+	inventoryClient := inventory.NewNetBoxClient(api, bmhManager, netboxHostClass, credentials)
 	return newTestReconciler(inventoryClient, netboxTestNS)
 }
 

@@ -20,8 +20,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-
-	netbox "github.com/netbox-community/go-netbox/v4"
 )
 
 // NewClientForTest creates a Client with an injected HTTP client and API token.
@@ -36,21 +34,13 @@ func NewClientForTest(httpClient *http.Client, endpoint, token string) *Client {
 		return http.ErrUseLastResponse
 	}
 
-	configuration := netbox.NewConfiguration()
-	configuration.Servers[0].URL = strings.TrimRight(endpoint, "/")
-	configuration.Debug = false
-	configuration.AddDefaultHeader("Authorization", netBoxAuthorizationHeader(token))
-	configuration.HTTPClient = &testClient
-	return &Client{api: netbox.NewAPIClient(configuration)}
+	return &Client{api: newAPIClient(strings.TrimRight(endpoint, "/"), token, &testClient)}
 }
 
 // DevicePayloadForTest returns the dcim.device response shape the generated SDK
 // requires, so tests share one fixture instead of maintaining their own copies.
 func DevicePayloadForTest(id int, name, status string, customFields map[string]interface{}) map[string]interface{} {
-	fields := make(map[string]interface{}, len(customFields))
-	for key, value := range customFields {
-		fields[key] = value
-	}
+	fields := cloneCustomFields(customFields)
 	return map[string]interface{}{
 		"id":      id,
 		"url":     "/api/dcim/devices/" + strconv.Itoa(id) + "/",

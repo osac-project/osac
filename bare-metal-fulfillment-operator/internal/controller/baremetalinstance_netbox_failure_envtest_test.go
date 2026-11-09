@@ -85,17 +85,17 @@ var _ = Describe("BareMetalInstance NetBox claim recovery", func() {
 			Expect(device.Status).To(Equal("active"))
 			Expect(device.CustomFields["osac_instance_id"]).To(Equal(string(bmi.UID)))
 
-			Expect(bmhExistsInNS(netboxTestNS, hostname)).To(BeTrue())
-			Expect(netboxBMH(hostname).Spec.ConsumerRef).NotTo(BeNil())
-			Expect(netboxBMH(hostname).Spec.ConsumerRef.Name).To(Equal("another-instance"))
+			foreignBMH := netboxBMH(hostname)
+			Expect(foreignBMH.Spec.ConsumerRef).NotTo(BeNil())
+			Expect(foreignBMH.Spec.ConsumerRef.Name).To(Equal("another-instance"))
 
 			// Removing the conflict lets the retry prepare the host without
 			// reselecting or releasing the claim.
 			Expect(k8sClient.Delete(ctx, foreign)).To(Succeed())
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 1)
-			Expect(bmhExistsInNS(netboxTestNS, hostname)).To(BeTrue())
-			Expect(netboxBMH(hostname).Spec.ConsumerRef).NotTo(BeNil())
-			Expect(netboxBMH(hostname).Spec.ConsumerRef.Name).To(Equal(string(bmi.UID)))
+			claimedBMH := netboxBMH(hostname)
+			Expect(claimedBMH.Spec.ConsumerRef).NotTo(BeNil())
+			Expect(claimedBMH.Spec.ConsumerRef.Name).To(Equal(string(bmi.UID)))
 			Expect(mock.device(42).CustomFields["osac_instance_id"]).To(Equal(string(bmi.UID)))
 
 			markBMHReadyInNS(netboxTestNS, hostname)

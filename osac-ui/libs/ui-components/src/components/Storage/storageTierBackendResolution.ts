@@ -1,6 +1,6 @@
 import type { TFunction } from 'i18next';
 
-import type { StorageTier } from '@osac/types/private';
+import type { StorageBackend, StorageTier } from '@osac/types/private';
 import { StorageProtocol } from '@osac/types/private';
 
 export const protocolLabel = (t: TFunction): Record<StorageProtocol, string> => ({
@@ -16,3 +16,14 @@ export const uniqueBackendIds = (tiers: StorageTier[]): string[] => {
   });
   return Array.from(ids).sort();
 };
+
+export const tierBackendDisplayNames = (
+  tier: StorageTier,
+  backendsById: ReadonlyMap<string, StorageBackend>,
+): string =>
+  (tier.spec?.backends ?? [])
+    .map(
+      (association) =>
+        backendsById.get(association.backendId)?.metadata?.name ?? association.backendId,
+    )
+    .join(', ');

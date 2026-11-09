@@ -233,7 +233,9 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 	})
 
 	Context("Tenant-default networking", func() {
-		var tenant string
+		var (
+			tenant string
+		)
 
 		BeforeEach(func() {
 			tenants := privatev1.NewTenantsClient(tool.InternalView().ControllerConn())
@@ -266,8 +268,10 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		newIsolatedVirtualNetwork := func(project string, defaultLabelled bool) string {
 			networks := privatev1.NewVirtualNetworksClient(tool.InternalView().ControllerConn())
 			id := fmt.Sprintf("test-vnet-%s", uuid.New())
+			resourceProject := project
 			labels := map[string]string{}
 			if defaultLabelled {
+				resourceProject = ""
 				labels[tenantDefaultNetworkingLabel] = "true"
 			}
 			_, err := networks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
@@ -276,7 +280,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					Metadata: privatev1.Metadata_builder{
 						Name:        fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
 						Tenant:      tenant,
-						Project:     project,
+						Project:     resourceProject,
 						Annotations: map[string]string{"osac.openshift.io/management-state": "unmanaged"},
 						Labels:      labels,
 					}.Build(),
@@ -319,8 +323,10 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 			subnets := privatev1.NewSubnetsClient(tool.InternalView().ControllerConn())
 			id := fmt.Sprintf("test-subnet-%s", uuid.New())
 			name := fmt.Sprintf("test-subnet-%s", uuid.New()[24:32])
+			resourceProject := project
 			labels := map[string]string{}
 			if defaultLabelled {
+				resourceProject = ""
 				labels[tenantDefaultNetworkingLabel] = "true"
 				name = "default-ipv4"
 			}
@@ -334,7 +340,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					Metadata: privatev1.Metadata_builder{
 						Name:        name,
 						Tenant:      tenant,
-						Project:     project,
+						Project:     resourceProject,
 						Annotations: map[string]string{"osac.openshift.io/management-state": "unmanaged"},
 						Labels:      labels,
 						Finalizers:  finalizers,
@@ -389,8 +395,10 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 		newProjectSecurityGroup := func(project, virtualNetworkId string, defaultLabelled bool, state string) string {
 			groups := privatev1.NewSecurityGroupsClient(tool.InternalView().ControllerConn())
 			id := fmt.Sprintf("test-sg-%s", uuid.New())
+			resourceProject := project
 			labels := map[string]string{}
 			if defaultLabelled {
+				resourceProject = ""
 				labels[tenantDefaultNetworkingLabel] = "true"
 			}
 			finalizers := []string{}
@@ -403,7 +411,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					Metadata: privatev1.Metadata_builder{
 						Name:        fmt.Sprintf("test-sg-%s", uuid.New()[24:32]),
 						Tenant:      tenant,
-						Project:     project,
+						Project:     resourceProject,
 						Annotations: map[string]string{"osac.openshift.io/management-state": "unmanaged"},
 						Labels:      labels,
 						Finalizers:  finalizers,
@@ -483,6 +491,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				project := createCatalogItemProjectFixture(ctx, tenant)
 				virtualNetworkId := newIsolatedVirtualNetwork(project, true)
 				configure(project, virtualNetworkId)
+				Expect(setTenantDefaultNetworkingCondition(ctx, tenant, true)).To(Succeed())
 
 				clusterId := fmt.Sprintf("test-cluster-%s", uuid.New())
 				DeferCleanup(func(cleanupCtx context.Context) {
@@ -499,9 +508,8 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				expectNoStoredCluster(clusterId)
 			},
 			Entry("missing default Subnet",
-				func(project, virtualNetworkId string) {
-					newProjectSecurityGroup(project, virtualNetworkId, true, "ready")
-				}, grpccodes.InvalidArgument, "default subnet is required"),
+				func(project, virtualNetworkId string) {},
+				grpccodes.InvalidArgument, "no tenant default subnet is available"),
 			Entry("pending default Subnet",
 				func(project, virtualNetworkId string) {
 					newProjectSubnet(project, virtualNetworkId, true, "pending")
@@ -518,7 +526,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 			Entry("missing default SecurityGroup",
 				func(project, virtualNetworkId string) {
 					newProjectSubnet(project, virtualNetworkId, true, "ready")
-				}, grpccodes.InvalidArgument, "default security group is required"),
+				}, grpccodes.InvalidArgument, "no tenant default security group is available"),
 			Entry("pending default SecurityGroup",
 				func(project, virtualNetworkId string) {
 					newProjectSubnet(project, virtualNetworkId, true, "ready")
@@ -804,6 +812,9 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					NodeSets: testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+						SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+							publicv1.SecurityGroupLocalReference_builder{Id: securityGroupId}.Build(),
+						},
 					}.Build(),
 				}.Build(),
 			}.Build(),
@@ -826,6 +837,9 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 					NodeSets: testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: otherSubnetId}.Build(),
+						SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+							publicv1.SecurityGroupLocalReference_builder{Id: securityGroupId}.Build(),
+						},
 					}.Build(),
 				}.Build(),
 			}.Build(),

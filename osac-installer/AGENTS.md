@@ -46,7 +46,7 @@ respective areas.
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | Shared provider-networking provisioning configuration | Helm contract | `make helm-networking-test` (GATE-CONFIG-01) |
-| MCE defaults, lifecycle gate, image overrides, or compatibility RBAC | Helm contract | `make mce-render-test` |
+| MCE defaults, lifecycle gate, image overrides, compatibility RBAC, or ACM auto-import policy | Helm contract plus command-stub unit | `make mce-render-test` includes `scripts/test-mce-auto-import.py` (targeted policy apply, bootstrap ordering, API failure; no host `jq`). To check the hook image, run `MCE_TEST_CONTAINER_IMAGE=quay.io/openshift/origin-cli:4.20.0 python3 scripts/test-mce-auto-import.py` after pulling that image (Podman by default; `CONTAINER_TOOL` overrides it). No live MCE or API merge validation; see [CaaS ACM policy and test guidance](../docs/guides/installation/helm-deployment-guide.md#caas-acm-registration-policy). |
 | Kind runtime selection, sudo authentication, image loading, device-mapper permissions, cluster/storage lifecycle, or devstack Helm apply flags | Unit with command stubs | `make kind-runtime-test` |
 | Deployed dev-full OSAC UI Gateway reachability | Component integration | `./scripts/test-ui-gateway.sh` |
 | TopoLVM chart dependency download, cache reuse, build scoping, or install preparation | Unit with command stubs | `make kind-runtime-test` |

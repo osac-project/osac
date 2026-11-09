@@ -310,6 +310,7 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
         "wait_for_cluster_grpc_deleting_or_archived",
         "_assert_cluster_metering",
         "_assert_worker_metering",
+        "assert_acm_registration",
     ):
         monkeypatch.setattr(scenario, name, Mock())
     monkeypatch.setattr(scenario, "run", Mock(return_value="release-image"))

@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from tests.e2e.caas.acm_registration import assert_acm_registration
 from tests.e2e.caas.deletion_diagnostics import snapshot_cluster_deletion
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
@@ -378,6 +379,7 @@ def assert_cluster_available(
     metering: MeteringCollector,
     uuid: str,
     version_name: str,
+    cluster_template: str,
     expected_ssh_key: str = "",
 ) -> _AvailableCluster:
     """Verify provisioning, version propagation, guest readiness, and worker ownership."""
@@ -410,6 +412,12 @@ def assert_cluster_available(
         assert "sshPublicKey" not in cluster_order_spec and "ssh_public_key" not in cluster_order_spec
     hosted_cluster_name, hosted_cluster_ns = _assert_cluster_version_propagated(
         k8s=k8s, co_name=co_name, cluster=cluster, cluster_order_spec=cluster_order_spec, version_name=version_name
+    )
+    assert_acm_registration(
+        k8s=k8s,
+        hosted_cluster_name=hosted_cluster_name,
+        hosted_cluster_ns=hosted_cluster_ns,
+        cluster_template=cluster_template,
     )
     node_sets = cluster.get("object", {}).get("spec", {}).get("nodeSets", {})
     worker_node_set, original_size, worker_instance_type = _assert_worker_node_request(
@@ -698,6 +706,7 @@ def test_cluster_create(
             metering=metering,
             uuid=uuid,
             version_name=version["name"],
+            cluster_template=cluster_template,
             expected_ssh_key=Path(ssh_public_key_path).read_text().strip(),
         )
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
@@ -867,7 +876,13 @@ def _assert_owned_workers_for_node_sets(
 
 
 def assert_cluster_with_two_node_sets_available(
-    *, grpc: GRPCClient, k8s: K8sClient, metering: MeteringCollector, uuid: str, instance_types: dict[str, str]
+    *,
+    grpc: GRPCClient,
+    k8s: K8sClient,
+    metering: MeteringCollector,
+    uuid: str,
+    instance_types: dict[str, str],
+    cluster_template: str,
 ) -> _ClusterResources:
     """Verify two ready worker sets remain isolated and record their owned resources."""
     co_name = wait_for_cluster_order_cr(k8s=k8s, uuid=uuid)
@@ -908,6 +923,12 @@ def assert_cluster_with_two_node_sets_available(
     # success and all NodePools ready), so wait for the phase the billing gate
     # actually keys on before expecting the heartbeat.
     wait_for_cluster_ready(k8s=k8s, name=co_name)
+    assert_acm_registration(
+        k8s=k8s,
+        hosted_cluster_name=k8s.get_cluster_order_hosted_cluster_name(name=co_name),
+        hosted_cluster_ns=hosted_cluster_ns,
+        cluster_template=cluster_template,
+    )
     metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=300, resource_kind=WaitResourceKind.CLUSTER_ORDER)
     metering.verify()
 

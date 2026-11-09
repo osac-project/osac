@@ -1,0 +1,109 @@
+# Explicit counterpart to the hub's disabled automatic import. The Hosted-mode
+# contract is documented by hypershift-addon-operator's local-cluster import guide.
+- name: Require tenant ownership for explicit ACM registration
+  ansible.builtin.assert:
+    that:
+      - hosted_cluster_acm_registration_annotations['osac.openshift.io/tenant'] | length > 0
+    fail_msg: Explicit ACM registration requires ClusterOrder tenant ownership.
+
+- name: Read existing ManagedCluster registration
+  kubernetes.core.k8s_info:
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    name: "{{ hosted_cluster_name }}"
+  register: hosted_cluster_existing_managed_cluster
+
+- name: Validate ManagedCluster ownership before registration
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.metadata.annotations['osac.openshift.io/tenant'] | default('') ==
+        hosted_cluster_acm_registration_annotations['osac.openshift.io/tenant']
+      - >-
+        item.metadata.annotations['osac.openshift.io/owner-reference'] | default('') ==
+        hosted_cluster_acm_registration_annotations['osac.openshift.io/owner-reference']
+    fail_msg: >-
+      Existing ManagedCluster ownership does not match this ClusterOrder. Refusing to
+      adopt a foreign or legacy registration; ask the hub administrator to review it.
+  loop: "{{ hosted_cluster_existing_managed_cluster.resources }}"
+
+- name: Discover optional ACM addon configuration
+  kubernetes.core.k8s_info:
+    api_version: agent.open-cluster-management.io/v1
+    kind: KlusterletAddonConfig
+    name: "{{ hosted_cluster_name }}"
+    namespace: "{{ hosted_cluster_name }}"
+  register: hosted_cluster_existing_addon_config
+
+- name: Validate ACM addon ownership before registration
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.metadata.annotations['osac.openshift.io/tenant'] | default('') ==
+        hosted_cluster_acm_registration_annotations['osac.openshift.io/tenant']
+      - >-
+        item.metadata.annotations['osac.openshift.io/owner-reference'] | default('') ==
+        hosted_cluster_acm_registration_annotations['osac.openshift.io/owner-reference']
+    fail_msg: Existing KlusterletAddonConfig ownership does not match this ClusterOrder.
+  loop: "{{ hosted_cluster_existing_addon_config.resources }}"
+
+- name: Explicitly register opted-in HostedCluster
+  vars:
+    hosted_cluster_import_annotations:
+      import.open-cluster-management.io/hosting-cluster-name: "{{ hosted_cluster_acm_hosting_cluster_name }}"
+      import.open-cluster-management.io/klusterlet-deploy-mode: Hosted
+      open-cluster-management/created-via: hypershift
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cluster.open-cluster-management.io/v1
+      kind: ManagedCluster
+      metadata:
+        name: "{{ hosted_cluster_name }}"
+        labels: >-
+          {{ {'name': hosted_cluster_name, 'cloud': 'auto-detect', 'vendor': 'auto-detect',
+          'cluster.open-cluster-management.io/clusterset': 'default'}
+          | combine(hosted_cluster_default_cluster_order_label) }}
+        annotations: "{{ hosted_cluster_acm_registration_annotations | combine(hosted_cluster_import_annotations) }}"
+      spec:
+        hubAcceptsClient: true
+        leaseDurationSeconds: 60
+
+- name: Wait for ManagedCluster namespace before enabling ACM addons
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ hosted_cluster_name }}"
+  register: hosted_cluster_managed_namespace
+  until: hosted_cluster_managed_namespace.resources | length == 1
+  retries: 24
+  delay: 5
+  when: hosted_cluster_existing_addon_config.api_found
+
+- name: Enable ACM addons for opted-in cluster
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: agent.open-cluster-management.io/v1
+      kind: KlusterletAddonConfig
+      metadata:
+        name: "{{ hosted_cluster_name }}"
+        namespace: "{{ hosted_cluster_name }}"
+        annotations: "{{ hosted_cluster_acm_registration_annotations }}"
+      spec:
+        clusterName: "{{ hosted_cluster_name }}"
+        clusterNamespace: "{{ hosted_cluster_name }}"
+        clusterLabels:
+          cloud: auto-detect
+          vendor: auto-detect
+        applicationManager:
+          enabled: true
+        certPolicyController:
+          enabled: true
+        iamPolicyController:
+          enabled: true
+        policyController:
+          enabled: true
+        searchCollector:
+          enabled: true
+  when: hosted_cluster_existing_addon_config.api_found

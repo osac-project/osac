@@ -599,6 +599,27 @@ mce:          { enabled: false }
 On a shared cluster, do not change cluster-scoped prerequisites without the
 agreement of the cluster owner.
 
+### CaaS ACM registration policy
+
+Regular CaaS clusters are not registered with ACM; AI MaaS clusters are.
+No tenant-side setting is required.
+
+- **OSAC-managed MCE:** Set `mce.enabled: true` in the infrastructure values.
+  OSAC configures the required auto-import policy automatically.
+- **Existing MCE/RHACM:** Keep `mce.enabled: false`. Ask the hub administrator
+  to add or update this entry in `spec.customizedVariables` on
+  `AddOnDeploymentConfig` `multicluster-engine/hypershift-addon-deploy-config`,
+  preserving other entries:
+
+  ```yaml
+  - name: autoImportDisabled
+    value: "true"
+  ```
+
+Before provisioning, the affected HyperShift agents must finish rolling out
+with `DISABLE_AUTO_IMPORT=true`. This policy affects all HostedClusters on the
+hub, so coordinate with its owner. Existing ACM registrations are not removed.
+
 ### Skipping Phase 1 Entirely
 
 Safe only when the cluster already provides everything that the two phase-1

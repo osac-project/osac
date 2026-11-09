@@ -1,0 +1,51 @@
+# Shared policy belongs to the hub administrator/installer, never this job.
+- name: Read HyperShift auto-import policy
+  kubernetes.core.k8s_info:
+    api_version: addon.open-cluster-management.io/v1alpha1
+    kind: AddOnDeploymentConfig
+    name: hypershift-addon-deploy-config
+    namespace: "{{ hosted_cluster_acm_config_namespace }}"
+  register: hosted_cluster_acm_import_policy
+
+- name: Require explicitly disabled HyperShift auto-import
+  ansible.builtin.assert:
+    that:
+      - hosted_cluster_acm_import_policy.resources | length == 1
+      - >-
+        (hosted_cluster_acm_import_policy.resources[0].spec.customizedVariables | default([])
+        | selectattr('name', 'equalto', 'autoImportDisabled') | map(attribute='value')
+        | map('lower') | list) == ['true']
+    fail_msg: >-
+      The hub administrator must set autoImportDisabled="true" on
+      AddOnDeploymentConfig {{ hosted_cluster_acm_config_namespace }}/hypershift-addon-deploy-config
+      before provisioning CaaS clusters. Omitting the clusterset label does not disable
+      import. OSAC configures this only when it owns MCE; this job will not modify shared hub policy.
+
+- name: Read effective HyperShift agent deployments
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    label_selectors:
+      - app=hypershift-addon-agent
+  register: hosted_cluster_acm_agents
+
+- name: Require disabled agents with no old replicas
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item.spec.template.spec.containers
+        | selectattr('name', 'equalto', 'hypershift-addon-agent')
+        | map(attribute='env', default=[]) | flatten
+        | selectattr('name', 'equalto', 'DISABLE_AUTO_IMPORT') | map(attribute='value', default='')
+        | map('lower') | list) == ['true']
+      - (item.status.observedGeneration | default(0)) >= item.metadata.generation
+      - (item.status.updatedReplicas | default(0)) == (item.spec.replicas | default(1))
+      - (item.status.availableReplicas | default(0)) == (item.spec.replicas | default(1))
+      - (item.status.replicas | default(0)) == (item.spec.replicas | default(1))
+    fail_msg: >-
+      HyperShift agent {{ item.metadata.namespace }}/{{ item.metadata.name }} has not
+      fully rolled out with DISABLE_AUTO_IMPORT=true. Wait for the hub administrator's
+      policy rollout before provisioning; this job will not change shared agent configuration.
+  loop: "{{ hosted_cluster_acm_agents.resources }}"
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"

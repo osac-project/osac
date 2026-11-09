@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.e2e.caas.acm_registration import assert_auto_import_disabled
 from tests.e2e.core.helpers import registered_ssh_key_secret
+from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
 
@@ -29,6 +31,12 @@ def cli(namespace: str, fulfillment_address: str, service_account: str, jwt_cli_
     )
     yield instance
     instance.close()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def disabled_acm_auto_import(k8s_hub_client: K8sClient) -> None:
+    """Check the administrator-owned policy before any CaaS scenario provisions."""
+    assert_auto_import_disabled(k8s=k8s_hub_client)
 
 
 @pytest.fixture(scope="session")

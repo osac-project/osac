@@ -54,6 +54,13 @@ rules:
     resources: ["configmaps"]
     verbs: ["get"]
     resourceNames: ["osac-infra-mce-image-overrides"]
+  - apiGroups: ["addon.open-cluster-management.io"]
+    resources: ["addondeploymentconfigs"]
+    verbs: ["get", "patch"]
+    resourceNames: ["hypershift-addon-deploy-config"]
+  - apiGroups: ["addon.open-cluster-management.io"]
+    resources: ["addondeploymentconfigs"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

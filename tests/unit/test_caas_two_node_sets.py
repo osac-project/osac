@@ -121,6 +121,9 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         monkeypatch.setattr(scenario, name, Mock())
     monkeypatch.setattr(scenario, "snapshot_cluster_deletion", Mock(return_value=[]))
     monkeypatch.setattr(scenario, "wait_for_guest_cluster_health", Mock())
+    # ACM helper behavior has its own focused tests; keep this fixture scoped to
+    # the natural teardown/worker-ownership contract it is meant to exercise.
+    monkeypatch.setattr(scenario, "assert_acm_registration", Mock())
     monkeypatch.setattr(runner.time, "sleep", Mock())
     monkeypatch.setattr(
         helpers,

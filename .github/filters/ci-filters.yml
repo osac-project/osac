@@ -271,7 +271,7 @@ helm-osac-csi-driver:
 helm-osac-metering:
   - '{osac-metering/charts/**,.github/workflows/helm-lint.yaml}'
 helm-osac-installer:
-  - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,osac-installer/Makefile,osac-installer/scripts/test-mce-render.py,osac-installer/scripts/test-billing-render.py,osac-installer/scripts/test-chart-name-independence-render.py,osac-installer/scripts/lib.sh,osac-installer/scripts/test-infra-ready-wait.sh,.github/workflows/helm-lint.yaml}'
+  - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,osac-installer/Makefile,osac-installer/scripts/**,.github/workflows/helm-lint.yaml}'
 
 # Gates check-generated-code.yaml.
 proto-check:
@@ -345,7 +345,7 @@ unit-tests-osac-metering-schema:
 # chart's reader-grant suites and the infra chart's Kafka exporter suites. Preflight rendering also covers the
 # osac-aap and osac-csi-driver hook Jobs.
 unit-tests-osac-installer:
-  - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/test-preflight-*.py,osac-installer/scripts/test-kind-runtime.py,osac-installer/scripts/dev-full/**,osac-installer/scripts/lib.sh,osac-aap/charts/**,osac-csi-driver/charts/**,osac-metering/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
+  - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/**,osac-aap/charts/**,osac-csi-driver/charts/**,osac-metering/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
 
 # Integration test legs. osac-installer/** is included on the
 # first three: their jobs all run setup/tests via `make -C osac-installer

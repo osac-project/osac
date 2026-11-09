@@ -1,0 +1,4 @@
+# JSON is valid YAML, so key-duplicates covers it. check-json only validates
+# syntax: it keeps the last duplicate key and silently drops the rest.
+rules:
+  key-duplicates: enable

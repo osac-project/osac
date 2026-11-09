@@ -910,7 +910,7 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 				printf 'Helm unexpectedly accepted invalid values; expected error pattern: %s\n' "$$expected" >&2; \
 				exit 1; \
 			fi; \
-			if ! rg -q -- "$$expected" "$$error_render"; then \
+			if ! grep -Eq -- "$$expected" "$$error_render"; then \
 				printf 'Helm failed without the expected error pattern: %s\n' "$$expected" >&2; \
 				cat "$$error_render" >&2; \
 				exit 1; \
@@ -923,7 +923,7 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 			--set global.clusterDomain=example.com \
 			--set-string global.osacDeploymentId=ci/osac \
 			--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.example.com/realms/osac > "$$caas_render"; \
-		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$caas_render")" -eq 1; \
+		test "$$(grep -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$caas_render")" -eq 1; \
 		helm template osac $(OSAC_CHART) \
 			--values values/vmaas-ci/instance.yaml \
 			--set service.externalHostname=fulfillment-api.example.com \
@@ -931,12 +931,12 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 			--set global.clusterDomain=example.com \
 			--set-string global.osacDeploymentId=ci/osac \
 			--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.example.com/realms/osac > "$$vmaas_render"; \
-		rg -Uq 'name: OSAC_VENDOR_CONTROLLERS\n[[:blank:]]+value: "lvms=none"' "$$vmaas_render"; \
-		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$vmaas_render")" -eq 1; \
+		awk '/name: OSAC_VENDOR_CONTROLLERS/ { getline; if ($$0 ~ /^[[:blank:]]+value: "lvms=none"$$/) found = 1 } END { exit !found }' "$$vmaas_render"; \
+		test "$$(grep -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$vmaas_render")" -eq 1; \
 		helm template osac $(OSAC_CHART) \
 			--values $(OSAC_CHART)/ci/default-values.yaml > "$$default_operator_render"; \
-		! rg -q 'name: OSAC_VENDOR_CONTROLLERS' "$$default_operator_render"; \
-		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$default_operator_render")" -eq 1; \
+		! grep -q 'name: OSAC_VENDOR_CONTROLLERS' "$$default_operator_render"; \
+		test "$$(grep -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$default_operator_render")" -eq 1; \
 		assert_helm_failure 'operator[./]vendorControllers[./]lvms' \
 			helm template osac $(OSAC_CHART) \
 			--values $(OSAC_CHART)/ci/default-values.yaml \
@@ -947,26 +947,26 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 			--set operator.vendorControllers.lvms=42; \
 		helm template osac $(OSAC_CHART) \
 			--values charts/osac/ci/full-values.yaml > "$$full_render"; \
-		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$full_render")" -eq 1; \
-		! rg -q '# Source: osac/charts/(csiDriver|csiBackends)/' "$$full_render"; \
+		test "$$(grep -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$full_render")" -eq 1; \
+		! grep -Eq '# Source: osac/charts/(csiDriver|csiBackends)/' "$$full_render"; \
 		helm template osac $(OSAC_CHART) \
 			--values charts/osac/ci/full-values.yaml \
 			--set operator.fulfillment.configMap.name=osac-custom-fulfillment-config > "$$custom_render"; \
-		rg -q '^  name: "?osac-custom-fulfillment-config"?$$' "$$custom_render"; \
+		grep -Eq '^  name: "?osac-custom-fulfillment-config"?$$' "$$custom_render"; \
 		helm template csi-driver ../osac-csi-driver/charts/csi-driver \
 			--show-only templates/node-daemonset.yaml \
 			--set namespace=osac-csi \
 			--set controller.fulfillment.configMap.name=osac-csi-fulfillment-config \
 			--set controller.fulfillment.credentials.secretName=osac-csi-driver-credentials \
 			--set controller.fulfillment.allowStub=false > "$$node_render"; \
-		rg -Fq -- '--fulfillment-endpoint=$$(OSAC_FULFILLMENT_ENDPOINT)' "$$node_render"; \
-		rg -Fq -- '--fulfillment-issuer-url=$$(OSAC_FULFILLMENT_ISSUER_URL)' "$$node_render"; \
-		rg -Fq -- '--fulfillment-client-id=$$(FULFILLMENT_CLIENT_ID)' "$$node_render"; \
-		rg -q 'name: osac-csi-fulfillment-config' "$$node_render"; \
-		rg -q 'secretName: osac-csi-driver-credentials' "$$node_render"; \
+		grep -Fq -- '--fulfillment-endpoint=$$(OSAC_FULFILLMENT_ENDPOINT)' "$$node_render"; \
+		grep -Fq -- '--fulfillment-issuer-url=$$(OSAC_FULFILLMENT_ISSUER_URL)' "$$node_render"; \
+		grep -Fq -- '--fulfillment-client-id=$$(FULFILLMENT_CLIENT_ID)' "$$node_render"; \
+		grep -q 'name: osac-csi-fulfillment-config' "$$node_render"; \
+		grep -q 'secretName: osac-csi-driver-credentials' "$$node_render"; \
 		helm template osac-infra $(INFRA_CHART) \
 			--values values/caas-ci/infra.yaml > "$$infra_render"; \
-		! rg -q 'osac-infra-create-csi-creds|osac-csi-driver-credentials' "$$infra_render"; \
+		! grep -Eq 'osac-infra-create-csi-creds|osac-csi-driver-credentials' "$$infra_render"; \
 		assert_helm_failure 'namespace.*must be one of' \
 			helm template csi-driver ../osac-csi-driver/charts/csi-driver \
 			--set namespace=not-osac-csi; \
@@ -1038,9 +1038,11 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test network-class-step-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
+	@# Rendered manifests include Secret data (the Keycloak admin credentials in
+	@# osac-infra, for one), so discard stdout and keep only Helm's stderr.
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		extra=""; \
@@ -1048,11 +1050,11 @@ helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-ne
 			values/bmaas-netbox-ci) extra="--values values/bmaas-ci/infra.yaml";; \
 		esac; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \
-			helm template osac-deps $(DEPS_CHART) $$extra --values "$$infra" && \
-			helm template osac-infra $(INFRA_CHART) $$extra --values "$$infra"; \
+			helm template osac-deps $(DEPS_CHART) $$extra --values "$$infra" > /dev/null && \
+			helm template osac-infra $(INFRA_CHART) $$extra --values "$$infra" > /dev/null; \
 	done
 	@echo "Validating values/dev/kind-infra.yaml..."
-	helm template osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml
+	helm template osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml > /dev/null
 	./scripts/validate-keycloak-credentials.sh
 	./scripts/validate-hub-access-rbac.sh
 	./scripts/validate-keycloak-ui-redirect-uris.py

@@ -203,8 +203,8 @@ func writeJSON(w http.ResponseWriter, v any) {
 func newBCMReconciler(mock *mockBCM) *BareMetalInstanceReconciler {
 	bcmAPI := bcmclient.NewClientForTest(mock.server.Client(), mock.server.URL)
 	bmhMgr := baremetalhost.NewManager(k8sClient, k8sClient, bcmTestNS)
-	secretStore := bmh.NewSecretStore(k8sClient, bcmTestNS)
-	invClient := inventory.NewBCMClient(bcmAPI, bmhMgr, secretStore, bcmHostClass)
+	secretWriter := bmh.NewSecretWriter(k8sClient, bcmTestNS)
+	invClient := inventory.NewBCMClient(bcmAPI, bmhMgr, secretWriter, bcmHostClass)
 	mgmtClient := management.NewMetal3ClientForTest(k8sClient, bcmTestNS)
 	return NewBareMetalInstanceReconciler(
 		k8sClient,

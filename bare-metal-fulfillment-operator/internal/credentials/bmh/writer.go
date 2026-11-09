@@ -41,31 +41,27 @@ const (
 	secretSuffix   = "-bmc-secret"
 )
 
-// SecretStore manages operator-owned BMC credential Secrets in the Metal3 namespace.
-type SecretStore struct {
+// SecretWriter manages operator-owned BMC credential Secrets in the Metal3 namespace.
+type SecretWriter struct {
 	client    client.Client
 	namespace string
 }
 
-var _ credentials.SecretStore = (*SecretStore)(nil)
+var _ credentials.Writer = (*SecretWriter)(nil)
 
-// NewSecretStore creates a Secret store using the supplied direct Kubernetes client.
-func NewSecretStore(client client.Client, namespace string) *SecretStore {
-	return &SecretStore{client: client, namespace: namespace}
+// NewSecretWriter creates a Secret writer using the supplied direct Kubernetes client.
+func NewSecretWriter(client client.Client, namespace string) *SecretWriter {
+	return &SecretWriter{client: client, namespace: namespace}
 }
 
-// Ensure creates or updates the Secret consumed by BMO for its BMI owner.
-func (s *SecretStore) Ensure(ctx context.Context, name string, bmc *credentials.BMC, ownerUID string) error {
-	if bmc == nil {
-		return fmt.Errorf("BMC credentials are required")
-	}
-
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.namespace}}
+// Create creates or updates the Secret consumed by BMO for its BMI owner.
+func (s *SecretWriter) Create(ctx context.Context, ref credentials.Reference, bmc credentials.BMC) error {
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: ref.ID, Namespace: s.namespace}}
 	result, err := controllerutil.CreateOrUpdate(ctx, s.client, secret, func() error {
-		if err := s.checkSecretOwner(ctx, secret, ownerUID); err != nil {
+		if err := s.checkSecretOwner(ctx, secret, ref.OwnerID); err != nil {
 			return err
 		}
-		setSecretLabels(secret, ownerUID)
+		setSecretLabels(secret, ref.OwnerID)
 		secret.Type = corev1.SecretTypeOpaque
 		secret.Data = map[string][]byte{
 			"username": bmc.Username,
@@ -74,14 +70,14 @@ func (s *SecretStore) Ensure(ctx context.Context, name string, bmc *credentials.
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("failed to ensure BMC credentials Secret %s/%s: %w", s.namespace, name, err)
+		return fmt.Errorf("failed to ensure BMC credentials Secret %s/%s: %w", s.namespace, ref.ID, err)
 	}
 
-	ctrllog.FromContext(ctx).Info("Ensured BMC credentials Secret", "name", name, "namespace", s.namespace, "result", result)
+	ctrllog.FromContext(ctx).Info("Ensured BMC credentials Secret", "name", ref.ID, "namespace", s.namespace, "result", result)
 	return nil
 }
 
-func (s *SecretStore) checkSecretOwner(ctx context.Context, secret *corev1.Secret, ownerUID string) error {
+func (s *SecretWriter) checkSecretOwner(ctx context.Context, secret *corev1.Secret, ownerUID string) error {
 	if ownerUID == "" {
 		return fmt.Errorf("BMC credentials Secret %s/%s requires a BMI UID", s.namespace, secret.Name)
 	}
@@ -110,7 +106,7 @@ func setSecretLabels(secret *corev1.Secret, ownerUID string) {
 	secret.Labels[ownerUIDLabel] = ownerUID
 }
 
-func (s *SecretStore) findOwnedBMH(ctx context.Context, name, ownerUID string) (*metal3api.BareMetalHost, error) {
+func (s *SecretWriter) findOwnedBMH(ctx context.Context, name, ownerUID string) (*metal3api.BareMetalHost, error) {
 	if ownerUID == "" {
 		return nil, fmt.Errorf("BareMetalHost %s/%s requires a BMI UID", s.namespace, name)
 	}
@@ -125,19 +121,19 @@ func (s *SecretStore) findOwnedBMH(ctx context.Context, name, ownerUID string) (
 }
 
 // Delete removes the Secret only when its BMI owner matches.
-func (s *SecretStore) Delete(ctx context.Context, name, ownerUID string) error {
-	secret, err := s.findOwnedSecret(ctx, name, ownerUID)
+func (s *SecretWriter) Delete(ctx context.Context, ref credentials.Reference) error {
+	secret, err := s.findOwnedSecret(ctx, ref.ID, ref.OwnerID)
 	if err != nil || secret == nil {
 		return err
 	}
 	err = s.client.Delete(ctx, secret, client.Preconditions{UID: &secret.UID, ResourceVersion: &secret.ResourceVersion})
 	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete BMC credentials Secret %s/%s: %w", s.namespace, name, err)
+		return fmt.Errorf("failed to delete BMC credentials Secret %s/%s: %w", s.namespace, ref.ID, err)
 	}
-	return s.confirmDeletion(ctx, name)
+	return s.confirmDeletion(ctx, ref.ID)
 }
 
-func (s *SecretStore) findOwnedSecret(ctx context.Context, name, ownerUID string) (*corev1.Secret, error) {
+func (s *SecretWriter) findOwnedSecret(ctx context.Context, name, ownerUID string) (*corev1.Secret, error) {
 	secret := &corev1.Secret{}
 	if err := s.client.Get(ctx, client.ObjectKey{Namespace: s.namespace, Name: name}, secret); err != nil {
 		return nil, client.IgnoreNotFound(err)
@@ -148,7 +144,7 @@ func (s *SecretStore) findOwnedSecret(ctx context.Context, name, ownerUID string
 	return secret, nil
 }
 
-func (s *SecretStore) confirmDeletion(ctx context.Context, name string) error {
+func (s *SecretWriter) confirmDeletion(ctx context.Context, name string) error {
 	err := s.client.Get(ctx, client.ObjectKey{Namespace: s.namespace, Name: name}, &corev1.Secret{})
 	if err == nil {
 		return fmt.Errorf("BMC credentials Secret %s/%s deletion is pending", s.namespace, name)

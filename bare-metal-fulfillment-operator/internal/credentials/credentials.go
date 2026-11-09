@@ -45,8 +45,15 @@ type Reader interface {
 	Close() error
 }
 
-// SecretStore ensures and deletes the Kubernetes Secret consumed by BMO.
-type SecretStore interface {
-	Ensure(ctx context.Context, secretName string, bmc *BMC, ownerUID string) error
-	Delete(ctx context.Context, secretName, ownerUID string) error
+// Reference identifies credentials in a destination and their expected owner.
+type Reference struct {
+	ID      string
+	OwnerID string
+}
+
+// Writer stores and deletes BMC credentials in its configured destination.
+type Writer interface {
+	// Create creates or updates credentials for the reference's owner.
+	Create(ctx context.Context, ref Reference, bmc BMC) error
+	Delete(ctx context.Context, ref Reference) error
 }

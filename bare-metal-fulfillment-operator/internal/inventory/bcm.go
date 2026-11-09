@@ -46,7 +46,7 @@ const certBaseDir = "/etc/osac/certs"
 // without depending on the bcmclient package.
 //
 //go:generate mockgen -source=$GOFILE -destination=bcm_mock_test.go -package=$GOPACKAGE BCMAPI,BMCDiscoverer
-//go:generate mockgen -destination=bmc_secret_store_mock_test.go -package=$GOPACKAGE github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials SecretStore
+//go:generate mockgen -destination=credentials_writer_mock_test.go -package=$GOPACKAGE github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials Writer
 type BCMAPI interface {
 	CertWatcher() *certwatcher.CertWatcher
 	GetDevices(ctx context.Context) ([]bcmclient.Device, error)
@@ -126,25 +126,25 @@ func ParseBCMOptions(options map[string]any) (*BCMClientConfig, error) {
 // BCMClient implements inventory.Client by wrapping a BCMAPI
 // for BCM API communication and a baremetalhost.BMHLifecycleManager for BMH lifecycle.
 type BCMClient struct {
-	client         BCMAPI
-	bmhManager     baremetalhost.BMHLifecycleManager
-	bmcSecretStore credentials.SecretStore
-	bmcDiscoverer  BMCDiscoverer
-	hostClass      string
+	client            BCMAPI
+	bmhManager        baremetalhost.BMHLifecycleManager
+	credentialsWriter credentials.Writer
+	bmcDiscoverer     BMCDiscoverer
+	hostClass         string
 }
 
 // NewBCMClient creates a BCM inventory client with injected dependencies.
 func NewBCMClient(
 	client BCMAPI,
 	bmhManager baremetalhost.BMHLifecycleManager,
-	bmcSecretStore credentials.SecretStore,
+	credentialsWriter credentials.Writer,
 	hostClass string,
 ) *BCMClient {
 	return &BCMClient{
-		client:         client,
-		bmhManager:     bmhManager,
-		bmcSecretStore: bmcSecretStore,
-		hostClass:      hostClass,
+		client:            client,
+		bmhManager:        bmhManager,
+		credentialsWriter: credentialsWriter,
+		hostClass:         hostClass,
 	}
 }
 
@@ -493,10 +493,10 @@ func (c *BCMClient) ensureBMHExists(ctx context.Context, device *bcmclient.Devic
 
 	// Secret name is derived from the BMH so the two stay coupled.
 	secretName := bmhName + bmcSecretSuffix
-	if err := c.bmcSecretStore.Ensure(ctx, secretName, &credentials.BMC{
+	if err := c.credentialsWriter.Create(ctx, credentials.Reference{ID: secretName, OwnerID: bareMetalInstanceID}, credentials.BMC{
 		Username: []byte(username),
 		Password: []byte(password),
-	}, bareMetalInstanceID); err != nil {
+	}); err != nil {
 		return fmt.Errorf("failed to create BMC credentials Secret for host %q: %w", device.Hostname, err)
 	}
 
@@ -719,7 +719,7 @@ func (c *BCMClient) deleteBCMResources(ctx context.Context, hostname, ownerUID s
 	if exists {
 		return fmt.Errorf("BareMetalHost %s deletion pending", hostname)
 	}
-	return c.bmcSecretStore.Delete(ctx, hostname+bmcSecretSuffix, ownerUID)
+	return c.credentialsWriter.Delete(ctx, credentials.Reference{ID: hostname + bmcSecretSuffix, OwnerID: ownerUID})
 }
 
 func (c *BCMClient) clearBCMAssignment(ctx context.Context, hostname, bareMetalInstanceID string, labels []string) (bool, error) {

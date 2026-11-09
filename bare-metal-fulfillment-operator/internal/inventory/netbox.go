@@ -114,7 +114,7 @@ func ParseNetBoxOptions(options map[string]any) (*NetBoxClientConfig, error) {
 type NetBoxClient struct {
 	api               NetBoxAPI
 	bmhManager        baremetalhost.BMHLifecycleManager
-	bmcSecretStore    bmcCredentials.SecretStore
+	credentialsWriter bmcCredentials.Writer
 	hostClass         string
 	credentialsReader bmcCredentials.Reader
 }
@@ -149,14 +149,14 @@ func NewNetBoxAPI(config *Config) (NetBoxAPI, error) {
 func NewNetBoxClient(
 	api NetBoxAPI,
 	bmhManager baremetalhost.BMHLifecycleManager,
-	bmcSecretStore bmcCredentials.SecretStore,
+	credentialsWriter bmcCredentials.Writer,
 	hostClass string,
 	credentialsReader bmcCredentials.Reader,
 ) *NetBoxClient {
 	return &NetBoxClient{
 		api:               api,
 		bmhManager:        bmhManager,
-		bmcSecretStore:    bmcSecretStore,
+		credentialsWriter: credentialsWriter,
 		hostClass:         hostClass,
 		credentialsReader: credentialsReader,
 	}
@@ -325,8 +325,11 @@ func (c *NetBoxClient) resolveNetBoxHostAccess(ctx context.Context, device netbo
 }
 
 func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connection *netBoxConnectionData, credentials *bmcCredentials.BMC, bareMetalInstanceID string) (*Host, error) {
+	if credentials == nil {
+		return nil, errors.New("BMC credentials are required")
+	}
 	secretName := host.Name + bmcSecretSuffix
-	if err := c.bmcSecretStore.Ensure(ctx, secretName, credentials, bareMetalInstanceID); err != nil {
+	if err := c.credentialsWriter.Create(ctx, bmcCredentials.Reference{ID: secretName, OwnerID: bareMetalInstanceID}, *credentials); err != nil {
 		return nil, fmt.Errorf("failed to ensure BMC credentials Secret for NetBox host: %w", err)
 	}
 
@@ -549,7 +552,7 @@ func (c *NetBoxClient) deleteNetBoxResources(ctx context.Context, deviceID, bare
 	if err := c.deleteNetBoxBMH(ctx, name, bareMetalInstanceID); err != nil {
 		return err
 	}
-	return c.bmcSecretStore.Delete(ctx, name+bmcSecretSuffix, bareMetalInstanceID)
+	return c.credentialsWriter.Delete(ctx, bmcCredentials.Reference{ID: name + bmcSecretSuffix, OwnerID: bareMetalInstanceID})
 }
 
 func (c *NetBoxClient) deleteNetBoxBMH(ctx context.Context, name, bareMetalInstanceID string) error {

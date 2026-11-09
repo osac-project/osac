@@ -583,11 +583,11 @@ func createNetBoxInventoryClient(
 	if err := validateNetBoxInventoryConfig(inventoryCfg, managementCfg); err != nil {
 		return nil, err
 	}
-	bmhManager, secretStore, err := createMetal3Managers(managementCfg, mgr)
+	bmhManager, secretWriter, err := createMetal3Managers(managementCfg, mgr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to configure Metal3 dependencies for NetBox: %w", err)
 	}
-	return createNetBoxInventoryClientWithManager(ctx, inventoryCfg, bmhManager, secretStore)
+	return createNetBoxInventoryClientWithManager(ctx, inventoryCfg, bmhManager, secretWriter)
 }
 
 func validateNetBoxInventoryConfig(inventoryCfg *inventory.Config, managementCfg *management.Config) error {
@@ -605,7 +605,7 @@ func createNetBoxInventoryClientWithManager(
 	ctx context.Context,
 	inventoryCfg *inventory.Config,
 	bmhManager *baremetalhost.Manager,
-	secretStore *bmh.SecretStore,
+	secretWriter *bmh.SecretWriter,
 ) (inventory.Client, error) {
 	netBoxAPI, err := inventory.NewNetBoxAPI(inventoryCfg)
 	if err != nil {
@@ -619,7 +619,7 @@ func createNetBoxInventoryClientWithManager(
 
 	credentialsReader := netboxcredentials.NewReader(secretsClient)
 	netBoxClient := inventory.NewNetBoxClient(
-		netBoxAPI, bmhManager, secretStore, inventoryCfg.HostClass, credentialsReader,
+		netBoxAPI, bmhManager, secretWriter, inventoryCfg.HostClass, credentialsReader,
 	)
 	return netBoxClient, nil
 }
@@ -677,13 +677,13 @@ func createBCMInventoryClient(
 		}
 		return nil, fmt.Errorf("BCM inventory requires Metal3 management backend (got %q)", managementType)
 	}
-	bmhMgr, secretStore, err := createMetal3Managers(managementCfg, mgr)
+	bmhMgr, secretWriter, err := createMetal3Managers(managementCfg, mgr)
 	if err != nil {
 		return nil, err
 	}
 	setupLog.Info("Metal3 dependencies configured", "namespace", bmhMgr.Namespace())
 
-	client := inventory.NewBCMClient(bcmClient, bmhMgr, secretStore, inventoryCfg.HostClass)
+	client := inventory.NewBCMClient(bcmClient, bmhMgr, secretWriter, inventoryCfg.HostClass)
 
 	discoverer := &bmcdiscovery.GofishDiscoverer{
 		InsecureSkipVerify: bcmCfg.InsecureSkipVerify,
@@ -704,7 +704,7 @@ func createBCMInventoryClient(
 func createMetal3Managers(
 	managementCfg *management.Config,
 	mgr ctrl.Manager,
-) (*baremetalhost.Manager, *bmh.SecretStore, error) {
+) (*baremetalhost.Manager, *bmh.SecretWriter, error) {
 	ns, err := management.ParseMetal3ManagementNamespace(managementCfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse metal3 namespace: %w", err)
@@ -722,5 +722,5 @@ func createMetal3Managers(
 		return nil, nil, fmt.Errorf("failed to create uncached Kubernetes client: %w", err)
 	}
 
-	return baremetalhost.NewManager(mgr.GetClient(), uncachedClient, ns), bmh.NewSecretStore(uncachedClient, ns), nil
+	return baremetalhost.NewManager(mgr.GetClient(), uncachedClient, ns), bmh.NewSecretWriter(uncachedClient, ns), nil
 }

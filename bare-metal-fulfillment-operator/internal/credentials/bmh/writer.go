@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"strings"
 
-	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
@@ -94,7 +94,7 @@ func (s *SecretWriter) checkSecretOwner(ctx context.Context, secret *corev1.Secr
 	if owner != "" {
 		return fmt.Errorf("BMC credentials Secret %s/%s is not owned by this BMI", s.namespace, secret.Name)
 	}
-	_, err := s.findOwnedBMH(ctx, strings.TrimSuffix(secret.Name, secretSuffix), ownerUID)
+	_, err := baremetalhost.FindOwnedBMH(ctx, s.client, s.namespace, strings.TrimSuffix(secret.Name, secretSuffix), ownerUID)
 	return err
 }
 
@@ -104,20 +104,6 @@ func setSecretLabels(secret *corev1.Secret, ownerUID string) {
 	}
 	secret.Labels[managedByLabel] = managedByValue
 	secret.Labels[ownerUIDLabel] = ownerUID
-}
-
-func (s *SecretWriter) findOwnedBMH(ctx context.Context, name, ownerUID string) (*metal3api.BareMetalHost, error) {
-	if ownerUID == "" {
-		return nil, fmt.Errorf("BareMetalHost %s/%s requires a BMI UID", s.namespace, name)
-	}
-	bmh := &metal3api.BareMetalHost{}
-	if err := s.client.Get(ctx, client.ObjectKey{Namespace: s.namespace, Name: name}, bmh); err != nil {
-		return nil, client.IgnoreNotFound(err)
-	}
-	if bmh.Spec.ConsumerRef == nil || bmh.Spec.ConsumerRef.Name != ownerUID {
-		return nil, fmt.Errorf("BareMetalHost %s/%s is not owned by this BMI", s.namespace, name)
-	}
-	return bmh, nil
 }
 
 // Delete removes the Secret only when its BMI owner matches.

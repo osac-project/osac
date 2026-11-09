@@ -145,7 +145,7 @@ func (m *Manager) BMHExists(ctx context.Context, name string) (bool, error) {
 
 // DeleteBMH leaves a BMH with another consumerRef untouched.
 func (m *Manager) DeleteBMH(ctx context.Context, name, ownerUID string) error {
-	bmh, err := m.findOwnedBMH(ctx, name, ownerUID)
+	bmh, err := FindOwnedBMH(ctx, m.uncachedClient, m.namespace, name, ownerUID)
 	if err != nil || bmh == nil {
 		return err
 	}
@@ -156,16 +156,17 @@ func (m *Manager) DeleteBMH(ctx context.Context, name, ownerUID string) error {
 	return nil
 }
 
-func (m *Manager) findOwnedBMH(ctx context.Context, name, ownerUID string) (*metal3api.BareMetalHost, error) {
+// FindOwnedBMH returns the host only when its BMI owner matches, or nil if absent.
+func FindOwnedBMH(ctx context.Context, reader client.Reader, namespace, name, ownerUID string) (*metal3api.BareMetalHost, error) {
 	if ownerUID == "" {
-		return nil, fmt.Errorf("BareMetalHost %s/%s requires a BMI UID", m.namespace, name)
+		return nil, fmt.Errorf("BareMetalHost %s/%s requires a BMI UID", namespace, name)
 	}
 	bmh := &metal3api.BareMetalHost{}
-	if err := m.uncachedClient.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: name}, bmh); err != nil {
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, bmh); err != nil {
 		return nil, client.IgnoreNotFound(err)
 	}
 	if bmh.Spec.ConsumerRef == nil || bmh.Spec.ConsumerRef.Name != ownerUID {
-		return nil, fmt.Errorf("BareMetalHost %s/%s is not owned by this BMI", m.namespace, name)
+		return nil, fmt.Errorf("BareMetalHost %s/%s is not owned by this BMI", namespace, name)
 	}
 	return bmh, nil
 }

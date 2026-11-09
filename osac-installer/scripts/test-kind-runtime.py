@@ -1133,6 +1133,23 @@ exec /usr/bin/mktemp "$@"
         self.assertTrue(any(cmd.startswith("kind 0 load image-archive ") for cmd in self.commands()))
         self.assertFalse(any(cmd.startswith("sudo ") for cmd in self.commands()))
 
+    def test_devfull_arm64_preflight_requires_uv(self):
+        """Fail before setup when the ARM64 image build lacks uv."""
+        self.env["KIND_EXPERIMENTAL_PROVIDER"] = "docker"
+        self.env["KIND_REQUIRE_UV"] = "true"
+        self.env["MOCK_OS"] = "Darwin"
+        for tool in ("curl", "openssl", "python3"):
+            self.write_command(tool, "exit 0")
+        (self.bin / "dirname").symlink_to(shutil.which("dirname"))
+        self.env["PATH"] = str(self.bin)
+        result = subprocess.run(
+            ["/bin/bash", str(RUNTIME), "check"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Missing required tools: uv", result.stderr)
+        self.assertFalse(any(line.startswith("docker info") for line in self.commands()))
+
     def test_installer_ui_load_propagates_the_selected_profile(self):
         result = subprocess.run(
             ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "kind-load-images", "PLATFORM=kind", "PROFILE=dev-full", "NS=osac"],
@@ -1140,6 +1157,107 @@ exec /usr/bin/mktemp "$@"
         )
         self.assert_success(result)
         self.assertIn('KIND_PROFILE=dev-full KIND_OSAC_NAMESPACE=osac', result.stdout)
+        metering_load = result.stdout.find(
+            'kind-load-image.sh" "ghcr.io/osac-project/metering-service:latest"'
+        )
+        ui_load = result.stdout.find('kind-load-image.sh" "ghcr.io/osac-project/osac-ui:latest"')
+        self.assertGreaterEqual(metering_load, 0, result.stdout)
+        self.assertGreater(ui_load, metering_load, result.stdout)
+
+    def test_arm64_devfull_install_builds_and_loads_all_images_before_osac(self):
+        """Check the Apple Silicon install builds and loads all local images first."""
+        result = subprocess.run(
+            [
+                "make", "--no-print-directory", "-n", "-C", str(INSTALLER), "install",
+                "PLATFORM=kind", "PROFILE=dev-full", "NS=osac",
+                "CONTAINER_TOOL=docker", "KIND_EXPERIMENTAL_PROVIDER=docker",
+                "HOST_IS_MAC_ARM=true",
+            ],
+            env=self.env, text=True, capture_output=True, timeout=30,
+        )
+        self.assert_success(result)
+
+        output = result.stdout
+        builds = [
+            "image-build IMG=ghcr.io/osac-project/fulfillment-service:latest",
+            "image-build IMG=ghcr.io/osac-project/osac-operator:latest",
+            "image-build IMG=ghcr.io/osac-project/metering-service:latest",
+            "execution-environment-build IMG=ghcr.io/osac-project/osac-aap:latest",
+            "build -f ../osac-ui/Containerfile -t ghcr.io/osac-project/osac-ui:latest ..",
+        ]
+        build_positions = [output.find(command) for command in builds]
+        self.assertTrue(all(position >= 0 for position in build_positions), output)
+        osac_install = output.find("helm upgrade --install osac ")
+        devstack_install = output.find("helm upgrade --install osac-devstack ")
+        self.assertGreater(osac_install, max(build_positions), output)
+        self.assertGreater(devstack_install, osac_install, output)
+        self.assertIn("kind-build-load-images", output)
+        self.assertIn("KIND_REQUIRE_UV=true", output)
+        self.assertNotIn("container save quay.io/openshift/origin-cli:4.19", output)
+        preflight = output.find("scripts/dev-full/kind-runtime.sh check")
+        cluster_create = output.find("scripts/dev-full/kind-runtime.sh create-cluster")
+        preflight_line = next(
+            (line for line in output.splitlines() if "scripts/dev-full/kind-runtime.sh check" in line),
+            "",
+        )
+        self.assertGreaterEqual(preflight, 0, output)
+        self.assertIn("KIND_REQUIRE_UV=true", preflight_line)
+        self.assertGreater(cluster_create, preflight, output)
+        aap_cli_image = output.find(
+            "build-arm64-cli-image.sh osac-dev quay.io/openshift/origin-cli:4.19 4.19.0"
+        )
+        aap_build = output.find(
+            "execution-environment-build IMG=ghcr.io/osac-project/osac-aap:latest"
+        )
+        self.assertGreaterEqual(aap_cli_image, 0, output)
+        self.assertGreater(aap_build, aap_cli_image, output)
+        self.assertIn(
+            'kind-load-image.sh" "ghcr.io/osac-project/metering-service:latest"',
+            output,
+        )
+        self.assertIn(
+            'kind-load-image.sh" "ghcr.io/osac-project/osac-ui:latest"',
+            output,
+        )
+        for image in (
+            "kind-load-image IMG=ghcr.io/osac-project/fulfillment-service:latest",
+            "kind-load-image IMG=ghcr.io/osac-project/osac-operator:latest",
+            "kind-load-image IMG=ghcr.io/osac-project/osac-aap:latest",
+        ):
+            self.assertIn(image, output)
+
+        mixed_runtime_result = subprocess.run(
+            [
+                "make", "--no-print-directory", "-n", "-C", str(INSTALLER), "install",
+                "PLATFORM=kind", "PROFILE=dev-full", "NS=osac",
+                "CONTAINER_TOOL=docker", "KIND_EXPERIMENTAL_PROVIDER=podman",
+                "HOST_IS_MAC_ARM=true",
+            ],
+            env=self.env, text=True, capture_output=True, timeout=30,
+        )
+        self.assert_success(mixed_runtime_result)
+        mixed_output = mixed_runtime_result.stdout
+        copy_out = mixed_output.find("container save quay.io/openshift/origin-cli:4.19")
+        copy_in = mixed_output.find("docker load -i")
+        mixed_aap_build = mixed_output.find(
+            "execution-environment-build IMG=ghcr.io/osac-project/osac-aap:latest"
+        )
+        self.assertGreaterEqual(copy_out, 0, mixed_output)
+        self.assertGreater(copy_in, copy_out, mixed_output)
+        self.assertGreater(mixed_aap_build, copy_in, mixed_output)
+
+        linux_result = subprocess.run(
+            [
+                "make", "--no-print-directory", "-n", "-C", str(INSTALLER), "install",
+                "PLATFORM=kind", "PROFILE=dev-full", "NS=osac",
+                "CONTAINER_TOOL=docker", "HOST_IS_MAC_ARM=false",
+            ],
+            env=self.env, text=True, capture_output=True, timeout=30,
+        )
+        self.assert_success(linux_result)
+        self.assertNotIn("kind-build-load-images", linux_result.stdout)
+        self.assertNotIn("metering-service:latest", linux_result.stdout)
+        self.assertNotIn("origin-cli:4.19", linux_result.stdout)
 
 
 if __name__ == "__main__":

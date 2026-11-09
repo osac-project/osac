@@ -1,5 +1,6 @@
 extends: default
 ignore:
+  # Chart templates are Go template source, not YAML.
   - fulfillment-service/charts/*/templates/
   - fulfillment-service/it/charts/*/templates/
   - osac-operator/charts/*/templates/
@@ -8,7 +9,7 @@ ignore:
   - osac-aap/charts/
   - bare-metal-fulfillment-operator/charts/*/templates/
   - bare-metal-fulfillment-operator/config/
-  - osac-installer/charts/
+  - osac-installer/charts/*/templates/
   - osac-metering/charts/*/templates/
   - osac-csi-driver/charts/*/templates/
 rules:

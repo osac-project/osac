@@ -615,10 +615,10 @@ type ExternalIPPoolReference_builder struct {
 	Name    string
 	Project string
 	Shared  bool
-	// New platform pools live in the "shared" tenant. Set this to "shared" for
-	// name references to those pools; the legacy shared selector is also accepted.
-	// If omitted, name lookups use the owner's tenant, preserving existing
-	// tenant-owned pools. ID references to a shared pool may omit both selectors.
+	// Pools may live in the "shared" tenant or a regular tenant. For cross-tenant
+	// name references, set this to the pool's actual tenant. The legacy shared
+	// selector is also accepted for shared pools. With no selector, name lookups
+	// use the owner's tenant. ID references to a shared pool may omit both selectors.
 	Tenant string
 }
 

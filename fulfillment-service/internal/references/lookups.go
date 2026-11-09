@@ -40,17 +40,26 @@ func (e *errRefNotFound) IsNotFound() bool {
 // NewDAOLookupFunc creates a ReferenceLookupFunc backed by a GenericDAO. It queries the DAO
 // using a CEL filter that matches by id or metadata.name and returns the resolved reference metadata.
 func NewDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
-	return newDAOLookupFunc(d, false, false, false)
+	return newDAOLookupFunc(d, false, false, false, false)
 }
 
 // NewScopedDAOLookupFunc creates a DAO lookup that additionally constrains references to an
 // explicitly supplied tenant/project. If the caller has no explicit tenant, it retains the
 // visibility-based behavior of NewDAOLookupFunc.
 func NewScopedDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
-	return newDAOLookupFunc(d, true, false, false)
+	return newDAOLookupFunc(d, true, false, false, false)
 }
 
-func newDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O], scopeExplicitTenant, scopeNameLookup, publishedOnly bool) ReferenceLookupFunc {
+// NewTenantScopedDAOLookupFunc scopes ID-based lookups to the supplied tenant and name-only
+// lookups to the supplied tenant and project. If no tenant is supplied, it retains the
+// visibility-based behavior of NewDAOLookupFunc.
+func NewTenantScopedDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
+	return newDAOLookupFunc(d, false, true, false, true)
+}
+
+func newDAOLookupFunc[O dao.Object](
+	d *dao.GenericDAO[O], scopeExplicitTenant, scopeNameLookup, publishedOnly, scopeIDToTenant bool,
+) ReferenceLookupFunc {
 	return func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
 		var filter string
 		switch {
@@ -65,17 +74,20 @@ func newDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O], scopeExplicitTenant, s
 		}
 		// scopeExplicitTenant constrains every lookup (name and ID) to the
 		// supplied tenant/project. scopeNameLookup constrains only name-based
-		// lookups (id==""), matching the canonical resolver where names require
-		// scope disambiguation but IDs are globally unique within a tenant.
+		// lookups (id==""), while scopeIDToTenant constrains ID-based lookups
+		// to the supplied tenant without narrowing them to a project.
 		// Requests without metadata retain visibility-based behavior so
 		// default-tenant assignment remains compatible.
-		applyScope := tenant != "" &&
+		applyProjectScope := tenant != "" &&
 			(scopeExplicitTenant || (scopeNameLookup && id == ""))
-		if applyScope {
+		applyTenantScope := tenant != "" && scopeIDToTenant && id != ""
+		if applyProjectScope {
 			filter += fmt.Sprintf(
 				" && this.metadata.tenant == %s && this.metadata.project == %s",
 				strconv.Quote(tenant), strconv.Quote(project),
 			)
+		} else if applyTenantScope {
+			filter += fmt.Sprintf(" && this.metadata.tenant == %s", strconv.Quote(tenant))
 		}
 		if publishedOnly {
 			filter = PublishedFilter(filter)
@@ -127,5 +139,5 @@ func RegisterDAOLookup[O dao.Object](
 	fullName protoreflect.FullName,
 	d *dao.GenericDAO[O],
 ) {
-	v.Register(fullName, newDAOLookupFunc(d, false, true, false))
+	v.Register(fullName, newDAOLookupFunc(d, false, true, false, false))
 }

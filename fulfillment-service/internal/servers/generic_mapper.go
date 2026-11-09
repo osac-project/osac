@@ -374,18 +374,12 @@ func filterSystemTenantReferences(
 				continue
 			}
 			list := message.Mutable(field).List()
-			clones := make([]proto.Message, list.Len())
 			for j := range list.Len() {
-				cloned := proto.Clone(list.Get(j).Message().Interface())
 				if err := filterSystemTenantReferences(
-					ctx, cloned.ProtoReflect(), ownerTenant, userReferenceLookup,
+					ctx, list.Get(j).Message(), ownerTenant, userReferenceLookup,
 				); err != nil {
 					return err
 				}
-				clones[j] = cloned
-			}
-			for j, cloned := range clones {
-				list.Set(j, protoreflect.ValueOfMessage(cloned.ProtoReflect()))
 			}
 			continue
 		}
@@ -394,28 +388,17 @@ func filterSystemTenantReferences(
 				continue
 			}
 			values := message.Mutable(field).Map()
-			type mapMessage struct {
-				key   protoreflect.MapKey
-				value proto.Message
-			}
-			var entries []mapMessage
-			var filterErr error
-			values.Range(func(key protoreflect.MapKey, value protoreflect.Value) bool {
-				cloned := proto.Clone(value.Message().Interface())
-				if err := filterSystemTenantReferences(
-					ctx, cloned.ProtoReflect(), ownerTenant, userReferenceLookup,
-				); err != nil {
-					filterErr = err
-					return false
-				}
-				entries = append(entries, mapMessage{key: key, value: cloned})
+			var keys []protoreflect.MapKey
+			values.Range(func(key protoreflect.MapKey, _ protoreflect.Value) bool {
+				keys = append(keys, key)
 				return true
 			})
-			if filterErr != nil {
-				return filterErr
-			}
-			for _, entry := range entries {
-				values.Set(entry.key, protoreflect.ValueOfMessage(entry.value.ProtoReflect()))
+			for _, key := range keys {
+				if err := filterSystemTenantReferences(
+					ctx, values.Mutable(key).Message(), ownerTenant, userReferenceLookup,
+				); err != nil {
+					return err
+				}
 			}
 			continue
 		}

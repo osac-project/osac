@@ -544,10 +544,10 @@ type ExternalIPPoolReference struct {
 	Name    string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Project string                 `protobuf:"bytes,3,opt,name=project,proto3" json:"project,omitempty"`
 	Shared  bool                   `protobuf:"varint,4,opt,name=shared,proto3" json:"shared,omitempty"`
-	// New platform pools live in the "shared" tenant. Set this to "shared" for
-	// name references to those pools; the legacy shared selector is also accepted.
-	// If omitted, name lookups use the owner's tenant, preserving existing
-	// tenant-owned pools. ID references to a shared pool may omit both selectors.
+	// Pools may live in the "shared" tenant or a regular tenant. For cross-tenant
+	// name references, set this to the pool's actual tenant. The legacy shared
+	// selector is also accepted for shared pools. With no selector, name lookups
+	// use the owner's tenant. ID references to a shared pool may omit both selectors.
 	Tenant        string `protobuf:"bytes,5,opt,name=tenant,proto3" json:"tenant,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -640,10 +640,10 @@ type ExternalIPPoolReference_builder struct {
 	Name    string
 	Project string
 	Shared  bool
-	// New platform pools live in the "shared" tenant. Set this to "shared" for
-	// name references to those pools; the legacy shared selector is also accepted.
-	// If omitted, name lookups use the owner's tenant, preserving existing
-	// tenant-owned pools. ID references to a shared pool may omit both selectors.
+	// Pools may live in the "shared" tenant or a regular tenant. For cross-tenant
+	// name references, set this to the pool's actual tenant. The legacy shared
+	// selector is also accepted for shared pools. With no selector, name lookups
+	// use the owner's tenant. ID references to a shared pool may omit both selectors.
 	Tenant string
 }
 

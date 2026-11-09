@@ -725,7 +725,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	if err != nil {
 		return nil, fmt.Errorf("failed to create User DAO for public reference redaction: %w", err)
 	}
-	userReferenceLookup := references.NewScopedDAOLookupFunc(userReferenceDAO)
+	userReferenceLookup := references.NewTenantScopedDAOLookupFunc(userReferenceDAO)
 
 	// Create the role bindings server:
 	deps.Logger.InfoContext(ctx, "Creating role bindings server")

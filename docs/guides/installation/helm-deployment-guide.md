@@ -180,6 +180,12 @@ chart default is `osac`. The setup creates the AAP license Secret in `NS`, so
 set the correct value first. Changing `osacNamespace` during an upgrade makes
 Helm remove the old namespace and Kubernetes deletes its contents.
 
+The license Secret is required only for chart-managed AAP with
+`aap.bootstrap.enabled: true` (the default). For external AAP with its
+bootstrap job disabled, skip `AAP_LICENSE_FILE` and the two Secret commands
+below; external AAP administrators manage their AAP license, and the local
+Secret is not used.
+
 ```bash
 export OSAC_RELEASE_VERSION="<chart_version>"
 export OSAC_CHART="oci://ghcr.io/osac-project/charts/osac"
@@ -192,9 +198,11 @@ cd osac-installer
 export NS=osac
 export DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
 export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
+# Only for chart-managed AAP with a bootstrap job:
 export AAP_LICENSE_FILE=/path/to/license.zip
 
 oc create namespace "$NS" --dry-run=client -o yaml | oc apply -f -
+# Only for chart-managed AAP with a bootstrap job:
 oc create secret generic config-as-code-manifest-ig --from-file=license.zip="$AAP_LICENSE_FILE" -n "$NS" --dry-run=client -o yaml | oc apply --server-side -f -
 oc label secret config-as-code-manifest-ig osac.openshift.io/project=osac-aap -n "$NS" --overwrite
 ```
@@ -967,9 +975,9 @@ recorded values for an upgrade; for a new release, use the value in
 export NS=osac
 ```
 
-Create the AAP license Secret on the management cluster after setting `NS`.
-Set `AAP_LICENSE_FILE` to the local path of the license file if needed, then
-run:
+Create the AAP license Secret on the management cluster after setting `NS`,
+only for chart-managed AAP with `aap.bootstrap.enabled: true`. Set
+`AAP_LICENSE_FILE` to the local path of the license file if needed, then run:
 
 ```bash
 oc create namespace "$NS" --dry-run=client -o yaml | oc apply -f -
@@ -979,6 +987,10 @@ oc create secret generic config-as-code-manifest-ig \
 oc label secret config-as-code-manifest-ig \
     osac.openshift.io/project=osac-aap -n "$NS" --overwrite
 ```
+
+For external AAP with its bootstrap job disabled, skip the Secret commands
+above; the management cluster does not read the local license Secret in that
+configuration.
 
 Create a separate `my-management-infra-values.yaml` for its prerequisites.
 The values below are an example for a new management-cluster release, with the

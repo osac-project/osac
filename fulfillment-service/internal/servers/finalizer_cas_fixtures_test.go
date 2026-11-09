@@ -119,6 +119,7 @@ type genericFinalizerOps[O finalizerObject] struct {
 	server *GenericServer[O]
 }
 
+// get reads the object through the private server.
 func (o *genericFinalizerOps[O]) get(ctx context.Context, id string) (proto.Message, error) {
 	request := proto.Clone(o.server.getRequest).(finalizerIDRequest)
 	request.SetId(id)
@@ -323,6 +324,7 @@ func finalizerSelectingMasks() []finalizerSelectingMask {
 	}
 }
 
+// finalizerMaskEntries returns one table entry per mask that selects the finalizers.
 func finalizerMaskEntries() []TableEntry {
 	var entries []TableEntry
 	for _, m := range finalizerSelectingMasks() {
@@ -331,6 +333,7 @@ func finalizerMaskEntries() []TableEntry {
 	return entries
 }
 
+// publicMaskEntries returns the finalizer-selecting masks for a live and a deleting object.
 func publicMaskEntries() []TableEntry {
 	var entries []TableEntry
 	for _, m := range finalizerSelectingMasks() {
@@ -358,6 +361,7 @@ func finalizersOf(object proto.Message) []string {
 	return finalizerMetadataOf(object).GetFinalizers()
 }
 
+// withMetadata returns a copy of the object with change applied to its metadata, created if missing.
 func withMetadata(object proto.Message, change func(*privatev1.Metadata)) proto.Message {
 	result := proto.Clone(object)
 	setter := result.(interface {
@@ -448,6 +452,7 @@ func (t finalizerTarget) bump(ctx context.Context) {
 	Expect(err).ToNot(HaveOccurred(), "the concurrent label write must succeed")
 }
 
+// expectFinalizerConflict checks that err is Aborted and that the stored finalizers are still want.
 func (t finalizerTarget) expectFinalizerConflict(ctx context.Context, err error, want ...string) {
 	GinkgoHelper()
 	stored, getErr := t.ops.get(ctx, t.id)

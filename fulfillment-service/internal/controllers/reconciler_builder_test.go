@@ -221,6 +221,7 @@ type tenantGetServer struct {
 	gone bool
 }
 
+// Get returns NotFound once the tenant is gone.
 func (s *tenantGetServer) Get(
 	_ context.Context,
 	request *privatev1.TenantsGetRequest,

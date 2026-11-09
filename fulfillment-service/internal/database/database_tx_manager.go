@@ -165,6 +165,7 @@ type managedTx struct {
 	parent *managedTx
 }
 
+// OnCommit implements Tx.OnCommit.
 func (t *managedTx) OnCommit(fn func()) {
 	if fn == nil {
 		return
@@ -188,6 +189,7 @@ func (t *managedTx) runCommitHooks(ctx context.Context) {
 	}
 }
 
+// runCommitHook runs one OnCommit function, logging a panic.
 func (t *managedTx) runCommitHook(ctx context.Context, hook func()) {
 	defer func() {
 		if fault := recover(); fault != nil {

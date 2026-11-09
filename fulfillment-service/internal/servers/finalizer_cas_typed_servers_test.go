@@ -57,6 +57,7 @@ func newFinalizerPrivateVolumesServer() *PrivateVolumesServer {
 	return server
 }
 
+// finalizerCaseFor returns the private case of the service.
 func finalizerCaseFor(service string) finalizerCase {
 	GinkgoHelper()
 	for _, c := range finalizerCases() {
@@ -68,6 +69,7 @@ func finalizerCaseFor(service string) finalizerCase {
 	return finalizerCase{}
 }
 
+// publicFinalizerCaseFor returns the public case of the service.
 func publicFinalizerCaseFor(service string) publicFinalizerCase {
 	GinkgoHelper()
 	for _, c := range publicFinalizerCases() {
@@ -140,6 +142,7 @@ type publicFinalizerCase struct {
 	ops     func() publicFinalizerOps
 }
 
+// withPublicLabel returns a copy of the public object with a test label added.
 func withPublicLabel(object proto.Message) proto.Message {
 	result := proto.Clone(object)
 	accessor := result.(interface {
@@ -171,6 +174,7 @@ type storeFailingSecretStore struct {
 	failures int
 }
 
+// Store fails while fail is set, and otherwise stores in memory.
 func (s *storeFailingSecretStore) Store(ctx context.Context, tenant, project, name string,
 	data map[string][]byte) error {
 	if s.fail {

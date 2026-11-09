@@ -27,6 +27,7 @@ import (
 
 // Parents are seeded directly through DAOs, bypassing the typed servers' create gates.
 
+// finalizerPlatformCases returns the cases for platform-wide private resources.
 func finalizerPlatformCases() []finalizerCase {
 	return []finalizerCase{
 		newFinalizerCase(privatev1.AddOnOperators_ServiceDesc,
@@ -249,6 +250,7 @@ func finalizerStorageBackend() *privatev1.StorageBackend {
 	}.Build()
 }
 
+// finalizerTenantCases returns the cases for tenant-scoped private resources.
 func finalizerTenantCases() []finalizerCase {
 	return []finalizerCase{
 		newFinalizerCase(privatev1.Tenants_ServiceDesc,

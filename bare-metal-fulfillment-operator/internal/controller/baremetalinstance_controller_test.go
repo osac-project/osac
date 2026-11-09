@@ -600,6 +600,20 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				}
 			})
 
+			It("allows an assigned host when the attachment interface is empty", func() {
+				bareMetalInstance.Spec.NetworkAttachments[0].Interface = ""
+				mockInvClient.assignHostFunc = func(ctx context.Context, inventoryHostID, instanceID string, labels map[string]string) (*inventory.Host, error) {
+					return &inventory.Host{InventoryHostID: inventoryHostID, HostClass: hostClass, Available: true}, nil
+				}
+				mockK8sClient.updateFunc = func(context.Context, client.Object, ...client.UpdateOption) error { return nil }
+
+				result, err := reconciler.reconcileInventory(ctx, bareMetalInstance)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal(ctrl.Result{}))
+				Expect(bareMetalInstance.Status.Phase).NotTo(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+			})
+
 			It("records the normalized selected MAC before AssignHost", func() {
 				assigned := false
 				mockInvClient.assignHostFunc = func(context.Context, string, string, map[string]string) (*inventory.Host, error) {

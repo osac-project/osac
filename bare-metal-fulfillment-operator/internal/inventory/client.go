@@ -55,6 +55,8 @@ var (
 	ErrInvalidLogicalPortMAC = errors.New("invalid logical port MAC")
 	// ErrMalformedLogicalPortMACMapping indicates the backend mapping could not be parsed.
 	ErrMalformedLogicalPortMACMapping = errors.New("malformed logical port MAC mapping")
+	// ErrPortAwareMACLookupNotImplemented indicates a backend cannot select hosts by port MAC.
+	ErrPortAwareMACLookupNotImplemented = errors.New("port-aware MAC lookup is not implemented")
 )
 
 // HostNIC represents a physical network interface on an inventory host.
@@ -66,7 +68,9 @@ type HostNIC struct {
 // Client interface for inventory implementations
 type Client interface {
 	// FindFreeHost returns a matching unassigned host. When a logical port is
-	// provided, candidates without a valid MAC for that port are skipped.
+	// provided, candidates without a valid MAC for that port are skipped. A
+	// backend that cannot filter by port MAC returns
+	// ErrPortAwareMACLookupNotImplemented.
 	FindFreeHost(ctx context.Context, matchExpressions map[string]string, selectedLogicalPort ...string) (*Host, error)
 
 	// AssignHost attempts to mark a host as assigned

@@ -244,16 +244,6 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 	logicalPort := ""
 	if r.NetworkingProvider != nil && len(bareMetalInstance.Spec.NetworkAttachments) > 0 {
 		logicalPort = bareMetalInstance.Spec.NetworkAttachments[0].Interface
-		if logicalPort == "" {
-			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-			bareMetalInstance.SetStatusCondition(
-				v1alpha1.HostConditionAllocated,
-				metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonInvalidSelector,
-				"Network attachment interface is required for host selection",
-			)
-			return ctrl.Result{}, nil
-		}
 	}
 
 	bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseAllocating
@@ -274,6 +264,17 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 	}
 
 	if bareMetalInstance.Spec.ExternalHostID == "" {
+		if r.NetworkingProvider != nil && len(bareMetalInstance.Spec.NetworkAttachments) > 0 && logicalPort == "" {
+			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			bareMetalInstance.SetStatusCondition(
+				v1alpha1.HostConditionAllocated,
+				metav1.ConditionFalse,
+				v1alpha1.HostConditionReasonInvalidSelector,
+				"Network attachment interface is required for host selection",
+			)
+			return ctrl.Result{}, nil
+		}
+
 		// Validate that Selector.HostSelector is non-empty. This is a defensive
 		// check — the fulfillment-service API requires a non-empty host label
 		// selector and the CRD enforces MinProperties=1 — so an empty selector is

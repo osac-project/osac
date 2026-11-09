@@ -909,9 +909,6 @@ func (t *task) ensureVaultNamespace(ctx context.Context) error {
 	if t.r.vaultLifecycle == nil {
 		return nil
 	}
-	if t.isConditionTrue(condType) {
-		return nil
-	}
 
 	tenantName := t.tenant.GetMetadata().GetName()
 	err := t.r.vaultLifecycle.EnsureTenantNamespace(ctx, tenantName)

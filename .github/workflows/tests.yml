@@ -163,12 +163,18 @@ jobs:
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
           # The upload below takes this directory, so the diagnostics go to a file in it as well as to the log.
+          # Whatever the test run left in it that is not redacted yet is moved to a scratch directory outside it
+          # first, so that no way of leaving this step early can upload a raw file. If that is not possible, the
+          # raw files are removed.
+          raw=$(mktemp -d) || { rm -rf fulfillment-service/logs/timings; echo "No scratch directory, the timing reports are not in the artifact"; exit 0; }
+          trap 'rm -rf "$raw"' EXIT
+          mv fulfillment-service/logs/timings "$raw/timings" 2>/dev/null || rm -rf fulfillment-service/logs/timings
           mkdir -p fulfillment-service/logs/pods
-          # Cluster-internal host names (*.svc, *.svc.cluster.local, *.localhost) and the host of every URL (this
-          # covers short service names such as the one the wait-for-fulfillment container logs) are replaced in
-          # everything that goes to the artifact, because the diagnostics need the finalizer values and the gRPC
-          # methods, not the names.
-          redact='s/[A-Za-z0-9._-]+\.(svc(\.cluster\.local)?|cluster\.local|localhost)/<redacted-host>/g;s#(://)[^/:[:space:]"]+#\1<redacted-host>#g'
+          # Cluster-internal host names (*.svc, *.svc.cluster.local, *.localhost) and the whole authority of every
+          # URL, which is the user information, the host and the port (this covers short service names such as the
+          # one the wait-for-fulfillment container logs), are replaced in everything that goes to the artifact,
+          # because the diagnostics need the finalizer values and the gRPC methods, not the names.
+          redact='s/[A-Za-z0-9._-]+\.(svc(\.cluster\.local)?|cluster\.local|localhost)/<redacted-host>/g;s#(://)[^/[:space:]"'"'"'\\)}<>]+#\1<redacted-host>#g'
           {
             echo "=== Pods ==="
             kubectl get pods -n osac -o wide
@@ -189,7 +195,6 @@ jobs:
           # and only a container that restarted has a previous log to ask for. A failure here must not fail the
           # step. The raw log goes to a scratch directory outside the one that is uploaded, and the redacted copy is
           # written to the artifact only when the redaction succeeds, so that a failure can't leave a raw log in it.
-          raw=$(mktemp -d)
           collect() {
             local out=$1
             shift
@@ -213,12 +218,13 @@ jobs:
             echo "Failed to list the pods"
           fi
           # The Ginkgo timing reports hold the output of the specs, so they get the same treatment: a report that
-          # can't be redacted is removed from the artifact.
-          for report in fulfillment-service/logs/timings/*.json; do
+          # can't be redacted is not put back into the artifact.
+          mkdir -p fulfillment-service/logs/timings
+          for report in "$raw"/timings/*.json; do
             [ -e "$report" ] || continue
-            sed -E "$redact" "$report" > "$raw/report" && mv "$raw/report" "$report" || { rm -f "$report" "$raw/report"; echo "Failed to redact ${report##*/}, it is not in the artifact"; }
+            out="fulfillment-service/logs/timings/${report##*/}"
+            sed -E "$redact" "$report" > "$out" || { rm -f "$out"; echo "Failed to redact ${report##*/}, it is not in the artifact"; }
           done
-          rm -rf "$raw"
       - if: inputs.kind == 'it-fulfillment-service' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:

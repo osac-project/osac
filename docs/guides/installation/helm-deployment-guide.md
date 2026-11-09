@@ -359,7 +359,7 @@ For an existing release that manages LVMS, use the recorded
 Subscription exists.
 
 ```bash
-LVMS_CHANNEL_OVERRIDE="" # Existing release: set from its recorded lvms.channel.
+LVMS_CHANNEL_OVERRIDE="${LVMS_CHANNEL_OVERRIDE:-}"
 LVMS_CHANNEL=""
 if [ "$LVMS_SUBSCRIPTION_EXPECTED" = true ]; then
     LVMS_SUBSCRIPTION=$(oc get sub lvms-operator -n openshift-storage \
@@ -502,7 +502,15 @@ use the management cluster's ingress domain. Keep this value aligned with
 `ui.externalHostname` if you customize the UI Route. See
 [Keycloak osac-ui redirect URIs](#keycloak-osac-ui-redirect-uris).
 
+Set `KEYCLOAK_ISSUER_URL` below to the exact issuer URL in Keycloak's token
+`iss` claim. The example uses the default bundled Keycloak hostname. For
+external Keycloak or a custom hostname, replace it with the matching issuer
+URL. The command-line `--set` value overrides
+`bundledVault.keycloakIssuerUrl` in `my-infra-values.yaml`; remove that argument
+if you want the values file to supply the issuer.
+
 ```bash
+KEYCLOAK_ISSUER_URL="https://keycloak-keycloak.$DOMAIN/realms/osac"
 helm upgrade --install osac-infra ./charts/osac-infra \
     -n osac-infra --create-namespace \
     -f my-infra-values.yaml \
@@ -511,7 +519,7 @@ helm upgrade --install osac-infra ./charts/osac-infra \
     --set keycloak.hostname="https://keycloak-keycloak.$DOMAIN" \
     --set keycloak.route.publicIngress=true \
     --set keycloak.route.hostname="keycloak-keycloak.$DOMAIN" \
-    --set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$DOMAIN/realms/osac" \
+    --set "bundledVault.keycloakIssuerUrl=$KEYCLOAK_ISSUER_URL" \
     --take-ownership \
     --wait-for-jobs --timeout 30m
 ```
@@ -820,9 +828,10 @@ releases' values and repeat the Phase 1a value and Subscription checks with
 this kubeconfig. Use this cluster's recorded `lvms.channel` for
 `LVMS_CHANNEL_OVERRIDE` when needed, then rerun the Phase 1a channel-selection
 block before running Phase 1a and Phase 1b. Do not reuse the other cluster's
-LVMS channel. Before Phase 1b, set `NS` from this cluster's `osac-infra`
-`osacNamespace`; for a new release, use the value in the values file or the
-default `osac`.
+LVMS channel; set or clear `LVMS_CHANNEL_OVERRIDE` for this cluster before
+rerunning the block. Before Phase 1b, set `NS` from this cluster's
+`osac-infra` `osacNamespace`; for a new release, use the value in the values
+file or the default `osac`.
 
 ```bash
 export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
@@ -845,12 +854,14 @@ if [ "$LVMS_SUBSCRIPTION_EXPECTED" = true ]; then
 fi
 ```
 
-After checking an existing release, set `LVMS_CHANNEL_OVERRIDE` to its
-recorded `lvms.channel` if the Subscription is missing or omits
-`.spec.channel`. Leave it empty for a new release:
+After checking an existing release, set `LVMS_CHANNEL_OVERRIDE` to this
+cluster's recorded `lvms.channel` if the Subscription is missing or omits
+`.spec.channel`. If no override is needed, clear a value carried over from
+another cluster. The assignment below preserves a value you set and defaults
+to empty when it is unset:
 
 ```bash
-LVMS_CHANNEL_OVERRIDE=""
+LVMS_CHANNEL_OVERRIDE="${LVMS_CHANNEL_OVERRIDE:-}"
 ```
 
 Set `NS` from this cluster's `osacNamespace` before Phase 1b. For an upgrade,
@@ -898,8 +909,9 @@ from the workload cluster, recheck the management cluster's release values and
 Subscription; do not reuse the workload cluster's `NS` or LVMS channel. Use
 this cluster's recorded `lvms.channel` for `LVMS_CHANNEL_OVERRIDE` when needed,
 then rerun the Phase 1a channel-selection block before running the Phase 1a
-and Phase 1b commands. For a new release, use the `osacNamespace` in
-`my-management-infra-values.yaml` or the default `osac`.
+and Phase 1b commands. Set or clear the override for this cluster; for a new
+release, use the `osacNamespace` in `my-management-infra-values.yaml` or the
+default `osac`.
 
 ```bash
 export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
@@ -923,12 +935,14 @@ if [ "$LVMS_SUBSCRIPTION_EXPECTED" = true ]; then
 fi
 ```
 
-After checking an existing release, set `LVMS_CHANNEL_OVERRIDE` to its
-recorded `lvms.channel` if the Subscription is missing or omits
-`.spec.channel`. Leave it empty for a new release:
+After checking an existing release, set `LVMS_CHANNEL_OVERRIDE` to this
+cluster's recorded `lvms.channel` if the Subscription is missing or omits
+`.spec.channel`. If no override is needed, clear a value carried over from
+another cluster. The assignment below preserves a value you set and defaults
+to empty when it is unset:
 
 ```bash
-LVMS_CHANNEL_OVERRIDE=""
+LVMS_CHANNEL_OVERRIDE="${LVMS_CHANNEL_OVERRIDE:-}"
 ```
 
 Set `NS` to the management cluster's `osac-infra.osacNamespace` from its

@@ -2517,14 +2517,52 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
 
    With external AAP (`aap.aap.instance.enabled: false` and
    `aap.bootstrap.enabled: false`), do not expect `osac-aap-*` pods or the
-   bootstrap job. Verify connectivity to the external Controller URL from a
-   pod in the OSAC namespace:
+   bootstrap job. For a private AAP CA, use the PEM CA bundle that was added to
+   the OSAC Operator's system trust store. This is separate from the Fulfillment
+   API CA bundle; use the same administrator-provided source that configured
+   Operator trust. Create a temporary ConfigMap from that PEM file:
 
    ```console
-   AAP_URL="https://<external-aap>/api/controller"
+   AAP_CA_FILE=/path/to/operator-trusted-aap-ca.pem
+   oc create configmap aap-connectivity-ca \
+     --from-file=ca.crt="$AAP_CA_FILE" -n <namespace>
+   oc run aap-connectivity-check -n <namespace> --rm -i --restart=Never \
+     --image=quay.io/openshift/origin-cli:4.20.0 \
+     --overrides='{
+       "apiVersion":"v1",
+       "spec":{
+         "volumes":[
+           {"name":"aap-ca",
+            "configMap":{"name":"aap-connectivity-ca"}}
+         ],
+         "containers":[
+           {
+             "name":"aap-connectivity-check",
+             "image":"quay.io/openshift/origin-cli:4.20.0",
+             "command":[
+               "curl","--fail-with-body","--silent","--show-error",
+               "--cacert","/aap-ca/ca.crt",
+               "https://<external-aap>/api/controller/v2/ping/"
+             ],
+             "volumeMounts":[
+               {"name":"aap-ca","mountPath":"/aap-ca","readOnly":true}
+             ]
+           }
+         ]
+       }
+     }'
+   oc delete configmap aap-connectivity-ca -n <namespace>
+   ```
+
+   Replace `<external-aap>` with the Controller host. If its certificate is
+   publicly trusted, omit the ConfigMap and mount and use the image's system
+   trust store:
+
+   ```console
    oc run aap-connectivity-check -n <namespace> --rm -i --restart=Never \
      --image=quay.io/openshift/origin-cli:4.20.0 --command -- \
-     curl --fail-with-body --silent --show-error "${AAP_URL}/v2/ping/"
+     curl --fail-with-body --silent --show-error \
+       "https://<external-aap>/api/controller/v2/ping/"
    ```
 
 10. Check API reachability and log in with the `osac` CLI. For the bundled

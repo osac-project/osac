@@ -891,11 +891,16 @@ is required even when provider networking is disabled.
 
 **Chart-managed AAP.** The `create-api-token` hook waits for the chart-managed
 AAP admin Secret and gateway, creates `osac-aap-api-token`, and restarts
-`deploy/osac-operator`. Set the Operator to read that Secret:
+`deploy/osac-operator`. For production, set `operator.aap.url` to the AAP
+Controller's trusted HTTPS Route and set `operator.aap.insecureSkipVerify` to
+`"false"`. An empty URL defaults to `http://osac-aap/api/controller`, which
+sends the token without TLS. Set the Operator to read the token Secret:
 
 ```yaml
 operator:
   aap:
+    url: https://<trusted-aap-route>/api/controller
+    insecureSkipVerify: "false"
     tokenSecret:
       name: osac-aap-api-token
       key: token
@@ -951,8 +956,10 @@ oc create secret generic osac-aap-api-token \
 Do not put the token in the values file. The external AAP must already be
 reachable and bootstrapped with the release-compatible OSAC configuration,
 including the organizations, projects, job templates, inventories, credentials,
-execution environments, and instance groups required by enabled services. The
-token must be authorized to launch and read those jobs. Because the chart's
+execution environments, and instance groups required by enabled services. For
+networking instance-group settings and secrets, also follow
+[Section 4.4.3](#443-setting-the-networking-helm-values). The token must be
+authorized to launch and read those jobs. Because the chart's
 publication hook targets the chart-managed AAP instance, publish the required
 templates to Fulfillment separately. See
 [Section 5](#5-helm-chart-configuration-parameters) for the related values.
@@ -1261,14 +1268,61 @@ aap:
   release (the chart value `aap.bootstrap.image`) and rebuilds it for every
   release. AAP uses it for every OSAC instance group.
 - **Settings and secrets.** Networking jobs run in the AAP instance group
-  `<prefix>-networking-operations-ig` (prefix `osac` by default). Their pods
-  read every key of the `ConfigMap` and the `Secret` `network-fulfillment-ig`
-  in `$NS` as environment variables. The installer writes both from
-  `aap.instanceGroups.networkFulfillment.config` and `.secret` at every
-  install and rollout, so never edit them with `oc`. The key names come from
-  the Fabric Manager's design and start with its registration name in upper
-  case. Job pods read them when they start, so a change applies to the next
-  job.
+  `<prefix>-networking-operations-ig` (prefix `osac` by default). With
+  chart-managed AAP, job pods read every key of the `ConfigMap` and `Secret`
+  `network-fulfillment-ig` in `$NS` as environment variables. The chart writes
+  both from `aap.instanceGroups.networkFulfillment.config` and `.secret` at
+  every install and rollout, so do not edit these chart-managed resources with
+  `oc`. The key names come from the Fabric Manager's design and start with its
+  registration name in upper case. Job pods read the values when they start,
+  so a change applies to the next job.
+
+  With external AAP, job pods can read these resources only when the ConfigMap
+  and Secret are in the same cluster and namespace as the pods. Objects in the
+  OSAC release namespace are not available to jobs running in another cluster
+  or namespace. Create matching `network-fulfillment-ig` resources in the
+  cluster and namespace where the external networking container group's job
+  pods run, using the same keys and values from
+  `aap.instanceGroups.networkFulfillment.config` and `.secret`. Configure that
+  group's `pod_spec_override` to expose them as environment variables:
+
+  ```yaml
+  spec:
+    containers:
+      - name: worker
+        envFrom:
+          - configMapRef:
+              name: network-fulfillment-ig
+              optional: true
+          - secretRef:
+              name: network-fulfillment-ig
+  ```
+
+  For example, generate a non-secret env file from the `config` values and a
+  protected env file from `.secret` using your secret manager, then apply them
+  to the external job cluster:
+
+  ```console
+  AAP_CONTEXT="<external-aap-job-cluster-context>"
+  AAP_NAMESPACE="<external-aap-job-namespace>"
+  oc --context "$AAP_CONTEXT" create configmap network-fulfillment-ig \
+    --namespace "$AAP_NAMESPACE" --from-env-file=network-fulfillment-ig.env \
+    --dry-run=client -o yaml |
+    oc --context "$AAP_CONTEXT" apply -f -
+  oc --context "$AAP_CONTEXT" create secret generic network-fulfillment-ig \
+    --namespace "$AAP_NAMESPACE" --from-env-file=network-fulfillment-ig.secret \
+    --dry-run=client -o yaml |
+    oc --context "$AAP_CONTEXT" apply -f -
+  ```
+
+  Reapply the ConfigMap and Secret from their current sources whenever these
+  settings or secrets change; new job pods then read the updated values. Keep
+  the secret file out of version control. For multi-line settings or secrets,
+  use the corresponding resource's `--from-file=<KEY>=<path>` input instead of
+  an env file. If Netris CaaS jobs use `NETRIS_CA_CONFIGMAP`, also create that
+  ConfigMap in the external job cluster and namespace. The chart-managed pod
+  specification is shown in the
+  [OSAC networking instance-group template](../../../osac-aap/collections/ansible_collections/osac/config_as_code/roles/aap/templates/networking-operations-ig.j2).
 
 Put the secrets in a separate values file that is excluded from version
 control, for example `my-secrets.local.yaml`, generated from your secret
@@ -1592,7 +1646,7 @@ subchart's own `values.yaml` file.
 |---|---|---|
 | `operator.image.repository`, `operator.image.tag`, `operator.image.pullPolicy` | schema | Operator image. Use a release tag for production. |
 | `operator.replicaCount`, `operator.resources.*` | schema | Operator sizing. |
-| `operator.aap.url`, `operator.aap.insecureSkipVerify`, `operator.aap.statusPollInterval`, `operator.aap.templatePrefix` | schema | How the Operator reaches AAP. The chart defaults `insecureSkipVerify` to `"true"`; explicitly set it to `"false"` for production and use an AAP certificate trusted by the Operator's system trust store. `"true"` disables certificate verification and is for temporary evaluation only. The Fulfillment CA bundle does not configure AAP trust. |
+| `operator.aap.url`, `operator.aap.insecureSkipVerify`, `operator.aap.statusPollInterval`, `operator.aap.templatePrefix` | schema | How the Operator reaches AAP. An empty URL defaults to `http://osac-aap/api/controller`; set a trusted HTTPS Controller Route for production. The chart defaults `insecureSkipVerify` to `"true"`; explicitly set it to `"false"` for production and use an AAP certificate trusted by the Operator's system trust store. `"true"` disables certificate verification and is for temporary evaluation only. The Fulfillment CA bundle does not configure AAP trust. |
 | `operator.aap.token` | schema | Direct AAP token value. If `operator.aap.tokenSecret.name` is set, the Deployment uses that Secret and ignores this value; clear the Secret name when switching to a direct token. |
 | `operator.aap.tokenSecret.name` | schema | Secret containing the AAP API token. Set to `osac-aap-api-token` when using the `create-api-token` hook or when supplying a token for external AAP. |
 | `operator.aap.tokenSecret.key` | schema | Key in the referenced Secret containing the AAP token. The hook-created Secret uses `token`. |
@@ -1687,7 +1741,7 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `aap.configAsCode.remoteClusterKubeconfigSecretName`, `aap.configAsCode.remoteClusterKubeconfigSecretKey` | Secret name and key that AAP config-as-code uses for VM operations on a separate workload cluster. The key defaults to `kubeconfig`. See [Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster). |
 | `aap.configAsCode.importAgentsEnabled`, `aap.configAsCode.importBcmAgentsEnabled` | Enable bare-metal agent import and the BCM inventory backend. |
 | `aap.instanceGroups.clusterFulfillment.enabled`, `aap.instanceGroups.clusterFulfillment.config`, `aap.instanceGroups.clusterFulfillment.secret` | The `cluster-fulfillment` instance group for CaaS provisioning. See [Section 6.2](#62-installing-osac-for-caas). |
-| `aap.instanceGroups.networkFulfillment.enabled`, `aap.instanceGroups.networkFulfillment.config`, `aap.instanceGroups.networkFulfillment.secret` | The settings (`config`, the `ConfigMap` `network-fulfillment-ig`) and secrets (`secret`, the `Secret` `network-fulfillment-ig`) of the Fabric Manager, which networking jobs read as environment variables. Leave `enabled: true` (the default); `false` writes both empty and is rejected with provider networking enabled. The installer writes both at every rollout. See [Section 4.4.3](#443-setting-the-networking-helm-values). |
+| `aap.instanceGroups.networkFulfillment.enabled`, `aap.instanceGroups.networkFulfillment.config`, `aap.instanceGroups.networkFulfillment.secret` | The Fabric Manager settings (`config`) and secrets (`secret`) exposed to networking jobs as environment variables. With chart-managed AAP, the chart writes the `network-fulfillment-ig` ConfigMap and Secret at every rollout. With external AAP, maintain copies in the external job cluster as described in [Section 4.4.3](#443-setting-the-networking-helm-values). Leave `enabled: true` (the default); `false` renders empty local resources and is rejected with provider networking enabled. |
 | `aap.instanceGroups.storageFulfillment.config.STORAGE_SNAPSHOTS_ENABLED` | Snapshot toggle for the `storage-operations` instance group. |
 | `aap.instanceGroups.publishTemplates.enabled` | Runs the postinstallation `osac-publish-templates` hook, which publishes cluster templates (CaaS, MaaS), compute instance templates (VMaaS), bare-metal instance templates, and add-on operators (CaaS) to the fulfillment catalog. Default `true`. Set to `false` when AAP is external; publish required templates to Fulfillment separately. For chart-managed AAP, set it to `false` only when no enabled service depends on hook-published templates or when all required templates are provisioned separately. |
 | `aap.instanceGroups.publishTemplates.config.OSAC_TEMPLATE_COLLECTIONS`, `aap.instanceGroups.publishTemplates.config.OSAC_FULFILLMENT_SERVICE_URI` | The Ansible collections to publish and the internal Fulfillment Service URI. |
@@ -1906,8 +1960,11 @@ aap:
 ```
 
 Pass both files to Helm, for example `-f my-values.yaml -f my-secrets.local.yaml`.
-The chart writes these settings to the `network-fulfillment-ig` ConfigMap and
-Secret in the OSAC namespace. Replace `<netris_management_vpc_id>` with the
+With chart-managed AAP, the chart writes these settings to the
+`network-fulfillment-ig` ConfigMap and Secret in the OSAC namespace. With
+external AAP, also apply the copies in the external job cluster as described in
+[Section 4.4.3](#443-setting-the-networking-helm-values). Replace
+`<netris_management_vpc_id>` with the
 provider-supplied positive integer ID when using ExternalIP destinations in
 `provider_management`; otherwise omit `NETRIS_MGMT_VPC_ID`.
 `NATGateway` resources and VM ExternalIP attachments in the tenant network
@@ -3514,8 +3571,10 @@ values and run `helm upgrade` again.
 - **Instance group** — An AAP execution group with its own `ConfigMap` and
   Secret of environment variables, for example `cluster-fulfillment`,
   `network-fulfillment`, `storage-operations`, or `publish-templates`.
-  Networking jobs run in `<prefix>-networking-operations-ig` and read the
-  `network-fulfillment-ig` `ConfigMap` and `Secret`.
+  With chart-managed AAP, networking jobs run in
+  `<prefix>-networking-operations-ig` and read the `network-fulfillment-ig`
+  `ConfigMap` and `Secret`. External AAP requires equivalent resources in its
+  job cluster; see [Section 4.4.3](#443-setting-the-networking-helm-values).
 - **Fabric Manager** — The network manager that configures the provider's
   fabric: an Ansible role, written by the provider or shipped by OSAC (for
   example Netris), registered with a `ConfigMap` (the installer creates it for

@@ -1243,11 +1243,20 @@ service:
   vault:
     keycloakIssuerUrl: https://keycloak-keycloak.<cluster-domain>/realms/osac
     keycloakClientId: osac-controller
+    credentials:
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-secret
+              param: client-secret
 ```
 
 The `osac` chart defaults `service.vault.keycloakClientId` to empty. The
 evaluation installation provides the `osac-controller` Keycloak client and its
-credentials; set the client ID in the `osac` values file.
+`fulfillment-controller-credentials` Secret; set the client ID and Secret
+reference in the `osac` values file. The reference maps the Secret's
+`client-secret` key to the Vault `client-secret` parameter without putting the
+credential value in the values file.
 
 ## Infrastructure Configuration
 

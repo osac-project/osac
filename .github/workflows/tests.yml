@@ -163,18 +163,7 @@ jobs:
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
           # The upload below takes this directory, so the diagnostics go to a file in it as well as to the log.
-          # Whatever the test run left in it that is not redacted yet is moved to a scratch directory outside it
-          # first, so that no way of leaving this step early can upload a raw file. If that is not possible, the
-          # raw files are removed.
-          raw=$(mktemp -d) || { rm -rf fulfillment-service/logs/timings; echo "No scratch directory, the timing reports are not in the artifact"; exit 0; }
-          trap 'rm -rf "$raw"' EXIT
-          mv fulfillment-service/logs/timings "$raw/timings" 2>/dev/null || rm -rf fulfillment-service/logs/timings
           mkdir -p fulfillment-service/logs/pods
-          # Cluster-internal host names (*.svc, *.svc.cluster.local, *.localhost) and the whole authority of every
-          # URL, which is the user information, the host and the port (this covers short service names such as the
-          # one the wait-for-fulfillment container logs), are replaced in everything that goes to the artifact,
-          # because the diagnostics need the finalizer values and the gRPC methods, not the names.
-          redact='s/[A-Za-z0-9._-]+\.(svc(\.cluster\.local)?|cluster\.local|localhost)/<redacted-host>/g;s#(://)[^/[:space:]"'"'"'\\)}<>]+#\1<redacted-host>#g'
           {
             echo "=== Pods ==="
             kubectl get pods -n osac -o wide
@@ -186,22 +175,9 @@ jobs:
             kubectl logs -n osac -l 'app in (fulfillment-console-proxy,fulfillment-controller,fulfillment-grpc-server,fulfillment-rest-gateway,fulfillment-ingress-proxy)' --tail=100 --all-containers
             echo "=== Events ==="
             kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
-          } 2>&1 | sed -E "$redact" | tee fulfillment-service/logs/diagnostics.txt
-          # The complete log of every pod goes to the artifact only. A spec that fails in the middle of the
-          # suite is far outside the 100 lines above by the time this step runs, and the controller's writes
-          # are only visible here. Kind keeps up to 64Mi per container since its last rotation, see osac-installer/kind-config.yaml.
-          # One listing gives every container that has started, with its restart count. Then one request per
-          # container: kubectl stops at the first container that fails, which would lose the logs of the others,
-          # and only a container that restarted has a previous log to ask for. A failure here must not fail the
-          # step. The raw log goes to a scratch directory outside the one that is uploaded, and the redacted copy is
-          # written to the artifact only when the redaction succeeds, so that a failure can't leave a raw log in it.
-          collect() {
-            local out=$1
-            shift
-            kubectl logs -n osac "$@" > "$raw/log" 2>&1 || echo "Failed to get logs for ${out##*/}"
-            sed -E "$redact" "$raw/log" > "$out" || { rm -f "$out"; echo "Failed to redact ${out##*/}, it is not in the artifact"; }
-            rm -f "$raw/log"
-          }
+          } 2>&1 | tee fulfillment-service/logs/diagnostics.txt
+          # Full log of every container, and the previous log of restarted ones. One request per container,
+          # because kubectl stops at the first container that fails.
           if pods=$(kubectl get pods -n osac -o json); then
             jq -r '
               .items[] | .metadata.name as $pod
@@ -209,22 +185,14 @@ jobs:
               | "\($pod) \(.name) \(.restartCount)"
             ' <<<"$pods" | while read -r pod container restarts; do
               file="fulfillment-service/logs/pods/${pod}_${container}"
-              collect "${file}.log" "$pod" -c "$container" --tail=-1
+              kubectl logs -n osac "$pod" -c "$container" --tail=-1 > "${file}.log" 2>&1 || echo "Failed to get logs for ${pod}/${container}"
               if [ "$restarts" -gt 0 ]; then
-                collect "${file}-previous.log" "$pod" -c "$container" --previous --tail=-1
+                kubectl logs -n osac "$pod" -c "$container" --previous --tail=-1 > "${file}-previous.log" 2>&1 || echo "Failed to get previous logs for ${pod}/${container}"
               fi
             done
           else
             echo "Failed to list the pods"
           fi
-          # The Ginkgo timing reports hold the output of the specs, so they get the same treatment: a report that
-          # can't be redacted is not put back into the artifact.
-          mkdir -p fulfillment-service/logs/timings
-          for report in "$raw"/timings/*.json; do
-            [ -e "$report" ] || continue
-            out="fulfillment-service/logs/timings/${report##*/}"
-            sed -E "$redact" "$report" > "$out" || { rm -f "$out"; echo "Failed to redact ${report##*/}, it is not in the artifact"; }
-          done
       - if: inputs.kind == 'it-fulfillment-service' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:

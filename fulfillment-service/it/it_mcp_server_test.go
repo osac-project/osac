@@ -824,10 +824,15 @@ var _ = Describe("MCP server", func() {
 	It("returns safe missing-Secret guidance from the real API boundary", func() {
 		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-missing-secret", userUsername)
 		missingSecretCatalogItemID := fmt.Sprintf("mcp-missing-secret-item-%s", uuid.New())
+		mockSecretValue := "mock-user-data-secret-value"
+		missingSecretID := createCatalogItemSecretFixture(ctx, usersGroup,
+			privatev1.SecretType_SECRET_TYPE_USER_DATA,
+			map[string][]byte{"userdata": []byte(mockSecretValue)},
+		)
 		_, err := catalogItemsClient.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 			Object: privatev1.ComputeInstanceCatalogItem_builder{
 				Id:          missingSecretCatalogItemID,
-				Metadata:    privatev1.Metadata_builder{Name: missingSecretCatalogItemID}.Build(),
+				Metadata:    privatev1.Metadata_builder{Name: missingSecretCatalogItemID, Tenant: usersGroup}.Build(),
 				Title:       "MCP missing Secret catalog item",
 				Description: "Catalog item for missing-Secret MCP integration testing",
 				Published:   true,
@@ -854,7 +859,7 @@ var _ = Describe("MCP server", func() {
 						Editable: privatev1.EditableUserDataSourceField_builder{
 							DefaultValue: privatev1.UserDataSource_builder{
 								Secret: privatev1.SecretLocalReference_builder{
-									Id: "missing-user-data-secret",
+									Id: missingSecretID,
 								}.Build(),
 							}.Build(),
 						}.Build(),
@@ -870,8 +875,15 @@ var _ = Describe("MCP server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		secretsClient := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+		_, err = secretsClient.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: missingSecretID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func() codes.Code {
+			_, getErr := secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: missingSecretID}.Build())
+			return status.Code(getErr)
+		}, 10*time.Second, 100*time.Millisecond).Should(Equal(codes.NotFound))
+
 		instanceName := fmt.Sprintf("mcp-missing-secret-instance-%s", uuid.New()[24:32])
-		mockSecretValue := "mock-user-data-secret-value"
 		bootDiskSize := int32(20)
 		_, err = callMCPTool[mcpserver.CreateComputeInstanceOutput](
 			ctx, session, "create_compute_instance", mcpserver.CreateComputeInstanceInput{
@@ -892,7 +904,7 @@ var _ = Describe("MCP server", func() {
 		)
 		expectMCPSafeError(
 			err, "not_found", "NotFound", "/secrets/create",
-			"Secret reference missing-user-data-secret is missing",
+			fmt.Sprintf("Secret reference %s is missing", missingSecretID),
 		)
 		Expect(err.Error()).ToNot(ContainSubstring(mockSecretValue))
 		Expect(err.Error()).ToNot(ContainSubstring("Bearer "))

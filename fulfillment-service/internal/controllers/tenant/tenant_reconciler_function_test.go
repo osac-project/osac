@@ -2286,12 +2286,18 @@ var _ = Describe("Vault namespace provisioning", func() {
 			Return(nil).Times(2)
 
 		t := &task{r: reconciler, tenant: tenant}
+		var readyCondition *privatev1.TenantCondition
 		for range 2 {
 			Expect(t.update(ctx)).To(Succeed())
 			cond := findCondition(t.tenant)
 			Expect(cond).ToNot(BeNil())
 			Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 			Expect(cond.GetReason()).To(Equal("NamespaceReady"))
+			if readyCondition == nil {
+				readyCondition = proto.Clone(cond).(*privatev1.TenantCondition)
+			} else {
+				Expect(proto.Equal(cond, readyCondition)).To(BeTrue())
+			}
 			Expect(t.tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
 		}
 	}, Entry("ordinary tenant", "already-org"), Entry("system tenant", auth.SystemTenant))
@@ -2495,11 +2501,13 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(record).To(HaveKeyWithValue("tenant_name", tenantName))
 		Expect(record).To(HaveKeyWithValue("error_code", expectedCode.String()))
 		Expect(record).ToNot(HaveKey("error"))
-		Expect(findCondition(persisted).GetMessage()).To(Equal("Failed to provision vault namespace"))
+		expectedMessage := "Failed to provision vault namespace (" + expectedCode.String() + ")"
+		Expect(findCondition(persisted).GetMessage()).To(Equal(expectedMessage))
 		Expect(reconciler.Run(ctx, proto.Clone(persisted).(*privatev1.Tenant))).To(Succeed())
 		Expect(updates).To(HaveLen(2))
 		Expect(findCondition(persisted).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 		Expect(findCondition(persisted).GetReason()).To(Equal("ProvisionFailed"))
+		Expect(findCondition(persisted).GetMessage()).To(Equal(expectedMessage))
 		Expect(persisted.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
 		Expect(findCondition(updates[1].GetObject()).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 		Expect(findCondition(updates[1].GetObject()).GetReason()).To(Equal("NamespaceReady"))
@@ -2556,7 +2564,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(cond).ToNot(BeNil())
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 		Expect(cond.GetReason()).To(Equal("ProvisionFailed"))
-		Expect(cond.GetMessage()).To(Equal("Failed to provision vault namespace"))
+		Expect(cond.GetMessage()).To(Equal("Failed to provision vault namespace (Internal)"))
 	})
 
 	It("stays SYNCED with condition FALSE when vault provisioning fails for synced tenant", func() {
@@ -2595,7 +2603,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(cond).ToNot(BeNil())
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 		Expect(cond.GetReason()).To(Equal("ProvisionFailed"))
-		Expect(cond.GetMessage()).To(Equal("Failed to provision vault namespace"))
+		Expect(cond.GetMessage()).To(Equal("Failed to provision vault namespace (Internal)"))
 	})
 
 	It("provisions a vault namespace for the system tenant", func() {

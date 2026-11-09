@@ -209,10 +209,9 @@ func newBCMReconciler(mock *mockBCM) *BareMetalInstanceReconciler {
 		k8sClient.Scheme(),
 		invClient,
 		mgmtClient,
-		nil, // provisioning provider
-		nil, // networking provider
-		nil, // IP discovery provider
-		nil, // AAP client
+		nil,   // provisioning provider
+		false, // provider networking disabled
+		"",
 		0, 0, 0, 0, 0,
 	)
 }

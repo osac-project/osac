@@ -26,6 +26,9 @@ import (
 )
 
 const (
+	// BareMetalInstanceUUIDLabel is the fulfillment API ID copied onto its BMI CR.
+	BareMetalInstanceUUIDLabel = "osac.openshift.io/baremetalinstance-uuid"
+
 	// BareMetalPoolIDLabel is the BareMetalPool ID label to put in the inventory backend
 	BareMetalPoolIDLabel = "bareMetalPoolId"
 

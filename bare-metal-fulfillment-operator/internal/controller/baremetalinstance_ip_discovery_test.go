@@ -18,10 +18,8 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -29,523 +27,142 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac/osac-operator/pkg/aap"
-	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
-// newMockAAPServer creates an HTTP test server that mocks AAP API responses.
-// Returns the server and an aap.Client configured to use it.
-func newMockAAPServer(jobID string, artifacts json.RawMessage) (*httptest.Server, *aap.Client) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Mock the GetJob endpoint: GET /v2/jobs/{id}/
-		expectedPath := fmt.Sprintf("/v2/jobs/%s/", jobID)
-		if r.Method == http.MethodGet && r.URL.Path == expectedPath {
-			job := map[string]interface{}{
-				"id":        1,
-				"status":    "successful",
-				"artifacts": artifacts,
-			}
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(job); err != nil {
-				http.Error(w, fmt.Sprintf("Failed to encode response: %v", err), http.StatusInternalServerError)
-			}
-			return
-		}
-		// Return 404 for unexpected requests
-		http.Error(w, fmt.Sprintf("Not found: %s %s", r.Method, r.URL.Path), http.StatusNotFound)
-	}))
-
-	// Create aap.Client pointing to the test server
-	client := aap.NewClient(server.URL, "fake-token", true)
-	return server, client
-}
-
-var _ = Describe("BareMetalInstance IP Discovery", func() {
+var _ = Describe("BareMetalInstance DHCP lease projection", func() {
 	var (
 		ctx        context.Context
-		reconciler *BareMetalInstanceReconciler
 		bmi        *v1alpha1.BareMetalInstance
+		reconciler *BareMetalInstanceReconciler
+		na         *opv1alpha1.NetworkAttachment
 	)
-
-	bmiForIPDiscovery := func(attachments []v1alpha1.BareMetalNetworkAttachment) *v1alpha1.BareMetalInstance {
-		return &v1alpha1.BareMetalInstance{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "test-bmi-ipd-",
-				Namespace:    "default",
-			},
-			Spec: v1alpha1.BareMetalInstanceSpec{
-				ExternalHostID: "host-456",
-				Selector: v1alpha1.HostSelectorSpec{
-					HostSelector: map[string]string{"test": "value"},
-				},
-				HostClass:          "openstack",
-				TemplateID:         "noop",
-				NetworkAttachments: attachments,
-			},
-		}
-	}
 
 	BeforeEach(func() {
 		ctx = context.Background()
-	})
-
-	Describe("reconcileIPDiscovery", func() {
-		Context("when no network attachments are configured", func() {
-			BeforeEach(func() {
-				bmi = bmiForIPDiscovery(nil)
-				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-				reconciler = &BareMetalInstanceReconciler{
-					Client:              k8sClient,
-					Scheme:              k8sClient.Scheme(),
-					IPDiscoveryProvider: &mockProvisioningProvider{},
-				}
-			})
-
-			AfterEach(func() {
-				Expect(k8sClient.Delete(ctx, bmi)).To(Succeed())
-			})
-
-			It("should skip with condition set to True/Skipped", func() {
-				result, err := reconciler.reconcileIPDiscovery(ctx, bmi)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(result.RequeueAfter).To(BeZero())
-
-				cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-				Expect(cond).NotTo(BeNil())
-				Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-				Expect(cond.Reason).To(Equal("Skipped"))
-			})
-		})
-
-		Context("when IPDiscoveryProvider is nil", func() {
-			BeforeEach(func() {
-				bmi = bmiForIPDiscovery([]v1alpha1.BareMetalNetworkAttachment{
-					{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
-				})
-				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-				// Mark network handoff as complete so IP discovery can run
-				bmi.SetStatusCondition(
-					v1alpha1.HostConditionNetworkHandoffComplete,
-					metav1.ConditionTrue,
-					"Succeeded",
-					"Handoff complete",
-				)
-				reconciler = &BareMetalInstanceReconciler{
-					Client:              k8sClient,
-					Scheme:              k8sClient.Scheme(),
-					IPDiscoveryProvider: nil,
-				}
-			})
-
-			AfterEach(func() {
-				Expect(k8sClient.Delete(ctx, bmi)).To(Succeed())
-			})
-
-			It("should skip with condition set to True/Skipped", func() {
-				result, err := reconciler.reconcileIPDiscovery(ctx, bmi)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(result.RequeueAfter).To(BeZero())
-
-				cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-				Expect(cond).NotTo(BeNil())
-				Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-				Expect(cond.Reason).To(Equal("Skipped"))
-			})
-		})
-
-		Context("when resolving logical port MACs", func() {
-			var (
-				inventoryClient *mockInventoryClient
-				jobMACs         map[string]string
-				jobTriggered    bool
-			)
-
-			BeforeEach(func() {
-				bmi = bmiForIPDiscovery([]v1alpha1.BareMetalNetworkAttachment{
-					{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
-				})
-				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-				bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete, metav1.ConditionTrue, "Succeeded", "Handoff complete")
-				inventoryClient = &mockInventoryClient{}
-				jobMACs = nil
-				jobTriggered = false
-				reconciler = &BareMetalInstanceReconciler{
-					Client:          k8sClient,
-					InventoryClient: inventoryClient,
-					IPDiscoveryProvider: &mockProvisioningProvider{
-						triggerProvisionFunc: func(jobCtx context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-							jobTriggered = true
-							jobMACs = provisioning.NetworkAttachmentMACsFromContext(jobCtx)
-							return &provisioning.ProvisionResult{JobID: "mac-lookup-job", InitialState: opv1alpha1.JobStatePending}, nil
-						},
-					},
-					ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
-				}
-			})
-
-			AfterEach(func() {
-				Expect(k8sClient.Delete(ctx, bmi)).To(Succeed())
-			})
-
-			It("passes inventory logical port MACs to the DHCP job when management is unset", func() {
-				lookupCalled := false
-				inventoryClient.getHostLogicalPortMACsFunc = func(_ context.Context, hostID string) (map[string]string, error) {
-					lookupCalled = true
-					Expect(hostID).To(Equal(bmi.Spec.ExternalHostID))
-					return map[string]string{"data-0": "52:54:00:16:04:83"}, nil
-				}
-				_, err := reconciler.reconcileIPDiscovery(ctx, bmi)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(lookupCalled).To(BeTrue())
-				Expect(jobTriggered).To(BeTrue())
-				Expect(jobMACs).To(Equal(map[string]string{"subnet-1": "52:54:00:16:04:83"}))
-			})
-
-			DescribeTable("preserves name-based matching",
-				func(macs map[string]string, lookupErr error, noInventory, noHostID bool) {
-					lookupCalled := false
-					inventoryClient.getHostLogicalPortMACsFunc = func(_ context.Context, _ string) (map[string]string, error) {
-						lookupCalled = true
-						return macs, lookupErr
-					}
-					if noInventory {
-						reconciler.InventoryClient = nil
-					}
-					if noHostID {
-						bmi.Spec.ExternalHostID = ""
-					}
-					_, err := reconciler.reconcileIPDiscovery(ctx, bmi)
-					Expect(err).NotTo(HaveOccurred())
-					Expect(lookupCalled).To(Equal(!noInventory && !noHostID))
-					Expect(jobTriggered).To(BeTrue())
-					Expect(jobMACs).To(BeEmpty())
+		name := fmt.Sprintf("bm-lease-%d", time.Now().UnixNano())
+		apiID := "api-" + name
+		bmi = &v1alpha1.BareMetalInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: testNetworkingNamespace,
+				Labels:    map[string]string{BareMetalInstanceUUIDLabel: apiID},
+				Annotations: map[string]string{
+					bareMetalInstanceTenantAnnotation: "tenant-a",
 				},
-				Entry("when the mapping is empty", map[string]string{}, nil, false, false),
-				Entry("when the attachment has no mapped port", map[string]string{"other-port": "52:54:00:16:04:83"}, nil, false, false),
-				Entry("when inventory lookup fails", nil, fmt.Errorf("inventory unavailable"), false, false),
-				Entry("when inventory is unset", nil, nil, true, false),
-				Entry("when the host ID is unset", nil, nil, false, true),
-			)
-		})
-
-		Context("when IP discovery succeeds", func() {
-			var mockProvider *mockProvisioningProvider
-
-			BeforeEach(func() {
-				bmi = bmiForIPDiscovery([]v1alpha1.BareMetalNetworkAttachment{
-					{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
-				})
-				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-				// Mark network handoff as complete so IP discovery can run
-				bmi.SetStatusCondition(
-					v1alpha1.HostConditionNetworkHandoffComplete,
-					metav1.ConditionTrue,
-					"Succeeded",
-					"Handoff complete",
-				)
-
-				mockProvider = &mockProvisioningProvider{}
-				reconciler = &BareMetalInstanceReconciler{
-					Client:                        k8sClient,
-					Scheme:                        k8sClient.Scheme(),
-					IPDiscoveryProvider:           mockProvider,
-					AAPClient:                     nil, // no AAP client for unit tests
-					ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
-				}
-			})
-
-			AfterEach(func() {
-				Expect(k8sClient.Delete(ctx, bmi)).To(Succeed())
-			})
-
-			It("should set IPDiscoveryComplete to True and initialize statuses", func() {
-				mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-					return &provisioning.ProvisionResult{
-						JobID:        "ipd-job-1",
-						InitialState: opv1alpha1.JobStatePending,
-					}, nil
-				}
-				mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, _ string) (provisioning.ProvisionStatus, error) {
-					return provisioning.ProvisionStatus{
-						JobID: "ipd-job-1",
-						State: opv1alpha1.JobStateSucceeded,
-					}, nil
-				}
-
-				var foundCond *metav1.Condition
-				for range 10 {
-					_, _ = reconciler.reconcileIPDiscovery(ctx, bmi)
-					foundCond = bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-					if foundCond != nil && foundCond.Status == metav1.ConditionTrue {
-						break
-					}
-					_ = k8sClient.Status().Update(ctx, bmi)
-					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
-				}
-
-				Expect(foundCond).NotTo(BeNil())
-				Expect(foundCond.Status).To(Equal(metav1.ConditionTrue))
-				Expect(foundCond.Reason).To(Equal("Succeeded"))
-
-				Expect(bmi.Status.NetworkAttachmentStatuses).To(HaveLen(1))
-				Expect(bmi.Status.NetworkAttachmentStatuses[0].SubnetRef).To(Equal("subnet-1"))
-				Expect(bmi.Status.NetworkAttachmentStatuses[0].Interface).To(Equal("data-0"))
-				Expect(bmi.Status.NetworkAttachmentStatuses[0].Primary).To(BeTrue())
-			})
-
-			It("should track IP discovery jobs in status", func() {
-				mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-					return &provisioning.ProvisionResult{
-						JobID:        "ipd-job-2",
-						InitialState: opv1alpha1.JobStatePending,
-					}, nil
-				}
-				mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, _ string) (provisioning.ProvisionStatus, error) {
-					return provisioning.ProvisionStatus{
-						JobID: "ipd-job-2",
-						State: opv1alpha1.JobStateSucceeded,
-					}, nil
-				}
-
-				for range 10 {
-					_, _ = reconciler.reconcileIPDiscovery(ctx, bmi)
-					_ = k8sClient.Status().Update(ctx, bmi)
-					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
-				}
-
-				Expect(bmi.Status.IPDiscoveryJobs).NotTo(BeEmpty())
-				Expect(bmi.Status.IPDiscoveryJobs[0].JobID).To(Equal("ipd-job-2"))
-			})
-
-			It("populates tenant IP address after network handoff completes", func() {
-				const tenantIP = "10.20.30.40"
-				const jobID = "ipd-job-3"
-
-				// Setup: BMI with attachments, fully handed off (NetworkHandoffComplete=True)
-				bmi.SetStatusCondition(
-					v1alpha1.HostConditionProvisionTemplateComplete,
-					metav1.ConditionTrue,
-					"Succeeded",
-					"Provisioning completed",
-				)
-				bmi.SetStatusCondition(
-					v1alpha1.HostConditionNetworkAttachmentsReady,
-					metav1.ConditionTrue,
-					"Succeeded",
-					"Network attachments ready",
-				)
-
-				// Create mock AAP server that returns artifacts with tenant IP
-				leaseResult := DHCPLeaseResult{
-					Leases: []DHCPLease{
-						{
-							SubnetRef:  "subnet-1",
-							Interface:  "data-0",
-							IPAddress:  tenantIP,
-							MACAddress: "52:54:00:aa:bb:cc",
-						},
-					},
-				}
-				artifactsJSON, _ := json.Marshal(leaseResult)
-				server, aapClient := newMockAAPServer(jobID, artifactsJSON)
-				defer server.Close()
-
-				// Wire the AAP client into the reconciler
-				reconciler.AAPClient = aapClient
-
-				// Mock IP discovery provider to trigger job and report success
-				mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-					return &provisioning.ProvisionResult{
-						JobID:        jobID,
-						InitialState: opv1alpha1.JobStatePending,
-					}, nil
-				}
-				mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, _ string) (provisioning.ProvisionStatus, error) {
-					return provisioning.ProvisionStatus{
-						JobID:   jobID,
-						State:   opv1alpha1.JobStateSucceeded,
-						Message: "IP discovery completed",
-					}, nil
-				}
-
-				// Reconcile IP discovery until complete
-				var ipDiscoveryCond *metav1.Condition
-				for range 10 {
-					_, _ = reconciler.reconcileIPDiscovery(ctx, bmi)
-					ipDiscoveryCond = bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-					if ipDiscoveryCond != nil && ipDiscoveryCond.Status == metav1.ConditionTrue {
-						break
-					}
-					_ = k8sClient.Status().Update(ctx, bmi)
-					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmi), bmi)).To(Succeed())
-				}
-
-				// Assert IP discovery completed
-				Expect(ipDiscoveryCond).NotTo(BeNil())
-				Expect(ipDiscoveryCond.Status).To(Equal(metav1.ConditionTrue))
-				Expect(ipDiscoveryCond.Reason).To(Equal("Succeeded"))
-
-				// Assert the tenant IP is actually populated (non-vacuous check)
-				Expect(bmi.Status.NetworkAttachmentStatuses).To(HaveLen(1))
-				Expect(bmi.Status.NetworkAttachmentStatuses[0].SubnetRef).To(Equal("subnet-1"))
-				Expect(bmi.Status.NetworkAttachmentStatuses[0].Interface).To(Equal("data-0"))
-				Expect(bmi.Status.NetworkAttachmentStatuses[0].IPAddress).To(Equal(tenantIP),
-					"tenant IP must be discovered and populated, not merely that discovery ran")
-				Expect(bmi.Status.NetworkAttachmentStatuses[0].Primary).To(BeTrue())
-			})
+			},
+			Spec: v1alpha1.BareMetalInstanceSpec{
+				Selector:   v1alpha1.HostSelectorSpec{HostSelector: map[string]string{"test": "networking"}},
+				TemplateID: shared.OsacNoopTemplate,
+				NetworkAttachments: []v1alpha1.BareMetalNetworkAttachment{{
+					SubnetRef: "subnet-a", Interface: "data-0", SecurityGroupRefs: []string{"sg-a"}, Primary: true,
+				}},
+			},
+		}
+		reconciler = &BareMetalInstanceReconciler{
+			Client:                        k8sClient,
+			Scheme:                        k8sClient.Scheme(),
+			NetworkingEnabled:             true,
+			NetworkingNamespace:           testNetworkingNamespace,
+			ProvisionPollIntervalDuration: time.Second,
+		}
+		na = &opv1alpha1.NetworkAttachment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, apiID),
+				Namespace:  testNetworkingNamespace,
+				Finalizers: []string{BareMetalInstanceNetworkingFinalizer},
+				Annotations: map[string]string{
+					bareMetalInstanceTenantAnnotation: "tenant-a",
+				},
+			},
+			Spec: opv1alpha1.NetworkAttachmentSpec{
+				Target:         opv1alpha1.NetworkAttachmentTarget{Kind: opv1alpha1.NetworkAttachmentTargetBareMetalInstance, ID: apiID},
+				Subnet:         "subnet-a",
+				Interface:      opv1alpha1.NetworkAttachmentInterface{Type: opv1alpha1.NetworkInterfacePhysical, Name: "data-0", MACAddress: "aa:bb:cc:dd:ee:01"},
+				SecurityGroups: []string{"sg-a"},
+			},
+		}
+		Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+		Expect(k8sClient.Create(ctx, na)).To(Succeed())
+		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+			metav1.ConditionTrue, "Succeeded", "handoff completed")
+		DeferCleanup(func() {
+			latestNA := &opv1alpha1.NetworkAttachment{}
+			if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(na), latestNA); err == nil {
+				latestNA.Finalizers = nil
+				_ = k8sClient.Update(context.Background(), latestNA)
+				_ = k8sClient.Delete(context.Background(), latestNA)
+			}
+			latestBMI := &v1alpha1.BareMetalInstance{}
+			if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(bmi), latestBMI); err == nil {
+				latestBMI.Finalizers = nil
+				_ = k8sClient.Update(context.Background(), latestBMI)
+				_ = k8sClient.Delete(context.Background(), latestBMI)
+			}
 		})
 	})
 
-	Describe("applyIPDiscoveryResults", func() {
-		It("should return error when job has no artifacts", func() {
-			bmi := bmiForIPDiscovery([]v1alpha1.BareMetalNetworkAttachment{
-				{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
-			})
-			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-			defer func() { _ = k8sClient.Delete(ctx, bmi) }()
+	It("waits for a lease while the operator is still querying", func() {
+		na.Status.Jobs = []opv1alpha1.NetworkJobStatus{{
+			Task: bareMetalQueryDHCPLeaseTask, Manager: opv1alpha1.NetworkJobManagerFabric,
+			State: opv1alpha1.NetworkJobStateRetrying, Message: "retrying query", JobID: "job-9",
+		}}
+		Expect(k8sClient.Status().Update(ctx, na)).To(Succeed())
 
-			server, aapClient := newMockAAPServer("empty-job", nil)
-			defer server.Close()
-
-			reconciler = &BareMetalInstanceReconciler{
-				Client:    k8sClient,
-				Scheme:    k8sClient.Scheme(),
-				AAPClient: aapClient,
-			}
-
-			err := reconciler.applyIPDiscoveryResults(ctx, bmi, "empty-job")
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("no artifacts"))
-		})
-
-		It("should return error when lease is missing for an attachment", func() {
-			// Use a single attachment so the CRD "exactly one primary" rule is satisfied,
-			// then return a lease with a mismatched subnetRef so no lease matches.
-			bmi := bmiForIPDiscovery([]v1alpha1.BareMetalNetworkAttachment{
-				{SubnetRef: "subnet-2", Interface: "data-0", Primary: true},
-			})
-			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-			defer func() { _ = k8sClient.Delete(ctx, bmi) }()
-
-			// Return a lease only for subnet-1, not subnet-2
-			leaseResult := DHCPLeaseResult{
-				Leases: []DHCPLease{
-					{SubnetRef: "subnet-1", Interface: "data-0", IPAddress: "10.0.1.5", MACAddress: "aa:bb:cc:dd:ee:ff"},
-				},
-			}
-			artifactsJSON, _ := json.Marshal(leaseResult)
-			server, aapClient := newMockAAPServer("partial-job", artifactsJSON)
-			defer server.Close()
-
-			reconciler = &BareMetalInstanceReconciler{
-				Client:    k8sClient,
-				Scheme:    k8sClient.Scheme(),
-				AAPClient: aapClient,
-			}
-
-			err := reconciler.applyIPDiscoveryResults(ctx, bmi, "partial-job")
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("subnet-2"))
-			Expect(err.Error()).To(ContainSubstring("1/1"))
-
-			// Verify attachment exists but has no IP (lease was for subnet-1, not subnet-2)
-			Expect(bmi.Status.NetworkAttachmentStatuses).To(HaveLen(1))
-			Expect(bmi.Status.NetworkAttachmentStatuses[0].IPAddress).To(BeEmpty())
-		})
-
-		It("should succeed when all leases are found", func() {
-			bmi := bmiForIPDiscovery([]v1alpha1.BareMetalNetworkAttachment{
-				{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
-			})
-			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-			defer func() { _ = k8sClient.Delete(ctx, bmi) }()
-
-			leaseResult := DHCPLeaseResult{
-				Leases: []DHCPLease{
-					{SubnetRef: "subnet-1", Interface: "data-0", IPAddress: "10.0.1.5", MACAddress: "aa:bb:cc:dd:ee:ff"},
-				},
-			}
-			artifactsJSON, _ := json.Marshal(leaseResult)
-			server, aapClient := newMockAAPServer("full-job", artifactsJSON)
-			defer server.Close()
-
-			reconciler = &BareMetalInstanceReconciler{
-				Client:    k8sClient,
-				Scheme:    k8sClient.Scheme(),
-				AAPClient: aapClient,
-			}
-
-			err := reconciler.applyIPDiscoveryResults(ctx, bmi, "full-job")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(bmi.Status.NetworkAttachmentStatuses).To(HaveLen(1))
-			Expect(bmi.Status.NetworkAttachmentStatuses[0].IPAddress).To(Equal("10.0.1.5"))
-		})
+		result, err := reconciler.reconcileIPDiscovery(ctx, bmi)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(time.Second))
+		condition := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
+		Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+		Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
+		Expect(condition.Message).To(ContainSubstring("job-9"))
 	})
 
-	Describe("buildSubnetMACMap", func() {
-		It("maps each attachment's subnet to the MAC of its interface", func() {
-			attachments := []v1alpha1.BareMetalNetworkAttachment{
-				{SubnetRef: "subnet-a", Interface: "eth9"},
-				{SubnetRef: "subnet-b", Interface: "eth0"},
-			}
-			ifaceMACs := map[string]string{
-				"eth9": "52:54:00:16:04:83",
-				"eth0": "52:54:00:AA:BB:CC",
-			}
+	It("mirrors an accepted DHCP lease into the existing BMI attachment status", func() {
+		na.Status.DHCPLease = &opv1alpha1.NetworkAttachmentDHCPLease{
+			IPAddress: "192.0.2.44", MACAddress: "aa:bb:cc:dd:ee:01",
+		}
+		Expect(k8sClient.Status().Update(ctx, na)).To(Succeed())
 
-			Expect(buildSubnetMACMap(attachments, ifaceMACs)).To(Equal(map[string]string{
-				"subnet-a": "52:54:00:16:04:83",
-				"subnet-b": "52:54:00:AA:BB:CC",
-			}))
-		})
+		result, err := reconciler.reconcileIPDiscovery(ctx, bmi)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(BeZero())
+		Expect(bmi.Status.NetworkAttachmentStatuses).To(HaveLen(1))
+		Expect(bmi.Status.NetworkAttachmentStatuses[0].IPAddress).To(Equal("192.0.2.44"))
+		condition := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
+		Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+	})
 
-		It("uses the single host interface when the attachment has no interface set", func() {
-			attachments := []v1alpha1.BareMetalNetworkAttachment{
-				{SubnetRef: "subnet-a"},
-			}
-			ifaceMACs := map[string]string{"eth9": "52:54:00:16:04:83"}
+	It("fails discovery when the Fabric query fails even if attachment Ready stays true", func() {
+		na.Status.Conditions = []metav1.Condition{{
+			Type: opv1alpha1.NetworkConditionReady, Status: metav1.ConditionTrue,
+			Reason: opv1alpha1.ReasonSucceeded, Message: "attachment applied", LastTransitionTime: metav1.Now(),
+		}}
+		na.Status.Jobs = []opv1alpha1.NetworkJobStatus{{
+			Task: bareMetalQueryDHCPLeaseTask, Manager: opv1alpha1.NetworkJobManagerFabric,
+			State: opv1alpha1.NetworkJobStateFailed, Message: "fabric query rejected", JobID: "job-10",
+		}}
+		Expect(k8sClient.Status().Update(ctx, na)).To(Succeed())
 
-			Expect(buildSubnetMACMap(attachments, ifaceMACs)).To(Equal(map[string]string{
-				"subnet-a": "52:54:00:16:04:83",
-			}))
-		})
+		result, err := reconciler.reconcileIPDiscovery(ctx, bmi)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(BeZero())
+		condition := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
+		Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+		Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonTemplateFailed))
+		Expect(condition.Message).To(ContainSubstring("fabric query rejected"))
+		Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+	})
 
-		It("uses one MAC for an unnamed attachment when interface names are aliases", func() {
-			attachments := []v1alpha1.BareMetalNetworkAttachment{{SubnetRef: "subnet-a"}}
-			ifaceMACs := map[string]string{
-				"eno1":   "52:54:00:16:04:AB",
-				"data-0": "52:54:00:16:04:ab",
-			}
-
-			Expect(buildSubnetMACMap(attachments, ifaceMACs)).To(Or(
-				Equal(map[string]string{"subnet-a": "52:54:00:16:04:AB"}),
-				Equal(map[string]string{"subnet-a": "52:54:00:16:04:ab"}),
-			))
-		})
-
-		It("omits attachments whose interface has no known MAC", func() {
-			attachments := []v1alpha1.BareMetalNetworkAttachment{
-				{SubnetRef: "subnet-a", Interface: "eth9"},
-				{SubnetRef: "subnet-b", Interface: "eth1"},
-			}
-			ifaceMACs := map[string]string{"eth9": "52:54:00:16:04:83"}
-
-			Expect(buildSubnetMACMap(attachments, ifaceMACs)).To(Equal(map[string]string{
-				"subnet-a": "52:54:00:16:04:83",
-			}))
-		})
-
-		It("does not guess when the attachment has no interface and the host has multiple", func() {
-			attachments := []v1alpha1.BareMetalNetworkAttachment{
-				{SubnetRef: "subnet-a"},
-			}
-			ifaceMACs := map[string]string{
-				"eth9": "52:54:00:16:04:83",
-				"eth0": "52:54:00:AA:BB:CC",
-			}
-
-			Expect(buildSubnetMACMap(attachments, ifaceMACs)).To(BeEmpty())
-		})
+	It("skips lease discovery using the explicit networking flag", func() {
+		reconciler.NetworkingEnabled = false
+		result, err := reconciler.reconcileIPDiscovery(ctx, bmi)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(BeZero())
+		condition := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
+		Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+		Expect(condition.Reason).To(Equal(opv1alpha1.ReasonProvisioningDisabled))
+		Expect(bmi.Status.NetworkAttachmentStatuses).To(BeEmpty())
 	})
 })

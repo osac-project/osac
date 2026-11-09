@@ -55,6 +55,7 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 				GenerateName: "test-bmi-ownership-",
 				Namespace:    "default",
 				Labels:       map[string]string{"osac.openshift.io/baremetalinstance-uuid": "ownership-test-id"},
+				Annotations:  map[string]string{bareMetalInstanceTenantAnnotation: "tenant-a"},
 				Finalizers:   []string{BareMetalInstanceInventoryFinalizer, BareMetalInstanceManagementFinalizer},
 			},
 			Spec: v1alpha1.BareMetalInstanceSpec{
@@ -82,8 +83,10 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 		Expect(k8sClient.Create(ctx, attachment)).To(Succeed())
 		unassigned = false
 		reconciler = &BareMetalInstanceReconciler{
-			Client: k8sClient,
-			Scheme: k8sClient.Scheme(),
+			Client:                            k8sClient,
+			Scheme:                            k8sClient.Scheme(),
+			ManagementRecheckIntervalDuration: time.Second,
+			ProvisionPollIntervalDuration:     time.Second,
 			InventoryClient: &mockInventoryClient{unassignHostFunc: func(_ context.Context, hostID, bareMetalInstanceID string, _ []string) error {
 				Expect(hostID).To(Equal("host-ownership"))
 				Expect(bareMetalInstanceID).NotTo(BeEmpty())
@@ -201,7 +204,7 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 		}
 		reconciler = NewBareMetalInstanceReconciler(
 			k8sClient, k8sClient.Scheme(), reconciler.InventoryClient, reconciler.ManagementClient,
-			provider, nil, nil, nil, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
+			provider, false, "", time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
 		)
 
 		key := client.ObjectKeyFromObject(bmi)
@@ -267,7 +270,7 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 
 		restartedReconciler := NewBareMetalInstanceReconciler(
 			k8sClient, k8sClient.Scheme(), reconciler.InventoryClient, reconciler.ManagementClient,
-			provider, nil, nil, nil, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
+			provider, false, "", time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
 		)
 		result, err = restartedReconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())
@@ -291,12 +294,26 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 		full.UID = ""
 		full.Spec.TemplateID = "test_template"
 		full.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{{
-			SubnetRef: "test-subnet", Interface: "data-0", Primary: true,
+			SubnetRef: "test-subnet", Interface: "data-0", SecurityGroupRefs: []string{"sg-a"}, Primary: true,
 		}}
+		full.Labels[BareMetalInstanceUUIDLabel] = "ownership-delete-test-id"
+		reconciler.NetworkingEnabled = true
+		reconciler.NetworkingNamespace = "default"
 		controllerutil.AddFinalizer(full, BareMetalInstanceNetworkingFinalizer)
 		controllerutil.AddFinalizer(full, osacCleanupFinalizer)
 		Expect(k8sClient.Create(ctx, full)).To(Succeed())
+		na := buildBareMetalNetworkAttachment(full, "default", full.Labels[BareMetalInstanceUUIDLabel],
+			opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance,
+				full.Labels[BareMetalInstanceUUIDLabel]), "aa:bb:cc:dd:ee:01")
+		na.Finalizers = append(na.Finalizers, operatorNetworkAttachmentFinalizer)
+		Expect(k8sClient.Create(ctx, na)).To(Succeed())
 		defer func() {
+			latestNA := &opv1alpha1.NetworkAttachment{}
+			if k8sClient.Get(ctx, client.ObjectKeyFromObject(na), latestNA) == nil {
+				latestNA.Finalizers = nil
+				_ = k8sClient.Update(ctx, latestNA)
+				_ = k8sClient.Delete(ctx, latestNA)
+			}
 			latest := &v1alpha1.BareMetalInstance{}
 			if k8sClient.Get(ctx, client.ObjectKeyFromObject(full), latest) == nil {
 				latest.Finalizers = nil
@@ -307,7 +324,6 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 
 		poweredOn := true
 		powerOffCalls := 0
-		networkDeprovisionCalls := 0
 		providerDeprovisionCalls := 0
 		reconciler.ManagementClient = &mockManagementClient{
 			getPowerStateFunc: func(_ context.Context, _ string) (*management.PowerStatus, error) {
@@ -323,16 +339,11 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 				return nil
 			},
 		}
-		reconciler.NetworkingProvider = &mockProvisioningProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []opv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
-				Expect(poweredOn).To(BeFalse())
-				networkDeprovisionCalls++
-				return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "network-job"}, nil
-			},
-		}
 		reconciler.ProvisioningProvider = &mockProvisioningProvider{
 			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []opv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
-				Expect(networkDeprovisionCalls).To(Equal(1))
+				Expect(poweredOn).To(BeFalse())
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(na), &opv1alpha1.NetworkAttachment{})).To(Satisfy(apierrors.IsNotFound),
+					"provider cleanup must wait until NetworkAttachment offboarding finishes")
 				providerDeprovisionCalls++
 				return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "provider-job"}, nil
 			},
@@ -343,7 +354,6 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 		Expect(poweredOn).To(BeTrue())
 		Expect(powerOffCalls).To(Equal(0))
-		Expect(networkDeprovisionCalls).To(Equal(0))
 		Expect(providerDeprovisionCalls).To(Equal(0))
 		Expect(unassigned).To(BeFalse())
 
@@ -352,8 +362,29 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 		controllerutil.RemoveFinalizer(latest, osacCleanupFinalizer)
 		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
 
+		// With OSAC workload cleanup complete, power off first, then request
+		// NetworkAttachment deletion and wait for the networking controller.
+		result, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(full)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(powerOffCalls).To(Equal(1))
+		Expect(providerDeprovisionCalls).To(Equal(0))
+		result, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(full)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		latestNA := &opv1alpha1.NetworkAttachment{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(na), latestNA)).To(Succeed())
+		Expect(latestNA.DeletionTimestamp).NotTo(BeZero())
+		Expect(controllerutil.ContainsFinalizer(latestNA, operatorNetworkAttachmentFinalizer)).To(BeTrue())
+		Expect(providerDeprovisionCalls).To(Equal(0))
+
+		// Model completion by the osac-operator controller. BMF then removes
+		// its finalizer and waits until the NetworkAttachment is gone.
+		controllerutil.RemoveFinalizer(latestNA, operatorNetworkAttachmentFinalizer)
+		Expect(k8sClient.Update(ctx, latestNA)).To(Succeed())
+
 		completed := false
-		for range 8 {
+		for range 10 {
 			result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(full)})
 			Expect(err).NotTo(HaveOccurred())
 			fresh := &v1alpha1.BareMetalInstance{}
@@ -367,6 +398,9 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 			Expect(controllerutil.ContainsFinalizer(fresh, osacCleanupFinalizer)).To(BeFalse())
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(eip), &opv1alpha1.ExternalIP{})).To(Succeed())
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(attachment), &opv1alpha1.ExternalIPAttachment{})).To(Succeed())
+			if providerDeprovisionCalls > 0 {
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(na), &opv1alpha1.NetworkAttachment{})).To(Satisfy(apierrors.IsNotFound))
+			}
 			if len(fresh.Finalizers) == 1 {
 				Expect(result.IsZero()).To(BeTrue())
 				completed = true
@@ -375,7 +409,6 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 		}
 		Expect(completed).To(BeTrue())
 		Expect(powerOffCalls).To(Equal(1))
-		Expect(networkDeprovisionCalls).To(Equal(1))
 		Expect(providerDeprovisionCalls).To(Equal(1))
 		Expect(unassigned).To(BeTrue())
 	})

@@ -1,0 +1,37 @@
+{{- if .Values.global.networking.provisioningEnabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+  name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-networking-role
+  namespace: {{ .Release.Namespace }}
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - networkattachments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+  name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-networking-rolebinding
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-networking-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "bare-metal-fulfillment-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

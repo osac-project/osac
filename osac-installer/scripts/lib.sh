@@ -143,17 +143,22 @@ render_osac_chart_offline() {
     return 1
 }
 
-# Dotted paths of the installer values-schema maps whose entry names come
-# from the caller: JSON-schema objects that validate their unknown keys, so
-# Helm echoes such a key in a schema error path (a serviceMonitor label that
+# Dotted paths of the values-schema maps whose entry names come from the
+# caller: JSON-schema objects that validate their unknown keys, so Helm
+# echoes such a key in a schema error path (a serviceMonitor label that
 # is a hostname, for example). A failure under one of these maps reports only
 # the map root. The validation diagnostics tests derive the same set from
-# every charts/*/values.schema.json and fail when this list and the schemas
-# drift, so a new open map cannot start printing caller-supplied keys
-# unnoticed. A map that accepts any additional property
-# (`"additionalProperties": true`) is deliberately absent: it validates no
-# unknown key, so no key can reach a path through it.
+# every charts/*/values.schema.json and from the schemas vendored in the
+# dependency archives, and fail when this list and the schemas drift, so a
+# new open map cannot start printing caller-supplied keys unnoticed. A root
+# from a dependency chart is relative to that subchart's values, because Helm
+# validates and reports that chart's schema on its own. A map that accepts
+# any additional property (`"additionalProperties": true`) is deliberately
+# absent: it validates no unknown key, so no key can reach a path through it.
 _LIB_OPEN_SCHEMA_MAPS=(
+    # netbox (an osac-infra dependency): its pepper version keys reach the
+    # subchart-relative path of a schema failure.
+    apiTokenPeppers
     aap.instanceGroups.networkFulfillment.config
     aap.instanceGroups.networkFulfillment.secret
     metering.prometheusRule.labels

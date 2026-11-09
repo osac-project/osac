@@ -8,6 +8,7 @@ from pathlib import Path
 import secrets
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -424,8 +425,8 @@ class ValidationDiagnosticsTests(unittest.TestCase):
     def test_schema_paths_of_open_maps_are_masked(self):
         """Check every validating open map in the chart schemas is listed."""
         derived = set()
-        for path in sorted((INSTALLER / "charts").glob("*/values.schema.json")):
-            schema = json.loads(path.read_text())
+
+        def derive(schema):
             defs = schema.get("$defs", {})
 
             def resolve(node):
@@ -459,6 +460,34 @@ class ValidationDiagnosticsTests(unittest.TestCase):
                         walk(child, prefix)
 
             walk(schema, [])
+
+        for path in sorted((INSTALLER / "charts").glob("*/values.schema.json")):
+            derive(json.loads(path.read_text()))
+
+        # Helm validates each dependency's own values against its own schema
+        # and reports a failure there with a subchart-relative path, so the
+        # schemas vendored in the dependency archives contribute their
+        # open-map roots too.
+        archives = sorted((INSTALLER / "charts").glob("*/charts/*.tgz"))
+        self.assertTrue(
+            archives,
+            "chart dependency archives are missing; run"
+            " `make helm-deps helm-infra-deps` first")
+
+        def scan_archive(data):
+            with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+                for member in archive.getmembers():
+                    if not member.isfile():
+                        continue
+                    payload = archive.extractfile(member).read()
+                    if member.name.endswith("/values.schema.json"):
+                        derive(json.loads(payload))
+                    elif member.name.endswith(".tgz"):
+                        scan_archive(payload)
+
+        for archive in archives:
+            scan_archive(archive.read_bytes())
+
         listed = subprocess.run(
             ["bash", "-c",
              'source "$1"; printf "%s\\n" "${_LIB_OPEN_SCHEMA_MAPS[@]}"',
@@ -528,6 +557,36 @@ class ValidationDiagnosticsTests(unittest.TestCase):
         self.assert_private(result.stdout + result.stderr)
         self.assertIn("metering.serviceMonitor.labels: violates the values"
                       " schema", result.stderr)
+        # Helm validates a dependency's own values against that dependency's
+        # schema and reports the failure with a subchart-relative path, so a
+        # caller-named key in an open map of a dependency schema must be
+        # masked the same way.
+        subchart = chart / "charts" / "dependency"
+        (subchart / "templates").mkdir(parents=True)
+        (subchart / "Chart.yaml").write_text(
+            "apiVersion: v2\nname: dependency\nversion: 0.1.0\n")
+        (subchart / "values.schema.json").write_text(json.dumps({
+            "type": "object",
+            "properties": {"apiTokenPeppers": {
+                "type": "object",
+                "additionalProperties": {"type": "integer"}}},
+        }))
+        values.write_text(json.dumps(
+            {"dependency": {"apiTokenPeppers": {self.hostname: "not-an-int"}}}))
+        render = subprocess.run(
+            [helm, "template", "release", str(chart), "-f", str(values)],
+            text=True, capture_output=True,
+        )
+        self.assertNotEqual(render.returncode, 0)
+        self.assertIn(self.hostname, render.stderr)
+        result = subprocess.run(
+            ["bash", "-c", 'source "$1"; offline_render_error "$2"',
+             "bash", str(INSTALLER / "scripts/lib.sh"), render.stderr],
+            text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assert_private(result.stdout + result.stderr)
+        self.assertIn("apiTokenPeppers: violates the values schema", result.stderr)
 
     @unittest.skipUnless(HELM, "helm 3 is not installed")
 

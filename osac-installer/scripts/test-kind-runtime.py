@@ -477,33 +477,39 @@ check_topolvm_cluster_mounts() {{
 create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
 ''')
 
-    def test_direct_infra_preserves_vendored_dependencies(self):
-        """Check direct infra setup keeps each chart's vendored dependencies."""
+    def test_direct_infra_rebuilds_osac_dependencies(self):
+        """Check direct infra setup rebuilds OSAC's deps and keeps infra's."""
         sandbox = self.directory / "installer"
         shutil.copytree(INSTALLER, sandbox)
-        sentinels = [sandbox / "charts" / chart / "charts/preservation-sentinel"
-                     for chart in ("osac", "osac-infra")]
-        for sentinel in sentinels:
+        sentinels = {chart: sandbox / "charts" / chart / "charts/preservation-sentinel"
+                     for chart in ("osac", "osac-infra")}
+        for sentinel in sentinels.values():
             sentinel.parent.mkdir(parents=True, exist_ok=True)
             sentinel.write_text("preserve vendored dependencies\n")
         with patch.dict(globals(), INSTALLER=sandbox):
-            result = self.run_direct_infra()
+            result = self.run_direct_infra(skip_deps=False)
         self.assert_success(result)
-        for sentinel in sentinels:
-            self.assertTrue(sentinel.is_file(), "direct infra test deleted vendored dependencies")
-        self.assertNotIn("dependency build", self.log.read_text())
+        self.assertFalse(
+            sentinels["osac"].is_file(),
+            "helm-osac-deps must rebuild charts/osac's dependencies")
+        self.assertTrue(
+            sentinels["osac-infra"].is_file(),
+            "helm-infra-deps must keep the vendored osac-infra archives")
+        self.assertIn("dependency build", self.log.read_text())
 
-    def run_direct_infra(self, cluster_name=None):
+    def run_direct_infra(self, cluster_name=None, skip_deps=True):
         self.write_command("helm", '''
 if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >> "$MOCK_LOG"; fi
 ''')
         self.write_command("kubectl", 'printf "kubectl %s\\n" "$*" >> "$MOCK_LOG"')
+        args = ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER)]
+        if skip_deps:
+            args += ["-o", "helm-osac-deps", "-o", "helm-infra-deps"]
         return subprocess.run(
-            ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER),
-             "-o", "helm-osac-deps", "-o", "helm-infra-deps",
-             "install-infra", "PLATFORM=kind", "PROFILE=dev", "NS=osac",
-             f"KIND_CLUSTER_NAME={cluster_name or self.cluster_name}",
-             f"KIND_KUBECONFIG={self.directory / 'cluster.kubeconfig'}"],
+            args + [
+                "install-infra", "PLATFORM=kind", "PROFILE=dev", "NS=osac",
+                f"KIND_CLUSTER_NAME={cluster_name or self.cluster_name}",
+                f"KIND_KUBECONFIG={self.directory / 'cluster.kubeconfig'}"],
             env=self.env, text=True, capture_output=True, timeout=15,
         )
 

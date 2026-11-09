@@ -1,6 +1,6 @@
 import { type Page, expect } from '@playwright/test';
 
-import { expectRowNotToExist } from './general/row_assertions';
+import { confirmDetailDeletion, expectRowNotToExist } from './general/row_assertions';
 import type { LifecycleAction } from './lifecycle';
 import {
   DiskImageCreatePage,
@@ -235,14 +235,13 @@ export const deleteDiskImage = async (page: Page, diskImageName: string): Promis
   await deleteAction.click();
 
   const deleteDialog = page.locator(...DiskImageDetailPage.deleteDialog);
-  await expect(deleteDialog).toBeVisible();
-  await expect(deleteDialog.locator(...DiskImageDetailPage.deleteTitle)).toContainText(
-    `Delete ${diskImageName}?`,
+  await confirmDetailDeletion(
+    deleteDialog,
+    deleteDialog.locator(...DiskImageDetailPage.deleteTitle),
+    deleteDialog.getByText(...DiskImageDetailPage.deleteWarning),
+    deleteDialog.getByRole('button', { name: 'Delete', exact: true }),
+    diskImageName,
   );
-  await expect(deleteDialog.getByText(...DiskImageDetailPage.deleteWarning)).toBeVisible();
-
-  await deleteDialog.getByRole('button', { name: 'Delete', exact: true }).click();
-  await expect(deleteDialog).toBeHidden();
   await expect(page.getByRole(...DiskImagesMainPage.pageTitle)).toBeVisible();
 
   await includeObsoleteDiskImages(page);

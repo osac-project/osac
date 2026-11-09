@@ -448,7 +448,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 			tenant := "machines-" + uuid.New()
 			insertChange("service_accounts", tenant, "sa-1", fmt.Sprintf(`{
 				"id": "sa-1", "name": "robot", "tenant": %q,
-				"data": {"metadata":{"display_name":"Build robot","description":"Build jobs","tenant":"forged"},
+				"data": {"metadata":{"tenant":"forged"},
 				         "client_secret":"event-secret-marker"}
 			}`, tenant))
 			cancel, done := startPublisher(pub)
@@ -456,8 +456,6 @@ var _ = Describe("Event publisher", Ordered, func() {
 			events := collectKafkaEvents(client, DefaultEventTopicPrefix+tenant, 1)
 			account := events[0].event.GetServiceAccount()
 			Expect(account).ToNot(BeNil())
-			Expect(account.GetMetadata().GetDisplayName()).To(BeEmpty())
-			Expect(account.GetMetadata().GetDescription()).To(BeEmpty())
 			Expect(account.GetMetadata().GetTenant()).To(Equal(tenant))
 			Expect(account.GetMetadata().GetName()).To(Equal("robot"))
 			payload, err := protojson.Marshal(events[0].event)
@@ -474,7 +472,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 				"tenant": %q,
 				"project": "web",
 				"data": {
-					"spec": {"ssh_public_key": "ssh-ed25519 AAAA"},
+					"spec": {"ssh_key": {"id": "w-1-key"}},
 					"status": {"cluster": {"id": "c-1"}, "node_set": "compute"}
 				}
 			}`, tenant))

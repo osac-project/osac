@@ -24,7 +24,7 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// findDefaultSubnet returns the tenant's READY default Subnet with an IPv4 CIDR, or nil. Tenant defaults are
+// findDefaultSubnet returns the tenant's default Subnet with an IPv4 CIDR, or nil. Tenant defaults are
 // tenant-wide (Default Networking design), so the project isn't used.
 func findDefaultSubnet(
 	ctx context.Context,
@@ -33,12 +33,11 @@ func findDefaultSubnet(
 	tenant, _ string,
 ) (*privatev1.Subnet, error) {
 	return findTenantDefault(ctx, subnetsDao, tenant, func(subnet *privatev1.Subnet) bool {
-		return subnet.GetSpec().GetIpv4Cidr() != "" &&
-			subnet.GetStatus().GetState() == privatev1.SubnetState_SUBNET_STATE_READY
+		return subnet.GetSpec().GetIpv4Cidr() != ""
 	})
 }
 
-// findDefaultSecurityGroup returns the tenant's READY default SecurityGroup of the given VirtualNetwork, or nil.
+// findDefaultSecurityGroup returns the tenant's default SecurityGroup of the given VirtualNetwork, or nil.
 // Tenant defaults are tenant-wide (Default Networking design), so the project isn't used.
 func findDefaultSecurityGroup(
 	ctx context.Context,
@@ -48,8 +47,7 @@ func findDefaultSecurityGroup(
 	tenant, _ string,
 ) (*privatev1.SecurityGroup, error) {
 	return findTenantDefault(ctx, securityGroupsDao, tenant, func(group *privatev1.SecurityGroup) bool {
-		return refKey(group.GetSpec().GetVirtualNetwork()) == virtualNetworkID &&
-			group.GetStatus().GetState() == privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY
+		return refKey(group.GetSpec().GetVirtualNetwork()) == virtualNetworkID
 	})
 }
 

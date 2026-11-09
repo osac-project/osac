@@ -157,10 +157,18 @@ message ClusterSpec {
     pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
   }];
 
-  // SSH public key installed into the `authorized_keys` file on cluster worker nodes.
+  // Reserved field number and name for the removed inline SSH-key field.
+  // Callers must use `ssh_key` with a registered SSH public-key Secret instead.
+  reserved 5;
+  reserved "ssh_public_key";
+
+  // Reference to a Secret containing an OpenSSH public key installed into the
+  // `authorized_keys` file on cluster worker nodes.
   //
+  // The Secret must have type SECRET_TYPE_SSH_PUBLIC_KEY and a non-empty
+  // data["public_key"] entry. The reference is resolved to its canonical values.
   // If not provided, the provider's default SSH key is used.
-  optional string ssh_public_key = 5;
+  SecretReference ssh_key = 15 [(google.api.field_behavior) = IMMUTABLE];
 
   // Reference to a ClusterVersion resource.
   //

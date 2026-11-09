@@ -20,6 +20,7 @@ from tests.e2e.core.helpers import (
     wait_for_grpc_removal,
     wait_for_grpc_security_group_ready,
     wait_for_grpc_subnet_ready,
+    wait_for_grpc_virtual_network_ready,
     wait_for_provision,
     wait_for_restart,
     wait_for_running,
@@ -99,6 +100,7 @@ def metering_network_attachment(
         )
         vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
         wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
+        wait_for_grpc_virtual_network_ready(grpc=grpc, vn_id=vn_id)
 
         subnet_id = grpc.create_subnet(
             name=unique_name("e2e-metering-subnet"),

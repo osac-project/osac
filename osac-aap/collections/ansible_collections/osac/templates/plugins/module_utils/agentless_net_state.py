@@ -169,6 +169,24 @@ class RetryableStateError(StateError):
     retryable = True
 
 
+class PublicStateError(StateError):
+    """An authored, value-free diagnostic safe for OSAC job artifacts."""
+
+    MESSAGES = {
+        "pool_exhausted": "ExternalIPPool has no available addresses",
+        "pool_not_registered": "ExternalIPPool is not registered",
+        "attachment_conflict": "physical address or switch port was reserved concurrently",
+    }
+
+    def __init__(self, code: str):
+        self.public_message = self.MESSAGES[code]
+        super().__init__(self.public_message)
+
+
+class PublicRetryableStateError(PublicStateError, RetryableStateError):
+    """An authored safe diagnostic for a retryable state conflict."""
+
+
 class StateCorrupt(StateError):
     """The state file is missing or does not contain a supported generation."""
 
@@ -2108,9 +2126,7 @@ class StateStore:
                 except sqlite3.IntegrityError as error:
                     if connection.in_transaction:
                         connection.rollback()
-                    raise RetryableStateError(
-                        "physical address or switch port was reserved concurrently"
-                    ) from error
+                    raise PublicRetryableStateError("attachment_conflict") from error
                 except BaseException:
                     if connection.in_transaction:
                         connection.rollback()
@@ -2340,14 +2356,14 @@ class StateStore:
         if observed_vlan_ids is None:
             observed_vlan_ids = set()
         if not isinstance(observed_vlan_ids, (set, list, tuple)):
-            raise StateError("Observed Cumulus VLAN IDs must be a collection of integers")
+            raise StateError("Observed switch VLAN IDs must be a collection of integers")
         for vlan_id in observed_vlan_ids:
             if (
                 isinstance(vlan_id, bool)
                 or not isinstance(vlan_id, int)
                 or not MIN_VLAN_ID <= vlan_id <= MAX_VLAN_ID
             ):
-                raise StateError("Observed Cumulus VLAN ID is outside the supported range")
+                raise StateError("Observed switch VLAN ID is outside the supported range")
         observed_vlan_ids = set(observed_vlan_ids)
         # Validate all caller-controlled fields before opening state.
         requested = _subnet_payload(
@@ -3556,11 +3572,13 @@ class StateStore:
         with operation_lock:
             with self._locked_database(create=False, read_only=check_mode) as connection:
                 if connection is None:
-                    raise StateError("ExternalIPPool is not registered")
+                    raise PublicStateError("pool_not_registered")
                 if not check_mode:
                     connection.execute("BEGIN IMMEDIATE")
                 try:
                     saved_pool = self._external_ip_pool_for_uid(connection, pool_uid)
+                    if saved_pool is None:
+                        raise PublicStateError("pool_not_registered")
                     if saved_pool != pool:
                         raise StateError("ExternalIPPool identity does not match saved state")
 
@@ -3628,9 +3646,7 @@ class StateStore:
                             (pool_uid,),
                         ).fetchone()[0]
                         if reservation_count >= host_count:
-                            raise StateError(
-                                "ExternalIPPool has no available addresses"
-                            )
+                            raise PublicStateError("pool_exhausted")
 
                         pool_end = first_host + host_count
                         start_address = first_host + (
@@ -3662,9 +3678,7 @@ class StateStore:
                         if available_address is None and start_address > first_host:
                             available_address = first_gap(first_host, start_address)
                         if available_address is None:
-                            raise StateError(
-                                "ExternalIPPool has no available addresses"
-                            )
+                            raise PublicStateError("pool_exhausted")
                         address = str(ipaddress.IPv4Address(available_address))
                     reservation = _external_ip_entry(
                         uid, fulfillment_id, tenant_id, pool_uid, address

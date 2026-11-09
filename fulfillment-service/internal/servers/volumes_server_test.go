@@ -430,10 +430,8 @@ var _ = Describe("Public volumes server", func() {
 		})
 
 		// TC-U1: Update with mutable metadata fields succeeds. Labels and annotations are
-		// stored in dedicated DB columns and are always round-tripped correctly. display_name
-		// and description are metadata fields that currently lack dedicated DB columns on the
-		// volumes table, so they are not persisted (this is a known schema limitation tracked
-		// separately). The test verifies the fields that are reliably stored.
+		// stored in dedicated DB columns and are always round-tripped correctly.
+		// The test verifies the fields that are reliably stored.
 		It("Updates mutable metadata fields", func() {
 			created := createVolumeViaPublic("pub-vol-update")
 

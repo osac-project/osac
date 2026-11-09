@@ -18,6 +18,7 @@ respective areas.
 
 - Component setup: [`README.md`](README.md)
 - Event schema: `schema/`
+- Published contract and its generated files: `docs/contract/`, generated from the field registry, the default rule revision in `charts/osac-metering/rules/` and `charts/osac-metering/templates/rules.yaml`, the chart defaults in `charts/osac-metering/values.yaml`, and `schema/versions/`
 - Fold, rounds, relay, and rules: `metering-service/`
 - Adapter runner and contracts: `adapters/`
 - Deployment values and rule revisions: `charts/osac-metering/`
@@ -44,8 +45,11 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-met
 | Event schema or heartbeat shape | Unit across affected modules | `make test` |
 | Database, fold, rounds, relay, or usage evaluation | Component integration against real PostgreSQL and Kafka | `make test` |
 | Rule revisions | Unit, plus the chart-sync check against the shipped ConfigMap | `make test` |
+| Generated contract or published schema files | Unit plus the contract check and the release gate | `make -C osac-metering contract-check schemas-unchanged-test` (the CI leg runs with full git history so the release-tag comparison can run) |
 | Kafka producer/consumer, CloudEvents transport, offsets, retries, or DLQ | Component integration | `make test` |
 | Provider adapters | Unit plus component/E2E coverage for the provider boundary | `make test` and the qualifying provider suite |
+| Reader grants (one reader, all tenants), ACLs, and grant/revoke render stability | Chart render unit | `make helm-test` and `make readers-render-test` (helm-unittest plugin for the first; CI pins v1.2.1) |
+| Worked example reader (`adapters/examples/billing-reader`) | Unit; component integration against a real Kafka topic is a gap | `make -C adapters test` |
 | Billing provider contract | Contract test against a real M360 tenant | `M360_TEST_API_URL`/`M360_TEST_API_KEY`/`M360_TEST_TENANT` gate `adapters/m360/contract_test.go` |
 
 Do not skip the real PostgreSQL and Kafka suites when validating database,
@@ -54,6 +58,8 @@ fold, round, or relay behavior; they are the determinism gate for billing.
 ## Generated files
 
 - Fulfillment proto types are the shared top-level `proto/` module, imported as `github.com/osac-project/osac/proto/gen/...`. `metering-service/` no longer generates its own copy; `make generate` there just delegates to `make -C ../../proto generate`. Commit the regenerated `proto/gen/` (see `proto/AGENTS.md`); never edit generated code manually.
+- `docs/contract/` is generated from the field registry, the default rule revision, and `schema/versions/`. Change the sources and run `make -C osac-metering contract`; never edit the reference or the schema file by hand.
+- A published version file is pinned in `schema/published.sha256`. A new version file needs its own entry; CI fails when an existing file's bytes differ from the manifest.
 - Use `go mod tidy` for dependency updates in the affected module.
 
 ## Validation
@@ -64,6 +70,7 @@ From `osac-metering/`:
 make test                  # schema, metering-service, and adapters
 make lint
 make helm-lint
+make helm-test             # chart render tests; needs the helm-unittest plugin
 ```
 
 For isolated changes, run `make test` and `make lint` in the changed module

@@ -17,8 +17,8 @@ import {
 } from '../../../../libs/test-utils/src/tenants.page';
 
 test('deletes the requested tenant', async ({ page }) => {
-  // Allow the 120-second backend deletion wait plus login and UI actions to complete.
-  test.setTimeout(180_000);
+  // Allow the 300-second backend deletion wait plus login and UI actions to complete.
+  test.setTimeout(420_000);
   const configuredTenantName = tenantNameOrSkip();
   if (!configuredTenantName) {
     logProgress('tenant-delete', 'Skipped: tenant_name is not configured.');

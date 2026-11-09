@@ -48,7 +48,7 @@ def test_compatible_direct_template_provisions(
     bmi_instance_type: str,
     bmi_disk_image: str,
     bmh_namespace: str,
-    ssh_public_key: str,
+    ssh_key_secret: str,
 ) -> None:
     response = jwt_grpc_tenant1.call(
         service=f"{PUBLIC_API}.BareMetalInstances/Create",
@@ -59,7 +59,7 @@ def test_compatible_direct_template_provisions(
                     "template": {"name": bmi_template, "shared": True},
                     "instance_type": {"name": bmi_instance_type, "shared": True},
                     "disk_image": {"name": bmi_disk_image, "shared": True},
-                    "ssh_public_key": ssh_public_key,
+                    "ssh_key": {"name": ssh_key_secret},
                     "run_strategy": "BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS",
                 },
             }

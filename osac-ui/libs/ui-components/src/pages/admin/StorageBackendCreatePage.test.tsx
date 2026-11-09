@@ -61,6 +61,12 @@ const existingCspBackend = create(StorageBackendSchema, {
   spec: { provider: 'netapp', cspManaged: true },
 });
 
+const existingLvmsBackend = create(StorageBackendSchema, {
+  id: 'b-1',
+  metadata: { name: 'local-storage', version: 7 },
+  spec: { provider: 'lvms' },
+});
+
 const renderEditPage = (overrides?: MockTransportOverrides, apiFixtures?: MockApiFixtures) =>
   renderWithProviders(
     <Routes>
@@ -82,7 +88,7 @@ describe('StorageBackendCreatePage', () => {
     const fillValidForm = async (user: ReturnType<typeof renderCreatePage>['user']) => {
       await user.type(screen.getByRole('textbox', { name: 'Name' }), 'vast-prod-1');
       await user.click(screen.getByLabelText(/^Provider/));
-      await user.click(screen.getByRole('option', { name: 'VAST' }));
+      await user.click(screen.getByRole('option', { name: 'VAST Data' }));
       await user.type(screen.getByRole('textbox', { name: 'Endpoint' }), 'vast.example.com:443');
       await user.type(screen.getByLabelText(/^Username/), 'test-admin');
       await user.type(screen.getByLabelText(/^Password/), testBackendPassword);
@@ -120,18 +126,17 @@ describe('StorageBackendCreatePage', () => {
       expect(await screen.findByRole('tooltip')).toHaveTextContent(explanation);
     });
 
-    it('renders the provider select with existing providers and NetApp', async () => {
+    it('offers only the providers and names from the API catalog', async () => {
       const { user } = renderCreatePage();
 
       await user.click(screen.getByLabelText(/^Provider/));
 
       const options = screen.getAllByRole('option');
-      expect(options).toHaveLength(4);
+      expect(options).toHaveLength(3);
       expect(options.map((option) => option.textContent)).toEqual([
-        'VAST',
-        'Ceph',
-        'Pure',
-        'NetApp',
+        'VAST Data',
+        'NetApp ONTAP',
+        'Pure FlashArray/FlashBlade',
       ]);
     });
 
@@ -143,7 +148,7 @@ describe('StorageBackendCreatePage', () => {
       expect(ownership).toBeDisabled();
       expect(ownership).not.toBeChecked();
 
-      for (const option of ['VAST', 'Ceph', 'Pure']) {
+      for (const option of ['VAST Data', 'Pure FlashArray/FlashBlade']) {
         await user.click(provider);
         await user.click(screen.getByRole('option', { name: option }));
         expect(ownership).toBeDisabled();
@@ -151,16 +156,16 @@ describe('StorageBackendCreatePage', () => {
       }
 
       await user.click(provider);
-      await user.click(screen.getByRole('option', { name: 'NetApp' }));
+      await user.click(screen.getByRole('option', { name: 'NetApp ONTAP' }));
       expect(ownership).toBeDisabled();
       expect(ownership).toBeChecked();
 
       await user.click(provider);
-      await user.click(screen.getByRole('option', { name: 'VAST' }));
+      await user.click(screen.getByRole('option', { name: 'VAST Data' }));
       expect(ownership).not.toBeChecked();
 
       await user.click(provider);
-      await user.click(screen.getByRole('option', { name: 'NetApp' }));
+      await user.click(screen.getByRole('option', { name: 'NetApp ONTAP' }));
       expect(ownership).toBeChecked();
     });
 
@@ -195,7 +200,7 @@ describe('StorageBackendCreatePage', () => {
 
       await user.type(screen.getByRole('textbox', { name: 'Name' }), 'vast-prod-1');
       await user.click(screen.getByLabelText(/^Provider/));
-      await user.click(screen.getByRole('option', { name: 'VAST' }));
+      await user.click(screen.getByRole('option', { name: 'VAST Data' }));
       await user.click(screen.getByRole('button', { name: 'Create' }));
 
       expect(screen.getByText('Endpoint').closest('label')).toHaveTextContent('*');
@@ -220,7 +225,7 @@ describe('StorageBackendCreatePage', () => {
 
       await user.type(screen.getByRole('textbox', { name: 'Name' }), 'netapp-shared');
       await user.click(screen.getByLabelText(/^Provider/));
-      await user.click(screen.getByRole('option', { name: 'NetApp' }));
+      await user.click(screen.getByRole('option', { name: 'NetApp ONTAP' }));
       expect(screen.getByRole('checkbox', { name: 'CSP-managed' })).toBeChecked();
 
       expect(screen.getByText('Endpoint').closest('label')).not.toHaveTextContent('*');
@@ -245,7 +250,7 @@ describe('StorageBackendCreatePage', () => {
 
       await user.type(screen.getByRole('textbox', { name: 'Name' }), 'netapp-shared');
       await user.click(screen.getByLabelText(/^Provider/));
-      await user.click(screen.getByRole('option', { name: 'NetApp' }));
+      await user.click(screen.getByRole('option', { name: 'NetApp ONTAP' }));
       await user.type(screen.getByLabelText(/^Username/), 'test-admin');
       await user.click(screen.getByRole('button', { name: 'Create' }));
 
@@ -389,7 +394,7 @@ describe('StorageBackendCreatePage', () => {
       expect(screen.getByRole('textbox', { name: 'Endpoint' })).toHaveValue('vast.example.com:443');
       expect(screen.getByRole('textbox', { name: 'Description' })).toHaveValue('primary array');
       expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('vast-prod-1');
-      expect(screen.getByLabelText(/^Provider/)).toHaveTextContent('VAST');
+      expect(screen.getByLabelText(/^Provider/)).toHaveTextContent('VAST Data');
     });
 
     it('renders name and provider as disabled', async () => {
@@ -402,6 +407,16 @@ describe('StorageBackendCreatePage', () => {
       expect(screen.getByLabelText(/^Provider/)).toBeDisabled();
       expect(screen.getByRole('checkbox', { name: 'CSP-managed' })).toBeDisabled();
       expect(screen.getByRole('checkbox', { name: 'CSP-managed' })).not.toBeChecked();
+    });
+
+    it('shows an existing deployment-managed provider even though it is not selectable', async () => {
+      renderEditPage(undefined, { storageBackends: [existingLvmsBackend] });
+
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('local-storage');
+      });
+      expect(screen.getByLabelText(/^Provider/)).toHaveTextContent('lvms');
+      expect(screen.getByLabelText(/^Provider/)).toBeDisabled();
     });
 
     it('edits a CSP-managed backend without requiring an endpoint or changing ownership', async () => {

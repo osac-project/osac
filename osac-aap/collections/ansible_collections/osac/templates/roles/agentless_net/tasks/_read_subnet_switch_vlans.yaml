@@ -1,0 +1,15 @@
+---
+- name: Read the normalized VLAN state of {{ _agentless_net_switch_name }}
+  ansible.builtin.include_role:
+    name: ansible_network.network_runner.switch
+    tasks_from: list_vlans
+    apply:
+      delegate_to: "{{ _agentless_net_switch_name }}"
+      become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port }}"
+    ansible_network_os: "{{ hostvars[_agentless_net_switch_name].ansible_network_os }}"
+  no_log: true

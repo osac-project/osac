@@ -1,0 +1,18 @@
+---
+# delegate task to localhost to avoid starting the device connection
+- name: "check for required fact: guard_scope"
+  fail:
+    msg: "missing required fact: guard_scope"
+  when: not guard_scope
+  delegate_to: localhost
+
+- name: "check for required fact: guard_key"
+  fail:
+    msg: "missing required fact: guard_key"
+  when: not guard_key
+  delegate_to: localhost
+
+- name: include and run device provider specific tasks
+  include_tasks: run.yaml
+  vars:
+    network_action: set_deletion_guard

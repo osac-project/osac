@@ -92,7 +92,7 @@ const advanceThroughRemainingSteps = async (user: ReturnType<typeof renderWizard
   // Configuration through Access: governed fields are locked with catalog defaults,
   // so Next can be clicked without further input.
   for (let step = 0; step < 5; step += 1) {
-    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(await screen.findByRole('button', { name: 'Next' }));
   }
   await waitFor(() => {
     expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();

@@ -118,8 +118,16 @@ func (p *Pipeline) StartRelay(t *testing.T) {
 func (p *Pipeline) FoldAll(t *testing.T, total int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	go func() { _ = p.Fold.RunTenant(ctx, p.Tenant) }()
+	done := make(chan struct{})
+	var workerErr error
+	defer func() {
+		cancel()
+		<-done
+	}()
+	go func() {
+		defer close(done)
+		workerErr = p.Fold.RunTenant(ctx, p.Tenant)
+	}()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		progress, err := p.Store.GetTenantProgress(context.Background(), p.Tenant)
@@ -127,8 +135,15 @@ func (p *Pipeline) FoldAll(t *testing.T, total int) {
 			t.Fatalf("reading progress: %v", err)
 		}
 		if progress.EventOffset >= int64(total) {
-			cancel()
 			return
+		}
+		select {
+		case <-done:
+			if workerErr != nil {
+				t.Fatalf("folding events: %v", workerErr)
+			}
+			t.Fatalf("fold stopped before reaching offset %d, stopped at %d", total, progress.EventOffset)
+		default:
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("fold did not reach offset %d, stopped at %d", total, progress.EventOffset)

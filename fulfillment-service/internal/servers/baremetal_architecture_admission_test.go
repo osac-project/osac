@@ -109,7 +109,8 @@ var _ = Describe("Bare metal architecture admission", func() {
 			Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 			Spec: privatev1.BareMetalInstanceSpec_builder{
 				Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "architecture-template"}.Build(),
-				InstanceType: typeRef, DiskImage: imageRef, SshPublicKey: new(testSSHPublicKey),
+				InstanceType: typeRef, DiskImage: imageRef,
+				UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config\n")}.Build(),
 			}.Build(),
 		}.Build()
 	}

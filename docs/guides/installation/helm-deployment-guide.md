@@ -352,9 +352,15 @@ used for `osac-infra`, so disabling LVMS also skips its configuration hook and
 leaves the existing `LVMCluster` in place. Use `--take-ownership` only for
 existing resources this release is intended to manage.
 
+For an existing release that manages LVMS, use the recorded
+`lvms.channel` from `helm get values osac-deps -n osac-deps --all` as
+`LVMS_CHANNEL_OVERRIDE` if the Subscription is missing or omits
+`.spec.channel`. A new release uses `stable-$OCP_VERSION` only when no
+Subscription exists.
+
 ```bash
-LVMS_CHANNEL_OVERRIDE="" # Set if an existing Subscription omits its channel.
-LVMS_CHANNEL="stable-$OCP_VERSION"
+LVMS_CHANNEL_OVERRIDE="" # Existing release: set from its recorded lvms.channel.
+LVMS_CHANNEL=""
 if [ "$LVMS_SUBSCRIPTION_EXPECTED" = true ]; then
     LVMS_SUBSCRIPTION=$(oc get sub lvms-operator -n openshift-storage \
         --ignore-not-found -o name) || exit 1
@@ -367,16 +373,25 @@ if [ "$LVMS_SUBSCRIPTION_EXPECTED" = true ]; then
             LVMS_CHANNEL="$LVMS_CHANNEL_OVERRIDE"
         fi
         if [ -z "$LVMS_CHANNEL" ]; then
-            echo "Set LVMS_CHANNEL_OVERRIDE to the effective Subscription channel." >&2
+            echo "Set LVMS_CHANNEL_OVERRIDE to the installed Subscription channel." >&2
             exit 1
         fi
+    elif helm status osac-deps -n osac-deps >/dev/null 2>&1; then
+        LVMS_CHANNEL="$LVMS_CHANNEL_OVERRIDE"
+        if [ -z "$LVMS_CHANNEL" ]; then
+            echo "Set LVMS_CHANNEL_OVERRIDE to the installed lvms.channel value." >&2
+            exit 1
+        fi
+    else
+        LVMS_CHANNEL="stable-$OCP_VERSION"
     fi
+else
+    LVMS_CHANNEL="stable-$OCP_VERSION"
 fi
 ```
 
-If an existing Subscription omits `.spec.channel`, replace the empty
-`LVMS_CHANNEL_OVERRIDE` value in the block with its effective channel. When
-LVMS is disabled, the block skips the Subscription lookup.
+For a new release, leave `LVMS_CHANNEL_OVERRIDE` empty. When LVMS is disabled,
+the block skips the Subscription lookup.
 
 ```bash
 helm upgrade --install osac-deps ./charts/osac-deps \
@@ -800,16 +815,50 @@ The phase-2 values that mount that Secret are in the
 
 **Workload cluster.** Point `KUBECONFIG` at the workload cluster and refresh
 `OCP_VERSION` for this cluster. Set `LVMS_ENABLED` to the `lvms.enabled` value
-in `my-workload-infra-values.yaml`, then rerun the Phase 1a channel-selection
+in `my-workload-infra-values.yaml`. For existing releases, inspect both
+releases' values and repeat the Phase 1a value and Subscription checks with
+this kubeconfig. Use this cluster's recorded `lvms.channel` for
+`LVMS_CHANNEL_OVERRIDE` when needed, then rerun the Phase 1a channel-selection
 block before running Phase 1a and Phase 1b. Do not reuse the other cluster's
-LVMS channel. For an existing release, repeat the Phase 1a values and
-Subscription checks with this kubeconfig.
+LVMS channel. Before Phase 1b, set `NS` from this cluster's `osac-infra`
+`osacNamespace`; for a new release, use the value in the values file or the
+default `osac`.
 
 ```bash
 export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
 LVMS_ENABLED=true # Set to the value in my-workload-infra-values.yaml.
 LVMS_SUBSCRIPTION_EXPECTED="$LVMS_ENABLED"
 # Override to true if an external Subscription should be checked.
+```
+
+For an existing release, inspect overrides and computed values on this cluster
+before setting `LVMS_CHANNEL_OVERRIDE` and running the channel-selection block:
+
+```bash
+helm get values osac-deps -n osac-deps
+helm get values osac-infra -n osac-infra
+helm get values osac-deps -n osac-deps --all
+helm get values osac-infra -n osac-infra --all
+if [ "$LVMS_SUBSCRIPTION_EXPECTED" = true ]; then
+    oc get sub lvms-operator -n openshift-storage --ignore-not-found \
+        -o jsonpath='channel={.spec.channel}{"\n"}'
+fi
+```
+
+After checking an existing release, set `LVMS_CHANNEL_OVERRIDE` to its
+recorded `lvms.channel` if the Subscription is missing or omits
+`.spec.channel`. Leave it empty for a new release:
+
+```bash
+LVMS_CHANNEL_OVERRIDE=""
+```
+
+Set `NS` from this cluster's `osacNamespace` before Phase 1b. For an upgrade,
+use the recorded value; for a new release, use the value in
+`my-workload-infra-values.yaml` or the default `osac`:
+
+```bash
+export NS=osac
 ```
 
 In `my-workload-infra-values.yaml`, set `cnv.enabled: true` when this release
@@ -844,8 +893,13 @@ Do not install the `osac` chart on this cluster.
 
 **Management cluster.** Point `KUBECONFIG` at the management cluster and
 refresh `OCP_VERSION` for this cluster. Set `LVMS_ENABLED` to the
-`lvms.enabled` value in `my-management-infra-values.yaml`, then rerun the Phase
-1a channel-selection block before running the Phase 1a and Phase 1b commands.
+`lvms.enabled` value in `my-management-infra-values.yaml`. After switching back
+from the workload cluster, recheck the management cluster's release values and
+Subscription; do not reuse the workload cluster's `NS` or LVMS channel. Use
+this cluster's recorded `lvms.channel` for `LVMS_CHANNEL_OVERRIDE` when needed,
+then rerun the Phase 1a channel-selection block before running the Phase 1a
+and Phase 1b commands. For a new release, use the `osacNamespace` in
+`my-management-infra-values.yaml` or the default `osac`.
 
 ```bash
 export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
@@ -855,11 +909,39 @@ LVMS_SUBSCRIPTION_EXPECTED="$LVMS_ENABLED"
 # Override to true if an external Subscription should be checked.
 ```
 
-For an existing release, compare its recorded values and, when LVMS is enabled,
-the LVMS Subscription channel before upgrading, as described in Phase 1a.
+For existing releases, recheck overrides and computed values on this cluster
+before setting `LVMS_CHANNEL_OVERRIDE` and running the channel-selection block:
 
-Create the AAP license Secret on the management cluster as well. Set
-`AAP_LICENSE_FILE` to the local path of the license file if needed, then run:
+```bash
+helm get values osac-deps -n osac-deps
+helm get values osac-infra -n osac-infra
+helm get values osac-deps -n osac-deps --all
+helm get values osac-infra -n osac-infra --all
+if [ "$LVMS_SUBSCRIPTION_EXPECTED" = true ]; then
+    oc get sub lvms-operator -n openshift-storage --ignore-not-found \
+        -o jsonpath='channel={.spec.channel}{"\n"}'
+fi
+```
+
+After checking an existing release, set `LVMS_CHANNEL_OVERRIDE` to its
+recorded `lvms.channel` if the Subscription is missing or omits
+`.spec.channel`. Leave it empty for a new release:
+
+```bash
+LVMS_CHANNEL_OVERRIDE=""
+```
+
+Set `NS` to the management cluster's `osac-infra.osacNamespace` from its
+recorded values for an upgrade; for a new release, use the value in
+`my-management-infra-values.yaml` or the chart default `osac`:
+
+```bash
+export NS=osac
+```
+
+Create the AAP license Secret on the management cluster after setting `NS`.
+Set `AAP_LICENSE_FILE` to the local path of the license file if needed, then
+run:
 
 ```bash
 oc create namespace "$NS" --dry-run=client -o yaml | oc apply -f -

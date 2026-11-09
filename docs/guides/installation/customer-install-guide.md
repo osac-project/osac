@@ -296,7 +296,9 @@ Notes on individual components:
   `service.certs.caBundle.configMap` and `certs.caBundle.configMap` name the
   same ConfigMap and you manage it directly, complete this transfer before
   changing the `Bundle` so it no longer targets that ConfigMap. Then set
-  `caIssuer.enabled: false` before installing or upgrading OSAC. If
+  `caIssuer.enabled: false` in the infrastructure values file, such as
+  `my-infra-values.yaml`, not `my-values.yaml`, and apply the infrastructure
+  release before installing or upgrading OSAC. If
   `service.certs.caBundle.configMap` uses a different name, you can provide
   that ConfigMap directly and leave `caIssuer.enabled: true`. On an existing
   installation, check who owns `default-ca` and which certificates use it
@@ -353,12 +355,16 @@ Always required:
   permissions. Complete the [Kafka configuration guide](kafka-configuration.md)
   before installing OSAC with external Kafka. It includes a Strimzi example
   and the additional requirements for metering.
+
+Required when the OSAC chart bootstraps chart-managed AAP:
+
 - **AAP subscription manifest (`license.zip`).** A Subscription Allocation
   export from the [Red Hat Customer Portal](https://access.redhat.com/). The AAP
   bootstrap job cannot start without it. You load it into the
   `config-as-code-manifest-ig` Secret in
-  [Section 4.1](#41-preparing-the-cluster). For more information, see
-  "Obtaining an AAP License" in
+  [Section 4.1](#41-preparing-the-cluster). External AAP administrators manage
+  their AAP license; when `aap.bootstrap.enabled` is `false`, this local Secret
+  is not used. For more information, see "Obtaining an AAP License" in
   [`osac-installer/README.md`](https://github.com/osac-project/osac/blob/main/osac-installer/README.md).
 
 Required for a production deployment:
@@ -721,7 +727,10 @@ Install OSAC with `oc` and Helm.
 - You are logged in to the cluster as a user with `cluster-admin` privileges.
 - The cluster pull secret is in place. See
   [Section 2.1](#21-cluster-and-access).
-- You have the AAP subscription manifest file (`license.zip`).
+- For chart-managed AAP with `aap.bootstrap.enabled: true`, you have the AAP
+  subscription manifest file (`license.zip`). External AAP administrators
+  manage their AAP license; no local manifest Secret is used when its bootstrap
+  job is disabled.
 - For a production deployment, your external PostgreSQL database is running and
   reachable from the cluster.
 - For a production deployment, your external Vault-compatible store is running
@@ -738,6 +747,7 @@ Run all installation commands in the same shell session.
    export NS=<namespace>
    export DOMAIN=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')
    export OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2)
+   # Only for chart-managed AAP with a bootstrap job:
    export AAP_LICENSE_FILE=/path/to/license.zip
    ```
 
@@ -747,13 +757,17 @@ Run all installation commands in the same shell session.
    oc create namespace "$NS" --dry-run=client -o yaml | oc apply -f -
    ```
 
-3. Create the Secret that holds the AAP subscription manifest:
+3. For chart-managed AAP with `aap.bootstrap.enabled: true`, create the Secret
+   that holds the AAP subscription manifest. Skip this step for external AAP
+   when its bootstrap job is disabled:
 
    ```console
    oc create secret generic config-as-code-manifest-ig --from-file=license.zip="$AAP_LICENSE_FILE" -n "$NS" --dry-run=client -o yaml | oc apply --server-side -f -
    ```
 
-4. Label the Secret so that the AAP bootstrap job reads it:
+4. For chart-managed AAP with `aap.bootstrap.enabled: true`, label the Secret
+   so that the AAP bootstrap job reads it. Skip this step when the bootstrap
+   job is disabled:
 
    ```console
    oc label secret config-as-code-manifest-ig osac.openshift.io/project=osac-aap -n "$NS" --overwrite
@@ -2065,7 +2079,7 @@ Manager such as Netris.
        namespace: host-inventory
        hostClass: metal3
      env:
-       aapUrl: "http://osac-aap/api/controller"
+       aapUrl: "https://<trusted-aap-route>/api/controller"
        aapInsecureSkipVerify: "false"
    aap:
      instanceGroups:
@@ -2089,10 +2103,13 @@ Manager such as Netris.
    With external AAP, keep it `false` and publish the required templates
    separately as described in [Section 4.2](#42-configuring-the-helm-values).
 
-   The example URL is for chart-managed AAP. When AAP is external, set
-   `bmf.env.aapUrl` to the external Controller URL from
-   [Section 4.2](#42-configuring-the-helm-values); BMF has a separate URL
-   setting from `operator.aap.url`. Keep
+   For production, use the HTTPS Route for chart-managed AAP with a certificate
+   trusted by BMF's system trust store. The internal
+   `http://osac-aap/api/controller` URL is evaluation-only unless another
+   mechanism protects the cluster network; otherwise it sends the AAP token
+   without transport encryption. When AAP is external, set `bmf.env.aapUrl` to
+   its Controller URL from [Section 4.2](#42-configuring-the-helm-values).
+   BMF has a separate URL setting from `operator.aap.url`. Keep
    `bmf.env.aapInsecureSkipVerify: "false"` for production HTTPS connections.
 
    Also add `networkClass.defaults` from
@@ -2471,7 +2488,8 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
 
    - Always: `fulfillment-grpc-server`, `fulfillment-rest-gateway`,
      `fulfillment-controller`, `fulfillment-ingress-proxy`, `osac-operator`,
-     `osac-operator-console-proxy`, and the `osac-aap-*` pods.
+     and `osac-operator-console-proxy`.
+   - When `aap.aap.instance.enabled` is `true`: the `osac-aap-*` pods.
    - With `ui.enabled`: `osac-ui`.
    - Always: the `osac-metering` pods.
    - VMaaS: `fulfillment-console-proxy`.
@@ -2489,12 +2507,25 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    initialization, see [Section 11.5](#115-the-osac-db-init-hook-fails) for
    the retained Job's logs.
 
-9. Check the AAP bootstrap job. The `osac-aap-bootstrap` job runs as a
-    postinstallation hook and takes 10 to 40 minutes:
+9. Verify AAP according to its configuration. When
+   `aap.bootstrap.enabled` is `true`, the `osac-aap-bootstrap` job runs as a
+   postinstallation hook and takes 10 to 40 minutes:
 
-    ```console
-    oc logs -f job/osac-aap-bootstrap -n <namespace>
-    ```
+   ```console
+   oc logs -f job/osac-aap-bootstrap -n <namespace>
+   ```
+
+   With external AAP (`aap.aap.instance.enabled: false` and
+   `aap.bootstrap.enabled: false`), do not expect `osac-aap-*` pods or the
+   bootstrap job. Verify connectivity to the external Controller URL from a
+   pod in the OSAC namespace:
+
+   ```console
+   AAP_URL="https://<external-aap>/api/controller"
+   oc run aap-connectivity-check -n <namespace> --rm -i --restart=Never \
+     --image=quay.io/openshift/origin-cli:4.20.0 --command -- \
+     curl --fail-with-body --silent --show-error "${AAP_URL}/v2/ping/"
+   ```
 
 10. Check API reachability and log in with the `osac` CLI. For the bundled
     CA or a custom CA, use the API trust bundle prepared in step 4 of

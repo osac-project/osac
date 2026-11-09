@@ -1370,7 +1370,9 @@ Read the `NetworkClass` through the private API of the Fulfillment Service.
 ExternalIPs and NATGateways, including each tenant's default NATGateway
 ExternalIP `default-nat`, take their addresses from an ExternalIPPool. Create
 the pools after the `NetworkClass` is `READY` and before the first Tenant:
-tenant onboarding waits for a `READY` pool.
+tenant onboarding waits for a `READY` pool. Every pool is shared by all
+tenants: OSAC places it in the `shared` tenant and rejects a pool that names
+another tenant with `PERMISSION_DENIED`.
 
 **Procedure**
 

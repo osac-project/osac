@@ -37,6 +37,12 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   conditions to identify the actual boundary.
 - Tests gated on provider networking skip in the standard fulfillment target;
   their presence is not evidence for the enabled-provider path.
+- ExternalIPPool tenant placement: a pool created without a tenant is stored
+  as shared, any other tenant is rejected without persisting, a shared pool
+  cannot move into a tenant, and a pool stored in a tenant before this rule
+  keeps it and still takes status updates. Unit specs use real PostgreSQL with
+  mocked tenancy; the deployed private-API rejection does not depend on
+  provider networking.
 - Fixture-written readiness conditions prove status projection, not automatic
   watch delivery or the upstream controller's calculation of readiness.
 - The networking fixture uses distinct Hub entries/namespaces on one cluster;

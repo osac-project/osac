@@ -45,8 +45,13 @@ in `osac-aap/Makefile`.
 The shared goldens do not bind delete/detach, SecurityGroup, DHCP-lease,
 FabricDomain, cluster-ingress or physical-interface shapes; those gaps have no
 owning ticket. Read both sides' suites before extending a task contract.
-AgentlessNet targets use fixture provider commands: service-readiness checks
-alone prove no DHCP leases, BGP convergence or packet delivery.
+AgentlessNet Fabric and switch-VLAN targets ([OSAC-7156](https://redhat.atlassian.net/browse/OSAC-7156))
+run generic-playbook child jobs with real SQLite against one stateful fake SSH
+switch endpoint: physical NetworkAttachment apply, partial-retry, delete-wins
+guards, port restoration, VLAN discovery and creation on declared trunks, and
+shared ExternalIPPool lifecycle. DHCP leases, Linux and provider commands,
+Kind, an AAP server, a live switch, BGP convergence and packet delivery are
+not run.
 
 ## Network role coverage gate
 

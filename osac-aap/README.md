@@ -212,7 +212,10 @@ VirtualNetwork-only jobs may omit the `switches` group. Subnet jobs require at
 least one Cumulus host with a nonempty list of safe `trunk_ports`. The saved
 Subnet VLAN is converged on each declared trunk; the role does not assign host
 access ports. Before reserving a new Subnet, the role reads every switch's
-`bridge -j vlan show` memberships and NVUE internal and L3-VNI reserved ranges.
+normalized VLAN state from the `ansible_network.network_runner` collection,
+which reports interface memberships together with the provider's internal and
+L3-VNI reserved VLAN ranges. Switch commands stay in the collection's provider;
+the role only consumes the normalized result.
 The SQLite allocator chooses the lowest available VLAN from 1–4094 after
 excluding those observed IDs and every saved allocation. Existing Subnet UIDs
 reuse their saved VLAN, including allocations from the former 100–199 range.

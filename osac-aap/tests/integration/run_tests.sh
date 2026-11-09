@@ -68,6 +68,7 @@ ROLE_TESTS=(
   "agentless_net_nat_gateway"
   "agentless_net_attachment"
   "agentless_net_contract"
+  "agentless_net_switch"
   "compute_instance_delete_vmi_recovery"
   "metallb_l2_detach_annotation"
   "netris_protected_launch"

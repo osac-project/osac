@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -35,6 +36,16 @@ func fixtureDAO[O dao.Object]() *dao.GenericDAO[O] {
 		SetTenancyLogic(tenancy).
 		Build()
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	return result
+}
+
+// newAdminTenancy returns tenancy logic for a caller that can assign every tenant, such as an admin. As with the
+// real tenancy logic, its default tenant is the shared tenant.
+func newAdminTenancy() *auth.MockTenancyLogic {
+	result := auth.NewMockTenancyLogic(ctrl)
+	result.EXPECT().DetermineAssignableTenants(gomock.Any()).Return(auth.AllTenants, nil).AnyTimes()
+	result.EXPECT().DetermineDefaultTenant(gomock.Any()).Return(auth.SharedTenant, nil).AnyTimes()
+	result.EXPECT().DetermineVisibility(gomock.Any()).Return(auth.TotalVisibility(), nil).AnyTimes()
 	return result
 }
 

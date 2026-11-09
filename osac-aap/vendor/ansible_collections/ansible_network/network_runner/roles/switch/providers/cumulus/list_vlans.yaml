@@ -1,3 +1,30 @@
 ---
-- fail:
-    msg: List VLANs is not implimented for cumulus
+- name: "cumulus: read bridge VLAN memberships"
+  raw: bridge -j vlan show
+  register: _cumulus_bridge_vlans
+  changed_when: false
+  no_log: true
+
+- name: "cumulus: read NVUE reserved VLAN ranges"
+  raw: nv show system global reserved vlan --output json
+  register: _cumulus_reserved_vlans
+  changed_when: false
+  no_log: true
+
+- name: "cumulus: read the switchd reserved VLAN range"
+  raw: >-
+    awk '/^[[:space:]]*resv_vlan_range[[:space:]]*=/ { print }'
+    /etc/cumulus/switchd.conf
+  register: _cumulus_switchd_vlans
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: "cumulus: normalize the switch VLAN state"
+  ansible.builtin.set_fact:
+    network_runner_vlans: >-
+      {{ _cumulus_bridge_vlans.stdout
+         | ansible_network.network_runner.cumulus_vlans(
+             _cumulus_reserved_vlans.stdout,
+             _cumulus_switchd_vlans.stdout) }}
+  no_log: true

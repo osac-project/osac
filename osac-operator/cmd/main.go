@@ -494,6 +494,7 @@ func setupClusterControllers(
 				os.Getenv(envNetworkingNamespace),
 				provider, pollInterval, maxJobHistory,
 			)
+			reconciler.NetworkingProvisioningEnabled = networkingProvisioningEnabled()
 			reconciler.StallThresholds = clusterOrderStallThresholdsFromEnv()
 			reconciler.Recorder = localMgr.GetEventRecorder(controller.ClusterOrderControllerName)
 			if grpcConn != nil {
@@ -1022,6 +1023,7 @@ func setupBareMetalInstanceControllers(
 	reconciler := controller.NewBareMetalInstanceCleanupReconciler(
 		localMgr.GetClient(), bareMetalInstanceNamespace, os.Getenv(envNetworkingNamespace),
 	)
+	reconciler.NetworkingProvisioningEnabled = networkingProvisioningEnabled()
 	if grpcConn != nil {
 		reconciler.BareMetalInstancesClient = privatev1.NewBareMetalInstancesClient(grpcConn)
 		reconciler.ExternalIPAttachmentsClient = privatev1.NewExternalIPAttachmentsClient(grpcConn)

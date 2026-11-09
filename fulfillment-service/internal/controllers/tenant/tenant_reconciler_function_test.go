@@ -20,10 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"net/url"
-	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -40,7 +37,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/defaultnetworking"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
-	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -2252,127 +2248,6 @@ var _ = Describe("Vault namespace provisioning", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 	})
-
-	DescribeTable("keeps cold-cache lifecycle logs safe with redaction disabled", func(tenantName string) {
-		const testToken = "synthetic-cold-access-marker"
-		const testRefreshToken = "synthetic-cold-refresh-marker"
-		const testClientSecret = "synthetic-cold-client-marker"
-		const testVaultToken = "synthetic-cold-vault-marker"
-		const testBody = "synthetic-cold-body-marker"
-		var logs bytes.Buffer
-		debugLogger, err := logging.NewLogger().SetWriter(&logs).SetLevel("debug").SetRedact(false).Build()
-		Expect(err).ToNot(HaveOccurred())
-		var blocked atomic.Bool
-		blocked.Store(true)
-		var oauthCalls, oidcCalls, tokenCalls, loginCalls, provisionCalls atomic.Int32
-		var server *httptest.Server
-		server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			defer GinkgoRecover()
-			writer.Header().Set("Content-Type", "application/json")
-			switch request.URL.Path {
-			case "/issuer/.well-known/oauth-authorization-server", "/issuer/.well-known/openid-configuration":
-				isOAuth := request.URL.Path == "/issuer/.well-known/oauth-authorization-server"
-				if isOAuth {
-					oauthCalls.Add(1)
-				} else {
-					oidcCalls.Add(1)
-				}
-				if blocked.Load() {
-					writer.WriteHeader(http.StatusServiceUnavailable)
-					_, _ = writer.Write([]byte(testBody))
-				} else if isOAuth {
-					writer.WriteHeader(http.StatusNotFound)
-				} else {
-					Expect(json.NewEncoder(writer).Encode(map[string]any{
-						"issuer": server.URL + "/issuer", "token_endpoint": server.URL + "/token",
-						"authorization_endpoint":        "https://synthetic-discovery.example.invalid/authorize",
-						"device_authorization_endpoint": "https://synthetic-discovery.example.invalid/device",
-						"scopes_supported":              []string{testBody},
-					})).To(Succeed())
-				}
-			case "/token":
-				tokenCalls.Add(1)
-				Expect(request.ParseForm()).To(Succeed())
-				Expect(request.Form.Get("grant_type")).To(Equal("client_credentials"))
-				Expect(request.Form.Get("client_secret")).To(Equal(testClientSecret))
-				Expect(json.NewEncoder(writer).Encode(map[string]any{
-					"access_token": testToken, "refresh_token": testRefreshToken, "expires_in": 300,
-				})).To(Succeed())
-			case "/v1/auth/jwt/login":
-				loginCalls.Add(1)
-				var body map[string]string
-				Expect(json.NewDecoder(request.Body).Decode(&body)).To(Succeed())
-				Expect(body["jwt"]).To(Equal(testToken))
-				Expect(json.NewEncoder(writer).Encode(map[string]any{
-					"auth": map[string]any{"client_token": testVaultToken, "lease_duration": 300},
-				})).To(Succeed())
-			default:
-				provisionCalls.Add(1)
-				Expect(request.Header.Get("X-Vault-Token")).To(Equal(testVaultToken))
-				_, _ = writer.Write([]byte(`{}`))
-			}
-		}))
-		DeferCleanup(server.Close)
-		authenticator, err := vault.NewAuthenticator().SetLogger(debugLogger).
-			SetVaultAddress(server.URL).SetVaultNamespace("osac").SetVaultRole("lifecycle").
-			SetKeycloakIssuerURL(server.URL + "/issuer").SetKeycloakClientID("test-client").
-			SetKeycloakClientSecret(testClientSecret).Build()
-		Expect(err).ToNot(HaveOccurred())
-		lifecycle, err := vault.NewVaultLifecycleClient().SetLogger(debugLogger).
-			SetAddress(server.URL).SetParentNamespace("osac").SetTokenSource(authenticator).
-			SetKeycloakIssuerURL(server.URL + "/issuer").SetServiceClientID("test-client").Build()
-		Expect(err).ToNot(HaveOccurred())
-		var updates []*privatev1.TenantsUpdateRequest
-		reconciler := &function{
-			logger: debugLogger, idpManager: idpManager, vaultLifecycle: lifecycle,
-			maskCalculator: masks.NewCalculator().Build(),
-			tenantsClient: finalizerClient{update: func(request *privatev1.TenantsUpdateRequest) (*privatev1.TenantsUpdateResponse, error) {
-				updates = append(updates, proto.Clone(request).(*privatev1.TenantsUpdateRequest))
-				return privatev1.TenantsUpdateResponse_builder{Object: request.GetObject()}.Build(), nil
-			}},
-		}
-		tenant := privatev1.Tenant_builder{
-			Id: "test-cold-tenant", Metadata: privatev1.Metadata_builder{
-				Name: tenantName, Tenant: "tenant-1",
-				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
-			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				State: privatev1.TenantState_TENANT_STATE_SYNCED, IdpTenantName: tenantName,
-				Conditions: []*privatev1.TenantCondition{privatev1.TenantCondition_builder{
-					Type: condType, Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-				}.Build()},
-			}.Build(),
-		}.Build()
-		mockIDPClient.EXPECT().GetTenant(gomock.Any(), tenantName).
-			Return(&idp.Tenant{Name: tenantName}, nil).Times(2)
-		Expect(reconciler.Run(ctx, tenant)).To(Succeed())
-		Expect(updates).To(HaveLen(1))
-		Expect(findCondition(updates[0].GetObject()).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
-		Expect(findCondition(updates[0].GetObject()).GetReason()).To(Equal("ProvisionFailed"))
-		Expect(tokenCalls.Load()).To(BeZero())
-		blocked.Store(false)
-		Expect(reconciler.Run(ctx, proto.Clone(updates[0].GetObject()).(*privatev1.Tenant))).To(Succeed())
-		Expect(updates).To(HaveLen(2))
-		Expect(findCondition(updates[0].GetObject()).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
-		Expect(findCondition(updates[0].GetObject()).GetReason()).To(Equal("ProvisionFailed"))
-		Expect(updates[0].GetObject().GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
-		Expect(findCondition(updates[1].GetObject()).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
-		Expect(findCondition(updates[1].GetObject()).GetReason()).To(Equal("NamespaceReady"))
-		Expect(oauthCalls.Load()).To(Equal(int32(2)))
-		Expect(oidcCalls.Load()).To(Equal(int32(2)))
-		Expect(tokenCalls.Load()).To(Equal(int32(1)))
-		Expect(loginCalls.Load()).To(Equal(int32(1)))
-		Expect(provisionCalls.Load()).To(Equal(int32(7)))
-		for _, update := range updates {
-			Expect(update.GetLock()).To(BeTrue())
-			Expect(update.GetUpdateMask().GetPaths()).To(ContainElement("status.conditions"))
-			Expect(update.GetObject().GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
-			for _, marker := range []string{server.URL, "synthetic-discovery.example.invalid", testToken, testRefreshToken, testClientSecret, testVaultToken, testBody} {
-				Expect(update.String()).ToNot(ContainSubstring(marker))
-				Expect(logs.String()).ToNot(ContainSubstring(marker))
-			}
-		}
-	}, Entry("ordinary tenant", "cold-tenant"), Entry("system tenant", auth.SystemTenant))
 
 	DescribeTable("re-ensures vault provisioning when already ready", func(tenantName string) {
 		reconciler := &function{

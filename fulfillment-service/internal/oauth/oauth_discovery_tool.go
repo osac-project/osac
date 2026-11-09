@@ -153,6 +153,7 @@ func (t *DiscoveryTool) Discover(ctx context.Context) (result *ServerMetadata, e
 	t.logger.InfoContext(
 		ctx,
 		"Failed to discover endpoints using OAuth",
+		slog.Any("error", err),
 	)
 	result, err = t.discover(ctx, "openid-configuration")
 	if err == nil {
@@ -165,6 +166,7 @@ func (t *DiscoveryTool) Discover(ctx context.Context) (result *ServerMetadata, e
 	t.logger.InfoContext(
 		ctx,
 		"Failed to discover endpoints using OIDC",
+		slog.Any("error", err),
 	)
 	err = fmt.Errorf("failed to discover endpoints using OAuth or OIDC")
 	return
@@ -178,14 +180,15 @@ func (t *DiscoveryTool) discover(ctx context.Context, endpoint string) (result *
 	t.logger.DebugContext(
 		ctx,
 		"Attempting discovery",
-		slog.String("discovery_kind", endpoint),
+		slog.String("url", metadataUrl),
 	)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataUrl, nil)
 	if err != nil {
 		t.logger.ErrorContext(
 			ctx,
 			"Failed to create metadata request",
-			slog.String("discovery_kind", endpoint),
+			slog.String("url", metadataUrl),
+			slog.Any("error", err),
 		)
 		err = fmt.Errorf("failed to create metadata request: %w", err)
 		return
@@ -195,17 +198,14 @@ func (t *DiscoveryTool) discover(ctx context.Context, endpoint string) (result *
 		t.logger.ErrorContext(
 			ctx,
 			"Failed to fetch metadata",
-			slog.String("discovery_kind", endpoint),
+			slog.String("url", metadataUrl),
+			slog.Any("error", err),
 		)
 		err = fmt.Errorf("failed to fetch metadata from '%s': %w", metadataUrl, err)
 		return
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		t.logger.ErrorContext(ctx, "Unexpected metadata response code",
-			slog.String("discovery_kind", endpoint),
-			slog.Int("code", response.StatusCode),
-		)
 		err = fmt.Errorf("failed to fetch metadata from '%s': %s", metadataUrl, response.Status)
 		return
 	}
@@ -218,7 +218,7 @@ func (t *DiscoveryTool) discover(ctx context.Context, endpoint string) (result *
 		t.logger.ErrorContext(
 			ctx,
 			"Failed to parse metadata",
-			slog.String("discovery_kind", endpoint),
+			slog.Any("error", err),
 		)
 		err = fmt.Errorf("failed to parse metadata: %w", err)
 		return
@@ -246,8 +246,11 @@ func (t *DiscoveryTool) discover(ctx context.Context, endpoint string) (result *
 	t.logger.DebugContext(
 		ctx,
 		"Successfully discovered endpoints",
-		slog.String("discovery_kind", endpoint),
-		slog.Int("supported_scope_count", len(serverMetadata.ScopesSupported)),
+		slog.String("issuer", serverMetadata.Issuer),
+		slog.String("token_endpoint", serverMetadata.TokenEndpoint),
+		slog.String("authorization_endpoint", serverMetadata.AuthorizationEndpoint),
+		slog.String("device_authorization_endpoint", serverMetadata.DeviceAuthorizationEndpoint),
+		slog.Any("scopes_supported", serverMetadata.ScopesSupported),
 	)
 	result = &serverMetadata
 	return

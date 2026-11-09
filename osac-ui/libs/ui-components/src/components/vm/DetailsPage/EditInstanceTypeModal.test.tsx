@@ -1,6 +1,7 @@
 import { toJson } from '@bufbuild/protobuf';
 import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
+import type { TFunction } from 'i18next';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -14,7 +15,11 @@ import {
 } from '@osac/types';
 
 import EditInstanceTypeModal from './EditInstanceTypeModal';
+import { connectErrorInterceptor } from '../../../api/api-context';
+import { createNetworkingImmutabilityInterceptor } from '../../../api/networking-immutability';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
+
+const tIdentity = ((key: string) => key) as unknown as TFunction;
 
 const cpu = {
   id: 'cpu-1',
@@ -63,6 +68,8 @@ const renderWrapper = ({
   onUpdate,
   onList,
   rejectUpdate = false,
+  immutableNetworkError = false,
+  useMiddleware = false,
 }: {
   instance?: ComputeInstance;
   types?: InstanceType[];
@@ -71,37 +78,58 @@ const renderWrapper = ({
   onUpdate?: (request: unknown) => void;
   onList?: (request: { filter?: string }) => void;
   rejectUpdate?: boolean;
+  immutableNetworkError?: boolean;
+  useMiddleware?: boolean;
 } = {}) => {
   let getCalls = 0;
-  const transport = createRouterTransport((router) => {
-    router.service(InstanceTypes, {
-      list: (request) => {
-        onList?.(request);
-        return { items: types };
-      },
-      get: () => {
-        getCalls += 1;
-        if (getMode === 'error') {
-          throw new ConnectError('lookup failed', Code.Unavailable);
+  const transport = createRouterTransport(
+    (router) => {
+      router.service(InstanceTypes, {
+        list: (request) => {
+          onList?.(request);
+          return { items: types };
+        },
+        get: () => {
+          getCalls += 1;
+          if (getMode === 'error') {
+            throw new ConnectError('lookup failed', Code.Unavailable);
+          }
+          if (getMode === 'loading' && getCalls === 1) {
+            return new Promise(() => undefined);
+          }
+          return {
+            object:
+              currentType ?? types.find((item) => item.id === instance.spec?.instanceType?.id),
+          };
+        },
+      });
+      router.service(ComputeInstances, {
+        update: (request) => {
+          onUpdate?.(request);
+          if (immutableNetworkError) {
+            throw new ConnectError(
+              'spec.network_attachments is immutable after creation',
+              Code.InvalidArgument,
+            );
+          }
+          if (rejectUpdate) {
+            throw new ConnectError('cannot change GPU configuration', Code.FailedPrecondition);
+          }
+          return { object: request.object, warnings: [] };
+        },
+      });
+    },
+    useMiddleware
+      ? {
+          transport: {
+            interceptors: [
+              connectErrorInterceptor,
+              createNetworkingImmutabilityInterceptor(tIdentity),
+            ],
+          },
         }
-        if (getMode === 'loading' && getCalls === 1) {
-          return new Promise(() => undefined);
-        }
-        return {
-          object: currentType ?? types.find((item) => item.id === instance.spec?.instanceType?.id),
-        };
-      },
-    });
-    router.service(ComputeInstances, {
-      update: (request) => {
-        onUpdate?.(request);
-        if (rejectUpdate) {
-          throw new ConnectError('cannot change GPU configuration', Code.FailedPrecondition);
-        }
-        return { object: request.object, warnings: [] };
-      },
-    });
-  });
+      : undefined,
+  );
 
   const onClose = vi.fn();
   const view = renderWithProviders(<EditInstanceTypeModal vm={instance} onClose={onClose} />, {
@@ -199,6 +227,7 @@ describe('EditInstanceTypeModal wrapper', () => {
     const { user } = renderWrapper({
       instance: vm(ComputeInstanceState.RUNNING, 'cpu-1'),
       rejectUpdate: true,
+      useMiddleware: true,
     });
 
     await user.click(await screen.findByRole('combobox'));
@@ -206,7 +235,36 @@ describe('EditInstanceTypeModal wrapper', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(await screen.findByText('Failed to update the instance type')).toBeInTheDocument();
+    expect(screen.getByText('cannot change GPU configuration')).toBeInTheDocument();
+    expect(screen.queryByText(/Delete and recreate/)).not.toBeInTheDocument();
     expect(screen.getByRole('dialog', { name: 'Edit instance type' })).toBeInTheDocument();
+  });
+
+  it('shows workload replacement guidance decorated by the middleware', async () => {
+    const { user } = renderWrapper({
+      instance: vm(ComputeInstanceState.RUNNING, 'cpu-1'),
+      immutableNetworkError: true,
+      useMiddleware: true,
+    });
+
+    await user.click(await screen.findByRole('combobox'));
+    await user.click(await screen.findByRole('option', { name: /CPU large/ }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText('Failed to update the instance type')).toBeInTheDocument();
+    const alert = screen
+      .getByRole('heading', { name: 'Danger alert: Failed to update the instance type' })
+      .closest('.pf-v6-c-alert');
+    expect(alert).not.toBeNull();
+    expect(alert).toHaveTextContent('spec.network_attachments is immutable after creation');
+    expect(alert).toHaveTextContent(
+      'Delete and recreate the workload to change its network attachment.',
+    );
+    expect(
+      alert?.textContent?.match(
+        /Delete and recreate the workload to change its network attachment\./g,
+      ),
+    ).toHaveLength(1);
   });
 
   it('updates with the explicit instance type mask', async () => {

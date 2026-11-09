@@ -186,7 +186,16 @@ jobs:
           # One listing gives every container that has started, with its restart count. Then one request per
           # container: kubectl stops at the first container that fails, which would lose the logs of the others,
           # and only a container that restarted has a previous log to ask for. A failure here must not fail the
-          # step. Each file is redacted after it is written.
+          # step. The raw log goes to a scratch directory outside the one that is uploaded, and the redacted copy is
+          # written to the artifact only when the redaction succeeds, so that a failure can't leave a raw log in it.
+          raw=$(mktemp -d)
+          collect() {
+            local out=$1
+            shift
+            kubectl logs -n osac "$@" > "$raw/log" 2>&1 || echo "Failed to get logs for ${out##*/}"
+            sed -E "$redact" "$raw/log" > "$out" || { rm -f "$out"; echo "Failed to redact ${out##*/}, it is not in the artifact"; }
+            rm -f "$raw/log"
+          }
           if pods=$(kubectl get pods -n osac -o json); then
             jq -r '
               .items[] | .metadata.name as $pod
@@ -194,16 +203,15 @@ jobs:
               | "\($pod) \(.name) \(.restartCount)"
             ' <<<"$pods" | while read -r pod container restarts; do
               file="fulfillment-service/logs/pods/${pod}_${container}"
-              kubectl logs -n osac "$pod" -c "$container" --tail=-1 > "${file}.log" 2>&1 || echo "Failed to get logs for ${pod}/${container}"
-              sed -E -i "$redact" "${file}.log"
+              collect "${file}.log" "$pod" -c "$container" --tail=-1
               if [ "$restarts" -gt 0 ]; then
-                kubectl logs -n osac "$pod" -c "$container" --previous --tail=-1 > "${file}-previous.log" 2>&1 || echo "Failed to get previous logs for ${pod}/${container}"
-                sed -E -i "$redact" "${file}-previous.log"
+                collect "${file}-previous.log" "$pod" -c "$container" --previous --tail=-1
               fi
             done
           else
             echo "Failed to list the pods"
           fi
+          rm -rf "$raw"
       - if: inputs.kind == 'it-fulfillment-service' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:

@@ -27,6 +27,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 )
 
 // Shared helpers for the controller integration suites (Metal3 and BCM). Both
@@ -95,4 +97,44 @@ func cleanupBMIInNS(namespace, name string) {
 func cleanupBMHInNS(namespace, name string) {
 	bmh := &metal3api.BareMetalHost{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
 	ExpectWithOffset(1, client.IgnoreNotFound(k8sClient.Delete(ctx, bmh))).NotTo(HaveOccurred())
+}
+
+// newTestReconciler wires a BareMetalInstance reconciler with the given
+// inventory client and the Metal3 management client for namespace.
+func newTestReconciler(invClient inventory.Client, namespace string) *BareMetalInstanceReconciler {
+	return NewBareMetalInstanceReconciler(
+		k8sClient,
+		k8sClient.Scheme(),
+		invClient,
+		management.NewMetal3ClientForTest(k8sClient, namespace),
+		nil, // provisioning provider
+		nil, // networking provider
+		nil, // IP discovery provider
+		nil, // AAP client
+		0, 0, 0, 0, 0,
+	)
+}
+
+// markBMHReadyInNS flips a BMH to available+OK so IsBMHAvailable returns true.
+// It stands in for the Metal3 baremetal-operator, which is not running in
+// envtest.
+func markBMHReadyInNS(namespace, name string) {
+	bmh := getBMHInNS(namespace, name)
+	bmh.Status.OperationalStatus = metal3api.OperationalStatusOK
+	bmh.Status.Provisioning.State = metal3api.StateAvailable
+	ExpectWithOffset(1, k8sClient.Status().Update(ctx, bmh)).To(Succeed())
+}
+
+func bmhExistsInNS(namespace, name string) bool {
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &metal3api.BareMetalHost{})
+	return err == nil
+}
+
+// driveToAllocatedIn runs finalizer, selection and claim, then marks the BMH
+// ready and reconciles once more so hostClass is persisted.
+func driveToAllocatedIn(reconciler *BareMetalInstanceReconciler, namespace, bmiName, hostname string) {
+	reconcileInNS(reconciler, namespace, bmiName, 3)
+	ExpectWithOffset(1, bmhExistsInNS(namespace, hostname)).To(BeTrue(), "AssignHost should have created the BMH")
+	markBMHReadyInNS(namespace, hostname)
+	reconcileInNS(reconciler, namespace, bmiName, 1)
 }

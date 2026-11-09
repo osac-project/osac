@@ -69,7 +69,7 @@ var _ = Describe("BareMetalInstance NetBox allocation and release", func() {
 			mock.addDevice(43, "staged", netboxDeviceFields(8))
 			reconciler := newNetBoxReconciler(mock, newNetBoxCredentialResolver(42))
 
-			createNetBoxBMI(bmiName, map[string]string{"cpu_cores": "16"}, nil)
+			createNetBoxBMI(bmiName, map[string]string{"cpu_cores": "16"})
 
 			// Finalizer, then selection: the host binding is persisted before any claim.
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 2)
@@ -85,6 +85,7 @@ var _ = Describe("BareMetalInstance NetBox allocation and release", func() {
 			Expect(query["cf_osac_managed"]).To(ConsistOf("true"))
 			Expect(query["cf_osac_instance_id__empty"]).To(ConsistOf("true"))
 			Expect(query["cf_cpu_cores"]).To(ConsistOf("16"))
+			Expect(listRequests[0].Authorization).To(HavePrefix("Token "))
 			Expect(mock.requestsFor(http.MethodPatch, "/api/dcim/devices/42/")).To(BeEmpty())
 
 			// Claim: the device becomes active and owned by the BareMetalInstance UID.
@@ -116,7 +117,7 @@ var _ = Describe("BareMetalInstance NetBox allocation and release", func() {
 			// Host is reserved but not available yet.
 			Expect(bmi.Spec.HostClass).To(BeEmpty())
 
-			markNetBoxBMHReady(hostname)
+			markBMHReadyInNS(netboxTestNS, hostname)
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 1)
 
 			bmi = getBMIInNS(netboxTestNS, bmiName)
@@ -129,8 +130,8 @@ var _ = Describe("BareMetalInstance NetBox allocation and release", func() {
 			mock.addDevice(42, "staged", netboxDeviceFields(16))
 			reconciler := newNetBoxReconciler(mock, newNetBoxCredentialResolver(42))
 
-			createNetBoxBMI(bmiName, map[string]string{"cpu_cores": "16"}, nil)
-			driveNetBoxToAllocated(reconciler, bmiName, hostname)
+			createNetBoxBMI(bmiName, map[string]string{"cpu_cores": "16"})
+			driveToAllocatedIn(reconciler, netboxTestNS, bmiName, hostname)
 
 			bmi := getBMIInNS(netboxTestNS, bmiName)
 			Expect(bmi.Spec.HostClass).To(Equal(netboxHostClass))
@@ -144,7 +145,7 @@ var _ = Describe("BareMetalInstance NetBox allocation and release", func() {
 			device := mock.device(42)
 			Expect(device.Status).To(Equal("staged"))
 			Expect(device.CustomFields["osac_instance_id"]).To(BeNil())
-			Expect(netboxBMHMissing(hostname)).To(BeTrue())
+			Expect(bmhExistsInNS(netboxTestNS, hostname)).To(BeFalse())
 
 			secret := &corev1.Secret{}
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: netboxBMCSecretName, Namespace: netboxTestNS}, secret)

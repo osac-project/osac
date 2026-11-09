@@ -66,7 +66,7 @@ var _ = Describe("BareMetalInstance NetBox claim recovery", func() {
 			Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
 
 			reconciler := newNetBoxReconciler(mock, newNetBoxCredentialResolver(42))
-			createNetBoxBMI(bmiName, map[string]string{"cpu_cores": "16"}, nil)
+			createNetBoxBMI(bmiName, map[string]string{"cpu_cores": "16"})
 
 			// Finalizer and selection.
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 2)
@@ -85,6 +85,7 @@ var _ = Describe("BareMetalInstance NetBox claim recovery", func() {
 			Expect(device.Status).To(Equal("active"))
 			Expect(device.CustomFields["osac_instance_id"]).To(Equal(string(bmi.UID)))
 
+			Expect(bmhExistsInNS(netboxTestNS, hostname)).To(BeTrue())
 			Expect(netboxBMH(hostname).Spec.ConsumerRef).NotTo(BeNil())
 			Expect(netboxBMH(hostname).Spec.ConsumerRef.Name).To(Equal("another-instance"))
 
@@ -92,11 +93,12 @@ var _ = Describe("BareMetalInstance NetBox claim recovery", func() {
 			// reselecting or releasing the claim.
 			Expect(k8sClient.Delete(ctx, foreign)).To(Succeed())
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 1)
+			Expect(bmhExistsInNS(netboxTestNS, hostname)).To(BeTrue())
 			Expect(netboxBMH(hostname).Spec.ConsumerRef).NotTo(BeNil())
 			Expect(netboxBMH(hostname).Spec.ConsumerRef.Name).To(Equal(string(bmi.UID)))
 			Expect(mock.device(42).CustomFields["osac_instance_id"]).To(Equal(string(bmi.UID)))
 
-			markNetBoxBMHReady(hostname)
+			markBMHReadyInNS(netboxTestNS, hostname)
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 1)
 			Expect(getBMIInNS(netboxTestNS, bmiName).Spec.HostClass).To(Equal(netboxHostClass))
 
@@ -107,7 +109,7 @@ var _ = Describe("BareMetalInstance NetBox claim recovery", func() {
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 			Expect(mock.device(42).Status).To(Equal("staged"))
 			Expect(mock.device(42).CustomFields["osac_instance_id"]).To(BeNil())
-			Expect(netboxBMHMissing(hostname)).To(BeTrue())
+			Expect(bmhExistsInNS(netboxTestNS, hostname)).To(BeFalse())
 		})
 	})
 })

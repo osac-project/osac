@@ -34,14 +34,12 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
-	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/netboxclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
@@ -50,7 +48,8 @@ import (
 const (
 	netboxTestNS    = "netbox-test"
 	netboxHostClass = "metal3"
-	netboxTestToken = "0123456789012345678901234567890123456789"
+	// netboxTestToken is a synthetic marker, not a credential.
+	netboxTestToken = "test-netbox-token"
 )
 
 // mockNetBoxDevice is one dcim.device as the NetBox API would return it.
@@ -105,10 +104,11 @@ func (d *mockNetBoxDevice) response() map[string]any {
 
 // recordedRequest keeps the parts of an API call the specs assert on.
 type recordedRequest struct {
-	Method  string
-	Path    string
-	Query   map[string][]string
-	IfMatch string
+	Method        string
+	Path          string
+	Query         map[string][]string
+	IfMatch       string
+	Authorization string
 }
 
 // mockNetBox is a stateful NetBox HTTPS endpoint for the envtest reconciler.
@@ -181,10 +181,11 @@ func (m *mockNetBox) handle(w http.ResponseWriter, r *http.Request) {
 
 	m.mu.Lock()
 	m.requests = append(m.requests, recordedRequest{
-		Method:  r.Method,
-		Path:    r.URL.Path,
-		Query:   r.URL.Query(),
-		IfMatch: r.Header.Get("If-Match"),
+		Method:        r.Method,
+		Path:          r.URL.Path,
+		Query:         r.URL.Query(),
+		IfMatch:       r.Header.Get("If-Match"),
+		Authorization: r.Header.Get("Authorization"),
 	})
 	m.mu.Unlock()
 
@@ -217,21 +218,11 @@ func (m *mockNetBox) listDevices(w http.ResponseWriter, r *http.Request) {
 	}
 	m.mu.Unlock()
 
-	limit := parseQueryInt(query.Get("limit"), len(results))
-	offset := parseQueryInt(query.Get("offset"), 0)
-	if offset > len(results) {
-		offset = len(results)
-	}
-	end := offset + limit
-	if end > len(results) {
-		end = len(results)
-	}
-
-	writeJSONResponse(w, map[string]any{
+	writeJSON(w, map[string]any{
 		"count":    len(results),
 		"next":     nil,
 		"previous": nil,
-		"results":  results[offset:end],
+		"results":  results,
 	})
 }
 
@@ -292,7 +283,7 @@ func (m *mockNetBox) getDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("ETag", device.etag())
-	writeJSONResponse(w, device.response())
+	writeJSON(w, device.response())
 }
 
 func (m *mockNetBox) patchDevice(w http.ResponseWriter, r *http.Request) {
@@ -335,30 +326,12 @@ func (m *mockNetBox) patchDevice(w http.ResponseWriter, r *http.Request) {
 	device.version++
 
 	w.Header().Set("ETag", device.etag())
-	writeJSONResponse(w, device.response())
+	writeJSON(w, device.response())
 }
 
 func deviceIDFromPath(path string) (int, error) {
 	trimmed := strings.TrimSuffix(strings.TrimPrefix(path, "/api/dcim/devices/"), "/")
 	return strconv.Atoi(trimmed)
-}
-
-func parseQueryInt(value string, fallback int) int {
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < 0 {
-		return fallback
-	}
-	return parsed
-}
-
-func writeJSONResponse(w http.ResponseWriter, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		http.Error(w, "encode failed", http.StatusInternalServerError)
-	}
 }
 
 // fakeSecretAPI serves the system-scoped device Secrets the credential
@@ -422,21 +395,10 @@ func netboxAPIFor(m *mockNetBox) inventory.NetBoxAPI {
 func newNetBoxReconciler(m *mockNetBox, credentials inventory.CredentialsReaderRepository) *BareMetalInstanceReconciler {
 	bmhManager := baremetalhost.NewManager(k8sClient, k8sClient, netboxTestNS)
 	inventoryClient := inventory.NewNetBoxClient(netboxAPIFor(m), bmhManager, netboxHostClass, credentials)
-	managementClient := management.NewMetal3ClientForTest(k8sClient, netboxTestNS)
-	return NewBareMetalInstanceReconciler(
-		k8sClient,
-		k8sClient.Scheme(),
-		inventoryClient,
-		managementClient,
-		nil, // provisioning provider
-		nil, // networking provider
-		nil, // IP discovery provider
-		nil, // AAP client
-		0, 0, 0, 0, 0,
-	)
+	return newTestReconciler(inventoryClient, netboxTestNS)
 }
 
-func createNetBoxBMI(name string, selector map[string]string, labels map[string]string) *v1alpha1.BareMetalInstance {
+func createNetBoxBMI(name string, selector map[string]string) {
 	bmi := &v1alpha1.BareMetalInstance{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: netboxTestNS},
 		Spec: v1alpha1.BareMetalInstanceSpec{
@@ -444,37 +406,7 @@ func createNetBoxBMI(name string, selector map[string]string, labels map[string]
 			TemplateID: shared.OsacNoopTemplate,
 		},
 	}
-	if labels != nil {
-		bmi.Spec.InventoryLabels = labels
-	}
 	ExpectWithOffset(1, k8sClient.Create(ctx, bmi)).To(Succeed())
-	return bmi
-}
-
-// driveNetBoxToAllocated runs finalizer, selection and claim, then marks the
-// BMH ready and reconciles once more so hostClass is persisted.
-func driveNetBoxToAllocated(reconciler *BareMetalInstanceReconciler, bmiName, hostname string) {
-	reconcileInNS(reconciler, netboxTestNS, bmiName, 3)
-	ExpectWithOffset(1, netboxBMHExists(hostname)).To(BeTrue(), "AssignHost should have created the BMH")
-	markNetBoxBMHReady(hostname)
-	reconcileInNS(reconciler, netboxTestNS, bmiName, 1)
-}
-
-func markNetBoxBMHReady(name string) {
-	bmh := getBMHInNS(netboxTestNS, name)
-	bmh.Status.OperationalStatus = metal3api.OperationalStatusOK
-	bmh.Status.Provisioning.State = metal3api.StateAvailable
-	ExpectWithOffset(1, k8sClient.Status().Update(ctx, bmh)).To(Succeed())
-}
-
-func netboxBMHExists(name string) bool {
-	err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: netboxTestNS}, &metal3api.BareMetalHost{})
-	return err == nil
-}
-
-func netboxBMHMissing(name string) bool {
-	err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: netboxTestNS}, &metal3api.BareMetalHost{})
-	return apierrors.IsNotFound(err)
 }
 
 func netboxBMH(name string) *metal3api.BareMetalHost {
@@ -485,8 +417,6 @@ func netboxBMH(name string) *metal3api.BareMetalHost {
 func cleanupNetBoxHost(bmiName, hostname string) {
 	cleanupBMIInNS(netboxTestNS, bmiName)
 	cleanupBMHInNS(netboxTestNS, hostname)
-	secret := &corev1.Secret{}
-	if err := k8sClient.Get(ctx, types.NamespacedName{Name: hostname + "-bmc-secret", Namespace: netboxTestNS}, secret); err == nil {
-		ExpectWithOffset(1, k8sClient.Delete(ctx, secret)).To(Succeed())
-	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: hostname + "-bmc-secret", Namespace: netboxTestNS}}
+	ExpectWithOffset(1, client.IgnoreNotFound(k8sClient.Delete(ctx, secret))).NotTo(HaveOccurred())
 }

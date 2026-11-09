@@ -34,10 +34,7 @@ test(`stops, starts and restarts VM ${vmTestName} from its details page`, async 
   try {
     await access(credentialsFile);
   } catch {
-    test.skip(
-      true,
-      `Tenant credentials were not found at ${credentialsFile}; run the full flow first.`,
-    );
+    test.skip(true, 'Tenant credentials were not found; run the full flow first.');
     return;
   }
 

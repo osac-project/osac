@@ -243,8 +243,7 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 	if !oldComputeInstance.HasStatus() && computeInstance.HasStatus() {
 		oldComputeInstance.SetStatus(&privatev1.ComputeInstanceStatus{})
 	}
-	// The version is what the server checks the update against, not a field that this pass changes. A pass that
-	// had to read the object again, after writing it, carries the version of that read.
+	// The version isn't a change: keep the one this pass last read, so the server checks against it.
 	if oldComputeInstance.HasMetadata() && computeInstance.HasMetadata() {
 		oldComputeInstance.GetMetadata().SetVersion(computeInstance.GetMetadata().GetVersion())
 	}
@@ -260,8 +259,7 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 	}
 
 	if reconcileErr != nil {
-		// Both errors are kept: the reconciler loop retries a write that the server rejected as a conflict,
-		// and it can only see that conflict if the write error is part of what this function returns.
+		// Return the write error too, so the reconciler loop can retry a conflict.
 		if updateErr != nil {
 			return errors.Join(reconcileErr, updateErr)
 		}

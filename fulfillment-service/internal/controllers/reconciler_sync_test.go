@@ -197,15 +197,13 @@ var _ = Describe("Reconciler", func() {
 		Consistently(service.listCalls.Load, 100*time.Millisecond).Should(BeZero())
 	})
 
-	// received is what the reconciler function saw on one call. The object is a clone taken on entry, so later
-	// in-place changes made by the function don't affect what the test inspects.
+	// The object is cloned on entry so in-place changes by the function don't affect it.
 	type received struct {
 		object *privatev1.Tenant
 		at     time.Time
 	}
 
-	// recordCalls installs a reconciler function that records every call on the returned channel and counter, and
-	// that returns whatever result decides for the call number (1 for the first call).
+	// recordCalls records each call; result picks the return value by call number, starting at 1.
 	recordCalls := func(result func(call int32, object *privatev1.Tenant) error) (chan received, *atomic.Int32) {
 		objects := make(chan received, 10)
 		var calls atomic.Int32
@@ -225,8 +223,7 @@ var _ = Describe("Reconciler", func() {
 
 	DescribeTable("Retries conflicting reconciliations with a fresh read",
 		func(firstErr error) {
-			// Each read returns a different version, so a retry that reuses the queued snapshot instead of
-			// reading again can be told apart.
+			// Each read returns a new version, exposing a retry that reuses the queued snapshot.
 			service.get = func(req *privatev1.TenantsGetRequest) (*privatev1.TenantsGetResponse, error) {
 				return privatev1.TenantsGetResponse_builder{
 					Object: privatev1.Tenant_builder{
@@ -259,9 +256,7 @@ var _ = Describe("Reconciler", func() {
 			errors.Join(status.Error(codes.Unavailable, "hub down"), status.Error(codes.Aborted, "modified"))),
 	)
 
-	// A failure made only of conflicts is expected under contention and is retried, so it is logged quietly. Any other
-	// failure, including a conflict that comes with another error or with a retry interval of its own, is logged as an
-	// error.
+	// Conflict-only failures are expected under contention and logged quietly; anything mixed is an error.
 	const (
 		conflictMessage = "Reconciliation conflicted with a concurrent update, will retry"
 		failureMessage  = "Reconciliation failed"
@@ -307,7 +302,7 @@ var _ = Describe("Reconciler", func() {
 		pushTenantEvent("t1")
 		Eventually(objects, 5*time.Second).Should(Receive())
 
-		// Longer than the one second conflict delay, so a wrongly classified retry would be observed.
+		// Longer than the conflict delay, so a misclassified retry would show.
 		Consistently(calls.Load, 2*time.Second).Should(Equal(int32(1)))
 	})
 
@@ -326,8 +321,7 @@ var _ = Describe("Reconciler", func() {
 		Eventually(calls.Load, 5*time.Second).Should(Equal(int32(2)))
 	})
 
-	// replaysUnmutated checks that the retry of a failed first attempt replays the object as it was read, even when
-	// the function changed it in place and the refresh read of the retry fails.
+	// replaysUnmutated checks a retry replays the object as read, even after in-place changes and a failed refresh.
 	replaysUnmutated := func(firstErr error) {
 		const controller = "fulfillment-controller"
 		const hold = "test.osac.io/hold"

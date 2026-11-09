@@ -111,8 +111,7 @@ func TestRequeueDelayUsesExponentialBackoffWithOneMinuteCap(t *testing.T) {
 func TestConflictLogLevelWarnsOnceBackoffReachesTheCap(t *testing.T) {
 	RegisterTestingT(t)
 
-	// With a one second initial delay the delays are 1, 2, 4, 8, 16, 32 and then the 60 second cap, so the retry
-	// that follows the seventh consecutive conflict is the first one at the cap.
+	// Delays go 1, 2, 4, 8, 16, 32, then the 60s cap, so the seventh conflict is the first at the cap.
 	reconciler := &Reconciler[*privatev1.VirtualNetwork]{retryAttempts: map[string]uint8{}}
 	for attempt := uint8(0); attempt < 6; attempt++ {
 		reconciler.retryAttempts["vn-1"] = attempt
@@ -123,7 +122,6 @@ func TestConflictLogLevelWarnsOnceBackoffReachesTheCap(t *testing.T) {
 		Expect(reconciler.conflictLogLevel("vn-1")).To(Equal(slog.LevelWarn), "attempt %d", attempt)
 	}
 
-	// An object without retry state starts at DEBUG.
 	Expect(reconciler.conflictLogLevel("other")).To(Equal(slog.LevelDebug))
 }
 
@@ -135,8 +133,7 @@ func TestReconcilerLogsRepeatedConflictsAtWarn(t *testing.T) {
 		return status.Error(codes.Aborted, "object has been modified")
 	}
 
-	// Six consecutive conflicts have already happened for this object, so the retry that follows the next one is the
-	// first at the one minute cap.
+	// After six prior conflicts, the next retry is the first at the cap.
 	startTenantReconciler(t, &tenantGetServer{}, slog.New(logs), conflict, func(r *Reconciler[*privatev1.Tenant]) {
 		r.retryAttempts["t1"] = 6
 	})
@@ -156,8 +153,7 @@ func TestReconcilerClearsRetryStateWhenTheObjectIsGone(t *testing.T) {
 		return nil
 	}
 
-	// A conflict has already been retried three times for this object, and the next retry is pending. Without the
-	// cleanup, a later object with the same identifier would start from the backoff of the fourth attempt.
+	// Without cleanup, a later object with the same id would inherit this backoff.
 	pending := &scheduledRetry{timer: time.NewTimer(time.Hour), cancel: make(chan struct{})}
 	defer pending.timer.Stop()
 	reconciler := startTenantReconciler(t, &tenantGetServer{gone: true}, slog.New(&osactesting.LogRecorder{}),
@@ -173,9 +169,7 @@ func TestReconcilerClearsRetryStateWhenTheObjectIsGone(t *testing.T) {
 	Expect(reconciler.retryTimers).ToNot(HaveKey("t1"))
 }
 
-// startTenantReconciler builds a reconciler of tenants that reads them from the given server and calls the given
-// function, lets prepare set up its state before it starts, starts it, and sends it the tenant 't1'. The reconciler
-// is stopped when the test ends.
+// startTenantReconciler runs prepare before Start, then sends tenant "t1". It stops when the test ends.
 func startTenantReconciler(t *testing.T, tenants privatev1.TenantsServer, logger *slog.Logger,
 	function func(context.Context, *privatev1.Tenant) error,
 	prepare func(*Reconciler[*privatev1.Tenant])) *Reconciler[*privatev1.Tenant] {
@@ -200,7 +194,7 @@ func startTenantReconciler(t *testing.T, tenants privatev1.TenantsServer, logger
 		Build()
 	Expect(err).ToNot(HaveOccurred())
 
-	// Start has not run yet, so the state can be written without the lock:
+	// Start hasn't run, so no lock is needed.
 	prepare(reconciler)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -221,8 +215,7 @@ func startTenantReconciler(t *testing.T, tenants privatev1.TenantsServer, logger
 	return reconciler
 }
 
-// tenantGetServer answers the read that the reconciler makes before each reconciliation. When gone is set it answers
-// that the object doesn't exist.
+// tenantGetServer serves the pre-reconcile read; gone makes it return NotFound.
 type tenantGetServer struct {
 	privatev1.UnimplementedTenantsServer
 	gone bool

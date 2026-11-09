@@ -1384,9 +1384,8 @@ var _ = Describe("create status population", func() {
 	})
 })
 
-// These specs guard the contract that the server enforces for finalizer changes: the reconciler writes the finalizer
-// list it read, with the version it read, so that a concurrent finalizer change makes the server reject the write
-// with Aborted instead of silently losing the other writer's finalizer.
+// The reconciler must write the finalizer list and version it read, so a concurrent change gets Aborted instead of
+// being lost.
 var _ = Describe("finalizer removal on delete", func() {
 	const (
 		foreignFinalizer = "test.osac.io/hold"

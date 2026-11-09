@@ -64,27 +64,20 @@ func ClassifyHubError(err error) error {
 	return err
 }
 
-// IsConflict reports whether err is, or contains, an optimistic-concurrency conflict reported by the server as a gRPC
-// Aborted status. The whole error tree is searched, including errors joined with others, because grpcstatus.Code
-// stops at the first gRPC status it finds and would miss a conflict joined behind a failure that carries another
-// status, such as an Unavailable from the hub.
+// IsConflict reports whether any error in the tree of err, joined errors included, has a gRPC Aborted status.
+// grpcstatus.Code only looks at the first status, which may not be the Aborted one.
 func IsConflict(err error) bool {
 	found, _ := scanConflicts(err)
 	return found
 }
 
-// isOnlyConflict reports whether err contains an Aborted status and every leaf error of the tree is an Aborted
-// status, so that there is no independent failure hidden behind the conflict. Only leaves are classified: a wrapper
-// that reports its own non-Aborted status but wraps an Aborted error does not count as an independent failure.
+// isOnlyConflict reports whether err contains an Aborted status and every leaf error of its tree is one.
 func isOnlyConflict(err error) bool {
 	found, other := scanConflicts(err)
 	return found && !other
 }
 
-// scanConflicts walks the error tree depth first. It reports whether any node carries an Aborted gRPC status, and
-// whether any leaf is something else. Each node is asserted directly for GRPCStatus rather than through errors.As,
-// because errors.As stops at the first match, and the first status in the tree may not be the Aborted one. Cyclic
-// error graphs are not supported, as with errors.Is.
+// scanConflicts reports whether any error in the tree has an Aborted status, and whether any leaf is something else.
 func scanConflicts(err error) (found, other bool) {
 	if err == nil {
 		return false, false

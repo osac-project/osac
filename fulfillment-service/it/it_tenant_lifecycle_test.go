@@ -59,9 +59,8 @@ func createTenant(ctx context.Context, client privatev1.TenantsClient, name stri
 	return id
 }
 
-// waitForTenantSyncedWithFinalizers blocks until the reconcilers have added both tenant finalizers and the tenant
-// is SYNCED. Specs that send whole-object updates need this, because from that point on a write that omits the
-// finalizers is a finalizer change and requires the current version.
+// waitForTenantSyncedWithFinalizers precedes whole-object updates: once the finalizers exist, a write that omits them
+// is a finalizer change and needs the current version.
 func waitForTenantSyncedWithFinalizers(ctx context.Context, client privatev1.TenantsClient, id string) {
 	Eventually(
 		func(g Gomega) {

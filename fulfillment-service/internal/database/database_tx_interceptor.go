@@ -94,9 +94,7 @@ func (i *TxInterceptor) UnaryServer(ctx context.Context, request any, info *grpc
 	// return that, no matter what is the outcome of the transaction. If the method succeeded but ending the
 	// transaction fails, then we will return an internal error.
 	defer func() {
-		// A method that panics must not commit what it wrote, so the panic is reported to the transaction, which
-		// rolls it back, and once the transaction has ended it goes on to the interceptors outside this one, which
-		// turn it into an error.
+		// Roll back a method that panics, then let the panic continue to the outer interceptors.
 		fault := recover()
 		if fault != nil {
 			err = fmt.Errorf("method panicked: %v", fault)

@@ -707,8 +707,7 @@ var _ = Describe("run", func() {
 				f := newFunction(mockHubCache, mockHubs, mockTenants, mockProjects)
 				err := f.run(ctx, tenant)
 
-				// Both errors are returned. The loop retries a conflict only if it can see one in the returned
-				// error, and it must not take any other write failure for a conflict.
+				// The write error must be visible so the loop retries a conflict, and only a conflict.
 				Expect(err).To(MatchError(writeErr))
 				Expect(err).To(MatchError(ContainSubstring(hub1ID)))
 				Expect(controllers.IsConflict(err)).To(Equal(expectConflict))

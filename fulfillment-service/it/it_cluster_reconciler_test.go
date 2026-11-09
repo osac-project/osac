@@ -529,7 +529,7 @@ var _ = Describe("Cluster reconciler", func() {
 			privateCluster := privateClusterResponse.GetObject()
 			privateCluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_READY)
 			privateCluster.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now()))
-			// The mask keeps the update off the finalizers, which the reconciler may change after the read above:
+			// Mask out the finalizers, which the reconciler may change after the read.
 			_, err = privateClustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: privateCluster,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{

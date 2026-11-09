@@ -25,11 +25,8 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// The fixtures of this file seed parents directly through DAOs, bypassing the create gates of the typed servers, and
-// return the unsaved object for the case. The options mirror the builder options of the production server of each
-// resource.
+// Parents are seeded directly through DAOs, bypassing the typed servers' create gates.
 
-// finalizerPlatformCases returns the cases for the platform-scoped resources: catalogs, templates, types and the like.
 func finalizerPlatformCases() []finalizerCase {
 	return []finalizerCase{
 		newFinalizerCase(privatev1.AddOnOperators_ServiceDesc,
@@ -147,7 +144,7 @@ func finalizerPlatformCases() []finalizerCase {
 		),
 		newFinalizerCase(privatev1.NetworkClasses_ServiceDesc,
 			func() *privatev1.NetworkClass {
-				// The deployment NetworkClass is a singleton, so the case creates it itself:
+				// The deployment NetworkClass is a singleton, so the case creates it.
 				return privatev1.NetworkClass_builder{
 					Title:         "OSAC NetworkClass",
 					FabricManager: "netris",
@@ -232,13 +229,12 @@ func finalizerPlatformCases() []finalizerCase {
 	}
 }
 
-// withDefaultTenant puts a storage backend in the test tenant, where fixtures are created by default.
 func withDefaultTenant(backend *privatev1.StorageBackend) *privatev1.StorageBackend {
 	backend.GetMetadata().SetTenant(testTenant)
 	return backend
 }
 
-// finalizerStorageBackend returns a storage backend that isn't managed by the CSP.
+// finalizerStorageBackend is not CSP-managed.
 func finalizerStorageBackend() *privatev1.StorageBackend {
 	return privatev1.StorageBackend_builder{
 		Metadata: privatev1.Metadata_builder{Name: finalizerName("backend")}.Build(),
@@ -253,7 +249,6 @@ func finalizerStorageBackend() *privatev1.StorageBackend {
 	}.Build()
 }
 
-// finalizerTenantCases returns the cases for the resources that belong to a tenant and are created by its users.
 func finalizerTenantCases() []finalizerCase {
 	return []finalizerCase{
 		newFinalizerCase(privatev1.Tenants_ServiceDesc,
@@ -268,8 +263,7 @@ func finalizerTenantCases() []finalizerCase {
 				b.SetTableName("tenants")
 			},
 		).afterCreate(func(id string) {
-			// The database creates a default project for every tenant, and the foreign key from that project
-			// makes it impossible to archive the tenant, which the specs on deleting objects need to do:
+			// The auto-created default project's foreign key would block archiving the tenant.
 			GinkgoHelper()
 			tx, err := database.TxFromContext(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -413,8 +407,7 @@ func finalizerTenantCases() []finalizerCase {
 		newFinalizerCase(privatev1.Clusters_ServiceDesc,
 			func() *privatev1.Cluster {
 				GinkgoHelper()
-				// The template of the shared seed helper has a fixed name, which the catalog item case uses already,
-				// and every case of a concurrent spec is seeded in the same database:
+				// The shared seed helper uses a fixed template name that the catalog item case already takes.
 				templateID := fmt.Sprintf("finalizer_cas_%s", uuid.NewString()[:8])
 				_, err := fixtureDAO[*privatev1.ClusterTemplate]().Create().SetObject(privatev1.ClusterTemplate_builder{
 					Id:       templateID,
@@ -433,7 +426,7 @@ func finalizerTenantCases() []finalizerCase {
 		newFinalizerCase(privatev1.BareMetalInstances_ServiceDesc,
 			func() *privatev1.BareMetalInstance {
 				GinkgoHelper()
-				// As for clusters, the template needs a name that the catalog item case doesn't use:
+				// Unique template name, as for clusters.
 				templateID := fmt.Sprintf("finalizer_cas_%s", uuid.NewString()[:8])
 				_, err := fixtureDAO[*privatev1.BareMetalInstanceTemplate]().Create().SetObject(
 					privatev1.BareMetalInstanceTemplate_builder{
@@ -469,8 +462,7 @@ func finalizerTenantCases() []finalizerCase {
 	}
 }
 
-// finalizerNetworkingCases returns the cases for the networking resources. Their parents are READY, as they would be
-// when a user can reference them.
+// finalizerNetworkingCases seeds READY parents, as a user would need to reference them.
 func finalizerNetworkingCases() []finalizerCase {
 	virtualNetwork := func() *privatev1.VirtualNetwork {
 		return seedVirtualNetwork(testTenant, "10.1.0.0/16",
@@ -528,7 +520,7 @@ func finalizerNetworkingCases() []finalizerCase {
 		),
 		newFinalizerCase(privatev1.ExternalIPs_ServiceDesc,
 			func() *privatev1.ExternalIP {
-				// Archiving an ExternalIP returns its address to the pool, so the pool has to count it as allocated:
+				// Archiving returns the address to the pool, so the pool must count it as allocated.
 				GinkgoHelper()
 				pool := seedExternalIPPool("203.0.113.0/24", 10)
 				pool.GetStatus().SetAllocated(1)

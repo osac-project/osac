@@ -32,18 +32,10 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// These specs check that a writer that holds a stale snapshot of an object can't overwrite the finalizers that
-// another writer stored after the snapshot was taken. The concurrency is logical: each scenario orders its writes
-// explicitly in one transaction, except where it says otherwise. The specs that cover every resource run the scenario
-// of each resource concurrently, on its own object and in its own transaction, with runFinalizerCases.
+// A writer with a stale snapshot must not overwrite finalizers stored after it. Writes are ordered within one
+// transaction unless a spec says otherwise.
 var _ = Describe("finalizer CAS", func() {
-	// The guard proves coverage of the RPCs at the level of the bare GenericServer, not of the production typed
-	// wrappers: a wrapper that rebuilds the request from the stored object without restoring the version of the
-	// client would defeat the compare-and-swap without failing these specs. DiskImage and InstanceType rebuild the
-	// request from the stored object: their masked paths ignore metadata.finalizers, and their nil-mask path merges
-	// the request over the stored object, which unions the request finalizers with the stored ones, and the object
-	// that the public servers forward already carries the stored finalizers. BareMetalInstanceType applies the masks
-	// itself and has its own specs with the typed servers.
+	// Coverage is at the GenericServer level; typed wrappers that rebuild the request have their own specs.
 	It("covers every finalizer-bearing private resource", func() {
 		covered := map[string]bool{}
 		for _, c := range finalizerCases() {
@@ -76,14 +68,10 @@ var _ = Describe("finalizer CAS", func() {
 	It("rejects a stale private finalizer write", func() {
 		runFinalizerCases([]string{finalizerController, finalizerHold},
 			func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
-				// The reconciler read the object while a hold was present:
 				stale := t.get(r.ctx)
-
-				// Another writer released the hold after that read:
 				t.release(r.ctx, finalizerController)
 				logs := t.recordLogs()
 
-				// The reconciler writes back its stale view without the lock:
 				err := t.update(r.ctx, withFinalizers(stale, finalizerHold), finalizersMask(), false)
 
 				t.expectFinalizerConflict(r.ctx, err, finalizerController)
@@ -96,7 +84,7 @@ var _ = Describe("finalizer CAS", func() {
 	It("keeps finalizers on a public nil-mask update", func() {
 		runFinalizerCases([]string{finalizerController, finalizerHold},
 			func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
-				// Public objects have no finalizers, so the object that a public server forwards has none:
+				// Public objects have no finalizers.
 				object := withFinalizers(t.get(r.ctx))
 
 				err := t.update(withPublicAPIView(r.ctx), object, nil, false)
@@ -107,9 +95,7 @@ var _ = Describe("finalizer CAS", func() {
 			})
 	})
 
-	// A public request has no finalizers and no way to prove a version for them, so the server restores the stored
-	// ones before it checks anything else. A stale public request therefore succeeds and never gets the Aborted
-	// error that private finalizer changes get.
+	// Public requests can't carry finalizers, so the server restores the stored ones and never returns Aborted.
 	It("keeps finalizers on a stale public nil-mask update", func() {
 		runFinalizerCases([]string{finalizerController, finalizerHold},
 			func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
@@ -124,9 +110,7 @@ var _ = Describe("finalizer CAS", func() {
 			})
 	})
 
-	// Most objects have no finalizers. A public nil-mask update of such an object must not give it any, and must not be
-	// rejected for its finalizers. Without metadata in the request the update may still be rejected by validation or
-	// by the database, as for objects that have finalizers, so that part runs in a savepoint.
+	// Without metadata the update may still fail validation or in the database, so that part runs in a savepoint.
 	It("keeps an object without finalizers as it is on a public nil-mask update", func() {
 		runFinalizerCases(nil, func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
 			err := t.update(withPublicAPIView(r.ctx), t.get(r.ctx), nil, false)
@@ -143,7 +127,6 @@ var _ = Describe("finalizer CAS", func() {
 	It("keeps a deleting object on a public nil-mask update", func() {
 		runFinalizerCases([]string{finalizerController, finalizerHold},
 			func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
-				// The deletion only marks the object because it has finalizers:
 				t.markDeleting(r.ctx)
 				object := withFinalizers(t.get(r.ctx))
 
@@ -156,9 +139,7 @@ var _ = Describe("finalizer CAS", func() {
 			})
 	})
 
-	// A public request can also arrive without any metadata. The server then has no metadata to restore the stored
-	// finalizers into, so it creates it. The merged object may still be rejected afterwards, for example by its
-	// validation or by the database, but never for its finalizers, and a rejected update must not write anything.
+	// The update may still be rejected, by validation or the database, but never for its finalizers.
 	DescribeTable("keeps finalizers on a public nil-mask update that has no metadata",
 		func(deleting bool) {
 			runFinalizerCases([]string{finalizerController, finalizerHold},
@@ -185,10 +166,7 @@ var _ = Describe("finalizer CAS", func() {
 		Entry("for a deleting object", true),
 	)
 
-	// A public request can also carry a mask that selects the finalizers, directly or through the whole metadata.
-	// The stored finalizers are restored after the mask is applied, so such a request is not rejected for its
-	// finalizers and doesn't change them, even from a stale version. The restore is the same code for every resource,
-	// and the specs above run the nil mask for every resource, so one resource is enough here.
+	// The restore is shared code already run for every resource above, so one resource is enough here.
 	DescribeTable("keeps finalizers on a stale public update with a mask that selects them",
 		func(mask *fieldmaskpb.FieldMask, deleting bool) {
 			t := finalizerCaseFor(privatev1.Hubs_ServiceDesc.ServiceName).
@@ -210,11 +188,8 @@ var _ = Describe("finalizer CAS", func() {
 		publicMaskEntries(),
 	)
 
-	// Candidate preparation callbacks run after the finalizer check, so they must not change the finalizers that it
-	// accepted. The Hub resource has no preparation of its own, so the specs add one and run it through both entry
-	// points. They use real transactions to see that an update that is rejected for any reason undoes what its
-	// callback wrote: because the callback changed the finalizers, because it failed, or because the candidate it left
-	// is not valid.
+	// Preparation callbacks run after the finalizer check, so they must not change the finalizers. Real transactions
+	// show that a rejected update also undoes what its callback wrote.
 	Describe("candidate preparation", func() {
 		const preparedFinalizer = "test.osac.io/prepared"
 
@@ -234,7 +209,6 @@ var _ = Describe("finalizer CAS", func() {
 				})
 		}
 
-		// freshContext returns a context with a new transaction, which is ended when the spec finishes.
 		freshContext := func() context.Context {
 			GinkgoHelper()
 			tx, err := tm.Begin(context.Background())
@@ -245,7 +219,6 @@ var _ = Describe("finalizer CAS", func() {
 			return database.TxIntoContext(context.Background(), tx)
 		}
 
-		// What the callbacks do to the candidate, after they have written the other object:
 		leavesAlone := func(*privatev1.Hub) error {
 			return nil
 		}
@@ -266,8 +239,7 @@ var _ = Describe("finalizer CAS", func() {
 			return nil
 		}
 
-		// writesSideObject returns a callback that writes another object in the transaction of the request, saves its
-		// identifier, and then modifies the candidate.
+		// writesSideObject writes another object in the request transaction before modifying the candidate.
 		writesSideObject := func(sideID *string,
 			modify func(*privatev1.Hub) error) PrepareCandidateFunc[*privatev1.Hub] {
 			return func(ctx context.Context, _, candidate *privatev1.Hub) error {
@@ -290,7 +262,7 @@ var _ = Describe("finalizer CAS", func() {
 				var sideID string
 				prepare := writesSideObject(&sideID, modify)
 
-				// Commit the fixture, and send the request in a transaction of its own:
+				// Commit the fixture and send the request in its own transaction.
 				Expect(suiteTx.End(ctx)).To(Succeed())
 				suiteTx = nil
 				tx, err := tm.Begin(context.Background())
@@ -342,8 +314,6 @@ var _ = Describe("finalizer CAS", func() {
 				entryPoint(withValidation), leavesAlone, codes.OK),
 		)
 
-		// Create runs the same kind of callback, and a create that is rejected after it must also undo what the
-		// callback wrote.
 		DescribeTable("commits what a create callback wrote only when the create is accepted",
 			func(modify func(*privatev1.Hub) error, code codes.Code) {
 				t := finalizerCaseFor(privatev1.Hubs_ServiceDesc.ServiceName).target(nil)
@@ -352,7 +322,7 @@ var _ = Describe("finalizer CAS", func() {
 				var sideID string
 				prepare := writesSideObject(&sideID, modify)
 
-				// Commit the fixture, and send the request in a transaction of its own:
+				// Commit the fixture and send the request in its own transaction.
 				Expect(suiteTx.End(ctx)).To(Succeed())
 				suiteTx = nil
 				tx, err := tm.Begin(context.Background())
@@ -484,7 +454,6 @@ var _ = Describe("finalizer CAS", func() {
 				func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
 					t.bump(r.ctx)
 
-					// The mask selects the labels, so the finalizers of the stored object are untouched:
 					object := withoutMetadata(t.get(r.ctx))
 					Expect(t.update(r.ctx, object, finalizerMaskOf("metadata.labels"), false)).To(Succeed())
 
@@ -507,13 +476,9 @@ var _ = Describe("finalizer CAS", func() {
 		})
 	})
 
-	// The generic server logs a finalizer change once the transaction that wrote it commits, so that the writer of a
-	// finalizer transition can be found in the server logs. The specs end the transaction before they look at the
-	// log.
+	// The change is logged only on commit, so specs end the transaction before checking the log.
 	Describe("finalizer change log", func() {
-		// The lists are the ones that the DAO wrote, which are sorted and have no repeated finalizer, and the
-		// version is the one that the change was checked against, not the one that the write produced. The object
-		// is written once before, so that its version is not zero.
+		// Lists are the DAO's sorted, deduplicated ones; version is the one checked against, not the one written.
 		It("logs an accepted finalizer change once, when it is committed", func() {
 			runFinalizerCases([]string{finalizerController}, func(r *finalizerRun, c finalizerCase, t finalizerTarget) {
 				t.bump(r.ctx)
@@ -575,7 +540,7 @@ var _ = Describe("finalizer CAS", func() {
 				})
 		})
 
-		// The finalizer check accepts the change, then the validation of the labels rejects the update.
+		// The finalizer check passes, then label validation rejects the update.
 		It("logs nothing when the update is rejected after the finalizer check", func() {
 			runFinalizerCases([]string{finalizerController}, func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
 				logs := t.recordLogs()
@@ -593,9 +558,7 @@ var _ = Describe("finalizer CAS", func() {
 			})
 		})
 
-		// Code that runs after the generic update in the same request, like the settlement of the parent of an
-		// ExternalIPAttachment, can report an error that rolls the whole transaction back. The fixture is committed
-		// before the scenario starts, so the rollback only undoes the update.
+		// Later code in the same request, like ExternalIPAttachment parent settlement, can roll back the transaction.
 		It("logs nothing when the transaction is rolled back after the write", func() {
 			runFinalizerCases([]string{finalizerController}, func(r *finalizerRun, _ finalizerCase, t finalizerTarget) {
 				logs := t.recordLogs()
@@ -609,8 +572,7 @@ var _ = Describe("finalizer CAS", func() {
 			})
 		})
 
-		// Secrets updates the object inside a savepoint and then stores the data in Vault. When that fails the
-		// savepoint is rolled back, but the enclosing transaction can still commit.
+		// Secrets rolls back a savepoint when Vault fails, but the enclosing transaction can still commit.
 		Describe("inside a savepoint", func() {
 			It("logs nothing when the savepoint is rolled back", func() {
 				t := finalizerCaseFor(privatev1.Hubs_ServiceDesc.ServiceName).target([]string{finalizerController})
@@ -636,7 +598,6 @@ var _ = Describe("finalizer CAS", func() {
 				logs := t.recordLogs()
 				object := withFinalizers(t.get(ctx), finalizerController, finalizerHold)
 
-				// The update arrives through gRPC, so the log line names the method:
 				const method = "/osac.private.v1.Hubs/Update"
 				err := suiteTx.Savepoint(ctx, func(ctx context.Context) error {
 					ctx = grpc.NewContextWithServerTransportStream(ctx, methodStream(method))
@@ -656,8 +617,6 @@ var _ = Describe("finalizer CAS", func() {
 	})
 
 	Describe("mask edges", func() {
-		// A stale writer that changes the finalizers must be rejected whichever way it selects them: a mask for the
-		// whole metadata, no mask at all, or the finalizers themselves.
 		DescribeTable("rejects a stale finalizer change",
 			func(mask *fieldmaskpb.FieldMask) {
 				runFinalizerCases([]string{finalizerController, finalizerHold},
@@ -673,9 +632,8 @@ var _ = Describe("finalizer CAS", func() {
 			finalizerMaskEntries(),
 		)
 
-		// A private write without metadata can't prove which version it started from, so it is rejected whatever the
-		// stored version is, and whether it selects the finalizers with a mask or replaces the whole object. The
-		// finalizer check runs before the validation of the object, so every resource gets the conflict.
+		// Without metadata the write can't prove its version. The finalizer check runs before validation, so every
+		// resource gets the conflict.
 		DescribeTable("rejects a finalizer change that has no metadata",
 			func(bumpFirst bool, mask *fieldmaskpb.FieldMask) {
 				runFinalizerCases([]string{finalizerController, finalizerHold},

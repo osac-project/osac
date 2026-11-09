@@ -569,9 +569,7 @@ type registrationComputeInstancesClient struct {
 	beforeUpdate          func(int)
 	afterUpdate           func(int)
 
-	// checkFinalizers makes the fake apply the rule of the server for finalizer changes, for updates whose mask
-	// selects metadata.finalizers: one that changes the set of finalizers must carry the stored version, and the
-	// finalizers of an accepted one are stored.
+	// checkFinalizers makes the fake require the stored version for finalizer changes, like the server.
 	checkFinalizers bool
 }
 

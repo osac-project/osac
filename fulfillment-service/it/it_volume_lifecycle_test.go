@@ -234,7 +234,7 @@ var _ = Describe("Volume lifecycle", func() {
 		volObj.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now()))
 		volObj.GetStatus().SetVendorVolumeId("test-vendor-vol-123")
 
-		// The mask keeps the update off the finalizers, which the reconciler may change after the read above:
+		// Mask out the finalizers, which the reconciler may change after the read.
 		_, err = volumesClient.Update(ctx,
 			privatev1.VolumesUpdateRequest_builder{
 				Object: volObj,

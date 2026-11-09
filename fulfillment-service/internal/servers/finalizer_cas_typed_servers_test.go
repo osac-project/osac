@@ -36,11 +36,8 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// These specs run the finalizer scenarios through the real typed servers, not only through the bare generic server:
-// the private wrappers that rebuild the request before calling the generic update, and the public servers that map
-// objects without finalizers into private ones.
+// Finalizer scenarios run through the typed servers, which rebuild or map the request before the generic update.
 
-// finalizerTierResolver resolves every storage tier to a block-protocol test provider.
 func finalizerTierResolver(_ context.Context, _ string) (*TierResolution, error) {
 	return &TierResolution{
 		Provider: "test-provider",
@@ -48,7 +45,6 @@ func finalizerTierResolver(_ context.Context, _ string) (*TierResolution, error)
 	}, nil
 }
 
-// newFinalizerPrivateVolumesServer returns the private Volumes server with the test tier resolver.
 func newFinalizerPrivateVolumesServer() *PrivateVolumesServer {
 	GinkgoHelper()
 	server, err := NewPrivateVolumesServer().
@@ -61,7 +57,6 @@ func newFinalizerPrivateVolumesServer() *PrivateVolumesServer {
 	return server
 }
 
-// finalizerCaseFor returns the case of a resource by its fully qualified service name.
 func finalizerCaseFor(service string) finalizerCase {
 	GinkgoHelper()
 	for _, c := range finalizerCases() {
@@ -73,8 +68,6 @@ func finalizerCaseFor(service string) finalizerCase {
 	return finalizerCase{}
 }
 
-// publicFinalizerCaseFor returns the public server case of the given private service, failing the spec if there is
-// none.
 func publicFinalizerCaseFor(service string) publicFinalizerCase {
 	GinkgoHelper()
 	for _, c := range publicFinalizerCases() {
@@ -86,24 +79,21 @@ func publicFinalizerCaseFor(service string) publicFinalizerCase {
 	return publicFinalizerCase{}
 }
 
-// typedUpdater sends an update through a typed server. The object must be of the private type of the resource.
+// typedUpdater takes an object of the resource's private type.
 type typedUpdater func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error
 
-// publicFinalizerOps are the operations of a public server, on objects of the public type of the resource.
+// publicFinalizerOps take objects of the resource's public type.
 type publicFinalizerOps struct {
 	get    func(ctx context.Context, id string) (proto.Message, error)
 	update func(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask) error
 }
 
-// typedUpdateRequest is implemented by the generated update request, public or private, of a resource whose object
-// type is O.
 type typedUpdateRequest[O any] interface {
 	proto.Message
 	SetObject(O)
 	SetUpdateMask(*fieldmaskpb.FieldMask)
 }
 
-// privateUpdater adapts the Update method of a typed private server whose object type is O.
 func privateUpdater[O proto.Message, U typedUpdateRequest[O], V any](
 	update func(ctx context.Context, request U) (V, error),
 ) typedUpdater {
@@ -116,14 +106,12 @@ func privateUpdater[O proto.Message, U typedUpdateRequest[O], V any](
 	}
 }
 
-// newRequestOf returns an empty request of the given generated type.
 func newRequestOf[T proto.Message]() T {
 	var zero T
 	return zero.ProtoReflect().New().Interface().(T)
 }
 
-// newPublicFinalizerOps adapts the Get and Update methods of a public server. The object function extracts the public
-// object from the response of Get, which is the GetObject method of the response type.
+// newPublicFinalizerOps adapts a public server; object extracts the object from the Get response.
 func newPublicFinalizerOps[P proto.Message, G finalizerIDRequest, R any, U typedUpdateRequest[P], V any](
 	get func(ctx context.Context, request G) (R, error),
 	update func(ctx context.Context, request U) (V, error),
@@ -146,14 +134,12 @@ func newPublicFinalizerOps[P proto.Message, G finalizerIDRequest, R any, U typed
 	}
 }
 
-// publicFinalizerCase is a public server and the private resource that it serves.
+// publicFinalizerCase pairs a public server with the private service of its resource.
 type publicFinalizerCase struct {
 	service string
 	ops     func() publicFinalizerOps
 }
 
-// withPublicLabel returns a copy of a public object with an extra label, which is a change that every public update
-// has to carry through to the stored object.
 func withPublicLabel(object proto.Message) proto.Message {
 	result := proto.Clone(object)
 	accessor := result.(interface {
@@ -171,7 +157,6 @@ func withPublicLabel(object proto.Message) proto.Message {
 	return result
 }
 
-// withPublicDescriptionAndNoMetadata returns a copy of a public object with another description and without metadata.
 func withPublicDescriptionAndNoMetadata(object proto.Message) proto.Message {
 	result := proto.Clone(object)
 	result.(interface{ SetDescription(string) }).SetDescription("changed by the specs")
@@ -179,8 +164,7 @@ func withPublicDescriptionAndNoMetadata(object proto.Message) proto.Message {
 	return result
 }
 
-// storeFailingSecretStore is an in-memory secret store whose Store method fails once fail is set, as Vault does when
-// it is unavailable. It counts the failures, so that specs can tell that a request failed in the store.
+// storeFailingSecretStore simulates an unavailable Vault once fail is set.
 type storeFailingSecretStore struct {
 	*memorySecretStore
 	fail     bool
@@ -196,9 +180,7 @@ func (s *storeFailingSecretStore) Store(ctx context.Context, tenant, project, na
 	return s.memorySecretStore.Store(ctx, tenant, project, name, data)
 }
 
-// withOnlyIDAndMetadata returns a copy of the object that keeps its identifier and its metadata and nothing else. The
-// private servers that merge a request into the stored object append the repeated fields of the request, so a copy of
-// the whole stored object would repeat its spec.
+// withOnlyIDAndMetadata avoids duplicating the spec on servers whose merge appends repeated fields.
 func withOnlyIDAndMetadata(object proto.Message) proto.Message {
 	result := proto.Clone(object)
 	message := result.ProtoReflect()
@@ -211,8 +193,6 @@ func withOnlyIDAndMetadata(object proto.Message) proto.Message {
 	return result
 }
 
-// newBareMetalInstanceTypesUpdater returns an updater that sends requests through the private BareMetalInstanceTypes
-// server.
 func newBareMetalInstanceTypesUpdater() typedUpdater {
 	GinkgoHelper()
 	server, err := NewPrivateBareMetalInstanceTypesServer().
@@ -224,7 +204,6 @@ func newBareMetalInstanceTypesUpdater() typedUpdater {
 	return privateUpdater[*privatev1.BareMetalInstanceType](server.Update)
 }
 
-// newInstanceTypesUpdater returns an updater that sends requests through the private InstanceTypes server.
 func newInstanceTypesUpdater() typedUpdater {
 	GinkgoHelper()
 	server, err := NewPrivateInstanceTypesServer().
@@ -236,7 +215,6 @@ func newInstanceTypesUpdater() typedUpdater {
 	return privateUpdater[*privatev1.InstanceType](server.Update)
 }
 
-// newDiskImagesUpdater returns an updater that sends requests through the private DiskImages server.
 func newDiskImagesUpdater() typedUpdater {
 	GinkgoHelper()
 	server, err := NewPrivateDiskImagesServer().
@@ -248,7 +226,6 @@ func newDiskImagesUpdater() typedUpdater {
 	return privateUpdater[*privatev1.DiskImage](server.Update)
 }
 
-// newServiceAccountsUpdater returns an updater that sends requests through the private ServiceAccounts server.
 func newServiceAccountsUpdater() typedUpdater {
 	GinkgoHelper()
 	server, err := NewPrivateServiceAccountsServer().
@@ -260,22 +237,18 @@ func newServiceAccountsUpdater() typedUpdater {
 	return privateUpdater[*privatev1.ServiceAccount](server.Update)
 }
 
-// finalizerRaceResult is the outcome of a write that raced against the release of a finalizer.
 type finalizerRaceResult struct {
 	writerErr       error
 	releasedVersion int32
 }
 
-// raceAgainstRelease commits the fixture and then plays a release of a finalizer against a second writer with two
-// real transactions: one writer releases the hold with the lock and doesn't commit, a second writer starts and blocks
-// on the row lock, and then the first one commits. The second writer has read the object before the commit, so what
-// it writes is based on a stale view. The table is the one of the resource, used to see when the second writer is
-// blocked.
+// raceAgainstRelease releases the finalizer in an open transaction, runs writer in a second one until it blocks on the
+// row lock (detected via table), then commits the release so writer proceeds from a stale read.
 func (t finalizerTarget) raceAgainstRelease(table string, writer func(ctx context.Context) error) finalizerRaceResult {
 	GinkgoHelper()
 	var result finalizerRaceResult
 
-	// Commit the fixture so that two independent database transactions can write the object:
+	// Commit the fixture so other transactions can see it.
 	Expect(suiteTx.End(ctx)).To(Succeed())
 	suiteTx = nil
 
@@ -301,11 +274,10 @@ func (t finalizerTarget) raceAgainstRelease(table string, writer func(ctx contex
 		}
 	})
 
-	// The first writer releases the hold, but the transaction stays open:
+	// Release without committing, so the row lock stays held.
 	t.release(releaseCtx, finalizerController)
 	result.releasedVersion = finalizerMetadataOf(t.get(releaseCtx)).GetVersion()
 
-	// The second writer starts, and has to wait for the row lock of the first one:
 	writerTx, err = tm.Begin(context.Background())
 	Expect(err).ToNot(HaveOccurred())
 	writerCtx, cancel := context.WithTimeout(database.TxIntoContext(context.Background(), writerTx), 10*time.Second)
@@ -313,7 +285,7 @@ func (t finalizerTarget) raceAgainstRelease(table string, writer func(ctx contex
 	writerDone = make(chan error, 1)
 	go func() {
 		defer GinkgoRecover()
-		// Always send a result, so that the spec fails instead of waiting forever if the writer panics:
+		// Send a result even if writer panics, so the spec doesn't hang.
 		writerErr := errors.New("the writer panicked")
 		defer func() {
 			writerDone <- writerErr
@@ -321,7 +293,7 @@ func (t finalizerTarget) raceAgainstRelease(table string, writer func(ctx contex
 		writerErr = writer(writerCtx)
 	}()
 
-	// Wait until PostgreSQL reports that the second writer is blocked by the first one:
+	// Wait until PostgreSQL reports the writer blocked on the lock.
 	Eventually(func() (bool, error) {
 		var waiting bool
 		err := testPool.QueryRow(context.Background(), `
@@ -339,7 +311,7 @@ func (t finalizerTarget) raceAgainstRelease(table string, writer func(ctx contex
 		return waiting, err
 	}, 5*time.Second, 10*time.Millisecond).Should(BeTrue())
 
-	// Commit the first writer, which lets the second one go on:
+	// Commit the release to unblock the writer.
 	Expect(releaseTx.End(context.Background())).To(Succeed())
 	releaseTx = nil
 	result.writerErr = <-writerDone
@@ -349,8 +321,7 @@ func (t finalizerTarget) raceAgainstRelease(table string, writer func(ctx contex
 	return result
 }
 
-// committedState reads, from a new transaction, the finalizers and the version that are stored, and the number of
-// update records that the database kept for the object.
+// committedState reads the stored finalizers, version and UPDATE change count from a new transaction.
 func (t finalizerTarget) committedState(table string) (finalizers []string, version int32, updates int) {
 	GinkgoHelper()
 	tx, err := tm.Begin(context.Background())
@@ -370,8 +341,7 @@ func (t finalizerTarget) committedState(table string) (finalizers []string, vers
 	return finalizersOf(stored), finalizerMetadataOf(stored).GetVersion(), updates
 }
 
-// expectStaleTypedWriteRejected runs a stale finalizer write through a typed server: the writer reads the
-// object while the hold is present, another writer releases it, and then the first one writes back its stale view.
+// expectStaleTypedWriteRejected writes back a copy read before another writer released the controller finalizer.
 func expectStaleTypedWriteRejected(t finalizerTarget, update typedUpdater) {
 	GinkgoHelper()
 	stale := t.get(ctx)
@@ -384,8 +354,7 @@ func expectStaleTypedWriteRejected(t finalizerTarget, update typedUpdater) {
 
 var _ = Describe("typed finalizer updates", func() {
 	Describe("private wrappers with their own update path", func() {
-		// Volume reads the stored object, merges the request and checks immutable fields before calling the generic
-		// update. It ignores the metadata paths when merging, so a metadata.finalizers mask is safe.
+		// Volumes merges the request into the stored object, ignoring metadata paths, before the generic update.
 		It("rejects a stale finalizer write through the Volumes server", func() {
 			update := privateUpdater[*privatev1.Volume](newFinalizerPrivateVolumesServer().Update)
 			t := finalizerCaseFor(privatev1.Volumes_ServiceDesc.ServiceName).
@@ -403,7 +372,7 @@ var _ = Describe("typed finalizer updates", func() {
 			expectStaleTypedWriteRejected(t, update)
 		})
 
-		// Cluster validates and prepares the candidate on every update, so its fixture has to be a valid cluster.
+		// Clusters validates every update, so the fixture must be a valid cluster.
 		It("rejects a stale finalizer write through the Clusters server", func() {
 			server, err := NewPrivateClustersServer().
 				SetLogger(logger).
@@ -419,9 +388,7 @@ var _ = Describe("typed finalizer updates", func() {
 	})
 
 	Describe("public servers that send a nil update mask", func() {
-		// Every public Update ends in the generic update with the public API view, which is what keeps the stored
-		// finalizers, so a public server that has no case here fails this guard. The public Tenants and
-		// BareMetalInstanceTemplates servers don't implement Update, and the guard checks that they still don't.
+		// Tenants and BareMetalInstanceTemplates must stay Unimplemented or gain a case.
 		It("covers every public server that has an Update method", func() {
 			covered := map[string]bool{}
 			for _, c := range slices.Concat(publicFinalizerCases(), catalogItemFinalizerCases()) {
@@ -467,13 +434,8 @@ var _ = Describe("typed finalizer updates", func() {
 			Expect(checked).To(ConsistOf("Tenants", "BareMetalInstanceTemplates"))
 		})
 
-		// The public API has no finalizers. Most of these servers map the public object into an empty private one,
-		// so what they forward has none. Volumes, Clusters, BareMetalInstances, ProjectMemberships, DiskImages and
-		// InstanceTypes map it over the object that they read from the private server, so the object that they
-		// forward already carries the stored finalizers; the specs that follow cover what happens when those change
-		// while the update waits for the row lock. The masked paths of the private DiskImages and InstanceTypes
-		// servers ignore metadata.finalizers, and their nil-mask path merges the request over the stored object,
-		// which unions the request finalizers with the stored ones.
+		// Most servers map into an empty private object. Volumes, Clusters, BareMetalInstances, ProjectMemberships,
+		// DiskImages and InstanceTypes map over the stored object, so they forward its finalizers.
 		It("keeps the finalizers of the object", func() {
 			runPublicFinalizerCases(publicFinalizerCases(), []string{finalizerController, finalizerHold},
 				func(r *finalizerRun, c publicFinalizerCase, t finalizerTarget) {
@@ -498,7 +460,7 @@ var _ = Describe("typed finalizer updates", func() {
 					Expect(err).ToNot(HaveOccurred())
 					err = public.update(r.ctx, withPublicLabel(object), nil)
 					if c.service == privatev1.SecurityGroups_ServiceDesc.ServiceName {
-						// This server refuses to update a group that is being deleted:
+						// SecurityGroups refuses updates while deleting.
 						Expect(status.Code(err)).To(Equal(codes.FailedPrecondition), "the update returned %v", err)
 					} else {
 						Expect(err).ToNot(HaveOccurred())
@@ -512,7 +474,7 @@ var _ = Describe("typed finalizer updates", func() {
 	})
 
 	Describe("BareMetalInstanceType", func() {
-		// This server applies the masks itself, with compiled paths, before calling the generic update.
+		// This server applies masks itself before calling the generic update.
 		var update typedUpdater
 
 		BeforeEach(func() {
@@ -536,10 +498,8 @@ var _ = Describe("typed finalizer updates", func() {
 			expectStaleTypedWriteRejected(t, update)
 		})
 
-		// With a nil mask this server merges the whole request over the stored object and keeps the version of the
-		// request, so a stale write would bring back a finalizer that another writer released after the stale read. The
-		// merge appends repeated fields, so the request carries only the identifier and the metadata: a copy of the
-		// stored spec would double the hardware ports and fail the immutability check before the finalizer check.
+		// Only id and metadata are sent: the merge appends repeated fields, so a full copy would double the hardware
+		// ports and fail the immutability check before the finalizer check.
 		It("rejects a stale nil-mask write that would restore a released finalizer", func() {
 			t := finalizerCaseFor(privatev1.BareMetalInstanceTypes_ServiceDesc.ServiceName).
 				target([]string{finalizerController, finalizerHold})
@@ -555,9 +515,7 @@ var _ = Describe("typed finalizer updates", func() {
 			t.expectFinalizerConflict(ctx, err, finalizerController)
 		})
 
-		// This server takes the version of the request from its metadata and puts it in the merged object that it
-		// forwards. Without metadata the version is zero, and the mask application clears the finalizers because the
-		// request has none.
+		// Without metadata the forwarded version is zero and the mask clears the finalizers.
 		DescribeTable("rejects a finalizer change that has no metadata",
 			func(bumpFirst bool) {
 				t := finalizerCaseFor(privatev1.BareMetalInstanceTypes_ServiceDesc.ServiceName).
@@ -574,9 +532,7 @@ var _ = Describe("typed finalizer updates", func() {
 			Entry("at a later version", true),
 		)
 
-		// The rule only rejects a request without metadata that would change the finalizers. Without a mask the
-		// merge leaves the stored metadata in place, so a request that only names the object is accepted, even at a
-		// later stored version.
+		// Without a mask the merge keeps the stored metadata, so this is accepted at any version.
 		It("accepts a request without metadata that leaves the finalizers as they are", func() {
 			t := finalizerCaseFor(privatev1.BareMetalInstanceTypes_ServiceDesc.ServiceName).
 				target([]string{finalizerController, finalizerHold})
@@ -589,9 +545,7 @@ var _ = Describe("typed finalizer updates", func() {
 	})
 
 	Describe("private wrappers that merge the request into the stored object", func() {
-		// InstanceType and DiskImage ignore metadata.finalizers when they merge the request, so the object that they
-		// forward to the generic update carries the stored finalizers whatever the request holds. A request without
-		// metadata therefore doesn't change them, and is accepted at any stored version.
+		// These servers ignore metadata.finalizers when merging, so the stored finalizers are always forwarded.
 		DescribeTable("keeps the finalizers when the request has no metadata",
 			func(service string, newUpdate func() typedUpdater, bumpFirst bool) {
 				update := newUpdate()
@@ -615,9 +569,7 @@ var _ = Describe("typed finalizer updates", func() {
 				newDiskImagesUpdater, true),
 		)
 
-		// With a nil mask the merge forwards the finalizers of the request, so a stale whole-object write would bring
-		// back a finalizer that another writer released after the stale read. It carries an old version, so it is
-		// rejected as a conflict instead.
+		// A nil mask forwards the request finalizers, so only the stale version stops the write.
 		DescribeTable("rejects a stale nil-mask write that would restore a released finalizer",
 			func(service string, newUpdate func() typedUpdater) {
 				update := newUpdate()
@@ -633,8 +585,6 @@ var _ = Describe("typed finalizer updates", func() {
 			Entry("DiskImages", privatev1.DiskImages_ServiceDesc.ServiceName, newDiskImagesUpdater),
 		)
 
-		// From the current version the merge only adds: the finalizers of the request join the stored ones, and a
-		// request with fewer finalizers leaves the stored ones in place.
 		DescribeTable("adds the finalizers of the request to the stored ones and never removes one",
 			func(service string, newUpdate func() typedUpdater) {
 				update := newUpdate()
@@ -654,8 +604,7 @@ var _ = Describe("typed finalizer updates", func() {
 				newBareMetalInstanceTypesUpdater),
 		)
 
-		// These two servers apply the paths of the mask one by one, and none of them is a finalizer path, so a mask
-		// can neither add nor remove a finalizer. The request is accepted and the stored finalizers stay as they are.
+		// These servers apply mask paths one by one and have no finalizer path.
 		DescribeTable("ignores a finalizer path in the mask",
 			func(service string, newUpdate func() typedUpdater) {
 				update := newUpdate()
@@ -675,8 +624,7 @@ var _ = Describe("typed finalizer updates", func() {
 	})
 
 	Describe("ServiceAccounts server", func() {
-		// A missing mask is rewritten into an update of the labels, so the finalizers of the request are not looked
-		// at, even when the request is stale and carries a finalizer that another writer has released.
+		// A missing mask is rewritten into a labels update, so stale request finalizers are ignored.
 		It("leaves the finalizers alone when the mask is missing", func() {
 			update := newServiceAccountsUpdater()
 			t := finalizerCaseFor(privatev1.ServiceAccounts_ServiceDesc.ServiceName).
@@ -691,8 +639,7 @@ var _ = Describe("typed finalizer updates", func() {
 		})
 	})
 
-	// Secrets updates the object inside a savepoint and then stores its data in Vault. When the store fails the
-	// savepoint is rolled back, so a finalizer change made by the same request is neither stored nor logged.
+	// Secrets updates inside a savepoint, then stores data in Vault; a store failure rolls back the savepoint.
 	Describe("Secrets server and its Vault store", func() {
 		var (
 			store  *storeFailingSecretStore
@@ -724,7 +671,7 @@ var _ = Describe("typed finalizer updates", func() {
 			server.generic.logger = slog.New(logs)
 		})
 
-		// update adds a finalizer from the current version and changes the data, which is stored in Vault.
+		// update also changes data so the request reaches the Vault store.
 		update := func() error {
 			current, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{Id: id}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -772,9 +719,8 @@ var _ = Describe("typed finalizer updates", func() {
 	})
 
 	Describe("public servers that read the object before the update", func() {
-		// On a nil mask these servers do their own unlocked read of the private object and forward its finalizers.
-		// The window is between that read and the locked read of the generic server, so a sequential spec can't
-		// cover it: the other writer has to commit while the public update waits for the row lock.
+		// These servers forward finalizers from an unlocked read, so the release must commit while the update waits
+		// for the row lock.
 		DescribeTable("does not restore a finalizer that was released while waiting for the row lock",
 			func(service, table string) {
 				t := finalizerCaseFor(service).target([]string{finalizerController, finalizerHold})
@@ -822,9 +768,7 @@ var _ = Describe("typed finalizer updates", func() {
 	})
 
 	Describe("catalog items, whose public servers copy the stored metadata when a nil-mask request has none", func() {
-		// The three public catalog-items servers copy the stored metadata into the private object when they get a nil
-		// mask and the request has no metadata. Otherwise GenericServer restores the stored finalizers, like it does
-		// for every public update. These controls pin that the finalizers and the metadata are kept in all cases.
+		// In the other cases the generic server restores the stored finalizers, as for every public update.
 		DescribeTable("keeps the finalizers and the metadata",
 			func(variant string) {
 				runPublicFinalizerCases(catalogItemFinalizerCases(), []string{finalizerController, finalizerHold},
@@ -862,8 +806,7 @@ var _ = Describe("typed finalizer updates", func() {
 	})
 })
 
-// runPublicFinalizerCases checks a scenario for the given public servers in one spec, on objects seeded through their
-// private cases, as runFinalizerCases does for the private servers.
+// runPublicFinalizerCases is runFinalizerCases for public servers, seeding objects through their private cases.
 func runPublicFinalizerCases(publicCases []publicFinalizerCase, finalizers []string,
 	scenario func(r *finalizerRun, c publicFinalizerCase, t finalizerTarget)) {
 	GinkgoHelper()
@@ -878,8 +821,7 @@ func runPublicFinalizerCases(publicCases []publicFinalizerCase, finalizers []str
 	})
 }
 
-// publicFinalizerCases returns every public server that has an Update method, except the catalog-items ones, which
-// have their own cases.
+// publicFinalizerCases excludes the catalog-items servers, which have their own cases.
 func publicFinalizerCases() []publicFinalizerCase {
 	return []publicFinalizerCase{
 		{privatev1.Volumes_ServiceDesc.ServiceName, newPublicVolumesOps},
@@ -943,8 +885,7 @@ func publicFinalizerCases() []publicFinalizerCase {
 			server, err := NewSecurityGroupsServer().
 				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
 			Expect(err).ToNot(HaveOccurred())
-			// The public update request of this resource has no mask: the server always updates the rule lists
-			// only.
+			// This update request has no mask; it only updates the rule lists.
 			return publicFinalizerOps{
 				get: func(ctx context.Context, id string) (proto.Message, error) {
 					response, err := server.Get(ctx, publicv1.SecurityGroupsGetRequest_builder{Id: id}.Build())
@@ -1044,7 +985,6 @@ func publicFinalizerCases() []publicFinalizerCase {
 	}
 }
 
-// catalogItemFinalizerCases returns the three public catalog-items servers.
 func catalogItemFinalizerCases() []publicFinalizerCase {
 	return []publicFinalizerCase{
 		{privatev1.ComputeInstanceCatalogItems_ServiceDesc.ServiceName, func() publicFinalizerOps {
@@ -1077,7 +1017,6 @@ func catalogItemFinalizerCases() []publicFinalizerCase {
 	}
 }
 
-// newPublicVolumesOps returns the operations of the public Volumes server.
 func newPublicVolumesOps() publicFinalizerOps {
 	GinkgoHelper()
 	server, err := NewVolumesServer().
@@ -1089,7 +1028,6 @@ func newPublicVolumesOps() publicFinalizerOps {
 	)
 }
 
-// newPublicClustersOps returns the operations of the public Clusters server.
 func newPublicClustersOps() publicFinalizerOps {
 	GinkgoHelper()
 	server, err := NewClustersServer().

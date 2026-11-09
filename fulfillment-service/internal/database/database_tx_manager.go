@@ -129,8 +129,7 @@ func (m *txManager) Run(ctx context.Context, task any, args ...any) error {
 
 func (t *managedTx) End(ctx context.Context) error {
 	if t.real == nil {
-		// Nothing was sent to the database, so there is nothing to commit, but the outcome is the same as a
-		// commit when no errors were reported.
+		// Nothing was sent to the database, which counts as a commit when there are no errors.
 		if len(t.errs) == 0 {
 			t.runCommitHooks(ctx)
 		}
@@ -162,8 +161,7 @@ type managedTx struct {
 	errs    []error
 	hooks   []func()
 
-	// parent is the enclosing transaction of a savepoint that has been released. The functions registered after
-	// that go to the parent, because the savepoint no longer runs them.
+	// parent is set when a savepoint is released; later OnCommit calls go to it.
 	parent *managedTx
 }
 
@@ -178,9 +176,8 @@ func (t *managedTx) OnCommit(fn func()) {
 	t.hooks = append(t.hooks, fn)
 }
 
-// runCommitHooks calls the functions registered with OnCommit, once, including those that they register themselves.
-// The transaction is already committed when they run, so a panic in one of them must not turn the request into a
-// failure: it is logged, and the others still run.
+// runCommitHooks runs the OnCommit functions once, including ones they register. The transaction is already
+// committed, so a panic is logged instead of failing the request.
 func (t *managedTx) runCommitHooks(ctx context.Context) {
 	for len(t.hooks) > 0 {
 		hooks := t.hooks
@@ -267,8 +264,7 @@ func (t *managedTx) Savepoint(ctx context.Context, fn func(ctx context.Context) 
 		return err
 	}
 
-	// Releasing the savepoint doesn't store anything yet, so the functions registered inside it wait for the
-	// enclosing transaction, and so do those registered later:
+	// A released savepoint isn't stored yet, so its functions wait for the enclosing transaction:
 	t.hooks = append(t.hooks, spManaged.hooks...)
 	spManaged.hooks = nil
 	spManaged.parent = t

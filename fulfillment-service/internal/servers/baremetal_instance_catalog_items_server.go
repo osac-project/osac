@@ -244,9 +244,8 @@ func (s *BareMetalInstanceCatalogItemsServer) Update(ctx context.Context,
 	}
 
 	if request.GetUpdateMask() == nil && privateCatalogItem.GetMetadata() == nil {
-		// GenericServer restores the stored finalizers for public updates, but a nil-mask update without
-		// request metadata would still clear the stored name, labels and annotations, so copy the metadata
-		// read under the row lock.
+		// A nil-mask update without metadata would clear the stored name, labels and annotations, so copy
+		// them from the locked row.
 		current, err := getLockedReferenceResource(ctx, s.delegate.generic.dao, id)
 		if err != nil {
 			return nil, resourceLookupError(err, "catalog item", id, "", grpccodes.NotFound)

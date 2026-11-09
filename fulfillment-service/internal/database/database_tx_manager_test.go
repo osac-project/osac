@@ -520,7 +520,6 @@ var _ = Describe("Transaction manager", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		// insert starts a transaction and inserts a row into the table.
 		insert := func(value string) Tx {
 			GinkgoHelper()
 			tx, err := manager.Begin(ctx)
@@ -530,7 +529,7 @@ var _ = Describe("Transaction manager", func() {
 			return tx
 		}
 
-		// count returns the number of rows of the table, as seen from outside the transaction.
+		// count reads through the pool, outside any transaction.
 		count := func() int {
 			GinkgoHelper()
 			var result int
@@ -631,7 +630,7 @@ var _ = Describe("Transaction manager", func() {
 
 				Expect(tx.End(ctx)).To(Succeed())
 
-				// The function of the savepoint joins the transaction when the savepoint is released:
+				// The savepoint's hook joins the transaction on release.
 				Expect(calls).To(Equal([]string{"before", "inside", "after"}))
 			})
 
@@ -755,8 +754,7 @@ var _ = Describe("Transaction manager", func() {
 				Expect(output.String()).To(ContainSubstring("my panic"))
 			})
 
-			// Calling a nil function would panic, and that panic would be recovered and logged, so the spec looks
-			// at the log to tell that the function was dropped instead.
+			// Calling nil would log a recovered panic, so no panic in the log means it was dropped.
 			It("Should ignore a nil function", func() {
 				var output bytes.Buffer
 				loggingManager, err := NewTxManager().
@@ -882,7 +880,7 @@ var _ = Describe("Transaction manager", func() {
 		})
 
 		It("Should not call the functions when the commit fails", func() {
-			// A deferred constraint is only checked when the transaction commits, so the commit fails:
+			// A deferred constraint is checked at commit, so the commit fails.
 			_, err := pool.Exec(ctx, "create table my_table (my_column text unique deferrable initially deferred)")
 			Expect(err).ToNot(HaveOccurred())
 			tx := insert("my_value")

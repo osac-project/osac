@@ -519,15 +519,9 @@ func (c *Reconciler[O]) getObject(ctx context.Context, id string) (result O, err
 
 // Start starts the controller. To stop it cancel the context.
 //
-// Before each reconciliation the object is read again from the server, and a copy of it is kept for retries, so a
-// retry never replays an object that the reconciler function changed in place. Errors that carry a retry interval
-// (see RequeueAfter) are retried as requested. Optimistic-concurrency conflicts, reported by the server as an Aborted
-// status, are retried after one second with the same exponential backoff, because the retry reads the object again and
-// recomputes its changes. A failure made only of conflicts, with no retry interval of its own, is logged at DEBUG, so
-// ERROR based alerting excludes it, until the retry backoff reaches its one minute cap. From then on it is logged at
-// WARN, because the conflict is no longer transient. A conflict joined with any other failure is logged at ERROR, as
-// is a conflict that already carries its own retry interval. When a failure with its own retry interval is joined with
-// a conflict, the retry follows that interval and its backoff policy instead of the one second conflict delay.
+// Each reconciliation starts from a fresh read, and retries use a copy taken before the function ran. Conflicts
+// (Aborted) without their own retry interval are retried after conflictRetryDelay with exponential backoff. A
+// conflict-only failure logs at DEBUG until the backoff is capped, then at WARN; anything else logs at ERROR.
 func (c *Reconciler[O]) Start(ctx context.Context) error {
 	defer c.stopRetries()
 
@@ -605,8 +599,7 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 	}
 }
 
-// conflictLogLevel returns the level at which to log a failure made only of conflicts for the given object: DEBUG
-// while the next retry is still backing off, WARN once the backoff has reached its cap.
+// conflictLogLevel returns DEBUG while the retry of the object is still backing off, and WARN once it is capped.
 func (c *Reconciler[O]) conflictLogLevel(id string) slog.Level {
 	c.retryMu.Lock()
 	attempt := c.retryAttempts[id]

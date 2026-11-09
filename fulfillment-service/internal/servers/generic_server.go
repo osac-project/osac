@@ -59,12 +59,9 @@ func isPublicAPIView(ctx context.Context) bool {
 	return isPublic
 }
 
-// restoreProtectedMetadataForPublicAPIView restores the metadata that public API callers can never
-// change: reserved labels and annotations, and finalizers. The public metadata type has no
-// finalizers field, so the candidate built from a public request never carries them. The stored
-// finalizers always replace the candidate's, even when the stored list is empty, which prevents a
-// public update from clearing finalizers and, for an object that is being deleted, from
-// triggering its archival. It does nothing for private API requests.
+// restoreProtectedMetadataForPublicAPIView copies the reserved labels, annotations and finalizers of
+// the stored object into the candidate of a public request, which can't carry finalizers. Without
+// this a public update would clear them, and archive an object that is being deleted.
 func (s *GenericServer[O]) restoreProtectedMetadataForPublicAPIView(ctx context.Context, current, candidate O) {
 	if !isPublicAPIView(ctx) {
 		return
@@ -90,8 +87,7 @@ func metadataFinalizers(metadata metadataIface) []string {
 	return metadata.GetFinalizers()
 }
 
-// sameFinalizers checks if two finalizer lists contain the same finalizers. Order and duplicates are
-// ignored, and a nil list is the same as an empty one. This matches how the DAO stores finalizers.
+// sameFinalizers compares two finalizer lists as sets, the way the DAO stores them.
 func sameFinalizers(a, b []string) bool {
 	return collections.NewSet(a...).Equal(collections.NewSet(b...))
 }
@@ -536,8 +532,7 @@ func (s *GenericServer[O]) CreateWithCandidatePreparation(
 			err = s.validatePreparedCandidate(ctx, requestObject, preparedID, preparedMetadata)
 		}
 		if err != nil {
-			// The callback may have written to the database before failing, or before its candidate was found
-			// invalid, so mark the transaction for rollback instead of relying on the caller to do it.
+			// The callback may have written to the database, so roll back.
 			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
 				tx.ReportError(&err)
 			}
@@ -778,18 +773,9 @@ func (s *GenericServer[O]) UpdateWithCandidatePreparation(
 	return s.updateWithCandidatePreparation(ctx, request, response, prepareCandidate, false)
 }
 
-// checkFinalizerChange enforces the finalizer compare-and-swap contract of updates: a request that
-// changes the finalizers of an object, whether explicitly or by omitting them from a whole-object
-// write, is only accepted if it carries the current version of the stored object, regardless of the
-// lock flag. A request without metadata cannot carry a version, so it is rejected whenever it would
-// change finalizers. Finalizers are compared as sets, ignoring order and duplicates, and a nil list
-// is the same as an empty one. Requests that leave the finalizers as they are, such as status or
-// label updates, are not affected. The error reports only the identifier and versions of the
-// object.
-//
-// The merged object is the one that will be written, so changes made by the update mask and by
-// public API restoration are accounted for. Candidate preparation callbacks run later and are not
-// allowed to change finalizers, so the check holds for the written object.
+// checkFinalizerChange returns Aborted when the merged object, which is what will be written, has
+// different finalizers than the stored one and the request doesn't carry the stored version,
+// whatever the lock flag.
 func (s *GenericServer[O]) checkFinalizerChange(requestObject, currentObject, mergedObject O) error {
 	currentMetadata := s.getMetadata(currentObject)
 	if sameFinalizers(metadataFinalizers(s.getMetadata(mergedObject)), metadataFinalizers(currentMetadata)) {
@@ -817,14 +803,8 @@ func (s *GenericServer[O]) checkFinalizerChange(requestObject, currentObject, me
 	return nil
 }
 
-// logFinalizerChange records a finalizer change that has been written, with the service of the
-// object, the gRPC method that made the change when there is one, and the stored version that the
-// change was checked against, so that every finalizer transition of an object can be traced to the
-// call that made it. The lists logged are the ones that the DAO wrote, which are sorted and have no
-// repeated finalizer. The write belongs to the transaction of the request, and code that runs
-// after it, in the same request, can still roll that transaction back, so the line is only written
-// once the transaction commits. Requests that are rejected, that are rolled back, or that leave the
-// finalizers as they are log nothing.
+// logFinalizerChange logs a finalizer change, with the gRPC method that made it, once the
+// transaction commits.
 func (s *GenericServer[O]) logFinalizerChange(ctx context.Context, id string, currentObject, writtenObject O) {
 	currentMetadata := s.getMetadata(currentObject)
 	before := slices.Clone(metadataFinalizers(currentMetadata))
@@ -846,7 +826,6 @@ func (s *GenericServer[O]) logFinalizerChange(ctx context.Context, id string, cu
 	log := func() {
 		logger.InfoContext(ctx, "Updated finalizers", fields...)
 	}
-	// The DAO can't write without a transaction in the context, so there is always one here:
 	tx, err := database.TxFromContext(ctx)
 	if err != nil {
 		return
@@ -943,9 +922,7 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		return err
 	}
 
-	// Finalizer compare-and-swap, computed on the merged object so that it covers the nil mask and
-	// every mask form. Unlike the lock check above, it reads the version from the original request
-	// object and does not skip requests without metadata.
+	// Finalizer changes always need the current version, lock or not:
 	if err = s.checkFinalizerChange(requestObject, currentObject, tmpObject); err != nil {
 		return err
 	}
@@ -991,8 +968,7 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 	if prepareCandidate != nil {
 		err = s.prepareUpdateCandidate(ctx, currentObject, tmpObject, prepareCandidate)
 		if err != nil {
-			// The callback may have written to the database before failing, so mark the transaction for
-			// rollback instead of relying on the caller to do it.
+			// The callback may have written to the database, so roll back.
 			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
 				tx.ReportError(&err)
 			}
@@ -1027,9 +1003,8 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 }
 
 // prepareUpdateCandidate runs the candidate preparation callback on the merged object, restores the
-// metadata that public API callers cannot change, and validates the result. Candidate preparation must
-// not change finalizers: the compare-and-swap only covers the finalizers requested by the caller, so
-// the object that gets written must carry exactly those.
+// metadata that public API callers cannot change, and validates the result. The callback must not
+// change finalizers, because they have already been checked.
 func (s *GenericServer[O]) prepareUpdateCandidate(
 	ctx context.Context,
 	currentObject O,

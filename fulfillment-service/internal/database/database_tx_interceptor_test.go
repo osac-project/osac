@@ -243,7 +243,7 @@ var _ = Describe("Transactions interceptor", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			// The handler writes a row, registers a function to run after the commit, and then panics:
+			// Write a row and register a commit hook, then panic.
 			committed := false
 			handler := func(ctx context.Context, request any) (response any, err error) {
 				tx, err := TxFromContext(ctx)

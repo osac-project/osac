@@ -604,43 +604,22 @@ message ThingsUpdateResponse {
 - `lock` enables optimistic locking. When set to `true`, the server rejects the update if the
   current `metadata.version` of the stored object does not match the version in the submitted
   object. A stale locked update returns `Aborted`; read the object again, reapply the intended
-  change, and retry. A request that does not change finalizers may omit `lock`; only finalizer
-  changes are always version-checked.
-- Any change to `metadata.finalizers` is always checked against `metadata.version`, whether or not
-  `lock` is set. This applies to the private API only; public updates never change finalizers and
-  always keep the stored set. The finalizers are compared as a set, so order, duplicates, and a nil
-  list versus an empty one are ignored, and only a real difference triggers the check. When the
-  request version does not match the stored version, the server returns `Aborted` (HTTP 409). Read
-  the object again, reapply the change, and retry.
-  - A private update with no `metadata` that would change the finalizers is always rejected with
-    `Aborted`, whatever the stored version.
-  - In the generic update path the check runs before the merged object is validated. A request that
-    is both invalid and stale on its finalizers returns `Aborted`, not `InvalidArgument`; the
-    validation error shows up once the request is retried from the current version. A resource whose
-    server validates the request before it calls the generic update, such as the immutability checks
-    of InstanceTypes and BareMetalInstanceTypes, returns that validation error first.
-  - An update without a mask replaces the whole object, so leaving `finalizers` out of it is a
-    finalizer change when the stored object has any. Some resources handle a missing mask
-    differently. DiskImages, InstanceTypes, and BareMetalInstanceTypes merge the request into the
-    stored object, so the stored finalizers stay and any finalizers in the request are added to
-    them. DiskImages and InstanceTypes also ignore a finalizer path in a mask, so their finalizers
-    can only be added through a missing mask; no writer changes the finalizers of these two
-    resources today. ServiceAccounts treat a missing mask as an update of `metadata.labels` (plus
-    `metadata.name` when set), so finalizers are not touched. To change other fields of an object
-    that controllers may give finalizers, send an update mask for those fields.
-  - A `metadata` message with an unset `version` counts as version 0. The field is a plain `int32`,
-    so unset and 0 cannot be told apart. An object that has never been updated since creation is at
-    version 0.
-  - Candidate preparation hooks may not change finalizers on update. A hook that does so makes the
-    request fail with `Internal`.
-  - The version covers the whole object. A client that keeps writing its own object can make a
-    concurrent finalizer write return `Aborted`, so controllers must expect this and retry.
-  - The reconciler loop retries an `Aborted` returned by a reconciler function after 1 second,
-    with exponential backoff capped at 1 minute. Conflict-only failures are logged at DEBUG and at
-    WARN once the backoff reaches the cap. An `Aborted` that already carries a retry interval (see
-    `RequeueAfter`) keeps that interval and is logged at ERROR, as is a conflict joined with any
-    other failure. When the other failure has a retry interval of its own, the retry follows that
-    interval and its backoff policy instead of the 1 second conflict delay.
+  change, and retry. Locking is optional.
+- A private update that changes `metadata.finalizers` must carry the current `metadata.version`,
+  whether or not `lock` is set, or it returns `Aborted` (HTTP 409). Finalizers are compared as a
+  set, so order and duplicates don't count as changes. A request without `metadata` that would
+  change them is always rejected. Public updates keep the stored finalizers.
+  - An update without a mask replaces the whole object, so omitting `finalizers` changes them if the
+    object has any. Send a mask when changing other fields. DiskImages, InstanceTypes, and
+    BareMetalInstanceTypes merge a maskless request into the stored object instead, and
+    ServiceAccounts update only `metadata.labels` and `metadata.name`.
+  - The stale-finalizer check runs before validation, so an invalid stale request returns `Aborted`
+    first.
+  - Candidate preparation hooks may not change finalizers; doing so fails with `Internal`.
+  - The reconciler loop retries an `Aborted` from a reconciler function after 1 second, backing off
+    to 1 minute. Conflict-only failures log at DEBUG, then WARN once the backoff is capped; a
+    conflict joined with another failure logs at ERROR and follows that failure's retry interval,
+    if it has one.
 
 For the `metadata.labels` and `metadata.annotations` map rules, including reserved-entry handling,
 see [Administrator-only metadata](#administrator-only-metadata). The REST gateway normally builds

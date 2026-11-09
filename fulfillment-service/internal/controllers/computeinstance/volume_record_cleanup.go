@@ -65,9 +65,7 @@ func (t *task) releaseFinalizerAfterVolumeCleanup(ctx context.Context, release f
 			return t.retryVolumeCleanup(err)
 		}
 
-		// The recovery wrote the ComputeInstance, so the version that this pass started from is stale, and the
-		// server rejects a finalizer change made from a stale version. Take the finalizers and the version from
-		// the read that followed the recovery, so that the release is applied to the current list.
+		// The recovery wrote the ComputeInstance, so release the finalizer from the list and version read after it.
 		t.computeInstance.GetMetadata().SetFinalizers(slices.Clone(instance.GetMetadata().GetFinalizers()))
 		t.computeInstance.GetMetadata().SetVersion(instance.GetMetadata().GetVersion())
 	}

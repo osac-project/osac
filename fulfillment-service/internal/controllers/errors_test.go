@@ -116,8 +116,7 @@ var _ = Describe("ClassifyHubError", func() {
 	})
 })
 
-// unavailableWrapper is an error that reports an Unavailable gRPC status itself while wrapping another error, to check
-// that conflict detection keeps walking past nodes that carry a different status.
+// unavailableWrapper has its own Unavailable status, so conflict detection must walk past it.
 type unavailableWrapper struct {
 	cause error
 }
@@ -128,15 +127,13 @@ func (e *unavailableWrapper) GRPCStatus() *status.Status {
 	return status.New(codes.Unavailable, "unavailable")
 }
 
-// nilCauseError has an Unwrap method that returns no cause, which conflict detection must treat as an independent
-// failure rather than as a wrapper around nothing.
+// nilCauseError must count as its own failure, not a wrapper around nothing.
 type nilCauseError struct{}
 
 func (nilCauseError) Error() string { return "nil cause" }
 func (nilCauseError) Unwrap() error { return nil }
 
-// emptyJoinError has an Unwrap method that returns an empty list of causes, and is expected to be treated like
-// nilCauseError.
+// emptyJoinError must be treated like nilCauseError.
 type emptyJoinError struct{}
 
 func (emptyJoinError) Error() string   { return "empty join" }

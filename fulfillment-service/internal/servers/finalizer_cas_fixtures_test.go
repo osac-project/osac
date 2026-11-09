@@ -45,24 +45,20 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// Fixtures for the finalizer compare-and-swap specs. Every private resource that can carry finalizers has
-// one finalizerCase. The specs run each scenario against the bare GenericServer of the resource, which is the update
-// path that every private Update RPC ends in; the typed servers that add their own logic around it have their own
-// specs.
+// Finalizer CAS fixtures: one case per private resource with finalizers, run against its bare GenericServer.
 
 const (
-	// finalizerController stands for the finalizer that a controller keeps on an object for its whole life.
+	// Kept for the object's whole life.
 	finalizerController = "fulfillment-controller"
 
-	// finalizerHold stands for a finalizer that is added and later released by another writer.
+	// Added and later released by another writer.
 	finalizerHold = "test.osac.io/hold"
 
-	// finalizerForeign stands for a finalizer owned by a writer that the test doesn't control.
+	// Owned by a writer the test doesn't control.
 	finalizerForeign = "test.osac.io/foreign"
 )
 
-// finalizerBearingServices returns the fully qualified names of the private services that have an Update method whose
-// object has metadata with finalizers. Services without Update are read-only and are excluded by construction.
+// finalizerBearingServices returns the private services whose Update object has metadata.finalizers.
 func finalizerBearingServices() []string {
 	var result []string
 	packageName := (privatev1.EventType)(0).Descriptor().FullName().Parent()
@@ -93,15 +89,13 @@ func finalizerBearingServices() []string {
 	return result
 }
 
-// finalizerObject is the constraint satisfied by every private object that has metadata.
 type finalizerObject interface {
 	dao.Object
 	GetMetadata() *privatev1.Metadata
 	SetMetadata(*privatev1.Metadata)
 }
 
-// finalizerOps is the non-generic view of a GenericServer used by the specs. Objects are passed as proto.Message and
-// must be of the concrete type of the resource.
+// finalizerOps is a non-generic view of a GenericServer; objects must be the resource's concrete type.
 type finalizerOps interface {
 	get(ctx context.Context, id string) (proto.Message, error)
 	update(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask, lock bool) error
@@ -109,7 +103,6 @@ type finalizerOps interface {
 	setLogger(logger *slog.Logger)
 }
 
-// finalizerUpdateRequest is implemented by the generated update request of every resource.
 type finalizerUpdateRequest[O any] interface {
 	proto.Message
 	SetObject(O)
@@ -117,13 +110,11 @@ type finalizerUpdateRequest[O any] interface {
 	SetLock(bool)
 }
 
-// finalizerIDRequest is implemented by the generated get and delete requests of every resource.
 type finalizerIDRequest interface {
 	proto.Message
 	SetId(string)
 }
 
-// genericFinalizerOps drives a GenericServer through typed requests cloned from its own request templates.
 type genericFinalizerOps[O finalizerObject] struct {
 	server *GenericServer[O]
 }
@@ -156,28 +147,23 @@ func (o *genericFinalizerOps[O]) del(ctx context.Context, id string) error {
 	return o.server.Delete(ctx, request, &response)
 }
 
-// setLogger replaces the logger of the server, so that specs can look at what it logs.
 func (o *genericFinalizerOps[O]) setLogger(logger *slog.Logger) {
 	o.server.logger = logger
 }
 
-// finalizerTarget is a seeded object together with the operations of its server.
 type finalizerTarget struct {
 	ops finalizerOps
 	id  string
 }
 
-// finalizerCase describes how to seed and serve one resource. The target function builds the server and seeds an
-// object that carries the given finalizers from its creation, so its version is zero. It reads the suite context when
-// it is called, never when the table is built.
+// target seeds an object with the given finalizers at version zero. It reads the suite ctx when called, not when the
+// table is built.
 type finalizerCase struct {
 	service string
 	target  func(finalizers []string) finalizerTarget
 }
 
-// newFinalizerCase creates the case for a resource. The build function returns the object to store, after saving
-// whatever parents it needs; it must set the metadata. The options mirror the ones that the production server of the
-// resource sets on its generic server.
+// build saves any parents and returns the object with metadata set; options mirror the production server's.
 func newFinalizerCase[O finalizerObject](desc grpc.ServiceDesc, build func() O,
 	options ...func(*GenericServerBuilder[O])) finalizerCase {
 	return finalizerCase{
@@ -195,7 +181,7 @@ func newFinalizerCase[O finalizerObject](desc grpc.ServiceDesc, build func() O,
 			server, err := builder.Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			// The DAO doesn't assign a tenant, the server does, so default it as the server would:
+			// The server, not the DAO, assigns the tenant.
 			object := build()
 			if object.GetMetadata().GetTenant() == "" {
 				object.GetMetadata().SetTenant(testTenant)
@@ -215,8 +201,7 @@ func newFinalizerCase[O finalizerObject](desc grpc.ServiceDesc, build func() O,
 	}
 }
 
-// afterCreate returns a copy of the case that runs the given function with the identifier of the object after it has
-// been stored. Use it for state that the database adds around the object and that the specs need to remove.
+// afterCreate runs hook with the stored object's id, for database state the specs need to remove.
 func (c finalizerCase) afterCreate(hook func(id string)) finalizerCase {
 	inner := c.target
 	c.target = func(finalizers []string) finalizerTarget {
@@ -228,7 +213,6 @@ func (c finalizerCase) afterCreate(hook func(id string)) finalizerCase {
 	return c
 }
 
-// testHub returns a valid hub of the test tenant with the given name.
 func testHub(name string) *privatev1.Hub {
 	return privatev1.Hub_builder{
 		Metadata: privatev1.Metadata_builder{
@@ -242,13 +226,11 @@ func testHub(name string) *privatev1.Hub {
 	}.Build()
 }
 
-// finalizerName returns a unique name for a fixture.
 func finalizerName(prefix string) string {
 	return fmt.Sprintf("%s-%s", prefix, uuid.NewString()[:8])
 }
 
-// finalizerCases returns the cases for all the resources that the specs cover. The leaf resources come first: they
-// need no parent objects. The rest are in the groups below.
+// finalizerCases lists the leaf resources, which need no parents, here and the rest by group.
 func finalizerCases() []finalizerCase {
 	leaves := []finalizerCase{
 		newFinalizerCase(privatev1.BareMetalInstanceTemplates_ServiceDesc,
@@ -324,15 +306,12 @@ func finalizerCases() []finalizerCase {
 	return slices.Concat(leaves, finalizerPlatformCases(), finalizerTenantCases(), finalizerNetworkingCases())
 }
 
-// finalizerSelectingMask is a named field mask that selects the finalizers.
 type finalizerSelectingMask struct {
 	name string
 	mask *fieldmaskpb.FieldMask
 }
 
-// finalizerSelectingMasks returns every way of selecting the finalizers in an update. The indexed path replaces a
-// single entry of the stored list, so a write through it changes the finalizer set as well. The overlapping masks
-// select the finalizers twice, or together with the version.
+// finalizerSelectingMasks includes the indexed path, which replaces one stored entry and so also changes the set.
 func finalizerSelectingMasks() []finalizerSelectingMask {
 	return []finalizerSelectingMask{
 		{"metadata mask", finalizerMaskOf("metadata")},
@@ -344,7 +323,6 @@ func finalizerSelectingMasks() []finalizerSelectingMask {
 	}
 }
 
-// finalizerMaskEntries returns an entry for each way of selecting the finalizers.
 func finalizerMaskEntries() []TableEntry {
 	var entries []TableEntry
 	for _, m := range finalizerSelectingMasks() {
@@ -353,8 +331,6 @@ func finalizerMaskEntries() []TableEntry {
 	return entries
 }
 
-// publicMaskEntries returns an entry for each way of selecting the finalizers, for a live object and for one that is
-// being deleted.
 func publicMaskEntries() []TableEntry {
 	var entries []TableEntry
 	for _, m := range finalizerSelectingMasks() {
@@ -366,28 +342,22 @@ func publicMaskEntries() []TableEntry {
 	return entries
 }
 
-// finalizerMaskOf returns a field mask with the given paths.
 func finalizerMaskOf(paths ...string) *fieldmaskpb.FieldMask {
 	return &fieldmaskpb.FieldMask{Paths: paths}
 }
 
-// finalizersMask returns a field mask that selects only the finalizers.
 func finalizersMask() *fieldmaskpb.FieldMask {
 	return finalizerMaskOf("metadata.finalizers")
 }
 
-// finalizerMetadataOf returns the metadata of an object, which is nil when the object has none.
 func finalizerMetadataOf(object proto.Message) *privatev1.Metadata {
 	return object.(interface{ GetMetadata() *privatev1.Metadata }).GetMetadata()
 }
 
-// finalizersOf returns the finalizers of an object.
 func finalizersOf(object proto.Message) []string {
 	return finalizerMetadataOf(object).GetFinalizers()
 }
 
-// withMetadata returns a copy of the object whose metadata has been changed by the given function. The original
-// object isn't modified.
 func withMetadata(object proto.Message, change func(*privatev1.Metadata)) proto.Message {
 	result := proto.Clone(object)
 	setter := result.(interface {
@@ -401,28 +371,25 @@ func withMetadata(object proto.Message, change func(*privatev1.Metadata)) proto.
 	return result
 }
 
-// withFinalizers returns a copy of the object that has exactly the given finalizers.
 func withFinalizers(object proto.Message, finalizers ...string) proto.Message {
 	return withMetadata(object, func(metadata *privatev1.Metadata) {
 		metadata.SetFinalizers(finalizers)
 	})
 }
 
-// withLabel returns a copy of the object whose labels are exactly the given one.
+// withLabel replaces all labels with the given one.
 func withLabel(object proto.Message, key, value string) proto.Message {
 	return withMetadata(object, func(metadata *privatev1.Metadata) {
 		metadata.SetLabels(map[string]string{key: value})
 	})
 }
 
-// withoutMetadata returns a copy of the object that has no metadata at all.
 func withoutMetadata(object proto.Message) proto.Message {
 	result := proto.Clone(object)
 	result.(interface{ SetMetadata(*privatev1.Metadata) }).SetMetadata(nil)
 	return result
 }
 
-// get returns the stored object, failing the spec if it can't be read.
 func (t finalizerTarget) get(ctx context.Context) proto.Message {
 	GinkgoHelper()
 	object, err := t.ops.get(ctx, t.id)
@@ -430,8 +397,7 @@ func (t finalizerTarget) get(ctx context.Context) proto.Message {
 	return object
 }
 
-// markDeleting deletes the object, which only marks it as being deleted because it has finalizers, and checks that it
-// was marked and not archived.
+// markDeleting deletes the object, which its finalizers turn into a deletion mark instead of an archive.
 func (t finalizerTarget) markDeleting(ctx context.Context) {
 	GinkgoHelper()
 	Expect(t.ops.del(ctx, t.id)).To(Succeed())
@@ -439,21 +405,17 @@ func (t finalizerTarget) markDeleting(ctx context.Context) {
 		"the object must be marked as being deleted")
 }
 
-// finalizers returns the stored finalizers.
 func (t finalizerTarget) finalizers(ctx context.Context) []string {
 	GinkgoHelper()
 	return finalizersOf(t.get(ctx))
 }
 
-// update runs an update and returns its error.
 func (t finalizerTarget) update(ctx context.Context, object proto.Message, mask *fieldmaskpb.FieldMask,
 	lock bool) error {
 	return t.ops.update(ctx, object, mask, lock)
 }
 
-// publicUpdateInSavepoint sends a public update of the object with the given mask, and returns its error. A database
-// rejection would abort the transaction of the context, so the update runs in a savepoint that is rolled back when it
-// fails, as the transaction of a real request would be.
+// publicUpdateInSavepoint uses a savepoint so a database rejection doesn't abort the spec transaction.
 func (t finalizerTarget) publicUpdateInSavepoint(ctx context.Context, object proto.Message,
 	mask *fieldmaskpb.FieldMask) error {
 	GinkgoHelper()
@@ -469,15 +431,14 @@ func (t finalizerTarget) publicUpdateInSavepoint(ctx context.Context, object pro
 	return err
 }
 
-// release replaces the finalizers as a concurrent writer would: from a fresh read, with the lock, and so with the
-// current version. It fails the spec if the update doesn't succeed.
+// release replaces the finalizers as a concurrent writer would: fresh read, locked, current version.
 func (t finalizerTarget) release(ctx context.Context, finalizers ...string) {
 	GinkgoHelper()
 	err := t.ops.update(ctx, withFinalizers(t.get(ctx), finalizers...), finalizersMask(), true)
 	Expect(err).ToNot(HaveOccurred(), "the concurrent finalizer write must succeed")
 }
 
-// bump changes a label as a concurrent writer that doesn't touch finalizers would, which increases the version.
+// bump raises the version through a label change that leaves the finalizers alone.
 func (t finalizerTarget) bump(ctx context.Context) {
 	GinkgoHelper()
 	object := withMetadata(t.get(ctx), func(metadata *privatev1.Metadata) {
@@ -487,8 +448,6 @@ func (t finalizerTarget) bump(ctx context.Context) {
 	Expect(err).ToNot(HaveOccurred(), "the concurrent label write must succeed")
 }
 
-// expectFinalizerConflict checks that the update was rejected as a conflict and that the stored finalizers are exactly
-// the expected ones, which means that the rejected write wasn't applied.
 func (t finalizerTarget) expectFinalizerConflict(ctx context.Context, err error, want ...string) {
 	GinkgoHelper()
 	stored, getErr := t.ops.get(ctx, t.id)
@@ -507,8 +466,7 @@ func (t finalizerTarget) expectFinalizerConflict(ctx context.Context, err error,
 	expectConflictMessage(err, t.id)
 }
 
-// expectConflictMessage checks that the message of a conflict names the object and doesn't reveal finalizer names,
-// which belong to the controllers. It doesn't check the exact wording.
+// expectConflictMessage checks the message names the object but not the finalizers, which belong to controllers.
 func expectConflictMessage(err error, id string) {
 	GinkgoHelper()
 	message := status.Convert(err).Message()
@@ -517,11 +475,9 @@ func expectConflictMessage(err error, id string) {
 	Expect(message).ToNot(ContainSubstring(finalizerController))
 }
 
-// finalizerChangeMessage is the message that the generic server logs when it has written a finalizer change.
 const finalizerChangeMessage = "Updated finalizers"
 
-// methodStream is the server transport stream of a gRPC call to the given method, which is what grpc.Method reads
-// from the context. It doesn't send anything.
+// methodStream lets grpc.Method read the given method from the context.
 type methodStream string
 
 func (s methodStream) Method() string                 { return string(s) }
@@ -529,10 +485,8 @@ func (methodStream) SetHeader(grpcmetadata.MD) error  { return nil }
 func (methodStream) SendHeader(grpcmetadata.MD) error { return nil }
 func (methodStream) SetTrailer(grpcmetadata.MD) error { return nil }
 
-// commitSuiteTx commits the suite transaction and starts a new one for the rest of the spec. The generic server writes
-// its finalizer log when the transaction commits, so the specs about that log call this before they look at it. It
-// fails the spec if the transaction was rolled back instead, so that a spec that expects no log line can't pass only
-// because nothing was committed.
+// commitSuiteTx commits so the finalizer log is written, failing if the transaction rolled back so a spec expecting no
+// log can't pass just because nothing committed.
 func commitSuiteTx() {
 	GinkgoHelper()
 	endTx(ctx, suiteTx, true)
@@ -542,7 +496,7 @@ func commitSuiteTx() {
 	ctx = database.TxIntoContext(ctx, suiteTx)
 }
 
-// endTx ends a transaction, committing it or rolling it back as requested, and checks that it ended that way.
+// endTx commits or rolls back tx and checks which one happened.
 func endTx(ctx context.Context, tx database.Tx, commit bool) {
 	GinkgoHelper()
 	if !commit {
@@ -557,15 +511,13 @@ func endTx(ctx context.Context, tx database.Tx, commit bool) {
 	Expect(committed).To(Equal(commit), "the transaction must have been committed: %t", commit)
 }
 
-// finalizerRun holds the transaction in which one case of a concurrent spec runs. It takes the place of the suite
-// transaction for that case: commit and rollBack end the transaction and start a new one, so the scenario reads ctx
-// again after calling them.
+// finalizerRun replaces the suite transaction for one concurrent case. commit and rollBack start a new transaction, so
+// reread r.ctx after calling them.
 type finalizerRun struct {
 	ctx context.Context
 	tx  database.Tx
 }
 
-// begin starts a new transaction for the case.
 func (r *finalizerRun) begin() {
 	GinkgoHelper()
 	tx, err := tm.Begin(context.Background())
@@ -574,42 +526,34 @@ func (r *finalizerRun) begin() {
 	r.ctx = database.TxIntoContext(context.Background(), tx)
 }
 
-// commit commits the transaction of the case and starts a new one, as commitSuiteTx does for the suite transaction.
 func (r *finalizerRun) commit() {
 	GinkgoHelper()
 	endTx(r.ctx, r.tx, true)
 	r.begin()
 }
 
-// rollBack rolls the transaction of the case back, as code that runs after a write in the same request does when it
-// reports an error, and starts a new one.
+// rollBack simulates a later step of the request failing, then starts a new transaction.
 func (r *finalizerRun) rollBack() {
 	GinkgoHelper()
 	endTx(r.ctx, r.tx, false)
 	r.begin()
 }
 
-// finalizerScenario is what a concurrent spec checks for one case, on the object seeded for it.
 type finalizerScenario func(r *finalizerRun, c finalizerCase, t finalizerTarget)
 
-// finalizerFailure is the panic that stops a case of a concurrent spec when one of its assertions fails.
+// finalizerFailure is panicked by a failed assertion to stop only its own case.
 type finalizerFailure struct {
 	message  string
 	location types.CodeLocation
 }
 
-// runFinalizerCases checks a scenario for every resource in one spec, with runFinalizerCasesFor.
 func runFinalizerCases(finalizers []string, scenario finalizerScenario) {
 	GinkgoHelper()
 	runFinalizerCasesFor(finalizerCases(), finalizers, scenario)
 }
 
-// runFinalizerCasesFor checks a scenario for the given cases in one spec. It seeds an object with the given finalizers
-// for every case in the suite transaction and commits them, then runs the scenario of every case concurrently, each in
-// a transaction of its own. The cases don't share objects, so they don't wait for each other's row locks.
-//
-// A failed assertion stops only its own case. The spec fails after all the cases have finished, with the failures of
-// every case that failed, each with its resource and code location.
+// runFinalizerCasesFor seeds and commits one object per case, then runs each scenario concurrently in its own
+// transaction. A failed assertion stops only its case; the spec fails at the end with every case's failure.
 func runFinalizerCasesFor(cases []finalizerCase, finalizers []string, scenario finalizerScenario) {
 	GinkgoHelper()
 	targets := make([]finalizerTarget, len(cases))
@@ -617,13 +561,11 @@ func runFinalizerCasesFor(cases []finalizerCase, finalizers []string, scenario f
 		targets[i] = c.target(finalizers)
 	}
 
-	// The cases run in transactions of their own, so the suite transaction isn't needed any more, and ending it
-	// frees its connection:
+	// Each case has its own transaction; ending the suite one frees its connection.
 	endTx(ctx, suiteTx, true)
 	suiteTx = nil
 
-	// Ginkgo records only the first failure of a spec, and not the case that it came from, so while the cases run
-	// a failed assertion stops its case with a panic that the case records:
+	// Ginkgo keeps only the first failure and not its case, so failures panic and are recorded per case.
 	RegisterFailHandler(func(message string, callerSkip ...int) {
 		skip := 0
 		if len(callerSkip) > 0 {
@@ -680,8 +622,7 @@ func runFinalizerCasesFor(cases []finalizerCase, finalizers []string, scenario f
 	}
 }
 
-// recordLogs replaces the logger of the server behind the target with one that records everything it logs, and returns
-// the recorder. Call it after the target has been created, so the seeding isn't recorded.
+// recordLogs swaps the server logger for a recorder. Call it after seeding so the seed isn't recorded.
 func (t finalizerTarget) recordLogs() *osactesting.LogRecorder {
 	recorder := &osactesting.LogRecorder{}
 	t.ops.setLogger(slog.New(recorder))

@@ -958,8 +958,14 @@ reachable and bootstrapped with the release-compatible OSAC configuration,
 including the organizations, projects, job templates, inventories, credentials,
 execution environments, and instance groups required by enabled services. For
 networking instance-group settings and secrets, also follow
-[Section 4.4.3](#443-setting-the-networking-helm-values). The token must be
-authorized to launch and read those jobs. Because the chart's
+[Section 4.4.3](#443-setting-the-networking-helm-values). For separate-workload
+VMaaS, `aap.configAsCode.remoteClusterKubeconfigSecretName` configures only
+chart-managed AAP. External jobs in another cluster or namespace cannot mount
+the management-cluster Secret; follow
+[Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster) to make the
+workload kubeconfig available to both the external `compute-instance-operations`
+and `storage-operations` instance groups. The token must be authorized to
+launch and read those jobs. Because the chart's
 publication hook targets the chart-managed AAP instance, publish the required
 templates to Fulfillment separately. See
 [Section 5](#5-helm-chart-configuration-parameters) for the related values.
@@ -1319,10 +1325,44 @@ aap:
   settings or secrets change; new job pods then read the updated values. Keep
   the secret file out of version control. For multi-line settings or secrets,
   use the corresponding resource's `--from-file=<KEY>=<path>` input instead of
-  an env file. If Netris CaaS jobs use `NETRIS_CA_CONFIGMAP`, also create that
-  ConfigMap in the external job cluster and namespace. The chart-managed pod
-  specification is shown in the
-  [OSAC networking instance-group template](../../../osac-aap/collections/ansible_collections/osac/config_as_code/roles/aap/templates/networking-operations-ig.j2).
+  an env file.
+
+  **Netris CaaS CA bundle (`cluster-fulfillment`).** For chart-managed AAP,
+  `NETRIS_CA_CONFIGMAP` in
+  `aap.instanceGroups.networkFulfillment.config` tells config-as-code which
+  ConfigMap contains the Netris CA under the `bundle.pem` key. With external
+  AAP, the bootstrap does not create a mount for the external
+  `cluster-fulfillment` jobs. Ensure a ConfigMap with that same name and key is
+  present in the cluster and namespace where those jobs run. Creating the
+  ConfigMap or setting `NETRIS_CA_CONFIGMAP` alone does not expose its
+  certificate to a job. Add the following volume, volume-mount, and environment
+  entries to the external group's `pod_spec_override`; the path in
+  `NETRIS_CA_PATH` must match the mounted file:
+
+  ```yaml
+  spec:
+    volumes:
+      - name: netris-ca-bundle
+        configMap:
+          name: <NETRIS_CA_CONFIGMAP>
+          items:
+            - key: bundle.pem
+              path: bundle.pem
+    containers:
+      - name: worker
+        env:
+          - name: NETRIS_CA_PATH
+            value: /etc/netris/ca/bundle.pem
+        volumeMounts:
+          - name: netris-ca-bundle
+            mountPath: /etc/netris/ca/bundle.pem
+            subPath: bundle.pem
+            readOnly: true
+  ```
+
+  Keep the ConfigMap synchronized with the source CA bundle; newly launched
+  jobs then mount the current certificate. The chart-managed mount is shown in
+  the [CaaS cluster-fulfillment template](../../../osac-aap/collections/ansible_collections/osac/config_as_code/roles/aap/templates/cluster-fulfillment-ig.j2).
 
 Put the secrets in a separate values file that is excluded from version
 control, for example `my-secrets.local.yaml`, generated from your secret
@@ -1358,9 +1398,9 @@ retryable with "Missing or malformed setting in network-fulfillment-ig".
 | `NETRIS_PORT_SETTLE_SECONDS` | `config` | Optional. Default `15`. |
 | `NETRIS_BM_PROVISIONING_VNET`, `NETRIS_RESOURCE_CLASS_MAP` | `config` | BMaaS and FabricDomains only, so not used in this release: the provisioning V-Net name, and a non-empty JSON object that maps each resource class to its Netris server cluster template. |
 
-The networking jobs do not get a CA ConfigMap mount from the chart. In chart
-`0.4.0`, `NETRIS_CA_CONFIGMAP` applies only to the CaaS
-cluster-fulfillment jobs. With a Netris controller certificate from
+The `NETRIS_CA_CONFIGMAP` mount described above applies only to CaaS
+`cluster-fulfillment` jobs. The `network-fulfillment` jobs do not get a CA
+ConfigMap mount from the chart. With a Netris controller certificate from
 a private CA, build an execution environment image based on `osac-aap` that
 contains the CA certificate. Set it as `eeImage` and set `NETRIS_CA_PATH` to
 the CA file's path in the image. Setting `NETRIS_VALIDATE_CERTS: "false"`
@@ -2291,6 +2331,50 @@ The workload API endpoint in that kubeconfig must resolve and be reachable from
 the management-cluster workloads that use it, including the OSAC operator, AAP
 workers, and Console Proxy. Workstation-only access is insufficient; use direct
 connectivity or a supported proxy or tunnel configured for those workloads.
+
+The `aap.configAsCode.remoteClusterKubeconfigSecretName` values configure
+chart-managed AAP. For external AAP, ensure a Secret with the same workload
+kubeconfig is present in the cluster and namespace where the external compute
+and storage job pods run. A Secret in another cluster or namespace cannot be
+mounted. Use the same name and key as the values above (`osac-remote-kubeconfig`
+and `kubeconfig` in this example), and keep the Secret current whenever the
+workload kubeconfig changes. Add the following entries to the
+`pod_spec_override` for both the `compute-instance-operations` and
+`storage-operations` instance groups so each job exposes the file at the path
+expected by `OSAC_REMOTE_CLUSTER_KUBECONFIG`:
+
+```yaml
+spec:
+  volumes:
+    - name: remote-cluster-kubeconfig
+      secret:
+        secretName: osac-remote-kubeconfig
+        items:
+          - key: kubeconfig
+            path: remote-cluster-kubeconfig
+  containers:
+    - name: worker
+      volumeMounts:
+        - name: remote-cluster-kubeconfig
+          mountPath: /etc/osac
+          readOnly: true
+      env:
+        - name: OSAC_REMOTE_CLUSTER_KUBECONFIG
+          value: /etc/osac/remote-cluster-kubeconfig
+```
+
+For example, apply the workload kubeconfig file as a Secret in the external
+job cluster. Keep the file protected and out of version control:
+
+```console
+AAP_CONTEXT="<external-aap-job-cluster-context>"
+AAP_NAMESPACE="<external-aap-job-namespace>"
+oc --context "$AAP_CONTEXT" create secret generic osac-remote-kubeconfig \
+  --namespace "$AAP_NAMESPACE" \
+  --from-file=kubeconfig=/path/to/workload-kubeconfig \
+  --dry-run=client -o yaml |
+  oc --context "$AAP_CONTEXT" apply -f -
+```
 
 Before installing OSAC, point `KUBECONFIG` back to the management cluster and
 confirm that the active API server is its endpoint. The OSAC Helm command uses

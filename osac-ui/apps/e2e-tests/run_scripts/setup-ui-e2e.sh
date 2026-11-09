@@ -13,12 +13,8 @@ set -euo pipefail
 
 # A live URL and test account are needed when tests run, not for setup alone.
 OSAC_UI_BASE_URL="${OSAC_UI_BASE_URL:-}"
-# Keep the old names as compatibility aliases, but use the names consumed by
-# the Playwright authentication setup as the canonical variables.
-OSAC_ADMIN_USERNAME="${OSAC_ADMIN_USERNAME:-${OSAC_USERNAME:-admin}}"
-OSAC_ADMIN_PASSWORD="${OSAC_ADMIN_PASSWORD:-${OSAC_PASSWORD:-foobar}}"
-OSAC_USERNAME="${OSAC_USERNAME:-$OSAC_ADMIN_USERNAME}"
-OSAC_PASSWORD="${OSAC_PASSWORD:-$OSAC_ADMIN_PASSWORD}"
+OSAC_ADMIN_USERNAME="${OSAC_ADMIN_USERNAME:-admin}"
+OSAC_ADMIN_PASSWORD="${OSAC_ADMIN_PASSWORD:-foobar}"
 OSAC_EXTRAVARS="${OSAC_EXTRAVARS:-}"
 OSAC_CLI_PATH="${OSAC_CLI_PATH:-osac}"
 OSAC_VM_FLOW_MODE="${OSAC_VM_FLOW_MODE:-full}"
@@ -239,7 +235,7 @@ trap cleanup EXIT
 
 export_test_environment() {
   export OSAC_UI_BASE_URL OSAC_ADMIN_USERNAME OSAC_ADMIN_PASSWORD
-  export OSAC_USERNAME OSAC_PASSWORD OSAC_CLI_PATH OSAC_VM_FLOW_MODE
+  export OSAC_CLI_PATH OSAC_VM_FLOW_MODE
 }
 
 placeholder_url() {

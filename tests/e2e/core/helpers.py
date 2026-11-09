@@ -769,15 +769,15 @@ def wait_for_worker_agents(
 
 
 def _agent_install_progress(agent: dict[str, Any]) -> str:
-    """Report Agent install status as supplied, without dumping inventory or secrets."""
+    """Report Agent install status with credential-safe, single-line details."""
     status = agent.get("status", {})
     debug_info = status.get("debugInfo", {})
     progress = status.get("progress", {})
     parts = [debug_info.get("state") or "unknown"]
     if state_info := debug_info.get("stateInfo"):
-        parts.append(state_info)
+        parts.append(_one_line(state_info))
     if stage := progress.get("currentStage"):
-        parts.append(stage)
+        parts.append(_one_line(stage))
     percentage = progress.get("installationPercentage")
     if isinstance(percentage, int):
         parts.append(f"{percentage}%")

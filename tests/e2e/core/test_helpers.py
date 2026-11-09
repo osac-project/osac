@@ -776,6 +776,23 @@ def test_wait_for_worker_installation_reports_the_install_stage(
     ]
 
 
+@pytest.mark.parametrize(("section", "field"), [("debugInfo", "stateInfo"), ("progress", "currentStage")])
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Waiting for\n  reboot\tto finish", "Waiting for reboot to finish"),
+        (f"Request failed: {_FAKE_QUOTED_CREDENTIAL}", f"Request failed: {_REDACTED_CREDENTIAL}"),
+        ("x" * 400, "x" * 300),
+    ],
+    ids=["multiline", "quoted-credential", "long-message"],
+)
+def test_agent_install_progress_scrubs_free_form_fields(section: str, field: str, text: str, expected: str) -> None:
+    agent = _agent(name="agent-0")
+    agent["status"][section][field] = text
+
+    assert helpers._agent_install_progress(agent) == f"installing-in-progress, {expected}"
+
+
 def test_wait_for_worker_aggregates_reports_the_order_phase(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -73,19 +73,20 @@ operator:
   # resources (clusters, VMs, networks) via job templates.
   aap:
     # [REQUIRED for provisioning] Full URL to the AAP controller API.
-    # Typically set post-install by create-api-token Helm hook after the AAP
-    # instance is ready and its route is available.
-    # Example: https://osac-aap.osac.apps.mycluster.example.com/api/controller
-    url: ""
+    # Set before installation. The create-api-token hook only creates the token
+    # and restarts the operator; it does not set this URL. Production requires
+    # a trusted HTTPS route, for example:
+    # https://osac-aap.<namespace>.apps.<domain>/api/controller
+    url: "https://osac-aap.<namespace>.apps.<domain>/api/controller"
 
     # [REQUIRED for provisioning] Secret created by the create-api-token hook.
     tokenSecret:
       name: osac-aap-api-token
       key: token
 
-    # Skip TLS verification for AAP connection. Set to "false" in production
-    # if using trusted certificates.
-    insecureSkipVerify: "true"
+    # Skip TLS verification only for evaluation. Production requires "false"
+    # and an AAP certificate trusted by the Operator's system trust store.
+    insecureSkipVerify: "false"
 
     # How often the operator polls AAP for job status updates.
     statusPollInterval: "30s"

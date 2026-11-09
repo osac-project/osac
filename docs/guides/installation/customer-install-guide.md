@@ -958,14 +958,17 @@ reachable and bootstrapped with the release-compatible OSAC configuration,
 including the organizations, projects, job templates, inventories, credentials,
 execution environments, and instance groups required by enabled services. For
 networking instance-group settings and secrets, also follow
-[Section 4.4.3](#443-setting-the-networking-helm-values). For separate-workload
-VMaaS, `aap.configAsCode.remoteClusterKubeconfigSecretName` configures only
-chart-managed AAP. External jobs in another cluster or namespace cannot mount
-the management-cluster Secret; follow
-[Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster) to make the
-workload kubeconfig available to both the external `compute-instance-operations`
-and `storage-operations` instance groups. The token must be authorized to
-launch and read those jobs. Because the chart's
+[Section 4.4.3](#443-setting-the-networking-helm-values). For VMaaS, the
+`aap.configAsCode.remoteClusterKubeconfigSecretName` setting configures only
+chart-managed AAP. External jobs in another cluster or namespace cannot mount a
+Secret from the OSAC release namespace. Follow
+[Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster) to provide a
+kubeconfig for the cluster that hosts the VMs to both external
+`compute-instance-operations` and `storage-operations` instance groups. Use the
+workload-cluster kubeconfig when VMs run on a separate workload cluster; if VMs
+remain on the management (hub) cluster while external AAP jobs run elsewhere,
+use the hub kubeconfig. The token must be authorized to launch and read those
+jobs. Because the chart's
 publication hook targets the chart-managed AAP instance, publish the required
 templates to Fulfillment separately. See
 [Section 5](#5-helm-chart-configuration-parameters) for the related values.
@@ -1902,7 +1905,9 @@ override; publish the required templates to Fulfillment separately.
    For production, keep `lvms.enabled: false`, including when the workload
    cluster uses LVMS. Have your storage administrators prepare the appropriate
    CSI integration, StorageBackend, StorageTier, and tenant storage
-   configuration according to the [storage documentation](../../storage/README.md).
+   configuration according to the [storage documentation](../../storage/README.md),
+   especially its [tenant storage onboarding
+   guide](../../storage/guides/tenant-onboarding.md).
    Installing LVM Storage or another dynamic storage class alone does not
    register an OSAC storage offering. The automatic LVMS registration hook is
    for development and CI only; see [Section 9.2](#92-evaluation-only).
@@ -2119,10 +2124,91 @@ Manager such as Netris.
    ```
 
    If `DNS_CLASS` is `dns.noop.dns`, set it in `my-values.yaml` as described
-   in [Section 8.4](#84-installing-without-dns-management), skip this step, and
-   leave the AWS credentials unset.
+   in [Section 8.4](#84-installing-without-dns-management), skip the Route 53
+   credential instructions and leave the AWS credentials unset.
 
-3. Install OSAC (see [Section 4.3](#43-installing-osac)), passing every
+3. For external AAP, prepare the CaaS settings for its `cluster-fulfillment`
+   container group. This step applies with either DNS backend; skip it only for
+   chart-managed AAP. The chart-managed `cluster-fulfillment-ig` ConfigMap and
+   Secret are created in the OSAC release namespace and are not automatically
+   available to external job pods in another namespace or cluster. Create
+   matching resources in the namespace where the external group's job pods run,
+   using values from `aap.instanceGroups.clusterFulfillment.config` and
+   `.secret`. Generate the ConfigMap input from the non-secret values and the
+   Secret input from your protected secret store; keep the secret file out of
+   version control. For example:
+
+   ```console
+   AAP_CONTEXT="<external-aap-job-cluster-context>"
+   AAP_NAMESPACE="<external-aap-job-namespace>"
+   oc --context "$AAP_CONTEXT" create configmap cluster-fulfillment-ig \
+     --namespace "$AAP_NAMESPACE" --from-env-file=cluster-fulfillment-ig.env \
+     --dry-run=client -o yaml |
+     oc --context "$AAP_CONTEXT" apply -f -
+   oc --context "$AAP_CONTEXT" create secret generic cluster-fulfillment-ig \
+     --namespace "$AAP_NAMESPACE" --from-env-file=cluster-fulfillment-ig.secret \
+     --dry-run=client -o yaml |
+     oc --context "$AAP_CONTEXT" apply -f -
+   ```
+
+   If no secret keys are configured, create an empty `cluster-fulfillment-ig`
+   Secret with `data: {}` so the job pod's required Secret reference resolves.
+
+   The hosted-cluster workflow must authenticate to the OSAC management (hub)
+   cluster with an identity authorized to provision hosted clusters. When
+   external `cluster-fulfillment` jobs run on another cluster, the projected
+   service-account token belongs to that execution cluster; without separate
+   hub credentials, the job may use that identity and fail to provision on the
+   hub. In that layout, create a Secret with a protected hub kubeconfig in the
+   external job namespace and keep the kubeconfig out of values files and
+   version control. Run this in the same shell session with the
+   `AAP_CONTEXT` and `AAP_NAMESPACE` set above. The kubeconfig's API endpoint
+   must be reachable from the job pods and its CA must be trusted there:
+
+   ```console
+   oc --context "$AAP_CONTEXT" create secret generic osac-hub-kubeconfig \
+     --namespace "$AAP_NAMESPACE" \
+     --from-file=kubeconfig=/path/to/hub-kubeconfig \
+     --dry-run=client -o yaml |
+     oc --context "$AAP_CONTEXT" apply -f -
+   ```
+
+   Add the hub kubeconfig mount and `K8S_AUTH_KUBECONFIG` setting, along with
+   the CaaS `envFrom` entries, to the external container group's
+   `pod_spec_override`. The hosted-cluster workflow reads this variable for
+   Kubernetes API access. Merge these entries with any Netris CA mount from
+   [Section 4.4.3](#443-setting-the-networking-helm-values):
+
+   ```yaml
+   spec:
+     volumes:
+       - name: hub-kubeconfig
+         secret:
+           secretName: osac-hub-kubeconfig
+           items:
+             - key: kubeconfig
+               path: hub-kubeconfig
+     containers:
+       - name: worker
+         volumeMounts:
+           - name: hub-kubeconfig
+             mountPath: /etc/osac
+             readOnly: true
+         env:
+           - name: K8S_AUTH_KUBECONFIG
+             value: /etc/osac/hub-kubeconfig
+         envFrom:
+           - configMapRef:
+               name: cluster-fulfillment-ig
+               optional: true
+           - secretRef:
+               name: cluster-fulfillment-ig
+   ```
+
+   Keep the external ConfigMap and Secret synchronized with the configured
+   values; newly launched jobs then read the updated settings and credentials.
+
+4. Install OSAC (see [Section 4.3](#43-installing-osac)), passing every
    values file that contains required settings. For `dns.noop.dns`, leave the
    Route 53 credentials unset; keep passing `my-secrets.local.yaml` if it
    contains other required values. For example,
@@ -2132,7 +2218,7 @@ Manager such as Netris.
    and
    [`dns-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/dns-backend.md).
 
-4. Check the `NetworkClass`
+5. Check the `NetworkClass`
    ([Section 4.4.6](#446-checking-the-networkclass)). With provider networking
    disabled, OSAC creates no ExternalIPs, so you create no ExternalIPPools.
 
@@ -2288,7 +2374,11 @@ based on the workload cluster, and put its values in `my-values.yaml` on the
 management cluster. For production, keep `lvms.enabled: false` for every
 storage provider, including LVMS. Have your storage administrators prepare
 that provider's StorageBackend, StorageTier, and tenant storage configuration
-as described in Section 6.1. For development or CI with LVMS, see
+as described in Section 6.1 and the [tenant storage onboarding
+guide](../../storage/guides/tenant-onboarding.md). For an overview of storage
+providers and ownership models, see the
+[storage documentation](../../storage/README.md).
+For development or CI with LVMS, see
 [Section 9.2](#92-evaluation-only).
 
 The chart still requires a non-empty `fabricManager` value when provider
@@ -2333,12 +2423,16 @@ workers, and Console Proxy. Workstation-only access is insufficient; use direct
 connectivity or a supported proxy or tunnel configured for those workloads.
 
 The `aap.configAsCode.remoteClusterKubeconfigSecretName` values configure
-chart-managed AAP. For external AAP, ensure a Secret with the same workload
-kubeconfig is present in the cluster and namespace where the external compute
-and storage job pods run. A Secret in another cluster or namespace cannot be
-mounted. Use the same name and key as the values above (`osac-remote-kubeconfig`
-and `kubeconfig` in this example), and keep the Secret current whenever the
-workload kubeconfig changes. Add the following entries to the
+chart-managed AAP. For external AAP, ensure a Secret with the kubeconfig for the
+VM cluster is present in the cluster and namespace where the external compute
+and storage job pods run. Use the workload-cluster kubeconfig when VMs run on a
+separate workload cluster. If VMs remain on the management (hub) cluster while
+external AAP jobs run elsewhere, use the hub kubeconfig instead; the OSAC
+operator continues to use its in-cluster access. A Secret in
+another cluster or namespace cannot be mounted. Use the same name and key as
+the values above (`osac-remote-kubeconfig` and `kubeconfig` in this example),
+and keep the Secret current whenever the VM-cluster kubeconfig changes. Add the
+following entries to the
 `pod_spec_override` for both the `compute-instance-operations` and
 `storage-operations` instance groups so each job exposes the file at the path
 expected by `OSAC_REMOTE_CLUSTER_KUBECONFIG`:
@@ -2363,7 +2457,7 @@ spec:
           value: /etc/osac/remote-cluster-kubeconfig
 ```
 
-For example, apply the workload kubeconfig file as a Secret in the external
+For example, apply the VM-cluster kubeconfig file as a Secret in the external
 job cluster. Keep the file protected and out of version control:
 
 ```console

@@ -355,8 +355,8 @@ existing resources this release is intended to manage.
 For an existing release that manages LVMS, use the recorded
 `lvms.channel` from `helm get values osac-deps -n osac-deps --all` as
 `LVMS_CHANNEL_OVERRIDE` if the Subscription is missing or omits
-`.spec.channel`. A new release uses `stable-$OCP_VERSION` only when no
-Subscription exists.
+`.spec.channel`. Use `stable-$OCP_VERSION` for a new release only when neither
+the Subscription nor the `osac-deps` Helm release exists.
 
 ```bash
 LVMS_CHANNEL_OVERRIDE="${LVMS_CHANNEL_OVERRIDE:-}"
@@ -376,14 +376,27 @@ if [ "$LVMS_SUBSCRIPTION_EXPECTED" = true ]; then
             echo "Set LVMS_CHANNEL_OVERRIDE to the installed Subscription channel." >&2
             exit 1
         fi
-    elif helm status osac-deps -n osac-deps >/dev/null 2>&1; then
-        LVMS_CHANNEL="$LVMS_CHANNEL_OVERRIDE"
-        if [ -z "$LVMS_CHANNEL" ]; then
-            echo "Set LVMS_CHANNEL_OVERRIDE to the installed lvms.channel value." >&2
-            exit 1
-        fi
     else
-        LVMS_CHANNEL="stable-$OCP_VERSION"
+        OSAC_DEPS_NAMESPACE=$(oc get namespace osac-deps \
+            --ignore-not-found -o name) || exit 1
+        if [ -z "$OSAC_DEPS_NAMESPACE" ]; then
+            LVMS_CHANNEL="stable-$OCP_VERSION"
+        elif HELM_STATUS_OUTPUT=$(helm status osac-deps -n osac-deps 2>&1); then
+            LVMS_CHANNEL="$LVMS_CHANNEL_OVERRIDE"
+            if [ -z "$LVMS_CHANNEL" ]; then
+                echo "Set LVMS_CHANNEL_OVERRIDE to the installed lvms.channel value." >&2
+                exit 1
+            fi
+        else
+            HELM_STATUS_EXIT=$?
+            if [[ "$HELM_STATUS_OUTPUT" == *"release: not found"* ]]; then
+                LVMS_CHANNEL="stable-$OCP_VERSION"
+            else
+                printf 'Could not check Helm release osac-deps:\n%s\n' \
+                    "$HELM_STATUS_OUTPUT" >&2
+                exit "$HELM_STATUS_EXIT"
+            fi
+        fi
     fi
 else
     LVMS_CHANNEL="stable-$OCP_VERSION"
@@ -1082,8 +1095,10 @@ keep `lvms.enabled: false` in the phase-2 `my-values.yaml`, including when the
 workload cluster uses LVMS.
 Storage administrators must prepare the StorageBackend, StorageTier, and tenant
 storage configuration; installing the LVM Storage Operator and its operand does
-not register an OSAC storage offering. The automatic local-storage registration
-hook is for development and CI only; see
+not register an OSAC storage offering. See the
+[storage documentation](../../storage/README.md), especially the
+[tenant storage onboarding guide](../../storage/guides/tenant-onboarding.md).
+The automatic local-storage registration hook is for development and CI only; see
 [Evaluation only](customer-install-guide.md#92-evaluation-only).
 
 ## When Prerequisites Already Exist

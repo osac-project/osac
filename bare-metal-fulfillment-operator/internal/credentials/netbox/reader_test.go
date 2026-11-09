@@ -28,6 +28,14 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
 )
 
+// Synthetic test values only; this reader test never uses real credentials.
+const (
+	testNetBoxUsername = "fake-user"
+	testNetBoxPassword = "fake-value"
+	testSourceUsername = "fake-source-user"
+	testSourcePassword = "fake-source-value"
+)
+
 func TestNetBoxCredentials(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "NetBox Credentials Reader Suite")
@@ -67,14 +75,14 @@ var _ = Describe("NetBox credentials reader", func() {
 			listResult: secretapi.ListResult{Total: 1, Items: []secretapi.Secret{{ID: "secret-1", Tenant: "system", Labels: labels}}},
 			getSecret: secretapi.Secret{
 				ID: "secret-1", Tenant: "system", Labels: labels,
-				Data: map[string][]byte{"username": []byte("bmc-user"), "password": []byte("bmc-password")},
+				Data: map[string][]byte{"username": []byte(testNetBoxUsername), "password": []byte(testNetBoxPassword)},
 			},
 		}
 
 		got, err := NewReader(reader).GetCredentials(context.Background(), "42")
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(got).To(Equal(&credentials.BMC{Username: []byte("bmc-user"), Password: []byte("bmc-password")}))
+		Expect(got).To(Equal(&credentials.BMC{Username: []byte(testNetBoxUsername), Password: []byte(testNetBoxPassword)}))
 		Expect(reader.listFilter).To(Equal(secretapi.Filter(`this.metadata.tenant == "system" && "osac.openshift.io/netbox-device-42" in this.metadata.labels`)))
 		Expect(reader.listLimit).To(Equal(int32(1)))
 		Expect(reader.getID).To(Equal("secret-1"))
@@ -119,13 +127,13 @@ var _ = Describe("NetBox credentials reader", func() {
 
 			Expect(err).To(MatchError(ContainSubstring(wantErr)))
 			Expect(errors.Is(err, credentials.ErrResolutionFailed)).To(Equal(deterministic))
-			Expect(err.Error()).NotTo(ContainSubstring("source-user"))
-			Expect(err.Error()).NotTo(ContainSubstring("source-password"))
+			Expect(err.Error()).NotTo(ContainSubstring(testSourceUsername))
+			Expect(err.Error()).NotTo(ContainSubstring(testSourcePassword))
 		},
-		Entry("missing username", secretapi.Secret{ID: "secret-1", Tenant: "system", Labels: map[string]string{"osac.openshift.io/netbox-device-42": "true"}, Data: map[string][]byte{"password": []byte("source-password")}}, "non-empty username and password", true),
-		Entry("empty password", secretapi.Secret{ID: "secret-1", Tenant: "system", Labels: map[string]string{"osac.openshift.io/netbox-device-42": "true"}, Data: map[string][]byte{"username": []byte("source-user"), "password": {}}}, "non-empty username and password", true),
-		Entry("changed tenant", secretapi.Secret{ID: "secret-1", Tenant: "tenant-a", Labels: map[string]string{"osac.openshift.io/netbox-device-42": "true"}, Data: map[string][]byte{"username": []byte("source-user"), "password": []byte("source-password")}}, "not a system-scoped Secret associated", false),
-		Entry("changed label", secretapi.Secret{ID: "secret-1", Tenant: "system", Labels: map[string]string{"other": "true"}, Data: map[string][]byte{"username": []byte("source-user"), "password": []byte("source-password")}}, "not a system-scoped Secret associated", false),
+		Entry("missing username", secretapi.Secret{ID: "secret-1", Tenant: "system", Labels: map[string]string{"osac.openshift.io/netbox-device-42": "true"}, Data: map[string][]byte{"password": []byte(testSourcePassword)}}, "non-empty username and password", true),
+		Entry("empty password", secretapi.Secret{ID: "secret-1", Tenant: "system", Labels: map[string]string{"osac.openshift.io/netbox-device-42": "true"}, Data: map[string][]byte{"username": []byte(testSourceUsername), "password": {}}}, "non-empty username and password", true),
+		Entry("changed tenant", secretapi.Secret{ID: "secret-1", Tenant: "tenant-a", Labels: map[string]string{"osac.openshift.io/netbox-device-42": "true"}, Data: map[string][]byte{"username": []byte(testSourceUsername), "password": []byte(testSourcePassword)}}, "not a system-scoped Secret associated", false),
+		Entry("changed label", secretapi.Secret{ID: "secret-1", Tenant: "system", Labels: map[string]string{"other": "true"}, Data: map[string][]byte{"username": []byte(testSourceUsername), "password": []byte(testSourcePassword)}}, "not a system-scoped Secret associated", false),
 	)
 
 	It("returns retryable API errors without credentials in the error", func() {
@@ -135,7 +143,7 @@ var _ = Describe("NetBox credentials reader", func() {
 
 		Expect(err).To(MatchError(ContainSubstring("failed to list OSAC Secrets")))
 		Expect(errors.Is(err, credentials.ErrResolutionFailed)).To(BeFalse())
-		Expect(err.Error()).NotTo(ContainSubstring("source-password"))
+		Expect(err.Error()).NotTo(ContainSubstring(testSourcePassword))
 		Expect(reader.getCalls).To(BeZero())
 	})
 

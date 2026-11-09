@@ -33,6 +33,19 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
+// Synthetic test values only; this suite never uses real BMC credentials.
+const (
+	testBMCUsername            = "fake-user"
+	testBMCPassword            = "fake-value"
+	testOldBMCPassword         = "fake-old-value"
+	testNewBMCPassword         = "fake-new-value"
+	testOriginalBMCPassword    = "fake-original-value"
+	testReplacementBMCPassword = "fake-replacement-value"
+	testForeignBMCPassword     = "fake-foreign-value"
+	testUnmanagedBMCUsername   = "fake-other-user"
+	testUnmanagedBMCPassword   = "fake-other-value"
+)
+
 func TestBMCSecretStore(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "BMC Secret Store Suite")
@@ -60,15 +73,15 @@ var _ = Describe("BMC Secret Store", func() {
 			store, k8sClient := newStore()
 
 			Expect(store.Ensure(ctx, "node001-bmc-secret", &credentials.BMC{
-				Username: []byte("admin"),
-				Password: []byte("s3cret"),
+				Username: []byte(testBMCUsername),
+				Password: []byte(testBMCPassword),
 			}, "bmi-A")).To(Succeed())
 
 			secret := &corev1.Secret{}
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)).To(Succeed())
 			Expect(secret.Type).To(Equal(corev1.SecretTypeOpaque))
-			Expect(string(secret.Data["username"])).To(Equal("admin"))
-			Expect(string(secret.Data["password"])).To(Equal("s3cret"))
+			Expect(string(secret.Data["username"])).To(Equal(testBMCUsername))
+			Expect(string(secret.Data["password"])).To(Equal(testBMCPassword))
 			Expect(secret.Labels).To(HaveKeyWithValue(managedByLabel, shared.OsacDefaultManagedByValue))
 			Expect(secret.Labels).To(HaveKeyWithValue(ownerUIDLabel, "bmi-A"))
 		})
@@ -76,32 +89,32 @@ var _ = Describe("BMC Secret Store", func() {
 		It("updates credentials for the same BMI", func() {
 			store, k8sClient := newStore()
 			Expect(store.Ensure(ctx, "node001-bmc-secret", &credentials.BMC{
-				Username: []byte("admin"), Password: []byte("old"),
+				Username: []byte(testBMCUsername), Password: []byte(testOldBMCPassword),
 			}, "bmi-A")).To(Succeed())
 
 			Expect(store.Ensure(ctx, "node001-bmc-secret", &credentials.BMC{
-				Username: []byte("admin"), Password: []byte("new"),
+				Username: []byte(testBMCUsername), Password: []byte(testNewBMCPassword),
 			}, "bmi-A")).To(Succeed())
 
 			secret := &corev1.Secret{}
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)).To(Succeed())
-			Expect(string(secret.Data["password"])).To(Equal("new"))
+			Expect(string(secret.Data["password"])).To(Equal(testNewBMCPassword))
 		})
 
 		It("refuses an update by a different BMI", func() {
 			store, k8sClient := newStore()
 			Expect(store.Ensure(ctx, "node001-bmc-secret", &credentials.BMC{
-				Username: []byte("admin"), Password: []byte("original"),
+				Username: []byte(testBMCUsername), Password: []byte(testOriginalBMCPassword),
 			}, "bmi-A")).To(Succeed())
 
 			err := store.Ensure(ctx, "node001-bmc-secret", &credentials.BMC{
-				Username: []byte("admin"), Password: []byte("replacement"),
+				Username: []byte(testBMCUsername), Password: []byte(testReplacementBMCPassword),
 			}, "bmi-B")
 			Expect(err).To(MatchError(ContainSubstring("not owned by this BMI")))
 
 			secret := &corev1.Secret{}
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)).To(Succeed())
-			Expect(string(secret.Data["password"])).To(Equal("original"))
+			Expect(string(secret.Data["password"])).To(Equal(testOriginalBMCPassword))
 		})
 
 		It("adopts a legacy Secret only for its BMH consumer", func() {
@@ -112,38 +125,38 @@ var _ = Describe("BMC Secret Store", func() {
 			legacy := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 				Name: "node001-bmc-secret", Namespace: testNamespace,
 				Labels: map[string]string{managedByLabel: shared.OsacDefaultManagedByValue},
-			}, Data: map[string][]byte{"password": []byte("original")}}
+			}, Data: map[string][]byte{"password": []byte(testOriginalBMCPassword)}}
 			store, k8sClient := newStore(bmh, legacy)
 
 			err := store.Ensure(ctx, legacy.Name, &credentials.BMC{
-				Username: []byte("admin"), Password: []byte("foreign"),
+				Username: []byte(testBMCUsername), Password: []byte(testForeignBMCPassword),
 			}, "bmi-B")
 			Expect(err).To(MatchError(ContainSubstring("not owned by this BMI")))
 			Expect(store.Ensure(ctx, legacy.Name, &credentials.BMC{
-				Username: []byte("admin"), Password: []byte("replacement"),
+				Username: []byte(testBMCUsername), Password: []byte(testReplacementBMCPassword),
 			}, "bmi-A")).To(Succeed())
 
 			secret := &corev1.Secret{}
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(legacy), secret)).To(Succeed())
 			Expect(secret.Labels).To(HaveKeyWithValue(ownerUIDLabel, "bmi-A"))
-			Expect(string(secret.Data["password"])).To(Equal("replacement"))
+			Expect(string(secret.Data["password"])).To(Equal(testReplacementBMCPassword))
 		})
 
 		It("refuses to overwrite an unmanaged Secret", func() {
 			foreign := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{Name: "node001-bmc-secret", Namespace: testNamespace},
-				Data:       map[string][]byte{"username": []byte("someone"), "password": []byte("else")},
+				Data:       map[string][]byte{"username": []byte(testUnmanagedBMCUsername), "password": []byte(testUnmanagedBMCPassword)},
 			}
 			store, k8sClient := newStore(foreign)
 
 			err := store.Ensure(ctx, "node001-bmc-secret", &credentials.BMC{
-				Username: []byte("admin"), Password: []byte("s3cret"),
+				Username: []byte(testBMCUsername), Password: []byte(testBMCPassword),
 			}, "bmi-A")
 
 			Expect(err).To(MatchError(ContainSubstring("not operator-managed")))
 			secret := &corev1.Secret{}
 			Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)).To(Succeed())
-			Expect(string(secret.Data["password"])).To(Equal("else"))
+			Expect(string(secret.Data["password"])).To(Equal(testUnmanagedBMCPassword))
 			Expect(secret.Labels).NotTo(HaveKey(managedByLabel))
 		})
 
@@ -158,7 +171,7 @@ var _ = Describe("BMC Secret Store", func() {
 		It("deletes a Secret only for its BMI owner", func() {
 			store, k8sClient := newStore()
 			Expect(store.Ensure(ctx, "node001-bmc-secret", &credentials.BMC{
-				Username: []byte("admin"), Password: []byte("s3cret"),
+				Username: []byte(testBMCUsername), Password: []byte(testBMCPassword),
 			}, "bmi-A")).To(Succeed())
 
 			Expect(store.Delete(ctx, "node001-bmc-secret", "bmi-B")).To(MatchError(ContainSubstring("not owned by this BMI")))
@@ -172,7 +185,7 @@ var _ = Describe("BMC Secret Store", func() {
 		It("refuses to delete an unmanaged Secret", func() {
 			adminSecret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{Name: "admin-bmc-secret", Namespace: testNamespace},
-				Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("s3cret")},
+				Data:       map[string][]byte{"username": []byte(testBMCUsername), "password": []byte(testBMCPassword)},
 			}
 			store, k8sClient := newStore(adminSecret)
 

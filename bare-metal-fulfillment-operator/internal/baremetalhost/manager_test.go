@@ -18,6 +18,7 @@ package baremetalhost
 
 import (
 	"context"
+	"errors"
 
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -45,6 +46,25 @@ func newTestManager(objects ...client.Object) *Manager {
 		WithStatusSubresource(&metal3api.BareMetalHost{}).
 		Build()
 	return NewManager(k8sClient, k8sClient, testNamespace)
+}
+
+type replacementOnDeleteClient struct {
+	client.Client
+	replacement client.Object
+}
+
+func (c *replacementOnDeleteClient) Delete(ctx context.Context, object client.Object, options ...client.DeleteOption) error {
+	if err := c.Client.Delete(ctx, object); err != nil {
+		return err
+	}
+	if err := c.Client.Create(ctx, c.replacement); err != nil {
+		return err
+	}
+	preconditions := (&client.DeleteOptions{}).ApplyOptions(options).Preconditions
+	if preconditions != nil && preconditions.UID != nil && *preconditions.UID != c.replacement.GetUID() {
+		return errors.New("UID precondition rejects replacement")
+	}
+	return c.Client.Delete(ctx, object, options...)
 }
 
 var _ = Describe("BareMetalHost Manager", func() {
@@ -167,10 +187,11 @@ var _ = Describe("BareMetalHost Manager", func() {
 					Name:      "node001",
 					Namespace: testNamespace,
 				},
+				Spec: metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-A"}},
 			}
 			mgr := newTestManager(existing)
 
-			Expect(mgr.DeleteBMH(ctx, "node001")).To(Succeed())
+			Expect(mgr.DeleteBMH(ctx, "node001", "bmi-A")).To(Succeed())
 
 			bmh := &metal3api.BareMetalHost{}
 			err := mgr.client.Get(ctx, client.ObjectKey{
@@ -181,7 +202,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 
 		It("should be idempotent for not found", func() {
 			mgr := newTestManager()
-			Expect(mgr.DeleteBMH(ctx, "nonexistent")).To(Succeed())
+			Expect(mgr.DeleteBMH(ctx, "nonexistent", "bmi-A")).To(Succeed())
 		})
 	})
 
@@ -427,4 +448,45 @@ var _ = Describe("BareMetalHost Manager", func() {
 		})
 	})
 
+	Describe("DeleteBMH", func() {
+		It("deletes a matching BMH and tolerates its absence", func() {
+			bmh := &metal3api.BareMetalHost{
+				ObjectMeta: metav1.ObjectMeta{Name: "netbox-46", Namespace: testNamespace, UID: "host-A"},
+				Spec:       metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-A"}},
+			}
+			mgr := newTestManager(bmh)
+			Expect(mgr.DeleteBMH(ctx, "netbox-46", "bmi-A")).To(Succeed())
+			Expect(mgr.client.Get(ctx, client.ObjectKeyFromObject(bmh), &metal3api.BareMetalHost{})).NotTo(Succeed())
+			Expect(mgr.DeleteBMH(ctx, "netbox-46", "bmi-A")).To(Succeed())
+		})
+
+		It("does not delete a replacement BMH with the same name", func() {
+			original := &metal3api.BareMetalHost{
+				ObjectMeta: metav1.ObjectMeta{Name: "netbox-46", Namespace: testNamespace, UID: "host-old"},
+				Spec:       metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-A"}},
+			}
+			replacement := original.DeepCopy()
+			replacement.UID = "host-new"
+			base := newTestManager(original)
+			manager := NewManager(base.client, &replacementOnDeleteClient{Client: base.client, replacement: replacement}, testNamespace)
+
+			Expect(manager.DeleteBMH(ctx, "netbox-46", "bmi-A")).To(HaveOccurred())
+			current := &metal3api.BareMetalHost{}
+			Expect(base.client.Get(ctx, client.ObjectKeyFromObject(original), current)).To(Succeed())
+			Expect(current.UID).To(Equal(replacement.UID))
+		})
+
+		DescribeTable("preserves a BMH without the expected consumerRef", func(ref *corev1.ObjectReference) {
+			bmh := &metal3api.BareMetalHost{
+				ObjectMeta: metav1.ObjectMeta{Name: "netbox-46", Namespace: testNamespace},
+				Spec:       metal3api.BareMetalHostSpec{ConsumerRef: ref},
+			}
+			mgr := newTestManager(bmh)
+			Expect(mgr.DeleteBMH(ctx, "netbox-46", "bmi-B")).To(MatchError(ContainSubstring("not owned by this BMI")))
+			Expect(mgr.client.Get(ctx, client.ObjectKeyFromObject(bmh), &metal3api.BareMetalHost{})).To(Succeed())
+		},
+			Entry("foreign", &corev1.ObjectReference{Name: "bmi-A"}),
+			Entry("ownerless", nil),
+		)
+	})
 })

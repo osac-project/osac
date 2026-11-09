@@ -445,6 +445,9 @@ grep -Fq "get secret ${MOCK_CLIENT_SECRET_SECRET_NAME}" "${CALLER_KUBECTL_ARGS_F
   || fail "host tenant reads the configured client-secret Secret"
 grep -Fq ".data['${MOCK_CLIENT_SECRET_SECRET_KEY}']" "${CALLER_KUBECTL_ARGS_FILE}" \
   || fail "host tenant reads the configured client-secret Secret key"
+if grep -Eq 'get subnets|clusteruserdefinednetwork|create namespace' "${CALLER_KUBECTL_ARGS_FILE}"; then
+  fail "host tenant bootstrap does not wait for provider networking on Kind"
+fi
 grep -Fq -- '--cacert' "${CALLER_CURL_ARGS_FILE}" \
   || fail "host tenant token exchange verifies the Keycloak issuer"
 ! grep -Fq -- '--insecure' "${CALLER_CURL_ARGS_FILE}" \

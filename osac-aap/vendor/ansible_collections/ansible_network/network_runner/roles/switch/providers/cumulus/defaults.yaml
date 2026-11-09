@@ -1,3 +1,11 @@
 ---
 _vlan_id: "{{ vlan_id | default(1, True)}}"
 _vlan_name: '{{ vlan_name if vlan_name else "default" if vlan_id|string == "1" else "vlan"+vlan_id|string }}'
+
+# Deletion guards serialize with the nvue configuration lock, so a port change
+# that carries a guard can never run after the guarded owner was deleted.
+_supports_deletion_guard: true
+_guard_root: /var/lib/network-runner/guards
+_guard_path: >-
+  {{ _guard_root ~ '/' ~ guard_scope ~ '/' ~ guard_key
+     if guard_scope | default('') and guard_key | default('') else '' }}

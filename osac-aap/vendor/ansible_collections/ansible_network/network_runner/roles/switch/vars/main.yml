@@ -17,5 +17,9 @@ port_description: null
 # vars optional for managing ports
 stp_edge: null
 
+# vars optional for serializing port changes against a deleted owner
+guard_scope: null
+guard_key: null
+
 # Vendor specific variables
 junos_retries_msg: 'configuration database locked by:'

@@ -50,6 +50,7 @@ respective areas.
 | Kind runtime selection, sudo authentication, image loading, device-mapper permissions, cluster/storage lifecycle, or devstack Helm apply flags | Unit with command stubs | `make kind-runtime-test` |
 | Deployed dev-full OSAC UI Gateway reachability | Component integration | `./scripts/test-ui-gateway.sh` |
 | TopoLVM chart dependency download, cache reuse, build scoping, or install preparation | Unit with command stubs | `make kind-runtime-test` |
+| `install-infra` readiness waits for the CA issuer, bundled PostgreSQL, or Kafka | Unit with command stubs | `make infra-ready-wait-test` |
 | Fulfillment integration report opt-in and output paths | Unit with expanded Makefile commands | `make kind-runtime-test` |
 | Combined ComputeInstance disk handoff runner and AAP recorder | Unit and component integration | `make kind-runtime-test`; `python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py`; `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage`. Real Fulfillment APIs/PostgreSQL, operator and target StorageClass lookup; AAP execution is a recording double. See [coverage boundaries](../docs/INTEGRATION-TESTING.md#computeinstance-disk-handoff-osac-6685). |
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |
@@ -67,6 +68,7 @@ respective areas.
 | Install preflight engine, catalog, report schema, or `preflight.*` values | Unit (mocked cluster) | `helm unittest charts/osac` (helm-unittest plugin; CI pins v1.2.1) |
 | `metering.readers` values (reader name only, all tenants), schema, umbrella passthrough, or reserved names | Unit (mocked cluster) | `helm unittest -f 'tests/metering_readers*_test.yaml' charts/osac` (the suites also run in the full `helm unittest charts/osac`) |
 | Install preflight rendering contract, hook log policy, or CSI hook deadlines | Helm contract | `uv run --script scripts/test-preflight-render.py` |
+| Kind preflight harness readiness or fixture restoration | Unit (mocked commands) | `uv run --script scripts/test-preflight-harness.py` |
 | Install preflight against a real API server, upgrade behavior, or failed-hook logs | Component integration | `uv run --script scripts/test-preflight-kind.py` against a Kind context; see [install preflight](../docs/INTEGRATION-TESTING.md#install-preflight-osac-6561) |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
 

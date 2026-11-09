@@ -21,8 +21,6 @@ const makeVolume = (state: VolumeState, overrides: Partial<{ message: string }> 
         seconds: 1767225600n,
         nanos: 0,
       },
-      displayName: '',
-      description: '',
       annotations: {},
       labels: {},
       version: 1,

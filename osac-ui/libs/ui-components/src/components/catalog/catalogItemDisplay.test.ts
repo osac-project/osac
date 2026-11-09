@@ -24,8 +24,6 @@ describe('filterCatalogItemsBySearch', () => {
       template: undefined,
       metadata: {
         $typeName: 'osac.public.v1.Metadata',
-        displayName: '',
-        description: '',
         name: 'alpha-vm',
         creator: '',
         annotations: {},
@@ -45,8 +43,6 @@ describe('filterCatalogItemsBySearch', () => {
       template: undefined,
       metadata: {
         $typeName: 'osac.public.v1.Metadata',
-        displayName: '',
-        description: '',
         name: 'beta-cluster',
         creator: '',
         annotations: {},

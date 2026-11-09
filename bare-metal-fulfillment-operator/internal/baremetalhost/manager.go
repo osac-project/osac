@@ -143,28 +143,31 @@ func (m *Manager) BMHExists(ctx context.Context, name string) (bool, error) {
 	return true, nil
 }
 
-// DeleteBMH deletes a BareMetalHost CR by name. Idempotent — ignores NotFound.
-// It leaves the referenced credentials Secret untouched.
-func (m *Manager) DeleteBMH(ctx context.Context, name string) error {
-	log := ctrllog.FromContext(ctx)
-
-	bmh := &metal3api.BareMetalHost{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: m.namespace,
-		},
+// DeleteBMH leaves a BMH with another consumerRef untouched.
+func (m *Manager) DeleteBMH(ctx context.Context, name, ownerUID string) error {
+	bmh, err := m.findOwnedBMH(ctx, name, ownerUID)
+	if err != nil || bmh == nil {
+		return err
 	}
-
-	if err := m.client.Delete(ctx, bmh); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Info("BareMetalHost already deleted", "name", name, "namespace", m.namespace)
-			return nil
-		}
+	err = m.uncachedClient.Delete(ctx, bmh, client.Preconditions{UID: &bmh.UID, ResourceVersion: &bmh.ResourceVersion})
+	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete BareMetalHost %s/%s: %w", m.namespace, name, err)
 	}
-
-	log.Info("Deleted BareMetalHost", "name", name, "namespace", m.namespace)
 	return nil
+}
+
+func (m *Manager) findOwnedBMH(ctx context.Context, name, ownerUID string) (*metal3api.BareMetalHost, error) {
+	if ownerUID == "" {
+		return nil, fmt.Errorf("BareMetalHost %s/%s requires a BMI UID", m.namespace, name)
+	}
+	bmh := &metal3api.BareMetalHost{}
+	if err := m.uncachedClient.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: name}, bmh); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	if bmh.Spec.ConsumerRef == nil || bmh.Spec.ConsumerRef.Name != ownerUID {
+		return nil, fmt.Errorf("BareMetalHost %s/%s is not owned by this BMI", m.namespace, name)
+	}
+	return bmh, nil
 }
 
 // GetHardwareNICs returns the lowercased MAC addresses for the host's NICs,

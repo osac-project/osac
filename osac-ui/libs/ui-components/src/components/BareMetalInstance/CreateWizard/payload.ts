@@ -27,7 +27,7 @@ export const buildBareMetalInstanceCreatePayload = (
       ...(!catalogFieldPolicyLocked(catalogItem?.fields?.runStrategy) && {
         runStrategy: BareMetalInstanceRunStrategy.ALWAYS,
       }),
-      ...(!values.spec.sshKey.locked && sshKey && { sshPublicKey: sshKey }),
+      ...(!values.spec.sshKey.locked && sshKey && { sshKey: { name: sshKey } }),
       ...(userDataSource && { userDataSource }),
       ...(!values.spec.instanceType.locked &&
         values.spec.instanceType.value && {

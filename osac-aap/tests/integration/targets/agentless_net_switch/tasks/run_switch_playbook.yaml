@@ -1,0 +1,36 @@
+---
+- name: Write the switch playbook extra vars - {{ switch_test_label }}
+  ansible.builtin.copy:
+    dest: "{{ switch_test_tempdir.path }}/{{ switch_test_label }}.json"
+    mode: "0600"
+    content: >-
+      {{ {'switch_test_subnet': switch_test_subnet,
+          'switch_test_action': switch_test_action,
+          'switch_test_discovery_file': switch_test_discovery_file} | to_json }}
+
+- name: Run the AgentlessNet switch playbook - {{ switch_test_label }}
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+      - -i
+      - "{{ switch_test_tempdir.path }}/inventory.yaml"
+      - "{{ playbook_dir }}/../files/switch_playbook.yaml"
+      - -e
+      - "@{{ switch_test_tempdir.path }}/{{ switch_test_label }}.json"
+  args:
+    chdir: "{{ playbook_dir }}/../../../../../"
+  environment:
+    AGENTLESS_NET_VN_INVENTORY: "{{ switch_test_inventory | to_json }}"
+    AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+    ANSIBLE_CONFIG: "{{ playbook_dir }}/../../../../../ansible.cfg"
+    ANSIBLE_COLLECTIONS_PATH: "{{ playbook_dir }}/../../../../../collections:{{ playbook_dir }}/../../../../../vendor"
+    ANSIBLE_SSH_EXECUTABLE: "{{ playbook_dir }}/../../../fixtures/agentless_switch/ssh"
+    ANSIBLE_SSH_CONTROL_PATH_DIR: "{{ switch_test_tempdir.path }}/ssh-control"
+    ANSIBLE_SHOW_CUSTOM_STATS: "true"
+    ANSIBLE_LOCALHOST_WARNING: "False"
+    PATH: "{{ playbook_dir }}/../../../fixtures/agentless_switch:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    OSAC_AGENTLESS_SWITCH_STATE_FILE: "{{ switch_test_state }}"
+    OSAC_AGENTLESS_SWITCH_FAIL_MARKER: "{{ switch_test_fail_marker }}"
+  register: switch_test_run
+  changed_when: false
+  failed_when: false

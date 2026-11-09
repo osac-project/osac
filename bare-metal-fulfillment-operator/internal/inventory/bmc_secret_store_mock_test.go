@@ -42,29 +42,29 @@ func (m *MockBMCSecretStore) EXPECT() *MockBMCSecretStoreMockRecorder {
 }
 
 // Delete mocks base method.
-func (m *MockBMCSecretStore) Delete(ctx context.Context, secretName string) error {
+func (m *MockBMCSecretStore) Delete(ctx context.Context, secretName, ownerUID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Delete", ctx, secretName)
+	ret := m.ctrl.Call(m, "Delete", ctx, secretName, ownerUID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Delete indicates an expected call of Delete.
-func (mr *MockBMCSecretStoreMockRecorder) Delete(ctx, secretName any) *gomock.Call {
+func (mr *MockBMCSecretStoreMockRecorder) Delete(ctx, secretName, ownerUID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockBMCSecretStore)(nil).Delete), ctx, secretName)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockBMCSecretStore)(nil).Delete), ctx, secretName, ownerUID)
 }
 
 // Ensure mocks base method.
-func (m *MockBMCSecretStore) Ensure(ctx context.Context, secretName string, bmc *credentials.BMC) error {
+func (m *MockBMCSecretStore) Ensure(ctx context.Context, secretName string, bmc *credentials.BMC, ownerUID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Ensure", ctx, secretName, bmc)
+	ret := m.ctrl.Call(m, "Ensure", ctx, secretName, bmc, ownerUID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Ensure indicates an expected call of Ensure.
-func (mr *MockBMCSecretStoreMockRecorder) Ensure(ctx, secretName, bmc any) *gomock.Call {
+func (mr *MockBMCSecretStoreMockRecorder) Ensure(ctx, secretName, bmc, ownerUID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ensure", reflect.TypeOf((*MockBMCSecretStore)(nil).Ensure), ctx, secretName, bmc)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ensure", reflect.TypeOf((*MockBMCSecretStore)(nil).Ensure), ctx, secretName, bmc, ownerUID)
 }

@@ -108,7 +108,9 @@ func (b *PrivateExternalIPPoolsServerBuilder) Build() (result *PrivateExternalIP
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc(b.filterDesc).
-		AddAllowedTenants(auth.SharedTenant).
+		// ExternalIPPools are shared by all tenants. Automatic ExternalIPs don't check the
+		// tenant of the pool they select, so a pool must never be placed in a tenant.
+		SetAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return

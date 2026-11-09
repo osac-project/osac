@@ -70,17 +70,17 @@ func (mr *MockBMHLifecycleManagerMockRecorder) CreateBMH(ctx, params any) *gomoc
 }
 
 // DeleteBMH mocks base method.
-func (m *MockBMHLifecycleManager) DeleteBMH(ctx context.Context, name string) error {
+func (m *MockBMHLifecycleManager) DeleteBMH(ctx context.Context, name, ownerUID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteBMH", ctx, name)
+	ret := m.ctrl.Call(m, "DeleteBMH", ctx, name, ownerUID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteBMH indicates an expected call of DeleteBMH.
-func (mr *MockBMHLifecycleManagerMockRecorder) DeleteBMH(ctx, name any) *gomock.Call {
+func (mr *MockBMHLifecycleManagerMockRecorder) DeleteBMH(ctx, name, ownerUID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteBMH", reflect.TypeOf((*MockBMHLifecycleManager)(nil).DeleteBMH), ctx, name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteBMH", reflect.TypeOf((*MockBMHLifecycleManager)(nil).DeleteBMH), ctx, name, ownerUID)
 }
 
 // GetHardwareNICs mocks base method.

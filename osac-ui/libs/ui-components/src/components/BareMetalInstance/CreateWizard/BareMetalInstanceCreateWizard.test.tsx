@@ -1,6 +1,6 @@
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BareMetalInstanceCatalogItemSchema, BareMetalInstanceRunStrategy } from '@osac/types';
@@ -25,7 +25,7 @@ const DISK_IMAGE_ID = 'disk-image-rhel-9';
 // this exercises the full wizard shell (catalog selection, step navigation,
 // submission, and error handling) without duplicating the per-field coverage
 // already in the individual step tests. The locked SSH key satisfies the
-// Review step's authentication-method check.
+// Access step's authentication-method check.
 const bareMetalCatalogItem = create(BareMetalInstanceCatalogItemSchema, {
   id: 'catalog-bm-1',
   metadata: { name: 'catalog-bm-1' },
@@ -46,6 +46,18 @@ const bareMetalCatalogItem = create(BareMetalInstanceCatalogItemSchema, {
     instanceType: {
       behavior: { case: 'locked', value: { id: INSTANCE_TYPE_ID, name: 'standard' } },
     },
+    diskImage: {
+      behavior: { case: 'locked', value: { id: DISK_IMAGE_ID, name: 'rhel-9' } },
+    },
+  },
+});
+
+const bareMetalCatalogItemWithoutAuthentication = create(BareMetalInstanceCatalogItemSchema, {
+  id: 'catalog-bm-1',
+  metadata: { name: 'catalog-bm-1' },
+  title: 'Small bare metal host',
+  published: true,
+  fields: {
     diskImage: {
       behavior: { case: 'locked', value: { id: DISK_IMAGE_ID, name: 'rhel-9' } },
     },
@@ -80,11 +92,14 @@ const selectCatalogItemAndFillName = async (
 };
 
 const advanceThroughRemainingSteps = async (user: ReturnType<typeof renderWizard>['user']) => {
-  // Configuration and Networking: every governed field is locked with a
-  // catalog default, so Next can be clicked without further input.
-  await user.click(screen.getByRole('button', { name: 'Next' }));
-  await user.click(screen.getByRole('button', { name: 'Next' }));
-  await user.click(screen.getByRole('button', { name: 'Next' }));
+  // Configuration, Networking, and Access have valid catalog defaults, so
+  // Next can be clicked without further input (4 steps: to Review).
+  for (let step = 0; step < 4; step += 1) {
+    await user.click(await screen.findByRole('button', { name: 'Next' }));
+  }
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
+  });
 };
 
 describe('BareMetalInstanceCreateWizard', () => {
@@ -166,5 +181,54 @@ describe('BareMetalInstanceCreateWizard', () => {
     await user.click(screen.getByRole('button', { name: 'Next' }));
 
     expect(screen.getByText('Fix the highlighted errors before continuing.')).toBeInTheDocument();
+  });
+
+  it('shows the authentication error on Access before allowing Next', async () => {
+    const { user } = renderWithProviders(<BareMetalInstanceCreateWizard onClosed={vi.fn()} />, {
+      apiFixtures: { bareMetalCatalogItems: [bareMetalCatalogItemWithoutAuthentication] },
+      session: { role: 'tenant-user' },
+    });
+
+    await selectCatalogItemAndFillName(user, 'my-bmi');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.queryByLabelText(/^SSH public key/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'User data' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByRole('radiogroup', { name: 'User data' });
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    const authenticationError = 'Provide either an SSH public key or user data.';
+    expect(await screen.findAllByText(authenticationError)).toHaveLength(2);
+    expect(screen.getByLabelText(/^SSH public key/)).toHaveAttribute('aria-invalid', 'true');
+    const userDataGroup = screen.getByRole('radiogroup', { name: 'User data' });
+    expect(within(userDataGroup).getByText(authenticationError)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('radio', { name: 'Select secret' }));
+    expect(within(userDataGroup).getByText(authenticationError)).toBeInTheDocument();
+  });
+
+  it('requires Access again after returning from Review', async () => {
+    const { user } = renderWithProviders(<BareMetalInstanceCreateWizard onClosed={vi.fn()} />, {
+      apiFixtures: { bareMetalCatalogItems: [bareMetalCatalogItemWithoutAuthentication] },
+      session: { role: 'tenant-user' },
+    });
+
+    await selectCatalogItemAndFillName(user, 'my-bmi');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.type(await screen.findByRole('textbox', { name: 'File upload' }), '#cloud-config');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByRole('button', { name: 'Create' });
+
+    await user.click(screen.getByRole('button', { name: 'Access & initial run' }));
+    await user.clear(await screen.findByRole('textbox', { name: 'File upload' }));
+
+    expect(screen.getByRole('button', { name: 'Review' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    expect(
+      await screen.findAllByText('Provide either an SSH public key or user data.'),
+    ).toHaveLength(2);
   });
 });

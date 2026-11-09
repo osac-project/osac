@@ -47,6 +47,6 @@ type Reader interface {
 
 // BMCSecretStore ensures and deletes the Kubernetes Secret consumed by BMO.
 type BMCSecretStore interface {
-	Ensure(ctx context.Context, secretName string, bmc *BMC) error
-	Delete(ctx context.Context, secretName string) error
+	Ensure(ctx context.Context, secretName string, bmc *BMC, ownerUID string) error
+	Delete(ctx context.Context, secretName, ownerUID string) error
 }

@@ -10,7 +10,6 @@ describe('getVolumeValues', () => {
     expect(getVolumeValues()).toEqual({
       metadata: {
         name: '',
-        description: '',
       },
       spec: {
         storageTier: emptyResourceSelectValue(),

@@ -553,6 +553,10 @@ jobs:
           version: v3.22.0
       - uses: ./.github/actions/setup-python
         if: inputs.kind == 'helm-unit'
+      - name: Test preflight harness
+        if: inputs.kind == 'helm-unit'
+        working-directory: osac-installer
+        run: uv run --script scripts/test-preflight-harness.py
       - name: Test Kind runtime and suite runner
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer

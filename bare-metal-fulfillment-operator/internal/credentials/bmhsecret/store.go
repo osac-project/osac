@@ -20,7 +20,9 @@ package bmhsecret
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,6 +37,8 @@ import (
 const (
 	managedByLabel = shared.OsacPrefix + "/managed-by"
 	managedByValue = shared.OsacDefaultManagedByValue
+	ownerUIDLabel  = shared.OsacPrefix + "/bare-metal-instance-uid"
+	secretSuffix   = "-bmc-secret"
 )
 
 // Store manages operator-owned BMC credential Secrets in the Metal3 namespace.
@@ -50,22 +54,18 @@ func NewStore(client client.Client, namespace string) *Store {
 	return &Store{client: client, namespace: namespace}
 }
 
-// Ensure creates or updates the Secret consumed by BMO. It refuses to overwrite
-// a Secret that is not already marked as operator-managed.
-func (s *Store) Ensure(ctx context.Context, name string, bmc *credentials.BMC) error {
+// Ensure creates or updates the Secret consumed by BMO for its BMI owner.
+func (s *Store) Ensure(ctx context.Context, name string, bmc *credentials.BMC, ownerUID string) error {
 	if bmc == nil {
 		return fmt.Errorf("BMC credentials are required")
 	}
 
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.namespace}}
 	result, err := controllerutil.CreateOrUpdate(ctx, s.client, secret, func() error {
-		if secret.ResourceVersion != "" && secret.Labels[managedByLabel] != managedByValue {
-			return fmt.Errorf("BMC credentials Secret %s/%s already exists and is not operator-managed; refusing to overwrite", s.namespace, name)
+		if err := s.checkSecretOwner(ctx, secret, ownerUID); err != nil {
+			return err
 		}
-		if secret.Labels == nil {
-			secret.Labels = map[string]string{}
-		}
-		secret.Labels[managedByLabel] = managedByValue
+		setSecretLabels(secret, ownerUID)
 		secret.Type = corev1.SecretTypeOpaque
 		secret.Data = map[string][]byte{
 			"username": bmc.Username,
@@ -81,32 +81,71 @@ func (s *Store) Ensure(ctx context.Context, name string, bmc *credentials.BMC) e
 	return nil
 }
 
-// Delete removes the Secret if it is operator-managed. Missing and admin-owned
-// Secrets are left alone; deletion errors are returned while deletion is pending.
-func (s *Store) Delete(ctx context.Context, name string) error {
-	log := ctrllog.FromContext(ctx)
-	secret := &corev1.Secret{}
-	if err := s.client.Get(ctx, client.ObjectKey{Namespace: s.namespace, Name: name}, secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to get BMC credentials Secret %s/%s: %w", s.namespace, name, err)
+func (s *Store) checkSecretOwner(ctx context.Context, secret *corev1.Secret, ownerUID string) error {
+	if ownerUID == "" {
+		return fmt.Errorf("BMC credentials Secret %s/%s requires a BMI UID", s.namespace, secret.Name)
 	}
-
-	if secret.Labels[managedByLabel] != managedByValue {
-		log.Info("BMC credentials Secret is not operator-managed, leaving it in place",
-			"name", name, "namespace", s.namespace)
+	if secret.ResourceVersion == "" {
 		return nil
 	}
+	if secret.Labels[managedByLabel] != managedByValue {
+		return fmt.Errorf("BMC credentials Secret %s/%s is not operator-managed; refusing to modify or delete it", s.namespace, secret.Name)
+	}
+	owner := secret.Labels[ownerUIDLabel]
+	if owner == ownerUID {
+		return nil
+	}
+	if owner != "" {
+		return fmt.Errorf("BMC credentials Secret %s/%s is not owned by this BMI", s.namespace, secret.Name)
+	}
+	_, err := s.findOwnedBMH(ctx, strings.TrimSuffix(secret.Name, secretSuffix), ownerUID)
+	return err
+}
 
-	if err := s.client.Delete(ctx, secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
+func setSecretLabels(secret *corev1.Secret, ownerUID string) {
+	if secret.Labels == nil {
+		secret.Labels = map[string]string{}
+	}
+	secret.Labels[managedByLabel] = managedByValue
+	secret.Labels[ownerUIDLabel] = ownerUID
+}
+
+func (s *Store) findOwnedBMH(ctx context.Context, name, ownerUID string) (*metal3api.BareMetalHost, error) {
+	if ownerUID == "" {
+		return nil, fmt.Errorf("BareMetalHost %s/%s requires a BMI UID", s.namespace, name)
+	}
+	bmh := &metal3api.BareMetalHost{}
+	if err := s.client.Get(ctx, client.ObjectKey{Namespace: s.namespace, Name: name}, bmh); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	if bmh.Spec.ConsumerRef == nil || bmh.Spec.ConsumerRef.Name != ownerUID {
+		return nil, fmt.Errorf("BareMetalHost %s/%s is not owned by this BMI", s.namespace, name)
+	}
+	return bmh, nil
+}
+
+// Delete removes the Secret only when its BMI owner matches.
+func (s *Store) Delete(ctx context.Context, name, ownerUID string) error {
+	secret, err := s.findOwnedSecret(ctx, name, ownerUID)
+	if err != nil || secret == nil {
+		return err
+	}
+	err = s.client.Delete(ctx, secret, client.Preconditions{UID: &secret.UID, ResourceVersion: &secret.ResourceVersion})
+	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete BMC credentials Secret %s/%s: %w", s.namespace, name, err)
 	}
-	log.Info("Requested deletion of operator-managed BMC credentials Secret", "name", name, "namespace", s.namespace)
 	return s.confirmDeletion(ctx, name)
+}
+
+func (s *Store) findOwnedSecret(ctx context.Context, name, ownerUID string) (*corev1.Secret, error) {
+	secret := &corev1.Secret{}
+	if err := s.client.Get(ctx, client.ObjectKey{Namespace: s.namespace, Name: name}, secret); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	if err := s.checkSecretOwner(ctx, secret, ownerUID); err != nil {
+		return nil, err
+	}
+	return secret, nil
 }
 
 func (s *Store) confirmDeletion(ctx context.Context, name string) error {

@@ -25,8 +25,6 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
   id: 'catalog-rhel-9',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: VM_NAME,
     annotations: {},
     creator: 'foo',
@@ -47,8 +45,6 @@ const unpublishedVmCatalogItem: ComputeInstanceCatalogItem = {
   id: 'catalog-rhel-10',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: UNPUBLISHED_VM_NAME,
     annotations: {},
     creator: 'foo',
@@ -65,8 +61,6 @@ const clusterCatalogItem: ClusterCatalogItem = {
   id: 'catalog-openshift-4',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: CLUSTER_NAME,
     creator: 'admin',
     annotations: {},

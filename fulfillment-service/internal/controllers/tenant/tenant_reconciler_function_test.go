@@ -1130,6 +1130,73 @@ var _ = Describe("Deletion", func() {
 		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
 	})
 
+	It("deletes tenant users before requesting project deletion", func() {
+		deletionTimestamp := timestamppb.New(time.Now())
+		tenant := privatev1.Tenant_builder{
+			Id: "org-123",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "test-org",
+				Finalizers:        []string{finalizers.TenantLifecycle},
+				DeletionTimestamp: deletionTimestamp,
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: "test-org",
+			}.Build(),
+		}.Build()
+		user := privatev1.User_builder{
+			Id: "user-456",
+			Metadata: privatev1.Metadata_builder{
+				Name:   "test-user",
+				Tenant: "test-org",
+			}.Build(),
+		}.Build()
+		deletingUser := privatev1.User_builder{
+			Id: "user-789",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "deleting-user",
+				Tenant:            "test-org",
+				DeletionTimestamp: timestamppb.New(time.Now()),
+			}.Build(),
+		}.Build()
+		mockUsersClient := NewMockUsersClient(ctrl)
+		reconciler.usersClient = mockUsersClient
+
+		userList := mockUsersClient.EXPECT().List(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, req *privatev1.UsersListRequest, _ ...grpc.CallOption) (*privatev1.UsersListResponse, error) {
+				Expect(req.GetFilter()).To(Equal(`this.metadata.tenant == "test-org"`))
+				return privatev1.UsersListResponse_builder{
+					Size:  2,
+					Total: 2,
+					Items: []*privatev1.User{user, deletingUser},
+				}.Build(), nil
+			})
+		userDelete := mockUsersClient.EXPECT().Delete(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, req *privatev1.UsersDeleteRequest, _ ...grpc.CallOption) (*privatev1.UsersDeleteResponse, error) {
+				Expect(req.GetId()).To(Equal("user-456"))
+				return privatev1.UsersDeleteResponse_builder{}.Build(), nil
+			})
+		userSignal := mockUsersClient.EXPECT().Signal(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, req *privatev1.UsersSignalRequest, _ ...grpc.CallOption) (*privatev1.UsersSignalResponse, error) {
+				Expect(req.GetId()).To(Equal("user-789"))
+				return privatev1.UsersSignalResponse_builder{}.Build(), nil
+			})
+		projectList := func() *gomock.Call {
+			return mockProjectsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(privatev1.ProjectsListResponse_builder{Total: 0}.Build(), nil)
+		}
+		firstProjectList := projectList()
+		remainingProjectList := projectList()
+		deleteIDPTenant := mockClient.EXPECT().DeleteTenant(gomock.Any(), "test-org").Return(nil)
+		gomock.InOrder(userList, userDelete, userSignal, firstProjectList,
+			remainingProjectList, deleteIDPTenant)
+
+		task := &task{r: reconciler, tenant: tenant}
+		Expect(task.delete(ctx)).To(Succeed())
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
+	})
+
 	It("should delete IDP tenant by metadata name when not synced", func() {
 		deletionTimestamp := timestamppb.New(time.Now())
 		tenant := privatev1.Tenant_builder{

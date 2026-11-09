@@ -58,8 +58,8 @@ func credentialResolutionFailure(err error) error {
 
 type noOpBMCSecretStore struct{}
 
-func (noOpBMCSecretStore) Ensure(context.Context, string, *credentials.BMC) error { return nil }
-func (noOpBMCSecretStore) Delete(context.Context, string) error                   { return nil }
+func (noOpBMCSecretStore) Ensure(context.Context, string, *credentials.BMC, string) error { return nil }
+func (noOpBMCSecretStore) Delete(context.Context, string, string) error                   { return nil }
 
 func newNetBoxClient(api NetBoxAPI, manager baremetalhost.BMHLifecycleManager, hostClass string, reader credentials.Reader) *NetBoxClient {
 	return NewNetBoxClient(api, manager, noOpBMCSecretStore{}, hostClass, reader)
@@ -165,9 +165,9 @@ var _ = Describe("NetBox inventory client", func() {
 			manager := baremetalhost.NewMockBMHLifecycleManager(ctrl)
 			secretStore := NewMockBMCSecretStore(ctrl)
 			manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
-			bmhDelete := manager.EXPECT().DeleteBMH(gomock.Any(), "netbox-46").Return(nil)
+			bmhDelete := manager.EXPECT().DeleteBMH(gomock.Any(), "netbox-46", "bmi-123").Return(nil)
 			bmhGone := manager.EXPECT().BMHExists(gomock.Any(), "netbox-46").Return(false, nil)
-			secretDelete := secretStore.EXPECT().Delete(gomock.Any(), "netbox-46-bmc-secret").Return(nil)
+			secretDelete := secretStore.EXPECT().Delete(gomock.Any(), "netbox-46-bmc-secret", "bmi-123").Return(nil)
 			gomock.InOrder(bmhDelete, bmhGone, secretDelete)
 			client := newTestNetBoxClientWithStore(api, nil, manager, secretStore)
 
@@ -179,6 +179,35 @@ var _ = Describe("NetBox inventory client", func() {
 			Expect(api.patchETag).To(Equal(api.deviceSnapshot.ETag))
 			Expect(*api.patch.Status).To(Equal(netBoxStatusStaged))
 			Expect(api.patch.CustomFields).To(Equal(map[string]interface{}{"osac_instance_id": nil}))
+		})
+
+		It("cleans owned resources when the NetBox device is gone", func() {
+			ctx := context.Background()
+			bmh := &metal3api.BareMetalHost{
+				ObjectMeta: metav1.ObjectMeta{Name: "netbox-5", Namespace: "metal3-system"},
+				Spec:       metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-old"}},
+			}
+			manager, k8sClient := newNetBoxResourceManager(bmh)
+			secretStore := bmhsecret.NewStore(k8sClient, "metal3-system")
+			Expect(secretStore.Ensure(ctx, "netbox-5-bmc-secret", &credentials.BMC{
+				Username: []byte("admin"), Password: []byte("password"),
+			}, "bmi-old")).To(Succeed())
+			api := &selectorQueryTestAPI{deviceGetError: &netboxclient.APIError{Kind: netboxclient.ErrorKindNotFound, StatusCode: http.StatusNotFound}}
+			netBoxClient := newTestNetBoxClientWithStore(api, nil, manager, secretStore)
+
+			Expect(netBoxClient.UnassignHost(ctx, "metal3-system/netbox-5", "bmi-old", nil)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmh), &metal3api.BareMetalHost{})).NotTo(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: "metal3-system", Name: "netbox-5-bmc-secret"}, &corev1.Secret{})).NotTo(Succeed())
+			Expect(api.patchCalls).To(BeZero())
+		})
+
+		It("reports the device ID when a NetBox read fails", func() {
+			api := &selectorQueryTestAPI{deviceGetError: &netboxclient.APIError{Kind: netboxclient.ErrorKindUnavailable}}
+			manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
+			manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
+			client := newNetBoxClient(api, manager, testNetBoxHostClass, nil)
+			err := client.UnassignHost(context.Background(), "metal3-system/netbox-5", "bmi-old", nil)
+			Expect(err).To(MatchError(ContainSubstring("NetBox device 5")))
 		})
 
 		It("leaves another BMI's claim and resources untouched on a stale retry", func() {
@@ -193,15 +222,52 @@ var _ = Describe("NetBox inventory client", func() {
 			Expect(api.patchCalls).To(BeZero())
 		})
 
+		It("keeps a foreign BMH and the NetBox claim", func() {
+			ctx := context.Background()
+			bmh := &metal3api.BareMetalHost{
+				ObjectMeta: metav1.ObjectMeta{Name: "netbox-46", Namespace: "metal3-system"},
+				Spec:       metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-A"}},
+			}
+			manager, k8sClient := newNetBoxResourceManager(bmh)
+			secretKey := client.ObjectKey{Namespace: "metal3-system", Name: "netbox-46-bmc-secret"}
+			secretStore := bmhsecret.NewStore(k8sClient, "metal3-system")
+			Expect(secretStore.Ensure(ctx, secretKey.Name, &credentials.BMC{
+				Username: []byte("admin"), Password: []byte("password"),
+			}, "bmi-B")).To(Succeed())
+			api := &selectorQueryTestAPI{deviceSnapshot: testNetBoxAssignmentSnapshot(netBoxStatusActive, "bmi-B")}
+			netBoxClient := newTestNetBoxClientWithStore(api, nil, manager, secretStore)
+
+			Expect(netBoxClient.UnassignHost(ctx, "metal3-system/netbox-46", "bmi-B", nil)).To(MatchError(ContainSubstring("not owned by this BMI")))
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bmh), &metal3api.BareMetalHost{})).To(Succeed())
+			Expect(k8sClient.Get(ctx, secretKey, &corev1.Secret{})).To(Succeed())
+			Expect(api.patchCalls).To(BeZero())
+		})
+
+		It("keeps a foreign generated Secret and the NetBox claim", func() {
+			ctx := context.Background()
+			manager, k8sClient := newNetBoxResourceManager()
+			secretKey := client.ObjectKey{Namespace: "metal3-system", Name: "netbox-46-bmc-secret"}
+			secretStore := bmhsecret.NewStore(k8sClient, "metal3-system")
+			Expect(secretStore.Ensure(ctx, secretKey.Name, &credentials.BMC{
+				Username: []byte("admin"), Password: []byte("password"),
+			}, "bmi-A")).To(Succeed())
+			api := &selectorQueryTestAPI{deviceSnapshot: testNetBoxAssignmentSnapshot(netBoxStatusActive, "bmi-B")}
+			netBoxClient := newTestNetBoxClientWithStore(api, nil, manager, secretStore)
+
+			Expect(netBoxClient.UnassignHost(ctx, "metal3-system/netbox-46", "bmi-B", nil)).To(MatchError(ContainSubstring("not owned by this BMI")))
+			Expect(k8sClient.Get(ctx, secretKey, &corev1.Secret{})).To(Succeed())
+			Expect(api.patchCalls).To(BeZero())
+		})
+
 		DescribeTable("cleans resources without changing an unclaimed device", func(status string) {
 			api := &selectorQueryTestAPI{deviceSnapshot: testNetBoxAssignmentSnapshot(status, "")}
 			ctrl := gomock.NewController(GinkgoT())
 			manager := baremetalhost.NewMockBMHLifecycleManager(ctrl)
 			secretStore := NewMockBMCSecretStore(ctrl)
 			manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
-			manager.EXPECT().DeleteBMH(gomock.Any(), "netbox-46").Return(nil)
+			manager.EXPECT().DeleteBMH(gomock.Any(), "netbox-46", "bmi-123").Return(nil)
 			manager.EXPECT().BMHExists(gomock.Any(), "netbox-46").Return(false, nil)
-			secretStore.EXPECT().Delete(gomock.Any(), "netbox-46-bmc-secret").Return(nil)
+			secretStore.EXPECT().Delete(gomock.Any(), "netbox-46-bmc-secret", "bmi-123").Return(nil)
 			client := newTestNetBoxClientWithStore(api, nil, manager, secretStore)
 
 			err := client.UnassignHost(context.Background(), "metal3-system/netbox-46", "bmi-123", nil)
@@ -231,10 +297,10 @@ var _ = Describe("NetBox inventory client", func() {
 			manager := baremetalhost.NewMockBMHLifecycleManager(ctrl)
 			secretStore := NewMockBMCSecretStore(ctrl)
 			manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
-			bmhDelete := manager.EXPECT().DeleteBMH(gomock.Any(), "netbox-46").Return(bmhErr)
+			bmhDelete := manager.EXPECT().DeleteBMH(gomock.Any(), "netbox-46", "bmi-123").Return(bmhErr)
 			if bmhErr == nil {
 				bmhGone := manager.EXPECT().BMHExists(gomock.Any(), "netbox-46").Return(false, nil).After(bmhDelete)
-				secretStore.EXPECT().Delete(gomock.Any(), "netbox-46-bmc-secret").Return(secretErr).After(bmhGone)
+				secretStore.EXPECT().Delete(gomock.Any(), "netbox-46-bmc-secret", "bmi-123").Return(secretErr).After(bmhGone)
 			}
 			client := newTestNetBoxClientWithStore(api, nil, manager, secretStore)
 
@@ -255,14 +321,14 @@ var _ = Describe("NetBox inventory client", func() {
 			bmh := &metal3api.BareMetalHost{ObjectMeta: metav1.ObjectMeta{
 				Name: "netbox-46", Namespace: "metal3-system",
 				Finalizers: []string{"test.osac.openshift.io/hold"},
-			}}
+			}, Spec: metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-123"}}}
 			k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bmh).Build()
 			manager := baremetalhost.NewManager(k8sClient, k8sClient, "metal3-system")
 			secretKey := client.ObjectKey{Namespace: "metal3-system", Name: "netbox-46-bmc-secret"}
 			secretStore := bmhsecret.NewStore(k8sClient, "metal3-system")
 			Expect(secretStore.Ensure(ctx, secretKey.Name, &credentials.BMC{
 				Username: []byte("admin"), Password: []byte("test-password"),
-			})).To(Succeed())
+			}, "bmi-123")).To(Succeed())
 			secret := &corev1.Secret{}
 			Expect(k8sClient.Get(ctx, secretKey, secret)).To(Succeed())
 			secret.Finalizers = []string{"test.osac.openshift.io/hold"}
@@ -297,12 +363,30 @@ var _ = Describe("NetBox inventory client", func() {
 			api := &selectorQueryTestAPI{deviceSnapshot: testNetBoxAssignmentSnapshot(netBoxStatusActive, "bmi-123")}
 			manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 			manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
-			manager.EXPECT().DeleteBMH(gomock.Any(), "netbox-46").Return(nil)
+			manager.EXPECT().DeleteBMH(gomock.Any(), "netbox-46", "bmi-123").Return(nil)
 			manager.EXPECT().BMHExists(gomock.Any(), "netbox-46").Return(false, readErr)
 			client := newNetBoxClient(api, manager, testNetBoxHostClass, nil)
 
 			Expect(client.UnassignHost(context.Background(), "metal3-system/netbox-46", "bmi-123", nil)).To(MatchError(readErr))
 			Expect(api.patchCalls).To(BeZero())
+		})
+
+		It("finishes when the device disappears after resource cleanup", func() {
+			api := &selectorQueryTestAPI{
+				deviceSnapshot: testNetBoxAssignmentSnapshot(netBoxStatusActive, "bmi-123"),
+				patchErr:       &netboxclient.APIError{Kind: netboxclient.ErrorKindNotFound, StatusCode: http.StatusNotFound},
+			}
+			ctrl := gomock.NewController(GinkgoT())
+			manager := baremetalhost.NewMockBMHLifecycleManager(ctrl)
+			secretStore := NewMockBMCSecretStore(ctrl)
+			manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
+			manager.EXPECT().DeleteBMH(gomock.Any(), "netbox-46", "bmi-123").Return(nil)
+			manager.EXPECT().BMHExists(gomock.Any(), "netbox-46").Return(false, nil)
+			secretStore.EXPECT().Delete(gomock.Any(), "netbox-46-bmc-secret", "bmi-123").Return(nil)
+			client := newTestNetBoxClientWithStore(api, nil, manager, secretStore)
+
+			Expect(client.UnassignHost(context.Background(), "metal3-system/netbox-46", "bmi-123", nil)).To(Succeed())
+			Expect(api.patchCalls).To(Equal(1))
 		})
 
 		It("returns a 412 for the next reconciliation", func() {
@@ -312,9 +396,9 @@ var _ = Describe("NetBox inventory client", func() {
 			manager := baremetalhost.NewMockBMHLifecycleManager(ctrl)
 			secretStore := NewMockBMCSecretStore(ctrl)
 			manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
-			manager.EXPECT().DeleteBMH(gomock.Any(), "netbox-46").Return(nil)
+			manager.EXPECT().DeleteBMH(gomock.Any(), "netbox-46", "bmi-123").Return(nil)
 			manager.EXPECT().BMHExists(gomock.Any(), "netbox-46").Return(false, nil)
-			secretStore.EXPECT().Delete(gomock.Any(), "netbox-46-bmc-secret").Return(nil)
+			secretStore.EXPECT().Delete(gomock.Any(), "netbox-46-bmc-secret", "bmi-123").Return(nil)
 			client := newTestNetBoxClientWithStore(api, nil, manager, secretStore)
 
 			err := client.UnassignHost(context.Background(), "metal3-system/netbox-46", "bmi-123", nil)
@@ -452,6 +536,14 @@ func newTestNetBoxClientWithStore(
 	secretStore credentials.BMCSecretStore,
 ) *NetBoxClient {
 	return NewNetBoxClient(api, manager, secretStore, testNetBoxHostClass, resolver)
+}
+
+func newNetBoxResourceManager(objects ...client.Object) (*baremetalhost.Manager, client.Client) {
+	scheme := runtime.NewScheme()
+	Expect(corev1.AddToScheme(scheme)).To(Succeed())
+	Expect(metal3api.AddToScheme(scheme)).To(Succeed())
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	return baremetalhost.NewManager(k8sClient, k8sClient, "metal3-system"), k8sClient
 }
 
 func newTestNetBoxClientWithCredentials(api NetBoxAPI) *NetBoxClient {
@@ -633,12 +725,13 @@ var _ = Describe("NetBox assignment eligibility", func() {
 		manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
 		secretEnsured := false
 		bmhCreated := false
-		ensureCall := secretStore.EXPECT().Ensure(gomock.Any(), "netbox-46-bmc-secret", gomock.Eq(testNetBoxCredentials())).DoAndReturn(
-			func(_ context.Context, name string, bmc *credentials.BMC) error {
+		ensureCall := secretStore.EXPECT().Ensure(gomock.Any(), "netbox-46-bmc-secret", gomock.Eq(testNetBoxCredentials()), "bmi-123").DoAndReturn(
+			func(_ context.Context, name string, bmc *credentials.BMC, ownerUID string) error {
 				Expect(api.patchCalls).To(Equal(1))
 				Expect(name).To(Equal("netbox-46-bmc-secret"))
 				Expect(bmc.Username).To(Equal([]byte("bmc-user")))
 				Expect(bmc.Password).To(Equal([]byte("source-password")))
+				Expect(ownerUID).To(Equal("bmi-123"))
 				secretEnsured = true
 				return nil
 			})
@@ -786,7 +879,7 @@ var _ = Describe("NetBox Metal3 preparation", func() {
 		manager := baremetalhost.NewMockBMHLifecycleManager(ctrl)
 		secretStore := NewMockBMCSecretStore(ctrl)
 		manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
-		ensureCall := secretStore.EXPECT().Ensure(gomock.Any(), "netbox-46-bmc-secret", gomock.Eq(testNetBoxCredentials())).Return(nil)
+		ensureCall := secretStore.EXPECT().Ensure(gomock.Any(), "netbox-46-bmc-secret", gomock.Eq(testNetBoxCredentials()), "bmi-123").Return(nil)
 		createCall := manager.EXPECT().CreateBMH(gomock.Any(), gomock.Any()).Return(nil)
 		availabilityCall := manager.EXPECT().IsBMHAvailable(gomock.Any(), "netbox-46").Return(false, nil)
 		gomock.InOrder(ensureCall, createCall, availabilityCall)
@@ -811,7 +904,7 @@ var _ = Describe("NetBox Metal3 preparation", func() {
 			secretStore := NewMockBMCSecretStore(ctrl)
 			manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
 			var orderedCalls []*gomock.Call
-			secretCall := secretStore.EXPECT().Ensure(gomock.Any(), "netbox-46-bmc-secret", gomock.Eq(testNetBoxCredentials()))
+			secretCall := secretStore.EXPECT().Ensure(gomock.Any(), "netbox-46-bmc-secret", gomock.Eq(testNetBoxCredentials()), "bmi-123")
 			if failureStage == "secret" {
 				secretCall.Return(errors.New("secret operation failed"))
 				orderedCalls = append(orderedCalls, secretCall)
@@ -865,8 +958,8 @@ var _ = Describe("NetBox Metal3 preparation", func() {
 		secretStore := NewMockBMCSecretStore(ctrl)
 		manager.EXPECT().Namespace().Return("metal3-system").AnyTimes()
 		var ensureCalls int
-		ensureCall := secretStore.EXPECT().Ensure(gomock.Any(), "netbox-46-bmc-secret", gomock.Eq(testNetBoxCredentials())).DoAndReturn(
-			func(context.Context, string, *credentials.BMC) error {
+		ensureCall := secretStore.EXPECT().Ensure(gomock.Any(), "netbox-46-bmc-secret", gomock.Eq(testNetBoxCredentials()), "bmi-123").DoAndReturn(
+			func(context.Context, string, *credentials.BMC, string) error {
 				ensureCalls++
 				if ensureCalls == 1 {
 					return errors.New("temporary Secret operation failure")
@@ -929,7 +1022,6 @@ var _ = Describe("NetBox GetHostNICs", func() {
 		ctx := context.Background()
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
-		manager.EXPECT().IsBMHAvailable(ctx, "netbox-42").Return(true, nil)
 		manager.EXPECT().GetHardwareNICs(ctx, "netbox-42").Return([]string{"AA:BB:CC:DD:EE:01"}, nil)
 		api := &selectorQueryTestAPI{}
 		got, err := newNetBoxClient(api, manager, testNetBoxHostClass, nil).GetHostNICs(ctx, "baremetal/netbox-42")
@@ -938,36 +1030,34 @@ var _ = Describe("NetBox GetHostNICs", func() {
 		Expect(api.deviceReadCalls).To(BeZero())
 	})
 
-	It("does not read NICs before the BMH is ready", func() {
-		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
-		manager.EXPECT().Namespace().Return("baremetal").Times(2)
-		manager.EXPECT().IsBMHAvailable(gomock.Any(), "netbox-42").Return(false, nil)
-		got, err := newNetBoxClient(&selectorQueryTestAPI{}, manager, testNetBoxHostClass, nil).
-			GetHostNICs(context.Background(), "baremetal/netbox-42")
-		Expect(err).To(MatchError(ContainSubstring("not ready for NIC metadata")))
-		Expect(got).To(BeNil())
-	})
-
-	It("returns an empty NIC list after a ready BMH confirms no NICs", func() {
+	It("reads NICs from a provisioned BMH without requiring availability", func() {
 		ctx := context.Background()
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
-		manager.EXPECT().IsBMHAvailable(ctx, "netbox-42").Return(true, nil)
+		manager.EXPECT().GetHardwareNICs(ctx, "netbox-42").Return([]string{"AA:BB:CC:DD:EE:02"}, nil)
+		got, err := newNetBoxClient(&selectorQueryTestAPI{}, manager, testNetBoxHostClass, nil).
+			GetHostNICs(ctx, "baremetal/netbox-42")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got).To(Equal([]HostNIC{{MAC: "aa:bb:cc:dd:ee:02"}}))
+	})
+
+	It("errors when the BMH has no NIC inventory, matching metal3", func() {
+		ctx := context.Background()
+		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
+		manager.EXPECT().Namespace().Return("baremetal").Times(2)
 		manager.EXPECT().GetHardwareNICs(ctx, "netbox-42").Return(nil, nil)
 
 		got, err := newNetBoxClient(&selectorQueryTestAPI{}, manager, testNetBoxHostClass, nil).
 			GetHostNICs(ctx, "baremetal/netbox-42")
 
-		Expect(err).NotTo(HaveOccurred())
-		Expect(got).NotTo(BeNil())
-		Expect(got).To(BeEmpty())
+		Expect(err).To(MatchError(ContainSubstring("netbox-42 has no NIC inventory")))
+		Expect(got).To(BeNil())
 	})
 
 	It("propagates BMH errors without querying NetBox", func() {
 		lookupErr := errors.New("BMH lookup failed")
 		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
 		manager.EXPECT().Namespace().Return("baremetal").Times(2)
-		manager.EXPECT().IsBMHAvailable(gomock.Any(), "netbox-42").Return(true, nil)
 		manager.EXPECT().GetHardwareNICs(gomock.Any(), "netbox-42").Return(nil, lookupErr)
 		api := &selectorQueryTestAPI{}
 		got, err := newNetBoxClient(api, manager, testNetBoxHostClass, nil).

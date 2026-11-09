@@ -1,6 +1,6 @@
 # Tenant Identity and Access Guide (Fulfillment API / CLI)
 
-**Last Updated**: 2026-10-28
+**Last Updated**: 2026-11-05
 **Audience**: Cloud provider administrators, tenant administrators, developers validating fulfillment-service
 **Status**: Draft
 
@@ -28,6 +28,7 @@
 - [Flow 10 — Viewer IdP login again](#flow-10--viewer-idp-login-again)
 - [Flow 11 — Viewer lists project, cannot delete](#flow-11--viewer-lists-project-cannot-delete)
 - [Flow 12 — Delete the project](#flow-12--delete-the-project)
+- [Tenant Service Accounts](tenant-service-accounts.md)
 - [Troubleshooting](#troubleshooting)
 - [Frequently Asked Questions](#frequently-asked-questions)
 
@@ -37,6 +38,10 @@
 
 This guide shows tenant identity and access on OSAC using the `osac` CLI end to end:
 create a tenant, attach an IdP, grant roles, and prove project RBAC.
+
+For machine identities, see the [Tenant Service Accounts guide](tenant-service-accounts.md), which
+covers account administration, RoleBinding-based access, credential rotation, and workload use of
+client credentials.
 
 A **cloud provider administrator** creates the tenant. OSAC then sets up the basics for
 that tenant automatically (break-glass account, Keycloak organization, and Kubernetes
